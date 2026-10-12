@@ -1913,8 +1913,9 @@ def hit_seconds(value: Any, size_bytes: int) -> float | None:
 
 
 def _copy_polars(frame: Any) -> Any:
-    """A copy of a polars frame or series: a clone, which shares its immutable
-    buffers, with the Python objects of an ``Object`` column copied too.
+    """A copy of a polars frame, series or lazy frame: a clone, which shares
+    its immutable buffers, with the Python objects of an ``Object`` column
+    copied too.
 
     A clone shares those objects with the entry and every hit, and pickle
     refuses an ``Object`` column, so no disk tier holds one: the RAM entry
@@ -1922,6 +1923,9 @@ def _copy_polars(frame: Any) -> Any:
     """
     import polars as pl
 
+    if isinstance(frame, pl.LazyFrame):
+        # A plan has no in-place API: a clone shares it, and the data it holds.
+        return frame.clone()
     copied = copy.deepcopy(frame)
     columns = [copied] if isinstance(copied, pl.Series) else copied.get_columns()
     fresh = [
@@ -1935,23 +1939,31 @@ def _copy_polars(frame: Any) -> Any:
 
 
 def _is_polars_frame(value_type: type) -> bool:
-    """Exactly a polars DataFrame or Series: a subclass may hold state of
-    its own that a clone shares. Never imports polars."""
+    """Exactly a polars DataFrame, Series or LazyFrame: a subclass may hold
+    state of its own that a clone shares. Never imports polars."""
     pl = sys.modules.get("polars")
-    return pl is not None and value_type in (getattr(pl, "DataFrame", None), getattr(pl, "Series", None))
+    return pl is not None and value_type in (
+        getattr(pl, "DataFrame", None),
+        getattr(pl, "Series", None),
+        getattr(pl, "LazyFrame", None),
+    )
 
 
 def _has_object_column(frame: Any) -> bool:
     """Does a polars DataFrame or Series hold an ``Object`` column? Polars
-    nests none inside a List or Struct."""
+    nests none inside a List or Struct. A LazyFrame read from a disk tier
+    holds none: pickle refuses one."""
     import polars as pl
 
+    if isinstance(frame, pl.LazyFrame):
+        return False
     dtypes = [frame.dtype] if isinstance(frame, pl.Series) else frame.dtypes
     return any(dtype == pl.Object for dtype in dtypes)
 
 
 def _frame_types() -> tuple[type, ...]:
-    """The pandas and polars frame and series classes, of those imported.
+    """The pandas and polars frame and series classes, and polars'
+    LazyFrame, of those imported.
 
     Never imports either: a value cannot hold a frame of a library that
     is not imported.
@@ -1965,6 +1977,13 @@ def _frame_types() -> tuple[type, ...]:
         frame, series = getattr(module, "DataFrame", None), getattr(module, "Series", None)
         if isinstance(frame, type) and isinstance(series, type):
             found += [frame, series]
+            if module is modules[1]:
+                # Pickled, a plan and the data it holds took 2 s a hit at 80 MB.
+                lazy = getattr(module, "LazyFrame", None)
+                if isinstance(lazy, type):
+                    found.append(lazy)
+                else:
+                    complete = False
         elif module is not None:
             complete = False  # still importing: asked again next time
     if complete:

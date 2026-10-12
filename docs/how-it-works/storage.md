@@ -90,13 +90,13 @@ less; [the CLI page](../cli.md) has every option.
 | Memory | RAM | No |
 | Disk | the cache folder | Yes |
 
-A read tries memory first. A pandas table, or a polars frame or series,
-found on disk is kept in memory for the next read without a copy (see below). Any other value found on disk is
+A read tries memory first. A pandas table, or a polars `DataFrame`,
+`Series` or `LazyFrame`, found on disk is kept in memory for the next read without a copy (see below). Any other value found on disk is
 copied into memory on its second read from disk in the same process, so a
 value read once after a restart costs no extra copy. Neither is kept when it
 would take more than 90% of the memory cap.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @315c01f9, cash/backends/frame_sharing.py:_freeze @d0721597, cash/backends/tiered_backend.py:TieredBackend.get @877fbb31, cash/backends/memory_backend.py:_copy_polars @d13e8c40 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @315c01f9, cash/backends/frame_sharing.py:_freeze @d0721597, cash/backends/tiered_backend.py:TieredBackend.get @877fbb31, cash/backends/memory_backend.py:_copy_polars @4e2f4e69 -->
 The memory tier keeps a copy of each value that only it holds, so nothing you
 do to a value you were handed reaches the stored one, or the other way round.
 Under pandas copy-on-write (pandas 3, or `pd.options.mode.copy_on_write = True`
@@ -121,11 +121,11 @@ table nor a later hit; when such an attribute can be neither deep-copied nor
 pickled, the decorator does not cache the table
 ([`STORE-FAILED`](../warnings.md#store-failed)). A column of lists or dicts is kept as
 compact bytes and read back into new lists on every hit.
-A polars `DataFrame` or `Series` is cloned on the store and on every hit: the
-clone shares the frame's memory, which polars never writes in place (an edit
-such as `df[0, "x"] = ...` or `df.insert_column(...)` changes only the frame
-it is made on), so a hit costs well under a millisecond whatever the frame's
-size. The Python objects in an `Object` column are copied.
+A polars `DataFrame`, `Series` or `LazyFrame` is cloned on the store and on
+every hit: the clone shares the frame's memory, which polars never writes in
+place (an edit such as `df[0, "x"] = ...` or `df.insert_column(...)` changes
+only the frame it is made on), so a hit costs well under a millisecond
+whatever the frame's size. The Python objects in an `Object` column are copied.
 `SQLiteBackend`, `RedisBackend` and `S3Backend` can replace or join these
 tiers; see
 [choosing a backend](../tutorials/feature-guides/choosing-a-backend.md).
