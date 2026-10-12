@@ -151,15 +151,18 @@ def pyplot_draw_names(tree: ast.AST | None, namespace: Mapping[str, Any]) -> fro
 
 def holds_artists(value: Any) -> bool:
     """Whether *value* is a matplotlib artist (a figure, an axes) or a list,
-    tuple or object array of them (``plt.subplots(1, 3)``'s axes)."""
+    tuple or numpy object array of them (``plt.subplots(1, 3)``'s axes)."""
     module = sys.modules.get("matplotlib.artist")
     artist = getattr(module, "Artist", None)
     if artist is None:
         return False
     if isinstance(value, artist):
         return True
-    if getattr(getattr(value, "dtype", None), "kind", None) == "O" and getattr(value, "size", 0) <= 1024:
-        return any(isinstance(item, artist) for item in value.flat)
+    np = sys.modules.get("numpy")
+    if np is not None and isinstance(value, np.ndarray):
+        # Only a numpy array: a pandas Series of objects has an object dtype
+        # and a size too, but no ``.flat``.
+        return value.dtype == object and value.size <= 1024 and any(isinstance(item, artist) for item in value.flat)
     if isinstance(value, (list, tuple)) and len(value) <= 1024:
         return any(isinstance(item, artist) for item in value)
     return False
