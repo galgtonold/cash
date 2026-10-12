@@ -109,7 +109,7 @@ from ...tracking.randomness import (
 )
 from ..callee_reach import import_state_writes, module_globals, module_state_writes, rebound_modules
 from ..holder_patches import holder_patches
-from ..lineage_formula import held_lineage, key_hidden_reads, no_cache_value_digest
+from ..lineage_formula import held_lineage, key_hidden_reads, no_cache_value_digest, use_lineage_alias_store
 from ..magic_effects import (
     is_magic_statement,
     is_rerun_magic,
@@ -134,6 +134,7 @@ from ..shared_objects import (
     share_group,
     walk_budget,
 )
+from ..value_cutoff import LineageAliasStore
 from ..write_observer import observe_writes
 
 __all__ = ["StatementProcessor", "is_control_body"]
@@ -288,6 +289,8 @@ class StatementProcessor:
             file_deps=self._file_deps,
             compute_hash=compute_hash_fn,
         )
+        # Lineages found to name the same value as an earlier one (`value_cutoff`).
+        use_lineage_alias_store(LineageAliasStore(_guard_dir) if _guard_dir else None)
         self._hits = CacheHitServer(self.tracking_state, self._stmt_restorer, self._rebuild_cost)
         self._store = StatementStore(
             shell,
