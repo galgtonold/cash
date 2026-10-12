@@ -43,6 +43,7 @@ from enum import Enum
 from typing import Any, NamedTuple
 
 __all__ = [
+    "ENVIRONMENT_TEXT_MARKERS",
     "CLOCK_WHEN_ARG_CALLS",
     "ARGV_PARSER_METHODS",
     "ENVIRON_KEYED_METHODS",
@@ -643,6 +644,26 @@ def _resolves_relative_path(call: ast.Call) -> bool:
         and all(kw.arg == "strict" for kw in call.keywords)
         and not _surely_absolute(func.value)
     )
+
+
+#: Text a statement must contain for :func:`environment_input` to find a
+#: read in it: the last part of every name it knows, the methods that
+#: resolve a path, each followed by its call's parenthesis, ``environ`` and
+#: the command line. The cheap test before
+#: parsing a statement; ``Path.cwd() / "data.csv"`` and
+#: ``os.path.abspath("data.csv")`` contain no ``getcwd``, and a test made of
+#: three spellings missed them.
+ENVIRONMENT_TEXT_MARKERS: tuple[str, ...] = tuple(
+    sorted(
+        {
+            f"{name.rsplit('.', 1)[-1]}("  # called: `/home/` in a path string is no read
+            for name, kind in MODULE_CALLS.items()
+            if kind is EffectKind.ENVIRONMENT and not name.startswith("os.environ")  # `environ` covers them
+        }
+        | {f"{method}(" for method in (*_CWD_RESOLVER_METHODS, *ARGV_PARSER_METHODS, "expanduser")}
+        | {"environ", "argv"}
+    )
+)
 
 
 def environment_input(
