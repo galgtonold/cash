@@ -158,19 +158,35 @@ class MutationClassifier:
         assumed: set[str] = set()
         # A receiver no rule or verdict decides is observed when it can be
         # hashed reliably, otherwise assumed to change (correctness first).
+        snapshots: dict[str, str] = {}
+        unwatched = True
         for base in classes.unknown_receivers:
             if self._receiver_observable(base):
                 observe.add(base)
-            else:
+                continue
+            # A frame, series or array is hashed by its lineage, not its
+            # content: fingerprinted whole before and after instead, once per
+            # text. Anything else (a random generator advanced by ``choice``)
+            # is still assumed changed.
+            if not _fingerprinted_receiver(self.shell.user_ns.get(base)):
                 assumed.add(base)
                 pre_route.add(base)
+                continue
+            if unwatched:
+                self.digests.watch(tree)
+                unwatched = False
+            fingerprint = mutation_fingerprint(self.shell.user_ns.get(base), self.digests.digest)
+            if fingerprint is None:
+                assumed.add(base)
+                pre_route.add(base)
+            else:
+                snapshots[base] = fingerprint
         # An object handed to a bare call (`im.add_qc(df)`, `sc.tl.leiden(hv)`)
         # or to a function of the user's (`summary = add_features(df)`)
         # gets a full before/after fingerprint (`mutation_fingerprint`).
         # The result is learned into the verdict, so neither the next run nor
         # the simulation asks again: `print(df)` is learned as reading only.
-        snapshots: dict[str, str] = {}
-        if classes.unknown_args:
+        if classes.unknown_args and unwatched:
             self.digests.watch(tree)
         for name in classes.unknown_args:
             fingerprint = mutation_fingerprint(self.shell.user_ns.get(name), self.digests.digest)
@@ -330,3 +346,14 @@ class MutationClassifier:
             return True  # unpicklable -> identity hash -> mutation undetectable
         before = self.tracking_state.current_session_hashes.get(base)
         return before is None or after != before
+
+
+def _fingerprinted_receiver(value: object) -> bool:
+    """A frame, series or array: an unlisted method called on one is looked
+    at (`mutation_fingerprint`) rather than assumed to change it."""
+    t = type(value)
+    return ((t.__module__ or "").split(".", 1)[0], t.__name__) in {
+        ("pandas", "DataFrame"),
+        ("pandas", "Series"),
+        ("numpy", "ndarray"),
+    }

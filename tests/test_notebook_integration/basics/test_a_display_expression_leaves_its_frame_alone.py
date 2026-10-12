@@ -119,3 +119,55 @@ def test_a_chain_that_changes_the_frame_still_counts(nb_runner):
 
     assert "['a']" in nb_runner.get_output(5)
     assert _runs(nb_runner) == 2, "an edited mutation of df left what was built from it served"
+
+
+TEXT = (
+    SETUP.replace("range(1000), 'b': [0.123] * 1000", "range(300_000), 'b': [0.123] * 300_000")
+    + "\ndf['s'] = ['x: y'] * 300_000"
+)
+
+
+@pytest.mark.parametrize(
+    "shown, edited",
+    [
+        ("df['s'].str.split(': ', expand=True)", "df['s'].str.split(': ')"),
+        ("df.reset_index()", "df.reset_index(drop=True)"),
+        ("df['s'].apply(len)", "df['s'].apply(str.upper)"),
+        ("df.sort_values('a', ascending=False)", "df.sort_values('b', ascending=False)"),
+    ],
+)
+def test_an_unlisted_method_that_leaves_the_frame_alone_keeps_what_is_built_from_it(nb_runner, shown, edited):
+    """A method no list knows is looked at: the frame is fingerprinted
+    before and after, and is not counted as changed when it was not.
+
+    A student's notebook showed ``df[0].str.split(': ', expand=True)`` and
+    ``tsimp.sort_values('action_time')`` many times while editing them; each
+    new text was assumed to change the frame and everything built from it
+    ran again (38 runs in that notebook)."""
+    nb_runner.create_notebook([ON, TEXT, shown, TOTAL])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert _runs(nb_runner) == 1
+
+    nb_runner.set_cell_source(3, edited)
+    nb_runner.run_all()
+
+    assert "TOTAL" in nb_runner.get_output(4)
+    assert _runs(nb_runner) == 1, f"`{edited}` counted as a change to df; its total ran again"
+
+
+def test_an_unlisted_method_that_changes_the_frame_still_counts(nb_runner):
+    """The fingerprint reads the values: a function handed to ``apply``
+    that appends to the lists a column holds changes the frame."""
+    setup = BIG + "\ndf['l'] = [[1] for _ in range(300_000)]"
+    show = "print(sum(map(len, df['l'])))"
+    nb_runner.create_notebook([ON, setup, "df['l'].apply(lambda v: v.append(0))", TOTAL, show])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "600000" in nb_runner.get_output(5)
+
+    nb_runner.set_cell_source(3, "df['l'].apply(lambda v: v.append(1))")
+    nb_runner.run_all()
+
+    assert "600000" in nb_runner.get_output(5)
+    assert _runs(nb_runner) == 2, "a mutating apply was not counted as a change to df"
