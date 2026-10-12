@@ -51,6 +51,35 @@ jobs:
         # Windows defaults to pwsh, where `\` does not continue a line.
         shell: bash
 
+  # The dev extra resolves to polars 2, and polars 1 differs in what it
+  # pickles, exports to Arrow and panics on (an Object column). The tests
+  # named for polars run once more on the newest polars 1.
+  polars-1:
+    name: Polars tests on polars 1
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" "polars>=1.0,<2"
+
+      - name: Run the polars tests
+        run: |
+          pytest tests/ \
+            --ignore=tests/test_notebook_integration \
+            --ignore=tests/test_wheel_gate \
+            --ignore=tests/docs \
+            -m "not perf" -k "polars or lazy_frame" \
+            -n auto --tb=short -q -rs
+        shell: bash
+
   # The integration core set: the tests picked (tools/test_selection/) to cover
   # every line, feature and step sequence the whole integration suite covers,
   # in about a tenth of its time. The whole suite runs nightly (nightly.yml).

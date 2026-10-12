@@ -84,19 +84,19 @@ less; [the CLI page](../cli.md) has every option.
 
 ## The tiers
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @877fbb31 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @877fbb31, cash/backends/memory_backend.py:_cheap_to_keep @c2798702 -->
 | Tier | Where | Survives a restart? |
 |------|-------|---------------------|
 | Memory | RAM | No |
 | Disk | the cache folder | Yes |
 
-A read tries memory first. A pandas table found on disk is kept in memory for
-the next read without a copy (see below). Any other value found on disk is
+A read tries memory first. A pandas table, or a polars `DataFrame`,
+`Series` or `LazyFrame`, found on disk is kept in memory for the next read without a copy (see below). Any other value found on disk is
 copied into memory on its second read from disk in the same process, so a
 value read once after a restart costs no extra copy. Neither is kept when it
 would take more than 90% of the memory cap.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @315c01f9, cash/backends/frame_sharing.py:_freeze @d0721597, cash/backends/tiered_backend.py:TieredBackend.get @877fbb31 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @315c01f9, cash/backends/frame_sharing.py:_freeze @d0721597, cash/backends/tiered_backend.py:TieredBackend.get @877fbb31, cash/backends/memory_backend.py:_copy_polars @4e2f4e69 -->
 The memory tier keeps a copy of each value that only it holds, so nothing you
 do to a value you were handed reaches the stored one, or the other way round.
 Under pandas copy-on-write (pandas 3, or `pd.options.mode.copy_on_write = True`
@@ -121,6 +121,11 @@ table nor a later hit; when such an attribute can be neither deep-copied nor
 pickled, the decorator does not cache the table
 ([`STORE-FAILED`](../warnings.md#store-failed)). A column of lists or dicts is kept as
 compact bytes and read back into new lists on every hit.
+A polars `DataFrame`, `Series` or `LazyFrame` is cloned on the store and on
+every hit: the clone shares the frame's memory, which polars never writes in
+place (an edit such as `df[0, "x"] = ...` or `df.insert_column(...)` changes
+only the frame it is made on), so a hit costs well under a millisecond
+whatever the frame's size. The Python objects in an `Object` column are copied.
 `SQLiteBackend`, `RedisBackend` and `S3Backend` can replace or join these
 tiers; see
 [choosing a backend](../tutorials/feature-guides/choosing-a-backend.md).
@@ -258,7 +263,7 @@ killed process was still writing is missing, and is computed again.
 
 ## Turning objects into bytes
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @a012adf1, cash/backends/serialization.py:PickleSerializer.serialize @5b9d05cd -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @a012adf1, cash/backends/serialization.py:PickleSerializer.serialize @2d72bc8d -->
 Every result is stored with `pickle` (protocol 5), pandas DataFrames
 included, so a hit hands back the same frame: its class, index, dtypes, cell
 types, `attrs` and `flags`. Pickle is several times faster than Parquet to
@@ -266,6 +271,16 @@ write and read. Parquet files are smaller for columns with few distinct values
 (small integers, repeated strings, mostly missing values); if disk space
 matters more than speed, the [`compress`](../getting-started/configuration.md#all-settings)
 setting gets most of that back.
+
+<!-- claim: cash/backends/serialization.py:_reduce_polars @f7539f57, cash/backends/serialization.py:_polars_from_arrow @654cf355 -->
+A polars `DataFrame` or `Series` is stored as its Arrow data, so its
+buffers are written to disk and read back as they are, as a pandas frame's
+are: it comes back with its dtypes (an `Enum` stays an `Enum`, a time zone
+stays), its column names and sorted flags. Without `pyarrow`, or for a dtype
+the installed `pyarrow` lacks, it is stored with polars' own pickle, which
+is several times slower for a large frame. polars does not pickle an
+`Object` column, so a frame with one stays in memory and is computed again
+in a new process.
 
 <span id="compression"></span>
 

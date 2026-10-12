@@ -887,7 +887,8 @@ class InMemoryBackend(CacheBackend):
 
         The value is the caller's alone: nothing else has seen it. Its pandas
         tables are frozen where they are (`frame_sharing`) and kept as they
-        are, so a restore of a 400 MB table costs no second copy. A value the
+        are, so a restore of a 400 MB table costs no second copy; a polars
+        frame is kept as a clone, which shares its memory. A value the
         store would have to copy -- an array, records, an object -- is not
         kept on its first read (`TieredBackend.get` keeps it on the second):
         a restored value is mostly read once per process, and copying it
@@ -1643,13 +1644,18 @@ _CHEAP_ARRAY_BYTES = 1 << 20
 
 def _cheap_to_keep(value: Any, depth: int = 0) -> bool:
     """Can the RAM tier keep *value* without copying much of it: atoms,
-    small arrays and pandas tables it can freeze (`frame_sharing`), in a few
-    small dicts, lists and tuples (a notebook entry's payload)?"""
+    small arrays, pandas tables it can freeze (`frame_sharing`) and polars
+    frames, in a few small dicts, lists and tuples (a notebook entry's
+    payload)?"""
     kind = type(value)
     if kind in _ATOMS:
         return True
     if _is_pandas_frame(kind):
         return frame_sharing.enabled() and frame_sharing.freezable(value)
+    if _is_polars_frame(kind):
+        # Its store is a clone, which shares the immutable buffers: no copy.
+        # Not with an Object column, whose Python objects are copied.
+        return not _has_object_column(value)
     if kind.__name__ == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
         return not value.dtype.hasobject and value.nbytes <= _CHEAP_ARRAY_BYTES
     if kind in (dict, list, tuple) and depth < _CHEAP_DEPTH and len(value) <= _CHEAP_ITEMS:
@@ -1907,8 +1913,9 @@ def hit_seconds(value: Any, size_bytes: int) -> float | None:
 
 
 def _copy_polars(frame: Any) -> Any:
-    """A copy of a polars frame or series: a clone, which shares its immutable
-    buffers, with the Python objects of an ``Object`` column copied too.
+    """A copy of a polars frame, series or lazy frame: a clone, which shares
+    its immutable buffers, with the Python objects of an ``Object`` column
+    copied too.
 
     A clone shares those objects with the entry and every hit, and pickle
     refuses an ``Object`` column, so no disk tier holds one: the RAM entry
@@ -1916,6 +1923,9 @@ def _copy_polars(frame: Any) -> Any:
     """
     import polars as pl
 
+    if isinstance(frame, pl.LazyFrame):
+        # A plan has no in-place API: a clone shares it, and the data it holds.
+        return frame.clone()
     copied = copy.deepcopy(frame)
     columns = [copied] if isinstance(copied, pl.Series) else copied.get_columns()
     fresh = [
@@ -1928,8 +1938,32 @@ def _copy_polars(frame: Any) -> Any:
     return fresh[0] if isinstance(copied, pl.Series) else copied.with_columns(fresh)
 
 
+def _is_polars_frame(value_type: type) -> bool:
+    """Exactly a polars DataFrame, Series or LazyFrame: a subclass may hold
+    state of its own that a clone shares. Never imports polars."""
+    pl = sys.modules.get("polars")
+    return pl is not None and value_type in (
+        getattr(pl, "DataFrame", None),
+        getattr(pl, "Series", None),
+        getattr(pl, "LazyFrame", None),
+    )
+
+
+def _has_object_column(frame: Any) -> bool:
+    """Does a polars DataFrame or Series hold an ``Object`` column? Polars
+    nests none inside a List or Struct. A LazyFrame read from a disk tier
+    holds none: pickle refuses one."""
+    import polars as pl
+
+    if isinstance(frame, pl.LazyFrame):
+        return False
+    dtypes = [frame.dtype] if isinstance(frame, pl.Series) else frame.dtypes
+    return any(dtype == pl.Object for dtype in dtypes)
+
+
 def _frame_types() -> tuple[type, ...]:
-    """The pandas and polars frame and series classes, of those imported.
+    """The pandas and polars frame and series classes, and polars'
+    LazyFrame, of those imported.
 
     Never imports either: a value cannot hold a frame of a library that
     is not imported.
@@ -1943,6 +1977,13 @@ def _frame_types() -> tuple[type, ...]:
         frame, series = getattr(module, "DataFrame", None), getattr(module, "Series", None)
         if isinstance(frame, type) and isinstance(series, type):
             found += [frame, series]
+            if module is modules[1]:
+                # Pickled, a plan and the data it holds took 2 s a hit at 80 MB.
+                lazy = getattr(module, "LazyFrame", None)
+                if isinstance(lazy, type):
+                    found.append(lazy)
+                else:
+                    complete = False
         elif module is not None:
             complete = False  # still importing: asked again next time
     if complete:

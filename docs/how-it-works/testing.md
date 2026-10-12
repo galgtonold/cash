@@ -15,12 +15,12 @@ yourself. Figures on this page are derived from the repository by
 
 ## The suites
 
-**<!-- docnum:tests_total -->~16,850<!-- /docnum --> tests** in
-<!-- docnum:test_files -->~1,710<!-- /docnum --> files:
+**<!-- docnum:tests_total -->~17,050<!-- /docnum --> tests** in
+<!-- docnum:test_files -->~1,720<!-- /docnum --> files:
 
 | Suite | Size | What it covers |
 |---|---|---|
-| Unit | <!-- docnum:tests_unit -->~11,710<!-- /docnum --> | keys, lineage, hashing, backends, the decorator, the notebook engine with a real IPython shell |
+| Unit | <!-- docnum:tests_unit -->~11,940<!-- /docnum --> | keys, lineage, hashing, backends, the decorator, the notebook engine with a real IPython shell |
 | Notebook integration | <!-- docnum:tests_integration -->~4,530<!-- /docnum --> | real kernels running real notebooks, one folder per feature |
 | Docs | <!-- docnum:tests_docs -->~600<!-- /docnum --> | the documentation's examples and claims ([below](#the-docs-are-tested-too)) |
 
@@ -29,6 +29,7 @@ yourself. Figures on this page are derived from the repository by
 | Check | When | Platforms | What it runs |
 |---|---|---|---|
 | Unit | every push and pull request | Linux, Windows and macOS, Python 3.10 to 3.14: <!-- docnum:platforms -->15<!-- /docnum --> combinations | the unit suite, without the tests marked `perf` |
+| Polars 1 | every push and pull request | Linux, Python 3.12 | the unit tests named for polars, on the newest polars 1 (the others run on polars 2) |
 | Integration core set | every push and pull request | Linux, Python 3.10 to 3.14 | about 340 integration tests (`tools/test_selection/core_set.txt`), chosen to cover every line, feature and step sequence the whole suite covers |
 | Integration, full | nightly | Linux, Python 3.12, in 6 parallel shards | the whole integration suite |
 | Docs | every push and pull request | Linux, Python 3.12 | the docs suite, and a check that the derived numbers are current |
