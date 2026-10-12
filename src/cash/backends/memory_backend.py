@@ -606,7 +606,7 @@ class InMemoryBackend(CacheBackend):
                     # refuses it (`set`), as it does a bare uncopiable object.
                     mutable = None
         if copied is None:
-            copied = frame.copy(deep=True)
+            copied = frame_sharing.copy_keeping_blocks(frame)
         if not _own_metadata(frame, copied):
             # An attribute deepcopy refuses: the pickle round trip copies it,
             # as a disk hit would.
@@ -821,7 +821,7 @@ class InMemoryBackend(CacheBackend):
                 memo.pop(id(flat), None)  # this list is ours, and gone on return
             if copied_flat is None:
                 return None
-            copied = frame.copy(deep=True)
+            copied = frame_sharing.copy_keeping_blocks(frame)
             import pandas as pd
 
             offset = 0

@@ -96,7 +96,7 @@ copied into memory on its second read from disk in the same process, so a
 value read once after a restart costs no extra copy. Neither is kept when it
 would take more than 90% of the memory cap.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @53ddf8d3, cash/backends/frame_sharing.py:_freeze @2e3125dc, cash/backends/tiered_backend.py:TieredBackend.get @877fbb31 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @315c01f9, cash/backends/frame_sharing.py:_freeze @d0721597, cash/backends/tiered_backend.py:TieredBackend.get @877fbb31 -->
 The memory tier keeps a copy of each value that only it holds, so nothing you
 do to a value you were handed reaches the stored one, or the other way round.
 Under pandas copy-on-write (pandas 3, or `pd.options.mode.copy_on_write = True`
@@ -109,7 +109,10 @@ copies a column of a hit before any write you make through it
 stays in your table. A write to a hit that goes past pandas to the shared
 memory -- `df["x"].array[0] = ...`, or a NumPy view made writable again --
 raises `ValueError: assignment destination is read-only`; write through
-`.loc` or `.iloc` instead. A table read from disk is shared the same way. A table with nullable,
+`.loc` or `.iloc` instead. The copy keeps the table's columns laid out as
+yours were, so `df[cols].to_numpy()` gives a new array you can write
+wherever it does on your own table (`X -= X.mean(axis=0)`). A table read from
+disk is shared the same way. A table with nullable,
 categorical or period columns, a `MultiIndex`, or a subclass of `DataFrame` is
 copied on the store and on every hit. A subclass's own attributes (those it
 names in `_metadata`, such as a GeoDataFrame's `crs` or an `info` dict) are
