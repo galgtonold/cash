@@ -326,6 +326,21 @@ class TrackingState:
     # W: StatementLineageBuilder (derivation_edges). R: VirtualLineage.
     derivation_edges: dict[str, set[str]] = field(default_factory=dict)
 
+    # Statement (or control structure) source hash -> the edges it linked
+    # (``(src, dst)`` pairs of ``derivation_edges``) when it last ran, or an
+    # earlier kernel's record of them (``share_edges_key``), once read. The
+    # simulation replays a statement's record where the runtime linked them,
+    # so a restart, or an edit that rebinds a name, leaves the edges as a
+    # run from the top would.
+    # W: StatementProcessor, control structures, StatementLineage (read back
+    # after a restart). R: StatementLineage, ControlSimulation, the hit path.
+    share_edge_records: dict[str, frozenset[tuple[str, str]]] = field(default_factory=dict)
+    # The source hash of each change a run made to ``share_edge_records``,
+    # in order: its length is the generation a simulation snapshot keeps. A
+    # snapshot taken before a record of one of its statements changed is
+    # simulated again.
+    share_edge_changes: list[str] = field(default_factory=list)
+
     # Cache key -> {variable: its lineage before} for each statement whose
     # run or hit moved on the lineages of the variables stored with its
     # outputs (``StatementCacheMetadata.holders``, ``held_lineage``) this

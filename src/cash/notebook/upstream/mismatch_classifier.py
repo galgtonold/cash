@@ -36,7 +36,7 @@ from .library_rules import self_call_resets_lineage
 from .loop_rules import LoopRules
 from .simulated_callables import SimulatedCallables
 from .unsaved_edits import UnsavedEdits
-from .virtual_lineage import VirtualLineage
+from .virtual_lineage import VirtualLineage, copy_edges
 
 __all__ = ["MismatchClassifier"]
 
@@ -684,7 +684,11 @@ class MismatchClassifier:
         nothing is kept."""
         if not code:
             return True
-        scratch = SimulationResult(virtual_lineage=dict(sim.virtual_lineage), virtual_modules=set(sim.virtual_modules))
+        scratch = SimulationResult(
+            virtual_lineage=dict(sim.virtual_lineage),
+            virtual_modules=set(sim.virtual_modules),
+            share_edges=copy_edges(sim.share_edges),
+        )
         try:
             self.simulation.simulate_one_cell(scratch, -1, code)
         except Exception:  # noqa: BLE001 - cannot tell: treat as not reproduced

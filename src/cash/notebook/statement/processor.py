@@ -43,7 +43,11 @@ from cash.notebook.statement.carrier_advances import (
     carriers_an_entry_advanced,
 )
 from cash.notebook.statement.control_body import is_control_body
-from cash.notebook.statement.derivation_edges import record_shared_object_edges
+from cash.notebook.statement.derivation_edges import (
+    apply_share_record,
+    logging_edges,
+    record_shared_object_edges,
+)
 from cash.notebook.statement.directives import statement_directives, ttl_floor_from_called_functions
 from cash.notebook.statement.evictions import EvictedRecomputes
 from cash.notebook.statement.file_deps import StatementFileDeps
@@ -399,6 +403,21 @@ class StatementProcessor:
     def user_written_paths(self, paths) -> frozenset[str]:
         """*paths* without cash's own storage (its cache directories)."""
         return self._records.user_written_paths(paths)
+
+    def note_share_edges(self, code: str, edges) -> None:
+        """Record the edges the control structure *code* linked when it ran
+        (``StatementRecords.note_share_edges``), under its source hash."""
+        self._records.note_share_edges(statement_source_hash(code), edges)
+
+    def recorded_share_edges(self, code: str):
+        """The edges the control structure *code* linked when it last ran
+        (``StatementRecords.recorded_share_edges``), or None."""
+        return self._records.recorded_share_edges(statement_source_hash(code))
+
+    def note_pyplot_draws(self, code: str, names: frozenset[str]) -> None:
+        """Record the names the control structure *code* changed by drawing
+        through pyplot (``StatementRecords.note_pyplot_draws``)."""
+        self._records.note_pyplot_draws(statement_source_hash(code), names)
 
     def note_module_state(self, code: str, names, modules) -> None:
         """Record the local *modules*, held by *names*, the loop or branch
@@ -867,7 +886,14 @@ class StatementProcessor:
         # What changed through an alias moves on as a run moves it, past the
         # variables the entry restored with its outputs (moved on already).
         moved = set((metadata.holders or {}) if metadata is not None and metadata.holders_moved else ())
-        clear_rebound_edges(self.tracking_state, run.outputs, run.inputs, self.shell.user_ns)
+        clear_rebound_edges(self.tracking_state, run.outputs, run.inputs, self.shell.user_ns, run.tree)
+        # The restore put back the objects its run shared with other
+        # variables (the entry stores them together): link them as its run
+        # did, as the simulation does for a hit.
+        if not is_control_body(run.code):
+            recorded = self._records.recorded_share_edges(run.source_hash)
+            if recorded:
+                apply_share_record(self.tracking_state.derivation_edges, (), recorded)
         self.lineage_builder.replay_derivation_bumps(self.tracking_state, run.outputs, run.inputs, skip=moved)
         # The restore put the generators where the run left them; their
         # lineages follow, as the run's did.
@@ -1386,29 +1412,35 @@ class StatementProcessor:
         if inputs_moved:
             run.skip_cache = True
             run.metrics["uncacheable_reasons"].append(INPUT_CHANGED_REASON)
-        captured_vars = self.lineage_builder.capture_and_track_variables(
-            self.tracking_state,
-            run.outputs,
-            run.inputs,
-            run.code,
-            run.source_hash,
-            cache_key=run.cache_key,
-            accessed_files=execution.accessed_files,
-            tree=run.tree,
-            accessed_remote=execution.accessed_remote,
-            no_cache=(run.annotation is not None and run.annotation.no_cache)
-            or inputs_moved
-            or self._binds_a_stream(run),
-            replay_bumps=False,
-            lineage_reads=run.pyplot_drawn,
-        )
+        # What it links, from its outputs' edges dropped to those found
+        # now, is kept for the simulation (`note_share_edges`).
+        with logging_edges() as linked:
+            captured_vars = self.lineage_builder.capture_and_track_variables(
+                self.tracking_state,
+                run.outputs,
+                run.inputs,
+                run.code,
+                run.source_hash,
+                cache_key=run.cache_key,
+                accessed_files=execution.accessed_files,
+                tree=run.tree,
+                accessed_remote=execution.accessed_remote,
+                no_cache=(run.annotation is not None and run.annotation.no_cache)
+                or inputs_moved
+                or self._binds_a_stream(run),
+                replay_bumps=False,
+                lineage_reads=run.pyplot_drawn,
+            )
         # The share check, the closure check and the RAM tier each look into
         # the outputs; JSON-like ones are walked once for all of them.
         with _plain_data.one_look(captured_vars):
             holders = None
             if not run.skip_cache:
                 holders = self._refuse_unrestorable_outputs(run, captured_vars, execution.echo, execution.cost)
-            self._record_shared_object_edges(run, captured_vars, holders, execution.echo, execution.cost)
+            with logging_edges() as shared:
+                self._record_shared_object_edges(run, captured_vars, holders, execution.echo, execution.cost)
+            if not is_control_body(run.code):
+                self._records.note_share_edges(run.source_hash, linked | shared)
             self._record_file_effects(run, execution)
 
             # Detect in-place mutations (detection-only; do not modify lineage).
@@ -1518,9 +1550,7 @@ class StatementProcessor:
         if is_control_body(run.code):
             return
         names = pyplot_draw_names(run.tree, self.shell.user_ns)
-        known = self.tracking_state.pyplot_draw_outputs
-        if names or run.source_hash in known:
-            known[run.source_hash] = names
+        self._records.note_pyplot_draws(run.source_hash, names)
         if not names:
             return
         # Outputs, and inputs too, so their new lineage folds in the one

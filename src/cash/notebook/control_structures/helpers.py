@@ -33,7 +33,6 @@ from ...analysis.mutation_effects import (
     loop_target_roots,
 )
 from ...value_types import BUILTIN_NAMES
-from ..cache_key import statement_source_hash
 from ..cache_status import CacheStatus
 from ..callee_reach import module_state_names, module_state_writes, state_holders
 from ..compiled_source import is_cash_filename
@@ -319,10 +318,7 @@ def update_lineage_after_execution(
     # Drawing through pyplot changes the current figure and axes
     # (``pyplot_draws``); recorded for the simulation as a statement's is.
     drawn = pyplot_draw_names(node, user_ns)
-    draws = state.pyplot_draw_outputs
-    digest = statement_source_hash(ast.unparse(node))
-    if drawn or digest in draws:
-        draws[digest] = drawn
+    statement_processor.note_pyplot_draws(ast.unparse(node), drawn)
     mutated_vars |= drawn
     if link_shares:
         names, static = share_candidates(node, mutated_vars, user_ns)
