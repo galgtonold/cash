@@ -823,7 +823,9 @@ def _handed_to_unknown_code(tree: ast.Module, names: _LoopNames, *, bare: bool) 
             continue
         args = [*call.args, *(kw.value for kw in call.keywords)]
         arg_names = [arg.id for arg in args if isinstance(arg, ast.Name)]
-        if call_only_reads(call, arg_names, namespace):
+        # Read before the loop runs: a name the loop binds (``ax`` in ``for
+        # ax in axes: ax.plot(df)``) is not yet in the namespace.
+        if call_only_reads(call, arg_names, namespace, bound_by_now=False):
             continue
         for arg in args:
             out |= argument_roots(arg, {})

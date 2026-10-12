@@ -131,3 +131,15 @@ def test_the_simulation_applies_what_the_runtime_saw(cash_magics, cash_instance,
     simulation = NotebookSimulator(mock_shell, cash_instance, cash_magics.tracking_state).virtual_lineage
     simulated = simulation.controls.collect_mutations(ast.parse(loop).body[0], set(), set(), set())
     assert "h" in simulated
+
+
+def test_a_method_of_a_name_the_loop_binds_is_judged_when_it_runs():
+    """``ax`` in ``for ax, col in zip(axes, cols): ax.plot(emb[col])`` is not
+    bound before the loop runs. Read as a name that would fail before its
+    arguments are evaluated, ``emb`` went unwatched, was taken as changed,
+    and a cell reading it re-drew a chart instead of naming it stale."""
+    namespace = {**NAMESPACE, "axes": [object(), object()], "emb": {"a": [1], "b": [2]}}
+    from cash.analysis.mutation_effects import loop_watch_candidates
+
+    node = ast.parse("for ax, col in zip(axes, ['a', 'b']):\n    ax.plot(emb[col])").body[0]
+    assert "emb" in loop_watch_candidates(node, namespace, lambda name: name in {"heapq", "np"})

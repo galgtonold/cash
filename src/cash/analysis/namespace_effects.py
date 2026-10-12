@@ -1312,7 +1312,7 @@ def _reads_only_as_called(call: ast.Call, fn) -> bool:
     )
 
 
-def _only_reads(call: ast.Call, arg_names: list[str], user_ns: dict) -> bool:
+def _only_reads(call: ast.Call, arg_names: list[str], user_ns: dict, *, bound_by_now: bool = True) -> bool:
     """``len(df)``, ``print(arr)``, ``np.quantile(deltas, 0.95)``: the
     unshadowed builtin or a library function that only reads its arguments
     (`reads_its_arguments_only`), on pandas, numpy or builtin values only.
@@ -1322,12 +1322,16 @@ def _only_reads(call: ast.Call, arg_names: list[str], user_ns: dict) -> bool:
     every value, twice, 14 s for ``len(df)`` over 1.7 million rows; for a
     list of 1.7 million values, 38.7 s for an ``np.quantile`` plain Python
     ran in 0.4 s.
+
+    *bound_by_now* says *user_ns* holds every name the call can see when it
+    runs. Read before a loop it does not: ``ax`` in ``for ax, col in
+    zip(axes, cols): ax.plot(emb[col])`` is bound by the loop itself.
     """
     func = call.func
     root = func
     while isinstance(root, ast.Attribute):
         root = root.value
-    if isinstance(root, ast.Name) and root.id not in user_ns and not hasattr(builtins, root.id):
+    if bound_by_now and isinstance(root, ast.Name) and root.id not in user_ns and not hasattr(builtins, root.id):
         # ``seaborn.countplot(data=df)`` with ``seaborn`` never imported:
         # the name fails before any argument is evaluated, let alone changed.
         return True
@@ -1529,8 +1533,9 @@ def fits_its_receiver(method: str, receiver: object) -> bool:
     return method in FITTING_METHODS and is_estimator(receiver)
 
 
-def call_only_reads(call: ast.Call, arg_names: list[str], user_ns: dict) -> bool:
+def call_only_reads(call: ast.Call, arg_names: list[str], user_ns: dict, *, bound_by_now: bool = True) -> bool:
     """Whether *call* only reads the arguments *arg_names* name: an
     unshadowed builtin or a library function known to (``len(xs)``,
-    ``np.mean(a)``), on pandas, numpy or builtin values."""
-    return _only_reads(call, arg_names, user_ns)
+    ``np.mean(a)``), on pandas, numpy or builtin values. *bound_by_now*:
+    see `_only_reads`."""
+    return _only_reads(call, arg_names, user_ns, bound_by_now=bound_by_now)
