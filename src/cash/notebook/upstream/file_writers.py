@@ -30,6 +30,7 @@ from ...analysis.file_effects import (
 from ...analysis.namespace_effects import (
     resolve_literal_path,
     statement_calls_user_writer,
+    statement_removed_paths,
     statement_written_paths,
 )
 from ...tracking.file_dep_snapshot import snapshot_is_fresh
@@ -265,10 +266,13 @@ class FileWriterScheduler:
             relevant_read_paths_known=relevant_read_paths_known,
             stale_exports=stale_exports,
         )
+        writer_indices = self._writers_undone_by_reruns(simulation_trace, scheduled, writer_indices)
         if not writer_indices:
             return stmts_to_run_indices, restored_statements_info
 
         writer_indices = self._whole_cell_writers(simulation_trace, writer_indices, scheduled)
+        # The deletions a cell's writers bring along undo writers too.
+        writer_indices = self._writers_undone_by_reruns(simulation_trace, scheduled, writer_indices)
         scheduled.update(writer_indices)
         first_writer = min(writer_indices)
 
@@ -372,6 +376,76 @@ class FileWriterScheduler:
             ]
 
         return sorted(scheduled), restored_statements_info
+
+    def _writers_undone_by_reruns(self, simulation_trace: list, scheduled: set[int], writer_indices) -> list[int]:
+        """*writer_indices* and the writers a statement that runs before them
+        in this repair would undo.
+
+        An export cell clears its folder (``for old in glob(OUT + '/*.csv'):
+        os.remove(old)``) and refills it; another cell writes
+        ``summary.csv`` into the same folder. Re-running the clearing cell
+        removed the summary, whose writer was judged fresh from the disk as
+        it was before the repair, and the listing below lost it. A writer
+        whose file a statement that runs before it removes (the file, or the
+        folder it is in) or writes over is run again after it, as running
+        the cells from the top does. A deletion that does not resolve
+        says nothing either way.
+        """
+        chosen = set(writer_indices)
+        candidates = [w for w in self.writer_positions(simulation_trace) if w not in scheduled and w not in chosen]
+        if not candidates:
+            return list(writer_indices)
+        namespace = {**_literal_path_bindings(simulation_trace), **(self._user_ns() or {})}
+        user_ns = self._user_ns()
+
+        def where(path: str) -> str | None:
+            try:
+                return os.path.normcase(os.path.abspath(resolve_file_dep_path(path) or path))
+            except (OSError, ValueError, TypeError):
+                return None
+
+        # (position, files it writes or removes, folders it clears)
+        undoing: list[tuple[int, set[str], list[str]]] = []
+
+        def note(i: int) -> None:
+            code = simulation_trace[i].stmt_code
+            removed = statement_removed_paths(code, None, namespace) or set()
+            written = self._writer_paths(code, simulation_trace) or set() if self._is_file_writer(code) else set()
+            places = {w for p in removed | written if (w := where(p)) is not None}
+            if places:
+                folders = [p + os.sep for p in places if os.path.isdir(p)]
+                undoing.append((i, places, folders))
+
+        for i in sorted(scheduled | chosen):
+            note(i)
+        added = True
+        while added and undoing:
+            added = False
+            for w in candidates:
+                if w in chosen:
+                    continue
+                entry = simulation_trace[w]
+                if statement_write_repeatability(entry.stmt_code) == REPEATABILITY_ACCUMULATING:
+                    continue
+                if user_ns and any(is_write_stream(user_ns.get(v)) for v in entry.inputs):
+                    continue
+                paths = {p for p in (self._writer_paths(entry.stmt_code, simulation_trace) or ()) if p}
+                mine = {p for raw in paths if (p := where(raw)) is not None}
+                if not mine:
+                    continue
+                if any(
+                    i < w and (mine & places or any(p.startswith(f) for p in mine for f in folders))
+                    for i, places, folders in undoing
+                ):
+                    chosen.add(w)
+                    note(w)
+                    added = True
+                    logger.debug(
+                        "[UPSTREAM] Scheduling writer [%s] whose file a statement run before it undoes: %s",
+                        w,
+                        entry.stmt_code[:60],
+                    )
+        return sorted(chosen)
 
     def _whole_cell_writers(self, simulation_trace: list, writer_indices, scheduled) -> list[int]:
         """*writer_indices* plus every other file writer in the same cells.

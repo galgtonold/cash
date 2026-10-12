@@ -59,6 +59,7 @@ __all__ = [
     "user_callee_writing_files",
     "resolve_literal_path",
     "statement_written_paths",
+    "statement_removed_paths",
     "statement_read_paths",
     "LISTING_TEXT_MARKERS",
     "resolve_path_list",
@@ -723,6 +724,43 @@ def statement_written_paths(
     if not saw_path_bearing or not paths:
         return None
     return paths
+
+
+def statement_removed_paths(
+    code: str,
+    tree: "ast.Module | None" = None,
+    namespace: dict[str, Any] | None = None,
+) -> set[str] | None:
+    """The paths *code* deletes: a file (``os.remove(p)``, ``p.unlink()``),
+    the folder a loop over its listing deletes entries of (``for old in
+    glob(OUT + '/*.csv'): os.remove(old)``), a folder ``shutil.rmtree`` or
+    ``rmdir`` removes. Empty when it deletes nothing, None when a deletion
+    does not resolve."""
+    if not any(m in code for m in ("remove", "unlink", "rmtree", "rmdir")):
+        return set()
+    if tree is None:
+        try:
+            tree = ast.parse(textwrap.dedent(code))
+        except (SyntaxError, ValueError):
+            return None
+    removed: set[str] = set()
+    listed = _listed_entry_folders(tree, namespace)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        resolved, is_removal = _removal_call_path(node, namespace, listed)
+        func = node.func
+        if not is_removal and isinstance(func, ast.Attribute) and func.attr in ("rmtree", "rmdir"):
+            if get_base_name(func.value) in ("os", "shutil"):
+                resolved, is_removal = _call_path_argument(node, 0, namespace, _PATH_KWARG_NAMES), True
+            elif not node.args:  # ``Path(OUT).rmdir()``
+                resolved, is_removal = resolve_literal_path(func.value, namespace), True
+        if not is_removal:
+            continue
+        if resolved is None:
+            return None
+        removed.add(resolved)
+    return removed
 
 
 #: ``os.<f>(PATH)`` calls that delete one file.
