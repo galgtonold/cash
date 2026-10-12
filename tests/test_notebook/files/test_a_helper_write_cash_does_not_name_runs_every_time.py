@@ -113,7 +113,7 @@ def test_what_a_hit_may_skip_is_still_served(cash_magics, tmp_path, case):
     body, def_line = {
         "waived on the def": ("np.savetxt(p, arr)", "  # @cash:assume-safe"),
         "temporary file": (
-            "with tempfile.NamedTemporaryFile(suffix='.gz') as t: f = gzip.open(t.name, 'wt'); f.write('x'); f.close()",
+            "with tempfile.NamedTemporaryFile(suffix='.gz') as t: f = gzip.open(t, 'wt'); f.write('x'); f.close()",
             "",
         ),
         "only a counter": ("pass", ""),
