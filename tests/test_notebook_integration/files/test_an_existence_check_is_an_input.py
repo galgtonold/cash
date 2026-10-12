@@ -39,9 +39,9 @@ def _result(nb_runner) -> str:
 
 def _prepare(work: Path) -> None:
     (work / "out").mkdir()
-    (work / "out" / "a.txt").write_text("1")
-    (work / "out" / "b.txt").write_text("2")
-    (work / "flag.txt").write_text("x")
+    (work / "out" / "a.txt").write_text("1", encoding="utf-8")
+    (work / "out" / "b.txt").write_text("2", encoding="utf-8")
+    (work / "flag.txt").write_text("x", encoding="utf-8")
 
 
 def test_a_deleted_output_and_flag_are_seen(nb_runner):
@@ -74,7 +74,7 @@ def test_an_unchanged_answer_hits_after_a_restart(nb_runner):
     assert _result(nb_runner) == "['c'] True ['C'] True"
     for cell in (3, 4, 5, 6):
         assert "CACHED" in nb_runner.get_raw_output(cell), f"cell {cell} ran again with nothing changed"
-    (work / "out" / "c.txt").write_text("3")
+    (work / "out" / "c.txt").write_text("3", encoding="utf-8")
     nb_runner.restart()
     nb_runner._init_cash()
     nb_runner.enable_persist()

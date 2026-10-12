@@ -32,4 +32,4 @@ def test_the_log_is_written_on_every_run_all(nb_runner):
     nb_runner.run_all()
     nb_runner.run_all()
     assert (work / "out" / "log.txt").exists(), "the cleared folder stayed without the log"
-    assert (work / "run.log").read_text().split() == ["a", "b", "a", "b"]
+    assert (work / "run.log").read_text(encoding="utf-8").split() == ["a", "b", "a", "b"]

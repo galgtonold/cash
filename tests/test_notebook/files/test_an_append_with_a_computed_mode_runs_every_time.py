@@ -54,4 +54,4 @@ def test_the_log_grows_on_every_run(cash_magics, tmp_path):
     for _ in range(3):
         for cell in cells:
             run_cash_cell(cash_magics, cell, cells=cells)
-    assert log.read_text().split() == ["a", "b"] * 3
+    assert log.read_text(encoding="utf-8").split() == ["a", "b"] * 3
