@@ -86,7 +86,7 @@ from ...analysis.annotations import CacheAnnotation
 from ...analysis.ast_util import resolve_dotted_name
 from ...analysis.cacheability import analyze_statement, statement_writes_files
 from ...analysis.cacheability_decision import (
-    decide_cacheability,
+    cacheability_verdict,
     identity_coupled_reason,
 )
 from ...analysis.code_analyzer import CodeAnalyzer, calls_ipython, statement_code
@@ -796,7 +796,7 @@ class StatementProcessor:
         """Skip-cache *run* when the static cacheability decision refuses it."""
         if run.skip_cache:
             return
-        cacheable, reasons = decide_cacheability(
+        cacheable, reasons, varies = cacheability_verdict(
             code=run.code,
             tree=run.tree,
             inputs=run.inputs,
@@ -811,6 +811,7 @@ class StatementProcessor:
         if not cacheable:
             run.metrics["uncacheable_reasons"].extend(reasons)
             run.skip_cache = True
+            run.value_varies = varies
             return
         drawn = drawn_stream_inputs(run.tree, run.inputs, run.outputs, self.shell.user_ns)
         if drawn:
@@ -1397,6 +1398,7 @@ class StatementProcessor:
             tree=run.tree,
             accessed_remote=execution.accessed_remote,
             no_cache=(run.annotation is not None and run.annotation.no_cache)
+            or run.value_varies
             or inputs_moved
             or self._binds_a_stream(run),
             replay_bumps=False,

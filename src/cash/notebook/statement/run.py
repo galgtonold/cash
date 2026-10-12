@@ -119,6 +119,9 @@ class StatementRun:
     skip_cache: bool = False
     #: The statement reads from an open file, whose position it moves.
     drew_from_stream: bool = False
+    #: Refused because what it binds can differ between two runs with the
+    #: same key (``CacheabilityVerdict.varies``): the clock, a fresh id.
+    value_varies: bool = False
     allow_random: bool = False
     #: ``# @cash:cache-fit``: cache a bare estimator fit rather than re-run it.
     cache_fit: bool = False

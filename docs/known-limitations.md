@@ -109,8 +109,9 @@ warnings.filterwarnings("ignore", category=cash.CashRandomnessWarning)
 changes.
 
 A clock read written in the statement itself (`t = datetime.now()`) runs every
-time. One inside a function you call is not seen, and the call is cached with
-the first value:
+time, and so does a call to a function of yours that only returns one
+(`def tick(): return time.time()`). One inside a function that does more is
+not seen, and the call is cached with the first value:
 
 <!-- test:skip reason="illustrative: shows a value frozen across two runs of one cell" -->
 ```python { .nb-cell }

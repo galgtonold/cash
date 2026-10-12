@@ -26,6 +26,7 @@ from ..code_digest import unwrap_partials
 from ..effects import Action, classify_call
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import getsource
+from .ambient_reads import ambient_call, clock_helper_of
 from .ast_util import bytecode_global_refs, copy_tree, parse_cached
 from .callee_effects import callee_global_mutations
 from .file_effects import NOTEBOOK_POLICY, SCANNED_KINDS
@@ -594,8 +595,19 @@ def _forbidden_call(node: ast.Call, namespace: Mapping[str, Any]) -> str | None:
         return None
     effect = classify_call(node, namespace)
     if effect is None or effect.kind not in SCANNED_KINDS or NOTEBOOK_POLICY[effect.kind] is not Action.REFUSE:
-        return None
+        # A helper of the user's that only returns the clock (``def tick():
+        # return time.perf_counter_ns()``) is the clock read itself: cached,
+        # its caller would get a time cash cannot see change.
+        return _clock_helper_call(node, namespace) if effect is None else None
     return ".".join(effect.name.split(".")[-2:])
+
+
+def _clock_helper_call(node: ast.Call, namespace: Mapping[str, Any]) -> str | None:
+    """``tick() (which returns time.perf_counter_ns())`` when *node* calls a
+    clock helper of the user's (``clock_helper_read``), else None."""
+    if clock_helper_of(node, namespace) is None:  # type: ignore[arg-type]
+        return None
+    return ambient_call(node, namespace)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
