@@ -149,6 +149,9 @@ class FileAccessTracker:
         self.listed_stats: dict[str, tuple[int, int, int]] = {}
         # Folders the block wrote, made, removed or moved an entry in.
         self.touched_dirs: set[str] = set()
+        # Each folder spelling a write named -> its resolved form: a loop
+        # writing 2,000 files into one folder resolves it once.
+        self._touched_spellings: dict[str, str] = {}
         # Files whose inode change time moves without their content changing
         # (a SQLite ``-wal`` a reader opens as root is chown'ed): compared by
         # size and mtime only in `inputs_changed_since_read`.
@@ -367,7 +370,11 @@ class FileAccessTracker:
         folder holding it changes by the block's own hand (`touched_dirs`)."""
         try:
             raw = os.fsdecode(path) if isinstance(path, bytes) else str(path)
-            folder = normalize_path(os.path.realpath(os.path.dirname(os.path.abspath(raw))))
+            spelled = os.path.dirname(os.path.abspath(raw))
+            folder = self._touched_spellings.get(spelled)
+            if folder is None:
+                folder = normalize_path(os.path.realpath(spelled))
+                self._touched_spellings[spelled] = folder
         except (TypeError, ValueError, OSError):
             return
         for tracker in self._self_and_parents():

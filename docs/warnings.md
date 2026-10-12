@@ -1876,7 +1876,7 @@ loader runs again when the file is replaced or deleted. A folder that was alread
 there is not one the function made, so `os.makedirs(d, exist_ok=True)` leaves
 the files under `d` inputs.
 
-<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.note_entry_changed @b2453e20 -->
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.note_entry_changed @dbbf9b49 -->
 A folder the function or statement listed (`os.listdir`, `glob`,
 `Path.iterdir`, `os.walk`) counts too: a file landing in it or leaving it
 before the call returns means the listing was of a folder that is no longer
