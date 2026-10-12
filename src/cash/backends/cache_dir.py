@@ -74,7 +74,12 @@ __all__ = [
 #: run or key differently. An older build stored entries for some of them
 #: (``sns.barplot(...)``, ``s.apply(tracker.record)``) that this build would
 #: still find and serve, so they are cleared.
-CACHE_FORMAT_VERSION = 4
+#: 5: a statement or a cached call whose helper writes, creates or removes a
+#: file by name, or one that lists a folder, now runs every time or keys on
+#: what it lists. An older build stored entries for some of them that this
+#: build would still find and serve, skipping the write or returning a
+#: stale listing, so they are cleared.
+CACHE_FORMAT_VERSION = 5
 
 #: The per-directory format stamp. No entry suffix, so entry globs skip it.
 VERSION_FILENAME = "CACHE_VERSION"
