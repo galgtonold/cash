@@ -328,7 +328,7 @@ class StatementLineage:
         stmt_code: str,
         tree: ast.Module,
         virtual_modules: set[str] | None = None,
-        inputs_changed: Callable[[], bool] | None = None,
+        inputs_changed: Callable[[set[str]], bool] | None = None,
     ) -> set[str]:
         """Names *tree*'s calls change in place, decided as the runtime decides
         them (``classify_receivers``).
@@ -386,7 +386,10 @@ class StatementLineage:
             unseen = (fresh.unknown_receivers | fresh.unknown_args) - mutated
             if unseen:
                 unseen -= rewatch_exempt(tree, user_ns, self._function_source)
-            if unseen and inputs_changed():
+            # What the statement changes itself (`clf` in `clf.fit(X, y)`)
+            # always differs from what the kernel holds after it ran: only
+            # the rest says whether it runs on new inputs.
+            if unseen and inputs_changed(mutated):
                 mutated |= unseen
         return mutated
 
@@ -421,7 +424,9 @@ class StatementLineage:
                 stmt_code,
                 tree,
                 virtual_modules,
-                None if virtual_lineage is None else lambda: self._inputs_moved(inputs, virtual_lineage),
+                None
+                if virtual_lineage is None
+                else lambda changed: self._inputs_moved(inputs - outputs - changed, virtual_lineage),
             )
             outputs |= effects.arg_mutations
         if not is_control_body(stmt_code):
