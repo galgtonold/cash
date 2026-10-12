@@ -1049,6 +1049,13 @@ def _only_reads(call: ast.Call, arg_names: list[str], user_ns: dict) -> bool:
     ran in 0.4 s.
     """
     func = call.func
+    root = func
+    while isinstance(root, ast.Attribute):
+        root = root.value
+    if isinstance(root, ast.Name) and root.id not in user_ns and not hasattr(builtins, root.id):
+        # ``seaborn.countplot(data=df)`` with ``seaborn`` never imported:
+        # the name fails before any argument is evaluated, let alone changed.
+        return True
     if isinstance(func, ast.Name) and func.id in _READING_BUILTINS:
         if func.id in user_ns and user_ns[func.id] is not getattr(builtins, func.id):
             return False
