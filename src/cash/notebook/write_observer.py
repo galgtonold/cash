@@ -22,9 +22,11 @@ from __future__ import annotations
 
 import contextvars
 import os
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from cash.install_paths import is_user_code_file
 from cash.tracking import io_watch
 
 __all__ = ["WrittenPaths", "kept_writes", "observe_writes"]
@@ -60,6 +62,35 @@ def _record(sinks: tuple[WrittenPaths, ...], path: object, appends: bool = False
             sink.appended.add(resolved)
 
 
+#: Modules that open a file for the code that calls them (``Path.open``,
+#: ``gzip.open``, ``codecs.open``, the ``open`` IPython puts in a kernel's
+#: builtins): whose append it is, is their caller's. Cash's own frames too.
+_PASS_THROUGH_OPENERS = frozenset(
+    {"pathlib", "pathlib._local", "pathlib._abc", "io", "_pyio", "codecs", "gzip", "bz2", "lzma"}
+    | {"IPython.core.interactiveshell"}
+)
+
+
+def _passes_through(frame) -> bool:
+    name = frame.f_globals.get("__name__") or ""
+    return name in _PASS_THROUGH_OPENERS or name == "cash" or name.startswith("cash.")
+
+
+def _appended_by_user_code() -> bool:
+    """Was the append being audited opened by the user's own code (a helper's
+    ``open(path, mode)``), not by a library's (a log handler's)?
+
+    Such an append is a write a hit would skip, like a replacing one, and the
+    static check cannot see it when the mode is computed (``open(p, mode)``)."""
+    try:
+        frame = sys._getframe(io_watch.CALLER_DEPTH + 1)
+    except ValueError:
+        return False
+    while frame is not None and _passes_through(frame):
+        frame = frame.f_back
+    return frame is not None and is_user_code_file(frame.f_code.co_filename)
+
+
 def _on_open(args: tuple) -> None:
     sinks = _active.get()
     if not sinks:
@@ -67,7 +98,8 @@ def _on_open(args: tuple) -> None:
     path, mode, flags = args
     if isinstance(mode, str):
         written = any(c in mode for c in "wax+")
-        appends = "a" in mode
+        # An append the user's own ``open()`` made is a write a hit skips.
+        appends = "a" in mode and not _appended_by_user_code()
     else:  # os.open
         written = isinstance(flags, int) and bool(flags & _WRITE_FLAGS)
         appends = written and bool(flags & os.O_APPEND) and not flags & os.O_TRUNC
@@ -105,9 +137,10 @@ def kept_writes(written: "set[str] | frozenset[str]", storage_root: object = Non
     removed again within the block (a temporary file) left nothing a cache
     hit would skip.
 
-    A file only appended to is left to the static writer check, which reads
-    ``open(p, 'a')`` and ``to_csv(mode='a')`` in the user's code: an append
-    seen in a library's code is a log handler's, as often as not."""
+    A file only appended to by a library is left to the static writer check,
+    which reads ``to_csv(mode='a')`` in the user's code: an append seen in a
+    library's code is a log handler's, as often as not. One the user's own
+    code opened (``open(p, mode)`` in a helper) is never in *appended*."""
     if not written:
         return []
     root = None
