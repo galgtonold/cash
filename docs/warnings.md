@@ -639,7 +639,7 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @0e28a6a5 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @6c1ea7cb -->
 **What happened.** The function reads a module global or captured variable,
 and calling the function changed it. The message names the variable and the
 line that changes it, which may be in a helper. A callable object that changes
@@ -838,7 +838,7 @@ program runs.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @538cb073 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @4d2ab472 -->
 **What happened.** Something raised while cash built the cache key. The
 message names the exception and, when it can, the argument type. The call ran
 and returned its real result, uncached.
@@ -1227,7 +1227,7 @@ first cached call differs between runs. Turn the check off with
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @538cb073 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @4d2ab472 -->
 **What happened.** An argument could not be hashed, so no key could be built.
 The message names the type, says the value is nested in a container, or says
 it is nested too deeply to key: deeper than pickle follows, such as a long
@@ -1934,7 +1934,7 @@ interrupted write.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:CallRunner._inputs_moved_check @ac875baf, cash/decorator/runtime.py:KeyBuilder.inputs_state_now @1fee8a6a -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._inputs_moved_check @2dd33f3d, cash/decorator/runtime.py:KeyBuilder.ledger_now @355ab3b5 -->
 **What happened.** A global, a class attribute or other program state the
 function's key read changed while the call was running: another thread
 reloaded a config, say. The result was returned but not stored. The check
