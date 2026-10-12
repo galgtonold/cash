@@ -1250,7 +1250,7 @@ def call_arguments(
     changes it as much as one that returns nothing, and a hit that
     restored only ``summary`` left ``df`` without its new column.
 
-    Only a function of the user's (:func:`_users_callee`) is followed past
+    Only a function of the user's (:func:`users_callee`) is followed past
     a bare call: a library function whose result is kept (``m =
     np.mean(arr)``, ``X = scaler.transform(df)``) returns its answer
     instead of changing its arguments, and watching it would hash each
@@ -1273,7 +1273,7 @@ def call_arguments(
     iterated = iterated_sources(tree)
     named_users_calls: list[ast.Call] = []
     for call in statement_calls(tree, control_bodies=False):
-        if _users_callee(call.func, user_ns):
+        if users_callee(call.func, user_ns):
             if isinstance(call.func, ast.Name):
                 named_users_calls.append(call)
         elif not _asks_for_a_write(call, user_ns):
@@ -1613,7 +1613,7 @@ def _changeable(names: set[str], user_ns: Mapping[str, Any]) -> frozenset[str]:
     return frozenset(out)
 
 
-def _users_callee(func: ast.expr, user_ns: Mapping[str, Any]) -> bool:
+def users_callee(func: ast.expr, user_ns: Mapping[str, Any]) -> bool:
     """Whether the callee *func* names is code of the user's: a function or
     class defined in the notebook or a project module, or a method of an
     object of such a class. One cash cannot name without running something

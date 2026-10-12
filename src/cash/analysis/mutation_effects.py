@@ -71,6 +71,7 @@ from .namespace_effects import (
     fits_its_receiver,
     function_handoffs,
     handed_to_params,
+    users_callee,
 )
 from .object_protocol import ObjectProtocolResets, object_protocol_mutations
 
@@ -617,9 +618,32 @@ def _iterable_roots(node: ast.expr, names: _LoopNames | None = None) -> set[str]
         for sub in ast.walk(node):
             if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
                 source = names.user_source(sub.func.id)
-                if source:
+                if source and resolve_function_def(sub.func.id, lambda _name, s=source: s) is not None:
                     roots |= _function_global_reads(source)
+                elif (
+                    names.namespace is not None
+                    and isinstance(names.namespace.get(sub.func.id), (types.FunctionType, type(None)))
+                    and users_callee(sub.func, names.namespace)
+                ):
+                    # A function of the user's whose body cannot be read (a
+                    # lambda, one made by ``exec``) may hand out the items
+                    # of any global it reaches.
+                    roots |= _mutable_globals(names)
     return roots
+
+
+#: Names IPython binds in the user namespace, not the user's data.
+_IPYTHON_NAMES = frozenset({"In", "Out", "exit", "quit", "get_ipython"})
+
+
+def _mutable_globals(names: _LoopNames) -> set[str]:
+    """Every variable of the notebook a call could change in place."""
+    namespace = names.namespace or {}
+    return {
+        name
+        for name in namespace
+        if not name.startswith("_") and name not in _IPYTHON_NAMES and _watchable(name, namespace, names.is_module)
+    }
 
 
 @functools.lru_cache(maxsize=1024)

@@ -54,3 +54,14 @@ def test_a_later_statement_of_the_pass_sees_the_change(cash_magics, mock_shell, 
     for cell in cells:
         run_cash_cell(cash_magics, cell, cells=cells)
     assert mock_shell.user_ns["log"] == after
+
+
+def test_a_header_calling_an_unreadable_function_hands_out_every_mutable_global():
+    from cash.analysis.mutation_effects import loop_target_roots
+
+    records = [{"v": 1}]
+    namespace = {"records": records, "rate": 2, "other": [1], "active": lambda: records}
+    node = ast.parse("for r in active():\n    r['v'] = 1").body[0]
+    roots = loop_target_roots(node, namespace, lambda name: False, lambda name: None)
+    assert roots["r"] >= {"records", "other"}
+    assert "rate" not in roots["r"]
