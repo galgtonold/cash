@@ -393,3 +393,37 @@ def test_chdir_collision_run_all_serves_old_dirs_file(nb_runner, tmp_path):
         f"DIFFERENT data.csv served the OLD directory's data (ground truth "
         f"= [100, 200, 300, 400]). Got: {out!r}"
     )
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    "read",
+    [
+        "pd.read_csv(pathlib.Path.cwd() / 'data.csv')",
+        "pd.read_csv(os.path.abspath('data.csv'))",
+        "pd.read_csv(pathlib.Path('data.csv').resolve())",
+    ],
+    ids=["cwd", "abspath", "resolve"],
+)
+def test_a_path_made_absolute_follows_an_edited_chdir(nb_runner, tmp_path, read):
+    """The path is absolute by the time it is read, so the file dependency
+    names the old folder's file, unchanged; the key must fold the working
+    directory the statement made it from."""
+    dira = tmp_path / "dira"
+    dirb = tmp_path / "dirb"
+    dira.mkdir()
+    dirb.mkdir()
+    pd.DataFrame({"v": [1]}).to_csv(dira / "data.csv", index=False)
+    pd.DataFrame({"v": [2]}).to_csv(dirb / "data.csv", index=False)
+    cells = [
+        "import os, pathlib\nimport pandas as pd",
+        f"os.chdir(r'{_p(dira)}')",
+        f"k = int({read}.v.sum())",
+    ]
+    nb_runner.create_notebook(cells)
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert nb_runner.peek("k") == "1"
+    nb_runner.set_cell_source(2, f"os.chdir(r'{_p(dirb)}')")
+    nb_runner.run_all()
+    assert nb_runner.peek("k") == "2"

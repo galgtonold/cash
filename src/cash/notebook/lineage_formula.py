@@ -26,7 +26,7 @@ from typing import Any, Callable, Iterable
 from ..analysis.ast_util import parse_cached
 from ..analysis.purity_analyzer import get_analyzer
 from ..code_digest import module_identity
-from ..effects import environment_component, environment_input
+from ..effects import ENVIRONMENT_TEXT_MARKERS, environment_component, environment_input
 from ..tracking.module_symbols import closure_digest, static_attribute_reads
 from ..tracking.randomness import hidden_lineage_reads, observed_rng_reads
 from ..value_hash import compute_hash, is_identity_fallback_hash
@@ -340,17 +340,13 @@ def input_lineage(
         return None
 
 
-#: Spellings a statement must contain to read the environment at all: the
-#: cheap test before parsing it (`statement_environment_reads`).
-_ENVIRONMENT_MARKERS = ("environ", "getenv", "getcwd")
-
-
 def statement_environment_reads(
     code: str, user_ns: Mapping[str, Any] | None = None, reach: Reach | None = None
 ) -> set[tuple[str, str]]:
     """The environment reads whose value a key can fold
     (`cash.effects.environment_input`): ``os.getenv("NAME")``,
-    ``os.environ["NAME"]``, ``os.getcwd()``, written in *code* or in a
+    ``os.environ["NAME"]``, ``os.getcwd()``, ``Path.cwd()``, a relative path
+    made absolute (``os.path.abspath(p)``, ``Path(p).resolve()``), written in *code* or in a
     function of the user's it calls (:func:`callee_environment_reads`;
     *reach* as there).
     """
@@ -359,11 +355,10 @@ def statement_environment_reads(
 
 def _written_environment_reads(code: str, user_ns: Mapping[str, Any] | None) -> set[tuple[str, str]]:
     """The environment reads written in *code* itself."""
-    if not code or not any(marker in code for marker in _ENVIRONMENT_MARKERS):
+    if not code or not any(marker in code for marker in ENVIRONMENT_TEXT_MARKERS):
         return set()
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
+    tree = parse_cached(code)
+    if tree is None:
         return set()
     found = set()
     for node in ast.walk(tree):

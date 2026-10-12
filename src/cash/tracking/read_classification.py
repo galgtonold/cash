@@ -75,6 +75,18 @@ def regular_file_stat(path: str) -> tuple[int, int, int] | None:
     return stat_key(st)
 
 
+def folder_stat(path: str) -> tuple[int, int, int] | None:
+    """`stat_key` of *path* when it is a directory, None otherwise."""
+
+    try:
+        st = os.stat(path)
+    except (OSError, ValueError):
+        return None
+    if not stat.S_ISDIR(st.st_mode):
+        return None
+    return stat_key(st)
+
+
 #: The folder joblib memory-maps a parallel call's large arguments into.
 SCRATCH_MEMMAP = "joblib_memmapping_folder_"
 

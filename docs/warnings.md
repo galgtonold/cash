@@ -1850,9 +1850,9 @@ handle), or on Windows a file held open by another process.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @7d20722f, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @b6d6c4b7 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @7d20722f, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @efc7273e -->
 <!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @57e71e71, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @538d7a29 -->
-<!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @98e0fdb4, cash/notebook/statement/processor.py:StatementProcessor._post_execute @3b2a3a02 -->
+<!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @6c593ab7, cash/notebook/statement/processor.py:StatementProcessor._post_execute @3b2a3a02 -->
 === "Decorator"
 
     **What happened.** A file the function read changed before it returned.
@@ -1869,7 +1869,7 @@ handle), or on Windows a file held open by another process.
 **Why it matters.** Nobody can say which version of the file the result came
 from, so storing it could serve a stale result later.
 
-<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.created_by_block @edb2ba0e, cash/tracking/file_tracker.py:FileAccessTracker.get_accessed_files @5c8d904e, cash/tracking/read_events.py:_on_mkdir @006fdec4 -->
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.created_by_block @edb2ba0e, cash/tracking/file_tracker.py:FileAccessTracker.get_accessed_files @5c8d904e, cash/tracking/read_events.py:_on_mkdir @309b5321 -->
 A file the function creates itself (opened for writing, in a directory it made
 with `tempfile.TemporaryDirectory`, `mkdtemp` or `os.mkdir`, or by
 `tempfile.mkstemp`) is its own output while the function runs: writing a
@@ -1879,6 +1879,15 @@ checked against its content at that moment: a "download if missing, then read"
 loader runs again when the file is replaced or deleted. A folder that was already
 there is not one the function made, so `os.makedirs(d, exist_ok=True)` leaves
 the files under `d` inputs.
+
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.note_entry_changed @dbbf9b49 -->
+A folder the function or statement listed (`os.listdir`, `glob`,
+`Path.iterdir`, `os.walk`) counts too: a file landing in it or leaving it
+before the call returns means the listing was of a folder that is no longer
+there. A folder in which the call itself writes, makes, removes or moves an
+entry is left out, as its own output moves the folder too and cash cannot tell
+the two apart; a file arriving from outside while such a call runs is not
+caught.
 
 **What to do.** Usually nothing: the next call or run caches normally. If it
 fires on every run, the function or statement probably reads a file and then

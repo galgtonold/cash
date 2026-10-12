@@ -102,7 +102,13 @@ def compute_file_hash_component(
                 rel_path = name if rel_dir == "." else f"{rel_dir}/{name}"
                 if not rel_path.startswith("../../../"):
                     display_path = rel_path
-        file_components.append(f"{display_path}:{stat.st_mtime}:{stat.st_size}")
+        # The full stat key (`stat_key`): on POSIX the inode change time
+        # moves on every write, so an edit that keeps the size and puts the
+        # mtime back (`cp -p`, `rsync -t`, unzip) still gives a new lineage.
+        # Size and mtime alone left a value read through a helper that also
+        # writes a file -- which no stored entry checks by content -- with
+        # its old lineage, and the cells below served the old result.
+        file_components.append(f"{display_path}:{stat.st_mtime_ns}:{stat.st_size}:{getattr(stat, 'st_ctime_ns', 0)}")
 
     for url in sorted(accessed_remote or ()):
         # The URL is the identity and the token is the state, exactly as

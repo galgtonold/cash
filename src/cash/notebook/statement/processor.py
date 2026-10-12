@@ -96,7 +96,7 @@ from ...analysis.mutation_effects import (
     live_function_source,
     statement_effects,
 )
-from ...analysis.namespace_effects import statement_calls_user_writer
+from ...analysis.namespace_effects import statement_calls_user_writer, statement_waives_through_user_code
 from ...analytics import AnalyticsManager
 from ...tracking.file_dep_snapshot import file_state_epoch
 from ...tracking.file_tracker import FileAccessTracker
@@ -139,7 +139,7 @@ from ..shared_objects import (
     walk_budget,
 )
 from ..value_cutoff import LineageAliasStore
-from ..write_observer import observe_writes
+from ..write_observer import kept_writes, observe_writes
 
 __all__ = ["StatementProcessor", "is_control_body"]
 
@@ -1055,6 +1055,7 @@ class StatementProcessor:
                                 user_ns[LOOP_ITERABLE_NAME] = shadowed
                 execution.accessed_files = file_tracker.get_accessed_files() | run.header_files
                 execution.written_paths = frozenset(written_paths)
+                execution.appended_paths = frozenset(written_paths.appended)
                 execution.file_tracker = file_tracker
                 execution.accessed_remote = file_tracker.get_accessed_remote_urls() | run.header_remote
                 # The keyed form (`run.code`), not what ran: a call routed
@@ -1068,6 +1069,11 @@ class StatementProcessor:
         if figures_before is not None and execution.result.success and pyplot_state() != figures_before:
             run.skip_cache = True
             run.metrics["uncacheable_reasons"].append(CHANGED_PYPLOT_REASON)
+        if not run.skip_cache and execution.written_paths and execution.result.success:
+            wrote = self._kept_writes_reason(run, execution)
+            if wrote:
+                run.skip_cache = True
+                run.metrics["uncacheable_reasons"].append(wrote)
         if positions:
             run.carriers_advanced = moved_carrier_names(positions, self.shell.user_ns)
         if held:
@@ -1085,6 +1091,36 @@ class StatementProcessor:
         execution.wall_time = wall_time
         execution.cost, execution.store_cost, execution.tax = self._calls.price(execution.wall_time, marks)
         execution.cached_call_reads = self._calls.files_read_in_cached_calls(marks)
+
+    def _kept_writes_reason(self, run: StatementRun, execution: StatementExecution) -> str | None:
+        """Why *run* may not be stored when it was seen writing a file of the
+        user's that is still there, or None.
+
+        Cash's static writer check reads the calls it knows
+        (``df.to_csv``, ``open(p, 'w')``); ``np.savetxt``, ``joblib.dump``,
+        ``gzip.open(p, 'wt')`` and ``os.open`` in a helper are none of
+        those. Stored, the next Run All restored the value without the
+        write: the folder cleared at the top stayed empty, and a staging file
+        written twice was read with its later content. A file written and
+        removed again within the statement is no effect a hit skips.
+        ``# @cash:assume-safe`` on the statement, or a waiver in a function
+        it calls, keeps it cacheable."""
+        backend = self.cash_instance.backend if self.cash_instance else None
+        written = kept_writes(execution.written_paths, getattr(backend, "local_dir", None), execution.appended_paths)
+        if not written:
+            return None
+        if getattr(run.annotation, "assume_safe", False):
+            return None
+        try:
+            if statement_waives_through_user_code(run.code, self.shell.user_ns, run.tree):
+                return None
+        except Exception:
+            logger.debug("%s could not read the waivers of %r", _LOG_PROCESSOR, run.code[:80], exc_info=True)
+        more = f" and {len(written) - 1} more" if len(written) > 1 else ""
+        return (
+            f"Wrote {written[0]}{more} as it ran: a cache hit would skip the write, "
+            "so the statement runs every time (# @cash:assume-safe caches it anyway)"
+        )
 
     @contextmanager
     def watching_reads(self, code: str) -> Generator[None, None, None]:

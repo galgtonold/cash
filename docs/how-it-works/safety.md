@@ -190,14 +190,29 @@ cash spots side effects from the statement's source, without running it. So:
   package is not looked into, and neither is a method called on an object
   (`report.build()`): put `# @cash:no-cache` on such a statement.
 
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._kept_writes_reason @61f032cd, cash/notebook/write_observer.py:kept_writes @8a47bb69 -->
+- In your function, deleting, moving or creating a file or folder by name
+  counts too (`p.touch()`, `p.unlink()`, `os.remove(p)`, `shutil.move(a, b)`,
+  `os.makedirs(d)`). A write on a handle passed in (`f.write(...)`) does not,
+  since it may be a buffer in memory.
+- A statement seen writing a file as it ran is not stored either, whichever
+  library wrote it (`np.savetxt`, `np.savez`, `joblib.dump`,
+  `gzip.open(p, "wt")`, `os.open`), and neither is a cached call inside it,
+  so it runs every time. A file it only appended to is left to the check of
+  the source above, and so is one it removed again before it finished (a
+  temporary file). A waiver anywhere in a function it calls
+  (`# @cash:assume-safe`, `with cash.assume_safe():`) or `@pure` keeps it
+  cacheable.
+
 <!-- claim: cash/analysis/code_analyzer.py:_forbidden_call @8d78391d, cash/notebook/lineage_formula.py:statement_environment_component @5a647f0c -->
 A statement that reads the clock (`time.time()`, `time.perf_counter_ns()`,
 `datetime.now()`), makes a
 fresh id (`uuid.uuid4()`), reads random bytes from the system (`os.urandom()`,
 `secrets.token_hex()`) or asks for input (`input()`, `getpass.getpass()`)
 runs every time too. A statement that reads an environment variable by name
-(`os.getenv("TENANT")`) or `os.getcwd()` is cached, with a digest of the value
-in its key. So is a read inside a function of your own the statement calls,
+(`os.getenv("TENANT")`) or the working directory (`os.getcwd()`,
+`Path.cwd()`, or a relative path made absolute with `os.path.abspath(p)` or
+`Path(p).resolve()`) is cached, with a digest of the value in its key. So is a read inside a function of your own the statement calls,
 in a cell or in a local module, however deep; a read inside an installed
 package is not seen.
 

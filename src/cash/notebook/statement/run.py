@@ -232,6 +232,8 @@ class StatementExecution:
     accessed_remote: set[str] = field(default_factory=set)
     #: Files the statement was seen writing (``write_observer``).
     written_paths: frozenset[str] = frozenset()
+    #: Those of ``written_paths`` it only appended to.
+    appended_paths: frozenset[str] = frozenset()
     #: The `FileAccessTracker` of the run, for the store: which files moved
     #: since the statement read them, and their digests as it read them.
     file_tracker: Any = None

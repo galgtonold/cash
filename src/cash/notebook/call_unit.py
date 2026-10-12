@@ -42,7 +42,7 @@ from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.cacheability import analyze_statement
 from cash.analysis.cacheability_decision import decide_cacheability
 from cash.analysis.handed_callables import hands_a_state_changing_callable
-from cash.analysis.namespace_effects import user_callee_using_pyplot
+from cash.analysis.namespace_effects import user_callee_using_pyplot, user_callee_waiving
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, restore_kind
 from cash.cost_model import estimated_restore_time
 from cash.notebook._trace import trace_event
@@ -70,6 +70,7 @@ from cash.notebook.call_refs import (
 from cash.notebook.held_sentinels import find_for_call, put_back_for_call
 from cash.notebook.pyplot_state import pyplot_state
 from cash.notebook.read_handles import reaches_read_handle
+from cash.notebook.write_observer import WrittenPaths, kept_writes, observe_writes
 from cash.sizing import estimate_object_size
 from cash.tracking.file_tracker import FileAccessTracker, tracking_seconds
 from cash.tracking.function_tracker import is_local_module
@@ -947,7 +948,7 @@ class CallUnit:
         )
         self._running += 1
         try:
-            with call_tracker:
+            with call_tracker, observe_writes() as written:
                 result, stdout_text, stderr_text = call_capturing_output(call.fn, call.args, call.kwargs)
         finally:
             self._running -= 1
@@ -955,8 +956,10 @@ class CallUnit:
         # Read while `result` is this frame's only reference of its own.
         result_held = refs_beyond([result]) > ONE_LOCAL
         stored = False
-        if self._did_what_a_hit_cannot(call, rng_before, arg_hashes_before, ticket) or _rebound_unwatched(
-            call, module_before
+        if (
+            self._did_what_a_hit_cannot(call, rng_before, arg_hashes_before, ticket)
+            or _rebound_unwatched(call, module_before)
+            or self._wrote_files(call, written)
         ):
             self._entries.refuse(call.key)
         # Not stored when it made, picked or drew on a pyplot figure, which a
@@ -984,6 +987,20 @@ class CallUnit:
         if stored and self._invocations:
             self._invocations[-1].stored = True
         return result
+
+    def _wrote_files(self, call: _Call, written: WrittenPaths) -> bool:
+        """Whether the call just run wrote a file of the user's that is still
+        there, which a hit would skip: ``np.savetxt``, ``joblib.dump`` or
+        ``os.open`` in a helper, none of which cash's static writer check
+        reads. A waiver in a function it reaches (``# @cash:assume-safe``,
+        ``with cash.assume_safe():``, ``@pure``) keeps it storable."""
+        root = getattr(getattr(self._cash, "backend", None), "local_dir", None)
+        if not kept_writes(written, root, written.appended):
+            return False
+        try:
+            return not user_callee_waiving(call.fn)
+        except Exception:  # noqa: BLE001 - unjudged: the write stands
+            return True
 
     def _did_what_a_hit_cannot(
         self, call: _Call, rng_before, arg_hashes_before: tuple | None, ticket: tuple[int, int] = (0, 0)
