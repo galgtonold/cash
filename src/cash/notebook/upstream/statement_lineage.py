@@ -426,7 +426,7 @@ class StatementLineage:
                 virtual_modules,
                 None
                 if virtual_lineage is None
-                else lambda changed: self._inputs_moved(inputs - outputs - changed, virtual_lineage),
+                else lambda changed: self._inputs_moved(inputs - outputs - changed, virtual_lineage, stmt_code),
             )
             outputs |= effects.arg_mutations
         if not is_control_body(stmt_code):
@@ -440,12 +440,15 @@ class StatementLineage:
             inputs |= drawn
         return effects, inputs, outputs
 
-    def _inputs_moved(self, inputs: set[str], virtual_lineage: Mapping[str, str]) -> bool:
+    def _inputs_moved(self, inputs: set[str], virtual_lineage: Mapping[str, str], stmt_code: str = "") -> bool:
         """Whether the simulation gives one of *inputs* another lineage than
-        the one the kernel holds it with: the statement then runs on inputs
-        it did not run on to make what the kernel holds. A name the kernel
-        holds no lineage for (after a restart) says nothing either way."""
-        held = self.tracking_state.variable_lineage
+        the one the statement last ran with in this kernel
+        (``statement_entry_lineages``), else than the one the kernel holds
+        it with: the statement then runs on inputs it did not run on. A name
+        with no lineage there (after a restart) says nothing either way."""
+        held = self.tracking_state.statement_entry_lineages.get(stmt_code)
+        if held is None:
+            held = self.tracking_state.variable_lineage
         return any(name in virtual_lineage and name in held and virtual_lineage[name] != held[name] for name in inputs)
 
     def pyplot_draw_outputs(self, stmt_code: str, tree: ast.AST | None) -> frozenset[str]:

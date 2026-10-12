@@ -61,6 +61,14 @@ class TrackingState:
     # W: StatementProcessor, ControlStructureProcessor. R: FileWriterScheduler.
     executed_write_input_lineages: dict[str, dict[str, str]] = field(default_factory=dict)
 
+    # Code of a statement the runtime keyed this session -> the lineages its
+    # inputs had then. The simulation asks whether a statement runs on new
+    # inputs against these, not against the lineage the kernel holds at the
+    # end, which a later statement (``lg.handlers.clear()`` after
+    # ``lg.setLevel(...)``) has moved on.
+    # W: StatementProcessor. R: StatementLineage._inputs_moved.
+    statement_entry_lineages: dict[str, dict[str, str]] = field(default_factory=dict)
+
     # sha256 of every whole-cell source that ran this session, to tell an
     # edited-but-not-rerun seed() cell from one that ran.
     # W: CellExecutor. R: UpstreamChecker.
