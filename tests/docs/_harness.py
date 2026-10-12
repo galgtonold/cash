@@ -22,6 +22,8 @@ import logging
 import operator
 import os
 import re
+import sys
+import types
 import warnings
 from ast import PyCF_ALLOW_TOP_LEVEL_AWAIT
 from dataclasses import dataclass, field
@@ -697,7 +699,10 @@ def _run_page(
 
     script = "\n\n".join(pieces)
     script = _apply_inject_comments(script)
-    namespace: dict[str, Any] = {"__name__": "__cash_docs_test__"}
+    # A real module in ``sys.modules`` for the page while it runs: a fence
+    # that defines a dataclass needs ``sys.modules[cls.__module__]``.
+    page_module = types.ModuleType("__cash_docs_test__")
+    namespace: dict[str, Any] = page_module.__dict__
     if namespace_overrides:
         namespace.update(namespace_overrides)
 
@@ -741,12 +746,20 @@ def _run_page(
             "exec",
             flags=PyCF_ALLOW_TOP_LEVEL_AWAIT,
         )
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always", CashWarning)
-            # If the compiled code is a coroutine (top-level await), run it.
-            maybe_coro = eval(code_obj, namespace)
-            if asyncio.iscoroutine(maybe_coro):
-                asyncio.run(maybe_coro)
+        previous_module = sys.modules.get(page_module.__name__)
+        sys.modules[page_module.__name__] = page_module
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", CashWarning)
+                # If the compiled code is a coroutine (top-level await), run it.
+                maybe_coro = eval(code_obj, namespace)
+                if asyncio.iscoroutine(maybe_coro):
+                    asyncio.run(maybe_coro)
+        finally:
+            if previous_module is None:
+                sys.modules.pop(page_module.__name__, None)
+            else:
+                sys.modules[page_module.__name__] = previous_module
     except Exception as e:
         raise PageExecutionError(f"{md_path}: exec failed with {type(e).__name__}: {e}") from e
 
