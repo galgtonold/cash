@@ -328,7 +328,15 @@ def _calls_pyplot(
     func: types.FunctionType, replaces: bool, appends_itself: bool, callees: tuple[ast.expr, ...]
 ) -> bool:
     """Whether *func*'s body calls a function of the pyplot module: through
-    the module (``plt.gca``) or a name bound to one of its functions."""
+    the module (``plt.gca``) or a name bound to one of its functions, one it
+    imports itself (``import matplotlib.pyplot as mp``), or one a default
+    of its holds (``def f(get=plt.gca)``)."""
+    names = func.__code__.co_names
+    if "matplotlib.pyplot" in names or ("matplotlib" in names and "pyplot" in names):
+        return True
+    defaults = (*(func.__defaults__ or ()), *(func.__kwdefaults__ or {}).values())
+    if any(_is_pyplot_object(value) for value in defaults):
+        return True
     namespace = func.__globals__
     for expr in callees:
         if isinstance(expr, ast.Attribute):
@@ -353,10 +361,38 @@ def statement_user_pyplot_call(
         return None
     calls = _calls(code) if tree is None else tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
     for node in calls:
-        found = user_callee_using_pyplot(resolve_callee(node.func, namespace))
+        # A method of the notebook's own class (``insp.nlines()``) as well.
+        callee = resolve_callee(node.func, namespace, modules_only=False)
+        if isinstance(callee, types.MethodType):
+            callee = callee.__func__
+        found = user_callee_using_pyplot(callee)
         if found:
             return ast.unparse(node.func), found
+        # ``nlines(plt)``: user code handed pyplot reads it through a name
+        # its body cannot resolve.
+        if _hands_pyplot(node, namespace):
+            body = _examined_body(callee)
+            if body is not None:
+                return ast.unparse(node.func), body[0].__name__
     return None
+
+
+def _is_pyplot_object(value: Any) -> bool:
+    """Whether *value* is the pyplot module or one of its functions."""
+    if isinstance(value, types.ModuleType):
+        return value.__name__ == "matplotlib.pyplot"
+    return callable(value) and getattr(value, "__module__", None) == "matplotlib.pyplot"
+
+
+def _hands_pyplot(call: ast.Call, namespace: "Mapping[str, Any]") -> bool:
+    """Whether *call* passes the pyplot module or one of its functions."""
+    args = [*call.args, *(keyword.value for keyword in call.keywords)]
+    for arg in args:
+        if isinstance(arg, ast.Starred):
+            arg = arg.value
+        if isinstance(arg, (ast.Name, ast.Attribute)) and _is_pyplot_object(resolve_callee(arg, namespace)):
+            return True
+    return False
 
 
 def _first_user_callee(

@@ -111,3 +111,43 @@ def test_a_call_unit_does_not_store_it(call_unit_harness):
         assert calls == [1, 1]
     finally:
         plt.close("all")
+
+
+class Insp:
+    def nlines(self):
+        return len(plt.gca().lines)
+
+
+def by_argument(p):
+    return len(p.gca().lines)
+
+
+def by_default(get=plt.gca):
+    return len(get().lines)
+
+
+def by_own_import():
+    import matplotlib.pyplot as mp
+
+    return len(mp.gca().lines)
+
+
+def test_pyplot_reached_by_a_method_an_argument_a_default_or_an_import_is_found():
+    """Each was cached, and served the old drawing's answer after an edit."""
+    from cash.analysis.namespace_effects import statement_user_pyplot_call
+
+    ns = {"plt": plt, "insp": Insp(), "by_argument": by_argument, "by_default": by_default}
+    ns["by_own_import"] = by_own_import
+    assert statement_user_pyplot_call("n = insp.nlines()", ns) == ("insp.nlines", "nlines")
+    assert statement_user_pyplot_call("n = by_argument(plt)", ns) == ("by_argument", "by_argument")
+    assert statement_user_pyplot_call("n = by_default()", ns) == ("by_default", "by_default")
+    assert statement_user_pyplot_call("n = by_own_import()", ns) == ("by_own_import", "by_own_import")
+
+
+def test_user_code_handed_something_else_is_not():
+    """Control: the same helper handed a figure's own object, and a plain one."""
+    from cash.analysis.namespace_effects import statement_user_pyplot_call
+
+    ns = {"plt": plt, "by_argument": by_argument, "total": total, "rows": [1, 2]}
+    assert statement_user_pyplot_call("n = by_argument(rows)", ns) is None
+    assert statement_user_pyplot_call("n = total(rows)", ns) is None
