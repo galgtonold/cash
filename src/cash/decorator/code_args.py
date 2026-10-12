@@ -621,7 +621,7 @@ class CodeArgs:
             # held in a list or an object, of a subclass, or keyed by
             # ``key=`` runs the same accessor. Each loaded accessor class is
             # asked for the names the code reads, whatever the arguments.
-            family = _loaded_accessor_classes()
+            family = loaded_accessor_classes()
             if family:
                 if names is None:
                     names = self._attribute_names(func, report)
@@ -703,7 +703,7 @@ class CodeArgs:
                 if attr is _MISSING:
                     continue
                 if not (user and self._is_user_instance_class(klass)):
-                    for carrier in _installed_user_code(attr):
+                    for carrier in installed_user_code(attr):
                         found.append((name, klass, attr, carrier))
                 break
         self._installed_memo[memo_key] = (cls, tuple(len(k.__dict__) for k in mro), tuple(found))
@@ -964,11 +964,11 @@ def _accessor_classes(cls: type) -> list[type]:
 
 
 #: (the accessor libraries' modules as loaded, their classes); see
-#: `_loaded_accessor_classes`.
+#: `loaded_accessor_classes`.
 _LOADED_FAMILY: list = [(), ()]
 
 
-def _loaded_accessor_classes() -> tuple[type, ...]:
+def loaded_accessor_classes() -> tuple[type, ...]:
     """The classes of every accessor family whose library is loaded, the same
     tuple object while the same modules are loaded."""
     modules = tuple(sys.modules.get(top) for top in _ACCESSOR_FAMILIES)
@@ -996,7 +996,7 @@ def _code_scopes(code: types.CodeType):
             yield from _code_scopes(const)
 
 
-def _installed_user_code(attr: Any) -> list[Any]:
+def installed_user_code(attr: Any) -> list[Any]:
     """The user code a class attribute *attr* stands for: a function or class
     of the user's itself, what a ``staticmethod``, ``classmethod`` or
     ``property`` wraps, or the functions and classes a library descriptor

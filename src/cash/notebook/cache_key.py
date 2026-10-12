@@ -23,6 +23,7 @@ from cash.notebook.lineage_store import resolve_lineage
 from cash.source_norm import exact_source_digest, unparse_without_docstrings
 from cash.tracking.randomness import rng_carrier_kind
 
+from .installed_code import installed_code_parts
 from .lineage_formula import (
     bound_names,
     is_cash_instrumentation,
@@ -782,6 +783,12 @@ def compute_cache_key(
     # distinct keys (first occurrence is ``occ0``).
     occurrence_component = f":occ{occurrence_index}"
     callee_component = _callee_component(sorted_inputs, ctx)
+    # Code the notebook installed on a library class (a pandas accessor, a
+    # patched method) that the statement reaches by attribute. Empty when
+    # there is none, so every other key is unchanged.
+    installed = installed_code_parts(code, sorted_inputs, ctx.user_ns, ctx.variable_lineage)
+    if installed:
+        callee_component += ":" + ":".join(installed)
 
     combined_hash_str = (
         f"{source_hash}:{':'.join(input_hashes)}{func_component}{module_component}"
