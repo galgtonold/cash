@@ -56,9 +56,8 @@ def test_a_target_over_a_computed_iterable_is_asked_about(header):
 @pytest.mark.parametrize(
     "header, roots",
     [
-        ("for i, r in enumerate(rows):", {"rows"}),
         ("for k, v in data.items():", {"data"}),
-        ("for a, b in zip(left, right):", {"left", "right"}),
+        ("for p in zip(left, right):", {"left", "right"}),
         ("for i in range(n):", set()),
     ],
 )
@@ -66,6 +65,25 @@ def test_a_target_over_named_items_is_linked_to_them(header, roots):
     names, static = _ask(header + "\n    pass")
     assert names == set()
     assert all(found == roots for found in static.values())
+
+
+@pytest.mark.parametrize(
+    "header, static",
+    [
+        ("for ax, cc in zip(axes.flat, by_cc.index):", {"ax": {"axes"}, "cc": {"by_cc"}}),
+        ("for a, b in zip(left, right):", {"a": {"left"}, "b": {"right"}}),
+        ("for a, (b, c) in zip(x, zip(y, z)):", {"a": {"x"}, "b": {"y"}, "c": {"z"}}),
+        ("for i, r in enumerate(rows):", {"i": set(), "r": {"rows"}}),
+        ("for i, (k, v) in enumerate(d.items(), 1):", {"i": set(), "k": {"d"}, "v": {"d"}}),
+    ],
+)
+def test_each_position_of_a_zip_takes_its_own_argument(header, static):
+    """``ax`` takes the axes, not the frame beside it: linked to ``by_cc``,
+    every later draw on the axes counted as a change of the frame, and
+    rebuilding the frame re-ran the chart cells and saved their files."""
+    names, found = _ask(header + "\n    pass")
+    assert names == set()
+    assert found == static
 
 
 @pytest.mark.parametrize(

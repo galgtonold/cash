@@ -148,6 +148,49 @@ def _item_roots(node: ast.AST, user_ns: Mapping[str, Any]) -> set[str] | None:
     return None
 
 
+def _target_roots(target: ast.AST, node: ast.AST, user_ns: Mapping[str, Any]) -> dict[str, set[str]] | None:
+    """Each name of the loop *target* with the variables whose items it
+    takes from the iterable *node*; None when *node* computes something else
+    (`_item_roots`).
+
+    ``zip`` hands each position of its tuple from one argument, and
+    ``enumerate`` a count beside the items: ``for ax, cc in zip(axes.flat,
+    df.index)`` takes ``ax`` from ``axes`` alone. Linking every target to
+    every argument made ``ax`` share an object with ``df``, so each later
+    draw on the axes counted as a change of the frame, and rebuilding the
+    frame re-ran the cells that drew charts and saved them.
+    """
+    if (
+        isinstance(node, ast.Call)
+        and not node.keywords
+        and isinstance(node.func, ast.Name)
+        and _is_builtin(node.func.id, user_ns)
+        and isinstance(target, (ast.Tuple, ast.List))
+        and not any(isinstance(elt, ast.Starred) for elt in target.elts)
+    ):
+        func, args, elts = node.func.id, node.args, target.elts
+        pairs = None
+        found: dict[str, set[str]] = {}
+        if func == "zip" and args and len(args) == len(elts) and not any(isinstance(a, ast.Starred) for a in args):
+            pairs = list(zip(elts, args))
+        elif func == "enumerate" and len(args) in (1, 2) and len(elts) == 2:
+            # The count is a number: it takes nothing.
+            pairs = [(elts[1], args[0])]
+            found = {name: set() for name in _target_names(elts[0])}
+        if pairs is not None:
+            for elt, arg in pairs:
+                sub = _target_roots(elt, arg, user_ns)
+                if sub is None:
+                    return None
+                for name, roots in sub.items():
+                    found.setdefault(name, set()).update(roots)
+            return found
+    roots = _item_roots(node, user_ns)
+    if roots is None:
+        return None
+    return {name: set(roots) for name in _target_names(target)}
+
+
 def _plain_index(node: ast.AST) -> bool:
     """A subscript that takes items, not computes them: a constant, a name,
     a slice of such."""
@@ -176,13 +219,12 @@ def share_candidates(
     taken: set[int] = set()
     for sub in ast.walk(node):
         if isinstance(sub, (ast.For, ast.AsyncFor)):
-            targets = _target_names(sub.target)
-            roots = _item_roots(sub.iter, user_ns)
-            if roots is None:
-                names |= targets
+            by_target = _target_roots(sub.target, sub.iter, user_ns)
+            if by_target is None:
+                names |= _target_names(sub.target)
             else:
                 taken.update(id(call) for call in ast.walk(sub.iter) if isinstance(call, ast.Call))
-                for target in targets:
+                for target, roots in by_target.items():
                     static.setdefault(target, set()).update(roots)
         elif isinstance(sub, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
             targets = sub.targets if isinstance(sub, ast.Assign) else [sub.target]
