@@ -15,6 +15,7 @@ import builtins
 import functools
 import inspect
 import os
+import pathlib
 import sys
 import textwrap
 import types
@@ -28,6 +29,7 @@ from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..install_paths import is_user_code_file
 from ..purity import is_pure
 from ..source_reading import own_source, wrapper_layers
+from ..tracking.randomness.state import rng_carrier_kind
 from .annotations import assume_safe_block_lines, audited_lines
 from .ast_util import called_names, resolve_callee
 from .callee_effects import (
@@ -1454,7 +1456,7 @@ def _call_handoffs(
                 base = base.value
         if (
             isinstance(base, ast.Name)
-            and not (base.id not in local and isinstance(user_ns.get(base.id), types.ModuleType))
+            and not (base.id not in local and _followed_elsewhere(user_ns.get(base.id)))
             and func.attr not in RECEIVER_READONLY_WRITE_METHODS
             and not chain_is_pure(func.attr, frozenset())
         ):
@@ -1472,7 +1474,21 @@ def _call_handoffs(
     if _only_reads(call, arg_names, user_ns if isinstance(user_ns, dict) else dict(user_ns)):
         return
     for arg in args:
-        roots.update(argument_roots(arg, iterated))
+        roots.update(
+            name
+            for name in argument_roots(arg, iterated)
+            if name in local or not _followed_elsewhere(user_ns.get(name))
+        )
+
+
+def _followed_elsewhere(value: Any) -> bool:
+    """A global the handoff rules leave alone: one no call can change in
+    place (a module, a class, a function, an immutable value, a path, whose
+    methods act on the file system and not on the object), or a random
+    generator, whose draws are followed as a carrier's are."""
+    if isinstance(value, (types.ModuleType, type, pathlib.PurePath, _IMMUTABLE_ARGUMENT_TYPES)):
+        return True
+    return inspect.isroutine(value) or rng_carrier_kind(value) is not None
 
 
 def _readable_function(name: str, resolve_source: Callable[[str], str | None] | None):
@@ -1514,6 +1530,100 @@ def handed_to_params(
         if kw.arg is None or kw.arg in params or (kwarg in params and kw.arg not in all_param_names(fdef)):
             out |= argument_roots(kw.value, iterated)
     return out
+
+
+def rewatch_exempt(
+    tree: ast.Module | None,
+    user_ns: Mapping[str, Any],
+    resolve_source: Callable[[str], str | None] | None,
+) -> frozenset[str]:
+    """The names *tree* only hands, each time as a plain argument, to a
+    function of the user's whose source is read (``bt =
+    run_backtest(series, 3)``), or as data to a draw on a Figure/Axes
+    (``ax.bar(names, totals)``).
+
+    A verdict learned from earlier runs is learned again on new inputs
+    (``MutationClassifier.start_rewatch``, ``LoopWatch``) for what a
+    statement or a loop hands straight to a library call: an empty
+    ``[heapq.heappush(h, x) for x in pending]`` changed nothing, and that
+    says nothing about the next items. What a helper of the user's is
+    handed keeps the verdict of the run that first watched it; counting it
+    as changed whenever the inputs move would make every reader of
+    ``series`` wait for the backtest that was handed it. Shared by both
+    engines, which must not disagree on what such a run may change."""
+    if tree is None:
+        return frozenset()
+    from .cacheability_decision import receiver_is_identity_coupled  # it imports this module
+
+    parents = {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    safe_nodes: set[int] = set()
+    for call in calls_with_lambdas(tree):
+        func = call.func
+        if isinstance(func, ast.Attribute):
+            # A draw on a Figure/Axes (`ax.bar(names, totals)`) reads the
+            # data it is handed; a buffer or a file it writes into is no data.
+            root = func.value
+            while isinstance(root, (ast.Attribute, ast.Subscript)):
+                root = root.value
+            if isinstance(root, ast.Name) and receiver_is_identity_coupled(user_ns.get(root.id)):
+                for arg in [*call.args, *(kw.value for kw in call.keywords if kw.arg is not None)]:
+                    if isinstance(arg, ast.Name) and _plain_data(user_ns.get(arg.id, _UNBOUND)):
+                        safe_nodes.add(id(arg))
+            continue
+        if resolve_source is None or not isinstance(func, ast.Name) or not users_callee(func, user_ns):
+            continue
+        if _readable_function(func.id, resolve_source) is None or not _result_kept(call, parents, user_ns):
+            continue
+        for arg in [*call.args, *(kw.value for kw in call.keywords if kw.arg is not None)]:
+            if isinstance(arg, ast.Name):
+                safe_nodes.add(id(arg))
+    if not safe_nodes:
+        return frozenset()
+    safe: set[str] = set()
+    other: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            (safe if id(node) in safe_nodes else other).add(node.id)
+    return frozenset(safe - other)
+
+
+#: Values a draw only reads: the builtin data types, and numpy's and pandas'.
+_PLAIN_DATA_TYPES = (list, dict, set, frozenset, tuple, str, bytes, int, float, complex, bool, range)
+
+
+def _plain_data(value: Any) -> bool:
+    if isinstance(value, _PLAIN_DATA_TYPES):
+        return True
+    module = getattr(type(value), "__module__", "") or ""
+    return module.split(".", 1)[0] in ("numpy", "pandas")
+
+
+def _result_kept(node: ast.expr, parents: dict[int, ast.AST], user_ns: Mapping[str, Any]) -> bool:
+    """Nothing in the statement changes what *node* answers: it is bound to
+    a name, dropped, read by an operator, handed to a builtin that reads or
+    copies it, or kept by a method that only stores it (``rows.append``),
+    directly or as an item of a display. Not ``f(data)[0].append(1)`` nor
+    ``np.copyto(f(data), x)``, which change an object *f* may hand back
+    from what it was given."""
+    while True:
+        parent = parents.get(id(node))
+        if isinstance(parent, (ast.List, ast.Tuple, ast.Set, ast.Dict)) or (
+            isinstance(parent, ast.keyword) and parent.arg is not None
+        ):
+            node = parent
+            continue
+        if isinstance(parent, (ast.Assign, ast.AnnAssign)) and parent.value is node:
+            targets = parent.targets if isinstance(parent, ast.Assign) else [parent.target]
+            return all(isinstance(t, ast.Name) for t in targets)
+        if isinstance(parent, (ast.Expr, ast.Compare, ast.BinOp, ast.UnaryOp)):
+            return True
+        if isinstance(parent, ast.Call) and parent.func is not node:
+            func = parent.func
+            if isinstance(func, ast.Name) and func.id in ARGUMENT_READING_BUILTINS:
+                builtin = getattr(builtins, func.id)
+                return user_ns.get(func.id, builtin) is builtin
+            return isinstance(func, ast.Attribute) and func.attr in MUTATING_METHODS
+        return False
 
 
 def callee_handed_globals(

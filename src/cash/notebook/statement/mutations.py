@@ -25,7 +25,13 @@ from cash.analysis.mutation_effects import (
     live_function_source,
 )
 from cash.analysis.mutations import assigned_method_call_receivers, standalone_method_call_receivers
-from cash.analysis.namespace_effects import bare_call_arguments, call_arguments, fits_its_receiver, is_estimator
+from cash.analysis.namespace_effects import (
+    bare_call_arguments,
+    call_arguments,
+    fits_its_receiver,
+    is_estimator,
+    rewatch_exempt,
+)
 from cash.mutation_fingerprint import mutation_fingerprint
 from cash.notebook.cache_key import statement_source_hash
 from cash.notebook.call_effects import DigestHandoff
@@ -214,6 +220,9 @@ class MutationClassifier:
             # other inputs (`start_rewatch`).
             fresh = classify_receivers(tree, self.shell.user_ns, lambda: None, arguments=arguments)
             unseen = (fresh.unknown_receivers | fresh.unknown_args) - set(verdict) - outputs - pre_route
+            if unseen:
+                user_ns = self.shell.user_ns
+                unseen -= rewatch_exempt(tree, user_ns, lambda name: live_function_source(name, user_ns))
             if unseen:
                 self._rewatch_candidates[source_hash] = frozenset(unseen)
         return pre_route - outputs, observe, assumed, record_verdict

@@ -131,6 +131,12 @@ class LoopRules:
         if not vars_mutated_by_loops:
             return changed  # no statement has an accumulator to compare
         outcomes = self.tracking_state.control_outcomes
+        # Loop-built as the trace reaches each entry. What counts is how an
+        # input was built BEFORE the loop reads it: a loop also lists among
+        # its outputs a name it only may change (handed to a library call),
+        # which `vars_derived_from_loops` then holds as loop-built, and a
+        # frame re-read from a new file would never be compared.
+        derived_before = set(vars_mutated_by_loops)
         for entry in simulation_trace:
             stmt_code, outputs, inputs, input_hashes = (
                 entry.stmt_code,
@@ -138,6 +144,9 @@ class LoopRules:
                 entry.inputs,
                 entry.input_hashes or {},
             )
+            built_before = set(derived_before)
+            if inputs & derived_before:
+                derived_before |= outputs
             accs = outputs & vars_mutated_by_loops
             if not accs or not stmt_code.lstrip().startswith(self._CTRL_PREFIXES):
                 continue
@@ -146,9 +155,9 @@ class LoopRules:
                 continue
             for inp in inputs:
                 if (
-                    inp in outputs
+                    inp in accs
                     or inp in loop_target_vars
-                    or inp in vars_derived_from_loops
+                    or (inp in built_before and inp in vars_derived_from_loops)
                     or unbound_builtin(inp, self.tracking_state.variable_lineage, input_hashes)
                 ):
                     continue

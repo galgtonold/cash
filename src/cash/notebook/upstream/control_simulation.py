@@ -219,7 +219,9 @@ class ControlSimulation:
             sim.loop_target_vars,
             sim.vars_mutated_by_loops,
             sim.virtual_modules,
-            lambda: not self._recorded_outcome_holds(node, sim),
+            # Taken from the lineages the loop is entered with: `apply`
+            # has already moved what it binds (its target).
+            lambda: not self._outcome_holds(stmt_code, input_hashes),
         )
 
         # CRITICAL FIX: Update virtual lineage for variables mutated inside loops.
@@ -323,13 +325,22 @@ class ControlSimulation:
         stmt_code = ast.unparse(node)
         try:
             _, input_hashes = self._input_hashes(stmt_code, sim.virtual_lineage)
-            recorded = self._recorded_outcome(stmt_code, sim.virtual_lineage)
+        except Exception:  # any doubt keeps the split
+            logger.debug("[UPSTREAM_DEBUG] could not check a loop's recorded outcome", exc_info=True)
+            return False
+        return self._outcome_holds(stmt_code, input_hashes)
+
+    def _outcome_holds(self, stmt_code: str, input_hashes: dict[str, str]) -> bool:
+        """Whether the outcome recorded for *stmt_code* was left by a run on
+        these *input_hashes*, with every file behind it unchanged."""
+        try:
+            recorded = self._recorded_outcome(stmt_code, input_hashes)
             return (
                 recorded is not None
                 and recorded[0] == input_hashes
                 and compute_file_hash_component(recorded[2]) == recorded[3]
             )
-        except Exception:  # any doubt keeps the split
+        except Exception:  # any doubt: it does not hold
             logger.debug("[UPSTREAM_DEBUG] could not check a loop's recorded outcome", exc_info=True)
             return False
 

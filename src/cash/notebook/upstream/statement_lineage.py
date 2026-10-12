@@ -31,7 +31,12 @@ from ...analysis.mutation_effects import (
     live_function_source,
     statement_effects,
 )
-from ...analysis.namespace_effects import call_argument_names, call_arguments, callee_handed_globals
+from ...analysis.namespace_effects import (
+    call_argument_names,
+    call_arguments,
+    callee_handed_globals,
+    rewatch_exempt,
+)
 from ...control_markers import strip_markers
 from ...tracking.randomness import (
     advanced_carrier_lineage,
@@ -247,8 +252,11 @@ class StatementLineage:
         )
         if verdict is None:
             return candidates
-        if candidates - set(verdict) and inputs_changed is not None and inputs_changed():
-            return candidates | set(verdict)
+        unseen = candidates - set(verdict)
+        if unseen:
+            unseen -= rewatch_exempt(ast.Module(body=[node], type_ignores=[]), user_ns, self._function_source)
+        if unseen and inputs_changed is not None and inputs_changed():
+            return unseen | set(verdict)
         return set(verdict)
 
     def branch_verdict_changes(self, node: ast.AST, virtual_modules: set[str]) -> set[str]:
@@ -332,6 +340,8 @@ class StatementLineage:
                 tree, user_ns, lambda: None, arguments=arguments, virtual_modules=virtual_modules or ()
             )
             unseen = (fresh.unknown_receivers | fresh.unknown_args) - mutated
+            if unseen:
+                unseen -= rewatch_exempt(tree, user_ns, self._function_source)
             if unseen and inputs_changed():
                 mutated |= unseen
         return mutated

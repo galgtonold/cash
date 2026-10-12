@@ -106,8 +106,9 @@ global to one) is watched the first time each version of the loop runs:
 the objects are hashed before and after, and the ones that changed are
 recorded for that loop's text, so later runs, a restart and the upstream check
 move the same names. A run on inputs not seen before watches again what the
-record does not list yet, so a loop first run on no items still learns what it
-changes. A `with` block is watched the same way; an `if` or `try` moves what
+loop hands straight to such code and the record does not list yet, so a loop
+first run on no items still learns what it changes; what only a function of
+yours is handed keeps its first record. A `with` block is watched the same way; an `if` or `try` moves what
 the statements in its branches were seen changing, and, for a branch that has
 not run yet, everything it hands to such code.
 

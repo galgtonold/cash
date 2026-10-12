@@ -86,7 +86,8 @@ def test_what_a_helper_hands_on_is_split_into_parameters_and_globals():
     from cash.analysis.namespace_effects import function_handoffs
 
     fdef = resolve_function_def("reshuffle", SOURCES.get)
-    assert function_handoffs(fdef, NAMESPACE, SOURCES.get) == (frozenset(), frozenset({"SEED", "DECK"}))
+    # SEED (an int) is handed too, but no call changes an int in place.
+    assert function_handoffs(fdef, NAMESPACE, SOURCES.get) == (frozenset(), frozenset({"DECK"}))
     fdef = resolve_function_def("outer", SOURCES.get)
     assert function_handoffs(fdef, NAMESPACE, SOURCES.get)[0] == {"q", "x"}
 

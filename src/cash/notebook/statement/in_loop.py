@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from ...analysis.mutation_effects import WATCHED_STRUCTURES, is_module_name
+from ...analysis.namespace_effects import rewatch_exempt
 from ..loop_watch import LoopWatch, branch_changes, loop_watch_hash, watch_candidates
 from .derivation_edges import bump_derived_lineages
 
@@ -128,6 +129,10 @@ class InLoopChanges:
             return None
         key = loop_watch_hash(code)
         verdict = self._verdict(key)
+        if verdict is not None:
+            # Learned again on new inputs: what the loop hands straight to
+            # library code, not what it hands a helper (`rewatch_exempt`).
+            candidates -= rewatch_exempt(ast.Module(body=[node], type_ignores=[]), user_ns, resolve_source)
         rewatch = False
         if verdict is None or candidates - verdict:
             state = self._observed_state(cache_key)
