@@ -27,6 +27,7 @@ from ..loaded_code import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
 from .arg_hashing import is_opaque, plain_census
 from .class_data import class_surface_functions, implicit_access_functions
+from .closure_fold import _CLASS_BODY_CELLS
 from .user_code import cached_function_in, is_user_code_object
 
 if TYPE_CHECKING:
@@ -166,6 +167,9 @@ class CodeArgs:
         # those namespaces' sizes, (namespace, name, attribute) per found
         # attribute, what was found); see `_family_installed_code`.
         self._family_memo: LruMemo[int, tuple] = LruMemo(CODE_OBJECTS)
+        # class -> (its MRO namespaces, their sizes, its functions with
+        # closure cells); see `_capturing_functions`.
+        self._capturing_memo: LruMemo[type, tuple] = LruMemo(CODE_OBJECTS)
         self._installed_memo: LruMemo[tuple[int, frozenset[str]], tuple[type, tuple, tuple]] = LruMemo(CODE_OBJECTS)
 
     def _warn_untrackable_in_carrier_once(self, carrier: Any, func_name: str = "?", param: str | None = None) -> None:
@@ -802,6 +806,7 @@ class CodeArgs:
                 # through the folds the cached function's own reads use.
                 if is_user_code_carrier(carrier):
                     parts.extend(self._carrier_read_global_parts(carrier, func_name, owner_code))
+                    parts.extend(self._carrier_capture_parts(carrier))
                     env |= self._carrier_environment_reads(carrier)
                     self._warn_untrackable_in_carrier_once(carrier, func_name, param)
                     self._warn_ambient_in_carrier_once(carrier, func_name, param)
@@ -816,6 +821,36 @@ class CodeArgs:
             component = environment_component(env, note=lambda label, digest: ledger_note(("env", label), digest))
             parts.append(f"argenv:{component}")
         return parts
+
+    def _carrier_capture_parts(self, carrier: Any) -> list[str]:
+        """Key parts for what the functions of a class *carrier* captured: a
+        class made inside a factory (``make_lookup(table)``) reads ``table``
+        from a closure cell in ``__getitem__``, ``__len__`` or a property,
+        which Python calls without the body naming them. Watched like a
+        helper's captures (`HelperIdentity.identity`)."""
+        if not isinstance(carrier, type):
+            return []
+        return [
+            f"captures:{fn.__qualname__}:{self._values.helper_identity(fn)}"
+            for fn in self._capturing_functions(carrier)
+        ]
+
+    def _capturing_functions(self, cls: type) -> tuple:
+        """The functions of *cls* (`class_surface_functions`) with a closure
+        cell of their own, per class while its MRO namespaces keep their
+        sizes: asked for every user class reached, on every call."""
+        mro = cls.__mro__
+        entry = self._capturing_memo.get(cls)
+        if entry is not None and list(map(len, entry[0])) == entry[1]:
+            return entry[2]
+        found = tuple(
+            fn
+            for fn in class_surface_functions(cls)
+            if getattr(fn, "__closure__", None) and any(n not in _CLASS_BODY_CELLS for n in fn.__code__.co_freevars)
+        )
+        namespaces = tuple(k.__dict__ for k in mro)
+        self._capturing_memo[cls] = (namespaces, list(map(len, namespaces)), found)
+        return found
 
     def _carrier_environment_reads(self, carrier: Any) -> set:
         """The environment reads (`cash.effects.environment_input`) of the

@@ -86,6 +86,11 @@ class GlobalValues:
         # table of plain functions; see `table_digest`.
         self._table_digests: LruMemo[tuple[str, int], tuple[CodeTable, str]] = LruMemo(TABLES)
 
+    def helper_identity(self, fn: Any) -> str:
+        """*fn*'s identity as a helper: its code, defaults and the values its
+        closure captured (`HelperIdentity.identity`)."""
+        return self._helpers.identity(fn)
+
     def data_callable_identity(self, fn: Any) -> str:
         """A callable found INSIDE a data global, identified by what calling it runs.
 
