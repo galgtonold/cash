@@ -8,6 +8,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import logging
+import operator
 import os
 import pickle
 import types
@@ -22,7 +23,7 @@ from ..code_digest import callable_identity, compiled_identity, own_source_diges
 from ..content_hashers import BUILTIN_CONTENT
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
-from ..loaded_code import loaded_class_identity, loaded_code_matches_disk
+from ..loaded_code import code_objects_of, loaded_class_identity, loaded_code_matches_disk
 from ..source_norm import bytecode_identity, code_consts_without_docstring
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,7 @@ logger = logging.getLogger(__name__)
 #
 # Module-level rather than per-instance: the digest depends only on the code
 # object, so two Cash instances cannot legitimately disagree about it.
-SOURCE_HASH_MEMO: LruMemo[int, tuple[Any, str]] = LruMemo(CODE_OBJECTS)
+SOURCE_HASH_MEMO: LruMemo[int, tuple[Any, str, tuple]] = LruMemo(CODE_OBJECTS)
 #: ``id(code) -> (code, path, size, mtime_ns, text digest)``: the stat of the
 #: file whose text a function's key was read from, taken just before reading
 #: it, and that text's digest. The store compares both with the file now
@@ -193,11 +194,20 @@ def hash_callable_source(fn: Callable) -> str:
         # identity includes the one it wraps -- so it is memoized as itself.
         memo_owner = fn
     memo_key = id(memo_owner) if memo_owner is not None else None
+    # What a memo entry held by the object itself must still see: IPython's
+    # ``%autoreload`` keeps the class and the function objects and swaps each
+    # method's ``__code__`` (and a wrapper's ``__wrapped__``) in place.
+    codes = code_objects_of(fn) if memo_owner is fn else ()
     if memo_key is not None:
         entry = SOURCE_HASH_MEMO.get(memo_key)
         # ``is``, not ``==``: confirms this is the SAME object and not a
         # recycled id, and sidesteps CodeType's by-value equality.
-        if entry is not None and entry[0] is memo_owner:
+        if (
+            entry is not None
+            and entry[0] is memo_owner
+            and len(entry[2]) == len(codes)
+            and all(map(operator.is_, entry[2], codes))
+        ):
             return entry[1]
 
     # The source on disk may no longer be the code that is running: a file
@@ -211,7 +221,7 @@ def hash_callable_source(fn: Callable) -> str:
         if digest is not None:
             warn_source_changed_since_load(fn)
             if memo_key is not None:
-                SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
+                SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest, codes)
             return digest
 
     # `callable_identity`, in its two halves: only a digest read from the
@@ -225,10 +235,10 @@ def hash_callable_source(fn: Callable) -> str:
         # object fixes: memoized like a source digest, or every hit re-ran a
         # failing `inspect.getsource` per generated method.
         if memo_key is not None and isinstance(memo_owner, types.CodeType):
-            SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
+            SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest, codes)
         return digest
     if memo_key is not None:
-        SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
+        SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest, codes)
     if keyed_stat is not None:
         own = digest if memo_owner is not fn else own_source_digest(fn)
         if own is not None:

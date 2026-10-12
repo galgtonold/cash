@@ -526,11 +526,11 @@ class HelperIdentity:
         self._mutations = mutations
         # id(helper) -> (helper, __defaults__, __kwdefaults__, what its read
         # cells held, identity snapshots of the mutable values it keyed,
-        # identity, the drift guard's entries); see `identity`. Holding the
+        # identity, the drift guard's entries, the code's digest); see `identity`. Holding the
         # helper keeps its id from being recycled while the entry lives. A
         # helper that keyed a mutable value no snapshot can watch has no
         # entry and is hashed per call.
-        self._defaults_memo: LruMemo[int, tuple[Any, Any, Any, tuple, list, str, dict]] = LruMemo(CODE_OBJECTS)
+        self._defaults_memo: LruMemo[int, tuple[Any, Any, Any, tuple, list, str, dict, str]] = LruMemo(CODE_OBJECTS)
 
     def _read_cells(self, fn: Callable) -> tuple:
         """What each closure cell *fn* reads (not writes) holds now, in order:
@@ -692,6 +692,7 @@ class HelperIdentity:
         defaults = None if is_class else getattr(fn, "__defaults__", None)
         kwdefaults = None if is_class else getattr(fn, "__kwdefaults__", None)
         memo_key = id(fn)
+        code_source = source
         cells = () if is_class else self._read_cells(fn)
         cached = self._defaults_memo.get(memo_key)
         if (
@@ -702,6 +703,10 @@ class HelperIdentity:
             and len(cached[3]) == len(cells)
             and all(map(operator.is_, cached[3], cells))
             and not any(map(_snapshot_moved, cached[4]))
+            # The code itself: IPython's ``%autoreload`` swaps a function's
+            # ``__code__`` in place, keeping the object, its defaults and its
+            # cells, so only the source digest says the helper changed.
+            and cached[7] == code_source
         ):
             if cached[6]:
                 pending = CAPTURE_WATCH.get()
@@ -755,7 +760,7 @@ class HelperIdentity:
             if pending is not None:
                 pending.update(watch)
         if snapshots is not None:
-            self._defaults_memo[memo_key] = (fn, defaults, kwdefaults, cells, snapshots, identity, watch)
+            self._defaults_memo[memo_key] = (fn, defaults, kwdefaults, cells, snapshots, identity, watch, code_source)
         else:
             self._defaults_memo.pop(memo_key, None)
         return identity
