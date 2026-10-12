@@ -92,6 +92,9 @@ class ReadRecord:
     seen: dict[str, ReadParts] = field(default_factory=dict)
     #: A full key -> the component it folded, for its outputs' lineage.
     by_key: dict[str, str] = field(default_factory=dict)
+    #: A full key -> the digest of the globals its called functions reached
+    #: for (``cache_key._callee_component``), for its outputs' lineage.
+    callees: dict[str, str] = field(default_factory=dict)
     #: ``(kind, label)`` of every value a record holds: what :func:`snapshot` watches.
     watched: set[tuple[str, str]] = field(default_factory=set)
     #: ``kind:label`` -> the last change the runtime saw a statement make to it.

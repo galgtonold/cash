@@ -794,8 +794,15 @@ def compute_cache_key(
     combined_hash_str += reads
     combined_hash = hashlib.sha256(combined_hash_str.encode("utf-8")).hexdigest()
     cache_key = f"{namespace}:{combined_hash}"
-    if reads and ctx.reads is not None:
-        ctx.reads.by_key[cache_key] = reads
+    if ctx.reads is not None:
+        if reads:
+            ctx.reads.by_key[cache_key] = reads
+        if callee_component:
+            # The globals the callees read are in the key, so they belong in
+            # what the outputs carry below: ``CFG["round"] = 1`` re-keys
+            # ``res = summarize(raw)``, and ``report = render(res)`` must
+            # miss too (``recorded_reads_lineage_component``).
+            ctx.reads.callees[cache_key] = hashlib.sha256(callee_component.encode("utf-8")).hexdigest()
 
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
