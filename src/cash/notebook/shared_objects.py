@@ -448,6 +448,7 @@ def view_base_names(
         return set()
     value_types = VALUE_TYPES + library_value_types()
     bases: set[int] = set()
+    views: list[Any] = []
     seen: set[int] = set()
     stack = [value for value in values if not _plain_data.is_tree(value)]
     pops = 0
@@ -459,12 +460,28 @@ def view_base_names(
         if is_value(obj, value_types) or id(obj) in seen:
             continue
         seen.add(id(obj))
-        bases.update(view_bases(obj))
+        found = view_bases(obj)
+        if found:
+            bases.update(found)
+            views.append(obj)
         stack.extend(children_of(obj) or ())
     del stack, seen
     if not bases:
         return set()
-    return {name for name, value in list(user_ns.items()) if id(value) in bases and not skip_name(name)}
+    return {name for name, value in list(user_ns.items()) if on_bases(value, bases, views, np) and not skip_name(name)}
+
+
+def on_bases(value: Any, bases: set[int], views: list[Any], np: Any) -> bool:
+    """Whether the array *value* is one of *bases* (ids), or a view of one
+    that overlaps one of *views*: ``big = np.arange(6.0).reshape(3, 2)`` is
+    itself a view, so ``big[0].base`` is the buffer under both, not ``big``."""
+    if id(value) in bases:
+        return True
+    if not isinstance(value, np.ndarray) or value.base is None:
+        return False
+    if not any(found in bases for found in view_bases(value)):
+        return False
+    return any(np.may_share_memory(value, view) for view in views)
 
 
 def holds_a_held_object(value: Any) -> bool:

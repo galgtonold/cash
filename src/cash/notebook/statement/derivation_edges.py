@@ -55,6 +55,7 @@ from ..shared_objects import (
     excess_refs,
     is_value,
     library_value_types,
+    view_bases,
 )
 
 logger = logging.getLogger(__name__)
@@ -404,6 +405,17 @@ def _detect_numpy_view_edge(
         nm = _find_name_by_identity(user_ns, root)
         if nm is not None and nm != out:
             targets.add(nm)
+    # A named view of the same buffer (``big = np.arange(6.0).reshape(3,
+    # 2)`` under ``row = big[0]``): ``row.base`` is the buffer, not ``big``.
+    chain = view_bases(value)
+    for name, other in list(user_ns.items()):
+        if name != out and not name.startswith("_") and other is not value and isinstance(other, np.ndarray):
+            if (
+                other.base is not None
+                and any(found in chain for found in view_bases(other))
+                and np.may_share_memory(value, other)
+            ):
+                targets.add(name)
     for target in sorted(targets):
         link(derivation_edges, out, target)
 
