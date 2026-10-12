@@ -18,6 +18,7 @@ from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cel
 from ..cache_key import (
     statement_source_hash,
 )
+from ..lineage_formula import recorded_reads_lineage_component
 from ._types import normalize_stmt
 from .statement_lineage import unbound_builtin
 
@@ -168,7 +169,24 @@ class UnsavedEdits:
             # function-source component. A hand-rolled sha256(code)+input_lineages
             # omitted it, so any function-routed edit always projected != recorded
             # and was wrongly discarded. [layer 1]
-            projected = self.statements.output_lineages(source_hash, input_lineages, "", inputs, outputs, code)
+            # What the key the runtime ran it under folded beyond the inputs
+            # (the environment, the globals its callees read) is read back
+            # by that key, as the simulation does.
+            keys = {self.tracking_state.variable_sources.get(out) for out in outputs} - {None}
+            recorded = [
+                recorded_reads_lineage_component(self.tracking_state, key, code, self.statements.shell.user_ns, outputs)
+                for key in sorted(keys)
+            ] or [None]
+            projected = {}
+            for reads in recorded:
+                projected.update(
+                    {
+                        f"{out}:{reads}": lineage
+                        for out, lineage in self.statements.output_lineages(
+                            source_hash, input_lineages, "", inputs, outputs, code, recorded_reads=reads
+                        ).items()
+                    }
+                )
 
             return actual_lineage in projected.values()
 

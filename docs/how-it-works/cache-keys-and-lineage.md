@@ -67,14 +67,15 @@ For other types, register a hasher; see
 
     A registered hasher does not change a statement's key. A variable made by
     a statement is keyed on its lineage, not on its content, so this rarely
-    matters. The exception is the output of a `no-cache` statement, whose
-    lineage includes a hash of its value.
+    matters. The exception is the output of a statement that runs every time
+    (`no-cache`, the clock, a fresh id), whose lineage includes a hash of its
+    value.
 
 ## In a notebook
 
 ### The statement key
 
-<!-- claim: cash/notebook/cache_key.py:compute_cache_key @de919252 -->
+<!-- claim: cash/notebook/cache_key.py:compute_cache_key @9e6380eb -->
 Every statement key is built by one function. It joins these parts with
 colons, in this order, and hashes the result:
 
@@ -141,10 +142,11 @@ the chain. You declare no dependencies.
 | Files | `path:mtime:size` per file read. |
 | Called functions | Their source hashes, sorted. |
 | Local modules | Their source hashes, sorted. |
-| Value | A digest of `x`'s content, only when its statement is `no-cache`. |
+| Callee globals | A digest of the key's callee globals part, less the globals the statement itself changes, when a function the statement calls reads globals. |
+| Value | A digest of `x`'s content, only when its statement is `no-cache`, or runs every time because what it binds changes from run to run: the clock, a fresh id, a `@stateful` function, pyplot's current figure read through a function of yours. |
 
-Files, called functions, local modules and the value are left out when there
-are none.
+Files, called functions, local modules, callee globals and the value are left
+out when there are none.
 
 ```python { .nb-cell }
 a = 1

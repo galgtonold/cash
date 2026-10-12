@@ -204,7 +204,7 @@ cash spots side effects from the statement's source, without running it. So:
   (`# @cash:assume-safe`, `with cash.assume_safe():`) or `@pure` keeps it
   cacheable.
 
-<!-- claim: cash/analysis/code_analyzer.py:_forbidden_call @8d78391d, cash/notebook/lineage_formula.py:statement_environment_component @5a647f0c -->
+<!-- claim: cash/analysis/code_analyzer.py:_forbidden_call @57270636, cash/notebook/lineage_formula.py:statement_environment_component @5a647f0c -->
 A statement that reads the clock (`time.time()`, `time.perf_counter_ns()`,
 `datetime.now()`), makes a
 fresh id (`uuid.uuid4()`), reads random bytes from the system (`os.urandom()`,

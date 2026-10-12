@@ -50,7 +50,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["enabled", "freeze", "frozen_already", "hand_out", "is_frozen", "is_pin"]
+__all__ = ["copy_keeping_blocks", "enabled", "freeze", "frozen_already", "hand_out", "is_frozen", "is_pin"]
 
 
 class _Pin:
@@ -344,7 +344,10 @@ def _freeze(frame: Any, *, cells_known: bool = False) -> bool:
         if not freezable(frame, cells_known=cells_known):
             return False
         _install_pickling()
-        frame._consolidate_inplace()
+        # Not consolidated: the blocks stay as the caller's table had them.
+        # One block for every float column made ``data[cols].to_numpy()`` a
+        # read-only view of it, where the caller's own table (one block per
+        # column, from ``read_csv``) gives a writable copy.
         for blk in frame._mgr.blocks:
             refs = blk.refs
             sharing = [ref() for ref in refs.referenced_blocks]
@@ -367,6 +370,28 @@ def _freeze(frame: Any, *, cells_known: bool = False) -> bool:
     except Exception:
         logger.debug("cash: could not freeze a %s", type(frame).__name__, exc_info=True)
         return False
+
+
+def copy_keeping_blocks(frame: Any) -> Any:
+    """``frame.copy(deep=True)`` with *frame*'s blocks as they are.
+
+    pandas joins the blocks of one dtype into one on a deep copy. What a
+    table hands out then changes: ``data[["f1", "f2"]].to_numpy()`` on one
+    block is a view, read-only under copy-on-write, where the same call on
+    one block per column (a fresh ``read_csv``) builds a writable array, so
+    the user's ``X -= X.mean(axis=0)`` raised on a cached table only.
+    Copied block by block instead, which also skips the join's copy.
+    """
+    try:
+        mgr = frame._mgr
+        if frame.ndim != 2 or mgr.is_consolidated():
+            return frame.copy(deep=True)
+        copied_mgr = mgr.apply("copy", deep=True)
+        copied_mgr.axes = [axis.view() for axis in mgr.axes]  # as pandas' own deep copy keeps them
+        return frame._constructor_from_mgr(copied_mgr, axes=copied_mgr.axes).__finalize__(frame, method="copy")
+    except Exception:
+        logger.debug("cash: copying a %s the pandas way", type(frame).__name__, exc_info=True)
+        return frame.copy(deep=True)
 
 
 def hand_out(stored: Any) -> Any:

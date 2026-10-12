@@ -106,8 +106,15 @@ they talk to the outside world.
 | reads an environment variable (`os.getenv`) | cached; the value is part of the key, so a new value runs it again |
 
 Only effects written in the statement count, plus file writes in your own
-functions. A clock read inside a function you call is not seen; see
+functions. A function of yours that only returns the clock
+(`def tick(): return time.perf_counter_ns()`) counts as the clock read itself.
+Any other clock read inside a function you call is not seen; see
 [Writing cache-safe cells](known-limitations.md#a-helper-that-reads-the-clock-is-frozen).
+
+A statement that runs every time because what it binds can change (the clock,
+a fresh id, pyplot's current figure read through a function of yours) hands
+its value on: a cached statement that reads it runs again when the value is
+new and is served from the cache when it is the same.
 Unseeded random draws are cached and replayed; see
 [Randomness](known-limitations.md#randomness).
 

@@ -393,21 +393,22 @@ def called_function_dependencies(
         if name in seen:
             continue
         seen.add(name)
-        code_obj = code_of(name)
-        if code_obj is None:
-            continue
-        attrs = _attribute_only_names(code_obj)
-        for ref in code_obj.co_names:
-            if ref in seen or ref in ("get_ipython", "__builtins__"):
-                continue
-            # Builtins are constant. Modules carry their own key component,
-            # which is decided below: an attribute name is kept whatever it names.
-            if not hasattr(builtins, ref):
-                referenced.add(ref)
-            if ref in attrs:
-                attribute_only.add(ref)
-                continue
-            stack.append(ref)
+        # The function's nested code too: a comprehension (its own code
+        # object before Python 3.12), a generator expression, a lambda or an
+        # inner function reads its globals at call time as the body does.
+        for code_obj in _nested_codes(code_of(name)):
+            attrs = _attribute_only_names(code_obj)
+            for ref in code_obj.co_names:
+                if ref in seen or ref in ("get_ipython", "__builtins__"):
+                    continue
+                # Builtins are constant. Modules carry their own key component,
+                # which is decided below: an attribute name is kept whatever it names.
+                if not hasattr(builtins, ref):
+                    referenced.add(ref)
+                if ref in attrs:
+                    attribute_only.add(ref)
+                    continue
+                stack.append(ref)
 
     referenced -= set(inputs)
     # A name the callees use ONLY as an attribute (``m.forecast(h)``) reads no
@@ -415,7 +416,9 @@ def called_function_dependencies(
     # notebook variable shares it. ``forecast = run_forecast(...)`` keyed
     # ``forecast:ABSENT`` before its first run and ``forecast:<lineage>``
     # after, so the simulation never found the entry and re-ran it.
-    attribute_only -= {ref for name in seen for ref in _global_names(code_of(name))}
+    attribute_only -= {
+        ref for name in seen for code_obj in _nested_codes(code_of(name)) for ref in _global_names(code_obj)
+    }
     # So is a module that shares an attribute's name: ``np.random`` keyed
     # ``random:ABSENT`` until ``import random`` bound the module, and then
     # dropped the component, so the call missed once.
@@ -529,6 +532,17 @@ def _global_names(code_obj: Any) -> frozenset[str]:
         _GLOBAL_NAMES_MEMO[code_obj] = found
     except TypeError:
         pass
+    return found
+
+
+def _nested_codes(code_obj: types.CodeType | None) -> list[types.CodeType]:
+    """*code_obj* and every code object nested in it, at any depth."""
+    found: list[types.CodeType] = []
+    stack = [code_obj] if code_obj is not None else []
+    while stack:
+        current = stack.pop()
+        found.append(current)
+        stack.extend(c for c in current.co_consts if isinstance(c, types.CodeType))
     return found
 
 
@@ -679,7 +693,7 @@ def _joined(hashes: list[str]) -> str:
     return ":" + ":".join(sorted(hashes)) if hashes else ""
 
 
-def _callee_component(sorted_inputs: list[str], ctx: CacheKeyContext) -> str:
+def _callee_deps(sorted_inputs: list[str], ctx: CacheKeyContext) -> list[str]:
     """The key component for the globals the called functions reach for.
 
     Those are read at CALL time, including any bound BELOW this statement,
@@ -698,10 +712,9 @@ def _callee_component(sorted_inputs: list[str], ctx: CacheKeyContext) -> str:
         if ctx.virtual_callables
         else None
     )
-    callee_deps = called_function_dependencies(
+    return called_function_dependencies(
         sorted_inputs, ctx.user_ns, ctx.variable_lineage, virtual, simulated=ctx.virtual_lineage
     )
-    return f":callees:{':'.join(callee_deps)}" if callee_deps else ""
 
 
 def _recorded_reads_component(code: str, ctx: CacheKeyContext, statement: str) -> str:
@@ -805,7 +818,8 @@ def compute_cache_key(
     # Include occurrence index so duplicate statements within a cell get
     # distinct keys (first occurrence is ``occ0``).
     occurrence_component = f":occ{occurrence_index}"
-    callee_component = _callee_component(sorted_inputs, ctx)
+    callee_deps = _callee_deps(sorted_inputs, ctx)
+    callee_component = f":callees:{':'.join(callee_deps)}" if callee_deps else ""
 
     combined_hash_str = (
         f"{source_hash}:{':'.join(input_hashes)}{func_component}{module_component}"
@@ -818,8 +832,15 @@ def compute_cache_key(
     combined_hash_str += reads
     combined_hash = hashlib.sha256(combined_hash_str.encode("utf-8")).hexdigest()
     cache_key = f"{namespace}:{combined_hash}"
-    if reads and ctx.reads is not None:
-        ctx.reads.by_key[cache_key] = reads
+    if ctx.reads is not None:
+        if reads:
+            ctx.reads.by_key[cache_key] = reads
+        if callee_deps:
+            # The globals the callees read are in the key, so they belong in
+            # what the outputs carry below: ``CFG["round"] = 1`` re-keys
+            # ``res = summarize(raw)``, and ``report = render(res)`` must
+            # miss too (``recorded_reads_lineage_component``).
+            ctx.reads.callees[cache_key] = tuple(callee_deps)
 
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(

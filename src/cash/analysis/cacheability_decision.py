@@ -41,7 +41,7 @@ import logging
 import sys
 import types
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, NamedTuple
 
 from cash import _plain_data
 from cash.analysis.annotations import CacheAnnotation
@@ -55,7 +55,9 @@ from cash.value_types import BUILTIN_NAMES, mro_kind
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "CacheabilityVerdict",
     "analysis_failed",
+    "cacheability_verdict",
     "decide_cacheability",
     "identity_coupled_reason",
     "receiver_is_identity_coupled",
@@ -261,7 +263,28 @@ def analysis_failed(check: str, exc: BaseException) -> str:
     return reason
 
 
-def decide_cacheability(
+class CacheabilityVerdict(NamedTuple):
+    """:func:`cacheability_verdict`'s answer."""
+
+    cacheable: bool
+    reasons: list[str]
+    #: Refused because what the statement binds can differ between two runs
+    #: with the same key: it reads the clock or makes a fresh id, calls a
+    #: ``@stateful`` function, or reads pyplot's current figure through a
+    #: helper. It runs every time, and its outputs carry their value in their
+    #: lineage, as a ``# @cash:no-cache`` statement's do, so what is cached
+    #: below is keyed on the value this run gave.
+    varies: bool = False
+
+
+def decide_cacheability(**kwargs: Any) -> tuple[bool, list[str]]:
+    """Return ``(cacheable, reasons)`` for a statement: see
+    :func:`cacheability_verdict`, which takes the same arguments."""
+    verdict = cacheability_verdict(**kwargs)
+    return verdict.cacheable, verdict.reasons
+
+
+def cacheability_verdict(
     *,
     code: str,
     tree: ast.Module | None,
@@ -273,23 +296,23 @@ def decide_cacheability(
     variable_lineage: Mapping[str, str],
     is_stateful_call: Callable[[str], bool],
     scan_forbidden: Callable[[str, Mapping[str, Any], ast.Module | None], list[str]],
-) -> tuple[bool, list[str]]:
-    """Return ``(cacheable, reasons)`` for a statement.
+) -> CacheabilityVerdict:
+    """Return the verdict ``(cacheable, reasons, varies)`` for a statement.
 
     ``cacheable`` is ``True`` only when *all* reason-sources are silent.
     ``reasons`` is the list of human-readable strings that populate
     ``metrics['uncacheable_reasons']``.  An empty list means "cacheable."
     """
     if annotation is not None and annotation.no_cache:
-        return False, ["@cash:no-cache annotation"]
+        return CacheabilityVerdict(False, ["@cash:no-cache annotation"])
     waived = bool(getattr(annotation, "assume_safe", False))
 
     try:
         forbidden = scan_forbidden(code, user_ns, tree)
     except Exception as exc:  # noqa: BLE001 - an unjudged statement is not a pure one
-        return False, [analysis_failed("scan the statement for calls it must not cache", exc)]
+        return CacheabilityVerdict(False, [analysis_failed("scan the statement for calls it must not cache", exc)])
     if forbidden:
-        return False, list(forbidden)
+        return CacheabilityVerdict(False, list(forbidden), varies=True)
 
     try:
         # Bare names first, then ``helpers.announce(...)`` -- how a @stateful
@@ -300,7 +323,7 @@ def decide_cacheability(
             *sorted(called_dotted_names(tree if tree is not None else parse_cached(code))),
         ):
             if is_stateful_call(name):
-                return False, ["Calls @stateful function"]
+                return CacheabilityVerdict(False, ["Calls @stateful function"], varies=True)
         # Every spelling of the call: ``save(...)``, and ``helpers.save(...)``
         # through a project module -- how a function reaches the notebook
         # after it moves into a module. Offered only bare names, the module
@@ -308,30 +331,35 @@ def decide_cacheability(
         found = None if waived else statement_user_writer_call(code, user_ns, tree)
         if found:
             name, writer = found
-            return False, [
-                f"Calls {name}(), which writes files ({writer}): a cache hit would skip the write "
-                "(# @cash:assume-safe caches it anyway)"
-            ]
+            return CacheabilityVerdict(
+                False,
+                [
+                    f"Calls {name}(), which writes files ({writer}): a cache hit would skip the write "
+                    "(# @cash:assume-safe caches it anyway)"
+                ],
+            )
         # A helper reading pyplot's current figure (``len(plt.gca().lines)``)
         # is display, as ``plt.gca()`` in the statement is: no key holds the
         # figure it reads.
         drawn = None if waived else statement_user_pyplot_call(code, user_ns, tree)
         if drawn:
             name, user = drawn
-            return False, [
-                f"Calls {name}(), which reads or changes pyplot's current figure through {user}: it runs every time"
-            ]
+            return CacheabilityVerdict(
+                False,
+                [f"Calls {name}(), which reads or changes pyplot's current figure through {user}: it runs every time"],
+                varies=True,
+            )
     except Exception as exc:  # noqa: BLE001 - an unjudged statement is not a pure one
-        return False, [analysis_failed("check the functions the statement calls", exc)]
+        return CacheabilityVerdict(False, [analysis_failed("check the functions the statement calls", exc)])
 
     ast_reasons = analysis.skip_reasons(outputs, side_effects=not waived)
     if ast_reasons:
-        return False, ast_reasons
+        return CacheabilityVerdict(False, ast_reasons)
 
     if _has_missing_lineage(inputs, user_ns, variable_lineage):
-        return False, ["Input variable missing lineage"]
+        return CacheabilityVerdict(False, ["Input variable missing lineage"])
 
-    return True, []
+    return CacheabilityVerdict(True, [])
 
 
 def _has_missing_lineage(
