@@ -6,6 +6,10 @@ or a function patched onto ``pd.DataFrame``: ``res = df.fx.slow()`` names
 neither, so editing that code and running its cell again served the old
 result. The key now holds the code found under the attribute names the
 statement and the functions it calls read, and the globals that code reads.
+
+The accessor is reached on a fresh frame (``df.copy().fx``): pandas before 3
+keeps the accessor object it made on the frame, so plain Python hands the
+same ``df`` the old accessor's result too.
 """
 
 import time
@@ -50,9 +54,9 @@ def _run(magics, cells, start=0):
 @pytest.mark.parametrize(
     ("installer", "use"),
     [
-        (ACCESSOR, "res = df.fx_{tag}.slow()"),
+        (ACCESSOR, "res = df.copy().fx_{tag}.slow()"),
         (PATCHED, "res = df.slow_{tag}()"),
-        (ACCESSOR, "def total(d):\n    return d.fx_{tag}.slow()\nres = total(df)"),
+        (ACCESSOR, "def total(d):\n    return d.copy().fx_{tag}.slow()\nres = total(df)"),
     ],
     ids=["accessor", "patched-method", "through-a-function"],
 )
