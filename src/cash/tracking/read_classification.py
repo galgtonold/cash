@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import functools
 import os
+import re
 import stat
 import sys
 import threading
@@ -21,12 +22,11 @@ from cash._memo import SOURCE_FILES, LruMemo
 from cash.install_paths import installed_roots, interpreter_roots, norm_dir, normcase_path, site_roots
 
 __all__ = [
-    "RUNTIME_CACHE_SEGMENT",
-    "RUNTIME_CACHE_SUFFIXES",
     "SCRATCH_MEMMAP",
     "incidental_read",
     "is_cash_internal",
     "is_pseudo_fs",
+    "is_runtime_cache_path",
     "register_cache_dir",
     "regular_file_stat",
     "stat_key",
@@ -96,7 +96,36 @@ SCRATCH_MEMMAP = "joblib_memmapping_folder_"
 #: rewritten by any other process that runs the same function -- recorded,
 #: scanpy's normalize made every step after it re-run after a restart.
 RUNTIME_CACHE_SEGMENT = "/__pycache__/"
-RUNTIME_CACHE_SUFFIXES = (".nbi", ".nbc", ".pyc")
+#: The files themselves, wherever they are, and the temporary file numba
+#: writes first and renames into place (``kern-3.py313.nbi.tmp.1f2e3d``).
+RUNTIME_CACHE_FILE = re.compile(r"\.(nbi|nbc|pyc)(\.tmp\.[0-9a-f]+)?$")
+
+
+@functools.lru_cache(maxsize=8)
+def _numba_cache_dirs(setting: str) -> tuple[str, ...]:
+    """``NUMBA_CACHE_DIR`` as directory prefixes, as given and with links resolved."""
+    dirs = {norm_dir(setting)}
+    try:
+        dirs.add(norm_dir(os.path.realpath(setting)))
+    except (OSError, ValueError):
+        pass
+    return tuple(dirs)
+
+
+def is_runtime_cache_path(path: str) -> bool:
+    """Is *path* in a runtime's own cache (`RUNTIME_CACHE_SEGMENT`,
+    `RUNTIME_CACHE_FILE`, ``NUMBA_CACHE_DIR``)? Neither a read of one nor a
+    write to one is the user's: a hit that skips the write only leaves the
+    runtime to compile again. The folder itself counts: numba checks it can
+    write there by opening a nameless temporary file in it."""
+    normed = normcase_path(str(path))
+    if RUNTIME_CACHE_FILE.search(normed):
+        return True
+    as_dir = normed.rstrip("/") + "/"
+    if RUNTIME_CACHE_SEGMENT in as_dir:
+        return True
+    setting = os.environ.get("NUMBA_CACHE_DIR")
+    return bool(setting) and as_dir.startswith(_numba_cache_dirs(setting))
 
 
 def is_pseudo_fs(path: str) -> bool:

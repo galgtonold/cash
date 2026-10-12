@@ -37,6 +37,7 @@ from .._annotation_refs import annotation_referents
 from ..code_digest import callable_identity, compiled_identity, extension_file_digest
 from ..effects import EffectKind
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..jit_functions import jit_python_function
 from ..loaded_code import code_objects_of
 from ..purity import is_pure, is_stateful
 from ..source_reading import getsourcelines, own_source
@@ -252,10 +253,17 @@ class HelperWalk:
 
     def _walk_one(self, entry: _Entry, qualname: str) -> None:
         """Key one callable, audit it if it is a function body, and queue
-        what it reaches."""
+        what it reaches.
+
+        A JIT-compiled function (numba's ``@njit``) is keyed as itself --
+        the function it compiles plus its compile options -- and its body is
+        the function it compiles."""
         func = entry.func
+        code_fn = jit_python_function(func)
+        if code_fn is None:
+            code_fn = func
         try:
-            raw_src = own_source(func)
+            raw_src = own_source(code_fn)
         except SOURCE_RETRIEVAL_ERRORS:
             self._walk_without_source(entry, qualname)
             return
@@ -310,11 +318,11 @@ class HelperWalk:
                 self._queue_bytecode_refs(entry)
             return
 
-        body = self._audit(entry, qualname, func_def, src, tree)
+        body = self._audit(entry._replace(func=code_fn), qualname, func_def, src, tree)
         self._queue_called(body)
         self._queue_named_values(body)
         self._queue_attribute_values(body)
-        self._queue_annotation_refs(func, entry.depth, entry.reported)
+        self._queue_annotation_refs(code_fn, entry.depth, entry.reported)
 
     def _record_walked_code(self, func: Any) -> None:
         """Remember the code *func* ran when walked (`PurityReport.walked_code`)."""
@@ -346,8 +354,9 @@ class HelperWalk:
         self._helper_hashes[qualname] = compiled_identity(func)
         self._record_resolution_path(func, qualname)
         self._record_walked_code(func)
-        if isinstance(func, types.FunctionType):
-            self._queue_bytecode_refs(entry)
+        code_fn = jit_python_function(func) or func
+        if isinstance(code_fn, types.FunctionType):
+            self._queue_bytecode_refs(entry._replace(func=code_fn))
 
     def _queue_bytecode_refs(self, entry: _Entry) -> None:
         """Queue the user functions *entry*'s bytecode calls by global name:
@@ -355,7 +364,7 @@ class HelperWalk:
         func = entry.func
         for chain in bytecode_global_refs(func):
             callee = resolve_callee_chain(func.__globals__, chain)
-            if not isinstance(callee, types.FunctionType) or callee is func:
+            if not _is_function(callee) or callee is func:
                 continue
             if is_mock(callee):
                 continue
@@ -491,7 +500,7 @@ class HelperWalk:
         """
         for name in body.visitor.read_names:
             value = body.namespace.get(name)
-            if inspect.isfunction(value) or inspect.ismethod(value):
+            if _is_function(value) or inspect.ismethod(value):
                 self._queue_helper(body, value, 0, _call_site_path(body, (name,)))
             elif isinstance(value, type):
                 # A user class named but not called by a user path:
@@ -539,7 +548,7 @@ class HelperWalk:
             if value is None or is_mock(value):
                 continue
             if getattr(value, "_cash_cached", False) is True or (
-                (inspect.isfunction(value) or inspect.ismethod(value)) and is_user_code(value, self._root_module)
+                (_is_function(value) or inspect.ismethod(value)) and is_user_code(value, self._root_module)
             ):
                 self._queue_helper(body, value, getattr(node, "lineno", 0), _call_site_path(body, chain))
             elif isinstance(value, type):
@@ -774,6 +783,11 @@ class HelperWalk:
             cached_callees=tuple(self._cached_callees),
             unwalkable=self._unwalkable,
         )
+
+
+def _is_function(value: Any) -> bool:
+    """A plain function, or a JIT-compiled one (`cash.jit_functions`)."""
+    return isinstance(value, types.FunctionType) or jit_python_function(value) is not None
 
 
 def _walk_id(func: Any) -> Any:

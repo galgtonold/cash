@@ -19,6 +19,7 @@ from ..analysis.purity_report import PurityReport
 from ..dependency_state import STATE_LEDGER, ledger_note
 from ..effects import environment_component
 from ..exceptions import CashImpurityWarning
+from ..jit_functions import jit_python_function
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .code_tables import CodeTable
 from .global_reads import reach_pass
@@ -687,6 +688,8 @@ class GlobalsFold:
                 # its methods -- inherited, properties, `__init__` -- read.
                 state_hash = self._classes.fold_class_parts(target, func, func_name, state_hash, owner_code, seen)
                 continue
+            # A JIT-compiled helper reads what the function it compiles reads.
+            target = jit_python_function(target) or target
             if getattr(target, "__globals__", None) is None:
                 continue
             state_hash = self.fold_read_globals(target, func_name, state_hash, owner_code=owner_code, seen=seen)
@@ -740,6 +743,7 @@ class GlobalsFold:
             if qual in report.helper_resolution_paths:
                 continue
             target = report.helper_objects[qual]()
+            target = jit_python_function(target) or target
             if isinstance(target, type):
                 state_hash = self._classes.fold_class_parts(target, func, func_name, state_hash, owner_code, seen)
                 continue

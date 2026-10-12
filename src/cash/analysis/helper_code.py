@@ -20,6 +20,7 @@ from typing import Any
 
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..install_paths import in_own_package, top_package
+from ..jit_functions import jit_python_function
 from ..tracking.function_tracker import is_local_module
 
 
@@ -29,8 +30,10 @@ def _defining_module(obj: Any) -> Any:
     For a function, its ``__globals__`` say so. ``__module__`` does not
     always: ``functools.wraps`` copies the WRAPPED function's ``__module__``
     onto the wrapper, so a library's wrapper (tenacity's, torch's) claimed to
-    be user code and a user's wrapper claimed to be the helper's module.
+    be user code and a user's wrapper claimed to be the helper's module. A
+    JIT-compiled function's code is the function it compiles.
     """
+    obj = jit_python_function(obj) or obj
     if isinstance(obj, types.FunctionType):
         name = obj.__globals__.get("__name__")
         module = sys.modules.get(name) if isinstance(name, str) else None
@@ -189,7 +192,13 @@ def callable_layers(obj: Any) -> list[Any]:
     implementations, eight stacked decorators): one left out was not keyed,
     and editing it served the old result. Raises `UnwalkableLayers` when
     the layers do not end, or an object cannot be looked into.
+
+    A JIT-compiled function (`cash.jit_functions`) is returned as itself,
+    the one non-function among them, and the compiler's state it holds is
+    not looked into; *obj* itself being one has no other layers.
     """
+    if jit_python_function(obj) is not None:
+        return []
     found: list[Any] = []
     seen: set[int] = {id(obj)}
     # Every object visited stays alive until the walk ends, so an id in
@@ -220,6 +229,11 @@ def callable_layers(obj: Any) -> list[Any]:
             )
         if isinstance(value, types.FunctionType):
             found.append(value)
+        elif jit_python_function(value) is not None:
+            # Code, keyed as the function it compiles and its options; what
+            # the compiler holds beside it is not.
+            found.append(value)
+            continue
         stack.append(_expand(value, obj))
     return found
 

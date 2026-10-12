@@ -10,6 +10,7 @@ import types
 from typing import Any
 
 from ..analysis.helper_code import is_mock
+from ..jit_functions import jit_python_function
 from ..value_types import IMMUTABLE_LEAF_TYPES
 from .user_code import is_user_class, is_user_code_object, own_package
 
@@ -123,7 +124,9 @@ def carried_payload(value: Any) -> Any:
     instance (`np.vectorize`) keeps lazy caches that change after its first
     call, which would make every call miss -- of those, only the partials
     they hold, which are data the user built them with. A function, a
-    class, a method of a class or module, a mock: None.
+    class, a method of a class or module, a mock, a JIT-compiled function
+    (its options are part of its code's identity, the rest of what it holds
+    is the compiler's): None.
     """
     if isinstance(value, functools.partial):
         return ("partial", value.func, value.args, dict(value.keywords))
@@ -134,7 +137,7 @@ def carried_payload(value: Any) -> Any:
         return ("method", owner)
     if isinstance(value, (types.FunctionType, types.BuiltinFunctionType, type, types.ModuleType)) or is_mock(value):
         return None
-    if not callable(value):
+    if not callable(value) or jit_python_function(value) is not None:
         return None
     if is_user_class(type(value), own_package(type(value))):
         state = getattr(value, "__dict__", None)

@@ -27,13 +27,12 @@ from cash.tracking import io_watch
 from cash.tracking.file_dep_snapshot import file_content_hash, realpath_of_read_this_run, remembered_file_digest
 from cash.tracking.pending_digest import PendingDigest
 from cash.tracking.read_classification import (
-    RUNTIME_CACHE_SEGMENT,
-    RUNTIME_CACHE_SUFFIXES,
     SCRATCH_MEMMAP,
     folder_stat,
     incidental_read,
     is_cash_internal,
     is_pseudo_fs,
+    is_runtime_cache_path,
     regular_file_stat,
     stat_key,
 )
@@ -427,7 +426,7 @@ class FileAccessTracker:
             # call returns, so an entry depending on one could never be fresh.
             logger.debug("[TRACKER] Ignoring joblib scratch read %r", abs_path)
             return
-        if RUNTIME_CACHE_SEGMENT in abs_path or abs_path.endswith(RUNTIME_CACHE_SUFFIXES):
+        if is_runtime_cache_path(abs_path):
             logger.debug("[TRACKER] Ignoring runtime-cache read %r", abs_path)
             return
         if is_cash_internal(abs_path):

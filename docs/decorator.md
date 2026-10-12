@@ -791,13 +791,14 @@ property of an object of your class that the body reads by a global name
 (`BAG['k']`, `BAG.value`) is read as a helper: a global it changes is reported
 as one the body changes.
 
-<!-- claim: cash/effect_observer.py:EffectObserver @a3930913 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @9bcb1f97 -->
+<!-- claim: cash/effect_observer.py:EffectObserver @38484c19 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @9bcb1f97 -->
 cash also **watches the first call**. Library code is not read, so a
 `session.post` or an SDK request is invisible to the analysis above.
 
 While a miss runs, cash records file writes, outbound connections and subprocesses, and
 warns once about any it had not already reported (a write into a scratch
-directory the call made and removed again is not one)
+directory the call made and removed again is not one, nor is a write into
+the interpreter's or numba's own cache)
 ([`IMPURE-OBSERVED-EFFECTS`](warnings.md#impure-observed-effects)). A call to an
 LLM or HTTP SDK shows up this way, as a network read
 ([`KEY-NETWORK-READ`](warnings.md#key-network-read)): `ttl=` silences it, and

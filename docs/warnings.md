@@ -663,6 +663,12 @@ mutation` (an object you passed in changed). A connection to a server is a read
 the key cannot see, reported as [KEY-NETWORK-READ](#key-network-read).
 Each line names the path or address and the line of your code that led to it.
 
+<!-- claim: cash/tracking/read_classification.py:is_runtime_cache_path @303bdc01 -->
+Writes into a runtime's own cache are not reported: anything under a
+`__pycache__` folder or under `NUMBA_CACHE_DIR`, and bytecode and numba cache
+files (`.pyc`, `.nbi`, `.nbc`, and the `.nbi.tmp.<hex>` file numba writes
+first). A hit that skips one only leaves the runtime to compile again.
+
 **Why it matters.** A hit runs none of the body, so these effects happened
 once and will not happen again. If the next step relies on them, later runs
 behave differently from the first.
@@ -1352,7 +1358,7 @@ a hasher for the type.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @0a6de304, cash/decorator/closure_fold.py:HelperIdentity.identity @1f843e29, cash/decorator/code_surface.py:CodeSurface._unpicklable_identity @70e59364 -->
+<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @0a6de304, cash/decorator/closure_fold.py:HelperIdentity.identity @e54e2652, cash/decorator/code_surface.py:CodeSurface._unpicklable_identity @70e59364 -->
 **What happened.** A parameter default of the function, of a helper it
 calls, or of a function or class passed to it, could not be hashed, so the
 call was not cached. The message names the type.

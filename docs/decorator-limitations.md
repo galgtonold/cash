@@ -138,7 +138,7 @@ with `@cash.opaque`; see [Purity markers](tutorials/feature-guides/purity-decora
 
 ## Dispatch tables and strategy registries {#dispatch-tables}
 
-<!-- claim: cash/analysis/purity_visitor.py:PurityVisitor._table_is_reachable_from_the_key @f40e5656, cash/decorator/global_values.py:GlobalValues.data_callable_identity @5c403ff1 -->
+<!-- claim: cash/analysis/purity_visitor.py:PurityVisitor._table_is_reachable_from_the_key @f40e5656, cash/decorator/global_values.py:GlobalValues.data_callable_identity @f5ef89ae -->
 A cached function that picks a function from a module-level table caches
 correctly. The table can be a dict of functions, a registry a `@register`
 decorator fills, a dict of classes, or a `.get()` on any of them. cash reads

@@ -23,6 +23,7 @@ from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..effects import environment_component
 from ..exceptions import CashImpurityWarning
 from ..install_paths import is_user_code_module
+from ..jit_functions import jit_python_function
 from ..loaded_code import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
 from .arg_hashing import is_opaque, plain_census
@@ -348,6 +349,14 @@ class CodeArgs:
                 yield value
             return
         if callable(value):
+            compiled = jit_python_function(value)
+            if compiled is not None:
+                # numba's `@njit`: its code is the function it compiles; its
+                # options are keyed with the argument (`ArgHasher`).
+                if id(compiled) not in _seen:
+                    _seen.add(id(compiled))
+                    yield compiled
+                return
             # Distinguish a callable INSTANCE (whose class defines ``__call__``
             # in Python) from a function/method/C-callable. An instance has no
             # ``__code__`` of its own -- its code lives on its class -- so
@@ -534,6 +543,9 @@ class CodeArgs:
                 yield from self._find_user_code(v.values() if isinstance(v, dict) else v, _depth + 1, _seen)
             elif isinstance(v, (types.FunctionType, type)):
                 if defined_in_user_code(v):
+                    yield from self._walk_carriers(v, _depth, _seen)
+            elif jit_python_function(v) is not None:
+                if defined_in_user_code(jit_python_function(v)):
                     yield from self._walk_carriers(v, _depth, _seen)
             elif isinstance(v, types.MethodType):
                 _seen.add(id(v))

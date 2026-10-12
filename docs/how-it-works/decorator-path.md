@@ -37,14 +37,14 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 ## What goes into the state
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3514afa3, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/closure_fold.py:HelperIdentity._captures_of @0bee994c, cash/decorator/global_values.py:GlobalValues.code_ref_part @012a244d, cash/decorator/code_args.py:CodeArgs._installed_code @0898110a -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3514afa3, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/closure_fold.py:HelperIdentity._captures_of @0bee994c, cash/decorator/global_values.py:GlobalValues.code_ref_part @012a244d, cash/decorator/code_args.py:CodeArgs._installed_code @0898110a, cash/jit_functions.py:jit_options @6d1473a7 -->
 The state starts from source code and then folds in, on every call, each input
 that can change the result without changing an argument:
 
 | Folded in | Detail |
 |---|---|
 | The function's source | Parsed and rendered back (`ast.unparse`) without docstrings (code that reads one at run time, through `__doc__` or `inspect.getdoc`, keys the docstrings it reaches as data), so comments, blank lines, indentation, quote style, trailing commas, redundant parentheses and line breaks do not count: running `ruff format` or `black` keeps the cache. `# @cash:` directives count, except the waivers: a `# @cash:assume-safe` comment and a `with cash.assume_safe():` wrapper (not the code inside it) are dropped, so adding or removing one keeps the cache. A function with no readable source (`python -c`, a `python - <<EOF` heredoc, `exec`) is keyed by its bytecode, and its helpers and globals are found from the names that bytecode looks up. |
-| Helpers it calls | Followed transitively through your own modules (an editable install counts) and the package the cached function itself is in, wherever it is installed; any other installed package is where it stops, your team's own included when it is installed without `-e`. A function of a compiled extension built in your project (`build_ext --inplace`) is keyed by the content of its built file. `depends_on=` adds more. |
+| Helpers it calls | Followed transitively through your own modules (an editable install counts) and the package the cached function itself is in, wherever it is installed; any other installed package is where it stops, your team's own included when it is installed without `-e`. A function of a compiled extension built in your project (`build_ext --inplace`) is keyed by the content of its built file. A numba-compiled function (`@njit`, `@jit`, `@vectorize`, `@guvectorize`, `@cfunc`) is keyed as the Python function it compiles, followed like any other helper, plus the options it was compiled with (`fastmath`, `error_model`, `parallel`, but not `cache`), whether it is called by name, through its module, held in a global or passed as an argument. `depends_on=` adds more. |
 | Classes its code reaches | Classes it constructs, names or annotates, transitively. For a cached method: the class-level code and constants it reaches. For every class of yours it reaches (also as `module.Class`, or through an instance): its class attributes, re-read on every call (an Enum's member values, a namedtuple's fields and defaults), and the module globals its functions read, inherited methods, properties and `__init__` included. A class attribute the class's own code writes (a counter, a registry) is state, not an input, and is left out. |
 | Module globals it reads | Data globals read by the function or a helper: a threshold, a config dict, and an attribute read through a module however it is spelled (`conf.RATE`, `pkg.conf.RATE`, `m = pkg.conf; m.RATE`). Modules, functions and classes are tracked as code instead; a name bound to a class or to a library or builtin function (`DTYPE = np.float32`, `AGG = sum`, `E = ValueError`), read directly, as `settings.AGG` or from a closure, is also keyed by what it names, so changing it to `np.float64` or `max`, in the file or while the program runs, recomputes. So is a function or a class of yours held inside a data global, a class attribute, a closure or a `functools.partial`, in a dict, a list or an object's attribute (`CFG = {"b": Box(lambda x: x + 1)}`, `REG = {"double": Double}`): editing it recomputes. |
 | Closures, defaults, a bound method's instance | The values a closure captured, the cached function's own and those of a helper a factory made (`score = make_scorer(weights)` over an array, a data frame or a model it calls methods on); a captured module: its name and the code of the functions and classes read from it. Parameter defaults by value (a function default also by the globals it reads: `fn=lambda v: v + K`), data stored on a function (`scale.k`), and the `self` of `cash.cache(obj.method)`. |
@@ -68,7 +68,7 @@ warning; `allow_random=True` accepts that on purpose.
 
 ## How arguments are hashed
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @cba92fc6, cash/decorator/arg_hashing.py:ArgHasher._nested_hasher @6c8d0ce6 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @cba92fc6, cash/decorator/arg_hashing.py:ArgHasher._nested_hasher @0488bded -->
 Each argument is fingerprinted by the first rule that applies:
 
 1. A hasher you registered with `cash.register_hasher(T, fn, override=True)`.
@@ -96,7 +96,10 @@ what it pickles.
 
 Inside a list, tuple, set or dict argument, a value a registered hasher, a
 `__cash_key__` or a built-in content hasher covers is hashed by it too;
-everything else is pickled.
+everything else is pickled. A numba-compiled function is keyed by the name of
+the function it compiles and its compile options, as a function is by its
+name; the code of either is keyed with the state, as code passed as an
+argument.
 
 <!-- claim: cash/canonical_form.py:holds_content_data @c313e890, cash/decorator/arg_hashing.py:ArgHasher._memo_content_digest @8ce1698e -->
 An object that holds frames, arrays or tables, directly or in a list, tuple or
