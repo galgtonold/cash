@@ -244,7 +244,7 @@ def test_a_directory_too_deep_for_an_entry_s_name_is_announced(tmp_path, monkeyp
         assert "260-character limit" in text
 
 
-def test_the_path_length_advice_names_the_limit(tmp_path, monkeypatch):
+def test_the_path_length_advice_names_the_limit(full_warning_text, tmp_path, monkeypatch):
     from cash.backends.cache_dir import warn_if_unwritable
 
     # The folder itself must stay creatable on Windows (under 248 characters)

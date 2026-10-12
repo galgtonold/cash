@@ -32,6 +32,7 @@ from ..analysis.purity_report import (
     describe_untrackable,
 )
 from ..analysis.purity_visitor import ARGUMENT_MUTATION_NOT_STORED
+from ..diagnostics import list_gist
 from ..effect_observer import EffectObserver, observed_label
 from ..effects import EffectKind
 from ..exceptions import (
@@ -881,7 +882,8 @@ class PurityChecks:
             self._report_observed_network(func_name, network)
         if not effects:
             return
-        summary = "\n".join(dict.fromkeys(f"  {kind}: {detail}" for kind, detail in effects))
+        lines = list(dict.fromkeys(f"{kind}: {detail}" for kind, detail in effects))
+        summary = "\n".join(f"  {line}" for line in lines)
         self._notices.warn_once(
             CashImpurityWarning,
             func_name,
@@ -898,6 +900,8 @@ class PurityChecks:
             "the way to it counts) or run it inside `with "
             "cash.assume_safe():`; @cash.cache(assume_safe=True) waives "
             "the whole function instead, including effects added later.",
+            short=f"@cash.cache on {func_name}: the first call had effects static analysis did not see, "
+            f"which a cache hit will not repeat: {list_gist(lines, 'effect')}",
         )
 
     def _report_observed_network(self, func_name: str, connections: list[str]) -> None:

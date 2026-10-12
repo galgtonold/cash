@@ -932,7 +932,7 @@ class TestPositionalRngCarrierArguments:
             == []
         )
 
-    def test_positional_warning_names_the_parameter_and_the_escape_hatch(self):
+    def test_positional_warning_names_the_parameter_and_the_escape_hatch(self, full_warning_text):
         """The user-facing half: the warning has to reach a filter and a fix."""
         ns = self._ns(self.DEF_FIRST)
         detector = RandomnessDetector(shell=SimpleNamespace(user_ns=ns))
@@ -1123,7 +1123,7 @@ class TestPositionalRngCarrierArguments:
         detector.reset()
         assert detector.rng_carriers == {}
 
-    def test_carrier_warning_names_the_variable_and_the_escape_hatch(self):
+    def test_carrier_warning_names_the_variable_and_the_escape_hatch(self, full_warning_text):
         detector = RandomnessDetector()
         detector.analyze_code("import numpy as np\nrng = np.random.default_rng()")
         with warnings.catch_warnings(record=True) as w:

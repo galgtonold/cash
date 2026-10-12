@@ -60,7 +60,7 @@ says how the folder is chosen and capped.
 A `pyproject.toml` marks a project only when it has a `[project]`,
 `[build-system]`, `[tool.poetry]` or `[tool.cash]` table.
 
-<!-- claim: cash/config/schema.py:CashConfig @7fe9f694 broad="the field table is a claim about every field of the dataclass" -->
+<!-- claim: cash/config/schema.py:CashConfig @01f1a151 broad="the field table is a claim about every field of the dataclass" -->
 ## All settings
 
 Every setting is named by its field. In a TOML file the key is the field
@@ -140,6 +140,7 @@ say. See
 | `verbose` | `false` | <span class="md-tag">decorator only</span> Only the one line per decorated call, and the disk cache's cap and first eviction, without the other debug records. |
 | `disable` | `false` | Run every `@cash.cache` call uncached, and make `%cash_on` decline. `CASH_DISABLE=1 pytest` checks your tests pass without the cache ([Testing your code](../tutorials/feature-guides/testing-your-code.md)). |
 | `summary` | `false` | <span class="md-tag">decorator only</span> At exit, print a per-function hit/miss table to stderr, with why each function missed: `CASH_SUMMARY=1 python model.py`. |
+| `warning_detail` | `"short"` | `"short"`: each warning is one line, its code, what happened and where to read more; a code another function already showed says only `also on <name>`. `"full"`: the full text, with the fix and every finding. `f.cache_info()["warnings"]` and logging always keep the full text ([How much a warning says](../warnings.md#warning-detail)). |
 | `check_cash_keys` | `true` | <span class="md-tag">decorator only</span> Check each [`__cash_key__`](../tutorials/feature-guides/custom-hashers.md#cash-key) against the data it stands for, once per object per process, on a background thread; one key for two contents warns [`KEY-STALE-CASH-KEY`](../warnings.md#key-stale-cash-key). |
 | `analytics` | `true` | <span class="md-tag">notebook only</span> Record each statement's hit, miss and timing in `analytics.db` under the per-user cache root, for the `cash.show_stats()` dashboard. `false` creates no file. |
 

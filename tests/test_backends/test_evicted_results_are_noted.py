@@ -189,7 +189,7 @@ def test_explain_and_the_miss_say_evicted_to_make_room(tmp_path):
     )
 
 
-def test_an_expensive_recompute_of_an_evicted_result_warns_once(tmp_path, monkeypatch):
+def test_an_expensive_recompute_of_an_evicted_result_warns_once(full_warning_text, tmp_path, monkeypatch):
     from cash.backends import budget_notices
 
     _c, f = _filled(tmp_path / "c")

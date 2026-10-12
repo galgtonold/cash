@@ -109,7 +109,7 @@ def test_the_analyzer_names_a_read_as_a_read():
     assert "what the server returns is not in the cache key" in issues[0].description
 
 
-def test_a_network_read_gets_the_ttl_advisory(disk_cash, url):
+def test_a_network_read_gets_the_ttl_advisory(full_warning_text, disk_cash, url):
     rec = _call(disk_cash.cache(fetch), url)
     assert _codes(rec) == ["KEY-NETWORK-READ"], _codes(rec)
     message = _message(rec, "KEY-NETWORK-READ")

@@ -46,7 +46,7 @@ class TestOversizeRefusal:
     this trade safe.
     """
 
-    def test_object_over_the_whole_cap_is_refused_and_warns_once(self, tmp_path):
+    def test_object_over_the_whole_cap_is_refused_and_warns_once(self, full_warning_text, tmp_path):
         disk = FileBackend(str(tmp_path / "c"), max_size_bytes=8000, flush_interval=0)
         tiered = TieredBackend(
             [InMemoryBackend(), disk],
@@ -116,7 +116,7 @@ class TestOversizeRefusal:
 
 
 class TestEvictAfterWrite:
-    def test_warns_once_when_recent_entry_evicted(self, tmp_path):
+    def test_warns_once_when_recent_entry_evicted(self, full_warning_text, tmp_path):
         # Bare file backend (no tiered refusal) with a cap too small to hold
         # three medium entries: writing the third evicts the first, which was
         # written only two writes ago → treadmill signal.

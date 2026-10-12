@@ -88,6 +88,7 @@ def _run(cached, arg, calls=12):
 
 def test_it_warns_when_the_key_costs_more_than_the_work(tmp_path):
     cash = _cash(tmp_path)
+    cash.reconfigure(warning_detail="full")  # the fix is in the full text
     cash.register_hasher(Payload, _costly_hash)
 
     @cash.cache

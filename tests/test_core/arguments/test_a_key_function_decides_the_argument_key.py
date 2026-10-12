@@ -149,7 +149,7 @@ def test_a_key_function_that_raises_runs_the_call_uncached(cash_instance):
     assert runs == ["b", "b", "a"]
 
 
-def test_a_key_function_that_reads_the_clock_or_a_random_number_is_reported(cash_instance):
+def test_a_key_function_that_reads_the_clock_or_a_random_number_is_reported(full_warning_text, cash_instance):
     import random
 
     with warnings.catch_warnings(record=True) as caught:
@@ -176,7 +176,7 @@ def test_a_key_function_that_reads_the_clock_or_a_random_number_is_reported(cash
     assert "random.random()" in str(caught[-1].message)
 
 
-def test_a_key_function_that_reads_a_file_is_reported(cash_instance, tmp_path):
+def test_a_key_function_that_reads_a_file_is_reported(full_warning_text, cash_instance, tmp_path):
     path = tmp_path / "units.txt"
     path.write_text("1", encoding="utf-8")
 

@@ -62,7 +62,7 @@ def rate(url):
         return int(response.read())
 
 
-def test_an_unnamed_fetch_gets_the_ttl_advisory(disk_cash, url):
+def test_an_unnamed_fetch_gets_the_ttl_advisory(full_warning_text, disk_cash, url):
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
         assert disk_cash.cache(rate)(url) == 7

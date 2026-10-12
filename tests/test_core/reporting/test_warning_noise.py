@@ -91,6 +91,7 @@ def _audited_marker_then_audited_fetch(url):
 
 
 def test_a_network_read_is_reported_beside_a_static_finding(disk_cash, url):
+    disk_cash.reconfigure(warning_detail="full")  # the waiver is offered in the fix
     rec = _call(disk_cash.cache(_marker_then_fetch), url)
     assert "IMPURE-SIDE-EFFECTS" in _codes(rec), _codes(rec)
     observed = _message(rec, "KEY-NETWORK-READ")
@@ -200,6 +201,7 @@ def _applies(score, prep=None):
 
 
 def test_an_opaque_callable_names_the_parameter_it_arrived_in(disk_cash):
+    disk_cash.reconfigure(warning_detail="full")  # the fix names the scope of a hasher
     applies = disk_cash.cache(_applies, assume_safe=True)
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")

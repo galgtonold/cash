@@ -33,7 +33,11 @@ TIER_TYPES = frozenset({"memory", "file", "sqlite", "redis", "s3"})
 
 #: Settings whose value must be one of a fixed set (see ``validate_value``).
 #: ``backend = "tiered"`` is the RAM + disk stack; any other is one tier.
-_NAMED_CHOICES = {"backend": TIER_TYPES | {"tiered"}, "type": TIER_TYPES}
+_NAMED_CHOICES = {
+    "backend": TIER_TYPES | {"tiered"},
+    "type": TIER_TYPES,
+    "warning_detail": frozenset({"short", "full"}),
+}
 
 
 #: The smallest value each numeric setting can take (tier keys included), and
@@ -287,6 +291,14 @@ class CashConfig:
     """Log one line per decorated call (a hit, or a miss and why) to the
     ``cash.calls`` logger, without the other debug records. ``debug``
     implies it."""
+
+    warning_detail: str = "short"
+    """How much a warning prints. ``"short"``: one line, the code, what
+    happened and where to read more (the docs section; for a decorated
+    function also ``f.cache_info()['warnings']``, which keeps the full
+    text). ``"full"``: the full text, with the fix and any list of findings.
+    In ``"short"``, a code one function already showed prints only
+    ``also on <name>`` for the next function."""
 
     analytics: bool = True
     """Notebook only: record each statement's hit, miss and timing in

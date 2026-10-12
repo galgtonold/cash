@@ -186,7 +186,7 @@ def test_lines_are_file_lines_and_the_file_is_named():
     assert os.path.basename(issue.filename) == os.path.basename(__file__)
 
 
-def test_the_warning_names_the_defining_file(tmp_path):
+def test_the_warning_names_the_defining_file(full_warning_text, tmp_path):
     c = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
     cached = c.cache(mutates_a_parameter)
     with warnings.catch_warnings(record=True) as rec:

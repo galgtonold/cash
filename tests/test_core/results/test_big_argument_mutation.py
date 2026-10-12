@@ -87,7 +87,7 @@ def _rewrites(rows):
         (_rewrites, "changes an element of the argument 'rows' in place"),
     ],
 )
-def test_the_static_finding_says_the_argument_is_changed(disk_cash, fn, says):
+def test_the_static_finding_says_the_argument_is_changed(full_warning_text, disk_cash, fn, says):
     """Both read as the label a local list's `.sort()`
     gets ("write method", "subscript mutation"), the same as the false alarms
     beside them, so the one that mattered was not read."""

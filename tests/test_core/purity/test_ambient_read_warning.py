@@ -139,7 +139,7 @@ def test_an_environment_read_is_keyed_not_announced(disk_cash, factory):
     assert "KEY-AMBIENT-READ" not in text, text
 
 
-def test_the_advice_is_about_the_key_not_about_side_effects(disk_cash):
+def test_the_advice_is_about_the_key_not_about_side_effects(full_warning_text, disk_cash):
     """The wrong text sends the reader hunting for a write that is not there."""
     text = "\n".join(str(w.message) for w in _warnings_for(disk_cash, _clock))
     assert "IMPURE-SIDE-EFFECTS" not in text

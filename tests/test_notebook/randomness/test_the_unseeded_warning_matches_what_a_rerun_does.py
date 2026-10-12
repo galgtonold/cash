@@ -51,7 +51,7 @@ def _run_twice(magics, cells: list[str]) -> tuple[list[float], list[str]]:
     return values, [str(w.message) for w in caught if issubclass(w.category, CashRandomnessWarning)]
 
 
-def test_a_cheap_generator_draw_is_not_called_frozen(uncached):
+def test_a_cheap_generator_draw_is_not_called_frozen(full_warning_text, uncached):
     values, messages = _run_twice(uncached, ["rng = np.random.default_rng()", "x = float(rng.random())"])
     assert values[0] != values[1], "the generator draw was held; the rest of this test assumes it is drawn again"
     assert len(messages) == 1, messages
@@ -62,7 +62,7 @@ def test_a_cheap_generator_draw_is_not_called_frozen(uncached):
     assert "keep it frozen" not in message, "allow-random cannot keep a value frozen that is drawn again"
 
 
-def test_a_cheap_module_draw_is_frozen_and_says_so(uncached):
+def test_a_cheap_module_draw_is_frozen_and_says_so(full_warning_text, uncached):
     """The control: the module stream is rewound, so here "frozen" is true."""
     values, messages = _run_twice(uncached, ["x = random.random()"])
     assert values[0] == values[1], "the module draw was not rewound"

@@ -227,7 +227,7 @@ class TestValidationCostIsVisible:
 
         assert validation_is_expensive(seconds, saved) is expected, why
 
-    def test_an_expensive_check_warns_once(self, origin):
+    def test_an_expensive_check_warns_once(self, full_warning_text, origin):
         import warnings as w
 
         from cash.exceptions import CashCacheIneffectiveWarning
