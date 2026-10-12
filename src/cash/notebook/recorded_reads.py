@@ -96,6 +96,9 @@ class ReadRecord:
     #: functions reached for (``cache_key._callee_deps``), for its outputs'
     #: lineage.
     callees: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    #: A statement's text -> the ``callees`` its last run was keyed with,
+    #: which the simulation reads in place of its own (``compute_cache_key``).
+    callees_by_code: dict[str, tuple[str, ...]] = field(default_factory=dict)
     #: ``(kind, label)`` of every value a record holds: what :func:`snapshot` watches.
     watched: set[tuple[str, str]] = field(default_factory=set)
     #: ``kind:label`` -> the last change the runtime saw a statement make to it.

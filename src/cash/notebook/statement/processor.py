@@ -736,6 +736,10 @@ class StatementProcessor:
         run.analysis = analyze_statement(run.code, run.tree, self.shell.user_ns)
         self._mutation_routing.route(run, effects)
         self._decide_cacheability(run)
+        lineage = self.tracking_state.variable_lineage
+        self.tracking_state.statement_entry_lineages[run.code] = {
+            name: lineage[name] for name in run.inputs if name in lineage
+        }
         # An UNSEEDED estimator fit routed to caching above is frozen on re-run
         # with no warning -- cash's AST detector cannot see the randomness inside
         # sklearn's compiled .fit(). Warn now (compute time); the same set drives
