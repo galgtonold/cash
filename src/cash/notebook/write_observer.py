@@ -91,6 +91,17 @@ def _appended_by_user_code() -> bool:
     return frame is not None and is_user_code_file(frame.f_code.co_filename)
 
 
+def _names_a_folder(path: object) -> bool:
+    """Is the *path* being opened to write a folder already? Then it is an
+    ``O_TMPFILE`` open (``tempfile.TemporaryFile``): a file with no name,
+    which nothing after the block can find. A folder that only appears later
+    (moved into place) is kept."""
+    try:
+        return isinstance(path, (str, bytes, os.PathLike)) and os.path.isdir(path)
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def _on_open(args: tuple) -> None:
     sinks = _active.get()
     if not sinks:
@@ -103,7 +114,7 @@ def _on_open(args: tuple) -> None:
     else:  # os.open
         written = isinstance(flags, int) and bool(flags & _WRITE_FLAGS)
         appends = written and bool(flags & os.O_APPEND) and not flags & os.O_TRUNC
-    if written:
+    if written and not _names_a_folder(path):
         _record(sinks, path, appends)
 
 
@@ -151,7 +162,7 @@ def kept_writes(written: "set[str] | frozenset[str]", storage_root: object = Non
         for p in written
         if p not in appended
         and not (root and os.path.normcase(p).startswith(root))
+        # A folder is kept: one moved into place (``tmp.rename(dest)``) is
+        # what the block published.
         and os.path.lexists(p)
-        # A folder opened to write is ``O_TMPFILE``: a file with no name.
-        and not os.path.isdir(p)
     )
