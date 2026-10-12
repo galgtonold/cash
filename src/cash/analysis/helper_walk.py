@@ -43,7 +43,7 @@ from ..source_reading import getsourcelines, own_source
 from .ambient_reads import log_helper_names, log_only_ambient_reads, method_namespace
 from .annotations import assume_safe_block_lines, audited_lines
 from .ast_util import bytecode_global_refs, resolve_callee
-from .callee_effects import scope_locals
+from .callee_effects import scope_locals, source_global_mutations
 from .helper_bindings import (
     binding_path,
     build_namespace,
@@ -499,6 +499,27 @@ class HelperWalk:
                 # Its code shapes the result all the same; followed for the
                 # key, not audited.
                 self._queue_hash_only(value, body.func, body.depth, body.reported)
+            elif value is not None:
+                self._queue_special_functions(body, value)
+
+    def _queue_special_functions(self, body: _Body, value: Any) -> None:
+        """An object of the user's class read by name: ``BAG['k']``,
+        ``BAG.value``, ``with TIMER:`` run its special methods and
+        properties. The ones that change a global are audited as helpers, so
+        the change is reported as their own would be."""
+        from .handed_callables import is_users_instance, special_functions
+
+        if not is_users_instance(value):
+            return
+        for fn in special_functions(type(value)):
+            if not is_user_code(fn, self._root_module):
+                continue
+            try:
+                source = textwrap.dedent(own_source(fn))
+            except SOURCE_RETRIEVAL_ERRORS:
+                continue
+            if source_global_mutations(source):
+                self._queue_helper(body, fn, 0, None)
 
     def _queue_attribute_values(self, body: _Body) -> None:
         """The same through a module or a class: ``map(helper.g, xs)``,

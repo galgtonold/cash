@@ -1032,6 +1032,33 @@ _NOT_RUN_BY_A_STATEMENT = frozenset(
 )
 
 
+def is_users_instance(value: Any) -> bool:
+    """An object of a class of the user's (not a class, function or module)."""
+    return _is_users_object(value)
+
+
+def special_functions(cls: type) -> list[Any]:
+    """The functions Python runs implicitly on an object of the user's class
+    *cls*: its special methods (``__getitem__``, ``__exit__``, ``__add__``,
+    ...) and its properties' getters, setters and deleters, from the
+    classes of the user's in its MRO."""
+    out: list[Any] = []
+    for klass in cls.__mro__:
+        if klass is object or not _is_users_class(klass):
+            continue
+        for name, member in list(vars(klass).items()):
+            if isinstance(member, property):
+                out.extend(fn for fn in (member.fget, member.fset, member.fdel) if fn is not None)
+                continue
+            if not (name.startswith("__") and name.endswith("__")) or name in _NOT_RUN_BY_A_STATEMENT:
+                continue
+            if isinstance(member, (staticmethod, classmethod)):
+                member = member.__func__
+            if isinstance(member, types.FunctionType):
+                out.append(member)
+    return out
+
+
 class _Found:
     """What the values handed over lead to, collected over one statement."""
 
@@ -1332,19 +1359,8 @@ class _Found:
         if cls in self._special_seen:
             return
         self._special_seen.add(cls)
-        for klass in cls.__mro__:
-            if klass is object or not _is_users_class(klass):
-                continue
-            for name, member in list(vars(klass).items()):
-                if isinstance(member, property):
-                    for fn in (member.fget, member.fset, member.fdel):
-                        self.method_called(fn)
-                    continue
-                if not (name.startswith("__") and name.endswith("__")) or name in _NOT_RUN_BY_A_STATEMENT:
-                    continue
-                if isinstance(member, (staticmethod, classmethod)):
-                    member = member.__func__
-                self.method_called(member)
+        for fn in special_functions(cls):
+            self.method_called(fn)
 
     def method_called(self, value: Any) -> None:
         """A method of the user's class called on its object or class
@@ -1643,6 +1659,12 @@ def hands_a_state_changing_callable(
     ):
         if type(value) in _ATOMS:
             continue
+        if _is_users_object(value):
+            # ``with cm:``, ``b.value``, ``b[k]`` in the body run the special
+            # methods and properties of the object's class.
+            if found is None:
+                found = _Found({}, objects=objects)
+            found._special_methods(type(value))
         opens = False
         methods = 0
         if _openable(value):

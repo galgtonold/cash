@@ -598,7 +598,10 @@ The function does something a cache hit will not repeat. Every code here starts 
 **What happened.** The call handed the cached function a function of yours
 that changes a global or a variable it closes over when it is called. It may
 be passed directly (`run(record, 3)`), as a bound method, inside a
-`functools.partial`, or in a list or object that the body calls into. A
+`functools.partial`, or in a list or object that the body calls into. An
+object of your class counts when a special method or property of its class
+changes a global (`__exit__` of a timer the body enters with `with cm:`, a
+`__getitem__` or a property the body reads). A
 function whose source cannot be read counts too, because cash cannot tell what
 it changes. (A change to an object you passed in is seen after the call
 instead, and reported as an argument mutation under

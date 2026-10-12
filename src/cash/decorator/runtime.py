@@ -299,7 +299,9 @@ class KeyBuilder:
                 "handed_callable",
                 f"@cash.cache on {spec.name}: an argument is a function of yours, "
                 f"or holds one, that changes a global or what it closes over when "
-                f"it is called (or whose source cannot be read). "
+                f"it is called (or whose source cannot be read), or an object of "
+                f"your class whose special methods or properties (``with cm:``, "
+                f"``b[k]``, ``b.value``) change a global. "
                 f"A cache hit would skip that change, so calls like this run "
                 f"uncached.",
                 code="IMPURE-HANDED-CALLABLE",
