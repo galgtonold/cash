@@ -293,6 +293,12 @@ def _data_size(obj: Any) -> int | None:
             return int(obj.estimated_size())
         except Exception:  # noqa: BLE001 - a LazyFrame or another version: does not say
             return None
+        except BaseException as exc:
+            # Polars 1 panics on an Object column, and a panic derives from
+            # BaseException: it failed every RAM store of such a frame.
+            if type(exc).__name__ != "PanicException":
+                raise
+            return None
     if type_name in ("DataFrame", "Series"):
         size = pandas_nbytes(obj)
         if size is not None:

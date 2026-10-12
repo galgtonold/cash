@@ -56,6 +56,17 @@ def test_a_polars_frame_is_counted_by_its_data():
     assert memory_footprint({"variables": {"df": frame}}) >= 8_000_000
 
 
+def test_a_polars_frame_with_an_object_column_is_sized_and_stored():
+    """Polars 1's ``estimated_size`` panics on an Object column, and a panic
+    is no Exception: it failed the store, and the call that made the frame."""
+    pl = pytest.importorskip("polars")
+    frame = pl.DataFrame({"o": pl.Series([[1], [2]], dtype=pl.Object), "n": [1, 2]})
+    assert memory_footprint(frame) > 0
+    backend = InMemoryBackend()
+    backend.set("k", frame, {"execution_time": 1.0, "copy_required": True})
+    assert backend.get("k")[1]["o"].to_list() == [[1], [2]]
+
+
 @pytest.mark.parametrize("kind", ["array", "object", "polars"])
 def test_the_cap_evicts_objects_and_polars_frames_like_arrays(kind):
     if kind == "polars":
