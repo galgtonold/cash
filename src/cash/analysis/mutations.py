@@ -1080,6 +1080,25 @@ def top_level_calls(tree: ast.Module | None) -> TopLevelCalls:
     return collector.result()
 
 
+def _nested_statements(body: list[ast.stmt]):
+    """Each statement of *body* and of the blocks inside it, not of the
+    functions or classes it defines."""
+    for node in body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        if isinstance(node, ast.Match):
+            yield node
+            continue
+        blocks = [getattr(node, name, None) for name in ("body", "orelse", "finalbody")]
+        blocks += [handler.body for handler in getattr(node, "handlers", ())]
+        nested = [block for block in blocks if isinstance(block, list)]
+        if nested:
+            for block in nested:
+                yield from _nested_statements(block)
+        else:
+            yield node
+
+
 class _TopLevelCallCollector:
     """Fills a :class:`TopLevelCalls`, one top-level statement at a time."""
 
@@ -1092,6 +1111,13 @@ class _TopLevelCallCollector:
         self.argument_bases: set[str] = set()
 
     def statement(self, node: ast.stmt) -> None:
+        if isinstance(node, ast.Match):
+            # Cash runs a ``match`` as one statement: what its cases call
+            # is what it calls (``case 'train': rows.append('aug')``).
+            for case in node.cases:
+                for sub in _nested_statements(case.body):
+                    self.statement(sub)
+            return
         value = node.value if isinstance(node, (ast.Expr, ast.Assign, ast.AnnAssign)) else None
         if isinstance(value, ast.Call):
             for arg in [*value.args, *(kw.value for kw in value.keywords)]:

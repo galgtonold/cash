@@ -226,3 +226,18 @@ def test_is_estimator():
     assert not is_estimator(FitOnly())
     assert not is_estimator(fake_module)
     assert not is_estimator([1])
+
+
+def test_a_match_case_changing_a_list_changes_it():
+    """Cash runs a ``match`` as one statement: what its cases call is what it
+    calls, a branch inside a case included."""
+    import ast
+
+    from cash.analysis.mutations import top_level_calls
+
+    code = (
+        "match mode:\n    case 'train':\n        rows.append('aug')\n    case _:\n"
+        "        if flag:\n            seen.add(1)\n        def later():\n            other.append(1)"
+    )
+    calls = top_level_calls(ast.parse(code))
+    assert calls.mutation_receivers == {"rows", "seen"}
