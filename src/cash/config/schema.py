@@ -296,7 +296,9 @@ class CashConfig:
     """How much a warning prints. ``"short"``: one line, the code, what
     happened and where to read more (the docs section; for a decorated
     function also ``f.cache_info()['warnings']``, which keeps the full
-    text). ``"full"``: the full text, with the fix and any list of findings."""
+    text). ``"full"``: the full text, with the fix and any list of findings.
+    In ``"short"``, a code one function already showed prints only
+    ``also on <name>`` for the next function."""
 
     analytics: bool = True
     """Notebook only: record each statement's hit, miss and timing in

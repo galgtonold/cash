@@ -109,6 +109,28 @@ def test_the_function_log_keeps_the_full_text(tmp_path):
     assert str(tmp_path) in logged, "the log lists the full path"
 
 
+def test_the_same_code_on_a_second_function_says_also_on(tmp_path):
+    cash = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
+    first = cash.cache(_writes_a_zip(tmp_path))
+    second_body = _writes_a_zip(tmp_path)
+    second_body.__name__ = second_body.__qualname__ = "other"
+    second = cash.cache(second_body)
+    shown = _observed(cash, first, second)
+    assert len(shown) == 2, shown
+    assert shown[0].startswith("[IMPURE-OBSERVED-EFFECTS] @cash.cache on ")
+    assert shown[1] == "[IMPURE-OBSERVED-EFFECTS] also on other (other.cache_info()['warnings'])"
+    assert "Fix:" in second.cache_info()["warnings"][-1]["message"], "the log still has it all"
+
+
+def test_full_detail_repeats_the_full_text_per_function(tmp_path):
+    cash = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False, warning_detail="full")
+    first = cash.cache(_writes_a_zip(tmp_path))
+    second_body = _writes_a_zip(tmp_path)
+    second_body.__name__ = second_body.__qualname__ = "other"
+    shown = _observed(cash, first, cash.cache(second_body))
+    assert len(shown) == 2 and all("\n  Fix: " in m for m in shown), shown
+
+
 SCRIPT = """
 import warnings, zipfile
 import cash

@@ -25,7 +25,9 @@ model.py:10: CashImpurityWarning: [IMPURE-OBSERVED-EFFECTS] @cash.cache on model
 ```
 
 For a decorated function, `f.cache_info()["warnings"]` keeps the full text
-(every finding, and the fix), which the line names.
+(every finding, and the fix), which the line names. When a second function
+gets a code the first already showed, its line only says so:
+`[IMPURE-OBSERVED-EFFECTS] also on backtest2 (backtest2.cache_info()['warnings'])`.
 
 Set [`warning_detail`](getting-started/configuration.md#output-and-switches)
 to `"full"` (`CASH_WARNING_DETAIL=full`) to print the full text instead:

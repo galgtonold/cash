@@ -96,6 +96,9 @@ class Notices:
         self.lock = threading.Lock()
         # What `warn_once` has shown: (category, func_name, arg_type_name, code).
         self._seen: set[tuple[type[Warning], str, str, str]] = set()
+        # Each code shown in the short form, and the function it was shown
+        # for: the next function with that code prints only "also on <name>".
+        self._shown_codes: dict[str, str] = {}
 
     def warn_once(
         self,
@@ -128,7 +131,8 @@ class Notices:
         "full"`` stderr shows the same text; by default it shows the one line
         of :func:`~cash.diagnostics.short_diagnostic`, which points at that
         log -- *short*, when given, is the what it summarizes instead of the
-        first sentence of ``message``.
+        first sentence of ``message``. A code already shown for another
+        function shows only ``also on <name>``.
 
         ``arg_type_name`` is the empty string for warnings that do not
         attach to a specific arg type (e.g. store-failed). The seen-set
@@ -176,6 +180,9 @@ class Notices:
             self._displayed(func_name, code, message, rendered, short),
             fallback=self._definition_site(func_name),
         )
+        if shown:
+            with self.lock:
+                self._shown_codes.setdefault(code, func_name)
         # Recorded only once it was shown: a filter that ignores it, or turns
         # it into an error (which raises past this line), must not hide it
         # from every later run -- a CI job that fails on it would pass on the
@@ -189,6 +196,10 @@ class Notices:
             return rendered
         name = self._display_name(func_name)
         more = f"{name}.cache_info()['warnings']"
+        with self.lock:
+            first = self._shown_codes.get(code)
+        if first is not None and first != func_name:
+            return f"[{code}] also on {name} ({more})"
         return short_diagnostic(code, short or message, more=more)
 
     def _display_name(self, func_name: str) -> str:
@@ -212,6 +223,7 @@ class Notices:
         with self.lock:
             cf.warnings.clear()
             self._seen = {k for k in self._seen if k[1] != cf.name}
+            self._shown_codes = {c: name for c, name in self._shown_codes.items() if name != cf.name}
 
     def _not_shown_before(self, func_name: str, rendered: str) -> str | None:
         """Has an earlier run on this cache shown *rendered*? ``""`` when one
