@@ -30,6 +30,7 @@ from cash.tracking.read_classification import (
     RUNTIME_CACHE_SEGMENT,
     RUNTIME_CACHE_SUFFIXES,
     SCRATCH_MEMMAP,
+    folder_stat,
     incidental_read,
     is_cash_internal,
     is_pseudo_fs,
@@ -140,6 +141,14 @@ class FileAccessTracker:
         # what the body read -- and served, stale, forever after.
         # Comparing against this is what lets the store step refuse instead.
         self.read_stats: dict[str, tuple[int, int, int]] = {}
+        # The same for each folder the block listed (`stat_key` of the
+        # folder): an entry landing in it while the block runs leaves a
+        # listing without the entry, which a snapshot taken at store time
+        # would vouch for forever after. Compared only for a folder the
+        # block itself changed no entry of (`touched_dirs`).
+        self.listed_stats: dict[str, tuple[int, int, int]] = {}
+        # Folders the block wrote, made, removed or moved an entry in.
+        self.touched_dirs: set[str] = set()
         # Files whose inode change time moves without their content changing
         # (a SQLite ``-wal`` a reader opens as root is chown'ed): compared by
         # size and mtime only in `inputs_changed_since_read`.
@@ -265,18 +274,23 @@ class FileAccessTracker:
         return self.accessed_files | kept if kept else self.accessed_files
 
     def inputs_changed_since_read(self) -> list[str]:
-        """Regular files whose stat moved between their first read and now.
+        """Regular files whose stat moved between their first read and now,
+        and folders listed whose stat moved since the listing.
 
-        Directories are left out on purpose: a function that lists a directory
-        and writes its output into it moves the directory's mtime itself, and
-        refusing to cache every such function would be a regression for no
-        gain -- a new entry appearing mid-call is a smaller hole than a file
-        rewritten under the reader.
+        A folder the block changed an entry of itself (`touched_dirs`) is
+        left out: a function that lists a folder and writes its output into
+        it moves the folder's stat itself, and the stat cannot tell its own
+        entry from one that landed from outside. Any other folder that moved
+        had an entry added or removed by someone else while the block ran,
+        and the listing it made is not the folder a snapshot would describe.
         """
         moved = []
         for path, before in self.read_stats.items():
             now = regular_file_stat(path)
             if now != before and not (path in self.ctime_unreliable and now is not None and now[:2] == before[:2]):
+                moved.append(path)
+        for path, before in self.listed_stats.items():
+            if path not in self.touched_dirs and folder_stat(path) != before:
                 moved.append(path)
         return moved
 
@@ -347,6 +361,17 @@ class FileAccessTracker:
                     tracker.created_dirs.append(resolved.rstrip("/") + "/")
                 else:
                     tracker.created_files.add(resolved)
+
+    def note_entry_changed(self, path) -> None:
+        """Record that the block writes, makes, removes or moves *path*: the
+        folder holding it changes by the block's own hand (`touched_dirs`)."""
+        try:
+            raw = os.fsdecode(path) if isinstance(path, bytes) else str(path)
+            folder = normalize_path(os.path.realpath(os.path.dirname(os.path.abspath(raw))))
+        except (TypeError, ValueError, OSError):
+            return
+        for tracker in self._self_and_parents():
+            tracker.touched_dirs.add(folder)
 
     def created_by_block(self, abs_path: str) -> bool:
         """Did this block create *abs_path*, or a directory it lies in?"""
@@ -528,6 +553,10 @@ class FileAccessTracker:
             # cwd at check time, and a chdir during the call would make its
             # stat look like a change that never happened.
             st = regular_file_stat(abs_path) if lstat is None else stat_key(lstat)
+            if st is None and abs_path not in self.listed_stats:
+                folder = folder_stat(abs_path)
+                if folder is not None:
+                    self.listed_stats[abs_path] = folder
             if st is not None:
                 self.read_stats[abs_path] = st
                 if self._hash_on_read:

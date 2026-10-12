@@ -98,6 +98,10 @@ def _on_open(args: tuple) -> None:
     path, mode, flags = args
     if not isinstance(path, (str, bytes, os.PathLike)):
         return
+    if _opens_to_write(mode, flags) or (isinstance(flags, int) and flags & os.O_CREAT):
+        tracker = active_tracker.get()
+        if tracker is not None:
+            tracker.note_entry_changed(path)
     if PENDING and _opens_to_write(mode, flags):
         settle_before_write(path)
     if not isinstance(mode, str):
@@ -182,6 +186,8 @@ def _on_mkdir(args: tuple) -> None:
     # output in the working directory is `mkdir(".")`. Ask the disk.
     # The event reports no dir_fd as -1.
     dir_fd = args[2] if len(args) > 2 and isinstance(args[2], int) and args[2] >= 0 else None
+    if tracker is not None and dir_fd is None:
+        tracker.note_entry_changed(path)
     try:
         if dir_fd is None:
             os.lstat(path)
@@ -194,6 +200,27 @@ def _on_mkdir(args: tuple) -> None:
         tracker.note_created(path, directory=True)
     if observer is not None:
         observer.note_created_dir(path)
+
+
+def _on_entry_change(*indexes: int, dir_fd_at: int | None = None) -> Any:
+    """A consumer of an event that removes or moves a folder entry
+    (``os.remove``, ``os.rename``, ``os.rmdir``, ``shutil.rmtree``): the
+    folders it changes are changed by the block (`note_entry_changed`). One
+    relative to a descriptor (``rmtree``'s own steps) names no folder."""
+
+    def consumer(args: tuple) -> None:
+        tracker = active_tracker.get()
+        if tracker is None:
+            return
+        for at in indexes:
+            fd = args[dir_fd_at + at] if dir_fd_at is not None and len(args) > dir_fd_at + at else None
+            if isinstance(fd, int) and fd >= 0:
+                continue
+            path = args[at] if len(args) > at else None
+            if isinstance(path, (str, bytes, os.PathLike)):
+                tracker.note_entry_changed(path)
+
+    return consumer
 
 
 def _on_listing(args: tuple) -> None:
@@ -263,3 +290,8 @@ def subscribe_read_events() -> None:
     io_watch.subscribe("os.scandir", _on_listing)
     io_watch.subscribe("glob.glob", _on_glob)
     io_watch.subscribe("os.mkdir", _on_mkdir)
+    # (path, dir_fd), (src, dst, src_dir_fd, dst_dir_fd), (path, dir_fd), (path, dir_fd)
+    io_watch.subscribe("os.remove", _on_entry_change(0, dir_fd_at=1))
+    io_watch.subscribe("os.rename", _on_entry_change(0, 1, dir_fd_at=2))
+    io_watch.subscribe("os.rmdir", _on_entry_change(0, dir_fd_at=1))
+    io_watch.subscribe("shutil.rmtree", _on_entry_change(0, dir_fd_at=1))

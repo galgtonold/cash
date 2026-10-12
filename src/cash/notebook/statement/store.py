@@ -236,7 +236,8 @@ class StatementStore:
         )
 
     def inputs_moved(self, run: StatementRun, execution: StatementExecution) -> bool:
-        """Did a file the statement read change after it read it?
+        """Did a file the statement read change after it read it, or a
+        folder it listed gain or lose an entry from outside?
 
         The entry's file fingerprints are taken when it is stored, after the
         statement ran: a file another process replaced while it ran would be
@@ -247,7 +248,7 @@ class StatementStore:
         before its entry is written.
         """
         tracker = execution.file_tracker
-        if tracker is None or not tracker.read_stats:
+        if tracker is None or not (tracker.read_stats or tracker.listed_stats):
             return False
         try:
             moved = tracker.inputs_changed_since_read()
