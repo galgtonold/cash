@@ -225,6 +225,32 @@ def called_dotted_names(tree: ast.AST | None) -> frozenset[str]:
     return frozenset(out)
 
 
+def nodes_in(tree: ast.AST | None, scope: CallScope = "all") -> list[ast.AST]:
+    """Every node of *tree* within *scope* (as `calls_in` picks calls)."""
+    if tree is None:
+        return []
+    if scope == "all":
+        return list(ast.walk(tree))
+    out: list[ast.AST] = []
+
+    def visit(node: ast.AST, top: bool) -> None:
+        out.append(node)
+        for field, value in ast.iter_fields(node):
+            if scope == "no_control_bodies" and isinstance(node, _CONTROL_STATEMENTS) and field in _CONTROL_BODY_FIELDS:
+                continue
+            for child in value if isinstance(value, list) else (value,):
+                if not isinstance(child, ast.AST):
+                    continue
+                if scope == "top_level" and top and isinstance(child, _DEFINITIONS):
+                    continue
+                if scope == "eager" and isinstance(child, _DEFERRED):
+                    continue
+                visit(child, False)
+
+    visit(tree, True)
+    return out
+
+
 def _call_names(tree: ast.AST | None, scope: CallScope, pick) -> frozenset[str]:
     """The names *pick* takes from each ``Call`` in *tree*, within *scope*."""
     if tree is None:

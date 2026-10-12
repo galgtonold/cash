@@ -144,8 +144,8 @@ def statement_user_writer_call(
             # save(v))``: the callee calls what it is handed, as a call by
             # name does. ``[f() for f in fns]``, ``ops[key]()``,
             # ``bus.emit()``: what is called is read out of what it holds.
-            for value in handed_callable_values(node, namespace, bound):
-                found = user_callee_writing_files(_function_called(value), appends=appends)
+            for value, function in _handed_functions(node, namespace, bound):
+                found = user_callee_writing_files(function, appends=appends)
                 if found:
                     return getattr(value, "__name__", None) or ast.unparse(node.func), found
     return None
@@ -170,7 +170,7 @@ def statement_waives_through_user_code(
     for node in calls:
         values = [resolve_callee(node.func, namespace)]
         if node.args or node.keywords:
-            values.extend(_function_called(v) for v in handed_callable_values(node, namespace))
+            values.extend(function for _value, function in _handed_functions(node, namespace, None))
         if any(user_callee_waiving(value) for value in values):
             return True
     return False
@@ -204,6 +204,19 @@ def statement_handed_callables(code: str, namespace: "Mapping[str, Any] | None")
         if node.args or node.keywords or not isinstance(node.func, ast.Name) or node.func.id in bound:
             for value in handed_callable_values(node, namespace, bound):
                 out.setdefault(id(value), value)
+    return list(out.values())
+
+
+def _handed_functions(
+    node: ast.Call, namespace: "Mapping[str, Any]", bound: "Mapping[str, tuple[ast.expr, ...]] | None"
+) -> list[tuple[Any, Any]]:
+    """``(callable, the function calling it runs first)`` for what *node* is
+    handed (`handed_callable_values`), once per function: the same method
+    of each of many objects (``r.value() for r in rows``) is read once."""
+    out: dict[int, tuple[Any, Any]] = {}
+    for value in handed_callable_values(node, namespace, bound):
+        function = _function_called(value)
+        out.setdefault(id(function), (value, function))
     return list(out.values())
 
 
@@ -441,8 +454,8 @@ def statement_user_pyplot_call(
             return ast.unparse(node.func), found
         if node.args or node.keywords or not isinstance(node.func, ast.Name) or node.func.id in bound:
             # ``map(nlines, xs)``, ``s.apply(nlines)``: run as a call by name is.
-            for value in handed_callable_values(node, namespace, bound):
-                found = user_callee_using_pyplot(_function_called(value))
+            for value, function in _handed_functions(node, namespace, bound):
+                found = user_callee_using_pyplot(function)
                 if found:
                     return getattr(value, "__name__", None) or ast.unparse(node.func), found
     return None
