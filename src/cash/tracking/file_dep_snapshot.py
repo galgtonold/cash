@@ -36,7 +36,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any, NamedTuple
 
 from cash._memo import FILE_DIGESTS, LruMemo
-from cash._paths import normalize_path, resolve_file_dep_path
+from cash._paths import MAIN_MODULE_NAMES, main_namespace_name, normalize_path, resolve_file_dep_path
 from cash.bulk_digest import BulkHasher
 from cash.remote_source import RemoteFileDataSource, addressing_options, read_options
 from cash.tracking.digest_table import current_table
@@ -884,18 +884,29 @@ _CODE_REL = "code_rel"
 _CODE_MOD = "code_mod"
 
 
-def code_root_of(module_name: str | None) -> str | None:
-    """The directory holding the top-level package of *module_name*, resolved.
+def _loaded_code_module(module_name: str) -> Any:
+    """The module of THIS process that *module_name* names, or None.
 
-    ``fxpkg.core`` -> ``…/fxpkg``; a script run as ``__main__`` -> its own
-    directory. None when the module is not loaded or has no file.
+    *module_name* is an import name (``fxpkg.core``, ``job``). The script this
+    process runs answers to the name an import would give it, as its functions'
+    cache keys do (`main_namespace_name`): ``python job.py`` is ``job``, and
+    ``python other.py`` or ``python -m pytest`` is not.
     """
-
-    if not module_name:
-        return None
     mod = sys.modules.get(module_name)
+    if mod is not None and module_name not in MAIN_MODULE_NAMES:
+        return mod
+    for main_name in MAIN_MODULE_NAMES:
+        main = sys.modules.get(main_name)
+        if main is not None and main_namespace_name(vars(main)) == module_name:
+            return main
+    return None
+
+
+def _code_root(module_name: str, mod: Any) -> str | None:
+    """The directory holding the top-level package of *module_name*, whose
+    file is *mod*'s, resolved."""
     path = getattr(mod, "__file__", None)
-    if not path:
+    if not isinstance(path, str) or not path:
         return None
     try:
         root = os.path.dirname(os.path.realpath(path))
@@ -909,15 +920,39 @@ def code_root_of(module_name: str | None) -> str | None:
     return root
 
 
+def code_identity_of(module_name: str | None) -> tuple[str, str] | None:
+    """``(import name, code root)`` of *module_name* as loaded in this process.
+
+    ``fxpkg.core`` -> ``("fxpkg.core", "…/fxpkg")``. The script run as
+    ``__main__`` is named as an import would name it (``python job.py`` ->
+    ``("job", <its directory>)``): ``__main__`` names a different script in
+    every process, so a dependency recorded against it would be looked for
+    beside whatever another process happens to run. None when the module is
+    not loaded or has no file.
+    """
+    if not module_name:
+        return None
+    mod = sys.modules.get(module_name)
+    if mod is None:
+        return None
+    if module_name in MAIN_MODULE_NAMES:
+        module_name = main_namespace_name(vars(mod))
+        if module_name in MAIN_MODULE_NAMES:
+            return None  # a REPL, ``python -c``, a notebook: no code on disk
+    root = _code_root(module_name, mod)
+    return (module_name, root) if root else None
+
+
 def attach_code_relative(
     snapshot: dict[str, dict[str, Any]] | None, module_name: str | None
 ) -> dict[str, dict[str, Any]] | None:
     """Mark the snapshot entries that live under the writer's code root."""
     if not snapshot or not module_name:
         return snapshot
-    root = code_root_of(module_name)
-    if not root:
+    identity = code_identity_of(module_name)
+    if not identity:
         return snapshot
+    name, root = identity
     root_key = os.path.normcase(os.path.normpath(root)).rstrip(os.sep) + os.sep
     for path, entry in snapshot.items():
         if not isinstance(entry, dict) or entry.get(_REMOTE_MARKER):
@@ -928,7 +963,7 @@ def attach_code_relative(
         if not native.startswith(root_key):
             continue
         entry[_CODE_REL] = os.path.relpath(os.path.normpath(path), root).replace(os.sep, "/")
-        entry[_CODE_MOD] = module_name
+        entry[_CODE_MOD] = name
     return snapshot
 
 
@@ -936,15 +971,21 @@ def dep_path_for_this_process(path: str, recorded: Any) -> str:
     """Where THIS process would find the file *recorded* describes.
 
     For a dependency that lives beside the code, that is the same relative
-    location under this process's own copy of the code; for everything else,
-    the recorded path.
+    location under this process's own copy of that code; for everything else,
+    and when this process has not loaded that code (``cash inspect``, another
+    script, a notebook), the recorded path.
     """
     if not isinstance(recorded, dict):
         return path
     rel = recorded.get(_CODE_REL)
-    if not rel:
+    name = recorded.get(_CODE_MOD)
+    if not rel or not isinstance(name, str) or name in MAIN_MODULE_NAMES:
+        # An entry written before the script was named (``code_mod:
+        # "__main__"``) does not say which script: relocated, it was looked
+        # for beside any other process's ``__main__``.
         return path
-    root = code_root_of(recorded.get(_CODE_MOD))
+    mod = _loaded_code_module(name)
+    root = _code_root(name, mod) if mod is not None else None
     if not root:
         return path
     return normalize_path(os.path.join(root, *rel.split("/")))

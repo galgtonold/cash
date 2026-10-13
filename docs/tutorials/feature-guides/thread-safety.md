@@ -90,7 +90,7 @@ does its own share of cash's work in parallel.
 
 ## Across processes: Pool, ProcessPoolExecutor, joblib { #across-processes-pool-processpoolexecutor-joblib }
 
-<!-- claim: cash/_paths.py:resolve_main_module @898a6a7a, cash/backends/_writes.py:in_multiprocessing_child @9bd4615e, cash/decorator/run_summary.py:RunSummary.print_at_exit @63645a47 -->
+<!-- claim: cash/_paths.py:main_namespace_name @d870998d, cash/backends/_writes.py:in_multiprocessing_child @9bd4615e, cash/decorator/run_summary.py:RunSummary.print_at_exit @63645a47 -->
 Worker processes use the cache folder of the process that started them, so what
 one worker computes is a hit for the other workers, for the parent, and for the
 next run. That holds whether you map the cached function itself or a plain

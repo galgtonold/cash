@@ -217,7 +217,9 @@ bound earlier by `from my_lib import read_data` keeps the original. Pass
   another file, so switching directories recomputes.
 - **Files next to your code** (package data, `Path(__file__).parent / "x.csv"`)
   are checked in each install's own copy. Two installs of the same code share
-  entries when their data matches.
+  entries when their data matches. A file beside a script is checked beside
+  the copy of that script a program runs or imports; a program that has neither
+  (`cash inspect`, a test runner) checks it where it was read.
 - **Network file systems.** Content checks work there, but folder dependencies
   (`glob`, `listdir`) rely on the folder's modification time, which some network
   mounts don't update. List such files with `file_depends_on=`.
