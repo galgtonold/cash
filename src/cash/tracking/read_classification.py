@@ -19,7 +19,14 @@ import zoneinfo
 from collections.abc import Callable
 
 from cash._memo import SOURCE_FILES, LruMemo
-from cash.install_paths import installed_roots, interpreter_roots, norm_dir, normcase_path, site_roots
+from cash.install_paths import (
+    installed_outside_project,
+    installed_roots,
+    interpreter_roots,
+    norm_dir,
+    normcase_path,
+    site_roots,
+)
 
 __all__ = [
     "SCRATCH_MEMMAP",
@@ -258,7 +265,10 @@ def _installed_data_file(path_nc: str, own_package: str | None) -> bool:
             top = path_nc[len(root) :].split("/", 1)[0]
             name = top.split(".", 1)[0].split("-", 1)[0]
             return "/" in path_nc[len(root) :] and name != own_package
-    return False
+    # A package installed into a plain folder on ``sys.path``
+    # (``pip install --target``) is installed all the same.
+    top = installed_outside_project(path_nc)
+    return top is not None and top != own_package
 
 
 def _module_package_dir(module_name: str) -> str | None:

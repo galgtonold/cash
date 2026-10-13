@@ -21,11 +21,22 @@ console scripts are installed into. NOT the interpreter prefix itself: that
 is the standard library's parent, or, for a virtualenv created as the project
 folder (``python -m venv .``), the user's whole project. A module next to the
 venv's ``bin/`` and ``lib/`` is the user's.
+
+Installed code also lives outside any of those: ``pip install --target DIR``
+(or ``uv pip install --target``) puts packages in a plain folder that
+``PYTHONPATH`` or a ``.pth`` file adds to ``sys.path``. `is_user_path` counts
+a file there as a library's when the import folder holds the package's
+installed metadata (a ``*.dist-info`` whose ``RECORD`` lists it, not an
+editable install) and the file is outside the project and the running
+script's folder (`installed_outside_project`). A source folder on
+``PYTHONPATH`` without such metadata stays the user's: there is no installed
+version to stand in for its code, and an edit to it must still recompute.
 """
 
 from __future__ import annotations
 
 import functools
+import json
 import os
 import site
 import sys
@@ -36,6 +47,7 @@ from ._paths import normalize_path
 
 __all__ = [
     "in_own_package",
+    "installed_outside_project",
     "installed_roots",
     "interpreter_roots",
     "is_installed_path",
@@ -171,13 +183,104 @@ def is_installed_path(path: str | os.PathLike[str]) -> bool:
     return _is_installed(normcase_path(os.path.abspath(os.fspath(path))))
 
 
+#: import folder (`norm_dir`) -> the top-level names its installed,
+#: non-editable distributions put there. One listing per folder per process.
+_INSTALLED_TOPS: dict[str, frozenset[str]] = {}
+
+#: ``sys.path`` entry -> `norm_dir` of it ("" for none to look in: an empty
+#: entry, a zip). Reads are classified on every file a call opens.
+_ENTRY_DIRS: dict[str, str] = {}
+
+
+def _record_tops(dist_info: str) -> set[str]:
+    """The top-level names a ``*.dist-info`` folder's ``RECORD`` installs
+    (``lightgbm`` for ``lightgbm/sklearn.py``, ``six`` for ``six.py``); none
+    for an editable install, whose code is the user's source folder."""
+    try:
+        with open(os.path.join(dist_info, "direct_url.json"), encoding="utf-8") as f:
+            if json.load(f).get("dir_info", {}).get("editable"):
+                return set()
+    except (OSError, ValueError, AttributeError):
+        pass
+    tops: set[str] = set()
+    try:
+        with open(os.path.join(dist_info, "RECORD"), encoding="utf-8") as f:
+            for line in f:
+                first = line.split(",", 1)[0].replace("\\", "/").split("/", 1)[0].strip().strip('"')
+                if not first or first in ("..", ".", "__pycache__") or first.endswith((".dist-info", ".data")):
+                    continue
+                tops.add(normcase_path(first.split(".", 1)[0]))
+    except OSError:
+        pass
+    return tops
+
+
+def _installed_tops(entry_dir: str) -> frozenset[str]:
+    """`_INSTALLED_TOPS` for *entry_dir*, listed on first use."""
+    tops = _INSTALLED_TOPS.get(entry_dir)
+    if tops is None:
+        found: set[str] = set()
+        try:
+            names = os.listdir(entry_dir)
+        except OSError:
+            names = []
+        for name in names:
+            if name.endswith(".dist-info"):
+                found |= _record_tops(os.path.join(entry_dir, name))
+        tops = _INSTALLED_TOPS[entry_dir] = frozenset(found)
+    return tops
+
+
+def _installed_import_top(path_nc: str) -> str | None:
+    """The top-level name of the package *path_nc* is in, when that package is
+    installed into a ``sys.path`` folder that is not site-packages -- a
+    ``pip install --target`` folder on ``PYTHONPATH`` or added by a ``.pth``
+    file. None otherwise."""
+    for entry in sys.path:
+        entry_dir = _ENTRY_DIRS.get(entry)
+        if entry_dir is None:
+            entry_dir = _ENTRY_DIRS[entry] = "" if not entry or entry.lower().endswith(".zip") else norm_dir(entry)
+        if entry_dir and path_nc.startswith(entry_dir) and _installed_tops(entry_dir):
+            # The package folder (``lightgbm/sklearn.py``) or the module file
+            # (``six.py``, ``_ext.cpython-313-x86_64-linux-gnu.so``).
+            top = path_nc[len(entry_dir) :].split("/", 1)[0].split(".", 1)[0]
+            if top in _installed_tops(entry_dir):
+                return top
+    return None
+
+
+@functools.lru_cache(maxsize=1)
+def _project_dirs() -> tuple[str, ...]:
+    """`cash._location.project_code_dirs`, as directory prefixes."""
+    from ._location import project_code_dirs
+
+    try:
+        return tuple(sorted({norm_dir(str(d)) for d in project_code_dirs()}))
+    except Exception:  # noqa: BLE001 - no anchor: no file is judged outside it
+        return (norm_dir(os.path.abspath(os.sep)),)
+
+
+def installed_outside_project(path_nc: str) -> str | None:
+    """The top-level package *path_nc* (`normcase_path`'d) belongs to, when it
+    is installed outside the site-packages folders (`_installed_import_top`)
+    and lies outside the project and the running script's folder; else None.
+    A package installed into the project's own folder stays the user's, as
+    the rest of the project is."""
+    top = _installed_import_top(path_nc)
+    if top is None or path_nc.startswith(_project_dirs()):
+        return None
+    return top
+
+
 _USER_PATH: LruMemo[str, bool] = LruMemo(SOURCE_FILES)
 
 
 def is_user_path(path: str | os.PathLike[str] | None) -> bool:
     """Is *path* a file of code the user writes: a real path, outside the
-    installation and outside cash itself? A pseudo-filename (``<stdin>``,
-    ``<ipython-input-3>``) is not a path, so not."""
+    installation, outside cash itself and outside a package installed into a
+    plain folder away from the project (`installed_outside_project`)? A
+    pseudo-filename (``<stdin>``, ``<ipython-input-3>``) is not a path, so
+    not."""
     if not path:
         return False
     path = os.fspath(path)
@@ -188,7 +291,11 @@ def is_user_path(path: str | os.PathLike[str] | None) -> bool:
         verdict = False
     else:
         path_nc = normcase_path(os.path.abspath(path))
-        verdict = not _is_installed(path_nc) and not path_nc.startswith(_CASH_DIR)
+        verdict = (
+            not _is_installed(path_nc)
+            and not path_nc.startswith(_CASH_DIR)
+            and installed_outside_project(path_nc) is None
+        )
     _USER_PATH[path] = verdict
     return verdict
 
@@ -269,6 +376,8 @@ def is_user_code_module(mod: object, own_pkg: str | None = None) -> bool:
 
 def clear_caches() -> None:
     """Forget every root and verdict -- for a test that changes the installation."""
-    for fn in (interpreter_roots, site_roots, _script_roots, installed_roots):
+    for fn in (interpreter_roots, site_roots, _script_roots, installed_roots, _project_dirs):
         fn.cache_clear()
     _USER_PATH.clear()
+    _INSTALLED_TOPS.clear()
+    _ENTRY_DIRS.clear()

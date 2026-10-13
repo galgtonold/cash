@@ -197,11 +197,12 @@ the functions in a table instead.
 
 ## Code in installed packages
 
-<!-- claim: cash/install_paths.py:in_own_package @168c5d1e, cash/install_paths.py:is_user_path @d210933e, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
+<!-- claim: cash/install_paths.py:in_own_package @168c5d1e, cash/install_paths.py:is_user_path @8e9083cb, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
 cash follows the code a cached function calls, and puts it in the key, when
 that code is yours. Yours means:
 
-- a file outside the Python installation: your project, or a package installed
+- a file outside the Python installation and outside any installed package
+  (see the `--target` folders below): your project, or a package installed
   with `pip install -e` (an editable install runs from your source folder);
 - the package the cached function itself is in, wherever it is installed. A
   cached function in `mytool.jobs` is keyed by the code it calls anywhere in
@@ -211,6 +212,16 @@ Any other code in `site-packages` is a library, and that includes your team's
 internal package when it is installed with a plain `pip install`. cash keys a
 call into it by name and does not look inside, so after an upgrade the old
 results are still served.
+
+<!-- claim: cash/install_paths.py:installed_outside_project @b6219f35, cash/install_paths.py:_record_tops @c35eade7 -->
+A package installed into a plain folder is a library too: `pip install
+--target DIR` or `uv pip install --target DIR`, with `DIR` put on the path by
+`PYTHONPATH` or a `.pth` file. cash tells it from your code by the record the
+installer leaves in `DIR` (a `*.dist-info` folder that lists the package's
+files), and only when `DIR` is outside your project and outside the folder of
+the script you run. A folder of source on `PYTHONPATH` with no such record,
+say a checkout of a shared module, stays your code, and so does a package
+installed into a folder inside your project. Its edits recompute.
 
 Pinning versions does not change this: the version is not part of the key. A
 pin keeps everyone on the same code; it does not make an upgrade recompute.

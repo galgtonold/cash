@@ -343,8 +343,9 @@ changed. The second list is what cash does not see, and what to do about it.
 
     ---
 
-    - **Library code** (`site-packages`, the standard library), your team's
-      own package too when it is installed without `-e`. The version is not
+    - **Library code** (`site-packages`, a `pip install --target` folder
+      outside your project, the standard library), your team's own package
+      too when it is installed without `-e`. The version is not
       in the key: see
       [Code in installed packages](decorator-limitations.md#code-in-installed-packages).
     - What a **server or database** returns: set `ttl=`
