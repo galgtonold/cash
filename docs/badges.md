@@ -69,7 +69,9 @@ A row and the cell header use the same word for the same state.
 The header's counters (`EXEC`, `NOT CACHED`, `CACHED`, `WARN`) count rows, so
 `EXEC 1 · CACHED 1` under an `EXECUTED` header means one statement ran and one
 came from the cache. [`%cash_status`](magics.md#cash_status) reports the same
-states by their enum names: `COMPUTED` for EXECUTED and `RESTORED` for CACHED.
+states by their enum names: `COMPUTED` for EXECUTED and `RESTORED` for CACHED,
+plus `MIXED` for a statement that ran while calls inside it came from the
+cache.
 
 <iframe class="cash-badge" title="cash badge example: CACHED" src="/_badges/status_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 

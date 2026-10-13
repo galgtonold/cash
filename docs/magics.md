@@ -157,7 +157,11 @@ Returns the last cell's statements (status, code, outputs, times), the session's
 variable lineage and whether caching is on. With no argument it prints JSON and
 returns the dict; `dict` returns it without printing; `json` returns a JSON
 string. Statuses use the enum names: `COMPUTED` for the badge's EXECUTED,
-`RESTORED` for CACHED. Any other argument prints an error and returns `None`.
+`RESTORED` for CACHED, and `MIXED` for a statement that ran while calls inside
+it came from the cache (a cached helper called in a loop). What those calls
+saved counts in the statement's `saved_time` and the cell's
+`total_restored_time`, and its `calls` entry counts them. Any other argument
+prints an error and returns `None`.
 
 ```python
 status = %cash_status dict

@@ -1224,8 +1224,22 @@ class CashMagics(Magics):
             result.result = value
 
     def _update_last_cell_metrics(self, all_metrics: list[ProcessResult], hook_total: float) -> None:
-        """Compute and store ``_last_cell_metrics`` for ``%cash_status``."""
-        statuses = [m.get("status") for m in all_metrics if m.get("status")]
+        """Compute and store ``_last_cell_metrics`` for ``%cash_status``.
+
+        A statement that ran while calls inside it came from the cache (a
+        ``@cash.cache`` hit, an intercepted helper call served in a loop) is
+        ``MIXED``, and what those calls saved counts in its ``saved_time`` and
+        in ``total_restored_time``, as the badge and ``%cash_stats`` count it.
+        """
+        rows = [(m, _served_calls(m.get("decorator_calls"))) for m in all_metrics]
+
+        def status_of(m: ProcessResult, served: tuple[int, int, float]) -> Any:
+            status = m.get("status")
+            if status == CacheStatus.COMPUTED and served[0]:
+                return CacheStatus.MIXED
+            return status
+
+        statuses = [s for s in (status_of(m, served) for m, served in rows) if s]
         if all(s == CacheStatus.RESTORED for s in statuses) and statuses:
             overall_status = "RESTORED"
         elif all(s == CacheStatus.COMPUTED for s in statuses) and statuses:
@@ -1237,23 +1251,44 @@ class CashMagics(Magics):
         else:
             overall_status = None
 
+        statements = []
+        for m, served in rows:
+            row = {
+                "code": m.get("code", "")[:100],
+                "status": status_of(m, served),
+                "execution_time": m.get("execution_time", 0.0),
+                "saved_time": m.get("saved_time", 0.0) + served[2],
+                "outputs": m.get("restored_vars", []),
+                "is_upstream": m.get("is_upstream", False),
+            }
+            if served[0] or served[1]:
+                row["calls"] = {"restored": served[0], "computed": served[1], "saved_time": served[2]}
+            statements.append(row)
         self._last_cell_metrics = {
-            "statements": [
-                {
-                    "code": m.get("code", "")[:100],
-                    "status": m.get("status"),
-                    "execution_time": m.get("execution_time", 0.0),
-                    "saved_time": m.get("saved_time", 0.0),
-                    "outputs": m.get("restored_vars", []),
-                    "is_upstream": m.get("is_upstream", False),
-                }
-                for m in all_metrics
-            ],
+            "statements": statements,
             "total_time": hook_total,
-            "total_restored_time": sum(m.get("saved_time", 0.0) for m in all_metrics),
+            "total_restored_time": sum(row["saved_time"] for row in statements),
             "total_computed_time": sum(
                 m.get("execution_time", 0.0) for m in all_metrics if m.get("status") == CacheStatus.COMPUTED
             ),
             "upstream_metrics": [m for m in all_metrics if m.get("is_upstream", False)],
             "status": overall_status,
         }
+
+
+def _served_calls(events: Any) -> tuple[int, int, float]:
+    """``(restored, computed, seconds saved)`` over a statement's call
+    events (``decorator_calls``): the ``@cash.cache`` calls and intercepted
+    helper calls it made. A call run without the cache (``ran_plain``) is
+    neither."""
+    restored = computed = 0
+    saved = 0.0
+    for event in events or ():
+        if not isinstance(event, dict) or event.get("ran_plain"):
+            continue
+        if event.get("cache_hit"):
+            restored += 1
+            saved += float(event.get("time_saved") or 0.0)
+        else:
+            computed += 1
+    return restored, computed, saved
