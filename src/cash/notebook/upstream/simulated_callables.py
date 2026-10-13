@@ -162,7 +162,7 @@ class SimulatedCallables:
             return None
         variable_lineage = self.tracking_state.variable_lineage
         virtual = virtual_namespace(self.by_lineage, virtual_lineage, variable_lineage, virtual_modules)
-        deps = called_function_dependencies(sorted(inputs), user_ns, variable_lineage, virtual)
+        deps = called_function_dependencies(sorted(inputs), user_ns, variable_lineage, virtual, keyed=False)
         found = dict(dep.split(":", 1) for dep in deps)
         return {name: lin for name, lin in found.items() if lin != "ABSENT"} or None
 

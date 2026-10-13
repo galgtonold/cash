@@ -103,7 +103,7 @@ class StatementRecords:
     def lineages_read(self, inputs: set[str]) -> dict[str, str]:
         read = {}
         for dep in called_function_dependencies(
-            sorted(inputs), self.shell.user_ns, self.tracking_state.variable_lineage, None
+            sorted(inputs), self.shell.user_ns, self.tracking_state.variable_lineage, None, keyed=False
         ):
             name, _, lineage = dep.partition(":")
             if lineage != "ABSENT":

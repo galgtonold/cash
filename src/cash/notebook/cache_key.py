@@ -359,6 +359,7 @@ def called_function_dependencies(
     variable_lineage: Mapping[str, str],
     virtual: VirtualNamespace | None = None,
     simulated: Mapping[str, str] | None = None,
+    keyed: bool = True,
 ) -> list[str]:
     """``"name:lineage"`` components for the globals a called function reaches for.
 
@@ -389,6 +390,12 @@ def called_function_dependencies(
     so the one recorded now is where the generator stands after the
     statements below the call, not at it. The runtime keyed the call with
     the lineage it had then, which is the simulated one.
+
+    *keyed* False gives each global's lineage itself rather than what it
+    contributes to a key (`key_lineage`): for a caller that keeps them as
+    lineages (``SimulatedCallables.callee_lineages``), which the key built
+    from them maps then. A function's identity kept as its lineage found no
+    simulated ``def`` under it, so its body went unwalked and the key missed.
     """
     seen: set[str] = set()
     stack = [name for name in inputs]
@@ -444,16 +451,20 @@ def called_function_dependencies(
     # ``random:ABSENT`` until ``import random`` bound the module, and then
     # dropped the component, so the call missed once.
     referenced = {ref for ref in referenced if ref in attribute_only or not is_module(ref)}
+
+    def as_keyed(ref: str, found: str) -> str:
+        return key_lineage(ref, found, variable_lineage) if keyed else found
+
     if used_virtual:
 
         def lineage(ref: str) -> str:
-            return key_lineage(ref, virtual.lineage_of(ref) or "ABSENT", variable_lineage)
+            return as_keyed(ref, virtual.lineage_of(ref) or "ABSENT")
     else:
 
         def lineage(ref: str) -> str:
             if simulated and ref in simulated and rng_carrier_kind(user_ns.get(ref)) is not None:
                 return simulated[ref]
-            return key_lineage(ref, variable_lineage.get(ref, "ABSENT"), variable_lineage)
+            return as_keyed(ref, variable_lineage.get(ref, "ABSENT"))
 
     return sorted(f"{ref}:{'ABSENT' if ref in attribute_only else lineage(ref)}" for ref in referenced)
 

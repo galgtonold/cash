@@ -396,9 +396,19 @@ def call_time_reads(code: str, user_ns: Mapping[str, Any], virtual_modules: Iter
     """The `body_only_reads` of *code* that a function's identity
     (`function_identity`) leaves out: all but the modules. A key reading
     the function folds the others as they are at the call; a module only
-    through the function's lineage."""
+    through the function's lineage.
+
+    A module by what it is, as `cache_key.called_function_dependencies`
+    tells it, not by `is_module_like`: that also takes a callable named
+    ``_x`` for one, and the simulation that keys a restart sees no value for
+    a function defined in the same cell (``def _ran`` above ``def load``),
+    so it noted another identity than the run before and the cell's final
+    value was rebuilt instead of restored."""
+    modules = set(virtual_modules)
     return frozenset(
-        name for name in body_only_reads(code) if not is_module_like(name, user_ns.get(name), virtual_modules)
+        name
+        for name in body_only_reads(code)
+        if name not in modules and not isinstance(user_ns.get(name), types.ModuleType)
     )
 
 
