@@ -147,3 +147,32 @@ def test_code_the_fallback_is_for_still_counts():
         assert is_user_code_object(buffer.write) is False
     finally:
         del sys.modules[mod.__name__]
+
+
+def test_an_extensions_heap_type_is_not_user_code():
+    """pyo3 builds heap types that name ``builtins`` as their module, where
+    they are not found: polars' ``PyDataFrame``. Taken for exec'd code, a
+    polars frame argument walked the 237 methods of the frame it wraps on
+    every call (20-40 ms against 0.3 ms)."""
+    pl = pytest.importorskip("polars")
+    for native in (type(pl.DataFrame({"a": [1]})._df), type(pl.Series([1])._s)):
+        assert native.__module__ == "builtins"
+        assert not is_user_code_object(native)
+
+
+@pytest.mark.parametrize(
+    "body",
+    ["class A:\n    pass", "class A:\n    def f(self):\n        return 1", "class A:\n    x = 1"],
+    ids=["empty", "method", "data"],
+)
+def test_an_execd_class_still_is(body):
+    namespace: dict = {}
+    exec(body, namespace)  # noqa: S102 - a class whose module cannot be followed
+    assert is_user_code_object(namespace["A"])
+
+
+def test_a_polars_frame_argument_carries_no_code(cash_instance):
+    pl = pytest.importorskip("polars")
+    frame = pl.DataFrame({"a": list(range(10))})
+    carriers = list(cash_instance._code_args.iter_code_carriers(frame))
+    assert carriers == []

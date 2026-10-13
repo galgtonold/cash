@@ -24,6 +24,7 @@ from ..analysis.purity_report import PurityReport
 from ..backends._base import ttl_expired, written_at
 from ..dependency_state import STATE_LEDGER, ledger_note
 from ..exceptions import CashCacheIneffectiveWarning, CashImpureFunctionError, CashImpurityWarning
+from ..handed_digests import claim as claim_handed_digests
 from ..tracking.file_tracker import FileAccessTracker
 from ..tracking.randomness import (
     capture_argument_carrier_states,
@@ -33,7 +34,7 @@ from ..tracking.randomness import (
     replay_argument_carriers,
     replayable,
 )
-from .arg_hashing import PLAIN_CENSUS
+from .arg_hashing import HANDED_DIGESTS, PLAIN_CENSUS
 from .arg_key import keyed_arguments
 from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
@@ -1028,7 +1029,15 @@ class CallRunner:
         # Outside the key build, which turns any exception into "no key": an
         # exception from the body of an uncached call must propagate, not run
         # the body a second time.
-        built, call.capture_watch, call.ledger = self._keys.resolve(spec, args, kwargs)
+        handed = claim_handed_digests()
+        token = HANDED_DIGESTS.set(handed) if handed is not None else None
+        try:
+            built, call.capture_watch, call.ledger = self._keys.resolve(spec, args, kwargs)
+        finally:
+            if token is not None:
+                HANDED_DIGESTS.reset(token)
+        if handed is not None:
+            handed.ran_body = True  # until the call is seen to be a plain hit
         if isinstance(built, Unkeyable):
             call.outcome = self._run_uncached(spec, call, built.reason)
             return call
@@ -1053,6 +1062,10 @@ class CallRunner:
                 was_hit=True,
             )
             call.outcome = self._wrap_iterator_hit(call, call.metadata, hit)
+            if handed is not None and call.outcome is hit:
+                # Served: the body does not run, nor anything else of the
+                # user's until the statement binds the result.
+                handed.ran_body = False
         else:
             # Before the body runs: the mutation check compares against it.
             call.call_args_hash = self._keys.call_args_hash(spec, args, kwargs, built)

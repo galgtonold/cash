@@ -78,9 +78,45 @@ _C_CALLABLES = (
 def _is_c_type(cls: type) -> bool:
     """Was *cls* made by C code rather than a ``class`` statement? A static
     type, or a heap type an extension created immutable; Python cannot make
-    either."""
+    either -- or a heap type of an extension's that holds nothing but C
+    code (`_holds_only_c_code`)."""
     flags = getattr(cls, "__flags__", 0)
-    return not flags & _HEAPTYPE or bool(flags & _IMMUTABLETYPE)
+    return not flags & _HEAPTYPE or bool(flags & _IMMUTABLETYPE) or _holds_only_c_code(cls)
+
+
+#: What a type an extension builds holds besides its C methods and slots.
+_C_TYPE_NAMES = frozenset({"__doc__", "__module__", "__text_signature__", "__dict__", "__weakref__"})
+_C_MEMBERS = (
+    types.BuiltinFunctionType,
+    types.MethodDescriptorType,
+    types.WrapperDescriptorType,
+    types.ClassMethodDescriptorType,
+    types.GetSetDescriptorType,
+    types.MemberDescriptorType,
+)
+
+
+def _holds_only_c_code(cls: type) -> bool:
+    """Is *cls* an extension's heap type: every attribute of it and of its
+    bases a C function or descriptor? pyo3 builds its classes this way --
+    polars' ``PyDataFrame`` names its module ``builtins``, where it is not
+    found -- and took them for exec'd user code: a polars frame argument
+    walked the 237 methods of the frame it wraps on every call, 20-40 ms a
+    call. A ``class`` statement's type holds a Python function or a value
+    of its own, unless it is empty, and an empty class has no code to key."""
+    try:
+        for klass in cls.__mro__:
+            if klass is object:
+                continue
+            for name, value in vars(klass).items():
+                if name in _C_TYPE_NAMES or isinstance(value, _C_MEMBERS):
+                    continue
+                if isinstance(value, staticmethod) and isinstance(value.__func__, types.BuiltinFunctionType):
+                    continue
+                return False
+    except Exception:  # noqa: BLE001 - an odd class is judged as before
+        return False
+    return True
 
 
 def _c_code_verdict(obj: Any) -> bool | None:

@@ -623,6 +623,10 @@ _WATCHING = False
 #: itself can end up in the user's hands, so `_noting` records it too.
 _HANDING_OUT: contextvars.ContextVar[bool] = contextvars.ContextVar("cash_pandas_handing_out", default=False)
 
+#: The digests the notebook took of the arguments of the call a statement is
+#: (`cash.handed_digests`), while that call's key is built.
+HANDED_DIGESTS: contextvars.ContextVar[Any] = contextvars.ContextVar("cash_handed_digests", default=None)
+
 
 def _watch_callback_handouts() -> None:
     """Record the memory pandas hands to a user's callable.
@@ -1406,7 +1410,15 @@ class ArgHasher:
                     return f"{src_hash}:{hasher_fn(arg)}"
 
         since = exposure_mark()
-        content_digest = builtin_hash(arg)
+        content_digest = None
+        handed = HANDED_DIGESTS.get()
+        if handed is not None and builtin_family_of(type(arg)) is not None:
+            # The statement's own fingerprint of this very object, taken
+            # with only names read since (`cash.handed_digests`): the same
+            # `builtin_hash` a second read of every byte would give.
+            content_digest = handed.digest(arg)
+        if content_digest is None:
+            content_digest = builtin_hash(arg)
         if content_digest is not None:
             if lineage is not None:
                 self._memo_arg_hash(arg, lineage, content_digest)

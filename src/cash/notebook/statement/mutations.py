@@ -203,7 +203,7 @@ class MutationClassifier:
                 pre_route.add(base)
                 continue
             if unwatched:
-                self.digests.watch(tree)
+                self.digests.watch(tree, self.shell.user_ns)
                 unwatched = False
             fingerprint = mutation_fingerprint(self.shell.user_ns.get(base), self.digests.digest)
             if fingerprint is None:
@@ -217,7 +217,7 @@ class MutationClassifier:
         # The result is learned into the verdict, so neither the next run nor
         # the simulation asks again: `print(df)` is learned as reading only.
         if classes.unknown_args and unwatched:
-            self.digests.watch(tree)
+            self.digests.watch(tree, self.shell.user_ns)
         for name in classes.unknown_args:
             fingerprint = mutation_fingerprint(self.shell.user_ns.get(name), self.digests.digest)
             if fingerprint is None:

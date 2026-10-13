@@ -26,6 +26,7 @@ import weakref
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from cash import handed_digests
 from cash.analysis.read_only_callees import reads_its_arguments_only
 from cash.decorator.arg_hashing import (
     exposure_mark,
@@ -39,6 +40,7 @@ from cash.sizing import pandas_nbytes
 from cash.source_reading import wrapper_layers
 from cash.tracking.file_dep_snapshot import dep_path_for_this_process
 from cash.tracking.tracker_context import active_tracker
+from cash.content_hashers import builtin_family_of
 from cash.value_hash import compute_hash, is_identity_fallback_hash
 
 logger = logging.getLogger(__name__)
@@ -376,12 +378,14 @@ class ArgFingerprints:
         self._memo[key] = (ref, held, signature, digest, since)
 
 
-def _call_shape(tree: ast.Module | None) -> tuple[bool, bool]:
+def _call_shape(tree: ast.Module | None, namespace: Mapping[str, Any] | None = None) -> tuple[bool, bool]:
     """``(nothing_runs_before, nothing_runs_after)`` the one call *tree* is.
 
     *nothing_runs_before*: the statement is one call of a bare name on bare
     names and constants (``y = f(x, 3, k=z)``, or ``f(x)`` alone), so until
-    that call starts only names are read. *nothing_runs_after*: besides,
+    that call starts only names are read. The callee may also be a function
+    of a module (``etl.clean(raw)``) that *namespace* holds as a plain module
+    with that name in its dict: reading it runs no code. *nothing_runs_after*: besides,
     its result is bound to one name and nothing else, so once it returns
     only the binding happens -- not a display, not an unpacking that
     iterates the result, not an attribute or item store, not an annotation.
@@ -395,7 +399,9 @@ def _call_shape(tree: ast.Module | None) -> tuple[bool, bool]:
         call, after = node.value, False
     else:
         return False, False
-    if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+    if not isinstance(call, ast.Call) or not (
+        isinstance(call.func, ast.Name) or _module_function(call.func, namespace)
+    ):
         return False, False
     simple = (ast.Name, ast.Constant)
     if not all(isinstance(a, simple) for a in call.args):
@@ -403,6 +409,15 @@ def _call_shape(tree: ast.Module | None) -> tuple[bool, bool]:
     if not all(k.arg is not None and isinstance(k.value, simple) for k in call.keywords):
         return False, False
     return True, after
+
+
+def _module_function(func: ast.expr, namespace: Mapping[str, Any] | None) -> bool:
+    """Is *func* ``module.name`` for a plain module in *namespace* that has
+    ``name`` in its own dict (no ``__getattr__``, no property to run)?"""
+    if namespace is None or not isinstance(func, ast.Attribute) or not isinstance(func.value, ast.Name):
+        return False
+    module = namespace.get(func.value.id)
+    return type(module) is _types.ModuleType and func.attr in vars(module)
 
 
 class DigestHandoff:
@@ -444,6 +459,9 @@ class DigestHandoff:
         #: count when `_after` was filled.
         self._started = 0
         self._after_at = -1
+        #: The digests offered to a decorator call the statement makes
+        #: (`offer_to_decorator`).
+        self._offer: handed_digests.Offer | None = None
 
     def begin_cell(self) -> None:
         self.fingerprints.clear()
@@ -456,10 +474,12 @@ class DigestHandoff:
         self._after.clear()
         self._started = 0
         self._after_at = -1
+        self._offer = None
 
-    def watch(self, tree: ast.Module | None) -> None:
-        """The statement *tree* is about to have its arguments fingerprinted."""
-        self._before_ok, self._after_ok = _call_shape(tree)
+    def watch(self, tree: ast.Module | None, namespace: Mapping[str, Any] | None = None) -> None:
+        """The statement *tree* is about to have its arguments fingerprinted;
+        *namespace* is what it runs in."""
+        self._before_ok, self._after_ok = _call_shape(tree, namespace)
 
     def digest(self, value: Any) -> str:
         """`compute_hash` of *value*, kept for the call's hash before the
@@ -500,9 +520,31 @@ class DigestHandoff:
         self._after = {id(v): (v, d) for v, d in zip(values, digests) if isinstance(d, str)}
         self._after_at = self._started
 
+    def offer_to_decorator(self, filename: str) -> None:
+        """Hand the digests taken before the statement to the ``@cash.cache``
+        call it is, compiled under *filename* (`cash.handed_digests`)."""
+        if self._before_ok and self._before and self._started == 0:
+            self._offer = handed_digests.offer(filename, self._before)
+
+    def withdraw_offer(self) -> None:
+        handed_digests.withdraw()
+
     def digest_after(self, value: Any) -> str:
         """`compute_hash` of *value* for the statement's fingerprint after
-        it ran: the call's own when no other call started since."""
+        it ran: the call's own when no other call started since, or the one
+        before it when the statement is a ``@cash.cache`` call that was
+        served, whose body never ran."""
+        offer = self._offer
+        if (
+            offer is not None
+            and offer.ran_body is False
+            and self._after_ok
+            and self._started == 0
+            and builtin_family_of(type(value)) is not None
+        ):
+            found = offer.digest(value)
+            if found is not None:
+                return found
         if self._after and self._after_at == self._started:
             found = self._after.get(id(value))
             if found is not None and found[0] is value:
