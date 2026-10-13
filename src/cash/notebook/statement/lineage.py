@@ -43,6 +43,7 @@ from ..lineage_formula import (
     no_cache_value_digest,
     output_lineage,
     recorded_reads_lineage_component,
+    setting_output_lineage,
     statement_environment_component,
 )
 from ..restored_var import hashed_by_lineage
@@ -234,15 +235,23 @@ class StatementLineageBuilder:
 
             # The formula and its ingredients are shared with the simulator
             # (lineage_formula), which must arrive at the same hash.
-            output_lineage_hash = output_lineage(
-                source_hash,
-                input_lineage_hashes,
+            components = (
                 file_hash_component,
                 callable_source_component(self.function_tracker, inputs, user_ns),
                 self._compute_module_lineage_component(tracking_state, value, var_name, code, tree),
                 changed_module_environment(var_name, value, code, environment),
                 self._no_cache_value(value_digests, var_name, value) if no_cache else "",
             )
+            # A module set by a setting that is the same when run again
+            # (``pd.set_option('display.width', 120)``) keeps one run's
+            # lineage however often it ran.
+            output_lineage_hash = setting_output_lineage(
+                var_name,
+                value,
+                code,
+                input_lineage_map,
+                lambda others: output_lineage(source_hash, others, *components),
+            ) or output_lineage(source_hash, input_lineage_hashes, *components)
             # A new object only: ``t = raw`` binds the input itself, which
             # keeps the lineage the formula gives it.
             if cut_off:

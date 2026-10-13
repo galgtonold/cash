@@ -692,8 +692,99 @@ class _KeepDict(dict):
                 reducer = _reducer_with_dict(self._protocol)
             else:
                 reducer = operator.methodcaller("__reduce_ex__", self._protocol)
+            if self._keyed and _cached_properties(t):
+                reducer = functools.partial(_reduce_without_views, reducer=reducer)
         self[t] = reducer
         return reducer
+
+
+def _cached_properties(t: type) -> tuple[str, ...]:
+    """The attribute names *t*'s ``functools.cached_property`` members fill
+    in an instance's ``__dict__``. Remembered per type."""
+    try:
+        return _CACHED_PROPERTIES[t]
+    except KeyError:
+        pass
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return ()
+    names: list[str] = []
+    for klass in t.__mro__:
+        for name, member in vars(klass).items():
+            if isinstance(member, functools.cached_property) and name not in names:
+                names.append(member.attrname or name)
+    found = _CACHED_PROPERTIES[t] = tuple(names)
+    return found
+
+
+_CACHED_PROPERTIES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+#: What a view may hold beside its links to the object it views: settings,
+#: not data (``DegreeView``'s ``_weight``).
+_VIEW_SETTINGS = (type(None), bool, int, float, str, bytes)
+
+
+def derived_views(obj: Any) -> frozenset[str]:
+    """The ``cached_property`` values in *obj*'s ``__dict__`` that are views
+    of *obj*: every attribute of the value is *obj* itself (directly, by a
+    weak reference, or as a bound method's ``__self__``), one of the other
+    values *obj* holds, or a scalar setting -- and at least one is a link.
+
+    networkx fills ``G.nodes``, ``G.edges``, ``G.adj`` and ``G.degree`` on
+    first use, so ``print(G)`` changed G's pickle and read as an in-place
+    change of G, and a call keyed on G's content missed after it. A view
+    holds nothing the object does not, so a key leaves it out. A cached
+    value that is a snapshot (a number, a list) is kept: it may be stale.
+    """
+    names = _cached_properties(type(obj))
+    state = getattr(obj, "__dict__", None)
+    if not names or not isinstance(state, dict):
+        return frozenset()
+    present = [name for name in names if name in state]
+    if not present:
+        return frozenset()
+    held = {id(value) for name, value in state.items() if name not in present}
+    held.add(id(obj))
+    return frozenset(name for name in present if _views(state[name], held))
+
+
+def _views(value: Any, held: set[int]) -> bool:
+    if id(value) in held or type(value) in _VIEW_SETTINGS:
+        return False
+    attrs = _instance_attrs(value)
+    if not attrs:
+        return False
+    linked = False
+    for part in attrs.values():
+        if isinstance(part, weakref.ref):
+            part = part()
+        target = getattr(part, "__self__", part) if isinstance(part, types.BuiltinMethodType) else part
+        if id(target) in held:
+            linked = True
+        elif type(part) not in _VIEW_SETTINGS:
+            return False
+    return linked
+
+
+def _reduce_without_views(obj: Any, reducer: Any) -> Any:
+    """*reducer*'s reduce of *obj*, with the views `derived_views` finds
+    left out of its state. Only keyed, never loaded."""
+    reduced = reducer(obj)
+    if isinstance(reduced, str):
+        return reduced
+    views = derived_views(obj)
+    if not views:
+        return reduced
+    rebuild, args, *rest = reduced
+    if not rest:
+        return reduced
+    state = rest[0]
+    if isinstance(state, dict):
+        state = {k: v for k, v in state.items() if k not in views}
+    elif isinstance(state, tuple) and len(state) == 2 and isinstance(state[0], dict):
+        state = ({k: v for k, v in state[0].items() if k not in views}, state[1])
+    else:
+        return reduced
+    return (rebuild, args, state, *rest[1:])
 
 
 def packed_records(array: Any) -> Any:

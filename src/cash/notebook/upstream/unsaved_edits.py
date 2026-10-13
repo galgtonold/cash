@@ -145,7 +145,7 @@ class UnsavedEdits:
             if required_dependency and required_dependency not in inputs:
                 return False
 
-            input_lineages = []
+            input_lineage_map: dict[str, str] = {}
             # Note: CodeAnalyzer inputs are a set. We sort for deterministic hashing order.
             # However, the lineage hash construction below sorts them anyway.
             sorted_inputs = sorted(inputs)
@@ -154,10 +154,10 @@ class UnsavedEdits:
                     continue
 
                 if inp in virtual_lineage:
-                    input_lineages.append(virtual_lineage[inp])
+                    input_lineage_map[inp] = virtual_lineage[inp]
                 elif inp in self.tracking_state.variable_lineage:
                     # Fallback to memory if virtual missing (external var not in notebook)
-                    input_lineages.append(self.tracking_state.variable_lineage[inp])
+                    input_lineage_map[inp] = self.tracking_state.variable_lineage[inp]
                 else:
                     # Input missing entirely. Cannot verify.
                     return False
@@ -183,7 +183,14 @@ class UnsavedEdits:
                     {
                         f"{out}:{reads}": lineage
                         for out, lineage in self.statements.output_lineages(
-                            source_hash, input_lineages, "", inputs, outputs, code, recorded_reads=reads
+                            source_hash,
+                            list(input_lineage_map.values()),
+                            "",
+                            inputs,
+                            outputs,
+                            code,
+                            recorded_reads=reads,
+                            input_lineage_map=input_lineage_map,
                         ).items()
                     }
                 )

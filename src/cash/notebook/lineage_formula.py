@@ -24,6 +24,7 @@ from collections.abc import Mapping
 from typing import Any, Callable, Iterable
 
 from ..analysis.ast_util import parse_cached
+from ..analysis.mutations import repeatable_setting_receiver
 from ..analysis.purity_analyzer import get_analyzer
 from ..code_digest import module_identity
 from ..effects import ENVIRONMENT_TEXT_MARKERS, environment_component, environment_input
@@ -208,6 +209,75 @@ def output_lineage(
         f"{environment}{value_component}"
     )
     return resolve_lineage_alias(hashlib.sha256(lineage_str.encode("utf-8")).hexdigest())
+
+
+def setting_output_lineage(
+    name: str,
+    value: Any,
+    code: str,
+    input_lineages: Mapping[str, str],
+    lineage_of: Callable[[list[str]], str],
+    virtual_modules: Iterable[str] = (),
+) -> str | None:
+    """The lineage of module *name* after the statement *code* set it with a
+    setting that is the same when run again (`repeatable_setting_receiver`),
+    or None for the ordinary formula.
+
+    The ordinary formula folds the module's lineage before the statement, so
+    each run of ``pd.set_option('display.width', 120)`` moved ``pd`` on, and
+    a session that ran the setup cell three times keyed every reader of
+    ``pd`` apart from a Run All after a restart, which ran it once. Here the
+    setting stands for itself: *lineage_of* builds the ordinary formula from
+    the other inputs' lineages (*input_lineages* less the module's own), and
+    :func:`setting_lineage` adds it to the settings the module had before.
+    ONE function for the runtime (``statement/lineage.py``) and the
+    simulation (``upstream/statement_lineage.py``).
+    """
+    if not (isinstance(value, types.ModuleType) or (value is None and name in virtual_modules)):
+        return None
+    if repeatable_setting_receiver(parse_cached(code)) != name:
+        return None
+    others = [lineage for input_name, lineage in input_lineages.items() if input_name != name]
+    return setting_lineage(input_lineages.get(name), lineage_of(others))
+
+
+#: A lineage :func:`setting_lineage` made -> ``(the lineage the settings
+#: were made on, the settings in order)``, for this process. A lineage not
+#: here starts a new run of settings; that is never wrong, only a miss.
+_SETTING_RUNS: dict[str, tuple[str, tuple[str, ...]]] = {}
+
+
+def setting_lineage(before: str | None, setting: str) -> str:
+    """The lineage of a module after *setting* (a setting call's own
+    lineage) on a module whose lineage was *before*.
+
+    The module's lineage is the lineage it had before its run of settings
+    and the settings in order. A run that ends in the same settings twice
+    (``A B A B``) keeps them once (``A B``): each setting writes its values
+    over what was there, so the second time changes nothing, and re-running
+    the setup cell leaves the module's lineage where one run left it. Any
+    other order is a different lineage (``A B`` then ``A``), even where the
+    two settings touch different options: which ones a call touches
+    (``plt.style.use`` sets dozens) is not known, and a miss is safe.
+    """
+    base, run = _SETTING_RUNS.get(before or "", (before or "", ()))
+    run = _without_repeat((*run, setting))
+    lineage = hashlib.sha256(f"settings:{base}:{':'.join(run)}".encode("utf-8")).hexdigest()
+    _SETTING_RUNS[lineage] = (base, run)
+    return lineage
+
+
+def _without_repeat(run: tuple[str, ...]) -> tuple[str, ...]:
+    """*run* with each block that ends it twice in a row kept once."""
+    collapsed = True
+    while collapsed:
+        collapsed = False
+        for size in range(1, len(run) // 2 + 1):
+            if run[-size:] == run[-2 * size : -size]:
+                run = run[:-size]
+                collapsed = True
+                break
+    return run
 
 
 #: Lineage -> the lineage of an earlier value with the same content

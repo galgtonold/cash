@@ -166,6 +166,12 @@ A setting kept inside a library, such as `plt.style.use("ggplot")`,
 restart, a cell that uses that module runs the setting line again first, so a
 chart keeps the notebook's style.
 
+<!-- claim: cash/notebook/lineage_formula.py:setting_lineage @9387f46a, cash/analysis/mutations.py:repeatable_setting_receiver @7c71d912 -->
+Running the same settings again, such as the setup cell three times, keys
+the cells that use the module as one run does, so they are found in the
+cache after a restart that ran it once. Another value, or the same settings
+in another order, counts as a change.
+
 <!-- claim: cash/notebook/upstream/file_writers.py:FileWriterScheduler._writer_output_already_fresh @982cbefa, cash/notebook/upstream/file_writers.py:FileWriterScheduler.find_stale_file_writer_indices @7bfb9393 -->
 A cell that writes files (`df.to_csv(...)`, `fig.savefig(...)`) is not re-run
 after a restart just because it ran in an earlier kernel. cash records the
