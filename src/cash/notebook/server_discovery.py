@@ -484,11 +484,28 @@ def get_notebook_path() -> str | None:
         return _cache_and_return(result)
 
     try:
+        from traitlets.config.configurable import MultipleInstanceError
+    except ImportError:  # no traitlets means no IPython app and no ipykernel either
+        MultipleInstanceError = RuntimeError  # already caught; keeps the tuple valid
+
+    try:
         import ipykernel
 
         connection_file = ipykernel.get_connection_file()
         kernel_id = _kernel_id_from_connection_file(connection_file)
-    except (ImportError, AttributeError, OSError, RuntimeError, IndexError, ValueError):
+    except (
+        ImportError,
+        AttributeError,
+        OSError,
+        RuntimeError,
+        IndexError,
+        ValueError,
+        # Terminal IPython with ipykernel installed: the running app is a
+        # TerminalIPythonApp, so ``IPKernelApp.instance()`` refuses to create a
+        # sibling singleton. No kernel -> no connection file -> not found, the
+        # same as a headless run (every cell is still cached).
+        MultipleInstanceError,
+    ):
         logger.debug("[UTILS] Failed to get kernel connection file")
         return _cache_not_found()
 

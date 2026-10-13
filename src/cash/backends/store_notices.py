@@ -13,7 +13,12 @@ from ..exceptions import CashCacheIneffectiveWarning
 from ..units import human_bytes
 from .value_policy import WORTH_CEILING_BYTES_PER_SECOND
 
-__all__ = ["StoreNotices"]
+__all__ = ["DECORATED_CALLS_FIELD", "StoreNotices"]
+
+#: Entry metadata: the ``@cash.cache`` functions a notebook statement called
+#: (``StatementStore``), which CACHE-NOT-WORTH-BYTES names instead of advising
+#: to decorate them.
+DECORATED_CALLS_FIELD = "decorated_calls"
 
 
 def _cap_list(caps: list[int] | None) -> str:
@@ -35,7 +40,7 @@ class StoreNotices:
         #: Statements already told CACHE-NOT-WORTH-BYTES this session.
         self._warned_not_worth: set[str] = set()
         #: Refusals held for one notice (`hold`); None when not holding.
-        self._held: list[tuple[str, int, float]] | None = None
+        self._held: list[tuple[str, int, float, tuple[str, ...]]] | None = None
 
     def hold(self) -> None:
         """Hold CACHE-NOT-WORTH-BYTES refusals until `release`, to say them once."""
@@ -74,11 +79,20 @@ class StoreNotices:
             f"the serialized one, the same number `cash inspect` reports.",
         )
 
-    def not_worth_bytes(self, key: str, size_bytes: int, compute_seconds: float, code: str | None = None) -> None:
+    def not_worth_bytes(
+        self,
+        key: str,
+        size_bytes: int,
+        compute_seconds: float,
+        code: str | None = None,
+        decorated: list[str] | tuple[str, ...] | None = None,
+    ) -> None:
         """A value took more disk than the compute it saves is worth.
 
         Once per statement, named by its code, which is what a reader can find
-        in their notebook; a key is not.
+        in their notebook; a key is not. *decorated* names the ``@cash.cache``
+        functions the statement called: the advice then does not suggest
+        decorating them.
         """
         ident = (code or "").strip() or str(key)
         if ident in self._warned_not_worth:
@@ -88,15 +102,16 @@ class StoreNotices:
         # A loop body's stored code starts with its context marker comment.
         first = next((ln for ln in lines if not ln.lstrip().startswith("#")), lines[0] if lines else str(key))
         named = f"`{first[:80]}`" if code else repr(key)
+        refusal = (named, size_bytes, compute_seconds, tuple(decorated or ()))
         if self._held is not None:
-            self._held.append((named, size_bytes, compute_seconds))
+            self._held.append(refusal)
             return
-        self._say_not_worth([(named, size_bytes, compute_seconds)])
+        self._say_not_worth([refusal])
 
-    def _say_not_worth(self, refused: list[tuple[str, int, float]]) -> None:
+    def _say_not_worth(self, refused: list[tuple[str, int, float, tuple[str, ...]]]) -> None:
         ceiling = human_bytes(WORTH_CEILING_BYTES_PER_SECOND)
         if len(refused) == 1:
-            named, size_bytes, compute_seconds = refused[0]
+            named, size_bytes, compute_seconds, _ = refused[0]
             rate = size_bytes / max(compute_seconds, 1e-9) / (1024**2)
             what = (
                 f"the value of {named} is {human_bytes(size_bytes)} serialized but "
@@ -107,7 +122,7 @@ class StoreNotices:
             )
         else:
             shown = ", ".join(
-                f"{named} ({human_bytes(size)} for {secs:.2f}s)" for named, size, secs in refused[: self.NAMED]
+                f"{named} ({human_bytes(size)} for {secs:.2f}s)" for named, size, secs, _ in refused[: self.NAMED]
             )
             more = len(refused) - self.NAMED
             what = (
@@ -122,13 +137,43 @@ class StoreNotices:
             "CACHE-NOT-WORTH-BYTES",
             what,
             "nothing, if the recompute is cheap enough that you had not "
-            "noticed it -- that is the trade being made. To cache it anyway, "
-            "say so explicitly: `@cash:persist` on the statement, or "
-            "`@cash.cache` on the function, both of which cash honours without "
-            "re-taking the decision. Caching something smaller -- the "
+            "noticed it -- that is the trade being made. "
+            + _anyway_advice(refused)
+            + " Caching something smaller -- the "
             "aggregate, the sample, the columns you use -- is usually the "
             "better answer for a value this large. `cash inspect` in a "
             "terminal lists what the cache does hold, each entry's size "
             "next to the time it saves.",
             location=("<cash>", 1),
         )
+
+
+def _anyway_advice(refused: list[tuple[str, int, float, tuple[str, ...]]]) -> str:
+    """How to cache the refused values anyway, for what their statements call.
+
+    Decorating the function is advice only for a statement that calls no
+    ``@cash.cache`` function: one that does already has it, and that call's
+    own entry is stored by the decorator's rules, not refused here.
+    """
+    decorated = list(dict.fromkeys(name.rsplit(".", 1)[-1] for *_, names in refused for name in names))
+    undecorated = any(not names for *_, names in refused)
+    if not decorated:
+        return (
+            "To cache it anyway, say so explicitly: `@cash:persist` on the "
+            "statement, or `@cash.cache` on the function that computes it, both "
+            "of which cash honours without re-taking the decision."
+        )
+    shown = ", ".join(f"`{name}`" for name in decorated[:3]) + (" and others" if len(decorated) > 3 else "")
+    many = len(decorated) > 1
+    advice = (
+        f"{shown} {'are' if many else 'is'} already `@cash.cache`d and "
+        f"{'keep' if many else 'keeps'} {'their' if many else 'its'} own "
+        f"{'entries' if many else 'entry'}: what was not persisted is the "
+        "statement's value built from "
+        f"{'them' if many else 'it'}. To cache that anyway, say so explicitly: "
+        "`@cash:persist` on the statement, which cash honours without "
+        "re-taking the decision"
+    )
+    if undecorated:
+        advice += ", or `@cash.cache` on an undecorated function that computes the value"
+    return advice + "."

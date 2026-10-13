@@ -101,7 +101,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
 
 ### Files
 
-<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @51a8bdb1, cash/tracking/read_events.py:_is_read_mode @238e2cb8, cash/tracking/read_events.py:_on_listing @41ce1606 -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @b76337da, cash/tracking/read_events.py:_is_read_mode @238e2cb8, cash/tracking/read_events.py:_on_listing @41ce1606 -->
 cash records a file when your code reads it through one of these:
 
 | Library | Readers |
@@ -111,6 +111,7 @@ cash records a file when your code reads it through one of these:
 | polars | `read_csv`, `read_parquet`, `read_json`, `read_ndjson`, `read_ipc`, `read_avro`, `read_excel`, and `scan_csv`, `scan_parquet`, `scan_ipc`, `scan_ndjson` |
 | pyarrow | `csv.read_csv`, `csv.open_csv`, `parquet.read_table`, `parquet.read_pandas`, `parquet.ParquetFile`, `feather.read_table`, `feather.read_feather`, `json.read_json`, `orc.read_table`, `dataset.dataset`, `memory_map`, `input_stream`, `ipc.open_file`, `ipc.open_stream` |
 | numpy | `load`, `loadtxt`, `genfromtxt`, `fromfile`, `memmap` |
+| soundfile | `read`, `blocks`, `info`, and `SoundFile` opened to read (`'r'`, `'r+'`) |
 | others | `joblib.load`, `pickle.load` and `json.load` of an opened file, `sqlite3.connect` (a path or a `file:` URI; for a database in WAL mode, its `-wal` file too), and a library that opens your file with Python's `open()`, such as Pillow's `Image.open`, `openpyxl.load_workbook` or `scipy.io.wavfile.read` |
 | directories | `glob.glob`, `glob.iglob`, `os.listdir`, `os.scandir`, and what lists through them: `Path.glob`, `rglob`, `iterdir`, `os.walk`, `Path.walk`. The directory, so a new or removed file counts |
 | datasets | a directory, a glob or a list given to one of the readers above: every file in it (names starting with `.` or `_` aside), under linked sub-folders too, and each directory, so an edited or a new file counts |
@@ -130,9 +131,9 @@ that moment: a scratch file it removes is not a dependency, a file it
 downloaded and keeps is.
 
 A library that opens the file in its own compiled code, not through Python's
-`open()`, is not seen: `soundfile.read`, for example, reads through
-libsndfile, so editing the file keeps the old result. For a file read that
-way, name it with `file_depends_on=` on the decorator, or see
+`open()`, and is not in the table above, is not seen: editing the file keeps
+the old result, with no warning. For a file read that way, name it with
+`file_depends_on=` on the decorator, or see
 [custom file sources](../tutorials/feature-guides/custom-file-sources.md).
 
 <!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @a045b99e, cash/tracking/file_dep_snapshot.py:_note_settled @ec6408ac -->
@@ -217,7 +218,7 @@ ran runs again too, whatever the cell reads.
 
 ### Finding your notebook
 
-<!-- claim: cash/notebook/server_discovery.py:NotebookCellReaders.read @d0b4a970, cash/notebook/server_discovery.py:get_notebook_path @a7b91171, cash/notebook/server_discovery.py:_collect_running_servers @1929f93c, cash/notebook/server_discovery.py:_search_servers_for_notebook @e0bf82ad -->
+<!-- claim: cash/notebook/server_discovery.py:NotebookCellReaders.read @d0b4a970, cash/notebook/server_discovery.py:get_notebook_path @de3f7e08, cash/notebook/server_discovery.py:_collect_running_servers @1929f93c, cash/notebook/server_discovery.py:_search_servers_for_notebook @e0bf82ad -->
 To simulate, cash needs the notebook's current cells. It tries, in order:
 cells pushed by cash's JupyterLab extension before each run, Colab's
 frontend, and VS Code's unsaved-changes backup. All three see edits you have

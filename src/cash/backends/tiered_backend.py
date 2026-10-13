@@ -12,7 +12,7 @@ from .clear_watch import ClearWatcher
 from .persistence_policy import SERIALIZED_ESTIMATE, PersistencePolicy
 from .sampled_cost import sampled_cost
 from .serialization import PickleSerializer, Serializer
-from .store_notices import StoreNotices
+from .store_notices import DECORATED_CALLS_FIELD, StoreNotices
 from .value_policy import WORTH_FLOOR_BYTES
 
 logger = logging.getLogger(__name__)
@@ -470,7 +470,13 @@ class TieredBackend(CacheBackend):
             stored_metadata, rebuild_seconds, backend_kind=self._promotion_backend_kind()
         )
         if decision.skipped == "bytes":
-            self.notices.not_worth_bytes(key, decision.weight, rebuild_seconds, code=_named(stored_metadata))
+            self.notices.not_worth_bytes(
+                key,
+                decision.weight,
+                rebuild_seconds,
+                code=_named(stored_metadata),
+                decorated=stored_metadata.get(DECORATED_CALLS_FIELD),
+            )
             self._drop_persisted_call_refs(stored_metadata.get("call_refs"))
             stored_metadata["persist_skipped"] = "bytes"
         if not decision.persist:
@@ -562,7 +568,13 @@ class TieredBackend(CacheBackend):
             if decision.skipped == "bytes":
                 exec_time = store_seconds(metadata)
                 if decision.report:
-                    self.notices.not_worth_bytes(key, decision.weight, exec_time, code=_named(metadata))
+                    self.notices.not_worth_bytes(
+                        key,
+                        decision.weight,
+                        exec_time,
+                        code=_named(metadata),
+                        decorated=metadata.get(DECORATED_CALLS_FIELD),
+                    )
                 self._drop_persisted_call_refs(metadata.get("call_refs"))
             if decision.persist:
                 # The RAM tier's own copy, when it has one nothing changes: a

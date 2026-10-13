@@ -25,6 +25,7 @@ from cash._clock import perf_counter as _perf_counter
 from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
 from cash.backends import memory_backend
 from cash.backends.persistence_policy import PersistencePolicy, restore_kind
+from cash.backends.store_notices import DECORATED_CALLS_FIELD
 from cash.diagnostics import log_diagnostic, warn_diagnostic
 from cash.exceptions import CashCacheStoreFailedWarning
 from cash.notebook.statement._metadata import StatementCacheMetadata
@@ -819,6 +820,11 @@ class StatementStore:
         if referenced:
             wire[REFS_FIELD] = sorted(referenced)
             wire[REF_BYTES_FIELD] = sum(referenced.values())
+        # The ``@cash.cache`` functions the statement called, so a notice about
+        # its value does not advise decorating a function that already is.
+        decorated = _user_decorated_calls(run.metrics.get("decorator_calls"))
+        if decorated:
+            wire[DECORATED_CALLS_FIELD] = decorated
         # An intermediate of this cell (``cell_runs.written_later_in_cell``)
         # stays in RAM; the cell's final version is persisted at its end.
         later = self.written_later_in_cell
@@ -878,3 +884,15 @@ def _only_shows_a_name(tree: ast.Module | None) -> bool:
         and isinstance(tree.body[0], ast.Expr)
         and isinstance(tree.body[0].value, ast.Name)
     )
+
+
+def _user_decorated_calls(events: Any) -> list[str]:
+    """The names of the ``@cash.cache`` functions in *events* (the statement's
+    ``decorator_calls``), leaving out the calls cash wrapped itself."""
+    names: dict[str, None] = {}
+    for event in events or ():
+        if isinstance(event, dict) and not event.get("intercepted"):
+            name = event.get("func_name")
+            if isinstance(name, str) and name:
+                names[name] = None
+    return list(names)
