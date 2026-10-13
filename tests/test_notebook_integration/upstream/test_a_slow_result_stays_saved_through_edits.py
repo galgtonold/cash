@@ -25,7 +25,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.restore, pytest.mark.timeout(
 SETUP = (
     "import os, time\n"
     "def slow_score(seed):\n"
-    "    fd = os.open('runs.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
+    "    fd = os.open('runs.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)  # @cash:assume-safe\n"
     "    os.write(fd, b'x')\n"
     "    os.close(fd)\n"
     "    time.sleep(0.3)\n"

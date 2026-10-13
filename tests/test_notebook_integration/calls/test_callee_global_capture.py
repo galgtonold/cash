@@ -77,7 +77,7 @@ def _defs(cp, cf, ci, *, mult=10):
     return (
         "import time, os\n"
         "def _tick(p):\n"
-        "    fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        "    fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
         "    os.write(fd, b'X')\n"
         "    os.close(fd)\n"
         "def _busy(ms):\n"
@@ -236,7 +236,7 @@ def test_the_statement_stops_caching_but_the_work_does_not(nb_runner, tmp_path):
     defs = (
         "import time, os\n"
         "def _tick(p):\n"
-        "    fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        "    fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
         "    os.write(fd, b'X')\n"
         "    os.close(fd)\n"
         "def _busy(ms):\n"
@@ -312,7 +312,7 @@ def test_two_statements_writing_the_same_global_do_not_invalidate_each_other(nb_
             (
                 "import os\n"
                 "def _tick_i():\n"
-                f"    fd = os.open(r'{ci}', os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+                f"    fd = os.open(r'{ci}', os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
                 "    os.write(fd, b'X')\n"
                 "    os.close(fd)\n"
                 "counter = 0\n"
@@ -482,7 +482,7 @@ def test_callees_sharing_a_decorator_each_restore_their_own_global(nb_runner, tm
     defs = (
         "import functools, os, time\n"
         "def _tick(p):\n"
-        "    fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        "    fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
         "    os.write(fd, b'X')\n"
         "    os.close(fd)\n"
         "def _busy(ms):\n"

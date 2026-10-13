@@ -31,7 +31,7 @@ _PKG = textwrap.dedent("""
     RUN_LOG = {log!r}
 
     def eur_total(n):
-        fd = os.open(RUN_LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+        fd = os.open(RUN_LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe
         os.write(fd, b"run\\n")
         os.close(fd)
         time.sleep({sleep!r})

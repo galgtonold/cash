@@ -41,7 +41,7 @@ SETUP = (
     "def reads(a, log):\n"
     f"    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n"
     "    import os\n"
-    "    fd = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+    "    fd = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
     "    os.write(fd, b'.')\n"
     "    os.close(fd)\n"
     "    return float(a.sum())\n"

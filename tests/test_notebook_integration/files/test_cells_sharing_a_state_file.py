@@ -77,7 +77,7 @@ KEYS = ("a", "b", "c", "d")
 
 
 def _setup(counters):
-    """Open one append-only fd per cell. os.open/os.write are untracked."""
+    """Open one append-only fd per cell. A write on an open fd is not seen."""
     lines = ["import cash", "%cash_on", "import json, os, time"]
     for k, c in counters.items():
         p = str(c).replace("\\", "/")

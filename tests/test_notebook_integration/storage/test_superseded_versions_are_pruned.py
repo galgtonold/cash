@@ -24,7 +24,7 @@ SETUP = (
     "import os, time\n"
     "import numpy as np\n"
     "def _ran(name):\n"
-    "    fd = os.open('runs.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
+    "    fd = os.open('runs.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)  # @cash:assume-safe\n"
     "    os.write(fd, (name + '|').encode())\n"
     "    os.close(fd)\n"
     "def build(n):\n"

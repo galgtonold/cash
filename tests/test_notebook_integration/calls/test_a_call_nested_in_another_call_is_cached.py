@@ -20,7 +20,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 SETUP = (
     "import cash\n%cash_on\n%cash_badge print\nimport os, time\n"
     "def mark(name):\n"
-    "    fd = os.open('runs.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
+    "    fd = os.open('runs.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)  # @cash:assume-safe\n"
     "    os.write(fd, name.encode())\n    os.close(fd)\n"
     "def fit(xs, k):\n    mark('f')\n    time.sleep(0.4)\n    return [x * k for x in xs]\n"
     "def weights(scores, cap):\n    mark('w')\n    return sum(scores) + cap\n"

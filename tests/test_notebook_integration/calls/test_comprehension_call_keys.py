@@ -57,7 +57,7 @@ def test_each_element_gets_its_own_result(nb_runner, cell):
 COUNTED = (
     "import os, time\n"
     "def slow(v):\n"
-    "    fd = os.open('counted.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
+    "    fd = os.open('counted.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)  # @cash:assume-safe\n"
     "    os.write(fd, b'slow %d|' % v)\n"
     "    os.close(fd)\n"
     "    time.sleep(0.05)\n"

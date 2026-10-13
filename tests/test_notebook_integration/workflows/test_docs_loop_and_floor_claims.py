@@ -29,7 +29,7 @@ _COUNTER = (
     "import os, time, pathlib\n"
     "LOG = pathlib.Path(r'{log}')\n"
     "def compute(t):\n"
-    "    fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+    "    fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
     "    os.write(fd, (str(t) + chr(10)).encode()); os.close(fd)\n"
     "    time.sleep(0.2)\n"  # above the cost-model floor
     "    return len(str(t))\n"

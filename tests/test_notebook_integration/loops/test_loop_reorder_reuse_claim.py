@@ -52,9 +52,9 @@ def _helpers(log):
 import os, time
 
 def compute(x):
-    # Counted with os.open, which cash does not see: LOG.open("a") is a
-    # write a hit would skip, so it makes every call run.
-    fd = os.open(r"{log}", os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+    # Counted with a waived os.open: an unwaived append is a write a hit
+    # would skip, so it would make every call run.
+    fd = os.open(r"{log}", os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe
     os.write(fd, f"{{x}}\\n".encode()); os.close(fd)
     time.sleep({_SLEEP})
     return x + 1

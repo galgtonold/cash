@@ -21,7 +21,7 @@ def _cells(log):
         f"LOG = {str(log)!r}\n"
         "def load():\n    time.sleep(0.3)\n    return pd.DataFrame({'x': np.arange(100_000.0)})\n"
         "def feat(d):\n"
-        "    fd = os.open(LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
+        "    fd = os.open(LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND)  # @cash:assume-safe\n"
         "    os.write(fd, b'f'); os.close(fd)\n"
         "    time.sleep(0.3)\n"
         "    return d.x * 3",

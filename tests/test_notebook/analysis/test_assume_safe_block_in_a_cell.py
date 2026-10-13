@@ -73,7 +73,7 @@ def _writer_cell(counter, out) -> str:
         f"    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n"
         f"    with open({str(out)!r}, 'w') as fh:\n"
         "        fh.write(str(v))\n"
-        f"    fd = os.open({str(counter)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        f"    fd = os.open({str(counter)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
         "    os.write(fd, b'x')\n"
         "    os.close(fd)\n"
         "    return v\n"

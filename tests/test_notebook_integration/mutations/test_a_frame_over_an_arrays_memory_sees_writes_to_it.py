@@ -86,7 +86,7 @@ def test_a_frame_with_its_own_copy_keeps_its_cached_call(nb_runner, tmp_path):
     calls = tmp_path / "calls"
     counted = TOTAL.replace(
         "    time.sleep(0.3)\n",
-        f"    import os\n    fd = os.open({str(calls)!r}, os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
+        f"    import os\n    fd = os.open({str(calls)!r}, os.O_WRONLY | os.O_CREAT | os.O_APPEND)  # @cash:assume-safe\n"
         "    os.write(fd, b'x'); os.close(fd)\n    time.sleep(0.3)\n",
     )
     nb_runner.create_notebook(

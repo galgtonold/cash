@@ -38,7 +38,7 @@ def _defs(ticks):
     return (
         "import time, os\n"
         "def _tick():\n"
-        f"    fd = os.open(r'{ticks}', os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        f"    fd = os.open(r'{ticks}', os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
         "    os.write(fd, b'X')\n"
         "    os.close(fd)\n"
         "def fetch(n):\n"
