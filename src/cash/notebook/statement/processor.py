@@ -31,6 +31,7 @@ from cash.notebook.cache_key import (
 )
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.call_effects import DigestHandoff
+from cash.notebook.compiled_source import register_cell_source
 from cash.notebook.consumables import drawn_stream_inputs
 from cash.notebook.read_handles import reaches_read_handle
 from cash.notebook.statement._metadata import StatementCacheMetadata
@@ -655,11 +656,23 @@ class StatementProcessor:
             self._advance_rng(run)
             return done
         with self._executing(run) as runner:
-            runner.run()
+            self._offer_digests(run, runner)
+            try:
+                runner.run()
+            finally:
+                self._mutations.digests.withdraw_offer()
         try:
             return self._finish(run, runner.execution)
         finally:
             self._advance_rng(run)
+
+    def _offer_digests(self, run: StatementRun, runner: CodeRunner) -> None:
+        """Offer the arguments' digests taken before the statement to the
+        ``@cash.cache`` call it is (`DigestHandoff.offer_to_decorator`):
+        only when it runs as written, not through the call cache."""
+        if runner.source != run.code:
+            return
+        self._mutations.digests.offer_to_decorator(register_cell_source(runner.source))
 
     async def process_statement_async(
         self,
