@@ -28,7 +28,7 @@ from . import _plain_data
 from .bulk_digest import BulkHasher, fold_buffer
 from .canonical_form import ContentHashing, canonical_bytes
 from .kept_state import packed_records
-from .sizing import SPARSE_PARTS
+from .sizing import SPARSE_PARTS, held_values
 from .value_types import LEAF_TYPES
 
 logger = logging.getLogger(__name__)
@@ -255,6 +255,17 @@ def immutable_labels(values: Any) -> bool:
     return infer_dtype(values, skipna=False) in _IMMUTABLE_LABEL_KINDS
 
 
+def immutable_items(values: Any) -> bool:
+    """Whether an object-dtype array holds only immutable scalars and missing
+    values: `immutable_labels` with gaps allowed, as a column of strings
+    has them. Read by pandas in C, about 10 ms per million items; a 2-d
+    block of several such columns is read as one."""
+    from pandas.api.types import infer_dtype
+
+    flat = values.ravel(order="K") if values.ndim > 1 else values
+    return infer_dtype(flat, skipna=True) in _IMMUTABLE_LABEL_KINDS
+
+
 #: numpy dtype kinds whose buffer IS the values: bool, integers, floats,
 #: complex numbers, datetimes and timedeltas.
 _RAW_KINDS = frozenset("biufcmM")
@@ -310,13 +321,13 @@ def _fold_pandas_array(h: Any, values: Any, pd: Any) -> None:
         fold_buffer(h, _raw_view(_np_array(values)))
         return
     if route == "datetimetz":
-        asi8 = getattr(values.array, "asi8", None)
+        asi8 = getattr(held_values(values), "asi8", None)
         if asi8 is not None:
             fold_buffer(h, _raw_view(asi8))
             return
         route = None
     elif route == "masked":
-        array = values.array
+        array = held_values(values)
         data, mask = getattr(array, "_data", None), getattr(array, "_mask", None)
         if data is not None and mask is not None:
             # The values under a missing one are whatever was there: two equal
@@ -331,7 +342,7 @@ def _fold_pandas_array(h: Any, values: Any, pd: Any) -> None:
     elif route == "objects":
         _fold_object_items(h, _np_array(values, object))
     elif route == "arrow":
-        fold_arrow_column(h, values.array.__arrow_array__())
+        fold_arrow_column(h, held_values(values).__arrow_array__())
     else:
         fold_buffer(h, _np_array(pd.util.hash_pandas_object(values, index=False)))
 
@@ -753,6 +764,50 @@ def hash_polars(value: Any) -> str | None:
             raise
         logger.debug("polars panicked hashing a %s: %s", type(value).__name__, exc)
     return None
+
+
+def polars_signature(value: Any) -> tuple | None:
+    """What must stay the same for a polars DataFrame's or Series' content
+    hash to hold, read from its buffers' addresses, not their bytes: its
+    schema (names, dtypes) and height, and for every chunk of every column
+    the offset, the length and each Arrow buffer's address and size, as
+    polars exports them without a copy. None for anything else, for a frame
+    with an ``Object`` column (Python objects change in place), and when
+    the export fails.
+
+    Polars writes in place (``df[0, "a"] = 1``, ``s.scatter``, ``extend``,
+    ``df.columns = [...]``) only into memory nothing else shares: with a
+    copy of the frame held (``clone()``, which shares every buffer), each
+    such write gives the frame new buffers at new addresses, the old ones
+    still alive. So while the signature stays the same, no write through
+    polars happened. A write past polars into memory it borrowed (a numpy
+    array it was built over without a copy) is not seen: a caller trusts it
+    only over a span no such write can fall in (`ArgFingerprints`).
+    """
+    try:
+        import polars as pl
+
+        frame = value.to_frame() if isinstance(value, pl.Series) else value
+        if not isinstance(frame, pl.DataFrame):
+            return None
+        schema = tuple((name, repr(dtype)) for name, dtype in frame.schema.items())
+        if any("Object" in dtype for _, dtype in schema):
+            return None
+        table = frame.to_arrow(compat_level=pl.CompatLevel.newest())
+        columns = tuple(
+            tuple(
+                (chunk.offset, len(chunk), tuple(None if b is None else (b.address, b.size) for b in chunk.buffers()))
+                for chunk in column.chunks
+            )
+            for column in table.columns
+        )
+        return (schema, frame.height, columns)
+    except Exception:  # noqa: BLE001 - polars or pyarrow refused: no signature, hash it
+        return None
+    except BaseException as exc:
+        if not is_native_panic(exc):
+            raise
+        return None
 
 
 def _polars_to_arrow(value: Any, pl: Any) -> Any:

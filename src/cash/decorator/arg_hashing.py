@@ -28,7 +28,14 @@ from ..canonical_form import (
     canonical_marker_bytes,
     stable_key_repr,
 )
-from ..content_hashers import BUILTIN_CONTENT, builtin_family_of, builtin_hash, immutable_labels, is_native_panic
+from ..content_hashers import (
+    BUILTIN_CONTENT,
+    builtin_family_of,
+    builtin_hash,
+    immutable_items,
+    immutable_labels,
+    is_native_panic,
+)
 from ..exceptions import CashCacheIneffectiveWarning
 from ..jit_functions import is_jit_type, jit_options, jit_python_function
 from ..lineage_tag import own_tag
@@ -391,6 +398,10 @@ def _frame_memory(obj: Any, held: Any) -> tuple[list, dict[int, int]] | None:
     from pandas.core.indexes.frozen import FrozenList
 
     date_arrays = (pd.arrays.DatetimeArray, pd.arrays.TimedeltaArray)
+    # Strings held as Python objects (pandas 3 without pyarrow, or
+    # ``storage="python"``) are a numpy array of them too; its items are
+    # immutable ``str`` or a missing value, which pandas checks on every write.
+    string_array = pd.arrays.StringArray
     holders: dict[int, Any] = {}
     todo: list = []
 
@@ -424,7 +435,7 @@ def _frame_memory(obj: Any, held: Any) -> tuple[list, dict[int, int]] | None:
                 return _is_arrow_string(array._pa_array.type)
             pandas_refs[key] = 1
             arrays.append(array)
-            if isinstance(array, date_arrays):
+            if isinstance(array, date_arrays) or type(array) is string_array:
                 array = array._ndarray
             elif type(array) is not np.ndarray:
                 return False
@@ -440,7 +451,7 @@ def _frame_memory(obj: Any, held: Any) -> tuple[list, dict[int, int]] | None:
         holder = todo.pop()
         if isinstance(holder, block_type):
             values = holder.values
-            if type(values) is np.ndarray and values.dtype == object:
+            if type(values) is np.ndarray and values.dtype == object and not immutable_items(values):
                 return None  # Python objects change in place: `s[0].append(...)`
             if not reference(values):
                 return None
@@ -563,7 +574,9 @@ def watch_array_handles() -> None:
     ``arr.flags.writeable = True`` make one writable again (the block under
     it is), which is the usual answer to pandas' "assignment destination is
     read-only". pandas reads these itself all the time, so they are recorded
-    only when code outside pandas and cash asks, and only a read-only view.
+    only when code outside pandas and cash asks, and only a read-only view --
+    or, for strings held as Python objects, the column's own array, which
+    ``.values`` hands out as it is.
 
     A recorded handle that is dropped leaves its write, if any, in the
     frame; it costs the frame one fresh hash (*since* in
@@ -720,8 +733,10 @@ def _noting(accessor: Callable, outside_only: bool | str) -> Callable:
                 return handle
             if outside_only is _READ_ONLY_VIEW:
                 flags = getattr(handle, "flags", None)
-                if flags is None or flags.writeable or caller.startswith("cash."):
-                    return handle  # a copy, an extension array, or cash's own read
+                if caller.startswith("cash."):
+                    return handle  # cash's own read
+                if flags.writeable if flags is not None else not _held_string_array(handle):
+                    return handle  # a copy, or an extension array the memo never vouches for
         try:
             _note_exposed(handle)
         except Exception:  # noqa: BLE001 - recording must never break the user's read
@@ -729,6 +744,14 @@ def _noting(accessor: Callable, outside_only: bool | str) -> Callable:
         return handle
 
     return noting
+
+
+def _held_string_array(handle: Any) -> bool:
+    """Is *handle* pandas' array of strings held as Python objects? A
+    column's or an index's ``.values`` hands out that very array, writable
+    (``s.values[0] = "x"`` writes into the frame), not a read-only view."""
+    t = type(handle)
+    return t.__name__ == "StringArray" and (t.__module__ or "").startswith("pandas")
 
 
 def _note_exposed(handle: Any) -> None:

@@ -775,7 +775,7 @@ class StatementProcessor:
                 return hit_result
 
         if not run.mut_record and not is_control_body(run.code):
-            run.rewatching = self._mutations.start_rewatch(run.source_hash, run.cache_key)
+            run.rewatching = self._mutations.start_rewatch(run.source_hash, run.cache_key, run.tree)
         user_ns = self.shell.user_ns
         run.bound_before = {
             name: id(user_ns[name]) for name in run.outputs | run.mut_observe | run.mut_assumed if name in user_ns

@@ -91,21 +91,44 @@ _FLAT_CELLS = frozenset((str, int, float, bool, type(None), bytes, complex))
 
 def _column_bytes(col: Any) -> int:
     """One column's data, as ``memory_usage(deep=True)`` counts it."""
+    values = held_values(col)
     if str(col.dtype) == "category":
         # Codes, plus the categories counted deep: they are strings held as
         # Python objects on pandas < 3.
-        categorical = col.array
-        return int(categorical.codes.nbytes) + _index_bytes(categorical.categories)
+        return int(values.codes.nbytes) + _index_bytes(values.categories)
     if _holds_python_objects(col.dtype):
-        return _sampled_bytes(col.to_numpy(dtype=object))
-    return int(col.array.nbytes)
+        return _sampled_bytes(_python_objects(col, values))
+    return int(values.nbytes)
 
 
 def _index_bytes(index: Any) -> int:
     """The index's own ``nbytes``: a RangeIndex is a few numbers, not n of them."""
     if type(index).__name__ != "MultiIndex" and _holds_python_objects(index.dtype):
-        return _sampled_bytes(index.to_numpy(dtype=object))
+        return _sampled_bytes(_python_objects(index, held_values(index)))
     return int(index.nbytes)
+
+
+def held_values(values: Any) -> Any:
+    """The array a Series or Index keeps its values in, as pandas holds it.
+
+    Not ``.array``: that is a handle the frame memo records as one a caller
+    could write through (`cash.decorator.arg_hashing.watch_array_handles`),
+    so sizing or hashing a frame through it cost the frame its memoised
+    digest on every check."""
+    held = getattr(values, "_values", None)
+    return held if held is not None else values.array
+
+
+def _python_objects(values: Any, held: Any) -> Any:
+    """The 1-d object array of Python objects *values* (a Series or Index)
+    keeps, read where it lies rather than through ``to_numpy(dtype=object)``,
+    which for strings stored as Python objects looks for missing values and
+    copies: 75 ms per 900,000-row column, paid on every size check of the
+    frame. *held* is `held_values` of it."""
+    array = getattr(held, "_ndarray", held)
+    if type(array).__name__ == "ndarray" and array.dtype == object and array.ndim == 1:
+        return array
+    return values.to_numpy(dtype=object)
 
 
 def _arrays_bytes(obj: Any) -> int | None:

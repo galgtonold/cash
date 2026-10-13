@@ -28,7 +28,7 @@ from typing import Any
 
 from cash import handed_digests
 from cash.analysis.read_only_callees import reads_its_arguments_only
-from cash.content_hashers import builtin_family_of
+from cash.content_hashers import builtin_family_of, polars_signature
 from cash.decorator.arg_hashing import (
     exposure_mark,
     frame_borrows_its_data,
@@ -318,19 +318,39 @@ class ArgFingerprints:
     not such a frame is hashed every time.
 
     Kept for one cell (`clear`), and an entry only while its frame lives.
+
+    A polars frame or series is kept the same way, by `polars_signature`
+    (its schema and its buffers' addresses, with a ``clone()`` held so every
+    write through polars moves them), but for one statement only
+    (`begin_statement`): polars can be built over a numpy array without a
+    copy, and a write through that array changes the frame where no
+    signature sees it. Within a statement the frame is read once, by its
+    fingerprint before it runs, and the checks around its call and after
+    it reuse that digest; ``sess = el.sessionize(events)`` read the 674 MB
+    ``events`` four times.
     """
 
     def __init__(self) -> None:
         #: ``id(frame) -> (weak reference, shallow copy, signature, hash,
         #: exposure mark)``.
         self._memo: dict[int, tuple] = {}
+        #: ``id(frame) -> (weak reference, clone, signature, hash)`` for
+        #: polars, this statement's.
+        self._polars: dict[int, tuple] = {}
 
     def clear(self) -> None:
         self._memo.clear()
+        self._polars.clear()
+
+    def begin_statement(self) -> None:
+        """A statement starts: no polars digest is carried into it."""
+        self._polars.clear()
 
     def digest(self, value: Any) -> str:
         """`compute_hash` of *value*, from the memo when it is a frame
         that has not changed since it was hashed."""
+        if builtin_family_of(type(value)) == "polars":
+            return self._polars_digest(value)
         if not is_cow_pandas(value):
             return compute_hash(value)
         found = self._lookup(value)
@@ -340,6 +360,32 @@ class ArgFingerprints:
         digest = compute_hash(value)
         if not is_identity_fallback_hash(value, digest) and (pandas_nbytes(value) or 0) >= _FINGERPRINT_MIN_BYTES:
             self._store(value, digest, since)
+        return digest
+
+    def _polars_digest(self, value: Any) -> str:
+        """`compute_hash` of a polars *value*, read once per statement while
+        its `polars_signature` holds."""
+        memo = self._polars
+        key = id(value)
+        entry = memo.get(key)
+        if entry is not None:
+            ref, _held, signature, digest = entry
+            if ref() is value and signature is not None and polars_signature(value) == signature:
+                return digest
+            memo.pop(key, None)
+        digest = compute_hash(value)
+        if is_identity_fallback_hash(value, digest) or not _big_polars(value):
+            return digest
+        try:
+            held = value.clone()
+            signature = polars_signature(value)
+            if signature is None:
+                return digest
+            ref = weakref.ref(value, lambda _ref, key=key, memo=memo: memo.pop(key, None))
+        except Exception:  # polars refused: hash it again next time
+            logger.debug("call unit: could not remember a polars value", exc_info=True)
+            return digest
+        memo[key] = (ref, held, signature, digest)
         return digest
 
     def _lookup(self, value: Any) -> str | None:
@@ -376,6 +422,15 @@ class ArgFingerprints:
             logger.debug("call unit: could not remember a frame", exc_info=True)
             return
         self._memo[key] = (ref, held, signature, digest, since)
+
+
+def _big_polars(value: Any) -> bool:
+    """Is the polars *value* big enough that checking it beats reading it
+    (`_FINGERPRINT_MIN_BYTES`)?"""
+    try:
+        return value.estimated_size() >= _FINGERPRINT_MIN_BYTES
+    except Exception:  # noqa: BLE001 - a LazyFrame, or polars refused
+        return False
 
 
 def _call_shape(tree: ast.Module | None, namespace: Mapping[str, Any] | None = None) -> tuple[bool, bool]:
@@ -468,6 +523,7 @@ class DigestHandoff:
 
     def begin_statement(self) -> None:
         """A statement starts: nothing earlier is handed on."""
+        self.fingerprints.begin_statement()
         self._generation += 1
         self._before_ok = self._after_ok = False
         self._before.clear()
