@@ -50,10 +50,12 @@ _FIXED_NS = 1_000_000_000_000_000_000
 
 
 def _write(path, text):
-    """Same size and mtime for every version: only the content tells them apart."""
+    """Same size for every version, and one mtime per text: two copies of a
+    version look alike, two versions do not (Windows keeps no change time)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
-    os.utime(path, ns=(_FIXED_NS, _FIXED_NS))
+    stamp = _FIXED_NS + sum(text.encode()) * 1_000_000_000
+    os.utime(path, ns=(stamp, stamp))
 
 
 def _job(tmp_path):
