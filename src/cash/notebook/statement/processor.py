@@ -669,10 +669,12 @@ class StatementProcessor:
     def _offer_digests(self, run: StatementRun, runner: CodeRunner) -> None:
         """Offer the arguments' digests taken before the statement to the
         ``@cash.cache`` call it is (`DigestHandoff.offer_to_decorator`):
-        only when it runs as written, not through the call cache."""
-        if runner.source != run.code:
+        only when it runs as written (or as its original text, comments and
+        quotes intact), not through the call cache."""
+        if runner.source != (run.exec_source if run.exec_source is not None else run.code):
             return
-        self._mutations.digests.offer_to_decorator(register_cell_source(runner.source))
+        run.offered_as = register_cell_source(runner.source)
+        self._mutations.digests.offer_to_decorator(run.offered_as, run.tree, self.shell.user_ns)
 
     async def process_statement_async(
         self,

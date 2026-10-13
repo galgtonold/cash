@@ -20,7 +20,7 @@ import types
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from cash import cost_model
+from cash import cost_model, handed_digests
 from cash._clock import perf_counter as _perf_counter
 from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
 from cash.backends import memory_backend
@@ -38,7 +38,7 @@ from cash.tracking.file_dep_snapshot import snapshot_dependencies
 from cash.tracking.randomness import capture_object_rng_states, capture_rng_state
 
 from ..call_key import holds_a_closure_with_state
-from ..call_refs import REF_BYTES_FIELD, REFS_FIELD, CallRef
+from ..call_refs import DECORATOR_ENTRY, REF_BYTES_FIELD, REFS_FIELD, CallRef
 from ..closed_stream import ClosedStream, stored_form
 
 if TYPE_CHECKING:
@@ -728,10 +728,12 @@ class StatementStore:
         captured_output = execution.captured
         variables = self._filter_safe_vars(captured_vars)
         referenced: dict[str, int] = {}
+        decorated = False
         if not run.holders:
             # A reference restores a call's result on its own: with holders
             # it would no longer be the object they hold.
             variables = self._calls.with_call_refs(variables, run.code, referenced)
+            variables, decorated = self._with_decorator_ref(variables, run.offered_as)
         payload = {
             "variables": variables,
             "stdout": captured_output.stdout,
@@ -746,7 +748,7 @@ class StatementStore:
             # rather than continue the stream.
             "rng_epochs": dict(seed_epochs),
         }
-        if referenced:
+        if referenced or decorated:
             payload[REFS_FIELD] = True  # `has_call_refs`
         # The value the statement echoed as its cell's result, which a hit
         # hands to IPython's output history as a run does.
@@ -770,6 +772,27 @@ class StatementStore:
         if run.carriers_advanced is not None:
             payload[CARRIERS_FIELD] = sorted(run.carriers_advanced)
         return payload, referenced
+
+    def _with_decorator_ref(self, variables: dict[str, Any], offered_as: str | None) -> tuple[dict[str, Any], bool]:
+        """*variables* with the result of the ``@cash.cache`` call the
+        statement is (``x = f(a)``) stored as a reference to that call's own
+        entry (`handed_digests.stored_result`), and whether one was made.
+
+        The decorator's entry already holds that value: a second copy cost a
+        second RAM copy and a second disk write of a 100-900 MB result on
+        every compute. Only into the backend the statement is stored in, and
+        only when the entry is persisted wherever the statement may be. The
+        call's key is not added to the statement's ``call_refs``: those are
+        the notebook's own call entries, which pruning a statement version
+        may delete, and a decorator's entry is the user's.
+        """
+        stored = None if offered_as is None else handed_digests.stored_result(offered_as)
+        if stored is None or not stored.persisted or stored.backend is not self.cash_instance.backend:
+            return variables, False
+        names = [name for name, value in variables.items() if stored.holds(value)]
+        if len(names) != 1:
+            return variables, False
+        return {**variables, names[0]: CallRef(stored.key, DECORATOR_ENTRY)}, True
 
     def _wire(self, run: StatementRun, metadata: StatementCacheMetadata, referenced: dict[str, int]) -> dict[str, Any]:
         """*metadata* as the dict the backend stores.

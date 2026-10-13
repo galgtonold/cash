@@ -27,6 +27,7 @@ pruned, and the call entries only a pruned version referred to go with it.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 from dataclasses import dataclass
@@ -50,6 +51,10 @@ SIZE_FIELD = "value_bytes"
 #: *trusted*).
 ESTIMATED_FIELD = "value_bytes_estimated"
 UNHASHED_PREFIX = "unhashed:"
+#: The digest of a reference to a ``@cash.cache`` entry: the entry under the
+#: call's key is that call's result by the decorator's own contract, so it is
+#: taken as it is (`StatementStore._with_decorator_ref`).
+DECORATOR_ENTRY = "decorator-entry"
 
 #: How deep into plain dicts, lists and tuples a reference is looked for.
 _DEPTH = 2
@@ -228,7 +233,16 @@ def _load_ref(ref: CallRef, loaded: dict[str, Any], backend: Any) -> Any:
             metadata, value = backend.get(ref.key)
         except Exception as exc:
             raise _Missing(ref.key) from exc
-        if not isinstance(metadata, dict) or metadata.get(DIGEST_FIELD) != ref.digest:
+        if not isinstance(metadata, dict):
+            raise _Missing(ref.key)
+        if ref.digest == DECORATOR_ENTRY:
+            if not metadata.get("decorator_entry"):
+                raise _Missing(ref.key)
+            if metadata.get("read_only"):
+                # As a hit of the call hands it back (`DecoratorStore.restore_identity`).
+                with contextlib.suppress(AttributeError, ValueError):
+                    value.flags.writeable = False
+        elif metadata.get(DIGEST_FIELD) != ref.digest:
             raise _Missing(ref.key)
         loaded[ref.key] = value
     return loaded[ref.key]

@@ -562,6 +562,9 @@ class ResultStore:
             if dynamic is not None:
                 self._store_sources(dynamic)
             self._backend_slot.backend.set(cache_key, result, meta_dict, serializer=serializer)
+            call.stored_in = (
+                None if meta_dict.get("result_ref") or meta_dict.get("held_refs") else meta_dict.get("storage")
+            )
             if dynamic is not None:
                 remember_sources(cache_key, dynamic)
             # A tiered backend catches each tier's failure so one bad tier
