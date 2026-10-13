@@ -150,6 +150,8 @@ class EntryMetadata(TypedDict, total=False):
     value_bytes: int
     value_bytes_estimated: bool
     # Written back by the tiered backend.
+    #: About what the value pickles to, on a value past the bytes floor in RAM.
+    serialized_bytes_estimate: int
     #: What rebuilding the value would cost, when it was persisted for that.
     rebuild_time: float
     #: Why the value stayed in RAM: compute, bytes, size, replaced_in_cell or process_local.

@@ -47,6 +47,11 @@ class StatementCacheMetadata:
     file_dependencies: dict[str, dict[str, float]] | None = None
     force_persist: bool | None = None
     output_lineages: dict[str, str] | None = None
+    #: ``{output: the content digest its value had}`` for an output the
+    #: same-value cutoff compares (a frame, series or array,
+    #: ``value_cutoff``): restored, the value is known by its content as one
+    #: that ran is, and an equal value recomputed later takes its lineage.
+    output_digests: dict[str, str] | None = None
     #: ``{input var: its lineage when this statement ran}`` -- what the values
     #: in this entry were BUILT FROM. Recorded so a restored value can answer
     #: "was one of my inputs rebuilt since?", which only an executed one could

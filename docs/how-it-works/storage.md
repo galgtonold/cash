@@ -165,7 +165,7 @@ the entry was written with and the tier's current `default_ttl`.
     `%cash_persist on` writes it anyway. The [cost model](../cost-model.md)
     explains the prediction and every setting.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @79604ece -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @5681a193 -->
 Each tier turns down a single value too large for its cap, so a 20 MB frame
 can be stored in memory and on disk while skipping a Redis tier limited to
 10 MB. When a value was meant for disk but every disk tier refused it, cash

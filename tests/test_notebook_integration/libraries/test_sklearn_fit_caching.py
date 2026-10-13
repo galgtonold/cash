@@ -479,6 +479,47 @@ def test_construct_fit_assign_restores_after_restart(nb_runner):
     assert "n = 160" in out
 
 
+@pytest.mark.parametrize(
+    "imports",
+    [
+        "import numpy as np\nfrom sklearn.ensemble import HistGradientBoostingRegressor",
+        "%load_ext autoreload\n%autoreload 2\nimport numpy as np\nfrom sklearn.ensemble import HistGradientBoostingRegressor",
+    ],
+    ids=["plain_imports", "imports_beside_autoreload"],
+)
+def test_a_histogram_boosting_fit_caches(nb_runner, imports):
+    """``m = HistGradientBoostingRegressor(...).fit(X, y)``, the form the
+    docs recommend, caches -- also when the imports cell loads autoreload.
+
+    Its binning runs on joblib's threading backend, whose result objects
+    cash's read tracking held in a reference cycle, so the fitted model's
+    bin thresholds looked held by another variable: refused as shared. And
+    a cell with ``%load_ext`` went to IPython whole, so the class imported
+    beside it had no lineage: refused as "Input variable missing lineage".
+    """
+    nb_runner.create_notebook(
+        [
+            "import cash\n%cash_on\n%cash_badge print",
+            imports,
+            "rng = np.random.default_rng(0)\nX = rng.normal(size=(60_000, 8))\ny = X[:, 0] + rng.normal(size=60_000)",
+            "m = HistGradientBoostingRegressor(max_iter=60, early_stopping=False, random_state=0).fit(X, y)\n"
+            "print('iters', m.n_iter_)",
+        ]
+    )
+    # Headless, as papermill or nbconvert runs it: no notebook file tells
+    # the upstream check what the imports cell binds.
+    nb_runner.start_kernel(inject_notebook_path=False)
+    nb_runner.run_all()
+    first = nb_runner.get_output(4)
+    assert "iters 60" in first, first
+    assert "NOT CACHED" not in first, first
+
+    nb_runner.run_cell(4)
+    out = nb_runner.get_output(4)
+    assert shows_cached(out), f"the fit did not cache: {out!r}"
+    assert nb_runner.peek("m.n_iter_") == "60"
+
+
 # ----------------------------------------------------------------------
 # Gate tightness + lineage plumbing (unchanged by the bare-fit demotion)
 # ----------------------------------------------------------------------

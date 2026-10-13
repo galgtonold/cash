@@ -494,6 +494,7 @@ class StatementStore:
             ),
             force_persist=run.force_persist,
             output_lineages=self._lineage_builder.build_output_lineages(self.tracking_state, run.outputs),
+            output_digests=self._lineage_builder.build_output_digests(self.tracking_state, run.outputs) or None,
             input_lineages=self._lineage_builder.build_input_lineages(self.tracking_state, run.inputs),
             carriers_advanced=_carriers_advanced(run),
             holders=run.holders or None,

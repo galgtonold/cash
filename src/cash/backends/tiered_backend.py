@@ -6,12 +6,14 @@ import logging
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
+from ..sizing import pickled_size_estimate
 from ._base import CacheBackend, MetadataDict, entry_expired, store_seconds
 from .clear_watch import ClearWatcher
-from .persistence_policy import PersistencePolicy
+from .persistence_policy import SERIALIZED_ESTIMATE, PersistencePolicy
 from .sampled_cost import sampled_cost
 from .serialization import PickleSerializer, Serializer
 from .store_notices import StoreNotices
+from .value_policy import WORTH_FLOOR_BYTES
 
 logger = logging.getLogger(__name__)
 
@@ -543,6 +545,7 @@ class TieredBackend(CacheBackend):
 
         decision = None
         if len(self.backends) > 1:
+            _note_serialized_size(metadata, value, serializer)
             deferred = bool(metadata.pop("defer_persist", False))
             if original_metadata is not None:
                 original_metadata.pop("defer_persist", None)
@@ -612,3 +615,21 @@ def _chosen_by_caller(metadata: MetadataDict) -> bool:
     """Whether the persistence of the entry *metadata* describes is decided
     already, so its write cost is not sampled (`sampled_cost`)."""
     return bool(metadata.get("force_persist") or metadata.get("decorator_entry") or metadata.get("process_local"))
+
+
+def _note_serialized_size(metadata: MetadataDict, value: Any, serializer: Serializer | None) -> None:
+    """Put on *metadata* about what *value* pickles to, when it is big enough
+    in RAM for the bytes ceiling to judge it (`persistence_policy.disk_bytes`).
+
+    On the RAM tier's own metadata too (the same dict), so a later
+    `persist_from_memory` weighs the entry the same way. Read off the arrays
+    and a sample of each object column: half a millisecond for a 2-million-row
+    frame. Nothing for a value only a serializer of the caller's writes.
+    """
+    if serializer is not None and type(serializer) is not PickleSerializer:
+        return
+    if (metadata.get("size") or 0) <= WORTH_FLOOR_BYTES:
+        return
+    estimate = pickled_size_estimate(value)
+    if estimate:
+        metadata[SERIALIZED_ESTIMATE] = estimate

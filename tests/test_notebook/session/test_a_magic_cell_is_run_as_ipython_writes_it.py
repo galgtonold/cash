@@ -3,7 +3,7 @@
 cash runs a cell with a magic line as IPython's transform writes it, so its
 Python is tracked and runs once; a ``%%time``/``%%prun`` body runs under the
 magic. A cell of magics alone, another cell magic, or a cell that loads an
-extension or switches cash is left to IPython.
+extension of cash's own or switches cash is left to IPython.
 """
 
 from __future__ import annotations
@@ -48,7 +48,8 @@ def test_a_timed_or_profiled_body_runs_under_its_magic(magic, name, line):
         "%%debug\nx = 1",
         "%%bash\necho hi",
         "%cash_off\nx = 1",
-        "%load_ext autoreload\nx = 1",
+        "%load_ext cash\nx = 1",
+        "%reload_ext cash.notebook\nx = 1",
         "x = = 1\n%time f()",
     ],
 )
@@ -64,3 +65,12 @@ def test_a_magic_assignment_ends_a_run_of_plain_assignments():
     tree = CodeAnalyzer.parse_cell(TRANSFORM("a = 1\nfiles = !ls\na = a + 1"))
 
     assert jumpable_runs(tree.body, "", lambda src: False) == {}
+
+
+def test_another_extension_loads_in_place_beside_python():
+    """``%load_ext autoreload`` beside imports: the imports run through cash
+    (they had no lineage when IPython ran the whole cell)."""
+    cell = ipython_cell("%load_ext autoreload\n%autoreload 2\nfrom fractions import Fraction", TRANSFORM)
+
+    assert cell is not None
+    assert [type(node).__name__ for node in cell.tree.body] == ["Expr", "Expr", "ImportFrom"]

@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._nbharness.badge import shows_cached
+
 pytest.importorskip("pandas")
 
 pytestmark = [pytest.mark.integration]
@@ -140,3 +142,26 @@ def test_a_split_whose_one_half_came_out_the_same_still_rebuilds_the_other(nb_ru
     nb_runner.restart()
     nb_runner.run_all()
     assert f"TOTAL {expected}" in nb_runner.get_output(5)
+
+
+def test_a_value_restored_after_a_restart_counts_as_seen(nb_runner):
+    """After a restart ``t`` comes back from the cache, not from running.
+    Rebuilt to the same content from a ``raw`` that did change, it still
+    takes the restored one's lineage: the entry kept the digest ``t`` had
+    when it ran. An A/B notebook restricted its frame back to day 1 after
+    day 2 arrived, and its 9 s bootstrap over the same arrays ran again."""
+    pick = "# @cash:persist\n" + PICK
+    nb_runner.create_notebook([ON + "\n%cash_badge print", SETUP, RAW, pick, TOTAL])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert _runs(nb_runner) == 1
+
+    nb_runner.restart()
+    nb_runner.run_all()
+    assert shows_cached(nb_runner.get_output(4)), nb_runner.get_output(4)
+    assert _runs(nb_runner) == 1
+
+    nb_runner.set_cell_source(3, "raw = pd.DataFrame({'a': range(300_000), 'b': 2})")
+    nb_runner.run_all()
+    assert "TOTAL 44999850000" in nb_runner.get_output(5)
+    assert _runs(nb_runner) == 1, "a table rebuilt equal to a restored one ran what was built from it again"

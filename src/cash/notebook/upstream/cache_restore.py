@@ -306,6 +306,7 @@ class CacheRestorer:
         and file dependencies."""
         state = self.tracking_state
         output_lineages = metadata.get("output_lineages", {}) if "output_lineages" in metadata else {}
+        output_digests = metadata.get("output_digests") or {}
         stored_code = metadata.get("code")
         stored_hash = metadata.get("source_hash")
 
@@ -326,6 +327,8 @@ class CacheRestorer:
             lin = output_lineages.get(var) if output_lineages else None
             if lin is not None:
                 state.lineage.record(var, lin)
+                if var in output_digests:
+                    state.value_cutoff.remember(output_digests[var], lin)
             if stored_code:
                 state.executed_cell_codes[var] = stored_code
             if stored_hash:

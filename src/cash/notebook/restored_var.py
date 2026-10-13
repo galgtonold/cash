@@ -139,6 +139,9 @@ def apply_restored_var(
         lineage = (metadata.output_lineages or {}).get(name)
         if lineage is not None:
             state.lineage.record(name, lineage, value=value)
+            digest = (metadata.output_digests or {}).get(name)
+            if digest is not None:
+                state.value_cutoff.remember(digest, lineage)
         # What the value was built from. Without it a restored value has no
         # provenance, and the check for "built on an input rebuilt since"
         # compares an empty record and passes.
