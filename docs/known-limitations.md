@@ -13,6 +13,9 @@ Most of them need an **isolated re-run**, meaning you run one cell on its own. A
 top-to-bottom **Run All** executes every cell in order, so cash has nothing to
 reconstruct and these cases do not arise. Entries that also affect Run All say so.
 
+You do not need to read it all. Follow the checklist below, and come back to a
+section when a cell does something you did not expect.
+
 ## Checklist
 
 - Seed your random draws, or mark the ones that must change `# @cash:no-cache`.
@@ -73,7 +76,8 @@ other statement, with the generator's state after it, and a cache hit puts the
 generator in that state. With `rng = np.random.default_rng(0)` in one cell
 and draws from `rng` in the next two, re-running the third cell alone first runs or restores the two above it, so it
 draws where a top-to-bottom run does, also after a restart and when a draw
-above it was too cheap to store. A stored draw from such a generator is
+above it was too cheap to store. So running a draw cell twice gives the same
+numbers both times, where plain Jupyter would draw new ones. A stored draw from such a generator is
 kept apart from one made with it in another position, so a reseed or a restart
 does not bring back a value drawn elsewhere in its stream. Four gaps on an
 isolated re-run:
@@ -135,26 +139,34 @@ Each of these misses a change, or applies one a second time.
 ### Mutating through an alias
 
 <!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @1d3cdc8d, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @150acf16, cash/notebook/shared_objects.py:share_group @6b5f6133, cash/notebook/shared_objects.py:view_base_names @aea7d284, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @4fe4d23f -->
-When a statement leaves two names sharing an object, cash links them: an alias
-(`log = history`), a container holding another variable's object (`config =
-{"features": features}`, `t = (lst,)`, `b.ref = x`) or a part taken out of one
-(`train = data["train"]`), and a numpy view and the array it views (`head =
-big[:5]`). This holds when something that is not a variable holds the object
-too (a function default `def pick(row, cols=features)`, a class attribute, an
-`argparse.Namespace` or a `deque`): the variables are still linked, and so are
-the class or the function holding it, so `slow(Registry.items)` re-runs when
-`rows.append(3)` changes a list the registry holds. A loop,
-`if` or `try` block that makes two names share an object (`for name, rows in
-pairs: splits[name] = rows`) links them when it ends. A change
-made later through either name moves both,
-so the cells that read the other one re-run, on Run All and on a cell re-run
-alike. Each statement keeps what it linked, so the links hold after a kernel
-restart, and a statement edited since it last ran links what its text says
-(`d2 = df`, `y = x[0]`, `runs = [cfg]`) until it runs. A loop that changes
-the items it walks (`for r in rows: r.append(0)`) changes `rows`, and a pyplot call that draws on the current figure
-(`plt.plot(...)`, `plt.title(...)`) changes the names bound to that figure and
-its axes, or to a list, tuple or dict holding them (`figs = {"main":
-plt.figure()}`); such a call runs every time.
+When a statement leaves two names sharing an object, cash links them:
+
+- an alias: `log = history`;
+- a container holding another variable's object: `config = {"features":
+  features}`, `t = (lst,)`, `b.ref = x`;
+- a part taken out of one: `train = data["train"]`;
+- a NumPy view and the array it views: `head = big[:5]`.
+
+A change made later through either name moves both, so the cells that read
+the other one run again, on Run All and on a cell re-run alike. The links
+also hold:
+
+- when something that is not a variable holds the object too (a function
+  default `def pick(row, cols=features)`, a class attribute, an
+  `argparse.Namespace` or a `deque`). The class or function holding it is
+  linked as well, so `slow(Registry.items)` runs again when `rows.append(3)`
+  changes a list the registry holds;
+- for names a loop, `if` or `try` block makes share an object
+  (`for name, rows in pairs: splits[name] = rows`), from the end of the block;
+- after a kernel restart: each statement keeps what it linked. A statement
+  edited since it last ran links what its text says (`d2 = df`, `y = x[0]`,
+  `runs = [cfg]`) until it runs.
+
+A loop that changes the items it walks (`for r in rows: r.append(0)`) changes
+`rows`. A pyplot call that draws on the current figure (`plt.plot(...)`,
+`plt.title(...)`) changes the names bound to that figure and its axes, or to a
+list, tuple or dict holding them (`figs = {"main": plt.figure()}`); such a
+call runs every time.
 
 A change made through an object cash cannot link to a name is invisible, and
 the cells that read the name keep their cached results:
@@ -212,58 +224,80 @@ the global. Nothing to do. If you would rather not rely on this, pass the state
 in and return it.
 
 <!-- claim: cash/analysis/handed_callables.py:handed_callables @6e29af01, cash/analysis/handed_callables.py:hands_a_state_changing_callable @7531228b -->
-A function handed to a call counts as called, however it is handed: by name
-(`s.apply(f)`, `map(f, rows)`), as an entry of a dict (`s.apply(ops["dbl"])`),
-as a method that changes its object (`s.apply(tracker.record)`), as an object
-whose class defines `__call__` and changes it, as a closure that changes what
-it closes over, picked by an expression (`ops.get("dbl")`, `ops[key]`,
-`f if flag else g`, `getattr(tracker, "record")`), called from a lambda
-(`s.map(lambda v: tally.record(v))`), or in a list, dict, deque or object of
-your class that a function of yours calls into (`run_steps(steps, data)` with
-`steps = [f]`, `run(pipe, data)` calling `pipe.steps`). The same holds for a
-function the statement calls without naming it: picked from a list or dict it
-loops over (`[f() for f in fns]`, `{k: f(x) for k, f in table.items()}`), held
-by an object of yours as a callback (`bus.emit()`, also from a helper that
-reads `bus` as a global), inside a `functools.partial`, as a lambda default,
-passed in `**kwargs`, or attached to a logger as a handler of your class. So
-does code of yours that Python runs for the statement without a call by a bare
-name: a method called on an object or a class (`store.process(r)`, a static or
-class method, a hook reached through `super()`), a context manager's
-`__enter__` and `__exit__` (`with timer("fit"):`), a property, the special
-methods of an object of your class the statement names (`bag["k"]`,
-`len(bag)`, `bag + 1`, `f"{bag}"`, iterating it), the function a wrapper made
-without `functools.wraps` or a `compose(f, g)` closure calls, a
-`functools.partial`, `np.vectorize` or `operator.methodcaller` called by its
-own name, and a `functools.singledispatch` implementation. The
-statement runs every time, and the call of yours that is handed it is not
-served from the cache; nor is a `@cash.cache` function handed one
-([`IMPURE-HANDED-CALLABLE`](warnings.md#impure-handed-callable)). A method counts as changing its object when its code changes it, or
-calls a method on something the object holds that cash does not know to leave
-it unchanged (`self.model.fit(x)`). A function of yours handed over whose
-source cannot be read, or one that only running code can tell
-(`s.apply(make_scorer(2))`, the result of a call of yours), makes the
-statement run uncached, with the reason on its badge. A list or dict of
+### A function handed to a call
+
+A function you hand to another call counts as called. One that only reads
+keeps the statement cached: a pure lambda in `df.assign(w=lambda d: d.v * 2)`,
+`s.apply(f)` or `groupby("g")["v"].transform(lambda s: s - s.mean())` is
+fine. One that changes state makes the statement run every time, as calling it
+by name would.
+
+cash finds the function however it is handed:
+
+- by name: `s.apply(f)`, `map(f, rows)`;
+- picked by an expression: `ops["dbl"]`, `ops.get("dbl")`, `ops[key]`,
+  `f if flag else g`, `getattr(tracker, "record")`;
+- as a method that changes its object (`s.apply(tracker.record)`), an object
+  whose class defines `__call__` and changes it, or a closure that changes
+  what it closes over;
+- called from a lambda: `s.map(lambda v: tally.record(v))`;
+- in a list, dict, deque or object of your class that a function of yours
+  calls into: `run_steps(steps, data)` with `steps = [f]`, `run(pipe, data)`
+  calling `pipe.steps`.
+
+The same holds for code of yours that the statement runs without naming it:
+
+- a function picked from a list or dict it loops over (`[f() for f in fns]`,
+  `{k: f(x) for k, f in table.items()}`);
+- a callback an object of yours holds (`bus.emit()`, also from a helper that
+  reads `bus` as a global), a `functools.partial`, a lambda default, a
+  function passed in `**kwargs`, or a logging handler of your class;
+- a method called on an object or a class (`store.process(r)`, a static or
+  class method, a hook reached through `super()`), a property, or a context
+  manager's `__enter__` and `__exit__` (`with timer("fit"):`);
+- the special methods of an object of your class the statement names
+  (`bag["k"]`, `len(bag)`, `bag + 1`, `f"{bag}"`, iterating it);
+- the function that a wrapper made without `functools.wraps`, or a
+  `compose(f, g)` closure, calls; a `functools.partial`, `np.vectorize` or
+  `operator.methodcaller` called by its own name; a `functools.singledispatch`
+  implementation.
+
+When such a function changes state, the statement runs every time, and the
+call of yours that is handed it is not served from the cache; nor is a
+`@cash.cache` function handed one
+([`IMPURE-HANDED-CALLABLE`](warnings.md#impure-handed-callable)). A method
+counts as changing its object when its code changes it, or when it calls a
+method on something the object holds that cash does not know to leave it
+unchanged (`self.model.fit(x)`).
+
+Two cases run uncached, with the reason on the badge: a function of yours
+whose source cannot be read, and one that only running the code can tell
+(`s.apply(make_scorer(2))`, the result of a call of yours). A list or dict of
 functions handed to a library function is looked into only for `agg`,
-`aggregate` and `transform`, or when the statement hands that library function
-a function that calls what it is given (`map(lambda f: f(3), fns)`,
+`aggregate` and `transform`, or when the statement hands that library
+function a function that calls what it is given (`map(lambda f: f(3), fns)`,
 `functools.reduce`).
 
+### Setting state on one of your modules
+
 <!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting.route @b4d452c3, cash/notebook/callee_reach.py:module_state_writes @67827b2e, cash/notebook/call_unit.py:_rebound_unwatched @2d452d22 -->
-The same for a statement that sets state on one of your modules
-(`metrics.increment(5)` adding to a counter `metrics.py` keeps, itself or
-through a helper, or handed to a call as `s.apply(metrics.record)` or
-`s.map(record)` after `from metrics import record`, `mylib.K = slow()`, or
-`importlib.reload(mylib)`): it runs every time, so the module
-holds after a restart, or after an edit of its file, what a top-to-bottom run
-leaves in it. A setting whose code does not say it (`globals()[name] = v`,
-`global K` in a method of one of your classes) is seen when it runs, in the
-modules the statement reaches, and counts the same from then on, in a later
-kernel too. A slow call inside
-an assignment (`n = metrics.increment(5)`) is still served from the cache,
-with the globals its code says it writes put back; one seen rebinding a global
-its code does not say it writes runs every time; what the interpreter itself
-adds to the module (the registry the first warning it emits creates) is no
-setting. A cell that is only the call runs it.
+A statement that sets state on one of your modules runs every time, so that
+after a restart, or an edit of the module's file, the module holds what a
+top-to-bottom run leaves in it. That covers `mylib.K = slow()`,
+`importlib.reload(mylib)`, and a call that changes data the module keeps,
+such as `metrics.increment(5)` adding to a counter in `metrics.py`: called
+directly, through a helper, or handed to a call (`s.apply(metrics.record)`,
+or `s.map(record)` after `from metrics import record`).
+
+A setting the code does not spell out (`globals()[name] = v`, `global K` in a
+method of one of your classes) is seen when it runs, in the modules the
+statement reaches. It counts the same from then on, in a later kernel too.
+
+Inside an assignment, a slow call is still served from the cache:
+`n = metrics.increment(5)` comes back with the globals its code says it
+writes put back. A call seen rebinding a global its code does not mention
+runs every time, and a cell that is only the call runs it. What Python itself
+adds to a module (the registry its first warning creates) is not a setting.
 
 ### A setting on your module or the environment, run out of order
 
@@ -279,29 +313,31 @@ they read when they ran, not as a top-to-bottom run would. **Fix:** run the
 notebook, or the cells from the edited one down.
 
 <!-- claim: cash/notebook/recorded_reads.py:_HASHED_IN_PLACE_BELOW == 4194304, cash/notebook/recorded_reads.py:outside_changes @c51f572b -->
-A change made outside the notebook's cells (the shell or a launcher setting a
-variable, a console attached to the kernel, an edit of the module's file) is
-seen: running only the last cell rebuilds what was built on the old value. A
-change a cell makes is the notebook's own however the cell makes it: itself,
-in a function it calls (`setup()` doing `os.environ["MODE"] = "b"`), with a
-magic (`%env`, `%cd`) or by reloading the module. Your module's data is
-looked at for an outside change (hashed in full) only before a cell that
-reads it or uses something built from it, and around a statement only when
-the statement reaches the module or names the value itself; a cell that does
-neither runs without paying for it. A big value (a few MB or more, such as
-a table the module loads) is hashed only before a cell that reads it: a cell
-that only uses what the reader built sees the value rebound
-(`mylib.TABLE = load()`), but not changed in place from outside
-(`mylib.TABLE[0] = 5` in a console). That cell answers what a plain kernel
-answers from what the reader built, and the next cell that reads the table
-sees the change. **Fix:** run the notebook, or the reader and the cells below
-it. A statement that changes the data in
-place through something else holding it (`holder["t"][0] = 5`, where
-`holder["t"] = mylib.TABLE` above) is not seen as the notebook's own: the
-change counts as made outside, so the cells after it run again rather than
-reuse an answer. Where a cell above the reader sets the same module value
-(`mylib.K = 3`), that cell's value is the one the reader gets, as a
-top-to-bottom run gives it: the setting runs again over the outside value.
+A change made outside the notebook's cells is seen: a variable the shell or
+a launcher sets, a change from a console attached to the kernel, an edit of
+the module's file. Running only the last cell rebuilds what was built on the
+old value. A change a cell makes is the notebook's own, however the cell makes
+it: itself, in a function it calls (`setup()` doing
+`os.environ["MODE"] = "b"`), with a magic (`%env`, `%cd`), or by reloading
+the module.
+
+To keep this cheap, cash hashes your module's data to look for an outside
+change only before a cell that reads it or uses something built from it, and
+around a statement that reaches the module or names the value. A cell that
+does neither pays nothing. A big value (a few MB or more, such as a table the
+module loads) is hashed only before a cell that reads it. So a cell that only
+uses what the reader built sees the table rebound from outside
+(`mylib.TABLE = load()`), but not changed in place (`mylib.TABLE[0] = 5` in a
+console): it answers as a plain kernel would, from what the reader built, and
+the next cell that reads the table sees the change. **Fix:** run the
+notebook, or the reader and the cells below it.
+
+Two details. A statement that changes the data in place through something
+else holding it (`holder["t"][0] = 5`, after `holder["t"] = mylib.TABLE`)
+counts as a change from outside, so the cells after it run again rather than
+reuse an answer. And when a cell above the reader sets the same module value
+(`mylib.K = 3`), that cell's value is the one the reader gets, as in a
+top-to-bottom run: the setting runs again over the outside value.
 
 ### Re-running a cell above an in-place change
 
@@ -497,7 +533,8 @@ and no file write, move or delete written in the loop body. A loop that only
 reads files qualifies: the unit depends on every file and folder it read, so
 an edited, added or deleted file runs it again. A loop that appends to a list
 is an in-place change, so as one unit it is not cached at all. The badge row
-then shows `In-place mutation on: out`.
+then shows `In-place mutation on: out`. A shorter loop runs pass by pass:
+each `append` runs, and the expensive call inside it comes from the cache.
 
 <!-- claim: cash/notebook/control_structures/single_unit_policy.py:iterations_for_one_unit @9bb4425c, cash/notebook/control_structures/single_unit_policy.py:header_names_the_iterator @c82c885c -->
 A loop over a named iterator of unknown length (`for row in parsed:` after
@@ -536,28 +573,32 @@ out = [fetch(e) for e in entities]
 cash cannot tell from the text whether a library function changes what it is
 handed (`heapq.heappush(h, x)` does, `np.mean(a)` does not), nor whether a
 function of yours that hands its argument or a global to one changes it
-(`def push(h, x): heapq.heappush(h, x)`). The first time a version of a loop,
-a `with` block or a statement runs, cash hashes each such object before and
-after it, about 1 s per GB, and records which ones changed for that text;
-later runs, hits and restarts use the record. Editing the code, or splitting a
-long loop into a head and a rest, pays it again once. A run that changed
-nothing (a loop over no items yet, a copy of equal values) does not settle the
-record for what the code hands straight to a library: whenever the code runs
-again on inputs not seen before in the session, those objects, if the record
-does not list them yet, are hashed again, so a loop or statement whose inputs
-keep changing pays this on each such run. What only a function of yours is
-handed (`bt = run_backtest(series, 3)`), what a chart is drawn from
-(`ax.bar(names, totals)`), and a frame or an array a library call reads
-through an index or an attribute (`pd.Categorical(obs[r])`, `df.loc[k].plot()`)
-keep the record of their first run: a helper whose
-change to its argument depends on the data (`def push_all(h, xs): for x in xs:
-heapq.heappush(h, x)`, first run with no `xs`) is not seen changing it later.
-Re-run the cell that reads the object, or call the library directly in the
-cell. Builtins that
-only read (`len`, `sum`, `print`), methods known to only read, and functions of
-yours that do not change their arguments or hand them on are not hashed. While
-a version is being learned, the loop runs rather than being served from the
-cache.
+(`def push(h, x): heapq.heappush(h, x)`). So the first time a version of a
+loop, a `with` block or a statement runs, cash hashes each such object before
+and after it, about 1 s per GB, and records which ones changed. Later runs,
+hits and restarts use that record. Editing the code, or splitting a long loop
+into a head and a rest, pays the cost once more. While a version is being
+learned, the loop runs rather than being served from the cache.
+
+Not hashed: builtins that only read (`len`, `sum`, `print`), methods known to
+only read, and functions of yours that neither change their arguments nor hand
+them on.
+
+Two catches:
+
+- A run that changed nothing (a loop over no items yet, a copy of equal
+  values) does not settle the record for what the code hands straight to a
+  library. Each later run on inputs not seen before in the session hashes
+  those objects again, until the record lists them. So a loop whose inputs
+  keep changing pays the hashing on each such run.
+- What only a function of yours is handed (`bt = run_backtest(series, 3)`),
+  what a chart is drawn from (`ax.bar(names, totals)`), and a frame or an
+  array a library call reads through an index or an attribute
+  (`pd.Categorical(obs[r])`, `df.loc[k].plot()`) keep the record of their
+  first run. A helper whose change to its argument depends on the data
+  (`def push_all(h, xs): for x in xs: heapq.heappush(h, x)`, first run with
+  no `xs`) is then not seen changing it later. Re-run the cell that reads the
+  object, or call the library directly in the cell.
 
 ### Reordering a loop's items re-runs the tail
 
