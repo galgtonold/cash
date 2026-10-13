@@ -20,9 +20,10 @@ from .._memo import RESULT_TYPES, LruMemo
 from ..backends.memory_backend import InMemoryBackend
 from ..backends.serialization import PickleSerializer
 from ..backends.tiered_backend import TieredBackend
+from ..content_hashers import builtin_family_of, builtin_hash
 from ..effect_observer import EffectObserver
 from ..exceptions import CacheBackendError, CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
-from ..lineage_tag import set_tags
+from ..lineage_tag import own_tag, set_tags
 from ..sizing import estimate_object_size
 from ..value_types import IMMUTABLE_PRIMS
 from .arg_hashing import LINEAGE_SRC_DECORATOR, LINEAGE_SRC_FROZEN
@@ -46,6 +47,10 @@ if TYPE_CHECKING:
     from .stored_keys import StoredKeyRecord
 
 logger = logging.getLogger(__name__)
+
+#: The result types whose content hash a ``frozen=True`` entry keeps
+#: (`ResultStore._frozen_digest`): hashed in one pass over their memory.
+_CARRIED_FAMILIES = frozenset({"pandas", "numpy", "polars", "pyarrow"})
 
 STORE_FAILED_FIX = (
     "read the exception: a full disk, a cache_dir you cannot write to, or a "
@@ -341,6 +346,32 @@ class ResultStore:
         named = held_sentinels(inspect.unwrap(spec.func))
         return identity_refs.find(result, named) if named else None
 
+    def _frozen_digest(self, func_name: str, result: Any) -> str | None:
+        """*result*'s content hash, for a ``frozen=True`` function's frame,
+        array or table: kept in its entry for whoever restores it
+        (`FrozenResults.carry_digest`), and handed to this process's
+        argument hasher now. Not hashed again by the consumer it is passed
+        to, so the work moves rather than adds up when it is passed on."""
+        if builtin_family_of(type(result)) not in _CARRIED_FAMILIES or not self._registry.is_frozen(func_name):
+            return None
+        if id(result) not in self._frozen.arrays and own_tag(result, "_cash_lineage_src") != LINEAGE_SRC_FROZEN:
+            return None
+        try:
+            digest = builtin_hash(result)
+        except Exception:  # noqa: BLE001 - a speedup: the consumer hashes it instead
+            return None
+        if digest is not None:
+            self._frozen.carry_digest(result, digest)
+        return digest
+
+    def carry_digest(self, metadata: CacheMetadata, value: Any) -> None:
+        """Hand a hit's stored content hash to the argument hasher
+        (`FrozenResults.carry_digest`). Not for a result handed back as the
+        variable that holds it (`restore_identity`): that object is what the
+        variable holds now, not necessarily what was stored."""
+        if metadata.content_digest and not metadata.result_ref:
+            self._frozen.carry_digest(value, metadata.content_digest)
+
     def restore_identity(self, func_name: str, metadata: CacheMetadata, value: Any) -> Any:
         """What a hit hands back for *value*: the identity and flags the result had.
 
@@ -546,6 +577,7 @@ class ResultStore:
                 # and lose disk persistence.
                 copy_required=not self._registry.is_frozen(func_name),
                 read_only=_read_only_array(result) or None,
+                content_digest=self._frozen_digest(func_name, result),
                 result_ref=(result_ref := self._result_ref(func_name, result)),
                 held_refs=None if result_ref else self._held_refs(func_name, result),
                 # The non-file sources its cached callees resolved, with their

@@ -82,6 +82,9 @@ class FrozenResults:
         self.containers: dict[int, list] = {}
         # id(obj) -> [weakref, uses, audit baseline or None, shape], see `audit`.
         self._uses: LruMemo[int, list] = LruMemo(FROZEN_RESULTS)
+        # id(obj) -> (weakref, lineage, content digest): the digests
+        # `carry_digest` brought in with a stored or restored result.
+        self._carried: LruMemo[int, tuple] = LruMemo(FROZEN_RESULTS)
 
     def arg_names(self, normalized_args: tuple[tuple, dict]) -> list[str]:
         """`explain()`'s list of arguments keyed by a frozen=True producer."""
@@ -111,6 +114,53 @@ class FrozenResults:
             content_hash = builtin_hash(arr)
             entry[2] = content_hash
         return content_hash
+
+    def carry_digest(self, obj: Any, digest: str) -> None:
+        """Take *digest*, *obj*'s `builtin_hash`, as its content hash.
+
+        A frozen frame passed on was keyed by its content, hashed in full the
+        first time each process met it. A process restoring the frame from
+        the cache met it for the first time on every hit: a 200 MB frame read
+        again in every pool worker, about as long as the restore itself,
+        before a consumer could even look its own entry up. The digest is
+        taken once, when the result is stored, and kept in the entry, so a
+        consumer keys a restored result as fast as the one it was computed
+        from -- under the same key, since it is the same content hash.
+
+        It is the audit's baseline too: a change made after the result was
+        stored is what the first audit compares against.
+        """
+        entry = self.arrays.get(id(obj))
+        if entry is not None:
+            if entry[0]() is obj and entry[2] is None:
+                entry[2] = digest
+            return
+        if own_tag(obj, "_cash_lineage_src") != LINEAGE_SRC_FROZEN:
+            return
+        lineage = own_tag(obj)
+        if lineage is None:
+            return
+        key = id(obj)
+        try:
+            wref = weakref.ref(obj, lambda _r, k=key, m=self._carried: m.pop(k, None))
+            uses = self._uses.get(key)
+            if uses is None or uses[0]() is not obj:
+                use_ref = weakref.ref(obj, lambda _r, k=key, m=self._uses: m.pop(k, None))
+                self._uses[key] = [use_ref, 0, digest, frozen_shape(obj)]
+        except TypeError:
+            return
+        self._carried[key] = (wref, lineage, digest)
+
+    def carried_digest(self, obj: Any, lineage: str) -> str | None:
+        """The digest `carry_digest` gave *obj*, while it still carries
+        *lineage* as its frozen tag."""
+        entry = self._carried.get(id(obj))
+        if entry is None:
+            return None
+        wref, carried_lineage, digest = entry
+        if wref() is not obj or carried_lineage != lineage or own_tag(obj, "_cash_lineage_src") != LINEAGE_SRC_FROZEN:
+            return None
+        return digest
 
     def remember_array(self, arr: Any, producer: str) -> None:
         """Key a frozen function's numpy result by its content, hashed once.

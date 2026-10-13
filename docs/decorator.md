@@ -766,8 +766,10 @@ def score(model, batch):
 ```
 
 The consumer then keys the model by the call that produced it, in microseconds.
-A pandas frame or numpy array is hashed once, the first time it is passed, and
-that hash serves every later call in the process. A frozen numpy array comes
+A pandas frame or numpy array is hashed once, when the producer stores it. The
+hash is kept with the entry, so the process that computed the result and every
+process that restores it later (each worker of a pool, say) key it without
+reading it again. A frozen numpy array comes
 back read-only, and
 [`KEY-FROZEN-MUTATED`](warnings.md#key-frozen-mutated) names the producer if a
 frozen result was changed after all. [`CACHE-NET-LOSS`](warnings.md#cache-net-loss)
