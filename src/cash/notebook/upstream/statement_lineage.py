@@ -14,7 +14,7 @@ import ast
 import logging
 import types
 from collections import ChainMap
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Container, Mapping
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ..._clock import perf_counter as _perf_counter
@@ -71,6 +71,7 @@ from ..lineage_formula import (
 )
 from ..loop_watch import branch_changes, loop_watch_hash, watch_candidates
 from ..pyplot_draws import pyplot_draw_names
+from ..restored_var import present_holders
 from ..run_memo import stats_this_run
 from ..stateful_carriers import carrier_kind_from_producer
 from ..statement import is_control_body
@@ -832,6 +833,11 @@ class StatementLineage:
                         )
         return bumped
 
+    def _bound(self, virtual_lineage: dict[str, str]) -> Container[str]:
+        """The names bound when the simulated statement runs: in the
+        namespace now, or made by a statement simulated before it."""
+        return ChainMap(virtual_lineage, self.shell.user_ns)
+
     def _holders_current(self, holders: Mapping[str, str], virtual_lineage: Mapping[str, str]) -> bool:
         """Whether each variable an entry stores with its outputs has the
         lineage it had when the entry was written, as the runtime checks
@@ -892,7 +898,9 @@ class StatementLineage:
                 hist_files = metadata.get("file_dependencies", {})
                 output_lineages = metadata.get("output_lineages", {})
                 files_valid = not hist_files or self.probe.files_fresh(hist_files, memo_key=cache_key)
-                holders = metadata.get("holders") or {}
+                # As the runtime: one not bound when the statement runs holds
+                # nothing (`present_holders`), nor is it moved on.
+                holders = present_holders(metadata.get("holders") or {}, self._bound(virtual_lineage))
                 if session_held is not None:
                     moved = session_held
                 else:
