@@ -157,7 +157,7 @@ def announce(text):
 receipt = announce("model trained")
 ```
 
-<!-- claim: cash/purity.py:stateful @afae9270, cash/analysis/cacheability_decision.py:cacheability_verdict @5d6a8466, cash/notebook/statement/processor.py:StatementProcessor._check_callable_stateful @1754d469, cash/analysis/namespace_effects.py:statement_calls_user_writer @f3cb66b7 -->
+<!-- claim: cash/purity.py:stateful @afae9270, cash/analysis/cacheability_decision.py:cacheability_verdict @5d6a8466, cash/notebook/statement/processor.py:StatementProcessor._check_callable_stateful @1754d469, cash/analysis/namespace_effects.py:statement_calls_user_writer @f3cb66b7, cash/notebook/write_observer.py:_on_open @01e603a6 -->
 Without the marker, a slow `announce` call is cached and a re-run skips the
 message: cash does not look inside `announce` for a chat client. Three things to
 know:
@@ -178,7 +178,8 @@ know:
   detected: the statement runs every time and the
   badge says `Calls save(), which writes files`. An append through
   `open(path, "a")` counts too, and so does one through `Path(path).open("a")`,
-  `io.open`, `codecs.open` or `gzip.open`; the badge then says
+  `io.open`, `codecs.open`, `gzip.open` or `os.open(path, os.O_WRONLY |
+  os.O_APPEND)`; the badge then says
   `Wrote <path> as it ran`.
   If a write does not matter, mark the helper `@pure` and it caches again.
   Apart from this, `@pure` does not change what a notebook statement does.

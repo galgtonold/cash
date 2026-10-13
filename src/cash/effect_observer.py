@@ -291,7 +291,8 @@ class EffectObserver:
         #: Directories the block made (``mkdtemp``, ``os.mkdir``), and the
         #: writes into them, held back: a scratch directory the block removes
         #: before it returns takes those writes with it, and a hit skipping
-        #: them changes nothing (`effects`).
+        #: them changes nothing (`effects`). A file ``os.open`` wrote is held
+        #: back on its own path the same way (`record_write`).
         self._created_dirs: list[str] = []
         self._scratch_writes: list[tuple[str, tuple[str, str]]] = []
         #: The frames that entered this observer. The user's lines that led to
@@ -360,7 +361,7 @@ class EffectObserver:
     def effects(self) -> list[tuple[str, str]]:
         """What the block did, as ``(kind, detail)``: a write into a directory
         it made only while that directory is still there."""
-        kept = [effect for directory, effect in self._scratch_writes if os.path.isdir(directory)]
+        kept = [effect for held, effect in self._scratch_writes if os.path.lexists(held)]
         return (self._effects + kept)[:8]
 
     def record(self, kind: str, detail: str) -> None:
@@ -419,11 +420,20 @@ class EffectObserver:
             frame = frame.f_back
         return sites
 
-    def record_write(self, path: Any) -> None:
+    def record_write(self, path: Any, raw: bool = False) -> None:
         """Record a file opened for writing, unless it is cash's own storage
         or a runtime's own cache (`is_runtime_cache_path`): bytecode, numba's
         compiled index and data. A hit that skips such a write changes
-        nothing but a later compile."""
+        nothing but a later compile.
+
+        A folder opened to write is an ``O_TMPFILE`` open
+        (``tempfile.TemporaryFile``): a file with no name, which nothing
+        after the call can find.
+
+        *raw*: opened by ``os.open``, whose file is often a temporary one
+        (``mkstemp``) the block removes again: such a write is kept only
+        while the file is still there (`effects`), as the notebook keeps it
+        (`write_observer.kept_writes`)."""
         try:
             resolved = os.path.abspath(os.fspath(path))
         except (TypeError, ValueError):
@@ -433,7 +443,11 @@ class EffectObserver:
             return
         if is_runtime_cache_path(resolved):
             return
+        if os.path.isdir(resolved):
+            return
         scratch = next((d for d in self._created_dirs if under.startswith(d)), None)
+        if raw and scratch is None:
+            scratch = resolved
         self.record_effect(_LABELS[EffectKind.FILE_WRITE], resolved, scratch)
 
     # -- reporting ---------------------------------------------------------
