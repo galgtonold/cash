@@ -175,7 +175,11 @@ def resolve_main_module(func: Any) -> str:
     (``python pkg/pipeline.py``, with ``pkg/__init__.py``) is named as
     ``import pkg.pipeline`` names it (`script_module_name`).
     """
-    g = getattr(func, "__globals__", None) or {}
+    return main_namespace_name(getattr(func, "__globals__", None) or {})
+
+
+def main_namespace_name(g: Any) -> str:
+    """`resolve_main_module` for a module's namespace *g* (its ``__dict__``)."""
     # `python -m pkg.mod` runs as `__main__`; its spec carries the dotted name
     # the import uses.
     spec_name = getattr(g.get("__spec__"), "name", None)

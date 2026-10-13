@@ -14,6 +14,7 @@ import textwrap
 
 import pytest
 
+from cash._paths import normalize_path
 from cash.decorator.cache_metadata import CacheMetadata
 from cash.decorator.explain import describe_file_deps, describe_stale_files
 from tests._scripts import run_python
@@ -39,13 +40,18 @@ def _run_job(tmp_path) -> None:
     run_python("job.py", cwd=tmp_path)
 
 
+def _prices(tmp_path) -> str:
+    """The file as cash names it: forward slashes on Windows too."""
+    return normalize_path(str(tmp_path.resolve() / "data" / "prices.csv"))
+
+
 def test_inspect_lists_the_file_once(tmp_path):
     _run_job(tmp_path)
     listing = run_python("-m", "cash", "inspect", tmp_path / ".cash", "--function", "job.load", cwd=tmp_path).stdout
     reads = [line for line in listing.splitlines() if "reads:" in line]
     assert len(reads) == 1, listing
     assert reads[0].count("prices.csv") == 1, listing
-    assert str(tmp_path.resolve() / "data" / "prices.csv") in reads[0], listing
+    assert _prices(tmp_path) in reads[0], listing
 
 
 def _recorded(tmp_path) -> dict:
@@ -68,7 +74,7 @@ def test_the_two_records_are_paired_without_the_cwd(tmp_path, monkeypatch):
 
     recorded = _recorded(tmp_path)
     monkeypatch.chdir(tmp_path.parent)  # `cash inspect` runs from anywhere
-    absolute = str(tmp_path.resolve() / "data" / "prices.csv")
+    absolute = _prices(tmp_path)
     assert relative_twins(recorded) == {next(p for p in recorded if p != absolute): absolute}
     assert list(describe_file_deps(recorded)) == [absolute]
 
@@ -78,5 +84,5 @@ def test_a_miss_names_the_file_by_its_absolute_path(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "data" / "prices.csv").write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
     said = describe_stale_files(CacheMetadata(auto_file_deps=recorded))
-    assert said.startswith(str(tmp_path.resolve() / "data" / "prices.csv")), said
+    assert said.startswith(_prices(tmp_path)), said
     assert "more" not in said, said
