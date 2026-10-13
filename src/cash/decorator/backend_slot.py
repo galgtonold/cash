@@ -10,6 +10,7 @@ from ..backends._base import effective_ttl
 from ..backends.factory import build_backend_from_config
 from ..exceptions import CacheBackendError
 from ..tracking.digest_table import use_digest_table
+from ..tracking.file_versions import use_file_versions
 
 if TYPE_CHECKING:
     from ..backends import CacheBackend
@@ -58,7 +59,9 @@ class BackendSlot:
             return
         self._table_dir_set = True
         try:
-            use_digest_table(self._backend.local_dir if self._backend is not None else None)
+            local_dir = self._backend.local_dir if self._backend is not None else None
+            use_digest_table(local_dir)
+            use_file_versions(local_dir)
         except Exception:
             logger.debug("No file digest table for this backend", exc_info=True)
 

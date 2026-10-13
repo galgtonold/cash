@@ -179,7 +179,7 @@ change ([`IMPURE-HANDED-CALLABLE`](../warnings.md#impure-handed-callable)).
 
 ## Files
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.fold_declared_files @3db80a70, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @5ea5c38d -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.fold_declared_files @3db80a70, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @a045b99e -->
 A file the body reads through a tracked reader, and every file named in
 `file_depends_on=`, is recorded with its content hash when the entry is
 written. Before a stored value is returned, each file is checked; if one
