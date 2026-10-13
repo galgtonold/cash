@@ -614,6 +614,11 @@ def global_digests(fn, names: tuple[str, ...]) -> dict[str, str]:
     return digests
 
 
+#: Call sites (with their loop values, see `CallKeys._site_id`) whose key
+#: parts are kept for the miss reason; the least recently keyed go first.
+_SITE_PARTS_KEPT = 4096
+
+
 class CallKeys:
     """Builds each intercepted call's key from the live processor state, and
     remembers what each call site was keyed on so a miss can say what moved.
@@ -822,8 +827,12 @@ class CallKeys:
                 parts[f"argument {i + 1}"] = digest
             for name, digest in (global_digests or {}).items():
                 parts[name] = digest
-            seen = self._site_parts.get(site_id)
+            seen = self._site_parts.pop(site_id, None)
             self._site_parts[site_id] = (key, parts)
+            while len(self._site_parts) > _SITE_PARTS_KEPT:
+                oldest = next(iter(self._site_parts))
+                del self._site_parts[oldest]
+                self._site_reason.pop(oldest, None)
             if not seen or seen[0] == key:
                 self._site_reason.pop(site_id, None)
                 return
@@ -836,9 +845,19 @@ class CallKeys:
         except Exception:  # noqa: BLE001 - attribution never breaks a call
             logger.debug("call unit: could not note key parts for %s", site.source)
 
-    @staticmethod
-    def _site_id(site: CallSite) -> tuple[str, int, str]:
-        return (site.source, site.occurrence_index, getattr(site, "stmt_identity", ""))
+    def _site_id(self, site: CallSite) -> tuple:
+        """The call site, and the values of the loop variables around it.
+
+        A loop's iterations call one site with other loop values by design:
+        compared with the iteration before, every miss named the loop
+        variable (``0/9 hit - changed: hfa`` for a grid whose ``hfa`` took
+        the same three values as the run before). So a call is compared
+        with the last call of the same site under the same loop values.
+        """
+        loop_vars = {name: value for name, value in self._current_loop_vars().items() if not _is_dunder_loop_var(name)}
+        digests = self._current_loop_var_digests()
+        values = tuple(sorted((name, _loop_var_digest(name, value, digests)) for name, value in loop_vars.items()))
+        return (site.source, site.occurrence_index, getattr(site, "stmt_identity", ""), values)
 
     def why_missed(self, site: CallSite) -> str | None:
         """Which named part of this call's key moved since it was last keyed.
