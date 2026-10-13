@@ -230,6 +230,10 @@ def pickled_size_estimate(value: Any, _depth: int = 0, _seen: set[int] | None = 
     seen = set() if _seen is None else _seen
     kind = type(value).__name__
     try:
+        if type(value).__module__.startswith("polars") and kind in ("DataFrame", "Series"):
+            # Its Arrow buffers, which is what the store pickles
+            # (`serialization._reduce_polars`); polars sums them natively.
+            return int(value.estimated_size())
         if kind == "DataFrame":
             return sum(_array_estimate(arr, seen) for arr in value._mgr.arrays) + _index_estimate(value.index, seen)
         if kind == "Series":

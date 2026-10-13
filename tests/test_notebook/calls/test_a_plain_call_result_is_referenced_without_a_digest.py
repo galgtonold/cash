@@ -131,3 +131,25 @@ def test_a_quick_plain_value_is_referenced_too(cash_magics, seen):
     del cash_magics.shell.user_ns["q"]
     run_cash_cell(cash_magics, "q = quick()")
     assert float(cash_magics.shell.user_ns["q"]["x"].iloc[999]) == 999.0
+
+
+POLARS_BUILD = (
+    "import time\nimport numpy as np\nimport polars as pl\n"
+    "def load():\n"
+    "    time.sleep(0.12)\n"
+    "    return pl.DataFrame({'x': np.arange(6_000_000, dtype=float), 'h': ['web-01', 'web-02'] * 3_000_000})\n"
+)
+
+
+def test_a_plain_polars_result_is_not_pickled_for_a_digest(cash_magics, seen):
+    """``raw = etl.load_logs()``, a 4M-row polars concat: 2 s plain, 8-11 s
+    under cash, of which 2-4 s pickled the frame for a digest -- its size
+    was not estimated, so the plain value's token was not taken."""
+    pytest.importorskip("polars")
+    stored, digests = seen
+    run_cash_cell(cash_magics, POLARS_BUILD)
+    stored.clear()
+    run_cash_cell(cash_magics, "raw = load()")
+    assert cash_magics.shell.user_ns["raw"].height == 6_000_000
+    assert isinstance(stored[-1]["raw"], call_refs.CallRef)
+    assert digests == []

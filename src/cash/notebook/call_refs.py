@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import kept_state
+from ..backends.serialization import _polars_reducers
 
 logger = logging.getLogger(__name__)
 
@@ -84,10 +85,17 @@ def digest_and_size(value: Any) -> tuple[str, int] | None:
     Every byte, since this is what decides a restore; over pickle protocol 5
     with its buffers hashed in place, which for a 64 MB frame is 24 ms --
     ``compute_hash`` took 115 ms, and a call's store pays this.
+
+    A polars frame is pickled as its Arrow buffers, as the store writes it
+    (`serialization._polars_reducers`): polars' own pickle copies the whole
+    frame into one IPC blob first, 2.2-4 s for a 4.2M-row log frame against
+    0.3 s for its buffers.
     """
     try:
         buffers: list = []
-        head = kept_state.dumps(value, protocol=5, buffer_callback=buffers.append, keyed=True)
+        head = kept_state.dumps(
+            value, protocol=5, buffer_callback=buffers.append, keyed=True, extra=_polars_reducers()
+        )
         digest = hashlib.sha256(head)
         size = len(head)
         for buffer in buffers:
