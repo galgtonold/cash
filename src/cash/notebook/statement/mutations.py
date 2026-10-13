@@ -259,12 +259,16 @@ class MutationClassifier:
         call handed names, with those names (`ReceiverClasses.provisional`)."""
         return self._provisional.pop(source_hash, {})
 
-    def start_rewatch(self, source_hash: str, cache_key: str) -> bool:
+    def start_rewatch(self, source_hash: str, cache_key: str, tree: ast.Module | None = None) -> bool:
         """Before a statement whose verdict is known executes: fingerprint
         what it could change that the verdict does not hold, when it runs
         under a key not seen this session (new inputs). Its verdict was
         learned from earlier runs, and a run that changed nothing says
-        nothing about this one. False when nothing is watched."""
+        nothing about this one. False when nothing is watched.
+
+        *tree* is the statement: when it is one call, the digests taken here
+        are the call's before it runs, and the call's after it are the
+        statement's (`DigestHandoff`), as for a first run's fingerprints."""
         names = self._rewatch_candidates.pop(source_hash, None)
         if not names or not cache_key:
             return False
@@ -275,6 +279,8 @@ class MutationClassifier:
             seen.clear()
         seen.add(cache_key)
         user_ns = self.shell.user_ns
+        if tree is not None:
+            self.digests.watch(tree, user_ns)
         self._rewatch_snapshots[source_hash] = {
             name: mutation_fingerprint(user_ns.get(name), self.digests.digest) for name in names
         }
