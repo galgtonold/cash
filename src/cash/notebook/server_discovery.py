@@ -148,24 +148,22 @@ def warn_notebook_not_found_once() -> None:
         return
     _warned_notebook_not_found = True
     what = (
-        "notebook not found -- upstream dependency tracking is disabled for "
-        "this session. Statement-level caching still works, but changes in one "
-        "cell will not auto-invalidate dependent cells."
+        "cash cannot read this notebook's cells, so it will not re-run an edited "
+        "cell above the one you run; each statement is still cached by its own "
+        "code and inputs. Re-running an edited cell, and then the cells after "
+        "it, recomputes what the edit changed."
     )
     fix = (
-        "nothing, under papermill / nbconvert / CI -- there is no live Jupyter "
-        "Server to ask; in JupyterLab or VS Code, restart the kernel, and "
-        "reopen the notebook if it persists."
+        "nothing in a headless run (papermill, nbconvert, CI). In JupyterLab or "
+        "VS Code, restart the kernel, and reopen the notebook if it persists."
     )
     # The log carries the rendered text, code and all, so a reader who only has
     # the log is not the one person without a handle to look up.
     log_diagnostic(logger, "NOTEBOOK-NOT-FOUND", what, fix)
-    warn_diagnostic(
-        CashNotebookDiscoveryWarning,
-        "NOTEBOOK-NOT-FOUND",
-        what,
-        fix,
-    )
+    # Blamed on cash, not on a frame: raised from the run-cell hook, the
+    # nearest frame outside cash is ipykernel's, and the warning opened with
+    # ipykernel's file path, which reads as if something there went wrong.
+    warn_diagnostic(CashNotebookDiscoveryWarning, "NOTEBOOK-NOT-FOUND", what, fix, location=("<cash>", 0))
 
 
 def invalidate_notebook_path_cache() -> None:

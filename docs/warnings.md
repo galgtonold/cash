@@ -1493,7 +1493,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
 | [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
-| [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook file is unknown; cross-cell tracking is off |
+| [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook's cells cannot be read; cells above the one you run are not re-checked |
 | [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload or restart dropped state cells set on a module, and cash cannot rebuild it |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
 | [NOTEBOOK-SHARE-UNCHECKED](#notebook-share-unchecked) | notebook | not every variable sharing an object with a statement's outputs was found in time |
@@ -1616,17 +1616,19 @@ command computes.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/server_discovery.py:warn_notebook_not_found_once @f1dad161 -->
-**What happened.** cash could not find which notebook file this kernel runs,
-so cross-cell tracking is off for the session. Cells are still cached and
-restored.
+<!-- claim: cash/notebook/server_discovery.py:warn_notebook_not_found_once @b331a2de -->
+**What happened.** cash could not read this notebook's cells, so before a
+cell runs it does not re-check the cells above it. Each statement is still
+cached and restored by its own code and inputs.
 
-**Why it matters.** Editing a cell no longer invalidates the cells below that
-used its output.
+**Why it matters.** If you edit a cell and then run a cell below it without
+re-running the edited one, cash does not run the edited cell first. Re-running
+the edited cell, and then the cells after it, recomputes what the edit changed,
+as without the warning.
 
-**What to do.** Under papermill, nbconvert or CI this is expected. In
-JupyterLab or VS Code, restart the kernel; if it persists, close and reopen the
-notebook.
+**What to do.** Nothing under papermill, nbconvert or CI: there is no Jupyter
+server to ask. In JupyterLab or VS Code, restart the kernel; if it persists,
+close and reopen the notebook.
 
 **When it is safe to ignore.** In a run that executes the notebook top to
 bottom once. It is shown once per session.
