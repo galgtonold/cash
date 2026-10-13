@@ -46,7 +46,6 @@ from ..lineage_formula import (
     statement_environment_component,
 )
 from ..restored_var import hashed_by_lineage
-from ..value_cutoff import ValueCutoff
 from .derivation_edges import (
     assigned_names,
     bump_derived_lineages,
@@ -138,7 +137,6 @@ class StatementLineageBuilder:
         self.function_tracker = function_tracker
         self._file_deps = file_deps
         self.compute_hash = compute_hash
-        self._cutoff = ValueCutoff()
 
     # ------------------------------------------------------------------
     # Public entries
@@ -245,7 +243,7 @@ class StatementLineageBuilder:
             # A new object only: ``t = raw`` binds the input itself, which
             # keeps the lineage the formula gives it.
             if cut_off and not any(user_ns.get(name) is value for name in inputs):
-                output_lineage_hash = self._cutoff.lineage_for(
+                output_lineage_hash = tracking_state.value_cutoff.lineage_for(
                     value, output_lineage_hash, self.compute_hash or compute_hash
                 )
 
@@ -356,6 +354,20 @@ class StatementLineageBuilder:
     def build_output_lineages(self, tracking_state: "TrackingState", outputs: set[str]) -> dict[str, str]:
         """Collect ``{var: lineage_hash}`` for all outputs that have a lineage."""
         return {v: tracking_state.variable_lineage[v] for v in outputs if v in tracking_state.variable_lineage}
+
+    def build_output_digests(self, tracking_state: "TrackingState", outputs: set[str]) -> dict[str, str]:
+        """Collect ``{var: content digest}`` for the outputs whose value the
+        same-value cutoff saw (``ValueCutoff.digest_of`` their lineage), for
+        the entry to keep (``StatementCacheMetadata.output_digests``)."""
+        cutoff = tracking_state.value_cutoff
+        lineages = tracking_state.variable_lineage
+        found = {}
+        for var in outputs:
+            lineage = lineages.get(var)
+            digest = cutoff.digest_of(lineage) if lineage is not None else None
+            if digest is not None:
+                found[var] = digest
+        return found
 
     def build_input_lineages(self, tracking_state: "TrackingState", inputs: set[str]) -> dict[str, str]:
         """Collect ``{var: lineage_hash}`` for the inputs this statement read.

@@ -17,6 +17,7 @@ import pytest
 from cash.notebook.lineage_store import LineageStore
 from cash.notebook.recorded_reads import ReadRecord
 from cash.notebook.tracking_state import TrackingState
+from cash.notebook.value_cutoff import ValueCutoff
 
 
 def _mark(state: TrackingState) -> dict[str, object]:
@@ -29,6 +30,8 @@ def _mark(state: TrackingState) -> dict[str, object]:
         elif isinstance(value, ReadRecord):
             value.watched.add(("env", "X"))
             value.known[("env", "X")] = "d"
+        elif isinstance(value, ValueCutoff):
+            value.remember("d", "h")
         elif isinstance(value, dict):
             value["x"] = {"y"}
         elif isinstance(value, set):

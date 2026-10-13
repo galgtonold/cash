@@ -8,6 +8,7 @@ from typing import Any
 
 from cash.notebook.lineage_store import InputLineages, LineageStore
 from cash.notebook.recorded_reads import ReadRecord
+from cash.notebook.value_cutoff import ValueCutoff
 
 __all__ = ["TrackingState"]
 
@@ -376,6 +377,13 @@ class TrackingState:
     # did.
     # W: StatementProcessor. R: StatementLineage (simulation).
     held_with: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    # The content digest of each frame, series or array seen bound, and the
+    # lineage of the first value seen with it (`value_cutoff`).
+    # W: StatementLineageBuilder (a statement that ran), apply_restored_var
+    # and the simulation's restore (an entry's ``output_digests``).
+    # R: StatementLineageBuilder, StatementStore (the digests an entry keeps).
+    value_cutoff: ValueCutoff = field(default_factory=ValueCutoff)
 
     def __post_init__(self) -> None:
         if not isinstance(self.executed_input_lineages, InputLineages):

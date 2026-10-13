@@ -95,10 +95,46 @@ class LineageAliasStore(VersionedJsonStore[str]):
 
 
 class ValueCutoff:
-    """Content digest -> the lineage of the first value seen with it."""
+    """Content digest -> the lineage of the first value seen with it.
+
+    Seen executed (`lineage_for`), or restored from an entry that kept the
+    digest its value had when it ran (`remember`): after a restart most
+    values come back from the cache, and a value only restored was never
+    seen, so recomputing it from inputs that moved on and back (a frame
+    filtered to the rows it held before) missed what was built on it.
+    """
 
     def __init__(self) -> None:
         self._by_digest: dict[str, str] = {}
+        #: Lineage -> the digest of the value it names, for the entry stored
+        #: with that value (`digest_of`).
+        self._digest_of: dict[str, str] = {}
+
+    def clear(self) -> None:
+        """Forget every value seen, as a fresh kernel would."""
+        self._by_digest.clear()
+        self._digest_of.clear()
+
+    def __len__(self) -> int:
+        return len(self._by_digest)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ValueCutoff):
+            return NotImplemented
+        return self._by_digest == other._by_digest and self._digest_of == other._digest_of
+
+    __hash__ = None  # type: ignore[assignment]  # mutable
+
+    def digest_of(self, lineage: str) -> str | None:
+        """The digest of the value *lineage* names, when one was seen."""
+        return self._digest_of.get(lineage)
+
+    def remember(self, digest: str, lineage: str) -> None:
+        """Note that a value with *digest* (`digest_of`, kept on a cache
+        entry) was restored with *lineage*. An equal value seen first keeps
+        its lineage."""
+        self._by_digest.setdefault(digest, resolve_lineage_alias(lineage))
+        self._digest_of.setdefault(lineage, digest)
 
     def lineage_for(self, value: Any, lineage: str, compute_hash: Callable[[Any], str]) -> str:
         """The lineage *value*, just bound with *lineage*, should carry: an
@@ -115,8 +151,10 @@ class ValueCutoff:
         earlier = self._by_digest.get(digest)
         if earlier is None:
             self._by_digest[digest] = resolve_lineage_alias(lineage)
+            self._digest_of[lineage] = digest
             return lineage
         earlier = resolve_lineage_alias(earlier)
         if earlier != lineage:
             record_lineage_alias(lineage, earlier)
+        self._digest_of[earlier] = digest
         return earlier
