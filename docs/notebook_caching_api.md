@@ -131,6 +131,37 @@ Three directives change these rules for one statement:
 walks through them. [Knowing when not to cache](how-it-works/safety.md) explains
 the reasoning.
 
+## Fitting models
+
+<!-- claim: cash/notebook/statement/mutations.py:MutationClassifier.estimator_fit_receivers @6f64bb3f, cash/notebook/statement/mutations.py:MutationClassifier.cache_fit_hint @fd7eea71 -->
+A fit changes the estimator it is called on. So a separate `model.fit(X, y)`,
+on a `model` made in an earlier statement, changes an object in place and runs
+every time. Keep the fit in the assignment that binds the model, and the
+fitted model is cached like any other value, keyed on the data and the
+hyperparameters:
+
+<!-- test:skip reason="illustrative: needs training data" -->
+```python { .nb-cell }
+model = RandomForestClassifier(random_state=42).fit(X_train, y_train)
+```
+
+`fit_transform` and `fit_predict` fit the estimator too, while returning
+something else. `X_train = vec.fit_transform(train_texts)` on a `vec` made
+earlier is an assignment, but it binds the matrix, not the fitted `vec`, so
+it runs every time. Fit in one assignment and transform in the next:
+
+<!-- test:skip reason="illustrative: needs training data" -->
+```python { .nb-cell }
+vec = TfidfVectorizer().fit(train_texts)   # cached
+X_train = vec.transform(train_texts)       # cached
+X_test = vec.transform(test_texts)         # cached
+```
+
+Or keep `fit_transform`, which reads the training data once instead of twice,
+and add [`# @cash:cache-fit`](annotations.md#cashcache-fit) to it; read that
+directive's caveat first. The badge row of a fit that runs every time names
+the directive.
+
 ## After a restart
 
 The cache is on disk, so a fresh kernel picks up where you left off. Run a cell
@@ -147,6 +178,14 @@ The cache is a `.cash` folder in the kernel's working directory, which is
 usually the notebook's folder. Notebooks in the same folder share it. Set
 `CASH_CACHE_DIR` or `[tool.cash] cache_dir` to put it elsewhere. The folder holds
 a `.gitignore`, so git ignores it.
+
+<!-- claim: cash/_location.py:default_project_config_path @52360884, cash/_location.py:project_anchor @db681147 -->
+The kernel reads `[tool.cash]` from the nearest `pyproject.toml` at or above
+its working directory, the first one it finds, and a relative `cache_dir`
+there is relative to that file's folder. A notebook in `proj/notebooks/` and a
+script in `proj/` with `cache_dir = ".cash"` in `proj/pyproject.toml`
+therefore share `proj/.cash`, unless `proj/notebooks/` has a `pyproject.toml`
+of its own.
 
 <!-- claim: cash/backends/adaptive_caps.py:DISK_FLOOR, cash/backends/adaptive_caps.py:DISK_CEILING, cash/backends/adaptive_caps.py:RAM_FLOOR, cash/backends/adaptive_caps.py:RAM_CEILING -->
 By default the disk cache may use a quarter of the free disk space, at least
@@ -176,7 +215,23 @@ To let colleagues or CI reuse your results, see
 Under papermill, nbconvert or CI:
 
 - Add `%cash_badge print` to the first cell, after `%cash_on`, for a
-  plain-text badge that reads well in logs.
+  plain-text badge that reads well in logs. The setup cell still runs where
+  caching is off: with `CASH_DISABLE=1` set, `%cash_on` says so and does
+  nothing, and `%cash_badge print` only sets the mode. If the notebook must
+  also run in a kernel without cash installed, write the setup cell this
+  way, which does nothing there:
+
+    <!-- test:skip reason="illustrative: the page's own setup cell runs above" -->
+    ```python { .nb-cell }
+    try:
+        import cash
+    except ImportError:
+        pass
+    else:
+        get_ipython().run_line_magic("cash_on", "")
+        get_ipython().run_line_magic("cash_badge", "print")
+    ```
+
 - Expect one `NOTEBOOK-NOT-FOUND` warning. With no Jupyter server there is no
   notebook file to read, so cash does not re-check earlier cells. A
   top-to-bottom run does not need that. In JupyterLab or VS Code the warning

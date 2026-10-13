@@ -25,6 +25,22 @@ This is the setup cell: `import cash`, then any `cash.configure(...)` call, then
 cached. Do your work in the cells below. To skip this cell in every new kernel,
 run `cash autoload on` once in a terminal.
 
+<!-- claim: cash/tracking/function_tracker.py:FunctionTracker.check_and_reload_changed_modules @9a04e5bd -->
+**If you edit your own `.py` modules**, cash reloads an edited module by
+itself, so the next cell uses the new code. Plain Jupyter keeps the old code
+until you restart the kernel. A notebook that imports a module you edit then
+gives different results once cash is off (`%cash_off`, `CASH_DISABLE=1`, or a
+colleague without cash). Turn on IPython's autoreload in the cell that
+imports the module, and the notebook behaves the same both ways; cash works
+with it:
+
+<!-- test:skip reason="illustrative: mylib stands for a module of your own" -->
+```python { .nb-cell }
+%load_ext autoreload
+%autoreload 2
+import mylib
+```
+
 ## 2. Write your code in the cells below
 
 <!-- test:expect-badge first=EXECUTED -->
@@ -54,6 +70,10 @@ From here on:
   re-run. The rest of the cell stays cached.
 - Change `large_dataset.csv` on disk and the statements that read it re-run.
 - Restart the kernel and run the cell: expensive results come back from disk.
+- Fit a model in the assignment that binds it,
+  `model = Ridge().fit(X, y)`: a separate `model.fit(X, y)` changes `model`
+  in place and runs every time. See
+  [Fitting models](../notebook_caching_api.md#fitting-models).
 
 ## Related
 

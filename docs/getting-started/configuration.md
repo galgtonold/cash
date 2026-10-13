@@ -19,7 +19,9 @@ cash merges its settings from six layers. A higher layer wins:
 2. **Environment variables**: `CASH_<FIELD>`, such as `CASH_CACHE_DIR`.
 3. **A file named in code**: `Cash(config_path="cash.toml")`
    ([below](#a-config-file-named-in-code)).
-4. **Project file**: `[tool.cash]` in the project's `pyproject.toml`.
+4. **Project file**: `[tool.cash]` in the project's `pyproject.toml`. In a
+   notebook, the nearest `pyproject.toml` at or above the kernel's working
+   directory ([Notebook guide](../notebook_caching_api.md#where-the-cache-is)).
 5. **User file**: `~/.config/cash/config.toml` (`$XDG_CONFIG_HOME` is
    honoured), or `%APPDATA%\cash\config.toml` on Windows.
 6. **Defaults**, listed in the tables below.

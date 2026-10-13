@@ -94,7 +94,8 @@ model = RandomForestClassifier(
 The fitted model is cached like any other value, keyed on the data and the
 hyperparameters, and a slow fit is on disk after a kernel restart. Keep the fit
 in one assignment: a bare `model.fit(X_train, y_train)` changes `model` in place
-and runs every time (see [`# @cash:cache-fit`](../../annotations.md#cashcache-fit)).
+and runs every time, and so does `X = vec.fit_transform(...)` on a `vec` made
+earlier (see [Fitting models](../../notebook_caching_api.md#fitting-models)).
 Pass `random_state`: an unseeded fit is cached too, but as a frozen replay, and
 cash warns about it.
 
