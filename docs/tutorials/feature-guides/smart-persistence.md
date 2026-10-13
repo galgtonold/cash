@@ -16,6 +16,14 @@ stay in memory, and results under 10 ms are not stored at all. The
 [cost model](../../cost-model.md) has the exact rules and the settings that tune
 them.
 
+<!-- claim: cash/backends/memory_backend.py:_hit_no_faster @0686432d, cash/backends/memory_backend.py:_slower_than_its_compute @e342d0d6 -->
+An object that takes as long to load as to compute is not kept at all. Some
+objects rebuild their data when they are loaded: a fitted statsmodels result,
+for example, rebuilds its design matrix. cash times how long such an object
+takes to read back, and when a hit would be no faster than running the
+statement, it drops the entry and the statement runs every time. A value you
+mark `# @cash:persist` is kept regardless.
+
 With `%cash_badge print` each row shows where its result went. Here `slow`
 takes 0.3 s and `mid` 0.05 s:
 
@@ -55,6 +63,11 @@ as a value that was kept in memory only, it computes by running the statements
 that produced it. See
 [Picking up after a kernel restart](../../how-it-works/notebook-path.md#picking-up-after-a-kernel-restart).
 
+cash finds those statements in the notebook file. A headless run (papermill,
+nbconvert, CI) has no notebook file, so there a cell run on its own after a
+restart does not get the values the cells above it built: run from the top.
+See [Running a notebook headless](../../notebook_caching_api.md#running-a-notebook-headless).
+
 <!-- claim: cash/notebook/statement/rebuild_cost.py:RebuildCostLedger.end_cell_persistence @b5fce68e -->
 **A cheap value over expensive inputs is written too.** `latest =
 sales["week"].max()` takes milliseconds, but after a restart `sales` may be gone,
@@ -87,6 +100,15 @@ A slow cell made of cheap parts is a common surprise: a cell of 120 independent
 statements at 0.05 s each takes six seconds and stores nothing on disk, because
 the threshold applies to each statement on its own. Mark the ones you need with
 `# @cash:persist`, or move the expensive work into one statement.
+
+## Writes happen in the background
+
+<!-- claim: cash/backends/_writes.py:MAX_BACKLOG_S == 2.0 -->
+A cell does not wait for its results to reach the disk. The writes finish in
+the background while you run the next cell. A cell waits only when the writes
+still queued would take more than about 2 s, so a kernel restart, or a crash,
+loses at most the last couple of seconds of writes. A lost write does no
+harm: the statement runs again the next time, as if it had never been stored.
 
 ## Checking what was written
 

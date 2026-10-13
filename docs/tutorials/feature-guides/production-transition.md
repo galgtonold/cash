@@ -42,8 +42,19 @@ df = load("data.csv")              # Second call: cache hit
 Edit `data.csv` and `load` runs again, because cash tracks the file's contents.
 Edit `add_features` and it runs again, because its code is part of the key.
 
-Called from a notebook with `%cash_on`, a decorated function's hits and misses
-show on the cell's badge, so you can move code into the module step by step.
+## Calling a decorated function from a notebook
+
+You can move code into the module step by step and keep calling it from the
+notebook. With `%cash_on`, a decorated function's hits and misses show on the
+cell's badge.
+
+<!-- claim: cash/notebook/statement/store.py:StatementStore._with_decorator_ref @9edb344d -->
+A statement that binds the call's result, `prices = mylib.load_prices(path)`,
+does not store a second copy of it: the statement points at the function's own
+entry, so a 300 MB frame is written to disk once, and after a restart the
+statement is restored from that entry. A statement that does more with the
+result (`n = len(mylib.load_prices(path))`) is cached on its own, like any
+other statement.
 
 ## What does not carry over
 
