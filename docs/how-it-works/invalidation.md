@@ -100,7 +100,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
 
 ### Files
 
-<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @51a8bdb1, cash/tracking/read_events.py:_is_read_mode @238e2cb8, cash/tracking/read_events.py:_on_listing @41ce1606 -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @b76337da, cash/tracking/read_events.py:_is_read_mode @238e2cb8, cash/tracking/read_events.py:_on_listing @41ce1606 -->
 cash records a file when your code reads it through one of these:
 
 | Library | Readers |
@@ -110,6 +110,7 @@ cash records a file when your code reads it through one of these:
 | polars | `read_csv`, `read_parquet`, `read_json`, `read_ndjson`, `read_ipc`, `read_avro`, `read_excel`, and `scan_csv`, `scan_parquet`, `scan_ipc`, `scan_ndjson` |
 | pyarrow | `csv.read_csv`, `csv.open_csv`, `parquet.read_table`, `parquet.read_pandas`, `parquet.ParquetFile`, `feather.read_table`, `feather.read_feather`, `json.read_json`, `orc.read_table`, `dataset.dataset`, `memory_map`, `input_stream`, `ipc.open_file`, `ipc.open_stream` |
 | numpy | `load`, `loadtxt`, `genfromtxt`, `fromfile`, `memmap` |
+| soundfile | `read`, `blocks`, `info`, and `SoundFile` opened to read (`'r'`, `'r+'`) |
 | others | `joblib.load`, `pickle.load` and `json.load` of an opened file, `sqlite3.connect` (a path or a `file:` URI; for a database in WAL mode, its `-wal` file too), and a library that opens your file with Python's `open()`, such as Pillow's `Image.open` |
 | directories | `glob.glob`, `glob.iglob`, `os.listdir`, `os.scandir`, and what lists through them: `Path.glob`, `rglob`, `iterdir`, `os.walk`, `Path.walk`. The directory, so a new or removed file counts |
 | datasets | a directory, a glob or a list given to one of the readers above: every file in it (names starting with `.` or `_` aside), under linked sub-folders too, and each directory, so an edited or a new file counts |

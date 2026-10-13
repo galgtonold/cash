@@ -438,7 +438,7 @@ the statement.
 
 ### Reads through a loader cash cannot see
 
-<!-- claim: cash/tracking/reader_patches.py:_install_module_patches @3e52b060 -->
+<!-- claim: cash/tracking/reader_patches.py:_install_module_patches @4f31fa44 -->
 **Symptom:** you changed a file and the cell still shows the old data, with a
 `CACHED` badge and no warning.
 

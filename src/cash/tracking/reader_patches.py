@@ -3,7 +3,7 @@
 These are wrapped while a tracker is open; this list is the one place that
 names them:
 
-- readers that open files in C: pandas, polars, pyarrow and ``sqlite3``
+- readers that open files in C: pandas, polars, pyarrow, soundfile and ``sqlite3``
   (`FileDependencyRegistry` says which functions and how, and a meta-path
   hook wraps a registered module imported meanwhile);
 - existence probes: ``os.path.exists``, ``lexists``, ``isfile``, ``isdir``
@@ -163,15 +163,10 @@ def _install_module_patches(module_name: str, module_obj: Any) -> None:
                 if original is None or not callable(original) or _is_patch(original):
                     continue
                 _install_wrapper(module_obj, name, original, factory, lambda o, f=factory: f(o, _dispatch_track))
-        for class_name in _CLASS_READERS.get(module_name, ()):
+        for class_name, make_init in _CLASS_READERS.get(module_name, ()):
             owner = getattr(module_obj, class_name, None)
             if isinstance(owner, type):
-                _patch_attribute(owner, "__init__", _make_init_path_handler)
-
-
-#: Reader CLASSES, by module: the class is left in place, so ``isinstance``
-#: still works, and its ``__init__`` records the path it is given.
-_CLASS_READERS: dict[str, tuple[str, ...]] = {"pyarrow.parquet": ("ParquetFile",)}
+                _patch_attribute(owner, "__init__", make_init)
 
 
 def _make_init_path_handler(original: Callable[..., Any]) -> Callable[..., Any]:
@@ -184,6 +179,33 @@ def _make_init_path_handler(original: Callable[..., Any]) -> Callable[..., Any]:
         return original(self, *args, **kwargs)
 
     return tracked_init
+
+
+def _make_soundfile_init_handler(original: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap ``soundfile.SoundFile.__init__(self, file, mode='r', ...)``.
+
+    A file opened to read (``'r'``, ``'r+'``) is a dependency; one opened only
+    to write (``'w'``, ``'x'``) is an output, not an input.
+    """
+    path_handler = FileDependencyRegistry._create_path_arg_handler(lambda *a, **k: None, _dispatch_track)
+
+    @functools.wraps(original)
+    def tracked_init(self, *args, **kwargs):
+        mode = args[1] if len(args) > 1 else kwargs.get("mode", "r")
+        if not isinstance(mode, str) or "r" in mode:
+            path_handler(*args, **kwargs)
+        return original(self, *args, **kwargs)
+
+    return tracked_init
+
+
+#: Reader CLASSES, by module, with the wrapper each one's ``__init__`` gets:
+#: the class is left in place, so ``isinstance`` still works, and its
+#: ``__init__`` records the path it is given.
+_CLASS_READERS: dict[str, tuple[tuple[str, Callable[[Any], Any]], ...]] = {
+    "pyarrow.parquet": (("ParquetFile", _make_init_path_handler),),
+    "soundfile": (("SoundFile", _make_soundfile_init_handler),),
+}
 
 
 #: id(namespace) -> (its size when scanned, the names bound to a wrapped
@@ -1013,6 +1035,15 @@ class FileDependencyRegistry:
         # was registered and `dataset()` was not, so one entry point of an
         # otherwise-covered library went stale.
         self.register("pyarrow.dataset", "dataset", self._create_path_arg_handler)
+
+        # soundfile reads through libsndfile in C, so an edited .wav/.flac gave
+        # a stale hit with no warning. ``read``, ``blocks`` and ``info`` take the
+        # path first; a ``SoundFile`` opened to read is wrapped at ``__init__``
+        # (``_CLASS_READERS``), which also covers the reads the functions make
+        # through it.
+        self.register("soundfile", "read", self._create_path_arg_handler)
+        self.register("soundfile", "blocks", self._create_path_arg_handler)
+        self.register("soundfile", "info", self._create_path_arg_handler)
 
         # linecache answers from its own cache, so a file read once is not
         # opened again and no audit event reports the next lookup. Source files
