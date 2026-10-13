@@ -54,7 +54,7 @@ def test_the_log_grows_on_every_run(cash_magics, tmp_path):
         "n = write_log(1)",
     ]
     _run_three_times(cash_magics, cells)
-    assert log.read_text().split() == ["a"] * 3
+    assert log.read_text(encoding="utf-8").split() == ["a"] * 3
 
 
 def test_a_waived_append_is_written_once(cash_magics, tmp_path):
@@ -74,12 +74,12 @@ def test_a_waived_append_is_written_once(cash_magics, tmp_path):
         "n = count_run(1)",
     ]
     _run_three_times(cash_magics, cells)
-    assert log.read_text().split() == ["a"]
+    assert log.read_text(encoding="utf-8").split() == ["a"]
 
 
 def test_a_read_through_os_open_is_cached(cash_magics, tmp_path):
     data = tmp_path / "data.txt"
-    data.write_text("x")
+    data.write_text("x", encoding="utf-8")
     log = tmp_path / "runs.log"
     cells = [
         "import os, time\n"
@@ -95,4 +95,4 @@ def test_a_read_through_os_open_is_cached(cash_magics, tmp_path):
         f"n = read_raw({str(data)!r})",
     ]
     _run_three_times(cash_magics, cells)
-    assert log.read_text() == "x"
+    assert log.read_text(encoding="utf-8") == "x"

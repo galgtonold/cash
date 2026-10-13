@@ -25,7 +25,7 @@ SETUP = (
     "import os, time\n"
     "import networkx as nx\n"
     "def slow_summary(g):\n"
-    "    fd = os.open('runs.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
+    "    fd = os.open('runs.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)  # @cash:assume-safe\n"
     "    os.write(fd, b'x')\n"
     "    os.close(fd)\n"
     "    time.sleep(0.2)\n"

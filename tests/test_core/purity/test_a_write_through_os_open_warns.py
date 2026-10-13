@@ -30,7 +30,7 @@ def _helpers(tmp_path, body):
     ``sys.modules``, which the static pass does not read: only the observer
     can see what they do."""
     source = tmp_path / "raw_helpers.py"
-    source.write_text("import os, tempfile\n\n" + body)
+    source.write_text("import os, tempfile\n\n" + body, encoding="utf-8")
     spec = importlib.util.spec_from_file_location("raw_helpers", source)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -62,7 +62,7 @@ def test_a_helper_writing_through_os_open_warns(tmp_path, flags):
     found = _warnings(tmp_path, logged, 1)
     assert len(found) == 1, found
     assert "IMPURE-OBSERVED-EFFECTS" in found[0] and "file write" in found[0] and "run.log" in found[0]
-    assert log.read_bytes() == b"a\n"  # the hit skipped it, as warned
+    assert log.read_bytes().splitlines() == [b"a"]  # the hit skipped it, as warned
 
 
 def test_a_read_through_os_open_is_no_write(tmp_path):
