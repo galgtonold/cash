@@ -330,9 +330,7 @@ def key_aliases() -> Callable[[Any], Any]:
 
 #: Types whose instances cannot change and are pickled by value (tuples and
 #: frozensets: their items are marked, if anything, on their own).
-_ATOMS = frozenset(
-    {str, bytes, int, float, complex, bool, type(None), tuple, frozenset, range, slice, type(Ellipsis)}
-)
+_ATOMS = frozenset({str, bytes, int, float, complex, bool, type(None), tuple, frozenset, range, slice, type(Ellipsis)})
 
 #: Types pickled by name: their identity is their name.
 _BY_NAME = frozenset({types.FunctionType, types.BuiltinFunctionType, types.MethodDescriptorType, types.ModuleType})
@@ -348,7 +346,9 @@ def _identityless(t: type) -> bool:
     except TypeError:
         return False
     numpy = sys.modules.get("numpy")
-    found = numpy is not None and (issubclass(t, numpy.dtype) or (issubclass(t, numpy.generic) and t not in (numpy.object_, numpy.void)))
+    found = numpy is not None and (
+        issubclass(t, numpy.dtype) or (issubclass(t, numpy.generic) and t not in (numpy.object_, numpy.void))
+    )
     _IDENTITYLESS[t] = found
     return found
 
