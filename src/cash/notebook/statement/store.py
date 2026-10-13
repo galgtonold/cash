@@ -32,7 +32,7 @@ from cash.notebook.statement.capture import replay_record
 from cash.notebook.statement.carrier_advances import PAYLOAD_FIELD as CARRIERS_FIELD
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON
 from cash.notebook.statement.run import ECHO_FIELD
-from cash.sizing import estimate_object_size
+from cash.sizing import estimate_object_size, pickled_size_estimate
 from cash.tracking import file_dep_snapshot
 from cash.tracking.file_dep_snapshot import snapshot_dependencies
 from cash.tracking.randomness import capture_object_rng_states, capture_rng_state
@@ -381,22 +381,33 @@ class StatementStore:
 
         is_ram_backend = backend_kind == "ram"
         try:
-            obj_size = estimate_object_size(var_value)
+            # An object of a class of its own is sized by the frames and
+            # arrays it holds, not by its own few bytes: a statsmodels results
+            # object holding its design matrix read as 48 bytes, so a 145 MiB
+            # copy of it was predicted free, made, and then refused the disk.
+            obj_size = max(estimate_object_size(var_value), pickled_size_estimate(var_value))
             type_name = type(var_value).__name__
             family = cost_model.resolve_family(type_name)
             est_restore_time = cost_model.estimated_restore_time(type_name, obj_size, backend_kind)
+            # What unpickling one of its class took here (`round_trip_seconds`):
+            # a RAM hit copies it that way, a disk hit unpickles it.
+            round_trip = memory_backend.round_trip_seconds(var_value, obj_size)
             if is_ram_backend:
                 # What a hit costs here, as the RAM tier measures it: a copy
                 # at this machine's speed now, or nothing for a table it shares.
                 measured = memory_backend.hit_seconds(var_value, obj_size)
                 if measured is not None:
                     est_restore_time = measured
+            elif round_trip is not None:
+                est_restore_time = max(est_restore_time, round_trip)
             prediction: dict[str, Any] = {
                 "size_bytes": obj_size,
                 "restore_seconds": est_restore_time,
                 "type_name": type_name,
                 "family": family,
             }
+            if family == cost_model.GENERIC_FAMILY:
+                prediction["class_key"] = memory_backend.class_key(type(var_value))
 
             if policy.refuses_value(execution_time, est_restore_time):
                 size_mb = obj_size / (1024 * 1024)
@@ -792,6 +803,7 @@ class StatementStore:
             # that the backend has reported which tiers actually took it.
             # Only durable destinations count.
             self._amplification.account(run.code, prediction, wire)
+            _learn_round_trip(prediction, wire)
 
         # The metadata-only record keeps a RAM-only value's lineage across a
         # restart. A value written to a persistent tier carries its metadata
@@ -806,6 +818,19 @@ class StatementStore:
                 backend.set_metadata_only(cache_key, wire)
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("[PROCESSOR] Best-effort metadata persistence failed")
+
+
+def _learn_round_trip(prediction: dict[str, Any] | None, wire: dict[str, Any]) -> None:
+    """Credit what unpickling the RAM tier's copy of the entry took to the
+    class of its biggest value, when that is an object of a class of its own: the next
+    store of one is then judged on it before anything is copied
+    (`memory_backend.round_trip_seconds`). ``pooled`` (a statsmodels result
+    holding its 145 MiB design matrix) was copied on every run, for a hit
+    as slow as its 0.8 s fit."""
+    seconds = wire.get(memory_backend.MEASURED_ROUND_TRIP)
+    if not seconds or not prediction or prediction.get("class_key") is None:
+        return
+    memory_backend.note_round_trip(prediction["class_key"], int(prediction["size_bytes"]), float(seconds))
 
 
 def _only_shows_a_name(tree: ast.Module | None) -> bool:

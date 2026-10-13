@@ -136,17 +136,28 @@ class PersistencePolicy:
         return compute_s > 0 and restore_s > self.restore_budget(compute_s)
 
     def pays_to_restore(
-        self, compute_s: float, size_bytes: int, *, type_name: str = "", backend_kind: str = "disk"
+        self,
+        compute_s: float,
+        size_bytes: int,
+        *,
+        type_name: str = "",
+        backend_kind: str = "disk",
+        measured_s: float | None = None,
     ) -> bool:
         """Does restoring *size_bytes* beat recomputing for *compute_s*?
 
         ``compute_s - restore > min_savings_pct * compute_s``, with the restore
         time predicted by `cost_model` for the value's type (the slowest family
-        when *type_name* is unknown) on *backend_kind*.
+        when *type_name* is unknown) on *backend_kind*, or *measured_s* when
+        that is longer: what unpickling the RAM tier's copy of it took here,
+        which a disk hit takes again (a statsmodels results object rebuilds
+        its design matrix when it is unpickled).
         """
         if compute_s < self.compute_floor_s:
             return False
         restore = cost_model.estimated_restore_time(type_name, size_bytes, backend_kind)
+        if measured_s:
+            restore = max(restore, float(measured_s))
         return compute_s - restore > self.min_savings_pct * compute_s
 
     def decide(
@@ -188,11 +199,14 @@ class PersistencePolicy:
                 metadata.get("cost_model_size_bytes", size),
                 type_name=metadata.get("cost_model_type_name", ""),
                 backend_kind=backend_kind,
+                measured_s=_measured_copy_seconds(metadata),
             )
         elif override is not None:
             pays = override(compute_s, size)
         else:
-            pays = self.pays_to_restore(compute_s, size, backend_kind=backend_kind)
+            pays = self.pays_to_restore(
+                compute_s, size, backend_kind=backend_kind, measured_s=_measured_copy_seconds(metadata)
+            )
         if not pays or (sampled is not None and _write_outweighs_restore(compute_s, sampled, self.min_savings_pct)):
             return Decision(False, "compute", cap_size)
 
@@ -223,13 +237,30 @@ class PersistencePolicy:
             return Decision(False)
         size = metadata.get("cost_model_size_bytes", metadata.get("size", 0))
         if not self.pays_to_restore(
-            rebuild_s, size, type_name=metadata.get("cost_model_type_name", ""), backend_kind=backend_kind
+            rebuild_s,
+            size,
+            type_name=metadata.get("cost_model_type_name", ""),
+            backend_kind=backend_kind,
+            measured_s=_measured_copy_seconds(metadata),
         ):
             return Decision(False)
         weight = disk_bytes(metadata, metadata.get("size") or size) + int(metadata.get("call_ref_bytes") or 0)
         if not metadata.get("force_persist") and not worth_its_bytes(weight, rebuild_s):
             return Decision(False, "bytes", weight, report=True)
         return Decision(True, weight=weight)
+
+
+def _measured_copy_seconds(metadata: dict[str, Any]) -> float | None:
+    """What unpickling the RAM tier's copy of the entry took
+    (``measured_round_trip_seconds``), when that copy was a pickle round trip:
+    a disk hit unpickles the value again, ``__setstate__`` and all. The RAM tier times only such copies; a
+    statement's entry holds all its variables, so it counts only when its
+    biggest one is an object of a class of its own (a frame among them is
+    copied as data, which says nothing of what reading it back takes)."""
+    family = metadata.get("cost_model_family")
+    if family is not None and family != cost_model.GENERIC_FAMILY:
+        return None
+    return metadata.get("measured_round_trip_seconds")
 
 
 #: About what an entry's value pickles to (`sizing.pickled_size_estimate`),
