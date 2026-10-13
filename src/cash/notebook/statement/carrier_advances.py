@@ -19,7 +19,7 @@ to give them too.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from ...tracking.randomness import advanced_carrier_lineage, carrier_positions, moved_carrier_names, rng_carrier_kind
@@ -40,21 +40,29 @@ __all__ = [
 PAYLOAD_FIELD = "rng_carriers_moved"
 
 
-def carrier_candidates(inputs: Iterable[str], user_ns: dict[str, Any]) -> set[str]:
+def carrier_candidates(
+    inputs: Iterable[str], user_ns: dict[str, Any], variable_lineage: Mapping[str, str] | None = None
+) -> set[str]:
     """The variables a statement can draw from: its inputs, and the globals
     the functions it calls read (``def draw(k): return rng.normal() + k``),
     which its key folds in too (``called_function_dependencies``)."""
     inputs = set(inputs)
     try:
-        return inputs | called_function_globals(inputs, user_ns)
+        return inputs | called_function_globals(inputs, user_ns, variable_lineage=variable_lineage)
     except (TypeError, ValueError, AttributeError, RecursionError):
         return inputs
 
 
-def reachable_generators(inputs: Iterable[str], user_ns: dict[str, Any]) -> set[str]:
+def reachable_generators(
+    inputs: Iterable[str], user_ns: dict[str, Any], variable_lineage: Mapping[str, str] | None = None
+) -> set[str]:
     """The variables among :func:`carrier_candidates` that hold a random
     generator: what a statement reading *inputs* can draw from."""
-    return {name for name in carrier_candidates(inputs, user_ns) if rng_carrier_kind(user_ns.get(name)) is not None}
+    return {
+        name
+        for name in carrier_candidates(inputs, user_ns, variable_lineage)
+        if rng_carrier_kind(user_ns.get(name)) is not None
+    }
 
 
 def advance_carriers(

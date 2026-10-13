@@ -483,7 +483,9 @@ class StatementRecords:
             # vouch for (and a later freshness check would fail anyway).
             if any(p not in file_deps for p in paths):
                 return
-            names = set(inputs) | called_function_globals(inputs, self.shell.user_ns)
+            names = set(inputs) | called_function_globals(
+                inputs, self.shell.user_ns, variable_lineage=self.tracking_state.variable_lineage
+            )
             input_lineages = {
                 v: self.tracking_state.variable_lineage[v] for v in names if v in self.tracking_state.variable_lineage
             }

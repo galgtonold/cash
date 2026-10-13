@@ -112,7 +112,7 @@ yours is handed keeps its first record. A `with` block is watched the same way; 
 the statements in its branches were seen changing, and, for a branch that has
 not run yet, everything it hands to such code.
 
-<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @fa28e454, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @af26a44c -->
+<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @fa28e454, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @bbdd02b3 -->
 `if`/`elif`/`else` and `try`/`except` bodies are cached statement by
 statement too, and only the branch that ran is stored. `while` and `with`
 blocks are cached as one unit, because they have no list of items to key on,
@@ -144,7 +144,7 @@ cache, checking first that the code that produced them is unchanged. For a
 chain of steps (`df = load()`, then `df = clean(df)`), it restores the final
 value directly instead of replaying each step.
 
-<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @c5989fa9 -->
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @7a89a67f -->
 A value built by a `for` loop can be restored too. cash records what the loop
 produced when it ran, and trusts that record after a restart only while
 everything the loop and its functions read is unchanged, and only if the loop

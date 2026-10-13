@@ -1214,7 +1214,7 @@ class StatementLineage:
         dead = {
             name for name in inputs if name not in user_ns and virtual_lineage.get(name) in self._generator_lineages
         }
-        return reachable_generators(inputs, user_ns) | dead
+        return reachable_generators(inputs, user_ns, self.tracking_state.variable_lineage) | dead
 
     def _advanced_carriers(
         self,

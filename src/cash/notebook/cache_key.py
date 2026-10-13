@@ -13,6 +13,7 @@ import dis
 import functools
 import hashlib
 import logging
+import secrets
 import types
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -23,6 +24,7 @@ from cash.notebook.lineage_store import resolve_lineage
 from cash.source_norm import exact_source_digest, unparse_without_docstrings
 from cash.tracking.randomness import rng_carrier_kind
 
+from .held_functions import held_notebook_code
 from .installed_code import installed_code_parts
 from .lineage_formula import (
     bound_names,
@@ -360,6 +362,7 @@ def called_function_dependencies(
     virtual: VirtualNamespace | None = None,
     simulated: Mapping[str, str] | None = None,
     keyed: bool = True,
+    unfollowed: set[str] | None = None,
 ) -> list[str]:
     """``"name:lineage"`` components for the globals a called function reaches for.
 
@@ -396,20 +399,37 @@ def called_function_dependencies(
     lineages (``SimulatedCallables.callee_lineages``), which the key built
     from them maps then. A function's identity kept as its lineage found no
     simulated ``def`` under it, so its body went unwalked and the key missed.
+
+    A name that does not name a function but holds one -- ``fns = [make]``,
+    a dict of builders, a partial, an object of a notebook class, a
+    function kept as another's default -- is walked into the code it holds
+    (`held_functions.held_notebook_code`): ``fns[0](3)`` reads what ``make``
+    reads. A name whose value is too large to walk to the end is added to
+    *unfollowed*, when given, whatever *keyed* says: which names cannot be
+    followed does not depend on how their lineages are reported.
     """
     seen: set[str] = set()
     stack = [name for name in inputs]
     referenced: set[str] = set()
     attribute_only: set[str] = set()
     used_virtual = False
+    codes: dict[str, list[types.CodeType]] = {}
+    #: ids of the code reached only through what a name holds, not named.
+    held_only: set[int] = set()
 
-    def code_of(name: str) -> types.CodeType | None:
+    def codes_of(name: str) -> list[types.CodeType]:
         nonlocal used_virtual
-        code_obj = getattr(user_ns.get(name), "__code__", None)
-        if code_obj is None and virtual is not None and name not in user_ns:
+        if name in codes:
+            return codes[name]
+        found = _held_codes(name, user_ns, variable_lineage, unfollowed)
+        own = getattr(user_ns.get(name), "__code__", None)
+        held_only.update(id(code) for code in _nested_codes_of(c for c in found if c is not own))
+        if not found and virtual is not None and name not in user_ns:
             code_obj = virtual.code_for(name)
             used_virtual = used_virtual or code_obj is not None
-        return code_obj
+            found = [code_obj] if code_obj is not None else []
+        codes[name] = found
+        return found
 
     def is_module(ref: str) -> bool:
         if isinstance(user_ns.get(ref), types.ModuleType):
@@ -424,10 +444,16 @@ def called_function_dependencies(
         # The function's nested code too: a comprehension (its own code
         # object before Python 3.12), a generator expression, a lambda or an
         # inner function reads its globals at call time as the body does.
-        for code_obj in _nested_codes(code_of(name)):
+        for code_obj in _nested_codes_of(codes_of(name)):
             attrs = _attribute_only_names(code_obj)
+            held = id(code_obj) in held_only
             for ref in code_obj.co_names:
                 if ref in seen or ref in ("get_ipython", "__builtins__"):
+                    continue
+                # Held code adds only the globals it reads: an attribute
+                # name keys a constant, and the simulation, which cannot
+                # see what a name not run yet holds, keys none.
+                if held and ref in attrs:
                     continue
                 # Builtins are constant. Modules carry their own key component,
                 # which is decided below: an attribute name is kept whatever it names.
@@ -445,7 +471,7 @@ def called_function_dependencies(
     # ``forecast:ABSENT`` before its first run and ``forecast:<lineage>``
     # after, so the simulation never found the entry and re-ran it.
     attribute_only -= {
-        ref for name in seen for code_obj in _nested_codes(code_of(name)) for ref in _global_names(code_obj)
+        ref for name in seen for code_obj in _nested_codes_of(codes_of(name)) for ref in _global_names(code_obj)
     }
     # So is a module that shares an attribute's name: ``np.random`` keyed
     # ``random:ABSENT`` until ``import random`` bound the module, and then
@@ -474,6 +500,7 @@ def called_function_globals(
     user_ns: Mapping[str, Any],
     virtual: VirtualNamespace | None = None,
     keep_modules: bool = False,
+    variable_lineage: Mapping[str, str] | None = None,
 ) -> set[str]:
     """Notebook names the functions named in *inputs* read when called.
 
@@ -485,6 +512,8 @@ def called_function_globals(
     unless *keep_modules* (they are not walked into either way).
 
     *virtual* stands in for a function not in ``user_ns`` (simulation only).
+    *variable_lineage*, when given, lets the walk into what a name holds
+    (`held_functions`) be remembered for the name's lineage.
     """
     seen: set[str] = set()
     stack = list(inputs)
@@ -494,10 +523,9 @@ def called_function_globals(
         if name in seen:
             continue
         seen.add(name)
-        code = getattr(user_ns.get(name), "__code__", None)
-        if code is None and virtual is not None and name not in user_ns:
-            code = virtual.code_for(name)
-        code_objs = [code]
+        code_objs: list[Any] = _held_codes(name, user_ns, variable_lineage, None)
+        if not code_objs and virtual is not None and name not in user_ns:
+            code_objs = [virtual.code_for(name)]
         while code_objs:
             code_obj = code_objs.pop()
             if code_obj is None:
@@ -564,6 +592,55 @@ def _global_names(code_obj: Any) -> frozenset[str]:
         _GLOBAL_NAMES_MEMO[code_obj] = found
     except TypeError:
         pass
+    return found
+
+
+def _held_codes(
+    name: str,
+    user_ns: Mapping[str, Any],
+    variable_lineage: Mapping[str, str] | None,
+    unfollowed: set[str] | None,
+) -> list[types.CodeType]:
+    """The code *name*'s value runs when called, and the code of the
+    notebook functions it holds (`held_notebook_code`). A function of a
+    module is walked by its own code, as it always was."""
+    if name not in user_ns:
+        return []
+    value = user_ns.get(name)
+    found: list[types.CodeType] = []
+    code_obj = getattr(value, "__code__", None)
+    if code_obj is not None:
+        found.append(code_obj)
+    lineage = variable_lineage.get(name) if variable_lineage is not None else None
+    try:
+        held = held_notebook_code(value, user_ns, lineage)
+    except Exception:  # an object that cannot be walked is not followed
+        logger.debug("[CACHE_KEY] Could not walk %r for the functions it holds", name, exc_info=True)
+        if unfollowed is not None:
+            unfollowed.add(name)
+        return found
+    if not held.complete and unfollowed is not None:
+        unfollowed.add(name)
+    found.extend(code for code in held.codes if code is not code_obj)
+    return found
+
+
+def unfollowed_holders(
+    inputs: Iterable[str], user_ns: Mapping[str, Any], variable_lineage: Mapping[str, str]
+) -> set[str]:
+    """The names, among *inputs* and the globals their callees read, whose
+    value holds too much to find every notebook function in it: a
+    statement reading one cannot be keyed on what those functions read."""
+    unfollowed: set[str] = set()
+    called_function_dependencies(sorted(inputs), user_ns, variable_lineage, unfollowed=unfollowed)
+    return unfollowed
+
+
+def _nested_codes_of(code_objs: Iterable[types.CodeType]) -> list[types.CodeType]:
+    """Every code object in *code_objs* and nested in them, at any depth."""
+    found: list[types.CodeType] = []
+    for code_obj in code_objs:
+        found.extend(_nested_codes(code_obj))
     return found
 
 
@@ -725,7 +802,7 @@ def _joined(hashes: list[str]) -> str:
     return ":" + ":".join(sorted(hashes)) if hashes else ""
 
 
-def _callee_deps(sorted_inputs: list[str], ctx: CacheKeyContext) -> list[str]:
+def _callee_deps(sorted_inputs: list[str], ctx: CacheKeyContext, unfollowed: set[str] | None = None) -> list[str]:
     """The key component for the globals the called functions reach for.
 
     Those are read at CALL time, including any bound BELOW this statement,
@@ -745,7 +822,7 @@ def _callee_deps(sorted_inputs: list[str], ctx: CacheKeyContext) -> list[str]:
         else None
     )
     return called_function_dependencies(
-        sorted_inputs, ctx.user_ns, ctx.variable_lineage, virtual, simulated=ctx.virtual_lineage
+        sorted_inputs, ctx.user_ns, ctx.variable_lineage, virtual, simulated=ctx.virtual_lineage, unfollowed=unfollowed
     )
 
 
@@ -850,8 +927,15 @@ def compute_cache_key(
     # Include occurrence index so duplicate statements within a cell get
     # distinct keys (first occurrence is ``occ0``).
     occurrence_component = f":occ{occurrence_index}"
-    callee_deps = _callee_deps(sorted_inputs, ctx)
+    unfollowed: set[str] = set()
+    callee_deps = _callee_deps(sorted_inputs, ctx, unfollowed)
     callee_component = f":callees:{':'.join(callee_deps)}" if callee_deps else ""
+    if unfollowed:
+        # A value too large to find every notebook function in: what those
+        # functions read is not in the key, so no key may match it. The
+        # runtime runs the statement uncached and says why
+        # (``unfollowed_holders``).
+        callee_component += f":unfollowed:{','.join(sorted(unfollowed))}:{secrets.token_hex(16)}"
     # Code the notebook installed on a library class (a pandas accessor, a
     # patched method) that the statement reaches by attribute. Empty when
     # there is none, so every other key is unchanged.

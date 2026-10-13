@@ -28,6 +28,7 @@ from cash.notebook.cache_key import (
     CacheKeyResult,
     compute_cache_key,
     statement_source_hash,
+    unfollowed_holders,
 )
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.call_effects import DigestHandoff
@@ -508,7 +509,7 @@ class StatementProcessor:
         again draws the next values, so what it showed is not kept."""
         user_ns = self.shell.user_ns
         try:
-            names = carrier_candidates(run.inputs or (), user_ns)
+            names = carrier_candidates(run.inputs or (), user_ns, self.tracking_state.variable_lineage)
         except Exception:  # noqa: BLE001 - not told: assume it does
             return True
         for name in names:
@@ -885,6 +886,17 @@ class StatementProcessor:
             run.skip_cache = True
             run.value_varies = varies
             return
+        unfollowed = unfollowed_holders(run.inputs, self.shell.user_ns, self.tracking_state.variable_lineage)
+        if unfollowed:
+            # Its key cannot name what the notebook functions held in them
+            # read (``held_functions``): served, it could be stale.
+            names = ", ".join(repr(n) for n in sorted(unfollowed))
+            run.metrics["uncacheable_reasons"].append(
+                f"Reads {names}, which holds more objects than cash walks to find the notebook functions in it: "
+                f"what those functions read cannot be keyed, so the statement runs every time"
+            )
+            run.skip_cache = True
+            return
         drawn = drawn_stream_inputs(run.tree, run.inputs, run.outputs, self.shell.user_ns)
         if drawn:
             run.metrics["uncacheable_reasons"].append(
@@ -1067,7 +1079,10 @@ class StatementProcessor:
         positions = (
             {}
             if is_control_body(run.code)
-            else carrier_positions(carrier_candidates(run.inputs, self.shell.user_ns), self.shell.user_ns)
+            else carrier_positions(
+                carrier_candidates(run.inputs, self.shell.user_ns, self.tracking_state.variable_lineage),
+                self.shell.user_ns,
+            )
         )
         # What the globals of the local modules it reaches hold, to see one
         # it sets state on that its text does not say (`note_module_state`).
