@@ -328,3 +328,27 @@ def test_the_effectiveness_warning_names_the_override(tmp_path):
     assert "override=True" in fix, (
         "the remedy is unreachable for numpy/pandas arguments without it, which is the case this warning fires on most"
     )
+
+
+def test_override_wins_over_a_frame_the_notebook_already_hashed(disk_cash):
+    """The copy-on-write frame memo is the process's, and the notebook's
+    value hash fills it (`compute_hash`, for a fingerprint or a loop watch)
+    before the call keys the same frame. Found there first, the frame was
+    keyed on its content and the overriding hasher was never asked."""
+    pd = pytest.importorskip("pandas")
+    from cash.decorator.arg_hashing import is_cow_pandas
+    from cash.value_hash import compute_hash
+
+    frame = pd.DataFrame(np.zeros((2_000, 100)))
+    if not is_cow_pandas(frame):
+        pytest.skip("the frame memo needs pandas copy-on-write")
+    calls = []
+    _register(disk_cash, pd.DataFrame, lambda d: calls.append(1) or "v1", override=True)
+
+    @disk_cash.cache(assume_safe=True)
+    def f(d):
+        return d.shape
+
+    compute_hash(frame)
+    f(frame)
+    assert calls, "a frame the notebook hashed first skipped the overriding hasher"

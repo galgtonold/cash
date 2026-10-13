@@ -1418,10 +1418,10 @@ class ArgHasher:
            within-session speedup that returns the content digest, never
            the tag. The decorator's own tags are not trusted here, since
            nothing moves them when the object is mutated.
-        4. A pandas copy-on-write frame's memoised digest, checked
-           exactly (`_frame_memo_lookup`).
-        5. A hasher registered with ``override=True``: the user's
+        4. A hasher registered with ``override=True``: the user's
            identity beats reading the content.
+        5. A pandas copy-on-write frame's memoised digest, checked
+           exactly (`_frame_memo_lookup`).
         6. A builtin content hasher (pandas, numpy, polars, pyarrow,
            ...): byte-stable across processes, so a persisted entry
            survives a restart where a session tag would not.
@@ -1445,6 +1445,19 @@ class ArgHasher:
                 wref, memo_lineage, content_hash = entry
                 if memo_lineage == lineage and wref() is arg:
                     return content_hash
+        # Overriding hashers, ahead of everything cash would do itself.
+        # The user has said their identity for this type beats content
+        # hashing, which is the only way to stop re-reading a 800MB array
+        # on every call. Guarded by the emptiness check so the ordinary
+        # case pays one dict truth test, not a loop. Ahead of the frame
+        # memo too: that memo is the process's (`FRAME_DIGESTS`), filled by
+        # the notebook's value hash as well, so it holds content digests of
+        # frames this hasher claims.
+        if self.override_hashers:
+            for type_, (hasher_fn, src_hash) in self.override_hashers.items():
+                if isinstance(arg, type_):
+                    return f"{src_hash}:{hasher_fn(arg)}"
+
         # pandas >= 3 copy-on-write: an exact "has this frame changed?"
         # check instead of a trusted tag. See `_frame_memo_lookup`.
         frame_memo = lineage is None and is_cow_pandas(arg)
@@ -1452,16 +1465,6 @@ class ArgHasher:
             content_hash = self._frame_memo_lookup(arg)
             if content_hash is not None:
                 return content_hash
-
-        # Overriding hashers, ahead of everything cash would do itself.
-        # The user has said their identity for this type beats content
-        # hashing, which is the only way to stop re-reading a 800MB array
-        # on every call. Guarded by the emptiness check so the ordinary
-        # case pays one dict truth test, not a loop.
-        if self.override_hashers:
-            for type_, (hasher_fn, src_hash) in self.override_hashers.items():
-                if isinstance(arg, type_):
-                    return f"{src_hash}:{hasher_fn(arg)}"
 
         since = exposure_mark()
         content_digest = None
