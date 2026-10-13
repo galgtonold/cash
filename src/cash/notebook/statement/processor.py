@@ -8,7 +8,7 @@ import logging
 import secrets
 import sys
 import types
-from collections.abc import Callable, Generator, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Generator, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
@@ -116,6 +116,7 @@ from ...tracking.randomness import (
     rng_carrier_kind,
     rng_virtual_var,
 )
+from ..borrowed_memory import borrowed_memory_names, lazy_frame_sources
 from ..callee_reach import import_state_writes, module_globals, module_state_writes, rebound_modules
 from ..holder_patches import holder_patches
 from ..lineage_formula import held_lineage, key_hidden_reads, no_cache_value_digest, use_lineage_alias_store
@@ -1675,9 +1676,12 @@ class StatementProcessor:
                     shell=self.shell,
                     holders=holders,
                     gave_up=gave_up,
+                    inputs=run.inputs,
                 )
                 if reason is None and echo:
                     reason = identity_coupled_reason("the value it echoes", echo[0])
+                if reason is None:
+                    reason = self._lazy_frame_refusal(run, captured_vars)
                 if reason is None and holders:
                     found = dict(holders)
                     reason = self._take_holders(run, captured_vars, holders)
@@ -1698,6 +1702,21 @@ class StatementProcessor:
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)
             return None
         return holders
+
+    def _lazy_frame_refusal(self, run: StatementRun, captured_vars: dict[str, Any]) -> str | None:
+        """A polars LazyFrame built over its inputs' data (``pl.LazyFrame({'a':
+        arr})``) is not stored: a restored copy would not see the next write
+        to ``arr`` (`lazy_frame_sources`)."""
+        user_ns = self.shell.user_ns
+        for name in sorted(run.outputs - run.est_fit):
+            if name in captured_vars:
+                sources = lazy_frame_sources([captured_vars[name]], run.inputs - {name}, user_ns)
+                if sources:
+                    return (
+                        f"Live-alias object '{name}' (a LazyFrame over {', '.join(sorted(sources))}); "
+                        "re-derived from live data, not cached."
+                    )
+        return None
 
     def _route_pyplot_draws(self, run: StatementRun) -> None:
         """Take the names bound to pyplot's current figure and axes for
@@ -1763,7 +1782,7 @@ class StatementProcessor:
             links = [(outputs, set(holders))]
         else:
             links, complete = self._holders_of(run, outputs, captured_vars, echo, cost, fallback_floor, held)
-        bases, bases_complete = self._view_bases_of(outputs, captured_vars, cost)
+        bases, bases_complete = self._view_bases_of(outputs, captured_vars, cost, run.inputs)
         links += bases
         complete = complete and bases_complete
         for owners, names in links:
@@ -1875,24 +1894,32 @@ class StatementProcessor:
         return [(outputs, found_names)], complete
 
     def _view_bases_of(
-        self, outputs: list[str], captured_vars: dict[str, Any], cost: float
+        self, outputs: list[str], captured_vars: dict[str, Any], cost: float, inputs: Collection[str] = frozenset()
     ) -> tuple[list[tuple[Iterable[str], set[str]]], bool]:
         """``(links, complete)``: each output with the variables bound to an
-        array a numpy view in it sits on (`view_base_names`), within the
-        share check's budget."""
+        array a numpy view in it sits on (`view_base_names`), or whose data
+        shares memory with it across libraries (`borrowed_memory_names`:
+        ``s = pl.Series(arr)``; for a polars LazyFrame, the *inputs* it may
+        keep its data in, `lazy_frame_sources`), within the share check's
+        budget."""
         if "numpy" not in sys.modules:
             return [], True
         user_ns = self.shell.user_ns
         hidden = getattr(self.shell, "user_ns_hidden", None) or {}
         links: list[tuple[Iterable[str], set[str]]] = []
+
+        def skip_name(other: str) -> bool:
+            return other in hidden or is_history_name(other)
+
         try:
             with walk_budget(share_check_budget(cost)):
                 for name in outputs:
-                    found = view_base_names(
-                        [captured_vars[name]],
-                        user_ns,
-                        skip_name=lambda other: other in hidden or is_history_name(other),
+                    found = view_base_names([captured_vars[name]], user_ns, skip_name=skip_name)
+                    found |= borrowed_memory_names(
+                        [captured_vars[name]], user_ns, skip_name=skip_name, containers=inputs
                     )
+                    found |= lazy_frame_sources([captured_vars[name]], inputs, user_ns)
+                    found.discard(name)
                     if found:
                         links.append(([name], found))
         except WalkBudgetExceeded:
