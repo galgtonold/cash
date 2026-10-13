@@ -172,6 +172,23 @@ c = a + b      # lineage(c) folds in lineage(a) and lineage(b)
 d = c * 2      # lineage(d) folds in lineage(c)
 ```
 
+<!-- claim: cash/notebook/value_cutoff.py:ValueCutoff.lineage_for @7f9a2f17, cash/notebook/value_cutoff.py:_COMPARED @18236e1f, cash/notebook/statement/lineage.py:StatementLineageBuilder._hash_once @6214e8f5 -->
+**A value rebuilt to the same content keeps its lineage.** When a statement
+runs again because an input moved on, and the pandas frame or series, numpy
+array or networkx graph (`Graph`, `DiGraph`, `MultiGraph`, `MultiDiGraph`)
+it binds has the same content as one an earlier statement bound, it takes
+that one's lineage, and what was built on it is served. A table filtered
+back to the rows it held, or a giant component that new data outside it left
+unchanged, does not run the analyses below it again. The comparison reads
+the whole value: for a graph its class, its nodes and each node's edges in
+order, and every node, edge and graph attribute by content. Any difference
+keeps the new lineage. The graph's digest is the one cash already takes of a
+statement's output, so this costs no extra pass. After a restart a value
+restored from the cache counts as seen, and the equalities found before are
+kept in the cache folder. A statement below that also depends on a file that
+changed since (new rows read upstream) still runs, as any reader of that file
+does; the library calls inside it that are keyed on the value are served.
+
 ### Inputs a statement never names
 
 A statement's inputs come from the names it mentions. Two real dependencies

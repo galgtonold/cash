@@ -5,13 +5,14 @@ A lineage names a value by how it was built. Rebuild a table with the same
 code from an input that moved on (``temptastic = tsimp[...]`` after
 ``tsimp`` was rebuilt above it) and the new lineage differs although the
 table holds the same rows -- so a 150 s loop reading it ran again in a
-student's notebook. When a frame, series or array a statement executed to
-bind has the same content as one an earlier statement bound, its output takes
-that one's lineage, and what was cached from it is served.
+student's notebook. When a frame, series, array or networkx graph a statement
+executed to bind has the same content as one an earlier statement bound, its
+output takes that one's lineage, and what was cached from it is served.
 
 Content is compared by `compute_hash`, which reads the whole value: values,
-index, column names, dtypes and ``attrs``. A digest that is only an identity
-(`is_identity_fallback_hash`) is never compared.
+index, column names, dtypes and ``attrs``; for a graph its class, nodes and
+edges in order and every attribute (`_GRAPHS`). A digest that is only an
+identity (`is_identity_fallback_hash`) is never compared.
 
 The alias from the lineage the formula gives to the one taken is kept in
 `lineage_formula`, so the simulation, which recomputes lineages from code,
@@ -38,14 +39,40 @@ __all__ = ["LineageAliasStore", "ValueCutoff"]
 _MAX_ALIASES = 50_000
 
 #: The types compared: a frame, series or array, whose content hash covers
-#: everything a reader can see of it. Other values keep their own lineage.
-_COMPARED = {("pandas", "DataFrame"), ("pandas", "Series"), ("numpy", "ndarray")}
+#: everything a reader can see of it, and a networkx graph, whose content
+#: hash is the key pickle of all it holds (`_GRAPHS`). Other values keep
+#: their own lineage.
+_COMPARED = {
+    ("pandas", "DataFrame"),
+    ("pandas", "Series"),
+    ("numpy", "ndarray"),
+    ("networkx", "Graph"),
+    ("networkx", "DiGraph"),
+    ("networkx", "MultiGraph"),
+    ("networkx", "MultiDiGraph"),
+}
+
+#: A networkx graph's content hash (`compute_hash`) is the sha256 of its key
+#: pickle: its class by name, and its ``__dict__`` -- the graph, node and
+#: adjacency dicts in their order (so node order and, per node, edge order),
+#: every attribute dict and every value in it by content, and, for a view
+#: (``G.subgraph(nodes)``), the graph it views and its filters. Only the
+#: views networkx fills on first use (``G.nodes``, ``G.adj``) are left out
+#: (`kept_state.derived_views`): they hold nothing the graph does not. Equal
+#: graphs whose objects are shared otherwise (one attribute dict on two
+#: nodes) pickle apart: a miss, never a wrong lineage. The digest is taken
+#: once per statement: the session hash of the output reuses it
+#: (`StatementLineageBuilder._hash_once`). A graph keeps no version counter,
+#: so it is not carried to the next statement.
+_GRAPHS = frozenset(name for module, name in _COMPARED if module == "networkx")
 
 
 def _compared(value: Any) -> bool:
     t = type(value)
     if ((t.__module__ or "").split(".", 1)[0], t.__name__) not in _COMPARED:
         return False
+    if t.__name__ in _GRAPHS:
+        return True
     # An array of objects (``axes`` from ``plt.subplots``) is hashed by
     # pickling what it holds -- a whole figure.
     return getattr(getattr(value, "dtype", None), "kind", "") != "O"
@@ -66,7 +93,7 @@ def _read_only(value: Any) -> str:
     One flag per array: ``"1"`` read-only, ``"0"`` writeable, ``"?"`` not
     told."""
     numpy = sys.modules.get("numpy")
-    if numpy is None:
+    if numpy is None or type(value).__name__ in _GRAPHS:
         return ""
     if isinstance(value, numpy.ndarray):
         arrays = [value]
@@ -166,9 +193,10 @@ class ValueCutoff:
         only when an earlier statement bound the same names to values with
         the same content and gave them one lineage: ``U, V, hist =
         als_fit(C, tol=1e-3)`` returning what ``als_fit(C)`` did keeps what
-        was built on ``U`` and ``V``. Each value must be a frame, series or
-        array, or plain data (`_plain_data.is_plain`), whose digest covers
-        all of it; otherwise *lineages* stand.
+        was built on ``U`` and ``V``. Each value must be a frame, series,
+        array or networkx graph (`_compared`), or plain data
+        (`_plain_data.is_plain`), whose digest covers all of it; otherwise
+        *lineages* stand.
         """
         shared = set(lineages.values())
         if len(shared) != 1 or set(values) != set(lineages):

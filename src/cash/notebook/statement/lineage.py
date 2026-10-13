@@ -26,7 +26,7 @@ from __future__ import annotations
 import ast
 import logging
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from ...analysis.code_analyzer import CodeAnalyzer
@@ -232,6 +232,12 @@ class StatementLineageBuilder:
         cut_off = rebuilt and len(bound) == 1
 
         func_component = callable_source_component(self.function_tracker, inputs, user_ns)
+        # The content digests the cutoff takes of the outputs, kept for the
+        # session hash `_record_output` takes of the same values below: a
+        # networkx graph has no cheaper digest and no sound "unchanged"
+        # signal, so it is read once here, not twice.
+        taken: dict[int, tuple[Any, str]] = {}
+        content_hash = self._hash_once(taken)
         lineages: dict[str, str] = {}
         for var_name, value in bound.items():
             captured_vars[var_name] = value
@@ -260,15 +266,11 @@ class StatementLineageBuilder:
             # A new object only: ``t = raw`` binds the input itself, which
             # keeps the lineage the formula gives it.
             if cut_off:
-                output_lineage_hash = tracking_state.value_cutoff.lineage_for(
-                    value, output_lineage_hash, self.compute_hash or compute_hash
-                )
+                output_lineage_hash = tracking_state.value_cutoff.lineage_for(value, output_lineage_hash, content_hash)
             lineages[var_name] = output_lineage_hash
 
         if rebuilt and len(bound) > 1:
-            lineages = tracking_state.value_cutoff.lineage_for_outputs(
-                bound, lineages, self.compute_hash or compute_hash
-            )
+            lineages = tracking_state.value_cutoff.lineage_for_outputs(bound, lineages, content_hash)
 
         for var_name, value in bound.items():
             if body_only:
@@ -293,6 +295,7 @@ class StatementLineageBuilder:
                 cache_key=cache_key,
                 inputs=inputs,
                 accessed_files=accessed_files,
+                taken=taken,
             )
 
         if cache_key:
@@ -354,9 +357,11 @@ class StatementLineageBuilder:
         cache_key: str,
         inputs: set[str],
         accessed_files: set[str] | None,
+        taken: Mapping[int, tuple[Any, str]] | None = None,
     ) -> None:
         """Record everything the tracking state keeps about the output
-        *var_name*, once its lineage is known."""
+        *var_name*, once its lineage is known. *taken* holds the content
+        digests already taken of this statement's outputs (`_hash_once`)."""
         user_ns = self.shell.user_ns
         # Record via LineageStore so the dict entry and ``_cash_lineage_hash``
         # are written together and cannot drift.
@@ -373,13 +378,26 @@ class StatementLineageBuilder:
         tracking_state.executed_cell_codes[var_name] = code
 
         self._update_module_attribute_deps(tracking_state, var_name, code, user_ns)
-        self._update_variable_content_hashes(tracking_state, var_name, value, output_lineage_hash)
+        self._update_variable_content_hashes(tracking_state, var_name, value, output_lineage_hash, taken)
 
         tracking_state.variable_sources[var_name] = cache_key
 
         self._file_deps.update_for_var(
             tracking_state, var_name, accessed_files, inputs, value, rebind=var_name not in inputs
         )
+
+    def _hash_once(self, taken: dict[int, tuple[Any, str]]) -> Callable[[Any], str]:
+        """The content hash (`compute_hash`, or the one this builder was
+        given), noting each digest in *taken* by the value's id, with the
+        value held so the id stays its own."""
+        hash_fn = self.compute_hash or compute_hash
+
+        def content_hash(value: Any) -> str:
+            digest = hash_fn(value)
+            taken[id(value)] = (value, digest)
+            return digest
+
+        return content_hash
 
     @staticmethod
     def _no_cache_value(digests: dict[str, str], var_name: str, value: Any) -> str:
@@ -513,20 +531,29 @@ class StatementLineageBuilder:
         var_name: str,
         value: Any,
         output_lineage_hash: str,
+        taken: Mapping[int, tuple[Any, str]] | None = None,
     ) -> None:
-        """Update variable_hashes and current_session_hashes for *var_name*."""
+        """Update variable_hashes and current_session_hashes for *var_name*.
+
+        A digest in *taken* is the one this statement already took of this
+        very *value*, after it ran and with no user code since: it is used
+        rather than read again."""
         content_hash: str | None = None
         if not hashed_by_lineage(value):
             if not self.compute_hash:
                 return
-            try:
-                # Within a budget: a value that takes longer to read is
-                # remembered as costly and has its lineage as its session
-                # hash, like a frame (`budgeted_hash`).
-                content_hash = budgeted_hash(value, self.compute_hash)
-            except Exception as e:  # noqa: BLE001 - a user value that cannot be hashed
-                logger.debug("[CACHE DEBUG] Could not hash captured variable '%s': %s", var_name, e)
-                return
+            found = taken.get(id(value)) if taken else None
+            if found is not None and found[0] is value:
+                content_hash = found[1]
+            else:
+                try:
+                    # Within a budget: a value that takes longer to read is
+                    # remembered as costly and has its lineage as its session
+                    # hash, like a frame (`budgeted_hash`).
+                    content_hash = budgeted_hash(value, self.compute_hash)
+                except Exception as e:  # noqa: BLE001 - a user value that cannot be hashed
+                    logger.debug("[CACHE DEBUG] Could not hash captured variable '%s': %s", var_name, e)
+                    return
         # For large or costly objects the lineage stands for the content: no
         # content hash equals it, so a check comparing one reads "changed".
         session_hash = content_hash if content_hash is not None else output_lineage_hash
