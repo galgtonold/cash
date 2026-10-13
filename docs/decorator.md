@@ -275,14 +275,18 @@ changed. The second list is what cash does not see, and what to do about it.
       [tracked reader](tutorials/feature-guides/custom-file-sources.md#whats-automatically-tracked),
       by content, or declared with `file_depends_on=`. Also a file it looked
       for and did not find, once it appears, and one it found without
-      reading, once it is gone.
+      reading, once it is gone. A folder it lists (`glob.glob`,
+      `os.listdir`, `Path.glob`, `Path.iterdir`, `os.walk`, ...), once a
+      file in it is added or removed.
     - An **environment variable** read by literal name (`os.getenv("TENANT")`,
       `"DEBUG" in os.environ`) and the working directory (`os.getcwd()`,
       `Path.cwd()`, `os.path.abspath(p)`). Also what standard-library helpers
       read for you: `os.path.expandvars("$DATA_DIR/x")`, `expanduser`,
       `Path.home()`, `tempfile.gettempdir()`, `shutil.which` (`PATH`).
-    - The **command line**: `sys.argv`, and an `argparse` parser's
-      `parse_args()` called without a list of its own.
+    - The **command line**, when the function or a helper it calls reads
+      it: `sys.argv`, and an `argparse` parser's `parse_args()` called
+      without a list of its own. Flags your `main()` parses and passes on
+      count only as those arguments.
     - Sources named in `depends_on=` or `dynamic_depends_on=`, and an elapsed
       `ttl`.
 
@@ -755,12 +759,53 @@ def score(model, batch):
 ```
 
 The consumer then keys the model by the call that produced it, in microseconds.
-A frozen numpy array comes back read-only, and
+A pandas frame or numpy array is hashed once, the first time it is passed, and
+that hash serves every later call in the process. A frozen numpy array comes
+back read-only, and
 [`KEY-FROZEN-MUTATED`](warnings.md#key-frozen-mutated) names the producer if a
 frozen result was changed after all. [`CACHE-NET-LOSS`](warnings.md#cache-net-loss)
-warns when hashing an argument costs more than the cache saves. For big inputs,
-key the cached functions by **file path** and parse inside them. For an object
-of your own class that holds the big data, a
+warns when hashing an argument costs more than the cache saves.
+
+`frozen=True` covers the value the function returns. A tuple it returns is
+keyed by the call when you pass the tuple on whole; a value you unpack from
+it (`graph, nodes = build()`) is keyed by its content, as if the function
+were not frozen. Return one value per frozen function, or pass the tuple.
+
+<!-- claim: cash/decorator/frozen.py:FrozenResults.remember_container @1e8af0c7, cash/decorator/store.py:ResultStore.attach_lineage @f47f5d75 -->
+**Big inputs: path in, data passed on.** [Pass data in](#pass-data-in) and
+`frozen=` work together. Give the file path to a cached loader marked
+`frozen=True`, parse inside it, and pass what it returns to the functions
+that use it:
+
+```python
+import cash
+
+@cash.cache(frozen=True)
+def load_prices(path):
+    with open(path) as f:
+        return [float(line) for line in f]
+
+@cash.cache
+def mean_price(prices):
+    return sum(prices) / len(prices)
+
+with open("prices.txt", "w") as f:
+    f.write("1.0\n2.0\n4.5\n")
+
+prices = load_prices("prices.txt")  # first call: parses the file
+mean_price(prices)    # first call: runs the body
+mean_price(prices)    # cache hit; the list is not read again
+```
+
+The loader is keyed by the path, its code and the file's content, and
+`mean_price` by the call that made `prices`. When the big value is put
+together outside any cached function (a `pd.concat` of cached per-file
+results), do that in a cached `frozen=True` function too, so it has a
+producer. The one trade-off: a value keyed by its producer call reruns its
+consumers when you edit the loader's code, even if the loader returns the
+same value; a frame or array, keyed by its content, does not.
+
+For an object of your own class that holds the big data, a
 [`__cash_key__`](tutorials/feature-guides/custom-hashers.md#cash-key) method
 that returns a version or id keys it without reading the data.
 
@@ -785,6 +830,27 @@ would skip or get wrong:
 | Reads the clock, a random UUID, or an environment variable by computed name | Warns ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)) and caches the first value |
 | Reads an environment variable by literal name, the working directory, or the command line (`sys.argv`, `parser.parse_args()`) | Puts the value in the key. No warning |
 | Uses `eval`/`exec`, `importlib`, or `getattr(obj, name)()` with a computed name, or calls a function `exec`/`eval` built from a string (rules or formulas loaded from a file) | Warns ([`KEY-UNTRACKABLE-DEP`](warnings.md#key-untrackable-dep)) and runs uncached, because edits to that code can't be tracked. `strict=True` raises `CashImpureFunctionError` |
+
+**When writing a file is part of the job** (a report, a thumbnail, a saved
+model), a hit skips the write. Split the function: cache the computation, and
+write the file in an uncached function, so the file is written on every run
+while the slow part comes from the cache:
+
+```python
+import cash
+
+@cash.cache
+def totals(rows):
+    return {"n": len(rows), "sum": sum(rows)}
+
+def write_report(t, path):
+    with open(path, "w") as f:
+        f.write(f"{t['n']} rows, sum {t['sum']}\n")
+
+rows = [1, 2, 3]
+write_report(totals(rows), "report.txt")  # first call: runs totals
+write_report(totals(rows), "report.txt")  # cache hit; written again
+```
 
 Logging calls are not side effects for this purpose. A special method or a
 property of an object of your class that the body reads by a global name
@@ -948,6 +1014,33 @@ iterator chunks, and resets its counters and warning log.
 
 **`f.__wrapped__`** is the undecorated function. Call it to bypass the cache,
 for example in a test.
+
+## Common questions
+
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3514afa3, cash/decorator/arg_hashing.py:ArgHasher.arg_hash @ed3fc6d0 -->
+**Do new command-line flags make every cached function miss?** No. Only a
+function that reads `sys.argv` or calls `parse_args()` itself, or through a
+helper, is keyed by the command line. One that gets the parsed values as
+arguments is keyed by those values alone.
+
+**Is a path argument part of the key?** Yes, as text, like any argument, and
+the file the function reads through it is tracked by its content as well.
+With an absolute path, a copy of the project in another folder passes
+another path, so each call runs once there. A relative path keeps the key,
+but names a file in the working directory
+([Relative paths](decorator-limitations.md#relative-paths-and-working-directories)).
+
+**Pass a big input in, or load it by path?** Both: a cached `frozen=True`
+loader takes the path, and what it returns is passed on. See
+[`frozen=` and large arguments](#frozen-and-large-arguments).
+
+**Does `frozen=True` cover a tuple I unpack?** Only the tuple passed on
+whole. A value unpacked from it is keyed by its content, as if the function
+were not frozen.
+
+**Is a fitted model I pass to another cached function keyed by its content
+or by the call that made it?** By its content, read in full on every call,
+unless the function that returned it is `frozen=True`: then by that call.
 
 ## Known limitations
 

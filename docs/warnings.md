@@ -717,7 +717,8 @@ which that key does not see move. Past about 50 ms of hashing,
 the message may say "an argument" instead of naming which one.
 
 **What to do.** If the effect is part of the job, split the function: cache the
-computation and do the writing in an uncached caller. For an argument
+computation and do the writing in an uncached caller
+([example](decorator.md#side-effects)). For an argument
 mutation, return a modified copy instead. If the effect is incidental (a log
 file, a temp file), put `# @cash:assume-safe` on the line the message names, or
 run the code in `with cash.assume_safe():`.
