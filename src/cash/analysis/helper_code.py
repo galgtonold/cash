@@ -59,7 +59,34 @@ def is_exec_built(obj: Any) -> bool:
         # A class built so (``exec(rule_text, ns); Rule = ns["Rule"]``): its
         # methods are such functions, and the class, named after no module
         # (``__module__`` falls back to "builtins"), read as library code.
-        return any(is_exec_built(_unwrapped_member(m)) for m in vars(obj).values())
+        return _class_is_exec_built(obj)
+    return _function_is_exec_built(obj)
+
+
+def _class_is_exec_built(cls: type) -> bool:
+    """`is_exec_built` for a class: a method of it, or of a class nested in
+    it, is. Nested classes are followed with a seen set, as class attributes
+    can form a cycle: ``ctypes.c_int.__ctype_be__`` is the byte-swapped type,
+    whose ``__ctype_le__`` is ``c_int`` again. Followed without one, any call
+    to ``ctypes.c_int(...)`` ended the helper walk in a RecursionError, and
+    the cached function ran uncached (KEY-HELPERS-UNWALKABLE)."""
+    seen: set[int] = set()
+    pending: list[type] = [cls]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        for member in list(vars(current).values()):
+            member = _unwrapped_member(member)
+            if isinstance(member, type):
+                pending.append(member)
+            elif _function_is_exec_built(member):
+                return True
+    return False
+
+
+def _function_is_exec_built(obj: Any) -> bool:
     fn = getattr(obj, "__func__", obj)
     if not isinstance(fn, types.FunctionType) or "__name__" in fn.__globals__:
         return False
