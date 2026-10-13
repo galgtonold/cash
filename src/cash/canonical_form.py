@@ -708,6 +708,11 @@ def _object_by_fields(value: Any, walk: _Walk) -> Any:
     state = getattr(value, "__dict__", None)
     if type(state) is not dict or not _STR_ONLY.issuperset(map(type, state)):
         return None
+    views = kept_state.derived_views(value)
+    if views:
+        # ``G.degree`` filled on first use: a view of the rest, keyed as
+        # the pickle keys it, without (`kept_state.derived_views`).
+        state = {k: v for k, v in state.items() if k not in views}
     if not any(type(v) in _plain_data.TREE_NODES and len(v) >= RECORDS_FROM for v in state.values()):
         return None  # small: pickled whole costs no more
     if not _found_by_name(t):
@@ -897,6 +902,9 @@ def _pickled_state(value: Any) -> Any:
         return reduced  # pickled by name
     t = type(value)
     rebuild, args, *rest = reduced
+    views = kept_state.derived_views(value) if rest and isinstance(rest[0], dict) else ()
+    if views:
+        rest[0] = {k: v for k, v in rest[0].items() if k not in views}
     parts: list = [tuple("__cash_self_type__" if a is t else a for a in args or ())]
     for i, part in enumerate(rest):
         # State, then the iterators of list items and dict items.
