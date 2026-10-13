@@ -283,7 +283,7 @@ def test_small_losses_across_functions_are_reported_together():
     warning waits for, and the run was 1.3x slower than no cache at all."""
     ledger = EffectivenessLedger(waste_threshold_seconds=2.0)
     for name in ("app.max_latency", "app.coupons", "app.parse_users"):
-        ledger.record(name, overhead_seconds=0.9, body_seconds=0.01, was_hit=False)
+        ledger.record(name, overhead_seconds=0.9, body_seconds=0.01, was_hit=True)
     verdicts = ledger.final_verdicts()
     assert len(verdicts) == 1, verdicts
     what, fix = verdicts[0]
@@ -292,11 +292,25 @@ def test_small_losses_across_functions_are_reported_together():
 
 
 def test_a_function_that_never_hit_is_not_said_to_be_slow_to_load():
-    """'it is loading the stored result' about a function whose
-    calls were all misses -- nothing was loaded; keeping the result was the
-    cost."""
+    """'it is loading the stored result' about a function whose cost is in
+    its misses -- keeping the result was the cost, not loading it."""
     ledger = EffectivenessLedger(waste_threshold_seconds=2.0)
     culprit = ("path", "str", 0.0001, None, False)
     ledger.record("app.parse", overhead_seconds=2.5, body_seconds=0.6, was_hit=False, culprit=culprit)
+    ledger.record("app.parse", overhead_seconds=0.7, body_seconds=0.6, was_hit=True, culprit=culprit)
     ((what, _fix),) = ledger.final_verdicts()
     assert "keeping the result" in what and "loading" not in what, what
+
+
+def test_no_verdict_before_the_first_hit():
+    """A first run that only missed was told caching "is costing more than it
+    saves", though nothing could have been saved yet and its next run broke
+    even: what a hit costs is not known before one. Misses alone, however
+    costly, say nothing -- in a run, and at its end."""
+    ledger = EffectivenessLedger(waste_threshold_seconds=2.0)
+    for _ in range(5):
+        assert ledger.record("etl.clean", overhead_seconds=2.9, body_seconds=1.2, was_hit=False) is None
+    assert ledger.final_verdicts() == []
+    # Control: the same overhead on a hit is a verdict.
+    ledger.record("etl.clean", overhead_seconds=2.9, body_seconds=1.2, was_hit=True)
+    assert ledger.final_verdicts() or ledger._ledgers["etl.clean"].warned

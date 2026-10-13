@@ -159,7 +159,7 @@ the loop runs again. The loop's own working variables (`parts` in
 `for f in files: parts.append(read(f))`) are not stored; a cell that reads
 them runs the loop.
 
-<!-- claim: cash/analysis/mutations.py:module_setting_receivers @977421aa, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @745e10a2 -->
+<!-- claim: cash/analysis/mutations.py:module_setting_receivers @977421aa, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @d2ba2265 -->
 A setting kept inside a library, such as `plt.style.use("ggplot")`,
 `plt.rcParams.update(...)`, `pd.set_option(...)` or
 `warnings.filterwarnings(...)`, is not a variable cash can store. After a

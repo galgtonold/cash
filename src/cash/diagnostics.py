@@ -303,7 +303,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # depend on it stop being tracked
         "NOTEBOOK-MAGIC-STALE",  # a name a magic bound is kept as it is,
         # though what the magic read changed since it ran, or is gone
-        "NOTEBOOK-NOT-FOUND",  # no notebook path; upstream tracking is off
+        "NOTEBOOK-NOT-FOUND",  # no notebook cells to read; cells above the one
+        # run are not re-checked, statements still cache on their own inputs
         "NOTEBOOK-RELOAD-STATE",  # an edited module was reloaded, or the
         # kernel restarted, and cash cannot rebuild the state a cell set on it
         "NOTEBOOK-SAVEFIG-SKIP",  # refused to re-run plt.savefig() during

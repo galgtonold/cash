@@ -111,7 +111,8 @@ def test_net_loss_says_an_argument_key_replaces_is_hashed_for_the_change_check(f
 
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
-        for i in range(5):
+        # Hits too: no verdict comes before one (nothing could be saved yet).
+        for i in (0, 1, 2, 0, 1, 2):
             step(i, scratch)
     found = [str(w.message) for w in rec if "CACHE-NET-LOSS" in str(w.message)]
     assert found, [str(w.message) for w in rec]

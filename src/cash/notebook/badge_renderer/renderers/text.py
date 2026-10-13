@@ -336,8 +336,8 @@ def _item_lines(item: SectionItem, *, is_upstream: bool, indent: int = 0) -> lis
     return []
 
 
-#: A statement that cannot be cached and ran in less than this is folded with
-#: its neighbours; a slower one keeps its row and its reason.
+#: A statement that cannot be cached and ran in less than this is left out
+#: with its neighbours; a slower one keeps its row and its reason.
 _FOLD_BELOW_S = 0.1
 #: Fewer consecutive cheap not-cached rows than this keep their rows.
 _FOLD_MIN_ROWS = 3
@@ -355,12 +355,15 @@ def _foldable(item: SectionItem) -> bool:
 
 
 def _items_lines(items, *, is_upstream: bool) -> list[str]:
-    """Lines for a section's items, folding runs of cheap not-cached rows.
+    """Lines for a section's items, leaving out runs of cheap not-cached rows.
 
     ``ax.axhline(...)``, ``ax.legend()``, ``fig.savefig(...)``, ``to_csv(...)``:
     a row apiece, each with its reason, put 10 of 12 lines of a chart cell's
-    badge on steps that re-run in milliseconds and must. They cost nothing
-    to re-run; one line names them.
+    badge on steps that re-run in milliseconds and must. Folded into one
+    "re-ran 8 quick steps that are never cached" line, they still printed the
+    same line on every run of every chart cell. They cost nothing to re-run,
+    and the header already counts them ("- 8 not cached"), so a run of them
+    has no line; one or two keep their rows, and a slow one always does.
     """
     out: list[str] = []
     items = list(items)
@@ -370,14 +373,6 @@ def _items_lines(items, *, is_upstream: bool) -> list[str]:
         while j < len(items) and _foldable(items[j]):
             j += 1
         if j - i >= _FOLD_MIN_ROWS:
-            run = items[i:j]
-            names = [(r.code or "").splitlines()[0].split("(")[0].strip()[:40] for r in run]
-            shown = ", ".join(names[:6]) + (", ..." if len(names) > 6 else "")
-            lead = "^" if is_upstream else ""
-            out.append(
-                f"  {lead}re-ran {len(run)} quick steps that are never cached "
-                f"({sum(r.time_s for r in run):.2f}s): {shown}"
-            )
             i = j
             continue
         out.extend(_item_lines(items[i], is_upstream=is_upstream))

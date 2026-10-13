@@ -57,7 +57,7 @@ Each tier has a size cap, sized to the machine unless you set one:
 | Disk | A quarter of the room on the cache's volume (free space plus what the cache already holds), at least 8 GiB and at most 100 GiB, and never more than 80% of that room. Set `max_cache_size` to fix it. |
 | Memory | A fifth of the memory the process may use (the machine's RAM, or a container's limit if lower), at least 512 MiB and at most 4 GiB. |
 
-<!-- claim: cash/backends/budget_notices.py:describe_budget @663afadf, cash/backends/adaptive_caps.py:disk_cap_reason @988059b0, cash/backends/file_eviction.py:FileEvictor.budget @9ff2d2c0 -->
+<!-- claim: cash/backends/budget_notices.py:describe_budget @663afadf, cash/backends/adaptive_caps.py:disk_cap_reason @8e67909a, cash/backends/file_eviction.py:FileEvictor.budget @9ff2d2c0 -->
 cash says how big the disk cache may grow when caching starts, once per
 process and cache folder. The line names the folder, the cap and the rule that
 set it, so a cache of many GiB is never a surprise:
@@ -66,16 +66,19 @@ set it, so a cache of many GiB is never a surprise:
 caching in /work/.cash, up to 26.0 GiB (a quarter of the free disk space; set max_cache_size to change it)
 ```
 
-When the 8 GiB floor or the 100 GiB ceiling decided, it says that instead, and
-a cap you set reads `(set by max_cache_size)`.
+When the 8 GiB floor or the 100 GiB ceiling decided, it says that instead. On
+a volume too full for the 8 GiB floor, it reads `(80% of the free disk space,
+the most cash takes; the 8 GiB minimum does not fit)`. A cap you set reads
+`(set by max_cache_size)`.
 
 === "Decorator"
 
     <!-- claim: cash/backends/file_eviction.py:FileEvictor.ensure_size_scanned @adb3043c, cash/decorator/run_summary.py:RunSummary._budget @b7ff011b -->
     The first result a process writes to disk logs the line on the
-    `cash.storage` logger. `verbose=True`, `debug=True` (or `CASH_VERBOSE=1`,
-    `CASH_DEBUG=1`) or your own `logging` at INFO shows it; otherwise it stays
-    quiet. `summary=True` names the cap on the summary's `cache:` line.
+    `cash.storage` logger when you ask for it: `verbose=True`, `debug=True` (or
+    `CASH_VERBOSE=1`, `CASH_DEBUG=1`), or a level of INFO you set on the `cash`
+    or `cash.storage` logger yourself. An application that logs everything at
+    INFO from the root logger does not get it on every run. `summary=True` names the cap on the summary's `cache:` line.
 
 === "Notebook"
 
@@ -187,7 +190,7 @@ cheap value goes before many small expensive ones. Entries nobody reads lose
 their standing over time. An entry read since the ranking was made, or one
 about to be rewritten, is skipped in that round.
 
-<!-- claim: cash/backends/file_eviction.py:FileEvictor.report_eviction @aa4b93be, cash/backends/budget_notices.py:eviction_text @172c867a -->
+<!-- claim: cash/backends/file_eviction.py:FileEvictor.report_eviction @0a7cf82f, cash/backends/budget_notices.py:eviction_text @172c867a -->
 The first time the cap makes cash remove entries, it says how much it removed
 and that those were the entries worth least per byte. It says so once per
 process and cache folder; later removals only reach the debug log. It is a

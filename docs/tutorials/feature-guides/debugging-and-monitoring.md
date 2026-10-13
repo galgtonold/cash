@@ -151,7 +151,8 @@ explains the size caps.
 <!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @c4c64c7d -->
 `status = %cash_status dict` returns the last cell's statements (status, code,
 times) and the session's tracking state, for tools and agents. It uses the enum
-names `COMPUTED` (the badge's EXECUTED) and `RESTORED` (CACHED).
+names `COMPUTED` (the badge's EXECUTED) and `RESTORED` (CACHED), and `MIXED`
+for a statement that ran while calls inside it came from the cache.
 `%cash_provenance NAME` shows how a variable was computed: the code, its inputs
 and its history. See [Magic commands](../../magics.md).
 

@@ -64,6 +64,10 @@ class PurityIssue:
             global of a ``mutable_global``.
         effect_kind: The :class:`~cash.effects.EffectKind` of the call an
             ``impure_call`` is about, where it has one.
+        waiver_line: Another line, numbered like *line* before anchoring,
+            that a ``# @cash:assume-safe`` comment may sit on to waive the
+            finding: the opening line of a statement whose method chain puts
+            the reported call on a later line. 0 when there is none.
     """
 
     kind: str
@@ -73,6 +77,7 @@ class PurityIssue:
     filename: str = ""
     subject: str = ""
     effect_kind: EffectKind | None = None
+    waiver_line: int = 0
 
 
 @dataclass(frozen=True)

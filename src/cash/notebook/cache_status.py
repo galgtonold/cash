@@ -8,10 +8,12 @@ import enum
 class CacheStatus(enum.Enum):
     """What happened to one statement, as its metric reports it.
 
-    The last three are notification rows the cell executor adds to a cell's
-    metrics (a function or module changed under the cell, an advisory); they
-    are not the outcome of running a statement. A metric may carry a member
-    or its value; :meth:`parse` reads either.
+    ``FUNCTION_CHANGED``, ``MODULE_RELOADED`` and ``WARNING`` are
+    notification rows the cell executor adds to a cell's metrics (a function
+    or module changed under the cell, an advisory); they are not the outcome
+    of running a statement. ``MIXED`` appears only in ``%cash_status``: a
+    statement that ran while calls inside it came from the cache. A metric
+    may carry a member or its value; :meth:`parse` reads either.
     """
 
     COMPUTED = "COMPUTED"
@@ -22,6 +24,7 @@ class CacheStatus(enum.Enum):
     FUNCTION_CHANGED = "FUNCTION_CHANGED"
     MODULE_RELOADED = "MODULE_RELOADED"
     WARNING = "WARNING"
+    MIXED = "MIXED"
 
     def __str__(self) -> str:
         return self.value

@@ -46,7 +46,7 @@ from ..purity import KNOWN_PURE_BUILTINS
 from .ambient_reads import ambient_call, clock_helper_of
 from .file_effects import get_base_name, get_call_module, get_call_name
 from .helper_bindings import callee_chain
-from .mutations import PANDAS_INPLACE_METHODS
+from .mutations import NONE_RETURNING_MUTATORS, PANDAS_INPLACE_METHODS, returns_a_new_object
 from .purity_flow import is_log_line, receiver_is_fresh
 from .purity_policy import AMBIENT_KINDS, DECORATOR_POLICY, REPORTED_METHODS
 from .purity_report import (
@@ -173,6 +173,8 @@ class PurityVisitor(ast.NodeVisitor):
 
     __slots__ = (
         "issues",
+        "_discarded_calls",
+        "_chained_calls",
         "called_callable_nodes",
         "_param_names",
         "_qualname",
@@ -199,6 +201,11 @@ class PurityVisitor(ast.NodeVisitor):
         func_def: ast.AST | None = None,
     ) -> None:
         self.issues: list[PurityIssue] = []
+        #: ids of the calls whose value an expression statement drops.
+        self._discarded_calls: set[int] = set()
+        #: ids of the calls another method or a subscript is applied to,
+        #: worked out when first asked.
+        self._chained_calls: frozenset[int] | None = None
         #: *namespace* plus, in a method, its ``self`` / ``cls`` bound to the
         #: class: what a call site's clock helper is looked up in
         #: (`ambient_call`), so ``self.stamp()`` is judged like ``stamp()``.
@@ -520,13 +527,23 @@ class PurityVisitor(ast.NodeVisitor):
         self.called_callable_nodes.append(node)
 
     def _issue(self, kind: str, description: str, node: ast.AST, effect_kind: EffectKind | None = None) -> None:
+        line = getattr(node, "lineno", 0)
+        waiver_line = 0
+        func = getattr(node, "func", None)
+        if isinstance(func, ast.Attribute) and func.end_lineno and func.end_lineno != line:
+            # A link of a method chain that spans lines (``(df.group_by(...)
+            # \n .sort("ts"))``): name the line the method is on, where a
+            # reader looks for it and puts the waiver, and keep honouring a
+            # waiver on the line the statement opens on.
+            line, waiver_line = func.end_lineno, line
         self.issues.append(
             PurityIssue(
                 kind=kind,
                 description=description,
                 where=self._qualname,
-                line=getattr(node, "lineno", 0),
+                line=line,
                 effect_kind=effect_kind,
+                waiver_line=waiver_line,
             )
         )
 
@@ -738,6 +755,7 @@ class PurityVisitor(ast.NodeVisitor):
         if (
             not isinstance(func, ast.Attribute)
             or not reported
+            or self._returns_a_new_object(node, func)
             # A file written natively (``df = pl.DataFrame(...);
             # df.write_csv(p)``) is written whoever owns the frame, and
             # the runtime observer, which sees only ``open()``, cannot
@@ -762,6 +780,28 @@ class PurityVisitor(ast.NodeVisitor):
             effect_kind=effect.kind if effect is not None else None,
         )
         return True
+
+    def _returns_a_new_object(self, node: ast.Call, func: ast.Attribute) -> bool:
+        """Is this ``sort`` / ``reverse`` / ``clear`` / ``update`` the variant
+        that returns a new object and leaves its receiver alone, like polars'
+        ``df.sort("ts")`` (`returns_a_new_object`)?"""
+        if func.attr not in NONE_RETURNING_MUTATORS:
+            return False
+        if id(node) in self._discarded_calls:
+            use = "discarded"
+        else:
+            if self._chained_calls is None:
+                self._chained_calls = (
+                    frozenset(
+                        id(n.value)
+                        for n in ast.walk(self._func_def)
+                        if isinstance(n, (ast.Attribute, ast.Subscript)) and isinstance(n.value, ast.Call)
+                    )
+                    if self._func_def is not None
+                    else frozenset()
+                )
+            use = "chained" if id(node) in self._chained_calls else "bound"
+        return returns_a_new_object(node, use)
 
     def _inplace_true(self, node: ast.Call) -> bool:
         """A pandas method called with ``inplace=True`` mutates its receiver."""
@@ -837,6 +877,8 @@ class PurityVisitor(ast.NodeVisitor):
         return obj is time.sleep
 
     def visit_Expr(self, node: ast.Expr) -> None:
+        if isinstance(node.value, ast.Call):
+            self._discarded_calls.add(id(node.value))
         if isinstance(node.value, ast.Call) and (self._discard_is_expected(node.value.func) or is_log_line(node.value)):
             self.generic_visit(node)
             return

@@ -409,9 +409,12 @@ stopped. A new kernel re-runs the loop from where storing stopped.
 **What happened.** cash times what it spends on each call (building the key,
 the lookup, storing the result) and compares it with the function's own run
 time. For this function, caching has lost more than two seconds in total so
-far. The message gives the numbers and names the costliest argument.
+far, and a hit costs more than the function's longest run. The message gives
+the numbers and names the costliest argument. It waits for the function's
+first hit in the process: before one, nothing could have been saved, and what
+a hit costs is not known.
 
-<!-- claim: cash/effectiveness.py:EffectivenessLedger.final_verdicts @0e2aaab4 -->
+<!-- claim: cash/effectiveness.py:EffectivenessLedger.final_verdicts @d94c91a3 -->
 **Why it matters.** The decorator makes your program slower. The usual cause
 is a large argument, such as a big DataFrame, being hashed on every call.
 The check also runs at exit, so a script that calls each function once is
@@ -778,8 +781,8 @@ Each finding has a line number and a label:
 <!-- claim: cash/analysis/purity_flow.py:_FreshFlow._check_insertion @70874c70, cash/analysis/purity_flow.py:_FreshFlow._loop_targets @bd0ebd1c, cash/analysis/purity_flow.py:is_log_line @90d04d4b, cash/effects.py:is_read_only_sql @94e903d1 -->
 | Label | What it flags | Reported as |
 |---|---|---|
-| `impure_call` | A call made for its effect: `print` to stdout, `open(..., "w")`, `os.remove`, `subprocess.run`, `requests.post`, a write method such as `df.to_csv` on an object the function did not create, or a `@stateful` function; also reading the keyboard or standard input (`input()`, `sys.stdin.read()`, `for line in sys.stdin`) | this code |
-| `scope_mutation` | `global` / `nonlocal`, or assigning to another object's attribute or item | this code |
+| `impure_call` | A call made for its effect: `print` to stdout, `open(..., "w")`, `os.remove`, `subprocess.run`, `requests.post`, a write method such as `df.to_csv` on an object the function did not create, an in-place method such as `rows.sort()` on one (a `sort` whose result is used, as polars' `df.sort("ts")` is, returns a new object and is not reported), or a `@stateful` function; also reading the keyboard or standard input (`input()`, `sys.stdin.read()`, `for line in sys.stdin`) | this code |
+| `scope_mutation` | `global` / `nonlocal`, or assigning to another object's attribute or item. An object the function made is its own: a literal, a copy, or what a numpy, pandas or polars function returns (`load = np.bincount(...); load[c] -= d`, `counts = pd.crosstab(...); counts.columns = [...]`), except a view of an argument (`np.reshape`, `np.asarray`, `out=`) | this code |
 | `discarded_call` | A call whose return value is thrown away, except on an object the function made itself (`d = deque(xs); d.popleft()`, `m = LinearRegression(); m.fit(X, y)`) | this code |
 | `mutable_global` | A module global that other code in the module reassigns, and that the key does not fold | this code |
 | `dynamic_pattern` | A callable picked at run time from a table built in the body (`t = {...}; t[kind]()`), from a parameter (`router.table[key]()`), or from `globals()[name]` or `vars(mod)[name]` | this code |
@@ -813,11 +816,13 @@ several lines in a row, wrap them in `with cash.assume_safe():` instead. A line
 that changes an argument in place is better fixed than waived: return a
 modified copy.
 
-<!-- claim: cash/decorator/reporting.py:Notices._not_shown_before @981e26bf, cash/decorator/reporting.py:Notices.warn_once @213ba8ef -->
+<!-- claim: cash/decorator/reporting.py:Notices._not_shown_before @7e3fc337, cash/decorator/reporting.py:Notices.warn_once @213ba8ef -->
 **When it is safe to ignore.** When every line is a `print` to stdout or a
 progress bar: you only lose the printout on hits. Never ignore
 `mutable_global` or `dynamic_pattern`. This warning is shown once per cache,
-not once per process. A run whose warning filters ignore it, or turn it into
+not once per process. An edit that only moves the lines it names (a line added
+above the function) does not show it again; one that changes the findings
+does. A run whose warning filters ignore it, or turn it into
 an error, does not count as having shown it, so a CI job that fails on it
 fails on every run.
 
@@ -911,7 +916,9 @@ report([1, 2, 3], as_of=date.today())
 For an environment variable, write its name out.
 
 **When it is safe to ignore.** When freezing the value is the point, such as
-a timestamp of when the result was computed.
+a timestamp of when the result was computed. Like
+[IMPURE-SIDE-EFFECTS](#impure-side-effects), it is shown once per cache, and
+again only when an edit changes the findings.
 
 **Silencing it.** Per line: `# @cash:assume-safe`. Per block:
 `with cash.assume_safe():`. Whole function: `@cash.cache(assume_safe=True)`.
@@ -1494,7 +1501,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
 | [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
-| [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook file is unknown; cross-cell tracking is off |
+| [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook's cells cannot be read; cells above the one you run are not re-checked |
 | [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload or restart dropped state cells set on a module, and cash cannot rebuild it |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
 | [NOTEBOOK-SHARE-UNCHECKED](#notebook-share-unchecked) | notebook | not every variable sharing an object with a statement's outputs was found in time |
@@ -1617,17 +1624,19 @@ command computes.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/server_discovery.py:warn_notebook_not_found_once @f1dad161 -->
-**What happened.** cash could not find which notebook file this kernel runs,
-so cross-cell tracking is off for the session. Cells are still cached and
-restored.
+<!-- claim: cash/notebook/server_discovery.py:warn_notebook_not_found_once @b331a2de -->
+**What happened.** cash could not read this notebook's cells, so before a
+cell runs it does not re-check the cells above it. Each statement is still
+cached and restored by its own code and inputs.
 
-**Why it matters.** Editing a cell no longer invalidates the cells below that
-used its output.
+**Why it matters.** If you edit a cell and then run a cell below it without
+re-running the edited one, cash does not run the edited cell first. Re-running
+the edited cell, and then the cells after it, recomputes what the edit changed,
+as without the warning.
 
-**What to do.** Under papermill, nbconvert or CI this is expected. In
-JupyterLab or VS Code, restart the kernel; if it persists, close and reopen the
-notebook.
+**What to do.** Nothing under papermill, nbconvert or CI: there is no Jupyter
+server to ask. In JupyterLab or VS Code, restart the kernel; if it persists,
+close and reopen the notebook.
 
 **When it is safe to ignore.** In a run that executes the notebook top to
 bottom once. It is shown once per session.

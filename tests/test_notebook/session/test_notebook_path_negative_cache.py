@@ -337,3 +337,24 @@ def test_a_broken_live_reader_probe_keeps_the_advisory(monkeypatch):
     monkeypatch.setattr(sd, "in_colab", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
 
     assert _advisories(sd.warn_notebook_not_found_once) == 1
+
+
+def test_the_advisory_says_what_still_works_and_blames_no_kernel_file(monkeypatch):
+    """Headless, the advisory opened with ipykernel's file path and said
+    upstream tracking was disabled, which read as if re-running an edited cell
+    were unsafe. It says what is off (re-running edited cells above), what
+    still works (each statement keyed on its own code and inputs), and names
+    cash as the place, not a file of the kernel's."""
+    from cash.notebook import live_cells
+
+    monkeypatch.setattr(live_cells, "_store", {"seq": 0, "cells": None})
+    monkeypatch.setattr(sd, "in_colab", lambda: False)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        sd.warn_notebook_not_found_once()
+    [advisory] = [w for w in caught if issubclass(w.category, sd.CashNotebookDiscoveryWarning)]
+    text = str(advisory.message)
+    assert advisory.filename == "<cash>"
+    assert "will not re-run an edited cell above" in text
+    assert "still cached by its own code and inputs" in text
+    assert "disabled" not in text

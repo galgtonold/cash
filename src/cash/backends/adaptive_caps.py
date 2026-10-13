@@ -104,7 +104,10 @@ def disk_cap_reason(free_bytes: int, own_bytes: int = 0) -> str:
     space = "the free disk space"
     cap = adaptive_disk_cap(room)
     if cap < min(DISK_CEILING, max(DISK_FLOOR, int(DISK_FRACTION * room))):
-        return f"80% of {space}, as that is less than the usual {_gib(DISK_FLOOR)} minimum"
+        # Not "less than the minimum": the docs give the floor as a floor, and
+        # a cap below it read as cash breaking its own rule. The floor gives
+        # way to the 80% safety margin on a nearly full volume.
+        return f"80% of {space}, the most cash takes; the {_gib(DISK_FLOOR)} minimum does not fit"
     if cap == DISK_CEILING and int(DISK_FRACTION * room) > DISK_CEILING:
         return f"the {_gib(DISK_CEILING)} maximum; a quarter of {space} would be more"
     if cap == DISK_FLOOR and int(DISK_FRACTION * room) < DISK_FLOOR:

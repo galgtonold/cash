@@ -77,7 +77,7 @@ data = [1, 2, 3]      # stored: [1, 2, 3]
 data.append(4)        # data is now [1, 2, 3, 4]; the stored copy is not
 ```
 
-<!-- claim: cash/analysis/mutations.py:MutationVisitor @7c19f318, cash/analysis/mutations.py:MUTATING_METHODS @245ce55b broad="the table lists every pattern the visitor detects" -->
+<!-- claim: cash/analysis/mutations.py:MutationVisitor @d6981bbd, cash/analysis/mutations.py:MUTATING_METHODS @245ce55b broad="the table lists every pattern the visitor detects" -->
 What decides the verdict is whether the statement also *produces* the variable
 it changed. If it does, the change is a new version of that variable: it is
 stored, its lineage advances, and the statement caches. If it changes some
@@ -103,14 +103,17 @@ again. See
 
 #### Method calls
 
-<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @3016be1f, cash/analysis/mutations.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/mutations.py:chain_is_pure @96104373, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @745e10a2, cash/analysis/mutation_effects.py:captured_call_receivers @a711d067, cash/analysis/namespace_effects.py:call_arguments @808a92d9 -->
+<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @3016be1f, cash/analysis/mutations.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/mutations.py:chain_is_pure @404cc05d, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @d2ba2265, cash/analysis/mutation_effects.py:captured_call_receivers @a711d067, cash/analysis/namespace_effects.py:call_arguments @808a92d9 -->
 A method call has no assignment target, so cash classifies its object:
 
 - **Not a change.** A call on a module (`np.mean(x)`, `time.sleep(1)`), a call
   that only writes a file from the object (`df.to_csv(path)`), and methods on
   the known-pure list (`head`, `describe`, `mean`, `groupby`, `plot`, ...).
   A chain that passes through a pure method is pure, because what follows acts
-  on the new object: `df[mask].groupby("hour").size()` leaves `df` alone. A
+  on the new object: `df[mask].groupby("hour").size()` leaves `df` alone, and
+  so does polars' `raw.group_by("host").len().sort("host")`. A `sort` whose
+  result is used (`out = raw.sort("ts")`, `raw.sort("ts").head()`) is the kind
+  that returns a new object, not `list.sort`. A
   module setting such as `plt.style.use(...)` or `pd.set_option(...)` counts
   as changing the module, so it is replayed after a restart.
 - **Always a change.** Any call on a live matplotlib `Figure` or `Axes`, or

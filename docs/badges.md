@@ -19,7 +19,10 @@ was not stored, why.
     The HTML badge is about 20 kB per cell, most of it styling. `nbconvert`, CI
     logs, a diff or a coding agent reading the output see only that styling.
     `%cash_badge print` prints the same information as plain text, one line per
-    statement. Use it for headless runs and for notebooks you commit.
+    statement. Three or more quick steps in a row that are never cached, such
+    as a chart's `ax.legend()` and `fig.savefig(...)`, get no line; the
+    header's `not cached` count includes them. Use it for headless runs and for
+    notebooks you commit.
 
 ## Anatomy
 
@@ -69,7 +72,9 @@ A row and the cell header use the same word for the same state.
 The header's counters (`EXEC`, `NOT CACHED`, `CACHED`, `WARN`) count rows, so
 `EXEC 1 · CACHED 1` under an `EXECUTED` header means one statement ran and one
 came from the cache. [`%cash_status`](magics.md#cash_status) reports the same
-states by their enum names: `COMPUTED` for EXECUTED and `RESTORED` for CACHED.
+states by their enum names: `COMPUTED` for EXECUTED and `RESTORED` for CACHED,
+plus `MIXED` for a statement that ran while calls inside it came from the
+cache.
 
 <iframe class="cash-badge" title="cash badge example: CACHED" src="/_badges/status_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 

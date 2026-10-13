@@ -26,6 +26,9 @@ not log-only, which keeps the warning.
 from __future__ import annotations
 
 import ast
+import types
+from contextvars import ContextVar
+from typing import Any
 
 __all__ = ["fresh_name_nodes", "receiver_is_fresh", "LogOnlyFlow", "is_log_helper", "is_log_line"]
 
@@ -338,12 +341,14 @@ def _has_slice(slc: ast.AST) -> bool:
     return isinstance(slc, ast.Tuple) and any(isinstance(e, ast.Slice) for e in slc.elts)
 
 
-def _fresh(node: ast.AST | None, name_is_fresh, name_is_deep=None) -> bool:
+def _fresh(node: ast.AST | None, name_is_fresh, name_is_deep=None, fresh_calls: frozenset[int] = frozenset()) -> bool:
     """Does *node* evaluate to an object no caller-visible name can reach?
 
     *name_is_fresh* answers the question for a bare name; everything else is
     decided by the shape of the expression. *name_is_deep*, when given, says
     whether a name holds a deep-fresh container, whose elements are fresh.
+    *fresh_calls* holds the ids of the calls `library_fresh_calls` resolved
+    to a numpy / pandas / polars function that builds a new object.
     """
 
     def element_of_deep(container: ast.AST) -> bool:
@@ -358,13 +363,22 @@ def _fresh(node: ast.AST | None, name_is_fresh, name_is_deep=None) -> bool:
     if isinstance(node, ast.BinOp):
         return True  # a + b builds a new object
     if isinstance(node, ast.IfExp):
-        return _fresh(node.body, name_is_fresh) and _fresh(node.orelse, name_is_fresh)
+        return _fresh(node.body, name_is_fresh, fresh_calls=fresh_calls) and _fresh(
+            node.orelse, name_is_fresh, fresh_calls=fresh_calls
+        )
     if isinstance(node, ast.BoolOp):
-        return all(_fresh(v, name_is_fresh) for v in node.values)
+        return all(_fresh(v, name_is_fresh, fresh_calls=fresh_calls) for v in node.values)
+    if isinstance(node, ast.Call) and id(node) in fresh_calls:
+        return True
 
     def rooted(n: ast.AST) -> bool:
-        name = root_name(n)
-        return name is not None and name_is_fresh(name)
+        # Down the chain to its root: a name of our own, or a library call
+        # that built a new object (``np.bincount(x)[1:]``).
+        while isinstance(n, (ast.Attribute, ast.Subscript, ast.Call)):
+            if isinstance(n, ast.Call) and id(n) in fresh_calls:
+                return True
+            n = n.func if isinstance(n, ast.Call) else n.value
+        return isinstance(n, ast.Name) and name_is_fresh(n)
 
     if isinstance(node, ast.Subscript):
         if _is_mask(node.slice):
@@ -384,7 +398,7 @@ def _fresh(node: ast.AST | None, name_is_fresh, name_is_deep=None) -> bool:
             if _module_factory(f):
                 return True
             if f.attr in _PASS_THROUGH_CONVERTERS:
-                return bool(node.args) and _fresh(node.args[0], name_is_fresh, name_is_deep)
+                return bool(node.args) and _fresh(node.args[0], name_is_fresh, name_is_deep, fresh_calls)
             if f.attr in _FRESH_CONSTRUCTOR_ATTRS or f.attr in _FRESH_READER_ATTRS or f.attr in _NEW_OBJECT_METHODS:
                 return True
             if f.attr in _ELEMENT_METHODS:
@@ -393,9 +407,160 @@ def _fresh(node: ast.AST | None, name_is_fresh, name_is_deep=None) -> bool:
     return False
 
 
+#: The libraries whose module-level functions build a new object: a call of
+#: one returns an array or frame nobody else holds, so writing into it is
+#: local. ``load = np.bincount(...); load[c] -= d`` and ``counts =
+#: pd.crosstab(...); counts.columns = [...]`` were reported as side effects.
+_NEW_OBJECT_LIBRARIES = frozenset({"numpy", "pandas", "polars"})
+
+#: ...except these, which hand back their argument or a view of it: writing
+#: into the result writes into the caller's data.
+_LIBRARY_VIEW_FUNCTIONS = frozenset(
+    {
+        "asarray",
+        "asanyarray",
+        "ascontiguousarray",
+        "asfortranarray",
+        "asarray_chkfinite",
+        "asmatrix",
+        "require",
+        "reshape",
+        "ravel",
+        "squeeze",
+        "transpose",
+        "matrix_transpose",
+        "permute_dims",
+        "swapaxes",
+        "moveaxis",
+        "rollaxis",
+        "expand_dims",
+        "atleast_1d",
+        "atleast_2d",
+        "atleast_3d",
+        "broadcast_to",
+        "broadcast_arrays",
+        "diagonal",
+        "diag",
+        "real",
+        "imag",
+        "flip",
+        "fliplr",
+        "flipud",
+        "rot90",
+        "split",
+        "array_split",
+        "hsplit",
+        "vsplit",
+        "dsplit",
+        "unstack",
+        "trim_zeros",
+        "frombuffer",
+        "from_dlpack",
+        "as_strided",
+        "sliding_window_view",
+        "nditer",
+        "ndenumerate",
+        "ndarray",
+        "from_numpy",
+        "from_arrow",
+        "from_pandas",
+    }
+)
+
+#: Keywords that make a library function write into, or share, an object
+#: it was given: ``out=a``, ``copy=False``, ``inplace=True``, ``buffer=b``.
+_SHARING_KEYWORDS = frozenset({"out", "copy", "inplace", "buffer"})
+
+
+def _plain_attr(obj: Any, attr: str) -> str:
+    """``obj.attr`` when it is a string, else "". Read defensively: some
+    library objects answer any attribute (polars' ``pl.col.__name__`` is an
+    expression), and a lookup may raise."""
+    try:
+        value = getattr(obj, attr, "")
+    except Exception:  # noqa: BLE001 - a third-party __getattr__ may raise anything
+        return ""
+    return value if isinstance(value, str) else ""
+
+
+def _library_of(obj: Any) -> str | None:
+    """The top-level package *obj* (a module or a function) belongs to."""
+    name = _plain_attr(obj, "__name__") if isinstance(obj, types.ModuleType) else ""
+    if not name:
+        name = _plain_attr(obj, "__module__") or _plain_attr(type(obj), "__module__")
+    return name.split(".")[0] or None
+
+
+def _resolve_callee(func: ast.AST, namespace: dict[str, Any]) -> Any:
+    """What ``np.linalg.inv`` / ``bincount`` names in *namespace*, through
+    modules only; a sentinel when it cannot be resolved that way."""
+    parts: list[str] = []
+    node = func
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name) or node.id not in namespace:
+        return _UNRESOLVED
+    obj = namespace[node.id]
+    for attr in reversed(parts):
+        if not isinstance(obj, types.ModuleType):
+            return _UNRESOLVED
+        try:
+            obj = getattr(obj, attr, _UNRESOLVED)
+        except Exception:  # noqa: BLE001 - a module's __getattr__ may raise anything
+            return _UNRESOLVED
+        if obj is _UNRESOLVED:
+            return _UNRESOLVED
+    return obj
+
+
+_UNRESOLVED = object()
+
+
+def library_fresh_calls(func_def: ast.AST, namespace: dict[str, Any]) -> frozenset[int]:
+    """ids of the calls in *func_def* of a numpy / pandas / polars function
+    (``np.bincount(...)``, ``pd.crosstab(...)``, ``from numpy import
+    histogram``) that builds a new object: not a view or pass-through
+    (`_LIBRARY_VIEW_FUNCTIONS`), and not told to write into or share an
+    argument (`_SHARING_KEYWORDS`).
+
+    Resolved through what the names are bound to, so a local or a user
+    module that happens to be called ``np`` is not taken for numpy. A name
+    the body rebinds is left out: the namespace no longer says what it is.
+    """
+    rebound = {n.id for n in ast.walk(func_def) if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))}
+    rebound |= {a.arg for a in ast.walk(func_def) if isinstance(a, ast.arg)}
+    found: set[int] = set()
+    for node in ast.walk(func_def):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        root = func
+        while isinstance(root, ast.Attribute):
+            root = root.value
+        if not isinstance(root, ast.Name) or root.id in rebound:
+            continue
+        name = func.attr if isinstance(func, ast.Attribute) else root.id
+        if name in _LIBRARY_VIEW_FUNCTIONS or any(kw.arg in _SHARING_KEYWORDS for kw in node.keywords):
+            continue
+        obj = _resolve_callee(func, namespace)
+        if obj is _UNRESOLVED or isinstance(obj, types.ModuleType) or not callable(obj):
+            continue
+        real_name = _plain_attr(obj, "__name__")
+        if real_name in _LIBRARY_VIEW_FUNCTIONS:
+            continue  # ``from numpy import asarray as aa``
+        if _library_of(obj) in _NEW_OBJECT_LIBRARIES:
+            found.add(id(node))
+    return frozenset(found)
+
+
+#: `library_fresh_calls` of the body the flow pass is walking.
+_FRESH_CALLS: ContextVar[frozenset[int]] = ContextVar("_FRESH_CALLS", default=frozenset())
+
+
 def expr_is_fresh(node: ast.AST | None, fresh: set[str]) -> bool:
     """`_fresh` against a set of names known to be fresh here."""
-    return _fresh(node, lambda n: n.id in fresh, lambda n: _DEEP + n.id in fresh)
+    return _fresh(node, lambda n: n.id in fresh, lambda n: _DEEP + n.id in fresh, _FRESH_CALLS.get())
 
 
 def _fresh_or_immutable(node: ast.AST | None, fresh: set[str]) -> bool:
@@ -413,7 +578,7 @@ def receiver_is_fresh(node: ast.AST, fresh_nodes: frozenset[int]) -> bool:
     which also hold the element expressions of deep-fresh containers."""
     if id(node) in fresh_nodes:
         return True
-    return _fresh(node, lambda n: id(n) in fresh_nodes)
+    return _fresh(node, lambda n: id(n) in fresh_nodes, fresh_calls=fresh_nodes)
 
 
 def _callee_name(func: ast.AST) -> str | None:
@@ -810,9 +975,11 @@ class _FreshFlow:
         return _without(out, _walrus_names(s))
 
 
-def fresh_name_nodes(func_def: ast.AST) -> frozenset[int]:
+def fresh_name_nodes(func_def: ast.AST, namespace: dict[str, Any] | None = None) -> frozenset[int]:
     """ids of the nodes in *func_def* that hold a fresh object where evaluated:
-    Name nodes, and the element expressions of deep-fresh containers.
+    Name nodes, the element expressions of deep-fresh containers, and the
+    calls of a numpy / pandas / polars function that builds a new object
+    (`library_fresh_calls`, resolved through *namespace*).
 
     Nested function bodies are not walked; their names are never marked.
     """
@@ -820,9 +987,14 @@ def fresh_name_nodes(func_def: ast.AST) -> frozenset[int]:
     for node in ast.walk(func_def):
         if isinstance(node, (ast.Global, ast.Nonlocal)):
             excluded.update(node.names)
+    calls = library_fresh_calls(func_def, namespace) if namespace else frozenset()
     flow = _FreshFlow(frozenset(excluded), _escaped_names(func_def))
-    flow.block(getattr(func_def, "body", []), set())
-    return frozenset(k for k, v in flow.marks.items() if v)
+    token = _FRESH_CALLS.set(calls)
+    try:
+        flow.block(getattr(func_def, "body", []), set())
+    finally:
+        _FRESH_CALLS.reset(token)
+    return frozenset(k for k, v in flow.marks.items() if v) | calls
 
 
 # -- ambient reads that only reach a log line --------------------------------
