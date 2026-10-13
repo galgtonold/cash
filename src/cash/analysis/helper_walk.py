@@ -405,7 +405,7 @@ class HelperWalk:
         visitor = PurityVisitor(
             qualname=qualname,
             param_names=param_names,
-            fresh_nodes=fresh_name_nodes(func_def),
+            fresh_nodes=fresh_name_nodes(func_def, namespace),
             log_only=log_only_ambient_reads(func_def, func, ambient_namespace),
             namespace=namespace,
             log_helpers=log_helper_names(func_def, func),
@@ -853,7 +853,11 @@ def _drop_audited(issues: list[PurityIssue], audited: frozenset[int], function_s
     """*issues* without those the waivers cover."""
     if not audited and not function_scope:
         return issues
-    return [issue for issue in issues if not (issue.line in audited if issue.line else function_scope)]
+    return [
+        issue
+        for issue in issues
+        if not ((issue.line in audited or issue.waiver_line in audited) if issue.line else function_scope)
+    ]
 
 
 def _anchor_issue_lines(issues: list[PurityIssue], func: Any) -> list[PurityIssue]:
@@ -871,7 +875,12 @@ def _anchor_issue_lines(issues: list[PurityIssue], func: Any) -> list[PurityIssu
     except SOURCE_RETRIEVAL_ERRORS:
         return issues
     return [
-        dataclasses.replace(issue, line=issue.line + first - 1 if issue.line else 0, filename=filename)
+        dataclasses.replace(
+            issue,
+            line=issue.line + first - 1 if issue.line else 0,
+            waiver_line=issue.waiver_line + first - 1 if issue.waiver_line else 0,
+            filename=filename,
+        )
         for issue in issues
     ]
 

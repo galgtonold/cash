@@ -832,8 +832,11 @@ def fetch_user(uid):
 ```
 
 <!-- claim: cash/analysis/annotations.py:audited_lines @5aa0a42f -->
-The comment covers that statement only (put it on the opening line of a call
-that spans lines, or on the line above), so code added later is still checked.
+The comment covers that statement only (put it on the line the warning names,
+on the opening line of a call that spans lines, or on the line above), so code
+added later is still checked. In a method chain over several lines, the warning
+names the line of the method it is about (`.to_csv(path)`), and the comment
+works there too.
 
 On the `def` line it covers findings about the whole body. In a helper it
 covers every caller of that helper.

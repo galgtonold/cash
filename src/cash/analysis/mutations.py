@@ -32,6 +32,9 @@ __all__ = [
     "standalone_method_call_receivers",
     "module_setting_receivers",
     "chain_is_pure",
+    "returns_a_new_object",
+    "NONE_RETURNING_MUTATORS",
+    "NEW_OBJECT_CHAIN_METHODS",
     "is_pandas_plot_call",
     "assigned_method_call_receivers",
     "TopLevelCalls",
@@ -162,6 +165,90 @@ KNOWN_PURE_METHODS = frozenset(
         "show",
     }
 )
+
+
+# Mutators whose in-place form returns None wherever it exists (``list.sort``,
+# ``ndarray.sort``, ``dict.update``, pandas' ``update``), while a frame
+# library's method of the same name returns a new object and leaves its
+# receiver alone (polars' ``sort`` / ``reverse`` / ``clear`` / ``update``).
+# ``append`` and ``extend`` are not here: polars' change the receiver and
+# return it.
+NONE_RETURNING_MUTATORS = frozenset({"sort", "reverse", "clear", "update"})
+
+# Methods that return a NEW object, used to tell what a method later in the
+# same chain acts on: ``raw.group_by("host").len().sort("host")`` sorts the
+# frame ``len`` built, not ``raw``. Only names that build a new object on
+# every type that has them; views (``reshape``, ``transpose``, ``to_numpy``,
+# ``astype(copy=False)``) are left out, since a mutator on a view writes into
+# the receiver's data.
+NEW_OBJECT_CHAIN_METHODS = KNOWN_PURE_METHODS - {"plot", "hist", "boxplot", "show", "info"} | frozenset(
+    {
+        # polars
+        "group_by",
+        "group_by_dynamic",
+        "len",
+        "with_columns",
+        "select",
+        "filter",
+        "join",
+        "unique",
+        "collect",
+        "unpivot",
+        "drop_nulls",
+        "fill_null",
+        "with_row_index",
+        # pandas
+        "sort_values",
+        "sort_index",
+        "merge",
+        "reset_index",
+        "pivot",
+        "melt",
+        "explode",
+        "to_frame",
+    }
+)
+
+
+def returns_a_new_object(call: ast.Call, use: str) -> bool:
+    """Is *call*, a ``sort`` / ``reverse`` / ``clear`` / ``update``, the
+    variant that returns a new object and leaves its receiver alone?
+
+    *use* is how the statement uses the call's value: ``"discarded"`` (an
+    expression statement of its own), ``"chained"`` (another method or a
+    subscript is applied to it) or ``"bound"`` (anything else: returned,
+    assigned, passed on). It is, when:
+
+    * its receiver is a new object a method earlier in the chain built
+      (`NEW_OBJECT_CHAIN_METHODS`): ``raw.group_by("h").len().sort("h")``;
+    * its value is chained on: the in-place forms return None, which has no
+      methods (``raw.sort("ts").head()``);
+    * or it is a ``sort`` whose value is used and that is given a column:
+      ``list.sort`` takes no positional argument and ``ndarray.sort`` an int
+      axis, so ``out = raw.sort("ts")`` is polars'.
+
+    Never when told to sort in place (``in_place=True``). A discarded call
+    with no new object under it (``rows.sort()``) is the in-place form.
+    """
+    func = call.func
+    if not isinstance(func, ast.Attribute) or func.attr not in NONE_RETURNING_MUTATORS:
+        return False
+    if any(
+        kw.arg in ("in_place", "inplace") and not (isinstance(kw.value, ast.Constant) and kw.value.value is False)
+        for kw in call.keywords
+    ):
+        return False
+    if _chain_methods(func.value) & NEW_OBJECT_CHAIN_METHODS:
+        return True
+    if use == "chained":
+        return True
+    if use == "bound" and func.attr == "sort":
+        return any(
+            not isinstance(arg, ast.Starred)
+            and not (isinstance(arg, ast.Constant) and isinstance(arg.value, int) and not isinstance(arg.value, bool))
+            for arg in call.args
+        )
+    return False
 
 
 # pandas ``to_*`` writers: they READ the DataFrame/Series and write it out to a
@@ -309,6 +396,31 @@ class MutationVisitor(ast.NodeVisitor):
 
     def __init__(self) -> None:
         self.mutations: list[MutationInfo] = []
+        #: How the statement uses each call's value (`returns_a_new_object`):
+        #: ids of the calls an expression statement drops, and of those
+        #: another method or a subscript is applied to.
+        self._discarded: set[int] = set()
+        self._chained: set[int] = set()
+
+    def visit_Expr(self, node: ast.Expr) -> None:
+        if isinstance(node.value, ast.Call):
+            self._discarded.add(id(node.value))
+        self.generic_visit(node)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if isinstance(node.value, ast.Call):
+            self._chained.add(id(node.value))
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript) -> None:
+        if isinstance(node.value, ast.Call):
+            self._chained.add(id(node.value))
+        self.generic_visit(node)
+
+    def _use(self, call: ast.Call) -> str:
+        if id(call) in self._discarded:
+            return "discarded"
+        return "chained" if id(call) in self._chained else "bound"
 
     def _record_method_mutation(self, call: ast.Call, lineno: int) -> None:
         """Record a KNOWN-mutating method call on a named receiver.
@@ -326,7 +438,7 @@ class MutationVisitor(ast.NodeVisitor):
         base = _extract_receiver_base_name(call.func.value)
         if not base:
             return
-        if method_name in MUTATING_METHODS:
+        if method_name in MUTATING_METHODS and not returns_a_new_object(call, self._use(call)):
             self.mutations.append(
                 MutationInfo(
                     variable=base,
@@ -989,9 +1101,11 @@ def chain_is_pure(method: str, inner: frozenset[str]) -> bool:
     mutation of ``dwells`` because ``size`` is not listed,
     and a repair re-ran it and everything built from ``dwells``.
     """
-    if inner & MUTATING_METHODS:
+    # A ``sort`` / ``update`` inside the chain had its value chained on, so
+    # it is the kind that returns a new object (`returns_a_new_object`).
+    if inner & (MUTATING_METHODS - NONE_RETURNING_MUTATORS):
         return False
-    return method in KNOWN_PURE_METHODS or bool(inner & KNOWN_PURE_METHODS)
+    return method in KNOWN_PURE_METHODS or bool(inner & (KNOWN_PURE_METHODS | NEW_OBJECT_CHAIN_METHODS))
 
 
 def _argument_root(node: ast.AST) -> str | None:
@@ -1148,7 +1262,9 @@ class _TopLevelCallCollector:
         if not base:
             return
         method = func.attr
-        if method in MUTATING_METHODS or (method in PANDAS_INPLACE_METHODS and _expr_call_inplace_true(call)):
+        if (method in MUTATING_METHODS and not returns_a_new_object(call, "discarded")) or (
+            method in PANDAS_INPLACE_METHODS and _expr_call_inplace_true(call)
+        ):
             self.mutation_receivers.add(base)
         on_attribute = isinstance(func.value, ast.Attribute)
         if (
