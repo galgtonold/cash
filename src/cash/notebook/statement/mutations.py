@@ -38,6 +38,7 @@ from cash.notebook.call_effects import DigestHandoff
 from cash.notebook.consumables import is_stream, watched_call_receivers
 from cash.notebook.magic_effects import magic_call_arguments
 from cash.notebook.restored_var import hashed_by_lineage
+from cash.value_hash import budgeted_hash, is_costly
 
 if TYPE_CHECKING:
     from cash.notebook._protocols import ShellProtocol
@@ -226,6 +227,14 @@ class MutationClassifier:
         if classes.unknown_args and unwatched:
             self.digests.watch(tree, self.shell.user_ns)
         for name in classes.unknown_args:
+            if not outputs and is_costly(self.shell.user_ns.get(name)):
+                # Too costly to read (`budgeted_hash`: an openpyxl workbook,
+                # 3 s a read, read twice), and handed on by a statement that
+                # keeps nothing (`money_format(wb["P&L"])`), whose call is
+                # there for what it does: assumed changed.
+                assumed.add(name)
+                pre_route.add(name)
+                continue
             fingerprint = mutation_fingerprint(self.shell.user_ns.get(name), self.digests.digest)
             if fingerprint is None:
                 if name in kept_only:
@@ -431,12 +440,14 @@ class MutationClassifier:
         mutation.
         """
         val = self.shell.user_ns.get(base)
-        if val is None:
+        if val is None or self.compute_hash is None:
             return True
         try:
-            after = self.compute_hash(val)
+            after = budgeted_hash(val, self.compute_hash)
         except (TypeError, ValueError, AttributeError, pickle.PicklingError):
             return True
+        if after is None:
+            return True  # too costly to read (`budgeted_hash`): assumed changed
         identity_hash = hashlib.sha256(str(id(val)).encode("utf-8")).hexdigest()
         if after == identity_hash:
             return True  # unpicklable -> identity hash -> mutation undetectable

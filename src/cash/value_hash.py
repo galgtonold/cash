@@ -15,6 +15,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import pickle
+import threading
+import weakref
+from collections.abc import Callable
+from time import perf_counter
 from typing import Any
 
 from . import kept_state
@@ -66,7 +70,103 @@ def _hash_collection(obj: Any) -> str:
         else:
             parts.extend(compute_hash(v) for v in values)
         return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
-    return hashlib.sha256(kept_state.dumps(obj, keyed=True)).hexdigest()
+    return _pickle_digest(obj)
+
+
+class HashBudgetExceeded(Exception):
+    """A hash taken under `budgeted_hash` ran past its budget."""
+
+
+#: How long a check whether a value changed may spend pickling it before
+#: the value counts as too costly to read (`budgeted_hash`). An openpyxl
+#: workbook of 400,000 cells pickles in about 3 s, and a formatting cell that
+#: binds and changes one was checked after each of its statements: 15-40 s a
+#: run next to 11 s of its own work.
+CHANGE_CHECK_BUDGET_S = 0.5
+
+_budget = threading.local()
+
+#: ``id -> weak reference`` of the objects a budgeted hash gave up on.
+_COSTLY: dict[int, weakref.ref] = {}
+
+
+class _BudgetedSink:
+    """Where a budgeted pickle writes: hashed as it comes, and stopped once
+    the deadline has passed (`HashBudgetExceeded`, raised from ``write``,
+    which the pickler calls a frame, at most 64 KiB, at a time)."""
+
+    __slots__ = ("_deadline", "_sha")
+
+    def __init__(self, deadline: float) -> None:
+        self._sha = hashlib.sha256()
+        self._deadline = deadline
+
+    def write(self, data: Any) -> int:
+        self._sha.update(data)
+        if perf_counter() > self._deadline:
+            raise HashBudgetExceeded
+        return len(data)
+
+    def hexdigest(self) -> str:
+        return self._sha.hexdigest()
+
+
+def _pickle_digest(obj: Any) -> str:
+    """The sha256 of *obj*'s key pickle; under a budget (`budgeted_hash`),
+    hashed as the pickler writes and stopped when the budget runs out. The
+    same digest either way: the same bytes in the same order."""
+    deadline = getattr(_budget, "deadline", None)
+    if deadline is None:
+        return hashlib.sha256(kept_state.dumps(obj, keyed=True)).hexdigest()
+    if perf_counter() > deadline:
+        raise HashBudgetExceeded
+    sink = _BudgetedSink(deadline)
+    kept_state.dumps(obj, keyed=True, sink=sink)
+    return sink.hexdigest()
+
+
+def is_costly(obj: Any) -> bool:
+    """Did a budgeted hash give up on *obj* (`budgeted_hash`)? Such a value
+    is treated as one whose content no check compares: changed whenever a
+    check would have to read it."""
+    if not _COSTLY:
+        return False
+    ref = _COSTLY.get(id(obj))
+    return ref is not None and ref() is obj
+
+
+def _remember_costly(obj: Any) -> None:
+    key = id(obj)
+    try:
+        ref = weakref.ref(obj, lambda _ref, key=key: _COSTLY.pop(key, None))
+    except TypeError:
+        return  # no weak reference (a list, a dict): asked again next time
+    _COSTLY[key] = ref
+
+
+def budgeted_hash(obj: Any, hash_fn: Callable[[Any], str] | None = None, seconds: float | None = None) -> str | None:
+    """``hash_fn(obj)`` (`compute_hash` by default) for a check whether
+    *obj* changed, or None when pickling it takes longer than *seconds*
+    (`CHANGE_CHECK_BUDGET_S`); *obj* is then remembered as costly
+    (`is_costly`) and later budgeted hashes of it return None at once.
+
+    None means "cannot say": every caller treats the value as changed, or
+    as one whose content it does not compare -- never as unchanged. Only
+    the checks around a statement take this; a key never does, so no key
+    loses part of a value.
+    """
+    if is_costly(obj):
+        return None
+    outer = getattr(_budget, "deadline", None)
+    if outer is None:
+        _budget.deadline = perf_counter() + (CHANGE_CHECK_BUDGET_S if seconds is None else seconds)
+    try:
+        return (hash_fn or compute_hash)(obj)
+    except HashBudgetExceeded:
+        _remember_costly(obj)
+        return None
+    finally:
+        _budget.deadline = outer
 
 
 def identity_hash(obj: Any) -> str:
@@ -186,7 +286,9 @@ def compute_hash(obj: Any) -> str:
             # Exact types: a subclass is pickled whole, with the attributes
             # it holds beside its items.
             return _hash_collection(obj)
-        return hashlib.sha256(kept_state.dumps(obj, keyed=True)).hexdigest()
+        return _pickle_digest(obj)
+    except HashBudgetExceeded:
+        raise
     except HASH_ERRORS as exc:
         logger.debug("Primary hash failed for %s: %s", type_name, exc)
     except Exception as exc:  # noqa: BLE001 - see below
@@ -202,7 +304,9 @@ def compute_hash(obj: Any) -> str:
         return identity_hash(obj)
 
     try:
-        return hashlib.sha256(kept_state.dumps(obj, keyed=True)).hexdigest()
+        return _pickle_digest(obj)
+    except HashBudgetExceeded:
+        raise
     except Exception:  # noqa: BLE001 - see below
         # Python 3.13 raises AttributeError for an instance of a class
         # defined inside a function ("Can't get local object"); a user's

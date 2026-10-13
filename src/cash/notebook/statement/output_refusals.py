@@ -13,7 +13,7 @@ from typing import Any
 
 from ...analysis.cacheability_decision import identity_coupled_reason
 from ..consumables import is_consumable_unrestorable
-from ..shared_objects import GaveUp, attrs_copied_apart, output_history, share_group, shared_names
+from ..shared_objects import GaveUp, attrs_copied_apart, output_history, refers_back, share_group, shared_names
 from .derivation_edges import is_uncacheable_alias
 
 __all__ = ["is_history_name", "live_shared_reason", "unrestorable_output_reason"]
@@ -152,6 +152,7 @@ def shared_output_reason(
     (`output_history`)."""
     history, named = output_history(user_ns, shell)
     names = [out for out in outputs if captured_vars.get(out) is not None]
+    found_holders: set[str] | None = None
     if holders is None:
         roots = {out: captured_vars[out] for out in names}
         shared = shared_names(roots, (captured_vars, user_ns), [*cash_held, *history], named)
@@ -170,19 +171,37 @@ def shared_output_reason(
         )
         holders.update(found)
         del found
+        found_holders = partial.names
         if shared and gave_up is not None:
             gave_up.append(partial)
-    return _shared_reason(shared)
+    return _shared_reason(shared, captured_vars, found_holders)
 
 
-def _shared_reason(shared: set[str]) -> str | None:
+def _shared_reason(
+    shared: set[str], captured_vars: dict[str, Any], found_holders: set[str] | None = None
+) -> str | None:
+    """The refusal for the outputs *shared*. When no variable was found
+    holding them (*found_holders*, when the search ran) and an output's
+    object is held by its own parts (`refers_back`: each sheet of an
+    openpyxl workbook holds the workbook), the count cannot tell those
+    references from another holder's, and the reason says that instead of
+    naming a holder that is not there."""
     if not shared:
         return None
-    names = ", ".join(f"'{n}'" for n in sorted(shared))
-    return (
-        f"{names} holds an object another variable or container also holds; a restored "
-        f"copy would not be that object, so the statement re-runs every time"
-    )
+    selfheld = set()
+    if not found_holders:
+        selfheld = {name for name in shared if refers_back(captured_vars.get(name))}
+    reasons = []
+    others = shared - selfheld
+    if others:
+        names = ", ".join(f"'{n}'" for n in sorted(others))
+        reasons.append(f"{names} holds an object another variable or container also holds")
+    for name in sorted(selfheld):
+        kind = type(captured_vars.get(name)).__name__
+        reasons.append(
+            f"'{name}' is a {kind} whose own parts hold it, so cash cannot tell whether anything else holds it too"
+        )
+    return "; ".join(reasons) + "; a restored copy would not be that object, so the statement re-runs every time"
 
 
 def live_shared_reason(

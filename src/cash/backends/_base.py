@@ -81,6 +81,11 @@ _KEY_LOCK_BOOTSTRAP = threading.Lock()
 MetadataDict = dict[str, Any]
 
 
+#: The field the RAM tier puts what unpickling its copy of an entry took on
+#: (`EntryMetadata.measured_round_trip_seconds`).
+MEASURED_ROUND_TRIP = "measured_round_trip_seconds"
+
+
 class EntryMetadata(TypedDict, total=False):
     """Every metadata key a backend reads or writes, and what it means.
 
@@ -141,6 +146,9 @@ class EntryMetadata(TypedDict, total=False):
     cost_model_family: str
     cost_model_type_name: str
     cost_model_size_bytes: int
+    #: What unpickling the RAM tier's copy of the entry took, when that copy
+    #: was a pickle round trip (an object of a class of its own).
+    measured_round_trip_seconds: float
     #: Keys of entries this one refers to, and their total bytes.
     call_refs: list[str]
     call_ref_bytes: int

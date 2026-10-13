@@ -143,8 +143,12 @@ _COEFFS: dict[tuple[str, str, str], tuple[float, float]] = {
 _KNOWN_BACKENDS = frozenset({"ram", "disk", "redis", "s3"})
 
 
+#: The family of every type not fitted above: an object of a class of its own.
+GENERIC_FAMILY = "_GENERIC"
+
+
 def resolve_family(value_type_name: str) -> str:
-    return _TYPE_TO_FAMILY.get(value_type_name, "_GENERIC")
+    return _TYPE_TO_FAMILY.get(value_type_name, GENERIC_FAMILY)
 
 
 def _resolve_backend(backend_kind: str) -> str:

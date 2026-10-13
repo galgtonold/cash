@@ -503,6 +503,7 @@ class DigestHandoff:
         self.fingerprints = ArgFingerprints()
         self._generation = 0
         self._before_ok = False
+        self._watched = False
         self._after_ok = False
         #: ``id(value) -> (value, digest)``: what the statement's fingerprint
         #: read before it ran, for its call's hash before the call; and what
@@ -531,11 +532,14 @@ class DigestHandoff:
         self._started = 0
         self._after_at = -1
         self._offer = None
+        self._watched = False
+        handed_digests.forget()
 
     def watch(self, tree: ast.Module | None, namespace: Mapping[str, Any] | None = None) -> None:
         """The statement *tree* is about to have its arguments fingerprinted;
         *namespace* is what it runs in."""
         self._before_ok, self._after_ok = _call_shape(tree, namespace)
+        self._watched = True
 
     def digest(self, value: Any) -> str:
         """`compute_hash` of *value*, kept for the call's hash before the
@@ -576,11 +580,20 @@ class DigestHandoff:
         self._after = {id(v): (v, d) for v, d in zip(values, digests) if isinstance(d, str)}
         self._after_at = self._started
 
-    def offer_to_decorator(self, filename: str) -> None:
+    def offer_to_decorator(
+        self, filename: str, tree: ast.Module | None = None, namespace: Mapping[str, Any] | None = None
+    ) -> None:
         """Hand the digests taken before the statement to the ``@cash.cache``
-        call it is, compiled under *filename* (`cash.handed_digests`)."""
-        if self._before_ok and self._before and self._started == 0:
-            self._offer = handed_digests.offer(filename, self._before)
+        call it is, compiled under *filename* (`cash.handed_digests`). A
+        statement nothing was fingerprinted for (``df = load("data")``) is
+        looked at here, from its *tree*: its call still says where its
+        result went."""
+        if not self._watched and tree is not None:
+            self.watch(tree, namespace)
+        if self._before_ok and self._started == 0:
+            # With no digests too: the call still says where its result went
+            # (`handed_digests.stored_result`).
+            self._offer = handed_digests.offer(filename, self._before, binds_result=self._after_ok)
 
     def withdraw_offer(self) -> None:
         handed_digests.withdraw()

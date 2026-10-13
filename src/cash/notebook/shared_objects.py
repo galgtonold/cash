@@ -56,6 +56,7 @@ __all__ = [
     "holds_part_of",
     "output_history",
     "referring_names",
+    "refers_back",
     "share_group",
     "shared_names",
     "view_base_names",
@@ -482,6 +483,49 @@ def on_bases(value: Any, bases: set[int], views: list[Any], np: Any) -> bool:
     if not any(found in bases for found in view_bases(value)):
         return False
     return any(np.may_share_memory(value, view) for view in views)
+
+
+#: How many objects `refers_back` looks through below a value.
+_BACK_REF_OBJECTS = 5_000
+
+#: What `refers_back` does not walk into: shared by everything, never a
+#: part of one value.
+_NOT_PARTS = (type, types.ModuleType, types.FunctionType, types.BuiltinFunctionType, types.CodeType, types.FrameType)
+
+
+def refers_back(value: Any) -> bool:
+    """Whether an object *value* holds -- any reference the garbage
+    collector sees, a few levels down -- holds *value* itself, as each
+    sheet of an openpyxl workbook holds its workbook.
+
+    For a refusal's wording only (`_shared_reason`): `excess_refs` counts
+    such references as holders, since a leaf is not walked. Looks at
+    `_BACK_REF_OBJECTS` objects at most, breadth first; False past that."""
+    if value is None or is_value(value, VALUE_TYPES):
+        return False
+    seen = {id(value)}
+    level = [value]
+    looked = 0
+    while level and looked < _BACK_REF_OBJECTS:
+        below = []
+        for obj in level:
+            for ref in gc.get_referents(obj):
+                if ref is value:
+                    if obj is not value:
+                        return True
+                    continue
+                if id(ref) in seen or not gc.is_tracked(ref) or isinstance(ref, _NOT_PARTS):
+                    continue
+                seen.add(id(ref))
+                below.append(ref)
+                looked += 1
+                if looked >= _BACK_REF_OBJECTS:
+                    break
+            if looked >= _BACK_REF_OBJECTS:
+                break
+        level = below
+    del level
+    return False
 
 
 def holds_a_held_object(value: Any) -> bool:

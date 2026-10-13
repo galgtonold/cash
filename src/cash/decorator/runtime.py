@@ -14,6 +14,7 @@ import os
 import pickle
 import threading
 import time
+import weakref
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -24,6 +25,7 @@ from ..analysis.purity_report import PurityReport
 from ..backends._base import ttl_expired, written_at
 from ..dependency_state import STATE_LEDGER, ledger_note
 from ..exceptions import CashCacheIneffectiveWarning, CashImpureFunctionError, CashImpurityWarning
+from ..handed_digests import Stored
 from ..handed_digests import claim as claim_handed_digests
 from ..tracking.file_tracker import FileAccessTracker
 from ..tracking.randomness import (
@@ -1038,6 +1040,7 @@ class CallRunner:
                 HANDED_DIGESTS.reset(token)
         if handed is not None:
             handed.ran_body = True  # until the call is seen to be a plain hit
+            call.handed = handed
         if isinstance(built, Unkeyable):
             call.outcome = self._run_uncached(spec, call, built.reason)
             return call
@@ -1066,10 +1069,36 @@ class CallRunner:
                 # Served: the body does not run, nor anything else of the
                 # user's until the statement binds the result.
                 handed.ran_body = False
+                self._hand_back_entry(call, hit, call.metadata, getattr(call.metadata, "storage", None))
         else:
             # Before the body runs: the mutation check compares against it.
             call.call_args_hash = self._keys.call_args_hash(spec, args, kwargs, built)
         return call
+
+    def _hand_back_entry(self, call: Call, value: Any, metadata: Any, storage: list[str] | None) -> None:
+        """Tell the notebook statement this call is (`cash.handed_digests`)
+        which entry its result *value* is in, so the statement's own entry
+        refers to it instead of holding a second copy: a 200 MB design matrix
+        was copied and written twice, once per entry. Not for a result whose
+        hit puts a held object back in place (`restore_identity`), nor one
+        only this process can read."""
+        handed = call.handed
+        if handed is None or not handed.binds_result or not storage:
+            return
+        if metadata is not None and (
+            getattr(metadata, "result_ref", None)
+            or getattr(metadata, "held_refs", None)
+            or getattr(metadata, "process_local", None)
+        ):
+            return
+        backend = self._backend_slot.backend
+        tiers = getattr(backend, "backends", None)
+        persisted = any(tier != "RAM" for tier in storage) or not (isinstance(tiers, list) and len(tiers) > 1)
+        try:
+            result = weakref.ref(value)
+        except TypeError:  # a builtin value: its statement keeps its own copy
+            return
+        handed.stored = Stored(result, call.cache_key, backend, persisted)
 
     def _reread(self, spec: CachedFunction, call: Call) -> Any:
         """Look the key up again (another caller may have stored it meanwhile):
@@ -1267,6 +1296,8 @@ class CallRunner:
                 ),
                 res,
             )
+            if call.stored_in is not None:
+                self._hand_back_entry(call, res, None, call.stored_in)
         # A result the disk cap had evicted, computed again: say what that cost.
         if self._misses.pending_eviction(call.cache_key) is not None:
             self._notices.evicted_recompute(func_name, run.body_seconds)

@@ -20,7 +20,7 @@ import types
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from cash import cost_model
+from cash import cost_model, handed_digests
 from cash._clock import perf_counter as _perf_counter
 from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
 from cash.backends import memory_backend
@@ -32,13 +32,13 @@ from cash.notebook.statement.capture import replay_record
 from cash.notebook.statement.carrier_advances import PAYLOAD_FIELD as CARRIERS_FIELD
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON
 from cash.notebook.statement.run import ECHO_FIELD
-from cash.sizing import estimate_object_size
+from cash.sizing import estimate_object_size, pickled_size_estimate
 from cash.tracking import file_dep_snapshot
 from cash.tracking.file_dep_snapshot import snapshot_dependencies
 from cash.tracking.randomness import capture_object_rng_states, capture_rng_state
 
 from ..call_key import holds_a_closure_with_state
-from ..call_refs import REF_BYTES_FIELD, REFS_FIELD, CallRef
+from ..call_refs import DECORATOR_ENTRY, REF_BYTES_FIELD, REFS_FIELD, CallRef
 from ..closed_stream import ClosedStream, stored_form
 
 if TYPE_CHECKING:
@@ -381,22 +381,33 @@ class StatementStore:
 
         is_ram_backend = backend_kind == "ram"
         try:
-            obj_size = estimate_object_size(var_value)
+            # An object of a class of its own is sized by the frames and
+            # arrays it holds, not by its own few bytes: a statsmodels results
+            # object holding its design matrix read as 48 bytes, so a 145 MiB
+            # copy of it was predicted free, made, and then refused the disk.
+            obj_size = max(estimate_object_size(var_value), pickled_size_estimate(var_value))
             type_name = type(var_value).__name__
             family = cost_model.resolve_family(type_name)
             est_restore_time = cost_model.estimated_restore_time(type_name, obj_size, backend_kind)
+            # What unpickling one of its class took here (`round_trip_seconds`):
+            # a RAM hit copies it that way, a disk hit unpickles it.
+            round_trip = memory_backend.round_trip_seconds(var_value, obj_size)
             if is_ram_backend:
                 # What a hit costs here, as the RAM tier measures it: a copy
                 # at this machine's speed now, or nothing for a table it shares.
                 measured = memory_backend.hit_seconds(var_value, obj_size)
                 if measured is not None:
                     est_restore_time = measured
+            elif round_trip is not None:
+                est_restore_time = max(est_restore_time, round_trip)
             prediction: dict[str, Any] = {
                 "size_bytes": obj_size,
                 "restore_seconds": est_restore_time,
                 "type_name": type_name,
                 "family": family,
             }
+            if family == cost_model.GENERIC_FAMILY:
+                prediction["class_key"] = memory_backend.class_key(type(var_value))
 
             if policy.refuses_value(execution_time, est_restore_time):
                 size_mb = obj_size / (1024 * 1024)
@@ -717,10 +728,12 @@ class StatementStore:
         captured_output = execution.captured
         variables = self._filter_safe_vars(captured_vars)
         referenced: dict[str, int] = {}
+        decorated = False
         if not run.holders:
             # A reference restores a call's result on its own: with holders
             # it would no longer be the object they hold.
             variables = self._calls.with_call_refs(variables, run.code, referenced)
+            variables, decorated = self._with_decorator_ref(variables, run.offered_as)
         payload = {
             "variables": variables,
             "stdout": captured_output.stdout,
@@ -735,7 +748,7 @@ class StatementStore:
             # rather than continue the stream.
             "rng_epochs": dict(seed_epochs),
         }
-        if referenced:
+        if referenced or decorated:
             payload[REFS_FIELD] = True  # `has_call_refs`
         # The value the statement echoed as its cell's result, which a hit
         # hands to IPython's output history as a run does.
@@ -759,6 +772,27 @@ class StatementStore:
         if run.carriers_advanced is not None:
             payload[CARRIERS_FIELD] = sorted(run.carriers_advanced)
         return payload, referenced
+
+    def _with_decorator_ref(self, variables: dict[str, Any], offered_as: str | None) -> tuple[dict[str, Any], bool]:
+        """*variables* with the result of the ``@cash.cache`` call the
+        statement is (``x = f(a)``) stored as a reference to that call's own
+        entry (`handed_digests.stored_result`), and whether one was made.
+
+        The decorator's entry already holds that value: a second copy cost a
+        second RAM copy and a second disk write of a 100-900 MB result on
+        every compute. Only into the backend the statement is stored in, and
+        only when the entry is persisted wherever the statement may be. The
+        call's key is not added to the statement's ``call_refs``: those are
+        the notebook's own call entries, which pruning a statement version
+        may delete, and a decorator's entry is the user's.
+        """
+        stored = None if offered_as is None else handed_digests.stored_result(offered_as)
+        if stored is None or not stored.persisted or stored.backend is not self.cash_instance.backend:
+            return variables, False
+        names = [name for name, value in variables.items() if stored.holds(value)]
+        if len(names) != 1:
+            return variables, False
+        return {**variables, names[0]: CallRef(stored.key, DECORATOR_ENTRY)}, True
 
     def _wire(self, run: StatementRun, metadata: StatementCacheMetadata, referenced: dict[str, int]) -> dict[str, Any]:
         """*metadata* as the dict the backend stores.
@@ -792,6 +826,7 @@ class StatementStore:
             # that the backend has reported which tiers actually took it.
             # Only durable destinations count.
             self._amplification.account(run.code, prediction, wire)
+            _learn_round_trip(prediction, wire)
 
         # The metadata-only record keeps a RAM-only value's lineage across a
         # restart. A value written to a persistent tier carries its metadata
@@ -806,6 +841,19 @@ class StatementStore:
                 backend.set_metadata_only(cache_key, wire)
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("[PROCESSOR] Best-effort metadata persistence failed")
+
+
+def _learn_round_trip(prediction: dict[str, Any] | None, wire: dict[str, Any]) -> None:
+    """Credit what unpickling the RAM tier's copy of the entry took to the
+    class of its biggest value, when that is an object of a class of its own: the next
+    store of one is then judged on it before anything is copied
+    (`memory_backend.round_trip_seconds`). ``pooled`` (a statsmodels result
+    holding its 145 MiB design matrix) was copied on every run, for a hit
+    as slow as its 0.8 s fit."""
+    seconds = wire.get(memory_backend.MEASURED_ROUND_TRIP)
+    if not seconds or not prediction or prediction.get("class_key") is None:
+        return
+    memory_backend.note_round_trip(prediction["class_key"], int(prediction["size_bytes"]), float(seconds))
 
 
 def _only_shows_a_name(tree: ast.Module | None) -> bool:

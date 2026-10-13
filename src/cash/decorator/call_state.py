@@ -84,6 +84,8 @@ class Call:
         "metadata",
         "cash_overhead",
         "outcome",
+        "handed",
+        "stored_in",
     )
 
     def __init__(self, args: tuple, kwargs: dict) -> None:
@@ -95,6 +97,10 @@ class Call:
         self.ledger: dict | None = None
         self.cash_overhead = 0.0
         self.outcome: Any = CACHE_MISS
+        #: The notebook statement's hand-off this call claimed (`cash.handed_digests`).
+        self.handed: Any = None
+        #: The tiers the store put the result in (``storage``), once stored.
+        self.stored_in: list[str] | None = None
 
 
 class BodyRun:

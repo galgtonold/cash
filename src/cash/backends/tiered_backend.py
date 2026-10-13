@@ -7,7 +7,7 @@ from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from ..sizing import pickled_size_estimate
-from ._base import CacheBackend, MetadataDict, entry_expired, store_seconds
+from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, entry_expired, store_seconds
 from .clear_watch import ClearWatcher
 from .persistence_policy import SERIALIZED_ESTIMATE, PersistencePolicy
 from .sampled_cost import sampled_cost
@@ -594,6 +594,9 @@ class TieredBackend(CacheBackend):
         # Propagate storage info back to the caller's original metadata dict
         if original_metadata is not None:
             original_metadata["storage"] = stored_destinations
+            if MEASURED_ROUND_TRIP in metadata:
+                # What the RAM tier's copy took, for the caller to learn from.
+                original_metadata[MEASURED_ROUND_TRIP] = metadata[MEASURED_ROUND_TRIP]
             if store_errors:
                 original_metadata["store_errors"] = store_errors
             # And why it went no further, so "why did the next process miss?"

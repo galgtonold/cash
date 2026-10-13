@@ -24,6 +24,7 @@ from ...analysis.mutations import consumed_input_names
 from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import CashWarning
 from ...lineage_tag import own_tag
+from ...value_hash import budgeted_hash
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from .._trace import trace_event
@@ -544,7 +545,16 @@ class StaleValueGuard:
         base_content = session_hashes.get(var_name)
         if base_content is None:
             return
-        if hashed_by_lineage(live_value):
+        lineage_hashed = hashed_by_lineage(live_value)
+        if not lineage_hashed:
+            try:
+                live_content = budgeted_hash(live_value, self.compute_hash_fn)
+            except (TypeError, ValueError, AttributeError, RecursionError):
+                return
+            # Too costly to read (`budgeted_hash`): its identity answers, as
+            # for a value hashed by its lineage.
+            lineage_hashed = live_content is None
+        if lineage_hashed:
             # Its session hash is a lineage, which no content hash equals, and
             # hashing it in full costs seconds. Its identity answers instead:
             # the value is this cell's own prior output when it is the very
@@ -561,10 +571,6 @@ class StaleValueGuard:
                     var_name,
                 )
                 broken_vars.add(var_name)
-            return
-        try:
-            live_content = self.compute_hash_fn(live_value)
-        except (TypeError, ValueError, AttributeError, RecursionError):
             return
         if live_content != base_content and not self._kept_for_partner_below(var_name, live_value):
             logger.debug(
@@ -674,7 +680,10 @@ class StaleValueGuard:
         user_ns = self.shell.user_ns
         for var_name in names:
             value = user_ns.get(var_name)
-            if value is None or not hashed_by_lineage(value):
+            if value is None or not (hashed_by_lineage(value) or _weakly_held(value)):
+                # A value that takes a weak reference is recorded all the
+                # same: a check may find it too costly to read before the
+                # cell's next run (`budgeted_hash`), and then asks this.
                 self._started_from.pop((cell_idx, var_name), None)
                 continue
             try:
@@ -770,3 +779,12 @@ class StaleValueGuard:
             except (SyntaxError, ValueError, TypeError):
                 continue
         return muts
+
+
+def _weakly_held(value: Any) -> bool:
+    """Whether *value* takes a weak reference."""
+    try:
+        weakref.ref(value)
+    except TypeError:
+        return False
+    return True

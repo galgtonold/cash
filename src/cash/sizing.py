@@ -277,7 +277,70 @@ def pickled_size_estimate(value: Any, _depth: int = 0, _seen: set[int] | None = 
         return sum(pickled_size_estimate(v, _depth + 1, seen) for v in value)
     if type(value) is dict:
         return sum(pickled_size_estimate(v, _depth + 1, seen) for v in value.values())
+    if _depth == 0 and _is_instance(value):
+        return _instance_estimate(value, seen)
     return 0
+
+
+#: How many objects `_instance_estimate` looks at below a value, and how
+#: many attributes down.
+_INSTANCE_OBJECTS = 2_000
+_INSTANCE_DEPTH = 6
+
+
+def _is_instance(value: Any) -> bool:
+    """An object of some class's own, whose attributes say what it holds:
+    not a builtin value or container, a function, a class or a module."""
+    kind = type(value)
+    return not (
+        kind in CODELESS_PRIMS
+        or kind in BUILTIN_CONTAINERS
+        or isinstance(value, _HELD_BY_NAME)
+        or (getattr(value, "__dict__", None) is None and not _slot_names(kind))
+    )
+
+
+def _instance_estimate(value: Any, seen: set[int]) -> int:
+    """The frames and arrays an object holds through its attributes, and
+    through the lists, tuples and dicts among them, as `pickled_size_estimate`
+    counts each: a statsmodels results object holding its model's design
+    matrix and data pickles to 145 MiB, and read as 0 it was copied and
+    pickled before the bytes ceiling refused it. Looks at most
+    `_INSTANCE_OBJECTS` objects, `_INSTANCE_DEPTH` levels down; whatever
+    else it holds counts as nothing (an estimate: low, never high)."""
+    total = 0
+    looked = 0
+    walked = {id(value)}
+    level = [value]
+    for _depth in range(_INSTANCE_DEPTH):
+        below: list[Any] = []
+        for obj in level:
+            if type(obj) is dict:
+                held = list(obj.values())
+            elif type(obj) in (list, tuple):
+                held = list(obj) if len(obj) <= _INSTANCE_OBJECTS else []
+            else:
+                try:
+                    held = _attr_values(obj)
+                except Exception:  # noqa: BLE001 - an attribute that raises holds nothing we can see
+                    held = []
+            for item in held:
+                kind = type(item)
+                if kind in _FLAT_CELLS or id(item) in walked:
+                    continue
+                walked.add(id(item))
+                looked += 1
+                found = pickled_size_estimate(item, _ESTIMATE_DEPTH, seen)
+                if found:
+                    total += found
+                elif kind in (dict, list, tuple) or _is_instance(item):
+                    below.append(item)
+                if looked >= _INSTANCE_OBJECTS:
+                    return total
+        if not below:
+            break
+        level = below
+    return total
 
 
 # Recursion-depth cap for ``estimate_object_size`` walks; bounds total cost.

@@ -18,6 +18,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from cash.content_hashers import builtin_hash_family
+from cash.value_hash import budgeted_hash, is_costly
 
 if TYPE_CHECKING:
     from cash.notebook.statement._metadata import StatementCacheMetadata
@@ -56,8 +57,13 @@ def hashed_by_lineage(value: Any, _seen: set[int] | None = None) -> bool:
     check compares such a value's content with its session hash: each one
     that would reads it as changed instead (fail closed), since a lineage
     never equals a content hash.
+
+    So is a value a check found too costly to read (`is_costly`: an openpyxl
+    workbook of 400,000 cells, 3 s a hash).
     """
     t = type(value)
+    if is_costly(value):
+        return True
     if t.__name__ in _LINEAGE_HASHED_TYPES or builtin_hash_family(t) is not None or _wraps_a_frame(t):
         return True
     artist = _artist_class()
@@ -191,10 +197,12 @@ def _record_session_hash(
         value_hash = lineage
     elif compute_hash is not None:
         try:
-            value_hash = compute_hash(value)
+            value_hash = budgeted_hash(value, compute_hash)
         except (TypeError, ValueError, AttributeError, RecursionError) as e:
             logger.debug("Could not hash restored variable '%s': %s", name, e)
             return
+        if value_hash is None:
+            value_hash = lineage  # too costly to read: as `hashed_by_lineage`
     else:
         return
     if value_hash:

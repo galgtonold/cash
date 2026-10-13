@@ -50,6 +50,7 @@ def dumps(
     keyed: bool = False,
     on_retry: Any = None,
     aliases: bool = False,
+    sink: Any = None,
 ) -> bytes:
     """``pickle.dumps(value, protocol)``, keeping the instance attributes a C
     base's reduce drops. *fast* is the pickler's memo-less mode; *extra*
@@ -65,11 +66,20 @@ def dumps(
     (`FlatValue`), which ``pickle.loads`` reads back as the value; when it
     is, *on_retry* is called first, as *buffer_callback* is called again
     for the buffers of the second attempt. *keyed* bytes are not: a value
-    too deep to key raises RecursionError, as before."""
+    too deep to key raises RecursionError, as before.
+
+    With *sink*, an object with a ``write`` method, the bytes are written
+    to it a frame at a time as the pickler makes them, the same bytes in
+    the same order, and the result is empty: a digest is taken as they
+    come, and whoever reads them can stop the pickle by raising from
+    ``write`` (`value_hash.budgeted_hash`). Only for *keyed* bytes, which
+    are never pickled flat."""
+    if sink is not None and not keyed:
+        raise ValueError("dumps: a sink takes keyed bytes only")
     if FLAT_FIRST and not _surely_shallow(value):
-        return _dumps_walked_first(value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases)
+        return _dumps_walked_first(value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink)
     try:
-        return _dumps(value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases)
+        return _dumps(value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink)
     except (RecursionError, MemoryError) as exc:
         if keyed or not too_deep(exc):
             # A key is never taken over a value pickle cannot follow: the
@@ -93,6 +103,7 @@ def _dumps_walked_first(
     persistent_id: Any,
     keyed: bool,
     aliases: bool = False,
+    sink: Any = None,
 ) -> bytes:
     """`dumps` where the pickler would run out of C stack before its
     recursion limit (`FLAT_FIRST`): the value is walked on the heap first,
@@ -102,10 +113,10 @@ def _dumps_walked_first(
     pickler raises on other Pythons."""
     reducers, leaf = _KeepDict(protocol, extra, keyed), _flat_leaf(persistent_id)
     if _at_most_deep(value, _SAFE_DEPTH, reducers, leaf):
-        return _dumps(value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases)
+        return _dumps(value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink)
     deepest = sys.getrecursionlimit() // 2 if keyed else None
     flat = flatten(value, reducers, leaf, deepest)
-    return _dumps(flat, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases)
+    return _dumps(flat, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink)
 
 
 def _at_most_deep(value: Any, limit: int, reducers: Any, leaf: Any) -> bool:
@@ -275,8 +286,9 @@ def _dumps(
     persistent_id: Any,
     keyed: bool,
     aliases: bool = False,
+    sink: Any = None,
 ) -> bytes:
-    buf = io.BytesIO()
+    buf = io.BytesIO() if sink is None else sink
     pickler = pickle.Pickler(buf, protocol=protocol, buffer_callback=buffer_callback)
     pickler.fast = fast
     if persistent_id is not None:
@@ -288,7 +300,7 @@ def _dumps(
         pickler.persistent_id = key_aliases()
     pickler.dispatch_table = _KeepDict(protocol, extra, keyed)
     pickler.dump(value)
-    return buf.getvalue()
+    return b"" if sink is not None else buf.getvalue()
 
 
 def key_aliases() -> Callable[[Any], Any]:

@@ -23,10 +23,11 @@ from cash.exceptions import CacheBackendError
 
 from .. import _plain_data, kept_state
 from .._lazy_module import LazyModule
+from ..cost_model import GENERIC_FAMILY
 from ..sizing import memory_footprint
 from ..value_types import IMMUTABLE_PRIMS
 from . import frame_sharing, iterative_copy
-from ._base import CacheBackend, MetadataDict, gdsf_value
+from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, gdsf_value
 from .serialization import Serializer
 
 psutil = LazyModule("psutil")  # imported on first use: ~11 ms off `import cash`
@@ -730,7 +731,11 @@ class InMemoryBackend(CacheBackend):
                     buffers=[bytes(b) if memoryview(b).readonly else bytearray(b) for b in buffers],
                 )
                 unpickler.persistent_load = memo.__getitem__
-                return unpickler.load()
+                started = time.perf_counter()
+                try:
+                    return unpickler.load()
+                finally:
+                    _UNPICKLED.seconds = getattr(_UNPICKLED, "seconds", 0.0) + time.perf_counter() - started
             except pickle.PicklingError:
                 logger.debug("could not copy a %s by pickle", type(value).__name__, exc_info=True)
             except Exception as exc:
@@ -1163,6 +1168,14 @@ class InMemoryBackend(CacheBackend):
                 self._drop(key)
             return False
 
+        if _slower_than_its_compute(value, size, metadata):
+            # Its class's copies were timed here: a hit would take longer
+            # than computing it again. Not copied; the disk tier is asked
+            # with that time too (`PersistencePolicy.decide`), and says no.
+            with self._lock:
+                self._drop(key)
+            return False
+
         if "storage" not in metadata:
             metadata["storage"] = [self.source_label]
 
@@ -1203,6 +1216,7 @@ class InMemoryBackend(CacheBackend):
             fell_back: list[bool] = []
             by_spine: list[bool] = []
             by_deepcopy: list[bool] = []
+            _UNPICKLED.seconds = 0.0
             stored = self._safe_deep_copy(
                 value,
                 key,
@@ -1214,6 +1228,22 @@ class InMemoryBackend(CacheBackend):
                 premade=premade,
                 by_deepcopy=by_deepcopy,
             )
+            if not (fell_back or by_deepcopy) and size >= _ROUND_TRIP_MIN_BYTES:
+                # The unpickling alone: what a disk hit does again, after
+                # reading the bytes (the pickling and the array copies here
+                # are this tier's own).
+                unpickle_seconds = _UNPICKLED.seconds
+                if _copied_by_round_trip(value, metadata):
+                    # On the entry, for the disk tier's decision just after
+                    # this (`PersistencePolicy.decide`): the copy was a pickle
+                    # round trip, and a disk hit unpickles it again.
+                    metadata[MEASURED_ROUND_TRIP] = unpickle_seconds
+                _note_round_trip(value, size, unpickle_seconds)
+                if _hit_no_faster(value, unpickle_seconds, metadata):
+                    # A hit is this copy again: no faster than computing it.
+                    with self._lock:
+                        self._drop(key)
+                    return False
             holds_bytes = (marshalled_parts or _BYTES in frame_cells.values()) and not fell_back
             if shared and not fell_back:
                 kept = {id(premade[part_id]): premade[part_id] for part_id in shared}
@@ -1909,7 +1939,120 @@ def hit_seconds(value: Any, size_bytes: int) -> float | None:
                 return copy_seconds(size_bytes)
     except Exception:
         logger.debug("no measured hit cost for a %s", kind.__name__, exc_info=True)
-    return None
+    return round_trip_seconds(value, size_bytes)
+
+
+#: Seconds the RAM tier's copies on this thread spent unpickling, since the
+#: store in progress began (`InMemoryBackend.set`).
+_UNPICKLED = threading.local()
+
+#: Seconds per byte unpickling the tier's copy of an object of a class took
+#: -- ``__setstate__`` and all -- by class, the fastest of the last
+#: `_COPY_READINGS`. A statsmodels results object rebuilds its
+#: design matrix when it is unpickled: 0.74 s for 141 MiB, five times what
+#: the cost model's generic rate says.
+_ROUND_TRIP_RATES: dict[str, list[float]] = {}
+
+#: Smaller copies are not timed: their fixed costs would read as a rate.
+_ROUND_TRIP_MIN_BYTES = 1 << 20
+
+#: Classes remembered at most.
+_ROUND_TRIP_CLASSES = 256
+
+
+def class_key(kind: type) -> str:
+    """The name `round_trip_seconds` remembers a class's readings under."""
+    return f"{getattr(kind, '__module__', '')}.{getattr(kind, '__qualname__', kind.__name__)}"
+
+
+def _note_round_trip(value: Any, nbytes: int, seconds: float) -> None:
+    """Remember what unpickling the copy of *value*, of about *nbytes*, took:
+    only for an object of a class of its own (a frame, an array or a builtin
+    container is copied otherwise, and has its own measure). A notebook
+    entry is a dict of the statement's variables: its store credits the
+    class of its biggest one (`note_round_trip`)."""
+    kind = type(value)
+    if kind is dict or _copied_as_data(kind):
+        return
+    note_round_trip(class_key(kind), nbytes, seconds)
+
+
+def _hit_no_faster(value: Any, unpickle_seconds: float, metadata: MetadataDict) -> bool:
+    """Did unpickling the copy of *value*, an object of a class of its own,
+    take at least the compute its entry records? A RAM hit copies it the
+    same way, so it would be no faster than computing it again."""
+    if type(value) is dict or _copied_as_data(type(value)) or not _judged_by_compute(metadata):
+        return False
+    return unpickle_seconds >= metadata["execution_time"]
+
+
+def _judged_by_compute(metadata: MetadataDict) -> bool:
+    """May the tier refuse the entry *metadata* describes for costing more
+    than it saves? Not one the caller decided to keep (a decorator's,
+    ``@cash:persist``, one that must be isolated), nor one recording no compute."""
+    if metadata.get("decorator_entry") or metadata.get("force_persist") or metadata.get("copy_required"):
+        return False
+    return bool(metadata.get("execution_time"))
+
+
+def _slower_than_its_compute(value: Any, size: int, metadata: MetadataDict) -> bool:
+    """Would a hit of *value* (about *size* bytes) take at least as long as
+    the compute its entry records, by what unpickling objects of its class
+    took here (`round_trip_seconds`)? Then that time goes on *metadata*.
+    Never for an entry the caller decided to keep (`_judged_by_compute`)."""
+    kind = type(value)
+    if kind is dict or _copied_as_data(kind) or not _ROUND_TRIP_RATES or not _judged_by_compute(metadata):
+        return False
+    predicted = round_trip_seconds(value, size)
+    if predicted is None or predicted < metadata["execution_time"]:
+        return False
+    metadata[MEASURED_ROUND_TRIP] = predicted
+    return True
+
+
+def _copied_by_round_trip(value: Any, metadata: MetadataDict) -> bool:
+    """Was the copy of *value* a pickle round trip of an object of a class
+    of its own? A notebook entry is a dict of a statement's variables: only
+    when its biggest one is such an object (its ``cost_model_family``)."""
+    if type(value) is dict:
+        return metadata.get("cost_model_family") == GENERIC_FAMILY
+    return not _copied_as_data(type(value))
+
+
+def _copied_as_data(kind: type) -> bool:
+    """Is a value of type *kind* copied as data -- a frame, an array, a
+    builtin container or scalar -- rather than through a pickle round trip
+    of an object of a class of its own?"""
+    if kind in _COPIED_AS_DATA:
+        return True
+    return _is_pandas_frame(kind) or _is_polars_frame(kind) or kind.__name__ == "ndarray"
+
+
+def note_round_trip(key: str, nbytes: int, seconds: float) -> None:
+    """Remember that unpickling an object of the class named *key*
+    (`class_key`), of about *nbytes*, took *seconds*."""
+    if nbytes < _ROUND_TRIP_MIN_BYTES or seconds <= 0:
+        return
+    readings = _ROUND_TRIP_RATES.pop(key, [])
+    readings.append(seconds / nbytes)
+    del readings[:-_COPY_READINGS]
+    _ROUND_TRIP_RATES[key] = readings  # the most recently seen class last
+    while len(_ROUND_TRIP_RATES) > _ROUND_TRIP_CLASSES:
+        del _ROUND_TRIP_RATES[next(iter(_ROUND_TRIP_RATES))]
+
+
+_COPIED_AS_DATA = frozenset({list, tuple, set, frozenset, str, bytes, bytearray})
+
+
+def round_trip_seconds(value: Any, nbytes: int) -> float | None:
+    """What unpickling *value*, about *nbytes*, is measured to cost in this
+    process, from the tier's earlier copies of objects of its class; None
+    when none was timed. A RAM hit copies it that way, and a disk hit
+    unpickles it: either takes at least this."""
+    readings = _ROUND_TRIP_RATES.get(class_key(type(value)))
+    if not readings:
+        return None
+    return nbytes * min(readings)
 
 
 def _copy_polars(frame: Any) -> Any:
