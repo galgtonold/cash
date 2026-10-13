@@ -98,11 +98,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 #: the start of the fence's code, so an edit elsewhere on the page does not
 #: move the entry. ``test_harness.py`` fails on an entry that matches no fence,
 #: so the list only shrinks: when a page is fixed, delete its entries.
-PENDING_FENCES: dict[str, dict[str, str]] = {
-    "docs/for-coding-agents.md": {
-        "# fit()'s discarded return": "fragment: needs `import cash` and a scikit-learn import",
-    },
-}
+PENDING_FENCES: dict[str, dict[str, str]] = {}
 
 
 def pending_reason(md_path: Path, code: str) -> str | None:

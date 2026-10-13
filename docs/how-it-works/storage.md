@@ -165,7 +165,7 @@ the entry was written with and the tier's current `default_ttl`.
     `%cash_persist on` writes it anyway. The [cost model](../cost-model.md)
     explains the prediction and every setting.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @5681a193 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @967def4e -->
 Each tier turns down a single value too large for its cap, so a 20 MB frame
 can be stored in memory and on disk while skipping a Redis tier limited to
 10 MB. When a value was meant for disk but every disk tier refused it, cash
@@ -273,7 +273,7 @@ killed process was still writing is missing, and is computed again.
 
 ## Turning objects into bytes
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @a012adf1, cash/backends/serialization.py:PickleSerializer.serialize @2d72bc8d -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @e50d5cf9, cash/backends/serialization.py:PickleSerializer.serialize @2973e72f -->
 Every result is stored with `pickle` (protocol 5), pandas DataFrames
 included, so a hit hands back the same frame: its class, index, dtypes, cell
 types, `attrs` and `flags`. Pickle is several times faster than Parquet to

@@ -67,9 +67,11 @@ function in a script.
 
 === "Decorator"
 
-    Set `debug = true` (or `CASH_DEBUG=true`) to log one line per call: a hit,
-    or a miss and why. See
-    [configuration](../getting-started/configuration.md).
+    Set `verbose = true` (or `CASH_VERBOSE=1`) to log one `cash.calls` line
+    per call: a hit, or a miss and why. `debug = true` logs those lines along
+    with cash's other debug records. `CASH_SUMMARY=1` prints one table of hits,
+    misses and time saved per function when the process ends. See
+    [Seeing what cash did](../decorator.md#seeing-what-cash-did).
 
 === "Notebook"
 

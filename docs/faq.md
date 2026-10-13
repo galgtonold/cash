@@ -20,9 +20,9 @@ link to the page that has the details.
 
 ??? question "Does it work with pandas, numpy, polars, torch or duckdb?"
     Built-in hashers cover pandas, numpy, polars, PyArrow, modin, dask and
-    scipy.sparse. For
-    a class of your own, add a `__cash_key__` method; for anything else,
-    register a hasher with `cash.register_hasher`. See
+    scipy.sparse. Any other value that pickles is compared by its pickle. For
+    a class of your own, a `__cash_key__` method is faster; for a type you do
+    not own, register a hasher with `cash.register_hasher`. See
     [Custom hashers](tutorials/feature-guides/custom-hashers.md).
 
 ??? question "How much faster will it make things?"
@@ -106,6 +106,11 @@ link to the page that has the details.
     decides the result. See
     [Leaving arguments out of the key](decorator.md#leaving-arguments-out-of-the-key).
 
+??? question "Does it work with a multiprocessing pool or joblib?"
+    Yes. Workers use the cache folder of the process that started them, so a
+    result one worker stored is a hit in the others and in the next run. See
+    [Across processes](tutorials/feature-guides/thread-safety.md#across-processes-pool-processpoolexecutor-joblib).
+
 ## Notebook
 
 ??? question "Do I need to change my notebook?"
@@ -148,6 +153,11 @@ link to the page that has the details.
     the statement runs and stores the new value; then remove the directive.
     `cash clear --all` in a terminal empties the whole cache instead. See
     [Annotations](annotations.md).
+
+??? question "I call a `@cash.cache` function from a notebook. Is the result stored twice?"
+    No. A statement that only binds the result (`df = mylib.load(path)`)
+    points to the function's own entry, and a restart restores it from there.
+    See [The notebook path](how-it-works/notebook-path.md).
 
 ??? question "`cache_info()` on a decorated function reads zero in my notebook."
     Re-running the defining cell creates a new wrapper with fresh counters.

@@ -107,7 +107,9 @@ See [Knowing when to recompute](how-it-works/invalidation.md).
 
 *Notebook.* Writing a statement's result from RAM to disk so it survives a
 kernel restart. It happens when the statement took more than 0.1 s and
-reloading is cheaper than recomputing. `# @cash:persist` forces it. Decorated
+the disk write is worth the time it saves: reloading is cheaper than
+recomputing, and the value is not big for how fast it rebuilds.
+`# @cash:persist` forces it. Decorated
 results are always written to disk. See [Cost model](cost-model.md).
 
 ## Provenance

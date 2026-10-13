@@ -29,7 +29,7 @@ flowchart TB
     R2 --> BD
 ```
 
-<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @100752f2, cash/notebook/statement/processor.py:StatementProcessor.process_statement @704074bb -->
+<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @100752f2, cash/notebook/statement/processor.py:StatementProcessor.process_statement @b34f8b36 -->
 1. **Inputs.** cash reads from the cell's source which variables it uses.
 2. **Upstream check.** If an input is missing (after a restart) or a cell above
    it was edited, cash works out from the notebook's code which statements
@@ -137,12 +137,22 @@ the function with how many of its calls were served from its own cache:
 In the HTML badge each call gets its own row until a function has more than
 three calls in the statement; then they fold into one expandable row.
 
+<!-- claim: cash/notebook/statement/store.py:StatementStore._with_decorator_ref @9edb344d, cash/notebook/lineage_store.py:frozen_tag @4d26d42d -->
+A statement that only binds the result (`prices = mylib.load_prices(path)`)
+does not store it a second time: its entry points to the function's entry,
+so a script and the notebook share one copy on disk. A `frozen=True` result
+held in a notebook variable is keyed by the call that produced it when you
+pass it to another cached function, as in a script, until a cell changes it.
+
 ## Picking up after a kernel restart
 
 After a restart, run any cell. cash restores the variables it needs from the
 cache, checking first that the code that produced them is unchanged. For a
 chain of steps (`df = load()`, then `df = clean(df)`), it restores the final
-value directly instead of replaying each step.
+value directly instead of replaying each step. This needs the notebook's
+cells: in a headless run
+([`NOTEBOOK-NOT-FOUND`](../warnings.md#notebook-not-found)), run the cells
+from the top, and each one is restored from the cache as it comes.
 
 <!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @7a89a67f -->
 A value built by a `for` loop can be restored too. cash records what the loop
@@ -159,7 +169,7 @@ the loop runs again. The loop's own working variables (`parts` in
 `for f in files: parts.append(read(f))`) are not stored; a cell that reads
 them runs the loop.
 
-<!-- claim: cash/analysis/mutations.py:module_setting_receivers @977421aa, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @d2ba2265 -->
+<!-- claim: cash/analysis/mutations.py:module_setting_receivers @977421aa, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @6775632d -->
 A setting kept inside a library, such as `plt.style.use("ggplot")`,
 `plt.rcParams.update(...)`, `pd.set_option(...)` or
 `warnings.filterwarnings(...)`, is not a variable cash can store. After a

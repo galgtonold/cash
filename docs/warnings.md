@@ -449,9 +449,21 @@ avoid a paid API call or to hold a result steady.
 <!-- claim: cash/backends/value_policy.py:worth_its_bytes, cash/backends/store_notices.py:StoreNotices.not_worth_bytes @bac7fc82 -->
 **What happened.** A value over 8 MiB was cheap enough to rebuild that storing
 it would cost more than 128 MiB of disk per second of compute saved, so it was
-not written to disk. The message names the size and compute time. A cached
-call's result faces the same rule unless a statement stores a reference to it
-(`b = load(p)`); the message then names the function, as in `load(...)`.
+not written to disk. The message names the size and compute time, and divides
+one by the other: "215 MiB of cache per second saved, against the 128 MiB"
+means a 430 MiB value that takes 2 s to compute, above the 128 MiB a second
+cash spends. It is shown once per statement in a session; a new kernel
+recomputes the value, so it shows the warning again. A slow call that cash
+caches inside a statement faces the same rule unless a statement stores a
+reference to it (`b = load(p)`); the message then names the function, as in
+`load(...)`.
+
+<!-- claim: cash/notebook/statement/store.py:StatementStore._with_decorator_ref @9edb344d, cash/backends/persistence_policy.py:PersistencePolicy.decide @e3aa6741 -->
+The result of a `@cash.cache` function is not judged by this rule: the
+decorator writes every result to disk, and a statement that only binds it
+(`df = mylib.build_features(raw)`) refers to that entry instead of storing
+it again. So when the message suggests "`@cash.cache` on the function", it
+means a function that is not decorated yet; a decorated one already works.
 
 **Why it matters.** A new kernel recomputes it, which is usually faster than
 you would notice. The rule keeps big, cheap values from filling the disk.
@@ -516,7 +528,7 @@ smaller values, or move `cache_dir` to a bigger volume.
 whole cap, so it was not written to disk. The message names its size and the
 cap.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e, cash/backends/memory_backend.py:InMemoryBackend.set @394f95d7 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e, cash/backends/memory_backend.py:InMemoryBackend.set @871602f2 -->
 **Why it matters.** It is offered to the RAM tier instead, but the RAM cap is
 usually smaller, so usually nothing is cached at all.
 
@@ -1270,7 +1282,7 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/loaded_code.py:loaded_code_matches_disk @541209ac, cash/decorator/function_identity.py:warn_source_changed_since_load @4f566032 -->
+<!-- claim: cash/loaded_code.py:loaded_code_matches_disk @f7d13d9d, cash/decorator/function_identity.py:warn_source_changed_since_load @4f566032 -->
 <!-- claim: cash/loaded_code.py:_pyc_proves_unchanged @42e99e55 -->
 **What happened.** A file holding a cached function or a helper was edited
 after this process imported it, or the import loaded bytecode compiled from an
@@ -1696,7 +1708,7 @@ file on disk is the one you want.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._record_shared_object_edges @a3bd8d7c, cash/notebook/shared_objects.py:referring_names @5602736f, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @4fe4d23f -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._record_shared_object_edges @b3fd57ed, cash/notebook/shared_objects.py:referring_names @5602736f, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @4fe4d23f -->
 **What happened.** After a statement ran, cash looked for the other variables
 that hold an object of its outputs, or are held in one (`data = raw`,
 `config = {"features": features}`), so that a later change through either
@@ -1973,7 +1985,7 @@ something is replacing files under a running job, such as a deploy.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @a012adf1 -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @e50d5cf9 -->
 **What happened.** The result was computed, but writing it to the cache
 failed. The message names the backend and the exception. Whatever the
 exception, the call returns its result; a failed write never fails the call.

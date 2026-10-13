@@ -103,7 +103,7 @@ again. See
 
 #### Method calls
 
-<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @3016be1f, cash/analysis/mutations.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/mutations.py:chain_is_pure @404cc05d, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @d2ba2265, cash/analysis/mutation_effects.py:captured_call_receivers @a711d067, cash/analysis/namespace_effects.py:call_arguments @808a92d9 -->
+<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @a2229b61, cash/analysis/mutations.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/mutations.py:chain_is_pure @404cc05d, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @6775632d, cash/analysis/mutation_effects.py:captured_call_receivers @a711d067, cash/analysis/namespace_effects.py:call_arguments @808a92d9 -->
 A method call has no assignment target, so cash classifies its object:
 
 - **Not a change.** A call on a module (`np.mean(x)`, `time.sleep(1)`), a call
@@ -115,7 +115,9 @@ A method call has no assignment target, so cash classifies its object:
   result is used (`out = raw.sort("ts")`, `raw.sort("ts").head()`) is the kind
   that returns a new object, not `list.sort`. A
   module setting such as `plt.style.use(...)` or `pd.set_option(...)` counts
-  as changing the module, so it is replayed after a restart.
+  as changing the module, so it is replayed after a restart. A `set_*` call
+  that changes the variable it is handed (`nx.set_node_attributes(G, ...)`)
+  changes that variable, not the module.
 - **Always a change.** Any call on a live matplotlib `Figure` or `Axes`, or
   passing one to a call (`df.plot(ax=ax)`, `draw(axes[0], df)`), draws on it.
   A call that fits an estimator (`fit`, `fit_transform`, `fit_predict`, ...)
@@ -275,11 +277,15 @@ The badge marks the row `seed`, `random` (a seeded draw) or `unseeded`. A cached
 
 ### Values that cannot survive a round trip
 
-<!-- claim: cash/notebook/statement/derivation_edges.py:is_uncacheable_alias @6aa89a05, cash/analysis/cacheability_decision.py:identity_coupled_reason @77bfb1cc -->
-Two kinds of value are refused after the statement runs, because restoring a
-copy would break them: a view of another variable (a numpy slice, a pandas
-`groupby` object), which would come back detached from its base, and a
-matplotlib `Figure`/`Axes`, which would come back detached from pyplot. A
+<!-- claim: cash/notebook/statement/derivation_edges.py:is_uncacheable_alias @000c4568, cash/analysis/cacheability_decision.py:identity_coupled_reason @77bfb1cc, cash/notebook/borrowed_memory.py:borrowed_memory_names @5835709f -->
+Three kinds of value are refused after the statement runs, because restoring
+a copy would break them: a view of another variable (a numpy slice, a pandas
+`groupby` object), which would come back detached from its base; a frame or
+array that keeps its data in another variable's memory without a copy
+(`x = df["a"].to_numpy()`, `s = pl.Series(arr)`), which would miss a later
+write to that variable; and a matplotlib `Figure`/`Axes`, which would come
+back detached from pyplot. Such a statement runs every time, which costs
+little: making a view is fast. A
 numpy view counts wherever it sits, also inside a list, tuple or dict
 (`parts = np.split(a, 2)`), and its base counts as another variable's whenever
 something besides the view holds it: a name, a dict (`w = data['x'][2:5]`), an

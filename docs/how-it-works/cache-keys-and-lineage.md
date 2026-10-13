@@ -25,7 +25,7 @@ key, and a miss.
 
 ## Hashing values
 
-<!-- claim: cash/content_hashers.py:builtin_hash @dd82c01b, cash/value_hash.py:compute_hash @e9c43540 -->
+<!-- claim: cash/content_hashers.py:builtin_hash @dd82c01b, cash/value_hash.py:compute_hash @829f2273 -->
 Both paths fingerprint data values with the same built-in hashers. The
 decorator uses them for arguments; the notebook uses them wherever it hashes
 a value: a loop iteration's values, the arguments of a cached call inside a
@@ -38,6 +38,7 @@ statement, and a variable with no lineage.
 | `DataFrame`, `Series` | polars | schema and every value, each column from its Arrow memory; an `Object` column by its values' content |
 | `LazyFrame` | polars | the serialised plan, including in-memory data; a plan reading a file holds the path, not the contents |
 | `Table`, `RecordBatch` | pyarrow | schema and every row, each column from its offset; a dictionary column by its values |
+| sparse matrices and arrays | scipy.sparse | type, shape, dtype, format and every array the format stores; a DOK or LIL matrix as the CSR matrix it converts to |
 | `DataFrame`, `Series` | modin | converted to pandas, then hashed as pandas |
 | any collection | dask | the task-graph keys and the schema |
 
@@ -52,10 +53,13 @@ order-sensitive code can treat them differently; a strided view and its
 contiguous copy share a key. The dtypes are in a pandas key, so `int64` and
 `Int64` columns, or a tz-naive and a tz-aware series, never share an entry.
 
-For other types, register a hasher; see
-[custom hashers](../tutorials/feature-guides/custom-hashers.md).
+<!-- claim: cash/value_hash.py:_pickle_digest @888bcf87, cash/content_hashers.py:hash_sparse @b0bdb6a6 -->
+Any other value, such as a networkx graph or a fitted model, is pickled and
+the pickle is hashed, so it is compared by content too, at the cost of
+pickling it. To key a type faster, or one that cannot be pickled, register a
+hasher; see [custom hashers](../tutorials/feature-guides/custom-hashers.md).
 
-<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/value_hash.py:compute_hash @e9c43540 -->
+<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/value_hash.py:compute_hash @829f2273 -->
 === "Decorator"
 
     Registered hashers apply to call arguments and to the values inside a
@@ -204,7 +208,7 @@ calling a function defined in a later cell, see
 
 ### Resolving an input
 
-<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @778e6d73, cash/value_hash.py:compute_hash @e9c43540 -->
+<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @778e6d73, cash/value_hash.py:compute_hash @829f2273 -->
 For each input variable, the statement key uses the first of these that
 exists:
 
