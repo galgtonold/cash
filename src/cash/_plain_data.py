@@ -68,16 +68,19 @@ def fake_clock() -> tuple[tuple, dict]:
 _FAKE_CLOCK: dict[int, tuple[Any, tuple[tuple, dict]]] = {}
 
 
-def _dump(value: Any, fast: bool, keyed: bool = False) -> bytes:
-    return kept_state.dumps(value, fast=fast, extra=fake_clock()[1], keyed=keyed)
+def _dump(value: Any, fast: bool, keyed: bool = False, aliases: bool = False) -> bytes:
+    return kept_state.dumps(value, fast=fast, extra=fake_clock()[1], keyed=keyed, aliases=aliases)
 
 
 def key_dumps(value: Any) -> bytes:
     """``pickle.dumps(value)`` for a cache key: a clock test double's date
     pickles as the date (`fake_clock`), and a C base's reduce keeps the
     subclass's attributes (`kept_state`), and so does one a class of the
-    user's leaves out of its own pickled state (`kept_state.chooses_its_state`)."""
-    return _dump(value, fast=False, keyed=True)
+    user's leaves out of its own pickled state (`kept_state.chooses_its_state`).
+    An object met twice is marked only when it can change: which strings,
+    tuples or dtypes are one object says how a value was built, not what it
+    holds (`kept_state.key_aliases`)."""
+    return _dump(value, fast=False, keyed=True, aliases=True)
 
 
 def content_dumps(value: Any) -> bytes:

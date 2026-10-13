@@ -23,6 +23,7 @@ import pickle
 import sys
 import types
 import weakref
+from collections.abc import Callable
 from typing import Any
 
 __all__ = [
@@ -48,6 +49,7 @@ def dumps(
     persistent_id: Any = None,
     keyed: bool = False,
     on_retry: Any = None,
+    aliases: bool = False,
 ) -> bytes:
     """``pickle.dumps(value, protocol)``, keeping the instance attributes a C
     base's reduce drops. *fast* is the pickler's memo-less mode; *extra*
@@ -55,6 +57,9 @@ def dumps(
     *persistent_id* is the pickler's hook of that name. *keyed*
     bytes are for hashing, never loaded: an instance of the user's own class
     also keeps the attributes its own reduce leaves out (`_reduce_for_key`).
+    *aliases* (key bytes only) marks a changeable object met again instead
+    of pickle's memo back-referencing whatever object it meets again
+    (`key_aliases`), so equal values built apart key alike.
 
     A value too deep for the pickler's recursion is pickled flat
     (`FlatValue`), which ``pickle.loads`` reads back as the value; when it
@@ -62,9 +67,9 @@ def dumps(
     for the buffers of the second attempt. *keyed* bytes are not: a value
     too deep to key raises RecursionError, as before."""
     if FLAT_FIRST and not _surely_shallow(value):
-        return _dumps_walked_first(value, protocol, fast, buffer_callback, extra, persistent_id, keyed)
+        return _dumps_walked_first(value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases)
     try:
-        return _dumps(value, protocol, fast, buffer_callback, extra, persistent_id, keyed)
+        return _dumps(value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases)
     except (RecursionError, MemoryError) as exc:
         if keyed or not too_deep(exc):
             # A key is never taken over a value pickle cannot follow: the
@@ -76,7 +81,7 @@ def dumps(
     if on_retry is not None:
         on_retry()
     flat = flatten(value, _KeepDict(protocol, extra, keyed), _persistent_leaf(persistent_id))
-    return _dumps(flat, protocol, fast, buffer_callback, extra, persistent_id, keyed)
+    return _dumps(flat, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases)
 
 
 def _dumps_walked_first(
@@ -87,6 +92,7 @@ def _dumps_walked_first(
     extra: dict | None,
     persistent_id: Any,
     keyed: bool,
+    aliases: bool = False,
 ) -> bytes:
     """`dumps` where the pickler would run out of C stack before its
     recursion limit (`FLAT_FIRST`): the value is walked on the heap first,
@@ -96,10 +102,10 @@ def _dumps_walked_first(
     pickler raises on other Pythons."""
     reducers, leaf = _KeepDict(protocol, extra, keyed), _flat_leaf(persistent_id)
     if _at_most_deep(value, _SAFE_DEPTH, reducers, leaf):
-        return _dumps(value, protocol, fast, buffer_callback, extra, persistent_id, keyed)
+        return _dumps(value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases)
     deepest = sys.getrecursionlimit() // 2 if keyed else None
     flat = flatten(value, reducers, leaf, deepest)
-    return _dumps(flat, protocol, fast, buffer_callback, extra, persistent_id, keyed)
+    return _dumps(flat, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases)
 
 
 def _at_most_deep(value: Any, limit: int, reducers: Any, leaf: Any) -> bool:
@@ -268,15 +274,86 @@ def _dumps(
     extra: dict | None,
     persistent_id: Any,
     keyed: bool,
+    aliases: bool = False,
 ) -> bytes:
     buf = io.BytesIO()
     pickler = pickle.Pickler(buf, protocol=protocol, buffer_callback=buffer_callback)
     pickler.fast = fast
     if persistent_id is not None:
         pickler.persistent_id = persistent_id
+    elif aliases:
+        # Key bytes: sharing marked for the objects whose sharing means
+        # something, never through pickle's memo (`key_aliases`).
+        pickler.fast = True
+        pickler.persistent_id = key_aliases()
     pickler.dispatch_table = _KeepDict(protocol, extra, keyed)
     pickler.dump(value)
     return buf.getvalue()
+
+
+def key_aliases() -> Callable[[Any], Any]:
+    """A key pickle's ``persistent_id`` (`dumps` with *aliases*): an object
+    that can change met a second time is written as a mark naming its first
+    appearance; anything else is written in full every time.
+
+    Pickle's memo writes ANY object met twice as a back-reference, by
+    identity: a string, a tuple, a numpy dtype as much as a list. Which
+    immutable objects happen to be one object is how they were built, not
+    what they hold: a freshly fitted model's parameter names are the same
+    string objects as the keys of its own ``__dict__``, and its arrays share
+    numpy's one ``float64`` dtype, while the same model loaded from a pickle
+    holds copies. Equal models gave different key bytes, so a cached call
+    taking a model a cached call returned missed once in every new process
+    that loaded the model from the cache. Two names for one list, dict or
+    object still key apart from two equal ones, as through the memo, and a
+    cycle is closed by the mark.
+
+    Every object it marks is kept for the dump: a temporary a reduce made
+    and dropped must not hand its id to the next.
+    """
+    seen: dict[int, tuple[int, Any]] = {}
+    atoms = _ATOMS
+    by_name = _BY_NAME
+
+    def persistent_id(obj: Any, type: Any = type, id: Any = id) -> Any:
+        t = type(obj)
+        if t in atoms or t in by_name or issubclass(t, type) or _identityless(t):
+            return None
+        found = seen.get(id(obj))
+        if found is not None:
+            return ("__cash_alias__", found[0])
+        seen[id(obj)] = (len(seen), obj)
+        return None
+
+    return persistent_id
+
+
+#: Types whose instances cannot change and are pickled by value (tuples and
+#: frozensets: their items are marked, if anything, on their own).
+_ATOMS = frozenset(
+    {str, bytes, int, float, complex, bool, type(None), tuple, frozenset, range, slice, type(Ellipsis)}
+)
+
+#: Types pickled by name: their identity is their name.
+_BY_NAME = frozenset({types.FunctionType, types.BuiltinFunctionType, types.MethodDescriptorType, types.ModuleType})
+
+
+def _identityless(t: type) -> bool:
+    """Is *t* a numpy dtype or scalar type: values that cannot change, so
+    which object holds one says nothing? Remembered per type."""
+    try:
+        return _IDENTITYLESS[t]
+    except KeyError:
+        pass
+    except TypeError:
+        return False
+    numpy = sys.modules.get("numpy")
+    found = numpy is not None and (issubclass(t, numpy.dtype) or (issubclass(t, numpy.generic) and t not in (numpy.object_, numpy.void)))
+    _IDENTITYLESS[t] = found
+    return found
+
+
+_IDENTITYLESS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
 def _surely_shallow(value: Any) -> bool:
@@ -598,6 +675,12 @@ class _KeepDict(dict):
         if issubclass(t, type):
             raise KeyError(t)  # a class: pickled by name, as pickle does
         registered = copyreg.dispatch_table.get(t)
+        if self._keyed and t.__name__ == "ndarray" and t is getattr(sys.modules.get("numpy"), "ndarray", None):
+            # A record array's padding bytes are whatever memory held:
+            # keyed without them (`packed_records`).
+            reducer = functools.partial(_reduce_array_for_key, protocol=self._protocol)
+            self[t] = reducer
+            return reducer
         if self._keyed and (chooses_its_state(t) or (registered is not None and _is_users_class(t))):
             # A user's class whose state its own reduce -- or one registered
             # with ``copyreg.pickle`` -- decides: key it with what it leaves out.
@@ -611,6 +694,44 @@ class _KeepDict(dict):
                 reducer = operator.methodcaller("__reduce_ex__", self._protocol)
         self[t] = reducer
         return reducer
+
+
+def packed_records(array: Any) -> Any:
+    """*array* without the padding of its record dtype, or *array* itself
+    when its dtype has none.
+
+    A record dtype's gaps (a ``uint8`` field after ``float64`` ones, an
+    aligned struct) hold whatever the memory held: a fitted
+    scikit-learn tree's node array keyed differently in every process,
+    and a cached call taking a forest missed once for each. The copy holds
+    the same fields, packed; nested records are packed too.
+    """
+    dtype = array.dtype
+    if dtype.fields is None and dtype.subdtype is None:
+        return array
+    from numpy.lib import recfunctions
+
+    packed = recfunctions.repack_fields(dtype, recurse=True)
+    if packed.itemsize == dtype.itemsize:
+        return array
+    return array.astype(packed)
+
+
+def _reduce_array_for_key(array: Any, protocol: int) -> Any:
+    try:
+        packed = packed_records(array)
+    except Exception:  # noqa: BLE001 - a dtype recfunctions does not take: as it is
+        packed = array
+    if packed is array:
+        return array.__reduce_ex__(protocol)
+    return _packed_array, (array.dtype.descr, packed)
+
+
+def _packed_array(descr: Any, packed: Any) -> Any:
+    """What `_reduce_array_for_key` names (key bytes are never loaded)."""
+    import numpy as np
+
+    return packed.astype(np.dtype(descr))
 
 
 def _drops_dict(t: type) -> bool:

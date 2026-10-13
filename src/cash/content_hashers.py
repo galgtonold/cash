@@ -27,6 +27,7 @@ from typing import Any
 from . import _plain_data
 from .bulk_digest import BulkHasher, fold_buffer
 from .canonical_form import ContentHashing, canonical_bytes
+from .kept_state import packed_records
 from .sizing import SPARSE_PARTS
 from .value_types import LEAF_TYPES
 
@@ -671,6 +672,8 @@ def hash_numpy(value: Any) -> str | None:
             else:  # a structured dtype with an object field
                 h.update(_object_items_bytes(value.tolist()))
             return h.hexdigest()
+        # A record dtype's padding holds whatever the memory held.
+        value = packed_records(value)
         try:
             data = memoryview(_raw_view(value))  # no copy if C-contiguous
         except (TypeError, ValueError):
