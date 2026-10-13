@@ -176,7 +176,8 @@ def test_a_waiver_on_the_line_of_a_chained_call_is_honoured(tmp_path):
                     .update(extra))
                 return df
             """
-        )
+        ),
+        encoding="utf-8",
     )
     spec = importlib.util.spec_from_file_location("chain_mod", module)
     mod = importlib.util.module_from_spec(spec)
@@ -216,7 +217,8 @@ def test_a_polars_pipeline_runs_without_a_warning(tmp_path):
             raw = pl.DataFrame({"x": [1, -1, 3], "h": [1, 2, 1]})
             print(clean(raw).shape, hourly(raw).shape)
             """
-        )
+        ),
+        encoding="utf-8",
     )
     result = run_python(script, cwd=tmp_path)
     assert "(2, 2) (2, 2)" in result.stdout
