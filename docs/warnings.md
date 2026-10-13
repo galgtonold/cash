@@ -409,9 +409,12 @@ stopped. A new kernel re-runs the loop from where storing stopped.
 **What happened.** cash times what it spends on each call (building the key,
 the lookup, storing the result) and compares it with the function's own run
 time. For this function, caching has lost more than two seconds in total so
-far. The message gives the numbers and names the costliest argument.
+far, and a hit costs more than the function's longest run. The message gives
+the numbers and names the costliest argument. It waits for the function's
+first hit in the process: before one, nothing could have been saved, and what
+a hit costs is not known.
 
-<!-- claim: cash/effectiveness.py:EffectivenessLedger.final_verdicts @0e2aaab4 -->
+<!-- claim: cash/effectiveness.py:EffectivenessLedger.final_verdicts @d94c91a3 -->
 **Why it matters.** The decorator makes your program slower. The usual cause
 is a large argument, such as a big DataFrame, being hashed on every call.
 The check also runs at exit, so a script that calls each function once is

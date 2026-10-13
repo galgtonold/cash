@@ -17,12 +17,17 @@ suggests ``frozen=True`` there.
 
 When to speak up
 ----------------
-Two conditions, and both matter:
+Three conditions, and all matter:
 
 * **Cumulative waste past a threshold.** "This costs 100 ms twice" is not
   worth a warning; it is the kind of notice people filter away permanently,
   and then the one case that mattered is filtered too. The bar is seconds of
   real, accumulated loss.
+
+* **A hit to judge by.** Before the first hit nothing could have been saved
+  yet, and what a hit costs is unknown: a miss pays the store once per key, a
+  hit pays the lookup and the load instead. A first run that only missed was
+  told caching "is costing more than it saves" when its next run broke even.
 
 * **Overhead exceeds even the BEST case compute.** Compared against the
   *largest* body time observed, not the mean. A function that usually takes
@@ -153,7 +158,7 @@ class EffectivenessLedger:
             # body did not run. A miss saved nothing and still paid overhead.
             led.saved_seconds += body_seconds
 
-        if led.warned or led.calls < MIN_OBSERVATIONS:
+        if led.warned or led.calls < MIN_OBSERVATIONS or not led.hits:
             return None
 
         waste = led.overhead_seconds - led.saved_seconds
@@ -189,7 +194,7 @@ class EffectivenessLedger:
         # apiece made a run 1.3x slower and nothing said so.
         small: list[tuple[float, str]] = []
         for func_name, led in self._ledgers.items():
-            if led.warned or not led.calls or not led.body_samples:
+            if led.warned or not led.hits or not led.body_samples:
                 continue
             waste = led.overhead_seconds - led.saved_seconds
             per_call_overhead = led.typical_overhead()  # as in `record`
