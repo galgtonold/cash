@@ -30,7 +30,10 @@ returns.
   %cash_badge print
   ```
 
-  To change a setting, add `cash.configure(...)` before `%cash_on`. Nothing
+  This is the form for an agent or a headless run: `%cash_badge print` makes
+  the badge plain text that you and a log can read. A person in JupyterLab
+  needs only `import cash` and `%cash_on`, and gets the HTML badge. To change a setting, add `cash.configure(...)` before
+  `%cash_on`. Nothing
   that does work goes in this cell: statements in the `%cash_on` cell are
   never cached.
   Put imports, paths and constants in the next cell. Each statement below is
@@ -41,10 +44,11 @@ returns.
 
 - The default badge is an HTML widget that headless runs strip.
   `%cash_badge print` prints a text badge instead.
-- Cash cannot find the `.ipynb` in a headless run. It warns
-  `NOTEBOOK-NOT-FOUND` and turns off upstream tracking: a variable defined in
-  the `%cash_on` cell then makes every statement that reads it `NOT CACHED`.
-  That is why the first cell does no work.
+- Cash cannot read the notebook's cells in a headless run. It warns
+  `NOTEBOOK-NOT-FOUND`: an edited cell above the one you run is not re-run
+  first, but each statement is still cached by its own code and inputs. A
+  variable defined in the `%cash_on` cell makes every statement that reads it
+  `NOT CACHED`. That is why the first cell does no work.
 
 The text badge, one line per statement:
 
@@ -78,13 +82,16 @@ the output it printed, so a print marker shows up either way. A cached
 4. **ML: return the model, never a bare `.fit()`.** `model.fit(X, y)` alone
    changes the model in place and returns nothing to cache. Do:
    ```python
-   # fit()'s discarded return trips the purity check; safe here
-   @cash.cache(assume_safe=True)
+   import cash
+   from sklearn.ensemble import RandomForestClassifier
+
+   @cash.cache
    def train(X, y):
-       m = RandomForestClassifier(random_state=42)
-       m.fit(X, y)
-       return m
+       return RandomForestClassifier(random_state=42).fit(X, y)
    ```
+   In a notebook, fit in the assignment: `model = Est().fit(X, y)`. A bare
+   `model.fit(X, y)` statement runs every time unless `# @cash:cache-fit` is
+   above it.
 5. **Side effects run on the first call only.** A purity warning is advisory.
    Put `# @cash:assume-safe` on each audited line, or wrap several in
    `with cash.assume_safe():`; `assume_safe=True` waives the whole function,
