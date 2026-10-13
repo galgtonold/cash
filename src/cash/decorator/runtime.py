@@ -858,6 +858,7 @@ class CallRunner:
             # auto_file_deps), both available here.
             cached_data = self._store.restore_identity(func_name, metadata, cached_data)
             self._store.attach_lineage(cached_data, cache_key, metadata.auto_file_deps, ttl=ttl, func_name=func_name)
+            self._store.carry_digest(metadata, cached_data)
             replay_rng_state(metadata)
             self._registry.cached[func_name].last_key = cache_key
             self._calls.log(

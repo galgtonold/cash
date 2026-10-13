@@ -1435,14 +1435,17 @@ class ArgHasher:
            covers the type: the user said what identifies the value,
            and that holds across restarts.
         2. A frozen array or container (``frozen=True`` results): its
-           audited digest, without reading the content again.
+           audited digest, without reading the content again; for an
+           array, the digest stored with its entry when it has one.
         3. The content digest memoised for this very object, while its
            statement or frozen lineage tag is unchanged (`_memo`): a
            within-session speedup that returns the content digest, never
            the tag. The decorator's own tags are not trusted here, since
            nothing moves them when the object is mutated.
         4. A hasher registered with ``override=True``: the user's
-           identity beats reading the content.
+           identity beats reading the content. Then a frozen result's
+           content digest stored with its entry
+           (`FrozenResults.carry_digest`).
         5. A pandas copy-on-write frame's memoised digest, checked
            exactly (`_frame_memo_lookup`).
         6. A builtin content hasher (pandas, numpy, polars, pyarrow,
@@ -1480,6 +1483,14 @@ class ArgHasher:
             for type_, (hasher_fn, src_hash) in self.override_hashers.items():
                 if isinstance(arg, type_):
                     return f"{src_hash}:{hasher_fn(arg)}"
+        # A frozen result's content hash, taken when it was stored and
+        # brought back with it (`FrozenResults.carry_digest`): the same
+        # digest `builtin_hash` would give, without reading every byte.
+        if lineage is not None:
+            carried = self._frozen.carried_digest(arg, lineage)
+            if carried is not None:
+                self._memo_arg_hash(arg, lineage, carried)
+                return carried
 
         # pandas >= 3 copy-on-write: an exact "has this frame changed?"
         # check instead of a trusted tag. See `_frame_memo_lookup`.

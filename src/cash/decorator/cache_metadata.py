@@ -91,6 +91,10 @@ class CacheMetadata:
     #: False). Neither a copy nor a pickle keeps the flag, so a hit sets it
     #: again (`ResultStore.restore_identity`).
     read_only: bool | None = None
+    #: A ``frozen=True`` result's content hash (`builtin_hash`), taken when
+    #: it was stored: a hit hands it to the argument hasher, so a consumer
+    #: keys the restored value without reading it (`FrozenResults.carry_digest`).
+    content_digest: str | None = None
     #: The result WAS a module global or a closure variable of the function
     #: whose type compares by identity (``MISSING = object()``):
     #: ``["global" | "closure", name]``. A copy is a different object, so

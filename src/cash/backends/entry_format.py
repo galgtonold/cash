@@ -78,13 +78,29 @@ A read fills one ``bytearray`` per buffer straight from the file and the
 unpickled arrays use that memory as it is, with no second copy. The
 checksum covers every byte of the payload, padding included, and is checked
 before anything is unpickled.
+
+A large payload is not read at all but mapped (`_map_split`): a private,
+copy-on-write mapping of the file, whose pages are the page cache's own
+until the value writes to them. A pool of workers restoring the same 200 MB
+frame read it into one fresh copy each, which with the checksum pass made
+two passes over the memory per restore; mapped, the checksum pass is the
+only one, and the workers share the pages. A write to the value changes
+only that process's copy of the page, never the file or another reader,
+and an entry file is never rewritten in place past its metadata (a new
+version is a new file renamed over it), so the bytes checked are the bytes
+the value keeps. The writer starts the payload of a split entry at a
+multiple of 64 from the start of the file (the metadata region is padded to
+it), so the mapped buffers are aligned as freshly allocated ones are; an
+entry written before that is read as before.
 """
 
 from __future__ import annotations
 
+import mmap
 import os
 import pickle
 import struct
+import sys
 import zlib
 from collections.abc import Sequence
 from typing import Any, NamedTuple
@@ -126,6 +142,13 @@ HEADER = struct.Struct("<4sII")
 HEADER_SIZE = HEADER.size  # 12
 META_SLACK = 64
 ENTRY_SUFFIX = ".entry"
+
+#: A split payload at least this big is mapped rather than read (`_map_split`).
+MAP_MIN_BYTES = 1 << 20
+#: Where a mapping can be used: a mapped file cannot be deleted or replaced
+#: on Windows, and before Python 3.13 each mapping holds a file descriptor of
+#: its own for as long as the value lives.
+_CAN_MAP = os.name == "posix" and sys.version_info >= (3, 13)
 
 #: Metadata key holding the crc32 of the payload. Stamped by `pack_entry` and
 #: removed again by every read, so it never reaches a backend or a caller. An
@@ -256,7 +279,13 @@ def pack_entry_parts(
         checksum = _checksum_of(chunks)
     meta_bytes = pickle.dumps({**metadata, CHECKSUM_FIELD: checksum})
     cap = len(meta_bytes) + META_SLACK
-    head = b"".join((HEADER.pack(MAGIC_SPLIT if split else MAGIC, len(meta_bytes), cap), meta_bytes, bytes(META_SLACK)))
+    if split:
+        # The payload starts on a multiple of SPLIT_ALIGN, so its buffers do
+        # too: a mapped read (`_map_split`) hands them out where they lie.
+        cap += _pad(HEADER_SIZE + cap)
+    head = b"".join(
+        (HEADER.pack(MAGIC_SPLIT if split else MAGIC, len(meta_bytes), cap), meta_bytes, bytes(cap - len(meta_bytes)))
+    )
     return PackedEntry(head, chunks, checksum, len(head) + sum(_nbytes(c) for c in chunks))
 
 
@@ -373,6 +402,10 @@ def _read_split(fh: Any, start: int, expected: bytes | None, path: str) -> Split
         offset += _pad(offset) + length
     if start + offset != end:
         raise CorruptEntry(f"{path}: split payload is {end - start} bytes, its table says {offset}")
+    if _CAN_MAP and end - start >= MAP_MIN_BYTES and start % SPLIT_ALIGN == 0:
+        mapped = _map_split(fh, start, table, stream_len, lengths, expected, path)
+        if mapped is not None:
+            return mapped
     crc = zlib.crc32(lengths_raw, zlib.crc32(head))
     crc = zlib.crc32(_read_exact(fh, _pad(table), path), crc)
     stream = _read_into(fh, stream_len, path)
@@ -393,6 +426,37 @@ def _read_split(fh: Any, start: int, expected: bytes | None, path: str) -> Split
             f"{path}: payload checksum {found.hex()} != stored {expected.hex()} "
             f"({offset} bytes) -- the value will be recomputed"
         )
+    return SplitPayload(stream, buffers)
+
+
+def _map_split(
+    fh: Any, start: int, table: int, stream_len: int, lengths: Sequence[int], expected: bytes, path: str
+) -> SplitPayload | None:
+    """`_read_split` through a private copy-on-write mapping of the file:
+    the stream and each buffer are views of it, checked like a read.
+
+    None when the file cannot be mapped (a filesystem without ``mmap``): the
+    caller reads it instead.
+    """
+    try:
+        mapped = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_COPY, trackfd=False)
+    except (OSError, ValueError, TypeError):
+        return None
+    payload = memoryview(mapped)[start:]
+    found = zlib.crc32(payload).to_bytes(4, "big")
+    if found != expected:
+        raise CorruptEntry(
+            f"{path}: payload checksum {found.hex()} != stored {expected.hex()} "
+            f"({payload.nbytes} bytes) -- the value will be recomputed"
+        )
+    offset = table + _pad(table)
+    stream = payload[offset : offset + stream_len]
+    offset += stream_len
+    buffers = []
+    for length in lengths:
+        offset += _pad(offset)
+        buffers.append(payload[offset : offset + length])
+        offset += length
     return SplitPayload(stream, buffers)
 
 
