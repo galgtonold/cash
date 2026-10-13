@@ -46,6 +46,7 @@ from contextlib import contextmanager
 from typing import Any, Callable
 
 from ... import _plain_data
+from ..borrowed_memory import borrowed_memory_names
 from ..shared_objects import (
     EXACT_CONTAINER_TYPES,
     EXACT_VALUE_TYPES,
@@ -161,7 +162,7 @@ def read_share_edges(record: dict | None) -> frozenset[tuple[str, str]] | None:
         return None
 
 
-def is_uncacheable_alias(value: Any, user_ns: dict, cash_held: Iterable[Any] = ()) -> bool:
+def is_uncacheable_alias(value: Any, user_ns: dict, cash_held: Iterable[Any] = (), inputs: Iterable[str] = ()) -> bool:
     """True if *value* is, or holds, a live-alias of a ``user_ns`` object that
     must NOT be cache-restored.
 
@@ -169,7 +170,11 @@ def is_uncacheable_alias(value: Any, user_ns: dict, cash_held: Iterable[Any] = (
     a live reference to another in-memory object. Pickling and restoring them
     breaks that reference identity (the restored object aliases a stale *copy*),
     so a downstream mutation of the base is lost. These statements must always
-    re-derive from the live base instead of restoring from cache.
+    re-derive from the live base instead of restoring from cache. So must a
+    frame or array that keeps its data in a variable's memory across
+    libraries (``pl.Series(arr)``, ``pd.Series(arr, copy=False)``,
+    ``df['a'].to_numpy()``; `borrowed_memory_names`, looking into the
+    containers among the statement's *inputs*).
 
     *value* is walked as the shared-object check walks an output (the builtin
     containers and the attributes of the notebook's own objects), so views
@@ -197,6 +202,10 @@ def is_uncacheable_alias(value: Any, user_ns: dict, cash_held: Iterable[Any] = (
         # other checks share), where the walk below takes a Python step per
         # container -- 2.4 s for a million parsed records.
         return False
+    if borrowed_memory_names([value], user_ns, containers=set(inputs)):
+        # A frame over a variable's memory (``pl.Series(arr)``): a restored
+        # copy would not see the next write to it.
+        return True
     views, refholders = _aliases_in(value, np, refholder_types)
     for holder in refholders:
         src = getattr(holder, "obj", None)

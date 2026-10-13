@@ -21,6 +21,7 @@ from cash.analysis.cacheability_decision import identity_coupled_reason
 from cash.backends._base import ttl_expired
 from cash.backends.value_policy import worth_its_bytes
 from cash.notebook._trace import trace_event
+from cash.notebook.borrowed_memory import borrows_from, holds_a_borrower
 from cash.notebook.call_key import holds_a_closure_with_state
 from cash.notebook.call_refs import (
     DIGEST_FIELD,
@@ -308,8 +309,10 @@ class CallEntries:
         """
         try:
             sources = (*args, *kwargs.values())
+            reached = self._reached(result, fn, root_held)
             return (
-                not holds_part_of(result, (*sources, *self._reached(result, fn, root_held)))
+                not holds_part_of(result, (*sources, *reached))
+                and not self._borrows(result, sources, reached, fn)
                 # Held by something else (*root_held*), and that holder is
                 # none of the arguments or of what the function reaches: a
                 # holder cash cannot name, so a copy might not be what it holds.
@@ -321,6 +324,18 @@ class CallEntries:
         except Exception:
             logger.debug("storability check raised; the result is not stored", exc_info=True)
             return False
+
+    @staticmethod
+    def _borrows(result, sources: tuple[Any, ...], reached: list[Any], fn: Any) -> bool:
+        """Whether *result* keeps its data in an argument's memory, or in an
+        array the function reaches, across libraries (`borrows_from`):
+        ``return pl.Series(a)`` reads ``a``'s buffer, a restored copy would
+        not. What *fn* reaches is looked up only for such a result."""
+        if not holds_a_borrower(result):
+            return False
+        if borrows_from(result, sources):
+            return True
+        return fn is not None and borrows_from(result, reached or reached_objects(fn))
 
     @staticmethod
     def _reached(result, fn: Any, root_held: bool) -> list[Any]:
