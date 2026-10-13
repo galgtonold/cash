@@ -14,9 +14,13 @@ needed again and recomputing it took long enough to matter
 (`evicted_recompute_warning`).
 
 Quiet means not a warning: nothing is wrong. They are INFO records on the
-``cash.storage`` logger, which ``verbose=True``, ``debug=True`` or an
-application logging at INFO shows, and the notebook prints them into the cell
-(``%cash_on`` for the cap, the end of the cell for the eviction).
+``cash.storage`` logger, logged when someone asked cash for them:
+``verbose=True`` or ``debug=True`` (``CASH_VERBOSE``, ``CASH_DEBUG``), or a
+level set on the ``cash`` or ``cash.storage`` logger itself
+(`notices_wanted`). An application logging everything at INFO from the root
+did not ask, and got the cap line on every run that wrote anything. The
+notebook prints them into the cell (``%cash_on`` for the cap, the end of the
+cell for the eviction).
 """
 
 from __future__ import annotations
@@ -39,6 +43,7 @@ __all__ = [
     "describe_budget",
     "evicted_recompute_warning",
     "eviction_text",
+    "notices_wanted",
     "storage_logger",
 ]
 
@@ -151,6 +156,23 @@ def claim_eviction_notice(cache_dir: str) -> bool:
     return _claim(_eviction_told, cache_dir)
 
 
+def notices_wanted() -> bool:
+    """Did anyone ask for cash's storage notices?
+
+    True when the ``cash.storage`` logger, or the ``cash`` logger above it,
+    has a level of its own at INFO or below: what ``verbose=True`` and
+    ``debug=True`` set, and what an application sets to see cash's records.
+    A level inherited from the root logger does not count -- an application
+    logging its own work at INFO is not asking what size cash's cache is.
+    """
+    logger: logging.Logger | None = storage_logger
+    while logger is not None and logger.name.startswith("cash"):
+        if logger.level != logging.NOTSET:
+            return logger.level <= logging.INFO and storage_logger.isEnabledFor(logging.INFO)
+        logger = logger.parent
+    return False
+
+
 def announce_budget(cache_dir: str, budget: object) -> None:
     """Log the cap of *cache_dir* once, when a record would reach anyone.
 
@@ -159,7 +181,7 @@ def announce_budget(cache_dir: str, budget: object) -> None:
     shows nothing should not pay for that. Nor is the folder claimed then, so
     a notebook's ``%cash_on`` still shows it.
     """
-    if not storage_logger.isEnabledFor(logging.INFO):
+    if not notices_wanted():
         return
     if not claim_budget_notice(cache_dir):
         return

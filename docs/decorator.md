@@ -118,8 +118,8 @@ absolute path leaves no doubt about where entries go.
 
 <!-- claim: cash/config/schema.py:CashConfig.max_cache_size == None, cash/backends/adaptive_caps.py:adaptive_disk_cap @0d13d1d2 -->
 The disk cap is automatic. By default the disk tier may use a quarter of
-the room on its volume, between 8 GiB and 100 GiB, and the RAM tier a fifth of
-memory. `cash info` prints both numbers:
+the room on its volume, between 8 GiB and 100 GiB but never more than 80% of
+that room, and the RAM tier a fifth of memory. `cash info` prints both numbers:
 
 ```text title="Output"
 Max size:   RAM 3.1 GiB (auto), disk 8.0 GiB (auto)
@@ -130,10 +130,10 @@ first: cheap to recompute, large, and rarely read. To pin the disk cap, set
 `max_cache_size` (or `CASH_MAX_CACHE_SIZE`) to a number of bytes or a size
 such as `"20GB"`.
 
-<!-- claim: cash/backends/file_eviction.py:FileEvictor.ensure_size_scanned @adb3043c, cash/backends/file_eviction.py:FileEvictor.report_eviction @aa4b93be -->
-With `CASH_VERBOSE=1` or `CASH_DEBUG=1`, the first result a run writes to disk
-logs the folder and the cap, and the first time the cap makes cash remove
-entries it logs how much it removed:
+<!-- claim: cash/backends/file_eviction.py:FileEvictor.ensure_size_scanned @adb3043c, cash/backends/file_eviction.py:FileEvictor.report_eviction @0a7cf82f -->
+With `CASH_VERBOSE=1` or `CASH_DEBUG=1` (or an INFO level you set on the `cash`
+logger), the first result a run writes to disk logs the folder and the cap, and
+the first time the cap makes cash remove entries it logs how much it removed:
 
 ```text title="Output"
 cash.storage: caching in /srv/proj/.cash, up to 26.0 GiB (a quarter of the free disk space; set max_cache_size to change it)

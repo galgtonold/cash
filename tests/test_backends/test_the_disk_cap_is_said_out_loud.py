@@ -43,7 +43,11 @@ def _notices():
         (60 * GIB, 15 * GIB, "a quarter of the free disk space"),
         (20 * GIB, 8 * GIB, "the 8 GiB minimum; a quarter of the free disk space would be less"),
         (2048 * GIB, 100 * GIB, "the 100 GiB maximum; a quarter of the free disk space would be more"),
-        (4 * GIB, int(0.8 * 4 * GIB), "80% of the free disk space, as that is less than the usual 8 GiB minimum"),
+        (
+            4 * GIB,
+            int(0.8 * 4 * GIB),
+            "80% of the free disk space, the most cash takes; the 8 GiB minimum does not fit",
+        ),
         (0, 8 * GIB, "the 8 GiB default, as the free disk space could not be measured"),
     ],
 )
@@ -147,6 +151,25 @@ def test_a_log_nobody_reads_does_not_use_up_the_notice(tmp_path, caplog):
     _notices().announce_budget(str(tmp_path), lambda: called.append(1))
     assert called == [], "the cap was measured for a line nobody sees"
     assert _notices().claim_budget_notice(str(tmp_path)), "the folder was claimed without being shown"
+
+
+def test_an_application_logging_at_info_is_not_shown_the_cap(tmp_path, caplog, monkeypatch):
+    """An application that logs its own work at INFO from the root logger did
+    not ask for cash's storage notices: the cap line came on every run that
+    wrote anything, though the docs tie it to ``CASH_VERBOSE`` and
+    ``CASH_DEBUG``. A level set on the ``cash`` logger, as ``verbose=True``
+    sets, still shows it."""
+    caplog.set_level(logging.INFO)  # the root logger, as basicConfig(level=INFO)
+    monkeypatch.setattr(logging.getLogger("cash"), "level", logging.NOTSET)
+    monkeypatch.setattr(logging.getLogger("cash.storage"), "level", logging.NOTSET)
+    called = []
+    _notices().announce_budget(str(tmp_path / "a"), lambda: called.append(1))
+    assert called == [] and not _storage_records(caplog)
+
+    monkeypatch.setattr(logging.getLogger("cash"), "level", logging.INFO)
+    budget = _notices().DiskBudget(str(tmp_path / "b"), 50 * MB, None)
+    _notices().announce_budget(str(tmp_path / "b"), lambda: budget)
+    assert _storage_records(caplog) == [_notices().describe_budget(budget)]
 
 
 # -- the first eviction is said, later ones are not ---------------------------

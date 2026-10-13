@@ -24,7 +24,15 @@ from ..units import human_bytes
 from . import adaptive_caps as _caps
 from ._base import gdsf_value
 from .adaptive_caps import adaptive_disk_cap_for, free_bytes_on_volume
-from .budget_notices import DiskBudget, announce_budget, cap_text, claim_eviction_notice, eviction_text, storage_logger
+from .budget_notices import (
+    DiskBudget,
+    announce_budget,
+    cap_text,
+    claim_eviction_notice,
+    eviction_text,
+    notices_wanted,
+    storage_logger,
+)
 from .cache_dir import entry_totals
 from .entry_format import ENTRY_SUFFIX
 from .eviction_log import EvictionLog, EvictionNote
@@ -527,7 +535,8 @@ class FileEvictor:
             )
             return
         text = eviction_text(self.cache_dir, cap_text(self.max_size_bytes or 0, self.adaptive), freed, count)
-        storage_logger.info("%s", text)
+        if notices_wanted():
+            storage_logger.info("%s", text)
         with self._lock:
             self._notices.append(text)
 
