@@ -381,17 +381,41 @@ def copy_keeping_blocks(frame: Any) -> Any:
     one block per column (a fresh ``read_csv``) builds a writable array, so
     the user's ``X -= X.mean(axis=0)`` raised on a cached table only.
     Copied block by block instead, which also skips the join's copy.
+
+    Each block keeps its memory layout, too (`_copy_values`): pandas copies
+    a block's array in C order, and a frame built by ``pivot`` holds its
+    block in F order -- its ``.values`` row-major. Served such a frame,
+    ``held @ close.values[i]`` summed in another order than the computed
+    frame, and a backtest moved in the last bit (1.4e-17).
     """
     try:
         mgr = frame._mgr
-        if frame.ndim != 2 or mgr.is_consolidated():
+        if frame.ndim != 2:
             return frame.copy(deep=True)
-        copied_mgr = mgr.apply("copy", deep=True)
-        copied_mgr.axes = [axis.view() for axis in mgr.axes]  # as pandas' own deep copy keeps them
+        blocks = [
+            type(block)(_copy_values(block.values), placement=block._mgr_locs, ndim=block.ndim, refs=None)
+            for block in mgr.blocks
+        ]
+        axes = [axis.view() for axis in mgr.axes]  # as pandas' own deep copy keeps them
+        copied_mgr = type(mgr).from_blocks(blocks, axes)
         return frame._constructor_from_mgr(copied_mgr, axes=copied_mgr.axes).__finalize__(frame, method="copy")
     except Exception:
         logger.debug("cash: copying a %s the pandas way", type(frame).__name__, exc_info=True)
         return frame.copy(deep=True)
+
+
+def _copy_values(values: Any) -> Any:
+    """A copy of a block's array in its own memory order: a numpy array, or
+    a datetime or timedelta array over one, take ``order="K"``; other
+    extension arrays have no order to keep."""
+    import numpy as np
+
+    if isinstance(values, np.ndarray) or isinstance(getattr(values, "_ndarray", None), np.ndarray):
+        try:
+            return values.copy(order="K")
+        except TypeError:  # an array type whose copy takes no order
+            pass
+    return values.copy()
 
 
 def hand_out(stored: Any) -> Any:
