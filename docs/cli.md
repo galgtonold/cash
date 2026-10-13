@@ -108,12 +108,15 @@ cash inspect --function model.heavy_field
 ```
 
 ```text title="Output"
-Cache directory: .cash
+Cache directory: /home/me/project/.cash
   Total size: 13.7 MiB    Entries: 3    Functions: 2
 
-  FUNCTION                      ENTRIES        SIZE   LAST USED
-  model.heavy_field                   2    13.7 MiB   2 min ago
-  model.small_helper                  1       620 B   2 min ago
+  FUNCTION                                  ENTRIES        SIZE   LAST USED
+  model.heavy_field                               2    13.7 MiB   2min ago
+  model.small_helper                              1       620 B   2min ago
+
+  cash inspect --function NAME   to list one function's entries
+  cash clear   --function NAME   to drop them
 ```
 
 A script's functions are named after the file that defines them (`model.`),
@@ -123,9 +126,15 @@ whether you ran it or imported it. Notebook statements group under
 With `--function`, each row shows what the entry is worth:
 
 ```text title="Output"
-ENTRY             SAVES       SIZE   USES   LAST USED   PRODUCES
-aaaaaaaaaaaa      12.5s    4.0 KiB     3x   2 min ago   df, model
-      reads: /srv/etl/data/prices.csv
+Cache directory: /home/me/project/.cash
+  model.heavy_field - 2 entries, 13.7 MiB
+
+  ENTRY             SAVES       SIZE   USES   LAST USED   EXPIRES
+  fcac1fdcb566      12.5s    9.1 MiB     3x   2min ago    -
+      reads: /home/me/project/data/prices.csv
+  20985fa09f60      11.8s    4.6 MiB     1x   2min ago    -
+
+  cash clear --entry ID   to drop one of these (any unambiguous prefix)
 ```
 
 - `ENTRY` is the id `cash clear --entry` takes, and the same id
@@ -133,9 +142,9 @@ aaaaaaaaaaaa      12.5s    4.0 KiB     3x   2 min ago   df, model
 - `SAVES` is how long the body took to compute: what deleting the entry costs.
 - `USES` counts reads from disk; hits a running process serves from RAM are
   not counted.
-- `PRODUCES` names the variables a notebook statement produced. `EXPIRES`
-  shows when an entry with a `ttl` runs out. `reads:` lists the files an entry
-  depends on.
+- `EXPIRES` shows when an entry with a `ttl` runs out. `reads:` lists the
+  files an entry depends on. For notebook statements a `PRODUCES` column
+  names the variables each one produced.
 
 A notebook's cache is the one its kernel uses: `.cash` beside the notebook,
 unless a `pyproject.toml` above it sets `[tool.cash] cache_dir` or

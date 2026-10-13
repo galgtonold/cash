@@ -28,7 +28,8 @@ the job will use. Check it once in the container or on the host.
 
 <!-- claim: cash/config/schema.py:CashConfig.max_cache_size == None -->
 **The disk cap.** Without `max_cache_size`, the disk tier may use a quarter of
-the room on its volume. When it is full, cash evicts the entries worth least per
+the room on its volume ([Cache size limit](../../decorator.md#cache-size-limit)
+has the bounds). When it is full, cash evicts the entries worth least per
 byte first: cheap to recompute, large, rarely read. On a volume other programs
 also use, pin the cap. Each process enforces the cap on its own writes, so
 several workers writing at once can briefly overshoot it.

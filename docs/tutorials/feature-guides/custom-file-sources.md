@@ -46,8 +46,10 @@ cheap. Every file is hashed in full, whatever its size. The full rule is in
 cash tracks `open()` in a read mode and what reads through it, the pandas, polars,
 pyarrow and numpy readers, `sqlite3.connect`, directory listings (a new
 matching file recomputes the call) and existence checks (the call recomputes
-once a missing file appears, or once a file it found is gone). The full reader list is under
-[Files](../../how-it-works/invalidation.md#files).
+once a missing file appears, or once a file it found is gone). A library
+that opens your file with Python's `open()` is covered the same way, such as
+Pillow's `Image.open`, `scipy.io.wavfile.read` and `zipfile.ZipFile`. The full
+reader list is under [Files](../../how-it-works/invalidation.md#files).
 
 A path passed by keyword counts the same as one passed by position.
 

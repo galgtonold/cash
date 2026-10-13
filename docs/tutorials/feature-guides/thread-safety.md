@@ -93,7 +93,8 @@ does its own share of cash's work in parallel.
 <!-- claim: cash/_paths.py:resolve_main_module @898a6a7a, cash/backends/_writes.py:in_multiprocessing_child @9bd4615e, cash/decorator/run_summary.py:RunSummary.print_at_exit @63645a47 -->
 Worker processes use the cache folder of the process that started them, so what
 one worker computes is a hit for the other workers, for the parent, and for the
-next run.
+next run. That holds whether you map the cached function itself or a plain
+function that calls cached ones.
 
 <!-- claim: cash/_active.py:publish_settings @035400df, cash/_active.py:_arrive @ea2f94f8 -->
 Settings changed in code reach the workers too. A pool created inside
@@ -147,8 +148,14 @@ Each process keeps some things to itself:
   is still writing a result does not wait for that write: it reads what is on
   disk, and recomputes if the entry is not there yet.
 - **The summary.** `CASH_SUMMARY` prints one table per process that exits
-  normally, labelled with its pid. `multiprocessing.Pool` terminates its
-  workers, so only the parent's table prints.
+  normally, labelled with its pid. `multiprocessing.Pool` and
+  `ProcessPoolExecutor` stop their workers without a normal exit, so only the
+  parent's table prints. joblib's workers exit normally and print a table
+  each (`cash (pid 5682): ...`), so add the hits up across them to see
+  whether a run was warm.
+- **`frozen=True`.** A result a worker returns reaches the parent as a copy,
+  so the parent keys it by its content, not by the worker's call
+  ([`frozen=` and large arguments](../../decorator.md#frozen-and-large-arguments)).
 - **Warnings.** Each process warns once for itself.
 - **The disk cap.** Each process enforces `max_cache_size` on its own writes,
   so several workers together can overshoot it briefly.
