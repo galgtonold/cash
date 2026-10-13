@@ -256,6 +256,12 @@ def pickled_size_estimate(value: Any, _depth: int = 0, _seen: set[int] | None = 
     after 2.8 s of compute.
     """
     seen = set() if _seen is None else _seen
+    if type(value) in (tuple, list, dict):
+        # Ahead of the array checks, which these never pass: a list of
+        # 50,000 record dicts read each dict's module and name.
+        if _depth >= _ESTIMATE_DEPTH:
+            return 0
+        return _items_estimate(value.values() if type(value) is dict else value, _depth + 1, seen)
     kind = type(value).__name__
     try:
         if type(value).__module__.startswith("polars") and kind in ("DataFrame", "Series"):
@@ -271,15 +277,30 @@ def pickled_size_estimate(value: Any, _depth: int = 0, _seen: set[int] | None = 
             return _array_estimate(value, seen)
     except Exception:  # noqa: BLE001 - an estimate is optional: none is 0
         return 0
-    if _depth >= _ESTIMATE_DEPTH:
-        return 0
-    if type(value) in (tuple, list):
-        return sum(pickled_size_estimate(v, _depth + 1, seen) for v in value)
-    if type(value) is dict:
-        return sum(pickled_size_estimate(v, _depth + 1, seen) for v in value.values())
     if _depth == 0 and _is_instance(value):
         return _instance_estimate(value, seen)
     return 0
+
+
+#: Exact types `pickled_size_estimate` finds no array in below the top
+#: level, and, at its depth limit, the containers it looks no further into.
+_NO_ARRAYS = frozenset(CODELESS_PRIMS)
+_NO_ARRAYS_AT_LIMIT = _NO_ARRAYS | {tuple, list, dict}
+
+
+def _items_estimate(items: Any, depth: int, seen: set[int]) -> int:
+    """`pickled_size_estimate` at *depth* summed over the items of a list,
+    tuple or dict.
+
+    What it would find nothing in is passed over without a call: calling
+    for each of the 20,000 strings of ``[json.dumps(...) for i in range(N)]``
+    cost 8 ms on a 60 ms cell, and the values of 50,000 record dicts 30 ms."""
+    skip = _NO_ARRAYS if depth < _ESTIMATE_DEPTH else _NO_ARRAYS_AT_LIMIT
+    total = 0
+    for item in items:
+        if type(item) not in skip:
+            total += pickled_size_estimate(item, depth, seen)
+    return total
 
 
 #: How many objects `_instance_estimate` looks at below a value, and how
