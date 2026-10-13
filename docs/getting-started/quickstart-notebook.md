@@ -41,6 +41,12 @@ with it:
 import mylib
 ```
 
+The two magic lines run on every run and their badge rows say `NOT CACHED`
+(`Runs an IPython magic`): that is expected, and so is IPython's own "The
+autoreload extension is already loaded" when you run the cell again. With both
+on, an edit to `mylib.py` is reloaded once, and the badge shows one
+`MODULE RELOADED` row.
+
 ## 2. Write your code in the cells below
 
 <!-- test:expect-badge first=EXECUTED -->
@@ -70,10 +76,16 @@ From here on:
   re-run. The rest of the cell stays cached.
 - Change `large_dataset.csv` on disk and the statements that read it re-run.
 - Restart the kernel and run the cell: expensive results come back from disk.
-- Fit a model in the assignment that binds it,
+
+Two habits keep the slow statements cached:
+
+- **Fit a model in the assignment that binds it**,
   `model = Ridge().fit(X, y)`: a separate `model.fit(X, y)` changes `model`
   in place and runs every time. See
   [Fitting models](../notebook_caching_api.md#fitting-models).
+- **Build a new value instead of changing one from an earlier cell**,
+  `df = df.assign(c=...)` rather than `df["c"] = ...`: a change in place runs
+  every time. See [What gets cached](../notebook_caching_api.md#what-gets-cached).
 
 ## Related
 

@@ -22,6 +22,9 @@ It holds `import cash`, then any `cash.configure(...)` call, then `%cash_on`.
 Nothing in the `%cash_on` cell is cached, so load data and do work in the cells
 below it. `import cash` registers the magics. `%cash_off` switches caching off
 again. With `CASH_DISABLE=1` set, `%cash_on` says so and does nothing.
+`%cash_badge print` is not needed here: it is for
+[headless runs](#running-a-notebook-headless), such as papermill, CI or a
+coding agent.
 
 To change a setting, put it in `pyproject.toml` or an environment variable, or
 call `cash.configure(...)` between the two setup lines:
@@ -50,16 +53,33 @@ result = daily.rolling(7).mean()   # edit: only this runs again
 ```
 
 - **Functions you call are tracked.** Edit a function, or a helper it calls, even
-  in your own `.py` module, and the statements that use it run again.
+  in your own `.py` module, and the statements that use it run again. The
+  globals a function reads count as inputs of the statement that calls it:
+  `top = recommend(u)` runs again when a global `recommend` reads, such as a
+  model fitted in an earlier cell, is rebuilt. If you edit your own modules,
+  see [the quick start](getting-started/quickstart-notebook.md#1-turn-cash-on)
+  for `%autoreload`.
 - **Files you read are tracked.** Change a file read through `pd.read_csv`,
   `np.load`, `open` or another [tracked reader](how-it-works/invalidation.md#what-counts-as-a-change),
   and the statements that read it run again.
+  <!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @51a8bdb1 -->
+  A polars scan in one cell (`lf = pl.scan_parquet("data/*.parquet")`) and
+  its `.collect()` in a later one count too: a changed or added file runs both
+  again.
+  <!-- claim: cash/notebook/lineage_store.py:resolve_lineage @778e6d73 -->
+- **Inputs are keyed by where they came from**, not by hashing their
+  contents, so a `networkx` graph, a `scipy.sparse` matrix or an object of
+  your own class is followed like a DataFrame.
 - **Loops are cached per iteration**, keyed on the loop variable, so changing one
   item leaves the others cached. `if` and `try` blocks are cached per branch. A
   `while` or `with` block, or a `for` with `break`, `continue` or `else:`, runs
   as one unit.
 - **Calls inside a statement are cached too.** In `out.append(compute(x))` the
-  append runs every time, but `compute(x)` comes from the cache.
+  append runs every time, but `compute(x)` comes from the cache. Extend
+  `{s: backtest(s) for s in ids[:4]}` to `for s in ids` and the four calls
+  already made come from the cache; only the new ones run. A call to a
+  [`@cash.cache` function](tutorials/feature-guides/production-transition.md#calling-a-decorated-function-from-a-notebook)
+  is stored once, in that function's entry.
 - **Printed output is replayed** on a hit, along with rich output. A trailing
   `;` still hides it. A cell that rebuilds one name in steps
   (`df = load(); df = clean(df)`) shows every step's output too when cash
@@ -162,15 +182,32 @@ and add [`# @cash:cache-fit`](annotations.md#cashcache-fit) to it; read that
 directive's caveat first. The badge row of a fit that runs every time names
 the directive.
 
+An estimator made in the same statement as its fit changes nothing that
+existed before, so these are cached as they are:
+
+<!-- test:skip reason="illustrative: needs training data" -->
+```python { .nb-cell }
+emb = TSNE(random_state=0).fit_transform(Z)        # cached
+X = TfidfVectorizer().fit_transform(train_texts)   # cached
+```
+
+The second form keeps no fitted vectorizer to transform test data with; use
+it when you need only the matrix.
+
 ## After a restart
 
 The cache is on disk, so a fresh kernel picks up where you left off. Run a cell
 after a restart and cash restores its inputs from the cache instead of running
 the cells that built them, after checking that the code and files behind them
-have not changed. Results that took less than 0.1 s to compute are kept in
-memory only and run again after a restart.
+have not changed. Two thresholds decide what is there to restore: a
+statement under 10 ms is not cached at all, and one under 0.1 s is kept in
+memory only, so both run again after a restart.
 [Restarts and persistence](tutorials/feature-guides/smart-persistence.md) has the
-details, and the [cost model](cost-model.md) has the thresholds.
+details, and the [cost model](cost-model.md) has the exact rules.
+
+This needs the notebook file, which cash reads to find the cells that built a
+value. In a [headless run](#running-a-notebook-headless) there is none: after a
+restart, run the notebook from the top.
 
 ## Where the cache is
 
@@ -232,9 +269,14 @@ Under papermill, nbconvert or CI:
         get_ipython().run_line_magic("cash_badge", "print")
     ```
 
-- Expect one `NOTEBOOK-NOT-FOUND` warning. With no Jupyter server there is no
-  notebook file to read, so cash does not re-check earlier cells. A
-  top-to-bottom run does not need that. In JupyterLab or VS Code the warning
+- Expect one [`NOTEBOOK-NOT-FOUND`](warnings.md#notebook-not-found) warning.
+  With no Jupyter server there is no notebook file to read, so cash does not
+  re-check earlier cells. Each statement is still cached by its own code and
+  inputs, and a top-to-bottom run needs nothing more. Two things change:
+  after a restart, run from the top, because a cell run on its own does not
+  get the values the cells above it built; and keep values out of the setup
+  cell, because a statement that reads a name bound there runs uncached
+  (`Input variable missing lineage`). In JupyterLab or VS Code the warning
   means the kernel is stale: restart it.
 - Point `CASH_CACHE_DIR` at a folder your CI keeps between runs, or start clean
   with `cash clear --all`.

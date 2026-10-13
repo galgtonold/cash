@@ -118,6 +118,12 @@ and written to disk. A `@cash.cache` result is always stored, whatever these
 say. See
 [Cost model](../cost-model.md).
 
+<!-- claim: cash/backends/persistence_policy.py:COMPUTE_FLOOR_S == 0.1 -->
+Two time thresholds apply, and only the first is a setting: a statement
+faster than `min_execution_time_to_cache_seconds` (10 ms) is not cached at
+all, and one faster than 0.1 s is kept in memory only, never on disk. The
+0.1 s threshold is fixed; `# @cash:persist` or `persist_all` skips both.
+
 | Field | Default | Description |
 |---|---|---|
 | `persist_all` | `false` | Cache every statement, skipping the floors below, as if each had `# @cash:persist`. |
