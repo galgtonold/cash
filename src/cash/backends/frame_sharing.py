@@ -434,6 +434,10 @@ def _private_axes(frame: Any) -> None:
 
     for name in ("index",) if frame.ndim == 1 else ("index", "columns"):
         axis = getattr(frame, name)
+        if _is_range(axis):
+            # No labels to share, and reading its ``_data`` builds them: an
+            # arange of every row, 0.8 s for 21M rows, on each store and hit.
+            continue
         data = getattr(axis, "_data", None)
         if isinstance(data, ArrowExtensionArray):
             fresh = type(axis)._simple_new(data.copy(), name=axis.name)  # a new wrapper; Arrow data is not copied
