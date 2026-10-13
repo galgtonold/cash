@@ -62,7 +62,7 @@ def _assert_matches(nb_runner, seed: int = 7, extra: int = 0) -> None:
 def _write_helper(nb_runner, source: str) -> None:
     path = nb_runner.work_dir / "mc.py"
     old = path.stat().st_mtime_ns if path.exists() else 0
-    path.write_text(source)
+    path.write_text(source, encoding="utf-8")
     os.utime(path, ns=(old + 2_000_000_000, old + 2_000_000_000))
 
 
