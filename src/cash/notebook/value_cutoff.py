@@ -23,10 +23,12 @@ the lineage a restarted kernel computes.
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
+from .._plain_data import is_plain
 from ..value_hash import is_identity_fallback_hash
+from ..value_types import IMMUTABLE_LEAF_TYPES
 from .lineage_formula import record_lineage_alias, resolve_lineage_alias
 from .versioned_json_store import VersionedJsonStore
 
@@ -47,6 +49,14 @@ def _compared(value: Any) -> bool:
     # An array of objects (``axes`` from ``plt.subplots``) is hashed by
     # pickling what it holds -- a whole figure.
     return getattr(getattr(value, "dtype", None), "kind", "") != "O"
+
+
+def _is_plain_value(value: Any) -> bool:
+    """A scalar, or exact lists and tuples of them (`_plain_data.is_plain`):
+    its content digest is all there is to it."""
+    if type(value) in IMMUTABLE_LEAF_TYPES:
+        return True
+    return type(value) in (list, tuple) and is_plain(value)
 
 
 def _read_only(value: Any) -> str:
@@ -106,6 +116,9 @@ class ValueCutoff:
 
     def __init__(self) -> None:
         self._by_digest: dict[str, str] = {}
+        #: ``{(name, digest), ...}`` of every output of a statement that bound
+        #: several -> the lineage they shared (`lineage_for_outputs`).
+        self._by_outputs: dict[frozenset[tuple[str, str]], str] = {}
         #: Lineage -> the digest of the value it names, for the entry stored
         #: with that value (`digest_of`).
         self._digest_of: dict[str, str] = {}
@@ -114,6 +127,7 @@ class ValueCutoff:
         """Forget every value seen, as a fresh kernel would."""
         self._by_digest.clear()
         self._digest_of.clear()
+        self._by_outputs.clear()
 
     def __len__(self) -> int:
         return len(self._by_digest)
@@ -121,7 +135,11 @@ class ValueCutoff:
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ValueCutoff):
             return NotImplemented
-        return self._by_digest == other._by_digest and self._digest_of == other._digest_of
+        return (
+            self._by_digest == other._by_digest
+            and self._digest_of == other._digest_of
+            and self._by_outputs == other._by_outputs
+        )
 
     __hash__ = None  # type: ignore[assignment]  # mutable
 
@@ -136,18 +154,62 @@ class ValueCutoff:
         self._by_digest.setdefault(digest, resolve_lineage_alias(lineage))
         self._digest_of.setdefault(lineage, digest)
 
-    def lineage_for(self, value: Any, lineage: str, compute_hash: Callable[[Any], str]) -> str:
-        """The lineage *value*, just bound with *lineage*, should carry: an
-        earlier value's when its content is the same, else *lineage*."""
-        if not _compared(value):
-            return lineage
+    def lineage_for_outputs(
+        self, values: Mapping[str, Any], lineages: Mapping[str, str], compute_hash: Callable[[Any], str]
+    ) -> dict[str, str]:
+        """The lineages the outputs of one statement binding several values,
+        just bound with *lineages*, should carry.
+
+        They share one formula lineage, so a cutoff of one of them would
+        name the others' values too (``train, test = ...`` with only
+        ``train`` unchanged). All of them together take an earlier lineage
+        only when an earlier statement bound the same names to values with
+        the same content and gave them one lineage: ``U, V, hist =
+        als_fit(C, tol=1e-3)`` returning what ``als_fit(C)`` did keeps what
+        was built on ``U`` and ``V``. Each value must be a frame, series or
+        array, or plain data (`_plain_data.is_plain`), whose digest covers
+        all of it; otherwise *lineages* stand.
+        """
+        shared = set(lineages.values())
+        if len(shared) != 1 or set(values) != set(lineages):
+            return dict(lineages)
+        (lineage,) = shared
+        parts: set[tuple[str, str]] = set()
+        for name, value in values.items():
+            digest = self._digest(value, compute_hash, plain=True)
+            if digest is None:
+                return dict(lineages)
+            parts.add((name, digest))
+        outputs = frozenset(parts)
+        earlier = self._by_outputs.get(outputs)
+        if earlier is None:
+            self._by_outputs[outputs] = resolve_lineage_alias(lineage)
+            return dict(lineages)
+        earlier = resolve_lineage_alias(earlier)
+        if earlier != lineage:
+            record_lineage_alias(lineage, earlier)
+        return dict.fromkeys(lineages, earlier)
+
+    @staticmethod
+    def _digest(value: Any, compute_hash: Callable[[Any], str], plain: bool = False) -> str | None:
+        """*value*'s typed content digest, or None when it is not compared
+        (`_compared`; with *plain*, plain data too) or has no content hash."""
+        if not (_compared(value) or (plain and _is_plain_value(value))):
+            return None
         try:
             digest = compute_hash(value)
         except Exception:  # noqa: BLE001 - an unhashable value keeps its lineage
-            return lineage
+            return None
         if is_identity_fallback_hash(value, digest):
+            return None
+        return f"{type(value).__name__}:{_read_only(value)}:{digest}"
+
+    def lineage_for(self, value: Any, lineage: str, compute_hash: Callable[[Any], str]) -> str:
+        """The lineage *value*, just bound with *lineage*, should carry: an
+        earlier value's when its content is the same, else *lineage*."""
+        digest = self._digest(value, compute_hash)
+        if digest is None:
             return lineage
-        digest = f"{type(value).__name__}:{_read_only(value)}:{digest}"
         earlier = self._by_digest.get(digest)
         if earlier is None:
             self._by_digest[digest] = resolve_lineage_alias(lineage)

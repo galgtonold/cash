@@ -116,3 +116,111 @@ def test_a_reader_of_a_module_only_the_extension_reloads_runs_the_edit(
 
     assert mock_shell.user_ns["x"] == 11
     assert name in statement_processor.function_tracker.tracked_modules
+
+
+# -- the module is reloaded whole --------------------------------------------
+#
+# IPython's deduplicating reload (``%autoreload 2``'s default) compiles each
+# changed function from ``ast.unparse`` of its definition alone, with the
+# module's file name: the code says it starts on line 1, so its source read as
+# the module's docstring, and a function the edit added got a copy of the
+# module's namespace for its globals. Keys built from that code differed from
+# a fresh process's (an image notebook's 16 s preprocess missed after every
+# restart), and a call that raised took its argument for changed, since the
+# helper's source read as none (an Elo notebook's ``played`` lost its lineage
+# and every run_elo after the edit ran uncached).
+
+EDITED = (
+    '"""The module."""\n'
+    "import time\n\n\n"
+    "def get(x):\n"
+    f"    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n"
+    "    return helper(x) + 1\n\n\n"
+    "def helper(x):\n"
+    "    return x * 2\n"
+)
+
+
+def test_a_module_the_extension_reloads_is_loaded_as_a_fresh_import_loads_it(lib):
+    import inspect
+
+    name, path = lib
+    module = __import__(name)
+    reloader = _reloader(name)
+    assert reloader.deduper_reloader.enabled, "the extension's default this test is about"
+    reloader.deduper_reloader.update_sources()
+    shell = _autoreload_shell(reloader)
+
+    before = os.stat(path).st_mtime_ns
+    path.write_text(EDITED, encoding="utf-8")
+    os.utime(path, ns=(before + 2_000_000_000, before + 2_000_000_000))
+
+    assert run_autoreload_now(shell) == {name}
+    assert module.get(10) == 21
+    assert inspect.getsource(module.get).startswith("def get(x):")
+    assert module.get.__code__.co_firstlineno == 5
+    assert module.helper.__globals__ is module.__dict__
+    assert reloader.deduper_reloader.enabled, "the extension's setting is as it was"
+
+
+def test_a_module_cash_reloaded_is_left_to_cash(lib):
+    from cash.notebook.ipython.autoreload_hook import run_autoreload_now as run
+
+    name, path = lib
+    module = __import__(name)
+    reloader = _reloader(name)
+    shell = _autoreload_shell(reloader)
+    _edit(path, 1)
+    import importlib
+
+    importlib.reload(module)  # what cash's own check does first
+    reloaded_get = module.get
+
+    assert run(shell, {name}) == set()
+    assert module.get is reloaded_get
+    assert module.get(10) == 11
+    # Control: the extension still reloads the next edit.
+    _edit(path, 2)
+    assert run(shell) == {name}
+    assert module.get(10) == 12
+
+
+ELO = (
+    "import time\n\n\n"
+    "def run_elo(matches, k=20.0):\n"
+    f"    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n"
+    "    return float(matches.sum()) * k{tail}\n"
+)
+
+
+def test_an_argument_to_a_call_that_raised_after_an_edit_keeps_its_lineage(
+    cash_magics, statement_processor, mock_shell, tmp_path, monkeypatch
+):
+    name = f"_elo_{os.getpid()}_{id(tmp_path)}"
+    path = tmp_path / f"{name}.py"
+    path.write_text(ELO.format(tail=""), encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    try:
+        cells = [f"import numpy as np\nimport {name} as elo", "played = np.arange(4.0)", "hist = elo.run_elo(played)"]
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        reloader = _reloader(name)
+        reloader.deduper_reloader.update_sources()
+        mock_shell.magics_manager.registry = {"AutoreloadMagics": types.SimpleNamespace(_reloader=reloader)}
+        state = cash_magics.tracking_state
+        played = state.variable_lineage["played"]
+
+        before = os.stat(path).st_mtime_ns
+        path.write_text(ELO.format(tail=" + goal_diff"), encoding="utf-8")
+        os.utime(path, ns=(before + 2_000_000_000, before + 2_000_000_000))
+        with pytest.raises(NameError):
+            run_cash_cell(cash_magics, cells[2], cells=cells)
+
+        assert state.variable_lineage.get("played") == played, "run_elo cannot change its argument"
+        path.write_text(ELO.format(tail=" + 1.0"), encoding="utf-8")
+        os.utime(path, ns=(before + 4_000_000_000, before + 4_000_000_000))
+        run_cash_cell(cash_magics, cells[2], cells=cells)
+        assert mock_shell.user_ns["hist"] == 121.0
+        assert "hist" in state.variable_lineage, "the fixed call was not cached"
+    finally:
+        sys.modules.pop(name, None)

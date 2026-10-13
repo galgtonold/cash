@@ -814,7 +814,7 @@ class CellExecutor:
         reloaded that cash did not as an edit cash saw: the module is
         tracked and its readers' lineage moves."""
         try:
-            reloaded = run_autoreload_now(self.shell) - reloaded_by_cash
+            reloaded = run_autoreload_now(self.shell, reloaded_by_cash) - reloaded_by_cash
         except Exception:
             logger.debug("Running autoreload before the cell failed", exc_info=True)
             return []
