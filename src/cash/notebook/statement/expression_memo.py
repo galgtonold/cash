@@ -36,6 +36,8 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from cash.analysis.ast_util import copy_tree
+
 from ..shared_objects import output_history
 
 __all__ = ["ExpressionMemo", "MEMO_NAME_PREFIX"]
@@ -299,7 +301,10 @@ class ExpressionMemo:
                         return ast.copy_location(ast.Name(id=name, ctx=ast.Load()), node)
                 return self.generic_visit(node)
 
-        new_tree = copy.deepcopy(tree)
+        # Not ``copy.deepcopy``: after a traceback the shared ``ast.Load()``
+        # carries a ``parent`` link into a whole library file (`copy_tree`),
+        # and every statement of every cell paid for copying it.
+        new_tree = copy_tree(tree)
         put = _Put()
         new_tree.body[0].value = put.visit(new_tree.body[0].value)
         bound, saved = put.bound, put.saved
