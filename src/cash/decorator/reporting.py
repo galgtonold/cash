@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import logging
+import re
 import threading
 import time
 from collections import deque
@@ -32,6 +33,10 @@ if TYPE_CHECKING:
 #: One line per decorated call -- hit or miss, and why -- when `debug=True` /
 #: `CASH_DEBUG=1` or `verbose=True` asks for it.
 calls_logger = logging.getLogger("cash.calls")
+
+#: "line 74" in a finding: left out of what an earlier run's record of a
+#: shown warning is compared by (`Notices._not_shown_before`).
+_LINE_NUMBER = re.compile(r"\bline \d+")
 
 #: How many call events a `CallLog` holds. The notebook drains them after
 #: every statement; nothing drains them in a script or a service, so the log
@@ -235,7 +240,10 @@ class Notices:
             return None
         if self._stored_keys.path(func_name) is None:
             return None
-        digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:16]
+        # Without the line numbers: an edit elsewhere in the file moves the
+        # same findings down a line, and they were shown again on every run
+        # after it. An edit that changes what they say still shows them.
+        digest = hashlib.sha256(_LINE_NUMBER.sub("line", rendered).encode("utf-8")).hexdigest()[:16]
         if digest in self._stored_keys.read(func_name)["warned"]:
             return ""
         return digest

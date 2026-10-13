@@ -815,11 +815,13 @@ several lines in a row, wrap them in `with cash.assume_safe():` instead. A line
 that changes an argument in place is better fixed than waived: return a
 modified copy.
 
-<!-- claim: cash/decorator/reporting.py:Notices._not_shown_before @981e26bf, cash/decorator/reporting.py:Notices.warn_once @213ba8ef -->
+<!-- claim: cash/decorator/reporting.py:Notices._not_shown_before @7e3fc337, cash/decorator/reporting.py:Notices.warn_once @213ba8ef -->
 **When it is safe to ignore.** When every line is a `print` to stdout or a
 progress bar: you only lose the printout on hits. Never ignore
 `mutable_global` or `dynamic_pattern`. This warning is shown once per cache,
-not once per process. A run whose warning filters ignore it, or turn it into
+not once per process. An edit that only moves the lines it names (a line added
+above the function) does not show it again; one that changes the findings
+does. A run whose warning filters ignore it, or turn it into
 an error, does not count as having shown it, so a CI job that fails on it
 fails on every run.
 
@@ -913,7 +915,9 @@ report([1, 2, 3], as_of=date.today())
 For an environment variable, write its name out.
 
 **When it is safe to ignore.** When freezing the value is the point, such as
-a timestamp of when the result was computed.
+a timestamp of when the result was computed. Like
+[IMPURE-SIDE-EFFECTS](#impure-side-effects), it is shown once per cache, and
+again only when an edit changes the findings.
 
 **Silencing it.** Per line: `# @cash:assume-safe`. Per block:
 `with cash.assume_safe():`. Whole function: `@cash.cache(assume_safe=True)`.
