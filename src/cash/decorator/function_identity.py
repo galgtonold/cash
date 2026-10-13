@@ -26,6 +26,7 @@ from ..exceptions import CashCacheIneffectiveWarning
 from ..jit_functions import jit_identity, jit_python_function
 from ..loaded_code import code_objects_of, loaded_class_identity, loaded_code_matches_disk
 from ..source_norm import bytecode_identity, code_consts_without_docstring
+from ..source_reading import defining_file
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,11 @@ def stat_code_file(fn: Any) -> tuple[Any, str, int, int] | None:
     code = getattr(fn, "__code__", None)
     path = getattr(code, "co_filename", "") or ""
     if not path or path.startswith("<"):
+        return None
+    # The file the text is read from: code `%autoreload` compiled alone
+    # names another file, or another line of its own (`defining_file`).
+    path = defining_file(fn) or ""
+    if not path:
         return None
     try:
         st = os.stat(path)

@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import ast
 import contextlib
-import inspect
 import sys
 import types
 import uuid
@@ -68,6 +67,7 @@ from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS, CashWarning
 from ...remote_source import measured_validation as _measured_validation
 from ...source_norm import exact_source_digest
+from ...source_reading import getsource
 from ...tracking.file_dep_snapshot import begin_file_state_epoch, end_file_state_epoch
 from ...tracking.function_tracker import is_local_module
 from ...tracking.randomness import get_drawing_rng_modules, rng_lineage_fingerprint
@@ -237,7 +237,7 @@ def _arguments_its_callees_change(
         handed = [argument_roots(arg, iterated) for arg in call.args]
         by_keyword = [(kw.arg, argument_roots(kw.value, iterated)) for kw in call.keywords]
         try:
-            fdef = resolve_function_def(fn, inspect.getsource)
+            fdef = resolve_function_def(fn, getsource)
         except SOURCE_RETRIEVAL_ERRORS:
             fdef = None
         if fdef is None:

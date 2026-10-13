@@ -34,6 +34,7 @@ from ..analysis.helper_code import own_code_is_user
 from ..analysis.mutations import MUTATING_METHODS
 from ..effects import ENVIRON_NAMES, dotted_name
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..source_reading import getsource
 from ..tracking.function_tracker import is_local_module
 from ..tracking.randomness import get_seeding_rng_modules
 from ..value_types import IMMUTABLE_PRIMS, INTERPRETER_MANAGED_GLOBALS, is_runtime_machinery
@@ -652,7 +653,7 @@ def _receiver_stores(code: types.CodeType) -> frozenset[str]:
         return frozenset()
     first = code.co_varnames[0]
     try:
-        tree = parse_cached(textwrap.dedent(inspect.getsource(code)))
+        tree = parse_cached(textwrap.dedent(getsource(code)))
     except SOURCE_RETRIEVAL_ERRORS:
         return frozenset()
     if tree is None:
@@ -763,7 +764,7 @@ def _code_source(code: types.CodeType) -> str | None:
     """The source of the function whose code is *code*: a def run again
     makes a new code object, so an edited one is read again."""
     try:
-        return textwrap.dedent(inspect.getsource(code))
+        return textwrap.dedent(getsource(code))
     except SOURCE_RETRIEVAL_ERRORS:
         return None
 
@@ -1303,7 +1304,7 @@ def _changed_globals(code: types.CodeType) -> frozenset[str]:
     """The module globals the function whose code is *code* changes:
     ``global K; K = v``, ``CONFIG["k"] = v``."""
     try:
-        return source_global_mutations(inspect.getsource(code))
+        return source_global_mutations(getsource(code))
     except SOURCE_RETRIEVAL_ERRORS:
         return frozenset()
 

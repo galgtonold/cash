@@ -17,6 +17,7 @@ import inspect
 import io
 import linecache
 import os
+import re
 import sys
 import time
 import types
@@ -26,11 +27,15 @@ from .tracking.tracker_context import untracked
 
 __all__ = [
     "SETTLED_SECONDS",
+    "block_defines",
+    "code_is_where_it_says",
+    "defining_file",
     "getsource",
     "getsourcelines",
     "own_source",
     "read_code_file",
     "read_code_text",
+    "relocated_source_lines",
     "settled_source_version",
     "source_version_unchanged",
     "stat_has_settled",
@@ -130,8 +135,124 @@ def getsourcelines(obj: object) -> tuple[list[str], int]:
     block. Memoised on the file's ``(mtime, size)`` once the file has settled
     (`stat_has_settled`), for files ``linecache`` reads from disk only; any
     other case asks ``inspect`` every time. Raises what it raises.
+
+    A function's text is the definition of THAT function, or nothing
+    (`OSError`): ``inspect`` reads whatever block starts at the line its code
+    names, and code compiled from other text than its file's -- IPython's
+    ``%autoreload`` compiles each edited function alone and swaps it into the
+    old object, so its first line is 1 (or 2) of the module, and a decorated
+    one carries the decorator's file -- read as ``import cash``. Every edit of
+    that function then had the same text, and the key never moved again
+    (`relocated_source_lines` finds where the code is defined instead).
     """
     obj = inspect.unwrap(obj)
+    lines, first = _inspect_source_lines(obj)
+    code = _code_of(obj)
+    if code is not None and not block_defines(lines, code):
+        moved = relocated_source_lines(obj, code)
+        if moved is None:
+            raise OSError(f"could not find the definition of {code.co_name}: its code was compiled from other text")
+        return moved[0], moved[1]
+    return lines, first
+
+
+def _code_of(obj: object) -> types.CodeType | None:
+    """The code object *obj* runs as a function, or None."""
+    if inspect.ismethod(obj):
+        obj = obj.__func__
+    if inspect.isfunction(obj):
+        obj = obj.__code__
+    return obj if inspect.iscode(obj) else None
+
+
+_DEF_LINE = re.compile(r"[ \t]*(?:async[ \t]+)?(?:def|class)[ \t]+(\w+)")
+
+
+def block_defines(lines: list[str] | tuple[str, ...], code: types.CodeType) -> bool:
+    """Is *lines* (a block ``inspect`` read) the definition of *code*? Its
+    first ``def`` (or ``class``) line names it; a lambda's block holds a
+    ``lambda``; a comprehension or a module is not checked. Microseconds:
+    the decorators above the ``def`` are all it reads past."""
+    name = code.co_name
+    if name == "<lambda>":
+        return any("lambda" in line for line in lines)
+    if name.startswith("<"):
+        return True
+    for line in lines:
+        found = _DEF_LINE.match(line)
+        if found is not None:
+            return found.group(1) == name
+    return False
+
+
+def _candidate_files(obj: object, code: types.CodeType) -> list[str]:
+    """Where *code*'s definition can be: the file it names, then the file of
+    the module whose namespace it runs in (``%autoreload`` compiles a
+    decorated function under the decorator's file)."""
+    paths = [code.co_filename]
+    func = getattr(obj, "__func__", obj)
+    namespace = getattr(func, "__globals__", None)
+    module_file = namespace.get("__file__") if isinstance(namespace, dict) else None
+    if not isinstance(module_file, str):
+        module = sys.modules.get(getattr(func, "__module__", None) or "")
+        module_file = getattr(module, "__file__", None)
+    if isinstance(module_file, str) and module_file not in paths:
+        paths.append(module_file)
+    return [path for path in paths if path and path.endswith((".py", ".pyw"))]
+
+
+def _qualnames(obj: object, code: types.CodeType) -> list[str]:
+    """The qualified names *code* may be defined under: the function's own
+    (``%autoreload`` compiles a method inside a stand-in class, which its
+    code's qualname then names), then its code's."""
+    names: list[str] = []
+    func = getattr(obj, "__func__", obj)
+    for name in (getattr(func, "__qualname__", None), getattr(code, "co_qualname", None)):
+        if isinstance(name, str) and name not in names:
+            names.append(name)
+    return names
+
+
+def relocated_source_lines(obj: object, code: types.CodeType) -> tuple[list[str], int, str] | None:
+    """``(lines, first line, path)`` of the definition whose compiled code is
+    *code*'s, found by name in the files it can come from
+    (`_candidate_files`), or None when no file holds it."""
+    from .loaded_code import relocated_definition  # loaded_code reads files through this module
+
+    found = relocated_definition(code, _qualnames(obj, code), _candidate_files(obj, code))
+    if found is None:
+        return None
+    path, first, lines = found
+    return inspect.getblock(list(lines[first - 1 :])), first, path
+
+
+def code_is_where_it_says(code: types.CodeType) -> bool:
+    """Does the block at *code*'s file and first line define it? True when
+    that cannot be read (the caller's own checks then apply)."""
+    try:
+        lines, _first = _inspect_source_lines(code)
+    except Exception:  # noqa: BLE001 - no block to compare: nothing to say
+        return True
+    return block_defines(lines, code)
+
+
+def defining_file(fn: object) -> str | None:
+    """The file *fn*'s own code is defined in (not following ``__wrapped__``):
+    its ``co_filename``, unless that holds other text at its line and the
+    definition is found elsewhere (`relocated_source_lines`); None when it is
+    found nowhere."""
+    code = _code_of(fn)
+    if code is None:
+        return None
+    if code_is_where_it_says(code):
+        return code.co_filename
+    moved = relocated_source_lines(fn, code)
+    return moved[2] if moved is not None else None
+
+
+def _inspect_source_lines(obj: object) -> tuple[list[str], int]:
+    """`getsourcelines` as ``inspect`` answers it, memoised: the block at the
+    line the code names, whatever it defines."""
     target = _source_target(obj)
     if target is not None and target[0] == "code":
         held = _held_source_lines(obj, target)

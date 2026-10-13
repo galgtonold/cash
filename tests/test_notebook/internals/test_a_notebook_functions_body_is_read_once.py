@@ -3,8 +3,7 @@ once per definition, not on every statement that calls it.
 
 Each statement is walked for the module state and for the process state it
 sets, both following the notebook functions it calls into their bodies; each
-read the function's source again (``inspect.getsource``: a tokenize per
-read). Pins the work, not the behaviour: a refactor may expect this to fail.
+read the function's source again (``getsource``: a tokenize per read). Pins the work, not the behaviour: a refactor may expect this to fail.
 """
 
 from __future__ import annotations
@@ -27,8 +26,8 @@ def _source_reads(monkeypatch) -> list[object]:
     callee_reach._code_body.cache_clear()
     callee_reach._code_source.cache_clear()
     reads: list[object] = []
-    real = inspect.getsource
-    monkeypatch.setattr(inspect, "getsource", lambda obj: reads.append(obj) or real(obj))
+    real = callee_reach.getsource
+    monkeypatch.setattr(callee_reach, "getsource", lambda obj: reads.append(obj) or real(obj))
     return reads
 
 
@@ -38,7 +37,7 @@ def test_the_body_is_read_once_for_every_statement_calling_it(monkeypatch):
     for _ in range(3):
         assert callee_reach.process_state_writes("set_mode()", namespace) == {callee_reach.ENVIRON}
         callee_reach.module_state_writes("y = plain_helper(1)", namespace)
-    assert len(reads) <= 2  # once for each of the two functions
+    assert 1 <= len(reads) <= 2  # once for each of the two functions
 
 
 def test_a_new_definition_is_read_again(monkeypatch):

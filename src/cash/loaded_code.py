@@ -28,34 +28,91 @@ import types
 from ._memo import COMPILED_MODULES, LruMemo
 from .process_start import process_start_time
 from .source_norm import bytecode_identity
-from .source_reading import SETTLED_SECONDS, read_code_file, stat_has_settled
+from .source_reading import (
+    SETTLED_SECONDS,
+    code_is_where_it_says,
+    read_code_file,
+    relocated_source_lines,
+    stat_has_settled,
+)
 from .tracking.tracker_context import untracked
 
-__all__ = ["class_functions", "loaded_class_identity", "loaded_code_matches_disk", "loaded_module_matches_disk"]
+__all__ = [
+    "class_functions",
+    "loaded_class_identity",
+    "loaded_code_matches_disk",
+    "loaded_module_matches_disk",
+    "relocated_definition",
+]
 
-_MODULE_CODE_CACHE: LruMemo[str, tuple[int, int, types.CodeType | None]] = LruMemo(COMPILED_MODULES)
+_MODULE_CODE_CACHE: LruMemo[str, tuple[int, int, types.CodeType | None, tuple[str, ...]]] = LruMemo(COMPILED_MODULES)
 
 
 def _compiled_module(path: str) -> types.CodeType | None:
     """The whole file at *path*, compiled, cached per (path, mtime, size)."""
+    return _compiled_module_and_lines(path)[0]
+
+
+def _compiled_module_and_lines(path: str) -> tuple[types.CodeType | None, tuple[str, ...]]:
+    """`_compiled_module`, with the lines of the text it compiled."""
 
     try:
         st = os.stat(path)
     except OSError:
-        return None
+        return None, ()
     cached = _MODULE_CODE_CACHE.get(path)
     if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-        return cached[2]
+        return cached[2], cached[3]
     settled = stat_has_settled(st)
+    lines: tuple[str, ...] = ()
     try:
         source = read_code_file(path)
         code: types.CodeType | None = compile(source, path, "exec", dont_inherit=True)
+        # As the import decodes it: its coding cookie, universal newlines.
+        lines = tuple(io.StringIO(importlib.util.decode_source(source)).readlines())
     except (OSError, SyntaxError, ValueError):
         code = None
     if not settled:
-        return code
-    _MODULE_CODE_CACHE[path] = (st.st_mtime_ns, st.st_size, code)
-    return code
+        return code, lines
+    _MODULE_CODE_CACHE[path] = (st.st_mtime_ns, st.st_size, code, lines)
+    return code, lines
+
+
+def relocated_definition(
+    code: types.CodeType, qualnames: list[str], paths: list[str]
+) -> tuple[str, int, tuple[str, ...]] | None:
+    """``(path, first line, the file's lines)`` of the definition in one of
+    *paths* that compiles to *code* (`bytecode_identity`, which ignores line
+    numbers), looked up under each of *qualnames*, then under its bare name
+    when that is one definition only; None when no file holds it.
+
+    For code compiled from other text than its file at its line: IPython's
+    ``%autoreload`` compiles an edited function on its own (first line 1) and
+    swaps the code into the old function object, a decorated one under the
+    decorator's file. The file as it is now is what the code was compiled
+    from, so its definition there is the text a fresh process keys it by.
+    """
+    live = bytecode_identity(types.SimpleNamespace(__code__=code))
+    if live is None:
+        return None
+    for path in paths:
+        module, lines = _compiled_module_and_lines(path)
+        if module is None or not lines:
+            continue
+        index = _code_by_name(module)
+        for name in qualnames:
+            same = [c for c in index.get(name, ()) if bytecode_identity(types.SimpleNamespace(__code__=c)) == live]
+            if same:
+                # A name defined twice runs as the last definition.
+                return path, same[-1].co_firstlineno, lines
+        same = [
+            c
+            for c in index.get("name:" + code.co_name, ())
+            if bytecode_identity(types.SimpleNamespace(__code__=c)) == live
+        ]
+        if len(same) == 1:
+            return path, same[0].co_firstlineno, lines
+    return None
 
 
 def _pyc_postdates_source(st: object, pyc_st: object) -> bool:
@@ -225,6 +282,11 @@ def loaded_code_matches_disk(fn: object) -> bool:
         # page's fence, a template -- cannot be recompiled whole to compare,
         # and "does not compile" would read as "edited".
         return True
+    if not code_is_where_it_says(code):
+        # Compiled from other text than the file holds at its line
+        # (`%autoreload` swaps in code compiled from the function alone): the
+        # file it is defined in holds it now, or nothing does.
+        return relocated_source_lines(fn, code) is not None
     try:
         if _pyc_proves_unchanged(path, os.stat(path)):
             return True
