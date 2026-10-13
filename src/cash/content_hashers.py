@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import pickle
+from collections.abc import Callable
 from typing import Any
 
 from . import _plain_data
@@ -140,7 +141,7 @@ def hash_pandas(value: Any) -> str | None:
         # ``asfreq``) and ``attrs``.
         axes = f"{list(index.names)!r}:{index_dtypes!r}:{getattr(index, 'freq', None)!r}:"
         if type(value).__name__ == "DataFrame":
-            dtypes = [_pandas_dtype_key(dt) for dt in value.dtypes]
+            dtypes = _pandas_dtype_keys(value.dtypes)
             schema = f"{list(value.columns)!r}:{list(value.columns.names)!r}:{dtypes!r}:{axes}"
         else:  # Series
             schema = f"{value.name!r}:{_pandas_dtype_key(value.dtype)!r}:{axes}"
@@ -175,11 +176,23 @@ def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
     """
     if type(value).__name__ == "DataFrame":
         rest = []
+        column_buffer = _column_buffers(value)
+        routes: dict[Any, str | None] = {}
         for pos, dtype in enumerate(value.dtypes):
-            if _pandas_value_route(dtype, pd) is None:
+            try:
+                route = routes[dtype]
+            except KeyError:
+                route = routes[dtype] = _pandas_value_route(dtype, pd)
+            except TypeError:  # an unhashable dtype
+                route = _pandas_value_route(dtype, pd)
+            if route is None:
                 rest.append(pos)
+                continue
+            h.update(f"|{pos}|".encode())
+            buffer = column_buffer(pos, dtype) if route == "raw" else None
+            if buffer is not None:
+                fold_buffer(h, _raw_view(buffer))
             else:
-                h.update(f"|{pos}|".encode())
                 _fold_pandas_array(h, value.iloc[:, pos], pd)
         if rest:
             others = value if len(rest) == value.shape[1] else value.iloc[:, rest]
@@ -320,6 +333,37 @@ def _fold_pandas_array(h: Any, values: Any, pd: Any) -> None:
         fold_arrow_column(h, values.array.__arrow_array__())
     else:
         fold_buffer(h, _np_array(pd.util.hash_pandas_object(values, index=False)))
+
+
+def _column_buffers(frame: Any) -> Callable[[int, Any], Any]:
+    """``buffer(pos, dtype)``: the numpy array holding column *pos* of
+    *frame*, read from its block, or None when that column is not a plain
+    numpy array of *dtype* (an extension array, a pandas without the
+    internals read here). It is the array ``np.asarray(frame.iloc[:, pos])``
+    gives, so the digest is the same, without a Series built per column: a
+    2,000-column frame spent half its hash in ``iloc``.
+
+    The array is a view into the block: read here, never handed on.
+    """
+    import numpy as np
+
+    try:
+        mgr = frame._mgr
+        blocks, blknos, blklocs = mgr.blocks, mgr.blknos, mgr.blklocs
+    except Exception:  # noqa: BLE001 - pandas internals changed: through iloc
+        return lambda pos, dtype: None
+
+    def buffer(pos: int, dtype: Any) -> Any:
+        try:
+            values = blocks[blknos[pos]].values
+            if type(values) is not np.ndarray or values.ndim != 2:
+                return None
+            column = values[blklocs[pos]]
+        except Exception:  # noqa: BLE001 - through iloc
+            return None
+        return column if column.dtype == dtype else None
+
+    return buffer
 
 
 def _raw_view(array: Any) -> Any:
@@ -515,6 +559,26 @@ def _object_items_bytes(items: list) -> bytes:
     if tree is not None:
         return b"T" + _plain_data.pickle_unshared((items, tree[0]))
     return b"S" + canonical_bytes(items, BUILTIN_CONTENT)
+
+
+def _pandas_dtype_keys(dtypes: Any) -> list[str]:
+    """`_pandas_dtype_key` of each of *dtypes*, a numpy dtype worked out
+    once however many columns have it. Only a numpy dtype: two categorical
+    dtypes over the same categories in another order are equal, and keyed
+    apart."""
+    import numpy as np
+
+    known: dict[Any, str] = {}
+    keys = []
+    for dtype in dtypes:
+        if type(dtype) is not np.dtype and not isinstance(dtype, np.dtype):
+            keys.append(_pandas_dtype_key(dtype))
+            continue
+        key = known.get(dtype)
+        if key is None:
+            key = known[dtype] = _pandas_dtype_key(dtype)
+        keys.append(key)
+    return keys
 
 
 def _pandas_dtype_key(dtype: Any) -> str:
@@ -720,9 +784,13 @@ def held_objects(value: Any) -> list | None:
                 columns.append(value.ravel(order="K"))
         elif family == "pandas":
             frame = type(value).__name__ == "DataFrame"
-            for pos, dtype in enumerate(value.dtypes if frame else [value.dtype]):
-                if str(dtype) == "object":
-                    columns.append(_np_array(value.iloc[:, pos] if frame else value, object))
+            dtypes = list(value.dtypes) if frame else [value.dtype]
+            # Asked of each distinct dtype once: ``str`` of a dtype per
+            # column of a 2,000-column frame was most of a call's key.
+            if any(str(dtype) == "object" for dtype in _distinct(dtypes)):
+                for pos, dtype in enumerate(dtypes):
+                    if str(dtype) == "object":
+                        columns.append(_np_array(value.iloc[:, pos] if frame else value, object))
         elif family == "polars":
             import polars as pl
 
@@ -738,6 +806,14 @@ def held_objects(value: Any) -> list | None:
         if not all(k in LEAF_TYPES for k in set(map(type, column))):
             found.extend(v for v in column if type(v) not in LEAF_TYPES)
     return found or None
+
+
+def _distinct(items: list) -> list:
+    """*items* without repeats, or all of them when one is unhashable."""
+    try:
+        return list(dict.fromkeys(items))
+    except TypeError:
+        return items
 
 
 def is_native_panic(exc: BaseException) -> bool:

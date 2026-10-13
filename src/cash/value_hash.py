@@ -19,6 +19,7 @@ from typing import Any
 
 from . import kept_state
 from .content_hashers import builtin_hash, builtin_hash_family, is_native_panic
+from .sizing import pandas_nbytes
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,34 @@ def is_identity_fallback_hash(obj: Any, hash_value: str) -> bool:
 
 _COLLECTIONS = frozenset((list, tuple, dict, set, frozenset))
 
+_PANDAS_TYPE_NAMES = frozenset({"DataFrame", "Series"})
+
+#: The size from which a pandas frame's digest is memoised
+#: (`_memoised_frame_digest`): below it a full read costs about what the check
+#: does, as for the call checks' memo (`call_effects.ArgFingerprints`).
+FRAME_MEMO_MIN_BYTES = 1 << 20
+
+
+def _memoised_frame_digest(obj: Any) -> str | None:
+    """The content digest of a big pandas frame under copy-on-write, read
+    once and then checked, not read again, while it is provably unchanged
+    (`cash.decorator.arg_hashing.cow_frame_digest`): its blocks, axes and
+    manager are the same objects, which copy-on-write makes an exact "not
+    written" signal, and no handle that could write past it was given out.
+    The same digest `builtin_hash` gives, from the memo the decorator keys
+    its arguments through. None for a small frame or any other value.
+
+    A notebook loop that hands a 50 MB frame to a cached function on every
+    iteration took that frame's digest several times per iteration (the
+    loop's mutation watch before and after, the value checks around the
+    call) and spent most of its time doing so.
+    """
+    if (pandas_nbytes(obj) or 0) < FRAME_MEMO_MIN_BYTES:
+        return None
+    from .decorator.arg_hashing import cow_frame_digest
+
+    return cow_frame_digest(obj)
+
 
 def compute_hash(obj: Any) -> str:
     """Hash *obj* over its whole content, with explicit fallbacks.
@@ -137,6 +166,9 @@ def compute_hash(obj: Any) -> str:
     type_name = type(obj).__name__
 
     try:
+        digest = _memoised_frame_digest(obj) if type_name in _PANDAS_TYPE_NAMES else None
+        if digest is not None:
+            return digest
         digest = builtin_hash(obj)
         if digest is not None:
             return digest

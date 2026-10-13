@@ -84,3 +84,49 @@ def test_a_big_array_is_hashed_on_several_threads(monkeypatch):
     monkeypatch.setattr(threading.Thread, "start", start)
     assert builtin_hash(np.zeros(4 * 1024 * 1024)) is not None  # 32 MiB
     assert started.count("cash-digest") >= 2, started
+
+
+def _frames():
+    rng = np.random.default_rng(1)
+    wide = pd.DataFrame(rng.random((40, 300)), columns=[f"T{i}" for i in range(300)])
+    mixed = pd.DataFrame(
+        {
+            "f": rng.random(40),
+            "i": np.arange(40),
+            "i32": np.arange(40, dtype="i4"),
+            "b": rng.random(40) > 0.5,
+            "d": pd.date_range("2020-01-01", periods=40),
+            "td": pd.to_timedelta(np.arange(40), unit="s"),
+            "c": pd.Categorical(["a", "b"] * 20),
+            "f2": rng.random(40),
+        }
+    )
+    mixed["late"] = 1.5  # a block of its own, after the others
+    return {
+        "wide": wide,
+        "mixed": mixed,
+        "fortran": pd.DataFrame(np.asfortranarray(rng.random((40, 5)))),
+        "view": wide.iloc[3:30, [7, 2, 250]],
+        "duplicate labels": pd.DataFrame(rng.random((5, 3)), columns=["a", "a", "b"]),
+        "half floats": pd.DataFrame(rng.random((5, 2)).astype("f2")),
+    }
+
+
+@pytest.mark.parametrize("name", list(_frames()))
+def test_a_frames_columns_are_read_from_its_blocks_with_the_digest_unchanged(name, monkeypatch):
+    """A 2,000-column frame spent half its hash building a Series per
+    column through ``iloc``; read from the blocks, the digest is the one
+    the per-column route gives."""
+    from cash import content_hashers
+
+    frame = _frames()[name]
+    fast = builtin_hash(frame)
+    monkeypatch.setattr(content_hashers, "_column_buffers", lambda frame: lambda pos, dtype: None)
+    assert builtin_hash(frame) == fast
+
+
+def test_a_wide_numeric_frame_builds_no_series_per_column():
+    frame = _frames()["wide"]
+    with method_calls(pd.DataFrame, "_ixs") as boxed:
+        assert builtin_hash(frame) is not None
+    assert boxed.calls == 0, f"{boxed.calls} columns boxed as a Series to hash a numeric frame"
