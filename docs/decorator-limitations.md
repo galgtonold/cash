@@ -37,7 +37,7 @@ another object's entry. See [Custom hashers](tutorials/feature-guides/custom-has
 
 ## A table changed past pandas
 
-<!-- claim: cash/decorator/arg_hashing.py:watch_array_handles @e066a3bf, cash/decorator/arg_hashing.py:_watch_callback_handouts @e4bee4fe -->
+<!-- claim: cash/decorator/arg_hashing.py:watch_array_handles @84c7787c, cash/decorator/arg_hashing.py:_watch_callback_handouts @e4bee4fe -->
 Under pandas copy-on-write, a table passed to a cached function again is not
 hashed again while pandas has given it no new data: pandas copies a column
 before it writes it. A write that goes past pandas is seen as long as it goes
@@ -310,16 +310,27 @@ See [Async functions](tutorials/feature-guides/async-caching.md).
 
 ## Edits inside a running process
 
-cash reads a helper's source once per process, so an edit between two calls
-of one long-running process is seen only by the next process. If a source file
-changes on disk after the process started (a deploy), cash keys by the code
-that is running and warns [`KEY-SOURCE-CHANGED`](warnings.md#key-source-changed).
+<!-- claim: cash/loaded_code.py:code_objects_of @256d2c70, cash/decorator/function_identity.py:warn_source_changed_since_load @4f566032 -->
+cash keys a function by the code that is running. An edit saved while a
+long-running process works is seen by the next process, or in this one once
+the module is reloaded (`importlib.reload`, IPython's `%autoreload`): the
+next call then recomputes. If a source file changes on disk after the process
+loaded it (a deploy), cash keys by the running code and warns
+[`KEY-SOURCE-CHANGED`](warnings.md#key-source-changed).
 
 ## Using a decorated function in a notebook
 
 Decorated functions work in a notebook, but re-running the cell that defines
 one creates a new wrapper with new counters, so `cache_info()` may read zero.
 Use `explain()` there.
+
+<!-- claim: cash/notebook/statement/store.py:StatementStore._with_decorator_ref @9edb344d -->
+A call keeps the key it has in a script, so a notebook and a script that use
+one cache folder share its entries. When cash also caches the notebook's
+statements, a statement that only binds the call's result (`df = load(path)`)
+stores a pointer to the function's entry, not a second copy of the value.
+[Moving to a module](tutorials/feature-guides/production-transition.md) covers
+the notebook side.
 
 ## Related
 
