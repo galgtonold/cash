@@ -63,6 +63,7 @@ from ..lineage_formula import (
     no_cache_value_component,
     output_lineage,
     recorded_reads_lineage_component,
+    setting_output_lineage,
     statement_environment_component,
 )
 from ..loop_watch import branch_changes, loop_watch_hash, watch_candidates
@@ -554,10 +555,10 @@ class StatementLineage:
 
     def _input_lineages(
         self, stmt_code: str, inputs: set[str], virtual_lineage: dict[str, str], virtual_modules: set[str]
-    ) -> list[str]:
+    ) -> dict[str, str]:
         """Each input's lineage (``lineage_formula.input_lineage``), with the
-        simulation's own lineages in front of the recorded ones."""
-        input_lineages_all = []
+        simulation's own lineages in front of the recorded ones, by name."""
+        input_lineages_all: dict[str, str] = {}
         for inp in sorted(inputs):
             if inp in {"get_ipython", "__builtins__"}:
                 continue
@@ -571,13 +572,13 @@ class StatementLineage:
                 virtual_modules=virtual_modules,
             )
             if lineage:
-                input_lineages_all.append(lineage)
+                input_lineages_all[inp] = lineage
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "[LINEAGE_DEBUG] %s... inputs %s -> %s",
                 stmt_code[:50],
                 sorted(inputs),
-                [ln[:12] + "..." for ln in input_lineages_all],
+                [ln[:12] + "..." for ln in input_lineages_all.values()],
             )
         return input_lineages_all
 
@@ -594,6 +595,7 @@ class StatementLineage:
         no_cache_values: dict[str, str] | None = None,
         recorded_reads: str | None = None,
         virtual_modules: set[str] | None = None,
+        input_lineage_map: Mapping[str, str] | None = None,
     ) -> dict[str, str]:
         """The lineage of each output of a simulated statement.
 
@@ -609,6 +611,10 @@ class StatementLineage:
 
         A callee that is only a simulated def contributes its digest as the
         live function would (``SimulatedCallables.source_hashes``).
+
+        *input_lineage_map* names the lineages of *input_lineages_all*: a
+        module set by a setting that is the same when run again
+        (``setting_output_lineage``) is given its lineage from them.
         """
         function_tracker = self.function_tracker
         user_ns = self.shell.user_ns
@@ -623,18 +629,28 @@ class StatementLineage:
             logger.debug("[UPSTREAM] Failed to compute function source hashes for capture")
             func_component = ""
         environment = statement_environment_component(stmt_code, user_ns) if recorded_reads is None else recorded_reads
-        return {
-            out: output_lineage(
-                source_hash,
-                input_lineages_all,
+        lineages: dict[str, str] = {}
+        for out in outputs:
+            value = user_ns.get(out)
+            components = (
                 file_hash_component,
                 func_component,
-                module_source_component(function_tracker, user_ns.get(out), out, stmt_code, tree),
-                changed_module_environment(out, user_ns.get(out), stmt_code, environment, virtual_modules or ()),
+                module_source_component(function_tracker, value, out, stmt_code, tree),
+                changed_module_environment(out, value, stmt_code, environment, virtual_modules or ()),
                 no_cache_value_component(no_cache_values, out),
             )
-            for out in outputs
-        }
+            setting = None
+            if input_lineage_map is not None:
+                setting = setting_output_lineage(
+                    out,
+                    value,
+                    stmt_code,
+                    input_lineage_map,
+                    lambda others, components=components: output_lineage(source_hash, others, *components),
+                    virtual_modules or (),
+                )
+            lineages[out] = setting or output_lineage(source_hash, input_lineages_all, *components)
+        return lineages
 
     # -- Files -----------------------------------------------------------------
 
@@ -1029,9 +1045,10 @@ class StatementLineage:
     ) -> StatementOutcome:
         """Give each of *outputs* its lineage: the cache entry's when it is
         valid, else the runtime's formula's."""
-        input_lineages_all = self._input_lineages(
+        input_lineage_map = self._input_lineages(
             stmt_code, inputs | lineage_hidden_reads(stmt_code), virtual_lineage, virtual_modules
         )
+        input_lineages_all = list(input_lineage_map.values())
         cache_key = self._key(
             stmt_code, inputs | hidden_reads, outputs, virtual_lineage, virtual_modules, occurrence_index
         )
@@ -1087,6 +1104,7 @@ class StatementLineage:
                 self.tracking_state, cache_key, stmt_code, self.shell.user_ns, outputs, as_last_run=True
             ),
             virtual_modules=virtual_modules,
+            input_lineage_map=input_lineage_map,
         )
         _log_lineage_calc(stmt_code, source_hash, input_lineages_all, file_hash_component, lineage_by_out)
 

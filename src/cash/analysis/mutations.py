@@ -31,6 +31,7 @@ __all__ = [
     "standalone_method_mutation_receivers",
     "standalone_method_call_receivers",
     "module_setting_receivers",
+    "repeatable_setting_receiver",
     "chain_is_pure",
     "returns_a_new_object",
     "NONE_RETURNING_MUTATORS",
@@ -1082,6 +1083,52 @@ def module_setting_receivers(tree: ast.Module | None) -> frozenset[str]:
     Counted as a change to the module, it is replayed with the import.
     """
     return top_level_calls(tree).setting_receivers
+
+
+def repeatable_setting_receiver(tree: ast.Module | None) -> str | None:
+    """The module a statement that is one setting call sets, when running
+    the same calls again leaves what running them once did.
+
+    ``pd.set_option('display.width', 120)``, ``plt.style.use('ggplot')``,
+    ``np.seterr(all='raise')``, ``plt.rcParams.update({...})``: a setter
+    writes the values it is handed over what was there, so running it again,
+    or a run of such calls again (a setup cell run twice), changes nothing.
+    ``logging.basicConfig`` and ``filterwarnings`` keep that too (the first
+    call wins; an equal filter moves to the front). The module's lineage
+    after it (`lineage_formula.setting_lineage`) can then leave such a
+    repeat out, so the readers of the module key alike however often the
+    setting cell ran.
+
+    Not one: a call whose arguments read the module itself
+    (``pd.set_option(k, pd.get_option(k) + 1)``, each run a new value), a
+    mutating method other than ``rcParams.update`` (``mylib.items.append(x)``
+    grows on every run), a receiver reached through a call or a subscript,
+    and a statement that does anything else.
+    """
+    if tree is None or len(tree.body) != 1:
+        return None
+    node = tree.body[0]
+    if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
+        return None
+    call = node.value
+    func = call.func
+    if not isinstance(func, ast.Attribute):
+        return None
+    chain = func.value
+    while isinstance(chain, ast.Attribute):
+        chain = chain.value
+    if not isinstance(chain, ast.Name):
+        return None
+    base = chain.id
+    method = func.attr
+    setter = method == "set" or method.startswith("set_") or method in MODULE_SETTING_FUNCTIONS
+    rc_update = method == "update" and isinstance(func.value, ast.Attribute) and func.value.attr == "rcParams"
+    if not (setter or rc_update):
+        return None
+    for arg in [*call.args, *(kw.value for kw in call.keywords)]:
+        if any(isinstance(sub, ast.Name) and sub.id == base for sub in ast.walk(arg)):
+            return None
+    return base
 
 
 def chain_is_pure(method: str, inner: frozenset[str]) -> bool:
