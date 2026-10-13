@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...tracking.module_symbols import static_attribute_reads
-from ...value_hash import compute_hash
+from ...value_hash import budgeted_hash, compute_hash
 from ..cache_key import statement_source_hash
 from ..lineage_formula import (
     callable_source_component,
@@ -479,21 +479,23 @@ class StatementLineageBuilder:
         output_lineage_hash: str,
     ) -> None:
         """Update variable_hashes and current_session_hashes for *var_name*."""
-        if hashed_by_lineage(value):
-            # For large objects, use lineage hash as proxy for content hash
-            if var_name not in tracking_state.variable_hashes:
-                tracking_state.variable_hashes[var_name] = set()
-            tracking_state.variable_hashes[var_name].add(output_lineage_hash)
-            tracking_state.current_session_hashes[var_name] = output_lineage_hash
-        elif self.compute_hash:
+        content_hash: str | None = None
+        if not hashed_by_lineage(value):
+            if not self.compute_hash:
+                return
             try:
-                content_hash = self.compute_hash(value)
-                if var_name not in tracking_state.variable_hashes:
-                    tracking_state.variable_hashes[var_name] = set()
-                tracking_state.variable_hashes[var_name].add(content_hash)
-                tracking_state.current_session_hashes[var_name] = content_hash
+                # Within a budget: a value that takes longer to read is
+                # remembered as costly and has its lineage as its session
+                # hash, like a frame (`budgeted_hash`).
+                content_hash = budgeted_hash(value, self.compute_hash)
             except Exception as e:  # noqa: BLE001 - a user value that cannot be hashed
                 logger.debug("[CACHE DEBUG] Could not hash captured variable '%s': %s", var_name, e)
+                return
+        # For large or costly objects the lineage stands for the content: no
+        # content hash equals it, so a check comparing one reads "changed".
+        session_hash = content_hash if content_hash is not None else output_lineage_hash
+        tracking_state.variable_hashes.setdefault(var_name, set()).add(session_hash)
+        tracking_state.current_session_hashes[var_name] = session_hash
 
     def lineage_if_rerun(self, tracking_state: "TrackingState", var_name: str, value: Any, code: str) -> str:
         """The lineage *var_name* would get if *code* ran again now: the same
