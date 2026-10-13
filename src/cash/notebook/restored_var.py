@@ -14,7 +14,7 @@ import itertools
 import logging
 import sys
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Container, Mapping
 from typing import TYPE_CHECKING, Any
 
 from cash.content_hashers import builtin_hash_family
@@ -27,7 +27,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["FORWARD_PROBE_PLACEHOLDER", "apply_held_var", "apply_restored_var", "hashed_by_lineage", "identity_digest"]
+__all__ = [
+    "FORWARD_PROBE_PLACEHOLDER",
+    "apply_held_var",
+    "apply_restored_var",
+    "hashed_by_lineage",
+    "identity_digest",
+    "present_holders",
+]
 
 #: Stands in the namespace for a variable the upstream check's forward probe
 #: found a current-cell cache hit for: a statement whose input is not in the
@@ -167,6 +174,22 @@ def apply_restored_var(
         if metadata.key is not None:
             state.variable_sources[name] = metadata.key
     _record_session_hash(state, name, value, lineage, compute_hash)
+
+
+def present_holders(holders: Mapping[str, str], present: Container[str]) -> dict[str, str]:
+    """The variables of *holders* (``StatementCacheMetadata.holders``) that
+    are bound now: those in *present*.
+
+    An entry stores with its outputs each variable that held one of their
+    objects when it ran, so that a restore gives them that object again.
+    One that is not bound now holds nothing: running the statement would
+    share its objects with no such variable, so neither does the restore.
+    It is not checked (its lineage is not there to compare), nor restored,
+    which would bring back a variable no cell made (a fitted ``logreg``
+    holding the column lists ``hgb`` holds, its cell not run since a
+    restart). The variables that are bound are checked and restored as before.
+    """
+    return {name: before for name, before in holders.items() if name in present}
 
 
 def apply_held_var(

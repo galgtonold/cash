@@ -30,7 +30,7 @@ from ..lineage_formula import (
     key_hidden_reads,
 )
 from ..lineage_store import restore_frozen_tag, tag_value
-from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
+from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var, present_holders
 from ._types import key_inputs, key_lineages
 from .cache_probe import CacheProbe
 
@@ -158,6 +158,15 @@ class CacheRestorer:
                     logger.debug("[UPSTREAM] Restore failed: lineage mismatch for %s", conflict)
                     return set(), _perf_counter() - start_time, 0.0
                 holders = metadata.get("holders") or {}
+                variables_to_restore = cached_data.get("variables", {})
+                present = present_holders(holders, self.shell.user_ns)
+                if len(present) < len(holders):
+                    # Not bound now, so holding nothing (`present_holders`).
+                    variables_to_restore = {
+                        k: v for k, v in variables_to_restore.items() if k in present or k not in holders
+                    }
+                    metadata = {**metadata, "holders": present or None}
+                    holders = present
                 lineage = self.tracking_state.variable_lineage
                 if any(lineage.get(name) != before for name, before in holders.items()):
                     # As at a hit (``CacheFreshnessChecker``): the entry would
@@ -167,7 +176,6 @@ class CacheRestorer:
 
                 # 4. Success! Restore into shell.
                 # Cache stores variables under 'variables' key (see StatementStore._payload)
-                variables_to_restore = cached_data.get("variables", {})
                 if self.guard is not None:
                     self.guard(set(variables_to_restore))
                 restored_vars = self._restore_vars_from_cache(

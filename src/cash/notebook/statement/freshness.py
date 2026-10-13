@@ -27,7 +27,8 @@ import copy
 import io
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Container
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from ... import _plain_data
@@ -36,6 +37,7 @@ from ...backends._base import ttl_expired
 from ...tracking.file_dep_snapshot import FreshnessMemo, snapshot_is_fresh
 from ...value_types import IMMUTABLE_LEAF_TYPES
 from ..call_refs import resolve_call_refs
+from ..restored_var import present_holders
 from ._metadata import StatementCacheMetadata
 
 if TYPE_CHECKING:
@@ -61,6 +63,24 @@ def _copies(value: Any) -> bool:
     if type(value) in IMMUTABLE_LEAF_TYPES:
         return True
     return type(value) in _plain_data.TREE_NODES and _plain_data.is_tree(value)
+
+
+def _without_unbound_holders(
+    metadata: StatementCacheMetadata, cached_data: Any, bound: Container[str]
+) -> tuple[StatementCacheMetadata, Any]:
+    """*metadata* and *cached_data* without the variables stored with the
+    outputs that are not in *bound* (`present_holders`). New objects: the
+    RAM tier hands back its stored payload."""
+    holders = metadata.holders or {}
+    present = present_holders(holders, bound)
+    if len(present) == len(holders):
+        return metadata, cached_data
+    metadata = replace(metadata, holders=present or None, holders_moved=metadata.holders_moved if present else None)
+    variables = cached_data.get("variables") if isinstance(cached_data, dict) else None
+    if isinstance(variables, dict):
+        kept = {k: v for k, v in variables.items() if k in present or k not in holders}
+        cached_data = {**cached_data, "variables": kept}
+    return metadata, cached_data
 
 
 class CacheFreshnessChecker:
@@ -126,8 +146,13 @@ class CacheFreshnessChecker:
         ttl: int | None,
         inputs: set[str] | None = None,
         epoch: Any = None,
+        bound: Container[str] | None = None,
     ) -> tuple["StatementCacheMetadata | None", Any | None, float]:
         """Look up *cache_key* and run freshness checks.
+
+        *bound* is the namespace: a variable the entry stores with its
+        outputs that is not in it is left out of the entry
+        (`present_holders`). Without it, every one is checked.
 
         Returns ``(metadata, cached_data, check_time)``.  When the entry
         is stale, ``cached_data`` is None and :attr:`last_miss_reason`
@@ -149,6 +174,8 @@ class CacheFreshnessChecker:
         cache_check_time = _perf_counter() - t3
 
         if cached_data and metadata:
+            if metadata.holders and bound is not None:
+                metadata, cached_data = _without_unbound_holders(metadata, cached_data, bound)
             # `is not None`, not truthiness: ttl=0 is a REQUEST ("expire
             # immediately"), not an absence. Reading it as falsy skipped the
             # check and made the entry immortal — the inverse of the ask.
