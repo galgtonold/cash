@@ -29,7 +29,7 @@ expensive_function(1, 2)   # first call: runs, about 5 seconds
 expensive_function(1, 2)   # second call: cache hit, instant
 ```
 
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @130f1202 -->
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @e3aa6741 -->
 cash keys each call on its arguments and on the function's source. Every result
 is written to disk, in a [`.cash/` folder](../decorator.md#where-results-are-stored)
 in your project, so the next run of the script gets a hit on the first call too.
@@ -98,6 +98,35 @@ def load():
 ```
 
 cash tracks the files a decorated function reads, with nothing to declare.
+
+## 4. See what cash did
+
+A script shows nothing by default, apart from one line the first time cash
+makes a cache folder:
+
+```text title="Output"
+run.py:9: CashWarning: [CACHE-DIR-NEW] new cache at .cash. Fix: set CASH_CACHE_DIR or [tool.cash] cache_dir to cache elsewhere. (https://cash-lib.readthedocs.io/en/latest/warnings/#cache-dir-new)
+```
+
+<!-- claim: cash/decorator/run_summary.py:RunSummary.text @d64f5e55 -->
+Set `CASH_SUMMARY=1` to get one table when the script ends: hits and misses
+per function, the time saved, and why calls missed. Saved as `run.py`, the
+script from step 2 prints this on its second run:
+
+```bash
+CASH_SUMMARY=1 python run.py
+```
+
+```text title="Output"
+cash: 2 of 2 calls restored, 10.0s saved
+  cache: /home/me/project/.cash, up to 8.0 GiB (the 8 GiB minimum; a quarter of the free disk space would be less)
+  run.expensive_function  2 hits,   0 misses    10.0s saved
+```
+
+A first run, where calls miss, can end with `a net loss`: storing a result
+costs a little once, and later runs get it back.
+[Seeing what cash did](../decorator.md#seeing-what-cash-did) explains every
+line, and `CASH_VERBOSE=1` prints one line per call.
 
 ## Related
 

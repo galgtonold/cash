@@ -32,7 +32,7 @@ slow_square(1_000_000)   # cache hit: returns the stored result
 
 That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @cf16cee7, cash/decorator/store.py:ResultStore.store @a012adf1, cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @cf16cee7, cash/decorator/store.py:ResultStore.store @e50d5cf9, cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
 - **Exceptions are never cached.** If the body raises, nothing is stored and the
   exception reaches you as usual. The next call runs the body again.
 - **A hit does not replay output.** Anything the body printed or logged appears
@@ -74,7 +74,7 @@ takes a backend instance or a backend type name (`backend="sqlite"`). See the
 
 ## Where results are stored
 
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @130f1202, cash/backends/tiered_backend.py:TieredBackend.set @5681a193 -->
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @e3aa6741, cash/backends/tiered_backend.py:TieredBackend.set @967def4e -->
 **Every result is written to disk.** However cheap the call was, a decorated
 result goes to the RAM tier and to the disk tier, so the next process finds it.
 There are two exceptions, and each stays in RAM for this process with a
@@ -102,6 +102,17 @@ started it, from any directory. cash finds the folder from the running script:
 
 [Where your cache lives](how-it-works/storage.md#where-the-cache-folder-is)
 has the full rule.
+
+<!-- claim: cash/_location.py:announce_new_cache_dir @5260de8d -->
+The first time cash makes a `.cash` folder there, it says where, once
+([`CACHE-DIR-NEW`](warnings.md#cache-dir-new)):
+
+```text title="Output"
+run.py:9: CashWarning: [CACHE-DIR-NEW] new cache at .cash (no project found above the script). Fix: set CASH_CACHE_DIR or [tool.cash] cache_dir to cache elsewhere. (https://cash-lib.readthedocs.io/en/latest/warnings/#cache-dir-new)
+```
+
+The first run in a new folder starts with an empty cache, so every call
+misses; this line tells you that is why.
 
 To choose the folder yourself, highest priority first:
 
@@ -196,6 +207,21 @@ is the folder this run actually used. The summary also lists results that were
 computed but not stored. It prints on any normal exit or uncaught exception,
 not when the process is killed. `summary=True` in code or config does the same.
 
+<!-- claim: cash/decorator/run_summary.py:_head @089b4b31, cash/decorator/run_summary.py:_cash_seconds @16ac9ccb -->
+When cash's own work is noticeable, the first line adds what it cost, and
+each function's row its share:
+
+```text title="Output"
+cash: 0 of 33 calls restored, 0.0s saved -- and 5.3s spent by cash on keys, lookups and stores, a net loss of 5.3s
+```
+
+*Saved* is the time the hits would have taken to compute. *Spent by cash* is
+cash's own work: building keys, checking the files an entry read, looking
+entries up and storing results. When it is larger, the line ends with
+`a net loss`. On a first run that is expected: nothing is stored yet, so
+nothing can be saved, and storing is paid once for each new call. The next
+run shows what the cache is worth.
+
 <!-- claim: cash/decorator/explain.py:describe_state_change @58a52664, cash/decorator/explain.py:MissHistory.absent_entry_reason @27204896 -->
 **One line per call.** `CASH_DEBUG=1` logs every call to stderr, with cash's
 other debug records. `CASH_VERBOSE=1` gives only the call lines:
@@ -214,10 +240,33 @@ source changed`, `helper model._rank changed`, `environment variable TENANT
 changed`, and so on. This works across runs too, including `ttl expired` and
 entries the size cap evicted (`evicted to make room`).
 
+<!-- claim: cash/decorator/reporting.py:describe_call @b8e1d0da -->
+A hit whose lookup took a noticeable share of what it saved says so:
+
+```text title="Output"
+cash.calls: HIT  model.load_stores  [8d1c0e2a4b7f]  (saved 0.02s; the lookup took 0.04s; a net loss)
+```
+
+Reading the entry back cost more than running the body. A function that
+always shows this is too quick to be worth caching: take the decorator off,
+or cache a larger step that calls it.
+[`CACHE-NET-LOSS`](warnings.md#cache-net-loss) warns when such losses add up
+to more than two seconds.
+
 <!-- claim: cash/_log.py:_StandDownWhenTheAppLogs.filter @1f08254a -->
 If your program configures `logging`, these lines go to your handlers in your
-format instead of stderr. cash's warnings are Python warnings, not log records;
-`logging.captureWarnings(True)` routes them to your handlers too.
+format instead of stderr.
+
+<!-- claim: cash/diagnostics.py:warn_diagnostic @c9245473, cash/config/schema.py:CashConfig.warning_detail == "short" -->
+**Warnings.** cash's warnings are Python warnings, not log records, and each
+prints as one line: the code, what happened, the fix, and a link to its entry
+on [Warnings](warnings.md). The `file:line` in front is the call in your code
+that set it off; a `line N` inside the message is a line of the cached
+function's own file. When a second function gets the same code, its line
+says only `also on <name>`. `f.cache_info()["warnings"]` keeps each one's
+full text, with every finding listed, and `CASH_WARNING_DETAIL=full` prints
+that instead. `logging.captureWarnings(True)` routes warnings to your
+handlers.
 
 **One function, from code.** `f.explain(*args)` tells you whether the next call
 with those arguments would hit, and why, without running anything.
@@ -732,7 +781,7 @@ where the stream stands, so each seed and each draw after it gets its own
 entry. A seed set before the function is decorated is not seen. A function
 whose own body seeds the stream is not keyed by where the caller left it.
 
-<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @b7b2d616 -->
+<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @72773502 -->
 The same holds for a generator in a module global that the body draws from
 (`rng = np.random.default_rng(42)` at module level, `rng.normal()` inside): the
 key includes where `rng` stands, and a hit moves `rng` on to where the computed
@@ -767,16 +816,34 @@ def score(model, batch):
 
 The consumer then keys the model by the call that produced it, in microseconds.
 A pandas frame or numpy array is hashed once, the first time it is passed, and
-that hash serves every later call in the process. A frozen numpy array comes
-back read-only, and
-[`KEY-FROZEN-MUTATED`](warnings.md#key-frozen-mutated) names the producer if a
-frozen result was changed after all. [`CACHE-NET-LOSS`](warnings.md#cache-net-loss)
-warns when hashing an argument costs more than the cache saves.
+that hash serves every later call in the process; each new run pays that one
+hash again. [`CACHE-NET-LOSS`](warnings.md#cache-net-loss) warns when hashing
+an argument costs more than the cache saves.
 
-`frozen=True` covers the value the function returns. A tuple it returns is
-keyed by the call when you pass the tuple on whole; a value you unpack from
-it (`graph, nodes = build()`) is keyed by its content, as if the function
-were not frozen. Return one value per frozen function, or pass the tuple.
+<!-- claim: cash/decorator/store.py:ResultStore.attach_lineage @f47f5d75, cash/decorator/frozen.py:FrozenResults.container_hash @cfd38330 -->
+`frozen=True` covers the very object the function returns, in the process
+that called it:
+
+| What the consumer gets | Keyed by |
+|---|---|
+| The returned array or pandas frame | its content, hashed once per process |
+| The returned model, object, list, tuple or dict, passed on whole | the call that produced it |
+| A value taken out of a returned container (`graph, nodes = build()`, `parts["counts"]`) | its content, as if the function were not frozen |
+| A list or dict you build from frozen results (`[load(a), load(b)]`) | its content, as if the function were not frozen |
+| A result a pool worker returned to the parent process | its content: the parent holds a copy |
+
+So pass a returned container on whole, or return one value per frozen
+function, and build a container you pass on inside a frozen function of its
+own. `frozen=` has no effect together with `ttl=`: such a result is keyed by
+its content.
+
+<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @2571147a, cash/decorator/frozen.py:FrozenResults.remember_array @59fe65cc -->
+A frozen numpy array comes back read-only, so a write raises. A frozen pandas
+frame or any other object stays writable, and writing into it breaks the
+promise: the calls after the write can be served results computed for its
+old content. cash checks a frozen result only now and then;
+[`KEY-FROZEN-MUTATED`](warnings.md#key-frozen-mutated) names the producer
+when a check finds a change. Modify a copy (`df = df.copy()`).
 
 In a notebook too: `model = train(data)` in one cell and `score(model, batch)`
 in the next key `model` by the call that made it, as a script does, so the
@@ -817,7 +884,10 @@ together outside any cached function (a `pd.concat` of cached per-file
 results), do that in a cached `frozen=True` function too, so it has a
 producer. The one trade-off: a value keyed by its producer call reruns its
 consumers when you edit the loader's code, even if the loader returns the
-same value; a frame or array, keyed by its content, does not.
+same value; a frame or array, keyed by its content, does not. In a chain of
+frozen functions that pass lists or objects on (`feat(denoise(load(path)))`),
+each result is keyed by the call before it, so an edit to `load` reruns the
+whole chain.
 
 For an object of your own class that holds the big data, a
 [`__cash_key__`](tutorials/feature-guides/custom-hashers.md#cash-key) method
@@ -865,6 +935,18 @@ rows = [1, 2, 3]
 write_report(totals(rows), "report.txt")  # first call: runs totals
 write_report(totals(rows), "report.txt")  # cache hit; written again
 ```
+
+<!-- claim: cash/analysis/purity_visitor.py:PurityVisitor._works_on_its_own_object @220ea3bf, cash/analysis/purity_visitor.py:PurityVisitor.visit_Expr @84080202 -->
+**Fitting a model.** A model the body builds and fits is local to the call,
+so `m = LinearRegression(); m.fit(X, y); return m` and
+`return LinearRegression().fit(X, y)` both cache with no warning and need
+no `assume_safe`.
+When the model comes from a helper or a factory such as `make_pipeline(...)`,
+cash cannot tell that `fit` changes only that new object, and reports the
+discarded return of `p.fit(X, y)` as
+[`IMPURE-SIDE-EFFECTS`](warnings.md#impure-side-effects). Chain the fit
+instead, as in `return make_pipeline(...).fit(X, y)`, or put
+`# @cash:assume-safe` on the fit line.
 
 Logging calls are not side effects for this purpose. A special method or a
 property of an object of your class that the body reads by a global name
@@ -1034,7 +1116,7 @@ for example in a test.
 
 ## Common questions
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3514afa3, cash/decorator/arg_hashing.py:ArgHasher.arg_hash @ed3fc6d0 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3514afa3, cash/decorator/arg_hashing.py:ArgHasher.arg_hash @e8b7df26 -->
 **Do new command-line flags make every cached function miss?** No. Only a
 function that reads `sys.argv` or calls `parse_args()` itself, or through a
 helper, is keyed by the command line. One that gets the parsed values as
@@ -1059,6 +1141,29 @@ were not frozen.
 or by the call that made it?** By its content, read in full on every call,
 unless the function that returned it is `frozen=True`: then by that call,
 in a script and through a notebook variable alike.
+
+**A miss says `new arguments`, but I made this call before.** The reason
+names what differs from the nearest earlier call cash knows of. An argument
+that another cached function returned differs once that function reruns
+after an edit: its result is a new value, or, from a `frozen=True` function,
+a new call. Look one step up: the function that made the argument says
+`code or state changed`.
+
+<!-- claim: cash/code_digest.py:callable_identity @38daa9e0 -->
+**Can I cache code that calls numba?** Yes. A function compiled with
+`@njit` or `@jit` is keyed like any helper, by the Python source it compiles
+and its compile options (`fastmath`, `parallel`, ...), so editing a kernel
+reruns the cached functions that call it. Put `@cash.cache` on a plain
+Python function that calls the kernels, or on top of `@njit` itself.
+`@njit(cache=True)` is fine: numba's own cache files are not reported as
+side effects. A miss's run time, and so the time a hit saves, includes any
+compiling the call did.
+
+<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @c3389dba -->
+**Can I use cached functions in a process pool?** Yes: map the cached
+function itself, or a plain function that calls cached ones. Workers share
+the cache folder with the parent. See
+[Threads and processes](tutorials/feature-guides/thread-safety.md#across-processes-pool-processpoolexecutor-joblib).
 
 ## Known limitations
 
@@ -1091,6 +1196,8 @@ with its fix:
   shared caches, libraries.
 - [Testing your code](tutorials/feature-guides/testing-your-code.md): keep the
   cache from passing tests for you.
+- [Threads and processes](tutorials/feature-guides/thread-safety.md): thread
+  pools, process pools, joblib and locking.
 - [File dependencies](tutorials/feature-guides/custom-file-sources.md): which
   file reads are tracked, and how to name the others.
 - [Dynamic dependencies](tutorials/feature-guides/dynamic-dependencies.md): a
