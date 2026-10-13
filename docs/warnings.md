@@ -446,7 +446,7 @@ avoid a paid API call or to hold a result steady.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/backends/value_policy.py:worth_its_bytes, cash/backends/store_notices.py:StoreNotices.not_worth_bytes @bac7fc82 -->
+<!-- claim: cash/backends/value_policy.py:worth_its_bytes, cash/backends/store_notices.py:StoreNotices.not_worth_bytes @04581c7b -->
 **What happened.** A value over 8 MiB was cheap enough to rebuild that storing
 it would cost more than 128 MiB of disk per second of compute saved, so it was
 not written to disk. The message names the size and compute time. A cached
@@ -457,8 +457,12 @@ call's result faces the same rule unless a statement stores a reference to it
 you would notice. The rule keeps big, cheap values from filling the disk.
 
 **What to do.** Usually nothing. To store it anyway, put `# @cash:persist` on
-the statement ([Cost model](cost-model.md)). Better still, store something
-smaller: the aggregate or the columns you use.
+the statement ([Cost model](cost-model.md)), or `@cash.cache` on the function
+that computes it. Better still, store something smaller: the aggregate or the
+columns you use. When the statement calls a `@cash.cache` function
+(`b = load(p) * 2`), the message names it instead of advising the decorator:
+that function's own entry is stored as usual, and what was refused is the
+value the statement builds from its result.
 
 **When it is safe to ignore.** Usually. Act on it when the message names a
 recompute time you can feel on every restart.

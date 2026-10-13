@@ -185,6 +185,41 @@ class TestThroughABackend:
         ours = [str(w.message) for w in caught if "CACHE-NOT-WORTH-BYTES" in str(w.message)]
         assert len(ours) == 1 and "`__main__.expand(...)`" in ours[0] and "call:" not in ours[0], ours
 
+    def _refusals(self, tmp_path, *entries, hold=False):
+        import warnings
+
+        b = self._tiered(tmp_path)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            if hold:
+                b.hold_notices()
+            for i, (code, decorated) in enumerate(entries):
+                extra = {"decorated_calls": decorated} if decorated else {}
+                self._set(b, f"stmt:d{i}", 200 * MIB, 1.2, code=code, **extra)
+            if hold:
+                b.release_notices()
+        b.shutdown()
+        return [str(w.message) for w in caught if "CACHE-NOT-WORTH-BYTES" in str(w.message)]
+
+    def test_a_statement_with_no_decorated_call_is_told_to_decorate(self, tmp_path):
+        [text] = self._refusals(tmp_path, ("x = build(orders)", None))
+        assert "`@cash.cache` on the function that computes it" in text, text
+
+    def test_a_statement_calling_a_decorated_function_is_not_told_to_decorate_it(self, tmp_path):
+        """p17, p27: ``df = crlib.build_features(...)`` with a ``@cash.cache``
+        ``build_features`` was told "or `@cash.cache` on the function", read
+        as "your decorator is not working". The statement's own value was
+        refused; the decorated call keeps its entry."""
+        [text] = self._refusals(tmp_path, ("b = lib.make(n) * 2", ["lib.make"]))
+        assert "`@cash.cache` on the function" not in text, text
+        assert "`make` is already `@cash.cache`d and keeps its own entry" in text, text
+        assert "`@cash:persist` on the statement" in text, text
+
+    def test_a_held_notice_gives_the_advice_that_fits_each_kind(self, tmp_path):
+        [text] = self._refusals(tmp_path, ("b = lib.make(n) * 2", ["lib.make"]), ("c = build(orders)", None), hold=True)
+        assert "`make` is already `@cash.cache`d" in text, text
+        assert "`@cash.cache` on an undecorated function that computes the value" in text, text
+
     def test_the_refusal_says_so(self, tmp_path):
         """The complaint was silence, not size."""
         b = self._tiered(tmp_path)
