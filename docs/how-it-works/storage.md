@@ -8,7 +8,7 @@ and a cache folder on disk, which survives a restart.
 
 ## Where the cache folder is
 
-<!-- claim: cash/_location.py:project_anchor @db681147, cash/_location.py:installed_entry_point_cache_dir @76af1800, cash/config/schema.py:CashConfig.cache_dir == ".cash" -->
+<!-- claim: cash/_location.py:_own_project_anchor @38fe0ec3, cash/_location.py:_own_installed_entry_point_cache_dir @7a17793c, cash/config/schema.py:CashConfig.cache_dir == ".cash" -->
 Unless you set it, the folder is called `.cash`, and where it goes depends on
 what is running:
 
@@ -28,6 +28,8 @@ what is running:
       `$XDG_CACHE_HOME`), `~/Library/Caches/cash/<tool>` on macOS,
       `%LOCALAPPDATA%\cash\<tool>` on Windows.
     - **A REPL or `python -c`**: the current directory.
+    - **A pool worker** (`multiprocessing`, `ProcessPoolExecutor`, joblib):
+      the folder of the process that started it.
 
 === "Notebook"
 
