@@ -75,12 +75,15 @@ def _record(sinks: tuple[WrittenPaths, ...], path: object, appends: bool = False
             sink.appended.add(resolved)
 
 
-#: Modules that open a file for the code that calls them (``gzip.open``,
-#: ``codecs.open``, the ``open`` IPython puts in a kernel's builtins): whose
-#: append it is, is their caller's. Cash's own frames too. Not ``pathlib``:
-#: ``LOG.open('a')`` in a helper stays left to the static check (an open
-#: question: counted, it would cost every such logging helper its cache).
-_PASS_THROUGH_OPENERS = frozenset({"io", "_pyio", "codecs", "gzip", "bz2", "lzma", "IPython.core.interactiveshell"})
+#: Modules that open a file for the code that calls them (``Path.open``,
+#: ``gzip.open``, ``codecs.open``, the ``open`` IPython puts in a kernel's
+#: builtins): whose append it is, is their caller's. Cash's own frames too.
+#: ``LOG.open('a')`` in a helper is the same append as ``open(LOG, 'a')``,
+#: which the static check counts: plain Python writes the line on every run.
+_PASS_THROUGH_OPENERS = frozenset(
+    {"pathlib", "pathlib._local", "pathlib._abc", "io", "_pyio", "codecs", "gzip", "bz2", "lzma"}
+    | {"IPython.core.interactiveshell"}
+)
 
 
 def _passes_through(frame) -> bool:

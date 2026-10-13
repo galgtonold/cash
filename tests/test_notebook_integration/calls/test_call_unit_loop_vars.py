@@ -30,14 +30,14 @@ _SLEEP = 0.15
 
 def _defs(log):
     return (
-        "import time, pathlib\n"
+        "import os, time, pathlib\n"
         f"LOG = pathlib.Path(r'{log}')\n"
         "counter = {'n': 0}\n"
         "conn = 'db-connection'\n"
         "def fetch_next(conn):\n"
         "    counter['n'] += 1\n"
-        "    with LOG.open('a') as fh:\n"
-        "        fh.write('x\\n')\n"
+        "    fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        "    os.write(fd, ('x\\n').encode()); os.close(fd)\n"
         f"    time.sleep({_SLEEP})\n"
         "    return counter['n']\n"
     )
@@ -120,14 +120,14 @@ def _long_tuple(fill):
 
 def _sampling_defs(log):
     return (
-        "import time, pathlib\n"
+        "import os, time, pathlib\n"
         f"LOG = pathlib.Path(r'{log}')\n"
         "counter = {'n': 0}\n"
         "conn = 'db-connection'\n"
         "def fetch_next(conn):\n"
         "    counter['n'] += 1\n"
-        "    with LOG.open('a') as fh:\n"
-        "        fh.write('x\\n')\n"
+        "    fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        "    os.write(fd, ('x\\n').encode()); os.close(fd)\n"
         f"    time.sleep({_SLEEP})\n"
         "    return counter['n']\n"
         f"A = {_long_tuple(0)!r}\n"
@@ -204,14 +204,14 @@ def test_sampled_equal_loop_var_values_match_the_no_cash_oracle(nb_runner, tmp_p
 
 def _reused_name_defs(log):
     return (
-        "import time, pathlib\n"
+        "import os, time, pathlib\n"
         f"LOG = pathlib.Path(r'{log}')\n"
         "counter = {'n': 0}\n"
         "conn = 'db-connection'\n"
         "def fetch_next(conn):\n"
         "    counter['n'] += 1\n"
-        "    with LOG.open('a') as fh:\n"
-        "        fh.write('x\\n')\n"
+        "    fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        "    os.write(fd, ('x\\n').encode()); os.close(fd)\n"
         f"    time.sleep({_SLEEP})\n"
         "    return counter['n']\n"
     )
@@ -341,15 +341,15 @@ def test_sibling_loops_reusing_the_target_name_match_the_no_cash_oracle(nb_runne
 
 def _sampled_lineage_defs(log):
     return (
-        "import time, pathlib\n"
+        "import os, time, pathlib\n"
         "import pandas as pd\n"
         f"LOG = pathlib.Path(r'{log}')\n"
         "counter = {'n': 0}\n"
         "conn = 'db-connection'\n"
         "def fetch_next(conn):\n"
         "    counter['n'] += 1\n"
-        "    with LOG.open('a') as fh:\n"
-        "        fh.write('x\\n')\n"
+        "    fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        "    os.write(fd, ('x\\n').encode()); os.close(fd)\n"
         f"    time.sleep({_SLEEP})\n"
         "    return counter['n']\n"
         "df_a = pd.DataFrame({'x': range(300)})\n"

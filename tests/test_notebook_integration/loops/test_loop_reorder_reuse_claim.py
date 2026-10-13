@@ -49,12 +49,13 @@ _SLEEP = 0.05
 
 def _helpers(log):
     return f"""
-import time, pathlib
-LOG = pathlib.Path(r"{log}")
+import os, time
 
 def compute(x):
-    with LOG.open("a") as fh:
-        fh.write(f"{{x}}\\n")
+    # Counted with os.open, which cash does not see: LOG.open("a") is a
+    # write a hit would skip, so it makes every call run.
+    fd = os.open(r"{log}", os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+    os.write(fd, f"{{x}}\\n".encode()); os.close(fd)
     time.sleep({_SLEEP})
     return x + 1
 """
