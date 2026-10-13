@@ -229,11 +229,55 @@ def same_file_key(path: str) -> str:
         return path
 
 
+def relative_twins(deps: dict[str, Any] | None) -> dict[str, str]:
+    """``{relative path: absolute path}`` for each read recorded twice.
+
+    A read by a relative path records the path as written beside the file it
+    resolved to (``FileAccessTracker._unresolved_spelling``), so a chdir is
+    seen. Both name one file, and a listing showed it twice
+    (``reads: /abs/prices.csv, prices.csv``) and a miss reason named one file
+    by either spelling, whichever came first. Paired without the cwd, which
+    in ``cash inspect`` is not the call's: the absolute path ends with the
+    relative one, and the two records agree on the file (device and inode,
+    else content hash) where both say.
+    """
+    if not deps:
+        return {}
+    absolute: dict[str, list[str]] = {}
+    for path in deps:
+        if os.path.isabs(path):
+            absolute.setdefault(os.path.basename(path), []).append(path)
+    twins: dict[str, str] = {}
+    for path, rec in deps.items():
+        if os.path.isabs(path) or not isinstance(rec, dict):
+            continue
+        tail = os.path.normcase(os.path.normpath(path))
+        for other in absolute.get(os.path.basename(path), ()):
+            if not os.path.normcase(other).endswith(os.sep + tail):
+                continue
+            twin = deps[other]
+            if not isinstance(twin, dict) or not _same_record(rec, twin):
+                continue
+            twins[path] = other
+            break
+    return twins
+
+
+def _same_record(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    for fields in (("dev", "ino"), ("hash",)):
+        if all(a.get(f) is not None and b.get(f) is not None for f in fields):
+            return all(a[f] == b[f] for f in fields)
+    return True
+
+
 def describe_file_deps(deps: dict[str, Any] | None) -> dict[str, str]:
     """``{path: fingerprint}`` for the files an entry recorded, readably."""
     out: dict[str, str] = {}
     seen: set[str] = set()
+    twins = relative_twins(deps)
     for path, rec in (deps or {}).items():
+        if path in twins:
+            continue  # listed under its absolute path
         same = same_file_key(path)
         if same in seen:
             continue
@@ -394,14 +438,22 @@ def stale_file_deps(metadata: CacheMetadata) -> dict[str, str]:
 
     stale: dict[str, str] = {}
     seen: set[str] = set()
-    for path, recorded in (metadata.auto_file_deps or {}).items():
+    #: the recorded paths found stale
+    moved: set[str] = set()
+    deps = metadata.auto_file_deps or {}
+    twins = relative_twins(deps)
+    # The absolute spelling first, so a file read by a relative path is named
+    # the same way as every other (its relative twin is then skipped as the
+    # same file); the twin still speaks when only it moved (a chdir).
+    for path, recorded in sorted(deps.items(), key=lambda item: item[0] in twins):
         here = dep_path_for_this_process(path, recorded)
         same = same_file_key(here)
-        if same in seen:
+        if same in seen or twins.get(path) in moved:
             continue
         resolved, is_fresh, why = dep_is_fresh(path, recorded)
         if not is_fresh:
             seen.add(same)
+            moved.add(path)
             stale[resolved or here] = STALE_REASON_TEXT.get(why or "", "changed")
     return stale
 
