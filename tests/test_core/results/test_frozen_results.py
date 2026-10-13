@@ -184,10 +184,11 @@ def test_a_frozen_numpy_result_is_hashed_once(disk_cash, monkeypatch):
     def total(a):
         return float(a.sum())
 
-    a = grid(1000)
     monkeypatch.setattr(content_hashers, "hash_numpy", counting)
+    a = grid(1000)
     for _ in range(5):
         total(a)
+    # Once, when the result is stored; every consumer call reuses that hash.
     assert len(calls) == 1
 
 
