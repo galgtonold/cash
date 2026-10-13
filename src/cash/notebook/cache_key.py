@@ -406,12 +406,16 @@ def called_function_dependencies(
     attribute_only: set[str] = set()
     used_virtual = False
     codes: dict[str, list[types.CodeType]] = {}
+    #: ids of the code reached only through what a name holds, not named.
+    held_only: set[int] = set()
 
     def codes_of(name: str) -> list[types.CodeType]:
         nonlocal used_virtual
         if name in codes:
             return codes[name]
         found = _held_codes(name, user_ns, variable_lineage, unfollowed)
+        own = getattr(user_ns.get(name), "__code__", None)
+        held_only.update(id(code) for code in _nested_codes_of(c for c in found if c is not own))
         if not found and virtual is not None and name not in user_ns:
             code_obj = virtual.code_for(name)
             used_virtual = used_virtual or code_obj is not None
@@ -434,8 +438,14 @@ def called_function_dependencies(
         # inner function reads its globals at call time as the body does.
         for code_obj in _nested_codes_of(codes_of(name)):
             attrs = _attribute_only_names(code_obj)
+            held = id(code_obj) in held_only
             for ref in code_obj.co_names:
                 if ref in seen or ref in ("get_ipython", "__builtins__"):
+                    continue
+                # Held code adds only the globals it reads: an attribute
+                # name keys a constant, and the simulation, which cannot
+                # see what a name not run yet holds, keys none.
+                if held and ref in attrs:
                     continue
                 # Builtins are constant. Modules carry their own key component,
                 # which is decided below: an attribute name is kept whatever it names.
