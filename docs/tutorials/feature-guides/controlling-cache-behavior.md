@@ -177,8 +177,9 @@ know:
   module of your project, is
   detected: the statement runs every time and the
   badge says `Calls save(), which writes files`. An append through
-  `open(path, "a")` counts too. One through `Path(path).open("a")` is not
-  seen; mark such a helper `@stateful` if the append must happen on every run.
+  `open(path, "a")` counts too, and so does one through `Path(path).open("a")`,
+  `io.open`, `codecs.open` or `gzip.open`; the badge then says
+  `Wrote <path> as it ran`.
   If a write does not matter, mark the helper `@pure` and it caches again.
   Apart from this, `@pure` does not change what a notebook statement does.
 
