@@ -280,6 +280,7 @@ def call_cache_key(
     global_digests: Mapping[str, str] | None = None,
     by_content: bool = False,
     name_digests: Mapping[str, str] | None = None,
+    code_names: frozenset[str] = frozenset(),
 ) -> str | None:
     """The cache key for one intercepted call, or ``None`` to refuse caching it.
 
@@ -317,17 +318,26 @@ def call_cache_key(
     key, so fixing some of a frame's rows re-runs only the calls whose inputs
     changed. Only the caller can say that is safe: :class:`CallUnit` does
     when everything the call reads is plain data or code.
+
+    *code_names* are the names read by the arguments whose value is a
+    function (``fu.fit_ets`` in ``backtest(y, fu.fit_ets, cuts)``): under
+    content keying they stay in the base, as the callee's names do, and the
+    call keeps its spelled source, so a module read is narrowed to the
+    functions the call names (``fit_ets`` among them) and an edit to one
+    moves the key. A function's pickled bytes are its name, not its code.
     """
     free_names = set(site.free_names)
     source, occurrence = site.source, site.occurrence_index
     if by_content:
-        free_names -= site.content_names
-        free_names -= set(name_digests or ())
+        free_names -= site.content_names - code_names
+        free_names -= set(name_digests or ()) - code_names
         # The call's shape, not its spelling: the computed arguments' values
         # are in the key. And no occurrence: the same call on the same values
         # twice in a cell is the same result, which is what content keying
         # already asserts across statements.
-        if getattr(site, "content_source", ""):
+        if code_names:
+            occurrence = 0
+        elif getattr(site, "content_source", ""):
             source, occurrence = site.content_source, 0
     base = compute_cache_key(
         source,
@@ -530,8 +540,48 @@ def global_names_reached(fn, seen: set[int] | None = None) -> set[str]:
     return names
 
 
+def _user_global_names_reached(fn) -> set[str]:
+    """`global_names_reached` through the user's own code only: a library's
+    function reads its library's globals, never a notebook's loop variable,
+    and walking a library's classes (``SARIMAX``'s methods, and theirs)
+    cost seconds per call."""
+    names: set[str] = set()
+    seen: set[int] = set()
+    pending = [fn]
+    while pending:
+        current = pending.pop()
+        code = getattr(current, "__code__", None)
+        if code is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        filename = code.co_filename or ""
+        if filename and not filename.startswith("<") and not is_user_path(filename):
+            continue
+        own = _code_names(code)
+        names |= own
+        namespace = getattr(current, "__globals__", None) or {}
+        for name in own:
+            value = namespace.get(name)
+            if isinstance(value, _types.FunctionType):
+                pending.append(value)
+            elif isinstance(value, type) and id(value) not in seen:
+                # A class it builds: its methods are followed as far as they
+                # are the user's (the file test above).
+                seen.add(id(value))
+                pending.extend(
+                    member
+                    for member in (getattr(m, "__func__", m) for m in vars(value).values())
+                    if isinstance(member, _types.FunctionType)
+                )
+    return names
+
+
 def _loop_vars_the_call_can_read(
-    fn, site: CallSite, loop_vars: Mapping[str, object], name_digests: Mapping[str, str] | None
+    fn,
+    site: CallSite,
+    loop_vars: Mapping[str, object],
+    name_digests: Mapping[str, str] | None,
+    handed: list | tuple = (),
 ) -> dict[str, object]:
     """The enclosing loops' variables a content-keyed call can still read
     without them being in its key.
@@ -548,7 +598,8 @@ def _loop_vars_the_call_can_read(
     by value (an argument too big to hash per call). Only a variable the
     arguments carry is dropped: one the call does not mention stays, since
     what the callee can reach is followed through functions and classes but
-    not every path (a dispatch table, an object's attribute).
+    not every path (a dispatch table, an object's attribute). The functions
+    *handed* to the call as arguments run too: what they read counts.
     """
     hashed = set(name_digests or ()) | set(site.content_names)
     reached = None
@@ -558,24 +609,71 @@ def _loop_vars_the_call_can_read(
         if bare in hashed:
             if reached is None:
                 reached = global_names_reached(fn)
+                for other in handed:
+                    reached |= _user_global_names_reached(other)
             if bare not in reached:
                 continue
         kept[key] = value
     return kept
 
 
-def _keys_by_content(fn, site: CallSite, args: tuple, kwargs: dict, loop_vars: Mapping[str, object]) -> bool:
+def _is_code_arg(value, budget: list[int]) -> bool:
+    """True when *value*, an argument, is a function whose own state is plain
+    (`_plain_or_code`): a fit function handed to a backtest. Only a plain
+    function, a builtin or a ufunc; a class, a module or a bound method is
+    not taken for code here."""
+    if isinstance(value, _types.FunctionType):
+        return _plain_or_code(value, set(), budget)
+    if isinstance(value, _types.BuiltinFunctionType):
+        return True
+    np = sys.modules.get("numpy")
+    return np is not None and isinstance(value, np.ufunc)
+
+
+def code_arg_positions(site: CallSite, args: tuple, kwargs: dict) -> tuple[int, ...] | None:
+    """Positions of the arguments that are functions (see `_is_code_arg`),
+    or None when one is not a plain reference to a name
+    (``CallSite.arg_names``): its code could not be keyed by name."""
+    combined = (*args, *kwargs.values())
+    np = sys.modules.get("numpy")
+    positions = tuple(
+        pos
+        for pos, value in enumerate(combined)
+        if isinstance(value, (_types.FunctionType, _types.BuiltinFunctionType))
+        or (np is not None and isinstance(value, np.ufunc))
+    )
+    if not positions:
+        return ()
+    names = getattr(site, "arg_names", ())
+    if len(names) != len(combined) or any(names[pos] is None for pos in positions):
+        return None
+    return positions
+
+
+def _keys_by_content(
+    fn,
+    site: CallSite,
+    args: tuple,
+    kwargs: dict,
+    loop_vars: Mapping[str, object],
+    code_positions: tuple[int, ...] = (),
+) -> bool:
     """Whether the call may be keyed on what it receives (see
     :func:`call_cache_key`'s *by_content*).
 
     Only when nothing it reads can change while its key stays put: every
     argument, every loop variable around it, and everything the callee
     reaches is plain data or code, and the arguments to hash in full are
-    small enough to be worth it.
+    small enough to be worth it. An argument at one of *code_positions* may
+    be a function (`_is_code_arg`): the key holds its code through its names
+    (*code_names* of `call_cache_key`).
     """
     combined = (*args, *kwargs.values())
     budget = [_PLAIN_BUDGET]
-    if not all(_is_plain_data(value, budget) for value in combined):
+    if not all(
+        _is_code_arg(value, budget) if pos in code_positions else _is_plain_data(value, budget)
+        for pos, value in enumerate(combined)
+    ):
         return False
     if not all(_is_plain_data(value, budget) for name, value in loop_vars.items() if not _is_dunder_loop_var(name)):
         return False
@@ -678,13 +776,25 @@ class CallKeys:
             return None
         try:
             loop_vars = self._current_loop_vars()
-            by_content = fn is not None and _keys_by_content(fn, site, args, kwargs, loop_vars)
+            code_positions = code_arg_positions(site, args, kwargs)
+            by_content = (
+                fn is not None
+                and code_positions is not None
+                and _keys_by_content(fn, site, args, kwargs, loop_vars, code_positions)
+            )
+            code_positions = code_positions or ()
             if getattr(site, "in_loop_unit", False) and not by_content:
                 return None
             arg_digests = self._arg_digests(site, args, kwargs)
-            name_digests = self._name_digests(site, args, kwargs) if by_content else None
+            code_names: frozenset[str] = frozenset()
+            if by_content and code_positions:
+                code_names = frozenset().union(*(site.arg_names[pos] for pos in code_positions))
+            name_digests = self._name_digests(site, args, kwargs, code_names) if by_content else None
             if by_content and loop_vars:
-                loop_vars = _loop_vars_the_call_can_read(fn, site, loop_vars, name_digests)
+                combined = (*args, *kwargs.values())
+                loop_vars = _loop_vars_the_call_can_read(
+                    fn, site, loop_vars, name_digests, [combined[pos] for pos in code_positions]
+                )
             ctx = self._ctx_provider()
             key = call_cache_key(
                 site,
@@ -695,6 +805,7 @@ class CallKeys:
                 global_digests=global_digests,
                 by_content=by_content,
                 name_digests=name_digests,
+                code_names=code_names,
             )
             self._note_key_parts(site, key, ctx, arg_digests, global_digests)
             return key
@@ -781,13 +892,18 @@ class CallKeys:
         return digests if isinstance(digests, Mapping) else {}
 
     @staticmethod
-    def _name_digests(site: CallSite, args: tuple, kwargs: dict) -> dict[str, str]:
+    def _name_digests(
+        site: CallSite, args: tuple, kwargs: dict, code_names: frozenset[str] = frozenset()
+    ) -> dict[str, str]:
         """Full hashes of the small arguments passed as a bare name (see
         :func:`call_cache_key`'s *name_digests*). Past
-        ``_NAME_CONTENT_MAX_BYTES`` a value keeps its lineage instead."""
+        ``_NAME_CONTENT_MAX_BYTES`` a value keeps its lineage instead, and a
+        function (one of *code_names*) is keyed by its name's code."""
         combined = (*args, *kwargs.values())
         digests = {}
         for name, pos in getattr(site, "name_arg_positions", ()):
+            if name in code_names:
+                continue
             if pos < len(combined) and _nbytes(combined[pos]) <= _NAME_CONTENT_MAX_BYTES:
                 digests[name] = compute_hash(combined[pos])
         return digests

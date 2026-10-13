@@ -179,6 +179,14 @@ class CallSite:
     #:Under unpacking, the callee alone: the key then
     #: holds every value received, with its keyword.
     content_source: str = ""
+    #: Per argument, in ``(*args, *kwargs.values())`` order, the name it is a
+    #: plain reference to (``fit``, ``fu.fit_ets``), or None for any other
+    #: expression; empty under unpacking. An argument whose value is a
+    #: function (``backtest(y, fu.fit_ets, cuts)``) is code, not data: under
+    #: content keying its name stays in the key, as the callee's does, so an
+    #: edit to the function moves the key (see ``call_key.CallKeys.key``). A
+    #: function reached any other way leaves the call keyed as before.
+    arg_names: tuple[frozenset[str] | None, ...] = ()
     #: Inside a loop cached as one unit (see ``_eligible_calls_in_loop``): no
     #: name read there has a lineage the key can trust, so the call is cached
     #: only when keyed on what it receives, and otherwise runs plain.
@@ -410,6 +418,7 @@ def wrap_eligible_calls(
                     content_names=_content_names(call, local),
                     name_arg_positions=_name_arg_positions(call, local),
                     content_source=_content_source(call, local),
+                    arg_names=_arg_names(call, local),
                     in_loop_unit=in_loop_unit,
                 )
             )
@@ -489,6 +498,25 @@ def _content_names(call: ast.Call, local: frozenset[str]) -> frozenset[str]:
         else:
             inside |= names_read(value)
     return frozenset(inside - elsewhere - local)
+
+
+def _arg_names(call: ast.Call, local: frozenset[str]) -> tuple[frozenset[str] | None, ...]:
+    """The name each argument of *call* refers to, for an argument that is a
+    plain reference to one (``fit``, ``fu.fit_ets``), else None (see
+    ``CallSite.arg_names``)."""
+    if _call_has_unpacking(call):
+        return ()
+    return tuple(_referenced_name(v, local) for v in [*call.args, *(kw.value for kw in call.keywords)])
+
+
+def _referenced_name(node: ast.expr, local: frozenset[str]) -> frozenset[str] | None:
+    """``{name}`` when *node* is ``name`` or ``name.attr.attr`` and *name* is
+    not bound by an enclosing comprehension or lambda, else None."""
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    if isinstance(node, ast.Name) and node.id not in local:
+        return frozenset({node.id})
+    return None
 
 
 def _content_source(call: ast.Call, local: frozenset[str]) -> str:
