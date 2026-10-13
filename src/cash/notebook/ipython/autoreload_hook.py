@@ -17,8 +17,9 @@ from __future__ import annotations
 import contextlib
 import logging
 import sys
+import tokenize
 import types
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from typing import Any
 
 from ...tracking.function_tracker import is_local_module
@@ -28,24 +29,97 @@ __all__ = ["run_autoreload_now"]
 logger = logging.getLogger(__name__)
 
 
-def run_autoreload_now(shell: Any) -> set[str]:
+def run_autoreload_now(shell: Any, reloaded: Iterable[str] = ()) -> set[str]:
     """Run ``%autoreload``'s check now, when the extension is loaded and on,
     and return the names of the modules it reloaded. Its later
-    ``pre_run_cell`` check then finds nothing left to do."""
+    ``pre_run_cell`` check then finds nothing left to do.
+
+    *reloaded* are the modules cash has just reloaded itself: the extension
+    takes them as current and leaves them alone. IPython's deduplicating
+    reload (``deduperreload``, ``%autoreload 2``'s default) is off for the
+    check, so a module it reloads is reloaded whole, as a fresh import loads
+    it. That reload compiles each changed function from ``ast.unparse`` of
+    its definition alone: the code says it starts on line 1 of the module's
+    file, so ``inspect.getsource`` read the module's docstring for it, and a
+    function the edit added got a copy of the module's namespace for its
+    globals. Keys built from that code differed from a fresh process's, so
+    nothing computed after an edit was reused after a restart, and a failed
+    call took its arguments for changed (the helper's source read as none).
+    """
     registry = getattr(getattr(shell, "magics_manager", None), "registry", None)
     magics = registry.get("AutoreloadMagics") if isinstance(registry, dict) else None
     reloader = getattr(magics, "_reloader", None)
     mtimes = getattr(reloader, "modules_mtimes", None)
     if not getattr(reloader, "enabled", False) or not isinstance(mtimes, dict):
         return set()
+    current = set(reloaded)
+    for name in current:
+        _take_as_current(reloader, name)
     before = dict(mtimes)
     try:
-        with _only_local_modules(reloader):
+        with _only_local_modules(reloader), _whole_module_reloads(reloader):
             reloader.check()
     except Exception:
         logger.debug("autoreload's check failed", exc_info=True)
     # A module seen for the first time is only recorded, not reloaded.
-    return {name for name, mtime in mtimes.items() if name in before and before[name] != mtime}
+    found = {name for name, mtime in mtimes.items() if name in before and before[name] != mtime}
+    _note_sources(reloader, found | current)
+    return found
+
+
+def _take_as_current(reloader: Any, name: str) -> None:
+    """Record module *name*'s file as loaded, as the extension does after it
+    reloads one itself: cash already reloaded it from that file."""
+    module = sys.modules.get(name)
+    try:
+        filename, mtime = reloader.filename_and_mtime(module)
+    except Exception:  # noqa: BLE001 - an extension without it: its check decides
+        return
+    if filename is None:
+        return
+    reloader.modules_mtimes[name] = mtime
+    failed = getattr(reloader, "failed", None)
+    if isinstance(failed, dict):
+        failed.pop(filename, None)
+
+
+@contextlib.contextmanager
+def _whole_module_reloads(reloader: Any) -> Iterator[None]:
+    """Turn the deduplicating reload off for the check (see
+    `run_autoreload_now`), so the extension falls back to its whole-module
+    reload. An extension without one is left as it is."""
+    deduper = getattr(reloader, "deduper_reloader", None)
+    if deduper is None or not hasattr(type(deduper), "enabled"):
+        yield
+        return
+    was = deduper.enabled
+    try:
+        deduper.enabled = False
+    except Exception:  # noqa: BLE001 - not switchable: its check runs as it is
+        yield
+        return
+    try:
+        yield
+    finally:
+        with contextlib.suppress(Exception):
+            deduper.enabled = was
+
+
+def _note_sources(reloader: Any, names: set[str]) -> None:
+    """Give the deduplicating reload the source each of *names* was reloaded
+    from, so a later edit is compared with that one, not the one before."""
+    sources = getattr(getattr(reloader, "deduper_reloader", None), "source_by_modname", None)
+    if not isinstance(sources, dict):
+        return
+    for name in names:
+        filename = getattr(sys.modules.get(name), "__file__", None)
+        if name not in sources or not filename or not filename.endswith(".py"):
+            continue
+        try:
+            with tokenize.open(filename) as handle:
+                sources[name] = handle.read()
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            sources[name] = ""
 
 
 @contextlib.contextmanager
