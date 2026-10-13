@@ -196,7 +196,7 @@ is the folder this run actually used. The summary also lists results that were
 computed but not stored. It prints on any normal exit or uncaught exception,
 not when the process is killed. `summary=True` in code or config does the same.
 
-<!-- claim: cash/decorator/explain.py:describe_state_change @7b3bcda1, cash/decorator/explain.py:MissHistory.absent_entry_reason @27204896 -->
+<!-- claim: cash/decorator/explain.py:describe_state_change @58a52664, cash/decorator/explain.py:MissHistory.absent_entry_reason @27204896 -->
 **One line per call.** `CASH_DEBUG=1` logs every call to stderr, with cash's
 other debug records. `CASH_VERBOSE=1` gives only the call lines:
 
@@ -309,7 +309,8 @@ changed. The second list is what cash does not see, and what to do about it.
       ([`KEY-UNTRACKABLE-DEP`](warnings.md#key-untrackable-dep)).
     - A file read by a reader cash does not know: use `file_depends_on=`.
     - The decorator's own parameters (`ttl`, `cache_if`, `strict`, ...):
-      changing them keeps entries.
+      changing them keeps entries. `ignore=` and `key=` are the exception:
+      they decide what the key reads, so changing them recomputes.
 
 </div>
 
@@ -487,8 +488,10 @@ Checks and rules that hold for all of them:
 - An `ignore=` name that is not a parameter of the function raises
   `ValueError`, and `key=` together with an ignored parameter raises
   `TypeError`, also when the function is decorated.
-- Changing a parameter keeps the entries already stored; adding, removing or
-  changing a declared dependency recomputes.
+- Changing a parameter keeps the entries already stored, except `ignore=`
+  and `key=` (and a `cash.Ignore` annotation): they decide what the key
+  reads, so adding, removing or changing one recomputes, as does adding,
+  removing or changing a declared dependency.
 - Locking is not a decorator parameter: it is `Cash(use_locking=True)`, see
   [Threads and processes](tutorials/feature-guides/thread-safety.md).
 
@@ -602,6 +605,10 @@ A misspelt name raises at once:
 decorator that fills a parameter itself (`f(LOG, *args, **kwargs)`, click's
 `pass_obj`), the call binds to the parameters the caller passes, and the
 filled one is never in the key, ignored or not.
+
+Adding `ignore=` to a function that already has entries starts new ones:
+the old entries were keyed with the parameter in, so each call runs once
+more, and `explain()` says "it now ignores parameter ...".
 
 <!-- claim: cash/decorator/arg_key.py:annotated_ignores @3c698cef -->
 **`cash.Ignore`** says the same on the parameter itself. A type checker sees

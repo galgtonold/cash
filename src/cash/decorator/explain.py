@@ -260,6 +260,40 @@ def describe_file_deps(deps: dict[str, Any] | None) -> dict[str, str]:
     return out
 
 
+#: The ledger labels of how the arguments are keyed (``ArgKey``), as
+#: ``KeyBuilder._fold_key_function`` notes them.
+_IGNORED_LABEL = "ignored parameters "
+_KEY_FN_LABEL = "key= function "
+
+
+def _ignored(label: str) -> str:
+    names = label[len(_IGNORED_LABEL) :]
+    return ("parameters " if "," in names else "parameter ") + names
+
+
+def _argument_key_phrases(gone: list[str], added: list[str]) -> list[str]:
+    """Say a change to ``ignore=`` or ``key=`` as one, and take its labels
+    out of *gone* and *added*: they decide which arguments the key reads,
+    so a change re-keys every call, and "it now uses ignored parameters
+    workers" said neither."""
+    was = next((k for k in gone if k.startswith((_IGNORED_LABEL, _KEY_FN_LABEL))), None)
+    now = next((k for k in added if k.startswith((_IGNORED_LABEL, _KEY_FN_LABEL))), None)
+    for label in (was, now):
+        if label is not None:
+            (gone if label is was else added).remove(label)
+    if was is None and now is None:
+        return []
+    if now is None:
+        what = f"it no longer ignores {_ignored(was)}" if was.startswith(_IGNORED_LABEL) else "it no longer has key="
+    elif now.startswith(_KEY_FN_LABEL):
+        what = f"it now keys its arguments with key={now[len(_KEY_FN_LABEL) :]}"
+    elif was is not None and was.startswith(_IGNORED_LABEL):
+        what = f"the parameters it ignores changed from {was[len(_IGNORED_LABEL) :]} to {now[len(_IGNORED_LABEL) :]}"
+    else:
+        what = f"it now ignores {_ignored(now)}"
+    return [what + ", so the calls stored before the change run again"]
+
+
 def describe_state_change(old: dict[str, str], new: dict[str, str]) -> str | None:
     """What differs between two flattened state ledgers, in words, or None.
 
@@ -287,6 +321,7 @@ def describe_state_change(old: dict[str, str], new: dict[str, str]) -> str | Non
     for name in after:
         if name in before and before[name] != after[name]:
             phrases.append("its own source changed" if name == "source" else f"{name} changed")
+    phrases += _argument_key_phrases(gone, added)
     phrases += [f"it no longer uses {name}" for name in gone]
     phrases += [f"it now uses {name}" for name in added]
     if not phrases:
