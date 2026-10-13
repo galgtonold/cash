@@ -70,6 +70,9 @@ result = daily.rolling(7).mean()   # edit: only this runs again
 - **Inputs are keyed by where they came from**, not by hashing their
   contents, so a `networkx` graph, a `scipy.sparse` matrix or an object of
   your own class is followed like a DataFrame.
+  A frame, array or networkx graph that a changed input rebuilds to the same
+  content keeps its place, so what was built on it is still served
+  ([details](how-it-works/cache-keys-and-lineage.md#the-lineage-chain)).
 - **Loops are cached per iteration**, keyed on the loop variable, so changing one
   item leaves the others cached. `if` and `try` blocks are cached per branch. A
   `while` or `with` block, or a `for` with `break`, `continue` or `else:`, runs
