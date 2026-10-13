@@ -879,6 +879,98 @@ class _CostliestArg:
             self.costliest = (label, seconds, type(value).__name__, producer, False)
 
 
+class FrameDigests:
+    """The pandas copy-on-write memo: ``id(frame) -> (weakref, shallow copy,
+    signature, content hash, exposure mark)``.
+
+    One per process (`FRAME_DIGESTS`), shared by the decorator's argument
+    hash and the notebook's value hash (`cow_frame_digest`): a frame a
+    notebook loop hands to a cached function on every iteration is read
+    once, not once per call and once more per check around it. The digest
+    is `builtin_hash`'s, a function of the content alone, so whoever
+    computed it, it holds while `lookup` finds the frame unchanged.
+    """
+
+    def __init__(self, maxsize: int) -> None:
+        self._entries: LruMemo[int, tuple] = LruMemo(maxsize)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._entries
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+    def lookup(self, obj: Any) -> str | None:
+        """The content hash recorded for *obj*, if *obj* has not changed since."""
+        entries = self._entries
+        entry = entries.get(id(obj))
+        if entry is None:
+            return None
+        wref, held, signature, content_hash, since = entry
+        if frame_borrows_its_data(obj, held, since):
+            entries.pop(id(obj), None)
+            return None
+        try:
+            if wref() is obj and frame_signature(obj) == signature:
+                return content_hash
+        except Exception:  # noqa: BLE001 - a pandas internals change: just re-hash
+            pass
+        entries.pop(id(obj), None)
+        return None
+
+    def store(self, obj: Any, content_hash: str, since: int) -> None:
+        """Remember *obj*'s content hash, and hold a shallow copy of it.
+
+        *since* is the `exposure_mark` taken before the content was hashed:
+        a handle recorded up to it no longer matters once it is gone.
+
+        The shallow copy shares the data and is what makes the signature
+        exact: while cash references the blocks, pandas must copy before any
+        write. Cost: the first in-place write to each block afterwards copies
+        that block, once. The entry, copy included, goes when *obj* is
+        collected, or when the memo drops it to make room.
+
+        Nothing is stored for a frame whose data something outside pandas
+        can write (`frame_borrows_its_data`): a caller could write through
+        its array and drop it before the next call, leaving nothing to see.
+        """
+        try:
+            watch_array_handles()
+            held = obj.copy(deep=False)
+            if frame_borrows_its_data(obj, held, since):
+                return
+            signature = frame_signature(obj)
+            entries = self._entries
+            key = id(obj)
+            wref = weakref.ref(obj, lambda _ref, key=key, entries=entries: entries.pop(key, None))
+        except Exception:  # noqa: BLE001 - the memo is a speedup; hash every time
+            return
+        self._entries[key] = (wref, held, signature, content_hash, since)
+
+
+#: The process's copy-on-write frame memo (`FrameDigests`).
+FRAME_DIGESTS = FrameDigests(FRAMES)
+
+
+def cow_frame_digest(value: Any) -> str | None:
+    """`builtin_hash` of a pandas frame or series under copy-on-write,
+    through `FRAME_DIGESTS`: read once, then checked, not read, while it
+    stays unchanged. None for any other value, and when hashing fails."""
+    if not is_cow_pandas(value):
+        return None
+    digest = FRAME_DIGESTS.lookup(value)
+    if digest is not None:
+        return digest
+    since = exposure_mark()
+    digest = builtin_hash(value)
+    if digest is not None:
+        FRAME_DIGESTS.store(value, digest, since)
+    return digest
+
+
 class ArgHasher:
     """Canonical arguments and their content hashes, with the memos that keep
     re-hashing an unchanged argument cheap."""
@@ -901,9 +993,9 @@ class ArgHasher:
         # input; `hash_payload` validates each read (weakref identity +
         # lineage).
         self._memo: LruMemo[int, tuple] = LruMemo(ARGUMENTS)
-        # id(frame) -> (weakref, shallow copy, signature, content hash): the
-        # pandas copy-on-write memo, see `_frame_memo_store`.
-        self._frame_memo: LruMemo[int, tuple] = LruMemo(FRAMES)
+        # The pandas copy-on-write memo, one per process (`FRAME_DIGESTS`):
+        # the notebook's value hash reads the same frames.
+        self._frame_memo = FRAME_DIGESTS
         #: type -> (callable(value) -> str, source hash), from
         #: ``cash.register_hasher``. The source hash is part of the argument
         #: hash, so editing a hasher's body invalidates what it keyed.
@@ -1143,49 +1235,11 @@ class ArgHasher:
 
     def _frame_memo_lookup(self, obj: Any) -> str | None:
         """The content hash recorded for *obj*, if *obj* has not changed since."""
-        entry = self._frame_memo.get(id(obj))
-        if entry is None:
-            return None
-        wref, held, signature, content_hash, since = entry
-        if frame_borrows_its_data(obj, held, since):
-            self._frame_memo.pop(id(obj), None)
-            return None
-        try:
-            if wref() is obj and frame_signature(obj) == signature:
-                return content_hash
-        except Exception:  # noqa: BLE001 - a pandas internals change: just re-hash
-            pass
-        self._frame_memo.pop(id(obj), None)
-        return None
+        return self._frame_memo.lookup(obj)
 
     def _frame_memo_store(self, obj: Any, content_hash: str, since: int) -> None:
-        """Remember *obj*'s content hash, and hold a shallow copy of it.
-
-        *since* is the `exposure_mark` taken before the content was hashed:
-        a handle recorded up to it no longer matters once it is gone.
-
-        The shallow copy shares the data and is what makes the signature
-        exact: while cash references the blocks, pandas must copy before any
-        write. Cost: the first in-place write to each block afterwards copies
-        that block, once. The entry, copy included, goes when *obj* is
-        collected, or when the memo drops it to make room.
-
-        Nothing is stored for a frame whose data something outside pandas
-        can write (`frame_borrows_its_data`): a caller could write through
-        its array and drop it before the next call, leaving nothing to see.
-        """
-        try:
-            watch_array_handles()
-            held = obj.copy(deep=False)
-            if frame_borrows_its_data(obj, held, since):
-                return
-            signature = frame_signature(obj)
-            memo = self._frame_memo
-            key = id(obj)
-            wref = weakref.ref(obj, lambda _ref, key=key, memo=memo: memo.pop(key, None))
-        except Exception:  # noqa: BLE001 - the memo is a speedup; hash every time
-            return
-        self._frame_memo[key] = (wref, held, signature, content_hash, since)
+        """Remember *obj*'s content hash (`FrameDigests.store`)."""
+        self._frame_memo.store(obj, content_hash, since)
 
     def cash_key_hash(self, value: Any, method: Callable) -> str:
         """*value*'s identity from its class's ``__cash_key__``.

@@ -83,7 +83,8 @@ def test_a_frame_is_read_once_when_it_provably_did_not_change(cash_magics, mock_
     run_cash_cell(cash_magics, "x = pd.DataFrame({'a': np.arange(300_000.0), 'b': np.ones(300_000)})")
     reads_of_x.clear()
     run_cash_cell(cash_magics, "y = normalize(x)")
-    assert len(reads_of_x) == 1, f"x was hashed {len(reads_of_x)} times"
+    # 0 when the digest taken as x was made still holds (`FrameDigests`).
+    assert len(reads_of_x) <= 1, f"x was hashed {len(reads_of_x)} times"
 
 
 def test_a_statement_that_is_more_than_the_call_reads_for_each_check(cash_magics, mock_shell, reads_of_x):
