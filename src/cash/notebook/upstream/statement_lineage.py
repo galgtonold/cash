@@ -53,14 +53,17 @@ from ..cache_key import CacheKeyContext, compute_cache_key, statement_source_has
 from ..callee_reach import helper_seeded_modules, module_state_names
 from ..consumables import is_stream, watched_call_receivers
 from ..lineage_formula import (
+    call_time_reads,
     callable_source_component,
     changed_module_environment,
+    function_identity,
     held_lineage,
     input_lineage,
     key_hidden_reads,
     lineage_hidden_reads,
     module_source_component,
     no_cache_value_component,
+    note_function_identity,
     output_lineage,
     recorded_reads_lineage_component,
     statement_environment_component,
@@ -612,16 +615,7 @@ class StatementLineage:
         """
         function_tracker = self.function_tracker
         user_ns = self.shell.user_ns
-        try:
-            func_component = callable_source_component(function_tracker, inputs, user_ns)
-            virtual = self.callables.source_hashes(inputs, virtual_lineage or {})
-            if virtual and function_tracker is not None:
-                hashes = function_tracker.get_callable_source_hashes(inputs, user_ns)
-                hashes.update(virtual)
-                func_component = ":" + ":".join(f"{k}:{v}" for k, v in sorted(hashes.items()))
-        except (TypeError, ValueError, AttributeError):
-            logger.debug("[UPSTREAM] Failed to compute function source hashes for capture")
-            func_component = ""
+        func_component = self._func_component(inputs, virtual_lineage)
         environment = statement_environment_component(stmt_code, user_ns) if recorded_reads is None else recorded_reads
         return {
             out: output_lineage(
@@ -635,6 +629,52 @@ class StatementLineage:
             )
             for out in outputs
         }
+
+    def _func_component(self, inputs: set[str], virtual_lineage: Mapping[str, str] | None) -> str:
+        """The source digests of the callables among *inputs*, as the runtime
+        folds them (``callable_source_component``); a callee that is only a
+        simulated def contributes its digest as the live function would
+        (``SimulatedCallables.source_hashes``)."""
+        function_tracker = self.function_tracker
+        user_ns = self.shell.user_ns
+        try:
+            func_component = callable_source_component(function_tracker, inputs, user_ns)
+            virtual = self.callables.source_hashes(inputs, virtual_lineage or {})
+            if virtual and function_tracker is not None:
+                hashes = function_tracker.get_callable_source_hashes(inputs, user_ns)
+                hashes.update(virtual)
+                func_component = ":" + ":".join(f"{k}:{v}" for k, v in sorted(hashes.items()))
+        except (TypeError, ValueError, AttributeError):
+            logger.debug("[UPSTREAM] Failed to compute function source hashes for capture")
+            func_component = ""
+        return func_component
+
+    def _note_function_identities(
+        self,
+        stmt_code: str,
+        inputs: set[str],
+        lineage_by_out: Mapping[str, str],
+        virtual_lineage: dict[str, str],
+        virtual_modules: set[str],
+    ) -> None:
+        """For a plain ``def``, record its function's identity as the runtime
+        does (``lineage_formula.note_function_identity``)."""
+        body_only = call_time_reads(stmt_code, self.shell.user_ns, virtual_modules)
+        if not body_only:
+            return
+        def_time = self._input_lineages(
+            stmt_code, (inputs | lineage_hidden_reads(stmt_code)) - body_only, virtual_lineage, virtual_modules
+        )
+        func_component = self._func_component(inputs, virtual_lineage)
+        for lineage in lineage_by_out.values():
+            note_function_identity(
+                lineage,
+                stmt_code,
+                statement_source_hash(stmt_code),
+                [function_identity(h) for h in def_time],
+                func_component,
+                self.shell.user_ns,
+            )
 
     # -- Files -----------------------------------------------------------------
 
@@ -1089,6 +1129,7 @@ class StatementLineage:
             virtual_modules=virtual_modules,
         )
         _log_lineage_calc(stmt_code, source_hash, input_lineages_all, file_hash_component, lineage_by_out)
+        self._note_function_identities(stmt_code, inputs, lineage_by_out, virtual_lineage, virtual_modules)
 
         virtual_lineage.update(lineage_by_out)
         self._note_made_generators(stmt_code, outputs, virtual_lineage)

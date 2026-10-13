@@ -34,13 +34,16 @@ from ...tracking.module_symbols import static_attribute_reads
 from ...value_hash import compute_hash
 from ..cache_key import statement_source_hash
 from ..lineage_formula import (
+    call_time_reads,
     callable_source_component,
     changed_module_environment,
+    function_identity,
     input_lineage,
     lineage_hidden_reads,
     module_source_component,
     no_cache_value_component,
     no_cache_value_digest,
+    note_function_identity,
     output_lineage,
     recorded_reads_lineage_component,
     statement_environment_component,
@@ -214,6 +217,7 @@ class StatementLineageBuilder:
         input_lineage_hashes, input_lineage_map = self._build_input_lineages(
             tracking_state, lineage_inputs, user_ns, code
         )
+        body_only = call_time_reads(code, user_ns)
 
         # All outputs of one statement share its formula lineage (``train,
         # test = ...``, or ``M = enc.fit_transform(X)`` writing ``enc`` too):
@@ -231,11 +235,12 @@ class StatementLineageBuilder:
 
             # The formula and its ingredients are shared with the simulator
             # (lineage_formula), which must arrive at the same hash.
+            func_component = callable_source_component(self.function_tracker, inputs, user_ns)
             output_lineage_hash = output_lineage(
                 source_hash,
                 input_lineage_hashes,
                 file_hash_component,
-                callable_source_component(self.function_tracker, inputs, user_ns),
+                func_component,
                 self._compute_module_lineage_component(tracking_state, value, var_name, code, tree),
                 changed_module_environment(var_name, value, code, environment),
                 self._no_cache_value(value_digests, var_name, value) if no_cache else "",
@@ -245,6 +250,16 @@ class StatementLineageBuilder:
             if cut_off and not any(user_ns.get(name) is value for name in inputs):
                 output_lineage_hash = tracking_state.value_cutoff.lineage_for(
                     value, output_lineage_hash, self.compute_hash or compute_hash
+                )
+
+            if body_only:
+                note_function_identity(
+                    output_lineage_hash,
+                    code,
+                    source_hash,
+                    [function_identity(h) for name, h in input_lineage_map.items() if name not in body_only],
+                    func_component,
+                    user_ns,
                 )
 
             self._record_output(

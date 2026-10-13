@@ -99,6 +99,11 @@ example `stmt:ffd3d255…`.
 - The namespace is `stmt` for a statement and `call` for a
   [call inside a statement](../annotations.md#call-level-caching-default-and-cashno-cache-calls),
   so the two never collide.
+- A function your notebook defines counts as an input by its code and what
+  its `def` evaluates, such as default values. The globals its body reads
+  count as callee globals, as they are when the statement runs. A restart
+  then keys a call the same even when a global changed since the `def` cell
+  last ran.
 - A module is not an input lineage. A statement that reads `helpers.load` is
   keyed on `load` and what it reaches inside `helpers`, so editing another
   function in that file leaves it cached.

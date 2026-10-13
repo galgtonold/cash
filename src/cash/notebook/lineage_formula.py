@@ -23,6 +23,7 @@ import types
 from collections.abc import Mapping
 from typing import Any, Callable, Iterable
 
+from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.ast_util import parse_cached
 from ..analysis.purity_analyzer import get_analyzer
 from ..code_digest import module_identity
@@ -299,6 +300,85 @@ def lineage_hidden_reads(code: str) -> set[str]:
     spells. An observed draw stays out: folding it in makes a refit mint a
     new lineage on every run, and reconstruction then never converges."""
     return hidden_lineage_reads(code)
+
+
+def body_only_reads(code: str) -> frozenset[str]:
+    """Names the ``def`` statement *code* reads only in its body, which runs
+    at call time; empty for any other statement.
+
+    Only for one undecorated function: a decorator can keep the function
+    where no call site walks into its code (an ``lru_cache`` wrapper has
+    none). What the ``def`` itself evaluates -- its defaults -- is not here.
+    """
+    tree = parse_cached(code)
+    if tree is None or len(tree.body) != 1:
+        return frozenset()
+    node = tree.body[0]
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.decorator_list:
+        return frozenset()
+    evaluated = [*node.args.defaults, *(d for d in node.args.kw_defaults if d is not None)]
+    at_def = {n.id for d in evaluated for n in ast.walk(d) if isinstance(n, ast.Name)}
+    in_body = {n.id for stmt in node.body for n in ast.walk(stmt) if isinstance(n, ast.Name)}
+    return frozenset(in_body - at_def)
+
+
+def call_time_reads(code: str, user_ns: Mapping[str, Any], virtual_modules: Iterable[str] = ()) -> frozenset[str]:
+    """The `body_only_reads` of *code* that a function's identity
+    (`function_identity`) leaves out: all but the modules. A key reading
+    the function folds the others as they are at the call; a module only
+    through the function's lineage."""
+    return frozenset(
+        name for name in body_only_reads(code) if not is_module_like(name, user_ns.get(name), virtual_modules)
+    )
+
+
+#: A notebook function's lineage -> its identity (`function_identity`), for
+#: this process. One entry per ``def`` run; a dropped one only re-keys.
+_FUNCTION_IDENTITIES: LruMemo[str, str] = LruMemo(CODE_OBJECTS)
+
+
+def function_identity(lineage: str) -> str:
+    """What *lineage* contributes to a cache key (``cache_key``): for a
+    function a plain ``def`` bound, the lineage of its code and of what the
+    ``def`` evaluated, without the globals its body reads; for any other
+    lineage, itself.
+
+    The function's lineage folds the globals its body reads as they were
+    when the ``def`` last ran. That is what moves it on when the ``def``
+    runs again after one changed, so the upstream check re-runs what holds
+    the function, and lineages keep it. In a key it cost the reuse a restart
+    should give: ``num_cols`` edited without re-running ``def make_prep()``,
+    and after a restart the ``def`` ran with the new ``num_cols``, so every
+    fit calling it missed with its code and data unchanged. A key reading
+    the function also folds those globals as they are now
+    (``cache_key.called_function_dependencies``), so the identity leaves
+    them out and the key loses nothing.
+    """
+    return _FUNCTION_IDENTITIES.get(lineage) or lineage
+
+
+def note_function_identity(
+    lineage: str,
+    code: str,
+    source_hash: str,
+    def_time_lineages: Iterable[str],
+    func_component: str,
+    user_ns: Mapping[str, Any] | None,
+) -> None:
+    """Record the identity (`function_identity`) of the function the ``def``
+    statement *code* bound with *lineage*. *def_time_lineages* are the input
+    lineages less those of `call_time_reads`. Both engines call this, with
+    the same ingredients, wherever they give a ``def`` its lineage."""
+    identity = output_lineage(
+        source_hash,
+        def_time_lineages,
+        "",
+        func_component,
+        "",
+        ":defn" + statement_environment_component(code, user_ns),
+    )
+    if identity != lineage:
+        _FUNCTION_IDENTITIES[lineage] = identity
 
 
 def input_lineage(
