@@ -778,6 +778,13 @@ keyed by the call when you pass the tuple on whole; a value you unpack from
 it (`graph, nodes = build()`) is keyed by its content, as if the function
 were not frozen. Return one value per frozen function, or pass the tuple.
 
+In a notebook too: `model = train(data)` in one cell and `score(model, batch)`
+in the next key `model` by the call that made it, as a script does, so the
+notebook and a script share `score`'s entries. That holds after a restart,
+when the cell restores `model` from the cache instead of calling `train`. Once
+a cell changes `model` (`model.set_params(...)`), it is keyed as a changed
+value.
+
 <!-- claim: cash/decorator/frozen.py:FrozenResults.remember_container @1e8af0c7, cash/decorator/store.py:ResultStore.attach_lineage @f47f5d75 -->
 **Big inputs: path in, data passed on.** [Pass data in](#pass-data-in) and
 `frozen=` work together. Give the file path to a cached loader marked
@@ -1050,7 +1057,8 @@ were not frozen.
 
 **Is a fitted model I pass to another cached function keyed by its content
 or by the call that made it?** By its content, read in full on every call,
-unless the function that returned it is `frozen=True`: then by that call.
+unless the function that returned it is `frozen=True`: then by that call,
+in a script and through a notebook variable alike.
 
 ## Known limitations
 

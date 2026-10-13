@@ -18,6 +18,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from cash.content_hashers import builtin_hash_family
+from cash.notebook.lineage_store import restore_frozen_tag
 
 if TYPE_CHECKING:
     from cash.notebook.statement._metadata import StatementCacheMetadata
@@ -137,6 +138,9 @@ def apply_restored_var(
     lineage = None
     if metadata is not None:
         lineage = (metadata.output_lineages or {}).get(name)
+        frozen = (metadata.frozen_tags or {}).get(name)
+        if frozen is not None:
+            restore_frozen_tag(value, frozen)
         if lineage is not None:
             state.lineage.record(name, lineage, value=value)
             digest = (metadata.output_digests or {}).get(name)

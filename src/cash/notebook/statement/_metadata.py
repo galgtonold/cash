@@ -60,6 +60,11 @@ class StatementCacheMetadata:
     #: restored value had an empty record and the check silently passed. That
     #: is how a model table built before an upstream fix got exported.
     input_lineages: dict[str, str] | None = None
+    #: ``{output: [lineage, producer]}`` for an output holding a
+    #: ``frozen=True`` result (``lineage_store.frozen_tag``): restored, it
+    #: carries that tag again, so a cached function given it keys it by
+    #: its producer's call, as before the restart and as a script does.
+    frozen_tags: dict[str, list[str]] | None = None
     #: The input variables holding a random generator that this statement
     #: drew from, each of which it gave a new lineage
     #: (``advanced_carrier_lineage``); empty when it read one and did not

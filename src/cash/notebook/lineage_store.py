@@ -14,7 +14,7 @@ Invariants
   value's tag (`tag_value`, held beside the value) are written together so
   they cannot drift.
 * The priority ladder lives in :func:`resolve_lineage`: virtual → store →
-  the value's own tag (`own_tag`) → ``compute_hash_fn`` → ``sha256(str(value))``.
+  the value's own tag (`statement_tag`) → ``compute_hash_fn`` → ``sha256(str(value))``.
 """
 
 from __future__ import annotations
@@ -30,7 +30,22 @@ from cash.lineage_tag import clear_tags, own_tag, set_tags
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["InputLineages", "LineageStore", "LineageWatch", "resolve_lineage", "tag_value"]
+__all__ = [
+    "InputLineages",
+    "LineageStore",
+    "LineageWatch",
+    "frozen_tag",
+    "resolve_lineage",
+    "restore_frozen_tag",
+    "statement_tag",
+    "tag_value",
+]
+
+#: ``decorator.arg_hashing.LINEAGE_SRC_FROZEN``, not imported: this module
+#: stays free of the decorator package.
+_FROZEN = "frozen"
+#: The statement lineage a frozen result was first bound with (`tag_value`).
+_BOUND = "_cash_lineage_nb_bound"
 
 
 def tag_value(value: Any, hash_: str) -> None:
@@ -44,12 +59,61 @@ def tag_value(value: Any, hash_: str) -> None:
     key alike. Values that take no tag (builtins, slotted types) keep only
     the store's entry, which stays authoritative.
     """
+    if own_tag(value, "_cash_lineage_src") == _FROZEN:
+        # A ``frozen=True`` result, bound by the statement that called its
+        # function: it keeps the producer's tag, so a cached function given
+        # it keys it by that call, as a script does, and the two share
+        # entries. It stays the frozen result while the statement's
+        # lineage does; a later one (a mutation found, another binding)
+        # re-tags it below. The decorator audits the frozen tag on use.
+        bound = own_tag(value, _BOUND)
+        if bound is None:
+            set_tags(value, **{_BOUND: hash_})
+            return
+        if bound == hash_:
+            return
     # Drop any tag the decorator left (its producer too): this newer tag wins.
     clear_tags(value)
     # This layer re-tags the value whenever it changes, which is what lets
     # the decorator trust the tag for its content ("statement").
     if not set_tags(value, _cash_lineage_hash=hash_, _cash_lineage_src="statement"):
         logger.debug("LineageStore: cannot tag %s", type(value).__name__)
+
+
+def statement_tag(value: Any) -> str | None:
+    """The lineage a statement tagged *value* with (`tag_value`): for a
+    ``frozen=True`` result it bound, the statement's, not the producer's
+    tag it keeps."""
+    if own_tag(value, "_cash_lineage_src") == _FROZEN:
+        bound = own_tag(value, _BOUND)
+        if bound is not None:
+            return bound
+    return own_tag(value)
+
+
+def frozen_tag(value: Any) -> list[str] | None:
+    """``[lineage, producer]`` of a ``frozen=True`` result *value* (the
+    decorator's tag), for a statement's entry to keep; else None."""
+    if own_tag(value, "_cash_lineage_src") != _FROZEN:
+        return None
+    lineage = own_tag(value)
+    if not isinstance(lineage, str):
+        return None
+    return [lineage, str(own_tag(value, "_cash_lineage_producer") or "")]
+
+
+def restore_frozen_tag(value: Any, tag: Any) -> None:
+    """Give *value*, restored from a statement's entry, the frozen tag
+    `frozen_tag` read from the value it stored: a cached function given it
+    then keys it by its producer's call, as it did before the restart and
+    as a script does. Before the statement's own tag (`tag_value`)."""
+    if not (isinstance(tag, list) and len(tag) == 2 and all(isinstance(t, str) for t in tag)):
+        return
+    tags = {"_cash_lineage_src": _FROZEN, "_cash_lineage_hash": tag[0]}
+    if tag[1]:
+        tags["_cash_lineage_producer"] = tag[1]
+    clear_tags(value)
+    set_tags(value, **tags)
 
 
 def resolve_lineage(
@@ -62,7 +126,7 @@ def resolve_lineage(
 ) -> str | None:
     """Resolve a lineage hash for *var* using the priority ladder.
 
-    Order: ``virtual`` mapping → *lineage* → the value's own tag (`own_tag`) →
+    Order: ``virtual`` mapping → *lineage* → the value's own tag (`statement_tag`) →
     ``compute_hash_fn(value)`` → ``sha256(str(value))``.
     """
     if virtual is not None and var in virtual:
@@ -72,7 +136,7 @@ def resolve_lineage(
     if value is None:
         return None
     try:
-        attr = own_tag(value)
+        attr = statement_tag(value)
         if attr is not None:
             return attr
         if compute_hash_fn is not None:

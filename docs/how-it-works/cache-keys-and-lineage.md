@@ -200,7 +200,7 @@ calling a function defined in a later cell, see
 
 ### Resolving an input
 
-<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @a7a489f1, cash/value_hash.py:compute_hash @e9c43540 -->
+<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @778e6d73, cash/value_hash.py:compute_hash @e9c43540 -->
 For each input variable, the statement key uses the first of these that
 exists:
 
