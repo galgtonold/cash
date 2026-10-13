@@ -642,6 +642,13 @@ cells.
   raises `ValueError: assignment destination is read-only`. `df.loc`,
   `df.iloc` and `df["x"] = ...` work as usual. See
   [the tiers](how-it-works/storage.md#the-tiers).
+- **A file you save from a restored object may differ in its bytes.** A
+  value restored from the cache equals the one the code computed, but its
+  internals can be laid out differently: two attributes that shared one
+  string can each hold a copy. So `joblib.dump(model, path)` or `pickle.dump`
+  after a restore can write a file a few bytes off from the one plain Python
+  writes, which loads to the same model. Compare such files by loading them,
+  not by their bytes or a checksum.
 
 ## Reporting something not on this page
 
