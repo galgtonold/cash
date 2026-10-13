@@ -207,7 +207,9 @@ class ControlStructureProcessor:
         self._unit_frame = (node, reads, before, rng_before, reads_before)
         # Where each generator it can draw from stands, so a draw in the body
         # moves the variable on (`carrier_advances`).
-        positions = carrier_positions(carrier_candidates(reads, self.shell.user_ns), self.shell.user_ns)
+        positions = carrier_positions(
+            carrier_candidates(reads, self.shell.user_ns, state.variable_lineage), self.shell.user_ns
+        )
 
         sp.begin_structure_cost()
         state.structure_module_writes.clear()
@@ -434,7 +436,9 @@ class ControlStructureProcessor:
             held = users_object_attributes(user_ns.get(name))
             if any(is_stream(value) or rng_carrier_kind(value) is not None for value in held):
                 return None
-        callee_names = called_function_globals(reads, user_ns)
+        callee_names = called_function_globals(
+            reads, user_ns, variable_lineage=self.statement_processor.tracking_state.variable_lineage
+        )
         for name in callee_names:
             value = user_ns.get(name)
             if is_stream(value) or rng_carrier_kind(value) is not None:

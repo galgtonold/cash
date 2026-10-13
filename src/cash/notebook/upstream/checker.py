@@ -294,7 +294,9 @@ class UpstreamChecker:
         # A generator a called function draws from (`def boot(x): rng...`)
         # moves without being named, as a generator named in the cell does: an
         # isolated re-run first puts it where a top-to-bottom run has it.
-        required_inputs = required_inputs | reachable_generators(required_inputs, self.shell.user_ns)
+        required_inputs = required_inputs | reachable_generators(
+            required_inputs, self.shell.user_ns, self.tracking_state.variable_lineage
+        )
         # A reloaded module whose state cells set is rebuilt now, whatever the
         # cell reads (``ModuleInvalidator._schedule_state_rebuild``).
         rebuilds = {name for name in self.tracking_state.module_state_rebuilds if name in self.shell.user_ns}

@@ -75,7 +75,7 @@ For other types, register a hasher; see
 
 ### The statement key
 
-<!-- claim: cash/notebook/cache_key.py:compute_cache_key @9ac6f530 -->
+<!-- claim: cash/notebook/cache_key.py:compute_cache_key @619d428b -->
 Every statement key is built by one function. It joins these parts with
 colons, in this order, and hashes the result:
 
@@ -86,7 +86,7 @@ colons, in this order, and hashes the result:
 | Called functions | `name:hash` per function it calls, sorted. |
 | Local modules | `name:hash` per local module it reads, sorted. |
 | Occurrence | `occ` and a 0-based index, which tells a statement repeated in the cell apart. |
-| Callee globals | `callees:`, then `name:lineage` per global a called function reads. |
+| Callee globals | `callees:`, then `name:lineage` per global a called function reads. That includes a function the statement reaches through what holds it: `fns[0](3)` with `fns = [make]`, a dict of builders, a `functools.partial`, a function kept as another's default or in its closure, a class attribute, an object of a class of yours, or a library object such as `FunctionTransformer(make)`. |
 | Installed code | `installed:name:...` per function or class of yours installed on a pandas or polars frame, series, index or expression class under an attribute name the statement or a function it calls reads (an accessor, `pd.DataFrame.report = report`), by its code, and `installed-reads:name:lineage` per global that code reads. |
 | Environment | `env:`, then a digest per `os.getenv("NAME")`, `os.environ["NAME"]` or `os.getcwd()` it, or a function of yours it calls, reads. |
 | Module data | `moddata:`, then `module.name=digest` per piece of a local module's data it, or a function of yours it calls, reads, by its value. A function, or an object of a class of yours, kept in that data (a registry dict, a handler set with a setter) counts by its code too, so editing its body moves the key. |
@@ -96,6 +96,10 @@ example `stmt:ffd3d255…`.
 
 - Called functions, local modules, callee globals, installed code,
   environment reads and module data are left out when there are none.
+- A value too large to search to the end for the functions it holds (more
+  than two million objects that are not plain values) adds `unfollowed:` and
+  a random token, so the key never matches, and the statement runs uncached
+  with a reason.
 - The namespace is `stmt` for a statement and `call` for a
   [call inside a statement](../annotations.md#call-level-caching-default-and-cashno-cache-calls),
   so the two never collide.

@@ -105,7 +105,7 @@ def installed_code_parts(
     if any(isinstance(user_ns.get(name), types.FunctionType) for name in inputs):
         names |= _code_names(inputs, user_ns)
         try:
-            names |= _code_names(called_function_globals(inputs, user_ns), user_ns)
+            names |= _code_names(called_function_globals(inputs, user_ns, variable_lineage=variable_lineage), user_ns)
         except (TypeError, ValueError, AttributeError, RecursionError):
             pass
     parts: set[str] = set()
