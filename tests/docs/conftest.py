@@ -54,6 +54,15 @@ def reset_cash_state(tmp_path, monkeypatch):
     # directory the page had chdir'd into; with the default anchored to the
     # project it lands in the repo's own .cash and pages start sharing a cache.
     cash.configure(cache_dir=str(tmp_path / ".cash"))
+    # A page's statements are a few milliseconds of work, so the share check
+    # of their outputs gets the 0.1 s floor -- which a busy machine (a full
+    # run on two workers) overran now and then, and a page that never
+    # mentions it printed NOTEBOOK-SHARE-UNCHECKED. A page shows what cash
+    # does on an idle machine; the budget itself is pinned in
+    # test_notebook/internals/test_the_share_check_stops_at_its_time_budget.py.
+    from cash.notebook.statement import processor
+
+    monkeypatch.setattr(processor, "SHARE_CHECK_FLOOR_S", 2.0)
     yield
     cash.reset_session()
     # A page that shows logging (``%cash_debug on``, ``setup_logging``) leaves
