@@ -26,11 +26,11 @@ from tests._nbharness.badge import shows_cached, shows_executed
 pytestmark = [pytest.mark.integration, pytest.mark.loops]
 
 _COUNTER = (
-    "import time, pathlib\n"
+    "import os, time, pathlib\n"
     "LOG = pathlib.Path(r'{log}')\n"
     "def compute(t):\n"
-    "    with LOG.open('a') as fh:\n"
-    "        fh.write(str(t) + chr(10))\n"
+    "    fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+    "    os.write(fd, (str(t) + chr(10)).encode()); os.close(fd)\n"
     "    time.sleep(0.2)\n"  # above the cost-model floor
     "    return len(str(t))\n"
 )

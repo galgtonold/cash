@@ -30,11 +30,11 @@ _SLEEP = 0.2
 
 def _helpers(log):
     return (
-        "import time, pathlib\n"
+        "import os, time, pathlib\n"
         f"LOG = pathlib.Path(r'{log}')\n"
         "def compute(x):\n"
-        "    with LOG.open('a') as fh:\n"
-        "        fh.write(str(x) + '\\n')\n"
+        "    fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        "    os.write(fd, (str(x) + '\\n').encode()); os.close(fd)\n"
         f"    time.sleep({_SLEEP})\n"
         "    return x + 1\n"
     )

@@ -43,14 +43,14 @@ _SLEEP = 0.15
 
 def _defs(log):
     return (
-        "import time, pathlib\n"
+        "import os, time, pathlib\n"
         f"LOG = pathlib.Path(r'{log}')\n"
         "state = {'n': 0}\n"
         "conn = object()\n"
         "def fetch_next(conn):\n"
         "    state['n'] += 1\n"
-        "    with LOG.open('a') as fh:\n"
-        "        fh.write('c\\n')\n"
+        "    fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        "    os.write(fd, ('c\\n').encode()); os.close(fd)\n"
         f"    time.sleep({_SLEEP})\n"
         "    return state['n']\n"
     )
@@ -133,11 +133,11 @@ def test_reorder_within_one_statement_still_reuses_cached_calls(nb_runner, tmp_p
     """
     log = tmp_path / "calls.log"
     pure_defs = (
-        "import time, pathlib\n"
+        "import os, time, pathlib\n"
         f"LOG = pathlib.Path(r'{log}')\n"
         "def fetch_pure(step):\n"
-        "    with LOG.open('a') as fh:\n"
-        "        fh.write('c\\n')\n"
+        "    fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        "    os.write(fd, ('c\\n').encode()); os.close(fd)\n"
         f"    time.sleep({_SLEEP})\n"
         "    return step * 2\n"
     )
