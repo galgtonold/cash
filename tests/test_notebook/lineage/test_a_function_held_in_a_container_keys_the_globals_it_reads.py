@@ -37,6 +37,13 @@ SHAPES = {
     "method": ("class M:\n    def build(self, n):\n        return [cfg['w'] * n]", "pass", "M().build(3)"),
     "library object": ("import types\n" + MAKE, "box = types.SimpleNamespace(fns={'a': make})", "box.fns['a'](3)"),
     "body calls through a list": (MAKE, "fns = [make]\ndef run_all():\n    return [f(3) for f in fns][0]", "run_all()"),
+    "slot of one of many cells": (
+        "import array\n" + MAKE + "\nclass Style(array.array):\n    __slots__ = ()\n"
+        "class Cell:\n    __slots__ = ('value', 'style')\n    def __init__(self, v):\n"
+        "        self.value = v\n        self.style = Style('i', [0])",
+        "cells = [Cell(float(i)) for i in range(3000)]\ncells[2500].value = make",
+        "cells[2500].value(3)",
+    ),
 }
 
 

@@ -18,12 +18,13 @@ than be keyed without it.
 
 from __future__ import annotations
 
+import collections
 import functools
 import itertools
 import operator
 import sys
 import types
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
 from typing import Any, NamedTuple
 
 from .._memo import CODE_OBJECTS, LruMemo
@@ -138,13 +139,17 @@ def _walk(value: Any, namespace: Mapping[str, Any]) -> tuple[tuple[Any, ...], tu
         children: list[Any] = []
         # One step per TYPE in the level, not per object: the items of a
         # list of 100,000 records are gathered at C speed.
-        kinds = set(map(type, level))
-        for kind in kinds:
-            group = level if len(kinds) == 1 else [obj for obj in level if type(obj) is kind]
+        for kind, group in _by_type(level):
             _visit_group(kind, group, globals_ids, functions, classes, children)
         if not children:
             break
-        others = list(itertools.compress(children, map(operator.not_, map(_LEAVES.__contains__, map(type, children)))))
+        kinds_of = list(map(type, children))
+        # An object that leads only to its class (`_inert`: an openpyxl
+        # cell's style array, 400,000 of them) is not visited: its class is.
+        inert = {kind for kind in set(kinds_of) if _inert(kind)}
+        skipped = _LEAVES | inert if inert else _LEAVES
+        others = list(itertools.compress(children, map(operator.not_, map(skipped.__contains__, kinds_of))))
+        others.extend(inert)
         others = _without_plain_records(others)
         found = dict(zip(map(id, others), others))
         for key in seen & found.keys():
@@ -159,12 +164,10 @@ def _without_plain_records(objects: list[Any]) -> list[Any]:
     values, when every one of a type does: a million records read as rows
     are dropped in one pass at C speed, before the walk dedups them by id
     (most of what a walk over them cost)."""
-    kinds = set(map(type, objects))
-    if not kinds & _PLAIN:
+    if not set(map(type, objects)) & _PLAIN:
         return objects
     kept: list[Any] = []
-    for kind in kinds:
-        group = objects if len(kinds) == 1 else [obj for obj in objects if type(obj) is kind]
+    for kind, group in _by_type(objects):
         if kind is dict:
             items = itertools.chain(
                 itertools.chain.from_iterable(group), itertools.chain.from_iterable(map(dict.values, group))
@@ -192,8 +195,15 @@ def _visit_group(
     if issubclass(kind, types.ModuleType):
         return
     if issubclass(kind, dict):
-        if not set(map(type, itertools.chain.from_iterable(group))) <= _LEAVES:
-            children.extend(itertools.chain.from_iterable(group))
+        keys = list(itertools.chain.from_iterable(group))
+        key_kinds = set(map(type, keys))
+        # Keys that are tuples of plain values (an openpyxl sheet's cells by
+        # ``(row, column)``) lead nowhere: one pass says so, as for a list.
+        if not key_kinds <= _LEAVES and not (
+            key_kinds <= _LEAVES | {tuple}
+            and set(map(type, itertools.chain.from_iterable(_of_type(keys, tuple)))) <= _LEAVES
+        ):
+            children.extend(keys)
         if not set(map(type, itertools.chain.from_iterable(map(dict.values, group)))) <= _LEAVES:
             children.extend(itertools.chain.from_iterable(map(dict.values, group)))
         if kind is dict:
@@ -242,19 +252,131 @@ def _visit_group(
     # Any other object: its class (a notebook class's methods run on it),
     # its attributes and its slots.
     children.append(kind)
-    for obj in group:
-        try:
-            attrs = object.__getattribute__(obj, "__dict__")
-        except (AttributeError, TypeError):
-            attrs = None
-        if isinstance(attrs, dict):
-            children.extend(attrs.values())
+    if _may_have_dict(kind):
+        for obj in group:
+            try:
+                attrs = object.__getattribute__(obj, "__dict__")
+            except (AttributeError, TypeError):
+                attrs = None
+            if isinstance(attrs, dict):
+                children.extend(attrs.values())
     for name in _slot_names(kind):
+        getter = _slot_getter(kind, name)
+        if getter is not None:
+            try:
+                # What ``object.__getattribute__`` reads, at C speed: the
+                # slot's own descriptor (400,000 openpyxl cells, 8 slots each).
+                column = list(map(getter, group))
+            except (AttributeError, TypeError):
+                pass  # a slot not set on some object: one at a time
+            else:
+                _add_column(column, children)
+                continue
         for obj in group:
             try:
                 children.append(object.__getattribute__(obj, name))
             except (AttributeError, TypeError):
                 pass
+
+
+def _add_column(column: list[Any], children: list[Any]) -> None:
+    """Put what one slot of a group of objects holds in *children*, at C
+    speed: nothing for a column of plain values (each cell's value), the
+    class alone for a column of `_inert` objects (each cell's style array),
+    each object once (the sheet that 400,000 cells name as their parent)."""
+    kinds = set(map(type, column))
+    if kinds <= _LEAVES:
+        return
+    if all(map(_inert, kinds - _LEAVES)):
+        children.extend(kinds - _LEAVES)
+        return
+    children.extend(dict(zip(map(id, column), column)).values())
+
+
+def _of_type(objects: list[Any], kind: type) -> Iterator[Any]:
+    """The objects of exact type *kind* in *objects*, at C speed."""
+    return itertools.compress(objects, map(operator.is_, map(type, objects), itertools.repeat(kind)))
+
+
+#: A type with more than 1/`_MAJOR` of a level's objects is split out of it
+#: in a pass at C speed of its own; the rest are sorted one at a time.
+_MAJOR = 16
+
+
+def _by_type(objects: list[Any]) -> list[tuple[type, list[Any]]]:
+    """*objects* grouped by exact type, each group in its order in *objects*.
+    The types most of them have are split out at C speed (a level of
+    400,000 openpyxl cells and as many index tuples was split by a
+    comprehension per type), the few others one at a time."""
+    counts = collections.Counter(map(type, objects))
+    if len(counts) == 1:
+        return [(next(iter(counts)), objects)]
+    major = [kind for kind, n in counts.items() if n * _MAJOR > len(objects)]
+    types_of = list(map(type, objects))
+    groups = {
+        kind: list(itertools.compress(objects, map(operator.is_, types_of, itertools.repeat(kind)))) for kind in major
+    }
+    if len(major) < len(counts):
+        majors = frozenset(major)
+        for obj in itertools.compress(objects, map(operator.not_, map(majors.__contains__, types_of))):
+            groups.setdefault(type(obj), []).append(obj)
+    return list(groups.items())
+
+
+#: What `_visit_group` walks into other than an object's attributes.
+_WALKED_KINDS = (
+    types.ModuleType,
+    dict,
+    *_SEQUENCES,
+    types.FunctionType,
+    types.MethodType,
+    functools.partial,
+    staticmethod,
+    classmethod,
+    property,
+    type,
+)
+
+
+@functools.lru_cache(maxsize=1024)
+def _inert(kind: type) -> bool:
+    """An object of *kind* leads `_visit_group` to its class alone: no
+    instance dict, no slots, and not a kind it walks into otherwise."""
+    if kind in _LEAVES or issubclass(kind, _WALKED_KINDS):
+        return False
+    return not _may_have_dict(kind) and not _slot_names(kind)
+
+
+@functools.lru_cache(maxsize=1024)
+def _may_have_dict(kind: type) -> bool:
+    """Can ``object.__getattribute__(obj, "__dict__")`` find anything on an
+    object of *kind*: it has an instance dict, or a class along its MRO
+    defines ``__dict__``. An openpyxl cell has slots only, and asking each of
+    400,000 for its ``__dict__`` raised as many AttributeErrors."""
+    if getattr(kind, "__dictoffset__", 1):
+        return True
+    try:
+        return any("__dict__" in vars(klass) for klass in kind.__mro__)
+    except TypeError:
+        return True
+
+
+@functools.lru_cache(maxsize=1024)
+def _slot_getter(kind: type, name: str) -> Callable[[Any], Any] | None:
+    """The ``__get__`` of the slot descriptor ``object.__getattribute__``
+    finds for *name* on an object of *kind* (the first class along the MRO
+    that defines *name*), or None when that is not a plain slot."""
+    try:
+        for klass in kind.__mro__:
+            found = vars(klass).get(name, _MISSING)
+            if found is not _MISSING:
+                return found.__get__ if type(found) is types.MemberDescriptorType else None
+    except TypeError:
+        return None
+    return None
+
+
+_MISSING = object()
 
 
 def _cell_contents(cells: tuple[Any, ...] | None) -> list[Any]:
@@ -276,10 +398,22 @@ def _slot_names(kind: type) -> tuple[str, ...]:
         if isinstance(slots, str):
             slots = (slots,)
         try:
-            names.extend(s for s in slots if isinstance(s, str) and s not in ("__dict__", "__weakref__"))
+            names.extend(
+                _mangled(klass, s) for s in slots if isinstance(s, str) and s not in ("__dict__", "__weakref__")
+            )
         except TypeError:
             continue
     return tuple(dict.fromkeys(names))
+
+
+def _mangled(klass: type, name: str) -> str:
+    """The attribute a slot *name* of *klass* is stored under: a private
+    ``__x`` is ``_Klass__x``, as for any private name in a class body (read
+    by its own name, it was not found and its contents were not walked)."""
+    owner = klass.__name__.lstrip("_")
+    if name.startswith("__") and not name.endswith("__") and owner:
+        return f"_{owner}{name}"
+    return name
 
 
 def _member_functions(member: Any) -> list[Any]:
