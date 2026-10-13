@@ -696,6 +696,13 @@ cells.
   after a restore can write a file a few bytes off from the one plain Python
   writes, which loads to the same model. Compare such files by loading them,
   not by their bytes or a checksum.
+- **A restored set may loop in a different order.** A set holds the same
+  items after a restore, but the order a `for` loop meets them in can differ
+  from the run that made it: Python does not keep a set's order, and a set
+  rebuilt from its items lays them out afresh (`copy.deepcopy` and
+  multiprocessing do the same). Results are equal; only code that depends on
+  that order sees a difference, such as the key order of a dict built by
+  looping over the set. Use `sorted(s)` where the order matters.
 
 ## Reporting something not on this page
 

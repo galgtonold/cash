@@ -299,6 +299,9 @@ paths from the project root or pass absolute paths.
   `frozen=True`.
 - A call that changed its argument in place is not stored, so it runs every
   time. Return a modified copy instead (`rows = sorted(rows)`).
+- A set in a result comes back with the same items, but a `for` loop may
+  meet them in a different order than in the call that made it: Python does
+  not keep a set's order. Use `sorted(s)` where the order matters.
 
 ## Generators and async functions
 
