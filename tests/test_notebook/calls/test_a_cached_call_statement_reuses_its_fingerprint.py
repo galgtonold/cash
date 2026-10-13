@@ -119,10 +119,10 @@ def test_only_the_statements_own_call_claims_the_digests():
         assert handed_digests.claim() is None, "claimed from a frame that is not the statement's"
         code = compile("got = claim()", "<cash-test>", "exec")
         namespace = {"claim": handed_digests.claim}
-        exec(code, namespace)  # noqa: S102 - the statement's module-level code
+        exec(code, namespace)
         assert namespace["got"] is offered
         assert offered.digest(value) == "d"
-        exec(code, namespace)  # noqa: S102
+        exec(code, namespace)
         assert namespace["got"] is None, "claimed twice"
     finally:
         handed_digests.withdraw()

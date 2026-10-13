@@ -167,7 +167,7 @@ def test_an_extensions_heap_type_is_not_user_code():
 )
 def test_an_execd_class_still_is(body):
     namespace: dict = {}
-    exec(body, namespace)  # noqa: S102 - a class whose module cannot be followed
+    exec(body, namespace)
     assert is_user_code_object(namespace["A"])
 
 

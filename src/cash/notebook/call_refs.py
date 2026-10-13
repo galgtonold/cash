@@ -93,9 +93,7 @@ def digest_and_size(value: Any) -> tuple[str, int] | None:
     """
     try:
         buffers: list = []
-        head = kept_state.dumps(
-            value, protocol=5, buffer_callback=buffers.append, keyed=True, extra=polars_reducers()
-        )
+        head = kept_state.dumps(value, protocol=5, buffer_callback=buffers.append, keyed=True, extra=polars_reducers())
         digest = hashlib.sha256(head)
         size = len(head)
         for buffer in buffers:

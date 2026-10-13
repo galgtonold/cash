@@ -28,6 +28,7 @@ from typing import Any
 
 from cash import handed_digests
 from cash.analysis.read_only_callees import reads_its_arguments_only
+from cash.content_hashers import builtin_family_of
 from cash.decorator.arg_hashing import (
     exposure_mark,
     frame_borrows_its_data,
@@ -40,7 +41,6 @@ from cash.sizing import pandas_nbytes
 from cash.source_reading import wrapper_layers
 from cash.tracking.file_dep_snapshot import dep_path_for_this_process
 from cash.tracking.tracker_context import active_tracker
-from cash.content_hashers import builtin_family_of
 from cash.value_hash import compute_hash, is_identity_fallback_hash
 
 logger = logging.getLogger(__name__)
