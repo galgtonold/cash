@@ -25,7 +25,7 @@ def simulate(n_steps: int, dt: float, alpha: float, seed: int):
 trajectory = simulate(n_steps=10_000, dt=0.01, alpha=0.5, seed=42)
 ```
 
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @130f1202 -->
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @e3aa6741 -->
 The first call runs the simulation and writes the result to disk; every later
 call with the same four arguments, in this run or the next, loads it. Change
 `alpha` or `seed` and it runs again.
@@ -66,7 +66,7 @@ combination at the same moment, unless the backend is Redis with
 <!-- claim: cash/backends/adaptive_caps.py:adaptive_disk_cap @0d13d1d2, cash/__main__.py:cmd_clear @fd92c8a3 -->
 A sweep writes one entry per combination, and every entry goes to disk. By
 default cash lets the cache use a quarter of the free room on its volume,
-between 8 GiB and 100 GiB. When it is full, cash evicts the entries that are
+between 8 GiB and 100 GiB but never more than 80% of that room. When it is full, cash evicts the entries that are
 cheapest to recompute per byte.
 
 - **See it.** `cash info` in a terminal shows the folder, what it holds and
