@@ -40,6 +40,7 @@ from cash.tracking.randomness import capture_object_rng_states, capture_rng_stat
 from ..call_key import holds_a_closure_with_state
 from ..call_refs import DECORATOR_ENTRY, REF_BYTES_FIELD, REFS_FIELD, CallRef
 from ..closed_stream import ClosedStream, stored_form
+from ..lineage_store import frozen_tag
 
 if TYPE_CHECKING:
     from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
@@ -78,6 +79,18 @@ def _snapshot_with_inherited(
     for path, recorded in inherited_snapshots.items():
         snapshot.setdefault(path, recorded)
     return snapshot
+
+
+def _frozen_tags(captured_vars: Mapping[str, Any], outputs: set[str]) -> dict[str, list[str]] | None:
+    """``{output: its frozen tag}`` for the outputs holding a ``frozen=True``
+    result (``StatementCacheMetadata.frozen_tags``), or None."""
+    found = {}
+    for name in outputs:
+        if name in captured_vars:
+            tag = frozen_tag(captured_vars[name])
+            if tag is not None:
+                found[name] = tag
+    return found or None
 
 
 def _carriers_advanced(run: StatementRun) -> list[str] | None:
@@ -507,6 +520,7 @@ class StatementStore:
             output_lineages=self._lineage_builder.build_output_lineages(self.tracking_state, run.outputs),
             output_digests=self._lineage_builder.build_output_digests(self.tracking_state, run.outputs) or None,
             input_lineages=self._lineage_builder.build_input_lineages(self.tracking_state, run.inputs),
+            frozen_tags=_frozen_tags(captured_vars, run.outputs),
             carriers_advanced=_carriers_advanced(run),
             holders=run.holders or None,
             holders_moved=True if run.holders and run.moves_holders else None,

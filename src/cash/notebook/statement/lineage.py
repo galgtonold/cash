@@ -34,13 +34,16 @@ from ...tracking.module_symbols import static_attribute_reads
 from ...value_hash import budgeted_hash, compute_hash
 from ..cache_key import statement_source_hash
 from ..lineage_formula import (
+    call_time_reads,
     callable_source_component,
     changed_module_environment,
+    function_identity,
     input_lineage,
     lineage_hidden_reads,
     module_source_component,
     no_cache_value_component,
     no_cache_value_digest,
+    note_function_identity,
     output_lineage,
     recorded_reads_lineage_component,
     setting_output_lineage,
@@ -215,6 +218,7 @@ class StatementLineageBuilder:
         input_lineage_hashes, input_lineage_map = self._build_input_lineages(
             tracking_state, lineage_inputs, user_ns, code
         )
+        body_only = call_time_reads(code, user_ns)
 
         # All outputs of one statement share its formula lineage (``train,
         # test = ...``, or ``M = enc.fit_transform(X)`` writing ``enc`` too):
@@ -227,6 +231,7 @@ class StatementLineageBuilder:
         rebuilt = not no_cache and not any(user_ns.get(name) is value for name in inputs for value in bound.values())
         cut_off = rebuilt and len(bound) == 1
 
+        func_component = callable_source_component(self.function_tracker, inputs, user_ns)
         lineages: dict[str, str] = {}
         for var_name, value in bound.items():
             captured_vars[var_name] = value
@@ -237,7 +242,7 @@ class StatementLineageBuilder:
             # (lineage_formula), which must arrive at the same hash.
             components = (
                 file_hash_component,
-                callable_source_component(self.function_tracker, inputs, user_ns),
+                func_component,
                 self._compute_module_lineage_component(tracking_state, value, var_name, code, tree),
                 changed_module_environment(var_name, value, code, environment),
                 self._no_cache_value(value_digests, var_name, value) if no_cache else "",
@@ -266,6 +271,18 @@ class StatementLineageBuilder:
             )
 
         for var_name, value in bound.items():
+            if body_only:
+                # What a key reads for the function this ``def`` bound: its
+                # code and what the ``def`` evaluated, not the globals only
+                # its body reads (`lineage_formula.function_identity`).
+                note_function_identity(
+                    lineages[var_name],
+                    code,
+                    source_hash,
+                    [function_identity(h) for name, h in input_lineage_map.items() if name not in body_only],
+                    func_component,
+                    user_ns,
+                )
             self._record_output(
                 tracking_state,
                 var_name,

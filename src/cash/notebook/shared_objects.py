@@ -937,6 +937,8 @@ def _check_group(
             if id(mapping.get(key)) in nodes:
                 inbound[id(mapping.get(key))] += 1
         excess = excess_refs(nodes, inbound, checked)
+        if excess and _count_leaf_attributes(nodes, inbound):
+            excess = excess_refs(nodes, inbound, checked)
         if not excess:
             return set(), set()
         shared = {owner[k] for k in excess}
@@ -961,6 +963,45 @@ def _check_group(
         # again of the full walk, with none of these references left.
         del nodes, inbound, checked, owner, breaks, internal, excess, found, partial
     return shared, None
+
+
+def _count_leaf_attributes(nodes: dict[int, Any], inbound: dict[int, int]) -> bool:
+    """Add to *inbound* the references the attributes of each object of the
+    walk it does not look into (a library's own object, `children_of` None)
+    make to nodes, when nothing outside the walk holds that object; whether
+    any were added.
+
+    Such an object is inside the outputs, and a restore copies it with them,
+    so what it holds is held within: a LightGBM classifier's
+    ``_best_score`` is also its booster's ``best_score``, and the walk,
+    which looks into the classifier but not the booster, read that dict as
+    held by "another variable or container" and every fit statement re-ran.
+    One level: what the attributes hold in turn stays uncounted. Each
+    object is read in `_attributes_in`, so that no local here holds it
+    while its own count is taken.
+    """
+    added = False
+    containers = EXACT_CONTAINER_TYPES
+    for key in list(nodes):
+        held = _attributes_in(nodes[key], nodes, containers)
+        if held and not excess_refs(nodes, inbound, [key]):
+            for child in held:
+                inbound[child] += 1
+            added = True
+    return added
+
+
+def _attributes_in(value: Any, nodes: dict[int, Any], containers: frozenset[type]) -> list[int]:
+    """The ids of the nodes a leaf *value*'s own attributes are bound to."""
+    if type(value) in containers or children_of(value) is not None:
+        return []
+    try:
+        own = object.__getattribute__(value, "__dict__")
+    except (AttributeError, TypeError):
+        return []
+    if type(own) is not dict:
+        return []
+    return [id(attr) for attr in own.values() if id(attr) in nodes]
 
 
 def _count_memo(memo: dict[int, list | None], nodes: dict[int, Any], inbound: dict[int, int]) -> None:

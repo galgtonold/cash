@@ -23,12 +23,12 @@ from ...analysis.mutation_effects import CellEffects
 from ...analysis.mutations import consumed_input_names
 from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import CashWarning
-from ...lineage_tag import own_tag
 from ...value_hash import budgeted_hash
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from .._trace import trace_event
 from ..consumables import consumable_state, has_diverged, is_consumable_unrestorable
+from ..lineage_store import statement_tag
 from ..restored_var import hashed_by_lineage
 from ..shared_objects import holds_part_of
 from ..statement.derivation_edges import shared_object_partners
@@ -157,7 +157,7 @@ class StaleValueGuard:
                 broken_vars.add(var_name)
                 continue
             live_value = self.shell.user_ns.get(var_name)
-            live_lineage = own_tag(live_value)
+            live_lineage = statement_tag(live_value)
             # The value is the one the simulation of the cells above says this
             # cell starts from: current, and not this cell's own earlier output.
             # The checks below compare it with what the LAST statement writing

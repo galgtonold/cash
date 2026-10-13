@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 from ..._paths import normalize_path
 from ...remote_source import RemoteFileDataSource
 from ...tracking.file_dep_snapshot import probe_state_parts, realpath_of_read_this_run
+from ...tracking.file_versions import file_version
 from ...value_types import IMMUTABLE_PRIMS
 from ..server_discovery import get_notebook_path
 
@@ -115,7 +116,11 @@ def compute_file_hash_component(
         # Size and mtime alone left a value read through a helper that also
         # writes a file -- which no stored entry checks by content -- with
         # its old lineage, and the cells below served the old result.
-        file_components.append(f"{display_path}:{stat.st_mtime_ns}:{stat.st_size}:{getattr(stat, 'st_ctime_ns', 0)}")
+        # A version found to hold the bytes of an earlier one is named by
+        # that one (`file_version`): a file rewritten unchanged keeps its
+        # readers' lineage, whether they were restored or ran again.
+        mtime_ns, size, ctime_ns = file_version(canonical_path, stat)
+        file_components.append(f"{display_path}:{mtime_ns}:{size}:{ctime_ns}")
 
     for url in sorted(accessed_remote or ()):
         # The URL is the identity and the token is the state, exactly as

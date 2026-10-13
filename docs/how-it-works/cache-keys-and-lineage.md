@@ -99,6 +99,11 @@ example `stmt:ffd3d255…`.
 - The namespace is `stmt` for a statement and `call` for a
   [call inside a statement](../annotations.md#call-level-caching-default-and-cashno-cache-calls),
   so the two never collide.
+- A function your notebook defines counts as an input by its code and what
+  its `def` evaluates, such as default values. The globals its body reads
+  count as callee globals, as they are when the statement runs. A restart
+  then keys a call the same even when a global changed since the `def` cell
+  last ran.
 - A module is not an input lineage. A statement that reads `helpers.load` is
   keyed on `load` and what it reaches inside `helpers`, so editing another
   function in that file leaves it cached.
@@ -118,10 +123,12 @@ variable the read produced, and it is checked again before each reuse; see
 [what counts as a change](invalidation.md#what-counts-as-a-change).
 
 ??? warning "Keys survive a restart, not a move to another machine"
-    <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @438d8cb1 -->
+    <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @903b4459 -->
     A statement that reads a file folds the file's modification time, size
     and inode change time into its lineage, and one that only checks whether
-    a path exists folds whether it is there. Copy the `.cash` folder to another machine, or point two
+    a path exists folds whether it is there. A file rewritten with the same
+    bytes keeps the times cash saw before once a content check has found it
+    unchanged, so what is built on it keeps its lineage after a restart. Copy the `.cash` folder to another machine, or point two
     machines at one shared backend, and those statements miss there, because
     the two machines compute different keys. The decorator checks files by
     content instead, so its entries can survive a move while the file paths
@@ -193,7 +200,7 @@ calling a function defined in a later cell, see
 
 ### Resolving an input
 
-<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @a7a489f1, cash/value_hash.py:compute_hash @e9c43540 -->
+<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @778e6d73, cash/value_hash.py:compute_hash @e9c43540 -->
 For each input variable, the statement key uses the first of these that
 exists:
 

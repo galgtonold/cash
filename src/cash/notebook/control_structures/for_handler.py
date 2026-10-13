@@ -29,11 +29,11 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from cash.control_markers import iteration_digest, mark_iteration
 
 from ...analysis.mutations import accumulator_loop_body_shape, seeded_accumulator_loop
-from ...lineage_tag import own_tag
 from ...tracking.file_tracker import FileAccessTracker
 from ...value_hash import compute_hash
 from .. import heavy_loops
 from ..cache_status import CacheStatus
+from ..lineage_store import statement_tag
 from ..loop_split import loop_source_hash, split_nodes
 from ..restored_var import identity_digest
 from . import helpers as _helpers
@@ -729,7 +729,7 @@ class ForLoopHandler:
                 # `for df in [df_a, df_b]:` would collapse iteration 2 onto
                 # iteration 1's cached value. Only `compute_hash` of
                 # `val` answers it soundly -- one full hash per iteration.
-                tag = own_tag(val)
+                tag = statement_tag(val)
                 h = tag if tag is not None else full
                 self.statement_processor.tracking_state.lineage.record(name, h)
                 loop_var_digests[name] = full

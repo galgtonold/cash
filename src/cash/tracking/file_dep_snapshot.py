@@ -40,6 +40,7 @@ from cash._paths import normalize_path, resolve_file_dep_path
 from cash.bulk_digest import BulkHasher
 from cash.remote_source import RemoteFileDataSource, addressing_options, read_options
 from cash.tracking.digest_table import current_table
+from cash.tracking.file_versions import note_same_content
 from cash.tracking.read_classification import stat_key
 from cash.tracking.tracker_context import untracked
 
@@ -852,6 +853,8 @@ def file_dep_is_fresh(
         if cur_hash != stored_hash:
             return False, "content"
         _note_settled(st, stored, checked_at)
+        if listed is None:
+            note_same_content(resolved_path, st, stored)
         return True, None
     # No content hash: the file was unreadable when the snapshot was taken.
     if not _timestamps_match(st, stored, "mtime"):

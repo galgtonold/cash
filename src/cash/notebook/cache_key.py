@@ -26,6 +26,7 @@ from cash.tracking.randomness import rng_carrier_kind
 from .installed_code import installed_code_parts
 from .lineage_formula import (
     bound_names,
+    function_identity,
     is_cash_instrumentation,
     is_module_like,
     module_read_lineage,
@@ -333,6 +334,25 @@ def virtual_namespace(
     return VirtualNamespace(code_for, virtual_modules.__contains__, lineage_of)
 
 
+def key_lineage(name: str, lineage: str, variable_lineage: Mapping[str, str]) -> str:
+    """What *name*, with *lineage*, contributes to a key: a notebook
+    function by its identity (``lineage_formula.function_identity``), its
+    code and what its ``def`` evaluated. The globals its body reads are
+    keyed as they are at the call (:func:`called_function_dependencies`),
+    so a restart that re-runs the ``def`` over a global edited since its last
+    run reproduces the key.
+
+    Not where the simulation holds another lineage for the function than
+    the kernel does: the ``def`` would run again over a global the
+    simulation changed and the kernel has not (an edited cell above, not
+    run yet), which only the function's lineage carries. That key then
+    misses, and what was built on the function is rebuilt.
+    """
+    if variable_lineage.get(name, lineage) != lineage:
+        return lineage
+    return function_identity(lineage)
+
+
 def called_function_dependencies(
     inputs: Iterable[str],
     user_ns: Mapping[str, Any],
@@ -427,13 +447,13 @@ def called_function_dependencies(
     if used_virtual:
 
         def lineage(ref: str) -> str:
-            return virtual.lineage_of(ref) or "ABSENT"
+            return key_lineage(ref, virtual.lineage_of(ref) or "ABSENT", variable_lineage)
     else:
 
         def lineage(ref: str) -> str:
             if simulated and ref in simulated and rng_carrier_kind(user_ns.get(ref)) is not None:
                 return simulated[ref]
-            return variable_lineage.get(ref, "ABSENT")
+            return key_lineage(ref, variable_lineage.get(ref, "ABSENT"), variable_lineage)
 
     return sorted(f"{ref}:{'ABSENT' if ref in attribute_only else lineage(ref)}" for ref in referenced)
 
@@ -599,7 +619,7 @@ def _process_input_var(var_name: str, ctx: CacheKeyContext, parts: _KeyParts, co
         compute_hash_fn=ctx.compute_hash_fn,
     )
     if lineage:
-        parts.input_hashes.append(lineage)
+        parts.input_hashes.append(key_lineage(var_name, lineage, variable_lineage))
         logger.debug("[CACHE_KEY] Input %r resolved to: %.16s...", var_name, lineage)
 
     if val is None and lineage and virtual_callables and var_name not in user_ns:

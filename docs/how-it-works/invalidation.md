@@ -130,7 +130,7 @@ downloaded and keeps is. For a file
 read another way, name it with `file_depends_on=` on the decorator, or see
 [custom file sources](../tutorials/feature-guides/custom-file-sources.md).
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @5ea5c38d, cash/tracking/file_dep_snapshot.py:_note_settled @ec6408ac -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @a045b99e, cash/tracking/file_dep_snapshot.py:_note_settled @ec6408ac -->
 When the result is stored, each file is recorded with its size, modification
 time and a content hash. Before the result is reused:
 

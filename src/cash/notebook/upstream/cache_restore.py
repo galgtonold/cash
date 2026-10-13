@@ -29,7 +29,7 @@ from ..lineage_formula import (
     held_lineage,
     key_hidden_reads,
 )
-from ..lineage_store import tag_value
+from ..lineage_store import restore_frozen_tag, tag_value
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var
 from ._types import key_inputs, key_lineages
 from .cache_probe import CacheProbe
@@ -271,6 +271,9 @@ class CacheRestorer:
                     pass
             self.shell.user_ns[var] = val
             restored_vars.add(var)
+            frozen = (metadata.get("frozen_tags") or {}).get(var)
+            if frozen is not None:
+                restore_frozen_tag(val, frozen)
             if "output_lineages" in metadata:
                 new_lineage = metadata["output_lineages"].get(var)
                 if var in self.tracking_state.lineage and new_lineage is not None:
