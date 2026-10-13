@@ -67,9 +67,11 @@ are **not** flagged and are cached silently:
 
 <!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @4ebbcaa0, cash/tracking/randomness/lineage.py:advanced_carrier_lineage @eaa66fca, cash/notebook/upstream/statement_lineage.py:StatementLineage._recorded_draws @3b7507d9, cash/notebook/upstream/statement_lineage.py:StatementLineage._reachable_generators @b6c1ea9f -->
 A statement that draws from a generator held in a variable, or calls a function
-that does, counts as changing that variable. With `rng =
-np.random.default_rng(0)` in one cell and draws from `rng` in the next two,
-re-running the third cell alone first runs or restores the two above it, so it
+that does (also one the generator is handed to, as in `paths =
+simulate(n, rng)`), counts as changing that variable. It is stored like any
+other statement, with the generator's state after it, and a cache hit puts the
+generator in that state. With `rng = np.random.default_rng(0)` in one cell
+and draws from `rng` in the next two, re-running the third cell alone first runs or restores the two above it, so it
 draws where a top-to-bottom run does, also after a restart and when a draw
 above it was too cheap to store. A stored draw from such a generator is
 kept apart from one made with it in another position, so a reseed or a restart

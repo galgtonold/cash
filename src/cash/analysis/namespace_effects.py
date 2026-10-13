@@ -1994,7 +1994,14 @@ def _asks_for_a_write(call: ast.Call, user_ns: Mapping[str, Any]) -> bool:
 
 
 def _changeable(names: set[str], user_ns: Mapping[str, Any]) -> frozenset[str]:
-    """The live names among *names* whose value a call could change in place."""
+    """The live names among *names* whose value a call could change in place.
+
+    A random generator is not one: a call that draws from it (``paths =
+    simulate(n, rng)``) moves its stream, which is followed as a carrier's
+    is (``carrier_advances``): the generator gets a new lineage, the entry
+    stores where the call left it, and a hit puts it there. Watched as an
+    argument instead, every draw read as a change in place, and the
+    statement was never stored."""
     out: set[str] = set()
     for name in names:
         if name not in user_ns:
@@ -2002,7 +2009,7 @@ def _changeable(names: set[str], user_ns: Mapping[str, Any]) -> frozenset[str]:
         value = user_ns[name]
         if isinstance(value, (types.ModuleType, type, _IMMUTABLE_ARGUMENT_TYPES)):
             continue
-        if inspect.isroutine(value):
+        if inspect.isroutine(value) or rng_carrier_kind(value) is not None:
             continue
         out.add(name)
     return frozenset(out)
