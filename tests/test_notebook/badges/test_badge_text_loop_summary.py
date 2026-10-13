@@ -107,17 +107,20 @@ def _chart_cell(slow_s=0.01):
     return metrics
 
 
-def test_quick_steps_that_are_never_cached_fold_into_one_line():
+def test_quick_steps_that_are_never_cached_have_no_line():
     """10 of 12 badge lines of a chart cell were
-    ``In-place mutation on: ax (...)`` for steps that re-run in milliseconds."""
+    ``In-place mutation on: ax (...)`` for steps that re-run in milliseconds,
+    and folded into one "re-ran 8 quick steps that are never cached" line
+    they still repeated it on every run of every chart cell. The header
+    counts them; a slow one keeps its row."""
     from cash.notebook.badge_renderer.renderers.text import render_text
     from cash.notebook.badge_renderer.view_builder import build_interactive_badge
 
     text = render_text(build_interactive_badge(_chart_cell(slow_s=2.5)))
     lines = text.splitlines()
-    assert len(lines) <= 5, text
-    assert "re-ran 3 quick steps" in text and "re-ran 4 quick steps" in text, text
-    assert "ax.axhline" in text and "fig.savefig" in text, text
+    assert len(lines) <= 3, text
+    assert "quick steps" not in text and "ax.axhline" not in text and "fig.savefig" not in text, text
+    assert "8 not cached" in lines[0], text
     assert "big = fit(ax)" in text and "In-place mutation on: ax" in text, "a slow one keeps its row"
 
 

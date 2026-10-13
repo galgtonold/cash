@@ -19,7 +19,10 @@ was not stored, why.
     The HTML badge is about 20 kB per cell, most of it styling. `nbconvert`, CI
     logs, a diff or a coding agent reading the output see only that styling.
     `%cash_badge print` prints the same information as plain text, one line per
-    statement. Use it for headless runs and for notebooks you commit.
+    statement. Three or more quick steps in a row that are never cached, such
+    as a chart's `ax.legend()` and `fig.savefig(...)`, get no line; the
+    header's `not cached` count includes them. Use it for headless runs and for
+    notebooks you commit.
 
 ## Anatomy
 
