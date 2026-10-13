@@ -13,7 +13,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(180)]
 LIB = (
     "import os, time, warnings\n"
     "def load(x):\n"
-    "    fd = os.open({counter!r}, os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
+    "    fd = os.open({counter!r}, os.O_WRONLY | os.O_CREAT | os.O_APPEND)  # @cash:assume-safe\n"
     "    os.write(fd, b'x')\n"
     "    os.close(fd)\n"
     "    time.sleep(0.3)\n"

@@ -53,7 +53,7 @@ def _counted(tmp_path, body):
     log = str(tmp_path / "runs.log")
 
     def run(*args):
-        fd = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+        fd = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe
         os.write(fd, b".")
         os.close(fd)
         time.sleep(ABOVE_PERSISTENCE_FLOOR_S)

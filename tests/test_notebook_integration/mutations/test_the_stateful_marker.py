@@ -54,7 +54,7 @@ from cash import stateful
 @stateful
 def announce(text):
     time.sleep(0.2)
-    fd = os.open("sent.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+    fd = os.open("sent.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND)  # @cash:assume-safe
     os.write(fd, (text + "\\n").encode())
     os.close(fd)
     return 1

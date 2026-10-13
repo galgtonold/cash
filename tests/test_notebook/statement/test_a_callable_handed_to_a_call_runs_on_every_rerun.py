@@ -128,7 +128,7 @@ def test_a_method_that_changes_nothing_is_still_served(cash_magics, mock_shell, 
     definitions = (
         "import os\nclass Model:\n    def __init__(self, k):\n        self.k = k\n"
         "    def predict(self, v):\n        time.sleep(SLEEP)\n"
-        f"        fd = os.open({str(log)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        f"        fd = os.open({str(log)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
         "        os.write(fd, b'x'); os.close(fd)\n        return v * self.k\n"
         "model = Model(3)"
     )

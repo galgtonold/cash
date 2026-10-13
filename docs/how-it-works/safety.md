@@ -212,7 +212,7 @@ cash spots side effects from the statement's source, without running it. So:
   `gzip.open(p, "wt")`, `os.open`), and neither is a cached call inside it,
   so it runs every time. That covers a folder moved into place
   (`tmp.rename(dest)`) and an append your own code makes
-  (`open(p, mode)` in a helper); an append made inside a library (a log
+  (`open(p, mode)` or `os.open(p, os.O_WRONLY | os.O_APPEND)` in a helper); an append made inside a library (a log
   handler) is left to the check of the source above, and so is a file
   removed again before the statement finished (a temporary file). A waiver
   on the write's way keeps it cacheable: `# @cash:assume-safe` on the line

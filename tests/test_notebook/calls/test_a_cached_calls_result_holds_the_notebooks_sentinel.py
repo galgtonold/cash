@@ -20,7 +20,7 @@ def _cells(counter):
     return [
         "import os, time\nMISSING = object()\nTABLE = {'a': 1}",
         "def lookup(keys):\n"
-        f"    fd = os.open({str(counter)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        f"    fd = os.open({str(counter)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
         "    os.write(fd, b'x'); os.close(fd)\n"
         f"    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n"
         "    return [TABLE.get(k, MISSING) for k in keys]",

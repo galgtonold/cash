@@ -17,7 +17,7 @@ def _cells(counter, body: str) -> list[str]:
         "import cash, os, time\n"
         "def save(v):\n"
         "    time.sleep(0.25)\n"
-        f"    fd = os.open(r'{counter}', os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        f"    fd = os.open(r'{counter}', os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
         "    os.write(fd, b'x')\n"
         "    os.close(fd)\n"
         "    with open(r'" + str(counter) + ".out', 'w') as fh:\n"

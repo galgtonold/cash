@@ -27,7 +27,7 @@ def _setup(log):
         "def als_fit(n, tol=None, bump=0.0):\n"
         "    return np.arange(n) * 1.0, np.ones(n) + bump, [0.5, 0.25]\n"
         "def evaluate(U, V):\n"
-        f"    fd = os.open({str(log)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        f"    fd = os.open({str(log)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
         "    os.write(fd, b'x')\n"
         "    os.close(fd)\n"
         f"    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n"

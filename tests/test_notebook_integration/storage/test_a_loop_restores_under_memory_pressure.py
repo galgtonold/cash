@@ -82,7 +82,7 @@ def _loop(counter) -> str:
 
 #: ``os.write``, not ``open``: an ``open`` write is an effect a hit replays.
 COUNT = """def _count(path):
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe
     os.write(fd, b"x")
     os.close(fd)
 """

@@ -27,7 +27,7 @@ SETUP = (
     "import pandas as pd\n"
     "from sklearn.preprocessing import normalize\n"
     "def fit_vectors(texts, seed):\n"
-    "    fd = os.open('fits.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
+    "    fd = os.open('fits.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)  # @cash:assume-safe\n"
     "    os.write(fd, b'fit|')\n"
     "    os.close(fd)\n"
     "    time.sleep(0.1)\n"

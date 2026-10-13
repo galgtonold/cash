@@ -20,7 +20,7 @@ HELPERS = f"""import gzip, os, time
 import cash
 COUNTER = None
 def count():
-    fd = os.open(COUNTER, os.O_WRONLY | os.O_APPEND | os.O_CREAT); os.write(fd, b'x'); os.close(fd)
+    fd = os.open(COUNTER, os.O_WRONLY | os.O_APPEND | os.O_CREAT); os.write(fd, b'x'); os.close(fd)  # @cash:assume-safe
 @cash.pure
 def normalize(v):
     return v / 2

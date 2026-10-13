@@ -56,7 +56,7 @@ TICKED = (
     "import os\nimport time\n\nimport cash\n\n\n{extra}"
     "@cash.cache\n"
     "def get(x):\n"
-    "    fd = os.open({log!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+    "    fd = os.open({log!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
     "    os.write(fd, b'x')\n"
     "    os.close(fd)\n"
     "    time.sleep(0.3)\n"
@@ -111,7 +111,7 @@ def test_a_call_that_raised_after_an_edit_leaves_its_argument_cacheable(nb_runne
     body = (
         "import os, time\n\n\n"
         "def run_elo(matches, k=20.0):\n"
-        f"    fd = os.open({str(log)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        f"    fd = os.open({str(log)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
         "    os.write(fd, b'x')\n"
         "    os.close(fd)\n"
         "    time.sleep(0.3)\n"

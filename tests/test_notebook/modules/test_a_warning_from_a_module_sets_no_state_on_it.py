@@ -26,7 +26,7 @@ def _lib(counter: str) -> str:
     return (
         "import os, time, warnings\n"
         "def _count():\n"
-        f"    fd = os.open({counter!r}, os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
+        f"    fd = os.open({counter!r}, os.O_WRONLY | os.O_CREAT | os.O_APPEND)  # @cash:assume-safe\n"
         "    os.write(fd, b'x')\n"
         "    os.close(fd)\n"
         "def load(x):\n"

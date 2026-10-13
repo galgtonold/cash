@@ -49,7 +49,7 @@ RUNS = sys.argv[3]
 
 @c.cache
 def load(scale):
-    fd = os.open(RUNS, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+    fd = os.open(RUNS, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe
     os.write(fd, b"x\\n")
     os.close(fd)
     random.seed(scale)

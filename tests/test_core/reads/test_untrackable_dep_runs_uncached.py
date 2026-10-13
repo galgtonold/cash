@@ -54,7 +54,7 @@ def _load(tmp_path, body):
 _COUNT = """
         MARK = {mark!r}
         def _count():
-            fd = os.open(MARK, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+            fd = os.open(MARK, os.O_WRONLY | os.O_CREAT | os.O_APPEND)  # @cash:assume-safe
             os.write(fd, b"x")
             os.close(fd)
 """

@@ -19,7 +19,7 @@ def _defs(log) -> str:
     return (
         "import os, time\n"
         "def run(cfg):\n"
-        f"    fd = os.open({str(log)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        f"    fd = os.open({str(log)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
         "    os.write(fd, b'x')\n"
         "    os.close(fd)\n"
         "    time.sleep(cfg['secs'])\n"

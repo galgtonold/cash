@@ -176,7 +176,8 @@ def _on_open(args: tuple) -> None:
         appends = "a" in mode and not _appended_by_user_code()
     else:  # os.open
         written = isinstance(flags, int) and bool(flags & _WRITE_FLAGS)
-        appends = written and bool(flags & os.O_APPEND) and not flags & os.O_TRUNC
+        # ``O_APPEND`` from the user's own code is an append like ``open(p, "a")``.
+        appends = written and bool(flags & os.O_APPEND) and not flags & os.O_TRUNC and not _appended_by_user_code()
     if written and not _names_a_folder(path):
         _record(sinks, path, appends)
 

@@ -107,7 +107,7 @@ def test_a_disk_hit_in_a_new_process_keeps_the_range_index(tmp_path):
 
             @cash.cache
             def make(n):
-                fd = os.open(os.environ["RUNS"], os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+                fd = os.open(os.environ["RUNS"], os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe
                 os.write(fd, b"x")
                 os.close(fd)
                 return pd.DataFrame({"a": np.arange(n)})

@@ -92,8 +92,9 @@ def _on_open(args: tuple) -> None:
     """The ``open`` audit event: a read is a dependency, a write an effect.
 
     ``mode`` is the raw mode (``r``, ``w+``, ...) of any Python-level open;
-    ``os.open`` reports None there and is not watched, and an integer "path"
-    is a descriptor being wrapped, which names no file.
+    ``os.open`` reports None there and its *flags*: not watched as a read, but
+    a write like any other. An integer "path" is a descriptor being wrapped,
+    which names no file.
     """
     path, mode, flags = args
     if not isinstance(path, (str, bytes, os.PathLike)):
@@ -111,6 +112,18 @@ def _on_open(args: tuple) -> None:
             tracker = active_tracker.get()
             if tracker is not None:
                 tracker.note_created(path)
+        if isinstance(flags, int) and _os_open_writes(flags):
+            # A write, as ``open(p, "a")`` is: a helper appending through
+            # ``os.open`` + ``os.write`` was cached without a word, and a hit
+            # skipped the line it writes. Cash's own raw writes (an entry,
+            # a temporary name) are not the user's.
+            observer = _active_effect_observer.get()
+            if (
+                observer is not None
+                and not _opened_by_cash(_audited_caller())
+                and not is_cash_internal(os.fsdecode(os.fspath(path)))
+            ):
+                observer.record_write(path, raw=True)
         return
     caller = _audited_caller()
     if _not_a_read(caller):
@@ -161,6 +174,20 @@ def _opens_to_write(mode: Any, flags: Any) -> bool:
     if isinstance(mode, str):
         return any(ch in mode for ch in "wax+")
     return isinstance(flags, int) and bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_TRUNC))
+
+
+def _os_open_writes(flags: int) -> bool:
+    """Do ``os.open`` *flags* open the file to write to it? ``O_WRONLY``
+    always; ``O_RDWR`` when it appends, creates or truncates (an ``O_RDWR``
+    open of an existing file is ``r+``, which is read as an input)."""
+    if flags & os.O_WRONLY:
+        return True
+    return bool(flags & os.O_RDWR) and bool(flags & (os.O_APPEND | os.O_CREAT | os.O_TRUNC))
+
+
+def _opened_by_cash(frame: Any) -> bool:
+    name = (frame.f_globals.get("__name__") or "") if frame is not None else ""
+    return name == "cash" or name.startswith("cash.")
 
 
 def _creates(flags: int) -> bool:

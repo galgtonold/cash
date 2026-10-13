@@ -18,7 +18,7 @@ def test_slow_calls_at_the_re_check_are_served_on_a_re_run(nb_runner, tmp_path):
         "import os, time\n"
         f"RUNS_LOG = {str(log)!r}\n"
         "def work(i):\n"
-        "    fd = os.open(RUNS_LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        "    fd = os.open(RUNS_LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
         "    os.write(fd, f'{i} '.encode())\n"
         "    os.close(fd)\n"
         "    time.sleep(0.2 if 50 <= i < 55 else 0.01)\n"

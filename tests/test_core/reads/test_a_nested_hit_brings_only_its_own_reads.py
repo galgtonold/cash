@@ -33,7 +33,7 @@ def _read(path):
 def _note(root, line):
     # `os.write`, not `open`: a counter the body writes itself through `open`
     # would be a tracked file, and a dict it appends to is part of its key.
-    fd = os.open(root / "runs.log", os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+    fd = os.open(root / "runs.log", os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe
     try:
         os.write(fd, f"{line}\n".encode())
     finally:

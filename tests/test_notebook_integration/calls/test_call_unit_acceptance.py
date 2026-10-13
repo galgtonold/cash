@@ -151,7 +151,7 @@ def test_loop_carried_hidden_state_reuses_on_an_unchanged_rerun(nb_runner, tmp_p
         "import time\n",
         "import time, os\n"
         "def _tick():\n"
-        f"    fd = os.open(r'{ticks}', os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        f"    fd = os.open(r'{ticks}', os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
         "    os.write(fd, b'X')\n"
         "    os.close(fd)\n",
     ).replace("    CALLS.append(v)\n", "    CALLS.append(v)\n    _tick()\n")

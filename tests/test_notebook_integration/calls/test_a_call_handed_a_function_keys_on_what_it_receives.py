@@ -22,7 +22,7 @@ MODULE = (
     "def fit_b(y, h):\n"
     "    return float(y.iloc[0]) * h\n"
     "def backtest(y, fit_fn, cuts, h):\n"
-    "    fd = os.open('fits.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
+    "    fd = os.open('fits.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)  # @cash:assume-safe\n"
     "    os.write(fd, b'x')\n"
     "    os.close(fd)\n"
     "    time.sleep(0.3)\n"

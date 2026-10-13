@@ -42,7 +42,7 @@ cheap. Every file is hashed in full, whatever its size. The full rule is in
 
 ## What's automatically tracked
 
-<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @b76337da, cash/tracking/read_events.py:_on_open @47c21ac1, cash/tracking/read_events.py:_on_listing @41ce1606 -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @b76337da, cash/tracking/read_events.py:_on_open @ac42db2f, cash/tracking/read_events.py:_on_listing @41ce1606 -->
 cash tracks `open()` in a read mode and what reads through it, the pandas, polars,
 pyarrow, numpy and soundfile readers, `sqlite3.connect`, directory listings (a new
 matching file recomputes the call) and existence checks (the call recomputes

@@ -25,7 +25,7 @@ def _setup(log) -> str:
         "import numpy as np, pandas as pd\n"
         f"LOG = {str(log)!r}\n"
         "def tick():\n"
-        "    fd = os.open(LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
+        "    fd = os.open(LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND)  # @cash:assume-safe\n"
         "    os.write(fd, b'x')\n"
         "    os.close(fd)\n"
         f"    time.sleep({SLOW})\n"

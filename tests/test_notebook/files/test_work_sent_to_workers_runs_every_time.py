@@ -69,7 +69,7 @@ COUNTER = None
 def save_one(p):
     f = gzip.open(p, 'wt'); f.write('x'); f.close()
 def by_thread(d):
-    fd = os.open(COUNTER, os.O_WRONLY | os.O_APPEND | os.O_CREAT); os.write(fd, b'x'); os.close(fd)
+    fd = os.open(COUNTER, os.O_WRONLY | os.O_APPEND | os.O_CREAT); os.write(fd, b'x'); os.close(fd)  # @cash:assume-safe
     time.sleep({ABOVE_PERSISTENCE_FLOOR_S})
     t = threading.Thread(target=save_one, args=(os.path.join(d, 'part.gz'),))
     t.start(); t.join()

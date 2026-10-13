@@ -29,7 +29,7 @@ N = 130
 SETUP = (
     "import os, time\n"
     "def fit(values):\n"
-    "    fd = os.open('fits.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
+    "    fd = os.open('fits.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)  # @cash:assume-safe\n"
     "    os.write(fd, b'fit|')\n"
     "    os.close(fd)\n"
     # Above the many-cheap-calls guard's 50 ms, as the user's fits were:

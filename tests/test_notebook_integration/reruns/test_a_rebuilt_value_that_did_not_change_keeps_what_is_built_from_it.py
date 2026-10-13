@@ -24,7 +24,7 @@ SETUP = (
     "import os, time\n"
     "import pandas as pd\n"
     "def slow_total(frame):\n"
-    "    fd = os.open('runs.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
+    "    fd = os.open('runs.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)  # @cash:assume-safe\n"
     "    os.write(fd, b'x')\n"
     "    os.close(fd)\n"
     "    time.sleep(0.2)\n"

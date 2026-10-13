@@ -16,7 +16,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(180)]
 SLOW = (
     "import os, time\n"
     "def slow(v):\n"
-    "    os.write(os.open('runs.log', os.O_WRONLY | os.O_APPEND | os.O_CREAT), b'r')\n"
+    "    os.write(os.open('runs.log', os.O_WRONLY | os.O_APPEND | os.O_CREAT), b'r')  # @cash:assume-safe\n"
     f"    time.sleep({ABOVE_PERSISTENCE_FLOOR_S * 2})\n"
     "    return v"
 )

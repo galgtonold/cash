@@ -216,8 +216,14 @@ format is cleared on first open.
   kernel state: a cache hit replays stdout, so printed
   output can describe the value from when the entry was written.
 - Do not count executions of a cached callee with a counter it writes itself; the
-  write is restored on a hit. Use `os.open`/`os.write` (not `builtins.open`, which
-  the file tracker turns into a dependency).
+  write is restored on a hit. Count with an `os.open`/`os.write` append in a
+  function, with `# @cash:assume-safe` on the `os.open` line:
+  `fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe`.
+  Cash counts that append as a write like any other (a notebook statement calling
+  the helper would run every time, a decorated function would warn); the waiver,
+  the documented one for a write a hit may skip, keeps it out of what is tested.
+  Never put it on a cell's top-level line, where it caches the statement, and do
+  not use `builtins.open` (the file tracker turns a read mode into a dependency).
 - `InteractiveShell.instance()` creates a process-wide shell. A test that calls it
   must call `InteractiveShell.clear_instance()` in teardown, as
   `tests/docs/_harness.py` and `benchmarks/tests/conftest.py` do.

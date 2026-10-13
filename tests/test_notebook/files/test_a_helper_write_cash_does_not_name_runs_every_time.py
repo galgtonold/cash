@@ -31,7 +31,7 @@ def _cells(body: str, path, counter, *, def_line: str = "") -> list[str]:
     return [
         "import gzip, os, pathlib, tempfile, time, zipfile\nimport numpy as np\n"
         f"def export(arr, p):{def_line}\n"
-        f"    fd = os.open({str(counter)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        f"    fd = os.open({str(counter)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
         "    os.write(fd, b'x'); os.close(fd)\n"
         f"    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n"
         f"    {body}\n"

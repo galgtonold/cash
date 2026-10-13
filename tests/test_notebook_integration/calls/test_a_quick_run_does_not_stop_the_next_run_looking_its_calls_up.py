@@ -18,7 +18,7 @@ def _counting(name: str, body: str) -> str:
     return (
         "import os, time\n"
         f"def {name}(item):\n"
-        "    fd = os.open(RUNS_LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        "    fd = os.open(RUNS_LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
         "    os.write(fd, (str(item[0]) + ' ').encode())\n"
         "    os.close(fd)\n"
         f"{body}"

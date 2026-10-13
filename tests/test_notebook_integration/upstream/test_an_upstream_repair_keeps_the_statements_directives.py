@@ -19,7 +19,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.upstream, pytest.mark.timeout
 WORK = (
     "import os, time\n"
     "def work(i):\n"
-    "    fd = os.open('calls.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)\n"
+    "    fd = os.open('calls.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND)  # @cash:assume-safe\n"
     "    os.write(fd, b'w|')\n"
     "    os.close(fd)\n"
     "    time.sleep(0.06)\n"
