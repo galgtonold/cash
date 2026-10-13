@@ -282,7 +282,7 @@ Three kinds of value are refused after the statement runs, because restoring
 a copy would break them: a view of another variable (a numpy slice, a pandas
 `groupby` object), which would come back detached from its base; a frame or
 array that keeps its data in another variable's memory without a copy
-(`x = df["a"].to_numpy()`, `s = pl.Series(arr)`), which would no longer see a
+(`x = df["a"].to_numpy()`, `s = pl.Series(arr)`), which would miss a later
 write to that variable; and a matplotlib `Figure`/`Axes`, which would come
 back detached from pyplot. Such a statement runs every time, which costs
 little: making a view is fast. A
