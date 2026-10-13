@@ -218,13 +218,16 @@ class StatementLineageBuilder:
         # All outputs of one statement share its formula lineage (``train,
         # test = ...``, or ``M = enc.fit_transform(X)`` writing ``enc`` too):
         # it names no single value, so none of them may be cut off to an
-        # earlier value's lineage, nor lend it to a later value.
-        cut_off = not no_cache and sum(1 for name in outputs if name in user_ns) == 1
+        # earlier value's lineage on its own, nor lend it to a later value.
+        # Only all of them together, to the lineage they all shared when an
+        # earlier statement bound the same names to the same values
+        # (`ValueCutoff.lineage_for_outputs`).
+        bound = {name: user_ns[name] for name in outputs if name in user_ns}
+        rebuilt = not no_cache and not any(user_ns.get(name) is value for name in inputs for value in bound.values())
+        cut_off = rebuilt and len(bound) == 1
 
-        for var_name in outputs:
-            if var_name not in user_ns:
-                continue
-            value = user_ns[var_name]
+        lineages: dict[str, str] = {}
+        for var_name, value in bound.items():
             captured_vars[var_name] = value
 
             tracking_state.executed_input_lineages[var_name] = dict(input_lineage_map)
@@ -242,16 +245,23 @@ class StatementLineageBuilder:
             )
             # A new object only: ``t = raw`` binds the input itself, which
             # keeps the lineage the formula gives it.
-            if cut_off and not any(user_ns.get(name) is value for name in inputs):
+            if cut_off:
                 output_lineage_hash = tracking_state.value_cutoff.lineage_for(
                     value, output_lineage_hash, self.compute_hash or compute_hash
                 )
+            lineages[var_name] = output_lineage_hash
 
+        if rebuilt and len(bound) > 1:
+            lineages = tracking_state.value_cutoff.lineage_for_outputs(
+                bound, lineages, self.compute_hash or compute_hash
+            )
+
+        for var_name, value in bound.items():
             self._record_output(
                 tracking_state,
                 var_name,
                 value,
-                output_lineage_hash,
+                lineages[var_name],
                 code=code,
                 source_hash=source_hash,
                 cache_key=cache_key,

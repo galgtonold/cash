@@ -165,3 +165,37 @@ def test_a_value_restored_after_a_restart_counts_as_seen(nb_runner):
     nb_runner.run_all()
     assert "TOTAL 44999850000" in nb_runner.get_output(5)
     assert _runs(nb_runner) == 1, "a table rebuilt equal to a restored one ran what was built from it again"
+
+
+def test_a_statement_whose_outputs_all_came_out_the_same_keeps_what_is_built_from_them(nb_runner):
+    """``U, V, hist = als_fit(C, tol=1e-3)`` returned the factors the fit
+    without ``tol`` had; ``evaluate(U, V, ...)`` ran again. All outputs equal
+    to what the same names held before take their lineage together, in the
+    session and after a restart; one output changed keeps them all new."""
+    fit = (
+        "def als_fit(n, tol=None, bump=0.0):\n"
+        "    return pd.DataFrame({'a': range(n)}), pd.DataFrame({'a': [1.0 + bump] * n}), [0.5, 0.25]\n"
+        "def evaluate(U, V):\n"
+        "    return slow_total(U + V)"
+    )
+    # By name, and over 1 MiB: the call is keyed by the lineage of U and V.
+    cells = [ON, SETUP + "\n" + fit, "U, V, hist = als_fit(300_000)", "total = evaluate(U, V)\nprint('TOTAL', total)"]
+    nb_runner.create_notebook(cells)
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert _runs(nb_runner) == 1
+
+    nb_runner.set_cell_source(3, "U, V, hist = als_fit(300_000, tol=1e-3)")
+    nb_runner.run_all()
+    assert "TOTAL 45000150000" in nb_runner.get_output(4)
+    assert _runs(nb_runner) == 1, "a refit to the same values ran what was built on them again"
+
+    nb_runner.restart()
+    nb_runner.run_all()
+    assert "TOTAL 45000150000" in nb_runner.get_output(4)
+    assert _runs(nb_runner) == 1
+
+    nb_runner.set_cell_source(3, "U, V, hist = als_fit(300_000, tol=1e-3, bump=1.0)")
+    nb_runner.run_all()
+    assert "TOTAL 45000450000" in nb_runner.get_output(4)
+    assert _runs(nb_runner) == 2
