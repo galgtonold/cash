@@ -37,7 +37,8 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
     - **An input's lineage**, which changes whenever anything upstream of that
       input changed ([below](#lineage-propagation)).
     - **A function or local module it calls.** An imported module of yours
-      (outside the standard library and `site-packages`) is tracked as soon
+      (outside the standard library, `site-packages` and
+      [`--target` folders](../decorator-limitations.md#code-in-installed-packages)) is tracked as soon
       as a cell imports it (a cell that also loads an extension, such as
       `%load_ext autoreload` / `import mylib`, included), and cash reloads it
       in the kernel when you edit it. With `%autoreload` on, its reloads run

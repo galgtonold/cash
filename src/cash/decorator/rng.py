@@ -137,11 +137,11 @@ def _random_state_param(callee: Any) -> tuple[int | None, inspect.Parameter | No
     ``random_state=None``: where it may be passed positionally (None when only
     by keyword) and its ``shuffle`` parameter, if any. None for anything
     else, the user's own code included."""
-    from ..install_paths import is_installed_path
+    from ..install_paths import is_user_path
 
     module = sys.modules.get((getattr(callee, "__module__", None) or "").split(".")[0])
     file = getattr(module, "__file__", None)
-    if not file or not is_installed_path(file):
+    if not file or is_user_path(file):
         return None
     try:
         params = list(inspect.signature(callee).parameters.values())

@@ -32,6 +32,7 @@ __all__ = [
     "interactive_shell_is_running",
     "per_user_cache_root",
     "project_anchor",
+    "project_code_dirs",
 ]
 
 #: Files that mean "the project starts here".
@@ -423,6 +424,20 @@ def project_anchor() -> Path:
     as the process that started it, so both use one cache directory.
     """
     return _launch()[0]
+
+
+def project_code_dirs() -> list[Path]:
+    """The folders whose code is the user's whatever ``sys.path`` says: the
+    project (the first folder with a project marker at or above
+    `project_anchor`, else the anchor itself) and the running script's
+    folder. `cash.install_paths` asks it about packages installed into plain
+    folders on ``sys.path``."""
+    anchor = project_anchor()
+    dirs = [_project_root_above(anchor) or anchor]
+    script_dir = _running_script_dir()
+    if script_dir is not None:
+        dirs.append(script_dir)
+    return dirs
 
 
 def _own_project_anchor() -> Path:
