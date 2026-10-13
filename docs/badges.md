@@ -211,6 +211,33 @@ and runs the call every time from then on.
 `df = df.sort_values(...)`. For estimators, see
 [`# @cash:cache-fit`](annotations.md#cashcache-fit).
 
+### Shared with another variable
+
+```text title="Output"
+  NOT CACHED: X_tr = train[FEATURES]  (0.02s) - Live-alias object 'X_tr' (view/ref-holder); re-derived from live base, not cached.
+  NOT CACHED: m = make_model()  (1.30s) - 'm' holds an object another variable or container also holds; a restored copy would not be that object, so the statement re-runs every time
+```
+
+<!-- claim: cash/notebook/statement/output_refusals.py:_alias_refusal @be5da5dd, cash/notebook/statement/output_refusals.py:unrestorable_output_reason @fb9351f8 -->
+A value restored from the cache is a copy. Some values must stay the very
+object they are, or keep sharing memory with another variable, so cash runs
+the statement every time instead of storing it:
+
+- **Live-alias object**: the value is a view onto another variable's data, such
+  as a NumPy slice `a[:5]`, a pandas `groupby` or `rolling` object, or a
+  frame built over an array without copying it. A copy would stop seeing
+  changes to the original. These are usually quick to run again, so there
+  is nothing to do. When one is slow, add `.copy()` to make it a value of
+  its own, which is cached.
+- **Holds an object another variable or container also holds**: the result
+  keeps an object that something else cash cannot follow also holds, such as
+  a library's registry or a closure, or the statement is in a loop body. See
+  [Mutating an object created in an earlier cell](known-limitations.md#mutating-an-object-created-in-an-earlier-cell).
+
+A line that is an IPython magic or a shell command (`%load_ext autoreload`,
+`!ls`) shows `Runs an IPython magic or shell command`: cash cannot see what it
+does, so it always runs. That is expected and needs no fix.
+
 ### Unstable key
 
 ```text title="Output"
@@ -239,7 +266,9 @@ fix that one.
 
 The statement reads a name cash never saw assigned, so it cannot tell an old
 value from a new one. This happens when the name came from `%run`, `exec` or an
-IPython startup file. Bind the name in a notebook cell below `%cash_on` instead.
+IPython startup file, or from the `%cash_on` cell in a
+[headless run](notebook_caching_api.md#running-a-notebook-headless). Bind the
+name in a notebook cell below `%cash_on` instead.
 
 Names bound in the `%cash_on` cell itself are handled: imports, constants and
 paths get their lineage from the notebook, and a load such as

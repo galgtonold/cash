@@ -223,16 +223,23 @@ The statement around a cached call is then stored only for its own work; see
 The statement's `ttl=`, `persist` and `assume-safe` apply to the calls inside it,
 and `no-cache` switches them off.
 
-<!-- claim: cash/notebook/call_entries.py:CallEntries.storable @aae46ee9, cash/notebook/call_entries.py:reached_objects @b3cdef27, cash/notebook/shared_objects.py:view_bases @631203da -->
-A call whose result is or holds an object the notebook can also reach is not
-cached: one of its arguments or an object inside one, a global the function
-names (`return MODELS[1]`, `return {'model': MODEL}`, a lazily built
-`global _DATA`), a class attribute (`return Config.items`), a bound method of a
-global (`return LOG.append`), or a numpy view of any of these
-(`return arr[i:i+3]`, `return np.split(arr, 2)`). The same goes for a result
-something else holds when cash cannot tell what (a library object, a cache of
-the function's own). A hit would hand back a copy, so writes through the
-result would no longer reach the original. Such a call runs every time.
+<!-- claim: cash/notebook/call_entries.py:CallEntries.storable @1e99e8b2, cash/notebook/call_entries.py:reached_objects @b3cdef27, cash/notebook/shared_objects.py:view_bases @631203da -->
+A hit hands back a copy of the stored result. So a call is not cached, and
+runs every time, when its result has to be the very object it is:
+
+- it is, or holds, one of its arguments or an object inside one
+  (`return d`, `return {"model": model}`);
+- it is, or holds, a global the function reaches (`return MODELS[1]`,
+  `return {'model': MODEL}`, a lazily built `global _DATA`), a class
+  attribute (`return Config.items`), a bound method of a global
+  (`return LOG.append`), or a NumPy view of any of these
+  (`return arr[i:i+3]`, `return np.split(arr, 2)`);
+- something else holds it and cash cannot tell what (a library object, a
+  cache of the function's own);
+- it is a matplotlib figure or axes, an open file or a generator, or a
+  function that keeps a count or a log in its closure.
+
+With a copy, writes through the result would no longer reach the original.
 
 !!! warning "A cached call skips effects cash cannot see"
     cash does not serve a call from the cache when it sees the function change
