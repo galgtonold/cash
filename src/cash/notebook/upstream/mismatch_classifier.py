@@ -1066,7 +1066,7 @@ class MismatchClassifier:
         what its text reads, and the rest of *trace_inputs* (a local module it
         changes in place without naming it)."""
         scan.run.append(i)
-        stmt_inputs, _ = CodeAnalyzer.analyze_code_block(stmt_code)
+        stmt_inputs, bound = CodeAnalyzer.analyze_code_block(stmt_code)
         if trace_inputs:
             stmt_inputs = [*stmt_inputs, *sorted(set(trace_inputs) - set(stmt_inputs))]
         # A callee's globals are inputs too, once the statement runs; the ones
@@ -1078,7 +1078,15 @@ class MismatchClassifier:
             if self._should_add_input_to_needed(inp, sim, result, scan.needed):
                 scan.needed.add(inp)
 
-        outputs_only = outputs - set(stmt_inputs)
+        # Only a name the statement binds is made by it. One it changes
+        # without naming it -- through memory it shares with a name it does
+        # name (``m.fit(X, y)`` with ``y = data['churn'].to_numpy()`` changes
+        # ``data``) or a callee's write to a global in place -- is changed
+        # from what it held: it stays needed, and the scan goes on to the
+        # statements that made it. Taken as made by ``m.fit``, ``data`` was
+        # rebuilt from the cleaning cell's old output after an edit to its
+        # filter.
+        outputs_only = (outputs & set(bound)) - set(stmt_inputs)
         if outputs_only:
             removed = outputs_only & scan.needed
             if removed:

@@ -57,3 +57,51 @@ def test_the_spans_cover_every_chunk_and_skip_what_has_no_buffer():
     assert memory_spans(pl.Series(["a", "b"])) == []
     assert memory_spans(pd.DataFrame({"a": [1.0]}, index=pd.RangeIndex(1))) != []
     assert memory_spans("not a frame") == []
+
+
+class _Polars2Chunk:
+    """A polars chunk as polars 2 shows it: no ``_get_buffer_info``."""
+
+    def __init__(self, series):
+        self._series = series
+
+    def __len__(self):
+        return len(self._series)
+
+    def __getattr__(self, name):
+        if name == "_get_buffer_info":
+            raise AttributeError(name)
+        return getattr(self._series, name)
+
+
+@pytest.mark.parametrize("nulls", [False, True], ids=["values", "with nulls"])
+def test_a_chunk_without_buffer_info_is_read_through_numpy_or_arrow(nulls):
+    from cash.notebook.borrowed_memory import _polars_chunk_span
+
+    arr = np.arange(10, dtype="int64")
+    series = pl.Series(arr)[2:7]
+    if nulls:
+        series = series.scatter(0, None)
+    start, end = _polars_chunk_span(_Polars2Chunk(series), 8)
+    # The values of the slice: inside the buffer, five of them, which under
+    # polars 1 its own buffer info covers too.
+    (array,) = pa.chunked_array(series).chunks
+    assert end - start == 5 * 8
+    assert start == array.buffers()[1].address + array.offset * 8
+    if not nulls:
+        low, high = memory_spans(arr)[0]
+        assert low <= start and end <= high
+
+
+def test_a_frame_whose_buffers_cannot_be_read_is_taken_as_sharing(monkeypatch):
+    from cash.notebook import borrowed_memory
+
+    def unreadable(series, pl):
+        raise AttributeError("'Series' object has no attribute '_get_buffer_info'")
+
+    monkeypatch.setattr(borrowed_memory, "_polars_series_spans", unreadable)
+    arr = np.arange(100.0)
+    ns = {"arr": arr, "frame": pd.DataFrame({"a": np.arange(3.0)}), "n": 3}
+    # A copy shares nothing, but cash cannot tell: every candidate is linked
+    # rather than none (a missed write would leave a stale restore).
+    assert borrowed_memory_names([pl.Series(arr * 2)], ns) == {"arr", "frame"}

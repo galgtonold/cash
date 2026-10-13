@@ -25,6 +25,7 @@ shares.
 from __future__ import annotations
 
 import bisect
+import logging
 import sys
 from collections.abc import Callable, Container, Iterable, Mapping
 from itertools import chain
@@ -41,6 +42,8 @@ from .shared_objects import (
     is_value,
     library_value_types,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["borrowed_memory_names", "borrows_from", "holds_a_borrower", "lazy_frame_sources", "memory_spans"]
 
@@ -99,11 +102,22 @@ def _library_family(kind: type) -> str | None:
     return None
 
 
+#: The span of an object whose buffers a library would not show: all of
+#: memory, so it overlaps every other object's. Taken as sharing memory with
+#: each candidate, it is re-derived rather than restored as a copy that
+#: might miss a write; a library change costs speed, never a stale value.
+_EVERYWHERE: _Span = (0, 1 << 64)
+
+#: The families whose buffers could not be read, each logged once.
+_UNREADABLE: set[str] = set()
+
+
 def memory_spans(value: Any) -> list[_Span]:
     """The ``[start, end)`` address ranges *value*'s data sits in: a numpy
     array's, a pandas object's blocks and axes, a polars frame's fixed-width
-    columns (every chunk), an Arrow array's buffers. Empty for anything else,
-    and when a library will not say."""
+    columns (every chunk), an Arrow array's buffers. Empty for anything else.
+    When the library will not say (its internals changed), `_EVERYWHERE`:
+    an object whose memory is unknown may share any other's."""
     family = _family(value)
     try:
         if family == _NUMPY:
@@ -114,8 +128,16 @@ def memory_spans(value: Any) -> list[_Span]:
             return _polars_spans(value)
         if family == _ARROW:
             return _arrow_spans(value)
-    except Exception:  # noqa: BLE001 - a library internals change: nothing known
-        return []
+    except Exception:
+        if family not in _UNREADABLE:
+            _UNREADABLE.add(family)
+            logger.warning(
+                "cash: cannot read where a %s object keeps its data; it is taken as sharing memory "
+                "with the arrays and frames beside it (re-derived, not restored).",
+                family,
+                exc_info=True,
+            )
+        return [_EVERYWHERE]
     return []
 
 
@@ -198,10 +220,36 @@ def _polars_series_spans(series: Any, pl: Any) -> list[_Span]:
     spans = []
     chunks = series.get_chunks() if series.n_chunks() > 1 else [series]
     for chunk in chunks:
-        address, offset, length = chunk._get_buffer_info()
-        if length:
-            spans.append((address, address + (offset + length) * width))
+        span = _polars_chunk_span(chunk, width)
+        if span is not None:
+            spans.append(span)
     return spans
+
+
+def _polars_chunk_span(chunk: Any, width: int) -> _Span | None:
+    """Where the values of one polars chunk sit; None when it has none.
+
+    polars 1 says so itself (``_get_buffer_info``); polars 2 dropped that, so
+    the values are read as a numpy view (``to_numpy(allow_copy=False)``, of
+    the physical type: a date's integers), and a chunk with nulls, which has
+    no such view, through the Arrow array it exports without a copy. Raises
+    when none of these works (`memory_spans`)."""
+    buffer_info = getattr(chunk, "_get_buffer_info", None)
+    if buffer_info is not None:
+        address, offset, length = buffer_info()
+        return (address, address + (offset + length) * width) if length else None
+    if not len(chunk):
+        return None
+    if not chunk.null_count():
+        view = chunk.to_physical().to_numpy(allow_copy=False)
+        spans = _ndarray_spans(view)
+        return spans[0] if spans else None
+    import pyarrow as pa
+
+    (array,) = pa.chunked_array(chunk.to_physical()).chunks
+    values = array.buffers()[1]
+    start = values.address + array.offset * width
+    return (start, start + len(array) * width)
 
 
 def _polars_width(dtype: Any, pl: Any) -> int | None:
