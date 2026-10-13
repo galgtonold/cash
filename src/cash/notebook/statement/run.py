@@ -143,6 +143,11 @@ class StatementRun:
     mut_observe: set[str] = field(default_factory=set)
     mut_assumed: set[str] = field(default_factory=set)
     mut_record: bool = False
+    #: Modules a ``set_*`` call is assumed to change until a name it is
+    #: handed is seen changing (``ReceiverClasses.provisional``), and the
+    #: reason they were skip-cached with.
+    mut_provisional: dict[str, frozenset[str]] = field(default_factory=dict)
+    mut_provisional_reason: str = ""
     #: A statement whose verdict is known, watched as it runs on new inputs
     #: for what the verdict does not hold (``MutationClassifier.start_rewatch``).
     rewatching: bool = False

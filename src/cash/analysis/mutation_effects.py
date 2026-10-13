@@ -1389,6 +1389,12 @@ class ReceiverClasses:
     #: the simulation leaves them alone, since treating every ``print(df)``
     #: as a change would bump ``df`` for every reader.
     unknown_args: frozenset[str] = frozenset()
+    #: Modules counted as changed by a ``set_*`` call that is also handed
+    #: names, while no verdict says what the call changed, with those names:
+    #: ``nx.set_node_attributes(G, region, "region")`` sets on ``G``. The
+    #: runtime drops the module once it sees a handed name change
+    #: (`MutationRouting.observe`); the recorded verdict then decides.
+    provisional: Mapping[str, frozenset[str]] = field(default_factory=dict)
 
 
 #: Receivers whose methods are known: the builtin containers and scalars,
@@ -1487,11 +1493,28 @@ def classify_receivers(
     verdict = load_verdict()
     mutated: set[str] = set()
     unknown: set[str] = set()
+    provisional: dict[str, frozenset[str]] = {}
     for base, method in candidates:
         receiver = namespace.get(base)
         if is_module_name(base, namespace, virtual_modules):
-            if base in settings:  # pd.set_option, plt.rcParams.update
-                mutated.add(base)
+            if base not in settings:
+                continue
+            # pd.set_option, plt.rcParams.update. A ``set_*`` call handed
+            # names (``nx.set_node_attributes(G, ...)``) that was seen
+            # changing one of them set on it, not on the module: counted as
+            # a change to the module, every re-run moved the lineage of
+            # every statement reading ``nx``, and a restart that ran the
+            # call fewer times missed them all.
+            handed = frozenset(
+                name
+                for name in calls.setting_arguments.get(base, ())
+                if not is_module_name(name, namespace, virtual_modules)
+            )
+            if handed and verdict is not None and handed & set(verdict) and base not in verdict:
+                continue
+            mutated.add(base)
+            if handed and verdict is None:
+                provisional[base] = handed
             continue
         if base in tier1:
             mutated.add(base)
@@ -1525,7 +1548,7 @@ def classify_receivers(
     else:
         mutated |= {name for name in args if name in verdict}
         unknown_args = frozenset()
-    return ReceiverClasses(frozenset(mutated), frozenset(unknown), unknown_args)
+    return ReceiverClasses(frozenset(mutated), frozenset(unknown), unknown_args, provisional)
 
 
 def _receiver_root(node: ast.AST) -> str | None:

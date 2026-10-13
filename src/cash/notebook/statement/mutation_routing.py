@@ -306,12 +306,25 @@ class MutationRouting:
         skip_pre_route = mut_pre_route - est_fit
         if mut_pre_route or est_fit or fam:
             run.outputs = run.outputs | mut_pre_route | est_fit | fam
+        # A module a `set_*` call is handed names with gets a reason of its
+        # own, taken back if the call is seen setting on a name instead
+        # (`_settle_provisional`).
+        provisional = {
+            module: handed
+            for module, handed in self._classifier.provisional_modules(run.source_hash).items()
+            if module in skip_pre_route
+        }
+        run.mut_provisional = provisional
+        skip_pre_route -= set(provisional)
         if skip_pre_route:
             _skip(
                 run,
                 f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
                 "(receiver lineage bumped; statement re-executes)" + self._classifier.cache_fit_hint(skip_pre_route),
             )
+        if provisional:
+            run.mut_provisional_reason = f"In-place mutation on: {', '.join(sorted(provisional))} (receiver lineage bumped; statement re-executes)"
+            _skip(run, run.mut_provisional_reason)
 
     def _callees_changing_their_closure(self, tree: ast.AST | None) -> set[str]:
         """The functions *tree* calls by name, outside loop and branch bodies,
@@ -342,6 +355,7 @@ class MutationRouting:
         body = is_control_body(run.code)
         if run.mut_record:
             newly_mutated = self._observe_receivers(run, body)
+            self._settle_provisional(run, newly_mutated)
             verdict_hash = run.verdict_hash or run.source_hash
             self.tracking_state.mutation_verdicts[verdict_hash] = set(run.mut_assumed) | newly_mutated
             self._records.persist_mutation_verdict(verdict_hash, self.tracking_state.mutation_verdicts[verdict_hash])
@@ -351,6 +365,28 @@ class MutationRouting:
             self._in_loop.note_bindings(run.tree)
             if run.in_place:
                 self._in_loop.moved(run.in_place, run.cache_key)
+
+    @staticmethod
+    def _settle_provisional(run: StatementRun, newly_mutated: set[str]) -> None:
+        """A module a ``set_*`` call was handed names with, when the call was
+        seen changing one of them: it set on that name, not on the module
+        (``nx.set_node_attributes(G, ...)``), so the module leaves the
+        outputs and the reasons. The verdict, which then lists the name and
+        not the module, decides the next runs and the simulation alike."""
+        settled = {module for module, handed in run.mut_provisional.items() if handed & newly_mutated}
+        if not settled:
+            return
+        run.outputs = run.outputs - settled
+        reasons = run.metrics.get("uncacheable_reasons", [])
+        if run.mut_provisional_reason in reasons:
+            reasons.remove(run.mut_provisional_reason)
+        left = sorted(set(run.mut_provisional) - settled)
+        if left:
+            run.mut_provisional_reason = (
+                f"In-place mutation on: {', '.join(left)} (receiver lineage bumped; statement re-executes)"
+            )
+            reasons.append(run.mut_provisional_reason)
+        run.mut_provisional = {m: h for m, h in run.mut_provisional.items() if m not in settled}
 
     def _observe_rewatch(self, run: StatementRun) -> None:
         """A statement whose verdict is known ran on new inputs, watched for

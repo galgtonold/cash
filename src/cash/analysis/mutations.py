@@ -1182,6 +1182,11 @@ class TopLevelCalls:
     #: MUTATED when it is a live Axes/Figure: a plotting call draws on the
     #: axes it is given, whatever its receiver.
     argument_bases: frozenset[str] = frozenset()
+    #: The bare names a module setting call of ``setting_receivers`` is
+    #: handed, by module: ``nx.set_node_attributes(G, region, "region")``
+    #: -> ``{'nx': {'G', 'region'}}``. Such a call may set on what it is
+    #: handed rather than on the module (`classify_receivers`).
+    setting_arguments: Mapping[str, frozenset[str]] = field(default_factory=dict)
 
 
 def top_level_calls(tree: ast.Module | None) -> TopLevelCalls:
@@ -1223,6 +1228,8 @@ class _TopLevelCallCollector:
         self.setting_receivers: set[str] = set()
         self.assigned_method_calls: set[tuple[str, str]] = set()
         self.argument_bases: set[str] = set()
+        self.setting_arguments: dict[str, frozenset[str]] = {}
+        self.own_settings: set[str] = set()
 
     def statement(self, node: ast.stmt) -> None:
         if isinstance(node, ast.Match):
@@ -1274,6 +1281,18 @@ class _TopLevelCallCollector:
             or method in MODULE_SETTING_FUNCTIONS
         ):
             self.setting_receivers.add(base)
+            # ``nx.set_node_attributes(G, ...)`` may set on what it is
+            # handed, not on the module; a call handing no name, or any
+            # other kind of setting, is the module's own.
+            handed = frozenset()
+            if method == "set" or method.startswith("set_"):
+                handed = frozenset(
+                    arg.id for arg in [*call.args, *(kw.value for kw in call.keywords)] if isinstance(arg, ast.Name)
+                )
+            if handed:
+                self.setting_arguments[base] = self.setting_arguments.get(base, frozenset()) | handed
+            else:
+                self.own_settings.add(base)
         # ``df.plot.bar(...)``: label it by the accessor, so the classifiers
         # can tell pandas' plotting from a method named ``bar``.
         label = f"plot.{method}" if on_attribute and func.value.attr == "plot" else method
@@ -1289,6 +1308,9 @@ class _TopLevelCallCollector:
             setting_receivers=frozenset(self.setting_receivers),
             assigned_method_calls=frozenset(self.assigned_method_calls),
             argument_bases=frozenset(self.argument_bases),
+            setting_arguments={
+                base: names for base, names in self.setting_arguments.items() if base not in self.own_settings
+            },
         )
 
 

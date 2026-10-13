@@ -76,6 +76,9 @@ class MutationClassifier:
         self._rewatch_candidates: dict[str, frozenset[str]] = {}
         self._rewatched_keys: dict[str, set[str]] = {}
         self._rewatch_snapshots: dict[str, dict[str, str | None]] = {}
+        # Modules counted as changed only until a name handed to their
+        # ``set_*`` call is seen changing, by source hash -- see :meth:`classify`.
+        self._provisional: dict[str, dict[str, frozenset[str]]] = {}
 
     def observed_mutations(self, observe: set[str], source_hash: str) -> set[str]:
         """The receivers and bare-call arguments this statement changed.
@@ -180,6 +183,10 @@ class MutationClassifier:
         arguments = arguments | (extra_arguments - outputs)
         classes = classify_receivers(tree, self.shell.user_ns, lambda: verdict, arguments=arguments)
         pre_route = set(classes.mutated)
+        if classes.provisional:
+            self._provisional[source_hash] = dict(classes.provisional)
+        else:
+            self._provisional.pop(source_hash, None)
         observe: set[str] = set()
         assumed: set[str] = set()
         # A receiver no rule or verdict decides is observed when it can be
@@ -246,6 +253,11 @@ class MutationClassifier:
             if unseen:
                 self._rewatch_candidates[source_hash] = frozenset(unseen)
         return pre_route - outputs, observe, assumed, record_verdict
+
+    def provisional_modules(self, source_hash: str) -> dict[str, frozenset[str]]:
+        """The modules :meth:`classify` counted as changed by a ``set_*``
+        call handed names, with those names (`ReceiverClasses.provisional`)."""
+        return self._provisional.pop(source_hash, {})
 
     def start_rewatch(self, source_hash: str, cache_key: str) -> bool:
         """Before a statement whose verdict is known executes: fingerprint
