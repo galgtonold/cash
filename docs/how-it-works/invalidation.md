@@ -42,7 +42,8 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       `%load_ext autoreload` / `import mylib`, included), and cash reloads it
       in the kernel when you edit it. With `%autoreload` on, its reloads run
       before the cell, as in a plain kernel, and a module it reloads (one
-      `%aimport` loaded too) counts as edited. Editing one function in a
+      `%aimport` loaded too) counts as edited. A module cash has just
+      reloaded is not reloaded a second time. Editing one function in a
       module re-runs only what uses that function. A reload puts the file's values back for what cells set on
       the module (`mylib.K = k`, `mylib.set_k(k)`, `mylib.CACHE.append(x)`;
       the same through a name holding what the module holds, such as
@@ -110,7 +111,7 @@ cash records a file when your code reads it through one of these:
 | polars | `read_csv`, `read_parquet`, `read_json`, `read_ndjson`, `read_ipc`, `read_avro`, `read_excel`, and `scan_csv`, `scan_parquet`, `scan_ipc`, `scan_ndjson` |
 | pyarrow | `csv.read_csv`, `csv.open_csv`, `parquet.read_table`, `parquet.read_pandas`, `parquet.ParquetFile`, `feather.read_table`, `feather.read_feather`, `json.read_json`, `orc.read_table`, `dataset.dataset`, `memory_map`, `input_stream`, `ipc.open_file`, `ipc.open_stream` |
 | numpy | `load`, `loadtxt`, `genfromtxt`, `fromfile`, `memmap` |
-| others | `joblib.load`, `pickle.load` and `json.load` of an opened file, `sqlite3.connect` (a path or a `file:` URI; for a database in WAL mode, its `-wal` file too), and a library that opens your file with Python's `open()`, such as Pillow's `Image.open` |
+| others | `joblib.load`, `pickle.load` and `json.load` of an opened file, `sqlite3.connect` (a path or a `file:` URI; for a database in WAL mode, its `-wal` file too), and a library that opens your file with Python's `open()`, such as Pillow's `Image.open`, `openpyxl.load_workbook` or `scipy.io.wavfile.read` |
 | directories | `glob.glob`, `glob.iglob`, `os.listdir`, `os.scandir`, and what lists through them: `Path.glob`, `rglob`, `iterdir`, `os.walk`, `Path.walk`. The directory, so a new or removed file counts |
 | datasets | a directory, a glob or a list given to one of the readers above: every file in it (names starting with `.` or `_` aside), under linked sub-folders too, and each directory, so an edited or a new file counts |
 | file metadata | `Path.stat`, `os.stat`, `os.lstat`, `os.path.getsize`, `getmtime`, `getctime` and the `stat()` of an `os.scandir` entry, called from your code rather than from a library's: the file, by content |
@@ -126,8 +127,12 @@ A file opened for writing only (`'w'`, `'x'`) is not a dependency. A file
 the code creates (or one in a folder it makes) and then reads counts only if
 it is still there when the function or statement ends, with its content at
 that moment: a scratch file it removes is not a dependency, a file it
-downloaded and keeps is. For a file
-read another way, name it with `file_depends_on=` on the decorator, or see
+downloaded and keeps is.
+
+A library that opens the file in its own compiled code, not through Python's
+`open()`, is not seen: `soundfile.read`, for example, reads through
+libsndfile, so editing the file keeps the old result. For a file read that
+way, name it with `file_depends_on=` on the decorator, or see
 [custom file sources](../tutorials/feature-guides/custom-file-sources.md).
 
 <!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @a045b99e, cash/tracking/file_dep_snapshot.py:_note_settled @ec6408ac -->
@@ -230,7 +235,7 @@ on disk.
 
 ### Mutation bumps the receiver's lineage
 
-<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @3016be1f -->
+<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @a2229b61 -->
 `items.append(x)` assigns nothing, but it changes `items`. When cash decides a
 method call changed its receiver, the receiver gets a new lineage from that
 statement, so everything built from it downstream misses. How cash decides
