@@ -50,7 +50,7 @@ class PickleSerializer(Serializer):
     """
 
     def serialize(self, data: Any) -> bytes:
-        return kept_state.dumps(data, protocol=5, extra=_polars_reducers())
+        return kept_state.dumps(data, protocol=5, extra=polars_reducers())
 
     def deserialize(self, data: bytes) -> Any:
         return pickle.loads(data)
@@ -77,7 +77,7 @@ class PickleSerializer(Serializer):
             return False
 
         stream = kept_state.dumps(
-            data, protocol=5, buffer_callback=take, on_retry=buffers.clear, extra=_polars_reducers()
+            data, protocol=5, buffer_callback=take, on_retry=buffers.clear, extra=polars_reducers()
         )
         return stream, buffers
 
@@ -130,7 +130,7 @@ def rebuild(load: Callable[..., Any], *args: Any) -> Any:
         raise pickle.UnpicklingError(f"rebuilding the stored value raised {type(exc).__name__}: {exc}") from exc
 
 
-def _polars_reducers() -> dict | None:
+def polars_reducers() -> dict | None:
     """`_reduce_polars` for polars' DataFrame and Series, when polars is
     imported (a value cannot hold a frame before). Exact types: a subclass
     keeps its own reduce."""
