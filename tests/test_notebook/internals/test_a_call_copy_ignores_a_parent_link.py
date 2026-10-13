@@ -82,3 +82,28 @@ def test_a_cell_with_calls_never_copies_the_parent(cash_magics, parent_on_shared
     ns = cash_magics.shell.user_ns
     assert ns["r"] == "a b" and ns["parts"] == ["a", "b"] and ns["out"] == ["ax", "bx"]
     assert parent_on_shared_nodes.copies == 0
+
+
+def test_a_statement_after_a_shown_value_never_copies_the_parent(cash_magics, parent_on_shared_nodes, monkeypatch):
+    """While a cell's shown value is kept (`ExpressionMemo`), every later
+    statement is searched for it on a copy of its tree: one that copied the
+    parent made each cheap statement of a clustering notebook take 0.6 s."""
+    from cash.notebook.statement import expression_memo
+
+    monkeypatch.setattr(expression_memo, "_MIN_SECONDS", 0.0)  # keep a value however quick
+    handed = []
+    real = expression_memo.ExpressionMemo.substitute
+
+    def substitute(self, *args, **kwargs):
+        result = real(self, *args, **kwargs)
+        handed.append(result is not None)
+        return result
+
+    monkeypatch.setattr(expression_memo.ExpressionMemo, "substitute", substitute)
+    run_cash_cell(cash_magics, "import numpy as np\na = np.arange(10.0)")
+    run_cash_cell(cash_magics, "a * 2")
+    run_cash_cell(cash_magics, "b = (a * 2).sum()\nc = a + 1")
+    ns = cash_magics.shell.user_ns
+    assert ns["b"] == 90.0 and ns["c"][0] == 1.0
+    assert True in handed  # the kept value was handed to ``b = ...``: the search ran
+    assert parent_on_shared_nodes.copies == 0
