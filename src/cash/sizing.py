@@ -206,7 +206,12 @@ def _array_estimate(arr: Any, seen: set[int]) -> int:
         # of one, which sampled as ONE item pickled it whole.
         return _objects_estimate(arr.reshape(-1) if arr.ndim != 1 else arr, seen)
     if _holds_python_objects(getattr(arr, "dtype", None)):
-        return _objects_estimate(arr.to_numpy(dtype=object), seen)
+        # The array's own object ndarray when it has one: ``to_numpy`` copies
+        # every reference, 50 ms for two million strings, to sample 64.
+        held = getattr(arr, "_ndarray", None)
+        if type(held).__name__ != "ndarray" or held.dtype.kind != "O":
+            held = arr.to_numpy(dtype=object)
+        return _objects_estimate(held, seen)
     nbytes = getattr(arr, "nbytes", None)  # Arrow and other extension arrays
     return int(nbytes) if isinstance(nbytes, int) else 0
 

@@ -204,7 +204,7 @@ class PersistencePolicy:
         # unless its size is only an estimate (``value_bytes_estimated``), when
         # nothing else weighs it. Either way its referrer is the one that
         # reports a refusal. Every other entry faces the ceiling itself.
-        weight = cap_size + int(metadata.get("call_ref_bytes") or 0)
+        weight = disk_bytes(metadata, cap_size) + int(metadata.get("call_ref_bytes") or 0)
         referenced = bool(metadata.get("referenced"))
         if referenced and metadata.get("value_bytes_estimated"):
             weight = int(metadata.get("value_bytes") or cap_size)
@@ -226,10 +226,33 @@ class PersistencePolicy:
             rebuild_s, size, type_name=metadata.get("cost_model_type_name", ""), backend_kind=backend_kind
         ):
             return Decision(False)
-        weight = (metadata.get("size") or size) + int(metadata.get("call_ref_bytes") or 0)
+        weight = disk_bytes(metadata, metadata.get("size") or size) + int(metadata.get("call_ref_bytes") or 0)
         if not metadata.get("force_persist") and not worth_its_bytes(weight, rebuild_s):
             return Decision(False, "bytes", weight, report=True)
         return Decision(True, weight=weight)
+
+
+#: About what an entry's value pickles to (`sizing.pickled_size_estimate`),
+#: set by the tiered backend on a value big enough to face the ceiling.
+SERIALIZED_ESTIMATE = "serialized_bytes_estimate"
+
+
+def disk_bytes(metadata: dict[str, Any], size: int) -> int:
+    """What an entry of RAM size *size* would take on disk, for the ceiling.
+
+    The RAM size counts every Python object a column holds whole: a string
+    is 50 bytes of header before its text, and pickle writes it as its text
+    and two bytes. A frame with two string columns over two million rows is
+    445 MiB in RAM and 233 MiB written, and judged by the first, a
+    3.4 s rebuild of it read as 131 MiB/s against the 128 MiB/s ceiling --
+    refused one run, kept the next, as the seconds wavered. The estimate
+    only ever lowers the weight: where it is missing, or larger, the RAM
+    size stands.
+    """
+    estimate = int(metadata.get(SERIALIZED_ESTIMATE) or 0)
+    if estimate <= 0 or not size:
+        return size
+    return min(size, estimate)
 
 
 def _write_outweighs_restore(compute_s: float, sampled: SampledCost, min_savings_pct: float) -> bool:
