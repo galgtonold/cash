@@ -36,6 +36,7 @@ import stat
 import sys
 import threading
 import types
+import weakref
 from collections.abc import Callable
 from typing import Any
 
@@ -747,7 +748,8 @@ class _RelayFuture(concurrent.futures.Future):
         self._inner = inner
 
     def cancel(self) -> bool:
-        return self._inner.cancel() and super().cancel()
+        inner = self._inner
+        return inner is not None and inner.cancel() and super().cancel()
 
 
 def _make_relaying_submit(original: Callable[..., Any]) -> Callable[..., Any]:
@@ -768,8 +770,15 @@ def _make_relaying_submit(original: Callable[..., Any]) -> Callable[..., Any]:
         outer = _RelayFuture(inner)
 
         def relay(done: concurrent.futures.Future) -> None:
+            # The inner future holds this callback, which holds *outer*: with
+            # *outer* holding the inner one back, the three are a cycle that
+            # keeps the task's value alive until the garbage collector runs,
+            # and the notebook would count it as another holder of whatever
+            # the caller keeps of it (`_unwrapping_set`). Done, the inner
+            # future is not needed to cancel.
+            outer._inner = None
             if done.cancelled():
-                outer.cancel()
+                concurrent.futures.Future.cancel(outer)
                 return
             error = done.exception()
             if error is not None:
@@ -854,7 +863,7 @@ def _patch_multiprocessing_pool() -> None:
             original(self, *args, **kwargs)
             tracker = active_tracker.get()
             if tracker is not None:
-                self._set = _unwrapping_set(self._set, tracker)
+                self._set = _unwrapping_set(self, tracker)
 
         return __init__
 
@@ -864,14 +873,25 @@ def _patch_multiprocessing_pool() -> None:
     _patch_attribute(module.IMapIterator, "__init__", wrap_init)
 
 
-def _unwrapping_set(original_set: Callable[..., Any], tracker: Any) -> Callable[..., Any]:
+def _unwrapping_set(result: Any, tracker: Any) -> Callable[..., Any]:
     """A result object's ``_set(i, (success, value))`` that relays a worker's
-    reads to *tracker* and passes the task's own value on."""
+    reads to *tracker* and passes the task's own value on.
+
+    Kept on *result* itself, so it holds *result* only weakly: a closure over
+    ``result._set`` (a method bound to *result*) would make the two a
+    reference cycle, keeping the task's values alive until the garbage
+    collector runs. The notebook tells an object nothing else holds by its
+    reference count, so a model fitted through joblib's threading backend
+    (scikit-learn's histogram binning) looked held elsewhere and was never
+    cached.
+    """
+    original_set = type(result)._set
+    owner = weakref.ref(result)
 
     def _set(i: Any, obj: Any) -> Any:
         if isinstance(obj, tuple) and len(obj) == 2 and isinstance(obj[1], _WorkerReads):
             obj = (obj[0], obj[1].relay_to(tracker))
-        return original_set(i, obj)
+        return original_set(owner(), i, obj)
 
     return _set
 
