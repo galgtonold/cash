@@ -687,7 +687,7 @@ class StatementLineage:
                 lineage,
                 stmt_code,
                 statement_source_hash(stmt_code),
-                [function_identity(h) for h in def_time],
+                [function_identity(h) for h in def_time.values()],
                 func_component,
                 self.shell.user_ns,
             )
