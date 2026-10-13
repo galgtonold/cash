@@ -1843,12 +1843,16 @@ generator warns for calls that leave it out; pass `seed=i` per replicate. To
 keep the frozen value, use `@cash.cache(allow_random=True)`. For a fresh draw,
 do not cache the function.
 
-<!-- claim: cash/decorator/rng.py:unseeded_library_calls @96f66467 -->
+<!-- claim: cash/decorator/rng.py:unseeded_library_calls @1a8de838 -->
 A library call that draws inside its own compiled code warns too when the
 function passes it no seed: `train_test_split(X)`, `KFold(shuffle=True)`,
 `make_classification()`, an estimator such as `SGDClassifier()` or
 `RandomForestClassifier()`, and `df.sample(3)`. Pass `random_state=0`
-(`seed=0` in polars).
+(`seed=0` in polars). An estimator that uses its seed only with some settings
+warns only when the call picks them: `Ridge()` is silent, `Ridge(solver='sag')`
+warns. When cash cannot read the setting (a variable, or `PCA()`, whose
+`svd_solver='auto'` picks by the data's shape), the message says what the draw
+depends on rather than that one happened.
 
 **When it is safe to ignore.** When any fixed value will do: an exploratory
 split, a demo, a smoke test. Not when the number goes into a report or a test

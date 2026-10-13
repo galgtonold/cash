@@ -30,6 +30,7 @@ from cash.tracking.randomness import (
     warn_stale_randomness,
     warn_unseeded_estimator_fit,
 )
+from cash.tracking.randomness.estimator_draws import estimator_draws
 
 from ...source_norm import exact_source_digest
 from ..callee_reach import helper_seeded_modules
@@ -313,8 +314,10 @@ class StatementRandomness:
         UNSEEDED iff ``get_params()`` contains ``random_state`` AND it is ``None``.
         An int / ``RandomState`` / ``Generator`` seed -> SEEDED (no warning). No
         ``random_state`` param at all (e.g. ``LinearRegression``) -> deterministic
-        (no warning). Any ``get_params`` failure -> no warning: advisory output
-        must never crash the statement.
+        (no warning). Nor an estimator whose own settings rule a draw out
+        (``Ridge()``: only ``solver='sag'`` or ``'saga'`` draws, `estimator_draws`).
+        Any ``get_params`` failure -> no warning: advisory output must never
+        crash the statement.
         """
         unseeded: list[str] = []
         for rf in est_fit:
@@ -323,7 +326,7 @@ class StatementRandomness:
                 if est is None:
                     continue
                 params = est.get_params()
-                if "random_state" in params and params["random_state"] is None:
+                if "random_state" in params and params["random_state"] is None and estimator_draws(est) is not False:
                     unseeded.append(rf)
             except (AttributeError, TypeError, ValueError, KeyError):
                 continue
@@ -406,7 +409,7 @@ class StatementRandomness:
                 if not (callable(getattr(est, "fit", None)) and callable(getattr(est, "get_params", None))):
                     continue
                 params = est.get_params()
-                if "random_state" in params and params["random_state"] is None:
+                if "random_state" in params and params["random_state"] is None and estimator_draws(est) is not False:
                     found.append(var)
             except (AttributeError, TypeError, ValueError, KeyError):
                 continue

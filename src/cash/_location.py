@@ -12,6 +12,7 @@ folder.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -88,6 +89,14 @@ def _running_script_dir() -> Path | None:
         return None
     main = sys.modules.get("__main__")
     raw = getattr(main, "__file__", None)
+    if _pool_launcher_main():
+        # A joblib (loky) worker runs ``python -m ...popen_loky_posix``: its
+        # ``__main__`` is joblib's launcher, an installed module, while
+        # ``sys.argv`` is the parent's. Taken at its word, the worker was
+        # "the installed tool joblib" and cached in the per-user
+        # ``~/.cache/cash/joblib`` (or the cwd's project) while its parent
+        # cached beside the script.
+        raw = None
     if not raw:
         # A spawned multiprocessing worker has no ``__main__.__file__`` and no
         # ``__spec__`` -- but it does inherit the parent's ``sys.argv[0]``.
@@ -100,6 +109,12 @@ def _running_script_dir() -> Path | None:
         # empty string, and an installed console script is filtered below like
         # any other path inside the interpreter's installation.
         raw = sys.argv[0] if sys.argv else None
+        if raw and not os.path.isabs(raw):
+            # Relative to where the parent started, which multiprocessing
+            # and loky both hand their workers (the cwd may have moved since).
+            original = getattr(sys.modules.get("multiprocessing.process"), "ORIGINAL_DIR", None)
+            if original:
+                raw = os.path.join(original, raw)
         if not raw or not str(raw).endswith(".py") or not os.path.isfile(raw):
             return None
     try:
@@ -111,8 +126,134 @@ def _running_script_dir() -> Path | None:
     return path.parent
 
 
+def _is_installed_file(raw: str) -> bool:
+    try:
+        return is_installed_path(Path(raw).resolve())
+    except OSError:
+        return False
+
+
+def _pool_launcher_main() -> bool:
+    """Is this a pool worker whose ``__main__`` is not the parent's program?
+
+    A joblib (loky) worker runs ``python -m <joblib's launcher>``: installed
+    code. A spawned worker of ``python -m pkg`` has a bare ``__main__``.
+    ``sys.argv`` is still the parent's in both, so the program is the one
+    ``sys.argv[0]`` names.
+    """
+    raw = getattr(sys.modules.get("__main__"), "__file__", None)
+    return _multiprocessing_parent_pid() is not None and (not raw or _is_installed_file(raw))
+
+
+def _argv_installed_module_name() -> str | None:
+    """The top-level module of ``sys.argv[0]`` when that is an installed file:
+    what a pool worker of ``python -m <installed module>`` was started by."""
+    raw = sys.argv[0] if sys.argv else ""
+    if not raw.endswith(".py") or not _is_installed_file(raw):
+        return None
+    try:
+        path = Path(raw).resolve()
+    except OSError:
+        return None
+    best: tuple[str, ...] = ()
+    for entry in sys.path:
+        try:
+            parts = path.relative_to(Path(entry or ".").resolve()).parts
+        except (OSError, ValueError):
+            continue
+        if parts and (not best or len(parts) < len(best)):
+            best = parts
+    if not best:
+        return None
+    return best[0][:-3] if len(best) == 1 else best[0]
+
+
+def _multiprocessing_parent_pid() -> int | None:
+    """The pid of the process that started this one as a multiprocessing or
+    joblib (loky) worker, or None when this is no such worker.
+
+    Read only if multiprocessing is already imported: a worker always has it.
+    """
+    process = sys.modules.get("multiprocessing.process")
+    if process is None:
+        return None
+    try:
+        parent = process.parent_process()
+    except Exception:  # noqa: BLE001 - an odd multiprocessing is not a worker
+        return None
+    pid = getattr(parent, "pid", None)
+    return pid if isinstance(pid, int) else None
+
+
+#: The environment variable through which a process hands its pool workers
+#: where it resolved "here" (`project_anchor`, `installed_entry_point_cache_dir`).
+LAUNCH_ENV = "_CASH_PARENT_LAUNCH"
+
+
+#: (pid, `_read_parent_launch()`) once read: this process re-exports
+#: `LAUNCH_ENV` under its own pid, so it cannot read its parent's again.
+_PARENT_LAUNCH: tuple[int, dict | None] | None = None
+
+
+def _parent_launch() -> dict | None:
+    global _PARENT_LAUNCH
+    if _PARENT_LAUNCH is None or _PARENT_LAUNCH[0] != os.getpid():
+        _PARENT_LAUNCH = (os.getpid(), _read_parent_launch())
+    return _PARENT_LAUNCH[1]
+
+
+def _read_parent_launch() -> dict | None:
+    """What the parent resolved, when this process is its pool worker.
+
+    A worker is not launched the way its parent was -- joblib starts it as
+    ``python -m <joblib's launcher>``, a forkserver from wherever that server
+    was started, an interactive parent has no script at all -- so it cannot
+    re-derive the parent's answer; it reads it. Only from its own parent (by
+    pid): a script that a worker merely runs with ``subprocess`` resolves as
+    itself.
+    """
+    raw = os.environ.get(LAUNCH_ENV)
+    if not raw:
+        return None
+    parent = _multiprocessing_parent_pid()
+    if parent is None:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or data.get("pid") != parent or not isinstance(data.get("anchor"), str):
+        return None
+    return data
+
+
+def _launch() -> tuple[Path, Path | None]:
+    """This process's anchor and per-user tool cache, handed on to its workers.
+
+    Recorded in the environment on every resolution, so a pool started
+    afterwards inherits the answer the parent is using now.
+    """
+    inherited = _parent_launch()
+    if inherited is not None:
+        anchor = Path(inherited["anchor"])
+        entry = inherited.get("entry")
+        entry_dir = Path(entry) if isinstance(entry, str) else None
+    else:
+        anchor = _own_project_anchor()
+        entry_dir = _own_installed_entry_point_cache_dir()
+    try:
+        os.environ[LAUNCH_ENV] = json.dumps(
+            {"pid": os.getpid(), "anchor": str(anchor), "entry": None if entry_dir is None else str(entry_dir)}
+        )
+    except (TypeError, ValueError, OSError):  # pragma: no cover - a path that cannot be stored
+        pass
+    return anchor, entry_dir
+
+
 def _running_installed_module() -> bool:
     """``python -m <module installed in site-packages>`` -- ``python -m pytest``."""
+    if _pool_launcher_main():
+        return _argv_installed_module_name() is not None
     main = sys.modules.get("__main__")
     if getattr(main, "__spec__", None) is None:
         return False
@@ -276,6 +417,15 @@ def _invocation_project_root() -> Path | None:
 
 
 def project_anchor() -> Path:
+    """The directory cash treats as "here" (see `_own_project_anchor`).
+
+    A pool worker -- multiprocessing, ``concurrent.futures``, joblib -- answers
+    as the process that started it, so both use one cache directory.
+    """
+    return _launch()[0]
+
+
+def _own_project_anchor() -> Path:
     """The directory cash treats as "here" -- for the DEFAULT cache location
     and for finding ``pyproject.toml``.
 
@@ -364,8 +514,11 @@ def _running_installed_module_name() -> str | None:
     """
     if interactive_shell_is_running() or not _running_installed_module():
         return None
-    spec = getattr(sys.modules.get("__main__"), "__spec__", None)
-    top = (getattr(spec, "name", "") or "").split(".", 1)[0]
+    if _pool_launcher_main():
+        top = _argv_installed_module_name() or ""
+    else:
+        spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+        top = (getattr(spec, "name", "") or "").split(".", 1)[0]
     name = re.sub(r"[^A-Za-z0-9._-]", "-", top).strip("-.")
     return name or None
 
@@ -386,6 +539,13 @@ def per_user_cache_root() -> Path:
 
 
 def installed_entry_point_cache_dir() -> Path | None:
+    """Where an installed console script should cache, or None if not one
+    (see `_own_installed_entry_point_cache_dir`); a pool worker answers as the
+    process that started it."""
+    return _launch()[1]
+
+
+def _own_installed_entry_point_cache_dir() -> Path | None:
     """Where an installed console script should cache, or None if not one.
 
     Per tool, under the platform cache root, so two installed tools do not

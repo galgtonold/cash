@@ -45,7 +45,11 @@ from it (see below), so a cheap draw from an unseeded one
 (`rng = np.random.default_rng()`) changes on every run. cash warns
 `RANDOM-UNSEEDED` when an unseeded draw first runs (not in a `no-cache`
 statement), and `RANDOM-REPLAYED` when an unseeded value comes back from the
-cache. An estimator fitted with `random_state=None` counts as an unseeded draw.
+cache. An estimator fitted with `random_state=None` counts as an unseeded draw,
+unless its own settings rule a draw out: `Ridge()` uses the seed only with
+`solver='sag'` or `'saga'`, `LogisticRegression()` only with `'sag'`, `'saga'` or
+`'liblinear'`, `Lasso()` only with `selection='random'`, `SVC()` only with
+`probability=True`.
 
 | You want | Do this |
 |---|---|

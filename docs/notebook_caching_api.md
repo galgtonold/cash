@@ -216,7 +216,7 @@ usually the notebook's folder. Notebooks in the same folder share it. Set
 `CASH_CACHE_DIR` or `[tool.cash] cache_dir` to put it elsewhere. The folder holds
 a `.gitignore`, so git ignores it.
 
-<!-- claim: cash/_location.py:default_project_config_path @52360884, cash/_location.py:project_anchor @db681147 -->
+<!-- claim: cash/_location.py:default_project_config_path @52360884, cash/_location.py:_own_project_anchor @38fe0ec3 -->
 The kernel reads `[tool.cash]` from the nearest `pyproject.toml` at or above
 its working directory, the first one it finds, and a relative `cache_dir`
 there is relative to that file's folder. A notebook in `proj/notebooks/` and a

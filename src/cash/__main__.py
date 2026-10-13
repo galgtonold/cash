@@ -354,9 +354,20 @@ def _entry_of(stored: StoredEntry, tier_default: int | None) -> _Entry:
         saves=float(metadata.get("execution_time") or 0.0),
         uses=int(metadata.get("access_count") or 0),
         outputs=tuple(str(o) for o in metadata.get("outputs") or ()),
-        reads=tuple(str(p) for p in (metadata.get("auto_file_deps") or {})),
+        reads=_reads_of(metadata.get("auto_file_deps")),
         expires=None if ttl is None else float(written_at(metadata) or stored.mtime) + float(ttl),
     )
+
+
+def _reads_of(deps: object) -> tuple[str, ...]:
+    """The files an entry read, each once: a relative read is recorded beside
+    its absolute path (`relative_twins`), and listed by the absolute one."""
+    if not isinstance(deps, dict):
+        return ()
+    from .decorator.explain import relative_twins
+
+    twins = relative_twins(deps)
+    return tuple(str(p) for p in deps if p not in twins)
 
 
 def _drop(cache_dir: str | os.PathLike, entries: list[_Entry]) -> None:
