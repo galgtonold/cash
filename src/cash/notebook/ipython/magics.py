@@ -876,9 +876,9 @@ class CashMagics(Magics):
     def _tracking_imports_of(self, raw_cell: str) -> Iterator[None]:
         """Around a cell IPython runs on its own: track the local modules its
         Python imports once it ran, as the finaliser does for a cell cash
-        runs. ``%load_ext autoreload`` / ``%autoreload 2`` / ``import mylib``
-        in one cell is IPython's to run (it loads an extension), and with
-        ``mylib`` never tracked an edit of ``mylib.py`` reached no key."""
+        runs. ``%cash_on`` / ``import mylib`` in one cell is IPython's to run
+        (it switches cash), and with ``mylib`` never tracked an edit of
+        ``mylib.py`` reached no key."""
         try:
             yield
         finally:

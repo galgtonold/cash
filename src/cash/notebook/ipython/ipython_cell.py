@@ -27,9 +27,13 @@ __all__ = ["CellMagic", "IPythonCell", "ipython_cell"]
 #: The cell magics whose body cash runs from inside the magic.
 _WRAPPING_MAGICS = frozenset({"time", "prun"})
 
-#: Line magics that load or unload extensions, cash's own among them, or switch
-#: cash itself: they re-hook the shell, so not from inside cash's run of a cell.
-_SHELL_MAGICS = ("cash", "load_ext", "reload_ext", "unload_ext")
+#: Line magics that switch cash itself: they re-hook the shell, so not from
+#: inside cash's run of a cell.
+_SHELL_MAGICS = ("cash",)
+
+#: Line magics that load or unload an extension: IPython's to run when the
+#: extension is cash's own (`_rehooks_cash`).
+_EXTENSION_MAGICS = frozenset({"load_ext", "reload_ext", "unload_ext"})
 
 
 @dataclass(frozen=True)
@@ -67,8 +71,8 @@ def ipython_cell(raw_cell: str, transform: Callable[[str], str]) -> IPythonCell 
     when IPython runs it on its own.
 
     That is a cell magic other than ``%%time`` and ``%%prun``, a cell of
-    magic lines and nothing else (nothing to track), a cell that loads an
-    extension or switches cash, and one whose transform does not keep its
+    magic lines and nothing else (nothing to track), a cell that switches
+    cash or loads, reloads or unloads its extension, and one whose transform does not keep its
     lines in place or does not parse (a genuine syntax error).
     """
     lines = raw_cell.split("\n")
@@ -83,7 +87,7 @@ def ipython_cell(raw_cell: str, transform: Callable[[str], str]) -> IPythonCell 
         magic = CellMagic(name, line)
         lines = [""] * (first + 1) + lines[first + 1 :]
     source = "\n".join(lines)
-    if any(line.lstrip().lstrip("%").startswith(_SHELL_MAGICS) for line in lines if line.lstrip().startswith("%")):
+    if any(_rehooks_cash(line) for line in lines):
         return None
     try:
         return IPythonCell(source, CodeAnalyzer.parse_cell(source), magic)
@@ -100,6 +104,27 @@ def ipython_cell(raw_cell: str, transform: Callable[[str], str]) -> IPythonCell 
     if magic is None and all(_is_magic_line(node) for node in tree.body):
         return None
     return IPythonCell(transformed, tree, magic)
+
+
+def _rehooks_cash(line: str) -> bool:
+    """Whether the magic *line* switches cash (``%cash_off``) or loads,
+    reloads or unloads an extension of cash's own (``%load_ext cash``).
+
+    Another extension's ``%load_ext`` (``autoreload``) runs in place as the
+    other magics do. Left to IPython, it took the whole cell, so the imports
+    beside it (``%load_ext autoreload`` / ``%autoreload 2`` / ``from sklearn
+    import ...``, the usual first cell) ran outside the pipeline, the names
+    they bound had no lineage, and every statement reading one ran uncached.
+    """
+    stripped = line.lstrip()
+    if not stripped.startswith("%"):
+        return False
+    name, _, rest = stripped.lstrip("%").partition(" ")
+    if name.startswith(_SHELL_MAGICS):
+        return True
+    if name not in _EXTENSION_MAGICS:
+        return False
+    return any(ext == "cash" or ext.startswith("cash.") for ext in rest.split())
 
 
 def _is_magic_line(node: ast.stmt) -> bool:
