@@ -32,7 +32,7 @@ slow_square(1_000_000)   # cache hit: returns the stored result
 
 That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @cf16cee7, cash/decorator/store.py:ResultStore.store @e50d5cf9, cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @cf16cee7, cash/decorator/store.py:ResultStore.store @49dee82f, cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
 - **Exceptions are never cached.** If the body raises, nothing is stored and the
   exception reaches you as usual. The next call runs the body again.
 - **A hit does not replay output.** Anything the body printed or logged appears
@@ -1120,7 +1120,7 @@ for example in a test.
 
 ## Common questions
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3514afa3, cash/decorator/arg_hashing.py:ArgHasher.arg_hash @e8b7df26 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3514afa3, cash/decorator/arg_hashing.py:ArgHasher.arg_hash @59bed08e -->
 **Do new command-line flags make every cached function miss?** No. Only a
 function that reads `sys.argv` or calls `parse_args()` itself, or through a
 helper, is keyed by the command line. One that gets the parsed values as
