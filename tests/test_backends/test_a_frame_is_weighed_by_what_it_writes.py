@@ -52,7 +52,13 @@ def _store(tmp_path, frame, seconds):
     return meta, in_ram, said
 
 
-def test_a_frame_of_strings_is_weighed_by_its_pickle(tmp_path):
+def test_a_frame_of_strings_is_weighed_by_its_pickle(tmp_path, monkeypatch):
+    # Only the bytes ceiling is under test: on a busy machine the timed
+    # restore check refused the 0.5 s entry before the ceiling weighed it.
+    from cash.backends import persistence_policy
+
+    monkeypatch.setattr(persistence_policy.PersistencePolicy, "pays_to_restore", lambda *a, **k: True)
+    monkeypatch.setattr(persistence_policy, "_write_outweighs_restore", lambda *a, **k: False)
     frame = _strings_frame()
     written = len(pickle.dumps(frame, protocol=5))
 

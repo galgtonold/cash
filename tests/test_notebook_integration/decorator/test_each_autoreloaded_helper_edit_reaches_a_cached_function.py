@@ -7,7 +7,7 @@ the code says it starts on line 1 of the module (a decorated function's,
 of the decorator's file), so reading its source at that line gave
 ``import cash``. The cached function's own text then held no call to the
 helper, the key dropped the helper, and every later helper edit was served
-the old result (round 35, p17: 104/104/4/405 where a plain kernel gives
+the old result (104/104/4/405 where a plain kernel gives
 204/304/305/505). Both the decorator alone and ``%cash_on`` are run.
 """
 
@@ -31,7 +31,7 @@ TEMPLATE = (
     "    return feat(x) * 10\n"
 )
 
-#: (helper constant, feat constant) per edit, as the round-35 table ran them.
+#: (helper constant, feat constant) per edit, in the order of the edit sequence that went stale.
 EDITS = [(0, 2), (100, 2), (200, 2), (300, 2), (300, 3), (400, 3), (500, 3)]
 
 

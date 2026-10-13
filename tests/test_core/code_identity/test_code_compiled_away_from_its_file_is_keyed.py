@@ -152,7 +152,7 @@ SHAPES = {
     ),
 }
 
-#: (helper constant, feat constant) per edit, as round 35 ran them.
+#: (helper constant, feat constant) per edit, in the order of the edit sequence that went stale.
 EDITS = [(0, 2), (100, 2), (200, 2), (300, 2), (300, 3), (400, 3), (500, 3)]
 
 

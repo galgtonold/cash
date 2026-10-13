@@ -48,14 +48,14 @@ SCRIPT = "import lib\nm = lib.train(2)\nprint('R', lib.importance(m, 3))\n"
 
 
 def _runs(path) -> int:
-    return path.read_text().count("run") if path.exists() else 0
+    return path.read_text(encoding="utf-8").count("run") if path.exists() else 0
 
 
 def test_the_notebook_and_a_script_share_the_call_and_it_restores_after_a_restart(nb_runner, tmp_path):
     work = nb_runner.work_dir
     runs = tmp_path / "runs.txt"
-    (work / "lib.py").write_text(LIB.format(runs=str(runs)))
-    (work / "score.py").write_text(SCRIPT)
+    (work / "lib.py").write_text(LIB.format(runs=str(runs)), encoding="utf-8")
+    (work / "score.py").write_text(SCRIPT, encoding="utf-8")
     nb_runner.create_notebook(
         [
             "import cash\n%load_ext cash\n%cash_badge print\n%cash_on",
@@ -94,7 +94,7 @@ def test_the_notebook_and_a_script_share_the_call_and_it_restores_after_a_restar
 def test_a_frozen_result_changed_in_a_cell_is_keyed_as_changed(nb_runner, tmp_path):
     """The notebook's own lineage takes over once a cell changes the value."""
     runs = tmp_path / "runs.txt"
-    (nb_runner.work_dir / "lib.py").write_text(LIB.format(runs=str(runs)))
+    (nb_runner.work_dir / "lib.py").write_text(LIB.format(runs=str(runs)), encoding="utf-8")
     nb_runner.create_notebook(
         [
             "import cash\n%load_ext cash\n%cash_badge print\n%cash_on",
