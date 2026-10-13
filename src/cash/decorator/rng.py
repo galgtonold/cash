@@ -169,8 +169,8 @@ def _shuffles(call: ast.Call, shuffle: inspect.Parameter | None) -> bool:
     return bool(shuffle.default)
 
 
-def unseeded_library_calls(func: Callable, src: str) -> list[tuple[str, int]]:
-    """``(call, line)`` for each library call in *func* left without a seed.
+def unseeded_library_calls(func: Callable, src: str) -> list[tuple[str, int, str | None]]:
+    """``(call, line, condition)`` for each library call in *func* left without a seed.
 
     The draw is inside compiled library code, where the source scan cannot
     see it: ``train_test_split(X)``, ``KFold(shuffle=True)``,
@@ -179,10 +179,14 @@ def unseeded_library_calls(func: Callable, src: str) -> list[tuple[str, int]]:
     call passes none (and does not turn ``shuffle`` off); so does
     ``obj.sample(...)`` without ``random_state=`` / ``seed=``. The notebook's
     rule for a fitted estimator, ``random_state is None``, is the same one.
+    An estimator that uses its seed only with some settings (``Ridge()``: only
+    with ``solver='sag'``) counts only when the call picks them, and with a
+    *condition* to say instead when that is undecided (`call_draws`).
     Lines are relative to *src*.
     """
     from ..analysis.ast_util import resolve_callee
     from ..analysis.helper_bindings import build_namespace, local_import_map, resolve_local_import
+    from ..tracking.randomness.estimator_draws import call_draws, draw_condition
 
     try:
         tree = ast.parse(src)
@@ -206,7 +210,7 @@ def unseeded_library_calls(func: Callable, src: str) -> list[tuple[str, int]]:
         if isinstance(target, ast.Name)
         and ast.unparse(node.value.func).rsplit(".", 1)[-1] in (*_SEEDING_CALLS, "check_random_state")
     }
-    found: list[tuple[str, int]] = []
+    found: list[tuple[str, int, str | None]] = []
     for node in ast.walk(fn):
         if not isinstance(node, ast.Call) or any(kw.arg is None for kw in node.keywords):
             continue  # `**kwargs` may carry the seed
@@ -223,7 +227,7 @@ def unseeded_library_calls(func: Callable, src: str) -> list[tuple[str, int]]:
             last = spelled.rsplit(".", 1)[-1]
             if spelled in generators or _GENERATOR_NAME.search(last):
                 continue
-            found.append((f"{spelled if len(spelled) <= 24 else ''}.sample()", node.lineno))
+            found.append((f"{spelled if len(spelled) <= 24 else ''}.sample()", node.lineno, None))
             continue
         callee = resolve_callee(func_node, namespace)
         if callee is None or not callable(callee):
@@ -236,7 +240,10 @@ def unseeded_library_calls(func: Callable, src: str) -> list[tuple[str, int]]:
             continue  # passed by position (a class's signature has no `self`)
         if not _shuffles(node, shuffle):
             continue
-        found.append((f"{ast.unparse(func_node)}()", node.lineno))
+        draws = call_draws(callee, node)
+        if draws is False:
+            continue  # its own settings rule a draw out
+        found.append((f"{ast.unparse(func_node)}()", node.lineno, None if draws else draw_condition(callee)))
     return found
 
 
@@ -608,18 +615,28 @@ class RngWatch:
             return
         if not calls:
             return
-        call, line = calls[0]
+        # A call known to draw first: it is the one worth naming.
+        calls = sorted(calls, key=lambda c: c[2] is not None)
+        call, line, condition = calls[0]
         abs_lineno = line + first_lineno - 1 if first_lineno else line
         extra = f" (+{len(calls) - 1} more)" if len(calls) > 1 else ""
+        if condition is None:
+            said = (
+                f"Unseeded randomness detected: {call} without random_state at "
+                f"line {abs_lineno}{extra}. Whatever it draws is unseeded, and"
+            )
+        else:  # whether it draws depends on what cash cannot read: say so
+            said = (
+                f"{call} without random_state at line {abs_lineno}{extra}; "
+                f"{condition}. If it draws, the draw is unseeded, and"
+            )
         self._notices.warn_once(
             CashRandomnessWarning,
             func_name,
             "",
-            f"@cash.cache on {func_name}: Unseeded randomness detected: "
-            f"{call} without random_state at line {abs_lineno}{extra}. Whatever "
-            f"it draws is unseeded, and the first call's result is cached and "
-            f"replayed on every later call - the value is frozen and not "
-            f"reproducible across a cleared cache.",
+            f"@cash.cache on {func_name}: {said} the first call's result is "
+            f"cached and replayed on every later call - the value is frozen "
+            f"and not reproducible across a cleared cache.",
             code="RANDOM-UNSEEDED",
             fix="pass random_state=<int> (polars: seed=<int>) to make the value "
             "reproducible, leave the function undecorated for a genuinely "
@@ -722,15 +739,28 @@ class RngWatch:
                 return
         except Exception:  # noqa: BLE001 - advisory only; never break a call
             return
+        from ..tracking.randomness.estimator_draws import draw_condition, estimator_draws
 
+        draws = estimator_draws(result)
+        if draws is False:
+            return  # its own settings rule a draw out (`Ridge()`: no sag solver)
+        if draws:
+            said = (
+                "cash caches it, so every later call replays that one fit - the "
+                "model is frozen, not stable. Two genuine fits would differ, and "
+                "comparing runs cannot tell you otherwise."
+            )
+        else:
+            said = (
+                f"{draw_condition(type(result))}. If this fit drew, cash replays "
+                f"it on every later call - the model is frozen, and two genuine "
+                f"fits would differ."
+            )
         self._notices.warn_once(
             CashRandomnessWarning,
             func_name,
             "_estimator_result",
-            f"@cash.cache on {func_name}: returns a fitted estimator with "
-            f"random_state=None. cash caches it, so every later call replays "
-            f"that one fit - the model is frozen, not stable. Two genuine fits "
-            f"would differ, and comparing runs cannot tell you otherwise.",
+            f"@cash.cache on {func_name}: returns a fitted estimator with random_state=None. {said}",
             code="RANDOM-UNSEEDED",
             fix="pass random_state=<int> to the estimator for a reproducible "
             "fit, leave the function undecorated for a genuinely fresh "
