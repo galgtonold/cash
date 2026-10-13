@@ -32,7 +32,7 @@ slow_square(1_000_000)   # cache hit: returns the stored result
 
 That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @cf16cee7, cash/decorator/store.py:ResultStore.store @a012adf1, cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @cf16cee7, cash/decorator/store.py:ResultStore.store @e50d5cf9, cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
 - **Exceptions are never cached.** If the body raises, nothing is stored and the
   exception reaches you as usual. The next call runs the body again.
 - **A hit does not replay output.** Anything the body printed or logged appears
@@ -74,7 +74,7 @@ takes a backend instance or a backend type name (`backend="sqlite"`). See the
 
 ## Where results are stored
 
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @130f1202, cash/backends/tiered_backend.py:TieredBackend.set @5681a193 -->
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @e3aa6741, cash/backends/tiered_backend.py:TieredBackend.set @967def4e -->
 **Every result is written to disk.** However cheap the call was, a decorated
 result goes to the RAM tier and to the disk tier, so the next process finds it.
 There are two exceptions, and each stays in RAM for this process with a
@@ -732,7 +732,7 @@ where the stream stands, so each seed and each draw after it gets its own
 entry. A seed set before the function is decorated is not seen. A function
 whose own body seeds the stream is not keyed by where the caller left it.
 
-<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @b7b2d616 -->
+<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @72773502 -->
 The same holds for a generator in a module global that the body draws from
 (`rng = np.random.default_rng(42)` at module level, `rng.normal()` inside): the
 key includes where `rng` stands, and a hit moves `rng` on to where the computed
@@ -1034,7 +1034,7 @@ for example in a test.
 
 ## Common questions
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3514afa3, cash/decorator/arg_hashing.py:ArgHasher.arg_hash @ed3fc6d0 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3514afa3, cash/decorator/arg_hashing.py:ArgHasher.arg_hash @e8b7df26 -->
 **Do new command-line flags make every cached function miss?** No. Only a
 function that reads `sys.argv` or calls `parse_args()` itself, or through a
 helper, is keyed by the command line. One that gets the parsed values as

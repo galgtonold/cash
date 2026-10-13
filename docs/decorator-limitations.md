@@ -37,7 +37,7 @@ another object's entry. See [Custom hashers](tutorials/feature-guides/custom-has
 
 ## A table changed past pandas
 
-<!-- claim: cash/decorator/arg_hashing.py:watch_array_handles @e066a3bf, cash/decorator/arg_hashing.py:_watch_callback_handouts @e4bee4fe -->
+<!-- claim: cash/decorator/arg_hashing.py:watch_array_handles @84c7787c, cash/decorator/arg_hashing.py:_watch_callback_handouts @e4bee4fe -->
 Under pandas copy-on-write, a table passed to a cached function again is not
 hashed again while pandas has given it no new data: pandas copies a column
 before it writes it. A write that goes past pandas is seen as long as it goes
