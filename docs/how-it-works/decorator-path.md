@@ -101,7 +101,7 @@ the function it compiles and its compile options, as a function is by its
 name; the code of either is keyed with the state, as code passed as an
 argument.
 
-<!-- claim: cash/canonical_form.py:holds_content_data @c313e890, cash/decorator/arg_hashing.py:ArgHasher._memo_content_digest @8ce1698e -->
+<!-- claim: cash/canonical_form.py:holds_content_data @c313e890, cash/decorator/arg_hashing.py:ArgHasher._memo_content_digest @709cd512 -->
 An object that holds frames, arrays or tables, directly or in a list, tuple or
 dict attribute, is keyed part by part rather than pickled whole: each frame
 by its content, the rest as pickle would store it. That happens when it holds
@@ -110,7 +110,8 @@ a frame cash can check for changes (below) or an array, frame or table of
 scikit-learn model, is pickled whole, which is faster. Under pandas 3, a frame
 cash has already hashed is checked for changes instead of read again, so a
 repeat call on an unchanged object costs milliseconds however large its
-frames are, also when other frames share its data. A frame whose memory can
+frames are, also when other frames share its data, and a new frame made from
+one (`df.assign(p=...)`) reads only its new columns. A frame whose memory can
 be written without pandas noticing is read in full every time: one built with
 `copy=False` (or `index=`) over a numpy array you still hold, one from
 `read_parquet` (its memory belongs to Arrow), and one with categorical or

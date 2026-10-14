@@ -30,8 +30,10 @@ from ..canonical_form import (
 )
 from ..content_hashers import (
     BUILTIN_CONTENT,
+    ColumnPieces,
     builtin_family_of,
     builtin_hash,
+    column_pieces,
     immutable_items,
     immutable_labels,
     is_native_panic,
@@ -916,6 +918,12 @@ class FrameDigests:
 
     def __init__(self, maxsize: int) -> None:
         self._entries: LruMemo[int, tuple] = LruMemo(maxsize)
+        #: ``column memory key -> ids`` of the frames, latest first, whose
+        #: entries keep the bytes that column folds into a digest
+        #: (`ColumnPieces`): a loop's frames share the column with the frame
+        #: they were made from, and outlive one another. Ids whose entry is
+        #: gone are skipped, and dropped once there are many.
+        self._columns: dict[tuple, tuple[int, ...]] = {}
 
     def __contains__(self, key: object) -> bool:
         return key in self._entries
@@ -925,6 +933,46 @@ class FrameDigests:
 
     def clear(self) -> None:
         self._entries.clear()
+        self._columns.clear()
+
+    def hash_frame(self, obj: Any) -> str | None:
+        """`builtin_hash` of *obj*, a pandas frame under copy-on-write, kept
+        for it (`store`).
+
+        A column whose memory a frame in the memo holds, and that frame is
+        still unchanged (`lookup`), adds the bytes it added to that frame's
+        digest without being read: ``h = matches.assign(p=...)`` reads only
+        ``p`` when ``matches`` was hashed. The digest is the one a full read
+        gives. A frame the memo cannot vouch for is read in full.
+        """
+        since = exposure_mark()
+        pieces = _FramePieces(self)
+        previous = column_pieces(pieces)
+        try:
+            digest = builtin_hash(obj)
+        finally:
+            column_pieces(previous)
+        if digest is not None:
+            self.store(obj, digest, since, pieces.noted)
+        return digest
+
+    def column_piece(self, key: tuple, checked: dict[int, bool]) -> bytes | None:
+        """The bytes the column of memory *key* folds into a digest, from a
+        frame in the memo that is unchanged now; *checked* keeps which
+        frames were looked at during one hash."""
+        for owner in self._columns.get(key, ()):
+            entry = self._entries.peek(owner)
+            if entry is None:
+                continue
+            valid = checked.get(owner)
+            if valid is None:
+                frame = entry[0]()
+                valid = checked[owner] = frame is not None and self.lookup(frame) is not None
+            if valid:
+                piece = entry[5].get(key)
+                if piece is not None:
+                    return piece
+        return None
 
     def lookup(self, obj: Any) -> str | None:
         """The content hash recorded for *obj*, if *obj* has not changed since."""
@@ -932,7 +980,7 @@ class FrameDigests:
         entry = entries.get(id(obj))
         if entry is None:
             return None
-        wref, held, signature, content_hash, since = entry
+        wref, held, signature, content_hash, since, _pieces = entry
         if frame_borrows_its_data(obj, held, since):
             entries.pop(id(obj), None)
             return None
@@ -944,7 +992,7 @@ class FrameDigests:
         entries.pop(id(obj), None)
         return None
 
-    def store(self, obj: Any, content_hash: str, since: int) -> None:
+    def store(self, obj: Any, content_hash: str, since: int, pieces: dict[tuple, bytes] | None = None) -> None:
         """Remember *obj*'s content hash, and hold a shallow copy of it.
 
         *since* is the `exposure_mark` taken before the content was hashed:
@@ -959,6 +1007,10 @@ class FrameDigests:
         Nothing is stored for a frame whose data something outside pandas
         can write (`frame_borrows_its_data`): a caller could write through
         its array and drop it before the next call, leaving nothing to see.
+
+        *pieces* are the bytes each of its columns folded into the digest,
+        by the column's memory (`hash_frame`): another frame sharing that
+        memory reuses them while this entry holds.
         """
         try:
             watch_array_handles()
@@ -971,7 +1023,46 @@ class FrameDigests:
             wref = weakref.ref(obj, lambda _ref, key=key, entries=entries: entries.pop(key, None))
         except Exception:  # noqa: BLE001 - the memo is a speedup; hash every time
             return
-        self._entries[key] = (wref, held, signature, content_hash, since)
+        self._entries[key] = (wref, held, signature, content_hash, since, pieces or {})
+        if pieces:
+            columns = self._columns
+            if len(columns) > 64 * self._entries.maxsize:
+                live = set(self._entries.keys())
+                for column, owners in list(columns.items()):
+                    kept = tuple(owner for owner in owners if owner in live)
+                    if kept:
+                        columns[column] = kept
+                    else:
+                        del columns[column]
+            for column in pieces:
+                owners = columns.get(column, ())
+                alive = (owner for owner in owners if owner != key and owner in self._entries)
+                columns[column] = (key, *alive)[:_COLUMN_OWNERS]
+
+
+#: Frames remembered per shared column (`FrameDigests._columns`).
+_COLUMN_OWNERS = 4
+
+
+class _FramePieces(ColumnPieces):
+    """`ColumnPieces` for one `FrameDigests.hash_frame`: found in the memo,
+    and noted for the frame being hashed."""
+
+    __slots__ = ("_checked", "_memo", "noted")
+
+    def __init__(self, memo: FrameDigests) -> None:
+        self._memo = memo
+        self._checked: dict[int, bool] = {}
+        self.noted: dict[tuple, bytes] = {}
+
+    def find(self, key: tuple) -> bytes | None:
+        piece = self._memo.column_piece(key, self._checked)
+        if piece is not None:
+            self.noted[key] = piece
+        return piece
+
+    def note(self, key: tuple, piece: bytes) -> None:
+        self.noted[key] = piece
 
 
 #: The process's copy-on-write frame memo (`FrameDigests`).
@@ -987,11 +1078,7 @@ def cow_frame_digest(value: Any) -> str | None:
     digest = FRAME_DIGESTS.lookup(value)
     if digest is not None:
         return digest
-    since = exposure_mark()
-    digest = builtin_hash(value)
-    if digest is not None:
-        FRAME_DIGESTS.store(value, digest, since)
-    return digest
+    return FRAME_DIGESTS.hash_frame(value)
 
 
 class ArgHasher:
@@ -1327,16 +1414,12 @@ class ArgHasher:
         through the copy-on-write memo when it is a pandas frame: an
         unchanged frame inside an object or a list is checked, not read
         again (``ContentHashing.digest`` of the key walk)."""
-        cow = is_cow_pandas(value)
-        if cow:
+        if is_cow_pandas(value):
             digest = self._frame_memo_lookup(value)
             if digest is not None:
                 return digest
-        since = exposure_mark()
-        digest = builtin_hash(value)
-        if cow and digest is not None:
-            self._frame_memo_store(value, digest, since)
-        return digest
+            return self._frame_memo.hash_frame(value)
+        return builtin_hash(value)
 
     def plain_value_digest(self, value: Any) -> str | None:
         """``hash_payload((value,), {})`` for plain or JSON-like data

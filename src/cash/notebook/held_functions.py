@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import collections
 import functools
+import gc
 import itertools
 import operator
 import sys
@@ -31,12 +32,19 @@ from .._memo import CODE_OBJECTS, LruMemo
 from ..install_paths import is_user_code_module
 from ..value_types import LEAF_TYPES
 
-__all__ = ["WALK_LIMIT", "Held", "held_notebook_code"]
+__all__ = ["EXISTENCE_CHECK_AT", "WALK_LIMIT", "Held", "held_notebook_code", "notebook_functions_exist"]
 
 #: Objects one walk visits before it gives up. A model, a figure, a frame
 #: and their containers hold far fewer that are not plain values (a list of
 #: numbers is gathered at C speed and stops the walk).
 WALK_LIMIT = 2_000_000
+
+#: Objects a walk visits before it asks whether a notebook function exists
+#: at all (`notebook_functions_exist`). Asking reads every object Python
+#: tracks once, at C speed (0.06 s for two million); a walk of an openpyxl
+#: workbook of 400,000 cells took 0.6 s, before each statement that read
+#: it, and found nothing a cell could have defined in it.
+EXISTENCE_CHECK_AT = 20_000
 
 _LEAVES = frozenset(LEAF_TYPES)
 _SEQUENCES = (list, tuple, set, frozenset)
@@ -57,6 +65,15 @@ class Held(NamedTuple):
 
 
 _NOTHING = Held(())
+
+
+class _NoNotebookFunctions(Exception):
+    """A walk stopped early: no notebook function exists to be found."""
+
+
+#: What `_MEMO` keeps for a walk that stopped because no notebook function
+#: existed: the answer holds only while that is still so.
+_NONE_EXISTED = ((), (), True)
 
 #: ``(id(value), lineage)`` -> the functions and notebook classes a walk
 #: found, and whether it saw everything. The lineage moves whenever a cell
@@ -89,8 +106,17 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
         return Held((value.__code__,)) if _is_notebook(value, namespace) else _NOTHING
     memo_key = (id(value), lineage) if lineage else None
     found = _MEMO.get(memo_key) if memo_key is not None else None
+    if found is _NONE_EXISTED:
+        if not notebook_functions_exist(namespace):
+            return _NOTHING
+        found = None  # one exists now: walk to the end
     if found is None:
-        found = _walk(value, namespace)
+        try:
+            found = _walk(value, namespace, check_at=EXISTENCE_CHECK_AT)
+        except _NoNotebookFunctions:
+            if memo_key is not None:
+                _MEMO[memo_key] = _NONE_EXISTED
+            return _NOTHING
         if memo_key is not None:
             _MEMO[memo_key] = found
     functions, classes, complete = found
@@ -124,8 +150,39 @@ def _is_notebook(fn: Any, namespace: Mapping[str, Any]) -> bool:
     return id(getattr(fn, "__globals__", None)) in _globals_ids(namespace)
 
 
-def _walk(value: Any, namespace: Mapping[str, Any]) -> tuple[tuple[Any, ...], tuple[type, ...], bool]:
-    """Breadth first from *value*: ``(functions, classes, complete)``."""
+def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
+    """Whether any function whose globals are *namespace* exists, anywhere.
+
+    Every notebook function, a method of a notebook class or a lambda kept
+    in a list included, references its globals, and Python tracks every
+    function for its garbage collector: ``gc.get_referrers`` of the
+    namespace finds them all. When there is none, no value holds one, and
+    no class's method reads the notebook's globals. Objects ``gc.freeze``
+    moved out of the collector's view are not searched, so then the answer
+    is yes.
+    """
+    if gc.get_freeze_count():
+        return True
+    maps = getattr(namespace, "maps", None)
+    dicts = list(maps) if isinstance(maps, list) else [namespace]
+    globals_ids = _globals_ids(namespace)
+    function = types.FunctionType
+    for mapping in dicts:
+        for referrer in gc.get_referrers(mapping):
+            if type(referrer) is function and id(referrer.__globals__) in globals_ids:
+                return True
+    return False
+
+
+def _walk(
+    value: Any, namespace: Mapping[str, Any], check_at: int | None = None
+) -> tuple[tuple[Any, ...], tuple[type, ...], bool]:
+    """Breadth first from *value*: ``(functions, classes, complete)``.
+
+    With *check_at*, once that many objects were visited it asks whether a
+    notebook function exists at all (`notebook_functions_exist`) and raises
+    `_NoNotebookFunctions` when none does: the rest of the walk could find
+    nothing."""
     globals_ids = _globals_ids(namespace)
     functions: dict[int, Any] = {}
     classes: dict[int, type] = {}
@@ -134,6 +191,10 @@ def _walk(value: Any, namespace: Mapping[str, Any]) -> tuple[tuple[Any, ...], tu
     visited = 0
     while level:
         visited += len(level)
+        if check_at is not None and visited > check_at:
+            check_at = None
+            if not notebook_functions_exist(namespace):
+                raise _NoNotebookFunctions
         if visited > WALK_LIMIT:
             return tuple(functions.values()), tuple(classes.values()), False
         children: list[Any] = []
@@ -143,6 +204,12 @@ def _walk(value: Any, namespace: Mapping[str, Any]) -> tuple[tuple[Any, ...], tu
             _visit_group(kind, group, globals_ids, functions, classes, children)
         if not children:
             break
+        if check_at is not None and visited + len(children) > check_at:
+            # Asked before the next level is sorted: a sheet's 400,000
+            # cells cost more to dedup than the question does.
+            check_at = None
+            if not notebook_functions_exist(namespace):
+                raise _NoNotebookFunctions
         kinds_of = list(map(type, children))
         # An object that leads only to its class (`_inert`: an openpyxl
         # cell's style array, 400,000 of them) is not visited: its class is.
