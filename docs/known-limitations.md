@@ -69,7 +69,9 @@ are **not** flagged and are cached silently:
 
 - a generator cash never saw created: `self.rng.normal()`, a generator returned
   by a helper, `df.sample(100)` without `random_state`;
-- a draw inside a helper function (`arr = make_data()`);
+- a draw inside a helper function (`arr = make_data()`) from a generator the
+  helper makes or holds. One from the global `random`, `np.random` or torch
+  stream is flagged once the statement has run, by comparing the streams;
 - an anonymous generator: `z = np.random.default_rng().normal(size=3)`.
 
 <!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @4ebbcaa0, cash/tracking/randomness/lineage.py:advanced_carrier_lineage @eaa66fca, cash/notebook/upstream/statement_lineage.py:StatementLineage._recorded_draws @3b7507d9, cash/notebook/upstream/statement_lineage.py:StatementLineage._reachable_generators @bb6221ba -->

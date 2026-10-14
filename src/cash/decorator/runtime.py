@@ -1194,7 +1194,8 @@ class CallRunner:
             # can answer "did caching pay?".
             run.body_seconds = max(0.0, _perf_counter() - body_t0 - run.tracker.read_hash_seconds - nested[0])
             run.saves_seconds = run.body_seconds / max(threads_at_start, THREADS_IN_CALLS[0], 1)
-            run.rng_new = self._rng.note_draw(func_name, run.rng_pre)
+            run.rng_drew = self._rng.drawn_streams(run.rng_pre)
+            run.rng_new = self._rng.note_draw(func_name, run.rng_drew)
             run.carriers_moved = moved_carriers(run.carriers_pre)
             run.arg_carriers_moved = moved_carriers(run.arg_carriers_pre)
 
@@ -1255,6 +1256,9 @@ class CallRunner:
         execution_time = _perf_counter() - call.call_start
 
         self._purity.warn_shared_result(func, func_name, res, args, kwargs)
+        # The stream comparison above, read for a draw no seed stands behind:
+        # one the source scan could not see (a library a helper calls).
+        self._rng.warn_observed_draw(func_name, run.rng_drew, res)
         refusal = self._store.refusal(
             func,
             func_name,

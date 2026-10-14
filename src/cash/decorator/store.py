@@ -25,13 +25,14 @@ from ..effect_observer import EffectObserver
 from ..exceptions import CacheBackendError, CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
 from ..lineage_tag import own_tag, set_tags
 from ..sizing import estimate_object_size
+from ..tracking.randomness import CashRandomnessWarning
 from ..value_types import IMMUTABLE_PRIMS
 from .arg_hashing import LINEAGE_SRC_DECORATOR, LINEAGE_SRC_FROZEN
 from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
 from .call_state import NO_WATCH, BodyRun, Call
 from .dynamic_sources import DynamicSources, recorded_sources, remember_sources, source_key
-from .explain import not_persisted_reason
+from .explain import MissKind, not_persisted_reason
 from .file_deps import snapshot_tracked_deps
 from .iterators import chunk_prefix
 from .purity_checks import held_sentinels, sentinel_ref
@@ -364,6 +365,51 @@ class ResultStore:
             self._frozen.carry_digest(result, digest)
         return digest
 
+    def _warn_if_result_changed(
+        self, func_name: str, cache_key: str, meta: CacheMetadata, file_deps: dict | None
+    ) -> None:
+        """CACHE-NONDETERMINISTIC when a key computed again gives a result
+        whose content differs from the one this process stored under it.
+
+        Only where both content hashes are already in hand, so a miss hashes
+        nothing more: a ``frozen=True`` function's frame, array or table
+        (`_frozen_digest`), stored earlier in this process and since evicted
+        or cleared (a GONE miss). Not after a ttl, which says the source may
+        change; nor when the files the call read, or a ``dynamic_depends_on=``
+        source, differ from last time, since then the inputs did. With the
+        same key and the same inputs a different result is a draw nothing
+        seeded, or another input cash cannot see, and the stored value was
+        one draw of it.
+        """
+        new = meta.content_digest
+        if not new or meta.ttl or meta.dynamic_sources or meta.dynamic_resolvers:
+            return
+        cf = self._registry.cached.get(func_name)
+        if cf is None or cf.allow_random:
+            return
+        prior = self._misses.outcome(cache_key)
+        if not prior or not prior.get("digest") or prior["digest"] == new:
+            return
+        if prior.get("ttl") or prior.get("file_deps") != (file_deps or None):
+            return
+        reason = self._misses.pending_reason(cache_key)
+        if reason is None or reason.kind is not MissKind.GONE:
+            return
+        self._notices.warn_once(
+            CashRandomnessWarning,
+            func_name,
+            "_recomputed_differs",
+            f"@cash.cache on {func_name}: computed again for the same arguments "
+            f"and inputs after its entry was evicted or cleared, the result differs "
+            f"from the one stored before. Something in the call is not "
+            f"reproducible (an unseeded random draw, the clock, an input cash "
+            f"does not see), so the value a hit returns is one draw of it.",
+            code="CACHE-NONDETERMINISTIC",
+            fix="seed what draws (random_state=<int>, np.random.seed(0)) or pass "
+            "the changing input as an argument; or pass @cash.cache(allow_random=True) "
+            "if any one of the results will do.",
+        )
+
     def carry_digest(self, metadata: CacheMetadata, value: Any) -> None:
         """Hand a hit's stored content hash to the argument hasher
         (`FrozenResults.carry_digest`). Not for a result handed back as the
@@ -606,12 +652,17 @@ class ResultStore:
             if store_errors and not [t for t in (meta_dict.get("storage") or []) if t != "RAM"]:
                 raise CacheBackendError("; ".join(str(e) for e in store_errors))
             not_persisted = not_persisted_reason(meta_dict) or request.chunks_not_persisted
+            self._warn_if_result_changed(func_name, cache_key, meta, request.auto_file_deps)
             self._misses.remember_outcome(
                 cache_key,
                 {
                     "stored_at": time.time(),
                     "ttl": ttl,
                     "not_persisted": not_persisted,
+                    # For `_warn_if_result_changed`: what this result was, and
+                    # the files it was computed from.
+                    "digest": meta.content_digest,
+                    "file_deps": request.auto_file_deps or None,
                 },
             )
             ledger = functools.partial(self._misses.flat_ledger, func_name)
