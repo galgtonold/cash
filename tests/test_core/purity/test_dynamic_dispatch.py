@@ -14,7 +14,7 @@ processes and checking which spelling still returned the old value:
     fn()                parameter called       -> fresh
     map(fn, xs)         parameter to map       -> fresh
     t = {...}; t[k]()   built in the body      -> STALE
-    vars(mod)[k]()      runtime namespace      -> STALE
+    vars(mod)[k]()      runtime namespace      -> STALE (runs uncached)
     r.table[k]()        attribute of a param   -> STALE
 
 A module-level table is READ AS A GLOBAL, and hashing that global hashes the
@@ -143,8 +143,11 @@ def test_a_table_built_INSIDE_the_body_warns(tmp_path):
     assert "depends_on" in message, "the warning must name the remedy"
 
 
-def test_a_vars_namespace_lookup_warns(tmp_path):
+def test_a_vars_namespace_lookup_runs_uncached(tmp_path):
     """Measured STALE: resolved fresh out of a module namespace at call time.
+    ``getattr(mod, name)()`` by another spelling, and treated as it is:
+    neither the code it finds nor the globals that code reads are in the
+    key, so the function runs uncached.
 
     Uses a tiny module on purpose -- `vars()` of a big one hands cash a
     namespace it will walk while hashing, which is slow enough to look like a
@@ -155,7 +158,7 @@ def test_a_vars_namespace_lookup_warns(tmp_path):
     def dispatch(name, value):
         return vars(dummy_lib)[name](value)
 
-    assert _run(_cash(tmp_path), dispatch, "lib_func", 1)[0] == "warned"
+    assert _run(_cash(tmp_path), dispatch, "lib_func", 1)[0] == "uncached"
 
 
 def test_a_table_on_a_PARAMETER_warns(tmp_path):

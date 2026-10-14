@@ -446,11 +446,25 @@ notebook's namespace (`%%writefile`, `%%script`, `%%timeit`, `%%bash`) or runs
 under a debugger (`%%debug`), and cash never runs it. **Fix:** re-run the
 command's cell after such an edit.
 
-<!-- claim: cash/analysis/code_analyzer.py:_exec_literal @ba4cb7eb -->
+<!-- claim: cash/analysis/code_analyzer.py:exec_literal @1748a9a7 -->
 The same holds for `exec(code)` when `code` is not a string literal: cash reads
 `exec("w = base * 2")` as the assignment it runs, but not text built at run
 time. **Fix:** write the assignment out, or re-run that cell after an edit above
 it.
+
+### A function reached by a name spelled at run time
+
+<!-- claim: cash/notebook/string_lookups.py:code_looks_up_by_string @bb240f70, cash/notebook/cache_key.py:unkeyed_reach @eae285ed -->
+A statement's key holds the functions its code names and the globals they
+read. Code that finds a function through a string instead
+(`globals()["make"](3)`, `eval("make(3)")`, `vars()[name]`,
+`getattr(sys.modules[__name__], name)`, a frame's `f_globals`) names no
+function, so neither `make` nor what it reads can be in the key. Such a
+statement runs every time, uncached, and the badge says why: when the
+statement does it itself, and when a function of yours it calls does, at any
+depth, in a cell or in a module of your own. `getattr(obj, name)` on an
+object, `vars(self)` and a library's own lookups (`namedtuple`) do not count.
+**Fix:** call the function by its name, or pass it in as an argument.
 
 ### Background threads
 

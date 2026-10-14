@@ -26,11 +26,12 @@ from cash.exceptions import (
 )
 from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
 from cash.notebook.cache_key import (
+    THE_STATEMENT,
     CacheKeyContext,
     CacheKeyResult,
     compute_cache_key,
     statement_source_hash,
-    unfollowed_holders,
+    unkeyed_reach,
 )
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.call_effects import DigestHandoff
@@ -1025,7 +1026,9 @@ class StatementProcessor:
             run.skip_cache = True
             run.value_varies = varies
             return
-        unfollowed = unfollowed_holders(run.inputs, self.shell.user_ns, self.tracking_state.variable_lineage)
+        unfollowed, by_string = unkeyed_reach(
+            run.code, run.inputs, self.shell.user_ns, self.tracking_state.variable_lineage
+        )
         if unfollowed:
             # Its key cannot name what the notebook functions held in them
             # read (``held_functions``): served, it could be stale.
@@ -1033,6 +1036,17 @@ class StatementProcessor:
             run.metrics["uncacheable_reasons"].append(
                 f"Reads {names}, which holds more objects than cash walks to find the notebook functions in it: "
                 f"what those functions read cannot be keyed, so the statement runs every time"
+            )
+            run.skip_cache = True
+            return
+        if by_string:
+            # Its key cannot name the function a string spells at run time
+            # (``string_lookups``): served, it could be stale.
+            who = "The statement" if THE_STATEMENT in by_string else ", ".join(repr(n) for n in sorted(by_string))
+            run.metrics["uncacheable_reasons"].append(
+                f"{who} looks names up by a string (globals(), eval, vars(), getattr on a module): "
+                f"which function that reaches, and what it reads, is known only when it runs, "
+                f"so the statement runs every time"
             )
             run.skip_cache = True
             return

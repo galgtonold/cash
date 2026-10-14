@@ -127,8 +127,8 @@ what that code reads, so editing it recomputes. Three cases are not covered:
 - **A closure or `lambda`** can't be pickled, so the call runs uncached. Pass a
   module-level function and give it the captured value as an argument.
 - **An implementation picked from a table built inside the body**
-  (`handlers = {...}; handlers[name]()`), from an attribute of an argument
-  (`router.table[name]()`) or from `globals()[name]` is not reached. Name the
+  (`handlers = {...}; handlers[name]()`) or from an attribute of an argument
+  (`router.table[name]()`) is not reached. Name the
   candidates: `@cash.cache(depends_on=[FastPath, ExactPath])`. A module-level
   table or registry is reached; see
   [Dispatch tables and strategy registries](#dispatch-tables).

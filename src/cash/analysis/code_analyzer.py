@@ -38,6 +38,7 @@ __all__ = [
     "CodeAnalyzer",
     "calls_ipython",
     "clean_cell_source",
+    "exec_literal",
     "magic_python",
     "python_magic_argument",
     "split_magic_argument",
@@ -203,7 +204,7 @@ class _CallVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def _exec_literal(node: ast.Call) -> ast.Module | None:
+def exec_literal(node: ast.Call) -> ast.Module | None:
     """The code ``exec("...")`` runs in the namespace it is called from, parsed:
     a single string-literal argument, no namespaces of its own. None for any
     other call, or text that does not parse."""
@@ -461,7 +462,7 @@ class _FlowVisitor(ast.NodeVisitor):
             self.visit(node.value)
 
     def visit_Call(self, node: ast.Call) -> None:
-        executed = _exec_literal(node) if len(self.scopes) == 1 else None
+        executed = exec_literal(node) if len(self.scopes) == 1 else None
         if executed is not None:
             # ``exec('w = base * 2')`` runs its text in the cell's namespace:
             # what it reads and binds is the statement's, as if written inline.

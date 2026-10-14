@@ -79,7 +79,7 @@ hasher; see [custom hashers](../tutorials/feature-guides/custom-hashers.md).
 
 ### The statement key
 
-<!-- claim: cash/notebook/cache_key.py:compute_cache_key @619d428b -->
+<!-- claim: cash/notebook/cache_key.py:compute_cache_key @8f84eaf2 -->
 Every statement key is built by one function. It joins these parts with
 colons, in this order, and hashes the result:
 
@@ -103,7 +103,11 @@ example `stmt:ffd3d255…`.
 - A value too large to search to the end for the functions it holds (more
   than two million objects that are not plain values) adds `unfollowed:` and
   a random token, so the key never matches, and the statement runs uncached
-  with a reason.
+  with a reason. So does code that finds a function through a string
+  (`globals()["make"]`, `eval("make(3)")`), in the statement or in a function
+  of yours it reaches, with `by-string:`: the function it finds, and what that
+  reads, is known only when it runs. A call inside such a statement stores no
+  entry either.
 - The namespace is `stmt` for a statement and `call` for a
   [call inside a statement](../annotations.md#call-level-caching-default-and-cashno-cache-calls),
   so the two never collide.
