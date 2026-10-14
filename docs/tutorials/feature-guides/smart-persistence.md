@@ -16,13 +16,17 @@ stay in memory, and results under 10 ms are not stored at all. The
 [cost model](../../cost-model.md) has the exact rules and the settings that tune
 them.
 
-<!-- claim: cash/backends/memory_backend.py:_hit_no_faster @0686432d, cash/backends/memory_backend.py:_slower_than_its_compute @e342d0d6 -->
+<!-- claim: cash/backends/memory_backend.py:_hit_no_faster @0686432d, cash/backends/memory_backend.py:_slower_than_its_compute @fc6ce903 -->
 An object that takes as long to load as to compute is not kept at all. Some
 objects rebuild their data when they are loaded: a fitted statsmodels result,
-for example, rebuilds its design matrix. cash times how long such an object
-takes to read back, and when a hit would be no faster than running the
-statement, it drops the entry and the statement runs every time. A value you
-mark `# @cash:persist` is kept regardless.
+for example, rebuilds its design matrix. cash keeps such an object as the
+bytes it is written to disk in, and times reading it back: the first time a
+hit reads it, or before writing the first object of its class to disk. When a
+hit would be no faster than running the statement, it drops the entry and the
+statement runs every time, and the next object of that class is judged by the
+time it took. Before any object of a class was read back, the size-based
+[cost model](../../cost-model.md) judges it. A value you mark
+`# @cash:persist` is kept regardless.
 
 With `%cash_badge print` each row shows where its result went. Here `slow`
 takes 0.3 s and `mid` 0.05 s:

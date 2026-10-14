@@ -21,7 +21,7 @@ from typing import Any
 
 from cash.exceptions import CacheBackendError
 
-from .. import _plain_data, kept_state
+from .. import _plain_data, cost_model, kept_state
 from .._lazy_module import LazyModule
 from ..cost_model import GENERIC_FAMILY
 from ..sizing import memory_footprint
@@ -2251,12 +2251,20 @@ def _slower_than_its_compute(value: Any, size: int, metadata: MetadataDict) -> b
     """Would a hit of *value* (about *size* bytes) take at least as long as
     the compute its entry records, by what unpickling objects of its class
     took here (`round_trip_seconds`)? Then that time goes on *metadata*.
+    Before one of its class was read back here, by the fitted cost model's
+    price of reading one of its size into RAM: the first graph or model of
+    a session is judged before it is pickled, as the next ones are.
     Never for an entry the caller decided to keep (`_judged_by_compute`)."""
     kind = type(value)
-    if kind is dict or _copied_as_data(kind) or not _ROUND_TRIP_RATES or not _judged_by_compute(metadata):
+    if kind is dict or _copied_as_data(kind) or not _judged_by_compute(metadata):
         return False
     predicted = round_trip_seconds(value, size)
-    if predicted is None or predicted < metadata["execution_time"]:
+    if predicted is None:
+        # No object of its class read back here yet: the fitted cost model's
+        # price of reading one of its size into RAM. Not put on the entry as
+        # a reading: nothing was read.
+        return cost_model.estimated_restore_time(kind.__name__, size, "ram") >= metadata["execution_time"]
+    if predicted < metadata["execution_time"]:
         return False
     metadata[MEASURED_ROUND_TRIP] = predicted
     return True
