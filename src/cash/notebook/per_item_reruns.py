@@ -16,8 +16,9 @@ each input made of rows when a statement that took at least
 with it. Only digests are kept, never values, and they are kept with the
 statement's other records in the cache, so a run after a restart (or after
 the data was regenerated from the shell) compares with the last kernel's.
-Hashing is held to :data:`HASH_SHARE` of the statement's time; past that
-the input is not fingerprinted. Once per statement per session. Advice only:
+Hashing is held to :data:`HASH_SHARE` of the time the session's slow
+statements took, and to :data:`STEP_SHARE` of any one statement's; past
+that the input is not fingerprinted. Once per statement per session. Advice only:
 nothing here reaches a key or decides what is served.
 """
 
@@ -37,15 +38,19 @@ from cash.row_blocks import HashBudgetSpent, RowBlocks, compare, describe_ranges
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["CODE", "HASH_SHARE", "MIN_COST_S", "MIN_UNCHANGED", "PerItemReruns"]
+__all__ = ["CODE", "HASH_SHARE", "MIN_COST_S", "MIN_UNCHANGED", "STEP_SHARE", "PerItemReruns"]
 
 CODE = "CACHE-PER-ITEM-RERUN"
 
 #: What the statement must have taken before its inputs are fingerprinted,
 #: and before the hint is worth a line.
 MIN_COST_S = 1.0
-#: The share of the statement's time the fingerprints may take.
-HASH_SHARE = 0.05
+#: The share of the session's slow-statement time that fingerprints may
+#: take altogether.
+HASH_SHARE = 0.03
+#: The most of one statement's time its fingerprints may take: one big
+#: frame on a short step may borrow from what the others left unspent.
+STEP_SHARE = 0.10
 #: The share of the rows that must be unchanged for the hint: below it, a
 #: per-item helper would run again for most items anyway.
 MIN_UNCHANGED = 0.5
@@ -82,15 +87,18 @@ class PerItemReruns:
     _warned: set[str] = field(default_factory=set)
     #: The last fingerprints taken, by (value id, lineage, grid): no values.
     _taken: dict[tuple, Any] = field(default_factory=dict)
+    #: Seconds of hashing the session may still spend (:data:`HASH_SHARE`).
+    _budget: list[float] = field(default_factory=list)
 
     def __len__(self) -> int:
-        return len(self._records) + len(self._warned) + len(self._taken)
+        return len(self._records) + len(self._warned) + len(self._taken) + len(self._budget)
 
     def clear(self) -> None:
         """Forget the session, as a restarted kernel does."""
         self._records.clear()
         self._warned.clear()
         self._taken.clear()
+        self._budget.clear()
 
     def after_run(
         self,
@@ -110,6 +118,8 @@ class PerItemReruns:
         write a record that outlives the kernel."""
         if seconds < MIN_COST_S:
             return
+        left = (self._budget[0] if self._budget else 0.0) + HASH_SHARE * seconds
+        self._budget[:] = [left]
         rowed = {name: value for name, value in values.items() if row_count(value) is not None}
         if not rowed:
             return
@@ -117,9 +127,27 @@ class PerItemReruns:
         before = self._records.get(source_hash)
         if before is None:
             before = load(source_hash)
+        started = _perf_counter()
+        deadline = started + min(left, STEP_SHARE * seconds)
+        try:
+            self._fingerprint_and_compare(code, source_hash, rowed, lineages, seconds, before, others, deadline, save)
+        finally:
+            self._budget[:] = [max(0.0, left - (_perf_counter() - started))]
+
+    def _fingerprint_and_compare(
+        self,
+        code: str,
+        source_hash: str,
+        rowed: Mapping[str, Any],
+        lineages: Mapping[str, str],
+        seconds: float,
+        before: Record | None,
+        others: str,
+        deadline: float,
+        save: Callable[[str, Record], None],
+    ) -> None:
         same_rest = before is not None and before.get("others") == others
         old_inputs = (before or {}).get("inputs") or {}
-        deadline = _perf_counter() + HASH_SHARE * seconds
         record: Record = {"others": others, "inputs": {}}
         changes = {}
         for name, value in sorted(rowed.items(), key=lambda item: item[0]):

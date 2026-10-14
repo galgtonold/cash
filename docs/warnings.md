@@ -483,7 +483,7 @@ recompute time you can feel on every restart.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/notebook/per_item_reruns.py:PerItemReruns.after_run @8e784a48, cash/notebook/per_item_reruns.py:MIN_COST_S == 1.0, cash/notebook/per_item_reruns.py:MIN_UNCHANGED == 0.5, cash/notebook/per_item_reruns.py:HASH_SHARE == 0.05 -->
+<!-- claim: cash/notebook/per_item_reruns.py:PerItemReruns.after_run @73f9db69, cash/notebook/per_item_reruns.py:MIN_COST_S == 1.0, cash/notebook/per_item_reruns.py:MIN_UNCHANGED == 0.5, cash/notebook/per_item_reruns.py:HASH_SHARE == 0.03, cash/notebook/per_item_reruns.py:STEP_SHARE == 0.1 -->
 **What happened.** A statement that took a second or more ran again over a
 whole collection, although most of it is what it was when the statement last
 ran: 400 images were added to 3,000, one batch in the middle was exported
@@ -547,14 +547,14 @@ part, and stays correct when an old row is corrected.
 model fitted on all of them, a statistic over the whole column), or when the
 step is fast enough as it is.
 
-<!-- claim: cash/row_blocks.py:fingerprint @9ffab9b5, cash/notebook/per_item_reruns.py:HASH_SHARE == 0.05 -->
+<!-- claim: cash/row_blocks.py:fingerprint @9ffab9b5, cash/notebook/per_item_reruns.py:HASH_SHARE == 0.03, cash/notebook/per_item_reruns.py:STEP_SHARE == 0.1 -->
 **What it costs.** Cash keeps a digest per block of rows, never the values,
 with the statement's other records, so the comparison holds across a kernel
 restart. It hashes an input only after a statement that took a second or
-more, once per value however many statements read it, and skips it when
-hashing would take more than 5% of the statement's time. A large frame of
-text columns hashes at about 0.2 s per million rows, so its steps are
-checked only when they take a few seconds or more.
+more, once per value however many statements read it. All of it stays
+within 3% of the time the session's slow statements took, and within 10%
+of any one statement's; an input that would take longer is skipped. A
+large frame of text columns hashes at about 0.2 s per million rows.
 
 ### CACHE-RESULT-SHARED {#cache-result-shared}
 
