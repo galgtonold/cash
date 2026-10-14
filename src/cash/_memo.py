@@ -88,6 +88,10 @@ class LruMemo(Generic[K, V]):
             except KeyError:
                 break  # another thread emptied it
 
+    def peek(self, key: K) -> V | None:
+        """The entry for *key*, without marking it used."""
+        return self._data.get(key)
+
     def __contains__(self, key: object) -> bool:
         return key in self._data
 

@@ -21,11 +21,12 @@ from __future__ import annotations
 import hashlib
 import logging
 import pickle
+import threading
 from collections.abc import Callable
 from typing import Any
 
 from . import _plain_data
-from .bulk_digest import BulkHasher, fold_buffer
+from .bulk_digest import DIRECT_MAX_BYTES, BulkHasher, fold_buffer
 from .canonical_form import ContentHashing, canonical_bytes
 from .kept_state import packed_records
 from .sizing import SPARSE_PARTS, held_values
@@ -190,11 +191,23 @@ def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
                 rest.append(pos)
                 continue
             h.update(f"|{pos}|".encode())
+            pieces = _COLUMN_PIECES.current
+            key = column_memory_key(value, pos, route) if pieces is not None else None
+            if key is not None:
+                piece = pieces.find(key)
+                if piece is not None:
+                    h.update(piece)
+                    continue
+                into = _PieceRecorder(h)
+            else:
+                into = h
             buffer = column_buffer(pos, dtype) if route == "raw" else None
             if buffer is not None:
-                fold_buffer(h, _raw_view(buffer))
+                fold_buffer(into, _raw_view(buffer))
             else:
-                _fold_pandas_array(h, value.iloc[:, pos], pd)
+                _fold_pandas_array(into, value.iloc[:, pos], pd)
+            if key is not None and into.piece is not None:
+                pieces.note(key, into.piece)
         if rest:
             others = value if len(rest) == value.shape[1] else value.iloc[:, rest]
             h.update(b"|others|")
@@ -345,6 +358,143 @@ def _fold_pandas_array(h: Any, values: Any, pd: Any) -> None:
         fold_arrow_column(h, held_values(values).__arrow_array__())
     else:
         fold_buffer(h, _np_array(pd.util.hash_pandas_object(values, index=False)))
+
+
+class ColumnPieces:
+    """What `_fold_pandas_values` asks while the frame memo hashes a frame
+    (`column_pieces`): the bytes a column whose memory it knows folds into
+    a frame's digest (``find``), and the bytes each column it read folded
+    (``note``). `cash.decorator.arg_hashing.FrameDigests` answers only from
+    a frame it can still vouch is unchanged, so a column a new frame shares
+    with it (``df.assign(x=...)``, ``df[cols]``, a loop's ``matches.assign``)
+    is not read again. The digest is the same either way: the same bytes
+    go into it."""
+
+    def find(self, key: tuple) -> bytes | None:  # pragma: no cover - interface
+        return None
+
+    def note(self, key: tuple, piece: bytes) -> None:  # pragma: no cover - interface
+        return None
+
+
+class _CurrentPieces(threading.local):
+    current: ColumnPieces | None = None
+
+
+#: The `ColumnPieces` the frame memo set on this thread while it hashes a
+#: frame (`column_pieces`); None, the usual case, reads every column.
+_COLUMN_PIECES = _CurrentPieces()
+
+
+def column_pieces(pieces: ColumnPieces | None) -> ColumnPieces | None:
+    """Make *pieces* the `ColumnPieces` this thread's frame hashes consult;
+    returns the one it replaces, to be put back."""
+    previous = _COLUMN_PIECES.current
+    _COLUMN_PIECES.current = pieces
+    return previous
+
+
+#: The most bytes a column's piece may hold: a big column's part of a
+#: digest is a tag and a tree digest; one that adds its raw bytes is small
+#: enough to read again.
+_PIECE_MAX_BYTES = 512
+
+
+class _PieceRecorder:
+    """Passes every ``update`` on to *h* and keeps the bytes, while they
+    stay under `_PIECE_MAX_BYTES` (``piece``, else None)."""
+
+    __slots__ = ("_h", "_parts", "_size")
+
+    def __init__(self, h: Any) -> None:
+        self._h = h
+        self._parts: list[bytes] | None = []
+        self._size = 0
+
+    def update(self, data: Any) -> None:
+        self._h.update(data)
+        if self._parts is None:
+            return
+        self._size += memoryview(data).nbytes
+        if self._size > _PIECE_MAX_BYTES:
+            self._parts = None
+        else:
+            self._parts.append(bytes(data))
+
+    @property
+    def piece(self) -> bytes | None:
+        return b"".join(self._parts) if self._parts is not None else None
+
+
+def column_memory_key(frame: Any, pos: int, route: str | None) -> tuple | None:
+    """What identifies the memory column *pos* of *frame* reads from, for
+    `ColumnPieces`: the address, shape, strides and type of its numpy data
+    (a numpy block's row, the array under dates or strings held as Python
+    objects), or the Arrow array it holds, with its dtype and route. None
+    for any other column, which is read every time.
+
+    Only a key: the memo that answers it vouches that the memory has not
+    changed since, and holds what keeps it alive."""
+    import numpy as np
+
+    try:
+        mgr = frame._mgr
+        values = mgr.blocks[mgr.blknos[pos]].values
+        dtype = str(frame.dtypes.iloc[pos])
+        if type(values) is np.ndarray:
+            if values.ndim != 2:
+                return None
+            array = values[mgr.blklocs[pos]]
+        else:
+            arrow = getattr(values, "_pa_array", None)
+            if arrow is not None:
+                return _arrow_memory_key(arrow, dtype, route)
+            array = getattr(values, "_ndarray", None)
+            if type(array) is not np.ndarray:
+                return None
+            if array.ndim == 2:  # dates kept as a 2-d block
+                array = array[mgr.blklocs[pos]]
+            elif array.ndim != 1:
+                return None
+        interface = array.__array_interface__
+        return (
+            "numpy",
+            type(values).__name__,
+            interface["data"][0],
+            array.shape,
+            array.strides,
+            array.dtype.str,
+            dtype,
+            route,
+        )
+    except Exception:  # noqa: BLE001 - pandas internals changed: read the column
+        return None
+
+
+#: Chunks an Arrow column may have for `column_memory_key` to name them.
+_KEYED_CHUNKS = 64
+
+
+def _arrow_memory_key(arrow: Any, dtype: str, route: str | None) -> tuple | None:
+    """`column_memory_key` of an Arrow-backed column: each chunk's type,
+    offset, length and the address and size of each of its buffers. Arrow
+    buffers are never written; pandas wraps the same ones anew in each
+    frame that shares the column."""
+    chunks = getattr(arrow, "chunks", None)
+    if chunks is None:
+        chunks = [arrow]
+    if len(chunks) > _KEYED_CHUNKS:
+        return None
+    parts = tuple(
+        (
+            str(chunk.type),
+            chunk.offset,
+            len(chunk),
+            tuple((buf.address, buf.size) if buf is not None else None for buf in chunk.buffers()),
+        )
+        for chunk in chunks
+    )
+    return ("arrow", parts, dtype, route)
 
 
 def _column_buffers(frame: Any) -> Callable[[int, Any], Any]:
@@ -504,10 +654,17 @@ def _fold_object_items(h: Any, array: Any) -> None:
     """Fold a 1-d object array's items into *h*: as a typed buffer when
     every item is a ``float``, every one a ``bool`` or every one an ``int``
     that fits 64 bits (`_fold_typed_items`), else pickled
-    (`_object_items_bytes`)."""
+    (`_object_items_bytes`). Pickled items bigger than one leaf go in as
+    their tree digest (`fold_buffer`), so what the column adds to a frame's
+    digest is a few dozen bytes the frame memo can keep (`ColumnPieces`)."""
     items = array.tolist()
     if not _fold_typed_items(h, array, items):
-        h.update(_object_items_bytes(items))
+        blob = _object_items_bytes(items)
+        if len(blob) > DIRECT_MAX_BYTES:
+            h.update(b"|items-tree|")
+            fold_buffer(h, blob)
+        else:
+            h.update(blob)
 
 
 def _fold_typed_items(h: Any, array: Any, items: list) -> bool:
