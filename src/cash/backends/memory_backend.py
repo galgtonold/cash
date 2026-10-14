@@ -2015,7 +2015,8 @@ def _full_copy_values(values: Any) -> bool:
     """Is ``values.copy()`` a copy of all *values* hold that the caller can
     reach: their memory, and Python objects only where none can change
     (strings, a column of immutable cells)? Arrow data counts: the copy
-    that keeps a table (`frame_sharing.copy_keeping_blocks`) copies it too."""
+    that keeps a table (`frame_sharing.copy_keeping_blocks`) copies all of
+    it that is not memory only Arrow holds."""
     import numpy as np
     import pandas as pd
     from pandas.core.arrays.arrow import ArrowExtensionArray
@@ -2532,9 +2533,12 @@ def _copy_polars(frame: Any) -> Any:
     Polars data is Arrow data, and may be the caller's numpy memory itself:
     ``pl.Series(a)``, ``pl.DataFrame({"x": a})`` and ``pl.from_numpy`` copy
     nothing, so a clone, which shares its buffers, changed with ``a``. The
-    columns are copied through their Arrow data (`_owned_polars`), except
-    for a value the RAM tier holds as its own (`_own_polars`, a hit): a
-    clone of it shares nothing the caller had. The
+    columns are copied through their Arrow data (`_owned_polars`), all of
+    it: pyarrow sees every buffer polars exports as foreign memory, polars'
+    own and numpy's alike, so none passes as Arrow's own
+    (`frame_sharing.arrow_owned`). A value the RAM tier holds as its own
+    (`_own_polars`, a hit) is cloned instead: it shares nothing the caller
+    had. The
     Python objects of an ``Object`` column are copied too: pickle refuses
     such a column, so no disk tier holds one, and the RAM entry is the only
     copy there is.

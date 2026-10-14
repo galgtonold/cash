@@ -108,7 +108,7 @@ copied into memory on its second read from disk in the same process, so a
 value read once after a restart costs no extra copy. Neither is kept when it
 would take more than 90% of the memory cap.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @aba2fd9a, cash/backends/frame_sharing.py:_freeze @d0721597, cash/backends/frame_sharing.py:own_parts @5ad4163e, cash/backends/tiered_backend.py:TieredBackend.get @549a750b, cash/backends/memory_backend.py:_copy_polars @79e516fb -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @aba2fd9a, cash/backends/frame_sharing.py:_freeze @d0721597, cash/backends/frame_sharing.py:own_parts @5b3bb403, cash/backends/tiered_backend.py:TieredBackend.get @549a750b, cash/backends/memory_backend.py:_copy_polars @d34b28a6 -->
 The memory tier keeps a copy of each value that only it holds, so nothing you
 do to a value you were handed reaches the stored one, or the other way round.
 Under pandas copy-on-write (pandas 3, or `pd.options.mode.copy_on_write = True`
@@ -135,14 +135,16 @@ pickled, the decorator does not cache the table
 compact bytes and read back into new lists on every hit. Each copy holds
 labels of its own (row and column labels, a categorical column's
 categories), so writing one in place (`df.index.array[0] = ...`) changes
-neither the stored table nor a later hit. An Arrow-backed column is copied
-too: its Arrow data can be your NumPy array itself (`pa.array(a)` and
-`to_pandas(types_mapper=pd.ArrowDtype)` copy nothing), and Arrow cannot
-tell such memory from its own, so writing into `a` after the call changes
-nothing stored.
+neither the stored table nor a later hit. An Arrow-backed column's data
+can be your NumPy array itself (`pa.array(a)` and
+`to_pandas(types_mapper=pd.ArrowDtype)` copy nothing): each chunk of it
+that is not memory Arrow allocated itself (read from a file, computed by
+Arrow or pandas) is copied, so writing into `a` after the call changes
+nothing stored, and the rest is shared, as nothing but Arrow holds it.
 A polars `DataFrame`, `Series` or `LazyFrame` is copied on the store, for
 the same reason: `pl.Series(a)` and `pl.DataFrame({"x": a})` copy nothing
-from a NumPy array `a`. A hit is a clone of the stored copy: it shares that
+from a NumPy array `a`, and polars cannot say which of its memory it
+allocated itself. A hit is a clone of the stored copy: it shares that
 memory, which polars never writes in place (an edit such as
 `df[0, "x"] = ...` or `df.insert_column(...)` changes only the frame it is
 made on), so a hit costs well under a millisecond whatever the frame's size.

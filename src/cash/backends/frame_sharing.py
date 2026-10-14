@@ -33,8 +33,9 @@ Only a table cash owns is frozen: its own copy made when storing, or a
 table it has just unpickled from disk. A table the caller holds is never
 frozen -- cash does not change what an object of the caller's allows -- so
 the store copies it once, and every hit shares that copy. That copy holds
-nothing of the caller's (`own_parts`): its labels are copied, and so is its
-Arrow data, which may be the caller's numpy memory under Arrow's name.
+nothing of the caller's (`own_parts`): its labels are copied, and so is
+any Arrow data that may be the caller's numpy memory under Arrow's name;
+Arrow data in memory Arrow allocated itself is shared (`arrow_owned`).
 
 Used only where pandas has copy-on-write (pandas 3, or opted in before) and
 these internals behave as described (`enabled`, checked once). Otherwise the
@@ -53,6 +54,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "arrow_owned",
     "copy_keeping_blocks",
     "enabled",
     "freeze",
@@ -437,9 +439,9 @@ def own_parts(copied: Any, *, arrow: bool = True) -> None:
     Arrow arrays, which may be the caller's numpy memory itself --
     ``pa.array(a)`` and ``pa.table(...).to_pandas(types_mapper=pd.ArrowDtype)``
     copy nothing, so ``a[0] = ...`` after the store changed what was stored.
-    Arrow cannot say whether a buffer is its own or wraps memory someone
-    else writes, so Arrow data is copied (`_owned_arrow`) unless *arrow* is
-    False (the RAM tier's own data, a hit).
+    Every chunk with a buffer that is not memory Arrow allocated itself is
+    copied (`_owned_arrow`); the rest, which nothing but Arrow holds, is
+    shared. *arrow* False: the RAM tier's own data (a hit), all shared.
     """
     from pandas.core.arrays.arrow import ArrowExtensionArray
 
@@ -482,8 +484,8 @@ def _owned_axis(axis: Any, arrow: bool = True) -> Any:
 def _copy_values(values: Any, arrow: bool = True) -> Any:
     """A copy of a block's array in its own memory order: a numpy array, or
     a datetime or timedelta array over one, take ``order="K"``; other
-    extension arrays have no order to keep. Arrow data is copied too
-    (`_owned_arrow`) unless *arrow* is False."""
+    extension arrays have no order to keep. Arrow data that may be someone
+    else's memory is copied too (`_owned_arrow`) unless *arrow* is False."""
     import numpy as np
 
     if isinstance(values, _categorical()):  # over a numpy array too: its codes
@@ -519,35 +521,48 @@ def _owned_categories(values: Any, arrow: bool = True) -> Any:
 
 
 def _owned_arrow(chunked: Any) -> Any:
-    """A copy of the Arrow ChunkedArray *chunked*, chunk by chunk, in memory
-    Arrow allocated for it.
+    """The Arrow ChunkedArray *chunked* with every chunk that may hold
+    memory someone else writes copied into memory Arrow allocated for it;
+    *chunked* itself when no chunk does.
 
     Arrow data may wrap memory someone else owns and writes: ``pa.array(a)``
     over a numpy array copies nothing, and neither does
-    ``pa.table(...).to_pandas(types_mapper=pd.ArrowDtype)``. No pyarrow
-    API tells a buffer from Arrow's memory pool from one over foreign
-    memory (``Buffer.is_mutable`` is True for both), so every buffer is
-    copied. A slice comes out as its rows."""
+    ``pa.table(...).to_pandas(types_mapper=pd.ArrowDtype)``. A chunk whose
+    buffers are all Arrow's own (`arrow_owned`: allocated from a memory pool,
+    or a slice of such a buffer) is kept as it is: Arrow never writes a
+    buffer an array holds, and no Python object views that memory writably
+    but the buffer's own ``memoryview``. Every other chunk is copied, and
+    only it: chunks are never joined. A copied slice comes out as its rows.
+    """
     import pyarrow as pa
 
-    return pa.chunked_array([_owned_chunk(chunk) for chunk in chunked.chunks], type=chunked.type)
+    chunks = chunked.chunks
+    owned = [chunk if _chunk_owned(chunk) else _owned_chunk(chunk) for chunk in chunks]
+    if all(new is old for new, old in zip(owned, chunks)):
+        return chunked
+    return pa.chunked_array(owned, type=chunked.type)
 
 
 def owned_arrow_data(data: Any) -> Any:
-    """A copy of an Arrow Array, ChunkedArray or Table in memory Arrow
-    allocated for it (`_owned_arrow`); *data* itself when it is none of them."""
+    """An Arrow Array, ChunkedArray or Table holding no memory but Arrow's
+    own (`_owned_arrow`): *data* itself when it holds none else, or when it
+    is none of them."""
     import pyarrow as pa
 
     if isinstance(data, pa.ChunkedArray):
         return _owned_arrow(data)
     if isinstance(data, pa.Array):
-        return _owned_chunk(data)
+        return data if _chunk_owned(data) else _owned_chunk(data)
     if isinstance(data, pa.Table):
-        return pa.Table.from_arrays([_owned_arrow(column) for column in data.columns], schema=data.schema)
+        columns = [_owned_arrow(column) for column in data.columns]
+        if all(new is old for new, old in zip(columns, data.columns)):
+            return data
+        return pa.Table.from_arrays(columns, schema=data.schema)
     return data
 
 
 def _owned_chunk(chunk: Any) -> Any:
+    """A copy of the Arrow Array *chunk*, every buffer written anew."""
     import pyarrow as pa
 
     if pa.types.is_dictionary(chunk.type):
@@ -598,6 +613,158 @@ def _ipc_copy(chunk: Any) -> Any:
     with pa.ipc.new_stream(sink, batch.schema) as writer:
         writer.write_batch(batch)
     return pa.ipc.open_stream(sink.getvalue()).read_next_batch().column(0)
+
+
+# ------------------------------------------------- whose memory an Arrow buffer is
+#
+# pyarrow says nothing of where a buffer's memory came from: ``is_mutable``
+# is True for one its pool allocated and for one over a writable numpy
+# array alike, and ``parent`` is only set on a slice. The C++ object behind
+# a ``pa.Buffer`` does say it, by its class: a ``PoolBuffer`` is memory a
+# memory pool allocated for Arrow, a ``NumPyBuffer`` or ``PyBuffer`` wraps a
+# Python object's, an imported one (the C data interface: polars,
+# DuckDB, ...) someone else's. Its class is read off its vtable pointer, the
+# first word of the C++ object, which the ``pa.Buffer`` holds by a
+# ``shared_ptr``. Where to find both is learnt once from buffers of known
+# classes (`_find_layout`), and checked on every buffer read (the data
+# address and size must be the ones pyarrow reports); when anything does
+# not match, nothing is taken as Arrow's own and every chunk is copied.
+
+
+class _Layout:
+    """Where a ``pa.Buffer``'s C++ buffer is, and the vtables that tell its
+    class (`_find_layout`)."""
+
+    __slots__ = ("cpp", "data", "pool", "slice")
+
+    def __init__(self, cpp: int, data: int, pool: int, slice_: int) -> None:
+        self.cpp = cpp  # offset of the C++ Buffer* in the pa.Buffer object
+        self.data = data  # offset of data_ (then size_) in the C++ Buffer
+        self.pool = pool  # PoolBuffer's vtable: memory a pool allocated
+        self.slice = slice_  # plain Buffer's vtable: a slice of its parent
+
+
+_LAYOUT: list[_Layout | None] = []
+_LAYOUT_LOCK = threading.Lock()
+
+
+def _word(address: int) -> int:
+    return ctypes.c_size_t.from_address(address).value
+
+
+def _arrow_layout() -> _Layout | None:
+    if _LAYOUT:
+        return _LAYOUT[0]
+    with _LAYOUT_LOCK:
+        if not _LAYOUT:
+            try:
+                layout = _find_layout()
+            except Exception:  # unknown internals: copy everything
+                logger.debug("cash: Arrow buffers' owners unknown, Arrow data is copied", exc_info=True)
+                layout = None
+            _LAYOUT.append(layout)
+    return _LAYOUT[0]
+
+
+def _find_layout() -> _Layout | None:
+    """Learn `_Layout` from buffers of known classes; None when they do not
+    tell pool memory from numpy's, Python's and a slice's apart."""
+    import numpy as np
+    import pyarrow as pa
+
+    if sys.implementation.name != "cpython" or ctypes.sizeof(ctypes.c_size_t) != 8 or pa.Buffer.__basicsize__ > 256:
+        return None  # id() is an object's address in CPython only
+    small, other = pa.allocate_buffer(1024), pa.allocate_buffer(2048)
+    again = pa.Array.from_buffers(pa.uint8(), 1024, [None, small]).buffers()[1]  # a second pa.Buffer of `small`
+    if type(small) is not pa.Buffer or type(again) is not pa.Buffer or again.address != small.address:
+        return None
+    # The shared_ptr's two words are the same in both objects over `small`
+    # and differ for `other`. The object's other words that do so are small
+    # numbers (its shape: 1024), never read through.
+    candidates = []
+    for offset in range(16, pa.Buffer.__basicsize__ - 7, 8):
+        word = _word(id(small) + offset)
+        if word == _word(id(again) + offset) and word != _word(id(other) + offset) and word > 1 << 16 and not word % 8:
+            candidates.append(offset)
+    for cpp in candidates:
+        pointer = _word(id(small) + cpp)
+        data = next(
+            (at for at in range(8, 64, 8) if _word(pointer + at) == small.address and _word(pointer + at + 8) == 1024),
+            None,
+        )
+        if data is None:
+            continue
+        layout = _Layout(cpp, data, _vtable(small, cpp, data), 0)
+        sliced = small.slice(16, 64)
+        layout.slice = _vtable(sliced, cpp, data)
+        numbers = np.arange(128, dtype=np.int64)
+        foreign = [pa.py_buffer(bytearray(64)), pa.array(numbers).buffers()[1], pa.py_buffer(numbers)]
+        pooled = [other, pa.concat_arrays([pa.array(numbers)]).buffers()[1]]
+        if (
+            layout.pool
+            and layout.slice
+            and layout.slice != layout.pool
+            and sliced.parent is not None
+            and all(_vtable(buffer, cpp, data) == layout.pool for buffer in pooled)
+            and arrow_owned(sliced, layout)
+            and not any(arrow_owned(buffer, layout) for buffer in foreign)
+        ):
+            return layout
+    return None
+
+
+def _vtable(buffer: Any, cpp: int, data: int) -> int:
+    """The vtable of *buffer*'s C++ object; 0 when its data address and size
+    are not where `_Layout` has them."""
+    pointer = _word(id(buffer) + cpp)
+    if not pointer or _word(pointer + data) != buffer.address or _word(pointer + data + 8) != buffer.size:
+        return 0
+    return _word(pointer)
+
+
+def arrow_owned(buffer: Any, layout: _Layout | None = None) -> bool:
+    """Is the ``pa.Buffer`` *buffer* memory an Arrow memory pool allocated,
+    or a slice of such, so nothing but Arrow holds it? False when that
+    cannot be told (`_find_layout`).
+
+    Pool memory is written only through a ``pa.Buffer`` of it, by its
+    buffer protocol (``memoryview(arr.buffers()[1])``, ``np.frombuffer`` of
+    it, a buffer from ``pa.allocate_buffer`` filled in place): that writes
+    into an array Arrow treats as immutable. A hit, which shares the
+    stored copy's Arrow memory, has always relied on the same."""
+    import pyarrow as pa
+
+    layout = layout or _arrow_layout()
+    if layout is None:
+        return False
+    for _depth in range(64):
+        if type(buffer) is not pa.Buffer:
+            return False
+        vtable = _vtable(buffer, layout.cpp, layout.data)
+        if vtable == layout.pool:
+            return True
+        if vtable != layout.slice:
+            return False  # numpy's, Python's, imported, mapped from a file, or unknown
+        buffer = buffer.parent
+    return False
+
+
+def _chunk_owned(chunk: Any) -> bool:
+    """Is every buffer of the Arrow Array *chunk* (its children's and its
+    dictionary's too) Arrow's own (`arrow_owned`)?"""
+    import pyarrow as pa
+
+    if _arrow_layout() is None:
+        return False
+    if pa.types.is_dictionary(chunk.type):
+        return _buffers_owned(chunk.indices.buffers()) and _chunk_owned(chunk.dictionary)
+    if _holds_dictionary(chunk.type):
+        return False  # a dictionary under a list or struct: not walked, copied
+    return _buffers_owned(chunk.buffers())
+
+
+def _buffers_owned(buffers: list[Any]) -> bool:
+    return all(buffer is None or arrow_owned(buffer) for buffer in buffers)
 
 
 def hand_out(stored: Any) -> Any:
