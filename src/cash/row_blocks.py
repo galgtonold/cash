@@ -25,11 +25,13 @@ from __future__ import annotations
 import hashlib
 import math
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
 from ._clock import perf_counter as _perf_counter
-from .content_hashers import builtin_hash, builtin_hash_family
+from .bulk_digest import PARALLEL_MIN_BYTES, hashing_threads
+from .content_hashers import _raw_view, builtin_hash, builtin_hash_family
 
 __all__ = [
     "MAX_BLOCKS",
@@ -93,14 +95,20 @@ def _slicer(kind: str, value: Any) -> Callable[[int, int], Any]:
     return lambda a, b: value[a:b]
 
 
-#: A cautious rate for hashing a frame's rows, to skip one that would take
-#: too long before starting (object columns hash far slower than numbers).
-_FRAME_BYTES_PER_S = 200e6
+#: Seconds per row and column to hash a frame's rows, measured on pandas
+#: 3 (900k rows): a numeric column about 10 ns, a string or object column
+#: about 40 ns. Rounded up, to skip a frame that would take too long
+#: before starting rather than after.
+_NS_PER_NUMERIC_CELL = 12
+_NS_PER_OTHER_CELL = 50
 
 
-def _frame_bytes(value: Any) -> int:
-    usage = value.memory_usage(index=True, deep=False)
-    return int(usage.sum()) if hasattr(usage, "sum") else int(usage)
+def _frame_seconds(value: Any) -> float:
+    """About how long hashing the rows of a pandas frame or series takes."""
+    dtypes = list(value.dtypes) if hasattr(value, "columns") else [value.dtype]
+    dtypes.append(value.index.dtype)
+    ns = sum(_NS_PER_NUMERIC_CELL if getattr(dt, "kind", "O") in "biufcmM" else _NS_PER_OTHER_CELL for dt in dtypes)
+    return len(value) * ns * 1e-9
 
 
 def _pandas_rows(value: Any) -> Callable[[int, int], Any]:
@@ -202,12 +210,15 @@ def fingerprint(
     count = math.ceil(rows / block)
     digests: list[str] = []
     try:
+        if kind == "ndarray" and _plain_buffer(value):
+            return _array_fingerprint(value, rows, block, like, deadline)
         if kind == "pandas":
-            if deadline is not None and _perf_counter() + _frame_bytes(value) / _FRAME_BYTES_PER_S > deadline:
+            if deadline is not None and _perf_counter() + _frame_seconds(value) > deadline:
                 raise HashBudgetSpent
+            # One pass that cannot stop half way: judged before it starts,
+            # and finished once started (what it cost is spent either way).
             part, digest_kind = _pandas_rows(value), "pandas-rows"
-            if deadline is not None and _perf_counter() > deadline:
-                raise HashBudgetSpent
+            deadline = None
         else:
             part, digest_kind = _slicer(kind, value), kind
         for i in range(count):
@@ -224,6 +235,47 @@ def fingerprint(
     except (ImportError, TypeError, ValueError, AttributeError, IndexError, MemoryError):
         return None
     return RowBlocks(kind, rows, block, tuple(digests)), cut
+
+
+def _plain_buffer(value: Any) -> bool:
+    """A C-contiguous array of plain items: its rows are byte ranges."""
+    return bool(value.flags.c_contiguous) and value.dtype.fields is None and value.dtype.kind != "O"
+
+
+def _array_fingerprint(
+    value: Any, rows: int, block: int, like: RowBlocks | None, deadline: float | None
+) -> tuple[RowBlocks, str | None]:
+    """:func:`fingerprint` of a C-contiguous array: each block is a byte
+    range of its buffer, digested behind the row shape and dtype, the
+    blocks on several threads when the array is big (hashlib lets go of
+    the GIL while it hashes)."""
+    data = memoryview(_raw_view(value)).cast("B")
+    width = len(data) // rows if rows else 0
+    prefix = f"{value.shape[1:]}:{value.dtype}:".encode()
+
+    def digest(a: int, b: int) -> str:
+        h = hashlib.sha256(prefix)
+        h.update(data[a * width : b * width])
+        return h.hexdigest()[:_DIGEST_CHARS]
+
+    count = math.ceil(rows / block)
+    spans = [(i * block, min((i + 1) * block, rows)) for i in range(count)]
+    started = _perf_counter()
+    first = digest(*spans[0])
+    threads = hashing_threads() if len(data) >= PARALLEL_MIN_BYTES else 1
+    if deadline is not None:
+        now = _perf_counter()
+        if now + (now - started) * (count - 1) / threads > deadline:
+            raise HashBudgetSpent
+    if threads > 1 and count > 2:
+        with ThreadPoolExecutor(max_workers=threads) as pool:
+            rest = list(pool.map(lambda span: digest(*span), spans[1:]))
+    else:
+        rest = [digest(*span) for span in spans[1:]]
+    cut = None
+    if like is not None and like.rows % block and rows > like.rows:
+        cut = digest(like.rows // block * block, like.rows)
+    return RowBlocks("ndarray", rows, block, (first, *rest)), cut
 
 
 def compare(old: RowBlocks, new: RowBlocks, cut: str | None = None) -> RowChange | None:

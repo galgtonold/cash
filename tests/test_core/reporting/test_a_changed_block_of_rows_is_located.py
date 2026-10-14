@@ -127,3 +127,9 @@ def test_ranges_are_described_briefly():
     assert describe_ranges(((5, 6),)) == "row 5"
     assert describe_ranges(((0, 47), (2961, 3400))) == "rows 0-46, 2961-3399"
     assert describe_ranges(((0, 2), (4, 6), (8, 10), (12, 14))) == "rows 0-1, 4-5, 8-9, ..."
+
+
+def test_a_frame_too_slow_to_hash_in_time_is_skipped_before_hashing():
+    df = pd.DataFrame({"name": ["x"] * 200_000, "v": np.arange(200_000)})
+    with pytest.raises(HashBudgetSpent):
+        fingerprint(df, deadline=0.0)

@@ -52,6 +52,8 @@ MIN_UNCHANGED = 0.5
 #: Statements whose fingerprints are kept in memory; past this, the oldest go
 #: (a later run reads them back from the cache).
 _MAX_SITES = 512
+#: Fingerprints remembered by value, for the next statement reading it.
+_MAX_TAKEN = 16
 
 #: What a record is: input name -> its fingerprint, and the digest of the
 #: lineages of the statement's other inputs (``others``).
@@ -78,14 +80,17 @@ class PerItemReruns:
     _records: dict[str, Record] = field(default_factory=dict)
     #: Statements already warned about this session.
     _warned: set[str] = field(default_factory=set)
+    #: The last fingerprints taken, by (value id, lineage, grid): no values.
+    _taken: dict[tuple, Any] = field(default_factory=dict)
 
     def __len__(self) -> int:
-        return len(self._records) + len(self._warned)
+        return len(self._records) + len(self._warned) + len(self._taken)
 
     def clear(self) -> None:
         """Forget the session, as a restarted kernel does."""
         self._records.clear()
         self._warned.clear()
+        self._taken.clear()
 
     def after_run(
         self,
@@ -119,11 +124,20 @@ class PerItemReruns:
         changes = {}
         for name, value in sorted(rowed.items(), key=lambda item: item[0]):
             old = RowBlocks.from_dict(old_inputs[name]) if same_rest and name in old_inputs else None
-            try:
-                taken = fingerprint(value, like=old, deadline=deadline)
-            except HashBudgetSpent:
-                logger.debug("%s: fingerprinting %r would cost too much", CODE, name)
-                return  # keep the old record: nothing was compared
+            # The same value read by the next statement too (`clean` by
+            # three feature steps) is hashed once.
+            memo = (id(value), lineages.get(name), old.block if old else None, old.rows if old else None)
+            taken = self._taken.get(memo) if memo[1] is not None else None
+            if taken is None:
+                try:
+                    taken = fingerprint(value, like=old, deadline=deadline)
+                except HashBudgetSpent:
+                    logger.debug("%s: fingerprinting %r would cost too much", CODE, name)
+                    return  # keep the old record: nothing was compared
+                if memo[1] is not None and taken is not None:
+                    self._taken[memo] = taken
+                    if len(self._taken) > _MAX_TAKEN:
+                        del self._taken[next(iter(self._taken))]
             if taken is None:
                 continue
             blocks, cut = taken
