@@ -61,9 +61,7 @@ def test_each_hit_unpickles_once():
 
 
 def test_the_disk_writes_the_bytes_the_store_made(tmp_path):
-    """Pickled once for both tiers. Its class read back here already, so the
-    disk tier's decision needs no reading of it either."""
-    memory_backend.note_round_trip(memory_backend.class_key(Fit), 1 << 21, 1e-4)
+    """Pickled once for both tiers."""
     disk = FileBackend(str(tmp_path / "c"), flush_interval=0)
     tiers = TieredBackend([InMemoryBackend(), disk])
     metadata = {"execution_time": 5.0, "cost_model_family": None}
@@ -74,14 +72,13 @@ def test_the_disk_writes_the_bytes_the_store_made(tmp_path):
     assert isinstance(FileBackend(str(tmp_path / "c")).get("k")[1], Fit)
 
 
-def test_the_first_of_its_class_bound_for_disk_is_read_back_once(tmp_path):
-    """Nothing says yet what reading one back takes, and a value slower to
-    restore than to compute must not be written: it is read back once
-    before the write, and its class remembers the reading."""
+def test_the_first_of_its_class_is_written_without_being_read_back(tmp_path):
+    """Nothing says yet what reading one back takes: the cost model judges
+    it, and its first restore is the reading (``restored_no_faster``)."""
     disk = FileBackend(str(tmp_path / "c"), flush_interval=0)
     tiers = TieredBackend([InMemoryBackend(), disk])
-    tiers.set("a", Fit(), {"execution_time": 5.0})
-    assert len(LOADS) == 1
-    tiers.set("b", Fit(), {"execution_time": 5.0})
+    metadata = {"execution_time": 5.0}
+    tiers.set("a", Fit(), metadata)
     disk.shutdown()
-    assert (len(DUMPS), len(LOADS)) == (2, 1), "the second of the class was read back before its write"
+    assert "DISK" in metadata["storage"]
+    assert (len(DUMPS), len(LOADS)) == (1, 0)

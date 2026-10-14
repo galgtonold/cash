@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
+import sys
+import time
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from ..sizing import pickled_size_estimate
+from . import memory_backend
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, entry_expired, store_seconds
 from .clear_watch import ClearWatcher
 from .persistence_policy import SERIALIZED_ESTIMATE, PersistencePolicy
@@ -300,6 +303,8 @@ class TieredBackend(CacheBackend):
         self._drop_ram_if_cleared()
         tier_default = self.default_ttl
         for i, backend in enumerate(self.backends):
+            started = time.perf_counter()
+            modules = len(sys.modules)
             try:
                 metadata, value = backend.get(key)
             except Exception as e:  # noqa: BLE001 - a tier that cannot read is a miss there
@@ -321,6 +326,21 @@ class TieredBackend(CacheBackend):
                 except Exception:  # an expired copy is not served either way
                     logger.debug("Could not drop expired %r from %s", key, type(backend).__name__, exc_info=True)
                 continue
+            if metadata is not None and i > 0:
+                restore_s = time.perf_counter() - started
+                # Not judged when the read imported modules (the first
+                # statsmodels result after a restart imports statsmodels):
+                # that is not what the next restore takes.
+                if len(sys.modules) == modules and memory_backend.restore_too_slow(value, metadata, restore_s):
+                    # One stalled read is not enough: read again, the faster kept.
+                    restore_s = min(restore_s, self._read_seconds(backend, key))
+                if len(sys.modules) == modules and memory_backend.restored_no_faster(value, metadata, restore_s):
+                    # It proved no faster than computing it again: not
+                    # restored from here again. Handed out this once.
+                    try:
+                        backend.delete(key)
+                    except Exception:  # the next read judges it again
+                        logger.debug("Could not drop slow %r from %s", key, type(backend).__name__, exc_info=True)
             if metadata is not None:
                 # Read-Repair / Promotion to faster tiers
                 # If found in Tier 2 (File), promote to Tier 1 (Memory)
@@ -370,21 +390,16 @@ class TieredBackend(CacheBackend):
             logger.debug("no private copy of %r", key, exc_info=True)
             return _NO_COPY
 
-    def _timed_before_writing(self, key: str, metadata: MetadataDict) -> bool:
-        """Time a read of *key*'s value out of the bytes the first tier keeps
-        it in, when nothing says yet what one takes and the policy may still
-        refuse it for that (not one the caller decided to keep). True when
-        a reading was taken."""
-        if MEASURED_ROUND_TRIP in metadata or _chosen_by_caller(metadata):
-            return False
-        time_pickled = getattr(self.backends[0], "time_pickled", None)
-        if time_pickled is None:
-            return False
+    @staticmethod
+    def _read_seconds(backend: CacheBackend, key: str) -> float:
+        """Seconds another read of *key* from *backend* takes, the value
+        thrown away; infinite when it fails."""
+        started = time.perf_counter()
         try:
-            return time_pickled(key, metadata) is not None
-        except Exception:  # the decision stands as it was
-            logger.debug("could not time %r", key, exc_info=True)
-            return False
+            metadata, _value = backend.get(key)
+        except Exception:  # noqa: BLE001 - a read that fails is not a fast one
+            return float("inf")
+        return time.perf_counter() - started if metadata is not None else float("inf")
 
     def _stored_payload(self, key: str, metadata: MetadataDict) -> Any:
         """The bytes the first tier keeps *key*'s value in, stored with
@@ -504,10 +519,6 @@ class TieredBackend(CacheBackend):
         decision = self.policy.decide_rebuild(
             stored_metadata, rebuild_seconds, backend_kind=self._promotion_backend_kind()
         )
-        if decision.persist and self._timed_before_writing(key, stored_metadata):
-            decision = self.policy.decide_rebuild(
-                stored_metadata, rebuild_seconds, backend_kind=self._promotion_backend_kind()
-            )
         if decision.skipped == "bytes":
             self.notices.not_worth_bytes(
                 key,
@@ -608,20 +619,6 @@ class TieredBackend(CacheBackend):
                 override=self.promotion_policy,
                 sampled=sampled,
             )
-            if decision.persist and self._timed_before_writing(key, metadata):
-                # Kept as pickle bytes, its class never read back here: read
-                # out once now, so a value slower to restore than to compute
-                # is not written (`InMemoryBackend.time_pickled`).
-                decision = self.policy.decide(
-                    key,
-                    metadata,
-                    backend_kind=self._promotion_backend_kind(),
-                    deferred=deferred,
-                    override=self.promotion_policy,
-                    sampled=sampled,
-                )
-                if self.backends[0].peek_metadata(key) is None and self.backends[0].source_label in stored_destinations:
-                    stored_destinations.remove(self.backends[0].source_label)  # no faster than its compute
             size = metadata.get("size", 0) or 0
             cap_size = size or metadata.get("cost_model_size_bytes", 0)
             if decision.skipped == "bytes":

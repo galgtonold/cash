@@ -96,7 +96,7 @@ less; [the CLI page](../cli.md) has every option.
 
 ## The tiers
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @877fbb31, cash/backends/memory_backend.py:_cheap_to_keep @c2798702 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @549a750b, cash/backends/memory_backend.py:_cheap_to_keep @c2798702 -->
 | Tier | Where | Survives a restart? |
 |------|-------|---------------------|
 | Memory | RAM | No |
@@ -108,7 +108,7 @@ copied into memory on its second read from disk in the same process, so a
 value read once after a restart costs no extra copy. Neither is kept when it
 would take more than 90% of the memory cap.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @315c01f9, cash/backends/frame_sharing.py:_freeze @d0721597, cash/backends/tiered_backend.py:TieredBackend.get @877fbb31, cash/backends/memory_backend.py:_copy_polars @4e2f4e69 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @315c01f9, cash/backends/frame_sharing.py:_freeze @d0721597, cash/backends/tiered_backend.py:TieredBackend.get @549a750b, cash/backends/memory_backend.py:_copy_polars @4e2f4e69 -->
 The memory tier keeps a copy of each value that only it holds, so nothing you
 do to a value you were handed reaches the stored one, or the other way round.
 Under pandas copy-on-write (pandas 3, or `pd.options.mode.copy_on_write = True`
@@ -142,7 +142,7 @@ whatever the frame's size. The Python objects in an `Object` column are copied.
 tiers; see
 [choosing a backend](../tutorials/feature-guides/choosing-a-backend.md).
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @877fbb31, cash/backends/_base.py:effective_ttl @c0f1dab8 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @549a750b, cash/backends/_base.py:effective_ttl @c0f1dab8 -->
 An entry's ttl is checked on every tier's copy as it is read, so the memory
 copy expires with the disk copy, and a backend used on its own applies the
 same rule. The ttl is the decorator's `ttl=`, or else the shorter of the ttl
@@ -167,7 +167,7 @@ the entry was written with and the tier's current `default_ttl`.
     `%cash_persist on` writes it anyway. The [cost model](../cost-model.md)
     explains the prediction and every setting.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @4a3ab175 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @889f6f7d -->
 Each tier turns down a single value too large for its cap, so a 20 MB frame
 can be stored in memory and on disk while skipping a Redis tier limited to
 10 MB. When a value was meant for disk but every disk tier refused it, cash

@@ -1,4 +1,4 @@
-"""A result object that restores slower than it computes is not kept on disk.
+"""A result object that restores slower than it computes does not stay on disk.
 
 A statsmodels results object holds its design matrix and rebuilds it with
 patsy when it is unpickled: ``pooled`` (145 MiB, a 0.8 s fit) took 0.6 s to
@@ -7,18 +7,22 @@ bytes, so the cost model priced its restore at nothing: it pickled 145 MiB
 only to have the bytes ceiling refuse it, and wrote values whose hit was no
 faster than their fit.
 
-Now the object is sized by the frames and arrays it holds, the RAM tier
-times its copy -- a pickle round trip, ``__setstate__`` included, which a
-disk hit repeats -- and the disk tier is asked with that time: a value whose
-copy took longer than its compute stays in RAM. The class remembers the
-rate, so the next statement making one is refused before anything is
-copied. Counted by ``__setstate__`` calls, with sleeps far apart.
+Now the object is sized by the frames and arrays it holds, and the time
+its restore takes -- ``__setstate__`` included -- is what decides. The RAM
+tier keeps it as its pickle bytes without reading them back, so nothing of
+its class was read when the first one is stored: it is written to disk
+judged by the cost model. Its first restore is the reading. A restore no
+faster than the fit takes it off disk, and the class remembers the rate,
+so the next statement making one is refused before anything is pickled.
+Counted by ``__setstate__`` calls, with sleeps far
+apart.
 
 One slow reading is not enough: an unpickling that something else held up
 (a full garbage collection, the writer thread holding the interpreter lock)
 read 3.3 s in p20 for a graph that unpickles in 0.25 s, and its 1.4 s build
 was kept nowhere, so after a restart it and everything keyed on it ran
-again. A reading that may refuse is taken twice and the faster one kept.
+again. A reading that would drop a value is taken twice and the faster one
+kept.
 """
 
 from __future__ import annotations
@@ -82,6 +86,7 @@ def tiers(cash_magics, cash_instance, mock_shell, tmp_path):
     run_cash_cell(cash_magics, SETUP)
     yield cash_magics, ram, disk
     disk.shutdown()
+    getattr(cash_instance.backend, "shutdown", lambda: None)()
     rates.clear()
     rates.update(saved)
     LOAD_S[0] = 0.0
@@ -105,21 +110,56 @@ class TestSizing:
         assert fit.model["exog"].nbytes <= pickled_size_estimate(fit) < 2 * fit.model["exog"].nbytes
 
 
-def test_a_result_that_loads_slower_than_its_fit_stays_off_disk(tiers):
+def _restart(cash_instance, disk, tmp_path):
+    """A new process over the same cache folder: an empty RAM tier, and
+    nothing learned about copies."""
+    disk.shutdown()
+    memory_backend._ROUND_TRIP_RATES.clear()
+    fresh = FileBackend(str(tmp_path / "nbcache"), flush_interval=0)
+    cash_instance.backend = TieredBackend([InMemoryBackend(), fresh])
+    return fresh
+
+
+def _rerun_restores(magics) -> bool:
+    """Re-run the fit; True when it was restored (an object of it was
+    unpickled: storing one never unpickles it), False when it computed."""
+    loads = len(LOADS)
+    run_cash_cell(magics, "fit = fit_model()")
+    return len(LOADS) > loads
+
+
+def test_a_result_that_loads_slower_than_its_fit_leaves_disk_after_its_first_restore(tiers, cash_instance, tmp_path):
+    """Nothing of its class was read back when it was stored, so it is
+    written, judged by the cost model. Its first restore is the reading:
+    slower than the fit (twice, so not a stall), it is dropped from disk,
+    and the next run computes it."""
     magics, _ram, disk = tiers
     LOAD_S[0] = SLOW_LOAD_S
     run_cash_cell(magics, "fit = fit_model()")
-    assert _disk_bytes(disk) < 1 << 20, "a result restoring slower than its fit was written to disk"
+    assert not LOADS, "it was read back before it was written"
+    assert _disk_bytes(disk) >= Fit(1 << 17).model["exog"].nbytes
+    disk = _restart(cash_instance, disk, tmp_path)
+    assert _rerun_restores(magics), "the first restore did not come from disk: the test checks nothing"
+    assert len(LOADS) == 2, "a slow restore was not read again before it was dropped"
+    assert _disk_bytes(disk) < 1 << 20, "a result restoring slower than its fit stayed on disk"
+    _restart(cash_instance, disk, tmp_path)
+    assert not _rerun_restores(magics), "the dropped result was restored again"
 
 
-def test_the_next_one_is_refused_before_it_is_copied(tiers, mock_shell):
-    magics, _ram, _disk = tiers
+def test_the_next_one_is_refused_before_it_is_copied(tiers, cash_instance, tmp_path, mock_shell, monkeypatch):
+    """The slow restore taught the class: the next result of it is refused
+    before anything of it is kept."""
+    magics, _ram, disk = tiers
     LOAD_S[0] = SLOW_LOAD_S
     run_cash_cell(magics, "fit = fit_model()")
-    copies = len(LOADS)
+    _restart(cash_instance, disk, tmp_path)
+    run_cash_cell(magics, "fit = fit_model()")
+    kept: list[str] = []
+    snapshot = memory_backend._snapshot
+    monkeypatch.setattr(memory_backend, "_snapshot", lambda value: kept.append(1) or snapshot(value))
     run_cash_cell(magics, "other = fit_model()")
     assert isinstance(mock_shell.user_ns["other"], Fit)
-    assert len(LOADS) == copies, "the second result was copied although its class restores slower than it fits"
+    assert not kept, "the second result was pickled to keep although its class restores slower than it fits"
 
 
 def test_a_result_that_loads_fast_is_written(tiers):
@@ -129,12 +169,13 @@ def test_a_result_that_loads_fast_is_written(tiers):
     assert _disk_bytes(disk) >= Fit(1 << 17).model["exog"].nbytes
 
 
-def test_one_stalled_load_does_not_keep_a_result_off_disk(tiers, mock_shell):
-    """The first unpickling of the copy stalls, the next does not: the result
-    is kept in RAM and written to disk, as when nothing stalled."""
-    magics, ram, disk = tiers
-    STALLS.append(SLOW_LOAD_S)
+def test_one_stalled_load_does_not_take_a_result_off_disk(tiers, cash_instance, tmp_path):
+    """The first restore stalls, the second reading does not: the result
+    stays on disk, as when nothing stalled."""
+    magics, _ram, disk = tiers
     run_cash_cell(magics, "fit = fit_model()")
+    disk = _restart(cash_instance, disk, tmp_path)
+    STALLS.append(SLOW_LOAD_S)
+    assert _rerun_restores(magics)
     assert SLOW_LOAD_S in LOADS, "the stall was not taken: the test measures nothing"
-    assert _disk_bytes(disk) >= Fit(1 << 17).model["exog"].nbytes, "one stalled unpickling kept the result off disk"
-    assert len(ram.list_entries() or ()) > 0, "one stalled unpickling dropped the result from RAM"
+    assert _disk_bytes(disk) >= Fit(1 << 17).model["exog"].nbytes, "one stalled restore took the result off disk"

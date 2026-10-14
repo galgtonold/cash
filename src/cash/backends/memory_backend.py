@@ -1183,58 +1183,23 @@ class InMemoryBackend(CacheBackend):
         if not kept.served:
             kept.served = True
             if MEASURED_ROUND_TRIP not in metadata:
-                self._learn_reading(key, metadata, kept, time.perf_counter() - started)
+                seconds = time.perf_counter() - started
+                if _judged_by_compute(metadata) and seconds >= metadata["execution_time"]:
+                    # About to drop it: one stalled reading (a full garbage
+                    # collection, the writer holding the interpreter lock) is
+                    # not enough, so it is read again and the faster kept.
+                    seconds = min(seconds, _read_seconds(kept))
+                self._learn_reading(key, metadata, kept, seconds)
         return metadata, value
-
-    def time_pickled(self, key: str, metadata: MetadataDict) -> float | None:
-        """Read the value kept as pickle bytes for *key* (stored with
-        *metadata*) out once, timed, and throw the copy away: what a hit, and
-        a disk hit, will take. None for any other entry, or when it cannot
-        be read out (then it is dropped, as a hit would).
-
-        For the disk tier's decision when nothing of its class was read back
-        here yet (`TieredBackend.set`): a value that restores slower than it
-        computes must not be written. A reading of half the compute or more
-        is taken again and the faster kept (`_may_refuse`). The reading goes
-        on *metadata* and to the class, and a value no faster to read than
-        to compute leaves this tier, as on a store that copied it."""
-        with self._lock:
-            entry = self._store.get(key)
-        if entry is None or type(entry[1]) is not _Pickled or entry[0] is not metadata:
-            return None
-        kept = entry[1]
-        seconds = self._read_timed(kept)
-        if seconds is not None and _may_refuse(seconds, metadata):
-            again = self._read_timed(kept)
-            if again is not None:
-                seconds = min(seconds, again)
-        if seconds is None:
-            with self._lock:
-                entry = self._store.get(key)
-                if entry is not None and entry[1] is kept:
-                    self._drop(key)
-            return None
-        self._learn_reading(key, metadata, kept, seconds)
-        return seconds
-
-    @staticmethod
-    def _read_timed(kept: _Pickled) -> float | None:
-        started = time.perf_counter()
-        try:
-            kept.load()
-        except Exception:  # what cannot be read out is not kept
-            logger.debug("could not read a value out of its pickle bytes", exc_info=True)
-            return None
-        return time.perf_counter() - started
 
     def _learn_reading(self, key: str, metadata: MetadataDict, kept: _Pickled, seconds: float) -> None:
         """Put what reading *kept* out took on its entry and its class, and
         drop the entry when that is no faster than computing it."""
         size = int(metadata.get("size") or 0)
         metadata[MEASURED_ROUND_TRIP] = seconds
-        class_name = metadata.get(ROUND_TRIP_CLASS) if metadata.get("cost_model_family") is not None else None
-        if class_name is None and kept.top_class is not None:
-            class_name = kept.top_class
+        class_name = kept.top_class
+        if class_name is None and not metadata.get("call_refs") and metadata.get("cost_model_family") is not None:
+            class_name = metadata.get(ROUND_TRIP_CLASS)
         if class_name is not None:
             note_round_trip(class_name, size, seconds)
         if _judged_by_compute(metadata) and seconds >= metadata["execution_time"]:
@@ -2274,6 +2239,59 @@ def _slower_than_its_compute(value: Any, size: int, metadata: MetadataDict) -> b
 #: notebook entry, which a hit of the entry kept as pickle bytes credits
 #: its reading to (`InMemoryBackend._read_pickled`).
 ROUND_TRIP_CLASS = "round_trip_class"
+
+
+def _read_seconds(kept: _Pickled) -> float:
+    """Seconds reading a copy out of *kept* takes, the copy thrown away;
+    infinite when it cannot be read."""
+    started = time.perf_counter()
+    try:
+        kept.load()
+    except Exception:  # noqa: BLE001 - what cannot be read out is not worth keeping
+        return float("inf")
+    return time.perf_counter() - started
+
+
+def restore_too_slow(value: Any, metadata: MetadataDict, seconds: float) -> bool:
+    """Would `restored_no_faster` say *seconds* were no faster than the
+    compute, without crediting the reading to anything? For a second
+    reading first."""
+    if not _credited_class(value, metadata):
+        return False
+    return _judged_by_compute(metadata) and seconds >= metadata["execution_time"]
+
+
+def _credited_class(value: Any, metadata: MetadataDict) -> str | None:
+    """The class (`class_key`) a reading of *value* is credited to: its
+    own, for an object of a class of its own; for a notebook entry, that of
+    its biggest variable (`ROUND_TRIP_CLASS`) -- unless the entry holds
+    references to call entries (``call_refs``) in its place, whose reading
+    says nothing of the object's."""
+    kind = type(value)
+    if kind is dict:
+        if metadata.get("cost_model_family") != GENERIC_FAMILY or metadata.get("call_refs"):
+            return None
+        return metadata.get(ROUND_TRIP_CLASS)
+    return None if _copied_as_data(kind) else class_key(kind)
+
+
+def restored_no_faster(value: Any, metadata: MetadataDict, seconds: float) -> bool:
+    """Credit what restoring *value* from a slower tier took, *seconds*, to
+    its class (of its biggest value, for a notebook entry): the next store
+    of one is judged on it (`round_trip_seconds`). True when the restore
+    was no faster than the compute its entry records, for an entry the
+    policy may refuse (`_judged_by_compute`): then it is not worth keeping
+    there.
+
+    The first object of a class is written to disk judged by the cost model
+    alone, without being read back first; its first restore is the reading.
+    Only an object of a class of its own: a frame or an array is restored
+    as data, at the rate the cost model fits."""
+    name = _credited_class(value, metadata)
+    if not name:
+        return False
+    note_round_trip(name, int(metadata.get("cost_model_size_bytes") or metadata.get("size") or 0), seconds)
+    return _judged_by_compute(metadata) and seconds >= metadata["execution_time"]
 
 
 def _learned_round_trip(value: Any, size: int, metadata: MetadataDict) -> float | None:

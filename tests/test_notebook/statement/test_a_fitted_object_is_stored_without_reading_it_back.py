@@ -4,8 +4,8 @@
 and the RAM tier stored it by a pickle round trip: the unpickling rebuilt
 its design matrices, 9.5 s on top of a 10.6 s fit, for a value the cold
 run never read again. The tier now keeps the pickle bytes, and a hit
-unpickles them. Its class's rate, learned from the first such object bound
-for disk, judges the next one without reading it back.
+unpickles them; the first hit, from memory or from disk, teaches its class's
+rate, which judges the next one.
 
 What a statement hands out stays the value it computed: a cell that edits
 the object afterwards, in Python or in an array's memory, does not change
@@ -86,14 +86,13 @@ def test_an_edit_after_the_statement_is_not_what_a_rerun_restores(tiers, mock_sh
     assert fit.model["terms"] == ["x"]
 
 
-def test_a_stored_object_never_served_is_read_back_once_for_its_class_alone(tiers):
-    """The first of its class bound for disk is read back once, to learn what
-    a restore takes; the next is judged on that and never read back."""
+def test_a_stored_object_never_served_is_never_read_back(tiers):
+    """Not on the store, and not before its disk write: the first of its
+    class is judged by the cost model, and its first restore is the reading."""
     magics, _ram, disk = tiers
     run_cash_cell(magics, "first = fit_model()")
-    assert len(LOADS) == 1
     run_cash_cell(magics, "second = fit_model(1 << 16)")
-    assert len(LOADS) == 1, "the second of the class was read back although nothing served it"
+    assert not LOADS, "a stored object was read back although nothing served it"
     assert _on_disk(disk) >= Fit(1 << 17).model["exog"].nbytes
 
 
