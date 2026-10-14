@@ -483,7 +483,7 @@ recompute time you can feel on every restart.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/notebook/per_item_reruns.py:PerItemReruns.after_run @a1ffadac, cash/notebook/per_item_reruns.py:MIN_COST_S == 1.0, cash/notebook/per_item_reruns.py:MIN_UNCHANGED == 0.5, cash/notebook/per_item_reruns.py:HASH_SHARE == 0.03, cash/notebook/per_item_reruns.py:STEP_SHARE == 0.1 -->
+<!-- claim: cash/notebook/per_item_reruns.py:PerItemReruns.after_run @3109d431, cash/notebook/per_item_reruns.py:MIN_COST_S == 1.0, cash/notebook/per_item_reruns.py:MIN_UNCHANGED == 0.5, cash/notebook/per_item_reruns.py:HASH_SHARE == 0.03, cash/notebook/per_item_reruns.py:STEP_SHARE == 0.1 -->
 **What happened.** A statement that took a second or more ran again over a
 whole collection, although most of it is what it was when the statement last
 ran: 400 images were added to 3,000, one batch in the middle was exported
@@ -503,7 +503,8 @@ with the last run's in blocks of rows, so the rows it names are whole blocks:
 a change to one row names the block of rows around it. It is shown once per
 statement per session, and not when every row changed (most of a per-item
 helper would run again too) or when the input is the same (the statement ran
-for another reason, such as an edit to a function it calls).
+for another reason, such as an edit to a function it calls), nor when
+another input changed too (a parameter with a new value).
 
 **Why it matters.** The input is one value, and it changed, so cash cannot
 reuse any of the last run: the work on the unchanged rows is done again.

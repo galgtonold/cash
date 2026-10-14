@@ -156,3 +156,24 @@ def test_the_hint_never_changes_what_is_served(cash_magics, cash_instance, monke
         CacheStatus.RESTORED,
         CacheStatus.COMPUTED,
     ]
+
+
+def test_a_parameter_recomputed_to_the_same_value_still_compares(cash_magics):
+    """``best_k`` computed again (new lineage, same value) is the same
+    parameter: the step is still compared and named."""
+    step = f"clean = [imgs * best_k, time.sleep({SLOW})][0]"
+    _run(cash_magics, SETUP, BASE, "best_k = int('2')", step)
+
+    found = _run(cash_magics, GROWN, "best_k = int('2') + 0", step)
+
+    assert len(found) == 1, found
+
+
+def test_a_parameter_with_a_new_value_does_not_compare(cash_magics):
+    step = f"clean = [imgs * best_k, time.sleep({SLOW})][0]"
+    _run(cash_magics, SETUP, BASE, "best_k = 2", step)
+
+    found = _run(cash_magics, GROWN, "best_k = 3", step)
+
+    assert _status(cash_magics, step) == CacheStatus.COMPUTED, "control: it ran again"
+    assert not found, "the step changed, not only its rows"

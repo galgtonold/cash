@@ -65,12 +65,32 @@ _MAX_TAKEN = 16
 Record = dict[str, Any]
 
 
-def _others_digest(lineages: Mapping[str, str], fingerprinted: Iterable[str]) -> str:
-    """A digest of the lineages of the inputs that are not fingerprinted: two
-    runs compare only when these are the same."""
+#: Plain values an input can be compared by: a recomputed ``best_k = 20``
+#: has a new lineage but the same value.
+_PLAIN = (int, float, str, bool, type(None))
+
+
+def _plain(value: Any) -> bool:
+    if isinstance(value, _PLAIN):
+        return not isinstance(value, str) or len(value) <= 200
+    return isinstance(value, tuple) and len(value) <= 16 and all(isinstance(v, _PLAIN) for v in value)
+
+
+def _others_digest(lineages: Mapping[str, str], values: Mapping[str, Any], fingerprinted: Iterable[str]) -> str:
+    """A digest of the inputs that are not fingerprinted, by value when it
+    is a plain number, string or tuple of them, else by lineage: two runs
+    compare only when these are the same."""
     skip = set(fingerprinted)
-    text = "\0".join(f"{k}={v}" for k, v in sorted(lineages.items()) if k not in skip)
-    return hashlib.sha256(text.encode()).hexdigest()[:16]
+    parts = []
+    for name in sorted(set(lineages) | set(values)):
+        if name in skip:
+            continue
+        value = values.get(name)
+        if name in values and _plain(value):
+            parts.append(f"{name}:{type(value).__name__}:{value!r}")
+        else:
+            parts.append(f"{name}={lineages.get(name)}")
+    return hashlib.sha256("\0".join(parts).encode()).hexdigest()[:16]
 
 
 def _seconds(s: float) -> str:
@@ -132,7 +152,7 @@ class PerItemReruns:
         rowed = {name: value for name, value in values.items() if row_count(value) is not None}
         if not rowed:
             return
-        others = _others_digest(lineages, rowed)
+        others = _others_digest(lineages, values, rowed)
         before = self._records.get(source_hash)
         if before is None:
             before = load(source_hash)
