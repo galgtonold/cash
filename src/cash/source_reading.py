@@ -145,15 +145,16 @@ def getsourcelines(obj: object) -> tuple[list[str], int]:
     that function then had the same text, and the key never moved again
     (`relocated_source_lines` finds where the code is defined instead).
     """
-    obj = inspect.unwrap(obj)
-    lines, first = _inspect_source_lines(obj)
-    code = _code_of(obj)
-    if code is not None and not block_defines(lines, code):
-        moved = relocated_source_lines(obj, code)
-        if moved is None:
-            raise OSError(f"could not find the definition of {code.co_name}: its code was compiled from other text")
-        return moved[0], moved[1]
-    return lines, first
+    with untracked():
+        obj = inspect.unwrap(obj)
+        lines, first = _inspect_source_lines(obj)
+        code = _code_of(obj)
+        if code is not None and not block_defines(lines, code):
+            moved = relocated_source_lines(obj, code)
+            if moved is None:
+                raise OSError(f"could not find the definition of {code.co_name}: its code was compiled from other text")
+            return moved[0], moved[1]
+        return lines, first
 
 
 def _code_of(obj: object) -> types.CodeType | None:
@@ -230,7 +231,8 @@ def code_is_where_it_says(code: types.CodeType) -> bool:
     """Does the block at *code*'s file and first line define it? True when
     that cannot be read (the caller's own checks then apply)."""
     try:
-        lines, _first = _inspect_source_lines(code)
+        with untracked():
+            lines, _first = _inspect_source_lines(code)
     except Exception:  # noqa: BLE001 - no block to compare: nothing to say
         return True
     return block_defines(lines, code)
@@ -246,7 +248,8 @@ def defining_file(fn: object) -> str | None:
         return None
     if code_is_where_it_says(code):
         return code.co_filename
-    moved = relocated_source_lines(fn, code)
+    with untracked():
+        moved = relocated_source_lines(fn, code)
     return moved[2] if moved is not None else None
 
 
@@ -311,16 +314,21 @@ def settled_source_version(obj: object) -> tuple[str, int, int] | None:
     settled (`stat_has_settled`), and ``linecache`` reads it from disk. None
     otherwise. Check `source_version_unchanged` after reading, before storing.
     """
-    try:
-        path = inspect.getsourcefile(obj)  # type: ignore[arg-type]
-    except TypeError:
-        return None
-    if path is None:
-        return None
-    try:
-        st = os.stat(path)
-    except OSError:
-        return None
+    # Untracked: ``getsourcefile`` asks ``os.path.exists`` of the name the
+    # code was compiled under, and networkx numbers its decorators' names by
+    # a process-wide count -- recorded as the running statement's absent
+    # file, its lineage changed with each restart.
+    with untracked():
+        try:
+            path = inspect.getsourcefile(obj)  # type: ignore[arg-type]
+        except TypeError:
+            return None
+        if path is None:
+            return None
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None
     if not stat_has_settled(st) or not _disk_backed(path):
         return None
     return (path, st.st_mtime_ns, st.st_size)
@@ -330,7 +338,8 @@ def source_version_unchanged(version: tuple[str, int, int]) -> bool:
     """Is the file still at *version*? A memo stores what it read only then."""
     path = version[0]
     try:
-        st = os.stat(path)
+        with untracked():
+            st = os.stat(path)
     except OSError:
         return False
     return (path, st.st_mtime_ns, st.st_size) == version and _disk_backed(path)
