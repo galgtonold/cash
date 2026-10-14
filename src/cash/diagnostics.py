@@ -297,6 +297,9 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # ran the cell uncached
         "NOTEBOOK-ANALYSIS-FAILED",  # a safety check on a statement raised, so
         # the statement ran uncached
+        "NOTEBOOK-FILE-ROUNDTRIP",  # a statement reads back a file a statement
+        # of this session wrote, and each new write makes it and what is built
+        # from it run again
         "NOTEBOOK-FAILED-CELL",  # a cell raised part way, and a name it
         # changed is kept as that run left it, or could not be put back
         "NOTEBOOK-CELL-SYNTAX",  # an upstream cell does not parse, so cells that

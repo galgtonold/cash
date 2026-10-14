@@ -167,6 +167,9 @@ class StatementRun:
     loop_watch: str | None = None
     #: Estimator-fit receivers cached under ``# @cash:cache-fit``.
     est_fit: set[str] = field(default_factory=set)
+    #: The file whose change threw the statement's cache entry away, when
+    #: that is why it runs (``CacheFreshnessChecker.last_stale_file``).
+    stale_file: str | None = None
     #: What actually executes: ``code`` with eligible calls routed through
     #: the call cache. When that rewrite fires, ``exec_source`` is cleared so
     #: the rewritten code is what compiles.
