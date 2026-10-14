@@ -520,6 +520,12 @@ so this never misses. On **Windows**, two kinds of edit move nothing: a write
 whose modification time is put back afterwards (`os.utime`, `shutil.copystat`,
 `robocopy /COPY:T`), and a write through `np.memmap(path, mode="r+")`.
 
+<!-- claim: cash/tracking/file_dep_snapshot.py:_remembered_digest @7327a95f, cash/tracking/file_dep_snapshot.py:_HASH_MEMO_TTL_SECONDS == None -->
+Such an edit stays unseen for as long as the kernel runs, not only for a
+moment: once cash has read a file's content, it reuses that digest while the
+size and timestamps match. Restarting does not help either, since the digest
+is also kept in the cache folder for the next process.
+
 **Fix:** after such a write, touch the file (`Path(path).touch()`). cash then
 reads its content, and if it changed, everything that read it runs again.
 
