@@ -77,9 +77,14 @@ N = 3 * CHECK_AT
 @pytest.fixture
 def lib(tmp_path, monkeypatch):
     monkeypatch.setattr(held_functions, "EXISTENCE_CHECK_AT", CHECK_AT)
+    # Installed, as openpyxl is: the analysis opens only the objects of the
+    # user's own classes to look for code they would run, and a local
+    # module's 6,000 cells cost this test 15 s of it under load.
+    site = tmp_path / "site-packages"
+    site.mkdir()
     name = f"_book_lib_{os.getpid()}_{id(tmp_path)}"
-    (tmp_path / f"{name}.py").write_text(f"N = {N}\n" + MODULE, encoding="utf-8")
-    monkeypatch.syspath_prepend(str(tmp_path))
+    (site / f"{name}.py").write_text(f"N = {N}\n" + MODULE, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(site))
     yield importlib.import_module(name).__name__
     sys.modules.pop(name, None)
 
@@ -122,8 +127,8 @@ def test_the_workbook_is_not_walked_and_its_readers_follow_the_file(cash_magics,
     run_cash_cell(cash_magics, "report = total * 2")
     assert mock_shell.user_ns["total"] == _expected_total(1.0)
     assert mock_shell.user_ns["report"] == 2 * _expected_total(1.0)
-    # Each statement reading wb walked all of its N cells before.
-    assert visited[0] < 2 * N, visited[0]
+    # Each statement reading wb walked all of its N cells before (2 N here).
+    assert visited[0] < N, visited[0]
 
     # The file is rewritten from outside; the next run reads it again.
     path.write_text("5.0", encoding="utf-8")
