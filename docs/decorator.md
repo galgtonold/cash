@@ -32,7 +32,7 @@ slow_square(1_000_000)   # cache hit: returns the stored result
 
 That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @cf16cee7, cash/decorator/store.py:ResultStore.store @49dee82f, cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @cf16cee7, cash/decorator/store.py:ResultStore.store @e289b59d, cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
 - **Exceptions are never cached.** If the body raises, nothing is stored and the
   exception reaches you as usual. The next call runs the body again.
 - **A hit does not replay output.** Anything the body printed or logged appears
@@ -772,7 +772,7 @@ miss costs.
 
 ### `allow_random=`
 
-<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @d89d19fb -->
+<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @37dc56c2 -->
 When the body draws from an unseeded random generator, cash warns
 ([`RANDOM-UNSEEDED`](warnings.md#random-unseeded)): the first draw is stored and
 every later call gets the same "random" value. The fix is a generator seeded
@@ -789,7 +789,7 @@ where the stream stands, so each seed and each draw after it gets its own
 entry. A seed set before the function is decorated is not seen. A function
 whose own body seeds the stream is not keyed by where the caller left it.
 
-<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @72773502 -->
+<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @164e7c5c -->
 The same holds for a generator in a module global that the body draws from
 (`rng = np.random.default_rng(42)` at module level, `rng.normal()` inside): the
 key includes where `rng` stands, and a hit moves `rng` on to where the computed

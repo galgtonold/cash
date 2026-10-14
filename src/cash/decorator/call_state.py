@@ -118,6 +118,7 @@ class BodyRun:
         "body_seconds",
         "saves_seconds",
         "rng_new",
+        "rng_drew",
     )
 
 

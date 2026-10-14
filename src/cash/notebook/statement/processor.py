@@ -1305,7 +1305,9 @@ class StatementProcessor:
         self._randomness.flag_inline_unseeded_fit(
             metrics, run.code, run.tree, run.outputs, run.allow_random, is_hit=False, skip_cache=run.skip_cache
         )
-        self._randomness.flag_observed_hidden_draw(metrics, run.code, run.outputs, skip_cache=run.skip_cache)
+        self._randomness.flag_observed_hidden_draw(
+            metrics, run.code, run.outputs, skip_cache=run.skip_cache, allow_random=run.allow_random
+        )
         metrics["status"] = CacheStatus.COMPUTED
         metrics["evaluated_vars"] = list(run.outputs) if run.outputs else []
         # Input names, so provenance and badge tooltips can rebuild the

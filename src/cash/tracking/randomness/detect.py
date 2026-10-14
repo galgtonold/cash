@@ -1308,6 +1308,40 @@ def check_and_warn_randomness(
 # one source line), so ``0`` is used.
 
 
+_OBSERVED_DRAW_FIX = (
+    "pass a seed to what draws inside the call (random_state=<int> for a "
+    "scikit-learn estimator or transformer, including one inside a pipeline), "
+    "or seed the stream in a cell above (np.random.seed(0)); put "
+    "`# @cash:no-cache` on a line of its own above the statement for a fresh "
+    "draw each run, or `# @cash:allow-random` to keep it frozen on purpose."
+)
+
+
+def warn_observed_draw(code: str, streams: str, detector: RandomnessDetector, suppress_warning: bool = False) -> None:
+    """RANDOM-UNSEEDED for a statement that moved a global random stream no
+    seed stands behind, inside a function it calls: the statement's source
+    shows no draw, so only the before/after comparison of the streams sees
+    it. *streams* names them (`describe_stream`). Once per statement per
+    session, like the other notebook warnings here."""
+    if suppress_warning:
+        return
+    message = (
+        f"This statement drew from {streams} without a seed, inside a function "
+        f"it calls, where its source does not show the draw. If its result "
+        f"depends on that draw, it is cached and replayed on later runs - the "
+        f"value is frozen and not reproducible across a cleared cache."
+    )
+    if not detector.mark_warned(code, message):
+        return
+    warn_diagnostic(
+        CashRandomnessWarning,
+        code="RANDOM-UNSEEDED",
+        what=message,
+        fix=_OBSERVED_DRAW_FIX,
+        location=("<cash>", 0),
+    )
+
+
 def format_unseeded_estimator_fit_message(receiver: str) -> str:
     """Compute-time message for caching an unseeded estimator fit.
 

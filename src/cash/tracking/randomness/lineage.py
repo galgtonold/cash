@@ -95,14 +95,21 @@ _PROCESS_SEEDED: set[str] = set()
 _WATCHED: set[str] = set()
 
 
+#: ``torch`` when a watched ``torch.manual_seed(<value>)`` ran in this
+#: process. Kept apart from `_PROCESS_SEEDED`: it only tells the stream check
+#: (`unseeded_streams`) that a torch draw is seeded, and keys nothing.
+_TORCH_SEEDED: set[str] = set()
+
+
 def _note_seed(module: str, args: tuple, kwargs: dict) -> None:
     value = args[0] if args else kwargs.get("seed", kwargs.get("a"))
+    seeded = _TORCH_SEEDED if module == "torch" else _PROCESS_SEEDED
     if value is None:
         # ``seed()`` / ``seed(None)`` re-randomises: the stream is unseeded
         # again, and the freeze contract applies to it.
-        _PROCESS_SEEDED.discard(module)
+        seeded.discard(module)
     else:
-        _PROCESS_SEEDED.add(module)
+        seeded.add(module)
 
 
 def _seed_wrapper(module: str, original):
@@ -119,7 +126,8 @@ def _seed_wrapper(module: str, original):
 
 
 def watch_seeds() -> None:
-    """Wrap ``random.seed`` and ``numpy.random.seed`` (once each, when imported).
+    """Wrap ``random.seed``, ``numpy.random.seed`` and ``torch.manual_seed``
+    (once each, when imported).
 
     Cheap to call again: a module already wrapped is skipped. A seed set before
     the wrap -- before cash saw ``numpy`` imported -- is not seen.
@@ -131,17 +139,21 @@ def watch_seeds() -> None:
             import numpy.random  # noqa: F401 - imported to load it, so its seed() can be wrapped
         except Exception:  # noqa: BLE001 - a broken numpy only loses the watch
             pass
-    targets = (("random", "random"), ("numpy.random", "numpy.random"))
-    for module, rng in targets:
+    targets = (
+        ("random", "random", "seed"),
+        ("numpy.random", "numpy.random", "seed"),
+        ("torch", "torch", "manual_seed"),
+    )
+    for module, rng, attr in targets:
         if rng in _WATCHED:
             continue
         mod = sys.modules.get(module)
-        original = getattr(mod, "seed", None) if mod is not None else None
+        original = getattr(mod, attr, None) if mod is not None else None
         if original is None:
             continue
         if not getattr(original, "__cash_seed_watch__", False):
             try:
-                mod.seed = _seed_wrapper(rng, original)
+                setattr(mod, attr, _seed_wrapper(rng, original))
             except (AttributeError, TypeError):  # pragma: no cover - read-only module
                 continue
         _WATCHED.add(rng)
@@ -153,6 +165,55 @@ def seeded_rng_modules() -> set[str]:
     if _ACTIVE_SEED_EPOCHS is not None:
         return set(_ACTIVE_SEED_EPOCHS)
     return set(_PROCESS_SEEDED)
+
+
+#: How a warning names each global stream `capture_rng_state` reads.
+_STREAM_NAMES = {
+    "random": "Python's global random stream",
+    "numpy.random": "numpy's global random stream",
+    "torch": "torch's default random generator",
+    "torch.cuda": "torch's CUDA random generators",
+}
+
+
+def describe_stream(module: str) -> str:
+    """``"numpy's global random stream"`` for ``"numpy.random"``."""
+    return _STREAM_NAMES.get(module, f"the global random stream of {module}")
+
+
+def unseeded_streams(drew: Iterable[str], seeded: Iterable[str] = ()) -> set[str]:
+    """The streams of *drew* that no seed stands behind, asked right after
+    the code that drew them ran.
+
+    A stream counts as seeded when a seed set before that code, or by it,
+    is still in force: the notebook's seed ledger, a watched ``seed(<value>)``
+    in this process (`watch_seeds`), and *seeded* (the caller's own
+    knowledge: a seed in the function's source). A code that seeds and then
+    draws is reproducible, so it is not reported; a ``seed(None)`` re-randomises,
+    so a draw after it is. A seed set before the watch began (before cash saw
+    the module imported) is not seen.
+    """
+    known = seeded_rng_modules() | _PROCESS_SEEDED | _TORCH_SEEDED | set(seeded)
+    if "torch" in known:
+        known.add("torch.cuda")  # `manual_seed` seeds every device
+    return {m for m in drew if m not in known}
+
+
+#: How many draws a cached function judged (`note_judged_draw`): the
+#: notebook reads it around a statement, so a draw a cached function inside
+#: it already reported, or was told to keep quiet about, is not reported a
+#: second time for the statement.
+_JUDGED_DRAWS = [0]
+
+
+def note_judged_draw() -> None:
+    """Count one computed cached call whose global-stream draw was judged."""
+    _JUDGED_DRAWS[0] += 1
+
+
+def judged_draws() -> int:
+    """The count `note_judged_draw` keeps."""
+    return _JUDGED_DRAWS[0]
 
 
 def _stream_position(module: str) -> str | None:

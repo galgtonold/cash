@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @953c7c89 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @966b3c5b -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -80,7 +80,7 @@ its warning class.
 | Family | Prefix | Codes | What it reports |
 |---|---|---:|---|
 | [Annotations](#annot-codes) | `ANNOT-` | 2 | A `# @cash:` comment that cash could not honour. |
-| [Caching](#cache-codes) | `CACHE-` | 18 | Caching happened, or refused to, and it is worth saying. |
+| [Caching](#cache-codes) | `CACHE-` | 19 | Caching happened, or refused to, and it is worth saying. |
 | [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
 | [Side effects](#impure-codes) | `IMPURE-` | 4 | The function does something a cache hit will not repeat. |
 | [Cache keys](#key-codes) | `KEY-` | 24 | Something the result depends on may not be in the cache key. |
@@ -154,6 +154,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 | [CACHE-IF-RAISED](#cache-if-raised) | decorator | the `cache_if` predicate raised |
 | [CACHE-LOOP-GROWTH](#cache-loop-growth) | notebook | a loop stores every state of a growing value |
 | [CACHE-NET-LOSS](#cache-net-loss) | decorator | caching this function costs more time than it saves |
+| [CACHE-NONDETERMINISTIC](#cache-nondeterministic) | decorator | computed again, a result differs from the one stored before |
 | [CACHE-NOT-WORTH-BYTES](#cache-not-worth-bytes) | notebook | a big, cheap value was not written to disk |
 | [CACHE-PER-ITEM-RERUN](#cache-per-item-rerun) | notebook | a slow step ran again over a whole collection, though most of it is unchanged |
 | [CACHE-RETURNS-AWAITABLE](#cache-returns-awaitable) | decorator | a sync function returned a coroutine, which is not stored |
@@ -442,6 +443,31 @@ cash.register_hasher(
 
 **When it is safe to ignore.** When speed is not why you cache, for example to
 avoid a paid API call or to hold a result steady.
+
+### CACHE-NONDETERMINISTIC {#cache-nondeterministic}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashRandomnessWarning</span>
+
+<!-- claim: cash/decorator/store.py:ResultStore._warn_if_result_changed @c19fb467 -->
+**What happened.** A `frozen=True` function's result (a DataFrame, an array
+or a table) was stored, then evicted or cleared, and computed again in the
+same process for the same arguments and the same files. The new result's
+content differs from the one stored before.
+
+**Why it matters.** Something in the call is not reproducible: an unseeded
+random draw (often from a generator the code makes itself, such as
+`np.random.default_rng()`), the clock, or an input cash does not see. The value
+a hit returns is one draw of it, and another run would have cached another.
+
+**What to do.** Seed what draws (`random_state=0`, `np.random.default_rng(0)`),
+or pass the changing input in as an argument. If any one of the results will
+do, pass `@cash.cache(allow_random=True)`.
+
+**When it is safe to ignore.** When the difference is meant: the function
+reads something that changes on purpose. Then give it a `ttl`, which this
+check leaves alone, or pass the source with `dynamic_depends_on=`. Only
+results cash already hashes are compared, so a miss costs no extra hashing,
+and a function whose results are not compared is not warned about.
 
 ### CACHE-NOT-WORTH-BYTES {#cache-not-worth-bytes}
 
@@ -1940,7 +1966,7 @@ statement, on the line above it or at the end of its line. It turns off the
 rewind as well as caching, and the statement no longer raises this warning.
 `# @cash:allow-random` only silences the warning.
 
-<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @d89d19fb -->
+<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @37dc56c2 -->
 With `@cash.cache`: the check runs when the decorator is applied, once per
 function, and reads only that function's source, so a `random.seed(0)`
 elsewhere does not silence it. Such a seed is still keyed when it is set after
@@ -1960,6 +1986,27 @@ warns only when the call picks them: `Ridge()` is silent, `Ridge(solver='sag')`
 warns. When cash cannot read the setting (a variable, or `PCA()`, whose
 `svd_solver='auto'` picks by the data's shape), the message says what the draw
 depends on rather than that one happened.
+
+<!-- claim: cash/decorator/rng.py:RngWatch.warn_observed_draw @4bad64b0, cash/notebook/statement/randomness.py:StatementRandomness.flag_observed_hidden_draw @71b1e7ff, cash/tracking/randomness/lineage.py:unseeded_streams @5abf622f -->
+A draw that neither the function's source nor the statement's shows is caught
+as it happens: cash compares the global streams (Python's `random`, numpy's
+`np.random`, and torch's default generator when torch is imported) before and
+after a computed call or statement. If one moved and no seed stands behind it,
+the message says, for example, that the call "drew from numpy's global random
+stream without a seed". That covers a helper or a library deep inside the call:
+a scikit-learn transformer left at `random_state=None` inside a
+`ColumnTransformer` a helper builds, which subsamples large data from numpy's
+stream. A seed counts when it was set before the call, by the caller, or inside
+the call before the draw (`np.random.seed(0)`, `random.seed(0)`,
+`torch.manual_seed(0)`); `seed(None)` does not. Some library code takes a
+number from the stream and then does not use it (scikit-learn's `SVC()` and
+`Lasso()` take one for settings they are not using), so the message says the
+value is frozen if the result depends on that draw. A returned estimator left
+at `random_state=None` is judged by its own settings, as above. With
+`@cash.cache` this is said on a computed call, once per function. A generator the code makes for itself
+without a seed (`np.random.default_rng()` in a helper) moves no global stream,
+so this check cannot see it; for that, see
+[CACHE-NONDETERMINISTIC](#cache-nondeterministic).
 
 **When it is safe to ignore.** When any fixed value will do: an exploratory
 split, a demo, a smoke test. Not when the number goes into a report or a test
@@ -2099,7 +2146,7 @@ something is replacing files under a running job, such as a deploy.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @49dee82f -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @e289b59d -->
 **What happened.** The result was computed, but writing it to the cache
 failed. The message names the backend and the exception. Whatever the
 exception, the call returns its result; a failed write never fails the call.

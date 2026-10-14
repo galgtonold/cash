@@ -16,19 +16,24 @@ from cash.tracking.randomness import (
     RandomnessDetector,
     capture_rng_state,
     check_and_warn_randomness,
+    describe_stream,
     entropy_write_lineage,
     get_drawing_rng_modules,
     get_entropy_reseed_modules,
     get_seeding_rng_modules,
     hidden_lineage_writes,
     hidden_write_lineage,
+    judged_draws,
     publish_seed_epochs,
     restore_rng_state,
     rng_modules_changed,
     rng_virtual_var,
+    unseeded_streams,
+    warn_observed_draw,
     warn_stale_estimator_fit,
     warn_stale_randomness,
     warn_unseeded_estimator_fit,
+    watch_seeds,
 )
 from cash.tracking.randomness.estimator_draws import estimator_draws
 
@@ -82,6 +87,9 @@ class StatementRandomness:
         self._cell_pre: dict | None = None
         self._cell_pre_lineage: dict[str, str] = {}
         self._cell_post: dict | None = None
+        #: `judged_draws` when this statement began: a cached
+        #: function inside it that reported its own draw moves it.
+        self._draw_warnings_at_start = 0
 
     def resume_live_stream(self, code: str) -> None:
         """Move the unseeded streams a ``no-cache`` statement draws from back
@@ -119,6 +127,11 @@ class StatementRandomness:
         self.observed_draw = set()
         self.draw_newly_seen = False
         self.newly_seen_draws = set()
+        # A seed set inside a function the statement calls is seen as it is
+        # set (`unseeded_streams`); a module imported since the last
+        # statement is wrapped now.
+        watch_seeds()
+        self._draw_warnings_at_start = judged_draws()
         return capture_rng_state()
 
     def record_seeds(self, code: str, cache_key: str) -> None:
@@ -558,8 +571,10 @@ class StatementRandomness:
         outputs: set[str],
         *,
         skip_cache: bool,
+        allow_random: bool = False,
     ) -> None:
-        """Stamp the unseeded pill for a draw only the runtime observer saw.
+        """Stamp the unseeded pill, and warn RANDOM-UNSEEDED, for a draw only
+        the runtime observer saw.
 
         The AST detector (:meth:`stamp_random_effect`) sees ``np.random.rand()``
         spelled in the cell; object-introspection
@@ -581,9 +596,14 @@ class StatementRandomness:
           the session seed ledger, so overriding it here would mislabel a draw
           from a module seeded in an *earlier* statement.
         * Only genuinely unseeded modules. A hidden draw from a module already
-          seeded this session (the ``seed_epochs`` ledger) is reproducible.
-          A seeded estimator fit never touches the global stream at all, so it
-          never even reaches here.
+          seeded this session (the ``seed_epochs`` ledger), or seeded by the
+          function the statement calls before it draws (`unseeded_streams`),
+          is reproducible. A seeded estimator fit never touches the global
+          stream at all, so it never even reaches here.
+
+        The warning is left out for ``# @cash:allow-random``, when an
+        unseeded fit or call in the statement was already reported, and
+        when a cached function inside the statement reported the same draw.
         """
         if skip_cache or not outputs:
             return
@@ -594,12 +614,23 @@ class StatementRandomness:
             ast_draws = get_drawing_rng_modules(strip_markers(code))
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             return
-        seeded = set(self.seed_epochs)
-        hidden_unseeded = changed - ast_draws - seeded
+        hidden_unseeded = unseeded_streams(changed - ast_draws, self.seed_epochs)
         if not hidden_unseeded:
             return
+        reported = bool(metrics.get("random_unseeded"))
         metrics["random_effect"] = "draw"
         metrics["random_unseeded"] = True
+        if reported or allow_random or judged_draws() != self._draw_warnings_at_start:
+            return
+        # A notebook function the statement calls that seeds before it draws.
+        hidden_unseeded -= self.helper_seeds(code)
+        if not hidden_unseeded:
+            return
+        streams = " and ".join(describe_stream(m) for m in sorted(hidden_unseeded)[:2])
+        try:
+            warn_observed_draw(strip_markers(code), streams, self.detector)
+        except (ValueError, AttributeError, RecursionError):
+            logger.debug("%s Observed-draw randomness warning failed", _LOG_PROCESSOR)
 
     def warn_stale_estimator_fit(
         self,

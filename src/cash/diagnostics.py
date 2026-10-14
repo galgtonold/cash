@@ -221,6 +221,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "CACHE-IF-RAISED",  # the cache_if predicate raised
         "CACHE-LOOP-GROWTH",  # a loop is persisting every state of a growing
         # object, costing the sum of every snapshot
+        "CACHE-NONDETERMINISTIC",  # a key computed again gave a different
+        # result than the one stored under it
         "CACHE-NET-LOSS",  # key hashing has cost more than it has saved
         "CACHE-RETURNS-AWAITABLE",  # a sync wrapper returned a coroutine; not stored
         "CACHE-THRASH",  # at the cap, evicting within writes of storing

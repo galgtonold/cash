@@ -22,12 +22,16 @@ from ..tracking.randomness import (
     RandomnessDetector,
     capture_rng_state,
     describe_random_call,
+    describe_stream,
+    get_entropy_reseed_modules,
     get_seeding_rng_modules,
+    note_judged_draw,
     replay_carriers,
     restore_rng_state,
     rng_modules_changed,
     seed_epoch_component,
     seeded_rng_modules,
+    unseeded_streams,
     watch_seeds,
 )
 
@@ -328,6 +332,11 @@ class RngWatch:
         self._notices = notices
         #: func_name -> the global streams its own body seeds (`note_self_seeding`).
         self._self_seeded: dict[str, set[str]] = {}
+        #: The same, less the streams it re-randomises (``seed(None)``):
+        #: what the stream check (`warn_observed_draw`) counts as seeded.
+        self._self_seeded_fixed: dict[str, set[str]] = {}
+        #: Functions whose source carries ``# @cash:allow-random``.
+        self._source_allows_random: set[str] = set()
         watch_seeds()
 
     def fold_rng_epoch(self, func_name: str, state_hash: str) -> str:
@@ -405,17 +414,25 @@ class RngWatch:
         except Exception:  # noqa: BLE001 - best effort; correctness degrades to today's
             logger.debug("could not persist RNG draw marker for %s", func_name)
 
-    def note_draw(self, func_name: str, pre_state: dict | None) -> bool:
-        """Record which global RNG modules *func_name* just advanced."""
+    @staticmethod
+    def drawn_streams(pre_state: dict | None) -> set[str]:
+        """The global streams that moved since *pre_state* was captured.
+
+        One comparison per computed call: the states are compared directly
+        (`rng_modules_changed`), numpy's key array by its bytes. A module
+        merely imported by the call is newly present rather than advanced;
+        only streams that already existed count.
+        """
         if pre_state is None:
-            return False
+            return set()
         try:
             changed = rng_modules_changed(pre_state, capture_rng_state())
         except (TypeError, AttributeError):  # pragma: no cover
-            return False
-        # A module merely imported by the call is newly present rather than
-        # advanced; only count streams that already existed.
-        drew = {m for m in changed if m in pre_state}
+            return set()
+        return {m for m in changed if m in pre_state}
+
+    def note_draw(self, func_name: str, drew: set[str]) -> bool:
+        """Record that *func_name* just advanced the global streams *drew*."""
         if not drew:
             return False
         cf = self._registry.cached.get(func_name)
@@ -436,6 +453,67 @@ class RngWatch:
         # write there would redraw and break the freeze-from-first-call contract.
         return bool(self._stream_inputs(func_name, drew) & seeded_rng_modules())
 
+    def warn_observed_draw(self, func_name: str, drew: set[str], result: Any) -> None:
+        """RANDOM-UNSEEDED for a computed call that moved a global random
+        stream no seed stands behind.
+
+        Reading the source finds a draw spelled in the function itself and
+        a library call it makes without ``random_state``. It cannot see one
+        made further down: a helper that builds a scikit-learn
+        ``ColumnTransformer`` around a transformer left at
+        ``random_state=None``, which subsamples from numpy's global stream
+        once the data is large enough. The call itself shows it: the stream
+        moved while the body ran. That is the same comparison that keys a
+        seeded draw (`note_draw`), so this costs nothing more than reading it.
+
+        Silent when the stream is seeded (before the call or inside it,
+        `unseeded_streams`), when the function's source seeds it, for
+        ``allow_random=True`` and ``# @cash:allow-random``, when reading the
+        source already warned, and when the result is an estimator left at
+        ``random_state=None``: its own check judges whether its fit draws
+        (`warn_unseeded_estimator_result`), and some, such as ``SVC()`` or
+        ``Lasso()``, take a number from the stream that their fit then does
+        not use. A
+        generator the function makes for itself (``np.random.default_rng()``)
+        is no global stream, so it is not seen here.
+        """
+        if not drew:
+            return
+        cf = self._registry.cached.get(func_name)
+        if cf is None:
+            return
+        # Judged here, warned or not: a statement calling this function
+        # leaves the draw to it (`flag_observed_hidden_draw`).
+        note_judged_draw()
+        if cf.allow_random or func_name in self._source_allows_random:
+            return
+        if self._notices.has_warned((CashRandomnessWarning, func_name, "", "RANDOM-UNSEEDED")):
+            return  # the source scan said it already
+        try:
+            unseeded = unseeded_streams(drew, self._self_seeded_fixed.get(func_name, ()))
+        except Exception:  # noqa: BLE001 - an advisory never breaks a call
+            return
+        if not unseeded or _random_state_left_unset(result):
+            return  # none, or the estimator's own check judges it
+        streams = sorted(unseeded)
+        named = " and ".join(describe_stream(m) for m in streams[:2])
+        self._notices.warn_once(
+            CashRandomnessWarning,
+            func_name,
+            "_observed_draw",
+            f"@cash.cache on {func_name}: the call drew from {named} without a "
+            f"seed, where reading its source does not show the draw (a library "
+            f"or helper it calls). If the result depends on that draw, the "
+            f"first call's result is cached and replayed on every later call - "
+            f"the value is frozen and not reproducible across a cleared cache.",
+            code="RANDOM-UNSEEDED",
+            fix="pass a seed to what draws (random_state=<int> for a scikit-learn "
+            "estimator or transformer, including one inside a pipeline), or seed "
+            "the stream before the call (np.random.seed(0)); leave the function "
+            "undecorated for a fresh draw, or pass @cash.cache(allow_random=True) "
+            "to keep it frozen on purpose.",
+        )
+
     def _stream_inputs(self, func_name: str, modules: set[str]) -> set[str]:
         """The streams of *modules* whose position is an input of *func_name*:
         not one its own body seeds before drawing, since the seed, not where
@@ -448,10 +526,13 @@ class RngWatch:
         try:
             src = textwrap.dedent(getsource(func))
             own = get_seeding_rng_modules(src)
+            entropy = get_entropy_reseed_modules(src) if own else set()
         except Exception:  # noqa: BLE001 - no source: every drawn stream stays an input
             return
         if own:
             self._self_seeded[func_name] = set(own)
+        if own - entropy:
+            self._self_seeded_fixed[func_name] = set(own) - set(entropy)
 
     def replay_parts(
         self, drew: bool, pre_state: dict | None, carriers: list | None = None, arg_carriers: list | None = None
@@ -537,6 +618,7 @@ class RngWatch:
         for line in src.splitlines():
             ann = parse_annotation_line(line)
             if ann is not None and ann.allow_random:
+                self._source_allows_random.add(func_name)
                 return
 
         # A seeding call fed by a PARAMETER -- `default_rng(seed)` -- counts as
@@ -730,20 +812,11 @@ class RngWatch:
         # avoid paying for a fit. Check the same key first and leave.
         if self._notices.has_warned((CashRandomnessWarning, func_name, "_estimator_result", "RANDOM-UNSEEDED")):
             return
-        get_params = getattr(result, "get_params", None)
-        if get_params is None or not callable(get_params):
+        draws = _unseeded_estimator(result)
+        if draws is None:
             return
-        try:
-            params = get_params()
-            if params.get("random_state", "absent") is not None:
-                return
-        except Exception:  # noqa: BLE001 - advisory only; never break a call
-            return
-        from ..tracking.randomness.estimator_draws import draw_condition, estimator_draws
+        from ..tracking.randomness.estimator_draws import draw_condition
 
-        draws = estimator_draws(result)
-        if draws is False:
-            return  # its own settings rule a draw out (`Ridge()`: no sag solver)
         if draws:
             said = (
                 "cash caches it, so every later call replays that one fit - the "
@@ -767,3 +840,36 @@ class RngWatch:
             "one, or pass @cash.cache(allow_random=True) to keep it frozen "
             "on purpose.",
         )
+
+
+def _random_state_left_unset(result: Any) -> bool:
+    """Is *result* an estimator with a ``random_state`` parameter left at None?"""
+    get_params = getattr(result, "get_params", None)
+    if get_params is None or not callable(get_params):
+        return False
+    try:
+        return get_params(deep=False).get("random_state", "absent") is None
+    except Exception:  # noqa: BLE001 - advisory only; never break a call
+        return False
+
+
+def _unseeded_estimator(result: Any) -> bool | None:
+    """Is *result* an estimator with ``random_state=None`` whose fit may
+    draw? True when it draws, False when that is undecided
+    (`estimator_draws`), None when it is no such estimator: no
+    ``random_state`` parameter, a seed, settings that rule a draw out
+    (``Ridge()``), or ``get_params`` failing."""
+    get_params = getattr(result, "get_params", None)
+    if get_params is None or not callable(get_params):
+        return None
+    try:
+        if get_params().get("random_state", "absent") is not None:
+            return None
+    except Exception:  # noqa: BLE001 - advisory only; never break a call
+        return None
+    from ..tracking.randomness.estimator_draws import estimator_draws
+
+    draws = estimator_draws(result)
+    if draws is False:
+        return None  # its own settings rule a draw out (`Ridge()`: no sag solver)
+    return bool(draws)

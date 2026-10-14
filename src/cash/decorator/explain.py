@@ -554,6 +554,10 @@ class MissHistory:
         """The reason `note_miss` held for *cache_key*, removed."""
         return self._pending.pop(cache_key, None)
 
+    def pending_reason(self, cache_key: str) -> MissReason | None:
+        """The reason held for *cache_key*'s miss, left for `take_pending`."""
+        return self._pending.get(cache_key)
+
     def pending_eviction(self, cache_key: str) -> Any:
         """The `EvictionNote` of the miss held for *cache_key*, if a size cap
         had evicted its entry. Leaves the reason for `take_pending`."""
