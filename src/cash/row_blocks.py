@@ -31,7 +31,7 @@ from typing import Any
 
 from ._clock import perf_counter as _perf_counter
 from .bulk_digest import PARALLEL_MIN_BYTES, hashing_threads
-from .content_hashers import _raw_view, builtin_hash, builtin_hash_family
+from .content_hashers import builtin_hash, builtin_hash_family, raw_view
 
 __all__ = [
     "MAX_BLOCKS",
@@ -249,7 +249,7 @@ def _array_fingerprint(
     range of its buffer, digested behind the row shape and dtype, the
     blocks on several threads when the array is big (hashlib lets go of
     the GIL while it hashes)."""
-    data = memoryview(_raw_view(value)).cast("B")
+    data = memoryview(raw_view(value)).cast("B")
     width = len(data) // rows if rows else 0
     prefix = f"{value.shape[1:]}:{value.dtype}:".encode()
 

@@ -31,7 +31,7 @@ field(np.linspace(0.0, 1.0, 200))     # back to 200: cache hit
 assert CALLS == []
 ```
 
-<!-- claim: cash/content_hashers.py:hash_numpy @1502885a -->
+<!-- claim: cash/content_hashers.py:hash_numpy @77f8f3bc -->
 `np.linspace(0.0, 1.0, 200)` builds the same array bit for bit every time, so
 the third call is a plain hit. Sweeping a resolution down until accuracy breaks
 and stepping back costs nothing.

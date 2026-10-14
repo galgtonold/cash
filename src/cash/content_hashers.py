@@ -203,7 +203,7 @@ def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
                 into = h
             buffer = column_buffer(pos, dtype) if route == "raw" else None
             if buffer is not None:
-                fold_buffer(into, _raw_view(buffer))
+                fold_buffer(into, raw_view(buffer))
             else:
                 _fold_pandas_array(into, value.iloc[:, pos], pd)
             if key is not None and into.piece is not None:
@@ -331,12 +331,12 @@ def _fold_pandas_array(h: Any, values: Any, pd: Any) -> None:
     """Fold one Series' or Index's values into *h* (`_fold_pandas_values`)."""
     route = _pandas_value_route(values.dtype, pd)
     if route == "raw":
-        fold_buffer(h, _raw_view(_np_array(values)))
+        fold_buffer(h, raw_view(_np_array(values)))
         return
     if route == "datetimetz":
         asi8 = getattr(held_values(values), "asi8", None)
         if asi8 is not None:
-            fold_buffer(h, _raw_view(asi8))
+            fold_buffer(h, raw_view(asi8))
             return
         route = None
     elif route == "masked":
@@ -346,8 +346,8 @@ def _fold_pandas_array(h: Any, values: Any, pd: Any) -> None:
             # The values under a missing one are whatever was there: two equal
             # columns can differ in them, and only hash apart -- never alike.
             h.update(b"|masked|")
-            fold_buffer(h, _raw_view(data))
-            fold_buffer(h, _raw_view(mask))
+            fold_buffer(h, raw_view(data))
+            fold_buffer(h, raw_view(mask))
             return
         route = None
     if route == "codes":
@@ -528,7 +528,7 @@ def _column_buffers(frame: Any) -> Callable[[int, Any], Any]:
     return buffer
 
 
-def _raw_view(array: Any) -> Any:
+def raw_view(array: Any) -> Any:
     """*array*'s buffer as something ``memoryview`` takes: datetimes and
     timedeltas, which the buffer protocol refuses, as their int64 counts
     (their unit is in the dtype the key holds)."""
@@ -843,7 +843,7 @@ def hash_numpy(value: Any) -> str | None:
         # A record dtype's padding holds whatever the memory held.
         value = packed_records(value)
         try:
-            data = memoryview(_raw_view(value))  # no copy if C-contiguous
+            data = memoryview(raw_view(value))  # no copy if C-contiguous
         except (TypeError, ValueError):
             data = value.tobytes()  # a dtype the buffer protocol refuses
         fold_buffer(h, data)
