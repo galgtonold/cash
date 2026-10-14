@@ -73,7 +73,16 @@ _PLAIN = (int, float, str, bool, type(None))
 def _plain(value: Any) -> bool:
     if isinstance(value, _PLAIN):
         return not isinstance(value, str) or len(value) <= 200
-    return isinstance(value, tuple) and len(value) <= 16 and all(isinstance(v, _PLAIN) for v in value)
+    if _numpy_scalar(value):
+        return True
+    return (
+        isinstance(value, tuple) and len(value) <= 16 and all(isinstance(v, _PLAIN) or _numpy_scalar(v) for v in value)
+    )
+
+
+def _numpy_scalar(value: Any) -> bool:
+    """A numpy number (``grid_s.index[0]`` unpacks to ``np.int64``)."""
+    return type(value).__module__ == "numpy" and getattr(value, "shape", None) == () and value.dtype.kind in "biuf"
 
 
 def _others_digest(lineages: Mapping[str, str], values: Mapping[str, Any], fingerprinted: Iterable[str]) -> str:

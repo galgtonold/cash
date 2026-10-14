@@ -177,3 +177,13 @@ def test_a_parameter_with_a_new_value_does_not_compare(cash_magics):
 
     assert _status(cash_magics, step) == CacheStatus.COMPUTED, "control: it ran again"
     assert not found, "the step changed, not only its rows"
+
+
+def test_a_numpy_number_recomputed_to_the_same_value_still_compares(cash_magics):
+    """``best_k, best_hfa = grid_s.index[0]`` unpacks numpy integers."""
+    step = f"clean = [imgs * best_k, time.sleep({SLOW})][0]"
+    _run(cash_magics, SETUP, BASE, "best_k = np.int64(2)", step)
+
+    found = _run(cash_magics, GROWN, "best_k = np.int64(1) * 2", step)
+
+    assert len(found) == 1, found
