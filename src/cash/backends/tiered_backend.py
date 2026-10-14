@@ -568,6 +568,13 @@ class TieredBackend(CacheBackend):
         stored_metadata.pop("persist_skipped", None)
         return True
 
+    def _release_handoff(self) -> None:
+        """Let the RAM tier drop the copy of an entry its own store evicted
+        (`InMemoryBackend.release_handoff`): the disk writes have taken it."""
+        release = getattr(self.backends[0], "release_handoff", None)
+        if release is not None:
+            release()
+
     def set(
         self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None
     ) -> None:
@@ -605,7 +612,9 @@ class TieredBackend(CacheBackend):
             store_errors.append(f"{type(self.backends[0]).__name__}: {type(e).__name__}: {e}")
 
         decision = None
-        if len(self.backends) > 1:
+        if len(self.backends) == 1:
+            self._release_handoff()
+        else:
             _note_serialized_size(metadata, value, serializer)
             deferred = bool(metadata.pop("defer_persist", False))
             if original_metadata is not None:
@@ -632,22 +641,25 @@ class TieredBackend(CacheBackend):
                         decorated=metadata.get(DECORATED_CALLS_FIELD),
                     )
                 self._drop_persisted_call_refs(metadata.get("call_refs"))
-            if decision.persist:
-                # The RAM tier's own copy, when it has one nothing changes: a
-                # tier that takes it serializes it in the background, and the
-                # caller pays one copy (or none, for a table) instead of two.
-                private = self._private_copy(key, metadata)
-                writes = self._write_persistent_tiers(
-                    key,
-                    value if private is _NO_COPY else private,
-                    metadata,
-                    serializer,
-                    cap_size,
-                    private=private is not _NO_COPY,
-                    serialized=self._stored_payload(key, metadata),
-                )
-            else:
-                writes = _TierWrites([], False, cap_size, [], [])
+            try:
+                if decision.persist:
+                    # The RAM tier's own copy, when it has one nothing changes: a
+                    # tier that takes it serializes it in the background, and the
+                    # caller pays one copy (or none, for a table) instead of two.
+                    private = self._private_copy(key, metadata)
+                    writes = self._write_persistent_tiers(
+                        key,
+                        value if private is _NO_COPY else private,
+                        metadata,
+                        serializer,
+                        cap_size,
+                        private=private is not _NO_COPY,
+                        serialized=self._stored_payload(key, metadata),
+                    )
+                else:
+                    writes = _TierWrites([], False, cap_size, [], [])
+            finally:
+                self._release_handoff()
             stored_destinations.extend(writes.stored)
             store_errors.extend(writes.errors)
             size_refused = writes.size_refused

@@ -280,6 +280,9 @@ class FileBackend(CacheBackend):
         # The disk I/O runs here; values are serialized on the caller's
         # thread, unless they are `set` ``private``.
         self._writes = PendingWrites()
+        #: The metadata of each write still queued, by key: what
+        #: `peek_metadata` answers without waiting for the write.
+        self._queued_metadata: dict[str, dict] = {}
         self._writer_scope = _register_writer(self.cache_dir, self._writes)
         self.stamp = CacheDirStamp(self.cache_dir, _untracked)
         self.evictor = FileEvictor(
@@ -505,6 +508,25 @@ class FileBackend(CacheBackend):
         except (OSError, CorruptEntry):
             logger.debug("Unreadable metadata for key %s; treating as absent", key, exc_info=True)
             return None
+
+    def _forget_queued(self, key: str, metadata: dict) -> None:
+        if self._queued_metadata.get(key) is metadata:
+            self._queued_metadata.pop(key, None)
+
+    def peek_metadata(self, key: str) -> dict | None:  # type: ignore[override]
+        """Metadata for *key* without counting a use (`BaseBackend.peek_metadata`).
+
+        A write of *key* still queued is answered from the metadata it is
+        writing, without waiting for it: a look at an entry (the file
+        snapshots its producer recorded) waited 1.6-3.9 s for a 1 GB frame's
+        write in p18, which the RAM tier had evicted. Everything else reads
+        the file, as `get_metadata` does."""
+        queued = self._queued_metadata.get(key)
+        if queued is not None and self._writes.has_pending(key):
+            if entry_expired(queued, self._default_ttl):
+                return None
+            return dict(queued)
+        return self.get_metadata(key)
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         self._ensure_initialized()
@@ -823,7 +845,12 @@ class FileBackend(CacheBackend):
         meta_for_write = dict(metadata)
         # A private value's memory is held by the RAM tier anyway: only the
         # copies made here count against the queue's memory.
-        self._writes.submit_sized(key, nbytes, not private, job, key, path, meta_for_write, work)
+        self._queued_metadata[key] = meta_for_write
+        future = self._writes.submit_sized(key, nbytes, not private, job, key, path, meta_for_write, work)
+        if future is None:
+            self._forget_queued(key, meta_for_write)
+        else:
+            future.add_done_callback(lambda _done, key=key, meta=meta_for_write: self._forget_queued(key, meta))
         slot = metadata.get("version_slot")
         if slot:
             # A version whose values are references to call entries weighs

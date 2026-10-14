@@ -498,6 +498,12 @@ class InMemoryBackend(CacheBackend):
         #: within one timer tick, so it cannot order entries written together.
         self._access_seq = 0
         self._seq_by_key: dict[str, int] = {}
+        #: ``(key, metadata, value)`` of the entry the last `set` stored and
+        #: then evicted at once (the byte cap took the new entry itself): its
+        #: copy is still the tier's own, and `private_copy` hands it to the
+        #: disk write that follows instead of having the caller's value
+        #: serialized before the store returns. Released by `release_handoff`.
+        self._handoff: tuple[str, MetadataDict, Any] | None = None
 
     #: How far the machine's memory percent must climb within one pressure
     #: episode before the tier takes a fresh share rather than holding flat.
@@ -1082,6 +1088,9 @@ class InMemoryBackend(CacheBackend):
             entry = self._store.get(key)
             holds_bytes = key in self._holds_bytes
             own = key in self._own
+            if entry is None and self._handoff is not None and self._handoff[0] == key:
+                # Stored and evicted at once: its copy is still the tier's own.
+                entry, holds_bytes, own = self._handoff[1:], False, True
         if entry is None or not own or holds_bytes or entry[0].get("by_reference") or entry[0].get(NO_PRIVATE_COPY):
             return default
         if metadata is not None and entry[0] is not metadata:
@@ -1208,12 +1217,21 @@ class InMemoryBackend(CacheBackend):
                 if entry is not None and entry[1] is kept:
                     self._drop(key)
 
+    def release_handoff(self) -> None:
+        """Let go of the copy of an entry its own store evicted, which no
+        disk write took (`private_copy`)."""
+        with self._lock:
+            self._handoff = None
+
     def stored_payload(self, key: str, metadata: MetadataDict | None = None) -> Any:
         """The bytes a value kept as pickle bytes (`_Pickled`) is held in,
         as the file tier writes them; None for any other entry. With
-        *metadata*, only the entry stored with that very dict."""
+        *metadata*, only the entry stored with that very dict (or one its
+        own store evicted at once, `private_copy`)."""
         with self._lock:
             entry = self._store.get(key)
+            if entry is None and self._handoff is not None and self._handoff[0] == key:
+                entry = self._handoff[1:]
         if entry is None or type(entry[1]) is not _Pickled:
             return None
         if metadata is not None and entry[0] is not metadata:
@@ -1540,6 +1558,10 @@ class InMemoryBackend(CacheBackend):
             self._set_count += 1
             if self._set_count % self.check_interval == 0:
                 self._check_and_evict()
+
+            # Evicted by its own store: kept for the disk write that follows.
+            evicted_at_once = key not in self._store and own and not metadata.get("by_reference")
+            self._handoff = (key, metadata, stored) if evicted_at_once and not holds_bytes else None
 
     def _drop(self, key: str) -> None:
         """Remove *key*, keeping the byte-cap running total in sync. Called

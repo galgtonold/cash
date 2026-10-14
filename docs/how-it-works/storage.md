@@ -167,7 +167,7 @@ the entry was written with and the tier's current `default_ttl`.
     `%cash_persist on` writes it anyway. The [cost model](../cost-model.md)
     explains the prediction and every setting.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @889f6f7d -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @32a5e8d3 -->
 Each tier turns down a single value too large for its cap, so a 20 MB frame
 can be stored in memory and on disk while skipping a Redis tier limited to
 10 MB. When a value was meant for disk but every disk tier refused it, cash
@@ -255,14 +255,16 @@ NumPy writing into an array, never reaches them. Each hit reads a new copy
 out of the bytes, as a disk hit does, and the disk write is those same bytes,
 so the object is pickled once.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.holds_own_copy @d82553cc -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.holds_own_copy @d82553cc, cash/backends/memory_backend.py:InMemoryBackend.private_copy @ef57a587 -->
 The disk entry is the result as it was computed: a change you make to it
 after the call never reaches the disk. The background write takes the memory
 tier's copy when that copy keeps nothing of yours (numbers, plain data, a
-table shared as above, anything copied through pickle). A table copied with
-pandas' deep copy (nullable or categorical columns, a subclass), whose
-Python objects in object columns stay yours, is serialized before the call
-returns instead, which costs that copy's pickle time on a miss.
+table shared as above, anything copied through pickle), even when the memory
+tier lets that copy go as soon as it stored it, to stay under its cap. A
+table copied with pandas' deep copy (nullable or categorical columns, a
+subclass), whose Python objects in object columns stay yours, is serialized
+before the call returns instead, which costs that copy's pickle time on a
+miss.
 
 === "Decorator"
 
