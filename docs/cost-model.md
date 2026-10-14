@@ -36,7 +36,9 @@ The thresholds apply to each statement on its own; cash does not add them up. A
 cell of 120 independent statements at 0.05 s each takes six seconds and writes
 nothing to disk. The exceptions work in your favour:
 
-- A long loop that cash runs as one unit counts the whole loop's time.
+- A long loop that cash runs as one unit counts the whole loop's time. One
+  whose iterations were measured slow is cached per iteration instead
+  ([Loops](known-limitations.md#a-long-for-append-loop-can-stop-caching)).
 - A cheap value whose inputs would be expensive to rebuild after a restart is
   written at the end of the cell; see
   [Restarts and persistence](tutorials/feature-guides/smart-persistence.md).
