@@ -4,7 +4,10 @@ A miss copied its result twice before returning: once into the RAM tier,
 once more for the disk write (which runs later, on another thread, and must
 not see a change the caller makes meanwhile). The RAM tier's copy is
 already one nothing changes, so a tier that takes such a value
-(``takes_private_values``) serializes that in the background instead.
+(``takes_private_values``) serializes that in the background instead. A
+value the RAM tier keeps no copy of (refused, or its store failed) is
+copied for the disk write alone, the way the RAM tier copies, when that
+copy keeps nothing of the caller's.
 """
 
 from __future__ import annotations
@@ -30,9 +33,11 @@ class _Recording(CacheBackend):
 
     def __init__(self) -> None:
         self.calls: list[tuple] = []
+        self.copied: list[bool] = []
 
-    def set(self, key, value, metadata=None, serializer=None, private=False):
+    def set(self, key, value, metadata=None, serializer=None, private=False, copied=False):
         self.calls.append((key, value, private))
+        self.copied.append(copied)
 
     def get(self, key):
         return None, None
@@ -101,9 +106,20 @@ def test_a_value_the_ram_tier_keeps_by_reference_is_not_private():
     assert not private and written is lock_holder
 
 
-def test_a_value_the_ram_tier_refused_goes_to_disk_as_the_caller_gave_it():
+def test_a_value_the_ram_tier_refused_goes_to_disk_as_a_copy_made_for_it():
     tiers, disk = _tiers(InMemoryBackend(max_size_bytes=1000))
     value = np.arange(10_000, dtype=float)
+    tiers.set("k", value, dict(_KEEP))
+    ((_key, written, private),) = disk.calls
+    assert private and disk.copied == [True]
+    assert written is not value and not np.shares_memory(written, value)
+    value[0] = -1.0  # the caller's change after the call
+    assert written[0] == 0.0
+
+
+def test_a_refused_value_no_copy_can_keep_apart_goes_to_disk_as_the_caller_gave_it():
+    tiers, disk = _tiers(InMemoryBackend(max_size_bytes=1000))
+    value = [[i] for i in range(10_000)]  # lists: copied only by a pickle round trip
     tiers.set("k", value, dict(_KEEP))
     ((_key, written, private),) = disk.calls
     assert not private and written is value
@@ -119,11 +135,12 @@ def test_an_earlier_value_in_ram_is_never_written_for_a_later_store():
 
     real_set, ram.set = ram.set, refuse
     try:
-        tiers.set("k", np.ones(10), dict(_KEEP))
+        later = np.ones(10)
+        tiers.set("k", later, dict(_KEEP))
     finally:
         ram.set = real_set
-    _key, written, private = disk.calls[-1]
-    assert not private and written[0] == 1.0
+    _key, written, _private = disk.calls[-1]
+    assert written[0] == 1.0 and written is not ram._store["k"][1]
 
 
 def test_a_tier_that_does_not_take_private_values_gets_the_callers_value():
@@ -177,3 +194,21 @@ def test_a_value_marked_no_private_copy_goes_to_disk_as_the_caller_gave_it():
     tiers.set("k", value, {**_KEEP, NO_PRIVATE_COPY: True})
     ((_key, written, private),) = disk.calls
     assert not private and written is value
+
+
+def test_a_later_persist_of_a_table_copied_in_full_hands_the_ram_copy():
+    """Python strings: the RAM tier copies the table block by block, its
+    labels too, so its copy is its own and the write takes it."""
+    tiers, disk = _tiers()
+    df = pd.DataFrame(
+        {"s": pd.Series(["a", "b"] * 50, dtype="string[python]")},
+        index=pd.Index([f"r{i}" for i in range(100)], dtype="string[python]"),
+    )
+    tiers.set("k", {"df": df}, dict(_NOTEBOOK))
+    assert disk.calls == [] and tiers.backends[0].holds_own_copy("k")
+    assert tiers.persist_from_memory("k", rebuild_seconds=5.0)
+    ((_key, written, private),) = disk.calls
+    assert private and disk.copied == [False]
+    kept = tiers.backends[0]._store["k"][1]["df"]
+    assert written["df"] is kept and kept.index._data is not df.index._data
+    pd.testing.assert_frame_equal(written["df"], df)

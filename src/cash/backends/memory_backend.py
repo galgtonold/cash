@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 import types
+import weakref
 from collections.abc import Callable
 from typing import Any
 
@@ -29,7 +30,7 @@ from ..value_types import IMMUTABLE_PRIMS
 from . import frame_sharing, iterative_copy
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, gdsf_value
 from .entry_format import SplitPayload
-from .serialization import OUT_OF_BAND_MIN_BYTES, Serializer, polars_reducers
+from .serialization import OUT_OF_BAND_MIN_BYTES, Serializer, stored_reducers
 
 psutil = LazyModule("psutil")  # imported on first use: ~11 ms off `import cash`
 
@@ -172,7 +173,7 @@ def _snapshot(value: Any) -> _Pickled | None:
         readonly.clear()
 
     try:
-        stream = kept_state.dumps(value, protocol=5, buffer_callback=take, on_retry=retry, extra=polars_reducers())
+        stream = kept_state.dumps(value, protocol=5, buffer_callback=take, on_retry=retry, extra=stored_reducers())
     except Exception:  # copied the usual way, which says why it cannot be
         logger.debug("could not keep a %s as pickle bytes", type(value).__name__, exc_info=True)
         return None
@@ -579,8 +580,10 @@ class InMemoryBackend(CacheBackend):
         in *known_cells*, a store records its copies in *record_cells*.
 
         A polars frame is not a pandas one: it has no ``copy()``, and
-        ``deepcopy`` of it is a ``clone()``, which shares its immutable
-        buffers and so costs about a millisecond whatever its size.
+        ``deepcopy`` of it is a ``clone()``, which shares its buffers --
+        possibly the caller's numpy memory. `_copy_polars` copies a
+        caller's, and clones the tier's own, about a millisecond whatever
+        its size.
 
         *walk* is `_plain_data.tree_walk` of *value*, when the caller has it.
         *premade* is what to put in the copy for parts of a dict *value*,
@@ -721,7 +724,7 @@ class InMemoryBackend(CacheBackend):
                     # refuses it (`set`), as it does a bare uncopiable object.
                     mutable = None
         if copied is None:
-            copied = frame_sharing.copy_keeping_blocks(frame)
+            copied = frame_sharing.copy_keeping_blocks(frame, arrow=not _stored_frame(frame, known_cells, record_cells))
         if not _own_metadata(frame, copied):
             # An attribute deepcopy refuses: the pickle round trip copies it,
             # as a disk hit would.
@@ -810,6 +813,8 @@ class InMemoryBackend(CacheBackend):
                     memo[key] = InMemoryBackend._copy_frame(obj, known_cells, record_cells, memo)
                 else:
                     memo[key] = _copy_polars(obj)
+                    if record_cells is not None:
+                        _remember_own_polars(memo[key])  # stored: hits clone it
                 alive.append(obj)
                 return key
             return None
@@ -906,8 +911,10 @@ class InMemoryBackend(CacheBackend):
         # A subclass's attributes (`_own_metadata`): deepcopy's frame copy
         # leaves them shared too.
         if not any(cells.values()) and not any(_metadata_held(frame) for frame in frames):
-            if record_cells is not None:
-                for frame in frames:
+            for frame in frames:
+                # deepcopy's frame copy keeps the labels and the Arrow data.
+                frame_sharing.own_parts(memo[id(frame)], arrow=not _stored_frame(frame, known_cells, record_cells))
+                if record_cells is not None:
                     record_cells[id(memo[id(frame)])] = False
             return copied
         for frame in frames:
@@ -1016,7 +1023,9 @@ class InMemoryBackend(CacheBackend):
         if not _cheap_to_keep(value):
             return False
         for frame in _frames_in(value):
-            if not frame_sharing.freeze(frame):
+            if _is_polars_frame(type(frame)):
+                _remember_own_polars(frame)  # read from disk: kept as a clone
+            elif not frame_sharing.freeze(frame):
                 return False
         return self.set(key, value, metadata) is not False
 
@@ -1102,6 +1111,32 @@ class InMemoryBackend(CacheBackend):
             # copy out of them is the cost they were kept to save.
             return default
         return entry[1]
+
+    def write_copy(self, key: str, value: Any, metadata: MetadataDict, default: Any = None) -> Any:
+        """A copy of *value*, cash's own, for a background write to another
+        tier when this tier keeps none it can vouch for (`private_copy`):
+        it refused the value (over its eviction target, or slower to
+        restore than to compute), dropped it, or copied it in a way that
+        may keep something of the caller's (a table with nullable or
+        ``str`` columns of Python strings: pandas' deep copy shares its
+        labels). Else *default*, and the caller serializes its own value
+        before it returns.
+
+        Made here, on the caller's thread, for a value whose copy costs
+        about a copy of its memory and keeps nothing of the caller's
+        (`_write_copy`): tables of numbers, dates, text and nullable
+        columns (labels copied too), arrays, atoms, in a few dicts, lists
+        and tuples. *key* and *metadata* name the entry, for the log.
+        """
+        if metadata.get(NO_PRIVATE_COPY):
+            return default  # its copy does not store as the value does
+        try:
+            if not _write_copyable(value):
+                return default
+            return _write_copy(value, {})
+        except Exception:  # serialized by the caller instead, as before
+            logger.debug("no copy of %r to write", key, exc_info=True)
+            return default
 
     def get_metadata(self, key: str) -> MetadataDict | None:
         """The metadata, counted as an access the way `get` counts one.
@@ -1475,14 +1510,13 @@ class InMemoryBackend(CacheBackend):
                 shared = kept
             # Its own only when every part was copied in a way that leaves
             # nothing of the caller's in it: a pickle round trip, a spine
-            # copy, arrays, parts read out of bytes, and frozen tables. A
-            # deep pandas copy keeps the Python objects of its object cells
-            # (a str subclass with attributes), and ``deepcopy`` trusts a
-            # class's ``__deepcopy__``: such a value may still share a part
-            # with the caller's.
-            own = (
-                not fell_back and not by_deepcopy and all(cells in (_SHARED, _BYTES) for cells in frame_cells.values())
-            )
+            # copy, arrays, parts read out of bytes, frozen tables, and
+            # tables copied in full (`_frames_own`). A deep pandas copy keeps
+            # the Python objects of its object cells (a str subclass with
+            # attributes), and ``deepcopy`` trusts a class's
+            # ``__deepcopy__``: such a value may still share a part with the
+            # caller's.
+            own = not fell_back and not by_deepcopy and _frames_own(frame_cells, stored)
             if by_spine and type(stored) is dict:
                 # Nothing in it is reached twice: its parts can be copied
                 # each on its own, each the fastest way it allows. Planned
@@ -1925,6 +1959,121 @@ def _cheap_to_keep(value: Any, depth: int = 0) -> bool:
     return False
 
 
+def _write_copyable(value: Any, depth: int = 0) -> bool:
+    """Is *value* made only of atoms, arrays of plain values and plain
+    pandas tables `_write_copy` copies in full (`_copies_in_full`), in a
+    few dicts, lists and tuples?"""
+    kind = type(value)
+    if kind in _ATOMS:
+        return True
+    if _is_pandas_frame(kind):
+        return _copies_in_full(value)
+    if kind.__name__ == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
+        return not value.dtype.hasobject
+    if kind in (dict, list, tuple):
+        if _of_atoms(value):
+            return True  # any size: copied at C speed
+        if depth >= _CHEAP_DEPTH or len(value) > _CHEAP_ITEMS:
+            return False
+        if kind is dict and not all(type(name) in _ATOMS for name in value):
+            return False
+        items = value.values() if kind is dict else value
+        return all(_write_copyable(item, depth + 1) for item in items)
+    return False
+
+
+def _of_atoms(value: dict | list | tuple) -> bool:
+    """Are a dict's keys and values, or a list's or tuple's items, all `_ATOMS`?"""
+    atom = _ATOMS.__contains__
+    if type(value) is dict:
+        return all(map(atom, map(type, value))) and all(map(atom, map(type, value.values())))
+    return all(map(atom, map(type, value)))
+
+
+def _copies_in_full(frame: Any) -> bool:
+    """Does a copy of each array *frame* keeps its data and labels in
+    (`_full_copy_values`) leave nothing the caller can change: a plain
+    DataFrame or Series without ``attrs``, of numbers, dates and
+    durations, Arrow data, nullable columns and Python strings, under
+    labels of those kinds (or a range)?"""
+    import pandas as pd
+
+    if type(frame) not in (pd.DataFrame, pd.Series) or frame.attrs:
+        return False
+    if not all(_full_copy_values(blk.values) for blk in frame._mgr.blocks):
+        return False
+    axes = (frame.index,) if frame.ndim == 1 else (frame.index, frame.columns)
+    for axis in axes:
+        if isinstance(axis, pd.RangeIndex):
+            continue
+        if isinstance(axis, pd.MultiIndex) or not _full_copy_values(axis._data):
+            return False
+    return True
+
+
+def _full_copy_values(values: Any) -> bool:
+    """Is ``values.copy()`` a copy of all *values* hold that the caller can
+    reach: their memory, and Python objects only where none can change
+    (strings, a column of immutable cells)? Arrow data counts: the copy
+    that keeps a table (`frame_sharing.copy_keeping_blocks`) copies it too."""
+    import numpy as np
+    import pandas as pd
+    from pandas.core.arrays.arrow import ArrowExtensionArray
+    from pandas.core.arrays.masked import BaseMaskedArray
+
+    if type(values) is np.ndarray:
+        return not values.dtype.hasobject or immutable_cells(values.ravel())
+    if type(values) in (pd.arrays.DatetimeArray, pd.arrays.TimedeltaArray, pd.arrays.StringArray):
+        return True  # one array; a StringArray holds only str and missing values
+    return isinstance(values, (BaseMaskedArray, ArrowExtensionArray)) and type(values).__module__.startswith("pandas.")
+
+
+def _write_copy(value: Any, memo: dict[int, Any], depth: int = 0) -> Any:
+    """A copy of a `_write_copyable` *value*: each table and array copied
+    in full, containers rebuilt over the copies, atoms as they are. One
+    object met twice is copied once (*memo*), as pickle keeps it one."""
+    kind = type(value)
+    if kind in _ATOMS:
+        return value
+    found = memo.get(id(value))
+    if found is not None:
+        return found
+    if _is_pandas_frame(kind):
+        copied = _full_frame_copy(value)
+    elif _of_atoms(value):
+        copied = value if kind is tuple else kind(value)
+    elif kind is dict:
+        copied = {name: _write_copy(item, memo, depth + 1) for name, item in value.items()}
+    elif kind is list or kind is tuple:
+        copied = kind(_write_copy(item, memo, depth + 1) for item in value)
+    else:  # an array of plain values
+        copied = _copy_array(value)
+    memo[id(value)] = copied
+    return copied
+
+
+def _frames_own(frame_cells: dict[int, Any], stored: Any) -> bool:
+    """Is each table the RAM tier copied into *stored* (*frame_cells*: its
+    verdict by ``id``) a copy holding nothing of the caller's? A frozen one
+    or one kept with its cells as bytes is; so is one copied block by block
+    whose columns and labels are all of kinds that copy leaves nothing
+    shared of (`_copies_in_full`): a hit copies it again, so it is never
+    handed out either."""
+    if all(cells in (_SHARED, _BYTES) for cells in frame_cells.values()):
+        return True
+    found = {id(frame): frame for frame in _frames_in(stored)}
+    return all(
+        cells in (_SHARED, _BYTES) or (cells is False and key in found and _copies_in_full(found[key]))
+        for key, cells in frame_cells.items()
+    )
+
+
+def _full_frame_copy(frame: Any) -> Any:
+    """*frame* copied block by block, its labels and Arrow data with it
+    (`frame_sharing.copy_keeping_blocks`)."""
+    return frame_sharing.copy_keeping_blocks(frame)
+
+
 def _frames_in(value: Any, depth: int = 0) -> list:
     """The pandas tables `_cheap_to_keep` found in *value*."""
     kind = type(value)
@@ -2002,6 +2151,12 @@ def _own_metadata(frame: Any, copied: Any) -> bool:
     for name, value in fresh.items():
         object.__setattr__(copied, name, value)
     return True
+
+
+def _stored_frame(frame: Any, known_cells: dict[int, Any] | None, record_cells: dict[int, Any] | None) -> bool:
+    """Is *frame*, about to be copied, a table this tier stored (a hit), not
+    one a caller handed in? Its Arrow data is then the tier's own copy."""
+    return record_cells is None and known_cells is not None and id(frame) in known_cells
 
 
 def _round_trip(value: Any) -> Any:
@@ -2371,29 +2526,82 @@ def round_trip_seconds(value: Any, nbytes: int) -> float | None:
 
 
 def _copy_polars(frame: Any) -> Any:
-    """A copy of a polars frame, series or lazy frame: a clone, which shares
-    its immutable buffers, with the Python objects of an ``Object`` column
-    copied too.
+    """A copy of a polars frame, series or lazy frame holding nothing of
+    *frame*'s.
 
-    A clone shares those objects with the entry and every hit, and pickle
-    refuses an ``Object`` column, so no disk tier holds one: the RAM entry
-    is the only copy there is.
+    Polars data is Arrow data, and may be the caller's numpy memory itself:
+    ``pl.Series(a)``, ``pl.DataFrame({"x": a})`` and ``pl.from_numpy`` copy
+    nothing, so a clone, which shares its buffers, changed with ``a``. The
+    columns are copied through their Arrow data (`_owned_polars`), except
+    for a value the RAM tier holds as its own (`_own_polars`, a hit): a
+    clone of it shares nothing the caller had. The
+    Python objects of an ``Object`` column are copied too: pickle refuses
+    such a column, so no disk tier holds one, and the RAM entry is the only
+    copy there is.
     """
     import polars as pl
 
+    share = _own_polars(frame)  # polars writes no buffer a clone shares
     if isinstance(frame, pl.LazyFrame):
-        # A plan has no in-place API: a clone shares it, and the data it holds.
-        return frame.clone()
-    copied = copy.deepcopy(frame)
-    columns = [copied] if isinstance(copied, pl.Series) else copied.get_columns()
-    fresh = [
-        pl.Series(column.name, InMemoryBackend._deep_copy(column.to_list(), {}, None, None), dtype=pl.Object)
-        for column in columns
-        if column.dtype == pl.Object
-    ]
-    if not fresh:
+        if share:
+            return frame.clone()
+        # A plan holds the data it was made from: pickled, it is written out
+        # with it. A plan that does not pickle (a Python function in it) is
+        # shared, as a clone shares it.
+        try:
+            return pickle.loads(pickle.dumps(frame, protocol=pickle.HIGHEST_PROTOCOL))
+        except Exception:
+            logger.debug("could not copy a LazyFrame's data", exc_info=True)
+            return frame.clone()
+    if isinstance(frame, pl.Series):
+        if frame.dtype == pl.Object:
+            return pl.Series(frame.name, InMemoryBackend._deep_copy(frame.to_list(), {}, None, None), dtype=pl.Object)
+        return frame.clone() if share else _owned_polars(frame)
+    objects = [column for column in frame.get_columns() if column.dtype == pl.Object]
+    if not objects:
+        return frame.clone() if share else _owned_polars(frame)
+    names = {column.name for column in objects}
+    rest = frame.select([name for name in frame.columns if name not in names])
+    rest = rest.clone() if share else _owned_polars(rest)
+    by_name = {column.name: column for column in rest.get_columns()}
+    by_name.update((column.name, _copy_polars(column)) for column in objects)
+    return pl.DataFrame([by_name[name] for name in frame.columns])
+
+
+#: ``id -> weak reference`` for each polars value whose data is the RAM
+#: tier's own (`_remember_own_polars`): a copy it stored, or a value just
+#: read from disk. Copied by a clone, which shares that data.
+_OWN_POLARS: dict[int, Any] = {}
+_OWN_POLARS_LOCK = threading.Lock()
+
+
+def _remember_own_polars(frame: Any) -> None:
+    """Note that *frame*, held by the RAM tier alone and never handed out,
+    holds data cash owns: its copies (hits) may share it."""
+    key = id(frame)
+    try:
+        ref = weakref.ref(frame, lambda _ref, key=key: _OWN_POLARS.pop(key, None))
+    except TypeError:
+        return
+    with _OWN_POLARS_LOCK:
+        _OWN_POLARS[key] = ref
+
+
+def _own_polars(frame: Any) -> bool:
+    ref = _OWN_POLARS.get(id(frame))
+    return ref is not None and ref() is frame
+
+
+def _owned_polars(frame: Any) -> Any:
+    """A polars DataFrame or Series with no ``Object`` column, copied: its
+    Arrow data copied (`frame_sharing.owned_arrow_data`) and rebuilt as
+    the disk tier rebuilds it, or else polars' own pickle round trip."""
+    from .serialization import rebuilt_polars
+
+    copied = rebuilt_polars(frame, frame_sharing.owned_arrow_data)
+    if copied is not None:
         return copied
-    return fresh[0] if isinstance(copied, pl.Series) else copied.with_columns(fresh)
+    return pickle.loads(pickle.dumps(frame, protocol=pickle.HIGHEST_PROTOCOL))
 
 
 def _is_polars_frame(value_type: type) -> bool:

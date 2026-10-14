@@ -52,6 +52,7 @@ from .entry_format import (
     update_metadata_in_place,
 )
 from .file_eviction import FileEvictor
+from .persistence_policy import SERIALIZED_ESTIMATE
 from .serialization import RESTORE_ERRORS, PickleSerializer, Serializer, rebuild, restore_value
 from .touched_entries import TouchedEntries, stat_signature
 from .versions import VersionIndex, superseded_to_drop
@@ -779,6 +780,7 @@ class FileBackend(CacheBackend):
         serializer: Serializer | None = None,
         *,
         private: bool = False,
+        copied: bool = False,
         serialized: bytes | SplitPayload | None = None,
     ) -> None:
         """Serialize the value on the calling thread, then write to disk
@@ -788,7 +790,10 @@ class FileBackend(CacheBackend):
         *private*: cash owns *value* and nothing changes it from now on (the
         RAM tier's own copy). Then the background writer serializes it too,
         using its buffers' memory as it is: the caller pays nothing, where a
-        caller's value has to be copied before ``set`` may return.
+        caller's value has to be copied before ``set`` may return. *copied*:
+        with *private*, *value* is a copy made for this write alone (not
+        held by the RAM tier), so it counts against the queue's memory
+        bound until written.
 
         *serialized*: *value* as *serializer* writes it uncompressed, in
         bytes cash owns and nothing changes (the RAM tier keeps a value so,
@@ -818,7 +823,9 @@ class FileBackend(CacheBackend):
             private = True
         elif private:
             # Serialized by the writer; the size known now is the caller's.
-            nbytes = int(metadata.get("size") or metadata.get("cost_model_size_bytes") or 0)
+            nbytes = int(
+                metadata.get("size") or metadata.get("cost_model_size_bytes") or metadata.get(SERIALIZED_ESTIMATE) or 0
+            )
             job: Callable[..., None] = self._serialize_and_write
             work: Any = (value, serializer)
         else:
@@ -844,9 +851,9 @@ class FileBackend(CacheBackend):
         # written entry.
         meta_for_write = dict(metadata)
         # A private value's memory is held by the RAM tier anyway: only the
-        # copies made here count against the queue's memory.
+        # copies made for this write count against the queue's memory.
         self._queued_metadata[key] = meta_for_write
-        future = self._writes.submit_sized(key, nbytes, not private, job, key, path, meta_for_write, work)
+        future = self._writes.submit_sized(key, nbytes, copied or not private, job, key, path, meta_for_write, work)
         if future is None:
             self._forget_queued(key, meta_for_write)
         else:

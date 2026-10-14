@@ -108,7 +108,7 @@ copied into memory on its second read from disk in the same process, so a
 value read once after a restart costs no extra copy. Neither is kept when it
 would take more than 90% of the memory cap.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @315c01f9, cash/backends/frame_sharing.py:_freeze @d0721597, cash/backends/tiered_backend.py:TieredBackend.get @549a750b, cash/backends/memory_backend.py:_copy_polars @4e2f4e69 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @aba2fd9a, cash/backends/frame_sharing.py:_freeze @d0721597, cash/backends/frame_sharing.py:own_parts @5ad4163e, cash/backends/tiered_backend.py:TieredBackend.get @549a750b, cash/backends/memory_backend.py:_copy_polars @79e516fb -->
 The memory tier keeps a copy of each value that only it holds, so nothing you
 do to a value you were handed reaches the stored one, or the other way round.
 Under pandas copy-on-write (pandas 3, or `pd.options.mode.copy_on_write = True`
@@ -132,12 +132,21 @@ copied with it, so editing `df.info` on a result changes neither the stored
 table nor a later hit; when such an attribute can be neither deep-copied nor
 pickled, the decorator does not cache the table
 ([`STORE-FAILED`](../warnings.md#store-failed)). A column of lists or dicts is kept as
-compact bytes and read back into new lists on every hit.
-A polars `DataFrame`, `Series` or `LazyFrame` is cloned on the store and on
-every hit: the clone shares the frame's memory, which polars never writes in
-place (an edit such as `df[0, "x"] = ...` or `df.insert_column(...)` changes
-only the frame it is made on), so a hit costs well under a millisecond
-whatever the frame's size. The Python objects in an `Object` column are copied.
+compact bytes and read back into new lists on every hit. Each copy holds
+labels of its own (row and column labels, a categorical column's
+categories), so writing one in place (`df.index.array[0] = ...`) changes
+neither the stored table nor a later hit. An Arrow-backed column is copied
+too: its Arrow data can be your NumPy array itself (`pa.array(a)` and
+`to_pandas(types_mapper=pd.ArrowDtype)` copy nothing), and Arrow cannot
+tell such memory from its own, so writing into `a` after the call changes
+nothing stored.
+A polars `DataFrame`, `Series` or `LazyFrame` is copied on the store, for
+the same reason: `pl.Series(a)` and `pl.DataFrame({"x": a})` copy nothing
+from a NumPy array `a`. A hit is a clone of the stored copy: it shares that
+memory, which polars never writes in place (an edit such as
+`df[0, "x"] = ...` or `df.insert_column(...)` changes only the frame it is
+made on), so a hit costs well under a millisecond whatever the frame's size.
+The Python objects in an `Object` column are copied.
 `SQLiteBackend`, `RedisBackend` and `S3Backend` can replace or join these
 tiers; see
 [choosing a backend](../tutorials/feature-guides/choosing-a-backend.md).
@@ -167,7 +176,7 @@ the entry was written with and the tier's current `default_ttl`.
     `%cash_persist on` writes it anyway. The [cost model](../cost-model.md)
     explains the prediction and every setting.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @32a5e8d3 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @8aecb084 -->
 Each tier turns down a single value too large for its cap, so a 20 MB frame
 can be stored in memory and on disk while skipping a Redis tier limited to
 10 MB. When a value was meant for disk but every disk tier refused it, cash
@@ -247,7 +256,7 @@ does. cash waits for a write only when something needs it on disk:
 A process this one did not start, reading the same folder at the same time,
 finds a result once its write has finished, and computes it until then.
 
-<!-- claim: cash/backends/memory_backend.py:_snapshot @056e4f9d, cash/backends/tiered_backend.py:TieredBackend._stored_payload @92ed63c1 -->
+<!-- claim: cash/backends/memory_backend.py:_snapshot @9c99eb65, cash/backends/tiered_backend.py:TieredBackend._stored_payload @92ed63c1 -->
 An object of a class of its own (a fitted model, a graph) is kept in memory
 as the bytes its disk entry holds, made when it is stored: its arrays are
 copied out of it then, so a later change to your object, by Python or by
@@ -255,16 +264,20 @@ NumPy writing into an array, never reaches them. Each hit reads a new copy
 out of the bytes, as a disk hit does, and the disk write is those same bytes,
 so the object is pickled once.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.holds_own_copy @d82553cc, cash/backends/memory_backend.py:InMemoryBackend.private_copy @ef57a587 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.holds_own_copy @d82553cc, cash/backends/memory_backend.py:InMemoryBackend.private_copy @ef57a587, cash/backends/memory_backend.py:InMemoryBackend.write_copy @987f7a47, cash/backends/memory_backend.py:_frames_own @d957b9f5 -->
 The disk entry is the result as it was computed: a change you make to it
 after the call never reaches the disk. The background write takes the memory
 tier's copy when that copy keeps nothing of yours (numbers, plain data, a
-table shared as above, anything copied through pickle), even when the memory
-tier lets that copy go as soon as it stored it, to stay under its cap. A
-table copied with pandas' deep copy (nullable or categorical columns, a
-subclass), whose Python objects in object columns stay yours, is serialized
-before the call returns instead, which costs that copy's pickle time on a
-miss.
+table shared as above, a table of nullable or Python-string columns copied
+in full, anything copied through pickle), even when the memory tier lets
+that copy go as soon as it stored it, to stay under its cap. When the memory
+tier has no such copy (the value is over its cap, or slower to read back
+than to compute), one is made for the write before the call returns, at about
+the cost of copying its memory, if the value is tables of numbers, dates,
+text and nullable columns, arrays and plain values: the pickling, checksum
+and write still happen in the background. Anything else (a categorical
+column, a subclass, an object column holding lists) is serialized before
+the call returns instead, which costs its pickle time on a miss.
 
 === "Decorator"
 
@@ -285,7 +298,7 @@ killed process was still writing is missing, and is computed again.
 
 ## Turning objects into bytes
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @49dee82f, cash/backends/serialization.py:PickleSerializer.serialize @2973e72f -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @49dee82f, cash/backends/serialization.py:PickleSerializer.serialize @0f446a8f -->
 Every result is stored with `pickle` (protocol 5), pandas DataFrames
 included, so a hit hands back the same frame: its class, index, dtypes, cell
 types, `attrs` and `flags`. Pickle is several times faster than Parquet to
@@ -293,6 +306,12 @@ write and read. Parquet files are smaller for columns with few distinct values
 (small integers, repeated strings, mostly missing values); if disk space
 matters more than speed, the [`compress`](../getting-started/configuration.md#all-settings)
 setting gets most of that back.
+
+<!-- claim: cash/backends/serialization.py:_reduce_arrow_array @388e99d3, cash/backends/serialization.py:_compact @79a515ab -->
+A pandas column backed by Arrow (pandas' `str` columns, `ArrowDtype`) is
+stored as its Arrow chunks, written as they are: pandas' own pickle first
+joins a column's chunks into one copy. A short slice of a long column is
+copied down to its rows, so `df.head()` does not write the whole column.
 
 <!-- claim: cash/backends/serialization.py:_reduce_polars @f7539f57, cash/backends/serialization.py:_polars_from_arrow @654cf355 -->
 A polars `DataFrame` or `Series` is stored as its Arrow data, so its

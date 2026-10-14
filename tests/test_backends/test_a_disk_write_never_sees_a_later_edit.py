@@ -7,7 +7,10 @@ that cannot be frozen: a categorical or nullable column, a subclass) keeps
 the Python objects of its object cells, and ``deepcopy`` trusts a class's
 ``__deepcopy__``: a part the caller still holds was pickled with whatever the
 caller did to it while the write waited in the queue. Such a value is
-serialized on the calling thread, as the caller's value always was.
+serialized on the calling thread, as the caller's value always was. A table
+whose columns and labels the RAM tier copies in full (a nullable column,
+Python strings: arrays and labels copied, no Python object that can change)
+is its own copy, and goes to the writer as one.
 """
 
 from __future__ import annotations
@@ -54,10 +57,32 @@ class TrustsItself:
         return self
 
 
+COPIED_IN_FULL = {
+    "nullable column": lambda: pd.DataFrame({"n": pd.array([1, None, 3], dtype="Int64")}),
+    "python strings": lambda: pd.DataFrame(
+        {"s": pd.Series(["a", None, "c"], dtype="string[python]")}, index=pd.Index(["x", "y", "z"], dtype=object)
+    ),
+}
+
+
+@pytest.mark.parametrize("name", COPIED_IN_FULL)
+def test_a_table_the_ram_tier_copies_in_full_goes_to_disk_as_that_copy(name):
+    tiers, disk = _tiers()
+    value = COPIED_IN_FULL[name]()
+    tiers.set("k", value, dict(_KEEP))
+    assert tiers.backends[0].holds_own_copy("k")
+    ((_key, written, private),) = disk.calls
+    assert private and disk.copied == [False] and written is not value
+    column = value.columns[0]
+    value[column].array[0] = value[column].iloc[2]  # writes in place
+    if not isinstance(value.index, pd.RangeIndex):
+        value.index.array[0] = "edited"  # a deep pandas copy would keep these labels
+    pd.testing.assert_frame_equal(written, COPIED_IN_FULL[name]())
+
+
 NOT_OWN = {
     "table copied deep, with shared cells": _tagged_table,
     "subclass": lambda: Subclass({"a": np.arange(3.0)}),
-    "nullable column": lambda: pd.DataFrame({"n": pd.array([1, None, 3], dtype="Int64")}),
     "copied by deepcopy": TrustsItself,
 }
 

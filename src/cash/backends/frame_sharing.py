@@ -32,7 +32,9 @@ pickles themselves, loads as an ordinary table.
 Only a table cash owns is frozen: its own copy made when storing, or a
 table it has just unpickled from disk. A table the caller holds is never
 frozen -- cash does not change what an object of the caller's allows -- so
-the store copies it once, and every hit shares that copy.
+the store copies it once, and every hit shares that copy. That copy holds
+nothing of the caller's (`own_parts`): its labels are copied, and so is its
+Arrow data, which may be the caller's numpy memory under Arrow's name.
 
 Used only where pandas has copy-on-write (pandas 3, or opted in before) and
 these internals behave as described (`enabled`, checked once). Otherwise the
@@ -50,7 +52,17 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["copy_keeping_blocks", "enabled", "freeze", "frozen_already", "hand_out", "is_frozen", "is_pin"]
+__all__ = [
+    "copy_keeping_blocks",
+    "enabled",
+    "freeze",
+    "frozen_already",
+    "hand_out",
+    "is_frozen",
+    "is_pin",
+    "own_parts",
+    "owned_arrow_data",
+]
 
 
 class _Pin:
@@ -372,8 +384,9 @@ def _freeze(frame: Any, *, cells_known: bool = False) -> bool:
         return False
 
 
-def copy_keeping_blocks(frame: Any) -> Any:
-    """``frame.copy(deep=True)`` with *frame*'s blocks as they are.
+def copy_keeping_blocks(frame: Any, *, arrow: bool = True) -> Any:
+    """``frame.copy(deep=True)`` with *frame*'s blocks as they are, and
+    nothing of *frame*'s left in it (`own_parts`).
 
     pandas joins the blocks of one dtype into one on a deep copy. What a
     table hands out then changes: ``data[["f1", "f2"]].to_numpy()`` on one
@@ -387,35 +400,204 @@ def copy_keeping_blocks(frame: Any) -> Any:
     block in F order -- its ``.values`` row-major. Served such a frame,
     ``held @ close.values[i]`` summed in another order than the computed
     frame, and a backtest moved in the last bit (1.4e-17).
+
+    *arrow* False: *frame* is the RAM tier's own, so its Arrow data, which
+    no pandas handle writes, is shared rather than copied (a hit).
     """
     try:
         mgr = frame._mgr
         if frame.ndim != 2:
-            return frame.copy(deep=True)
+            copied = frame.copy(deep=True)
+            own_parts(copied, arrow=arrow)
+            return copied
         blocks = [
-            type(block)(_copy_values(block.values), placement=block._mgr_locs, ndim=block.ndim, refs=None)
+            type(block)(_copy_values(block.values, arrow), placement=block._mgr_locs, ndim=block.ndim, refs=None)
             for block in mgr.blocks
         ]
-        axes = [axis.view() for axis in mgr.axes]  # as pandas' own deep copy keeps them
+        axes = [_owned_axis(axis, arrow) for axis in mgr.axes]
         copied_mgr = type(mgr).from_blocks(blocks, axes)
         return frame._constructor_from_mgr(copied_mgr, axes=copied_mgr.axes).__finalize__(frame, method="copy")
     except Exception:
         logger.debug("cash: copying a %s the pandas way", type(frame).__name__, exc_info=True)
-        return frame.copy(deep=True)
+        copied = frame.copy(deep=True)
+        own_parts(copied, arrow=arrow)
+        return copied
 
 
-def _copy_values(values: Any) -> Any:
+def own_parts(copied: Any, *, arrow: bool = True) -> None:
+    """Make a deep pandas copy *copied* keep nothing of the table it was
+    copied from, in place.
+
+    A deep pandas copy keeps three things of the original. Its labels: the
+    axes are views of the original's (``Index.view``), and ``df.index.array``
+    or ``df.columns.values`` write a label array in place. A categorical
+    column's categories, which ``s.cat.categories.array`` writes the same
+    way (`_owned_categories`). And its Arrow
+    data: an Arrow-backed column's copy is a new wrapper over the same
+    Arrow arrays, which may be the caller's numpy memory itself --
+    ``pa.array(a)`` and ``pa.table(...).to_pandas(types_mapper=pd.ArrowDtype)``
+    copy nothing, so ``a[0] = ...`` after the store changed what was stored.
+    Arrow cannot say whether a buffer is its own or wraps memory someone
+    else writes, so Arrow data is copied (`_owned_arrow`) unless *arrow* is
+    False (the RAM tier's own data, a hit).
+    """
+    from pandas.core.arrays.arrow import ArrowExtensionArray
+
+    if arrow:
+        for block in copied._mgr.blocks:
+            values = block.values
+            if isinstance(values, ArrowExtensionArray):
+                values._pa_array = _owned_arrow(values._pa_array)  # a new wrapper: pandas' copy made it
+    for block in copied._mgr.blocks:
+        if isinstance(block.values, _categorical()):
+            block.values = _owned_categories(block.values, arrow)
+    for name in ("index",) if copied.ndim == 1 else ("index", "columns"):
+        axis = getattr(copied, name)
+        owned = _owned_axis(axis, arrow)
+        if owned is not axis:
+            setattr(copied, name, owned)
+
+
+def _owned_axis(axis: Any, arrow: bool = True) -> Any:
+    """A copy of *axis* holding no label array of *axis*'s (`own_parts`); a
+    range itself, which holds none."""
+    import pandas as pd
+
+    if _is_range(axis):
+        return axis
+    if isinstance(axis, pd.MultiIndex):
+        copied = axis.copy(deep=True)
+        levels = [_owned_axis(level, arrow) for level in copied.levels]
+        if any(new is not old for new, old in zip(levels, copied.levels)):
+            copied = copied.set_levels(levels, verify_integrity=False)
+        return copied
+    from pandas.core.arrays.arrow import ArrowExtensionArray
+
+    data = getattr(axis, "_data", None)
+    if isinstance(data, (ArrowExtensionArray, _categorical())):
+        return type(axis)._simple_new(_copy_values(data, arrow), name=axis.name)
+    return axis.copy(deep=True)
+
+
+def _copy_values(values: Any, arrow: bool = True) -> Any:
     """A copy of a block's array in its own memory order: a numpy array, or
     a datetime or timedelta array over one, take ``order="K"``; other
-    extension arrays have no order to keep."""
+    extension arrays have no order to keep. Arrow data is copied too
+    (`_owned_arrow`) unless *arrow* is False."""
     import numpy as np
 
+    if isinstance(values, _categorical()):  # over a numpy array too: its codes
+        return _owned_categories(values, arrow)
     if isinstance(values, np.ndarray) or isinstance(getattr(values, "_ndarray", None), np.ndarray):
         try:
             return values.copy(order="K")
         except TypeError:  # an array type whose copy takes no order
             pass
-    return values.copy()
+    copied = values.copy()
+    if arrow:
+        from pandas.core.arrays.arrow import ArrowExtensionArray
+
+        if isinstance(copied, ArrowExtensionArray):
+            copied._pa_array = _owned_arrow(copied._pa_array)  # a new wrapper: ``copy`` made it
+    return copied
+
+
+def _categorical() -> type:
+    import pandas as pd
+
+    return pd.Categorical
+
+
+def _owned_categories(values: Any, arrow: bool = True) -> Any:
+    """A copy of the Categorical *values* over a copy of its categories:
+    ``Categorical.copy`` keeps the categories, an index whose array
+    ``s.cat.categories.array[0] = ...`` writes in place."""
+    import pandas as pd
+
+    dtype = pd.CategoricalDtype(_owned_axis(values.categories, arrow), ordered=values.ordered)
+    return pd.Categorical.from_codes(values.codes.copy(), dtype=dtype, validate=False)
+
+
+def _owned_arrow(chunked: Any) -> Any:
+    """A copy of the Arrow ChunkedArray *chunked*, chunk by chunk, in memory
+    Arrow allocated for it.
+
+    Arrow data may wrap memory someone else owns and writes: ``pa.array(a)``
+    over a numpy array copies nothing, and neither does
+    ``pa.table(...).to_pandas(types_mapper=pd.ArrowDtype)``. No pyarrow
+    API tells a buffer from Arrow's memory pool from one over foreign
+    memory (``Buffer.is_mutable`` is True for both), so every buffer is
+    copied. A slice comes out as its rows."""
+    import pyarrow as pa
+
+    return pa.chunked_array([_owned_chunk(chunk) for chunk in chunked.chunks], type=chunked.type)
+
+
+def owned_arrow_data(data: Any) -> Any:
+    """A copy of an Arrow Array, ChunkedArray or Table in memory Arrow
+    allocated for it (`_owned_arrow`); *data* itself when it is none of them."""
+    import pyarrow as pa
+
+    if isinstance(data, pa.ChunkedArray):
+        return _owned_arrow(data)
+    if isinstance(data, pa.Array):
+        return _owned_chunk(data)
+    if isinstance(data, pa.Table):
+        return pa.Table.from_arrays([_owned_arrow(column) for column in data.columns], schema=data.schema)
+    return data
+
+
+def _owned_chunk(chunk: Any) -> Any:
+    import pyarrow as pa
+
+    if pa.types.is_dictionary(chunk.type):
+        indices, dictionary = _owned_chunk(chunk.indices), _owned_chunk(chunk.dictionary)
+        owned = pa.DictionaryArray.from_arrays(indices, dictionary, ordered=chunk.type.ordered)
+        if owned.type == chunk.type:
+            return owned
+    elif not _holds_dictionary(chunk.type):
+        # ``concat_arrays`` writes every buffer anew, but a type it may
+        # append as it is (views over data buffers) is checked, not trusted.
+        owned = pa.concat_arrays([chunk])
+        if not _overlapping(owned.buffers(), chunk.buffers()):
+            return owned
+    return _ipc_copy(chunk)
+
+
+def _holds_dictionary(arrow_type: Any) -> bool:
+    import pyarrow as pa
+
+    if pa.types.is_dictionary(arrow_type):
+        return True
+    storage = getattr(arrow_type, "storage_type", None)
+    if storage is not None:
+        return _holds_dictionary(storage)
+    return any(_holds_dictionary(arrow_type.field(i).type) for i in range(arrow_type.num_fields))
+
+
+def _overlapping(buffers: list[Any], others: list[Any]) -> bool:
+    """Does a buffer of *buffers* share memory with one of *others*?"""
+    spans = [(b.address, b.address + b.size) for b in others if b is not None and b.size]
+    for buffer in buffers:
+        if buffer is None or not buffer.size:
+            continue
+        start, end = buffer.address, buffer.address + buffer.size
+        if any(start < other_end and other_start < end for other_start, other_end in spans):
+            return True
+    return False
+
+
+def _ipc_copy(chunk: Any) -> Any:
+    """*chunk* written to Arrow's IPC format in a buffer of Arrow's own and
+    read back from it: a copy of every buffer, of any type (slower than
+    ``concat_arrays``, so only for nested dictionaries and the like)."""
+    import pyarrow as pa
+
+    batch = pa.RecordBatch.from_arrays([chunk], names=["c"])
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, batch.schema) as writer:
+        writer.write_batch(batch)
+    return pa.ipc.open_stream(sink.getvalue()).read_next_batch().column(0)
 
 
 def hand_out(stored: Any) -> Any:
