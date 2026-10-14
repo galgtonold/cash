@@ -351,7 +351,12 @@ def _state_writes(
         user's (its body, not its name, says what it changes)."""
         users = isinstance(callee, types.FunctionType) and _is_users_function(callee, namespace)
         if isinstance(callee, types.FunctionType) and follow:
-            modules = _modules_changed_by(callee, namespace, process)
+            # A method handed over on each of many objects (``o.total`` for
+            # each order) is one function: its body is read once.
+            kept = modules_of.get(id(callee))
+            if kept is None or kept[0] is not callee:
+                kept = modules_of[id(callee)] = (callee, _modules_changed_by(callee, namespace, process))
+            modules = kept[1]
             if found is not None:
                 found.update(modules)
                 if users:
@@ -360,6 +365,9 @@ def _state_writes(
                 followed.add(id(callee))
                 _state_writes(_function_body(callee), namespace, found, followed, process)
         return users
+
+    #: ``id(function) -> (function, _modules_changed_by of it)``.
+    modules_of: dict[int, tuple[types.FunctionType, set[str]]] = {}
 
     def handed(node: ast.Call) -> None:
         """Follow what the call is handed that the callee calls: a function

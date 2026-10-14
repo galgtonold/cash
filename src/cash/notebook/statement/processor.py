@@ -98,7 +98,7 @@ from ...analysis.cacheability_decision import (
     identity_coupled_reason,
 )
 from ...analysis.code_analyzer import CodeAnalyzer, calls_ipython, statement_code
-from ...analysis.handed_callables import new_analysis_round
+from ...analysis.handed_callables import answers_shared, new_analysis_round, stop_sharing_answers
 from ...analysis.mutation_effects import (
     StatementEffects,
     live_function_source,
@@ -654,16 +654,19 @@ class StatementProcessor:
             header_files=header_files,
             header_remote=header_remote,
         )
-        done = self._prepare(run)
-        if done is not None:
-            self._advance_rng(run)
-            return done
-        with self._executing(run) as runner:
-            self._offer_digests(run, runner)
-            try:
-                runner.run()
-            finally:
-                self._mutations.digests.withdraw_offer()
+        # The analyses before the statement runs share their walks through
+        # what it reads (`answers_shared`), up to the moment it runs.
+        with answers_shared():
+            done = self._prepare(run)
+            if done is not None:
+                self._advance_rng(run)
+                return done
+            with self._executing(run) as runner:
+                self._offer_digests(run, runner)
+                try:
+                    runner.run()
+                finally:
+                    self._mutations.digests.withdraw_offer()
         try:
             return self._finish(run, runner.execution)
         finally:
@@ -711,12 +714,13 @@ class StatementProcessor:
             force_outputs=force_outputs,
             is_last=is_last,
         )
-        done = self._prepare(run)
-        if done is not None:
-            self._advance_rng(run)
-            return done
-        with self._executing(run) as runner:
-            await runner.run_async()
+        with answers_shared():
+            done = self._prepare(run)
+            if done is not None:
+                self._advance_rng(run)
+                return done
+            with self._executing(run) as runner:
+                await runner.run_async()
         try:
             return self._finish(run, runner.execution)
         finally:
@@ -1120,6 +1124,7 @@ class StatementProcessor:
                         user_ns[LOOP_ITERABLE_NAME] = run.loop_iterable
                     if memo is not None:
                         user_ns.update(memo[1])
+                    stop_sharing_answers()
                     start_time = _perf_counter()
                     try:
                         yield runner

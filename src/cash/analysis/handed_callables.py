@@ -38,6 +38,7 @@ from __future__ import annotations
 import ast
 import builtins
 import collections
+import contextlib
 import dataclasses
 import functools
 import inspect
@@ -45,7 +46,7 @@ import operator
 import sys
 import types
 from collections import OrderedDict, defaultdict
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from itertools import chain, compress, repeat
 from typing import Any, NamedTuple
 
@@ -54,7 +55,7 @@ from .._memo import CODE_OBJECTS, LruMemo
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import own_source, wrapper_layers
 from ..tracking.function_tracker import is_local_module
-from .ast_util import CallScope, calls_in, nodes_in
+from .ast_util import CallScope, calls_in, nodes_in, same_as_all
 from .callee_effects import (
     all_param_names,
     callee_global_mutations,
@@ -68,12 +69,15 @@ from .mutations import MUTATING_METHODS, chain_is_pure
 
 __all__ = [
     "HandedCallables",
+    "answers_shared",
     "handed_callable_values",
     "handed_callables",
     "handed_values",
     "hands_a_state_changing_callable",
     "iteration_bindings",
     "new_analysis_round",
+    "one_reading",
+    "stop_sharing_answers",
     "users_object_attributes",
 ]
 
@@ -120,13 +124,52 @@ _HELD_IN_DATA = (collections.UserList, collections.UserDict)
 _INSTANCE_LIMIT = 10_000
 
 
+#: While `one_reading` is open: ``(id(tree), id(namespace), all) -> (tree,
+#: namespace, answer)`` of `handed_callables`.
+_READING: list[dict[tuple[int, int, bool], tuple[Any, Any, HandedCallables]] | None] = [None]
+
+
+@contextlib.contextmanager
+def one_reading() -> Iterator[None]:
+    """Answer `handed_callables` once for each tree and namespace while
+    open: the analyses of one statement that ask it the same question, with
+    no code run between them, share the answer, and the walk through what
+    the statement hands over is made once."""
+    outer = _READING[0]
+    if outer is None:
+        _READING[0] = {}
+    try:
+        yield
+    finally:
+        if outer is None:
+            _READING[0] = None
+
+
 def handed_callables(
     tree: ast.AST | None, namespace: Mapping[str, Any] | None, scope: CallScope = "all"
 ) -> HandedCallables:
     """The user callables the calls in *tree* (within *scope*) are handed, as
     *namespace* holds them. See the module docstring."""
+    reading = _READING[0]
+    if reading is None or tree is None or not namespace:
+        return _handed_callables(tree, namespace, scope)
+    every = same_as_all(tree, scope)
+    key = (id(tree), id(namespace), every)
+    kept = reading.get(key)
+    if kept is not None and kept[0] is tree and kept[1] is namespace:
+        return kept[2]
+    answer = _handed_callables(tree, namespace, "all" if every else scope)
+    reading[key] = (tree, namespace, answer)
+    return answer
+
+
+def _handed_callables(
+    tree: ast.AST | None, namespace: Mapping[str, Any] | None, scope: CallScope = "all"
+) -> HandedCallables:
     _CLASS_ATTRIBUTES.clear()
     _CHANGES_ITS_OBJECT.clear()
+    _SLOT_MEMBERS.clear()
+    _THROUGH_ITS_OBJECT.clear()
     if tree is None or not namespace:
         return _NONE
     found = _Found(namespace)
@@ -210,6 +253,8 @@ def handed_callable_values(
     object (``bus.emit(3)``)."""
     _CLASS_ATTRIBUTES.clear()
     _CHANGES_ITS_OBJECT.clear()
+    _SLOT_MEMBERS.clear()
+    _THROUGH_ITS_OBJECT.clear()
     calling: _Opened | None = None
     out: dict[int, Any] = {}
     bound = bound or {}
@@ -255,11 +300,23 @@ def handed_callable_values(
 def _held_callables(method: types.MethodType, seen: set[tuple[int, Any]] | None = None) -> list[Any]:
     """The callables the user method *method* reaches through its object:
     what the object holds when the method calls it, and the methods it
-    calls on the object (`_Found._held_by`), and theirs in turn."""
+    calls on the object (`_Found._held_by`), and theirs in turn. Worked out
+    once per analysis round (`_this_round`): ``sim.step()`` is asked about
+    by several analyses of the statement before it runs, and each answer
+    opens every agent the simulation holds."""
+    if seen is None:
+        return _this_round(
+            ("held", id(method.__self__), id(method.__func__)),
+            (method.__self__, method.__func__),
+            lambda: _held_callables_of(method, set()),
+        )
+    return _held_callables_of(method, seen)
+
+
+def _held_callables_of(method: types.MethodType, seen: set[tuple[int, Any]]) -> list[Any]:
     owner, fn = method.__self__, method.__func__
     if isinstance(owner, (type, types.ModuleType)) or not isinstance(fn, types.FunctionType) or not _is_users(fn):
         return []
-    seen = set() if seen is None else seen
     if (id(owner), fn.__code__) in seen:
         return []
     seen.add((id(owner), fn.__code__))
@@ -282,7 +339,15 @@ def _held_callables(method: types.MethodType, seen: set[tuple[int, Any]] | None 
 def _methods_called(value: Any, names: frozenset[str], held: bool) -> list[Any]:
     """The methods and stored functions called *names* of *value*, an
     object of the user's, and with *held* of those it holds
-    (`_Found.with_methods`)."""
+    (`_Found.with_methods`). With *held*, worked out once per analysis
+    round (`_this_round`): several analyses of one statement ask it before
+    it runs."""
+    if not held:
+        return _methods_called_of(value, names, False)
+    return _this_round(("methods", id(value), names), (value,), lambda: _methods_called_of(value, names, True))
+
+
+def _methods_called_of(value: Any, names: frozenset[str], held: bool) -> list[Any]:
     objects = [value] if _is_users_object(value) else []
     if held:
         objects.extend(item for item in _reached(value)[0] if _is_users_object(item))
@@ -290,6 +355,8 @@ def _methods_called(value: Any, names: frozenset[str], held: bool) -> list[Any]:
     #: ``(class, name)`` of the methods found whose effect does not depend on
     #: their object: one object's is enough (``r.value()`` for ``r`` in rows).
     same: set[tuple[type, str]] = set()
+    #: ``(class, name)`` whose method was found not to be such: asked once.
+    differs: set[tuple[type, str]] = set()
     for obj in objects:
         kind = type(obj)
         for name in names:
@@ -298,8 +365,11 @@ def _methods_called(value: Any, names: frozenset[str], held: bool) -> list[Any]:
             member = _attribute(obj, name)
             if member is not _MISSING and callable(member):
                 out.append(member)
-                if type(member) is types.MethodType and member.__self__ is obj and _same_for_every_object(member):
-                    same.add((kind, name))
+                if type(member) is types.MethodType and member.__self__ is obj and (kind, name) not in differs:
+                    if _same_for_every_object(member):
+                        same.add((kind, name))
+                    elif name not in _instance_dict(obj):
+                        differs.add((kind, name))
     return out
 
 
@@ -461,6 +531,8 @@ def handed_values(arg: ast.expr, namespace: Mapping[str, Any]) -> list[tuple[Any
     and what a lambda among them calls (`_resolve_argument`)."""
     _CLASS_ATTRIBUTES.clear()
     _CHANGES_ITS_OBJECT.clear()
+    _SLOT_MEMBERS.clear()
+    _THROUGH_ITS_OBJECT.clear()
     return _resolve_argument(arg, namespace).values
 
 
@@ -1142,6 +1214,16 @@ class _Found:
         #: ``id(object) -> names of the notebook bound to it``, built on the
         #: first `_changed`.
         self._names_of: dict[int, list[str]] | None = None
+        #: ``(method names or None, root) -> ids`` of the containers and
+        #: objects whose whole reach a finished walk has looked through for
+        #: those names (None: for the callables it holds) under that root:
+        #: each method of many objects that share what they hold (an order's
+        #: customer, the customer's other orders) walks only what no earlier
+        #: one did (`_reach`). No code runs while one statement is read, so
+        #: what an object reaches stays the same.
+        self._covered: dict[tuple[frozenset[str] | None, str | None], set[int]] = {}
+        #: The objects in `_covered`, kept alive so that their ids stay theirs.
+        self._covered_objects: list[Any] = []
 
     def add(self, value: Any, root: str | None, open_containers: bool) -> None:
         """Add what calling *value* changes. A builtin container, or an
@@ -1158,7 +1240,8 @@ class _Found:
             if (id(value), root, True) in self._seen:
                 return
             self._seen.add((id(value), root, True))
-            items, complete = _callables_reached(value)
+            covered, opened = self._reach_key(None, root)
+            items, complete = self._reach(value, covered, opened, objects=False)
             if not complete:
                 label = repr(root) if root else "an argument"
                 self.unreadable.append(
@@ -1167,6 +1250,8 @@ class _Found:
                 )
             for item in items:
                 self.add(item, root, False)
+            if complete:
+                self._cover(covered, opened)
             if type(value) in _OPENED or not callable(value):
                 return
         elif type(value) in _OPENED:
@@ -1185,8 +1270,12 @@ class _Found:
         calls (``model.predict(v)``); with *held*, of the objects of the
         user's it holds as well (``s.fn(v)`` for ``s`` in ``steps``)."""
         objects = [value] if _is_users_object(value) or (isinstance(value, type) and _is_users_class(value)) else []
+        covered: set[int] | None = None
+        opened: list[Any] = []
+        complete = False
         if held and _openable(value):
-            items, complete = _reached(value)
+            covered, opened = self._reach_key(names, root)
+            items, complete = self._reach(value, covered, opened, objects=True)
             if not complete:
                 label = repr(root) if root else "an argument"
                 self.unreadable.append(
@@ -1194,6 +1283,33 @@ class _Found:
                     f"{_INSTANCE_LIMIT} objects of your classes to look through"
                 )
             objects.extend(item for item in items if _is_users_object(item))
+        self._methods_of(objects, root, names)
+        if covered is not None and complete:
+            self._cover(covered, opened)
+
+    def _reach_key(self, names: frozenset[str] | None, root: str | None) -> tuple[set[int], list[Any]]:
+        """The ids `_covered` holds for *names* under *root*, and an empty
+        list for the walk about to start to note what it opens in."""
+        return self._covered.setdefault((names, root), set()), []
+
+    def _reach(self, value: Any, covered: set[int], opened: list[Any], objects: bool) -> tuple[list[Any], bool]:
+        """`_callables_reached` of *value*, not opening again what *covered*
+        says an earlier walk for the same question looked through: what is
+        found there was added then. *opened* gets what this walk opens."""
+        if id(value) in covered:
+            return [], True
+        return _callables_reached(value, objects=objects, covered=covered, opened_out=opened)
+
+    def _cover(self, covered: set[int], opened: list[Any]) -> None:
+        """Note that the whole reach of each of *opened*, the containers and
+        objects a finished walk opened, has been looked through: called
+        only after what the walk found has been added."""
+        covered.update(map(id, opened))
+        self._covered_objects.extend(opened)
+
+    def _methods_of(self, objects: list[Any], root: str | None, names: frozenset[str]) -> None:
+        """Add the methods and stored functions called *names* of each of
+        *objects* (`with_methods`)."""
         for obj in objects:
             kind = type(obj)
             for name in names:
@@ -1581,11 +1697,27 @@ def _method_key(method: Any, root: str | None) -> tuple[Any, type, str | None]:
     return (method.__name__, cls, root)
 
 
+#: `_reaches_through_its_object` of each function asked about: ``(code,
+#: id(globals)) -> answer``, holding no function (a reference cash keeps to
+#: one would read as another holder to the share check). Cleared with
+#: `_CLASS_ATTRIBUTES`: asked once per question, not once for each of the
+#: many objects a method is bound to.
+_THROUGH_ITS_OBJECT: dict[tuple[types.CodeType, int], bool] = {}
+
+
 def _reaches_through_its_object(fn: types.FunctionType) -> bool:
     """Whether `_Found._held_by` finds anything for the method *fn* on some
     object: it calls its first parameter, or calls methods on it or on
     what it holds. What it finds depends on the object; whether it looks
     does not."""
+    key = (fn.__code__, id(fn.__globals__))
+    known = _THROUGH_ITS_OBJECT.get(key)
+    if known is None:
+        known = _THROUGH_ITS_OBJECT[key] = _looks_through_its_object(fn)
+    return known
+
+
+def _looks_through_its_object(fn: types.FunctionType) -> bool:
     facts = _call_facts(fn)
     code = fn.__code__
     if facts is None or not code.co_argcount:
@@ -1695,6 +1827,8 @@ def hands_a_state_changing_callable(
     decorator passes False, as it watches the arguments for that itself."""
     _CLASS_ATTRIBUTES.clear()
     _CHANGES_ITS_OBJECT.clear()
+    _SLOT_MEMBERS.clear()
+    _THROUGH_ITS_OBJECT.clear()
     found: _Found | None = None
     opened: _Opened | None = None
     for position, keyword, value in chain(
@@ -2149,7 +2283,9 @@ def _class_member(cls: type, name: str) -> Any:
         return None
 
 
-def _callables_reached(value: Any, objects: bool = False) -> tuple[list[Any], bool]:
+def _callables_reached(
+    value: Any, objects: bool = False, covered: set[int] | None = None, opened_out: list[Any] | None = None
+) -> tuple[list[Any], bool]:
     """``(callables, complete)``: the callables *value* holds -- a builtin
     container's items, an object of the user's class's attributes (its
     ``__dict__`` and ``__slots__``, read without running code) -- and those
@@ -2157,26 +2293,44 @@ def _callables_reached(value: Any, objects: bool = False) -> tuple[list[Any], bo
     nested, each once. A level at a time, the types sorted at C speed.
     *complete* is False when more than `_INSTANCE_LIMIT` objects of the
     user's classes had to be opened, and the walk stopped. With *objects*,
-    the objects of the user's classes it holds as well."""
+    the objects of the user's classes it holds as well.
+
+    *covered* are the ids of containers and objects whose whole reach the
+    caller has already looked through for the same question: the walk does
+    not open them again (`_Found._reach`). *opened_out*, when given, gets
+    *value* and each container and object the walk opened."""
     if type(value) in (list, tuple) and set(map(type, value)) <= _ATOMS:
         return [], True  # a flat list of plain values: read at C speed
     if _plain_data.is_tree(value):
         return [], True  # lists and tuples of plain values only
     found: list[Any] = []
     seen = {id(value)}
+    if opened_out is not None:
+        opened_out.append(value)
     level = [value]
     users_objects = 0
+    #: ``type -> whether the walk opens its objects``, asked once per type.
+    opens: dict[type, bool] = {}
     while level:
         items = list(chain.from_iterable(map(_items, level)))
         if not items:
             break
         found.extend(filter(callable, items))
-        kinds = set(map(type, items))
-        opened = {kind for kind in kinds if kind in _OPENED or _users_instance_type(kind)}
+        opened = set()
+        for kind in set(map(type, items)):
+            known = opens.get(kind)
+            if known is None:
+                known = opens[kind] = kind in _OPENED or _users_instance_type(kind)
+            if known:
+                opened.add(kind)
         if not opened:
             break
         nested = [c for c in compress(items, map(opened.__contains__, map(type, items))) if id(c) not in seen]
+        if covered:
+            nested = [c for c in nested if id(c) not in covered]
         seen.update(map(id, nested))
+        if opened_out is not None:
+            opened_out.extend(nested)
         if objects:
             found.extend(c for c in nested if type(c) not in _OPENED and not callable(c))
         users_objects += sum(1 for c in nested if type(c) not in _OPENED)
@@ -2206,9 +2360,12 @@ def new_analysis_round() -> None:
     to run, or has run, and may have changed what a container holds."""
     _ROUND[0] += 1
     _REACHED_THIS_ROUND.clear()
+    _ANSWERED_THIS_ROUND.clear()
     _STEPS_THIS_ROUND.clear()
     _CLASS_ATTRIBUTES.clear()
     _CHANGES_ITS_OBJECT.clear()
+    _SLOT_MEMBERS.clear()
+    _THROUGH_ITS_OBJECT.clear()
 
 
 def _reached_this_round(value: Any) -> tuple[list[Any], bool]:
@@ -2222,6 +2379,55 @@ def _reached_this_round(value: Any) -> tuple[list[Any], bool]:
     if len(_REACHED_THIS_ROUND) > 256:
         _REACHED_THIS_ROUND.clear()
     _REACHED_THIS_ROUND[id(value)] = (value, _ROUND[0], answer)
+    return answer
+
+
+#: `_this_round`'s answers: ``key -> (round, the objects the key names
+#: by id, answer)``. Kept only while `answers_shared` is open, in the round
+#: it was opened in, and emptied when it closes: an answer holds the
+#: user's objects, and a reference cash keeps would read as another holder
+#: to the share check that follows a statement.
+_ANSWERED_THIS_ROUND: dict[tuple[Any, ...], tuple[int, tuple[Any, ...], list[Any]]] = {}
+#: The round `answers_shared` was opened in, or None outside it.
+_SHARED_ROUND: list[int | None] = [None]
+
+
+@contextlib.contextmanager
+def answers_shared() -> Iterator[None]:
+    """Let the analyses of one statement before it runs share what
+    `_this_round` works out, until code runs (`new_analysis_round`) or the
+    block ends. Nothing is kept past it."""
+    outer = _SHARED_ROUND[0]
+    _SHARED_ROUND[0] = _ROUND[0]
+    try:
+        yield
+    finally:
+        _SHARED_ROUND[0] = outer
+        _ANSWERED_THIS_ROUND.clear()
+
+
+def stop_sharing_answers() -> None:
+    """End what `answers_shared` keeps, as the statement's code is about to
+    run: an answer worked out before it is not one for what it does."""
+    _SHARED_ROUND[0] = None
+    _ANSWERED_THIS_ROUND.clear()
+
+
+def _this_round(key: tuple[Any, ...], objects: tuple[Any, ...], work: Callable[[], list[Any]]) -> list[Any]:
+    """What *work* answers, once per analysis round for *key* while
+    `answers_shared` is open: no code of the user's runs within a round, so
+    what the objects *key* names by id (*objects*, the very ones) hold is
+    the same each time it is asked. The list answered is shared: callers
+    only read it."""
+    if _SHARED_ROUND[0] != _ROUND[0]:
+        return work()
+    kept = _ANSWERED_THIS_ROUND.get(key)
+    if kept is not None and kept[0] == _ROUND[0] and all(map(operator.is_, kept[1], objects)):
+        return kept[2]
+    answer = work()
+    if len(_ANSWERED_THIS_ROUND) > 256:
+        _ANSWERED_THIS_ROUND.clear()
+    _ANSWERED_THIS_ROUND[key] = (_ROUND[0], objects, answer)
     return answer
 
 
@@ -2252,7 +2458,18 @@ def _items(container: Any) -> Iterable[Any]:
             base = next(kind for kind in _CONTAINERS if isinstance(container, kind))
             items = base.__iter__(container)  # type: ignore[attr-defined]
         return chain(items, _attributes_of(container))
-    return _attributes_of(container)
+    # `_attributes_of`, inlined: this runs once for each object a walk opens.
+    try:
+        own = object.__getattribute__(container, "__dict__")
+    except (AttributeError, TypeError):
+        own = None
+    values = list(own.values()) if isinstance(own, dict) else []
+    for member, cls in _slot_members(type(container)):
+        try:
+            values.append(member.__get__(container, cls))
+        except AttributeError:
+            pass  # an unset slot
+    return values
 
 
 #: The builtin containers whose subclasses' items `_items` reads.
@@ -2265,7 +2482,33 @@ def users_object_attributes(value: Any) -> list[Any]:
     running code); empty for anything else."""
     _CLASS_ATTRIBUTES.clear()
     _CHANGES_ITS_OBJECT.clear()
+    _SLOT_MEMBERS.clear()
+    _THROUGH_ITS_OBJECT.clear()
     return _attributes_of(value) if _is_users_object(value) else []
+
+
+#: ``class -> its slot descriptors``, each with the class defining it
+#: (`_attributes_of`). Read once by each question asked of this module, as
+#: `_CLASS_ATTRIBUTES` is, and cleared with it: not once per object.
+_SLOT_MEMBERS: dict[type, tuple[tuple[Any, type], ...]] = {}
+
+
+def _slot_members(kind: type) -> tuple[tuple[Any, type], ...]:
+    """The slot descriptors of the class *kind* and of the classes in its
+    MRO, each with its class."""
+    members = _SLOT_MEMBERS.get(kind)
+    if members is None:
+        found: list[tuple[Any, type]] = []
+        for cls in kind.__mro__:
+            slots = cls.__dict__.get("__slots__")
+            if slots is None:
+                continue
+            for name in (slots,) if isinstance(slots, str) else slots:
+                member = cls.__dict__.get(name)
+                if type(member) is types.MemberDescriptorType:
+                    found.append((member, cls))
+        members = _SLOT_MEMBERS[kind] = tuple(found)
+    return members
 
 
 def _attributes_of(obj: Any) -> list[Any]:
@@ -2273,17 +2516,11 @@ def _attributes_of(obj: Any) -> list[Any]:
     ``__slots__``, read through the slot descriptors so no property or
     ``__getattr__`` runs."""
     values = list(_instance_dict(obj).values())
-    for cls in type(obj).__mro__:
-        slots = cls.__dict__.get("__slots__")
-        if slots is None:
-            continue
-        for name in (slots,) if isinstance(slots, str) else slots:
-            member = cls.__dict__.get(name)
-            if type(member) is types.MemberDescriptorType:
-                try:
-                    values.append(member.__get__(obj, cls))
-                except AttributeError:
-                    pass  # an unset slot
+    for member, cls in _slot_members(type(obj)):
+        try:
+            values.append(member.__get__(obj, cls))
+        except AttributeError:
+            pass  # an unset slot
     return values
 
 

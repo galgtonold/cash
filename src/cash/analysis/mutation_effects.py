@@ -48,7 +48,7 @@ from .callee_effects import (
     stateful_self_functions,
 )
 from .code_analyzer import CodeAnalyzer, magic_python, parse_cell_source
-from .handed_callables import handed_callables
+from .handed_callables import handed_callables, one_reading
 from .mutations import (
     MUTATING_METHODS,
     RECEIVER_READONLY_WRITE_METHODS,
@@ -1339,11 +1339,12 @@ def statement_effects(
     arg_mutations: frozenset[str] = frozenset()
     unreadable: tuple[str, ...] = ()
     try:
-        inputs, outputs = CodeAnalyzer.analyze_code_block(
-            code, tree=tree, resolve_source=resolve_source, user_ns=namespace
-        )
-        if not control_body:
-            handed = handed_callables(tree, namespace, scope="no_control_bodies")
+        with one_reading():
+            inputs, outputs = CodeAnalyzer.analyze_code_block(
+                code, tree=tree, resolve_source=resolve_source, user_ns=namespace
+            )
+            handed = handed_callables(tree, namespace, scope="no_control_bodies") if not control_body else None
+        if handed is not None:
             callee_globals = (
                 callee_global_mutations(tree, resolve_source, scope="no_control_bodies", extra_sources=handed.sources)
                 | handed.receivers

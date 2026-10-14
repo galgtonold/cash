@@ -747,7 +747,7 @@ The function does something a cache hit will not repeat. Every code here starts 
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder._hands_a_state_changing_callable @d02c3941, cash/analysis/handed_callables.py:hands_a_state_changing_callable @7531228b -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder._hands_a_state_changing_callable @d02c3941, cash/analysis/handed_callables.py:hands_a_state_changing_callable @4c3c2d42 -->
 **What happened.** The call handed the cached function a function of yours
 that changes a global or a variable it closes over when it is called. It may
 be passed directly (`run(record, 3)`), as a bound method, inside a
