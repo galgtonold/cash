@@ -51,3 +51,10 @@ def test_a_big_frame_waits_for_the_session_budget():
 
     hint.after_run("longer = f(df)", "h2", values={"df": df}, lineages={"df": "L"}, seconds=3.0)
     assert "h2" in hint._records, "the slow steps left enough for a 3 s step"
+
+
+def test_a_slow_loop_pays_towards_the_budget(cash_magics):
+    for cell in ["import time", "for i in range(2):\n    time.sleep(1.1)"]:
+        run_cash_cell(cash_magics, cell)
+    budget = cash_magics.tracking_state.per_item_reruns._budget
+    assert budget and budget[0] >= per_item_reruns.HASH_SHARE * 1.0, budget

@@ -100,6 +100,16 @@ class PerItemReruns:
         self._taken.clear()
         self._budget.clear()
 
+    def credit(self, seconds: float) -> float:
+        """Add a slow statement's *seconds* to the session's hashing budget,
+        also one this hint does not check (a statement of a loop body);
+        what the budget holds now."""
+        left = self._budget[0] if self._budget else 0.0
+        if seconds >= MIN_COST_S:
+            left += HASH_SHARE * seconds
+            self._budget[:] = [left]
+        return left
+
     def after_run(
         self,
         code: str,
@@ -118,8 +128,7 @@ class PerItemReruns:
         write a record that outlives the kernel."""
         if seconds < MIN_COST_S:
             return
-        left = (self._budget[0] if self._budget else 0.0) + HASH_SHARE * seconds
-        self._budget[:] = [left]
+        left = self.credit(seconds)
         rowed = {name: value for name, value in values.items() if row_count(value) is not None}
         if not rowed:
             return

@@ -2103,7 +2103,12 @@ class StatementProcessor:
         just computed, and say so when it ran over mostly unchanged rows
         (``CACHE-PER-ITEM-RERUN``). Advice only."""
         seconds = execution.wall_time - execution.tax
-        if seconds < PER_ITEM_MIN_COST_S or is_control_body(run.code):
+        if seconds < PER_ITEM_MIN_COST_S:
+            return
+        if is_control_body(run.code):
+            # Not checked (the loop owns its body's inputs), but its time
+            # pays towards the session's hashing budget.
+            self.tracking_state.per_item_reruns.credit(seconds)
             return
         try:
             skip = run.outputs | run.analysis.all_mutated_vars | run.in_place
