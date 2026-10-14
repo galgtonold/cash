@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @966b3c5b -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @00051bf9 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -773,7 +773,7 @@ The function does something a cache hit will not repeat. Every code here starts 
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder._hands_a_state_changing_callable @d02c3941, cash/analysis/handed_callables.py:hands_a_state_changing_callable @7531228b -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder._hands_a_state_changing_callable @d02c3941, cash/analysis/handed_callables.py:hands_a_state_changing_callable @4c3c2d42 -->
 **What happened.** The call handed the cached function a function of yours
 that changes a global or a variable it closes over when it is called. It may
 be passed directly (`run(record, 3)`), as a bound method, inside a
@@ -1616,6 +1616,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 
 | Code | Applies to | Meaning |
 |---|---|---|
+| [NOTEBOOK-ANALYSIS-BUDGET](#notebook-analysis-budget) | notebook | working out how to key a statement took longer than caching it could save; it ran uncached |
 | [NOTEBOOK-ANALYSIS-FAILED](#notebook-analysis-failed) | notebook | a safety check raised; the statement ran uncached |
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
@@ -1628,11 +1629,41 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-SHARE-UNCHECKED](#notebook-share-unchecked) | notebook | not every variable sharing an object with a statement's outputs was found in time |
 | [NOTEBOOK-SHARED-KEPT](#notebook-shared-kept) | notebook | a value a variable below shares is kept as it is for a cell re-run on its own |
 
+### NOTEBOOK-ANALYSIS-BUDGET {#notebook-analysis-budget}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/analysis/analysis_budget.py:analysis_budget_seconds @0a25bb39, cash/notebook/statement/processor.py:StatementProcessor._tell_past_budget @aa3c92a2, cash/notebook/statement/processor.py:StatementProcessor._settle_budget @ffbe1a5a -->
+**What happened.** To key a statement, cash reads what it can run: the
+functions and methods of the objects it hands to a call, however deep in
+them, and, after it ran, which other variables share its outputs. Over a big
+graph of your own objects (20,000 agents each holding a strategy function)
+that reading took longer than the statement's budget: four times what the
+statement took the last time it ran, at least half a second. cash stopped
+reading. The message names how long the statement ran. It is shown once per
+statement, and only for a statement that took a tenth of a second or more:
+for a quicker one, caching would not have mattered.
+
+**Why it matters.** The statement runs every time and is not stored. What it
+binds is keyed by its value, as a `# @cash:no-cache` statement's is: a cell
+below that reads it is served from the cache only when the value is the
+same. What its calls were handed could change any local module's state or
+the process's working directory or environment; cash takes the modules as
+changed and watches the process. The result is correct.
+
+**What to do.** Nothing, usually: the statement measures itself as it
+runs, and its next budget follows. To cache it, hand the call the function
+and the values it needs rather than an object graph that holds them, or
+move the work into a function decorated with `@cash.cache`.
+
+**When it is safe to ignore.** When the statement is quick enough to run
+every time.
+
 ### NOTEBOOK-ANALYSIS-FAILED {#notebook-analysis-failed}
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/analysis/cacheability_decision.py:analysis_failed @cebe64c3 -->
+<!-- claim: cash/analysis/cacheability_decision.py:analysis_failed @3e0e56fc -->
 **What happened.** A check that decides whether a statement may be cached
 raised an error: the scan for calls it must not cache, or the analysis of the
 functions it calls and what they write. The message names the check and the
@@ -2166,7 +2197,7 @@ handle), or on Windows a file held open by another process.
 
 <!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @7d20722f, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @efc7273e -->
 <!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @57e71e71, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @538d7a29 -->
-<!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @6c593ab7, cash/notebook/statement/processor.py:StatementProcessor._post_execute @2d2f1f84 -->
+<!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @6c593ab7, cash/notebook/statement/processor.py:StatementProcessor._post_execute @df1f2aa9 -->
 === "Decorator"
 
     **What happened.** A file the function read changed before it returned.

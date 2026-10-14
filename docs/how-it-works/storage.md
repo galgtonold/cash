@@ -298,7 +298,7 @@ killed process was still writing is missing, and is computed again.
 
 ## Turning objects into bytes
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @49dee82f, cash/backends/serialization.py:PickleSerializer.serialize @0f446a8f -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @e289b59d, cash/backends/serialization.py:PickleSerializer.serialize @0f446a8f -->
 Every result is stored with `pickle` (protocol 5), pandas DataFrames
 included, so a hit hands back the same frame: its class, index, dtypes, cell
 types, `attrs` and `flags`. Pickle is several times faster than Parquet to
