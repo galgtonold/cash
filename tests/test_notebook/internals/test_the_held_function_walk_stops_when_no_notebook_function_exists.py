@@ -123,3 +123,30 @@ def test_a_chained_namespace_finds_a_function_in_any_of_its_maps():
     outer = _notebook("def f():\n    return 1")
     assert held_functions.notebook_functions_exist(ChainMap({}, outer))
     assert not held_functions.notebook_functions_exist(ChainMap({}, _notebook("y = 2")))
+
+
+def test_a_function_only_the_namespace_holds_is_found_through_a_value_holding_the_namespace(monkeypatch):
+    # Nothing refers to ``make`` but the namespace, and a cell defined an
+    # unrelated function too. The value holds the namespace, so it holds
+    # ``make``: no check of who refers to a function may stop this walk.
+    namespace = _notebook("def unrelated():\n    return 1\ndef make():\n    return cfg")
+    sheet = Sheet(N)
+    sheet.notes = {"ns": namespace}
+    held, _ = _visited(monkeypatch, sheet, namespace)
+    assert namespace["make"].__code__ in held.codes
+
+
+def test_a_function_bound_in_the_namespace_answers_without_a_scan_of_every_object(monkeypatch):
+    scans = []
+    real = gc.get_referrers
+
+    def counting(*objects):
+        scans.append(len(objects))
+        return real(*objects)
+
+    monkeypatch.setattr(held_functions.gc, "get_referrers", counting)
+    assert held_functions.notebook_functions_exist(_notebook("def helper():\n    return 1"))
+    assert scans == []
+    # One no name binds is still found, by the scan.
+    assert held_functions.notebook_functions_exist(_notebook("keep = [lambda: 1]"))
+    assert scans

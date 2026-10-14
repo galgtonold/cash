@@ -153,3 +153,28 @@ def test_a_function_a_cell_defined_and_the_workbook_holds_still_keys_its_readers
     run_cash_cell(cash_magics, "scale = 3")
     run_cash_cell(cash_magics, "out = lib.apply(wb)")
     assert mock_shell.user_ns["out"] == 30
+
+
+def test_with_a_function_a_cell_defined_the_workbook_is_walked_and_its_readers_follow_the_file(
+    cash_magics, mock_shell, lib, tmp_path, visited
+):
+    # Every real notebook defines one (the replay harness's kernel does): the
+    # workbook is then walked to its end, as it may hold the namespace and so
+    # every function in it (``test_a_big_value_reaching_a_function_only_
+    # through_the_namespace_still_keys_it``), and what reads it stays current.
+    mock_shell.user_ns["__name__"] = "__main__"
+    path = tmp_path / "report.txt"
+    path.write_text("1.0", encoding="utf-8")
+    run_cash_cell(cash_magics, f"import {lib} as lib\ndef unrelated():\n    return 1")
+    visited[0] = 0
+    run_cash_cell(cash_magics, _format_cell(path))
+    run_cash_cell(cash_magics, "report = total * 2")
+    assert mock_shell.user_ns["total"] == _expected_total(1.0)
+    assert mock_shell.user_ns["report"] == 2 * _expected_total(1.0)
+    assert visited[0] >= N
+
+    path.write_text("5.0", encoding="utf-8")
+    run_cash_cell(cash_magics, _format_cell(path))
+    run_cash_cell(cash_magics, "report = total * 2")
+    assert mock_shell.user_ns["total"] == _expected_total(5.0)
+    assert mock_shell.user_ns["report"] == 2 * _expected_total(5.0)
