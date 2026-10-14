@@ -106,6 +106,9 @@ class CacheFreshnessChecker:
     ) -> None:
         self._backend_of = backend_of if backend_of is not None else (lambda: backend)
         self.last_miss_reason: str | None = None
+        #: The file read by the statement itself whose change made the last
+        #: lookup a miss, or None.
+        self.last_stale_file: str | None = None
         self._memo = FreshnessMemo()
         #: Dependency sets verified fresh whole, while the answers above last.
         self._fresh_sets: list[dict] = []
@@ -161,6 +164,7 @@ class CacheFreshnessChecker:
         # Reset per-lookup miss attribution. The invalidator helpers may
         # overwrite this with a more specific reason on the way out.
         self.last_miss_reason = None
+        self.last_stale_file = None
         # A statement's own recorded deps include the ones it inherited from
         # its inputs, so the two passes below checked every file twice. One
         # answer per (path, snapshot) until a statement executes or the cell
@@ -281,6 +285,8 @@ class CacheFreshnessChecker:
                 self.last_miss_reason = f"file changed (size): {stale.resolved}"
             else:
                 self.last_miss_reason = f"file changed: {stale.resolved or stale.path}"
+            if stale.reason != "unreadable":
+                self.last_stale_file = stale.resolved or stale.path
             logger.debug("[CACHE DEBUG] File dependency stale: %s", stale)
             return None
         self._remember_fresh(file_deps)

@@ -6,6 +6,7 @@ from collections.abc import Mapping, Set
 from dataclasses import MISSING, dataclass, field, fields
 from typing import Any
 
+from cash.notebook.file_round_trips import FileRoundTrips
 from cash.notebook.lineage_store import InputLineages, LineageStore
 from cash.notebook.recorded_reads import ReadRecord
 from cash.notebook.value_cutoff import ValueCutoff
@@ -66,6 +67,11 @@ class TrackingState:
     # (``import os`` again) bound the name since.
     # W: StatementProcessor, ControlStructureProcessor. R: FileWriterScheduler.
     executed_write_input_lineages: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    # The files statements of this session wrote, and the rereads of them
+    # that made a statement run again (``NOTEBOOK-FILE-ROUNDTRIP``).
+    # W/R: StatementProcessor.
+    file_round_trips: FileRoundTrips = field(default_factory=FileRoundTrips)
 
     # Code of a statement the runtime keyed this session -> the lineages its
     # inputs had then. The simulation asks whether a statement runs on new

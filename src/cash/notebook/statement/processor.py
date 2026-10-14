@@ -928,6 +928,8 @@ class StatementProcessor:
         metadata, cached_data, cache_check_time = self._do_cache_lookup(
             run.skip_cache, run.cache_key, run.effective_ttl, run.inputs
         )
+        if cached_data is None and not run.skip_cache:
+            run.stale_file = self._freshness.last_stale_file
         self._observe_miss_guard(run.skip_cache, run.code, run.source_hash, run.cache_key, cached_data, run.inputs)
 
         if logger.isEnabledFor(logging.DEBUG):
@@ -2080,6 +2082,19 @@ class StatementProcessor:
             pass
         if execution.accessed_files:
             self._records.persist_read_provenance(code, execution.accessed_files)
+        try:
+            self.tracking_state.file_round_trips.after_run(
+                run.display_code or code,
+                run.source_hash,
+                read=execution.accessed_files,
+                written=written - execution.appended_paths,
+                stale_file=run.stale_file,
+                inputs=run.inputs,
+                outputs=run.outputs,
+                cost=execution.cost,
+            )
+        except Exception:  # a hint never breaks a statement
+            logger.debug("%s could not check %r for a file round trip", _LOG_PROCESSOR, code[:80], exc_info=True)
 
     def _miss_guarded(self, run: StatementRun, execution: StatementExecution, captured_vars: dict[str, Any]) -> bool:
         """Whether the perpetual-miss guard keeps *run*'s value from being written.

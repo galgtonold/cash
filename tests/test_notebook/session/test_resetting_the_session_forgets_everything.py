@@ -14,6 +14,7 @@ import dataclasses
 
 import pytest
 
+from cash.notebook.file_round_trips import FileRoundTrips
 from cash.notebook.lineage_store import LineageStore
 from cash.notebook.recorded_reads import ReadRecord
 from cash.notebook.tracking_state import TrackingState
@@ -32,6 +33,10 @@ def _mark(state: TrackingState) -> dict[str, object]:
             value.known[("env", "X")] = "d"
         elif isinstance(value, ValueCutoff):
             value.remember("d", "h")
+        elif isinstance(value, FileRoundTrips):
+            value.after_run(
+                "w", "h", read=frozenset(), written=["/x"], stale_file=None, inputs=(), outputs=(), cost=0.0
+            )
         elif isinstance(value, dict):
             value["x"] = {"y"}
         elif isinstance(value, set):

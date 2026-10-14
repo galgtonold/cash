@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @af1d4405 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @31f9626b -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -80,14 +80,14 @@ its warning class.
 | Family | Prefix | Codes | What it reports |
 |---|---|---:|---|
 | [Annotations](#annot-codes) | `ANNOT-` | 2 | A `# @cash:` comment that cash could not honour. |
-| [Caching](#cache-codes) | `CACHE-` | 16 | Caching happened, or refused to, and it is worth saying. |
+| [Caching](#cache-codes) | `CACHE-` | 17 | Caching happened, or refused to, and it is worth saying. |
 | [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
 | [Side effects](#impure-codes) | `IMPURE-` | 4 | The function does something a cache hit will not repeat. |
-| [Cache keys](#key-codes) | `KEY-` | 22 | Something the result depends on may not be in the cache key. |
-| [Notebook](#notebook-codes) | `NOTEBOOK-` | 6 | Notebook-wide machinery rather than one statement. |
+| [Cache keys](#key-codes) | `KEY-` | 24 | Something the result depends on may not be in the cache key. |
+| [Notebook](#notebook-codes) | `NOTEBOOK-` | 11 | Notebook-wide machinery rather than one statement. |
 | [Randomness](#random-codes) | `RANDOM-` | 3 | A cached value that randomness makes non-reproducible. |
 | [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
-| [Storing results](#store-codes) | `STORE-` | 7 | The call succeeded, but its result was not written. |
+| [Storing results](#store-codes) | `STORE-` | 8 | The call succeeded, but its result was not written. |
 
 ## Annotations {#annot-codes}
 
@@ -1515,6 +1515,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
 | [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
+| [NOTEBOOK-FILE-ROUNDTRIP](#notebook-file-roundtrip) | notebook | a file written in this session is read back, so the read reruns after every write |
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook's cells cannot be read; cells above the one you run are not re-checked |
 | [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload or restart dropped state cells set on a module, and cash cannot rebuild it |
@@ -1610,6 +1611,33 @@ see without cash, but a result built from them is not the notebook's result.
 cells below it.
 
 **When it is safe to ignore.** While you are still looking into the error.
+
+### NOTEBOOK-FILE-ROUNDTRIP {#notebook-file-roundtrip}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/notebook/file_round_trips.py:FileRoundTrips._find_round_trips @4bda0d68, cash/notebook/file_round_trips.py:MIN_COST_S == 1.0 -->
+**What happened.** A statement read a file that another statement wrote
+earlier in this kernel session, and it ran again because that file changed
+since it last read it. One cell writes `report.xlsx`, a later one opens it
+again, formats it, saves it and reads it back to check it. The message names
+the file, the statement that wrote it and the one that read it back. It is
+shown once per file per session, and only when the read and the statements
+that ran on what it read took a second or more.
+
+**Why it matters.** Every write gives the file new bytes, even when the data
+is the same (an Excel file stores the time it was saved), so the statement
+that reads it runs again after every write, and so does everything computed
+from what it read. Nothing from the read down can come from the cache.
+
+**What to do.** Keep the data in a variable (a DataFrame) and pass that to
+the next step instead of reading the file back; write the file once, as the
+last step. For a formatting pass, format while writing (through the
+`ExcelWriter`'s workbook) instead of loading the saved file again.
+
+**When it is safe to ignore.** When reading the file back is the point,
+such as a check that the saved file opens. A file an earlier session wrote,
+such as a checkpoint read after a restart, never gives this warning.
 
 ### NOTEBOOK-MAGIC-STALE {#notebook-magic-stale}
 
