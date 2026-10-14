@@ -230,6 +230,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # (and names an existing cache nearby)
         "CACHE-DIR-UNWRITABLE",  # the cache directory cannot be written at all,
         # so nothing reaches disk this run
+        "CACHE-PER-ITEM-RERUN",  # a costly step ran again over a whole
+        # collection although most of its rows are unchanged
         "CACHE-NOT-WORTH-BYTES",  # more disk per second saved than cash will spend
         "CACHE-VALUE-TOO-BIG",  # too large for any persistent tier; RAM only
         "CACHE-WRITE-ABANDONED",  # a write was still running at the exit deadline,

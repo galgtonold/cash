@@ -186,6 +186,18 @@ def share_edges_key(source_hash: str) -> str:
     return "shareedges:" + source_hash
 
 
+def row_blocks_key(source_hash: str) -> str:
+    """Backend key for the block fingerprints of a costly statement's inputs
+    when it last ran (``CACHE-PER-ITEM-RERUN``).
+
+    ``TrackingState.per_item_reruns`` holds them for the session. Kept with
+    the statement's other records so that the run after new data arrived
+    compares with the last one, though a restart or a shell command came
+    between. Advice only: never part of a key.
+    """
+    return "rowblocks:" + source_hash
+
+
 def carrier_advances_key(source_hash: str) -> str:
     """Backend key for which generators a statement drew from when it last ran.
 

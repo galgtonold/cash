@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @31f9626b -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @953c7c89 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -80,7 +80,7 @@ its warning class.
 | Family | Prefix | Codes | What it reports |
 |---|---|---:|---|
 | [Annotations](#annot-codes) | `ANNOT-` | 2 | A `# @cash:` comment that cash could not honour. |
-| [Caching](#cache-codes) | `CACHE-` | 17 | Caching happened, or refused to, and it is worth saying. |
+| [Caching](#cache-codes) | `CACHE-` | 18 | Caching happened, or refused to, and it is worth saying. |
 | [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
 | [Side effects](#impure-codes) | `IMPURE-` | 4 | The function does something a cache hit will not repeat. |
 | [Cache keys](#key-codes) | `KEY-` | 24 | Something the result depends on may not be in the cache key. |
@@ -155,6 +155,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 | [CACHE-LOOP-GROWTH](#cache-loop-growth) | notebook | a loop stores every state of a growing value |
 | [CACHE-NET-LOSS](#cache-net-loss) | decorator | caching this function costs more time than it saves |
 | [CACHE-NOT-WORTH-BYTES](#cache-not-worth-bytes) | notebook | a big, cheap value was not written to disk |
+| [CACHE-PER-ITEM-RERUN](#cache-per-item-rerun) | notebook | a slow step ran again over a whole collection, though most of it is unchanged |
 | [CACHE-RETURNS-AWAITABLE](#cache-returns-awaitable) | decorator | a sync function returned a coroutine, which is not stored |
 | [CACHE-RESULT-SHARED](#cache-result-shared) | decorator | the result shares state with the caller's object |
 | [CACHE-THRASH](#cache-thrash) | both | the cache is full and evicts what it just stored |
@@ -477,6 +478,81 @@ value the statement builds from its result.
 
 **When it is safe to ignore.** Usually. Act on it when the message names a
 recompute time you can feel on every restart.
+
+### CACHE-PER-ITEM-RERUN {#cache-per-item-rerun}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/notebook/per_item_reruns.py:PerItemReruns.after_run @d48faf41, cash/notebook/per_item_reruns.py:MIN_COST_S == 1.0, cash/notebook/per_item_reruns.py:MIN_UNCHANGED == 0.5, cash/notebook/per_item_reruns.py:HASH_SHARE == 0.05 -->
+**What happened.** A statement that took a second or more ran again over a
+whole collection, although most of it is what it was when the statement last
+ran: 400 images were added to 3,000, one batch in the middle was exported
+again, or a season was appended to fifty. The message names the statement,
+the input, how many of its rows differ and where:
+
+```text
+[CACHE-PER-ITEM-RERUN] `clean = F.preprocess(imgs, sigma=1.0)`
+re-ran over all 3,400 rows of `imgs` (26 s) but only 400 rows differ
+from the last run (rows 3000-3399). Fix: do the work in a @cash.cache
+function that takes one chunk of rows ...
+```
+
+A row is an item of the first axis of an array, a row of a pandas or polars
+frame or series, or an array in a list of arrays. Cash compares the input
+with the last run's in blocks of rows, so the rows it names are whole blocks:
+a change to one row names the block of rows around it. It is shown once per
+statement per session, and not when every row changed (most of a per-item
+helper would run again too) or when the input is the same (the statement ran
+for another reason, such as an edit to a function it calls).
+
+**Why it matters.** The input is one value, and it changed, so cash cannot
+reuse any of the last run: the work on the unchanged rows is done again.
+
+**What to do.** Do the work through a `@cash.cache` function that takes one
+item or one chunk of rows, and combine the results. Each call is cached on
+its own chunk, so after new data arrives only the chunks that changed run:
+
+<!-- test:skip reason="fragment: names a type or helper the page does not define" -->
+```python
+@cash.cache
+def prep_batch(batch):
+    return np.stack([prep_one(img) for img in batch])
+
+starts = range(0, len(imgs), 250)
+clean = np.concatenate([prep_batch(imgs[s:s + 250]) for s in starts])
+```
+
+A frame splits the same way, on a column that stays put, such as the
+batch or the season:
+
+<!-- test:skip reason="fragment: names a type or helper the page does not define" -->
+```python
+parts = [summarize(g) for _, g in df.groupby("batch")]
+```
+
+A cached call costs about a millisecond, a little more the first time, so
+give each call a chunk worth a tenth of a second or more of work rather
+than one tiny item. Cut the chunks on something that does not move when data
+is added (a batch column, a fixed row count): rows inserted at the front
+shift every fixed-size chunk after them. When each step needs what the one
+before it left (a rating carried from season to season), pass that in and
+return it: `hist, ratings = run_season(season, ratings)`, season by season,
+reuses every season up to the first one that changed.
+
+You do not need to write catch-up logic of your own (work out what is new,
+compute only that, merge it with a saved result): the cached helper does that
+part, and stays correct when an old row is corrected.
+
+**When it is safe to ignore.** When the work is not separable by rows (a
+model fitted on all of them, a statistic over the whole column), or when the
+step is fast enough as it is.
+
+<!-- claim: cash/row_blocks.py:fingerprint @40453e8c, cash/notebook/per_item_reruns.py:HASH_SHARE == 0.05 -->
+**What it costs.** Cash keeps a digest per block of rows, never the values,
+with the statement's other records, so the comparison holds across a kernel
+restart. It hashes an input only after a statement that took a second or
+more, and gives up when hashing would take more than 5% of the statement's
+time.
 
 ### CACHE-RESULT-SHARED {#cache-result-shared}
 
@@ -2040,7 +2116,7 @@ handle), or on Windows a file held open by another process.
 
 <!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @7d20722f, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @efc7273e -->
 <!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @57e71e71, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @538d7a29 -->
-<!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @6c593ab7, cash/notebook/statement/processor.py:StatementProcessor._post_execute @5eae6ddc -->
+<!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @6c593ab7, cash/notebook/statement/processor.py:StatementProcessor._post_execute @2d2f1f84 -->
 === "Decorator"
 
     **What happened.** A file the function read changed before it returned.

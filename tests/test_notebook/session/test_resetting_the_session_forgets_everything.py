@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import dataclasses
 
+import numpy as np
 import pytest
 
 from cash.notebook.file_round_trips import FileRoundTrips
 from cash.notebook.lineage_store import LineageStore
+from cash.notebook.per_item_reruns import PerItemReruns
 from cash.notebook.recorded_reads import ReadRecord
 from cash.notebook.tracking_state import TrackingState
 from cash.notebook.value_cutoff import ValueCutoff
@@ -37,6 +39,9 @@ def _mark(state: TrackingState) -> dict[str, object]:
             value.after_run(
                 "w", "h", read=frozenset(), written=["/x"], stale_file=None, inputs=(), outputs=(), cost=0.0
             )
+        elif isinstance(value, PerItemReruns):
+            value.after_run("c", "h", values={"a": list(np.zeros((20, 2)))}, lineages={}, seconds=2.0)
+            value._warned.add("h")
         elif isinstance(value, dict):
             value["x"] = {"y"}
         elif isinstance(value, set):
