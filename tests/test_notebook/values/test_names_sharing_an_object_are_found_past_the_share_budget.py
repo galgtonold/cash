@@ -29,7 +29,9 @@ def no_budget(monkeypatch):
     monkeypatch.setattr(processor, "share_group", spent)
     monkeypatch.setattr(output_refusals, "share_group", spent)
     # The search that stands in has time to finish on a loaded machine.
-    monkeypatch.setattr(processor, "SHARE_FALLBACK_FLOOR_S", 30.0)
+    # (SHARE_FALLBACK_FLOOR_S is bound as a default argument, so patching the
+    # module constant would not reach it; the analysis budget caps it too.)
+    monkeypatch.setattr(processor.StatementProcessor, "_fallback_seconds", lambda *_args: 30.0)
 
 
 @pytest.mark.parametrize(
