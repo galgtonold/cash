@@ -119,7 +119,9 @@ blocks are cached as one unit, because they have no list of items to key on,
 and so is a `for` with `break`, `continue` or `else:`, whose outcome depends
 on how the loop ended.
 A long loop whose per-iteration bookkeeping stops paying for itself is also
-cached as one unit ([cost model](../cost-model.md)).
+cached as one unit ([cost model](../cost-model.md)), unless its iterations were
+measured slow enough to be worth reusing one by one
+([details](../known-limitations.md#a-long-for-append-loop-can-stop-caching)).
 
 ## Decorated functions inside a cell
 

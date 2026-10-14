@@ -301,8 +301,9 @@ With `compress` on, each entry is compressed on the background writer: with
 zstd on Python 3.14 and later, with zlib before, both at fast settings. cash
 first tries the first megabyte; an entry that does not shrink by a tenth
 (random floats, images already compressed) is stored as it is. An entry
-compressed with zstd reads as missing on an older Python, and is recomputed
-there.
+compressed with zstd on Python 3.14 reads as missing on Python 3.13 or
+earlier, so it is computed again there, once: the new entry is written with
+zlib, which every Python reads. A zstd entry is never read wrongly.
 
 !!! warning "Only use caches you trust"
     Loading a pickle can run arbitrary code. A cache folder, Redis database or

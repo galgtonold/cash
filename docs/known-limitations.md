@@ -520,6 +520,12 @@ so this never misses. On **Windows**, two kinds of edit move nothing: a write
 whose modification time is put back afterwards (`os.utime`, `shutil.copystat`,
 `robocopy /COPY:T`), and a write through `np.memmap(path, mode="r+")`.
 
+<!-- claim: cash/tracking/file_dep_snapshot.py:_remembered_digest @7327a95f, cash/tracking/file_dep_snapshot.py:_HASH_MEMO_TTL_SECONDS == None -->
+Such an edit stays unseen for as long as the kernel runs, not only for a
+moment: once cash has read a file's content, it reuses that digest while the
+size and timestamps match. Restarting does not help either, since the digest
+is also kept in the cache folder for the next process.
+
 **Fix:** after such a write, touch the file (`Path(path).touch()`). cash then
 reads its content, and if it changed, everything that read it runs again.
 
@@ -539,6 +545,21 @@ an edited, added or deleted file runs it again. A loop that appends to a list
 is an in-place change, so as one unit it is not cached at all. The badge row
 then shows `In-place mutation on: out`. A shorter loop runs pass by pass:
 each `append` runs, and the expensive call inside it comes from the cache.
+
+<!-- claim: cash/notebook/heavy_loops.py:is_heavy @908c4eba, cash/notebook/heavy_loops.py:HEAVY_FACTOR == 4, cash/notebook/heavy_loops.py:MIN_HEAVY_ITER_SEC == 0.01, cash/notebook/heavy_loops.py:header_identity @ba179718, cash/notebook/control_structures/for_handler.py:ForLoopHandler._prefers_iterations @4510a192 -->
+That estimate is a guess made before the loop has run. A loop run as one unit
+is measured while it runs, and when one iteration's work takes at least four
+times its estimated bookkeeping, and at least 10 ms, the next runs cache it
+per iteration again. As one unit, raising its `range` or editing the last
+statement of its body runs every iteration again; per iteration, an edit runs
+only the iterations it changes or adds. The measurement is kept in the cache
+folder under the loop's header with its numbers left out, so it carries over
+an edit of the body or of the loop's length (`range(100)` to `range(180)`).
+The first edit after the measuring run still runs every iteration, since that
+run writes the per-iteration entries; edits after it reuse them. Run again
+unchanged, the loop is restored whole from its unit entry. A loop kept per
+iteration is measured again, and goes back to one unit once its iterations
+have become cheap.
 
 <!-- claim: cash/notebook/control_structures/single_unit_policy.py:iterations_for_one_unit @9bb4425c, cash/notebook/control_structures/single_unit_policy.py:header_names_the_iterator @c82c885c -->
 A loop over a named iterator of unknown length (`for row in parsed:` after
