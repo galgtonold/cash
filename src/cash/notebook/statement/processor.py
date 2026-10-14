@@ -34,6 +34,7 @@ from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.call_effects import DigestHandoff
 from cash.notebook.compiled_source import register_cell_source
 from cash.notebook.consumables import drawn_stream_inputs
+from cash.notebook.per_item_reruns import MIN_COST_S as PER_ITEM_MIN_COST_S
 from cash.notebook.read_handles import reaches_read_handle
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.amplification import AmplificationGuard
@@ -1624,6 +1625,7 @@ class StatementProcessor:
             if not is_control_body(run.code):
                 self._records.note_share_edges(run.source_hash, linked | shared)
             self._record_file_effects(run, execution)
+            self._note_per_item_rerun(run, execution)
 
             # Detect in-place mutations (detection-only; do not modify lineage).
             # Reuses the StatementAnalysis from process_statement to avoid a
@@ -2095,6 +2097,35 @@ class StatementProcessor:
             )
         except Exception:  # a hint never breaks a statement
             logger.debug("%s could not check %r for a file round trip", _LOG_PROCESSOR, code[:80], exc_info=True)
+
+    def _note_per_item_rerun(self, run: StatementRun, execution: StatementExecution) -> None:
+        """Fingerprint the inputs made of rows of a costly statement that was
+        just computed, and say so when it ran over mostly unchanged rows
+        (``CACHE-PER-ITEM-RERUN``). Advice only."""
+        seconds = execution.wall_time - execution.tax
+        if seconds < PER_ITEM_MIN_COST_S:
+            return
+        if is_control_body(run.code):
+            # Not checked (the loop owns its body's inputs), but its time
+            # pays towards the session's hashing budget.
+            self.tracking_state.per_item_reruns.credit(seconds)
+            return
+        try:
+            skip = run.outputs | run.analysis.all_mutated_vars | run.in_place
+            user_ns = self.shell.user_ns
+            values = {name: user_ns[name] for name in run.inputs - skip if name in user_ns}
+            records = self._records
+            self.tracking_state.per_item_reruns.after_run(
+                run.display_code or run.code,
+                run.source_hash,
+                values=values,
+                lineages=run.entry_lineages,
+                seconds=seconds,
+                load=records.recorded_row_blocks,
+                save=records.persist_row_blocks,
+            )
+        except Exception:  # a hint never breaks a statement
+            logger.debug("%s could not check %r for a per-item rerun", _LOG_PROCESSOR, run.code[:80], exc_info=True)
 
     def _miss_guarded(self, run: StatementRun, execution: StatementExecution, captured_vars: dict[str, Any]) -> bool:
         """Whether the perpetual-miss guard keeps *run*'s value from being written.

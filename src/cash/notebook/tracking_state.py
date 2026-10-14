@@ -8,6 +8,7 @@ from typing import Any
 
 from cash.notebook.file_round_trips import FileRoundTrips
 from cash.notebook.lineage_store import InputLineages, LineageStore
+from cash.notebook.per_item_reruns import PerItemReruns
 from cash.notebook.recorded_reads import ReadRecord
 from cash.notebook.value_cutoff import ValueCutoff
 
@@ -72,6 +73,11 @@ class TrackingState:
     # that made a statement run again (``NOTEBOOK-FILE-ROUNDTRIP``).
     # W/R: StatementProcessor.
     file_round_trips: FileRoundTrips = field(default_factory=FileRoundTrips)
+
+    # The block fingerprints of costly statements' inputs, and the hints
+    # given when one ran again over mostly unchanged rows
+    # (``CACHE-PER-ITEM-RERUN``). W/R: StatementProcessor.
+    per_item_reruns: PerItemReruns = field(default_factory=PerItemReruns)
 
     # Code of a statement the runtime keyed this session -> the lineages its
     # inputs had then. The simulation asks whether a statement runs on new

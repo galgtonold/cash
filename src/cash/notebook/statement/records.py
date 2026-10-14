@@ -32,6 +32,7 @@ from cash.notebook.cache_key import (
     process_state_key,
     pyplot_draws_key,
     read_provenance_key,
+    row_blocks_key,
     share_edges_key,
     statement_source_hash,
     write_provenance_key,
@@ -294,6 +295,32 @@ class StatementRecords:
             self._process_state_written[source_hash] = persisted
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("%s process-state persistence failed", _LOG_PROCESSOR)
+
+    def recorded_row_blocks(self, source_hash: str) -> dict | None:
+        """The input fingerprints an earlier run of the statement with
+        *source_hash* left (:meth:`persist_row_blocks`), or None."""
+        backend = self.cash_instance.backend if self.cash_instance else None
+        if backend is None:
+            return None
+        try:
+            record = backend.get_metadata(row_blocks_key(source_hash))
+        except (OSError, TypeError, ValueError, AttributeError):
+            return None
+        if not record or not record.get("row_blocks"):
+            return None
+        return {"others": record.get("others"), "inputs": record.get("inputs") or {}}
+
+    def persist_row_blocks(self, source_hash: str, record: dict) -> None:
+        """Keep the input fingerprints of a costly statement's run for a later
+        kernel (``CACHE-PER-ITEM-RERUN``). Best-effort: without it the hint
+        compares only within one session."""
+        backend = self.cash_instance.backend if self.cash_instance else None
+        if backend is None:
+            return
+        try:
+            backend.set_metadata_only(row_blocks_key(source_hash), {"row_blocks": True, **record, "ttl": None})
+        except (OSError, TypeError, ValueError, AttributeError):
+            logger.debug("%s row-block persistence failed", _LOG_PROCESSOR)
 
     def note_pyplot_draws(self, source_hash: str, names: frozenset[str]) -> None:
         """Record the names the statement (or structure) with *source_hash*
