@@ -262,6 +262,17 @@ def _reduce_polars(value: Any) -> Any:
     return _polars_from_arrow, (arrow, name, dtype, flags)
 
 
+def rebuilt_polars(value: Any, copy_arrow: Callable[[Any], Any]) -> Any:
+    """*value*, a polars DataFrame or Series, rebuilt as a disk entry
+    rebuilds it from its Arrow data passed through *copy_arrow*; None when
+    it is not stored as Arrow data (`_reduce_polars`)."""
+    rebuild, args = _reduce_polars(value)
+    if rebuild is not _polars_from_arrow:
+        return None
+    arrow, *rest = args
+    return _polars_from_arrow(copy_arrow(arrow), *rest)
+
+
 def _polars_from_arrow(arrow: Any, name: str | None, dtype: Any, flags: dict) -> Any:
     """The polars value `_reduce_polars` stored: from *arrow*, without a
     copy, cast back to its polars *dtype* (a schema for a DataFrame) where

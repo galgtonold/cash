@@ -196,20 +196,19 @@ def test_a_value_marked_no_private_copy_goes_to_disk_as_the_caller_gave_it():
     assert not private and written is value
 
 
-def test_a_later_persist_of_a_table_pandas_copied_hands_a_full_copy():
-    """Python strings: the RAM tier copies the table with pandas, which keeps
-    the caller's labels, so its copy is not its own; the write gets a copy
-    of it made in full, not the RAM tier's object."""
+def test_a_later_persist_of_a_table_copied_in_full_hands_the_ram_copy():
+    """Python strings: the RAM tier copies the table block by block, its
+    labels too, so its copy is its own and the write takes it."""
     tiers, disk = _tiers()
     df = pd.DataFrame(
         {"s": pd.Series(["a", "b"] * 50, dtype="string[python]")},
         index=pd.Index([f"r{i}" for i in range(100)], dtype="string[python]"),
     )
     tiers.set("k", {"df": df}, dict(_NOTEBOOK))
-    assert disk.calls == [] and not tiers.backends[0].holds_own_copy("k")
+    assert disk.calls == [] and tiers.backends[0].holds_own_copy("k")
     assert tiers.persist_from_memory("k", rebuild_seconds=5.0)
     ((_key, written, private),) = disk.calls
-    assert private and disk.copied == [True]
+    assert private and disk.copied == [False]
     kept = tiers.backends[0]._store["k"][1]["df"]
-    assert written["df"] is not kept and written["df"].index is not kept.index
+    assert written["df"] is kept and kept.index._data is not df.index._data
     pd.testing.assert_frame_equal(written["df"], df)

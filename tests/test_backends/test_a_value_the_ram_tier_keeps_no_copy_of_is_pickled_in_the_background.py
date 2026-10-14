@@ -3,17 +3,18 @@
 The disk write serializes the RAM tier's own copy on the writer thread
 (``FileBackend.set(..., private=True)``). A value that tier refused -- over
 its eviction target, or slower to restore than to compute -- left no copy,
-and a table it copied with pandas' deep copy (Python strings without
-pyarrow, nullable columns: the copy shares the caller's labels) is not its
-own, so the disk write pickled the caller's value before the store
-returned: for p28's 900k-row frame of three text columns, 0.2 s of every
-pass of a 15-pass loop, and seconds for a frame of a few hundred MB.
+so the disk write pickled the caller's value before the store returned: for
+p28's 900k-row frame of three text columns, 0.2 s of every pass of a
+15-pass loop, and seconds for a frame of a few hundred MB.
 
 Such a value is copied in full on the caller's thread instead (arrays and
 labels, at about the cost of their memory), and that copy is pickled,
-checksummed and written in the background. Nothing the caller does to the
-value after the store reaches the entry, and a value that cannot be copied
-that way (a table of lists) is still serialized before the store returns.
+checksummed and written in the background. A table the RAM tier copies
+block by block (Python strings without pyarrow, nullable columns) is copied
+in full, labels too, and that copy goes to the writer. Nothing the caller
+does to the value after the store reaches the entry, and a value that cannot
+be copied that way (a table of lists) is still serialized before the store
+returns.
 """
 
 from __future__ import annotations
@@ -111,7 +112,7 @@ def test_a_table_the_ram_tier_copied_with_pandas_is_serialized_by_the_writer(tmp
     frame = _python_text_frame()
     assert type(frame["home"].array).__name__ == "StringArray"
     tiers.set("h", frame, {"execution_time": 5.0, "force_persist": True})
-    assert ram.peek_metadata("h") is not None and not ram.holds_own_copy("h"), "the test checks nothing"
+    assert ram.holds_own_copy("h"), "the RAM tier's copy keeps something of the caller's"
     # After the store, through handles that write in place.
     frame["home"].array[0] = "changed"
     frame["goals"].array[1] = 99
