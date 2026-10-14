@@ -18,6 +18,7 @@ from .mutations import MutationVisitor, iter_store_targets
 
 __all__ = [
     "all_param_names",
+    "handed_or_called_on",
     "positional_param_names",
     "resolve_function_def",
     "params_mutated_in_function",
@@ -186,6 +187,20 @@ CallArgTargets = tuple[str, tuple[frozenset[str], ...], tuple[tuple[str, frozens
 
 #: Nodes whose calls run later, or never, not when the statement runs.
 _DEFERRED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+
+
+def handed_or_called_on(tree: ast.AST) -> set[str]:
+    """Every variable *tree* hands to a call or calls a method on, the roots
+    of each (``f(s.d)`` hands over ``s``): what a callee that cannot be read
+    may have changed."""
+    iterated = iterated_sources(tree)
+    names: set[str] = set()
+    for call in statement_calls(tree):
+        for arg in [*call.args, *(kw.value for kw in call.keywords)]:
+            names |= argument_roots(arg, iterated)
+        if isinstance(call.func, ast.Attribute):
+            names |= argument_roots(call.func.value, iterated)
+    return names
 
 
 def statement_calls(tree: ast.AST | None, *, control_bodies: bool = True) -> list[ast.Call]:

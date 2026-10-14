@@ -27,6 +27,7 @@ from itertools import repeat
 from typing import Any, NamedTuple
 
 from .._memo import NOTEBOOK_STATEMENTS
+from ..analysis.analysis_budget import AnalysisBudgetExceeded
 from ..analysis.ast_util import parse_cached
 from ..analysis.callee_effects import source_global_mutations
 from ..analysis.handed_callables import handed_callable_values
@@ -373,7 +374,17 @@ def _state_writes(
         """Follow what the call is handed that the callee calls: a function
         of a local module handed to ``s.apply`` runs as much as one called by
         name (``s.apply(helpers.record)``, ``s.map(count)``)."""
-        for value in handed_callable_values(node, namespace):
+        try:
+            values = handed_callable_values(node, namespace)
+        except AnalysisBudgetExceeded:
+            # What it is handed could not be read within the statement's
+            # analysis budget: any of it may set state on any local module.
+            # What of the process it changes is seen as it runs instead
+            # (``StatementProcessor``, for a statement past its budget).
+            if found is not None:
+                found.update(module.__name__ for module in _local_modules() if vars(module) is not namespace)
+            return
+        for value in values:
             followed_into(*_as_handed_callee(value))
 
     pending = list(statements)

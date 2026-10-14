@@ -54,6 +54,7 @@ from ...analysis.annotations import get_statement_annotations
 from ...analysis.ast_util import resolve_callee
 from ...analysis.callee_effects import (
     argument_roots,
+    handed_or_called_on,
     iterated_sources,
     params_mutated_in_function,
     resolve_function_def,
@@ -260,14 +261,7 @@ def _arguments_its_callees_change(
 def _handed_or_called_on(tree: ast.Module) -> set[str]:
     """Every variable *tree* hands to a call or calls a method on, the roots
     of each (``f(s.d)`` hands over ``s``)."""
-    iterated = iterated_sources(tree)
-    names: set[str] = set()
-    for call in statement_calls(tree):
-        for arg in [*call.args, *(kw.value for kw in call.keywords)]:
-            names |= argument_roots(arg, iterated)
-        if isinstance(call.func, ast.Attribute):
-            names |= argument_roots(call.func.value, iterated)
-    return names
+    return handed_or_called_on(tree)
 
 
 def _owed_by_skips(

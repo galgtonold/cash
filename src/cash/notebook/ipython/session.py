@@ -146,6 +146,16 @@ class CashSession:
                 self._baselines = resolved
         return self._baselines
 
+    def expected_compute(self, code: str) -> float | None:
+        """What the statement *code* took to run: the last measurement this
+        session, or the least an earlier kernel measured on this cache
+        (``compute_baselines``); None when it was never measured. A
+        statement's analysis budget follows it (`analysis_budget_seconds`)."""
+        measured = self.measured_compute.get(code)
+        if measured is not None:
+            return measured
+        return self.baselines.get(code)
+
     # ------------------------------------------------------------------
     # Counting a cell
     # ------------------------------------------------------------------

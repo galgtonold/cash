@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ..._memo import NOTEBOOK_CELLS, NOTEBOOK_VERSIONS
+from ...analysis.analysis_budget import AnalysisBudget, analysis_budget, analysis_budget_seconds
 from ...analysis.code_analyzer import CodeAnalyzer, parse_cell_source
 from ...analysis.mutation_effects import CellEffects, NotebookSources, cell_effects
 from ...control_markers import strip_markers
@@ -87,6 +88,21 @@ class UpstreamChecker:
     (:class:`RngRewind`). Every part shares one ``TrackingState``.
     """
 
+    def _cell_analysis_budget(self, cell_code: str) -> AnalysisBudget:
+        """The analysis budget of *cell_code*'s cell-wide reading
+        (`analysis_budget_seconds`): from what its statements last took
+        together (`expected_run_time`); the floor when none was measured."""
+        total = 0.0
+        try:
+            tree = ast.parse(cell_code)
+            for node in tree.body:
+                segment = ast.get_source_segment(cell_code, node)
+                took = self.expected_run_time(segment.strip()) if segment else None
+                total += took or 0.0
+        except Exception:  # noqa: BLE001 - unmeasured: the floor applies
+            total = 0.0
+        return AnalysisBudget(analysis_budget_seconds(total or None))
+
     def __init__(
         self,
         shell: ShellProtocol,
@@ -100,6 +116,9 @@ class UpstreamChecker:
         self.compute_hash_fn: Callable[[Any], str] | None = compute_hash_fn
         #: The index of the cell checked last, for a run whose own index is unknown.
         self.last_cell_index: int | None = None
+        #: What a statement's text last took to run, or None (set by the
+        #: magics, as the statement processor's): the cell's analysis budget.
+        self.expected_run_time: Callable[[str], float | None] = lambda code: None
 
         # Proven-stale verdict for the saved .ipynb, held for the session.
         # Populated at the cell-ID match site below, where both the running
@@ -289,7 +308,8 @@ class UpstreamChecker:
         # What the cell writes, by the channel an isolated re-run resets it
         # through. A global it changes without naming it joins its inputs, so
         # the reset below restores that global's producer too.
-        effects = cell_effects(cell_code, self._notebook_sources(cell_code, notebook_path), self.shell.user_ns)
+        with analysis_budget(self._cell_analysis_budget(cell_code)):
+            effects = cell_effects(cell_code, self._notebook_sources(cell_code, notebook_path), self.shell.user_ns)
         required_inputs = required_inputs | effects.hidden_inputs
         # A generator a called function draws from (`def boot(x): rng...`)
         # moves without being named, as a generator named in the cell does: an

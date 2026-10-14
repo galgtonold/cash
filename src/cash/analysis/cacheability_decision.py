@@ -44,6 +44,7 @@ from collections.abc import Callable, Mapping
 from typing import Any, NamedTuple
 
 from cash import _plain_data
+from cash.analysis.analysis_budget import ANALYSIS_BUDGET_REASON, AnalysisBudgetExceeded
 from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.ast_util import called_dotted_names, parse_cached
 from cash.analysis.cacheability import StatementAnalysis
@@ -244,8 +245,12 @@ def analysis_failed(check: str, exc: BaseException) -> str:
     """The uncacheable reason for a safety *check* that raised, warned once.
 
     A check whose job is to stop caching cannot answer "nothing found" when it
-    crashed: the statement it could not judge runs uncached instead.
+    crashed: the statement it could not judge runs uncached instead. One
+    stopped by the statement's analysis budget (`analysis_budget`) did not
+    crash: it is the budget's reason, with no warning.
     """
+    if isinstance(exc, AnalysisBudgetExceeded):
+        return ANALYSIS_BUDGET_REASON
     reason = f"cash could not {check} ({type(exc).__name__}: {exc}), so the statement runs uncached"
     logger.debug("analysis failed: %s", reason, exc_info=exc)
     key = (check, type(exc).__name__)

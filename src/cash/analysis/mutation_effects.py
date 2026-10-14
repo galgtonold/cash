@@ -30,6 +30,7 @@ from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..tracking.randomness.state import rng_carrier_kind
 from ..value_types import BUILTIN_NAMES
 from .aliases import aliased_sources
+from .analysis_budget import ANALYSIS_BUDGET_REASON, AnalysisBudgetExceeded, no_analysis_budget
 from .annotations import extract_annotations_for_statements
 from .ast_util import called_names
 from .cacheability import analyze_statement
@@ -39,6 +40,7 @@ from .callee_effects import (
     argument_roots,
     callee_global_mutations,
     function_arg_mutations,
+    handed_or_called_on,
     iterated_sources,
     mutating_partials,
     partial_arg_mutations,
@@ -71,6 +73,7 @@ from .namespace_effects import (
     fits_its_receiver,
     function_handoffs,
     handed_to_params,
+    notebook_global_rebinds,
     users_callee,
 )
 from .object_protocol import ObjectProtocolResets, object_protocol_mutations
@@ -1076,14 +1079,25 @@ class _CellWrites:
         # statement's key converge. The callables the cell hands to a call
         # (``s.apply(ops['dbl'])``, ``s.apply(tracker.record)``) count as
         # called, and the objects they change as mutated.
-        handed = handed_callables(facts.tree, namespace)
-        callee_globals = (
-            callee_global_mutations(facts.tree, sources.functions.get, extra_sources=handed.sources)
-            if facts.calls_something or handed.sources
-            else frozenset()
-        )
-        if handed.receivers:
-            callee_globals = callee_globals | capturable_globals(handed.receivers, namespace)
+        try:
+            handed = handed_callables(facts.tree, namespace)
+            extra_sources = handed.sources
+            receivers = set(handed.receivers)
+        except AnalysisBudgetExceeded:
+            # What the cell hands over could not be read within its analysis
+            # budget (`analysis_budget`): any function or method of the
+            # notebook may be among it, and change what it is handed or
+            # what it calls a method on.
+            extra_sources = (*sources.functions.values(), *sources.classes.values())
+            receivers = handed_or_called_on(facts.tree)
+        with no_analysis_budget():
+            callee_globals = (
+                callee_global_mutations(facts.tree, sources.functions.get, extra_sources=extra_sources)
+                if facts.calls_something or extra_sources
+                else frozenset()
+            )
+        if receivers:
+            callee_globals = callee_globals | capturable_globals(frozenset(receivers), namespace)
         nocache = facts.nocache
         return cls(
             mutated=set(facts.own_mutated | callee_globals) - nocache,
@@ -1355,6 +1369,8 @@ def statement_effects(
         arg_mutations = frozenset(
             v for v in function_arg_mutations(tree, resolve_source) if not is_module_name(v, namespace, virtual_modules)
         )
+    except AnalysisBudgetExceeded:
+        return _effects_past_the_budget(code, tree, namespace, resolve_source, control_body, virtual_modules)
     except Exception as exc:  # noqa: BLE001 - unknown writes must not read as no writes
         # What the called functions write is unknown, so the statement keeps
         # its own reads and writes and is marked to run uncached.
@@ -1364,6 +1380,46 @@ def statement_effects(
     # A user callable handed to a call whose source cannot be read: what it
     # changes is unknown, so the statement runs uncached.
     return StatementEffects(frozenset(inputs), frozenset(outputs), callee_globals, arg_mutations, unreadable)
+
+
+def _effects_past_the_budget(
+    code: str,
+    tree: ast.Module | None,
+    namespace: Mapping[str, Any],
+    resolve_source: SourceResolver,
+    control_body: bool,
+    virtual_modules: frozenset[str] | set[str],
+) -> StatementEffects:
+    """`statement_effects` when reading what the statement's calls are
+    handed ran past the statement's analysis budget (`analysis_budget`).
+
+    Everything but that reading is still answered in full -- it is read
+    from the statement and the functions it names, never from the objects
+    -- so the globals a function it calls writes are still outputs. What the
+    callables it hands over write is the part left unknown: the statement
+    runs uncached (*unanalysed*), as one handed a callable whose source
+    cannot be read, and its outputs are keyed by value (the processor).
+    """
+    with no_analysis_budget():
+        inputs, outputs = CodeAnalyzer.analyze_code_block(code, tree=tree, user_ns=namespace)
+        callee_globals: frozenset[str] = frozenset()
+        arg_mutations: frozenset[str] = frozenset()
+        if tree is not None:
+            if not control_body:
+                callee_globals = callee_global_mutations(tree, resolve_source, scope="no_control_bodies")
+            every = callee_global_mutations(tree, resolve_source)
+            if namespace is not None:
+                callee_globals = capturable_globals(callee_globals, namespace)
+                every = capturable_globals(every, namespace) | notebook_global_rebinds(tree, resolve_source, namespace)
+            outputs = set(outputs) | set(every)
+            arg_mutations = frozenset(
+                v
+                for v in function_arg_mutations(tree, resolve_source)
+                if not is_module_name(v, namespace, virtual_modules)
+            )
+    return StatementEffects(
+        frozenset(inputs), frozenset(outputs), callee_globals, arg_mutations, (ANALYSIS_BUDGET_REASON,)
+    )
 
 
 # ---------------------------------------------------------------------------

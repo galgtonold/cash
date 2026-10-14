@@ -26,6 +26,7 @@ from cash.notebook.statement.capture import NoCapture
 if TYPE_CHECKING:
     import types
 
+    from cash.analysis.analysis_budget import AnalysisBudget
     from cash.analysis.annotations import CacheAnnotation
     from cash.analysis.cacheability import StatementAnalysis
     from cash.notebook.shared_objects import GaveUp
@@ -229,6 +230,16 @@ class StatementRun:
     #: What of the process it changes (``callee_reach.process_state_writes``:
     #: the environment, the working directory).
     process_state: frozenset[str] = frozenset()
+    #: Its analysis budget (`analysis_budget`), from what it last took.
+    analysis_budget: AnalysisBudget | None = None
+    #: Seconds its analyses took so far, before and after it ran.
+    analysis_spent: float = 0.0
+    #: Its analysis ran past the budget: it runs uncached, and what it binds
+    #: is keyed by value, as a ``# @cash:no-cache`` statement's is.
+    past_budget: bool = False
+    #: The working directory and the environment before it ran, kept for a
+    #: statement past its budget, whose writes to them are seen, not read.
+    process_before: tuple[str, dict[str, str]] | None = None
 
 
 @dataclass

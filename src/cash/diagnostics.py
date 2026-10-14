@@ -297,6 +297,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # -- NOTEBOOK: notebook-wide machinery, not one statement ---------------
         "NOTEBOOK-BAILOUT",  # cash hit an internal error, stepped aside, and
         # ran the cell uncached
+        "NOTEBOOK-ANALYSIS-BUDGET",  # working out how to key a statement took
+        # longer than caching it could save, so it ran uncached
         "NOTEBOOK-ANALYSIS-FAILED",  # a safety check on a statement raised, so
         # the statement ran uncached
         "NOTEBOOK-FILE-ROUNDTRIP",  # a statement reads back a file a statement

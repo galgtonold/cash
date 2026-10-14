@@ -55,6 +55,7 @@ from .._memo import CODE_OBJECTS, LruMemo
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import own_source, wrapper_layers
 from ..tracking.function_tracker import is_local_module
+from .analysis_budget import check_analysis_budget
 from .ast_util import CallScope, calls_in, nodes_in, same_as_all
 from .callee_effects import (
     all_param_names,
@@ -338,6 +339,7 @@ def _held_group(fn: Any, owners: list[Any], seen: set[tuple[int, Any]]) -> list[
     ``__call__``). The walk reads each object's items once, at C speed."""
     if not isinstance(fn, types.FunctionType) or not _is_users(fn):
         return []
+    check_analysis_budget()
     code = fn.__code__
     keys = list(zip(map(id, owners), repeat(code)))
     fresh = [
@@ -431,6 +433,7 @@ def _members_by_class(objects: list[Any], names: frozenset[str]) -> list[Any]:
     for obj in objects:
         groups.setdefault(type(obj), []).append(obj)
     for kind, group in groups.items():
+        check_analysis_budget()
         dicts = list(map(_instance_dict, group))
         for name in names:
             rest = []
@@ -1437,6 +1440,7 @@ class _Found:
         for obj in objects:
             groups.setdefault(type(obj), []).append(obj)
         for kind, group in groups.items():
+            check_analysis_budget()
             if issubclass(kind, type):
                 for obj in group:
                     for name in names:
@@ -2568,6 +2572,24 @@ def _callables_reached(
     return _reached_from([value], objects, covered, opened_out, _INSTANCE_LIMIT)
 
 
+#: How many objects a walk opens between two looks at the clock.
+_BUDGET_STEP = 1024
+
+
+def _opened_in_steps(level: list[Any]) -> list[Any]:
+    """The items of each of *level*, opened `_BUDGET_STEP` at a time with a
+    look at the statement's analysis budget before each step: the walk stops
+    as it spends it, not after (`analysis_budget`)."""
+    if len(level) <= _BUDGET_STEP:
+        check_analysis_budget()
+        return list(chain.from_iterable(map(_items, level)))
+    items: list[Any] = []
+    for start in range(0, len(level), _BUDGET_STEP):
+        check_analysis_budget()
+        items.extend(chain.from_iterable(map(_items, level[start : start + _BUDGET_STEP])))
+    return items
+
+
 def _reached_from(
     sources: list[Any], objects: bool, covered: set[int] | None, opened_out: list[Any] | None, limit: int
 ) -> tuple[list[Any], bool]:
@@ -2589,7 +2611,7 @@ def _reached_from(
     #: ``type -> whether the walk opens its objects``, asked once per type.
     opens: dict[type, bool] = {}
     while level:
-        items = list(chain.from_iterable(map(_items, level)))
+        items = _opened_in_steps(level)
         if not items:
             break
         found.extend(filter(callable, items))
