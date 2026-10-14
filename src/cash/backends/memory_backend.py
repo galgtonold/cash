@@ -29,7 +29,7 @@ from ..value_types import IMMUTABLE_PRIMS
 from . import frame_sharing, iterative_copy
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, gdsf_value
 from .entry_format import SplitPayload
-from .serialization import OUT_OF_BAND_MIN_BYTES, Serializer, polars_reducers
+from .serialization import OUT_OF_BAND_MIN_BYTES, Serializer, stored_reducers
 
 psutil = LazyModule("psutil")  # imported on first use: ~11 ms off `import cash`
 
@@ -172,7 +172,7 @@ def _snapshot(value: Any) -> _Pickled | None:
         readonly.clear()
 
     try:
-        stream = kept_state.dumps(value, protocol=5, buffer_callback=take, on_retry=retry, extra=polars_reducers())
+        stream = kept_state.dumps(value, protocol=5, buffer_callback=take, on_retry=retry, extra=stored_reducers())
     except Exception:  # copied the usual way, which says why it cannot be
         logger.debug("could not keep a %s as pickle bytes", type(value).__name__, exc_info=True)
         return None

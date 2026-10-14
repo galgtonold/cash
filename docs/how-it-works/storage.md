@@ -167,7 +167,7 @@ the entry was written with and the tier's current `default_ttl`.
     `%cash_persist on` writes it anyway. The [cost model](../cost-model.md)
     explains the prediction and every setting.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @32a5e8d3 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @8aecb084 -->
 Each tier turns down a single value too large for its cap, so a 20 MB frame
 can be stored in memory and on disk while skipping a Redis tier limited to
 10 MB. When a value was meant for disk but every disk tier refused it, cash
@@ -247,7 +247,7 @@ does. cash waits for a write only when something needs it on disk:
 A process this one did not start, reading the same folder at the same time,
 finds a result once its write has finished, and computes it until then.
 
-<!-- claim: cash/backends/memory_backend.py:_snapshot @056e4f9d, cash/backends/tiered_backend.py:TieredBackend._stored_payload @92ed63c1 -->
+<!-- claim: cash/backends/memory_backend.py:_snapshot @9c99eb65, cash/backends/tiered_backend.py:TieredBackend._stored_payload @92ed63c1 -->
 An object of a class of its own (a fitted model, a graph) is kept in memory
 as the bytes its disk entry holds, made when it is stored: its arrays are
 copied out of it then, so a later change to your object, by Python or by
@@ -285,7 +285,7 @@ killed process was still writing is missing, and is computed again.
 
 ## Turning objects into bytes
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @49dee82f, cash/backends/serialization.py:PickleSerializer.serialize @2973e72f -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @49dee82f, cash/backends/serialization.py:PickleSerializer.serialize @0f446a8f -->
 Every result is stored with `pickle` (protocol 5), pandas DataFrames
 included, so a hit hands back the same frame: its class, index, dtypes, cell
 types, `attrs` and `flags`. Pickle is several times faster than Parquet to
@@ -293,6 +293,12 @@ write and read. Parquet files are smaller for columns with few distinct values
 (small integers, repeated strings, mostly missing values); if disk space
 matters more than speed, the [`compress`](../getting-started/configuration.md#all-settings)
 setting gets most of that back.
+
+<!-- claim: cash/backends/serialization.py:_reduce_arrow_array @388e99d3, cash/backends/serialization.py:_compact @79a515ab -->
+A pandas column backed by Arrow (pandas' `str` columns, `ArrowDtype`) is
+stored as its Arrow chunks, written as they are: pandas' own pickle first
+joins a column's chunks into one copy. A short slice of a long column is
+copied down to its rows, so `df.head()` does not write the whole column.
 
 <!-- claim: cash/backends/serialization.py:_reduce_polars @f7539f57, cash/backends/serialization.py:_polars_from_arrow @654cf355 -->
 A polars `DataFrame` or `Series` is stored as its Arrow data, so its

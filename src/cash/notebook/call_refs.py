@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import kept_state
-from ..backends.serialization import polars_reducers
+from ..backends.serialization import stored_reducers
 
 logger = logging.getLogger(__name__)
 
@@ -92,13 +92,16 @@ def digest_and_size(value: Any) -> tuple[str, int] | None:
     ``compute_hash`` took 115 ms, and a call's store pays this.
 
     A polars frame is pickled as its Arrow buffers, as the store writes it
-    (`serialization.polars_reducers`): polars' own pickle copies the whole
+    (`serialization.stored_reducers`): polars' own pickle copies the whole
     frame into one IPC blob first, 2.2-4 s for a 4.2M-row log frame against
-    0.3 s for its buffers.
+    0.3 s for its buffers. So is a pandas Arrow-backed column, chunk by
+    chunk, where pandas' own pickle joins the chunks first: the same rows
+    chunked another way digest apart, which costs a reference, never a
+    wrong one.
     """
     try:
         buffers: list = []
-        head = kept_state.dumps(value, protocol=5, buffer_callback=buffers.append, keyed=True, extra=polars_reducers())
+        head = kept_state.dumps(value, protocol=5, buffer_callback=buffers.append, keyed=True, extra=stored_reducers())
         digest = hashlib.sha256(head)
         size = len(head)
         for buffer in buffers:

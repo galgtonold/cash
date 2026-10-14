@@ -6,6 +6,7 @@ every decorated result, pandas DataFrames included.
 
 from __future__ import annotations
 
+import logging
 import pickle
 import sys
 from abc import ABC, abstractmethod
@@ -14,7 +15,9 @@ from typing import Any
 
 from .. import kept_state
 
-__all__ = ["Serializer", "PickleSerializer", "RESTORE_ERRORS", "rebuild", "restore_value"]
+logger = logging.getLogger(__name__)
+
+__all__ = ["Serializer", "PickleSerializer", "RESTORE_ERRORS", "rebuild", "restore_value", "stored_reducers"]
 
 #: Buffers at least this large are handed out of band by `serialize_split`;
 #: smaller ones stay in the stream, where a separate part costs more than the
@@ -46,11 +49,12 @@ class PickleSerializer(Serializer):
     ``compress`` option recovers for most of them.
 
     A polars DataFrame or Series is pickled as its Arrow data
-    (`_reduce_polars`), whose buffers protocol 5 hands out of band.
+    (`_reduce_polars`), whose buffers protocol 5 hands out of band, and so
+    is a pandas Arrow-backed column (`_reduce_arrow_array`).
     """
 
     def serialize(self, data: Any) -> bytes:
-        return kept_state.dumps(data, protocol=5, extra=polars_reducers())
+        return kept_state.dumps(data, protocol=5, extra=stored_reducers())
 
     def deserialize(self, data: bytes) -> Any:
         return pickle.loads(data)
@@ -77,7 +81,7 @@ class PickleSerializer(Serializer):
             return False
 
         stream = kept_state.dumps(
-            data, protocol=5, buffer_callback=take, on_retry=buffers.clear, extra=polars_reducers()
+            data, protocol=5, buffer_callback=take, on_retry=buffers.clear, extra=stored_reducers()
         )
         return stream, buffers
 
@@ -130,15 +134,100 @@ def rebuild(load: Callable[..., Any], *args: Any) -> Any:
         raise pickle.UnpicklingError(f"rebuilding the stored value raised {type(exc).__name__}: {exc}") from exc
 
 
-def polars_reducers() -> dict | None:
-    """`_reduce_polars` for polars' DataFrame and Series, when polars is
-    imported (a value cannot hold a frame before). Exact types: a subclass
-    keeps its own reduce."""
+def stored_reducers() -> dict | None:
+    """The reducers cash pickles a value it stores with, by exact type
+    (`kept_state.dumps` *extra*): `_reduce_polars` for polars' DataFrame
+    and Series, `_reduce_arrow_array` for pandas' Arrow-backed arrays. Each
+    only once its library is imported (a value cannot hold one before). A
+    subclass keeps its own reduce."""
+    reducers: dict = {}
     pl = sys.modules.get("polars")
     frame, series = getattr(pl, "DataFrame", None), getattr(pl, "Series", None)
-    if not (isinstance(frame, type) and isinstance(series, type)):
-        return None  # no polars, or one still importing
-    return {frame: _reduce_polars, series: _reduce_polars}
+    if isinstance(frame, type) and isinstance(series, type):  # else no polars, or one still importing
+        reducers[frame] = reducers[series] = _reduce_polars
+    for arrow_class in _arrow_array_classes():
+        reducers[arrow_class] = _reduce_arrow_array
+    return reducers or None
+
+
+#: pandas' Arrow-backed array classes `_reduce_arrow_array` takes, found
+#: once pandas has loaded them (`_arrow_array_classes`).
+_ARROW_CLASSES: list[tuple[type, ...]] = []
+
+
+def _arrow_array_classes() -> tuple[type, ...]:
+    """pandas' ``ArrowExtensionArray`` and its subclasses in pandas
+    (``ArrowStringArray``), each still pickled by the base class's
+    ``__getstate__``/``__setstate__`` that `_reduce_arrow_array` stands in
+    for; empty before pandas loaded them."""
+    if _ARROW_CLASSES:
+        return _ARROW_CLASSES[0]
+    module = sys.modules.get("pandas.core.arrays.arrow.array")
+    base = getattr(module, "ArrowExtensionArray", None)
+    if not isinstance(base, type) or "pyarrow" not in sys.modules:
+        return ()
+    found: list[type] = []
+    pending = [base]
+    while pending:
+        klass = pending.pop()
+        pending.extend(klass.__subclasses__())
+        if (
+            klass.__module__.startswith("pandas.")
+            and klass.__getstate__ is base.__getstate__
+            and klass.__setstate__ is base.__setstate__
+            and klass.__reduce_ex__ is object.__reduce_ex__
+            and klass.__reduce__ is object.__reduce__
+        ):
+            found.append(klass)
+    _ARROW_CLASSES.append(tuple(found))
+    return _ARROW_CLASSES[0]
+
+
+def _reduce_arrow_array(value: Any) -> Any:
+    """A pandas Arrow-backed array (``str`` columns, ``ArrowDtype``) as its
+    Arrow chunks, rebuilt by `_arrow_array_from_chunks`.
+
+    pandas' own pickle joins the chunks first (``combine_chunks``), a copy
+    of every value -- 0.8 s for the ten text columns of a 5.6M-row frame --
+    which the writer then copied again. The chunks pickle as their Arrow
+    buffers, which protocol 5 hands out of band as they are. A chunk that is
+    a small slice of bigger buffers (``df.head()`` of a big frame) is
+    copied down to its rows first (`_compact`), as pandas' join does; Arrow
+    would pickle the whole buffers under it. pandas' own state (the dtype)
+    is kept as it is, and restored by pandas' own ``__setstate__``.
+    """
+    try:
+        chunked = value._pa_array
+        chunks = [_compact(chunk) for chunk in chunked.chunks]
+        arrow_type = chunked.type
+    except Exception:  # not the layout this expects: pandas' own pickle
+        logger.debug("pickling a %s the pandas way", type(value).__name__, exc_info=True)
+        return value.__reduce_ex__(5)
+    state = dict(value.__dict__)
+    del state["_pa_array"]
+    return _arrow_array_from_chunks, (type(value), chunks, arrow_type, state)
+
+
+def _compact(chunk: Any) -> Any:
+    """*chunk*, or a copy of its rows alone when the buffers it slices hold
+    more than twice what it needs (and at least `OUT_OF_BAND_MIN_BYTES`
+    more): those would all be written."""
+    import pyarrow as pa
+
+    needed = chunk.nbytes
+    if chunk.get_total_buffer_size() - needed > max(needed, OUT_OF_BAND_MIN_BYTES):
+        return pa.concat_arrays([chunk])
+    return chunk
+
+
+def _arrow_array_from_chunks(cls: type, chunks: list, arrow_type: Any, state: dict) -> Any:
+    """The array `_reduce_arrow_array` stored: *chunks* of *arrow_type*,
+    with pandas' own *state*, through pandas' own ``__setstate__``."""
+    import pyarrow as pa
+
+    array = cls.__new__(cls)
+    array.__setstate__({**state, "_pa_array": pa.chunked_array(chunks, type=arrow_type)})
+    return array
 
 
 def _reduce_polars(value: Any) -> Any:
