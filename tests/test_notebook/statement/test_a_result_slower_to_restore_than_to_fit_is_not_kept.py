@@ -13,6 +13,12 @@ disk hit repeats -- and the disk tier is asked with that time: a value whose
 copy took longer than its compute stays in RAM. The class remembers the
 rate, so the next statement making one is refused before anything is
 copied. Counted by ``__setstate__`` calls, with sleeps far apart.
+
+One slow reading is not enough: an unpickling that something else held up
+(a full garbage collection, the writer thread holding the interpreter lock)
+read 3.3 s in p20 for a graph that unpickles in 0.25 s, and its 1.4 s build
+was kept nowhere, so after a restart it and everything keyed on it ran
+again. A reading that may refuse is taken twice and the faster one kept.
 """
 
 from __future__ import annotations
@@ -33,6 +39,8 @@ SLOW_LOAD_S = 0.9
 #: ``__setstate__`` calls, by the test's own clock.
 LOADS: list[float] = []
 LOAD_S = [0.0]
+#: One-off stalls, each taken by the next ``__setstate__`` in place of ``LOAD_S``.
+STALLS: list[float] = []
 
 
 class Fit:
@@ -44,8 +52,9 @@ class Fit:
         self.params = np.arange(4.0)
 
     def __setstate__(self, state: dict) -> None:
-        time.sleep(LOAD_S[0])
-        LOADS.append(LOAD_S[0])
+        seconds = STALLS.pop(0) if STALLS else LOAD_S[0]
+        time.sleep(seconds)
+        LOADS.append(seconds)
         self.__dict__.update(state)
 
 
@@ -66,6 +75,7 @@ def tiers(cash_magics, cash_instance, mock_shell, tmp_path):
     saved = dict(rates)
     rates.clear()
     LOADS.clear()
+    STALLS.clear()
     ram, disk = InMemoryBackend(), FileBackend(str(tmp_path / "nbcache"), flush_interval=0)
     cash_instance.backend = TieredBackend([ram, disk])
     mock_shell.user_ns["Fit"] = Fit
@@ -75,6 +85,7 @@ def tiers(cash_magics, cash_instance, mock_shell, tmp_path):
     rates.clear()
     rates.update(saved)
     LOAD_S[0] = 0.0
+    STALLS.clear()
 
 
 def _disk_bytes(disk) -> int:
@@ -116,3 +127,14 @@ def test_a_result_that_loads_fast_is_written(tiers):
     magics, _ram, disk = tiers
     run_cash_cell(magics, "fit = fit_model()")
     assert _disk_bytes(disk) >= Fit(1 << 17).model["exog"].nbytes
+
+
+def test_one_stalled_load_does_not_keep_a_result_off_disk(tiers, mock_shell):
+    """The first unpickling of the copy stalls, the next does not: the result
+    is kept in RAM and written to disk, as when nothing stalled."""
+    magics, ram, disk = tiers
+    STALLS.append(SLOW_LOAD_S)
+    run_cash_cell(magics, "fit = fit_model()")
+    assert SLOW_LOAD_S in LOADS, "the stall was not taken: the test measures nothing"
+    assert _disk_bytes(disk) >= Fit(1 << 17).model["exog"].nbytes, "one stalled unpickling kept the result off disk"
+    assert len(ram.list_entries() or ()) > 0, "one stalled unpickling dropped the result from RAM"

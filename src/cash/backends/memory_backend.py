@@ -432,6 +432,31 @@ class InMemoryBackend(CacheBackend):
     _PRESSURE_KEEPS_BYTES = 16 * 1024**2
 
     @staticmethod
+    def _time_copy(
+        value: Any, key: str, *, required: bool, walk: list | None, premade: dict[int, Any] | None
+    ) -> float | None:
+        """Seconds unpickling another copy of *value* takes, the copy thrown
+        away; None when that copy was not a pickle round trip throughout."""
+        fell_back: list[bool] = []
+        by_deepcopy: list[bool] = []
+        _UNPICKLED.seconds = 0.0
+        try:
+            InMemoryBackend._safe_deep_copy(
+                value,
+                key,
+                required=required,
+                record_cells={},
+                by_reference=fell_back,
+                by_spine=[],
+                walk=walk,
+                premade=premade,
+                by_deepcopy=by_deepcopy,
+            )
+        except Exception:  # noqa: BLE001 - the first copy stands; this one only times
+            return None
+        return None if (fell_back or by_deepcopy) else _UNPICKLED.seconds
+
+    @staticmethod
     def _safe_deep_copy(
         value: Any,
         key: str = "<unknown>",
@@ -1233,6 +1258,18 @@ class InMemoryBackend(CacheBackend):
                 # reading the bytes (the pickling and the array copies here
                 # are this tier's own).
                 unpickle_seconds = _UNPICKLED.seconds
+                if _may_refuse(unpickle_seconds, metadata):
+                    # A reading that may keep the value off disk, or out of
+                    # this tier, is taken again and the faster one kept: one
+                    # unpickling stalled by something else (a full garbage
+                    # collection, the writer thread holding the interpreter
+                    # lock) read 3.3 s for a graph that unpickles in 0.25 s,
+                    # and its 1.4 s build was kept nowhere, so a restart
+                    # rebuilt it and everything keyed on it. A class that is
+                    # slow to load is slow both times.
+                    again = self._time_copy(value, key, required=required, walk=walk, premade=premade)
+                    if again is not None:
+                        unpickle_seconds = min(unpickle_seconds, again)
                 if _copied_by_round_trip(value, metadata):
                     # On the entry, for the disk tier's decision just after
                     # this (`PersistencePolicy.decide`): the copy was a pickle
@@ -1984,6 +2021,16 @@ def _hit_no_faster(value: Any, unpickle_seconds: float, metadata: MetadataDict) 
     if type(value) is dict or _copied_as_data(type(value)) or not _judged_by_compute(metadata):
         return False
     return unpickle_seconds >= metadata["execution_time"]
+
+
+def _may_refuse(unpickle_seconds: float, metadata: MetadataDict) -> bool:
+    """Could *unpickle_seconds*, read for the entry *metadata* describes,
+    keep it out of this tier (`_hit_no_faster`) or off disk? The disk tier
+    refuses a restore that saves too little of the compute
+    (``PersistencePolicy.pays_to_restore``, 20% by default); a reading of
+    half the compute or more is close enough to either line to be taken
+    again."""
+    return _judged_by_compute(metadata) and 2 * unpickle_seconds >= metadata["execution_time"]
 
 
 def _judged_by_compute(metadata: MetadataDict) -> bool:
