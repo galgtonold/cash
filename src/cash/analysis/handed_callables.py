@@ -314,26 +314,63 @@ def _held_callables(method: types.MethodType, seen: set[tuple[int, Any]] | None 
 
 
 def _held_callables_of(method: types.MethodType, seen: set[tuple[int, Any]]) -> list[Any]:
-    owner, fn = method.__self__, method.__func__
-    if isinstance(owner, (type, types.ModuleType)) or not isinstance(fn, types.FunctionType) or not _is_users(fn):
+    return _held_group(method.__func__, [method.__self__], seen)
+
+
+def _held_group(fn: Any, owners: list[Any], seen: set[tuple[int, Any]]) -> list[Any]:
+    """`_held_callables` of the user function *fn* bound to each of
+    *owners*, read once for all of them: ``a.act()`` for each of a
+    simulation's agents is one function, whose source says the same of
+    every agent -- that it calls ``self.strategy`` -- so the question per
+    agent is only what each holds there, asked of all at once
+    (`_methods_called_by_many`). Then the methods found are grouped by
+    their function in turn. Each owner and function is looked at once
+    (*seen*), as when each was asked by itself; what is found is what the
+    questions asked one owner at a time find, since the facts read from
+    *fn* are the same for every owner and the walk of all owners at once
+    reaches what each of theirs does (`_reached_from`).
+
+    What the owners hold is still read from the owners, not from the
+    collector's view of who holds a function (``gc.get_referrers``): that
+    view misses what ``gc.freeze`` moved out of it, says nothing of whether
+    a holder is reachable from these owners, and a holder found is not only
+    a notebook function (a builtin's bound method, a class, an object with a
+    ``__call__``). The walk reads each object's items once, at C speed."""
+    if not isinstance(fn, types.FunctionType) or not _is_users(fn):
         return []
-    if (id(owner), fn.__code__) in seen:
-        return []
-    seen.add((id(owner), fn.__code__))
-    facts = _call_facts(fn)
     code = fn.__code__
-    if facts is None or not code.co_argcount:
+    keys = list(zip(map(id, owners), repeat(code)))
+    fresh = [
+        owner for owner, key in zip(owners, keys) if key not in seen and not isinstance(owner, (type, types.ModuleType))
+    ]
+    seen.update(keys)
+    facts = _call_facts(fn)
+    if not fresh or facts is None or not code.co_argcount:
         return []
     first = code.co_varnames[0]
     out: list[Any] = []
     if first in _called_params(fn):
-        out.extend(_callables_reached(owner)[0])
+        out.extend(_callables_reached_by_many(fresh))
     if facts.attributes and (first in facts.attribute_called or first in facts.held_attribute_called):
-        for member in _methods_called(owner, facts.attributes, first in facts.held_attribute_called):
-            out.append(member)
-            if isinstance(member, types.MethodType):
-                out.extend(_held_callables(member, seen))
+        members = _methods_called_by_many(fresh, facts.attributes, first in facts.held_attribute_called)
+        out.extend(members)
+        # By function (a function hashes by identity); a method of anything
+        # else reaches nothing more (`_held_group` reads functions only).
+        bound: dict[types.FunctionType, list[Any]] = {}
+        for member in members:
+            if type(member) is types.MethodType and type(member.__func__) is types.FunctionType:
+                bound.setdefault(member.__func__, []).append(member.__self__)
+        for func, selves in bound.items():
+            out.extend(_held_group(func, selves, seen))
     return out
+
+
+def _callables_reached_by_many(values: list[Any]) -> list[Any]:
+    """The callables any of *values* holds (`_callables_reached` of each),
+    with one walk: each object reached from several is opened once."""
+    if len(values) == 1:
+        return _callables_reached(values[0])[0]
+    return _reached_from(values, False, None, None, _INSTANCE_LIMIT * len(values))[0]
 
 
 def _methods_called(value: Any, names: frozenset[str], held: bool) -> list[Any]:
@@ -343,33 +380,98 @@ def _methods_called(value: Any, names: frozenset[str], held: bool) -> list[Any]:
     round (`_this_round`): several analyses of one statement ask it before
     it runs."""
     if not held:
-        return _methods_called_of(value, names, False)
-    return _this_round(("methods", id(value), names), (value,), lambda: _methods_called_of(value, names, True))
+        return _methods_called_by_many([value], names, False)
+    return _this_round(("methods", id(value), names), (value,), lambda: _methods_called_by_many([value], names, True))
 
 
-def _methods_called_of(value: Any, names: frozenset[str], held: bool) -> list[Any]:
-    objects = [value] if _is_users_object(value) else []
+def _methods_called_by_many(values: list[Any], names: frozenset[str], held: bool) -> list[Any]:
+    """`_methods_called` of each of *values*: the objects of the user's
+    among them, and with *held* those any of them holds (one walk,
+    `_reached_from`), each object's methods read a class at a time
+    (`_members_by_class`)."""
+    objects = _users_objects(values)
     if held:
-        objects.extend(item for item in _reached(value)[0] if _is_users_object(item))
-    out = []
-    #: ``(class, name)`` of the methods found whose effect does not depend on
-    #: their object: one object's is enough (``r.value()`` for ``r`` in rows).
-    same: set[tuple[type, str]] = set()
-    #: ``(class, name)`` whose method was found not to be such: asked once.
-    differs: set[tuple[type, str]] = set()
+        if len(values) == 1:
+            reached = _reached(values[0])[0]
+        else:
+            reached = _reached_from(values, True, None, None, _INSTANCE_LIMIT * len(values))[0]
+        objects.extend(_users_objects(reached))
+    return _members_by_class(objects, names)
+
+
+def _plain_own(kind: type, name: str, value: Any) -> bool:
+    """Whether *value*, held as *name* in an object of *kind*'s own
+    ``__dict__``, is what `_attribute` reads of it unchanged -- the class
+    has no data descriptor of that name in the way (`_static_attribute`,
+    already asked of an object of *kind* holding the name) -- and is not a
+    ``classmethod``, which `_attribute` binds. Such a value that is not
+    callable needs no reading."""
+    return not isinstance(value, classmethod) and _CLASS_ATTRIBUTES.get((kind, name, True)) is _OWN
+
+
+def _members_by_class(objects: list[Any], names: frozenset[str]) -> list[Any]:
+    """The methods and stored functions called *names* of each of
+    *objects*, as `_attribute` reads each, a class at a time.
+
+    What ``o.total`` is depends on ``type(o)`` -- read as the class is now,
+    so ``Order.total = f`` after the orders were made is what is found --
+    and on whether ``total`` is in ``o``'s own ``__dict__`` (``o.total =
+    f`` on one order). An object holding the name itself is read by itself.
+    For the rest of a class the class's member is the same, so it is read
+    once: a function is bound to each object (``o.total`` of each, since
+    which object it is bound to is part of what is found), unless calling
+    it does the same whatever the object (`_same_for_every_object`), when
+    one is enough (``r.value()`` for ``r`` in rows); anything else the
+    class holds is the same object for all."""
+    out: list[Any] = []
+    #: ids of what the objects hold themselves that is found: one strategy
+    #: function held by many agents is found once.
+    held: set[int] = set()
+    groups: dict[type, list[Any]] = {}
     for obj in objects:
-        kind = type(obj)
+        groups.setdefault(type(obj), []).append(obj)
+    for kind, group in groups.items():
+        dicts = list(map(_instance_dict, group))
         for name in names:
-            if (kind, name) in same and name not in _instance_dict(obj):
+            rest = []
+            for obj, own in zip(group, dicts):
+                if name not in own:
+                    rest.append(obj)
+                    continue
+                value = own[name]
+                if _plain_own(kind, name, value):
+                    if not callable(value):
+                        continue  # not callable, nor what `_attribute` makes of it
+                    if type(value) is types.FunctionType:
+                        if id(value) not in held:  # what `_attribute` reads: the function itself
+                            held.add(id(value))
+                            out.append(value)
+                        continue
+                member = _attribute(obj, name)
+                if member is not _MISSING and callable(member):
+                    if type(member) is types.MethodType:
+                        out.append(member)
+                    elif id(member) not in held:
+                        held.add(id(member))
+                        out.append(member)
+            if not rest:
                 continue
-            member = _attribute(obj, name)
-            if member is not _MISSING and callable(member):
-                out.append(member)
-                if type(member) is types.MethodType and member.__self__ is obj and (kind, name) not in differs:
-                    if _same_for_every_object(member):
-                        same.add((kind, name))
-                    elif name not in _instance_dict(obj):
-                        differs.add((kind, name))
+            sample = rest[0]
+            member = _attribute(sample, name)
+            if member is _MISSING or not callable(member):
+                continue
+            if type(member) is types.MethodType and member.__self__ is sample:
+                if _same_for_every_object(member):
+                    out.append(member)
+                else:
+                    func = member.__func__
+                    out.extend(types.MethodType(func, obj) for obj in rest)
+            elif getattr(member, "__self__", None) is sample:
+                # A builtin's method bound to each object (a subclass of
+                # ``list``'s ``append``): each one's own.
+                out.extend(m for obj in rest if (m := _attribute(obj, name)) is not _MISSING and callable(m))
+            else:
+                out.append(member)  # the class's own callable, the same for every object
     return out
 
 
@@ -935,6 +1037,15 @@ def _is_users_object(value: Any) -> bool:
     return _is_users_class(type(value))
 
 
+def _users_objects(values: Iterable[Any]) -> list[Any]:
+    """Those of *values* that are objects of the user's classes
+    (`_is_users_object`), asked once per type: whether a value is one
+    depends on its type alone."""
+    values = list(values)
+    users = {kind for kind in set(map(type, values)) if _users_instance_type(kind)}
+    return list(compress(values, map(users.__contains__, map(type, values)))) if users else []
+
+
 def _openable(value: Any) -> bool:
     """A value `_Found.add` looks inside of where the callee calls what it
     is handed: a builtin container, or an object of the user's."""
@@ -1084,6 +1195,10 @@ def _attribute(owner: Any, attr: str) -> Any:
         except Exception:  # noqa: BLE001 - an object's attribute lookup
             return _MISSING
     if hasattr(type(member), "__get__") and not isinstance(member, type):
+        if not isinstance(owner, type) and _instance_dict(owner).get(attr, _MISSING) is member:
+            # The object's own value (a bound method or a partial it holds):
+            # Python binds no descriptor held there, so it is what is called.
+            return member
         # A property or another descriptor computes the value: not read.
         return _MISSING
     return member
@@ -1282,7 +1397,7 @@ class _Found:
                     f"{label} is handed to a call that calls methods of what it holds, and holds more than "
                     f"{_INSTANCE_LIMIT} objects of your classes to look through"
                 )
-            objects.extend(item for item in items if _is_users_object(item))
+            objects.extend(_users_objects(items))
         self._methods_of(objects, root, names)
         if covered is not None and complete:
             self._cover(covered, opened)
@@ -1309,17 +1424,64 @@ class _Found:
 
     def _methods_of(self, objects: list[Any], root: str | None, names: frozenset[str]) -> None:
         """Add the methods and stored functions called *names* of each of
-        *objects* (`with_methods`)."""
+        *objects* (`with_methods`), a class at a time.
+
+        ``o.total()`` runs what ``type(o).__mro__`` binds to ``total``,
+        read from the class as it is now (a patch ``Order.total = f`` made
+        after the objects were built is what is read), unless the object's
+        own ``__dict__`` holds that name (``o.total = f`` on one order):
+        such an object is looked at by itself. For the others the method is
+        one function, bound to each, and `_bound_group` reads it once for
+        all of them."""
+        groups: dict[type, list[Any]] = {}
         for obj in objects:
-            kind = type(obj)
+            groups.setdefault(type(obj), []).append(obj)
+        for kind, group in groups.items():
+            if issubclass(kind, type):
+                for obj in group:
+                    for name in names:
+                        self._method_of(obj, kind, name, root)
+                continue
+            dicts = list(map(_instance_dict, group))
             for name in names:
-                if (kind, name, root) in self._inert_attributes and name not in _instance_dict(obj):
-                    continue  # another object's same method, read already
-                member = _attribute(obj, name)
-                if member is not _MISSING and callable(member):
-                    self.add(member, root, False)
-                    if type(member) is types.MethodType and _method_key(member, root) in self._inert_methods:
+                rest = []
+                for obj, own in zip(group, dicts):
+                    if name not in own:
+                        rest.append(obj)
+                    elif not _plain_own(kind, name, own[name]):
+                        self._method_of(obj, kind, name, root)
+                    elif type(own[name]) is types.FunctionType:
+                        self.add(own[name], root, False)  # what `_attribute` reads: the function itself
+                    elif callable(own[name]):
+                        self._method_of(obj, kind, name, root)
+                if not rest or (kind, name, root) in self._inert_attributes:
+                    continue
+                sample = rest[0]
+                member = _attribute(sample, name)
+                if member is _MISSING or not callable(member):
+                    continue
+                if type(member) is types.MethodType and member.__self__ is sample:
+                    self._bound_group(member.__func__, rest, root)
+                    if (member.__func__, kind, root) in self._inert_methods:
                         self._inert_attributes.add((kind, name, root))
+                elif getattr(member, "__self__", None) is sample:
+                    # A builtin's method bound to each object (a subclass of
+                    # ``list``'s ``append``): each one by itself.
+                    for obj in rest:
+                        self._method_of(obj, kind, name, root)
+                else:
+                    # The class's own callable, the same for every object.
+                    self._method_of(sample, kind, name, root)
+
+    def _method_of(self, obj: Any, kind: type, name: str, root: str | None) -> None:
+        """Add the method or stored function called *name* of *obj*."""
+        if (kind, name, root) in self._inert_attributes and name not in _instance_dict(obj):
+            return  # another object's same method, read already
+        member = _attribute(obj, name)
+        if member is not _MISSING and callable(member):
+            self.add(member, root, False)
+            if type(member) is types.MethodType and _method_key(member, root) in self._inert_methods:
+                self._inert_attributes.add((kind, name, root))
 
     def through_globals(self, fn: types.FunctionType) -> None:
         """What the function *fn* of the user's, and the ones of theirs it
@@ -1382,22 +1544,141 @@ class _Found:
 
     def _held_by(self, owner: Any, fn: types.FunctionType, root: str | None) -> None:
         """What the method *fn* of *owner* reaches through its first
-        parameter: what *owner* holds that it calls, and the methods of
-        *owner* (or of what it holds) it calls."""
-        if (id(owner), fn.__code__) in self._held_seen:
-            return
-        self._held_seen.add((id(owner), fn.__code__))
-        facts = _call_facts(fn)
+        parameter (`_held_by_many`)."""
+        self._held_by_many([owner], fn, root)
+
+    def _held_by_many(self, owners: list[Any], fn: types.FunctionType, root: str | None) -> None:
+        """What the method *fn* of each of *owners*, objects of one class,
+        reaches through its first parameter: what they hold that it calls,
+        and the methods of theirs (or of what they hold) it calls.
+
+        Asked of all of them at once, not of each in turn: what *fn* looks
+        for is the same for every object (its source says which attributes
+        and parameters it calls), only what the objects hold differs, and
+        that is gathered for all of them by one walk (`_add_open_many`,
+        `_with_methods_many`). The union of what each object leads to is
+        what the walk from all of them leads to, so nothing one of them held
+        is missed."""
         code = fn.__code__
+        owners = [owner for owner in owners if (id(owner), code) not in self._held_seen]
+        if not owners:
+            return
+        self._held_seen.update((id(owner), code) for owner in owners)
+        facts = _call_facts(fn)
         if facts is None or not code.co_argcount:
             return
         first = code.co_varnames[0]
         if first in _called_params(fn):
-            self.add(owner, root, True)
+            self._add_open_many(owners, root)
         if facts.attributes and (first in facts.attribute_called or first in facts.held_attribute_called):
-            self.with_methods(owner, root, facts.attributes, first in facts.held_attribute_called)
-        for member in _super_members(owner, fn, facts.super_methods):
-            self.add(member, root, False)
+            self._with_methods_many(owners, root, facts.attributes, first in facts.held_attribute_called)
+        if facts.super_methods:
+            # ``super().name(...)`` resolves along the class's MRO: the same
+            # function for every one of *owners*, bound to each.
+            sample = owners[0]
+            for member in _super_members(sample, fn, facts.super_methods):
+                if type(member) is types.MethodType and member.__self__ is sample:
+                    self._bound_group(member.__func__, owners, root)
+                else:
+                    self.add(member, root, False)
+
+    def _bound_group(self, func: Any, owners: list[Any], root: str | None) -> None:
+        """`add` of the function *func* bound to each of *owners*, objects
+        of one class: what `add` checks first (a method read already, or
+        found not to depend on its object), then `_bound_effects` once for
+        the objects not seen yet."""
+        kind = type(owners[0])
+        if (func, kind, root) in self._inert_methods:
+            return
+        fid = id(func)
+        owners = [owner for owner in owners if ((id(owner), fid), root) not in self._seen]
+        if not owners:
+            return
+        self._seen.update(((id(owner), fid), root) for owner in owners)
+        self._bound_effects(func, owners, root)
+
+    def _bound_effects(self, func: Any, owners: list[Any], root: str | None) -> None:
+        """What calling the method *func* bound to each of *owners* changes
+        (`_callable` of a bound method). *owners* are of one class (or a
+        single class or module): its source, and whether it changes its
+        object or reaches through it, are read once for the class; the
+        objects it changes are each noted, and what it reaches through them
+        is asked of all of them at once (`_held_by_many`)."""
+        owner = owners[0]
+        label = repr(root) if root else "a function"
+        cls = owner if isinstance(owner, type) else type(owner)
+        inert = not isinstance(owner, types.ModuleType)
+        for fn in wrapper_layers(func):
+            if not isinstance(fn, types.FunctionType) or not self._users(fn):
+                continue
+            source = self._source(fn, label)
+            if source is not None and not isinstance(owner, types.ModuleType):
+                changes, reaches_class = self._method_effects_of(fn, cls, source)
+                if changes:
+                    inert = False
+                    if self.objects or isinstance(owner, type):
+                        for each in owners:
+                            self._changed(each, root)
+                    if not isinstance(owner, type) and reaches_class:
+                        self._changed(cls, None)
+                if not isinstance(owner, type) and _reaches_through_its_object(fn):
+                    inert = False
+                    self._held_by_many(owners, fn, root)
+        if inert:
+            self._inert_methods.add((func, cls, root))
+
+    def _add_open_many(self, owners: list[Any], root: str | None) -> None:
+        """`add` of each of *owners*, objects of the user's, opened for the
+        callables they hold: one walk from all of them (`_reached_from`),
+        allowed `_INSTANCE_LIMIT` objects for each, so it stops only where
+        a walk of each would have too."""
+        owners = [owner for owner in owners if (id(owner), root, True) not in self._seen]
+        if not owners:
+            return
+        self._seen.update((id(owner), root, True) for owner in owners)
+        covered, opened = self._reach_key(None, root)
+        sources = [owner for owner in owners if id(owner) not in covered]
+        items, complete = (
+            _reached_from(sources, False, covered, opened, _INSTANCE_LIMIT * len(sources)) if sources else ([], True)
+        )
+        if not complete:
+            label = repr(root) if root else "an argument"
+            self.unreadable.append(
+                f"{label} is handed to a call that calls what it holds, and holds more than "
+                f"{_INSTANCE_LIMIT} objects of your classes to look through"
+            )
+        for item in items:
+            self.add(item, root, False)
+        if complete:
+            self._cover(covered, opened)
+        for owner in owners:
+            if callable(owner) and (id(owner), root) not in self._seen:
+                self._seen.add((id(owner), root))
+                self._callable(owner, root)
+
+    def _with_methods_many(self, owners: list[Any], root: str | None, names: frozenset[str], held: bool) -> None:
+        """`with_methods` of each of *owners*, objects of the user's, at
+        once: with *held*, one walk from all of them (as `_add_open_many`)."""
+        objects = list(owners)
+        complete = False
+        covered: set[int] | None = None
+        opened: list[Any] = []
+        if held:
+            covered, opened = self._reach_key(names, root)
+            sources = [owner for owner in owners if id(owner) not in covered]
+            items, complete = (
+                _reached_from(sources, True, covered, opened, _INSTANCE_LIMIT * len(sources)) if sources else ([], True)
+            )
+            if not complete:
+                label = repr(root) if root else "an argument"
+                self.unreadable.append(
+                    f"{label} is handed to a call that calls methods of what it holds, and holds more than "
+                    f"{_INSTANCE_LIMIT} objects of your classes to look through"
+                )
+            objects.extend(_users_objects(items))
+        self._methods_of(objects, root, names)
+        if covered is not None and complete:
+            self._cover(covered, opened)
 
     def called_by_name(self, func: ast.Name | ast.Attribute, namespace: Mapping[str, Any]) -> None:
         """A function of the user's called by name (``fire(3)``) runs what
@@ -1627,26 +1908,7 @@ class _Found:
                     self.through_globals(layer)
             return
         if isinstance(value, types.MethodType):
-            owner = value.__self__
-            cls = owner if isinstance(owner, type) else type(owner)
-            inert = not isinstance(owner, types.ModuleType)
-            for fn in wrapper_layers(value.__func__):
-                if not isinstance(fn, types.FunctionType) or not self._users(fn):
-                    continue
-                source = self._source(fn, label)
-                if source is not None and not isinstance(owner, types.ModuleType):
-                    changes, reaches_class = self._method_effects_of(fn, cls, source)
-                    if changes:
-                        inert = False
-                        if self.objects or isinstance(owner, type):
-                            self._changed(owner, root)
-                        if not isinstance(owner, type) and reaches_class:
-                            self._changed(cls, None)
-                    if not isinstance(owner, type) and _reaches_through_its_object(fn):
-                        inert = False
-                        self._held_by(owner, fn, root)
-            if inert:
-                self._inert_methods.add(_method_key(value, root))
+            self._bound_effects(value.__func__, [value.__self__], root)
             return
         if isinstance(value, (types.BuiltinMethodType, types.MethodWrapperType)):
             owner = getattr(value, "__self__", None)
@@ -2303,11 +2565,26 @@ def _callables_reached(
         return [], True  # a flat list of plain values: read at C speed
     if _plain_data.is_tree(value):
         return [], True  # lists and tuples of plain values only
+    return _reached_from([value], objects, covered, opened_out, _INSTANCE_LIMIT)
+
+
+def _reached_from(
+    sources: list[Any], objects: bool, covered: set[int] | None, opened_out: list[Any] | None, limit: int
+) -> tuple[list[Any], bool]:
+    """`_callables_reached` of each of *sources* at once: what any of them
+    reaches, each object opened once, the sources themselves left out of
+    what is found. Incomplete past *limit* objects of the user's classes.
+
+    One walk for many sources (the orders a method is called on) where a
+    walk each opened what they share once per source. Asked with a *limit*
+    of `_INSTANCE_LIMIT` for each source, it is never cut short where a walk
+    of each would all have finished: together they reach no more than the
+    sum of what each reaches."""
     found: list[Any] = []
-    seen = {id(value)}
+    seen = set(map(id, sources))
     if opened_out is not None:
-        opened_out.append(value)
-    level = [value]
+        opened_out.extend(sources)
+    level = list(sources)
     users_objects = 0
     #: ``type -> whether the walk opens its objects``, asked once per type.
     opens: dict[type, bool] = {}
@@ -2328,13 +2605,16 @@ def _callables_reached(
         nested = [c for c in compress(items, map(opened.__contains__, map(type, items))) if id(c) not in seen]
         if covered:
             nested = [c for c in nested if id(c) not in covered]
+        # Held twice in one level (an order's customer, met from each of
+        # its orders): opened once.
+        nested = list(dict(zip(map(id, nested), nested)).values())
         seen.update(map(id, nested))
         if opened_out is not None:
             opened_out.extend(nested)
         if objects:
             found.extend(c for c in nested if type(c) not in _OPENED and not callable(c))
         users_objects += sum(1 for c in nested if type(c) not in _OPENED)
-        if users_objects > _INSTANCE_LIMIT:
+        if users_objects > limit:
             return found, False
         level = nested
     return found, True
