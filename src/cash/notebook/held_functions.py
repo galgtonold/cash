@@ -25,7 +25,7 @@ import itertools
 import operator
 import sys
 import types
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any, NamedTuple
 
 from .._memo import CODE_OBJECTS, LruMemo
@@ -40,10 +40,11 @@ __all__ = ["EXISTENCE_CHECK_AT", "WALK_LIMIT", "Held", "held_notebook_code", "no
 WALK_LIMIT = 2_000_000
 
 #: Objects a walk visits before it asks whether a notebook function exists
-#: at all (`notebook_functions_exist`). Asking reads every object Python
-#: tracks once, at C speed (0.06 s for two million); a walk of an openpyxl
-#: workbook of 400,000 cells took 0.6 s, before each statement that read
-#: it, and found nothing a cell could have defined in it.
+#: at all (`notebook_functions_exist`). Asking looks in the namespace, then
+#: reads every object Python tracks once, at C speed (0.06 s for two
+#: million); a walk of an openpyxl workbook of 400,000 cells took 0.6 s,
+#: before each statement that read it, and found nothing a cell could have
+#: defined in it.
 EXISTENCE_CHECK_AT = 20_000
 
 _LEAVES = frozenset(LEAF_TYPES)
@@ -160,6 +161,16 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
     no class's method reads the notebook's globals. Objects ``gc.freeze``
     moved out of the collector's view are not searched, so then the answer
     is yes.
+
+    Asked of all functions at once, not of each: that nothing but the
+    namespace refers to ``make`` does not mean no value holds it. A value
+    holding the namespace (``{"ns": globals()}``), the shell
+    (``get_ipython().user_ns``) or anything of the kernel's that leads to
+    it holds every function there; telling which values do means following
+    what refers to the namespace back to them -- the shell, its completer,
+    the 140 objects that refer to the shell, and on: 1,300 objects and five
+    seconds of ``gc.get_referrers`` in a plain IPython shell, more than the
+    walk it would spare.
     """
     if gc.get_freeze_count():
         return True
@@ -167,6 +178,13 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
     dicts = list(maps) if isinstance(maps, list) else [namespace]
     globals_ids = _globals_ids(namespace)
     function = types.FunctionType
+    # A ``def`` binds its function in the namespace: found there, the scan of
+    # every tracked object (0.12 s beside a 400,000-cell workbook, at each
+    # walk that asked) is not needed. Only a yes is taken from it.
+    for mapping in dicts:
+        for value in list(mapping.values()):
+            if type(value) is function and id(value.__globals__) in globals_ids:
+                return True
     for mapping in dicts:
         for referrer in gc.get_referrers(mapping):
             if type(referrer) is function and id(referrer.__globals__) in globals_ids:
@@ -186,11 +204,13 @@ def _walk(
     globals_ids = _globals_ids(namespace)
     functions: dict[int, Any] = {}
     classes: dict[int, type] = {}
-    seen: set[int] = {id(value)}
-    level: list[Any] = [value]
+    #: What the walk met, each by `_identity_keys`.
+    seen: set[Any] = set(_identity_keys([value], {type(value)}))
+    #: The objects to visit next, by exact type.
+    level: list[tuple[type, list[Any]]] = [(type(value), [value])]
     visited = 0
     while level:
-        visited += len(level)
+        visited += sum(len(group) for _kind, group in level)
         if check_at is not None and visited > check_at:
             check_at = None
             if not notebook_functions_exist(namespace):
@@ -200,7 +220,7 @@ def _walk(
         children: list[Any] = []
         # One step per TYPE in the level, not per object: the items of a
         # list of 100,000 records are gathered at C speed.
-        for kind, group in _by_type(level):
+        for kind, group in level:
             _visit_group(kind, group, globals_ids, functions, classes, children)
         if not children:
             break
@@ -210,43 +230,49 @@ def _walk(
             check_at = None
             if not notebook_functions_exist(namespace):
                 raise _NoNotebookFunctions
-        kinds_of = list(map(type, children))
-        # An object that leads only to its class (`_inert`: an openpyxl
-        # cell's style array, 400,000 of them) is not visited: its class is.
-        inert = {kind for kind in set(kinds_of) if _inert(kind)}
-        skipped = _LEAVES | inert if inert else _LEAVES
-        others = list(itertools.compress(children, map(operator.not_, map(skipped.__contains__, kinds_of))))
-        others.extend(inert)
-        others = _without_plain_records(others)
-        found = dict(zip(map(id, others), others))
-        for key in seen & found.keys():
-            del found[key]
-        seen.update(found)
-        level = list(found.values())
+        level = _next_level(children, seen)
     return tuple(functions.values()), tuple(classes.values()), True
 
 
-def _without_plain_records(objects: list[Any]) -> list[Any]:
-    """*objects* less the plain dicts, lists and tuples that hold only plain
-    values, when every one of a type does: a million records read as rows
-    are dropped in one pass at C speed, before the walk dedups them by id
-    (most of what a walk over them cost)."""
-    if not set(map(type, objects)) & _PLAIN:
-        return objects
-    kept: list[Any] = []
-    for kind, group in _by_type(objects):
-        if kind is dict:
-            items = itertools.chain(
-                itertools.chain.from_iterable(group), itertools.chain.from_iterable(map(dict.values, group))
-            )
-        elif kind in _PLAIN:
-            items = itertools.chain.from_iterable(group)
-        else:
-            kept.extend(group)
+def _next_level(children: list[Any], seen: set[Any]) -> list[tuple[type, list[Any]]]:
+    """What of *children* the walk visits next, by exact type, each object
+    once and none it met before (*seen*, which this adds them to)."""
+    kinds_of = list(map(type, children))
+    child_kinds = set(kinds_of)
+    # An object that leads only to its class (`_inert`: an openpyxl cell's
+    # style array, 400,000 of them) is not visited: its class is.
+    inert = {kind for kind in child_kinds if _inert(kind)}
+    skipped = _LEAVES | inert if inert else _LEAVES
+    others = list(itertools.compress(children, map(operator.not_, map(skipped.__contains__, kinds_of))))
+    others.extend(inert)
+    level = []
+    # Split by type once, without another pass when one type is left.
+    for kind, group in _by_type(others, (child_kinds - skipped) | set(map(type, inert))):
+        if kind in _PLAIN and _plain_records(kind, group):
             continue
-        if not set(map(type, items)) <= _LEAVES:
-            kept.extend(group)
-    return kept
+        # Dedup by the objects themselves where that is identity: an
+        # openpyxl sheet's 400,000 cells were each asked for their ``id``.
+        found = dict(zip(group if _identity_hashed(kind) else map(id, group), group))
+        for key in seen & found.keys():
+            del found[key]
+        if found:
+            seen.update(found)
+            level.append((kind, list(found.values())))
+    return level
+
+
+def _plain_records(kind: type, group: list[Any]) -> bool:
+    """Whether every one of *group*, plain dicts, lists or tuples of type
+    *kind*, holds only plain values: a million records read as rows are
+    dropped in one pass at C speed, before the walk dedups them (most of
+    what a walk over them cost)."""
+    if kind is dict:
+        items = itertools.chain(
+            itertools.chain.from_iterable(group), itertools.chain.from_iterable(map(dict.values, group))
+        )
+    else:
+        items = itertools.chain.from_iterable(group)
+    return set(map(type, items)) <= _LEAVES
 
 
 def _visit_group(
@@ -357,7 +383,51 @@ def _add_column(column: list[Any], children: list[Any]) -> None:
     if all(map(_inert, kinds - _LEAVES)):
         children.extend(kinds - _LEAVES)
         return
-    children.extend(dict(zip(map(id, column), column)).values())
+    if kinds & _LEAVES:
+        column = list(itertools.compress(column, map(operator.not_, map(_LEAVES.__contains__, map(type, column)))))
+        kinds -= _LEAVES
+    children.extend(dict(zip(_identity_keys(column, kinds), column)).values())
+
+
+def _identity_keys(objects: list[Any], kinds: set[type]) -> Iterable[Any]:
+    """A key for each of *objects* (of the types *kinds*) that no other
+    live object shares: the object itself when its type hashes and compares
+    by identity (`_identity_hashed`), its ``id`` otherwise.
+
+    A dict keyed by them dedups the objects at C speed: an openpyxl sheet's
+    400,000 cells were each asked for their ``id`` -- a new int, and an
+    audit event the interpreter hands every audit hook (cash's own included)
+    -- twice a walk. An ``id`` and an object never compare equal, so the two
+    kinds of key mix in one set."""
+    by_identity = {kind for kind in kinds if _identity_hashed(kind)}
+    if len(by_identity) == len(kinds):
+        return objects
+    if not by_identity:
+        return map(id, objects)
+    return [obj if type(obj) in by_identity else id(obj) for obj in objects]
+
+
+@functools.lru_cache(maxsize=1024)
+def _identity_hashed(kind: type) -> bool:
+    """Whether an object of *kind* hashes and compares as ``object`` does:
+    by its address, with no code of its class run. Two distinct live
+    objects of such kinds never hash alike (the hash is the address,
+    rotated), so a set of them never compares two.
+
+    Read from the classes' own dicts, as `_slot_getter` does: looking
+    ``__hash__`` up on a ``MagicMock``'s class made a new mock, of a new
+    class, which the walk then met -- without end."""
+    try:
+        for name in ("__hash__", "__eq__"):
+            found = next((vars(klass)[name] for klass in kind.__mro__ if name in vars(klass)), None)
+            if found is not _OBJECT_SLOTS[name]:
+                return False
+    except TypeError:
+        return False
+    return True
+
+
+_OBJECT_SLOTS = {name: vars(object)[name] for name in ("__hash__", "__eq__")}
 
 
 def _of_type(objects: list[Any], kind: type) -> Iterator[Any]:
@@ -370,16 +440,19 @@ def _of_type(objects: list[Any], kind: type) -> Iterator[Any]:
 _MAJOR = 16
 
 
-def _by_type(objects: list[Any]) -> list[tuple[type, list[Any]]]:
+def _by_type(objects: list[Any], kinds: set[type] | None = None) -> list[tuple[type, list[Any]]]:
     """*objects* grouped by exact type, each group in its order in *objects*.
     The types most of them have are split out at C speed (a level of
     400,000 openpyxl cells and as many index tuples was split by a
-    comprehension per type), the few others one at a time."""
-    counts = collections.Counter(map(type, objects))
+    comprehension per type), the few others one at a time. *kinds*, when
+    given, holds the types of *objects*, or more: one alone needs no pass."""
+    if kinds is not None and len(kinds) == 1:
+        return [(next(iter(kinds)), objects)]
+    types_of = list(map(type, objects))
+    counts = collections.Counter(types_of)
     if len(counts) == 1:
         return [(next(iter(counts)), objects)]
     major = [kind for kind, n in counts.items() if n * _MAJOR > len(objects)]
-    types_of = list(map(type, objects))
     groups = {
         kind: list(itertools.compress(objects, map(operator.is_, types_of, itertools.repeat(kind)))) for kind in major
     }
