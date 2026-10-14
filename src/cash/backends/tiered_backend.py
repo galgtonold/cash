@@ -390,6 +390,21 @@ class TieredBackend(CacheBackend):
             logger.debug("no private copy of %r", key, exc_info=True)
             return _NO_COPY
 
+    def _write_copy(self, key: str, value: Any, metadata: MetadataDict) -> Any:
+        """A copy of *value* the first tier makes, cash's own, for a
+        persistent tier that `takes_private_values` when that tier keeps no
+        copy of its own (`InMemoryBackend.write_copy`); else `_NO_COPY`."""
+        if not any(getattr(b, "takes_private_values", False) for b in self.backends[1:]):
+            return _NO_COPY
+        write_copy = getattr(self.backends[0], "write_copy", None)
+        if write_copy is None:
+            return _NO_COPY
+        try:
+            return write_copy(key, value, metadata, _NO_COPY)
+        except Exception:
+            logger.debug("no copy of %r to write", key, exc_info=True)
+            return _NO_COPY
+
     @staticmethod
     def _read_seconds(backend: CacheBackend, key: str) -> float:
         """Seconds another read of *key* from *backend* takes, the value
@@ -433,13 +448,16 @@ class TieredBackend(CacheBackend):
         cap_size: int,
         *,
         private: bool = False,
+        copied: bool = False,
         serialized: Any = None,
     ) -> _TierWrites:
         """Write to every tier past RAM that takes an entry this size.
 
         *private*: *value* is the RAM tier's own copy, which nothing changes;
         a tier that `takes_private_values` serializes it in the background
-        instead of copying it first (``FileBackend.set``). *serialized*: the
+        instead of copying it first (``FileBackend.set``). *copied*: with
+        *private*, a copy made for these writes alone (`_write_copy`), which
+        the tier's queue holds until written. *serialized*: the
         bytes the RAM tier keeps *value* in (`InMemoryBackend.stored_payload`),
         which such a tier writes as they are."""
         stored_destinations: list[str] = []
@@ -482,7 +500,10 @@ class TieredBackend(CacheBackend):
                 if serialized is not None and getattr(backend, "takes_private_values", False):
                     backend.set(key, value, metadata, serializer, serialized=serialized)
                 elif private and getattr(backend, "takes_private_values", False):
-                    backend.set(key, value, metadata, serializer, private=True)
+                    if copied:
+                        backend.set(key, value, metadata, serializer, private=True, copied=True)
+                    else:
+                        backend.set(key, value, metadata, serializer, private=True)
                 else:
                     backend.set(key, value, metadata, serializer)
                 stored_destinations.append(backend.source_label)
@@ -551,13 +572,20 @@ class TieredBackend(CacheBackend):
         # background write serializes it, so it is serialized now.
         holds_own_copy = getattr(self.backends[0], "holds_own_copy", None)
         private = not stored_metadata.get("by_reference") and holds_own_copy is not None and bool(holds_own_copy(key))
+        value, copied = entry[1], False
+        if not private and serialized is None:
+            # A full copy of it, when one costs about its memory (`_write_copy`).
+            made = self._write_copy(key, value, metadata)
+            if made is not _NO_COPY:
+                value, private, copied = made, True, True
         writes = self._write_persistent_tiers(
             key,
-            entry[1],
+            value,
             metadata,
             None,
             stored_metadata.get("size") or size,
             private=private,
+            copied=copied,
             serialized=serialized,
         )
         if not writes.stored:
@@ -647,6 +675,17 @@ class TieredBackend(CacheBackend):
                     # tier that takes it serializes it in the background, and the
                     # caller pays one copy (or none, for a table) instead of two.
                     private = self._private_copy(key, metadata)
+                    serialized = self._stored_payload(key, metadata)
+                    copied = False
+                    if private is _NO_COPY and serialized is None:
+                        # None kept, or none of its own (refused, dropped,
+                        # copied by pandas): one made now, on this thread,
+                        # at the cost of its arrays, so the pickling,
+                        # checksum and write still run in the background,
+                        # and nothing done to *value* after this call
+                        # reaches them.
+                        private = self._write_copy(key, value, metadata)
+                        copied = private is not _NO_COPY
                     writes = self._write_persistent_tiers(
                         key,
                         value if private is _NO_COPY else private,
@@ -654,7 +693,8 @@ class TieredBackend(CacheBackend):
                         serializer,
                         cap_size,
                         private=private is not _NO_COPY,
-                        serialized=self._stored_payload(key, metadata),
+                        copied=copied,
+                        serialized=serialized,
                     )
                 else:
                     writes = _TierWrites([], False, cap_size, [], [])

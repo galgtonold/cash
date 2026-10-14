@@ -1103,6 +1103,32 @@ class InMemoryBackend(CacheBackend):
             return default
         return entry[1]
 
+    def write_copy(self, key: str, value: Any, metadata: MetadataDict, default: Any = None) -> Any:
+        """A copy of *value*, cash's own, for a background write to another
+        tier when this tier keeps none it can vouch for (`private_copy`):
+        it refused the value (over its eviction target, or slower to
+        restore than to compute), dropped it, or copied it in a way that
+        may keep something of the caller's (a table with nullable or
+        ``str`` columns of Python strings: pandas' deep copy shares its
+        labels). Else *default*, and the caller serializes its own value
+        before it returns.
+
+        Made here, on the caller's thread, for a value whose copy costs
+        about a copy of its memory and keeps nothing of the caller's
+        (`_write_copy`): tables of numbers, dates, text and nullable
+        columns (labels copied too), arrays, atoms, in a few dicts, lists
+        and tuples. *key* and *metadata* name the entry, for the log.
+        """
+        if metadata.get(NO_PRIVATE_COPY):
+            return default  # its copy does not store as the value does
+        try:
+            if not _write_copyable(value):
+                return default
+            return _write_copy(value, {})
+        except Exception:  # serialized by the caller instead, as before
+            logger.debug("no copy of %r to write", key, exc_info=True)
+            return default
+
     def get_metadata(self, key: str) -> MetadataDict | None:
         """The metadata, counted as an access the way `get` counts one.
 
@@ -1923,6 +1949,113 @@ def _cheap_to_keep(value: Any, depth: int = 0) -> bool:
             return False
         return all(_cheap_to_keep(item, depth + 1) for item in items)
     return False
+
+
+def _write_copyable(value: Any, depth: int = 0) -> bool:
+    """Is *value* made only of atoms, arrays of plain values and plain
+    pandas tables `_write_copy` copies in full (`_copies_in_full`), in a
+    few dicts, lists and tuples?"""
+    kind = type(value)
+    if kind in _ATOMS:
+        return True
+    if _is_pandas_frame(kind):
+        return _copies_in_full(value)
+    if kind.__name__ == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
+        return not value.dtype.hasobject
+    if kind in (dict, list, tuple):
+        if _of_atoms(value):
+            return True  # any size: copied at C speed
+        if depth >= _CHEAP_DEPTH or len(value) > _CHEAP_ITEMS:
+            return False
+        if kind is dict and not all(type(name) in _ATOMS for name in value):
+            return False
+        items = value.values() if kind is dict else value
+        return all(_write_copyable(item, depth + 1) for item in items)
+    return False
+
+
+def _of_atoms(value: dict | list | tuple) -> bool:
+    """Are a dict's keys and values, or a list's or tuple's items, all `_ATOMS`?"""
+    atom = _ATOMS.__contains__
+    if type(value) is dict:
+        return all(map(atom, map(type, value))) and all(map(atom, map(type, value.values())))
+    return all(map(atom, map(type, value)))
+
+
+def _copies_in_full(frame: Any) -> bool:
+    """Does a copy of each array *frame* keeps its data and labels in
+    (`_full_copy_values`) leave nothing the caller can change: a plain
+    DataFrame or Series without ``attrs``, of numbers, dates and
+    durations, Arrow data, nullable columns and Python strings, under
+    labels of those kinds (or a range)?"""
+    import pandas as pd
+
+    if type(frame) not in (pd.DataFrame, pd.Series) or frame.attrs:
+        return False
+    if not all(_full_copy_values(blk.values) for blk in frame._mgr.blocks):
+        return False
+    axes = (frame.index,) if frame.ndim == 1 else (frame.index, frame.columns)
+    for axis in axes:
+        if isinstance(axis, pd.RangeIndex):
+            continue
+        if isinstance(axis, pd.MultiIndex) or not _full_copy_values(axis._data):
+            return False
+    return True
+
+
+def _full_copy_values(values: Any) -> bool:
+    """Is ``values.copy()`` a copy of all *values* hold that the caller can
+    reach: their memory, and Python objects only where none can change
+    (strings, a column of immutable cells)? Arrow memory is not written in
+    place (`frame_sharing`): a copy of the wrapper is enough."""
+    import numpy as np
+    import pandas as pd
+    from pandas.core.arrays.arrow import ArrowExtensionArray
+    from pandas.core.arrays.masked import BaseMaskedArray
+
+    if type(values) is np.ndarray:
+        return not values.dtype.hasobject or immutable_cells(values.ravel())
+    if type(values) in (pd.arrays.DatetimeArray, pd.arrays.TimedeltaArray, pd.arrays.StringArray):
+        return True  # one array; a StringArray holds only str and missing values
+    return isinstance(values, (BaseMaskedArray, ArrowExtensionArray)) and type(values).__module__.startswith("pandas.")
+
+
+def _write_copy(value: Any, memo: dict[int, Any], depth: int = 0) -> Any:
+    """A copy of a `_write_copyable` *value*: each table and array copied
+    in full, containers rebuilt over the copies, atoms as they are. One
+    object met twice is copied once (*memo*), as pickle keeps it one."""
+    kind = type(value)
+    if kind in _ATOMS:
+        return value
+    found = memo.get(id(value))
+    if found is not None:
+        return found
+    if _is_pandas_frame(kind):
+        copied = _full_frame_copy(value)
+    elif _of_atoms(value):
+        copied = value if kind is tuple else kind(value)
+    elif kind is dict:
+        copied = {name: _write_copy(item, memo, depth + 1) for name, item in value.items()}
+    elif kind is list or kind is tuple:
+        copied = kind(_write_copy(item, memo, depth + 1) for item in value)
+    else:  # an array of plain values
+        copied = _copy_array(value)
+    memo[id(value)] = copied
+    return copied
+
+
+def _full_frame_copy(frame: Any) -> Any:
+    """*frame* copied block by block (`frame_sharing.copy_keeping_blocks`),
+    its labels copied too: a deep pandas copy keeps the caller's label
+    arrays, which ``index.array`` writes."""
+    import pandas as pd
+
+    copied = frame_sharing.copy_keeping_blocks(frame)
+    for name in ("index",) if frame.ndim == 1 else ("index", "columns"):
+        axis = getattr(frame, name)
+        if not isinstance(axis, pd.RangeIndex):
+            setattr(copied, name, axis.copy(deep=True))
+    return copied
 
 
 def _frames_in(value: Any, depth: int = 0) -> list:

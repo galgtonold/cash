@@ -255,16 +255,20 @@ NumPy writing into an array, never reaches them. Each hit reads a new copy
 out of the bytes, as a disk hit does, and the disk write is those same bytes,
 so the object is pickled once.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.holds_own_copy @d82553cc, cash/backends/memory_backend.py:InMemoryBackend.private_copy @ef57a587 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.holds_own_copy @d82553cc, cash/backends/memory_backend.py:InMemoryBackend.private_copy @ef57a587, cash/backends/memory_backend.py:InMemoryBackend.write_copy @987f7a47 -->
 The disk entry is the result as it was computed: a change you make to it
 after the call never reaches the disk. The background write takes the memory
 tier's copy when that copy keeps nothing of yours (numbers, plain data, a
 table shared as above, anything copied through pickle), even when the memory
-tier lets that copy go as soon as it stored it, to stay under its cap. A
-table copied with pandas' deep copy (nullable or categorical columns, a
-subclass), whose Python objects in object columns stay yours, is serialized
-before the call returns instead, which costs that copy's pickle time on a
-miss.
+tier lets that copy go as soon as it stored it, to stay under its cap. When
+the memory tier has no such copy (the value is over its cap, slower to read
+back than to compute, or a table pandas copies, which keeps your row and
+column labels), one is made for the write before the call returns, at about
+the cost of copying its memory, if the value is tables of numbers, dates,
+text and nullable columns, arrays and plain values: the pickling, checksum
+and write still happen in the background. Anything else (a categorical
+column, a subclass, an object column holding lists) is serialized before
+the call returns instead, which costs its pickle time on a miss.
 
 === "Decorator"
 
