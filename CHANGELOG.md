@@ -160,6 +160,17 @@ recomputed.** Read **Breaking** before upgrading, and **Upgrading** at the end.
   longer to restore than to compute (a statsmodels result that rebuilds its
   design matrix when loaded) is no longer stored, and a value that costs more
   to write to disk than a restore would save stays in memory only.
+- **A long loop with slow iterations keeps them reusable.** A long notebook
+  loop ran as one cache entry whenever cash's estimate of its bookkeeping
+  passed a second, so raising its `range` or editing its last statement ran
+  every iteration again. Running as one unit now measures what an iteration
+  costs. When that is at least four times the bookkeeping (and at least
+  10 ms), later runs cache the loop iteration by iteration, so once those
+  entries exist, an edit runs only the iterations it changes or adds. The
+  measurement is kept in the cache folder by the loop's header, numbers
+  aside, so it carries over edits to the body and to the loop's length; a
+  loop measured cheap again goes back to one unit, and an unchanged rerun
+  still restores the whole loop at once.
 - **The storage notices log only when asked.** The cache-cap and first-eviction
   lines need `CASH_VERBOSE`, `CASH_DEBUG` or an INFO level set on the `cash`
   logger; an application logging everything at INFO no longer gets them on
