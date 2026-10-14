@@ -14,6 +14,7 @@ import functools
 import hashlib
 import logging
 import secrets
+import sys
 import types
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -22,6 +23,7 @@ from typing import Any, NamedTuple, Protocol, runtime_checkable
 from cash._memo import CODE_OBJECTS, NOTEBOOK_STATEMENTS, LruMemo
 from cash.notebook.lineage_store import resolve_lineage
 from cash.source_norm import exact_source_digest, unparse_without_docstrings
+from cash.tracking.function_tracker import is_local_module
 from cash.tracking.randomness import rng_carrier_kind
 
 from .held_functions import held_notebook_code
@@ -34,6 +36,7 @@ from .lineage_formula import (
     module_read_lineage,
 )
 from .recorded_reads import ReadRecord, choose, read_parts, watch
+from .string_lookups import code_looks_up_by_string, statement_looks_up_by_string
 
 logger = logging.getLogger(__name__)
 
@@ -297,8 +300,8 @@ class CacheKeyContext:
     in_notebook: Callable[[str], bool] | None = None
 
 
-class CacheKeyResult(NamedTuple):
-    """Result of :func:`compute_cache_key`."""
+class _CacheKeyFields(NamedTuple):
+    """The five parts of a :class:`CacheKeyResult`, unpacked as a tuple."""
 
     cache_key: str
     """Final ``stmt:xxxx`` cache key string."""
@@ -314,6 +317,16 @@ class CacheKeyResult(NamedTuple):
 
     module_source_hashes: list[str]
     """``['var:hash', ...]`` for tracked module dependencies."""
+
+
+class CacheKeyResult(_CacheKeyFields):
+    """Result of :func:`compute_cache_key`: its five parts, and whether the
+    key could name what the statement depends on."""
+
+    #: True when the key was made to match no entry, as it cannot name what
+    #: the code reaches (a holder too large to walk, a name looked up by a
+    #: string): storing under it only fills the disk.
+    matches_nothing: bool = False
 
 
 class VirtualNamespace(NamedTuple):
@@ -375,6 +388,7 @@ def called_function_dependencies(
     simulated: Mapping[str, str] | None = None,
     keyed: bool = True,
     unfollowed: set[str] | None = None,
+    by_string: set[str] | None = None,
 ) -> list[str]:
     """``"name:lineage"`` components for the globals a called function reaches for.
 
@@ -419,6 +433,11 @@ def called_function_dependencies(
     reads. A name whose value is too large to walk to the end is added to
     *unfollowed*, when given, whatever *keyed* says: which names cannot be
     followed does not depend on how their lineages are reported.
+
+    A name whose code reaches the notebook's names through a string
+    (``globals()['make']``, ``eval('make(3)')``: `string_lookups`) is added
+    to *by_string*, when given: which function the string names is known
+    only when the code runs, so what it reads is in no key.
     """
     seen: set[str] = set()
     stack = [name for name in inputs]
@@ -441,6 +460,8 @@ def called_function_dependencies(
             used_virtual = used_virtual or code_obj is not None
             found = [code_obj] if code_obj is not None else []
         codes[name] = found
+        if by_string is not None and _looks_up_by_string(found, own, user_ns.get(name), user_ns):
+            by_string.add(name)
         return found
 
     def is_module(ref: str) -> bool:
@@ -505,6 +526,35 @@ def called_function_dependencies(
             return as_keyed(ref, variable_lineage.get(ref, "ABSENT"))
 
     return sorted(f"{ref}:{'ABSENT' if ref in attribute_only else lineage(ref)}" for ref in referenced)
+
+
+def _looks_up_by_string(
+    codes: Iterable[types.CodeType], own: types.CodeType | None, value: Any, user_ns: Mapping[str, Any]
+) -> bool:
+    """Does any of *codes*, what a name holding *value* runs, look the
+    notebook's names up by a string? *own* is *value*'s own code, read only
+    when it is the user's; the rest is notebook code it holds."""
+    for code in codes:
+        namespace = _users_own_globals(value, user_ns) if code is own else user_ns
+        if namespace is not None and code_looks_up_by_string(code, namespace):
+            return True
+    return False
+
+
+def _users_own_globals(fn: Any, user_ns: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """*fn*'s globals when it is the user's own code: defined in a cell, or
+    in a module of their own (``from mylib import via``, whose
+    ``globals()[name]`` finds what a cell set as ``mylib.K``). None for a
+    library's function imported by name: it is walked for the notebook
+    globals it names, but what it looks up by a string is its own
+    library's business (``namedtuple`` reads its caller's ``f_globals``)."""
+    namespace = getattr(fn, "__globals__", None)
+    if namespace is user_ns:
+        return namespace
+    if not isinstance(namespace, dict):
+        return None
+    module = sys.modules.get(namespace.get("__name__"))  # type: ignore[arg-type]
+    return namespace if module is not None and is_local_module(module) else None
 
 
 def called_function_globals(
@@ -637,15 +687,33 @@ def _held_codes(
     return found
 
 
-def unfollowed_holders(
-    inputs: Iterable[str], user_ns: Mapping[str, Any], variable_lineage: Mapping[str, str]
-) -> set[str]:
-    """The names, among *inputs* and the globals their callees read, whose
-    value holds too much to find every notebook function in it: a
-    statement reading one cannot be keyed on what those functions read."""
-    unfollowed: set[str] = set()
-    called_function_dependencies(sorted(inputs), user_ns, variable_lineage, unfollowed=unfollowed)
-    return unfollowed
+#: What `UnkeyedReach.by_string` names the statement itself by.
+THE_STATEMENT = "<the statement>"
+
+
+class UnkeyedReach(NamedTuple):
+    """What a statement reaches that its key cannot name: whatever key it
+    gets matches no entry (`compute_cache_key`), so it runs uncached."""
+
+    #: Names, among its inputs and the globals their callees read, whose
+    #: value holds too much to find every notebook function in it.
+    unfollowed: set[str]
+    #: Functions among them whose code reaches the notebook's names through
+    #: a string, and `THE_STATEMENT` when the statement does itself
+    #: (`string_lookups`): which function the string names, and what it
+    #: reads, is known only when the code runs.
+    by_string: set[str]
+
+
+def unkeyed_reach(
+    code: str, inputs: Iterable[str], user_ns: Mapping[str, Any], variable_lineage: Mapping[str, str]
+) -> UnkeyedReach:
+    """:class:`UnkeyedReach` of the statement *code* reading *inputs*, in one walk."""
+    reach = UnkeyedReach(set(), {THE_STATEMENT} if statement_looks_up_by_string(code, user_ns) else set())
+    called_function_dependencies(
+        sorted(inputs), user_ns, variable_lineage, unfollowed=reach.unfollowed, by_string=reach.by_string
+    )
+    return reach
 
 
 def _nested_codes_of(code_objs: Iterable[types.CodeType]) -> list[types.CodeType]:
@@ -814,7 +882,12 @@ def _joined(hashes: list[str]) -> str:
     return ":" + ":".join(sorted(hashes)) if hashes else ""
 
 
-def _callee_deps(sorted_inputs: list[str], ctx: CacheKeyContext, unfollowed: set[str] | None = None) -> list[str]:
+def _callee_deps(
+    sorted_inputs: list[str],
+    ctx: CacheKeyContext,
+    unfollowed: set[str] | None = None,
+    by_string: set[str] | None = None,
+) -> list[str]:
     """The key component for the globals the called functions reach for.
 
     Those are read at CALL time, including any bound BELOW this statement,
@@ -834,7 +907,13 @@ def _callee_deps(sorted_inputs: list[str], ctx: CacheKeyContext, unfollowed: set
         else None
     )
     return called_function_dependencies(
-        sorted_inputs, ctx.user_ns, ctx.variable_lineage, virtual, simulated=ctx.virtual_lineage, unfollowed=unfollowed
+        sorted_inputs,
+        ctx.user_ns,
+        ctx.variable_lineage,
+        virtual,
+        simulated=ctx.virtual_lineage,
+        unfollowed=unfollowed,
+        by_string=by_string,
     )
 
 
@@ -940,14 +1019,19 @@ def compute_cache_key(
     # distinct keys (first occurrence is ``occ0``).
     occurrence_component = f":occ{occurrence_index}"
     unfollowed: set[str] = set()
-    callee_deps = _callee_deps(sorted_inputs, ctx, unfollowed)
+    by_string: set[str] = {THE_STATEMENT} if statement_looks_up_by_string(code, ctx.user_ns) else set()
+    callee_deps = _callee_deps(sorted_inputs, ctx, unfollowed, by_string)
     callee_component = f":callees:{':'.join(callee_deps)}" if callee_deps else ""
     if unfollowed:
         # A value too large to find every notebook function in: what those
         # functions read is not in the key, so no key may match it. The
         # runtime runs the statement uncached and says why
-        # (``unfollowed_holders``).
+        # (``unkeyed_reach``).
         callee_component += f":unfollowed:{','.join(sorted(unfollowed))}:{secrets.token_hex(16)}"
+    if by_string:
+        # Code reaching a function by a name spelled at run time: what that
+        # function reads is not in the key either (``unkeyed_reach``).
+        callee_component += f":by-string:{','.join(sorted(by_string))}:{secrets.token_hex(16)}"
     # Code the notebook installed on a library class (a pandas accessor, a
     # patched method) that the statement reaches by attribute. Empty when
     # there is none, so every other key is unchanged.
@@ -995,4 +1079,7 @@ def compute_cache_key(
             cache_key,
         )
 
-    return CacheKeyResult(cache_key, source_hash, input_hashes, func_source_hashes, module_source_hashes)
+    result = CacheKeyResult(cache_key, source_hash, input_hashes, func_source_hashes, module_source_hashes)
+    if unfollowed or by_string:
+        result.matches_nothing = True
+    return result

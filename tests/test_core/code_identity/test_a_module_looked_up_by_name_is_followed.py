@@ -104,3 +104,56 @@ def _function_from_source(tmp_path, body):
     namespace: dict = {"__name__": "dispatch_src"}
     exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), namespace)
     return namespace["f"]
+
+
+BY_NAME_MAIN = """
+import cash
+
+cfg = 1
+NAME = "make"
+
+
+def make(x):
+    return x + cfg
+
+
+@cash.cache
+def f(x):
+    {body}
+
+
+print(f(1))
+"""
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "return globals()[NAME](x)",
+        "return globals().get(NAME)(x)",
+        "fn = globals()[NAME]\n    return fn(x)",
+        "fn = globals().get(NAME)\n    return fn(x)",
+        "return globals()['make'](x)",
+        "return make(x)",
+    ],
+)
+def test_a_function_named_by_a_string_is_keyed_on_what_it_reads(tmp_path, body):
+    """``globals()[NAME](x)`` calls ``make``, whose ``cfg`` was in no key:
+    after ``cfg = 2`` the next run was served 2 where an uncached run gives
+    3. A computed name now runs uncached, as ``getattr(obj, name)(x)``
+    does; a written-out one and a plain call are keyed on ``cfg``."""
+    files = {"main.py": BY_NAME_MAIN.replace("{body}", body)}
+    first, after, uncached = edited_runs(tmp_path, files, [("main.py", "cfg = 1", "cfg = 2")])
+    assert first == "2"
+    assert after == uncached == "3"
+
+
+@pytest.mark.parametrize("call", ["vars(json)[ATTR](x)", "json.__dict__[ATTR](x)", "globals().get(NAME).dumps(x)"])
+def test_a_computed_namespace_lookup_is_reported(tmp_path, call):
+    c = cash.Cash(cache_dir=str(tmp_path / "c"))
+    f = c.cache(_function_from_source(tmp_path, f"def f(x):\n    return {call}\n"))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert f(1) == "1"
+    messages = [str(w.message) for w in caught]
+    assert any("non-constant name" in m or "computed name" in m for m in messages), messages

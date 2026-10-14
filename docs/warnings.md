@@ -879,10 +879,10 @@ Each finding has a line number and a label:
 | `scope_mutation` | `global` / `nonlocal`, or assigning to another object's attribute or item. An object the function made is its own: a literal, a copy, or what a numpy, pandas or polars function returns (`load = np.bincount(...); load[c] -= d`, `counts = pd.crosstab(...); counts.columns = [...]`), except a view of an argument (`np.reshape`, `np.asarray`, `out=`) | this code |
 | `discarded_call` | A call whose return value is thrown away, except on an object the function made itself (`d = deque(xs); d.popleft()`, `m = LinearRegression(); m.fit(X, y)`) | this code |
 | `mutable_global` | A module global that other code in the module reassigns, and that the key does not fold | this code |
-| `dynamic_pattern` | A callable picked at run time from a table built in the body (`t = {...}; t[kind]()`), from a parameter (`router.table[key]()`), or from `globals()[name]` or `vars(mod)[name]` | this code |
+| `dynamic_pattern` | A callable picked at run time from a table built in the body (`t = {...}; t[kind]()`), from a parameter (`router.table[key]()`), or an object looked up in `globals()[name]` or `vars(mod)[name]` and called through (`globals()[name].fit(x)`) | this code |
 | `ambient_read` | The clock, a fresh UUID, an environment variable named at run time | [KEY-AMBIENT-READ](#key-ambient-read) |
 | `network_read` | A GET request or a read-only SQL query | [KEY-NETWORK-READ](#key-network-read) |
-| `untrackable_dep` | `eval` / `exec` / `compile`, a call to a function that `exec` / `eval` built from a string into a namespace of no module (`ns = {}; exec(rules_text, ns)`), `getattr(obj, name)()`, `operator.attrgetter(name)` or `methodcaller(name)` with a run-time name, `importlib.import_module`, `sys.modules[name]` | [KEY-UNTRACKABLE-DEP](#key-untrackable-dep) |
+| `untrackable_dep` | `eval` / `exec` / `compile`, a call to a function that `exec` / `eval` built from a string into a namespace of no module (`ns = {}; exec(rules_text, ns)`), `getattr(obj, name)()`, `globals()[name]()`, `globals().get(name)()` or `vars(mod)[name]()`, `operator.attrgetter(name)` or `methodcaller(name)` with a run-time name, `importlib.import_module`, `sys.modules[name]` | [KEY-UNTRACKABLE-DEP](#key-untrackable-dep) |
 
 Log lines (`logging`, `print(..., file=sys.stderr)`) are not reported. A
 module-level table such as `HANDLERS[kind]()` is hashed as a global and is not
@@ -1560,13 +1560,14 @@ you must. See [Silencing one code](#silencing-one-code).
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks._warn_untrackable @90bfa6af, cash/decorator/registry.py:FunctionRegistry.refresh_helper_bindings @006fceab -->
 **What happened.** The function, or a helper it calls, picks the code it runs
 by a name known only at run time: `getattr(module, name)()`,
+`globals()[name]()`, `vars(module)[name]()`,
 `importlib.import_module(name)`, `sys.modules[name]`,
 `operator.attrgetter(name)`, `eval`, `exec` or `compile`. The message names
 the line. The function runs uncached, and so does every cached function that
 calls it.
 
 **Why it matters.** cash cannot tell which code that name lands on, so an edit
-to it would not change the key. Nothing stale is served: the call is not
+to it, or to a global it reads, would not change the key. Nothing stale is served: the call is not
 cached.
 
 **What to do.** Call the function by name, or pass the function itself in as

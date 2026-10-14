@@ -59,6 +59,7 @@ from .purity_report import (
     ISSUE_UNTRACKABLE_DEP,
     PurityIssue,
 )
+from .static_dispatch import computed_namespace_lookup
 
 #: What a `network_read` finding names as the source of the answer.
 _SOURCE: dict[EffectKind, str] = {EffectKind.NETWORK_READ: "server", EffectKind.DB_READ: "database"}
@@ -410,10 +411,14 @@ class PurityVisitor(ast.NodeVisitor):
         """True when *value* resolves a callable from a runtime value.
 
         ``eval``/``exec``/``compile`` bound by name; ``getattr(obj, name)`` with
-        a non-constant name; ``importlib.import_module(...)`` / ``__import__``.
+        a non-constant name; ``importlib.import_module(...)`` / ``__import__``;
+        ``globals()[name]``, ``globals().get(name)``, ``vars(m)[name]`` with a
+        non-constant name (`computed_namespace_lookup`).
         Assigning one of these to a local and calling it is untrackable dispatch.
         """
         if isinstance(value, ast.Name) and value.id in {"eval", "exec", "compile"}:
+            return True
+        if computed_namespace_lookup(value) is not None:
             return True
         if isinstance(value, ast.Call):
             f = value.func

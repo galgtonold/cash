@@ -339,13 +339,18 @@ def call_cache_key(
             occurrence = 0
         elif getattr(site, "content_source", ""):
             source, occurrence = site.content_source, 0
-    base = compute_cache_key(
+    keyed = compute_cache_key(
         source,
         free_names,
         ctx=ctx,
         occurrence_index=occurrence,
         namespace="call",
-    ).cache_key
+    )
+    if keyed.matches_nothing:
+        # No entry could ever match it: the call runs uncached, as its
+        # statement does, and stores nothing.
+        return None
+    base = keyed.cache_key
     # A collapsed key is a wrong answer; an uncached call is merely slow.
     if len(arg_digests) != len(site.computed_arg_positions):
         return None

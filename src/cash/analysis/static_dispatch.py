@@ -32,6 +32,44 @@ _DYNAMIC_MODULE = "%s with a non-constant name - dynamic import; the module's co
 _DYNAMIC_GETTER = "operator.%s(name)(obj) with non-constant name - dynamic dispatch"
 
 
+def _is_identifier(node: ast.AST) -> bool:
+    key = _const_str(node)
+    return key is not None and key.isidentifier()
+
+
+def _namespace_spelled(base: ast.AST) -> str | None:
+    """How *base* is spelled when it is a runtime namespace: ``globals()``,
+    ``vars(x)``, ``x.__dict__``."""
+    if isinstance(base, ast.Call) and isinstance(base.func, ast.Name) and not base.keywords:
+        if base.func.id == "globals" and not base.args:
+            return "globals()"
+        if base.func.id == "vars" and len(base.args) == 1:
+            return "vars(...)"
+    if isinstance(base, ast.Attribute) and base.attr == "__dict__":
+        return "obj.__dict__"
+    return None
+
+
+def computed_namespace_lookup(node: ast.AST) -> str | None:
+    """How *node* is spelled for a report when it looks a name up in a
+    runtime namespace by a string that is not a constant identifier --
+    ``globals()[k]``, ``vars(m)[k]``, ``m.__dict__[k]``, ``globals().get(k)``
+    -- else None. What it finds is known only when the code runs."""
+    if isinstance(node, ast.Subscript) and not _is_identifier(node.slice):
+        spelled = _namespace_spelled(node.value)
+        return f"{spelled}[...]" if spelled else None
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "get"
+        and node.args
+        and not _is_identifier(node.args[0])
+    ):
+        spelled = _namespace_spelled(node.func.value)
+        return f"{spelled}.get(...)" if spelled else None
+    return None
+
+
 class _StaticDispatchSpeller(ast.NodeTransformer):
     """Rewrites the lookups that name a module or a function by a string into
     the plain spelling the helper walk follows (`spell_static_dispatch`)."""
@@ -118,23 +156,33 @@ class _StaticDispatchSpeller(ast.NodeTransformer):
                     return node
                 method = ast.copy_location(ast.Attribute(value=node.args[0], attr=name, ctx=ast.Load()), node)
                 return ast.copy_location(ast.Call(func=method, args=func.args[1:], keywords=func.keywords), node)
-        # globals()[k].g(x), vars(m)[k].g(x): a function looked up through a
-        # runtime namespace by a computed name, then called through it.
+        # globals()[k](x), globals().get(k)(x), vars(m)[k](x): the function
+        # called is named by a run-time string, so neither its code nor what
+        # it reads is in the key -- an edit to what it reads served the old
+        # result. Reported as `getattr(obj, name)(x)` is: the call runs uncached.
+        lookup = computed_namespace_lookup(func)
+        if lookup is not None:
+            self.untracked.append(
+                (node.lineno, ISSUE_UNTRACKABLE_DEP, f"{lookup}(...) with a non-constant name - dynamic dispatch")
+            )
+            return node
+        # globals()[k].g(x), globals().get(k).g(x), vars(m)[k].g(x): an
+        # object looked up through a runtime namespace by a computed name,
+        # then called through it.
         root = func
         while isinstance(root, ast.Attribute):
             root = root.value
-        if root is not func and isinstance(root, ast.Subscript) and _const_str(root.slice) is None:
-            lookup = self._namespace_lookup(root)
-            if lookup is not None:
-                self.untracked.append(
-                    (
-                        node.lineno,
-                        ISSUE_DYNAMIC_PATTERN,
-                        f"calls through {lookup[1]} with a computed name - that lookup does not reach "
-                        f"the cache key, so editing the callable it names will not invalidate; "
-                        f"name it with depends_on=[...]",
-                    )
+        lookup = computed_namespace_lookup(root) if root is not func else None
+        if lookup is not None:
+            self.untracked.append(
+                (
+                    node.lineno,
+                    ISSUE_DYNAMIC_PATTERN,
+                    f"calls through {lookup} with a computed name - that lookup does not reach "
+                    f"the cache key, so editing the callable it names will not invalidate; "
+                    f"name it with depends_on=[...]",
                 )
+            )
         return node
 
 
