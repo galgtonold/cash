@@ -28,13 +28,14 @@ from ..sizing import memory_footprint
 from ..value_types import IMMUTABLE_PRIMS
 from . import frame_sharing, iterative_copy
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, gdsf_value
-from .serialization import Serializer
+from .entry_format import SplitPayload
+from .serialization import OUT_OF_BAND_MIN_BYTES, Serializer, polars_reducers
 
 psutil = LazyModule("psutil")  # imported on first use: ~11 ms off `import cash`
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["NO_PRIVATE_COPY", "InMemoryBackend"]
+__all__ = ["NO_PRIVATE_COPY", "ROUND_TRIP_CLASS", "InMemoryBackend"]
 
 #: Metadata key: this tier's copy of the value is not a stand-in for the
 #: value the caller stored (a closed file, stored by name, copies back into
@@ -95,6 +96,88 @@ class _Marshalled:
         # The pickle round trip of `_deep_copy` reads it out too when it
         # runs without its persistent_id hook.
         return _plain_data.marshal_loads, (self.data,)
+
+
+class _Pickled:
+    """A stored value kept as the pickle stream and out-of-band buffers a
+    disk entry holds (``entry_format.MAGIC_SPLIT``): a hit unpickles a new
+    copy out of them, as a disk hit does, without reading a file.
+
+    The tier's copy of an object of a class of its own was a pickle round
+    trip on the store, and the unpickling was most of it: a statsmodels
+    result rebuilds its design matrices (7 s of a 10 s fit), so a value
+    that was never read again cost a second fit. Kept as the bytes, the
+    store pays the pickling alone, and the disk tier writes these very
+    bytes (`stored_payload`) instead of pickling the value again.
+
+    The bytes are cash's own, made when the value is stored: the stream is
+    a new ``bytes`` and each buffer is copied out of the value's memory
+    (``tobytes``), so nothing the caller does to the value afterwards --
+    in Python or in C -- reaches them. A hit hands out a value over new
+    buffers (a read-only one, which numpy will not make writable, shared).
+    """
+
+    __slots__ = ("buffers", "readonly", "served", "stream", "top_class")
+
+    def __init__(self, stream: bytes, buffers: list[bytes], readonly: list[bool], top_class: str | None = None) -> None:
+        self.stream = stream
+        self.buffers = buffers
+        self.readonly = readonly
+        #: The class (`class_key`) a reading is credited to, for a value that
+        #: is an object of a class of its own; None for a notebook entry.
+        self.top_class = top_class
+        #: Whether a hit has read it out yet (the first one is timed).
+        self.served = False
+
+    def load(self) -> Any:
+        """A new copy of the value."""
+        buffers = [data if ro else bytearray(data) for data, ro in zip(self.buffers, self.readonly)]
+        return pickle.loads(self.stream, buffers=buffers)
+
+    def payload(self) -> Any:
+        """The bytes as the file tier writes them."""
+        return SplitPayload(self.stream, list(self.buffers)) if self.buffers else self.stream
+
+    @property
+    def nbytes(self) -> int:
+        return len(self.stream) + sum(len(data) for data in self.buffers)
+
+    def __deepcopy__(self, memo: dict) -> Any:
+        return self.load()
+
+    def __reduce__(self) -> tuple:
+        return _load_pickled, (self.stream, self.buffers, self.readonly)
+
+
+def _load_pickled(stream: bytes, buffers: list[bytes], readonly: list[bool]) -> Any:
+    return _Pickled(stream, buffers, readonly).load()
+
+
+def _snapshot(value: Any) -> _Pickled | None:
+    """*value* pickled as the file tier pickles it (`PickleSerializer.serialize_split`),
+    each large buffer copied out of band; None when it does not pickle."""
+    buffers: list[bytes] = []
+    readonly: list[bool] = []
+
+    def take(buffer: pickle.PickleBuffer) -> bool:
+        raw = buffer.raw()
+        if raw.nbytes < OUT_OF_BAND_MIN_BYTES:
+            return True  # in band
+        buffers.append(raw.tobytes())
+        readonly.append(raw.readonly)
+        return False
+
+    def retry() -> None:
+        buffers.clear()
+        readonly.clear()
+
+    try:
+        stream = kept_state.dumps(value, protocol=5, buffer_callback=take, on_retry=retry, extra=polars_reducers())
+    except Exception:  # copied the usual way, which says why it cannot be
+        logger.debug("could not keep a %s as pickle bytes", type(value).__name__, exc_info=True)
+        return None
+    kind = type(value)
+    return _Pickled(stream, buffers, readonly, None if kind is dict or _copied_as_data(kind) else class_key(kind))
 
 
 def _marshals(facts: Any) -> bool:
@@ -957,6 +1040,11 @@ class InMemoryBackend(CacheBackend):
             return entry[0], None
         if entry is not None and type(entry[1]) is _Marshalled:
             return entry[0], _plain_data.marshal_loads(entry[1].data)
+        if entry is not None and type(entry[1]) is _Pickled:
+            try:
+                return entry[0], entry[1].load()
+            except Exception:  # noqa: BLE001 - as a hit: what cannot be rebuilt is not served
+                return None
         if entry is not None and key in self._holds_bytes:
             copied = self._copy_holding_bytes(entry[1], key, self._frame_cells.get(key))
             return None if copied is _UNSERVABLE else (entry[0], copied)
@@ -1000,6 +1088,10 @@ class InMemoryBackend(CacheBackend):
             return default
         if type(entry[1]) is _Marshalled:
             return _plain_data.marshal_loads(entry[1].data)
+        if type(entry[1]) is _Pickled:
+            # Its bytes go to disk as they are (`stored_payload`); reading a
+            # copy out of them is the cost they were kept to save.
+            return default
         return entry[1]
 
     def get_metadata(self, key: str) -> MetadataDict | None:
@@ -1038,6 +1130,8 @@ class InMemoryBackend(CacheBackend):
 
         if type(value) is _Marshalled:
             return metadata, _plain_data.marshal_loads(value.data)
+        if type(value) is _Pickled:
+            return self._read_pickled(key, metadata, value)
         if holds_bytes or shared:
             # Parts kept as bytes: only a copy reads them out, never a plan
             # or the stored value itself. Parts kept as lists over shared
@@ -1066,6 +1160,100 @@ class InMemoryBackend(CacheBackend):
             if copied is not None:
                 return metadata, copied
         return metadata, self._safe_deep_copy(value, key, known_cells=known_cells)
+
+    def _read_pickled(self, key: str, metadata: MetadataDict, kept: _Pickled) -> tuple[MetadataDict | None, Any]:
+        """A hit of a value kept as pickle bytes: a new copy read out of them.
+
+        The first one is timed, as the store used to time its round trip:
+        the reading goes on the entry (``measured_round_trip_seconds``) and
+        to its class (`round_trip_seconds`), so the next store of one is
+        judged on it; and a hit no faster than the compute keeps the value
+        out of this tier from now on (it is handed out this once). Bytes
+        that no longer load (a class gone) are a miss, as on disk."""
+        started = time.perf_counter()
+        try:
+            value = kept.load()
+        except Exception:  # a value that cannot be rebuilt here is recomputed
+            logger.debug("could not read %r out of its pickle bytes", key, exc_info=True)
+            with self._lock:
+                entry = self._store.get(key)
+                if entry is not None and entry[1] is kept:
+                    self._drop(key)
+            return None, None
+        if not kept.served:
+            kept.served = True
+            if MEASURED_ROUND_TRIP not in metadata:
+                self._learn_reading(key, metadata, kept, time.perf_counter() - started)
+        return metadata, value
+
+    def time_pickled(self, key: str, metadata: MetadataDict) -> float | None:
+        """Read the value kept as pickle bytes for *key* (stored with
+        *metadata*) out once, timed, and throw the copy away: what a hit, and
+        a disk hit, will take. None for any other entry, or when it cannot
+        be read out (then it is dropped, as a hit would).
+
+        For the disk tier's decision when nothing of its class was read back
+        here yet (`TieredBackend.set`): a value that restores slower than it
+        computes must not be written. A reading of half the compute or more
+        is taken again and the faster kept (`_may_refuse`). The reading goes
+        on *metadata* and to the class, and a value no faster to read than
+        to compute leaves this tier, as on a store that copied it."""
+        with self._lock:
+            entry = self._store.get(key)
+        if entry is None or type(entry[1]) is not _Pickled or entry[0] is not metadata:
+            return None
+        kept = entry[1]
+        seconds = self._read_timed(kept)
+        if seconds is not None and _may_refuse(seconds, metadata):
+            again = self._read_timed(kept)
+            if again is not None:
+                seconds = min(seconds, again)
+        if seconds is None:
+            with self._lock:
+                entry = self._store.get(key)
+                if entry is not None and entry[1] is kept:
+                    self._drop(key)
+            return None
+        self._learn_reading(key, metadata, kept, seconds)
+        return seconds
+
+    @staticmethod
+    def _read_timed(kept: _Pickled) -> float | None:
+        started = time.perf_counter()
+        try:
+            kept.load()
+        except Exception:  # what cannot be read out is not kept
+            logger.debug("could not read a value out of its pickle bytes", exc_info=True)
+            return None
+        return time.perf_counter() - started
+
+    def _learn_reading(self, key: str, metadata: MetadataDict, kept: _Pickled, seconds: float) -> None:
+        """Put what reading *kept* out took on its entry and its class, and
+        drop the entry when that is no faster than computing it."""
+        size = int(metadata.get("size") or 0)
+        metadata[MEASURED_ROUND_TRIP] = seconds
+        class_name = metadata.get(ROUND_TRIP_CLASS) if metadata.get("cost_model_family") is not None else None
+        if class_name is None and kept.top_class is not None:
+            class_name = kept.top_class
+        if class_name is not None:
+            note_round_trip(class_name, size, seconds)
+        if _judged_by_compute(metadata) and seconds >= metadata["execution_time"]:
+            with self._lock:
+                entry = self._store.get(key)
+                if entry is not None and entry[1] is kept:
+                    self._drop(key)
+
+    def stored_payload(self, key: str, metadata: MetadataDict | None = None) -> Any:
+        """The bytes a value kept as pickle bytes (`_Pickled`) is held in,
+        as the file tier writes them; None for any other entry. With
+        *metadata*, only the entry stored with that very dict."""
+        with self._lock:
+            entry = self._store.get(key)
+        if entry is None or type(entry[1]) is not _Pickled:
+            return None
+        if metadata is not None and entry[0] is not metadata:
+            return None
+        return entry[1].payload()
 
     def _copy_holding_bytes(
         self, value: Any, key: str, known_cells: dict[int, bool] | None, shared: dict[int, Any] | None = None
@@ -1217,6 +1405,23 @@ class InMemoryBackend(CacheBackend):
         elif whole and (marshalled := _plain_data.marshal_dumps(value, facts)) is not None:
             immutable = False
             stored = _Marshalled(marshalled)
+        elif (
+            plain is None
+            and facts is None
+            and not parts
+            and not shared
+            and size >= _ROUND_TRIP_MIN_BYTES
+            and _copied_by_round_trip(value, metadata)
+            and (pickled := _snapshot(value)) is not None
+        ):
+            # An object of a class of its own: kept as the bytes its pickle
+            # round trip would have read back at once (`_Pickled`). A hit
+            # reads them, and the disk tier writes them.
+            immutable = False
+            stored = pickled
+            learned = _learned_round_trip(value, size, metadata)
+            if learned is not None:
+                metadata[MEASURED_ROUND_TRIP] = learned
         elif plain is None:
             immutable = False
             premade = None
@@ -2055,6 +2260,21 @@ def _slower_than_its_compute(value: Any, size: int, metadata: MetadataDict) -> b
         return False
     metadata[MEASURED_ROUND_TRIP] = predicted
     return True
+
+
+#: Metadata key: the class (`class_key`) of the biggest value in a
+#: notebook entry, which a hit of the entry kept as pickle bytes credits
+#: its reading to (`InMemoryBackend._read_pickled`).
+ROUND_TRIP_CLASS = "round_trip_class"
+
+
+def _learned_round_trip(value: Any, size: int, metadata: MetadataDict) -> float | None:
+    """What unpickling *value* is predicted to take from earlier readings
+    of its class (of its biggest value, for a notebook entry), or None."""
+    if type(value) is not dict:
+        return round_trip_seconds(value, size)
+    readings = _ROUND_TRIP_RATES.get(metadata.get(ROUND_TRIP_CLASS) or "")
+    return size * min(readings) if readings else None
 
 
 def _copied_by_round_trip(value: Any, metadata: MetadataDict) -> bool:

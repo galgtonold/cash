@@ -837,6 +837,10 @@ class StatementStore:
     ) -> None:
         """Write the entry, and the metadata-only record a RAM-only value needs."""
         cache_key = run.cache_key
+        if prediction and prediction.get("class_key") is not None:
+            # A RAM tier that keeps the entry as pickle bytes credits its first
+            # hit's reading to this class (`InMemoryBackend._read_pickled`).
+            wire[memory_backend.ROUND_TRIP_CLASS] = prediction["class_key"]
         try:
             self.cash_instance.backend.set(cache_key, payload, wire)
         except (OSError, TypeError, ValueError, pickle.PicklingError, RuntimeError) as e:

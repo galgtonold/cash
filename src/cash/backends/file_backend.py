@@ -757,6 +757,7 @@ class FileBackend(CacheBackend):
         serializer: Serializer | None = None,
         *,
         private: bool = False,
+        serialized: bytes | SplitPayload | None = None,
     ) -> None:
         """Serialize the value on the calling thread, then write to disk
         in the background. ``set()`` returns once the bytes are captured;
@@ -765,7 +766,12 @@ class FileBackend(CacheBackend):
         *private*: cash owns *value* and nothing changes it from now on (the
         RAM tier's own copy). Then the background writer serializes it too,
         using its buffers' memory as it is: the caller pays nothing, where a
-        caller's value has to be copied before ``set`` may return."""
+        caller's value has to be copied before ``set`` may return.
+
+        *serialized*: *value* as *serializer* writes it uncompressed, in
+        bytes cash owns and nothing changes (the RAM tier keeps a value so,
+        `InMemoryBackend.stored_payload`): written as they are, nothing
+        pickled again. Ignored under ``compress`` or another serializer."""
         self._ensure_initialized()
         if self._unusable:
             return
@@ -780,7 +786,15 @@ class FileBackend(CacheBackend):
         if serializer is None:
             serializer = PickleSerializer()
 
-        if private:
+        if serialized is not None and (self.compress or type(serializer) is not PickleSerializer):
+            serialized = None
+        if serialized is not None:
+            # Held by the RAM tier anyway: not counted as a copy this write holds.
+            nbytes = self._payload_bytes(serialized)
+            job = self._do_set_sync
+            work = serialized
+            private = True
+        elif private:
             # Serialized by the writer; the size known now is the caller's.
             nbytes = int(metadata.get("size") or metadata.get("cost_model_size_bytes") or 0)
             job: Callable[..., None] = self._serialize_and_write

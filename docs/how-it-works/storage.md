@@ -167,7 +167,7 @@ the entry was written with and the tier's current `default_ttl`.
     `%cash_persist on` writes it anyway. The [cost model](../cost-model.md)
     explains the prediction and every setting.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @b4ff4e50 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @4a3ab175 -->
 Each tier turns down a single value too large for its cap, so a 20 MB frame
 can be stored in memory and on disk while skipping a Redis tier limited to
 10 MB. When a value was meant for disk but every disk tier refused it, cash
@@ -246,6 +246,14 @@ does. cash waits for a write only when something needs it on disk:
 
 A process this one did not start, reading the same folder at the same time,
 finds a result once its write has finished, and computes it until then.
+
+<!-- claim: cash/backends/memory_backend.py:_snapshot @056e4f9d, cash/backends/tiered_backend.py:TieredBackend._stored_payload @92ed63c1 -->
+An object of a class of its own (a fitted model, a graph) is kept in memory
+as the bytes its disk entry holds, made when it is stored: its arrays are
+copied out of it then, so a later change to your object, by Python or by
+NumPy writing into an array, never reaches them. Each hit reads a new copy
+out of the bytes, as a disk hit does, and the disk write is those same bytes,
+so the object is pickled once.
 
 <!-- claim: cash/backends/memory_backend.py:InMemoryBackend.holds_own_copy @d82553cc -->
 The disk entry is the result as it was computed: a change you make to it

@@ -370,6 +370,34 @@ class TieredBackend(CacheBackend):
             logger.debug("no private copy of %r", key, exc_info=True)
             return _NO_COPY
 
+    def _timed_before_writing(self, key: str, metadata: MetadataDict) -> bool:
+        """Time a read of *key*'s value out of the bytes the first tier keeps
+        it in, when nothing says yet what one takes and the policy may still
+        refuse it for that (not one the caller decided to keep). True when
+        a reading was taken."""
+        if MEASURED_ROUND_TRIP in metadata or _chosen_by_caller(metadata):
+            return False
+        time_pickled = getattr(self.backends[0], "time_pickled", None)
+        if time_pickled is None:
+            return False
+        try:
+            return time_pickled(key, metadata) is not None
+        except Exception:  # the decision stands as it was
+            logger.debug("could not time %r", key, exc_info=True)
+            return False
+
+    def _stored_payload(self, key: str, metadata: MetadataDict) -> Any:
+        """The bytes the first tier keeps *key*'s value in, stored with
+        *metadata*, for a persistent tier to write as they are; else None."""
+        stored_payload = getattr(self.backends[0], "stored_payload", None)
+        if stored_payload is None:
+            return None
+        try:
+            return stored_payload(key, metadata)
+        except Exception:  # the value is serialized as usual
+            logger.debug("no stored payload for %r", key, exc_info=True)
+            return None
+
     #: How many keys `_read_once` remembers.
     _READ_ONCE_KEYS = 4096
 
@@ -390,12 +418,15 @@ class TieredBackend(CacheBackend):
         cap_size: int,
         *,
         private: bool = False,
+        serialized: Any = None,
     ) -> _TierWrites:
         """Write to every tier past RAM that takes an entry this size.
 
         *private*: *value* is the RAM tier's own copy, which nothing changes;
         a tier that `takes_private_values` serializes it in the background
-        instead of copying it first (``FileBackend.set``)."""
+        instead of copying it first (``FileBackend.set``). *serialized*: the
+        bytes the RAM tier keeps *value* in (`InMemoryBackend.stored_payload`),
+        which such a tier writes as they are."""
         stored_destinations: list[str] = []
         errors: list[str] = []
         size_refused = False  # a tier skipped this object because it's too big
@@ -415,7 +446,9 @@ class TieredBackend(CacheBackend):
                 # write: this branch is reached only when the value was
                 # about to be dropped, and the alternative to the cost is a
                 # wrong answer to "will this fit".
-                true_size = self._serialized_size(value, serializer)
+                true_size = (
+                    self._serialized_size(value, serializer) if serialized is None else _payload_bytes(serialized)
+                )
                 if true_size is not None and true_size <= cap:
                     cap_size = true_size
                 else:
@@ -431,7 +464,9 @@ class TieredBackend(CacheBackend):
                     refusing_caps.append(int(cap))
                     continue
             try:
-                if private and getattr(backend, "takes_private_values", False):
+                if serialized is not None and getattr(backend, "takes_private_values", False):
+                    backend.set(key, value, metadata, serializer, serialized=serialized)
+                elif private and getattr(backend, "takes_private_values", False):
                     backend.set(key, value, metadata, serializer, private=True)
                 else:
                     backend.set(key, value, metadata, serializer)
@@ -469,6 +504,10 @@ class TieredBackend(CacheBackend):
         decision = self.policy.decide_rebuild(
             stored_metadata, rebuild_seconds, backend_kind=self._promotion_backend_kind()
         )
+        if decision.persist and self._timed_before_writing(key, stored_metadata):
+            decision = self.policy.decide_rebuild(
+                stored_metadata, rebuild_seconds, backend_kind=self._promotion_backend_kind()
+            )
         if decision.skipped == "bytes":
             self.notices.not_worth_bytes(
                 key,
@@ -488,7 +527,11 @@ class TieredBackend(CacheBackend):
             if k not in ("persist_skipped", "source", "storage", "defer_persist")
         }
         metadata["rebuild_time"] = rebuild_seconds
-        entry = self.backends[0].peek_entry(key)
+        serialized = self._stored_payload(key, stored_metadata)
+        # Kept as pickle bytes: written as they are, never read out first --
+        # unless a tier would serialize the value itself.
+        read_out = serialized is None or not all(_writes_bytes_as_they_are(b) for b in self.backends[1:])
+        entry = self.backends[0].peek_entry(key, value=read_out)
         if entry is None or entry[0] is not stored_metadata:
             return False  # gone or replaced meanwhile
         # The RAM tier's own copy, which nothing changes -- unless a part of
@@ -504,6 +547,7 @@ class TieredBackend(CacheBackend):
             None,
             stored_metadata.get("size") or size,
             private=private,
+            serialized=serialized,
         )
         if not writes.stored:
             if writes.size_refused:
@@ -555,14 +599,29 @@ class TieredBackend(CacheBackend):
             deferred = bool(metadata.pop("defer_persist", False))
             if original_metadata is not None:
                 original_metadata.pop("defer_persist", None)
+            sampled = None if deferred or _chosen_by_caller(metadata) else sampled_cost(value)
             decision = self.policy.decide(
                 key,
                 metadata,
                 backend_kind=self._promotion_backend_kind(),
                 deferred=deferred,
                 override=self.promotion_policy,
-                sampled=None if deferred or _chosen_by_caller(metadata) else sampled_cost(value),
+                sampled=sampled,
             )
+            if decision.persist and self._timed_before_writing(key, metadata):
+                # Kept as pickle bytes, its class never read back here: read
+                # out once now, so a value slower to restore than to compute
+                # is not written (`InMemoryBackend.time_pickled`).
+                decision = self.policy.decide(
+                    key,
+                    metadata,
+                    backend_kind=self._promotion_backend_kind(),
+                    deferred=deferred,
+                    override=self.promotion_policy,
+                    sampled=sampled,
+                )
+                if self.backends[0].peek_metadata(key) is None and self.backends[0].source_label in stored_destinations:
+                    stored_destinations.remove(self.backends[0].source_label)  # no faster than its compute
             size = metadata.get("size", 0) or 0
             cap_size = size or metadata.get("cost_model_size_bytes", 0)
             if decision.skipped == "bytes":
@@ -588,6 +647,7 @@ class TieredBackend(CacheBackend):
                     serializer,
                     cap_size,
                     private=private is not _NO_COPY,
+                    serialized=self._stored_payload(key, metadata),
                 )
             else:
                 writes = _TierWrites([], False, cap_size, [], [])
@@ -624,6 +684,19 @@ class TieredBackend(CacheBackend):
         # Log visibility
         if stored_destinations:
             logger.debug("[STORAGE] Stored in: %s", ", ".join(stored_destinations))
+
+
+def _writes_bytes_as_they_are(backend: CacheBackend) -> bool:
+    """Does *backend* write a value's pickle bytes as they are, given them
+    (``FileBackend.set`` *serialized*), without the value itself?"""
+    return bool(getattr(backend, "takes_private_values", False)) and not getattr(backend, "compress", False)
+
+
+def _payload_bytes(serialized: Any) -> int:
+    """The bytes in a serialized value: a stream, or a stream and its buffers."""
+    if isinstance(serialized, (bytes, bytearray, memoryview)):
+        return len(serialized)
+    return len(serialized.stream) + sum(memoryview(b).nbytes for b in serialized.buffers)
 
 
 def _chosen_by_caller(metadata: MetadataDict) -> bool:
