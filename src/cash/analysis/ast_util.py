@@ -225,6 +225,14 @@ def called_dotted_names(tree: ast.AST | None) -> frozenset[str]:
     return frozenset(out)
 
 
+def same_as_all(tree: ast.AST | None, scope: CallScope) -> bool:
+    """Whether *scope* picks every node of *tree*, as ``"all"`` does: a
+    ``"no_control_bodies"`` scope over a tree without a control statement."""
+    if scope == "all":
+        return True
+    return scope == "no_control_bodies" and not any(isinstance(n, _CONTROL_STATEMENTS) for n in ast.walk(tree))
+
+
 def nodes_in(tree: ast.AST | None, scope: CallScope = "all") -> list[ast.AST]:
     """Every node of *tree* within *scope* (as `calls_in` picks calls)."""
     if tree is None:

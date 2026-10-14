@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import io
 import logging
+import os
 import secrets
 import sys
 import types
@@ -15,11 +16,12 @@ from typing import Any
 from cash import _plain_data
 from cash._active import default_cash
 from cash._clock import perf_counter as _perf_counter
-from cash.backends.persistence_policy import PersistencePolicy
+from cash.backends.persistence_policy import COMPUTE_FLOOR_S, PersistencePolicy
 from cash.control_markers import has_marker
 from cash.diagnostics import log_diagnostic, warn_diagnostic
 from cash.exceptions import (
     CacheKeyComputationError,
+    CashCacheIneffectiveWarning,
     CashWarning,
 )
 from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
@@ -90,6 +92,14 @@ from cash.notebook.tracking_state import TrackingState
 from cash.notebook.versioned_json_store import resolve_cache_dir
 from cash.purity import is_known_pure, is_stateful
 
+from ...analysis.analysis_budget import (
+    ANALYSIS_BUDGET_REASON,
+    AnalysisBudget,
+    AnalysisBudgetExceeded,
+    analysis_budget,
+    analysis_budget_seconds,
+    no_analysis_budget,
+)
 from ...analysis.annotations import CacheAnnotation
 from ...analysis.ast_util import resolve_dotted_name
 from ...analysis.cacheability import analyze_statement, statement_writes_files
@@ -98,7 +108,7 @@ from ...analysis.cacheability_decision import (
     identity_coupled_reason,
 )
 from ...analysis.code_analyzer import CodeAnalyzer, calls_ipython, statement_code
-from ...analysis.handed_callables import new_analysis_round
+from ...analysis.handed_callables import answers_shared, new_analysis_round, stop_sharing_answers
 from ...analysis.mutation_effects import (
     StatementEffects,
     live_function_source,
@@ -119,7 +129,14 @@ from ...tracking.randomness import (
     rng_virtual_var,
 )
 from ..borrowed_memory import borrowed_memory_names, lazy_frame_sources
-from ..callee_reach import import_state_writes, module_globals, module_state_writes, rebound_modules
+from ..callee_reach import (
+    CWD,
+    ENVIRON,
+    import_state_writes,
+    module_globals,
+    module_state_writes,
+    rebound_modules,
+)
 from ..holder_patches import holder_patches
 from ..lineage_formula import held_lineage, key_hidden_reads, no_cache_value_digest, use_lineage_alias_store
 from ..magic_effects import (
@@ -227,6 +244,12 @@ class StatementProcessor:
         self._amplification = AmplificationGuard()
         #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
         self._share_unchecked_warned: set[str] = set()
+        #: Statements already told about NOTEBOOK-ANALYSIS-BUDGET.
+        self._past_budget_told: set[str] = set()
+        #: What a statement's text last took to run, in seconds, or None when
+        #: never measured (``CashSession.expected_compute``, set by the
+        #: magics): its analysis budget (`analysis_budget_seconds`).
+        self.expected_run_time: Callable[[str], float | None] = lambda code: None
 
         # The Cash instance's own, which the dashboard reads (`Cash.show_stats`).
         analytics = getattr(cash_instance, "analytics", None)
@@ -654,16 +677,19 @@ class StatementProcessor:
             header_files=header_files,
             header_remote=header_remote,
         )
-        done = self._prepare(run)
-        if done is not None:
-            self._advance_rng(run)
-            return done
-        with self._executing(run) as runner:
-            self._offer_digests(run, runner)
-            try:
-                runner.run()
-            finally:
-                self._mutations.digests.withdraw_offer()
+        # The analyses before the statement runs share their walks through
+        # what it reads (`answers_shared`), up to the moment it runs.
+        with answers_shared():
+            done = self._prepare(run)
+            if done is not None:
+                self._advance_rng(run)
+                return done
+            with self._executing(run) as runner:
+                self._offer_digests(run, runner)
+                try:
+                    runner.run()
+                finally:
+                    self._mutations.digests.withdraw_offer()
         try:
             return self._finish(run, runner.execution)
         finally:
@@ -711,12 +737,13 @@ class StatementProcessor:
             force_outputs=force_outputs,
             is_last=is_last,
         )
-        done = self._prepare(run)
-        if done is not None:
-            self._advance_rng(run)
-            return done
-        with self._executing(run) as runner:
-            await runner.run_async()
+        with answers_shared():
+            done = self._prepare(run)
+            if done is not None:
+                self._advance_rng(run)
+                return done
+            with self._executing(run) as runner:
+                await runner.run_async()
         try:
             return self._finish(run, runner.execution)
         finally:
@@ -731,7 +758,8 @@ class StatementProcessor:
         and :meth:`_finish`.
         """
         self._begin(run)
-        effects, analysis_time, hash_time = self._analyze(run)
+        run.analysis_budget = AnalysisBudget(analysis_budget_seconds(self._expected_run_time(run.code)))
+        effects, analysis_time, hash_time = self._within_budget(run, lambda: self._analyze(run))
         if effects.unanalysed:
             run.metrics["uncacheable_reasons"].extend(effects.unanalysed)
             run.skip_cache = True
@@ -752,8 +780,13 @@ class StatementProcessor:
         # Computed once: used by the cacheability decision and (on the
         # cache-miss path) by _post_execute for in-place-mutation tracking.
         run.analysis = analyze_statement(run.code, run.tree, self.shell.user_ns)
-        self._mutation_routing.route(run, effects)
-        self._decide_cacheability(run)
+        self._within_budget(run, lambda: self._mutation_routing.route(run, effects))
+        try:
+            with analysis_budget(run.analysis_budget):
+                self._decide_cacheability(run)
+        except AnalysisBudgetExceeded:
+            run.analysis_budget.tripped = True
+        self._settle_budget(run)
         lineage = self.tracking_state.variable_lineage
         self.tracking_state.statement_entry_lineages[run.code] = {
             name: lineage[name] for name in run.inputs if name in lineage
@@ -787,6 +820,110 @@ class StatementProcessor:
         }
         self._route_calls(run)
         return None
+
+    def _expected_run_time(self, code: str) -> float | None:
+        """What *code* last took to run (`expected_run_time`); None when
+        unknown or when asking fails."""
+        try:
+            return self.expected_run_time(code.strip())
+        except Exception:  # noqa: BLE001 - no measurement: the floor applies
+            return None
+
+    def _within_budget(self, run: StatementRun, step: Callable[[], Any]) -> Any:
+        """*step*, with *run*'s analysis budget (`analysis_budget`).
+
+        The analyses answer "could not tell in time" themselves, each as for
+        a callee it cannot read. One that does not, and lets the budget's
+        exception out, is asked again without a budget: a step left half
+        done would answer for less than the statement does.
+        """
+        budget = run.analysis_budget
+        try:
+            with analysis_budget(budget):
+                return step()
+        except AnalysisBudgetExceeded:
+            budget.tripped = True
+            with no_analysis_budget():
+                return step()
+
+    def _settle_budget(self, run: StatementRun) -> None:
+        """Note what *run*'s analyses took, and when they ran past its budget,
+        run it uncached with its outputs keyed by value, and watch what of
+        the process it changes (`_observe_process_state`)."""
+        budget = run.analysis_budget
+        if budget is None:
+            return
+        run.analysis_spent = budget.spent()
+        if not budget.tripped:
+            return
+        run.past_budget = True
+        run.skip_cache = True
+        reasons = run.metrics["uncacheable_reasons"]
+        if ANALYSIS_BUDGET_REASON not in reasons:
+            reasons.append(ANALYSIS_BUDGET_REASON)
+        run.process_before = (os.getcwd(), dict(os.environ))
+
+    def _budget_left(self, run: StatementRun) -> AnalysisBudget | None:
+        """What is left of *run*'s analysis budget, for the analyses after it
+        ran; None for a statement that has none."""
+        budget = run.analysis_budget
+        if budget is None:
+            return None
+        return AnalysisBudget(max(0.0, budget.seconds - run.analysis_spent))
+
+    @contextmanager
+    def _after_it_ran(self, run: StatementRun) -> Generator[None, None, None]:
+        """Run the analyses below, after *run* ran, within what is left of
+        its budget, and count what they took."""
+        left = self._budget_left(run)
+        if left is None:
+            yield
+            return
+        try:
+            with analysis_budget(left):
+                yield
+        finally:
+            run.analysis_spent += left.spent()
+
+    @staticmethod
+    def _observe_process_state(run: StatementRun) -> None:
+        """What of the process a statement past its budget changed, seen:
+        what it hands over was not read for it (`callee_reach.handed`)."""
+        if run.process_before is None:
+            return
+        cwd, environ = run.process_before
+        run.process_before = None
+        changed = set(run.process_state)
+        try:
+            if os.getcwd() != cwd:
+                changed.add(CWD)
+        except OSError:
+            changed.add(CWD)
+        if dict(os.environ) != environ:
+            changed.add(ENVIRON)
+        run.process_state = frozenset(changed)
+
+    def _tell_past_budget(self, run: StatementRun, cost: float) -> None:
+        """Say once per statement that it was not cached because working out
+        how to key it took longer than it could save
+        (``NOTEBOOK-ANALYSIS-BUDGET``); only for a statement slow enough that
+        caching it would have mattered."""
+        if not run.past_budget or cost < COMPUTE_FLOOR_S or run.source_hash in self._past_budget_told:
+            return
+        self._past_budget_told.add(run.source_hash)
+        budget = run.analysis_budget.seconds if run.analysis_budget is not None else 0.0
+        what = (
+            f"this statement ran {cost:.2f}s and was not cached: working out what it can run through the "
+            f"objects it hands over took more than its {budget:.1f}s budget (four times what it took the last "
+            "time it ran, at least half a second). It runs every time, and what it binds is keyed by its value."
+        )
+        fix = (
+            "nothing to do: when it runs, it measures itself, and its next budget follows. To cache it anyway, "
+            "pass the function and the values it needs rather than an object graph holding them, or wrap the "
+            "work in a function decorated with @cash.cache."
+        )
+        log_diagnostic(logger, "NOTEBOOK-ANALYSIS-BUDGET", what, fix)
+        warn_diagnostic(CashCacheIneffectiveWarning, "NOTEBOOK-ANALYSIS-BUDGET", what, fix)
 
     def _begin(self, run: StatementRun) -> None:
         """Read *run*'s annotation, warn about its randomness, start its
@@ -1120,6 +1257,7 @@ class StatementProcessor:
                         user_ns[LOOP_ITERABLE_NAME] = run.loop_iterable
                     if memo is not None:
                         user_ns.update(memo[1])
+                    stop_sharing_answers()
                     start_time = _perf_counter()
                     try:
                         yield runner
@@ -1181,7 +1319,8 @@ class StatementProcessor:
                 run.rebound_modules = run.rebound_modules | import_state_writes(run.code, self.shell.user_ns)
             except Exception:
                 logger.debug("%s could not read what %r's imports set", _LOG_PROCESSOR, run.code[:80], exc_info=True)
-        self._forget_file_answers_if_it_wrote(code, execution)
+        with self._after_it_ran(run):
+            self._forget_file_answers_if_it_wrote(code, execution)
         execution.wall_time = wall_time
         execution.cost, execution.store_cost, execution.tax = self._calls.price(execution.wall_time, marks)
         execution.cached_call_reads = self._calls.files_read_in_cached_calls(marks)
@@ -1569,6 +1708,7 @@ class StatementProcessor:
         Updates ``run.outputs`` and ``run.skip_cache`` with what execution
         revealed (an observed mutation, an uncacheable value).
         """
+        self._observe_process_state(run)
         self._mutation_routing.observe(run)
         self._mutation_routing.note_module_state(run)
         if run.carriers_advanced is not None:
@@ -1611,6 +1751,7 @@ class StatementProcessor:
                 probes=execution.probes,
                 no_cache=(run.annotation is not None and run.annotation.no_cache)
                 or run.value_varies
+                or run.past_budget
                 or inputs_moved
                 or self._binds_a_stream(run),
                 replay_bumps=False,
@@ -1626,7 +1767,8 @@ class StatementProcessor:
                 self._record_shared_object_edges(run, captured_vars, holders, execution.echo, execution.cost)
             if not is_control_body(run.code):
                 self._records.note_share_edges(run.source_hash, linked | shared)
-            self._record_file_effects(run, execution)
+            with self._after_it_ran(run):
+                self._record_file_effects(run, execution)
             self._note_per_item_rerun(run, execution)
 
             # Detect in-place mutations (detection-only; do not modify lineage).
@@ -1655,6 +1797,7 @@ class StatementProcessor:
         # statement read it, before its draw moved it on.
         self._advance_carriers(run.source_hash, run.carriers_advanced, run.cache_key, run.code)
         self._report_saved(run, saved_metadata)
+        self._tell_past_budget(run, execution.cost or execution.wall_time or 0.0)
         storage = (saved_metadata.storage if saved_metadata else None) or ()
         self._rebuild_cost.note(
             run.cache_key, run.inputs, run.outputs, execution.store_cost, on_disk=any(s != "RAM" for s in storage)
@@ -1912,11 +2055,23 @@ class StatementProcessor:
         found_names, complete = referring_names(
             [captured_vars[name] for name in names],
             user_ns,
-            max(budget, fallback_floor),
+            max(budget, self._fallback_seconds(run, fallback_floor)),
             skip_name=lambda name: foreign(name) or name in names,
             ignore=[captured_vars, run.metrics, echo, *cash_held],
         )
         return [(outputs, found_names)], complete
+
+    def _fallback_seconds(self, run: StatementRun, fallback_floor: float) -> float:
+        """How long the search from the outputs up (`referring_names`) may
+        take: *fallback_floor*, or less when *run*'s analysis budget has
+        less left (`analysis_budget`). The share check is the last of the
+        analyses of a statement and draws on the same budget: a search that
+        gives up says so (NOTEBOOK-SHARE-UNCHECKED), as one past its floor
+        does."""
+        left = self._budget_left(run)
+        if left is None:
+            return fallback_floor
+        return min(fallback_floor, left.seconds)
 
     def _view_bases_of(
         self, outputs: list[str], captured_vars: dict[str, Any], cost: float, inputs: Collection[str] = frozenset()

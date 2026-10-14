@@ -229,7 +229,7 @@ while the call inside it is served from the cache together with its effect on
 the global. Nothing to do. If you would rather not rely on this, pass the state
 in and return it.
 
-<!-- claim: cash/analysis/handed_callables.py:handed_callables @6e29af01, cash/analysis/handed_callables.py:hands_a_state_changing_callable @7531228b -->
+<!-- claim: cash/analysis/handed_callables.py:handed_callables @c55bd405, cash/analysis/handed_callables.py:hands_a_state_changing_callable @4c3c2d42 -->
 ### A function handed to a call
 
 A function you hand to another call counts as called. One that only reads

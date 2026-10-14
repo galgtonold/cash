@@ -38,6 +38,12 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from cash._clock import perf_counter as _perf_counter
+from cash.analysis.analysis_budget import (
+    AnalysisBudget,
+    AnalysisBudgetExceeded,
+    analysis_budget,
+    analysis_budget_seconds,
+)
 from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.cacheability import analyze_statement
 from cash.analysis.cacheability_decision import decide_cacheability
@@ -239,6 +245,18 @@ def routed_call_s() -> float:
         return min(max(0.0, (best(routed) - best(plain)) / calls), 1e-6)
     except Exception:  # noqa: BLE001 - no measurement is no tax
         return 0.0
+
+
+def _hands_a_state_changing_callable(fn: Any, args: tuple, kwargs: Mapping[str, Any]) -> bool:
+    """`hands_a_state_changing_callable`, within an analysis budget
+    (`analysis_budget`): when what the call is handed takes longer to read
+    than the floor allows, it is taken to hand one, and the call runs plain,
+    as for a callable whose source cannot be read."""
+    try:
+        with analysis_budget(AnalysisBudget(analysis_budget_seconds(None))):
+            return hands_a_state_changing_callable(fn, args, kwargs)
+    except AnalysisBudgetExceeded:
+        return True
 
 
 @dataclasses.dataclass
@@ -798,7 +816,15 @@ class CallUnit:
                 # `counter()` bumps a `nonlocal`: a hit would skip the bump
                 # and hand the next call the same count.
                 return fn(*args, **kwargs)
-            if hands_a_state_changing_callable(fn, args, kwargs):
+            checked = _perf_counter()
+            hands = _hands_a_state_changing_callable(fn, args, kwargs)
+            if hands:
+                if self._running == 0:
+                    # cash's time, not the user's: the statement's measured
+                    # run time, which its next analysis budget follows, leaves
+                    # it out. (A call that goes on counts it in its own
+                    # overhead; inside another call's run it is that call's.)
+                    self.overhead_s += _perf_counter() - checked
                 # `run_steps(steps, data)` with `steps = [f]`, `f` appending
                 # to a list: the callee runs `f`, and a hit would skip it.
                 return fn(*args, **kwargs)
