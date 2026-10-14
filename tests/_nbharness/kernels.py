@@ -601,7 +601,11 @@ class _WarmKernel:
             "try:\n"
             "    get_ipython().run_line_magic('cash_persist', 'off')\n"
             "except Exception:\n"
-            "    pass\n" + _REUSE_RESET_WARNING_REGISTRIES + _REUSE_CLOSE_FIGURES + _REUSE_PURGE_TEST_MODULES
+            "    pass\n"
+            + _REUSE_RESET_WARNING_REGISTRIES
+            + _REUSE_CLOSE_FIGURES
+            + _REUSE_UNSEED_RNG_STREAMS
+            + _REUSE_PURGE_TEST_MODULES
         )
         # Same shape, different flag: `%cash_persist on` sets `persist_all` on
         # the Cash instance's config, and `reset_session()` does NOT rebuild
@@ -750,6 +754,37 @@ try:
     _plt = _sys.modules.get('matplotlib.pyplot')
     if _plt is not None:
         _plt.close('all')
+except Exception:
+    pass
+"""
+
+# Unseed the global random streams. A seed is process state: cash notes each
+# watched `seed(<value>)` in a process-wide ledger (`_PROCESS_SEEDED`,
+# `_TORCH_SEEDED` in cash.tracking.randomness.lineage) that `reset_session()`
+# keeps, because the stream it describes is still seeded. A fresh kernel
+# starts with no seed in force, so a warm one must forget it too.
+#
+# Measured: randomness/test_rng_badge_indicator.py, -n 0, file order: any test
+# that runs `np.random.seed(...)` ahead of test_helper_internal_unseeded_draw_
+# flagged left numpy "seeded" for it, and its hidden unseeded draw lost the
+# unseeded pill -- 1 failed, 7 passed, every time. Under -n 16 it failed only
+# when worksteal put such a test first on the same worker.
+#
+# `seed()` re-randomises from fresh entropy, as a new process does, and through
+# cash's watched wrappers it also drops the module from the ledger; the ledger
+# is cleared as well for a stream whose seed function cash never wrapped.
+_REUSE_UNSEED_RNG_STREAMS = """
+try:
+    import sys as _sys
+    if 'random' in _sys.modules:
+        _sys.modules['random'].seed()
+    _npr = _sys.modules.get('numpy.random')
+    if _npr is not None:
+        _npr.seed()
+    _lin = _sys.modules.get('cash.tracking.randomness.lineage')
+    if _lin is not None:
+        _lin._PROCESS_SEEDED.clear()
+        _lin._TORCH_SEEDED.clear()
 except Exception:
     pass
 """
