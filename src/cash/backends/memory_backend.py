@@ -157,7 +157,51 @@ def _load_pickled(stream: bytes, buffers: list[bytes], readonly: list[bool]) -> 
 
 def _snapshot(value: Any) -> _Pickled | None:
     """*value* pickled as the file tier pickles it (`PickleSerializer.serialize_split`),
-    each large buffer copied out of band; None when it does not pickle."""
+    each large buffer copied out of band; None when it does not pickle.
+
+    The one `premade_snapshot` made of this very value a moment ago, when
+    there is one: taken, not made again."""
+    premade = getattr(_PREMADE, "entry", None)
+    if premade is not None and premade[0] is value:
+        _PREMADE.entry = None
+        return premade[1]
+    made = _snapshot_also_keyed(value)
+    return None if made is None else made[0]
+
+
+#: ``(value, _Pickled)``: the snapshot `premade_snapshot` made for the
+#: store about to run on this thread.
+_PREMADE = threading.local()
+
+
+def kept_as_pickle(value: Any) -> bool:
+    """Would the tier keep *value*, a call's result, as its pickle bytes
+    (`_Pickled`), were it big enough: an object of a class of its own?"""
+    kind = type(value)
+    return kind is not dict and not _copied_as_data(kind)
+
+
+def premade_snapshot(value: Any) -> tuple[_Pickled, bool] | None:
+    """`_snapshot` of *value*, made now for the store that follows on this
+    thread, which takes it instead of pickling *value* again; and whether
+    its bytes are also *value*'s keyed bytes (`kept_state.dumps_also_keyed`),
+    so a digest of them is a digest of its content. None when it does not
+    pickle.
+
+    Only for a store that runs before anything can change *value*: the
+    bytes are what it was when they were made. `release_premade` drops one
+    the store did not take."""
+    made = _snapshot_also_keyed(value)
+    _PREMADE.entry = None if made is None else (value, made[0])
+    return made
+
+
+def release_premade() -> None:
+    """Drop the snapshot `premade_snapshot` made, if no store took it."""
+    _PREMADE.entry = None
+
+
+def _snapshot_also_keyed(value: Any) -> tuple[_Pickled, bool] | None:
     buffers: list[bytes] = []
     readonly: list[bool] = []
 
@@ -174,12 +218,15 @@ def _snapshot(value: Any) -> _Pickled | None:
         readonly.clear()
 
     try:
-        stream = kept_state.dumps(value, protocol=5, buffer_callback=take, on_retry=retry, extra=stored_reducers())
+        stream, also_keyed = kept_state.dumps_also_keyed(
+            value, protocol=5, buffer_callback=take, on_retry=retry, extra=stored_reducers()
+        )
     except Exception:  # copied the usual way, which says why it cannot be
         logger.debug("could not keep a %s as pickle bytes", type(value).__name__, exc_info=True)
         return None
     kind = type(value)
-    return _Pickled(stream, buffers, readonly, None if kind is dict or _copied_as_data(kind) else class_key(kind))
+    top_class = None if kind is dict or _copied_as_data(kind) else class_key(kind)
+    return _Pickled(stream, buffers, readonly, top_class), also_keyed
 
 
 def _at_least(value: Any, nbytes: int, nodes: int = 2048, items: int = 64) -> bool:

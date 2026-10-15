@@ -41,6 +41,7 @@ from cash.notebook.shared_objects import (
 from cash.sizing import estimate_object_size, pickled_size_estimate
 from cash.tracking.file_dep_snapshot import attach_code_relative, snapshot_dependencies, snapshot_is_fresh
 
+from ..backends.memory_backend import release_premade
 from ..cost_model import estimated_restore_time
 
 logger = logging.getLogger(__name__)
@@ -532,7 +533,11 @@ class CallEntries:
         # second copy of the value, which a token makes free.
         if (plain_value or elapsed >= _REF_MIN_COMPUTE_S) and not callee_globals:
             estimate = self._too_big_to_digest(value, elapsed, plain_value)
-            found = digest_and_size(value) if estimate is None else (UNHASHED_PREFIX + uuid.uuid4().hex, estimate)
+            found = (
+                digest_and_size(value, for_store=True)
+                if estimate is None
+                else (UNHASHED_PREFIX + uuid.uuid4().hex, estimate)
+            )
             if found:
                 metadata[DIGEST_FIELD], metadata[SIZE_FIELD] = found
                 if estimate is not None:
@@ -573,6 +578,9 @@ class CallEntries:
             self._cash.backend.set(key, value, metadata)
         except Exception:  # noqa: BLE001 - a failed store costs a recompute, never the call
             logger.debug("call unit: store failed for %s", key)
+        finally:
+            # The pickle the digest made, when the store did not take it.
+            release_premade()
         return held
 
     @staticmethod

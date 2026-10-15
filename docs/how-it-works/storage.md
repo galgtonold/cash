@@ -258,13 +258,18 @@ does. cash waits for a write only when something needs it on disk:
 A process this one did not start, reading the same folder at the same time,
 finds a result once its write has finished, and computes it until then.
 
-<!-- claim: cash/backends/memory_backend.py:_snapshot @9c99eb65, cash/backends/tiered_backend.py:TieredBackend._stored_payload @92ed63c1 -->
+<!-- claim: cash/backends/memory_backend.py:_snapshot @12974f97, cash/backends/tiered_backend.py:TieredBackend._stored_payload @92ed63c1, cash/backends/memory_backend.py:InMemoryBackend.set @e6277181, cash/notebook/call_refs.py:digest_and_size @e214b154, cash/kept_state.py:stored_views @8fe0d16f -->
 An object of a class of its own (a fitted model, a graph) is kept in memory
 as the bytes its disk entry holds, made when it is stored: its arrays are
 copied out of it then, so a later change to your object, by Python or by
 NumPy writing into an array, never reaches them. Each hit reads a new copy
 out of the bytes, as a disk hit does, and the disk write is those same bytes,
-so the object is pickled once.
+so the object is pickled once. It counts against the memory cap by those
+bytes. In a notebook, a cached call's result also gets a digest, so later
+statements can refer to the stored entry instead of storing the object again.
+That digest is taken from the same pickle, not from a second one. A networkx
+graph's views (`G.adj`, `G.nodes`) are left out of the bytes, and networkx
+makes them again on first use.
 
 <!-- claim: cash/backends/memory_backend.py:InMemoryBackend.holds_own_copy @d82553cc, cash/backends/memory_backend.py:InMemoryBackend.private_copy @ef57a587, cash/backends/memory_backend.py:InMemoryBackend.write_copy @987f7a47, cash/backends/memory_backend.py:_frames_own @d957b9f5 -->
 The disk entry is the result as it was computed: a change you make to it
