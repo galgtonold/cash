@@ -499,11 +499,13 @@ the statement.
 `CACHED` badge and no warning.
 
 cash records a file when it is read through a reader it watches: `pd.read_*`,
-`np.load`, `joblib.load`, polars, `sqlite3.connect`, `open()` and
-[others](how-it-works/invalidation.md#what-counts-as-a-change). A read through
-anything else (a C extension that opens the file itself, a client library, a
-subprocess, `os.open`) is invisible, and the statement is cached with no file
-recorded. So is a watched reader imported by name in a cell
+`np.load`, `joblib.load`, polars, `sqlite3.connect`, `h5py.File`,
+`xarray.open_dataset`, `rasterio.open`, `open()` and
+[others](how-it-works/invalidation.md#what-counts-as-a-change), and on Linux and
+Windows the files C libraries open themselves (below). A read through anything
+else (a subprocess, a client library that makes the system call itself, and on
+macOS a C extension that opens the file itself or `os.open`) is invisible, and
+the statement is cached with no file recorded. So is a watched reader imported by name in a cell
 (`from polars import read_parquet`): call it through its module
 (`pl.read_parquet(...)`). A SQLite database in WAL mode is the same: a commit lands in the
 `-wal` file.
@@ -512,19 +514,20 @@ recorded. So is a watched reader imported by name in a cell
 the statement if the read is cheap.
 
 <!-- claim: cash/tracking/native_reads.py:close_window @0e2917f4 -->
-On Linux (glibc, x86-64 or aarch64) and on Windows (x64) you can also turn
-on the native file hook with `CASH_NATIVE_FILE_HOOK=1` (off by default;
-`%cash_status` shows it as `native_file_hook`). cash then also sees the files a
+On Linux (glibc, x86-64 or aarch64) and on Windows (x64) the native file hook
+is on by default (`%cash_status` shows it as `native_file_hook`;
+`CASH_NATIVE_FILE_HOOK=0` turns it off). cash then also sees the files a
 C, C++ or Rust library opens itself through the C library's `open`, `fopen` or
 `opendir`, or on Windows through `CreateFileW` or the CRT's `_wopen`,
-`_wsopen_s` and `fopen` family: `pyarrow.fs`, a polars `scan_csv`, a database
-`ATTACH`-ed in SQLite, a compiled extension of your own. It still misses a
-library that makes the system call itself, one linked statically against the
-C library, a call through a function pointer the library looked up itself
-(`dlsym`, `GetProcAddress`, ctypes), and a library first loaded inside the
-cached call. A file such a library opens while several cached calls run at
-once, in different threads, counts for all of them. On macOS the hook is not
-available yet.
+`_wsopen_s` and `fopen` family: `pyarrow.fs`, a polars `scan_csv`, netCDF4, a
+database `ATTACH`-ed in SQLite, `os.open`, a compiled extension of your own.
+It still misses a library that makes the system call itself, one linked
+statically against the C library, a call through a function pointer the
+library looked up itself (`dlsym`, `GetProcAddress`, ctypes), and a library
+first loaded inside the cached call. A file such a library opens while several
+cached calls run at once, in different threads, counts for all of them. On
+macOS the hook is not available yet; there the readers listed above are still
+recorded by their entry points.
 
 ### A file read into a memo before cash was imported
 

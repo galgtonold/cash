@@ -110,7 +110,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
 
 ### Files
 
-<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @b76337da, cash/tracking/read_events.py:_is_read_mode @238e2cb8, cash/tracking/read_events.py:_on_listing @41ce1606 -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @fa9f8714, cash/tracking/read_events.py:_is_read_mode @238e2cb8, cash/tracking/read_events.py:_on_listing @41ce1606 -->
 cash records a file when your code reads it through one of these:
 
 | Library | Readers |
@@ -121,6 +121,8 @@ cash records a file when your code reads it through one of these:
 | pyarrow | `csv.read_csv`, `csv.open_csv`, `parquet.read_table`, `parquet.read_pandas`, `parquet.ParquetFile`, `feather.read_table`, `feather.read_feather`, `json.read_json`, `orc.read_table`, `dataset.dataset`, `memory_map`, `input_stream`, `ipc.open_file`, `ipc.open_stream` |
 | numpy | `load`, `loadtxt`, `genfromtxt`, `fromfile`, `memmap` |
 | soundfile | `read`, `blocks`, `info`, and `SoundFile` opened to read (`'r'`, `'r+'`) |
+| HDF5, netCDF, rasters | `h5py.File` and `tables.open_file` opened to read (`'r'`, `'r+'`, `'a'`), `rasterio.open` in a read mode, xarray's `open_dataset`, `open_dataarray`, `load_dataset`, `load_dataarray` and `open_mfdataset` |
+| C libraries | on Linux and Windows, any file a C, C++ or Rust library opens itself through the C library (the [native file hook](../known-limitations.md#reads-through-a-loader-cash-cannot-see), on by default) |
 | others | `joblib.load`, `pickle.load` and `json.load` of an opened file, `sqlite3.connect` (a path or a `file:` URI; for a database in WAL mode, its `-wal` file too), and a library that opens your file with Python's `open()`, such as Pillow's `Image.open`, `openpyxl.load_workbook` or `scipy.io.wavfile.read` |
 | directories | `glob.glob`, `glob.iglob`, `os.listdir`, `os.scandir`, and what lists through them: `Path.glob`, `rglob`, `iterdir`, `os.walk`, `Path.walk`. The directory, so a new or removed file counts |
 | datasets | a directory, a glob or a list given to one of the readers above: every file in it (names starting with `.` or `_` aside), under linked sub-folders too, and each directory, so an edited or a new file counts |

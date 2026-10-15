@@ -559,8 +559,8 @@ class CashMagics(Magics):
             - fast_path: "on (...)" when the C extension skips re-hashing
               values that provably did not change, with the size of its
               watch table, else "off: <why>"
-            - native_file_hook: the opt-in hook on files C libraries open
-              (``CASH_NATIVE_FILE_HOOK``): "on (...)", "off (...)" or
+            - native_file_hook: the hook on files C libraries open, on by
+              default (``CASH_NATIVE_FILE_HOOK=0`` turns it off): "on (...)", "off (...)" or
               "off: not supported here ..."
         """
 

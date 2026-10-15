@@ -1,4 +1,4 @@
-"""Files that C libraries open themselves: the opt-in native file hook.
+"""Files that C libraries open themselves: the native file hook.
 
 Python's audit hook reports every open made through Python. A library that
 opens its file in C -- libarrow, libsqlite3, a Rust crate, C++'s
@@ -15,10 +15,10 @@ tracker gets them when it closes, through the methods the audit events use:
 a read is a dependency, a missing file an absent one, a file the library
 created or truncated is the block's own output.
 
-**Off by default.** ``CASH_NATIVE_FILE_HOOK=1`` turns it on at import;
-`enable` / `disable` switch it at run time (`disable` puts every rebound slot
-back). Linux with glibc on x86-64 and aarch64, and Windows on x64; elsewhere
-`status_line` says "off: not supported here".
+**On by default** where it is supported: Linux with glibc on x86-64 and
+aarch64, and Windows on x64; elsewhere `status_line` says "off: not supported
+here". ``CASH_NATIVE_FILE_HOOK=0`` keeps it off at import; `enable` /
+`disable` switch it at run time (`disable` puts every rebound slot back).
 
 What it does not see (``cfilehook.c`` has the details): direct system calls
 (io_uring, Go runtimes, ``NtCreateFile``), libraries linked statically against
@@ -57,8 +57,8 @@ _lock = threading.Lock()
 _on = False
 
 
-def _flag(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+def _switched_off(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("0", "false", "no", "off")
 
 
 def supported() -> tuple[bool, str]:
@@ -148,7 +148,7 @@ def status_line() -> str:
     if not ok:
         return f"off: {why}"
     if not _on:
-        return f"off (set {ENV}=1 to turn it on)"
+        return f"off ({ENV}=0 or disable(); unset it to turn the hook on)"
     s = stats()
     libs = len(s.get("hooked_objects", ()))
     return f"on ({s.get('slots', 0)} slots in {libs} librar{'y' if libs == 1 else 'ies'})"
@@ -165,5 +165,5 @@ if _fh is not None and hasattr(_fh, "FH_READ"):
 else:
     _READ, _ABSENT, _CREATED, _WRITE, _UNRESOLVED = 1, 2, 3, 4, 5
 
-if _flag(ENV):
+if not _switched_off(ENV):
     enable()

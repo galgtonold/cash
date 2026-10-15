@@ -1,6 +1,7 @@
 /* cash._cwatch, part 4: the native file-read hook (cfilehook.c).
  *
- * Opt-in (cash.tracking.native_reads, CASH_NATIVE_FILE_HOOK=1). Python's audit
+ * On by default (cash.tracking.native_reads; CASH_NATIVE_FILE_HOOK=0 turns it
+ * off). Python's audit
  * hook sees every open made through Python; a C library that opens a file
  * itself (libarrow, libsqlite3, libstdc++'s fstream, a Rust crate) raises no
  * event. This hook rebinds the slots through which already-loaded shared

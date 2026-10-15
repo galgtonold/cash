@@ -62,7 +62,7 @@ result = daily.rolling(7).mean()   # edit: only this runs again
 - **Files you read are tracked.** Change a file read through `pd.read_csv`,
   `np.load`, `open` or another [tracked reader](how-it-works/invalidation.md#what-counts-as-a-change),
   and the statements that read it run again.
-  <!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @b76337da -->
+  <!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @fa9f8714 -->
   A polars scan in one cell (`lf = pl.scan_parquet("data/*.parquet")`) and
   its `.collect()` in a later one count too: a changed or added file runs both
   again.

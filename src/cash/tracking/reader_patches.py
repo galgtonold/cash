@@ -67,7 +67,19 @@ _install_lock = threading.RLock()
 #: pandas (`filepath_or_buffer`, `path_or_buf`, `io` for read_excel, `path`),
 #: numpy (`file`, `fname`), joblib (`filename`), pyarrow (`source`,
 #: `input_file`) and polars (`source`).
-_PATH_KWARGS = ("filepath_or_buffer", "path_or_buf", "source", "input_file", "path", "file", "fname", "filename", "io")
+_PATH_KWARGS = (
+    "filepath_or_buffer",
+    "path_or_buf",
+    "source",
+    "input_file",
+    "path",
+    "file",
+    "fname",
+    "filename",
+    "io",
+    "filename_or_obj",
+    "fp",
+)
 
 
 def _dispatch_track(path: Any) -> None:
@@ -203,12 +215,40 @@ def _make_soundfile_init_handler(original: Callable[..., Any]) -> Callable[..., 
     return tracked_init
 
 
+def _opens_to_read(mode: Any) -> bool:
+    """Does an ``open(path, mode)``-style *mode* read the file that is there?
+
+    ``'r'``, ``'r+'`` and HDF5's ``'a'`` (read/write, created if missing) do;
+    ``'w'``, ``'w-'`` and ``'x'`` only write, so the file is an output.
+    """
+    return mode is None or not isinstance(mode, str) or "r" in mode or "a" in mode
+
+
+def _make_h5py_init_handler(original: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap ``h5py.File.__init__(self, name, mode='r', ...)``.
+
+    libhdf5 opens the file in C, so no audit event reports it; on a system
+    without the native file hook (macOS) this is the only record of the read.
+    """
+    path_handler = FileDependencyRegistry._create_path_arg_handler(lambda *a, **k: None, _dispatch_track)
+
+    @functools.wraps(original)
+    def tracked_init(self, *args, **kwargs):
+        name = args[0] if args else kwargs.get("name")
+        if _opens_to_read(args[1] if len(args) > 1 else kwargs.get("mode", "r")):
+            path_handler(name)
+        return original(self, *args, **kwargs)
+
+    return tracked_init
+
+
 #: Reader CLASSES, by module, with the wrapper each one's ``__init__`` gets:
 #: the class is left in place, so ``isinstance`` still works, and its
 #: ``__init__`` records the path it is given.
 _CLASS_READERS: dict[str, tuple[tuple[str, Callable[[Any], Any]], ...]] = {
     "pyarrow.parquet": (("ParquetFile", _make_init_path_handler),),
     "soundfile": (("SoundFile", _make_soundfile_init_handler),),
+    "h5py": (("File", _make_h5py_init_handler),),
 }
 
 
@@ -1049,6 +1089,16 @@ class FileDependencyRegistry:
         self.register("soundfile", "blocks", self._create_path_arg_handler)
         self.register("soundfile", "info", self._create_path_arg_handler)
 
+        # Scientific formats read in C: libhdf5, libnetcdf, GDAL. On Linux and
+        # Windows the native file hook sees those opens too; on macOS there is
+        # no hook, and a changed .h5/.nc/.tif returned yesterday's answer with
+        # no warning. ``h5py.File`` is a class (``_CLASS_READERS``); a file
+        # opened only to write is an output, not an input.
+        self.register("tables", "open_file", self._create_read_mode_path_handler)
+        self.register("rasterio", "open", self._create_read_mode_path_handler)
+        for name in ("open_dataset", "open_dataarray", "load_dataset", "load_dataarray", "open_mfdataset"):
+            self.register("xarray", name, self._create_path_arg_handler)
+
         # linecache answers from its own cache, so a file read once is not
         # opened again and no audit event reports the next lookup. Source files
         # are left out: linecache is what `inspect.getsource` (and every
@@ -1092,6 +1142,10 @@ class FileDependencyRegistry:
         # ``os.scandir`` raises its audit event (the listing), but an entry's
         # ``stat()`` is a C method on a type that cannot be patched.
         self.register("os", "scandir", self._create_scandir_handler)
+        # A module with only a reader class still needs an entry, so it is
+        # patched when it is imported (``_PatchingLoader``) and at each install.
+        for module_name in _CLASS_READERS:
+            self.handlers.setdefault(module_name, [])
         self._ready = True
 
     def register(self, module_name: str, func_name: str, handler_factory: Callable[..., Any]):
@@ -1118,6 +1172,20 @@ class FileDependencyRegistry:
         return self.handlers.get(module_name, [])
 
     # --- Standard Handler Factories ---
+
+    @staticmethod
+    def _create_read_mode_path_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
+        """``open(path, mode='r')``-style: the path is a dependency only when
+        *mode* reads it (`_opens_to_read`)."""
+        path_handler = FileDependencyRegistry._create_path_arg_handler(lambda *a, **k: None, track_callback)
+
+        @functools.wraps(original_func)
+        def tracked_func(*args, **kwargs):
+            if _opens_to_read(args[1] if len(args) > 1 else kwargs.get("mode", "r")):
+                path_handler(*args, **kwargs)
+            return original_func(*args, **kwargs)
+
+        return tracked_func
 
     @staticmethod
     def _create_path_arg_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
