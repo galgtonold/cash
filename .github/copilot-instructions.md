@@ -481,7 +481,8 @@ These are what `publish.yml` builds itself. The platform wheels with the C
 extension (`hatch_build.py` compiles it; plain `python -m build` on
 CPython 3.12+ gives one for this machine only) come from
 `.github/workflows/wheels.yml`, which `publish.yml` runs: cibuildwheel on
-Linux, macOS and Windows runners, each wheel import-tested. Run that
+Linux, macOS and Windows runners, each wheel running the C extension's
+tests on its own platform (`tests/_wheel_selftest.py`). Run that
 workflow by hand before tagging when the C sources or the build changed.
 
 - `pytest tests/test_notebook -x`

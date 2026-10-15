@@ -903,6 +903,8 @@ def _no_silently_discarded_cache_writes(request):
 _WORKER_DISCARDED: list[tuple[str, str]] = []
 
 
+# optionalhook: an xdist hook, and the wheel tests (wheels.yml) run without xdist.
+@pytest.hookimpl(optionalhook=True)
 def pytest_testnodedown(node, error):
     """Collect each xdist worker's discarded writes as it finishes.
 

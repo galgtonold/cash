@@ -301,7 +301,7 @@ class TestTheWheelIsChecked:
 
     def test_a_release_uploads_the_platform_wheels_and_the_pure_wheel(self):
         """The platform wheels come from cibuildwheel (wheels.yml), which
-        import-tests each one; the build job adds the universal
+        runs the C extension's tests on each one; the build job adds the universal
         pure-Python wheel, which verify-wheel checks."""
         text = PUBLISH_YML.read_text(encoding="utf-8")
         assert "uses: ./.github/workflows/wheels.yml" in _job(text, "wheels")
@@ -318,3 +318,15 @@ class TestTheWheelIsChecked:
         assert "python -m venv" in job
         assert "GITHUB_REF_NAME#v" in job and "cash.__version__" in job
         assert "labextension list" in job and "cash-live-cells" in job
+
+    def test_every_platform_wheel_runs_the_c_extension_tests(self):
+        """Importing ``cash._cwatch`` passed a Windows-only bug (a 32-bit
+        ``long``); each wheel runs the watcher tests, the fuzz and a
+        verify-mode smoke on its own platform, against the installed wheel."""
+        config = PYPROJECT.read_text(encoding="utf-8").split("[tool.cibuildwheel]", 1)[1].split("\n[", 1)[0]
+        assert re.search(r'^test-command = "python -m tests\._wheel_selftest"$', config, re.MULTILINE), config
+        sources = re.search(r"^test-sources = \[(.*)\]$", config, re.MULTILINE)
+        assert sources and {'"tests"', '"pyproject.toml"'} <= {s.strip() for s in sources.group(1).split(",")}, config
+        selftest = (TESTS_DIR / "_wheel_selftest.py").read_text(encoding="utf-8")
+        for runs in ('"tests/test_core/watchers"', "tests.test_core.watchers._fuzz", '"CASH_CWATCH_VERIFY": "1"'):
+            assert runs in selftest, f"tests/_wheel_selftest.py no longer runs {runs}"

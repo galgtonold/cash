@@ -12,6 +12,7 @@ from __future__ import annotations
 import copyreg
 import gc
 import sys
+import time
 import types
 
 import pytest
@@ -334,17 +335,51 @@ def test_a_value_changed_on_every_check_stops_being_watched(watching, counted):
     assert value_watch.stats()["dropped_changing"] >= 1
 
 
-def test_over_budget_the_least_worth_value_is_dropped(watching, counted):
+def _slow(hash_fn):
+    """*hash_fn*, taking 20 ms more: a value worth more than one hashed in
+    microseconds. What a value is worth is the time its hash took, so the
+    tests below set it rather than leave it to the machine's timing."""
+
+    def slow(value):
+        time.sleep(0.02)
+        return hash_fn(value)
+
+    return slow
+
+
+def _full_table(hash_fn):
+    """Four watched values, and a budget one byte under the table they fill."""
     cw = value_watch._cw
     values = [{"i": i, "l": [{"x": j} for j in range(200)]} for i in range(4)]
     for value in values:
-        watched(value, counted)
+        watched(value, hash_fn)
     assert cw.stats()["roots"] == 4
     cw.configure(budget=cw.stats()["table_bytes"] - 1)
+    return values
+
+
+def test_over_budget_the_least_worth_value_is_dropped(watching, counted):
+    cw = value_watch._cw
+    values = _full_table(counted)
+    extra = {"l": [{"x": j} for j in range(200)]}
+    watched(extra, _slow(counted))
+    assert cw.stats()["evicted"] >= 1
+    assert cw.stats()["table_bytes"] <= cw.stats()["budget"]
+    assert cw.info(extra) is not None
+    for value in [*values, extra]:
+        assert value_watch.digest(value, counted) == _compute_hash(value)
+
+
+def test_over_budget_a_value_worth_less_than_every_watched_one_is_not_watched(watching, counted):
+    cw = value_watch._cw
+    values = _full_table(_slow(counted))
+    table_bytes = cw.stats()["table_bytes"]
     extra = {"l": [{"x": j} for j in range(200)]}
     watched(extra, counted)
-    assert cw.stats()["table_bytes"] <= cw.stats()["budget"]
-    assert cw.stats()["evicted"] + cw.stats()["over_budget"] >= 1
+    assert cw.stats()["over_budget"] >= 1
+    assert cw.stats()["evicted"] == 0
+    assert cw.info(extra) is None
+    assert cw.stats()["table_bytes"] <= table_bytes
     for value in [*values, extra]:
         assert value_watch.digest(value, counted) == _compute_hash(value)
 
