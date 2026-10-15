@@ -158,8 +158,15 @@ def test_a_change_after_the_store_is_not_in_the_entry(tiers, mock_shell):
 
 
 def test_a_change_check_past_its_budget_leaves_the_pickle_to_the_store(tiers, mock_shell, monkeypatch):
+    from cash.notebook.statement import processor
+
     magics, ram, disk, _cache_dir = tiers
     monkeypatch.setattr(value_hash, "CHANGE_CHECK_BUDGET_S", 0.02)
+    # All the time it needs to make the pickle: by default half of the 0.3 s
+    # statement, and a busy runner's 0.05 s sleep in `SlowFit` overran it,
+    # so the store copied the value the other way. Running out of that time
+    # is `test_a_pickle_left_to_the_store_is_made_within_its_time`.
+    monkeypatch.setattr(processor, "PAST_BUDGET_SHARE", 100.0)
     run_cash_cell(magics, "fit = SlowFit() if time.sleep(0.3) is None else None")
     disk._writes.wait_all()
     assert value_hash.is_costly(mock_shell.user_ns["fit"]), "the check did not run out of its budget: proves nothing"
