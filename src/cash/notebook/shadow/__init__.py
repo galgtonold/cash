@@ -268,7 +268,7 @@ class Shadow:
         return value_digest(ns[name])
 
     def _holder(self, code: types.CodeType, spaces: Iterable[tuple[str, Mapping[str, Any]]]):
-        from .items import _candidates
+        from .items import candidates
 
         for module, ns in spaces:
             try:
@@ -277,7 +277,7 @@ class Shadow:
                 continue
             for name, value in pairs:
                 if isinstance(name, str) and not name.startswith("__") and callable(value):
-                    for c in _candidates(value):
+                    for c in candidates(value):
                         if c.__code__ is code:
                             return module, name
         return None

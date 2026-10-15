@@ -135,7 +135,8 @@ def test_worker_processes_mark_the_unit(on):
     import multiprocessing
 
     sh, _ = on
-    ctx = multiprocessing.get_context("fork")
+    # The platform's own start method: Windows has no fork.
+    ctx = multiprocessing.get_context()
 
     def run():
         p = ctx.Process(target=time.sleep, args=(0,))
@@ -165,7 +166,12 @@ def test_a_docstring_is_no_part_of_a_code_digest():
     exec("def g(x):\n    'two'\n    return x", ns)
     exec("def h(x):\n    return x", ns)
     f, g, h = ns["f"].__code__, ns["g"].__code__, ns["h"].__code__
-    assert items.code_digest(f) == items.code_digest(g) == items.code_digest(h.replace(co_name="f", co_qualname="f"))
+    assert items.code_digest(f) == items.code_digest(g)
+    if sys.version_info < (3, 14):
+        # From 3.14 a function reserves the docstring slot only when it has
+        # one, so adding or removing one shifts the constants, as the key
+        # sees it too (`source_norm.code_consts_without_docstring`).
+        assert items.code_digest(f) == items.code_digest(h.replace(co_name="f", co_qualname="f"))
 
 
 def test_equal_values_digest_equal_and_a_big_one_is_opaque():

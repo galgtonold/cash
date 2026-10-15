@@ -415,7 +415,7 @@ def class_digest(cls: type, within: _Digester | None = None) -> str:
 _MISSING = object()
 
 
-def _candidates(obj: Any) -> Iterable[types.FunctionType]:
+def candidates(obj: Any) -> Iterable[types.FunctionType]:
     """The functions *obj* may stand for: itself, what a staticmethod,
     classmethod, bound method, property, partial or JIT dispatcher holds,
     and what a ``functools.wraps`` wrapper wraps. Read off known types
@@ -445,7 +445,7 @@ def _candidates(obj: Any) -> Iterable[types.FunctionType]:
 
 
 def _code_of(obj: Any, qualname: str) -> types.CodeType | None:
-    for c in _candidates(obj):
+    for c in candidates(obj):
         if c.__code__.co_qualname == qualname:
             return c.__code__
     return None
