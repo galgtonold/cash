@@ -12,6 +12,7 @@ from ..sizing import pickled_size_estimate
 from . import memory_backend
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, entry_expired, store_seconds
 from .clear_watch import ClearWatcher
+from .entry_format import SplitPayload
 from .persistence_policy import SERIALIZED_ESTIMATE, PersistencePolicy
 from .sampled_cost import sampled_cost
 from .serialization import PickleSerializer, Serializer
@@ -232,6 +233,20 @@ class TieredBackend(CacheBackend):
         except Exception:  # a sizing probe must never raise
             logger.debug("Could not measure the serialized size", exc_info=True)
             return None
+
+    @staticmethod
+    def _split_payload(value: Any, serializer: Serializer | None, *, copy: bool) -> Any:
+        """*value* as a file tier writes it under `PickleSerializer` (its
+        stream, and its large buffers apart, copied when *copy*), or None for
+        another serializer or a value that does not pickle."""
+        if serializer is not None and type(serializer) is not PickleSerializer:
+            return None
+        try:
+            stream, buffers = PickleSerializer().serialize_split(value, copy=copy)
+        except Exception:  # a sizing probe must never raise
+            logger.debug("Could not measure the serialized size", exc_info=True)
+            return None
+        return SplitPayload(stream, buffers) if buffers else stream
 
     def _drop_persisted_call_refs(self, refs) -> None:
         """Take the persisted call results that a refused statement held.
@@ -465,6 +480,8 @@ class TieredBackend(CacheBackend):
         size_refused = False  # a tier skipped this object because it's too big
         refusing_caps: list[int] = []  # the caps it was measured against
         refused_size = cap_size  # the size that was actually compared
+        serialized_copied = False  # *serialized* made by the size probe, held by no tier
+        probe_copied = False
         for i in range(1, len(self.backends)):
             backend = self.backends[i]
             cap = backend.promotion_size_cap()
@@ -479,11 +496,19 @@ class TieredBackend(CacheBackend):
                 # write: this branch is reached only when the value was
                 # about to be dropped, and the alternative to the cost is a
                 # wrong answer to "will this fit".
-                true_size = (
-                    self._serialized_size(value, serializer) if serialized is None else _payload_bytes(serialized)
-                )
+                probed = serialized
+                if probed is None and _writes_bytes_as_they_are(backend):
+                    # Measured by the very bytes the tier then writes, so the
+                    # value is pickled once, not once here and again by the
+                    # writer; out-of-band buffers stay views of a private
+                    # value's memory, as the writer would take them.
+                    probed = self._split_payload(value, serializer, copy=not private)
+                    probe_copied = probed is not None and not private  # bytes made for this write
+                true_size = _payload_bytes(probed) if probed is not None else self._serialized_size(value, serializer)
                 if true_size is not None and true_size <= cap:
                     cap_size = true_size
+                    if serialized is None and probed is not None:
+                        serialized, serialized_copied = probed, probe_copied
                 else:
                     logger.debug(
                         "[TIERED] Skipping %s for key %r: size %d > cap %d",
@@ -498,7 +523,10 @@ class TieredBackend(CacheBackend):
                     continue
             try:
                 if serialized is not None and getattr(backend, "takes_private_values", False):
-                    backend.set(key, value, metadata, serializer, serialized=serialized)
+                    if serialized_copied:
+                        backend.set(key, value, metadata, serializer, serialized=serialized, copied=True)
+                    else:
+                        backend.set(key, value, metadata, serializer, serialized=serialized)
                 elif private and getattr(backend, "takes_private_values", False):
                     if copied:
                         backend.set(key, value, metadata, serializer, private=True, copied=True)
