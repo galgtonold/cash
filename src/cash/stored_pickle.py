@@ -34,7 +34,7 @@ import hashlib
 import pickle
 import threading
 import weakref
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from time import perf_counter
 from typing import Any
@@ -45,6 +45,7 @@ from .bulk_digest import TAG, fold_buffer
 __all__ = [
     "HashBudgetExceeded",
     "Part",
+    "apart",
     "keeping",
     "kept",
     "load_part",
@@ -108,14 +109,21 @@ class _Sink:
     """Where the pickler writes: hashed as it comes, kept when asked, and
     stopped once *deadline* has passed (`HashBudgetExceeded`, raised from
     ``write``, which the pickler calls a frame, at most 64 KiB, or one big
-    item at a time)."""
+    item at a time, and from `check`, called for each buffer).
 
-    __slots__ = ("_deadline", "_parts", "sha", "size")
+    With *past* (bytes), a kept pickle is not stopped at *deadline*: it is
+    made on, no longer hashed (*over*), for the store that takes it, while
+    it holds at most *past* bytes, stream and buffers (*apart*)."""
 
-    def __init__(self, deadline: float | None, keep: bool, digest: bool) -> None:
+    __slots__ = ("_deadline", "_parts", "_past", "apart", "over", "sha", "size")
+
+    def __init__(self, deadline: float | None, keep: bool, digest: bool, past: int | None = None) -> None:
         self.sha = hashlib.sha256() if digest else None
         self._parts: list[bytes] | None = [] if keep else None
         self._deadline = deadline
+        self._past = past if keep else None
+        self.over = False
+        self.apart = 0
         self.size = 0
 
     def write(self, data: Any) -> int:
@@ -125,9 +133,20 @@ class _Sink:
             self.sha.update(data)
         if self._parts is not None:
             self._parts.append(bytes(data))
-        if self._deadline is not None and perf_counter() > self._deadline:
-            raise HashBudgetExceeded
+        self.check()
         return n
+
+    def check(self) -> None:
+        """Raise `HashBudgetExceeded` past the deadline, or, made on past
+        it, past *past* bytes."""
+        if self.over:
+            if self.size + self.apart > self._past:
+                raise HashBudgetExceeded
+        elif self._deadline is not None and perf_counter() > self._deadline:
+            if self._past is None or self.size + self.apart > self._past:
+                raise HashBudgetExceeded
+            self.over = True
+            self.sha = None
 
     def stream(self) -> bytes:
         return b"".join(self._parts or ())
@@ -142,6 +161,8 @@ def pickle_value(
     as_keyed: bool = True,
     reducer_override: Any = None,
     kept_buffers: Any = None,
+    after: Any = None,
+    past: int | None = None,
 ) -> Part:
     """*value*'s store pickle (`kept_state.dumps_also_keyed`, protocol 5,
     the reducers a store pickles with, buffers of ``OUT_OF_BAND_MIN_BYTES``
@@ -154,11 +175,14 @@ def pickle_value(
     None). *deadline*: raise `HashBudgetExceeded` past it.
     *reducer_override* is the pickler's hook of that name, and
     *kept_buffers* says which buffers it hands out are cash's own copies
-    already, kept as they are.
+    already, kept as they are. *after* is called with the pickler once
+    it has pickled *value* (`kept_state.dumps_also_keyed`). *past*: a kept
+    pickle still under way at *deadline* is made on for the store, up to
+    that many bytes, and its digest not taken (None).
 
     Raises what pickling *value* raises.
     """
-    sink = _Sink(deadline, keep, digest)
+    sink = _Sink(deadline, keep, digest, past)
     folded = hashlib.sha256() if digest else None
     buffers: list[Any] = []
     readonly: list[bool] = []
@@ -171,7 +195,8 @@ def pickle_value(
         if raw.nbytes < smallest:
             return True  # in band, as the store writes it
         apart += raw.nbytes
-        if folded is not None:
+        sink.apart = apart
+        if folded is not None and not sink.over:
             fold_buffer(folded, raw)
         if keep:
             if kept_buffers is not None and kept_buffers(raw.obj):
@@ -179,15 +204,14 @@ def pickle_value(
             else:
                 buffers.append(raw.tobytes() if raw.readonly else bytearray(raw))
             readonly.append(raw.readonly)
-        if deadline is not None and perf_counter() > deadline:
-            raise HashBudgetExceeded
+        sink.check()
         return False
 
     def retry() -> None:
         nonlocal apart
         buffers.clear()
         readonly.clear()
-        apart = 0
+        apart = sink.apart = 0
 
     stream, also_keyed = kept_state.dumps_also_keyed(
         value,
@@ -199,9 +223,10 @@ def pickle_value(
         # a digest's is hashed as it is written (`dumps_also_keyed`).
         sink=sink if digest else None,
         reducer_override=reducer_override,
+        after=after,
     )
     found = None
-    if digest:
+    if digest and not sink.over:
         if also_keyed:
             found = _final(_HEAD, sink.sha.digest(), folded.digest())
         elif as_keyed:
@@ -247,12 +272,25 @@ def object_digest(value: Any, deadline: float | None = None) -> str:
     when the store's leaves something out (see the module's docstring).
 
     While a store is `keeping` the pickles of *value*, the bytes are kept
-    for it (`kept`). Raises what pickling raises, and `HashBudgetExceeded`
-    past *deadline*."""
+    for it (`kept`), even when they are made past *deadline* (up to
+    `keeping`'s *past_budget* bytes). Raises what pickling raises, and
+    `HashBudgetExceeded` past *deadline*."""
     keep = _keeps(value)
-    part = pickle_value(value, keep=keep, deadline=deadline)
+    # Only a value kept by a weak reference is kept at all (`_remember`).
+    others = _others(value) if keep and _weakly_held(value) else ()
+    proven: list[frozenset[int]] = []
+    after = None
+    if others:
+
+        def after(pickler: Any) -> None:
+            proven.append(_proven_apart(pickler, others))
+
+    past = _past_budget() if keep and deadline is not None else None
+    part = pickle_value(value, keep=keep, deadline=deadline, after=after, past=past)
     if keep and part.also_keyed:
-        _remember(value, part)
+        _remember(value, part, proven[0] if proven else frozenset())
+    if part.digest is None:
+        raise HashBudgetExceeded  # made on past the budget for the store alone
     return part.digest
 
 
@@ -270,9 +308,25 @@ _local = threading.local()
 
 
 @contextmanager
-def keeping(wanted: Callable[[Any], bool]) -> Iterator[None]:
+def keeping(
+    wanted: Callable[[Any], bool],
+    others: Callable[[Any], Iterable[Any]] | None = None,
+    past_budget: int | None = None,
+) -> Iterator[None]:
     """Keep the store pickle each digest takes of a value *wanted* says a
     store that runs before this ends will hold (`kept`).
+
+    *others* gives, for such a value, what else the store's entry will
+    hold that may share an object with it: the statement's echoed value,
+    its other outputs. Each is checked against the value's pickle as it is
+    made (`apart`).
+
+    *past_budget*: a digest under a budget (`value_hash.budgeted_hash`)
+    that runs out of it while pickling such a value gives up its digest
+    as before, but makes the pickle on, up to that many bytes, for the
+    store, which would make it (or a copy as big) anyway: a 915 MB
+    statsmodels result ran out of a change check's 0.5 s with 0.7 s of
+    pickling to make, and its store took 9.8 s to copy it the other way.
 
     Only around code that runs nothing of the user's between a digest and
     the store: the kept bytes are the value as it was when digested. A value
@@ -280,7 +334,7 @@ def keeping(wanted: Callable[[Any], bool]) -> Iterator[None]:
     nothing here adds to its reference count, which the checks between
     count. Everything kept is let go at the end."""
     outer = getattr(_local, "state", None)
-    _local.state = (wanted, {}, {})
+    _local.state = (wanted, {}, {}, others, past_budget)
     try:
         yield
     finally:
@@ -297,7 +351,93 @@ def _keeps(value: Any) -> bool:
         return False
 
 
-def _remember(value: Any, part: Part) -> None:
+def _weakly_held(value: Any) -> bool:
+    try:
+        weakref.ref(value)
+    except TypeError:
+        return False
+    return True
+
+
+def _past_budget() -> int | None:
+    state = getattr(_local, "state", None)
+    return None if state is None else state[4]
+
+
+def _others(value: Any) -> list[Any]:
+    """What `keeping`'s *others* says the entry holding *value* holds
+    besides it, *value* itself left out."""
+    state = getattr(_local, "state", None)
+    if state is None or state[3] is None:
+        return []
+    try:
+        return [other for other in state[3](value) if other is not value and type(other) not in _ATOMS]
+    except Exception:  # noqa: BLE001 - nothing known: nothing proven
+        return []
+
+
+#: Values `_others` leaves out: nothing can be part of them.
+_ATOMS = frozenset({str, bytes, int, float, complex, bool, type(None)})
+
+#: How much of the stream of each of `keeping`'s *others* `_proven_apart`
+#: pickles to look for shared objects, and for how long, before it gives up:
+#: an echo is a few kilobytes, and its buffers are not copied.
+_APART_MAX_BYTES = 16 << 20
+_APART_MAX_SECONDS = 0.25
+
+
+class _TooMuch(Exception):
+    """`_proven_apart` went past its bytes or time."""
+
+
+class _Counted:
+    """A sink that keeps nothing and stops past `_APART_MAX_BYTES` or
+    *deadline*."""
+
+    __slots__ = ("_deadline", "size")
+
+    def __init__(self, deadline: float) -> None:
+        self._deadline = deadline
+        self.size = 0
+
+    def write(self, data: Any) -> int:
+        self.size += len(data)
+        if self.size > _APART_MAX_BYTES or perf_counter() > self._deadline:
+            raise _TooMuch
+        return len(data)
+
+
+def _proven_apart(pickler: Any, others: list[Any]) -> frozenset[int]:
+    """The ids of those of *others* that share no object with the value
+    *pickler* just pickled, as a store pickles them: no object in both
+    pickles' memos -- every object a pickle restores as one wherever it
+    appears -- but values that restore alike apart
+    (`kept_state.restores_alike_apart`). Both memos are alive together,
+    so an id names one object in both.
+
+    Pickled together, an object both hold is restored as one; pickled
+    apart, as two. So *value*'s own pickle may stand in an entry beside
+    such an other (`nest`) only when none is shared."""
+    try:
+        inner = pickler.memo.copy()
+    except Exception:  # noqa: BLE001 - nothing known: nothing proven
+        return frozenset()
+    extra = _stored_reducers()
+    table = kept_state.reducers(5, extra)
+    deadline = perf_counter() + _APART_MAX_SECONDS
+    proven = set()
+    for other in others:
+        try:
+            memo = kept_state.store_memo(other, 5, extra=extra, sink=_Counted(deadline))
+        except Exception:  # noqa: BLE001 - too big, too slow, or unpicklable: not proven
+            continue
+        if all(kept_state.restores_alike_apart(memo[key][1], table) for key in memo if key in inner):
+            proven.add(id(other))
+        del memo
+    return frozenset(proven)
+
+
+def _remember(value: Any, part: Part, apart: frozenset[int]) -> None:
     state = getattr(_local, "state", None)
     if state is None:
         return
@@ -305,7 +445,19 @@ def _remember(value: Any, part: Part) -> None:
         ref = weakref.ref(value)
     except TypeError:
         return  # no weak reference (a list, a dict): not kept
-    state[1][id(value)] = (ref, part)
+    state[1][id(value)] = (ref, part, apart)
+
+
+def apart(value: Any, other: Any) -> bool:
+    """Did the digest that kept *value*'s pickle (`kept`) find that
+    *other*, one of `keeping`'s *others* for it, shares no object with it
+    (`_proven_apart`)? Both are alive from that digest to the store, so
+    the id names the same object."""
+    state = getattr(_local, "state", None)
+    if state is None:
+        return False
+    found = state[1].get(id(value))
+    return found is not None and found[0]() is value and id(other) in found[2]
 
 
 def kept(value: Any) -> Part | None:
@@ -324,7 +476,7 @@ def nest(container: Any, value: Any) -> None:
     """Say that *value*, held in *container* (a statement's entry), may be
     pickled as its own kept pickle inside *container*'s (`nested`): the
     caller has checked that nothing else in *container* is part of
-    *value*, so no object is held by both."""
+    *value*, so no object is held by both (immutable data, or `apart`)."""
     state = getattr(_local, "state", None)
     if state is None or kept(value) is None:
         return

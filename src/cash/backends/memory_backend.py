@@ -223,6 +223,25 @@ def _snapshot_nesting(value: dict, inner: Any, part: stored_pickle.Part) -> _Pic
 _PREMADE = threading.local()
 
 
+#: The most a stored output's pickle is made on past a change check's
+#: budget (`room_past_budget`): what one store may copy anyway.
+PAST_BUDGET_MAX_BYTES = 2 << 30
+
+
+def room_past_budget(backend: Any) -> int | None:
+    """How many bytes a digest of a statement's output may make its pickle
+    on past its budget for the store (`stored_pickle.keeping`): what one
+    entry of *backend*'s RAM tier may hold (see `InMemoryBackend.set`), at
+    most `PAST_BUDGET_MAX_BYTES`; None without a RAM tier first, which is
+    the only tier that takes those bytes."""
+    tiers = getattr(backend, "backends", None) or [backend]
+    first = tiers[0] if tiers else None
+    if not isinstance(first, InMemoryBackend):
+        return None
+    cap = first._max_size_bytes
+    return PAST_BUDGET_MAX_BYTES if cap is None else min(int(cap * 0.9), PAST_BUDGET_MAX_BYTES)
+
+
 def kept_as_pickle(value: Any) -> bool:
     """Would the tier keep *value*, a call's result, as its pickle bytes
     (`_Pickled`), were it big enough: an object of a class of its own?"""

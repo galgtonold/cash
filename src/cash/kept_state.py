@@ -37,6 +37,8 @@ __all__ = [
     "one_keying",
     "reducers",
     "restore_with_dict",
+    "restores_alike_apart",
+    "store_memo",
     "too_deep",
 ]
 
@@ -119,6 +121,7 @@ def _dumps_also_keyed(
     on_retry: Any = None,
     sink: Any = None,
     reducer_override: Any = None,
+    after: Any = None,
 ) -> tuple[bytes, bool]:
     """``dumps(value, protocol, ...)``, the bytes a store keeps, and whether
     they are also the *keyed* bytes of the same call: True when no object
@@ -135,7 +138,9 @@ def _dumps_also_keyed(
     writes them) and the stream returned is empty; a value too deep for
     the pickler then raises RecursionError, as keyed bytes do: its digest
     is taken over its keyed bytes, which refuse it too.
-    *reducer_override* is the pickler's hook of that name."""
+    *reducer_override* is the pickler's hook of that name. *after* is
+    called with the pickler once it has pickled *value*, its memo still
+    whole; not for a value pickled flat."""
     if FLAT_FIRST:
         if sink is not None:
             raise RecursionError("pickled flat first on this Python: digested over its keyed bytes")
@@ -155,6 +160,7 @@ def _dumps_also_keyed(
             sink=sink,
             table=table,
             override=reducer_override,
+            after=after,
         )
         return stream, not differs
     except (RecursionError, MemoryError) as exc:
@@ -361,6 +367,7 @@ def _dumps(
     sink: Any = None,
     table: _KeepDict | None = None,
     override: Any = None,
+    after: Any = None,
 ) -> bytes:
     buf = io.BytesIO() if sink is None else sink
     if override is None:
@@ -378,7 +385,58 @@ def _dumps(
         pickler.persistent_id = key_aliases()
     pickler.dispatch_table = _KeepDict(protocol, extra, keyed) if table is None else table
     pickler.dump(value)
+    if after is not None:
+        after(pickler)
     return b"" if sink is not None else buf.getvalue()
+
+
+def store_memo(value: Any, protocol: int, *, extra: dict | None, sink: Any) -> dict[int, tuple[int, Any]]:
+    """The memo of *value*'s store pickle (as `dumps_also_keyed` makes it),
+    ``id(obj) -> (index, obj)``: every object the pickle holds once and
+    refers back to, which is every object whose identity it keeps. The
+    bytes go to *sink* and are dropped; buffers are handed out of band
+    and not copied. Raises what pickling raises."""
+    found: dict[int, tuple[int, Any]] = {}
+    _dumps(
+        value,
+        protocol,
+        False,
+        _apart,
+        extra,
+        None,
+        False,
+        sink=sink,
+        table=_KeepDict(protocol, extra),
+        after=lambda pickler: found.update(pickler.memo.copy()),
+    )
+    return found
+
+
+def _apart(_buffer: Any) -> bool:
+    return False
+
+
+def restores_alike_apart(obj: Any, table: dict) -> bool:
+    """Does *obj*, an object the store pickles of two values both hold,
+    restore alike whether the two are pickled together or apart: a value
+    no program tells from an equal one (a string, a number, a tuple -- its
+    items are asked on their own --, a numpy dtype or scalar), or an
+    object pickled by its name, which every pickle restores to the one
+    object that name holds (a class, a function, a ``__reduce__`` that
+    gives a name)? *table* is a store's reducers (`_KeepDict`)."""
+    t = type(obj)
+    if t in _ATOMS or t is types.FunctionType or _identityless(t):
+        return True  # a function: the C pickler writes it by name, before the table
+    try:
+        reducer = table[t]
+    except KeyError:
+        return issubclass(t, type)  # a class: by name
+    except Exception:  # noqa: BLE001 - not known: kept apart
+        return False
+    try:
+        return isinstance(reducer(obj), str)
+    except Exception:  # noqa: BLE001 - not known: kept apart
+        return False
 
 
 class _Overriding(pickle.Pickler):
@@ -753,11 +811,11 @@ def _flat_array(obj: Any) -> bool:
     return isinstance(obj, ndarray) and not obj.dtype.hasobject
 
 
-def reducers(protocol: int = pickle.DEFAULT_PROTOCOL) -> dict:
+def reducers(protocol: int = pickle.DEFAULT_PROTOCOL, extra: dict | None = None) -> dict:
     """Each type's reducer, as `dumps` reduces it: ``reducers(p)[type(obj)](obj)``
     is what pickling *obj* at protocol *p* saves (a class has none: it is
-    pickled by name)."""
-    return _KeepDict(protocol, None)
+    pickled by name). *extra*: reducers taken first, as `dumps` takes them."""
+    return _KeepDict(protocol, extra)
 
 
 class _KeepDict(dict):
