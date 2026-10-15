@@ -164,7 +164,9 @@ def _snapshot(value: Any) -> _Pickled | None:
     store, or the one a digest of it made for the store that follows
     (`stored_pickle.kept`). A statement's entry holding a value so digested
     (`stored_pickle.nested`) holds that value's pickle as it is, nested in
-    its own (`_snapshot_nesting`)."""
+    its own (`_snapshot_nesting`); one whose digest ran out of its budget
+    has it made now, and raises `stored_pickle.HashBudgetExceeded` past
+    what the store may spend on it (`room_past_budget`)."""
     premade = getattr(_PREMADE, "entry", None)
     if premade is not None and premade[0] is value:
         _PREMADE.entry = None
@@ -223,17 +225,19 @@ def _snapshot_nesting(value: dict, inner: Any, part: stored_pickle.Part) -> _Pic
 _PREMADE = threading.local()
 
 
-#: The most a stored output's pickle is made on past a change check's
-#: budget (`room_past_budget`): what one store may copy anyway.
+#: The most a stored output's pickle is made for its store when its change
+#: check ran out of budget (`room_past_budget`): what one store may copy
+#: anyway.
 PAST_BUDGET_MAX_BYTES = 2 << 30
 
 
 def room_past_budget(backend: Any) -> int | None:
-    """How many bytes a digest of a statement's output may make its pickle
-    on past its budget for the store (`stored_pickle.keeping`): what one
-    entry of *backend*'s RAM tier may hold (see `InMemoryBackend.set`), at
-    most `PAST_BUDGET_MAX_BYTES`; None without a RAM tier first, which is
-    the only tier that takes those bytes."""
+    """How many bytes the pickle of a statement's output whose digest ran
+    out of its budget may take when the store makes it
+    (`stored_pickle.keeping`): what one entry of *backend*'s RAM tier may
+    hold (see `InMemoryBackend.set`), at most `PAST_BUDGET_MAX_BYTES`; None
+    without a RAM tier first, which is the only tier that takes those
+    bytes."""
     tiers = getattr(backend, "backends", None) or [backend]
     first = tiers[0] if tiers else None
     if not isinstance(first, InMemoryBackend):
@@ -1524,8 +1528,9 @@ class InMemoryBackend(CacheBackend):
         # 350,000 edges), on every store, for a number the bytes give.
         pickled = None
         # An entry holding a value whose pickle its digest made a moment ago
-        # (`stored_pickle.nested`) is kept as bytes too: that pickle is made.
-        nested = type(value) is dict and stored_pickle.nested(value) is not None
+        # (`stored_pickle.nested`) is kept as bytes too: that pickle is made,
+        # or, when the digest ran out of its budget, is made for this store.
+        nested = type(value) is dict and stored_pickle.nesting(value)
         if (
             plain is None
             and dict_rows_size is None
@@ -1546,7 +1551,15 @@ class InMemoryBackend(CacheBackend):
             if nested or estimate >= _ROUND_TRIP_MIN_BYTES or _at_least(value, _ROUND_TRIP_MIN_BYTES):
                 # Not for a small value, which is copied as any other: its
                 # pickle would be made only to be dropped.
-                pickled = _snapshot(value)
+                try:
+                    pickled = _snapshot(value)
+                except stored_pickle.HashBudgetExceeded:
+                    # Its pickle, left to this store, took longer than its
+                    # statement is worth (or more bytes than one entry may
+                    # hold): not kept, and not copied another way either.
+                    with self._lock:
+                        self._drop(key)
+                    return False
         if pickled is not None and pickled.nbytes >= _ROUND_TRIP_MIN_BYTES:
             size = pickled.nbytes
         elif dict_rows_size is not None:

@@ -842,9 +842,9 @@ class StatementStore:
             # A RAM tier that keeps the entry as pickle bytes credits its first
             # hit's reading to this class (`InMemoryBackend._read_pickled`).
             wire[memory_backend.ROUND_TRIP_CLASS] = prediction["class_key"]
-        inner = _nestable(payload)
-        if inner is not None:
-            stored_pickle.nest(payload, inner)
+        nestable = _nestable(payload)
+        if nestable is not None:
+            stored_pickle.nest(payload, *nestable)
         try:
             self.cash_instance.backend.set(cache_key, payload, wire)
         except (OSError, TypeError, ValueError, pickle.PicklingError, RuntimeError) as e:
@@ -871,14 +871,17 @@ class StatementStore:
             logger.debug("[PROCESSOR] Best-effort metadata persistence failed")
 
 
-def _nestable(payload: dict[str, Any]) -> Any:
+def _nestable(payload: dict[str, Any]) -> tuple[Any, list[Any]] | None:
     """A variable of *payload* whose pickle its digest kept
     (`stored_pickle.kept`), when the entry may hold that pickle as it is
     (`stored_pickle.nest`): every other variable, and the echoed value, is
     that value, immutable data, or found by that digest to share no object
     with it (`stored_pickle.apart`) -- two pickles would make two objects
     of one. The rest of the entry is cash's own (printed text, RNG
-    states). None otherwise."""
+    states). Else one whose digest ran out of its budget, leaving its
+    pickle to the store (`stored_pickle.pending`), which proves the others
+    apart as it makes it. ``(value, the parts still to prove apart)``, or
+    None."""
     parts = [value for value in payload["variables"].values() if not _immutable(value)]
     echo = payload.get(ECHO_FIELD)
     if echo is not None and not _immutable(echo):
@@ -887,7 +890,10 @@ def _nestable(payload: dict[str, Any]) -> Any:
         if stored_pickle.kept(found) is not None and all(
             other is found or stored_pickle.apart(found, other) for other in parts
         ):
-            return found
+            return found, []
+    for found in parts:
+        if stored_pickle.pending(found):
+            return found, [other for other in parts if other is not found]
     return None
 
 

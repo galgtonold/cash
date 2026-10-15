@@ -215,6 +215,13 @@ INPUT_CHANGED_REASON = (
 logger = logging.getLogger(__name__)
 
 
+#: The share of a statement's run time its store may spend pickling an
+#: output whose change check ran out of budget (`_keeping_outputs`). A hit
+#: reads those bytes back in about the time they took to make, or longer:
+#: past half the statement's run, keeping them saves little, and the store
+#: gives them up having spent at most that.
+PAST_BUDGET_SHARE = 0.5
+
 #: What `_keeping_outputs` reads an unbound name as.
 _ABSENT = object()
 
@@ -1891,10 +1898,11 @@ class StatementProcessor:
         its store may hold; nothing for a statement that is not stored.
         The other outputs and the value it *echo*es are checked for objects
         an output's pickle shares with them (`stored_pickle.apart`). A
-        pickle a change check's budget cut short is made on for the RAM tier
-        (`memory_backend.room_past_budget`) when the statement took longer
-        than that budget (*cost*): a value slower to pickle than its
-        statement was to run is not one its store keeps."""
+        pickle a change check's budget cut short is left to the RAM tier
+        (`memory_backend.room_past_budget`), when the statement took longer
+        than that budget (*cost*), to make if it keeps the output: in at
+        most `PAST_BUDGET_SHARE` of *cost*, for a value slower to pickle
+        than its statement is worth is not one its store keeps."""
         if run.skip_cache or not run.outputs:
             return contextlib.nullcontext()
         user_ns = self.shell.user_ns
@@ -1909,7 +1917,7 @@ class StatementProcessor:
         past = None
         if cost > value_hash.CHANGE_CHECK_BUDGET_S:
             past = memory_backend.room_past_budget(getattr(self.cash_instance, "backend", None))
-        return stored_pickle.keeping(stored, others, past)
+        return stored_pickle.keeping(stored, others, past, cost * PAST_BUDGET_SHARE)
 
     def _refuse_unrestorable_outputs(
         self, run: StatementRun, captured_vars: dict[str, Any], echo: tuple[Any, ...] = (), cost: float = 0.0

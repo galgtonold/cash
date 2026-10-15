@@ -12,13 +12,16 @@ objects pickled by name is in both pickles (`stored_pickle.apart`).
 And a change check that ran out of its budget while pickling such an output
 (`value_hash.budgeted_hash`) gave up that pickle, and the store copied the
 value the slow way: 9.8 s for a statsmodels result whose pickle needed 0.7
-s. The pickle is now made on, for the store alone (`keeping`'s
-*past_budget*).
+s. The pickle is now left to the store (`keeping`'s *past_budget*), which
+makes it when it keeps the value as bytes, and nests it as a kept one. It
+is not made on in the digest: a store that refuses the value after it was
+digested (an openpyxl workbook its own sheets hold) threw 8 s of pickling
+away.
 
 What must hold: an object the echo or another output shares with the
 output comes back shared, from the RAM tier and from disk after a restart;
 what is stored is the value as the statement left it; each value is pickled
-once.
+once whole.
 """
 
 from __future__ import annotations
@@ -57,6 +60,13 @@ class SlowFit(Fit):
         return super().__reduce_ex__(protocol)
 
 
+class SlowFits:
+    """Four `SlowFit`s."""
+
+    def __init__(self) -> None:
+        self.fits = [SlowFit(1 << 12) for _ in range(4)]
+
+
 # Slow enough to be stored; one statement binding ``fit`` and echoing a value.
 ECHO_APART = "(fit := Fit() if time.sleep(0.3) is None else None).names[:]"
 ECHO_SHARED = "(fit := Fit() if time.sleep(0.3) is None else None).names"
@@ -66,7 +76,7 @@ ECHO_SHARED = "(fit := Fit() if time.sleep(0.3) is None else None).names"
 def tiers(cash_magics, cash_instance, mock_shell, tmp_path):
     ram, disk = InMemoryBackend(), FileBackend(str(tmp_path / "nbcache"), flush_interval=0)
     cash_instance.backend = TieredBackend([ram, disk])
-    run_cash_cell(cash_magics, f"import time\nfrom {__name__} import Fit, SlowFit")
+    run_cash_cell(cash_magics, f"import time\nfrom {__name__} import Fit, SlowFit, SlowFits")
     PICKLED.clear()
     yield cash_magics, ram, disk, tmp_path / "nbcache"
     disk.shutdown()
@@ -154,8 +164,58 @@ def test_a_change_check_past_its_budget_leaves_the_pickle_to_the_store(tiers, mo
     disk._writes.wait_all()
     assert value_hash.is_costly(mock_shell.user_ns["fit"]), "the check did not run out of its budget: proves nothing"
     _key, payload, as_bytes = _entry(ram, "fit")
-    assert as_bytes and PICKLED == [1], "the store pickled the output again"
+    # Once begun by the check, which gave up; once whole, by the store.
+    assert as_bytes and PICKLED == [1, 1], "the store copied the output another way"
     assert np.array_equal(payload["variables"]["fit"].coef, mock_shell.user_ns["fit"].coef)
+
+
+def test_a_change_check_past_its_budget_makes_no_pickle_a_store_refuses(tiers, mock_shell, monkeypatch):
+    from cash.notebook.statement import processor
+
+    magics, ram, _disk, _cache_dir = tiers
+    monkeypatch.setattr(value_hash, "CHANGE_CHECK_BUDGET_S", 0.02)
+    # Refused after its change check, as an openpyxl workbook its own sheets
+    # hold is: cash cannot tell another holder from them.
+    refuse = processor.StatementProcessor._refuse_unrestorable_outputs
+
+    def refusing(self, run, *args, **kwargs):
+        found = refuse(self, run, *args, **kwargs)
+        if "fit" in run.outputs:
+            run.skip_cache = True
+        return found
+
+    monkeypatch.setattr(processor.StatementProcessor, "_refuse_unrestorable_outputs", refusing)
+    begun, made = [], []
+    real = stored_pickle.pickle_value
+
+    def counted(value, **kwargs):
+        if isinstance(value, SlowFits):
+            begun.append(kwargs)
+        part = real(value, **kwargs)  # raises past its budget: not counted
+        if isinstance(value, SlowFits):
+            made.append(part)
+        return part
+
+    monkeypatch.setattr(stored_pickle, "pickle_value", counted)
+    run_cash_cell(magics, "fit = SlowFits() if time.sleep(0.3) is None else None")
+    assert value_hash.is_costly(mock_shell.user_ns["fit"]), "the check did not run out of its budget: proves nothing"
+    assert begun, "no store pickle begun by its check: proves nothing"
+    assert _entry(ram, "fit")[0] is None, "stored: proves nothing"
+    assert made == [], "pickled on for a store that did not take it"
+
+
+def test_a_pickle_left_to_the_store_is_made_within_its_time(tiers, cash_instance, mock_shell, monkeypatch):
+    from cash.notebook.statement import processor
+
+    magics, _ram, _disk, _cache_dir = tiers
+    ram = cash_instance.backend = InMemoryBackend()  # no disk tier to pickle it its own way
+    monkeypatch.setattr(value_hash, "CHANGE_CHECK_BUDGET_S", 0.02)
+    # 0.3 s of statement: at most 0.003 s to pickle, and pickling takes 0.05 s.
+    monkeypatch.setattr(processor, "PAST_BUDGET_SHARE", 0.01)
+    run_cash_cell(magics, "fit = SlowFit() if time.sleep(0.3) is None else None")
+    assert value_hash.is_costly(mock_shell.user_ns["fit"]), "the check did not run out of its budget: proves nothing"
+    assert _entry(ram, "fit")[0] is None, "kept in RAM past its time"
+    assert PICKLED == [1, 1], "copied another way after its pickle ran out of time"
 
 
 # -- the proof itself ---------------------------------------------------------
@@ -188,16 +248,30 @@ def test_an_other_too_big_to_check_is_not_apart(monkeypatch):
     assert _apart(fit, [[str(i) for i in range(1000)]]) == [False]
 
 
-def test_a_budgeted_digest_makes_its_pickle_on_only_within_its_bytes():
-    for past, kept in ((None, False), (1000, False), (1 << 30, True)):
+def test_a_budgeted_digest_leaves_its_pickle_to_the_store_within_its_bytes():
+    for past, made in ((None, None), (1000, False), (1 << 30, True)):
         fit = SlowFit()
         with stored_pickle.keeping(lambda v, fit=fit: v is fit, None, past):
             assert budgeted_hash(fit, seconds=0.01) is None, "within its budget: proves nothing"
-            part = stored_pickle.kept(fit)
-            assert (part is not None) is kept, past
-            if part is not None:
-                assert part.digest is None
-                payload = {"variables": {"fit": fit}}
-                stored_pickle.nest(payload, fit)
+            assert stored_pickle.kept(fit) is None, "made on in the digest"
+            assert stored_pickle.pending(fit) is (past is not None)
+            payload = {"variables": {"fit": fit}}
+            stored_pickle.nest(payload, fit)
+            assert stored_pickle.nesting(payload) is (made is not None)
+            if made is False:
+                with pytest.raises(stored_pickle.HashBudgetExceeded):
+                    memory_backend._snapshot(payload)
+            elif made:
                 back = memory_backend._snapshot(payload).load()["variables"]["fit"]
                 assert np.array_equal(back.coef, fit.coef) and back.names == fit.names
+                assert stored_pickle.kept(fit).digest is None
+
+
+def test_a_pickle_left_to_the_store_is_nested_only_apart_from_the_rest():
+    fit = SlowFit()
+    for others, nests in (([["x"]], True), ([fit.names], False)):
+        with stored_pickle.keeping(lambda v, fit=fit: v is fit, None, 1 << 30):
+            assert budgeted_hash(fit, seconds=0.01) is None, "within its budget: proves nothing"
+            payload = {"variables": {"fit": fit, "other": others[0]}}
+            stored_pickle.nest(payload, fit, others)
+            assert (stored_pickle.nested(payload) is not None) is nests
