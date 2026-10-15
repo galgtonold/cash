@@ -94,6 +94,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# `pip install cash-lib[fast]`: hashes big arrays, columns and files with
+# BLAKE3, several times faster than SHA-256 on a CPU without SHA
+# instructions. Without it cash uses hashlib's SHA-256; each install's
+# entries only miss under the other, never serve its results.
+fast = [
+    "blake3>=1.0,<2",
+]
 docs = [
     "mkdocs>=1.5",
     # 9.5 draws mermaid diagrams itself and has navigation.footer and toc.follow.
@@ -148,6 +155,8 @@ dev = [
     "setuptools",
     # Integration tests import it inside a real kernel, where no stub reaches.
     "scikit-learn",
+    # The [fast] digest path; the SHA-256 one is tested by hiding it.
+    "blake3>=1.0,<2",
     # test_a_jit_compiled_helper_is_keyed_as_code.py runs real @njit functions.
     "numba",
     # The soundfile reader tests read real .wav files through libsndfile.

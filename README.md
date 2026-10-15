@@ -43,6 +43,8 @@ pip install cash-lib
 
 That one install is all cash needs. A few features, such as the Redis backend, need a package of their own; see [installation](https://cash-lib.readthedocs.io/en/latest/getting-started/installation/).
 
+`pip install "cash-lib[fast]"` adds `blake3`, which hashes big arrays and files several times faster.
+
 ## Decorator
 
 ```python
