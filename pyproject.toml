@@ -50,6 +50,18 @@ include = [
 [tool.hatch.version]
 path = "src/cash/__init__.py"
 
+# The platform wheels with the C extension, built by .github/workflows/wheels.yml.
+# Only CPython 3.12+ has the watchers the extension uses; 3.10 and 3.11 install
+# the universal pure-Python wheel. Each runner builds its own architecture, so
+# no wheel is cross-compiled or emulated.
+[tool.cibuildwheel]
+build = ["cp312-*", "cp313-*", "cp314-*", "cp314t-*"]
+archs = ["native"]
+# A platform wheel without the extension would be a broken release artifact.
+environment = { CASH_REQUIRE_EXTENSION = "1" }
+# The installed wheel loads its extension (the import fails the job if not).
+test-command = 'python -c "import cash._cwatch, cash._native as n; print(n.status_line())"'
+
 [project]
 name = "cash-lib"
 dynamic = ["version"]

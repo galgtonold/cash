@@ -5,6 +5,8 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  # Run by hand on any branch, e.g. one that is not ready for main.
+  workflow_dispatch:
 
 jobs:
   test:

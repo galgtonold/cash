@@ -39,8 +39,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install build twine
 
+      # The sdist and the universal pure-Python wheel. The platform wheels
+      # with the C extension come from the wheels job.
       - name: Build package
-        run: python -m build
+        run: |
+          python -m build --sdist
+          CASH_PURE_PYTHON=1 python -m build --wheel
 
       - name: Check package
         run: twine check dist/*
@@ -52,6 +56,11 @@ jobs:
         with:
           name: dist
           path: dist/
+
+  # The platform wheels with the C extension, each built and import-tested
+  # by cibuildwheel on its own OS and architecture (wheels.yml).
+  wheels:
+    uses: ./.github/workflows/wheels.yml
 
   # PyPI never takes a version back, so the wheel is installed and checked
   # before anything is uploaded: in a clean venv (never the checkout, whose
@@ -120,7 +129,7 @@ jobs:
           }
 
   publish-test:
-    needs: [build, verify-wheel]
+    needs: [build, verify-wheel, wheels]
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.test_pypi == 'true'
     environment: test-pypi
@@ -132,13 +141,19 @@ jobs:
           name: dist
           path: dist/
 
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: cibw-wheels-*
+          path: dist/
+          merge-multiple: true
+
       - name: Publish to Test PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
 
   publish:
-    needs: [build, verify-wheel]
+    needs: [build, verify-wheel, wheels]
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     environment: pypi
@@ -149,6 +164,12 @@ jobs:
         with:
           name: dist
           path: dist/
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: cibw-wheels-*
+          path: dist/
+          merge-multiple: true
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
