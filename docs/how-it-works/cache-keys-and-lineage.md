@@ -25,11 +25,18 @@ key, and a miss.
 
 ## Hashing values
 
-<!-- claim: cash/content_hashers.py:builtin_hash @54c21e7f, cash/value_hash.py:compute_hash @795f6769 -->
+<!-- claim: cash/content_hashers.py:builtin_hash @54c21e7f, cash/value_hash.py:compute_hash @98f5643e -->
 Both paths fingerprint data values with the same built-in hashers. The
 decorator uses them for arguments; the notebook uses them wherever it hashes
 a value: a loop iteration's values, the arguments of a cached call inside a
 statement, and a variable with no lineage.
+
+With the [C fast path](../getting-started/installation.md#the-c-fast-path)
+on, cash watches a big container value it has hashed twice (its dicts,
+objects, classes and functions through CPython's watchers, its lists and sets
+by their item pointers) and hands back the fingerprint it computed last time
+while nothing in it has changed. The fingerprint is the same either way; a
+value the watchers cannot fully cover is hashed every time.
 
 | Type | Library | What is hashed |
 |------|---------|----------------|
@@ -77,7 +84,7 @@ something a key must see (an attribute a class's own pickling leaves out),
 the key is taken over a pickle that keeps it, in the same format. To key a
 type faster, or one that cannot be pickled, register a hasher; see [custom hashers](../tutorials/feature-guides/custom-hashers.md).
 
-<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/value_hash.py:compute_hash @795f6769 -->
+<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/value_hash.py:compute_hash @98f5643e -->
 === "Decorator"
 
     Registered hashers apply to call arguments and to the values inside a
@@ -248,7 +255,7 @@ calling a function defined in a later cell, see
 
 ### Resolving an input
 
-<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @778e6d73, cash/value_hash.py:compute_hash @795f6769 -->
+<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @778e6d73, cash/value_hash.py:compute_hash @98f5643e -->
 For each input variable, the statement key uses the first of these that
 exists:
 
