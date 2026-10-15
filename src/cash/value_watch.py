@@ -38,6 +38,10 @@ from collections.abc import Callable
 from time import perf_counter
 from typing import Any
 
+from . import _native
+from ._native import REASON
+from ._native import cwatch as _cw
+
 __all__ = [
     "KIND_PLAIN_KEY",
     "KIND_VALUE",
@@ -61,32 +65,6 @@ class WatchMismatch(AssertionError):
     """``CASH_CWATCH_VERIFY=1``: a digest the watchers called unchanged is
     not the digest hashing the value again gives."""
 
-
-def _load() -> tuple[Any, str | None]:
-    """The extension module, or None and why not."""
-    try:
-        from . import _native  # the packaging's guarded loader, when present
-    except ImportError:
-        _native = None
-    if _native is not None:
-        module = getattr(_native, "cwatch", None)
-        if module is None:
-            return None, getattr(_native, "REASON", None) or "the C extension is not available"
-    else:
-        if os.environ.get("CASH_PURE_PYTHON", "") not in ("", "0"):
-            return None, "CASH_PURE_PYTHON is set"
-        try:
-            from . import _cwatch as module  # type: ignore[attr-defined]
-        except ImportError as exc:
-            return None, f"the C extension did not load ({exc})"
-    if getattr(module, "API_VERSION", None) != 1:
-        return None, f"the C extension has API {getattr(module, 'API_VERSION', None)}, cash expects 1"
-    if not getattr(module, "USABLE", False):
-        return None, getattr(module, "UNUSABLE_REASON", None) or "the C extension is not usable here"
-    return module, None
-
-
-_cw, REASON = _load()
 
 VERIFY = os.environ.get("CASH_CWATCH_VERIFY", "") not in ("", "0")
 
@@ -331,16 +309,16 @@ def stats() -> dict:
 
 
 def status_line() -> str:
-    """One line for ``%cash_status``: whether the fast path is on and, if
-    not, why; and how big the watch table is."""
+    """``%cash_status``'s ``fast_path``: on or off and why (`_native`), and
+    while on, how big the watch table is and how often it saved a hash."""
+    line = _native.status_line()
     if _cw is None:
-        return f"fast path: off - {REASON}"
+        return line
     from .units import human_bytes
 
     s = _cw.stats()
-    reuse = f"{s['hits']} reuse{'s' if s['hits'] != 1 else ''}"
     return (
-        f"fast path: on (cash._cwatch API {_cw.API_VERSION}); watch table "
-        f"{human_bytes(s['table_bytes'])} of {human_bytes(s['budget'])}, "
-        f"{s['roots']} value{'s' if s['roots'] != 1 else ''} watched, {reuse}" + (" (verify mode)" if VERIFY else "")
+        f"{line}; watch table {human_bytes(s['table_bytes'])} of {human_bytes(s['budget'])}, "
+        f"{s['roots']} value{'s' if s['roots'] != 1 else ''} watched, "
+        f"{s['hits']} hash{'es' if s['hits'] != 1 else ''} skipped" + (", verify mode" if VERIFY else "")
     )

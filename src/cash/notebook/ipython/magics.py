@@ -16,7 +16,7 @@ from typing import Any
 
 from IPython.core.magic import Magics, line_magic, magics_class
 
-from ... import _log, _native
+from ... import _log, value_watch
 from ..._clock import perf_counter as _perf_counter
 from ..._console import safe_text
 from ...backends import _writes
@@ -553,7 +553,8 @@ class CashMagics(Magics):
             - lineage: Current variable lineage state
             - cache_stats: {"keys": number of entries in the backend}
             - fast_path: "on (...)" when the C extension skips re-hashing
-              values that provably did not change, else "off: <why>"
+              values that provably did not change, with the size of its
+              watch table, else "off: <why>"
         """
 
         mode = parse_mode(line, ("", "print", "json", "dict"))
@@ -571,7 +572,7 @@ class CashMagics(Magics):
             },
             "auto_cache_enabled": self._auto_cache_enabled,
             "debug_enabled": self._debug,
-            "fast_path": _native.status_line(),
+            "fast_path": value_watch.status_line(),
         }
 
         # Counted, not listed: listing reads every entry's metadata, which on a

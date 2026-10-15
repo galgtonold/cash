@@ -102,8 +102,12 @@ def test_before_python_3_12_the_extension_is_not_tried(no_loaded_module):
 
 def test_cash_status_shows_the_fast_path_line(cash_magics):
     line = cash_magics.cash_status("dict")["fast_path"]
-    assert line == _native.status_line()
-    assert line.startswith("on (") if _native.AVAILABLE else line == f"off: {_native.REASON}"
+    assert line.startswith(_native.status_line())
+    if _native.AVAILABLE:
+        # and how big the watch table is (`value_watch.status_line`)
+        assert line.startswith("on (") and "watch table" in line
+    else:
+        assert line == f"off: {_native.REASON}"
 
 
 def test_a_fresh_interpreter_with_the_switch_imports_cash_on_the_pure_path(tmp_path):
