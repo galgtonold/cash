@@ -185,7 +185,7 @@ need it cached.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/maintenance.py:Maintenance.delete_function_entries @e215cf03, cash/backends/file_eviction.py:FileEvictor.remove_path @ec89275a -->
+<!-- claim: cash/decorator/maintenance.py:Maintenance.delete_function_entries @e215cf03, cash/backends/file_eviction.py:FileEvictor.remove_path @76e08300 -->
 **What happened.** `f.cache_clear()` could not remove some of the function's
 entries. The message says how many.
 

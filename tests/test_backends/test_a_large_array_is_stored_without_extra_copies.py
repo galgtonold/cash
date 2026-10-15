@@ -17,7 +17,7 @@ import pytest
 
 np = pytest.importorskip("numpy")
 
-from cash.backends import file_backend
+from cash.backends import chunk_store, file_backend
 from cash.backends.cache_dir import VERSION_FILENAME
 from cash.backends.entry_format import MAGIC, read_entry
 from cash.backends.file_backend import FileBackend
@@ -50,7 +50,8 @@ def _fresh(tmp_path, **kwargs):
 def test_a_large_array_is_written_without_joining_it_to_the_header(tmp_path, monkeypatch):
     writes = []
     real = file_backend.write_all
-    monkeypatch.setattr(file_backend, "write_all", lambda fd, data: (writes.append(len(data)), real(fd, data)))
+    for module in (file_backend, chunk_store):  # the array goes to the chunk store
+        monkeypatch.setattr(module, "write_all", lambda fd, data: (writes.append(len(data)), real(fd, data)))
     arr = np.arange(N, dtype=np.float64)
     _stored(tmp_path, arr).shutdown()
     assert max(writes) == arr.nbytes, f"the largest write was {max(writes)} bytes for a {arr.nbytes}-byte array"
@@ -114,7 +115,8 @@ def test_a_compressed_tier_stores_the_value_in_one_piece(tmp_path):
 
 @pytest.mark.parametrize("where", [0.3, 0.6, 0.99])
 def test_a_damaged_split_entry_is_not_served(tmp_path, where):
-    _stored(tmp_path, np.arange(N, dtype=np.float64)).shutdown()
+    # Buffers under a megabyte each, so they stay in the entry (not chunks).
+    _stored(tmp_path, [np.arange(N // 5, dtype=np.float64) + i for i in range(5)]).shutdown()
     path = _fresh(tmp_path)._get_path("k")
     data = bytearray(open(path, "rb").read())
     data[int(len(data) * where)] ^= 0x01

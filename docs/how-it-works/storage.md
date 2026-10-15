@@ -189,7 +189,7 @@ keeps it in memory if it fits and warns once
 
 ## Cache size limit and eviction
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @d7ba8c7f, cash/backends/file_eviction.py:FileEvictor.evict @290394ae -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @d7ba8c7f, cash/backends/file_eviction.py:FileEvictor.evict @697d1c43 -->
 Only a write can start eviction. After each write to disk, the background
 writer adds the entry's size to a running total. If the total is over the cap,
 it deletes entries until the cache is under 90% of the cap, so the next few
@@ -231,6 +231,13 @@ the newest 10,000 such notes, in `_evicted.log` inside the cache folder, and
 entry, the miss says "evicted to make room", and a recompute of two seconds or
 more warns once
 ([`CACHE-EVICTED-RECOMPUTE`](../warnings.md#cache-evicted-recompute)).
+
+<!-- claim: cash/backends/chunk_store.py:ChunkStore.share @b16f5d81, cash/backends/file_eviction.py:FileEvictor.remove_path @76e08300, cash/backends/chunk_store.py:ORPHAN_CHUNK_AGE == 3600.0 -->
+The size counted is what the folder holds: a buffer several entries share
+([below](#shared-buffers)) counts once. For the ranking, its bytes are shared
+out evenly among the entries holding it, and it is deleted with the last of
+them. A chunk no entry holds any more, left by a process killed between
+writing it and its entry, goes once it is an hour old.
 
 <!-- claim: cash/backends/file_eviction.py:FileEvictor.touched_since @1e44fa35 -->
 The value just written is not protected. If it is the least valuable entry, it
@@ -330,6 +337,25 @@ is several times slower for a large frame. polars does not pickle an
 `Object` column, so a frame with one stays in memory and is computed again
 in a new process.
 
+<span id="shared-buffers"></span>
+
+<!-- claim: cash/backends/chunk_store.py:ChunkStore.put @d0bbfbf9, cash/backends/chunk_store.py:CHUNK_MIN_BYTES @fdf218ec, cash/backends/file_backend.py:FileBackend._write_cache_files @8345402c -->
+Each buffer of a megabyte or more that a value is written with (a column of
+a table, an array's data) is stored once per cache folder, in its `chunks`
+folder, named by a digest of its bytes. An entry names the chunks it holds.
+When another entry already holds the same bytes -- a table with one column
+added, the same data stored by two statements, a loop whose every result
+carries its input's columns -- the write costs a digest of the buffer instead
+of writing it again. The digest is taken with the same algorithm as cash's
+other digests of big data (BLAKE3 with `cash-lib[fast]`, SHA-256 otherwise),
+and the name says which, so installs hashing differently never share a
+chunk. With `compress` on, values are not split this way.
+
+<!-- claim: cash/backends/chunk_store.py:read_chunk @aa8ba979, cash/backends/entry_format.py:_read_apart @97c522a8 -->
+A chunk is checked against the checksum its entry recorded each time it is
+read. A chunk that is missing or damaged makes the entry a miss, computed
+again, and a damaged chunk is removed so the next write stores it afresh.
+
 <span id="compression"></span>
 
 <!-- claim: cash/backends/compression.py:ZSTD_LEVEL == 3, cash/backends/compression.py:ZLIB_LEVEL == 1, cash/backends/compression.py:MIN_SAVING == 0.1, cash/backends/compression.py:compress @9df58020 -->
@@ -354,21 +380,21 @@ that does not match (a half-written file, a bad sector, a sync client that
 merged two versions) counts as missing, and the value is recomputed. So does
 an entry with no checksum. The check finds damage, not tampering.
 
-<!-- claim: cash/backends/cache_dir.py:remove_orphan_temp_files @0daea539, cash/backends/file_backend.py:FileBackend._do_set_sync @d7ba8c7f -->
+<!-- claim: cash/backends/cache_dir.py:remove_orphan_temp_files @f7c8f067, cash/backends/file_backend.py:FileBackend._do_set_sync @d7ba8c7f -->
 A write that replaces an entry goes to a hidden `.tmp-*.part` file first,
 renamed into place once complete. A process killed in between (a kernel
 restart, an out-of-memory kill) leaves that file behind. The first write of a
 later process on the same machine removes it; one left by another machine
 goes once nobody has written to it for a day.
 
-<!-- claim: cash/backends/entry_format.py:update_metadata_in_place @0d0c80fb, cash/backends/file_backend.py:FileBackend.get @5568ac7d -->
+<!-- claim: cash/backends/entry_format.py:update_metadata_in_place @0db18fc6, cash/backends/file_backend.py:FileBackend.get @5568ac7d -->
 Several processes can share one folder. Each one counts the reads of the
 entries it used and writes those counts back later. When another process has
 stored a new result under the same entry meanwhile, the next read takes the
 new entry as it is on disk, and the counts are dropped rather than written over
 it.
 
-<!-- claim: cash/backends/cache_dir.py:CACHE_FORMAT_VERSION == 5, cash/backends/cache_dir.py:CacheDirStamp.check @c89cf812 -->
+<!-- claim: cash/backends/cache_dir.py:CACHE_FORMAT_VERSION == 6, cash/backends/cache_dir.py:CacheDirStamp.check @7bdce11c -->
 The cache folder records the storage format it was written in. When cash opens
 a folder written in a different format, by an older or newer cash, it logs a
 warning and deletes the old entries, so the first run afterwards recomputes.
