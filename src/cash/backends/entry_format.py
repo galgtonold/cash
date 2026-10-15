@@ -71,6 +71,8 @@ payload is::
     stream_len  uint64 LE
     n_buffers   uint32 LE
     lengths     n_buffers x uint64 LE
+    n_apart     uint32 LE
+    apart       n_apart x (index uint32 LE, digest 32 bytes, crc32 4 bytes)
     stream      the pickle stream, at the next multiple of 64
     buffers     each at the next multiple of 64, zero padding between
 
@@ -78,6 +80,13 @@ A read fills one ``bytearray`` per buffer straight from the file and the
 unpickled arrays use that memory as it is, with no second copy. The
 checksum covers every byte of the payload, padding included, and is checked
 before anything is unpickled.
+
+A buffer of a megabyte or more is not in the entry at all but in the
+folder's chunk store (`cash.backends.chunk_store`), once for every entry
+holding the same bytes: ``apart`` names it by its digest, with the crc32 of
+its bytes, and ``buffers`` skips it. The entry's checksum covers those names
+and checksums; each chunk's bytes are checked against its crc32 as it is
+read, and a chunk missing or damaged makes the whole entry unreadable.
 
 A large payload is not read at all but mapped (`_map_split`): a private,
 copy-on-write mapping of the file, whose pages are the page cache's own
@@ -114,6 +123,7 @@ __all__ = [
     "META_SLACK",
     "ENTRY_SUFFIX",
     "CHECKSUM_FIELD",
+    "CHUNKS_FIELD",
     "CorruptEntry",
     "PackedEntry",
     "SplitPayload",
@@ -138,6 +148,9 @@ MAGICS = (MAGIC, MAGIC_SPLIT)
 #: payload's start.
 SPLIT_ALIGN = 64
 _SPLIT_HEAD = struct.Struct("<QI")
+_COUNT = struct.Struct("<I")
+#: A buffer kept in the chunk store: its index, digest and crc32.
+_CHUNK_REF = struct.Struct("<I32s4s")
 HEADER = struct.Struct("<4sII")
 HEADER_SIZE = HEADER.size  # 12
 META_SLACK = 64
@@ -159,6 +172,10 @@ _CAN_MAP = os.name == "posix" and sys.version_info >= (3, 13)
 #: checksum would make `packed_size` a guess and the cost of a metadata read
 #: depend on the payload after all.
 CHECKSUM_FIELD = "_payload_crc32"
+#: Metadata key listing the chunks a split payload keeps apart, as
+#: ``(chunk file name, file bytes)`` (`cash.backends.chunk_store`): what
+#: tells which entries hold a chunk without reading their payloads.
+CHUNKS_FIELD = "chunks"
 
 
 def _checksum(payload: bytes) -> bytes:
@@ -197,17 +214,30 @@ class PackedEntry(NamedTuple):
     size: int
 
 
-def split_chunks(stream: Any, buffers: Sequence[Any]) -> list:
+def split_chunks(
+    stream: Any, buffers: Sequence[Any], stored_apart: dict[int, tuple[bytes, bytes]] | None = None
+) -> list:
     """The payload of a ``CSH3`` entry, as the pieces to write in order.
 
     The buffers are written from where they are, not joined into one blob:
-    joining a 100 MB payload was a copy of its own."""
-    table = _SPLIT_HEAD.pack(len(stream), len(buffers)) + struct.pack(
-        f"<{len(buffers)}Q", *(_nbytes(b) for b in buffers)
+    joining a 100 MB payload was a copy of its own. *stored_apart* maps the
+    index of each buffer kept in the chunk store (`cash.backends.chunk_store`)
+    to its ``(digest, crc32)``; those are named in the table, not written
+    here."""
+    apart = stored_apart or {}
+    table = b"".join(
+        (
+            _SPLIT_HEAD.pack(len(stream), len(buffers)),
+            struct.pack(f"<{len(buffers)}Q", *(_nbytes(b) for b in buffers)),
+            _COUNT.pack(len(apart)),
+            *(_CHUNK_REF.pack(i, *apart[i]) for i in sorted(apart)),
+        )
     )
     chunks: list = [table + bytes(_pad(len(table))), stream]
     offset = _nbytes(chunks[0]) + len(stream)
-    for buf in buffers:
+    for i, buf in enumerate(buffers):
+        if i in apart:
+            continue
         pad = _pad(offset)
         if pad:
             chunks.append(bytes(pad))
@@ -383,36 +413,52 @@ def read_entry_and_checksum(path: str, *, with_payload: bool) -> tuple[dict[str,
 
 
 def _read_split(fh: Any, start: int, expected: bytes | None, path: str) -> SplitPayload:
-    """Read a ``CSH3`` payload into one new ``bytearray`` per part, checked."""
+    """Read a ``CSH3`` payload into one new ``bytearray`` per part, checked,
+    and the buffers its table names from the chunk store."""
     if expected is None:
         raise CorruptEntry(f"{path}: no payload checksum -- the value will be recomputed")
     end = fh.seek(0, os.SEEK_END)
     fh.seek(start)
     head = _read_exact(fh, _SPLIT_HEAD.size, path)
     stream_len, count = _SPLIT_HEAD.unpack(head)
-    if start + _SPLIT_HEAD.size + 8 * count > end:
+    if start + _SPLIT_HEAD.size + 8 * count + _COUNT.size > end:
         raise CorruptEntry(f"{path}: split payload truncated")
     lengths_raw = _read_exact(fh, 8 * count, path)
     lengths = struct.unpack(f"<{count}Q", lengths_raw)
-    table = _SPLIT_HEAD.size + 8 * count
+    count_raw = _read_exact(fh, _COUNT.size, path)
+    (n_apart,) = _COUNT.unpack(count_raw)
+    table = _SPLIT_HEAD.size + 8 * count + _COUNT.size + _CHUNK_REF.size * n_apart
+    if start + table > end:
+        raise CorruptEntry(f"{path}: split payload truncated")
+    refs_raw = _read_exact(fh, _CHUNK_REF.size * n_apart, path)
+    apart: dict[int, tuple[bytes, bytes]] = {}
+    for index, digest, crc in _CHUNK_REF.iter_unpack(refs_raw):
+        if index >= count or index in apart:
+            raise CorruptEntry(f"{path}: chunk table names buffer {index} of {count}")
+        apart[index] = (digest, crc)
     # The whole layout, checked against the file before anything is allocated
     # for it: a damaged length must not ask for terabytes.
     offset = table + _pad(table) + stream_len
-    for length in lengths:
-        offset += _pad(offset) + length
+    for i, length in enumerate(lengths):
+        if i not in apart:
+            offset += _pad(offset) + length
     if start + offset != end:
         raise CorruptEntry(f"{path}: split payload is {end - start} bytes, its table says {offset}")
     if _CAN_MAP and end - start >= MAP_MIN_BYTES and start % SPLIT_ALIGN == 0:
-        mapped = _map_split(fh, start, table, stream_len, lengths, expected, path)
+        mapped = _map_split(fh, start, table, stream_len, lengths, apart, expected, path)
         if mapped is not None:
             return mapped
     crc = zlib.crc32(lengths_raw, zlib.crc32(head))
+    crc = zlib.crc32(refs_raw, zlib.crc32(count_raw, crc))
     crc = zlib.crc32(_read_exact(fh, _pad(table), path), crc)
     stream = _read_into(fh, stream_len, path)
     crc = zlib.crc32(stream, crc)
     offset = table + _pad(table) + stream_len
-    buffers = []
-    for length in lengths:
+    buffers: list = []
+    for i, length in enumerate(lengths):
+        if i in apart:
+            buffers.append(None)
+            continue
         pad = _pad(offset)
         if pad:
             crc = zlib.crc32(_read_exact(fh, pad, path), crc)
@@ -426,11 +472,36 @@ def _read_split(fh: Any, start: int, expected: bytes | None, path: str) -> Split
             f"{path}: payload checksum {found.hex()} != stored {expected.hex()} "
             f"({offset} bytes) -- the value will be recomputed"
         )
+    _read_apart(buffers, lengths, apart, path)
     return SplitPayload(stream, buffers)
 
 
+def _read_apart(buffers: list, lengths: Sequence[int], apart: dict[int, tuple[bytes, bytes]], path: str) -> None:
+    """Fill in the buffers kept in the chunk store. Only after the entry's
+    own checksum matched: the digests and checksums named are the ones
+    written. A chunk missing or damaged makes the entry unreadable."""
+    if not apart:
+        return
+    # Imported here: chunk_store imports cache_dir, which imports this module.
+    from .chunk_store import ChunkError, read_chunk
+
+    cache_dir = os.path.dirname(path)
+    for index, (digest, crc) in apart.items():
+        try:
+            buffers[index] = read_chunk(cache_dir, digest, lengths[index], crc)
+        except ChunkError as exc:
+            raise CorruptEntry(f"{path}: {exc}") from exc
+
+
 def _map_split(
-    fh: Any, start: int, table: int, stream_len: int, lengths: Sequence[int], expected: bytes, path: str
+    fh: Any,
+    start: int,
+    table: int,
+    stream_len: int,
+    lengths: Sequence[int],
+    apart: dict[int, tuple[bytes, bytes]],
+    expected: bytes,
+    path: str,
 ) -> SplitPayload | None:
     """`_read_split` through a private copy-on-write mapping of the file:
     the stream and each buffer are views of it, checked like a read.
@@ -452,11 +523,15 @@ def _map_split(
     offset = table + _pad(table)
     stream = payload[offset : offset + stream_len]
     offset += stream_len
-    buffers = []
-    for length in lengths:
+    buffers: list = []
+    for i, length in enumerate(lengths):
+        if i in apart:
+            buffers.append(None)
+            continue
         offset += _pad(offset)
         buffers.append(payload[offset : offset + length])
         offset += length
+    _read_apart(buffers, lengths, apart, path)
     return SplitPayload(stream, buffers)
 
 
@@ -531,7 +606,13 @@ def update_metadata_in_place(path: str, metadata: dict[str, Any], expected: tupl
             return False
         if expected is not None and entry_identity(previous, checksum) != expected:
             return False
-        meta_bytes = pickle.dumps({**metadata, CHECKSUM_FIELD: checksum})
+        stamped = {**metadata, CHECKSUM_FIELD: checksum}
+        # Which chunks the payload holds is the payload's, like its checksum:
+        # never what the caller's dict says.
+        stamped.pop(CHUNKS_FIELD, None)
+        if CHUNKS_FIELD in previous:
+            stamped[CHUNKS_FIELD] = previous[CHUNKS_FIELD]
+        meta_bytes = pickle.dumps(stamped)
         if len(meta_bytes) > cap:
             return False
         fh.seek(0)

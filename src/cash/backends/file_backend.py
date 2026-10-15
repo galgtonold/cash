@@ -38,7 +38,9 @@ from .cache_dir import (
     warn_unusable,
     write_all,
 )
+from .chunk_store import CHUNK_MIN_BYTES, TRAILER, ChunkStore, as_bytes, chunk_name, digests
 from .entry_format import (
+    CHUNKS_FIELD,
     ENTRY_SUFFIX,
     CorruptEntry,
     PackedEntry,
@@ -286,6 +288,8 @@ class FileBackend(CacheBackend):
         self._queued_metadata: dict[str, dict] = {}
         self._writer_scope = _register_writer(self.cache_dir, self._writes)
         self.stamp = CacheDirStamp(self.cache_dir, _untracked)
+        #: The big buffers of the entries, each stored once (`chunk_store`).
+        self.chunks = ChunkStore(self.cache_dir, self._entry_chunks, _untracked)
         self.evictor = FileEvictor(
             self.cache_dir,
             max_size_bytes,
@@ -293,6 +297,7 @@ class FileBackend(CacheBackend):
             touched=self._touched,
             writes=self._writes,
             untracked=_untracked,
+            chunks=self.chunks,
         )
 
         # Directory creation, the stamp check and the flusher wait for first use.
@@ -316,6 +321,7 @@ class FileBackend(CacheBackend):
         self.evictor.rank_index._lock = threading.Lock()
         self.evictor.evictions._lock = threading.Lock()
         self._versions._lock = threading.Lock()
+        self.chunks.after_fork()
 
     @property
     def written_stamp(self) -> tuple | None:  # type: ignore[override]
@@ -448,6 +454,17 @@ class FileBackend(CacheBackend):
 
     def _get_path(self, key: str) -> str:
         return os.path.join(self.cache_dir, f"{self._stem(key)}{ENTRY_SUFFIX}")
+
+    def _entry_chunks(self):
+        """``(stem, chunks)`` of every entry holding chunks (`ChunkStore`)."""
+        for path in self.stamp.entry_files():
+            try:
+                metadata, _ = read_entry(path, with_payload=False)
+            except (OSError, CorruptEntry):
+                continue
+            held = metadata.get(CHUNKS_FIELD)
+            if held:
+                yield os.path.basename(path)[: -len(ENTRY_SUFFIX)], held
 
     @property
     def local_dir(self) -> str:
@@ -722,55 +739,84 @@ class FileBackend(CacheBackend):
         Raises:
             OSError, pickle.PickleError, ValueError: on write failure (caller handles cleanup).
         """
+        # The chunks this entry holds, as ``(name, file bytes)``, and the
+        # bytes the ones written new add to the folder.
+        held: list[tuple[str, int]] = []
+        added = 0
         if isinstance(serialized_value, SplitPayload):
-            chunks = split_chunks(serialized_value.stream, serialized_value.buffers)
+            apart: dict[int, tuple[bytes, bytes]] = {}
+            big = [(i, as_bytes(buf)) for i, buf in enumerate(serialized_value.buffers)]
+            big = [(i, view) for i, view in big if view.nbytes >= CHUNK_MIN_BYTES]
+            try:
+                for (i, view), known in zip(big, digests([view for _i, view in big])):
+                    digest, crc, grew = self.chunks.put(view, known)
+                    apart[i] = (digest, crc)
+                    held.append((chunk_name(digest), view.nbytes + TRAILER))
+                    added += grew
+            except BaseException:
+                self.chunks.abandon(held)
+                raise
+            chunks = split_chunks(serialized_value.stream, serialized_value.buffers, apart)
             split = True
             metadata["compressed"] = False
+            metadata[CHUNKS_FIELD] = held
+            # What the value weighs, wherever its bytes are.
+            metadata["size"] = sum(memoryview(c).nbytes for c in chunks) + sum(n - TRAILER for _name, n in held)
         else:
             codec = None
             if self.compress:
                 codec, serialized_value = compression.compress(serialized_value)
             metadata["compressed"] = codec or False
+            metadata.pop(CHUNKS_FIELD, None)
             chunks = [serialized_value]
             split = False
-        # The bytes the value occupies on disk, after compression.
-        metadata["size"] = sum(len(c) for c in chunks)
-        entry = pack_entry_parts(metadata, chunks, split=split)
-        checksum = entry.checksum
-
-        # What this entry occupies now, so a rewrite subtracts what was there.
+            # The bytes the value occupies on disk, after compression.
+            metadata["size"] = sum(len(c) for c in chunks)
         try:
-            old_entry_bytes = os.path.getsize(path)
-        except OSError:
-            old_entry_bytes = 0
+            entry = pack_entry_parts(metadata, chunks, split=split)
+            checksum = entry.checksum
 
-        try:
-            # A key that does not exist yet has nothing to preserve, so it
-            # skips the temp-and-rename dance. Anything else -- including a
-            # concurrent creator that won the O_EXCL race -- takes the safe
-            # path, because there a failed write must not destroy what is
-            # already cached.
-            if not self._write_new_in_place(path, entry):
-                self._atomic_write(path, [entry.head, *entry.chunks])
-        except FileNotFoundError:
-            # The cache directory was deleted under a live process (``cash
-            # clear --all``, or by hand): recreate it, stamped first so the next
-            # process does not discard these entries as an unknown format, and
-            # retry once.
-            os.makedirs(self.cache_dir, exist_ok=True)
-            self.stamp.ignore_in_git()
-            self.stamp.write()
-            if not self._write_new_in_place(path, entry):
-                self._atomic_write(path, [entry.head, *entry.chunks])
+            # What this entry occupies now, so a rewrite subtracts what was
+            # there, and the chunks it held, unless this process knows them.
+            replaced: list | None = None
+            try:
+                old_entry_bytes = os.path.getsize(path)
+            except OSError:
+                old_entry_bytes = 0
+            else:
+                replaced = self.evictor.chunks_held(path, self._stem(key))
+
+            try:
+                # A key that does not exist yet has nothing to preserve, so it
+                # skips the temp-and-rename dance. Anything else -- including a
+                # concurrent creator that won the O_EXCL race -- takes the safe
+                # path, because there a failed write must not destroy what is
+                # already cached.
+                if not self._write_new_in_place(path, entry):
+                    self._atomic_write(path, [entry.head, *entry.chunks])
+            except FileNotFoundError:
+                # The cache directory was deleted under a live process (``cash
+                # clear --all``, or by hand): recreate it, stamped first so the next
+                # process does not discard these entries as an unknown format, and
+                # retry once.
+                os.makedirs(self.cache_dir, exist_ok=True)
+                self.stamp.ignore_in_git()
+                self.stamp.write()
+                if not self._write_new_in_place(path, entry):
+                    self._atomic_write(path, [entry.head, *entry.chunks])
+        except BaseException:
+            self.chunks.abandon(held)
+            raise
+        freed = self.chunks.commit(self._stem(key), held, replaced)
 
         with self._touched.lock:
             self._remember(key, metadata, checksum)
-            self.evictor.note_write(key, old_entry_bytes, entry.size)
+            self.evictor.note_write(key, old_entry_bytes + freed, entry.size + added)
 
         # Only a capped tier ranks, so only a capped tier keeps the rank index:
         # uncapped, it would be a file that only grows.
         if self.evictor.capped:
-            self.evictor.record_rank(key, path, metadata, entry.size)
+            self.evictor.record_rank(key, path, metadata, entry.size + self.chunks.share(self._stem(key)))
 
     def set(
         self,
@@ -1001,6 +1047,7 @@ class FileBackend(CacheBackend):
             return
 
         metadata = dict(metadata)  # Don't mutate caller's dict
+        metadata.pop(CHUNKS_FIELD, None)  # it holds no payload
         metadata["key"] = key
         metadata["metadata_only"] = True
         metadata.setdefault("created_at", time.time())
@@ -1068,6 +1115,7 @@ class FileBackend(CacheBackend):
             except OSError:
                 # Best-effort removal during cache clear; file may be locked
                 logger.debug("Could not remove cache file %s during clear", f, exc_info=True)
+        self.chunks.clear()
         # The priorities and versions describe entries that no longer exist.
         self.evictor.clear()
         self._versions.remove()
