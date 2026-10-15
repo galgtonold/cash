@@ -28,7 +28,7 @@ from cash.tracking.function_tracker import is_local_module
 from cash.tracking.randomness import rng_carrier_kind
 
 from .held_functions import held_notebook_code
-from .held_modules import held_module_parts
+from .held_modules import held_data_part, held_module_parts
 from .installed_code import installed_code_parts
 from .lineage_formula import (
     bound_names,
@@ -1054,6 +1054,11 @@ def compute_cache_key(
     # too (``recorded_reads_lineage_component``). None when they hold none.
     held_modules, unkeyed_modules = held_module_parts(module_classes.values()) if module_classes else ([], set())
     callee_deps.extend(held_modules)
+    # And the data of those modules their methods read: a cell's
+    # ``mylib.K = 7`` leaves the files as they were.
+    held_data = held_data_part(module_classes.values(), ctx.user_ns) if module_classes else None
+    if held_data:
+        callee_deps.append(held_data)
     callee_component = f":callees:{':'.join(callee_deps)}" if callee_deps else ""
     if unfollowed:
         # A value too large to find every notebook function in: what those

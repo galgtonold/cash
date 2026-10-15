@@ -33,7 +33,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
 
     A statement recomputes when any of these changed:
 
-    <!-- claim: cash/notebook/held_modules.py:held_module_parts @34c0a619, cash/notebook/held_functions.py:held_notebook_code @875427ef, cash/notebook/ipython/autoreload_hook.py:in_place_reload @91fc9ec5 -->
+    <!-- claim: cash/notebook/held_modules.py:held_module_parts @34c0a619, cash/notebook/held_modules.py:held_data_part @7f1477b6, cash/notebook/held_functions.py:held_notebook_code @875427ef, cash/notebook/ipython/autoreload_hook.py:in_place_reload @91fc9ec5 -->
     - **Its source.**
     - **An input's lineage**, which changes whenever anything upstream of that
       input changed ([below](#lineage-propagation)).
@@ -52,7 +52,8 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       into objects of a class of your module uses the module however the
       objects were made: `[o.total() for o in orders]` after
       `orders = pickle.load(f)` runs again when `Order.total`, or a function
-      of the module it calls, is edited. A reload puts the file's values back for what cells set on
+      of the module it calls, is edited, and when a cell changes the module's
+      data those methods read (`mylib.K = 7`, `mylib.Order.scale = 7`). A reload puts the file's values back for what cells set on
       the module (`mylib.K = k`, `mylib.set_k(k)`, `mylib.CACHE.append(x)`;
       the same through a name holding what the module holds, such as
       `CONFIG["k"] = k` after `from mylib import CONFIG` or `cfg["k"] = k`
