@@ -77,21 +77,10 @@ def hashed_bytes() -> Iterator[Count]:
         yield count
 
 
-@contextlib.contextmanager
-def pickled_bytes() -> Iterator[Count]:
-    """Bytes pickled inside the block, by ``pickle.dumps`` or a
-    ``pickle.Pickler`` writing to a seekable buffer (cash's entry writer);
-    arrays handed out of band count their buffers' size."""
-    count = Count()
-    real_dumps = pickle.dumps
-    real_pickler = pickle.Pickler
+def _counting_pickler(base: type, count: Count) -> type:
+    """*base*, a pickler class, counting what it writes into *count*."""
 
-    def dumps(obj, *args, **kwargs):
-        out = real_dumps(obj, *args, **kwargs)
-        count.add(out)
-        return out
-
-    class CountingPickler(real_pickler):
+    class CountingPickler(base):
         def __init__(self, file, *args, buffer_callback=None, **kwargs):
             def on_buffer(buf):
                 count.bytes += memoryview(buf.raw()).nbytes
@@ -106,9 +95,31 @@ def pickled_bytes() -> Iterator[Count]:
             count.calls += 1
             count.bytes += (self._out.tell() - start) if hasattr(self._out, "tell") else 0
 
+    return CountingPickler
+
+
+@contextlib.contextmanager
+def pickled_bytes() -> Iterator[Count]:
+    """Bytes pickled inside the block, by ``pickle.dumps`` or a
+    ``pickle.Pickler`` writing to a seekable buffer (cash's entry writer);
+    arrays handed out of band count their buffers' size. Also cash's own
+    pickler subclass for a value walked before it is pickled
+    (`kept_state._Overriding`, always so on Windows 3.10), which subclasses
+    the ``pickle.Pickler`` of import time and so passes the patch by."""
+    from cash import kept_state
+
+    count = Count()
+    real_dumps = pickle.dumps
+
+    def dumps(obj, *args, **kwargs):
+        out = real_dumps(obj, *args, **kwargs)
+        count.add(out)
+        return out
+
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(pickle, "dumps", dumps)
-        mp.setattr(pickle, "Pickler", CountingPickler)
+        mp.setattr(pickle, "Pickler", _counting_pickler(pickle.Pickler, count))
+        mp.setattr(kept_state, "_Overriding", _counting_pickler(kept_state._Overriding, count))
         yield count
 
 
