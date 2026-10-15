@@ -211,7 +211,7 @@ static int ht_remove(uint32_t idx) {
     return 1;
 }
 
-static long node_new(uintptr_t addr, uint32_t root, PyObject *key) {
+static int64_t node_new(uintptr_t addr, uint32_t root, PyObject *key) {
     uint32_t idx;
     if (key) {
         if (kfree != NONE32) { idx = kfree; kfree = kn[idx].n.next; }
@@ -243,7 +243,7 @@ static long node_new(uintptr_t addr, uint32_t root, PyObject *key) {
         wlive++;
     }
     if (ht_add(idx) < 0) return -1;
-    return (long)idx;
+    return (int64_t)idx;
 }
 
 static void node_release(uint32_t idx) {
@@ -561,7 +561,7 @@ static int root_push_node(Walk *W, uintptr_t addr, PyObject *key) {
         if (!p) { PyErr_NoMemory(); return -1; }
         R->nodes = p; R->capnodes = nc;
     }
-    long idx = node_new(addr, W->r, key);
+    int64_t idx = node_new(addr, W->r, key);
     if (idx < 0) return -1;
     R->nodes[R->nnodes++] = (uint32_t)idx;
     return 0;

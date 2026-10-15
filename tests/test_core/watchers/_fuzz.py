@@ -481,10 +481,14 @@ def main() -> None:
     # deep enough that hashing them, with or without the watchers, takes
     # minutes (`kept_state.left_out_attrs` pickles each level's attributes
     # again): such a seed is given up on and reported, not counted.
-    signal.signal(signal.SIGALRM, too_slow)
+    # Windows has no SIGALRM: there a slow seed simply runs to its end.
+    can_alarm = hasattr(signal, "SIGALRM")
+    if can_alarm:
+        signal.signal(signal.SIGALRM, too_slow)
     while time.time() - t0 < args.seconds:
         ns.clear()
-        signal.alarm(args.seed_seconds)
+        if can_alarm:
+            signal.alarm(args.seed_seconds)
         try:
             fuzz(seed, args.steps, ns)
             runs += 1
@@ -495,7 +499,8 @@ def main() -> None:
                 carried[key] = carried.get(key, 0) + done[key]
             value_watch.reset()
         finally:
-            signal.alarm(0)
+            if can_alarm:
+                signal.alarm(0)
         seed += 1
     s = value_watch.stats()
     print(f"{runs} runs x {args.steps} steps, seeds {args.seed}..{seed - 1}: OK; too slow to hash: {slow}")
