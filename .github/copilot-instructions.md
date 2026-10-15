@@ -244,6 +244,10 @@ format is cleared on first open.
   to rule out cross-test contamination.
 - `perf` marks wall-clock threshold tests; CI's unit job skips them.
   `benchmarks/tests/` tests the benchmark tooling and runs separately.
+- Before moving main: `python tools/test_selection/impacted.py --run`. It runs
+  the tests whose recorded coverage reaches the diff from `origin/main`
+  (map: `impacted.py build`, nightly; `--file-level` without one; see
+  `docs/how-it-works/testing.md`).
 
 ### Performance checks
 

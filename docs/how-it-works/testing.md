@@ -92,6 +92,51 @@ python scripts/claims.py --queue
 python scripts/fails_first.py <your new test file>
 ```
 
+## Running the tests a change touches
+
+`tools/test_selection/impacted.py` reads the diff from `origin/main` (plus
+uncommitted changes) and picks the tests whose recorded coverage runs a
+changed line:
+
+```bash
+# print the node ids, one per line
+python tools/test_selection/impacted.py
+# run them: -n for workers, pytest arguments after --
+python tools/test_selection/impacted.py --run -n 8
+# without a map: the tests that import what changed
+python tools/test_selection/impacted.py --file-level
+```
+
+It reads a coverage map: one row per test and file, with the lines that test
+ran, and the commit it was built at. The map lives outside the repository, in
+`~/.cache/cash-test-map/map.sqlite` unless `--map` names another. Build it
+with the whole suite, once a night on a fast machine:
+
+```bash
+python tools/test_selection/impacted.py build -- -n 16
+```
+
+That runs every test CI runs, apart from `perf` and the wheel gate, under
+per-test coverage, Jupyter kernels included, and takes about 20 to 30 minutes
+on 16 cores. Without a map the tool stops and says how to build one;
+`--file-level` instead picks the tests that import the changed modules.
+
+What it picks, and says it picked, on stderr:
+
+- **A changed line** selects the tests that ran it. A `def` line or module
+  constant runs at import, once per process, so a change there counts as a
+  change to its function, or to the whole file.
+- **Lines no test runs** (new code, an untested branch) widen to the tests of
+  the enclosing function or class, then of the file, then to the tests that
+  import the module, then to tests named after it.
+- **C sources** (`src/cash/_c/`) are not traced. They select the tests that run
+  the Python lines calling into `cash._native`, the tests that import it, and
+  `tests/test_core/watchers/`.
+- **Changed test files** run whole; a changed `conftest.py` runs its folder.
+- **A map from an older commit** is read through `git diff`: changed lines are
+  carried to the map's line numbers, and lines that moved too far to place widen
+  to their file, with a count.
+
 ## Related
 
 - [Contributing](../contributing.md): setup, and which tests to run for a
