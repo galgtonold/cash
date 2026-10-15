@@ -180,15 +180,20 @@ def test_a_path_a_directory_is_made_from_is_restored_after_a_restart(nb_runner, 
     assert ran == ["print('T', total)"], f"ran after the restart: {ran}"
 
 
-def test_names_from_a_module_not_loaded_yet_are_restored_after_a_restart(nb_runner, _teed):
+@pytest.mark.parametrize("floor", ["", "cash.configure(min_execution_time_to_cache_seconds=0.0)\n"])
+def test_names_from_a_module_not_loaded_yet_are_restored_after_a_restart(nb_runner, _teed, floor):
     """``from zipapp import get_interpreter`` (a function) and ``from wave import
     Wave_read`` (a class), read by a helper. The runtime folds both digests into
     the def's lineage; after a restart neither module is loaded when the
     simulation meets the import, so it took both for modules, had no digest,
     and every call of the helper got a lineage the runtime never gave it
-    (in the user's notebook: ``from statsmodels... import ExponentialSmoothing``, a 45 s cell)."""
+    (in the user's notebook: ``from statsmodels... import ExponentialSmoothing``, a 45 s cell).
+
+    With every statement stored (*floor*, or a busy machine), the simulation
+    took the ``def``'s lineage from its entry and noted no identity for the
+    function, so the call was keyed on its whole lineage and missed."""
     cells = [
-        "import cash\n%cash_on",
+        f"import cash\n{floor}%cash_on",
         "import time\nfrom zipapp import get_interpreter\nfrom wave import Wave_read, Wave_write\n"
         "def slow_hue(r):\n    time.sleep(0.4)\n    assert Wave_read and Wave_write\n    return round(r * 2, 4) if get_interpreter else None",
         "hue = slow_hue(0.3)",

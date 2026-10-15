@@ -1117,6 +1117,19 @@ class StatementLineage:
             self._generator_lineages.add(virtual_lineage[name])
 
         if lookup.hit:
+            # A ``def`` whose entry gave its function the lineage: the
+            # function's identity, which a key reading it takes, is noted as
+            # on a miss. After a restart nothing else noted it, so a call of
+            # the function keyed on its whole lineage instead and missed --
+            # once the ``def`` was slow enough (or the machine busy enough)
+            # to be stored at all.
+            self._note_function_identities(
+                stmt_code,
+                inputs,
+                {out: virtual_lineage[out] for out in outputs if out in virtual_lineage},
+                virtual_lineage,
+                virtual_modules,
+            )
             # Union derivation-bumped vars so this cached mutation statement
             # is still recorded as a producer of the aliased base.
             self._note_made_generators(stmt_code, outputs, virtual_lineage)
