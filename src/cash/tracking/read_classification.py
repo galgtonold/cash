@@ -104,8 +104,9 @@ SCRATCH_MEMMAP = "joblib_memmapping_folder_"
 #: scanpy's normalize made every step after it re-run after a restart.
 RUNTIME_CACHE_SEGMENT = "/__pycache__/"
 #: The files themselves, wherever they are, and the temporary file numba
-#: writes first and renames into place (``kern-3.py313.nbi.tmp.1f2e3d``).
-RUNTIME_CACHE_FILE = re.compile(r"\.(nbi|nbc|pyc)(\.tmp\.[0-9a-f]+)?$")
+#: (``kern-3.py313.nbi.tmp.1f2e3d``) or importlib (``m.cpython-313.pyc.1403``,
+#: suffixed with a number) writes first and renames into place.
+RUNTIME_CACHE_FILE = re.compile(r"\.(nbi|nbc|pyc)(\.tmp\.[0-9a-f]+|\.[0-9]+)?$")
 
 
 @functools.lru_cache(maxsize=8)

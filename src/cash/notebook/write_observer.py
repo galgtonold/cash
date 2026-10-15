@@ -32,6 +32,7 @@ from cash.analysis.namespace_effects import code_waived_lines
 from cash.install_paths import is_user_code_file
 from cash.purity import is_pure
 from cash.tracking import io_watch
+from cash.tracking.read_classification import is_runtime_cache_path
 
 __all__ = ["WrittenPaths", "kept_writes", "observe_writes"]
 
@@ -63,6 +64,12 @@ def _record(sinks: tuple[WrittenPaths, ...], path: object, appends: bool = False
     if path is None or isinstance(path, int):
         return  # a descriptor names no file
     resolved = os.path.abspath(os.fsdecode(os.fspath(path)))
+    if is_runtime_cache_path(resolved):
+        # The ``.pyc`` an import writes the first time a module is loaded
+        # (and numba's compiled index): the runtime's own cache, which a hit
+        # that skips the write only leaves to be compiled again. Not the
+        # statement's output, wherever ``PYTHONPYCACHEPREFIX`` puts it.
+        return
     waived = _write_waived()
     for sink in sinks:
         sink.add(resolved)
