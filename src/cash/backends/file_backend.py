@@ -729,12 +729,23 @@ class FileBackend(CacheBackend):
             raise
         return True
 
-    def _write_cache_files(self, key: str, path: str, metadata: dict, serialized_value: bytes | SplitPayload) -> None:
+    def _write_cache_files(
+        self,
+        key: str,
+        path: str,
+        metadata: dict,
+        serialized_value: bytes | SplitPayload,
+        check: Callable[[], bool] | None = None,
+    ) -> None:
         """Write one entry -- metadata and payload -- and update size tracking.
 
         The header, the metadata and each part of the payload are written one
         after the other, never joined into one blob first: for a 100 MB value
         the join and the slice that split it again were two copies of it.
+
+        *check* (`set`): called once the chunks are written and the rest of
+        the payload is read out; when it returns False the entry is not
+        written, and the chunks this write added go.
 
         Raises:
             OSError, pickle.PickleError, ValueError: on write failure (caller handles cleanup).
@@ -772,6 +783,13 @@ class FileBackend(CacheBackend):
             split = False
             # The bytes the value occupies on disk, after compression.
             metadata["size"] = sum(len(c) for c in chunks)
+        if check is not None:
+            # Read out first: what the check vouches for is what is written.
+            chunks = [c if isinstance(c, bytes) else bytes(memoryview(c)) for c in chunks]
+            if not check():
+                logger.debug("cash: %r changed while it was written; not stored", key)
+                self.chunks.abandon(held)
+                return
         try:
             entry = pack_entry_parts(metadata, chunks, split=split)
             checksum = entry.checksum
@@ -828,6 +846,7 @@ class FileBackend(CacheBackend):
         private: bool = False,
         copied: bool = False,
         serialized: bytes | SplitPayload | None = None,
+        check: Callable[[], bool] | None = None,
     ) -> None:
         """Serialize the value on the calling thread, then write to disk
         in the background. ``set()`` returns once the bytes are captured;
@@ -844,7 +863,12 @@ class FileBackend(CacheBackend):
         *serialized*: *value* as *serializer* writes it uncompressed, in
         bytes cash owns and nothing changes (the RAM tier keeps a value so,
         `InMemoryBackend.stored_payload`): written as they are, nothing
-        pickled again. Ignored under ``compress`` or another serializer."""
+        pickled again. Ignored under ``compress`` or another serializer.
+
+        *check*: with *private* or *serialized*, a value whose memory the
+        caller may still write (`InMemoryBackend.checked_copy`): called on
+        the writer once the bytes are taken, and the entry is written only
+        when it returns True."""
         self._ensure_initialized()
         if self._unusable:
             return
@@ -899,7 +923,9 @@ class FileBackend(CacheBackend):
         # A private value's memory is held by the RAM tier anyway: only the
         # copies made for this write count against the queue's memory.
         self._queued_metadata[key] = meta_for_write
-        future = self._writes.submit_sized(key, nbytes, copied or not private, job, key, path, meta_for_write, work)
+        future = self._writes.submit_sized(
+            key, nbytes, copied or not private, job, key, path, meta_for_write, work, check if private else None
+        )
         if future is None:
             self._forget_queued(key, meta_for_write)
         else:
@@ -971,7 +997,9 @@ class FileBackend(CacheBackend):
             return len(serialized_value.stream) + sum(memoryview(b).nbytes for b in serialized_value.buffers)
         return len(serialized_value)
 
-    def _serialize_and_write(self, key: str, path: str, metadata: dict, work: tuple) -> None:
+    def _serialize_and_write(
+        self, key: str, path: str, metadata: dict, work: tuple, check: Callable[[], bool] | None = None
+    ) -> None:
         """`_do_set_sync` for a `set` ``private`` value: serialize it here, on
         the writer, without copying its buffers."""
         value, serializer = work
@@ -981,7 +1009,7 @@ class FileBackend(CacheBackend):
             logger.debug("Cache set failed for key %r: %s", key, exc)
             raise CacheBackendError(f"Cache set failed for key {key!r}: {exc}") from exc
         del value, work  # the buffers hold what the write needs
-        self._do_set_sync(key, path, metadata, serialized_value)
+        self._do_set_sync(key, path, metadata, serialized_value, check)
 
     def _call_refs_of(self, keys) -> set[str]:
         refs: set[str] = set()
@@ -990,7 +1018,14 @@ class FileBackend(CacheBackend):
             refs.update(meta.get("call_refs") or ())
         return refs
 
-    def _do_set_sync(self, key: str, path: str, metadata: dict, serialized_value: bytes | SplitPayload) -> None:
+    def _do_set_sync(
+        self,
+        key: str,
+        path: str,
+        metadata: dict,
+        serialized_value: bytes | SplitPayload,
+        check: Callable[[], bool] | None = None,
+    ) -> None:
         """The actual disk write — runs in the PendingWrites worker thread.
 
         A failure re-raises and touches nothing: the destination is the
@@ -1003,7 +1038,7 @@ class FileBackend(CacheBackend):
             self._orphans_swept = True
             remove_orphan_temp_files(self.cache_dir)
         try:
-            self._write_cache_files(key, path, metadata, serialized_value)
+            self._write_cache_files(key, path, metadata, serialized_value, check)
             if self.evictor.capped:
                 self.evictor.evict()
         except (OSError, pickle.PickleError, ValueError) as exc:
