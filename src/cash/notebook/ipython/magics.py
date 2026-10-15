@@ -94,6 +94,9 @@ class CashMagics(Magics):
         """
         super().__init__(shell)
         self._cash_instance = cash_instance
+        # A list or tuple variable has no other proof of identity than the
+        # namespace slot holding it (`value_watch.add_namespace`).
+        value_watch.add_namespace(shell)
         # Re-entrancy guard for the run_cell_async wrapper. IPython's *sync*
         # ``run_cell`` delegates to ``run_cell_async`` internally (via the
         # pseudo-sync runner), so once we patch ``run_cell_async`` it would

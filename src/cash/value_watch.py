@@ -34,6 +34,7 @@ import functools
 import os
 import sys
 import types
+import weakref
 from collections.abc import Callable
 from time import perf_counter
 from typing import Any
@@ -45,6 +46,7 @@ from ._native import cwatch as _cw
 __all__ = [
     "KIND_PLAIN_KEY",
     "KIND_VALUE",
+    "add_namespace",
     "WatchMismatch",
     "classify",
     "digest",
@@ -202,14 +204,36 @@ def _classify(t: type) -> tuple[bool, tuple]:
     return True, tuple(slots)
 
 
+#: Shells cash runs a notebook in (`add_namespace`), newest first, held
+#: weakly so an old shell's namespace is not kept alive.
+_SHELLS: list[weakref.ref] = []
+
+
+def add_namespace(shell: Any) -> None:
+    """cash runs notebook code in *shell*'s ``user_ns``: a value bound to a
+    name in it can be watched even when nothing else can prove its identity
+    (`_anchors`). The last few shells are remembered."""
+    try:
+        ref = weakref.ref(shell)
+    except TypeError:
+        return
+    _SHELLS[:] = [ref, *(other for other in _SHELLS if other() is not None and other() is not shell)][:4]
+
+
 def _anchors() -> tuple:
     """Namespaces that may hold a value with no other proof of identity (a
-    list, a set, a tuple): the notebook's and ``__main__``'s globals. Such a
-    value is watched only while one of them holds it under one name."""
+    list, a set, a tuple): the notebook's (`add_namespace`, or IPython's
+    ``user_ns``) and ``__main__``'s globals. Such a value is watched only
+    while one of them holds it under a name, and stops being watched when
+    that name is rebound or deleted."""
     found = []
+    for ref in _SHELLS:
+        user_ns = getattr(ref(), "user_ns", None)
+        if isinstance(user_ns, dict) and all(user_ns is not other for other in found):
+            found.append(user_ns)
     main = sys.modules.get("__main__")
     ns = getattr(main, "__dict__", None)
-    if isinstance(ns, dict):
+    if isinstance(ns, dict) and all(ns is not other for other in found):
         found.append(ns)
     ipython = sys.modules.get("IPython")
     if ipython is not None:
