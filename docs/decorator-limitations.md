@@ -279,7 +279,7 @@ worker: about 20 µs a task, which only shows for tiny tasks sent one at a time
 
 A polars `LazyFrame` argument from `scan_csv` is keyed by its path, not the
 file's content; collect it first. With the native file hook on
-(`CASH_NATIVE_FILE_HOOK=1`, Linux only, see
+(`CASH_NATIVE_FILE_HOOK=1`, Linux and Windows, see
 [known limitations](known-limitations.md#reads-through-a-loader-cash-cannot-see)),
 the file polars opens inside the call is a dependency, so an edit is seen.
 

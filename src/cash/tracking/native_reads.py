@@ -5,22 +5,28 @@ opens its file in C -- libarrow, libsqlite3, a Rust crate, C++'s
 ``std::ifstream`` -- raises no event, which is why `reader_patches` wraps
 those libraries' entry points one by one. This hook sees such opens
 generically: the C extension (``cfilehook.c``) rebinds the open family
-(``open``, ``openat``, ``fopen``, ``opendir`` and their variants) in the
-symbol tables of the shared libraries already loaded, without LD_PRELOAD or
-ptrace, and records the paths opened while a file tracker is running. Each
+(``open``, ``openat``, ``fopen``, ``opendir`` and their variants on Linux;
+``CreateFileW``/``A``/``2`` and the CRT's ``_open``, ``_wsopen_s``, ``fopen``,
+``_wfopen`` and their variants on Windows) in the symbol tables (GOT) or
+import address tables of the shared libraries already loaded, without
+LD_PRELOAD, DLL injection or ptrace, and records the paths opened while a file
+tracker is running. Each
 tracker gets them when it closes, through the methods the audit events use:
 a read is a dependency, a missing file an absent one, a file the library
 created or truncated is the block's own output.
 
 **Off by default.** ``CASH_NATIVE_FILE_HOOK=1`` turns it on at import;
 `enable` / `disable` switch it at run time (`disable` puts every rebound slot
-back). Linux with glibc on x86-64 and aarch64 only; elsewhere `status_line`
-says "off: not supported here".
+back). Linux with glibc on x86-64 and aarch64, and Windows on x64; elsewhere
+`status_line` says "off: not supported here".
 
 What it does not see (``cfilehook.c`` has the details): direct system calls
-(io_uring, Go runtimes), libraries linked statically against libc, opens
-inside libc itself, ``stat``/``access`` probes, and a library loaded and used
-inside a single tracked block (it is hooked from the next block on). A
+(io_uring, Go runtimes, ``NtCreateFile``), libraries linked statically against
+the C library (``/MT`` on Windows), opens inside the C library itself,
+``stat``/``access`` probes, directory listings on Windows, calls through a
+function pointer the library looked up itself (``dlsym``, ``GetProcAddress``,
+ctypes), and a library loaded and used inside a single tracked block (it is
+hooked from the next block on). A
 native open made by ANY thread while a tracker is open is credited to every
 tracker open at the time: a library's I/O threads carry no Python context,
 and an extra dependency can only cost a recompute, never a stale result.
