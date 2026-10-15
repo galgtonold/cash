@@ -171,18 +171,30 @@ _DEF_LINE = re.compile(r"[ \t]*(?:async[ \t]+)?(?:def|class)[ \t]+(\w+)")
 
 def block_defines(lines: list[str] | tuple[str, ...], code: types.CodeType) -> bool:
     """Is *lines* (a block ``inspect`` read) the definition of *code*? Its
-    first ``def`` (or ``class``) line names it; a lambda's block holds a
-    ``lambda``; a comprehension or a module is not checked. Microseconds:
-    the decorators above the ``def`` are all it reads past."""
+    first ``def`` (or ``class``) line names it, with nothing but decorators,
+    comments and blank lines above it; a lambda's block holds a ``lambda``;
+    a comprehension or a module is not checked. Microseconds: the
+    decorators above the ``def`` are all it reads past."""
     name = code.co_name
     if name == "<lambda>":
         return any("lambda" in line for line in lines)
     if name.startswith("<"):
         return True
+    in_decorators = False
     for line in lines:
         found = _DEF_LINE.match(line)
         if found is not None:
             return found.group(1) == name
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        if text.startswith("@"):
+            in_decorators = True
+        elif not in_decorators:
+            # A block that opens with other code is not a definition, however
+            # far down a ``def`` follows: before 3.13 ``inspect`` reads such a
+            # block to the end of the module's top-level code.
+            return False
     return False
 
 
