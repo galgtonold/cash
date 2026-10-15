@@ -23,15 +23,24 @@ import threading
 import weakref
 from typing import Any
 
-from ..content_hashers import _pandas_value_route, column_memory_key, known_column_pieces
+from ..content_hashers import column_memory_key, known_column_pieces, pandas_value_route
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["BlockReuse", "reused_count"]
+__all__ = ["BlockReuse", "is_kept", "reused_count"]
 
 #: ``content key -> weak reference`` to block values a stored table holds.
 _KEPT: dict[tuple, Any] = {}
+#: ``id(values) -> weak reference`` for the same values: what `is_kept` asks.
+_KEPT_IDS: dict[int, Any] = {}
 _LOCK = threading.Lock()
+
+
+def is_kept(values: Any) -> bool:
+    """Are *values* block values a stored table holds and `find` hands out,
+    so the RAM tier's own: never written while they live?"""
+    ref = _KEPT_IDS.get(id(values))
+    return ref is not None and ref() is values
 
 
 class _Counts:
@@ -134,7 +143,9 @@ class BlockReuse:
                     ref = _KEPT.get(key)
                     if ref is not None and ref() is not None:
                         continue
-                    _KEPT[key] = weakref.ref(values, lambda _ref, key=key: _drop(key, _ref))
+                    ref = weakref.ref(values, lambda _ref, key=key, at=id(values): _drop(key, at, _ref))
+                    _KEPT[key] = ref
+                    _KEPT_IDS[id(values)] = ref
         except Exception:  # only a saving: nothing kept
             logger.debug("cash: stored blocks not kept for reuse", exc_info=True)
 
@@ -152,7 +163,7 @@ def _plan(frame: Any) -> list[tuple[tuple, tuple, list[tuple]]]:
             if layout is None:
                 continue
             positions = tuple(int(pos) for pos in block.mgr_locs.as_array)
-            memory = [column_memory_key(frame, pos, _pandas_value_route(dtypes.iloc[pos], pd)) for pos in positions]
+            memory = [column_memory_key(frame, pos, pandas_value_route(dtypes.iloc[pos], pd)) for pos in positions]
             if all(key is not None for key in memory):
                 plan.append((positions, layout, memory))
     except Exception:  # pandas internals changed: copy it all
@@ -161,7 +172,9 @@ def _plan(frame: Any) -> list[tuple[tuple, tuple, list[tuple]]]:
     return plan
 
 
-def _drop(key: tuple, ref: Any) -> None:
+def _drop(key: tuple, at: int, ref: Any) -> None:
     with _LOCK:
         if _KEPT.get(key) is ref:
             del _KEPT[key]
+        if _KEPT_IDS.get(at) is ref:
+            del _KEPT_IDS[at]

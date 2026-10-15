@@ -163,7 +163,7 @@ def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
     """Fold a frame's or series' values, then its index's, into *h*.
 
     Column by column and index level by index level, each in the form that
-    keeps it exact and reads it fastest (`_pandas_value_route`): numbers,
+    keeps it exact and reads it fastest (`pandas_value_route`): numbers,
     booleans and dates from their own buffer, a nullable column from its
     values and its mask, an Arrow-backed column (pandas' ``str`` among them)
     from its Arrow buffers, a categorical by its codes (the categories are
@@ -186,9 +186,9 @@ def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
             try:
                 route = routes[dtype]
             except KeyError:
-                route = routes[dtype] = _pandas_value_route(dtype, pd)
+                route = routes[dtype] = pandas_value_route(dtype, pd)
             except TypeError:  # an unhashable dtype
-                route = _pandas_value_route(dtype, pd)
+                route = pandas_value_route(dtype, pd)
             if route is None:
                 rest.append(pos)
                 continue
@@ -286,7 +286,7 @@ def immutable_items(values: Any) -> bool:
 _RAW_KINDS = frozenset("biufcmM")
 
 
-def _pandas_value_route(dtype: Any, pd: Any) -> str | None:
+def pandas_value_route(dtype: Any, pd: Any) -> str | None:
     """How `_fold_pandas_array` keys values of *dtype*: ``"raw"``,
     ``"datetimetz"``, ``"masked"``, ``"arrow"``, ``"objects"``, ``"codes"``,
     or None for ``hash_pandas_object``."""
@@ -331,7 +331,7 @@ def _numpy() -> Any:
 
 def _fold_pandas_array(h: Any, values: Any, pd: Any) -> None:
     """Fold one Series' or Index's values into *h* (`_fold_pandas_values`)."""
-    route = _pandas_value_route(values.dtype, pd)
+    route = pandas_value_route(values.dtype, pd)
     if route == "raw":
         fold_buffer(h, raw_view(_np_array(values)))
         return
