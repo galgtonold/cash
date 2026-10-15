@@ -21,7 +21,7 @@ from collections.abc import Callable
 from time import perf_counter
 from typing import Any
 
-from . import kept_state
+from . import kept_state, value_watch
 from .content_hashers import builtin_hash, builtin_hash_family, is_native_panic
 from .sizing import pandas_nbytes
 
@@ -239,8 +239,17 @@ def _memoised_frame_digest(obj: Any) -> str | None:
     return cow_frame_digest(obj)
 
 
+#: Values `compute_hash` never asks the watchers about: they are hashed
+#: in less time than a lookup in the watch table takes.
+_ATOMS = frozenset((int, str, float, bool, type(None), bytes))
+
+
 def compute_hash(obj: Any) -> str:
     """Hash *obj* over its whole content, with explicit fallbacks.
+
+    With the C extension, a value hashed before whose content the watchers
+    prove unchanged since gets that earlier digest back without being read
+    (`value_watch.digest`): the same digest, so nothing downstream can tell.
 
     Strategy order:
     1. A frame, array or table through its built-in content hasher
@@ -263,6 +272,19 @@ def compute_hash(obj: Any) -> str:
     and an ``Int64`` column, a tz-naive and a tz-aware one, or a C- and an
     F-ordered array holding equal values hash apart.
     """
+    if value_watch.WATCHING and type(obj) not in _ATOMS:
+        return value_watch.digest(obj, _compute_hash, value_watch.KIND_VALUE, _reusable)
+    return _compute_hash(obj)
+
+
+def _reusable(obj: Any, digest: str) -> bool:
+    """May the watchers hand *digest* back for *obj*? Not the identity
+    tier's: it says nothing of the content, and callers treat it apart."""
+    return digest != identity_hash(obj)
+
+
+def _compute_hash(obj: Any) -> str:
+    """`compute_hash`, read from the value itself."""
     type_name = type(obj).__name__
 
     try:
