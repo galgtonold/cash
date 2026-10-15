@@ -102,8 +102,15 @@ def _holds_only_c_code(cls: type) -> bool:
     polars' ``PyDataFrame`` names its module ``builtins``, where it is not
     found -- and took them for exec'd user code: a polars frame argument
     walked the 237 methods of the frame it wraps on every call, 20-40 ms a
-    call. A ``class`` statement's type holds a Python function or a value
-    of its own, unless it is empty, and an empty class has no code to key."""
+    call.
+
+    A ``class`` statement's type gives its instances a ``__dict__`` unless
+    it names ``__slots__`` (a value of its own), so a type whose instances
+    have none is not one. One whose instances have one may be: before 3.13
+    (no ``__firstlineno__``), an empty class, or one holding only C
+    functions (``__call__ = staticmethod(abs)``), holds nothing else."""
+    if getattr(cls, "__dictoffset__", 0):
+        return False
     try:
         for klass in cls.__mro__:
             if klass is object:
