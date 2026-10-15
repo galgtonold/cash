@@ -149,7 +149,7 @@ explains each line.
 ```
 
 ### `%cash_status`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @a494ae38 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @76886d3c -->
 
 **Usage:** `%cash_status [dict|json]`
 
