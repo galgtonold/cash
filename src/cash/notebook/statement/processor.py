@@ -1757,6 +1757,12 @@ class StatementProcessor:
         # From here to the store, only cash's code runs: the pickle a digest
         # of an output takes is kept for the store to take
         # (`stored_pickle.keeping`), instead of pickling the value again.
+        returned = self._calls.returned_digest(run.code)
+        if returned is not None:
+            # ``x = f(...)``: the digest the call's store took of its result
+            # is the one the statement would take of ``x`` now.
+            run.settled_digests = {**run.settled_digests, id(returned[0]): returned}
+        del returned
         with self._keeping_outputs(run):
             # What it links, from its outputs' edges dropped to those found
             # now, is kept for the simulation (`note_share_edges`).

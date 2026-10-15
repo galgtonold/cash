@@ -20,9 +20,10 @@ from cash.control_markers import strip_markers
 from cash.notebook.cache_key import CacheKeyContext
 from cash.notebook.call_effects import DigestHandoff
 from cash.notebook.call_interception import COUNT_NAME, HELPER_NAME, PLAIN_NAME, SITE_SLOTS, wrap_eligible_calls
-from cash.notebook.call_refs import with_call_refs
+from cash.notebook.call_refs import UNHASHED_PREFIX, with_call_refs
 from cash.notebook.call_unit import CallCache, call_cost_floor_s, call_site_is_cacheable
 from cash.tracking.file_tracker import tracking_seconds
+from cash.value_hash import digest_via_pickle
 
 if TYPE_CHECKING:
     from cash.notebook._protocols import ShellProtocol
@@ -675,6 +676,26 @@ class CallRouting:
             return unit.files_read_since(marks.reads_seq if unit is marks.unit else 0)
         except Exception:  # noqa: BLE001 - nothing known is nothing left out
             return frozenset()
+
+    def returned_digest(self, code: str) -> tuple[Any, str] | None:
+        """``(result, digest)`` when the statement is ``name = call(...)``
+        (`plain_call_result`), that call ran and its store digested the
+        very value it returned, and that digest is the result's
+        `compute_hash` (`value_hash.digest_via_pickle`): nothing but binding
+        the name ran since, so the statement's own digest of it would read
+        the same bytes again. None otherwise."""
+        if self._call_cache is None:
+            return None
+        trusted, unpacked = self.plain_call_result(code)
+        if trusted is None or unpacked:
+            return None
+        entry = self._call_cache.held_results().get(trusted[1])
+        if entry is None or entry[1] != trusted[0] or trusted[1] not in self._call_cache.digested_results():
+            return None
+        result, digest = entry[0], str(entry[2])
+        if digest.startswith(UNHASHED_PREFIX) or not digest_via_pickle(result):
+            return None
+        return result, digest
 
     def plain_call_result(self, code: str) -> tuple[tuple[str, int] | None, dict[str, int] | None]:
         """``(trusted, unpacked)`` for `with_call_refs` when the statement is
