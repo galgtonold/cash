@@ -175,6 +175,11 @@ format is cleared on first open.
 
 ## Testing
 
+- **Set up each work stream with `python tools/dev_env.py create <dir> --branch <b>`**
+  (a worktree, its own `.venv`, editable install, C extension built), and run
+  `python tools/dev_env.py check <dir>` before trusting a test run: it fails when
+  `import cash` or the `python3` kernel loads another checkout's cash, the C
+  extension is stale, or the disk is nearly full. `clean <dir>` removes it.
 - **Every feature and bug fix needs a unit test, and an integration test when it
   touches notebook behaviour.**
 - Unit tests live in feature folders: `tests/test_core/`, `test_backends/`,

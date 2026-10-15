@@ -25,6 +25,20 @@ pip install ruff==0.15.8 pre-commit   # the ruff version CI uses
 pre-commit install                     # runs ruff on each commit
 ```
 
+With [uv](https://docs.astral.sh/uv/) installed, one command does all of this
+in a fresh git worktree, then checks the result:
+
+```bash
+python tools/dev_env.py create ../cash-x --branch my-fix --python 3.13
+python tools/dev_env.py check ../cash-x   # whenever something looks off
+python tools/dev_env.py clean ../cash-x   # its worktree and venv only
+```
+
+`check` fails when `import cash` or the `python3` Jupyter kernel finds a
+cash other than that checkout's `src/`, when the C extension is older than
+its sources, or when the disk is nearly full (`--min-free-gb`, default 5).
+`create --here` sets up a `.venv` in the current checkout instead.
+
 `docs-test` holds the packages the documentation's examples import. Without it,
 `pytest tests/docs` fails on real imports.
 
