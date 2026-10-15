@@ -28,8 +28,11 @@ __all__ = ["CellMagic", "IPythonCell", "ipython_cell"]
 _WRAPPING_MAGICS = frozenset({"time", "prun"})
 
 #: Line magics that switch cash itself: they re-hook the shell, so not from
-#: inside cash's run of a cell.
-_SHELL_MAGICS = ("cash",)
+#: inside cash's run of a cell. Cash's other magics (``%cash_badge print``,
+#: ``%cash_debug on``) only change a setting and run in place: left to IPython,
+#: they took the whole cell, so a setup cell's ``COLS = [...]`` ran untracked
+#: on every Run All, and what was keyed on it missed.
+_SHELL_MAGICS = frozenset({"cash_on", "cash_off"})
 
 #: Line magics that load or unload an extension: IPython's to run when the
 #: extension is cash's own (`_rehooks_cash`).
@@ -120,7 +123,7 @@ def _rehooks_cash(line: str) -> bool:
     if not stripped.startswith("%"):
         return False
     name, _, rest = stripped.lstrip("%").partition(" ")
-    if name.startswith(_SHELL_MAGICS):
+    if name in _SHELL_MAGICS:
         return True
     if name not in _EXTENSION_MAGICS:
         return False

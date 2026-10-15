@@ -137,3 +137,45 @@ def test_an_unchanged_rerun_of_the_loop_still_restores(nb_runner):
         f"fix has traded staleness for permanent invalidation. Cell 3 badge:\n"
         f"{badge}"
     )
+
+
+# Every statement stored, however quick: a busy machine pushes the cheap
+# `raw.loc[...] = -1.0` over the cost floor, and then the second Run All
+# restores it instead of re-running the cells above. Only the floor: the
+# loop-split thresholds stay as they are, so the loop's shape does too.
+PINNED_SETUP = "import cash\ncash.configure(min_execution_time_to_cache_seconds=0.0)\n" + SETUP
+
+
+def test_an_unchanged_rerun_restores_the_loop_when_every_statement_is_stored(nb_runner):
+    """``%cash_badge print`` beside ``COLS = [...]`` left the whole setup cell
+    to IPython, so ``COLS`` lost its lineage on every Run All. With nothing
+    above re-run to give it one back, the loop keyed its iterations on
+    ``COLS``'s value instead, ``feat`` moved and ``fillna`` ran again."""
+    nb_runner.create_notebook([PINNED_SETUP, LOAD_BEFORE, FEATURES_LOOP, DOWNSTREAM])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    first = _total(nb_runner, 4)
+
+    nb_runner.run_all()
+
+    assert _total(nb_runner, 4) == first
+    badge = nb_runner.get_output(3)
+    assert "9 ran" not in badge, badge
+    assert any("CACHED" in ln and "fillna" in ln for ln in badge.splitlines()), badge
+
+
+def test_a_changed_list_in_the_setup_cell_still_reruns_the_loop(nb_runner):
+    """The other direction: the setup cell's Python is keyed like any other,
+    so editing ``COLS`` there re-runs what is built from it."""
+    nb_runner.create_notebook([PINNED_SETUP, LOAD_BEFORE, FEATURES_LOOP, DOWNSTREAM])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    first = _total(nb_runner, 4)
+
+    nb_runner.set_cell_source(1, PINNED_SETUP.replace("range(8)", "range(7)"))
+    nb_runner.run_all()
+
+    assert nb_runner.peek("len(feat.columns)") == "8"
+    assert _total(nb_runner, 4) != first
+    badge = nb_runner.get_output(3)
+    assert "EXECUTED: feat = feat.fillna" in badge, badge

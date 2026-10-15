@@ -48,6 +48,8 @@ def test_a_timed_or_profiled_body_runs_under_its_magic(magic, name, line):
         "%%debug\nx = 1",
         "%%bash\necho hi",
         "%cash_off\nx = 1",
+        "%cash_on\nx = 1",
+        "%cash_on ttl=60\nx = 1",
         "%load_ext cash\nx = 1",
         "%reload_ext cash.notebook\nx = 1",
         "x = = 1\n%time f()",
@@ -74,3 +76,15 @@ def test_another_extension_loads_in_place_beside_python():
 
     assert cell is not None
     assert [type(node).__name__ for node in cell.tree.body] == ["Expr", "Expr", "ImportFrom"]
+
+
+@pytest.mark.parametrize("magic", ["%cash_badge print", "%cash_debug off", "%cash_persist off", "%cash_status"])
+def test_a_cash_setting_beside_python_runs_in_place(magic):
+    """Only ``%cash_on`` and ``%cash_off`` re-hook the shell. Another magic
+    of cash's beside Python (``%cash_badge print`` in a setup cell) left the
+    whole cell to IPython, so the names it bound lost their lineage on every
+    Run All and what was keyed on them missed."""
+    cell = ipython_cell(f"{magic}\nCOLS = [1, 2]", TRANSFORM)
+
+    assert cell is not None and cell.magic is None
+    assert [calls_ipython(n) for n in cell.tree.body] == [True, False]
