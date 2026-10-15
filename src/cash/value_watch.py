@@ -50,6 +50,7 @@ __all__ = [
     "digest",
     "enabled",
     "forget",
+    "peek",
     "reset",
     "stats",
     "status_line",
@@ -266,6 +267,14 @@ def digest(
     if keep is None or keep(value, result):
         cw.commit(value, kind, result, seconds)
     return result
+
+
+def peek(value: Any, kind: int = KIND_VALUE) -> Any:
+    """The digest of *kind* kept for *value* when the watchers prove it
+    unchanged since, else None. Unlike `digest` it counts no sighting."""
+    if _cw is None:
+        return None
+    return _cw.peek(value, kind)
 
 
 #: Reuses checked by ``CASH_CWATCH_VERIFY=1`` in this process.

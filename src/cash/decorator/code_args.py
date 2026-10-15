@@ -26,7 +26,7 @@ from ..install_paths import is_user_code_module
 from ..jit_functions import jit_python_function
 from ..loaded_code import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
-from .arg_hashing import is_opaque, plain_census
+from .arg_hashing import is_opaque, is_plain_data
 from .class_data import class_surface_functions, implicit_access_functions
 from .closure_fold import CLASS_BODY_CELLS
 from .user_code import cached_function_in, is_user_code_object
@@ -326,7 +326,7 @@ class CodeArgs:
             return
         # Plain and JSON-like data carries no code (`plain_census`); walking
         # two million rows to find that out was 14% of a warm hit.
-        if _depth == 0 and type(value) in _plain_data.TREE_NODES and plain_census(value) is not None:
+        if _depth == 0 and type(value) in _plain_data.TREE_NODES and is_plain_data(value):
             return
         # Below the top, the same answer read a level at a time: an
         # object's ``self.data`` of 100,000 records was walked one dict at a

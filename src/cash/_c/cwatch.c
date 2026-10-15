@@ -1263,6 +1263,29 @@ static PyObject *py_commit(PyObject *self, PyObject *const *args, Py_ssize_t nar
     Py_RETURN_TRUE;
 }
 
+/* peek(value, kind) -> the digest check() would hand back, or None; no
+   sighting is counted and nothing is armed */
+static PyObject *py_peek(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 2) { PyErr_SetString(PyExc_TypeError, "peek(value, kind)"); return NULL; }
+    PyObject *o = args[0];
+    int kind; if (kind_arg(args[1], &kind) < 0) return NULL;
+    if (!enabled || busy) Py_RETURN_NONE;
+    long r = rht_find((uintptr_t)o);
+    if (r < 0) Py_RETURN_NONE;
+    busy = 1;
+    Root *R = &roots[r];
+    PyObject *res = Py_None;
+    if (!R->dirty && same_object(R, o) && R->dg[kind] && R->dgver[kind] == R->version) {
+        int v = verify(R);
+        if (v < 0) { busy = 0; return NULL; }
+        R = &roots[r];
+        if (v == 1) res = R->dg[kind];
+        else { mark_dirty((uint32_t)r); c_verify_fail++; }
+    }
+    busy = 0;
+    return Py_NewRef(res);
+}
+
 static PyObject *py_forget(PyObject *self, PyObject *o) {
     if (busy) Py_RETURN_FALSE;
     busy = 1;
@@ -1407,6 +1430,7 @@ static PyMethodDef methods[] = {
     {"seen", (PyCFunction)(void (*)(void))py_seen, METH_FASTCALL, "seen(value, seconds)"},
     {"arm", (PyCFunction)(void (*)(void))py_arm, METH_FASTCALL, "arm(value, anchors=None) -> (status, detail)"},
     {"commit", (PyCFunction)(void (*)(void))py_commit, METH_FASTCALL, "commit(value, kind, digest, seconds) -> bool"},
+    {"peek", (PyCFunction)(void (*)(void))py_peek, METH_FASTCALL, "peek(value, kind) -> digest | None"},
     {"forget", py_forget, METH_O, "stop tracking value"},
     {"version", py_version, METH_O, "the version of a clean tracked value, or None"},
     {"set_type_verdict", (PyCFunction)(void (*)(void))py_set_type_verdict, METH_FASTCALL, ""},

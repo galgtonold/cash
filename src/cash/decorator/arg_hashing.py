@@ -15,7 +15,7 @@ import weakref
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from .. import _plain_data
+from .. import _plain_data, value_watch
 from .._clock import perf_counter as _perf_counter
 from .._memo import ARGUMENTS, FRAMES, LruMemo
 from ..backends.frame_sharing import is_pin
@@ -111,10 +111,35 @@ def plain_key_part(value: Any) -> Any:
 
     Each plain argument is keyed by its content on its own, pickled without the
     memo (`_plain_data.pickle_unshared`), so one small dict beside two million
-    rows does not send the rows down the general path.
+    rows does not send the rows down the general path. With the C extension,
+    the marker a value got before comes back without a census or a pickle
+    while the watchers prove the value unchanged (`value_watch.digest`).
     """
     if type(value) not in _plain_data.TREE_NODES:
         return value
+    if value_watch.WATCHING:
+        return value_watch.digest(value, _plain_key_part, value_watch.KIND_PLAIN_KEY, _is_marker)
+    return _plain_key_part(value)
+
+
+def _is_marker(value: Any, part: Any) -> bool:
+    """Is *part* a marker for *value* (one the watchers may hand back), not
+    *value* itself, which the walk keys instead?"""
+    return part is not value
+
+
+def is_plain_data(value: Any) -> bool:
+    """Is *value* plain or JSON-like data (`plain_census`)? Answered from
+    the marker the watchers kept for it when they prove it unchanged."""
+    if value_watch.WATCHING and value_watch.peek(value, value_watch.KIND_PLAIN_KEY) is not None:
+        if value_watch.VERIFY and plain_census(value) is None:
+            raise value_watch.WatchMismatch(f"a watched {type(value).__name__} kept as plain data is not plain")
+        return True
+    return plain_census(value) is not None
+
+
+def _plain_key_part(value: Any) -> Any:
+    """`plain_key_part`, read from the value."""
     census = plain_census(value)
     if census is None:
         return value
@@ -138,6 +163,12 @@ def shared_across(values: list, keyed: list, walked: dict) -> tuple:
     the canonical walk of the other arguments met (*walked*, its ``_seen``).
     *keyed* is what each of *values* is keyed as (`hash_payload`'s digests).
     """
+    if sum(type(value) not in IMMUTABLE_PRIMS for value in values) < 2:
+        # One argument that can hold a container, or none: nothing it holds
+        # is held by another argument, and what the walk met is only the
+        # key's own form (markers and atoms), never inside it. Its census
+        # need not be taken here (`value_watch` may have spared the rest).
+        return ()
     first: dict[int, tuple] = {}
     found: list = []
     writable = writable_types()
