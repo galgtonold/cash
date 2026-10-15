@@ -635,7 +635,9 @@ static TypeInfo *verdict_of(PyTypeObject *t) {
     TypeInfo *e = tinfo_find(t);
     if (!e) return NULL;
     if (e->ok && (t->tp_version_tag == 0 || t->tp_version_tag != e->tag)) return NULL;
-    if (!e->ok && e->tag != t->tp_version_tag) return NULL;
+    /* a tag of 0 names no class: a later class at the same address must not
+       inherit this verdict (unsound when ok, a missed watch when not) */
+    if (!e->ok && (e->tag == 0 || e->tag != t->tp_version_tag)) return NULL;
     return e;
 }
 
@@ -1600,6 +1602,9 @@ static PyObject *py_set_type_verdict(PyObject *self, PyObject *const *args, Py_s
     if (ok) {
         if (ensure_watchers() < 0) { free(offs); return NULL; }
         if (PyType_Watch(type_wid, (PyObject *)t) < 0) { free(offs); return NULL; }
+    }
+    if (!ok && t->tp_version_tag == 0 && !PyUnstable_Type_AssignVersionTag(t)) {
+        /* no tag to tie a verdict to: classified again next time */
     }
     TypeInfo *e = tinfo_put(t);
     if (!e) { free(offs); return NULL; }

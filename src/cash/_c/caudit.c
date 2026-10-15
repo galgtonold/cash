@@ -106,7 +106,7 @@ static PyObject *py_dispatch(PyObject *self, PyObject *const *args, Py_ssize_t n
     if (!copy) { Py_DECREF(seq); return PyErr_NoMemory(); }
     for (Py_ssize_t i = 0; i < n; i++) {
         PyObject *s = PyList_GET_ITEM(seq, i);
-        Py_ssize_t len;
+        Py_ssize_t len = 0;
         const char *utf8 = PyUnicode_Check(s) ? PyUnicode_AsUTF8AndSize(s, &len) : NULL;
         if (!utf8 || len == 0 || (Py_ssize_t)strlen(utf8) != len) {
             if (!PyErr_Occurred()) PyErr_SetString(PyExc_ValueError, "audit_dispatch: event names are non-empty str");
