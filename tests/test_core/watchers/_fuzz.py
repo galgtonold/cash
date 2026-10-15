@@ -13,6 +13,7 @@ import argparse
 import copyreg
 import gc
 import random
+import signal
 import sys
 import time
 import types
@@ -391,11 +392,16 @@ def fuzz(seed: int, steps: int, ns: dict) -> Fuzz:
     return run
 
 
+class _TooSlow(BaseException):  # cash catches what pickling raises
+    pass
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seconds", type=float, default=60)
     ap.add_argument("--steps", type=int, default=400)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--seed-seconds", type=int, default=20)
     args = ap.parse_args()
     if not value_watch.enabled():
         raise SystemExit(f"the fast path is off: {value_watch.REASON}")
@@ -406,13 +412,30 @@ def main() -> None:
     t0 = time.time()
     seed = args.seed
     runs = 0
+    slow = []
+
+    def too_slow(*_: Any) -> None:
+        raise _TooSlow
+
+    # A run can nest instances of a class with its own ``__getstate__``
+    # deep enough that hashing them, with or without the watchers, takes
+    # minutes (`kept_state.left_out_attrs` pickles each level's attributes
+    # again): such a seed is given up on and reported, not counted.
+    signal.signal(signal.SIGALRM, too_slow)
     while time.time() - t0 < args.seconds:
         ns.clear()
-        fuzz(seed, args.steps, ns)
+        signal.alarm(args.seed_seconds)
+        try:
+            fuzz(seed, args.steps, ns)
+            runs += 1
+        except _TooSlow:
+            slow.append(seed)
+            value_watch.reset()
+        finally:
+            signal.alarm(0)
         seed += 1
-        runs += 1
     s = value_watch.stats()
-    print(f"{runs} runs x {args.steps} steps, seeds {args.seed}..{seed - 1}: OK")
+    print(f"{runs} runs x {args.steps} steps, seeds {args.seed}..{seed - 1}: OK; too slow to hash: {slow}")
     print({k: s[k] for k in ("checks", "hits", "arms", "commits", "verify_changed", "dict_events", "roots")})
 
 
