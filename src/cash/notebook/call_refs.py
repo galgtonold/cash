@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..stored_pickle import object_digest_and_size
+from ..value_hash import note_size
 
 logger = logging.getLogger(__name__)
 
@@ -112,10 +113,14 @@ def digest_and_size(value: Any, *, for_store: bool = False) -> tuple[str, int] |
     try:
         if for_store and memory_backend.kept_as_pickle(value):
             part = memory_backend.premade_snapshot(value)
-            return None if part is None else (part.digest, part.size)
-        return object_digest_and_size(value)
+            found = None if part is None else (part.digest, part.size)
+        else:
+            found = object_digest_and_size(value)
     except Exception:  # noqa: BLE001 - no digest means no reference, never a failure
         return None
+    if found is not None:
+        note_size(value, found[1])  # for a change check of it (`budgeted_hash`)
+    return found
 
 
 #: Statement metadata: the call keys its entry refers to, and their bytes --

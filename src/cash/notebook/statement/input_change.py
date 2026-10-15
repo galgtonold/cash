@@ -68,7 +68,22 @@ def input_change_reason(tracking_state: TrackingState, inputs, outputs) -> str |
             if stale:
                 names = ", ".join(stale[:3])
                 more = f" +{len(stale) - 3} more" if len(stale) > 3 else ""
-                return f"input changed: {names}{more}"
+                return f"input changed: {names}{more}{_budget_cut(state, stale, current)}"
     except (AttributeError, TypeError):  # pragma: no cover - defensive
         return None
     return None
+
+
+def _budget_cut(state: TrackingState, stale: list[str], current) -> str:
+    """Why the first of *stale* that counts as changed because its change
+    check ran out of its budget (`value_hash.budgeted_hash`) changed, or
+    "": not read through, it may well be what it was."""
+    cuts = getattr(state, "budget_cut_lineages", None) or {}
+    for name in stale:
+        found = cuts.get(name)
+        if found is not None and found[0] == current.get(name):
+            return (
+                f" ({name}'s check for a change in place gave up after {found[1]:.1f}s, "
+                "too costly to read, so it counts as changed)"
+            )
+    return ""

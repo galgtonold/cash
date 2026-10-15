@@ -37,6 +37,7 @@ from cash.sizing import estimate_object_size, pickled_size_estimate
 from cash.tracking import file_dep_snapshot
 from cash.tracking.file_dep_snapshot import snapshot_dependencies
 from cash.tracking.randomness import capture_object_rng_states, capture_rng_state
+from cash.value_hash import known_size
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 from ..call_key import holds_a_closure_with_state
@@ -92,6 +93,19 @@ def _frozen_tags(captured_vars: Mapping[str, Any], outputs: set[str]) -> dict[st
             tag = frozen_tag(captured_vars[name])
             if tag is not None:
                 found[name] = tag
+    return found or None
+
+
+def _output_sizes(captured_vars: Mapping[str, Any], outputs: set[str]) -> dict[str, int] | None:
+    """``{output: the bytes its pickle came to}`` for the outputs whose size
+    is known (`value_hash.known_size`, ``StatementCacheMetadata.output_sizes``),
+    or None."""
+    found = {}
+    for name in outputs:
+        if name in captured_vars:
+            size = known_size(captured_vars[name])
+            if size is not None:
+                found[name] = size
     return found or None
 
 
@@ -521,6 +535,7 @@ class StatementStore:
             force_persist=run.force_persist,
             output_lineages=self._lineage_builder.build_output_lineages(self.tracking_state, run.outputs),
             output_digests=self._lineage_builder.build_output_digests(self.tracking_state, run.outputs) or None,
+            output_sizes=_output_sizes(captured_vars, run.outputs),
             input_lineages=self._lineage_builder.build_input_lineages(self.tracking_state, run.inputs),
             frozen_tags=_frozen_tags(captured_vars, run.outputs),
             carriers_advanced=_carriers_advanced(run),

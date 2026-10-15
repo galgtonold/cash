@@ -23,6 +23,7 @@ from ...analysis.mutation_effects import (
     statement_watch_candidates,
 )
 from ...control_markers import strip_markers
+from ...value_hash import costly_after
 from ...value_types import BUILTIN_NAMES
 from ..cache_key import statement_source_hash
 from ..call_key import changes_its_closure
@@ -320,11 +321,24 @@ class MutationRouting:
             _skip(
                 run,
                 f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
-                "(receiver lineage bumped; statement re-executes)" + self._classifier.cache_fit_hint(skip_pre_route),
+                "(receiver lineage bumped; statement re-executes)"
+                + self._classifier.cache_fit_hint(skip_pre_route)
+                + self._too_costly(skip_pre_route),
             )
         if provisional:
             run.mut_provisional_reason = f"In-place mutation on: {', '.join(sorted(provisional))} (receiver lineage bumped; statement re-executes)"
             _skip(run, run.mut_provisional_reason)
+
+    def _too_costly(self, names: set[str]) -> str:
+        """Which of *names* are assumed changed because a check of them ran
+        out of its budget (`value_hash.is_costly`), and after how long: the
+        lineage they get makes what reads them miss, for that alone."""
+        user_ns = self.shell.user_ns
+        cut = {name: costly_after(user_ns.get(name)) for name in sorted(names)}
+        said = [f"{name} ({seconds:.1f}s)" for name, seconds in cut.items() if seconds is not None]
+        if not said:
+            return ""
+        return f" -- assumed changed, its change check gave up as too costly to read: {', '.join(said)}"
 
     def _callees_changing_their_closure(self, tree: ast.AST | None) -> set[str]:
         """The functions *tree* calls by name, outside loop and branch bodies,

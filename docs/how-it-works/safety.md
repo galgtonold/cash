@@ -157,6 +157,20 @@ downstream of it misses, and the statement itself is not cached. Restoring it
 would rebind the name to a copy, while every other reference to the object
 kept the unchanged original.
 
+<!-- claim: cash/value_hash.py:CHANGE_CHECK_BUDGET_S == 0.5, cash/value_hash.py:CHANGE_CHECK_RUN_ON == 2.0, cash/value_hash.py:CHANGE_CHECK_STRETCH == 3.0, cash/value_hash.py:_Check.ask @acbf75d6, cash/notebook/statement/input_change.py:_budget_cut @1b85ea09 -->
+A check of a value outside the fingerprints above (its content hash after it
+is bound or restored, before and after a statement that may change it) gets
+half a second. A value that takes longer to read, such as a big openpyxl
+workbook, counts as too costly to read: it is not read again, and every
+statement that may change it counts as changing it. When cash knows what the
+value pickled to (from its last full read, or from the entry it was
+restored from), a check past half a second that is on course to finish
+within a second runs on, for up to a second and a half, so a networkx graph
+that hashes in 0.4 s is read in full on a busy machine too. A statement that
+misses because of such a check names it: `input changed: G (G's check for a
+change in place gave up after 0.5s, too costly to read, so it counts as
+changed)`.
+
 Inside a loop or `if`/`try` body, the loop or branch as a whole owns the
 changes its body makes, and an `if` or `while` owns what its condition
 changes whichever branch runs (`if opts.pop("debug", False):`). Drawing on

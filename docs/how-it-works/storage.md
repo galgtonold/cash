@@ -265,7 +265,7 @@ does. cash waits for a write only when something needs it on disk:
 A process this one did not start, reading the same folder at the same time,
 finds a result once its write has finished, and computes it until then.
 
-<!-- claim: cash/backends/memory_backend.py:_snapshot @b77f0d22, cash/backends/tiered_backend.py:TieredBackend._stored_payload @92ed63c1, cash/backends/memory_backend.py:InMemoryBackend.set @8416cd51, cash/notebook/call_refs.py:digest_and_size @0dc444f6, cash/kept_state.py:stored_views @8fe0d16f, cash/stored_pickle.py:keeping @d7836c52, cash/notebook/statement/store.py:_nestable @42c0babb, cash/stored_pickle.py:object_digest @e8534d39, cash/notebook/statement/processor.py:StatementProcessor._keeping_outputs @4c75425d -->
+<!-- claim: cash/backends/memory_backend.py:_snapshot @b77f0d22, cash/backends/tiered_backend.py:TieredBackend._stored_payload @92ed63c1, cash/backends/memory_backend.py:InMemoryBackend.set @8416cd51, cash/notebook/call_refs.py:digest_and_size @c51197c8, cash/kept_state.py:stored_views @8fe0d16f, cash/stored_pickle.py:keeping @d7836c52, cash/notebook/statement/store.py:_nestable @42c0babb, cash/stored_pickle.py:object_digest @3b287f5e, cash/notebook/statement/processor.py:StatementProcessor._keeping_outputs @4c75425d -->
 An object of a class of its own (a fitted model, a graph) is kept in memory
 as the bytes its disk entry holds, made when it is stored: its arrays are
 copied out of it then, so a later change to your object, by Python or by
@@ -279,8 +279,8 @@ holds for a statement: the content hash cash takes of a value the statement
 made is taken over the pickle its entry stores, and the entry holds those
 bytes as they are, unless another of the statement's values, or the value
 it shows, shares an object with it: cash checks that while the pickle is
-made. A value too slow to hash within the time a change check allows is not
-hashed; its pickle is made once, whole, by the store, only when the entry
+made. A value too slow to hash within the time a change check allows
+([safety](safety.md)) is not hashed; its pickle is made once, whole, by the store, only when the entry
 keeps it in memory, and given up past half the statement's run time. A networkx
 graph's views (`G.adj`, `G.nodes`) are left out of the bytes, and networkx
 makes them again on first use.

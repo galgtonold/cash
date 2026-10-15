@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from cash.content_hashers import builtin_hash_family
 from cash.notebook.lineage_store import restore_frozen_tag
-from cash.value_hash import budgeted_hash, is_costly
+from cash.value_hash import budgeted_hash, is_costly, note_size
 
 if TYPE_CHECKING:
     from cash.notebook.statement._metadata import StatementCacheMetadata
@@ -150,6 +150,12 @@ def apply_restored_var(
     entry *metadata* describes (the caller has already bound it)."""
     lineage = None
     if metadata is not None:
+        size = (metadata.output_sizes or {}).get(name)
+        if size:
+            # What it pickled to when stored: the check below, and the next
+            # after a change in place, know how far along they are
+            # (`budgeted_hash`), as in the process that stored it.
+            note_size(value, size)
         lineage = (metadata.output_lineages or {}).get(name)
         frozen = (metadata.frozen_tags or {}).get(name)
         if frozen is not None:

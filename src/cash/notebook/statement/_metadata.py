@@ -52,6 +52,11 @@ class StatementCacheMetadata:
     #: ``value_cutoff``): restored, the value is known by its content as one
     #: that ran is, and an equal value recomputed later takes its lineage.
     output_digests: dict[str, str] | None = None
+    #: ``{output: the bytes its pickle came to}`` for an output whose size
+    #: cash knew when it stored it (`value_hash.known_size`): restored, a
+    #: check of it knows how far along it is, as one in the process that
+    #: digested it does (`value_hash.budgeted_hash`).
+    output_sizes: dict[str, int] | None = None
     #: ``{input var: its lineage when this statement ran}`` -- what the values
     #: in this entry were BUILT FROM. Recorded so a restored value can answer
     #: "was one of my inputs rebuilt since?", which only an executed one could

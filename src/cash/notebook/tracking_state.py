@@ -215,6 +215,13 @@ class TrackingState:
     # W: StatementLineageBuilder. R: StatementLineageBuilder, VirtualLineage.
     no_cache_values: dict[str, dict[str, str]] = field(default_factory=dict)
 
+    # Variable -> (the lineage a statement that may have changed it in place
+    # gave it, seconds of the change check that gave up on it) when that
+    # check ran out of its budget (`value_hash.is_costly`): it counts as
+    # changed without being compared, and a miss below it says so.
+    # W: StatementLineageBuilder. R: input_change_reason.
+    budget_cut_lineages: dict[str, tuple[str, float]] = field(default_factory=dict)
+
     # magic_base -> {name: digest of the value} for each name a line magic or
     # shell command bound or changed on its last run (``magic_effects``), and
     # every lineage such a name was given by a magic a rebuild never runs

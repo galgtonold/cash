@@ -26,7 +26,7 @@ from typing import Any
 from . import value_watch
 from .content_hashers import builtin_hash, builtin_hash_family, is_native_panic
 from .sizing import pandas_nbytes
-from .stored_pickle import HashBudgetExceeded, object_digest
+from .stored_pickle import HashBudgetExceeded, run_on, running_on, sized_object_digest
 
 logger = logging.getLogger(__name__)
 
@@ -83,20 +83,73 @@ def _hash_collection(obj: Any) -> str:
 #: run next to 11 s of its own work.
 CHANGE_CHECK_BUDGET_S = 0.5
 
+#: A check runs on past its budget (`budgeted_hash`) only for a value whose
+#: size cash knows (`known_size`) and whose pickle so far projects it done
+#: within this many budgets: a value that hashes in about the budget, which a
+#: loaded machine pushes past it now and then. A networkx graph of 350,000
+#: edges (an 11 MB pickle) hashes in 0.3-0.55 s: cut at 0.5 s one run in a
+#: few, it counted as changed after a restart, and 195 s of statements built
+#: on it ran again. A value projected past it is a clear overrun, cut at the
+#: budget as before.
+CHANGE_CHECK_RUN_ON = 2.0
+
+#: How long a check that runs on may take in all, in budgets: room for a
+#: projection that comes out low, after which it is cut all the same.
+CHANGE_CHECK_STRETCH = 3.0
+
+#: The pickled size from which a value's size is remembered (`note_size`):
+#: below it no pickle comes near the budget.
+SIZE_MEMO_MIN_BYTES = 1 << 20
+
 _budget = threading.local()
 
-#: ``id -> weak reference`` of the objects a budgeted hash gave up on.
-_COSTLY: dict[int, weakref.ref] = {}
+#: ``id -> (weak reference, seconds of the check that gave up on it)`` of
+#: the objects a budgeted hash gave up on.
+_COSTLY: dict[int, tuple[weakref.ref, float]] = {}
+
+#: ``id -> (weak reference, bytes)``: what each object's pickle came to,
+#: from its last full digest or the entry it was restored from.
+_SIZES: dict[int, tuple[weakref.ref, int]] = {}
+
+
+def note_size(obj: Any, nbytes: int) -> None:
+    """Remember that *obj* pickles to about *nbytes* (`known_size`): its
+    digest took that many, or the entry it was just restored from holds
+    that many. Only for an object with a weak reference, of at least
+    `SIZE_MEMO_MIN_BYTES`."""
+    if nbytes < SIZE_MEMO_MIN_BYTES:
+        return
+    key = id(obj)
+    try:
+        ref = weakref.ref(obj, lambda _ref, key=key: _SIZES.pop(key, None))
+    except TypeError:
+        return
+    _SIZES[key] = (ref, nbytes)
+
+
+def known_size(obj: Any) -> int | None:
+    """The bytes *obj* last pickled to, as `note_size` was told, or None."""
+    found = _SIZES.get(id(obj))
+    if found is None or found[0]() is not obj:
+        return None
+    return found[1]
 
 
 def _pickle_digest(obj: Any) -> str:
     """The digest of *obj* over the bytes a store keeps of it
     (`stored_pickle.object_digest`); under a budget (`budgeted_hash`),
-    stopped when the budget runs out. The same digest either way."""
-    deadline = getattr(_budget, "deadline", None)
-    if deadline is not None and perf_counter() > deadline:
-        raise HashBudgetExceeded
-    return object_digest(obj, deadline)
+    stopped when the budget runs out. The same digest either way. What
+    the pickle came to is remembered (`note_size`)."""
+    check = getattr(_budget, "check", None)
+    if check is None:
+        digest, size = sized_object_digest(obj)
+    else:
+        if perf_counter() > check.deadline:
+            run_on(check.deadline, 0)
+        digest, size = sized_object_digest(obj, check.deadline)
+        check.done += size
+    note_size(obj, size)
+    return digest
 
 
 def is_costly(obj: Any) -> bool:
@@ -105,17 +158,69 @@ def is_costly(obj: Any) -> bool:
     check would have to read it."""
     if not _COSTLY:
         return False
-    ref = _COSTLY.get(id(obj))
-    return ref is not None and ref() is obj
+    found = _COSTLY.get(id(obj))
+    return found is not None and found[0]() is obj
 
 
-def _remember_costly(obj: Any) -> None:
+def costly_after(obj: Any) -> float | None:
+    """The seconds of the check that gave up on *obj* (`is_costly`), or
+    None when none did: for saying why it counts as changed."""
+    if not _COSTLY:
+        return None
+    found = _COSTLY.get(id(obj))
+    return found[1] if found is not None and found[0]() is obj else None
+
+
+def _remember_costly(obj: Any, seconds: float) -> None:
     key = id(obj)
     try:
         ref = weakref.ref(obj, lambda _ref, key=key: _COSTLY.pop(key, None))
     except TypeError:
         return  # no weak reference (a list, a dict): asked again next time
-    _COSTLY[key] = ref
+    _COSTLY[key] = (ref, seconds)
+
+
+class _Check:
+    """One budgeted hash (`budgeted_hash`): when it started, its budget
+    (*seconds*) and deadline, the size its value is known to pickle to
+    (*size*), and the bytes its finished pickles came to (*done*)."""
+
+    __slots__ = ("budget", "deadline", "done", "ran_on", "seconds", "size", "start")
+
+    def __init__(self, seconds: float, size: int | None) -> None:
+        self.start = perf_counter()
+        self.seconds = seconds
+        self.budget = self.deadline = self.start + seconds
+        self.size = size
+        self.done = 0
+        self.ran_on = False
+
+    def ask(self, passed: float, pickled: int) -> float | None:
+        """The later deadline a pickle past this check's (*passed*),
+        *pickled* bytes in, may run on to (`stored_pickle.run_on`), or
+        None; None for a pickle with a deadline of its own (a store's).
+
+        Only once, only for a value whose size is known, and only when the
+        rate so far says it is done within `CHANGE_CHECK_RUN_ON` budgets;
+        then up to `CHANGE_CHECK_STRETCH` budgets in all. A value nothing
+        is known of, or a clear overrun, stops at the budget, as it always
+        did, and costs no more."""
+        if passed != self.budget and passed != self.deadline:
+            return None
+        now = perf_counter()
+        if now <= self.deadline:
+            return self.deadline  # a later deadline given already
+        if self.ran_on or not self.size:
+            return None
+        done = self.done + pickled
+        if done <= 0 or done >= self.size:
+            return None  # nothing read yet, or more than it ever was
+        projected = (now - self.start) * self.size / done
+        if projected > self.seconds * CHANGE_CHECK_RUN_ON:
+            return None
+        self.ran_on = True
+        self.deadline = self.start + self.seconds * CHANGE_CHECK_STRETCH
+        return self.deadline
 
 
 def budgeted_hash(obj: Any, hash_fn: Callable[[Any], str] | None = None, seconds: float | None = None) -> str | None:
@@ -124,6 +229,14 @@ def budgeted_hash(obj: Any, hash_fn: Callable[[Any], str] | None = None, seconds
     (`CHANGE_CHECK_BUDGET_S`); *obj* is then remembered as costly
     (`is_costly`) and later budgeted hashes of it return None at once.
 
+    A value whose size is known (`known_size`: from its last digest, or
+    from the entry it was restored from) runs on past the budget when what
+    it pickled by then projects it done within `CHANGE_CHECK_RUN_ON`
+    budgets, for up to `CHANGE_CHECK_STRETCH` budgets in all (`_Check.ask`):
+    a value that hashes in about the budget is not cut short one run in a
+    few by a loaded machine, and does not count as changed for it. A value
+    nothing is known of, or a clear overrun, stops at the budget.
+
     None means "cannot say": every caller treats the value as changed, or
     as one whose content it does not compare -- never as unchanged. Only
     the checks around a statement take this; a key never does, so no key
@@ -131,16 +244,24 @@ def budgeted_hash(obj: Any, hash_fn: Callable[[Any], str] | None = None, seconds
     """
     if is_costly(obj):
         return None
-    outer = getattr(_budget, "deadline", None)
-    if outer is None:
-        _budget.deadline = perf_counter() + (CHANGE_CHECK_BUDGET_S if seconds is None else seconds)
+    outer = getattr(_budget, "check", None)
+    if outer is not None:
+        # Within another check: its budget holds.
+        try:
+            return (hash_fn or compute_hash)(obj)
+        except HashBudgetExceeded:
+            _remember_costly(obj, outer.deadline - outer.start)
+            return None
+    check = _Check(CHANGE_CHECK_BUDGET_S if seconds is None else seconds, known_size(obj))
+    _budget.check = check
     try:
-        return (hash_fn or compute_hash)(obj)
+        with running_on(check.ask):
+            return (hash_fn or compute_hash)(obj)
     except HashBudgetExceeded:
-        _remember_costly(obj)
+        _remember_costly(obj, check.deadline - check.start)
         return None
     finally:
-        _budget.deadline = outer
+        _budget.check = None
 
 
 def identity_hash(obj: Any) -> str:

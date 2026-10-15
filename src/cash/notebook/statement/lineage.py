@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...tracking.module_symbols import static_attribute_reads
-from ...value_hash import budgeted_hash, compute_hash
+from ...value_hash import budgeted_hash, compute_hash, costly_after
 from ..cache_key import statement_source_hash
 from ..lineage_formula import (
     call_time_reads,
@@ -386,6 +386,14 @@ class StatementLineageBuilder:
 
         self._update_module_attribute_deps(tracking_state, var_name, code, user_ns)
         self._update_variable_content_hashes(tracking_state, var_name, value, output_lineage_hash, taken)
+        cut = costly_after(value) if var_name in inputs else None
+        if cut is not None:
+            # Changed in place, or not: its check ran out of its budget, so
+            # it counts as changed (`budgeted_hash`), and what reads it
+            # misses for that. Said where it does (`input_change_reason`).
+            tracking_state.budget_cut_lineages[var_name] = (output_lineage_hash, cut)
+        else:
+            tracking_state.budget_cut_lineages.pop(var_name, None)
 
         tracking_state.variable_sources[var_name] = cache_key
 
