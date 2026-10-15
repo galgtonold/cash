@@ -358,7 +358,6 @@ def test_a_kernel_hands_back_what_it_cannot_answer():
 
 import datetime
 import decimal
-import gc
 
 from cash import _plain_data as pd
 from cash import sizing
@@ -446,7 +445,6 @@ def _both(fn, monkeypatch, *modules):
         with monkeypatch.context() as m:
             for module in modules:
                 m.setattr(module, "_K", kernels)
-            gc.collect()
             answers.append(fn())
     return answers
 
