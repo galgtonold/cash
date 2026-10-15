@@ -499,6 +499,20 @@ def _time_to_probe(run: _SiteRun) -> bool:
     )
 
 
+def _held_alone(entry: tuple) -> bool:
+    """Is ``entry[0]`` referenced by the tuple *entry* alone?"""
+    return sys.getrefcount(entry[0]) <= _HELD_ALONE
+
+
+def _refs_of_first(entry: tuple) -> int:
+    return sys.getrefcount(entry[0])
+
+
+#: What `_held_alone` reads for an object only its tuple holds: measured,
+#: as what ``sys.getrefcount`` counts besides differs across versions.
+_HELD_ALONE = _refs_of_first(([],))
+
+
 class CallUnit:
     """Caches one intercepted call against the statement backend.
 
@@ -616,6 +630,27 @@ class CallUnit:
         self.plain_sites.clear()
         self._keys.begin_statement()
         self.last_returned = None
+        self._release_unreferenced()
+
+    def _release_unreferenced(self) -> None:
+        """Let go of each held result nothing but `held_results` references.
+
+        A result is held so a later statement of the cell holding it stores
+        a reference to its entry, and so its ``id`` is not reused while
+        held. One nothing else references can reach no later statement: a
+        loop's ``h, _ = fit(df, k)`` drops each iteration's tuple once
+        unpacked, and holding them all kept every iteration's frames alive
+        until the next cell (430 MB in a 15-iteration grid), each one more
+        frame sharing ``df``'s columns for the frame memo to walk. The id
+        goes with the object, so it cannot name another one later.
+        """
+        held = self.held_results
+        if not held:
+            return
+        loose = [key for key, entry in held.items() if _held_alone(entry)]
+        for key in loose:
+            del held[key]
+            self.digested_results.discard(key)
 
     def outermost_result(self) -> tuple[str, int, str] | None:
         """``(call key, id(result), call source)`` of the call that returned
