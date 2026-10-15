@@ -150,6 +150,23 @@ _CHILD_PROCESS_EVENTS = (
 )
 
 
+def _settle(future: concurrent.futures.Future, timeout: float | None = None) -> BaseException | None:
+    """Wait for *future*, a queued write, to finish; what it raised, or None.
+
+    Never ``future.result()`` on a write that stays queued: it raises the
+    write's exception again, and every raise adds the waiting frames to that
+    exception's traceback, which the future keeps until ``wait(key)`` drops
+    it. A failed write waited on as a ``ProcessPoolExecutor`` started its
+    worker (`_finish_before_child`) kept the frames of the user's
+    ``submit`` alive, and every local in them: the task's future, and the
+    value it returned. Raises ``TimeoutError`` past *timeout*.
+    """
+    try:
+        return future.exception(timeout=timeout)
+    except concurrent.futures.CancelledError:
+        return None
+
+
 #: Seconds a process about to start another waits for its queued writes.
 #: Past it the child starts anyway and reads a miss for what is not on disk
 #: yet: a stalled cache directory must not stall every ``subprocess.run``.
@@ -422,10 +439,7 @@ class PendingWrites:
             prev = self._pending.get(key)
         # Waited on outside the lock so other keys' submissions are not held up.
         if prev is not None and not prev.done():
-            try:
-                prev.result()
-            except Exception:  # noqa: BLE001 - surfaces later via wait(key)
-                pass
+            _settle(prev)  # a failure surfaces later via wait(key)
         if in_multiprocessing_child():
             return self._run_inline(key, fn, args, kwargs)
         with self._lock:
@@ -488,10 +502,7 @@ class PendingWrites:
             held = sum(n for _, n in live)
             if not live or held + nbytes <= MAX_QUEUED_BYTES:
                 return
-            try:
-                live[0][0].result()
-            except BaseException:  # noqa: BLE001 - reported via wait(key)
-                pass
+            _settle(live[0][0])  # a failure is reported via wait(key)
             self._forget_size(live[0][0])
 
     def backlog_seconds(self) -> float:
@@ -540,8 +551,8 @@ class PendingWrites:
             if deadline is not None:
                 step = min(step, deadline - time.monotonic())
             try:
-                live[0][0].result(timeout=max(step, 0.0))
-            except BaseException:  # noqa: BLE001 - a timeout, or reported via wait(key)
+                _settle(live[0][0], timeout=max(step, 0.0))
+            except concurrent.futures.TimeoutError:
                 pass
         while self.backlog_seconds() > max_seconds:
             live = self._unfinished_sized()
@@ -553,11 +564,9 @@ class PendingWrites:
             if step <= 0:
                 return False
             try:
-                live[0][0].result(timeout=step)
+                _settle(live[0][0], timeout=step)
             except concurrent.futures.TimeoutError:
                 continue
-            except BaseException:  # noqa: BLE001 - reported via wait(key)
-                pass
             self._forget_size(live[0][0])
         return True
 
@@ -699,10 +708,10 @@ class PendingWrites:
                 continue
             timeout = None if deadline is None else max(0.0, deadline - time.monotonic())
             try:
-                f.result(timeout=timeout)
+                exc = _settle(f, timeout=timeout)
             except concurrent.futures.TimeoutError:
                 return False
-            except Exception as exc:  # noqa: BLE001 - re-raising would punish the wrong caller
+            if exc is not None:  # re-raising would punish the wrong caller
                 logger.debug("Pending write failed (surfaced via wait(key)): %s", exc)
         return not any(f in skip and not f.done() for f in futures)
 
