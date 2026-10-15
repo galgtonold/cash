@@ -76,6 +76,19 @@ _HEAP_TYPE = 1 << 9
 #: its own). A walk of a 350,000-edge graph took 1.2 s in Python.
 _K = _native.kernels
 
+#: What ``gc.freeze`` had moved out of the collector's view when cash was
+#: imported. Python 3.12 freezes some 375 tuples of its own while it starts,
+#: so a nonzero count says nothing of the user's objects by itself: only
+#: more than this does. ``gc.freeze`` moves every tracked object, far more
+#: than this many, so one that hides a function always counts above it.
+_FROZEN_AT_IMPORT = gc.get_freeze_count()
+
+
+def _objects_frozen_since_import() -> bool:
+    """Has ``gc.freeze`` hidden objects the collector's view no longer
+    shows, beyond the interpreter's own?"""
+    return gc.get_freeze_count() > _FROZEN_AT_IMPORT
+
 
 class Held(NamedTuple):
     """What `held_notebook_code` found."""
@@ -217,7 +230,7 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
     which may define a lambda after the question). A statement's checks
     asked it up to 13 times, 0.035-0.07 s each beside a big graph.
     """
-    if gc.get_freeze_count():
+    if _objects_frozen_since_import():
         return True
     maps = getattr(namespace, "maps", None)
     dicts = list(maps) if isinstance(maps, list) else [namespace]
@@ -267,7 +280,7 @@ def module_class_objects_exist() -> bool:
     classes = _users_module_classes()
     if not classes:
         return False
-    if gc.get_freeze_count():
+    if _objects_frozen_since_import():
         return True
     kinds: set[type] = set()
     pending = list(classes)

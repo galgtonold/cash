@@ -123,9 +123,19 @@ def test_methods_and_lambdas_in_containers_count_as_notebook_functions():
 
 
 def test_frozen_objects_are_not_searched_so_a_function_is_assumed(monkeypatch):
-    monkeypatch.setattr(gc, "get_freeze_count", lambda: 1)
-    held, visited = _visited(monkeypatch, Sheet(N), _notebook("x = 1"))
+    namespace = _notebook("x = 1")
+    gc.freeze()
+    try:
+        held, visited = _visited(monkeypatch, Sheet(N), namespace)
+    finally:
+        gc.unfreeze()
     assert held.complete and visited >= N
+
+
+def test_what_the_interpreter_froze_itself_hides_no_function():
+    """Python 3.12 freezes tuples of its own while it starts: a count of
+    frozen objects that is no more than those leaves the answer a no."""
+    assert not held_functions.notebook_functions_exist(_notebook("x = 1"))
 
 
 def test_a_chained_namespace_finds_a_function_in_any_of_its_maps():
