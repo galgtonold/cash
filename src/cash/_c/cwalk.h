@@ -9,5 +9,7 @@ int cwalk_add_functions(PyObject *m);
 int caudit_add_functions(PyObject *m);
 /* Add the native file hook's functions (cfilehook.c). */
 int cfilehook_add_functions(PyObject *m);
+/* Add the Arrow view column readers (cviews.c). */
+int cviews_add_functions(PyObject *m);
 
 #endif

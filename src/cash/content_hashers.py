@@ -28,7 +28,7 @@ from typing import Any
 
 from . import _plain_data
 from ._memo import ARROW_VALUES, LruMemo
-from .bulk_digest import DIRECT_MAX_BYTES, BulkHasher, fold_buffer
+from .bulk_digest import DIRECT_MAX_BYTES, LEAF_BYTES, BulkHasher, fold_buffer
 from .canonical_form import ContentHashing, canonical_bytes
 from .kept_state import packed_records
 from .sizing import SPARSE_PARTS, held_values
@@ -163,7 +163,7 @@ def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
     """Fold a frame's or series' values, then its index's, into *h*.
 
     Column by column and index level by index level, each in the form that
-    keeps it exact and reads it fastest (`_pandas_value_route`): numbers,
+    keeps it exact and reads it fastest (`pandas_value_route`): numbers,
     booleans and dates from their own buffer, a nullable column from its
     values and its mask, an Arrow-backed column (pandas' ``str`` among them)
     from its Arrow buffers, a categorical by its codes (the categories are
@@ -186,9 +186,9 @@ def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
             try:
                 route = routes[dtype]
             except KeyError:
-                route = routes[dtype] = _pandas_value_route(dtype, pd)
+                route = routes[dtype] = pandas_value_route(dtype, pd)
             except TypeError:  # an unhashable dtype
-                route = _pandas_value_route(dtype, pd)
+                route = pandas_value_route(dtype, pd)
             if route is None:
                 rest.append(pos)
                 continue
@@ -286,7 +286,7 @@ def immutable_items(values: Any) -> bool:
 _RAW_KINDS = frozenset("biufcmM")
 
 
-def _pandas_value_route(dtype: Any, pd: Any) -> str | None:
+def pandas_value_route(dtype: Any, pd: Any) -> str | None:
     """How `_fold_pandas_array` keys values of *dtype*: ``"raw"``,
     ``"datetimetz"``, ``"masked"``, ``"arrow"``, ``"objects"``, ``"codes"``,
     or None for ``hash_pandas_object``."""
@@ -331,7 +331,7 @@ def _numpy() -> Any:
 
 def _fold_pandas_array(h: Any, values: Any, pd: Any) -> None:
     """Fold one Series' or Index's values into *h* (`_fold_pandas_values`)."""
-    route = _pandas_value_route(values.dtype, pd)
+    route = pandas_value_route(values.dtype, pd)
     if route == "raw":
         fold_buffer(h, raw_view(_np_array(values)))
         return
@@ -394,6 +394,30 @@ def column_pieces(pieces: ColumnPieces | None) -> ColumnPieces | None:
     previous = _COLUMN_PIECES.current
     _COLUMN_PIECES.current = pieces
     return previous
+
+
+#: Who knows the pieces of a frame it vouches is unchanged now
+#: (`known_column_pieces`): the frame memo registers itself
+#: (`cash.decorator.arg_hashing.FrameDigests.pieces_of`).
+_PIECE_SOURCE: list[Callable[[Any], Any]] = []
+
+
+def set_piece_source(source: Callable[[Any], Any]) -> None:
+    """Make *source* what `known_column_pieces` asks."""
+    _PIECE_SOURCE[:] = [source]
+
+
+def known_column_pieces(frame: Any) -> Any:
+    """What the columns of the pandas frame *frame* fold into a digest, as
+    far as the frame memo can vouch for them now (`ColumnPieces`): an object
+    whose ``get(column memory key)`` is the piece, a function of the
+    column's content alone, or None. None when there is no memo."""
+    if not _PIECE_SOURCE:
+        return None
+    try:
+        return _PIECE_SOURCE[0](frame)
+    except Exception:  # noqa: BLE001 - only a speedup: nothing is known
+        return None
 
 
 #: The most bytes a column's piece may hold: a big column's part of a
@@ -895,10 +919,9 @@ def hash_polars(value: Any) -> str | None:
             objects = [name for name, dtype in value.schema.items() if dtype == pl.Object]
             rest = value.drop(objects) if objects else value
             if rest.width:
-                table = _polars_to_arrow(rest, pl)
-                for name, column in zip(table.column_names, table.columns):
+                for name, column in _polars_arrow_columns(rest, pl):
                     h.update(f"|{name!r}|".encode("utf-8"))
-                    fold_arrow_column(h, column)
+                    column.fold(h)
             for name in objects:
                 h.update(f"|{name!r}|".encode("utf-8"))
                 h.update(_object_items_bytes(value.get_column(name).to_list()))
@@ -908,7 +931,8 @@ def hash_polars(value: Any) -> str | None:
             if value.dtype == pl.Object:
                 h.update(_object_items_bytes(value.to_list()))
             else:
-                fold_arrow_column(h, _polars_to_arrow(value, pl))
+                ((_name, column),) = _polars_arrow_columns(value.to_frame(), pl)
+                column.fold(h)
             return h.hexdigest()
         if isinstance(value, pl.LazyFrame):
             try:
@@ -980,6 +1004,133 @@ def _polars_to_arrow(value: Any, pl: Any) -> Any:
         except TypeError:
             pass
     return value.to_arrow()
+
+
+class _ArrowColumn:
+    """A column `fold_arrow_column` folds as it is."""
+
+    __slots__ = ("column",)
+
+    def __init__(self, column: Any) -> None:
+        self.column = column
+
+    def fold(self, h: Any) -> None:
+        fold_arrow_column(h, self.column)
+
+
+class _ViewColumn:
+    """A string or binary view column, folded as `fold_arrow_column` folds
+    the ``large_string`` or ``large_binary`` column the oldest compat level
+    converts it to (`fold_view_column`), without converting it."""
+
+    __slots__ = ("column", "large")
+
+    def __init__(self, column: Any, large: str) -> None:
+        self.column = column
+        self.large = large
+
+    def fold(self, h: Any) -> None:
+        fold_view_column(h, self.column, self.large)
+
+
+def _polars_arrow_columns(frame: Any, pl: Any) -> list[tuple[str, Any]]:
+    """``(name, column)`` for each column of the polars DataFrame *frame*,
+    each with a ``fold(h)`` that folds what `fold_arrow_column` folds of it
+    as the oldest compat level exports it (`_polars_to_arrow`).
+
+    That level converts each string and binary column from the views polars
+    holds to ``large_string``/``large_binary``: a copy of all its bytes into
+    new memory, 0.2 s of each 1 s hash of a 10M-row log frame, where the
+    numbers and dates came out as they are. With the C extension's view
+    readers, a view column is read where it is (`fold_view_column`), as are
+    columns of numbers, dates and booleans, whose Arrow type is the same at
+    every level; any other column is exported at the oldest level, alone.
+    """
+    from ._native import kernels
+
+    compat = getattr(pl, "CompatLevel", None)
+    import pyarrow as pa
+
+    if (
+        compat is None
+        or kernels is None
+        or not hasattr(kernels, "view_values")
+        or not hasattr(pa.types, "is_string_view")
+    ):
+        table = _polars_to_arrow(frame, pl)
+        return [(name, _ArrowColumn(column)) for name, column in zip(table.column_names, table.columns)]
+
+    table = frame.to_arrow(compat_level=compat.newest())
+    out: list[tuple[str, Any]] = []
+    for name, column in zip(table.column_names, table.columns):
+        kind = column.type
+        if pa.types.is_string_view(kind):
+            out.append((name, _ViewColumn(column, "large_string")))
+        elif pa.types.is_binary_view(kind):
+            out.append((name, _ViewColumn(column, "large_binary")))
+        elif _arrow_layout(kind)[0] in ("fixed", "bool"):
+            out.append((name, _ArrowColumn(column)))
+        else:
+            oldest = _polars_to_arrow(frame.select(pl.nth(len(out))), pl)
+            out.append((name, _ArrowColumn(oldest.column(0))))
+    return out
+
+
+#: Bytes `fold_view_column` reads a view column's lengths and values into
+#: at a time: whole leaves of `BulkHasher`, hashed without a copy.
+VIEW_BLOCK_BYTES = 8 * LEAF_BYTES
+
+_VIEW_BLOCKS = threading.local()
+
+
+def _view_blocks() -> tuple[bytearray, bytearray]:
+    blocks = getattr(_VIEW_BLOCKS, "blocks", None)
+    if blocks is None:
+        blocks = _VIEW_BLOCKS.blocks = (bytearray(VIEW_BLOCK_BYTES), bytearray(VIEW_BLOCK_BYTES))
+    return blocks
+
+
+def fold_view_column(h: Any, column: Any, large: str) -> None:
+    """Fold a pyarrow ``string_view`` or ``binary_view`` Array or
+    ChunkedArray into *h* exactly as `fold_arrow_column` folds the column
+    of type *large* (``large_string``/``large_binary``) it converts to:
+    the same bytes, with neither the converted column nor its lengths made.
+
+    The C extension's ``view_lengths`` and ``view_values`` write each
+    value's length (int64, 0 for a missing one) and its bytes into blocks
+    that are hashed and used again (`VIEW_BLOCK_BYTES`)."""
+    import numpy as np
+    import pyarrow as pa
+
+    from ._native import kernels
+
+    chunks = column.chunks if isinstance(column, pa.ChunkedArray) else [column]
+    lengths_block, values_block = _view_blocks()
+    nulls, lengths, values = BulkHasher(), BulkHasher(), BulkHasher()
+    base = 0
+    for chunk in chunks:
+        n = len(chunk)
+        if not n:
+            continue
+        if chunk.null_count:
+            missing = np.flatnonzero(~chunk.is_valid().to_numpy(zero_copy_only=False)) + base
+            nulls.update(missing.astype("<i8"))
+        buffers = chunk.buffers()
+        validity = buffers[0] if chunk.null_count else None
+        views, datas = buffers[1], tuple(buffers[2:])
+        start, stop = chunk.offset, chunk.offset + n
+        row = start
+        while row < stop:
+            rows = kernels.view_lengths(views, validity, row, stop, lengths_block)
+            lengths.update(memoryview(lengths_block)[: rows * 8])
+            row += rows
+        row, skip = start, 0
+        while row < stop:
+            row, skip, written = kernels.view_values(views, datas, validity, row, skip, stop, values_block)
+            values.update(memoryview(values_block)[:written])
+        base += n
+    h.update(f"|arrow:{large}:offsets:{base}|".encode())
+    h.update(nulls.digest() + lengths.digest() + values.digest())
 
 
 def held_objects(value: Any) -> list | None:

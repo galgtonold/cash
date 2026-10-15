@@ -147,7 +147,114 @@ def stored_reducers() -> dict | None:
         reducers[frame] = reducers[series] = _reduce_polars
     for arrow_class in _arrow_array_classes():
         reducers[arrow_class] = _reduce_arrow_array
+    pd = sys.modules.get("pandas")
+    string_array = getattr(getattr(pd, "arrays", None), "StringArray", None)
+    if isinstance(string_array, type):
+        reducers[string_array] = _reduce_string_array
     return reducers or None
+
+
+#: Python-string columns at least this long go out of band as one buffer
+#: (`_reduce_string_array`): the size of `OUT_OF_BAND_MIN_BYTES` of pointers.
+STRINGS_APART_MIN_ITEMS = OUT_OF_BAND_MIN_BYTES // 8
+
+
+def _reduce_string_array(value: Any) -> Any:
+    """A pandas column of Python strings (``StringDtype("python")``, pandas
+    3's ``str`` without pyarrow) as pandas pickles it, but with its strings
+    pickled into one buffer of their own, which protocol 5 hands out of
+    band (`_string_array_from_items`).
+
+    Out of band, the file tier keeps it in the chunk store by its content
+    (`cash.backends.chunk_store`): the same column in another entry, as
+    each result of ``h = df.assign(...)`` in a loop holds it, is stored
+    once. A column the RAM tier keeps (`shared_blocks.is_kept`: its own,
+    never written) is pickled once while it is kept (`_items_buffer`); the
+    other entries holding it cost a digest of that buffer, not a pickle.
+    """
+    reduced = value.__reduce_ex__(5)
+    try:
+        func, args, state = reduced[0], reduced[1], reduced[2]
+        if (
+            len(reduced) != 3
+            or type(state) is not tuple
+            or len(state) != 2
+            or state[1] is not value._ndarray
+            or len(state[1]) < STRINGS_APART_MIN_ITEMS
+        ):
+            return reduced
+        items = _items_buffer(value)
+    except Exception:  # not the layout this expects: pandas' own pickle
+        logger.debug("pickling a %s the pandas way", type(value).__name__, exc_info=True)
+        return reduced
+    return _string_array_from_items, (func, args, state[0], pickle.PickleBuffer(items))
+
+
+def _string_array_from_items(func: Callable[..., Any], args: tuple, dtype: Any, items: Any) -> Any:
+    """The column `_reduce_string_array` stored: built as pandas' own pickle
+    builds it, with its strings read back from *items*."""
+    array = func(*args)
+    array.__setstate__((dtype, pickle.loads(items)))
+    return array
+
+
+class _KeptItems:
+    """``id(values) -> (weak reference, bytes)``, the strings of columns the
+    RAM tier keeps pickled once (`_items_buffer`), least recently used
+    first, at most `_KEPT_ITEMS_MAX_BYTES` together."""
+
+    def __init__(self) -> None:
+        import threading
+        from collections import OrderedDict
+
+        self.lock = threading.Lock()
+        self.entries: OrderedDict[int, tuple[Any, bytes]] = OrderedDict()
+        self.nbytes = 0
+        self.pickled = 0  # columns pickled, for the work-count tests
+
+    def drop(self, key: int, ref: Any) -> None:
+        with self.lock:
+            found = self.entries.get(key)
+            if found is not None and found[0] is ref:
+                del self.entries[key]
+                self.nbytes -= len(found[1])
+
+
+_KEPT_ITEMS = _KeptItems()
+#: What `_KeptItems` holds at most: past it, the oldest go.
+_KEPT_ITEMS_MAX_BYTES = 256 * 1024**2
+
+
+def _items_buffer(value: Any) -> bytes:
+    """*value*'s strings, pickled: from `_KEPT_ITEMS` for a column the RAM
+    tier keeps, which nothing writes while it lives."""
+    import weakref
+
+    from .shared_blocks import is_kept
+
+    kept = is_kept(value)
+    memo = _KEPT_ITEMS
+    if kept:
+        with memo.lock:
+            found = memo.entries.get(id(value))
+            if found is not None and found[0]() is value:
+                memo.entries.move_to_end(id(value))
+                return found[1]
+    items = pickle.dumps(value._ndarray, protocol=5)
+    memo.pickled += 1
+    if kept and len(items) <= _KEPT_ITEMS_MAX_BYTES // 4:
+        key = id(value)
+        ref = weakref.ref(value, lambda _ref, key=key: memo.drop(key, _ref))
+        with memo.lock:
+            old = memo.entries.pop(key, None)
+            if old is not None:
+                memo.nbytes -= len(old[1])
+            memo.entries[key] = (ref, items)
+            memo.nbytes += len(items)
+            while memo.nbytes > _KEPT_ITEMS_MAX_BYTES and memo.entries:
+                _old_key, (_ref, old_items) = memo.entries.popitem(last=False)
+                memo.nbytes -= len(old_items)
+    return items
 
 
 #: pandas' Arrow-backed array classes `_reduce_arrow_array` takes, found
