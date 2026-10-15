@@ -5,5 +5,7 @@
 
 /* Add the walk kernels to the module; 0 or -1 with an exception set. */
 int cwalk_add_functions(PyObject *m);
+/* Add the audit hook's functions (caudit.c). */
+int caudit_add_functions(PyObject *m);
 
 #endif

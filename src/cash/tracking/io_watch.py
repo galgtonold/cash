@@ -32,6 +32,8 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
+from .. import _native
+
 __all__ = [
     "Patches",
     "add_patcher",
@@ -64,11 +66,18 @@ _hook_installed = False
 _active: dict[str, tuple[Consumer, ...]] = {}
 _held_table: dict[str, tuple[Consumer, ...]] = {}
 _idle_table: dict[str, tuple[Consumer, ...]] = {}
+#: The C extension's audit hook (`cash._native.kernels`, ``caudit.c``), when
+#: it is the one installed: it calls `_hook` only for the events named in
+#: one of the two tables, where a Python hook was called for every audited
+#: event in the process (~0.25 us each, most of them ids cash's own walks
+#: asked for).
+_C_HOOK = _native.kernels
 
 
 def _hook(event: str, args: tuple) -> None:
     # Runs for every audited event in the process (every `id()`, every import,
     # every unpickled class): one dict lookup unless a consumer wants it.
+    # Under the C hook, only for the events a table names (`_C_HOOK`).
     consumers = _active.get(event)
     if consumers is None:
         return
@@ -81,6 +90,7 @@ def _hook(event: str, args: tuple) -> None:
 
 def _rebuild() -> None:
     global _held_table, _idle_table
+    old = {*_held_table, *_idle_table}
     held: dict[str, tuple[Consumer, ...]] = {}
     idle: dict[str, tuple[Consumer, ...]] = {}
     for event in {*_subscribers, *_always}:
@@ -92,9 +102,16 @@ def _rebuild() -> None:
         chosen = always + tuple(consumer for consumer, outside in subs if outside and _outside)
         if chosen:
             idle[event] = chosen
+    if _C_HOOK is not None and _hook_installed:
+        # Every event either table names: `_active` is one of them, and
+        # `_hook` drops what it does not name. The old names stay in while
+        # the tables change, so no event `_active` names is ever filtered.
+        _C_HOOK.audit_dispatch(_hook, old | {*held, *idle})
     _held_table = held
     _idle_table = idle
     _switch()
+    if _C_HOOK is not None and _hook_installed:
+        _C_HOOK.audit_dispatch(_hook, {*held, *idle})
 
 
 def _switch() -> None:
@@ -103,9 +120,13 @@ def _switch() -> None:
 
 
 def _ensure_hook() -> None:
-    global _hook_installed
+    global _hook_installed, _C_HOOK
     if not _hook_installed:
-        sys.addaudithook(_hook)
+        if _C_HOOK is not None and _C_HOOK.audit_hook_install():
+            _C_HOOK.audit_dispatch(_hook, {*_held_table, *_idle_table})
+        else:
+            _C_HOOK = None
+            sys.addaudithook(_hook)
         _hook_installed = True
 
 

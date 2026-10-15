@@ -1615,7 +1615,7 @@ static int exec_module(PyObject *m) {
         {"OVER_BUDGET", A_OVER_BUDGET}, {"ARM_BUSY", A_BUSY}, {"KINDS", NKINDS}};
     for (size_t i = 0; i < sizeof consts / sizeof consts[0]; i++)
         if (PyModule_AddIntConstant(m, consts[i].n, consts[i].v) < 0) return -1;
-    if (cwalk_add_functions(m) < 0) return -1;
+    if (cwalk_add_functions(m) < 0 || caudit_add_functions(m) < 0) return -1;
 #else
     if (PyModule_AddObjectRef(m, "USABLE", Py_False) < 0) return -1;
     if (PyModule_AddStringConstant(m, "UNUSABLE_REASON",

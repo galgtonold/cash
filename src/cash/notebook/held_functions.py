@@ -223,9 +223,9 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
     dicts = list(maps) if isinstance(maps, list) else [namespace]
     globals_ids = _globals_ids(namespace)
     running = _code_running_in(globals_ids)
-    if not running and _NO_FUNCTIONS.get(globals_ids) == _new_code[0]:
+    if not running and _NO_FUNCTIONS.get(globals_ids) == _new_code():
         return False
-    seen_at = _new_code[0]
+    seen_at = _new_code()
     function = types.FunctionType
     # A ``def`` binds its function in the namespace: found there, the scan of
     # every tracked object (0.12 s beside a 400,000-cell workbook, at each
@@ -346,18 +346,26 @@ def _of_a_users_module(cls: type) -> bool:
 #: The ids of the globals a `notebook_functions_exist` no was answered for,
 #: and the `_new_code` count it was answered at.
 _NO_FUNCTIONS: dict[frozenset[int], int] = {}
-#: How many times code started running from an ``exec`` or a function was
-#: made from code (``types.FunctionType``) in this process.
-_new_code = [0]
 _NEW_CODE_EVENTS = frozenset(("exec", "function.__new__"))
+#: How many times code started running from an ``exec`` or a function was
+#: made from code (``types.FunctionType``) in this process: counted by the C
+#: extension's audit hook (``caudit.c``) when it is in, else by a Python one,
+#: which Python calls for every audited event (an ``id()`` included).
+_counted = [0]
 
 
 def _note_new_code(event: str, _args: tuple) -> None:
     if event in _NEW_CODE_EVENTS:
-        _new_code[0] += 1
+        _counted[0] += 1
 
 
-sys.addaudithook(_note_new_code)
+if _K is not None and _K.audit_hook_install():
+    _new_code = _K.audit_new_code
+else:
+    sys.addaudithook(_note_new_code)
+
+    def _new_code() -> int:
+        return _counted[0]
 
 
 def _code_running_in(globals_ids: frozenset[int]) -> bool:
