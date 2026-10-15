@@ -62,7 +62,7 @@ says how the folder is chosen and capped.
 A `pyproject.toml` marks a project only when it has a `[project]`,
 `[build-system]`, `[tool.poetry]` or `[tool.cash]` table.
 
-<!-- claim: cash/config/schema.py:CashConfig @01f1a151 broad="the field table is a claim about every field of the dataclass" -->
+<!-- claim: cash/config/schema.py:CashConfig @78378872 broad="the field table is a claim about every field of the dataclass" -->
 ## All settings
 
 Every setting is named by its field. In a TOML file the key is the field

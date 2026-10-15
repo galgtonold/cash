@@ -185,7 +185,7 @@ need it cached.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/maintenance.py:Maintenance.delete_function_entries @e215cf03, cash/backends/file_eviction.py:FileEvictor.remove_path @76e08300 -->
+<!-- claim: cash/decorator/maintenance.py:Maintenance.delete_function_entries @a3f2bae5, cash/backends/file_eviction.py:FileEvictor.remove_path @76e08300 -->
 **What happened.** `f.cache_clear()` could not remove some of the function's
 entries. The message says how many.
 
@@ -636,7 +636,7 @@ smaller values, or move `cache_dir` to a bigger volume.
 whole cap, so it was not written to disk. The message names its size and the
 cap.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e, cash/backends/memory_backend.py:InMemoryBackend.set @3eb6a25c -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e, cash/backends/memory_backend.py:InMemoryBackend.set @d56280e2 -->
 **Why it matters.** It is offered to the RAM tier instead, but the RAM cap is
 usually smaller, so usually nothing is cached at all.
 

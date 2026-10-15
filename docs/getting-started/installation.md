@@ -3,7 +3,7 @@
 !!! info "Applies to: both paths"
     Everyone installing cash, for scripts or for notebooks.
 
-<!-- claim: cash/config/schema.py:CashConfig @01f1a151 broad="the requires-python floor and the one-install claim are properties of the package, checked against the docs by test_docs_install_cash_with_no_extra_but_fast" -->
+<!-- claim: cash/config/schema.py:CashConfig @78378872 broad="the requires-python floor and the one-install claim are properties of the package, checked against the docs by test_docs_install_cash_with_no_extra_but_fast" -->
 cash needs Python 3.10 or newer. One install gives you everything cash needs:
 
 ```bash

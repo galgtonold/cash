@@ -55,7 +55,7 @@ call that stored the entry also has `matched_by`. For a function with ignored
 parameters every hit has it: cash never hashes the ignored arguments, so it
 cannot tell whether they differ.
 
-<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_info.cache_info @b2155947 -->
+<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_info.cache_info @f5c264d2 -->
 `func.cache_info()` counts the hits and misses of this wrapper since it was
 created, with the reasons for the misses and, under `changed`, what changed
 for each `code or state changed` one. `explain()` itself is not a call, so

@@ -154,7 +154,7 @@ cash.storage: caching in /srv/proj/.cash, up to 26.0 GiB (a quarter of the free 
 
 ### Clearing the cache
 
-<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_clear.cache_clear @9691cbcc, cash/__main__.py:cmd_clear @fd92c8a3, cash/decorator/maintenance.py:Maintenance.delete_function_entries @e215cf03 -->
+<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_clear.cache_clear @968ec74a, cash/__main__.py:cmd_clear @fd92c8a3, cash/decorator/maintenance.py:Maintenance.delete_function_entries @a3f2bae5 -->
 Pick the narrowest tool that does the job:
 
 | To remove | Run |
@@ -184,7 +184,7 @@ and to answer "why did it miss?" when a call ran that you expected to be a
 cache hit. Each miss names its reason: new arguments, a changed file, a
 helper you edited, an expired `ttl`.
 
-<!-- claim: cash/decorator/run_summary.py:RunSummary.text @d64f5e55, cash/decorator/run_summary.py:RunSummary.reasons @e23c40a0, cash/decorator/run_summary.py:RunSummary.print_at_exit @63645a47 -->
+<!-- claim: cash/decorator/run_summary.py:RunSummary.text @771dcd99, cash/decorator/run_summary.py:RunSummary.reasons @e23c40a0, cash/decorator/run_summary.py:RunSummary.print_at_exit @63645a47 -->
 **A summary at exit.** `CASH_SUMMARY=1` prints one table to stderr when the
 process ends: hits and misses per function, the time saved, and why calls
 missed. Here, after `prices.csv` was edited and the global `THRESHOLD` changed:
@@ -1054,7 +1054,7 @@ To tell cash about a helper it cannot judge, mark it with `@cash.pure` or
 
 ## Methods on a cached function
 
-<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_info.cache_info @b2155947 -->
+<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_info.cache_info @f5c264d2 -->
 **`f.cache_info()`** returns this process's counters:
 
 ```python

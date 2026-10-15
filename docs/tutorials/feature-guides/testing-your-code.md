@@ -41,7 +41,7 @@ writes what the second reads. Two fixes, and CI wants both:
 
 ## Turning caching off
 
-<!-- claim: cash/config/schema.py:CashConfig.disable == False, cash/decorator/wrappers.py:Wrappers._with_stats @931f480b -->
+<!-- claim: cash/config/schema.py:CashConfig.disable == False, cash/decorator/wrappers.py:Wrappers._with_stats @efd2f64a -->
 ```bash
 CASH_DISABLE=1 pytest
 ```

@@ -108,7 +108,7 @@ makes a cache folder:
 run.py:9: CashWarning: [CACHE-DIR-NEW] new cache at .cash. Fix: set CASH_CACHE_DIR or [tool.cash] cache_dir to cache elsewhere. (https://cash-lib.readthedocs.io/en/latest/warnings/#cache-dir-new)
 ```
 
-<!-- claim: cash/decorator/run_summary.py:RunSummary.text @d64f5e55 -->
+<!-- claim: cash/decorator/run_summary.py:RunSummary.text @771dcd99 -->
 Set `CASH_SUMMARY=1` to get one table when the script ends: hits and misses
 per function, the time saved, and why calls missed. Saved as `run.py`, the
 script from step 2 prints this on its second run:
