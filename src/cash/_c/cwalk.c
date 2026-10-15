@@ -544,6 +544,533 @@ static PyObject *py_type_set(PyObject *self, PyObject *lst) {
     return out;
 }
 
+
+/* ============================================================ store walks */
+
+static PyObject *getsizeof_fn = NULL; /* sys.getsizeof */
+
+/* sys.getsizeof(o) as a size, or -1 with an exception */
+static Py_ssize_t sizeof_of(PyObject *o) {
+    if (!getsizeof_fn) {
+        getsizeof_fn = PySys_GetObject("getsizeof"); /* borrowed */
+        if (!getsizeof_fn) {
+            PyErr_SetString(PyExc_RuntimeError, "no sys.getsizeof");
+            return -1;
+        }
+        Py_INCREF(getsizeof_fn);
+    }
+    PyObject *r = PyObject_CallOneArg(getsizeof_fn, o);
+    if (!r) return -1;
+    Py_ssize_t n = PyLong_AsSsize_t(r);
+    Py_DECREF(r);
+    return n;
+}
+
+/* a growable array of borrowed object pointers */
+typedef struct { PyObject **v; Py_ssize_t n, cap; } PtrVec;
+
+static int pv_push(PtrVec *a, PyObject *o) {
+    if (a->n == a->cap) {
+        Py_ssize_t cap = a->cap ? a->cap * 2 : 64;
+        PyObject **v = PyMem_Realloc(a->v, cap * sizeof *v);
+        if (!v) { PyErr_NoMemory(); return -1; }
+        a->v = v;
+        a->cap = cap;
+    }
+    a->v[a->n++] = o;
+    return 0;
+}
+static void pv_free(PtrVec *a) { PyMem_Free(a->v); a->v = NULL; a->n = a->cap = 0; }
+
+static PyObject *list_of(PtrVec *a) {
+    PyObject *l = PyList_New(a->n);
+    if (!l) return NULL;
+    for (Py_ssize_t i = 0; i < a->n; i++) PyList_SET_ITEM(l, i, Py_NewRef(a->v[i]));
+    return l;
+}
+
+#define SIZE_EXACT_UP_TO ((Py_ssize_t)1 << 16)
+#define SIZE_SAMPLE ((Py_ssize_t)1 << 14)
+
+static PyObject *picks_fn = NULL; /* _plain_data._picks, handed in */
+
+/* _plain_data._level_size: getsizeof summed over v (n items), from
+ * `_picks(n)` of them when n > SIZE_EXACT_UP_TO. -1 on error, -2 overflow */
+static long long level_size(PyObject **v, Py_ssize_t n) {
+    long long total = 0;
+    if (n <= SIZE_EXACT_UP_TO) {
+        for (Py_ssize_t i = 0; i < n; i++) {
+            Py_ssize_t s = sizeof_of(v[i]);
+            if (s < 0) return -1;
+            total += s;
+        }
+        return total;
+    }
+    PyObject *count = PyLong_FromSsize_t(n);
+    if (!count) return -1;
+    PyObject *picks = PyObject_CallOneArg(picks_fn, count);
+    Py_DECREF(count);
+    if (!picks) return -1;
+    if (!PyTuple_CheckExact(picks)) {
+        Py_DECREF(picks);
+        PyErr_SetString(PyExc_TypeError, "_picks gave no tuple");
+        return -1;
+    }
+    for (Py_ssize_t j = 0; j < PyTuple_GET_SIZE(picks); j++) {
+        Py_ssize_t at = PyLong_AsSsize_t(PyTuple_GET_ITEM(picks, j));
+        if (at < 0 || at >= n) {
+            Py_DECREF(picks);
+            if (!PyErr_Occurred()) PyErr_SetString(PyExc_IndexError, "pick out of range");
+            return -1;
+        }
+        Py_ssize_t s = sizeof_of(v[at]);
+        if (s < 0) { Py_DECREF(picks); return -1; }
+        total += s;
+    }
+    Py_DECREF(picks);
+    long long out;
+    if (__builtin_mul_overflow(total, (long long)n, &out)) return -2;
+    return out / SIZE_SAMPLE;
+}
+
+/* a set of types met: a small array, then a frozenset/set at the end */
+typedef struct { PyTypeObject **t; Py_ssize_t n, cap; } TypeList;
+
+static int tl_add(TypeList *l, PyTypeObject *t) {
+    for (Py_ssize_t i = 0; i < l->n; i++)
+        if (l->t[i] == t) return 0;
+    if (l->n == l->cap) {
+        Py_ssize_t cap = l->cap ? l->cap * 2 : 16;
+        PyTypeObject **v = PyMem_Realloc(l->t, cap * sizeof *v);
+        if (!v) { PyErr_NoMemory(); return -1; }
+        l->t = v;
+        l->cap = cap;
+    }
+    l->t[l->n++] = t;
+    return 0;
+}
+static PyObject *tl_set(TypeList *l, int frozen) {
+    PyObject *s = frozen ? PyFrozenSet_New(NULL) : PySet_New(NULL);
+    if (!s) return NULL;
+    for (Py_ssize_t i = 0; i < l->n; i++)
+        if (PySet_Add(s, (PyObject *)l->t[i]) < 0) { Py_DECREF(s); return NULL; }
+    return s;
+}
+
+static int is_node_type(PyTypeObject *t) { return t == &PyDict_Type || t == &PyList_Type || t == &PyTuple_Type; }
+
+#define MAX_LEVELS 16
+
+/*
+ * tree_facts(value, leaves, want_walk, top_extra, picks, mode=0)
+ *   -> (types, held_once, size, nodes, walk | None) | None | NotImplemented
+ *
+ * _plain_data._tree_facts(value, look=None, walk, top_extra) for JSON-like
+ * *value* (exact dicts, lists and tuples over *leaves*, dict keys leaves):
+ * None where it raises _NotPlain (anything else, deeper than MAX_LEVELS, a
+ * cycle). Walked one level at a time in the same order, so each level's
+ * items, their sampled sizes and the walk's lists are the same. held_once
+ * reads the reference counts the Python walk reads, less the references its
+ * own lists hold: a container below the top held by its parent alone has
+ * one (plus *top_extra* at the first level).
+ *
+ * *mode* 1: the size is `tree_size`'s (`_tree_walk` over the same leaves),
+ * which sizes a level's keys from a sample of the keys, never of the dicts.
+ * *mode* 2: plain data (`_levels`, `size_of`): exact lists and tuples over
+ * the leaves, no dict anywhere, the top included.
+ * *mode* 3: the walk alone (`tree_walk`), no size (0).
+ */
+static int is_seq_type(PyTypeObject *t) { return t == &PyList_Type || t == &PyTuple_Type; }
+
+static PyObject *py_tree_facts(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs < 5 || nargs > 6 || !is_typeset(args[1]) || !PyLong_CheckExact(args[3]) || !PyCallable_Check(args[4])) {
+        PyErr_SetString(PyExc_TypeError, "tree_facts(value, leaves, want_walk, top_extra, picks, mode=0)");
+        return NULL;
+    }
+    long mode = nargs > 5 ? PyLong_AsLong(args[5]) : 0;
+    if (mode == -1 && PyErr_Occurred()) return NULL;
+    int (*node_type)(PyTypeObject *) = mode == 2 ? is_seq_type : is_node_type;
+    PyObject *value = args[0];
+    if (!node_type(Py_TYPE(value))) Py_RETURN_NONE;
+    int want_walk = PyObject_IsTrue(args[2]);
+    if (want_walk < 0) return NULL;
+    Py_ssize_t top_extra = PyLong_AsSsize_t(args[3]);
+    if (top_extra == -1 && PyErr_Occurred()) return NULL;
+    Py_XSETREF(picks_fn, Py_NewRef(args[4]));
+    TypeSet leaves;
+    ts_init(&leaves, args[1]);
+
+    PtrVec level = {0}, flat = {0}, keys = {0}, dicts = {0};
+    TypeList found = {0}, types = {0}, ktypes = {0};
+    PyObject *walk = NULL, *out = NULL;
+    /* the walk's levels, kept as pointer arrays until held_once is read */
+    PtrVec *wl = NULL, *wf = NULL;
+    PyObject **wtypes = NULL, **wktypes = NULL;
+    int wall_nodes[MAX_LEVELS + 1];
+    Py_ssize_t nw = 0;
+    int notplain = 0, unknown = 0, held_once = 1;
+    long long size = 0, nodes = 0;
+    GCPause gp;
+    gc_pause(&gp);
+    Py_INCREF(value);
+
+    if (want_walk) {
+        wl = PyMem_Calloc(MAX_LEVELS + 1, sizeof *wl);
+        wf = PyMem_Calloc(MAX_LEVELS + 1, sizeof *wf);
+        wtypes = PyMem_Calloc(MAX_LEVELS + 1, sizeof *wtypes);
+        wktypes = PyMem_Calloc(MAX_LEVELS + 1, sizeof *wktypes);
+        if (!wl || !wf || !wtypes || !wktypes) { PyErr_NoMemory(); goto fail; }
+    }
+    if (tl_add(&found, Py_TYPE(value)) < 0) goto fail;
+    int sizes = mode != 3;
+    if (sizes) {
+        Py_ssize_t s = sizeof_of(value);
+        if (s < 0) goto fail;
+        size = s;
+    }
+    if (pv_push(&level, value) < 0) goto fail;
+    for (int depth = 0; depth <= MAX_LEVELS; depth++) {
+        if (depth == MAX_LEVELS) { notplain = 1; goto done; }
+        nodes += level.n;
+        flat.n = keys.n = dicts.n = 0;
+        types.n = ktypes.n = 0;
+        int any_dict = 0;
+        for (Py_ssize_t i = 0; i < level.n; i++) {
+            PyObject *c = level.v[i];
+            if (PyDict_CheckExact(c)) {
+                any_dict = 1;
+                if (pv_push(&dicts, c) < 0) goto fail;
+                PyObject *k, *v;
+                Py_ssize_t pos = 0;
+                while (PyDict_Next(c, &pos, &k, &v)) {
+                    int r = ts_has(&leaves, Py_TYPE(k));
+                    if (r == -1) goto fail;
+                    if (r == -2) { unknown = 1; goto done; }
+                    if (!r) { notplain = 1; goto done; }
+                    if (tl_add(&ktypes, Py_TYPE(k)) < 0 || (sizes && pv_push(&keys, k) < 0) || pv_push(&flat, v) < 0)
+                        goto fail;
+                }
+            } else {
+                Py_ssize_t n = PySequence_Fast_GET_SIZE(c);
+                PyObject **items = PySequence_Fast_ITEMS(c);
+                for (Py_ssize_t j = 0; j < n; j++)
+                    if (pv_push(&flat, items[j]) < 0) goto fail;
+            }
+        }
+        if (any_dict) {
+            for (Py_ssize_t i = 0; i < ktypes.n; i++)
+                if (tl_add(&found, ktypes.t[i]) < 0) goto fail;
+        }
+        if (any_dict && sizes) {
+            /* _keys_size(dicts) */
+            long long ks;
+            if (mode == 1 || dicts.n <= SIZE_EXACT_UP_TO) {
+                ks = level_size(keys.v, keys.n);
+            } else {
+                PyObject *count = PyLong_FromSsize_t(dicts.n);
+                PyObject *picks = count ? PyObject_CallOneArg(picks_fn, count) : NULL;
+                Py_XDECREF(count);
+                if (!picks) goto fail;
+                ks = 0;
+                for (Py_ssize_t j = 0; j < PyTuple_GET_SIZE(picks) && ks >= 0; j++) {
+                    Py_ssize_t at = PyLong_AsSsize_t(PyTuple_GET_ITEM(picks, j));
+                    if (at < 0 || at >= dicts.n) { ks = -1; if (!PyErr_Occurred()) PyErr_SetString(PyExc_IndexError, "pick"); break; }
+                    PyObject *k, *v;
+                    Py_ssize_t pos = 0;
+                    while (PyDict_Next(dicts.v[at], &pos, &k, &v)) {
+                        Py_ssize_t s = sizeof_of(k);
+                        if (s < 0) { ks = -1; break; }
+                        ks += s;
+                    }
+                }
+                Py_DECREF(picks);
+                if (ks >= 0 && __builtin_mul_overflow(ks, (long long)dicts.n, &ks)) ks = -2;
+                if (ks >= 0) ks /= SIZE_SAMPLE;
+            }
+            if (ks == -1) goto fail;
+            if (ks == -2) { unknown = 1; goto done; }
+            size += ks;
+        }
+        int all_nodes = 1, no_nodes = 1;
+        PyTypeObject *last = NULL;
+        for (Py_ssize_t i = 0; i < flat.n; i++) {
+            PyTypeObject *t = Py_TYPE(flat.v[i]);
+            if (t == last) continue;
+            last = t;
+            int node = node_type(t);
+            if (!node) {
+                int r = ts_has(&leaves, t);
+                if (r == -1) goto fail;
+                if (r == -2) { unknown = 1; goto done; }
+                if (!r) { notplain = 1; goto done; }
+            }
+            if (tl_add(&types, t) < 0) goto fail;
+            if (node) no_nodes = 0; else all_nodes = 0;
+        }
+        for (Py_ssize_t i = 0; i < types.n; i++)
+            if (tl_add(&found, types.t[i]) < 0) goto fail;
+        if (sizes) {
+            long long ls = level_size(flat.v, flat.n);
+            if (ls == -1) goto fail;
+            if (ls == -2) { unknown = 1; goto done; }
+            size += ls;
+        }
+        if (want_walk) {
+            /* the level's containers and items, by pointer: made lists below */
+            PtrVec *a = &wl[nw], *b = &wf[nw];
+            for (Py_ssize_t i = 0; i < level.n; i++) if (pv_push(a, level.v[i]) < 0) goto fail;
+            for (Py_ssize_t i = 0; i < flat.n; i++) if (pv_push(b, flat.v[i]) < 0) goto fail;
+            wtypes[nw] = tl_set(&types, 0);
+            wktypes[nw] = tl_set(&ktypes, 0);
+            wall_nodes[nw] = all_nodes;
+            nw++;
+            if (!wtypes[nw - 1] || !wktypes[nw - 1]) goto fail;
+        }
+        if (no_nodes) break;
+        /* the next level: the containers among the items */
+        level.n = 0;
+        if (all_nodes) {
+            for (Py_ssize_t i = 0; i < flat.n; i++) if (pv_push(&level, flat.v[i]) < 0) goto fail;
+        } else {
+            for (Py_ssize_t i = 0; i < flat.n; i++)
+                if (node_type(Py_TYPE(flat.v[i])) && pv_push(&level, flat.v[i]) < 0) goto fail;
+        }
+        Py_ssize_t limit = 1 + (depth == 0 ? top_extra : 0);
+        if (held_once)
+            for (Py_ssize_t i = 0; i < level.n; i++)
+                if (Py_REFCNT(level.v[i]) > limit) { held_once = 0; break; }
+    }
+done:
+    if (!notplain && !unknown) {
+        PyObject *ft = tl_set(&found, 1);
+        if (!ft) goto fail;
+        if (want_walk) {
+            /* As the Python walk makes them: a level of containers only is
+             * the list of the items above it, the same list object (what
+             * `_spine_copy` reads reference counts against). */
+            walk = PyList_New(nw);
+            if (!walk) { Py_DECREF(ft); goto fail; }
+            PyObject *prev_flat = NULL; /* borrowed: walk holds it */
+            for (Py_ssize_t i = 0; i < nw; i++) {
+                PyObject *a = (i && wall_nodes[i - 1]) ? Py_NewRef(prev_flat) : list_of(&wl[i]);
+                PyObject *b = a ? list_of(&wf[i]) : NULL;
+                PyObject *t = b ? PyTuple_Pack(4, a, b, wtypes[i], wktypes[i]) : NULL;
+                Py_XDECREF(a);
+                Py_XDECREF(b);
+                if (!t) { Py_DECREF(ft); goto fail; }
+                PyList_SET_ITEM(walk, i, t);
+                prev_flat = b;
+            }
+        }
+        out = Py_BuildValue("(NOLLO)", ft, held_once ? Py_True : Py_False, size, nodes, walk ? walk : Py_None);
+        if (!out) goto fail;
+    }
+    goto cleanup;
+fail:
+    Py_CLEAR(out);
+    notplain = unknown = 0;
+cleanup:
+    Py_XDECREF(walk);
+    if (want_walk && wl) {
+        for (Py_ssize_t i = 0; i <= MAX_LEVELS; i++) {
+            pv_free(&wl[i]);
+            pv_free(&wf[i]);
+            Py_XDECREF(wtypes[i]);
+            Py_XDECREF(wktypes[i]);
+        }
+    }
+    PyMem_Free(wl);
+    PyMem_Free(wf);
+    PyMem_Free(wtypes);
+    PyMem_Free(wktypes);
+    pv_free(&level);
+    pv_free(&flat);
+    pv_free(&keys);
+    pv_free(&dicts);
+    PyMem_Free(found.t);
+    PyMem_Free(types.t);
+    PyMem_Free(ktypes.t);
+    Py_DECREF(value);
+    gc_resume(&gp);
+    if (out) return out;
+    if (PyErr_Occurred()) return NULL;
+    if (unknown) return NOT_IMPL();
+    Py_RETURN_NONE; /* not plain */
+}
+
+/*
+ * shared_parts(value, min_rows, max_depth, max_keys, immutable_below) -> dict
+ *
+ * memory_backend._shared_parts(value): {id(part): part} for the lists and
+ * tuples of at least *min_rows* items whose first item is a tuple and that
+ * `immutable_below` accepts, among the values of exact dict *value* and of
+ * the exact dicts of at most *max_keys* keys in it, *max_depth* down.
+ */
+static int shared_parts_in(PyObject *value, int depth, Py_ssize_t min_rows, int max_depth, Py_ssize_t max_keys,
+                           PyObject *check, PyObject *found) {
+    PyObject *k, *item;
+    Py_ssize_t pos = 0;
+    while (PyDict_Next(value, &pos, &k, &item)) {
+        if (PyList_CheckExact(item) || PyTuple_CheckExact(item)) {
+            Py_ssize_t n = PySequence_Fast_GET_SIZE(item);
+            if (n < min_rows || !PyTuple_CheckExact(PySequence_Fast_ITEMS(item)[0])) continue;
+            PyObject *key = PyLong_FromVoidPtr(item);
+            if (!key) return -1;
+            int there = PyDict_Contains(found, key);
+            if (there) { Py_DECREF(key); if (there < 0) return -1; continue; }
+            Py_INCREF(item);
+            PyObject *ok = PyObject_CallOneArg(check, item);
+            int yes = ok ? PyObject_IsTrue(ok) : -1;
+            Py_XDECREF(ok);
+            int r = yes > 0 ? PyDict_SetItem(found, key, item) : yes;
+            Py_DECREF(item);
+            Py_DECREF(key);
+            if (r < 0) return -1;
+        } else if (PyDict_CheckExact(item) && depth < max_depth && PyDict_GET_SIZE(item) <= max_keys) {
+            Py_INCREF(item);
+            int r = shared_parts_in(item, depth + 1, min_rows, max_depth, max_keys, check, found);
+            Py_DECREF(item);
+            if (r < 0) return -1;
+        }
+    }
+    return 0;
+}
+
+static PyObject *py_shared_parts(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 5 || !PyDict_CheckExact(args[0]) || !PyCallable_Check(args[4])) {
+        PyErr_SetString(PyExc_TypeError, "shared_parts(dict, min_rows, max_depth, max_keys, immutable_below)");
+        return NULL;
+    }
+    Py_ssize_t min_rows = PyLong_AsSsize_t(args[1]);
+    long max_depth = PyLong_AsLong(args[2]);
+    Py_ssize_t max_keys = PyLong_AsSsize_t(args[3]);
+    if (PyErr_Occurred()) return NULL;
+    if (min_rows < 1) {
+        PyErr_SetString(PyExc_ValueError, "min_rows >= 1");
+        return NULL;
+    }
+    PyObject *found = PyDict_New();
+    if (!found) return NULL;
+    GCPause gp;
+    gc_pause(&gp);
+    Py_INCREF(args[0]);
+    int r = shared_parts_in(args[0], 0, min_rows, (int)max_depth, max_keys, args[4], found);
+    Py_DECREF(args[0]);
+    gc_resume(&gp);
+    if (r < 0) { Py_DECREF(found); return NULL; }
+    return found;
+}
+
+/*
+ * items_estimate(container, depth, max_depth, no_arrays, no_arrays_at_limit, estimate, seen) -> int
+ *
+ * sizing._items_estimate(items of *container*, depth, seen) for an exact
+ * tuple, list or dict (its values): the exact tuples, lists and dicts among
+ * the items are summed here, as `pickled_size_estimate` recurses into them;
+ * any other item not of a skipped type is handed to *estimate*
+ * (`pickled_size_estimate`) with its depth and *seen*, in the same order as
+ * the Python loop, and its answer added as Python adds it. The estimate runs
+ * Python code: a list is read live by index as a list iterator reads it,
+ * and a dict changed meanwhile raises as its values iterator would.
+ */
+typedef struct {
+    int max_depth;
+    TypeSet skip, skip_at_limit;
+    PyObject *estimate, *seen;
+} EstCtx;
+
+/* `type(item) in skip`, asking the set itself for a metaclass of its own */
+static int est_skips(TypeSet *ts, PyTypeObject *t) {
+    int r = ts_has(ts, t);
+    if (r == -2) r = PySet_Contains(ts->set, (PyObject *)t);
+    return r;
+}
+
+/* total += x, in C while it fits, else as Python ints (*big* holds it) */
+static int est_add(long long *total, PyObject **big, PyObject *x) {
+    if (!*big && PyLong_CheckExact(x)) {
+        int overflow = 0;
+        long long v = PyLong_AsLongLongAndOverflow(x, &overflow);
+        if (v == -1 && PyErr_Occurred()) return -1;
+        if (!overflow && !__builtin_add_overflow(*total, v, total)) return 0;
+    }
+    if (!*big) {
+        *big = PyLong_FromLongLong(*total);
+        if (!*big) return -1;
+    }
+    PyObject *sum = PyNumber_Add(*big, x);
+    if (!sum) return -1;
+    Py_SETREF(*big, sum);
+    return 0;
+}
+
+static PyObject *est_items(EstCtx *cx, PyObject *container, int depth) {
+    TypeSet *skip = depth < cx->max_depth ? &cx->skip : &cx->skip_at_limit;
+    int is_dict = PyDict_CheckExact(container);
+    Py_ssize_t pos = 0, size0 = is_dict ? PyDict_GET_SIZE(container) : 0;
+    long long total = 0;
+    PyObject *big = NULL, *k, *item;
+    for (Py_ssize_t i = 0;; i++) {
+        if (is_dict) {
+            if (PyDict_GET_SIZE(container) != size0) {
+                PyErr_SetString(PyExc_RuntimeError, "dictionary changed size during iteration");
+                goto fail;
+            }
+            if (!PyDict_Next(container, &pos, &k, &item)) break;
+        } else {
+            if (i >= PySequence_Fast_GET_SIZE(container)) break;
+            item = PySequence_Fast_ITEMS(container)[i];
+        }
+        Py_INCREF(item);
+        int r = est_skips(skip, Py_TYPE(item));
+        if (r) {
+            Py_DECREF(item);
+            if (r < 0) goto fail;
+            continue;
+        }
+        PyObject *got;
+        if (is_node_type(Py_TYPE(item))) {
+            /* pickled_size_estimate(item, depth): 0 at the limit, else its items one down */
+            got = depth >= cx->max_depth ? PyLong_FromLong(0) : est_items(cx, item, depth + 1);
+        } else {
+            PyObject *d = PyLong_FromLong(depth);
+            got = d ? PyObject_CallFunctionObjArgs(cx->estimate, item, d, cx->seen, NULL) : NULL;
+            Py_XDECREF(d);
+        }
+        Py_DECREF(item);
+        if (!got) goto fail;
+        int bad = est_add(&total, &big, got);
+        Py_DECREF(got);
+        if (bad) goto fail;
+    }
+    return big ? big : PyLong_FromLongLong(total);
+fail:
+    Py_XDECREF(big);
+    return NULL;
+}
+
+static PyObject *py_items_estimate(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 7 || !is_typeset(args[3]) || !is_typeset(args[4]) || !PyCallable_Check(args[5])) {
+        PyErr_SetString(PyExc_TypeError,
+                        "items_estimate(container, depth, max_depth, no_arrays, at_limit, estimate, seen)");
+        return NULL;
+    }
+    PyObject *container = args[0];
+    if (!is_node_type(Py_TYPE(container))) return NOT_IMPL();
+    long depth = PyLong_AsLong(args[1]), max_depth = PyLong_AsLong(args[2]);
+    if (PyErr_Occurred()) return NULL;
+    EstCtx cx;
+    cx.max_depth = (int)max_depth;
+    ts_init(&cx.skip, args[3]);
+    ts_init(&cx.skip_at_limit, args[4]);
+    cx.estimate = args[5];
+    cx.seen = args[6];
+    Py_INCREF(container);
+    PyObject *total = est_items(&cx, container, (int)depth);
+    Py_DECREF(container);
+    return total;
+}
+
 static PyMethodDef cwalk_methods[] = {
     {"leaf_items", (PyCFunction)(void (*)(void))py_leaf_items, METH_FASTCALL,
      "leaf_items(group, mode, leaves) -> bool | NotImplemented"},
@@ -555,6 +1082,13 @@ static PyMethodDef cwalk_methods[] = {
      "split_level(children, skipped, extra) -> [(type, list)] | NotImplemented"},
     {"new_in", (PyCFunction)(void (*)(void))py_new_in, METH_FASTCALL, "new_in(group, by_identity, seen) -> list"},
     {"type_set", py_type_set, METH_O, "type_set(list) -> set(map(type, list))"},
+    {"tree_facts", (PyCFunction)(void (*)(void))py_tree_facts, METH_FASTCALL,
+     "tree_facts(value, leaves, want_walk, top_extra, picks, mode=0) -> (types, held_once, size, nodes, walk) | None | "
+     "NotImplemented"},
+    {"shared_parts", (PyCFunction)(void (*)(void))py_shared_parts, METH_FASTCALL,
+     "shared_parts(dict, min_rows, max_depth, max_keys, immutable_below) -> dict"},
+    {"items_estimate", (PyCFunction)(void (*)(void))py_items_estimate, METH_FASTCALL,
+     "items_estimate(container, depth, max_depth, no_arrays, at_limit, estimate, seen) -> int | NotImplemented"},
     {NULL, NULL, 0, NULL}};
 
 int cwalk_add_functions(PyObject *m) { return PyModule_AddFunctions(m, cwalk_methods); }

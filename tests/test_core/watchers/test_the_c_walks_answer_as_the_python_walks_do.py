@@ -352,3 +352,232 @@ def test_a_kernel_hands_back_what_it_cannot_answer():
     assert K.seq_children([[Odd()]], leaves, children) is NotImplemented
     assert children == []
     assert K.split_level([Odd()], leaves, set()) is NotImplemented
+
+
+# ----------------------------------------------------------------- the store's walks
+
+import datetime
+import decimal
+import gc
+
+from cash import _plain_data as pd
+from cash import sizing
+from cash.backends import memory_backend as mb
+
+
+def _json_like(rng: random.Random, depth: int, pool: list, odd: bool):
+    """Random JSON-like data, with now and then a part held twice, a value
+    no walk accepts (with *odd*), an immortal empty tuple, a deep chain."""
+    if pool and rng.random() < 0.05:
+        return rng.choice(pool)
+    leaf = rng.choice(
+        [
+            lambda: rng.randint(-(10**20), 10**20),
+            lambda: rng.randint(0, 9),
+            lambda: rng.random(),
+            lambda: "s" * rng.randint(0, 40),
+            lambda: "é" * rng.randint(1, 5),
+            lambda: None,
+            lambda: rng.random() < 0.5,
+            lambda: b"b" * rng.randint(0, 9),
+            lambda: bytearray(b"y"),
+            lambda: 2j,
+            lambda: datetime.date(2020, 1, rng.randint(1, 28)),
+            lambda: decimal.Decimal("1.5"),
+        ]
+    )
+    if depth <= 0 or rng.random() < 0.25:
+        if odd and rng.random() < 0.02:
+            return rng.choice([{1, 2}, Plain(), frozenset(), MyDict(), MyList()])
+        return leaf()
+    n = rng.randint(0, 7)
+    kind = rng.random()
+    if kind < 0.35:
+        made = {
+            rng.choice([f"k{i}", i, 1.5, None, (1, 2) if odd and rng.random() < 0.05 else "t"]): _json_like(
+                rng, depth - 1, pool, odd
+            )
+            for i in range(n)
+        }
+    elif kind < 0.7:
+        made = [_json_like(rng, depth - 1, pool, odd) for _ in range(n)]
+    elif kind < 0.95:
+        made = tuple(_json_like(rng, depth - 1, pool, odd) for _ in range(n))
+    else:
+        made = ()
+    if rng.random() < 0.15:
+        pool.append(made)
+    return made
+
+
+def _deep(n):
+    value: list = [1]
+    for _ in range(n):
+        value = [value]
+    return value
+
+
+def _walk_shape(walk):
+    """A walk's levels by identity: the containers and items of each level,
+    its types, and which level lists are the list above's items."""
+    if walk is None:
+        return None
+    out = []
+    for k, (level, flat, kinds, key_kinds) in enumerate(walk):
+        out.append(
+            (
+                [id(x) for x in level],
+                [id(x) for x in flat],
+                kinds,
+                key_kinds,
+                type(level) is list and type(flat) is list,
+                k > 0 and level is walk[k - 1][1],
+            )
+        )
+    return out
+
+
+def _both(fn, monkeypatch, *modules):
+    """*fn*() without the kernels and with them, each answer reduced to
+    plain data before the other runs (a walk's lists hold references the
+    other run would count)."""
+    answers = []
+    for kernels in (None, K):
+        with monkeypatch.context() as m:
+            for module in modules:
+                m.setattr(module, "_K", kernels)
+            gc.collect()
+            answers.append(fn())
+    return answers
+
+
+def _facts_of(value):
+    def run():
+        facts, walk = pd.tree_facts_and_walk(value)
+        shape = _walk_shape(walk)
+        del walk
+        return (
+            pd.tree_facts(value),
+            facts,
+            shape,
+            _walk_shape(pd.tree_walk(value)),
+            pd.tree_size(value),
+            pd.size_of(value),
+            pd.held_items_facts(value, 1) if type(value) is list else None,
+        )
+
+    return run
+
+
+@pytest.mark.parametrize("seed", range(250))
+def test_the_store_walks_find_the_same_facts_sizes_and_levels(seed, monkeypatch):
+    rng = random.Random(5000 + seed)
+    pool: list = []
+    value = _json_like(rng, rng.randint(1, 6), pool, odd=seed % 4 == 0)
+    if seed % 25 == 0:
+        value = [value, _deep(14 + seed % 5)]
+    if seed % 31 == 0 and type(value) is list:
+        value.append(value)  # a cycle
+    python, c = _both(_facts_of(value), monkeypatch, pd)
+    assert python == c
+    del pool
+
+
+@pytest.mark.parametrize("shape", ["rows", "records", "wide", "mixed"])
+def test_levels_past_the_sampling_threshold_are_sampled_alike(shape, monkeypatch):
+    n = pd.SIZE_EXACT_UP_TO + 4321
+    if shape == "rows":
+        value = [(f"a{i}", i, i * 0.5) for i in range(n)]
+    elif shape == "records":
+        value = [{"id": i, "name": f"n{i}" * (i % 3), "tags": [i, "x"]} for i in range(n)]
+    elif shape == "wide":
+        value = {f"key{i}" * (1 + i % 4): i for i in range(n)}
+    else:
+        value = {"rows": [(i, str(i)) for i in range(n)], "d": [{"a": i} for i in range(n)], "rng": (3, (1,) * 625)}
+    python, c = _both(_facts_of(value), monkeypatch, pd)
+    assert python == c
+    assert python[0] is not None and python[0].size > 0
+
+
+def test_a_tree_held_twice_below_the_top_is_not_held_once(monkeypatch):
+    part = {"a": [1, 2]}
+    for value, once in (([part, part], False), ([{"a": [1]}, {"b": ()}], False), ([{"a": [1]}, tuple([1])], True)):
+        python, c = _both(lambda value=value: pd.tree_facts(value), monkeypatch, pd)
+        assert python == c
+        assert python.held_once is once
+
+
+def test_a_copy_over_either_walk_is_the_same(monkeypatch):
+    rng = random.Random(7)
+    for _ in range(40):
+        value = _json_like(rng, 4, [], odd=False)
+
+        def copied(value=value):
+            walk = pd.tree_walk(value)
+            got = pd.spine_copy(value, walk=walk) if walk is not None else None
+            return repr(got), got == value if got is not None else None
+
+        python, c = _both(copied, monkeypatch, pd)
+        assert python == c
+
+
+def _parts_value(rng: random.Random):
+    rows = [(f"r{i}", i) for i in range(mb._SHARED_ROWS_MIN + rng.randint(0, 3))]
+    inner = {"rows": rows, "short": [(1,)], "nested": {"more": list(rows)}, "x": 1}
+    value = {
+        "variables": inner,
+        "again": rows,
+        "listed": [list(rows)],
+        "mutable_rows": [[1, 2]] * mb._SHARED_ROWS_MIN,
+        "big_dict": {f"k{i}": rows for i in range(mb._PARTS_KEYS + rng.randint(-2, 2))},
+        "deep": {"a": {"b": {"c": tuple(rows)}}},
+        "records": {f"k{i}": {"a": i, "e": (i, i)} for i in range(200)},
+    }
+    return value
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_the_shared_parts_are_the_same_parts(seed, monkeypatch):
+    value = _parts_value(random.Random(seed))
+    python, c = _both(lambda: mb._shared_parts(value), monkeypatch, mb)
+    assert list(python) == list(c)
+    assert [id(v) for v in python.values()] == [id(v) for v in c.values()]
+    assert python
+
+
+@pytest.mark.parametrize("seed", range(80))
+def test_the_pickled_size_estimate_and_the_footprint_are_the_same(seed, monkeypatch):
+    np = pytest.importorskip("numpy")
+    rng = random.Random(9000 + seed)
+    pool: list = []
+    value = _json_like(rng, rng.randint(1, 5), pool, odd=True)
+    arrays = [np.zeros(rng.randint(0, 50)), np.arange(3)]
+    extra = [arrays[0], (arrays[1], {"a": arrays[0]}), [[[arrays[1]]]], WithSlots(arrays[0]), Plain()]
+    value = [value, *rng.sample(extra, rng.randint(0, len(extra)))]
+    if seed % 3:
+        value = {"v": value, "t": tuple(value)}
+    python, c = _both(
+        lambda: (sizing.pickled_size_estimate(value), sizing.memory_footprint(value)), monkeypatch, sizing, pd
+    )
+    assert python == c
+
+
+def test_the_estimate_sums_what_it_is_handed_as_python_does(monkeypatch):
+    calls = []
+    real = sizing.pickled_size_estimate
+
+    def counting(value, _depth=0, _seen=None):
+        calls.append((type(value).__name__, _depth))
+        if type(value) is Plain:
+            return 2**70  # past a C integer
+        return real(value, _depth, _seen)
+
+    monkeypatch.setattr(sizing, "pickled_size_estimate", counting)
+    value = [Plain(), (Plain(), [Plain()]), {"a": Plain()}, 1, "x"]
+    python, c = _both(lambda: (calls.clear(), counting(value), list(calls))[1:], monkeypatch, sizing)
+    # The same objects estimated in the same order at the same depths; the
+    # C loop goes into a tuple, a list or a dict without a call.
+    containers = {"list", "tuple", "dict"}
+    assert python[0] == c[0]
+    assert [call for call in python[1] if call[0] not in containers] == c[1][1:]
+    assert python[0] == 3 * 2**70

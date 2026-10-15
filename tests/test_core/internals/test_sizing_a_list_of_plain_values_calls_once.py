@@ -44,7 +44,8 @@ def test_a_list_of_strings_is_one_call(calls):
 def test_record_dicts_are_a_call_each_and_their_fields_none(calls):
     recs = [{"id": i, "user": "u", "amount": i * 0.5, "tags": ["a"]} for i in range(5_000)]
     assert sizing.pickled_size_estimate(recs) == 0
-    assert len(calls) == 1 + len(recs)
+    # With the C walk kernels the dicts are gone into without a call.
+    assert len(calls) == (1 if sizing._K is not None else 1 + len(recs))
 
 
 def test_arrays_among_plain_values_are_still_counted():

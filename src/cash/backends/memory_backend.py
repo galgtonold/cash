@@ -23,7 +23,7 @@ from typing import Any
 
 from cash.exceptions import CacheBackendError
 
-from .. import _plain_data, cost_model, kept_state, stored_pickle
+from .. import _native, _plain_data, cost_model, kept_state, stored_pickle
 from .._lazy_module import LazyModule
 from ..cost_model import GENERIC_FAMILY
 from ..sizing import memory_footprint, pickled_size_estimate
@@ -362,6 +362,9 @@ def _marshal_parts(
 #: it marshal's bytes cost a hit little.
 _SHARED_ROWS_MIN = _MARSHAL_NODES_MIN
 
+#: The C walk kernels (`cash._native.kernels`), or None.
+_K = _native.kernels
+
 
 def _shared_parts(value: dict, depth: int = 0, found: dict | None = None) -> dict[int, list | tuple]:
     """``{id(part): part}`` for the big lists and tuples of rows -- tuples
@@ -372,6 +375,10 @@ def _shared_parts(value: dict, depth: int = 0, found: dict | None = None) -> dic
     Read back out of marshal bytes, 300,000 parsed ``(str, str, str)`` rows
     cost a hit 1.3 s, twice what parsing them took; a list over the same
     rows, which nothing can write into, costs milliseconds."""
+    if found is None and depth == 0 and _K is not None and type(value) is dict:
+        # The same walk in C: a Python step per value of 200,000 record
+        # dicts was a third of storing them.
+        return _K.shared_parts(value, _SHARED_ROWS_MIN, _PARTS_DEPTH, _PARTS_KEYS, _plain_data.immutable_below)
     found = {} if found is None else found
     for item in value.values():
         kind = type(item)
