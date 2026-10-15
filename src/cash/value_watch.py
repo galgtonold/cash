@@ -181,6 +181,10 @@ def _classify(t: type) -> tuple[bool, tuple]:
         return no
     if t in copyreg.dispatch_table:
         return no
+    from .backends.serialization import stored_reducers
+
+    if t in (stored_reducers() or ()):
+        return no  # pickled by a reducer of cash's own (`stored_pickle.pickle_value`)
     from .content_hashers import builtin_hash_family
 
     if t.__name__ in ("DataFrame", "Series", "ndarray") or builtin_hash_family(t) is not None:

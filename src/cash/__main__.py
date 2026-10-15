@@ -18,7 +18,14 @@ from cash import __version__, _native
 from cash._console import survive_narrow_streams
 from cash._location import per_user_cache_root
 from cash.backends._base import effective_ttl, written_at
-from cash.backends.cache_dir import DB_FILENAME, KEYS_DIRNAME, VERSION_FILENAME, entry_totals, is_cash_file
+from cash.backends.cache_dir import (
+    CHUNK_DIRNAME,
+    DB_FILENAME,
+    KEYS_DIRNAME,
+    VERSION_FILENAME,
+    entry_totals,
+    is_cash_file,
+)
 from cash.backends.entry_format import ENTRY_SUFFIX
 from cash.backends.factory import tier_cap, tier_specs
 from cash.backends.file_backend import FileBackend, StoredEntry
@@ -788,7 +795,7 @@ def _not_cash_files(cache_dir: str) -> list[str]:
             rel = name if root == cache_dir else os.path.join(rel_root, name)
             if not is_cash_file(rel):
                 found.append(rel)
-        if not files and not dirs and root != cache_dir and rel_root != KEYS_DIRNAME:
+        if not files and not dirs and root != cache_dir and rel_root not in (KEYS_DIRNAME, CHUNK_DIRNAME):
             # An empty directory is the user's too, unless it is one of cash's.
             found.append(rel_root + os.sep)
         if len(found) > 32:

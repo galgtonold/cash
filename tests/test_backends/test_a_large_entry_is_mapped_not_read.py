@@ -103,8 +103,9 @@ def test_a_damaged_mapped_entry_is_not_served(tmp_path):
 def test_an_entry_whose_payload_is_not_aligned_is_read(tmp_path, copied):
     """As one written before the metadata region was padded: read into new
     memory, as it was."""
-    arr = np.arange(N, dtype=np.float64)
-    path = _stored(tmp_path, arr)
+    # Buffers under a megabyte each, so they stay in the entry (not chunks).
+    arrays = [np.arange(N // 5, dtype=np.float64) + i for i in range(5)]
+    path = _stored(tmp_path, arrays)
     data = open(path, "rb").read()
     magic, meta_len, cap = HEADER.unpack(data[:HEADER_SIZE])
     new_cap = cap + 8
@@ -113,5 +114,6 @@ def test_an_entry_whose_payload_is_not_aligned_is_read(tmp_path, copied):
     with open(path, "wb") as fh:
         fh.write(shifted + data[HEADER_SIZE + cap :])
     _meta, got = _fresh(tmp_path).get("k")
-    np.testing.assert_array_equal(got, arr)
-    assert sum(copied) >= arr.nbytes
+    for one, stored in zip(got, arrays):
+        np.testing.assert_array_equal(one, stored)
+    assert sum(copied) >= sum(a.nbytes for a in arrays)

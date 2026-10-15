@@ -185,7 +185,7 @@ need it cached.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/maintenance.py:Maintenance.delete_function_entries @e215cf03, cash/backends/file_eviction.py:FileEvictor.remove_path @ec89275a -->
+<!-- claim: cash/decorator/maintenance.py:Maintenance.delete_function_entries @e215cf03, cash/backends/file_eviction.py:FileEvictor.remove_path @76e08300 -->
 **What happened.** `f.cache_clear()` could not remove some of the function's
 entries. The message says how many.
 
@@ -636,7 +636,7 @@ smaller values, or move `cache_dir` to a bigger volume.
 whole cap, so it was not written to disk. The message names its size and the
 cap.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e, cash/backends/memory_backend.py:InMemoryBackend.set @e6277181 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @2e17ed9e, cash/backends/memory_backend.py:InMemoryBackend.set @3eb6a25c -->
 **Why it matters.** It is offered to the RAM tier instead, but the RAM cap is
 usually smaller, so usually nothing is cached at all.
 
@@ -2198,7 +2198,7 @@ handle), or on Windows a file held open by another process.
 
 <!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @7d20722f, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @efc7273e -->
 <!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @57e71e71, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @538d7a29 -->
-<!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @6c593ab7, cash/notebook/statement/processor.py:StatementProcessor._post_execute @43f9c2e4 -->
+<!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @6c593ab7, cash/notebook/statement/processor.py:StatementProcessor._post_execute @0ef2dddb -->
 === "Decorator"
 
     **What happened.** A file the function read changed before it returned.

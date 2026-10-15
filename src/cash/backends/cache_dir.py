@@ -41,6 +41,9 @@ __all__ = [
     "FILE_VERSIONS_FILENAME",
     "HEAVY_LOOPS_FILENAME",
     "KEYS_DIRNAME",
+    "CHUNK_DIRNAME",
+    "CHUNK_SUFFIX",
+    "chunk_files",
     "LOOP_SPLIT_FILENAME",
     "MISS_GUARD_FILENAME",
     "RANK_INDEX_FILENAME",
@@ -80,7 +83,14 @@ __all__ = [
 #: what it lists. An older build stored entries for some of them that this
 #: build would still find and serve, skipping the write or returning a
 #: stale listing, so they are cleared.
-CACHE_FORMAT_VERSION = 5
+#: 6: a split entry's table names the buffers kept in the chunk store
+#: (`chunk_store`); an older split entry has no such table.
+#: 7: a value pickled whole is digested over the bytes a store keeps of it
+#: (`stored_pickle.object_digest`), so the keys, lineages and call digests
+#: built on such digests changed; and a statement's entry may hold a value's
+#: pickle nested in its own (`stored_pickle.load_part`), which an older
+#: build cannot load.
+CACHE_FORMAT_VERSION = 7
 
 #: The per-directory format stamp. No entry suffix, so entry globs skip it.
 VERSION_FILENAME = "CACHE_VERSION"
@@ -118,6 +128,9 @@ FILE_VERSIONS_FILENAME = "_file_versions.log"
 ANALYTICS_DB_FILENAME = "analytics.db"
 #: The decorator's stored-key records: one ``<function>.json`` each.
 KEYS_DIRNAME = ".keys"
+#: The file tier's big buffers, one file per distinct content (`chunk_store`).
+CHUNK_DIRNAME = "chunks"
+CHUNK_SUFFIX = ".chunk"
 
 #: Files SQLite creates beside a database: the WAL, its shared-memory index,
 #: and the rollback journal of a database not in WAL mode.
@@ -152,14 +165,20 @@ _TEMP_NAME_ATTEMPTS = 8
 
 
 def entry_totals(cache_dir: str) -> tuple[int, int] | None:
-    """``(entries, bytes)`` of the entry files in *cache_dir*, or None when the
+    """``(entries, bytes)`` of the entry files in *cache_dir*, the chunks
+    they keep apart (`chunk_store`) counted in the bytes, or None when the
     directory cannot be listed.
 
-    One ``scandir`` and a ``stat`` per entry, no file opened. The eviction cap
+    One ``scandir`` and a ``stat`` per file, no file opened. The eviction cap
     and ``cash info`` both count with this, so the size a cap is compared with
     is the size the CLI reports.
     """
     count = size = 0
+    for path in chunk_files(cache_dir):
+        try:
+            size += os.stat(path).st_size
+        except OSError:
+            continue
     try:
         with os.scandir(cache_dir) as found:
             for entry in found:
@@ -173,6 +192,15 @@ def entry_totals(cache_dir: str) -> tuple[int, int] | None:
     except OSError:
         return None
     return count, size
+
+
+def chunk_files(cache_dir: str) -> list[str]:
+    """Every chunk file in *cache_dir*'s chunk store; none when it has none."""
+    try:
+        with os.scandir(os.path.join(cache_dir, CHUNK_DIRNAME)) as found:
+            return [e.path for e in found if e.name.endswith(CHUNK_SUFFIX)]
+    except OSError:
+        return []
 
 
 def _is_temp_of(name: str, owner: Callable[[str], bool]) -> bool:
@@ -199,8 +227,9 @@ def _is_cash_name(name: str) -> bool:
 def is_cash_file(relpath: str) -> bool:
     """Did cash write *relpath*, a path relative to a cache directory?
 
-    An entry, the format stamp, the ``.gitignore``, a sidecar store, a
-    stored-key record, an SQLite database with its companions, or the temp
+    An entry, a chunk of the chunk store, the format stamp, the
+    ``.gitignore``, a sidecar store, a stored-key record, an SQLite database
+    with its companions, or the temp
     file of a write to one of these (``create_temp_file``'s ``.tmp-*.part``
     and ``.probe-*.tmp`` included). Anything else is the user's.
     """
@@ -208,6 +237,9 @@ def is_cash_file(relpath: str) -> bool:
     if len(parts) == 2 and parts[0] == KEYS_DIRNAME:
         name = parts[1]
         return name.endswith(".json") or _is_temp_of(name, lambda base: base.endswith(".json"))
+    if len(parts) == 2 and parts[0] == CHUNK_DIRNAME:
+        name = parts[1]
+        return name.endswith(CHUNK_SUFFIX) or (name.startswith(".tmp-") and name.endswith(".part"))
     if len(parts) != 1:
         return False
     name = parts[0]
@@ -263,7 +295,7 @@ ORPHAN_TEMP_AGE = 24 * 3600.0
 
 
 def remove_orphan_temp_files(cache_dir: str) -> int:
-    """Delete the temp files of entry writes whose process died mid-write.
+    """Delete the temp files of entry and chunk writes whose process died mid-write.
 
     A write goes to a ``.tmp-*.part`` file renamed into place when complete;
     a process killed in between leaves it behind, up to an entry's size, and
@@ -276,11 +308,13 @@ def remove_orphan_temp_files(cache_dir: str) -> int:
     host = _host_tag()
     removed = 0
     now = time.time()
-    try:
-        with os.scandir(cache_dir) as found:
-            names = [(e.name, e.path) for e in found if e.name.startswith(".tmp-") and e.name.endswith(".part")]
-    except OSError:
-        return 0
+    names = []
+    for directory in (cache_dir, os.path.join(cache_dir, CHUNK_DIRNAME)):
+        try:
+            with os.scandir(directory) as found:
+                names += [(e.name, e.path) for e in found if e.name.startswith(".tmp-") and e.name.endswith(".part")]
+        except OSError:
+            continue
     for name, path in names:
         owner = name[len(".tmp-") : -len(".part")].partition("-")[0]
         tag, _, pid = owner.partition(".")
@@ -516,7 +550,7 @@ class CacheDirStamp:
                 CACHE_FORMAT_VERSION,
                 len(entry_files),
             )
-            for f in entry_files:
+            for f in entry_files + chunk_files(self.cache_dir):
                 try:
                     os.remove(f)
                 except OSError:

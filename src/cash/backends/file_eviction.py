@@ -34,12 +34,13 @@ from .budget_notices import (
     storage_logger,
 )
 from .cache_dir import entry_totals
-from .entry_format import ENTRY_SUFFIX
+from .entry_format import CHUNKS_FIELD, ENTRY_SUFFIX, CorruptEntry, read_entry
 from .eviction_log import EvictionLog, EvictionNote
 from .rank_index import RankIndex
 
 if TYPE_CHECKING:
     from ._writes import PendingWrites
+    from .chunk_store import ChunkStore
     from .touched_entries import TouchedEntries
 
 logger = logging.getLogger(__name__)
@@ -102,8 +103,11 @@ class FileEvictor:
         touched: TouchedEntries,
         writes: PendingWrites,
         untracked: Callable[[], Any],
+        chunks: ChunkStore | None = None,
     ) -> None:
         self.cache_dir = cache_dir
+        #: The folder's chunk store: an entry's removal may free chunks too.
+        self.chunks = chunks
         self.max_size_bytes = max_size_bytes
         #: The cap came from the machine-scaling policy, not the user, so it
         #: may be re-derived as the volume fills or empties.
@@ -326,7 +330,9 @@ class FileEvictor:
                         st = entry.stat()
                     except OSError:
                         continue  # vanished mid-walk: a slightly late eviction
-                    ranks[entry.path] = (st.st_mtime, st.st_size)
+                    # An entry's chunks count shared out among their holders.
+                    share = self.chunks.share(entry.name[: -len(ENTRY_SUFFIX)]) if self.chunks is not None else 0.0
+                    ranks[entry.path] = (st.st_mtime, st.st_size + int(share))
         except OSError:
             logger.debug("Could not scan %s to rank evictions", self.cache_dir, exc_info=True)
 
@@ -421,7 +427,7 @@ class FileEvictor:
 
     def remove_path(self, path: str, key: str | None = None) -> int:
         """Remove the entry at *path* (*key*'s, looked up when not given), with
-        its bookkeeping, and return the bytes freed.
+        its bookkeeping and the chunks only it held, and return the bytes freed.
 
         Measured from the file: the bookkeeping only knows the keys this
         process touched. An entry that cannot be removed -- on Windows, one
@@ -429,6 +435,8 @@ class FileEvictor:
         bookkeeping and frees nothing: it is still there, and still served.
         Whoever asked for the removal checks for survivors.
         """
+        stem = _stem(path)
+        held = self.chunks_held(path, stem)
         try:
             freed = os.path.getsize(path)
         except OSError:
@@ -442,6 +450,8 @@ class FileEvictor:
             logger.debug("Failed to remove cache entry %s: %s", path, exc)
             return 0
 
+        if self.chunks is not None:
+            freed += self.chunks.release(stem, held)
         with self._lock:
             if key is None:
                 key = self._touched.key_for(path)
@@ -452,6 +462,18 @@ class FileEvictor:
             self.current_bytes -= freed
         return freed
 
+    def chunks_held(self, path: str, stem: str) -> list | None:
+        """The chunks the entry at *path* holds, read from its metadata when
+        this process does not know them; None when it does, or none."""
+        if self.chunks is None or self.chunks.knows(stem) or not os.path.isdir(self.chunks.dir):
+            return None
+        try:
+            with self._untracked():
+                metadata, _ = read_entry(path, with_payload=False)
+        except (OSError, CorruptEntry):
+            return None
+        return metadata.get(CHUNKS_FIELD) or None
+
     def evict(self) -> None:
         """Evict the least valuable entries per byte while over the cap, to 90% of it."""
         if not self.max_size_bytes:
@@ -461,6 +483,12 @@ class FileEvictor:
         if self.current_bytes <= self.max_size_bytes:
             return
 
+        if self.chunks is not None and not self.chunks.indexed:
+            # Which entries share which chunks, before ranking by bytes held.
+            swept = self.chunks.ensure_index()
+            if swept:
+                with self._lock:
+                    self.current_bytes -= swept
         target = self.max_size_bytes * 0.9
         evicted_recent = False
         n_evicted = 0
