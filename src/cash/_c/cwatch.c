@@ -742,7 +742,7 @@ static int visit(Walk *W, PyObject *o) {
         R->snap[R->nsnap++] = R_LIST | ((uintptr_t)n << 8);
         R->snap[R->nsnap++] = (uintptr_t)o;
         PyObject **items = ((PyListObject *)o)->ob_item;
-        memcpy(&R->snap[R->nsnap], items, (size_t)n * sizeof(PyObject *));
+        if (n) memcpy(&R->snap[R->nsnap], items, (size_t)n * sizeof(PyObject *));
         R->nsnap += (size_t)n;
         for (Py_ssize_t i = 0; i < n; i++) {
             PyObject *x = ((PyListObject *)o)->ob_item[i];
