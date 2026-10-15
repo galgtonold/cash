@@ -84,7 +84,7 @@ Each argument is fingerprinted by the first rule that applies:
 6. The pickled value, in one canonical form: sets in sorted order, every
    container tagged with its type.
 
-<!-- claim: cash/kept_state.py:chooses_its_state @2d177a27, cash/kept_state.py:left_out_attrs @30a7a59c -->
+<!-- claim: cash/kept_state.py:chooses_its_state @2d177a27, cash/kept_state.py:left_out_attrs @a42e2e87 -->
 A class of yours whose own `__getstate__`, `__reduce__` or `__reduce_ex__`,
 or a reducer registered for it with `copyreg.pickle`, leaves instance
 attributes out of what it pickles (a precision, a device, a lock) is keyed
