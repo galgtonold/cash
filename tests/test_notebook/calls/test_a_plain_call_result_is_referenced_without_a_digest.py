@@ -47,7 +47,7 @@ def seen(monkeypatch):
     real_digest = call_refs.digest_of
     monkeypatch.setattr(call_refs, "digest_of", lambda v: digests.append(1) or real_digest(v))
     real_ds = call_entries.digest_and_size
-    monkeypatch.setattr(call_entries, "digest_and_size", lambda v: digests.append(1) or real_ds(v))
+    monkeypatch.setattr(call_entries, "digest_and_size", lambda v, **k: digests.append(1) or real_ds(v, **k))
     return stored, digests
 
 

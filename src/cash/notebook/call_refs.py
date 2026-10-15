@@ -30,11 +30,12 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import logging
+import pickle
 from dataclasses import dataclass
 from typing import Any
 
 from .. import kept_state
-from ..backends.serialization import stored_reducers
+from ..backends.serialization import OUT_OF_BAND_MIN_BYTES, stored_reducers
 
 logger = logging.getLogger(__name__)
 
@@ -83,13 +84,25 @@ def digest_of(value: Any) -> str | None:
     return found[0] if found else None
 
 
-def digest_and_size(value: Any) -> tuple[str, int] | None:
+def digest_and_size(value: Any, *, for_store: bool = False) -> tuple[str, int] | None:
     """``(SHA-256 of value's pickle, pickled bytes)``, or ``None`` when it does
     not pickle.
 
     Every byte, since this is what decides a restore; over pickle protocol 5
     with its buffers hashed in place, which for a 64 MB frame is 24 ms --
     ``compute_hash`` took 115 ms, and a call's store pays this.
+
+    The pickle is the one the store writes (`kept_state.dumps_also_keyed`),
+    digested when it is also the value's keyed pickle; otherwise the keyed
+    one, taken apart (`_keyed_digest`). Which of the two a value gets
+    depends on the value alone, so an unchanged value digests alike.
+
+    *for_store*: the call's store runs next, before anything can change
+    *value*. A value the RAM tier keeps as pickle bytes is pickled once for
+    both (`memory_backend.premade_snapshot`): the digest is of the very
+    bytes the tier keeps, where the store used to pickle it a second time
+    (0.4 s of each 1 s store of a graph of 350,000 edges). The caller
+    calls `memory_backend.release_premade` after the store.
 
     A polars frame is pickled as its Arrow buffers, as the store writes it
     (`serialization.stored_reducers`): polars' own pickle copies the whole
@@ -99,18 +112,63 @@ def digest_and_size(value: Any) -> tuple[str, int] | None:
     chunked another way digest apart, which costs a reference, never a
     wrong one.
     """
+    from ..backends import memory_backend
+
     try:
-        buffers: list = []
-        head = kept_state.dumps(value, protocol=5, buffer_callback=buffers.append, keyed=True, extra=stored_reducers())
-        digest = hashlib.sha256(head)
-        size = len(head)
-        for buffer in buffers:
-            raw = buffer.raw()
-            digest.update(raw)
-            size += raw.nbytes
-        return digest.hexdigest(), size
+        if for_store and memory_backend.kept_as_pickle(value):
+            made = memory_backend.premade_snapshot(value)
+            if made is None:
+                return None
+            pickled, also_keyed = made
+            if also_keyed:
+                return _store_digest(pickled.stream, pickled.buffers)
+        else:
+            buffers: list = []
+
+            def take(buffer: pickle.PickleBuffer) -> bool:
+                raw = buffer.raw()
+                if raw.nbytes < OUT_OF_BAND_MIN_BYTES:
+                    return True  # in band, as the store writes it
+                buffers.append(raw)
+                return False
+
+            stream, also_keyed = kept_state.dumps_also_keyed(
+                value, protocol=5, buffer_callback=take, on_retry=buffers.clear, extra=stored_reducers()
+            )
+            if also_keyed:
+                return _store_digest(stream, buffers)
+        return _keyed_digest(value)
     except Exception:  # noqa: BLE001 - no digest means no reference, never a failure
         return None
+
+
+def _store_digest(stream: Any, buffers: list) -> tuple[str, int]:
+    """The digest and size of a store pickle: its stream and buffers, each
+    with its length (the stream does not say where a buffer ends)."""
+    digest = hashlib.sha256(b"cash-store-pickle\0")
+    size = len(stream)
+    digest.update(size.to_bytes(8, "little"))
+    digest.update(stream)
+    for buffer in buffers:
+        view = memoryview(buffer)
+        digest.update(view.nbytes.to_bytes(8, "little"))
+        digest.update(view)
+        size += view.nbytes
+    return digest.hexdigest(), size
+
+
+def _keyed_digest(value: Any) -> tuple[str, int]:
+    """The digest and size of *value*'s keyed pickle, for a value whose
+    store pickle leaves something of its content out."""
+    buffers: list = []
+    head = kept_state.dumps(value, protocol=5, buffer_callback=buffers.append, keyed=True, extra=stored_reducers())
+    digest = hashlib.sha256(head)
+    size = len(head)
+    for buffer in buffers:
+        raw = buffer.raw()
+        digest.update(raw)
+        size += raw.nbytes
+    return digest.hexdigest(), size
 
 
 #: Statement metadata: the call keys its entry refers to, and their bytes --

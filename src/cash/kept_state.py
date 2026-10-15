@@ -94,6 +94,41 @@ def dumps(
     return _dumps(flat, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases)
 
 
+def dumps_also_keyed(
+    value: Any,
+    protocol: int = pickle.DEFAULT_PROTOCOL,
+    *,
+    buffer_callback: Any = None,
+    extra: dict | None = None,
+    on_retry: Any = None,
+) -> tuple[bytes, bool]:
+    """``dumps(value, protocol, ...)``, the bytes a store keeps, and whether
+    they are also the *keyed* bytes of the same call: True when no object
+    in *value* is one a key pickles otherwise (`_KeepDict` with *keyed*) --
+    a record array with padding, a user's object whose reduce leaves an
+    attribute out, an object holding views of itself.
+
+    Then one pickle serves both the store and a digest of the value's
+    content (`call_refs.digest_and_size`), where two were made before. False
+    also for a value pickled flat (too deep for the pickler), which keyed
+    bytes refuse."""
+    if FLAT_FIRST:
+        stream = dumps(value, protocol, buffer_callback=buffer_callback, extra=extra, on_retry=on_retry)
+        return stream, False
+    differs: list[bool] = []
+    table = _KeepDict(protocol, extra, watch=differs)
+    try:
+        stream = _dumps(value, protocol, False, buffer_callback, extra, None, False, table=table)
+        return stream, not differs
+    except (RecursionError, MemoryError) as exc:
+        if not too_deep(exc):
+            raise
+    if on_retry is not None:
+        on_retry()
+    flat = flatten(value, _KeepDict(protocol, extra), None)
+    return _dumps(flat, protocol, False, buffer_callback, extra, None, False), False
+
+
 def _dumps_walked_first(
     value: Any,
     protocol: int,
@@ -287,6 +322,7 @@ def _dumps(
     keyed: bool,
     aliases: bool = False,
     sink: Any = None,
+    table: _KeepDict | None = None,
 ) -> bytes:
     buf = io.BytesIO() if sink is None else sink
     pickler = pickle.Pickler(buf, protocol=protocol, buffer_callback=buffer_callback)
@@ -298,7 +334,7 @@ def _dumps(
         # something, never through pickle's memo (`key_aliases`).
         pickler.fast = True
         pickler.persistent_id = key_aliases()
-    pickler.dispatch_table = _KeepDict(protocol, extra, keyed)
+    pickler.dispatch_table = _KeepDict(protocol, extra, keyed) if table is None else table
     pickler.dump(value)
     return b"" if sink is not None else buf.getvalue()
 
@@ -678,15 +714,22 @@ class _KeepDict(dict):
     is the one ``pickle.dumps`` writes; `_reduce_with_dict` for a type whose
     reduce drops its instances' ``__dict__`` (`_drops_dict`)."""
 
-    def __init__(self, protocol: int, extra: dict | None, keyed: bool = False) -> None:
+    def __init__(self, protocol: int, extra: dict | None, keyed: bool = False, watch: list | None = None) -> None:
         super().__init__(extra or ())
         self._protocol = protocol
         self._keyed = keyed
+        #: Store bytes only (`dumps_also_keyed`): gets an item when an
+        #: object is reduced otherwise than a key reduces it.
+        self._watch = watch
 
     def __missing__(self, t: type) -> Any:
         if issubclass(t, type):
             raise KeyError(t)  # a class: pickled by name, as pickle does
         registered = copyreg.dispatch_table.get(t)
+        if self._watch is not None:
+            reducer = _watched(self._store_reducer(t, registered), t, registered, self._watch)
+            self[t] = reducer
+            return reducer
         if self._keyed and t.__name__ == "ndarray" and t is getattr(sys.modules.get("numpy"), "ndarray", None):
             # A record array's padding bytes are whatever memory held:
             # keyed without them (`packed_records`).
@@ -704,10 +747,63 @@ class _KeepDict(dict):
                 reducer = _reducer_with_dict(self._protocol)
             else:
                 reducer = operator.methodcaller("__reduce_ex__", self._protocol)
-            if self._keyed and _cached_properties(t):
-                reducer = functools.partial(_reduce_without_views, reducer=reducer)
+            if _cached_properties(t) and (self._keyed or _leaves_views_out(t)):
+                which = None if self._keyed else stored_views
+                reducer = functools.partial(_reduce_without_views, reducer=reducer, which=which)
         self[t] = reducer
         return reducer
+
+    def _store_reducer(self, t: type, registered: Any) -> Any:
+        """The reducer a store's pickle (not *keyed*) takes for *t*."""
+        if registered is not None:
+            return registered
+        if _drops_dict(t):
+            reducer = _reducer_with_dict(self._protocol)
+        else:
+            reducer = operator.methodcaller("__reduce_ex__", self._protocol)
+        if _cached_properties(t) and _leaves_views_out(t):
+            reducer = functools.partial(_reduce_without_views, reducer=reducer, which=stored_views)
+        return reducer
+
+
+def _watched(reducer: Any, t: type, registered: Any, watch: list) -> Any:
+    """*reducer*, a store's for *t*, noting in *watch* each object a key
+    would reduce otherwise (`_KeepDict.__missing__` with *keyed*): what
+    `dumps_also_keyed` answers from. Each check is the one the keyed
+    reducer makes to decide whether it changes anything."""
+    if t.__name__ == "ndarray" and t is getattr(sys.modules.get("numpy"), "ndarray", None):
+
+        def array(obj: Any) -> Any:
+            try:
+                if packed_records(obj) is not obj:
+                    watch.append(True)
+            except Exception:  # noqa: BLE001 - keyed as it is then, as `_reduce_array_for_key` does
+                pass
+            return reducer(obj)
+
+        return array
+    if chooses_its_state(t) or (registered is not None and _is_users_class(t)):
+        plain = registered is not None or not _drops_dict(t)
+
+        def state(obj: Any) -> Any:
+            reduced = reducer(obj)
+            if not plain:
+                watch.append(True)  # a key reduces it without the dict this adds
+            elif not isinstance(reduced, str) and left_out_attrs(obj, reduced[2] if len(reduced) > 2 else None):
+                watch.append(True)
+            return reduced
+
+        return state
+    if registered is None and _cached_properties(t):
+
+        def views(obj: Any) -> Any:
+            reduced = reducer(obj)
+            if not isinstance(reduced, str) and derived_views(obj) - stored_views(obj):
+                watch.append(True)  # a view the stored bytes keep and a key leaves out
+            return reduced
+
+        return views
+    return reducer
 
 
 def _cached_properties(t: type) -> tuple[str, ...]:
@@ -777,13 +873,14 @@ def _views(value: Any, held: set[int]) -> bool:
     return linked
 
 
-def _reduce_without_views(obj: Any, reducer: Any) -> Any:
+def _reduce_without_views(obj: Any, reducer: Any, which: Any = None) -> Any:
     """*reducer*'s reduce of *obj*, with the views `derived_views` finds
-    left out of its state. Only keyed, never loaded."""
+    left out of its state (those *which* gives, when given:
+    `stored_views` for a store's bytes)."""
     reduced = reducer(obj)
     if isinstance(reduced, str):
         return reduced
-    views = derived_views(obj)
+    views = (which or derived_views)(obj)
     if not views:
         return reduced
     rebuild, args, *rest = reduced
@@ -797,6 +894,35 @@ def _reduce_without_views(obj: Any, reducer: Any) -> Any:
     else:
         return reduced
     return (rebuild, args, state, *rest[1:])
+
+
+def stored_views(obj: Any) -> frozenset[str]:
+    """The views of *obj* (`derived_views`) its stored pickle leaves out:
+    networkx's, which hold nothing but links to the graph and are made
+    again on first use. Building a graph fills ``G.adj``, so its stored
+    bytes were not its keyed bytes, and a call storing a graph pickled it
+    twice, once to digest and once to keep (`dumps_also_keyed`).
+
+    Only these: a view of a user's class may hold a counter beside its
+    link, which a restore must not reset."""
+    views = derived_views(obj)
+    if not views:
+        return views
+    state = obj.__dict__
+    return frozenset(name for name in views if type(state[name]).__module__ in _VIEW_MODULES_LEFT_OUT)
+
+
+#: The modules whose views a store leaves out (`stored_views`).
+_VIEW_MODULES_LEFT_OUT = frozenset({"networkx.classes.coreviews", "networkx.classes.reportviews"})
+
+
+def _leaves_views_out(t: type) -> bool:
+    """Does a store's pickle of a *t* look for views to leave out
+    (`stored_views`): a networkx graph class, or a subclass of one, that
+    does not choose its own state (a key keeps such a class's views)?
+    Any other class is pickled by its own reduce, as before, with no
+    Python step per instance."""
+    return not chooses_its_state(t) and any(k.__module__.startswith("networkx.") for k in t.__mro__)
 
 
 def packed_records(array: Any) -> Any:

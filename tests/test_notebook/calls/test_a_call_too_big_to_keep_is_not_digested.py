@@ -23,9 +23,9 @@ def _spy(monkeypatch):
     calls = []
     real = call_entries.digest_and_size
 
-    def spy(value):
+    def spy(value, **kwargs):
         calls.append(1)
-        return real(value)
+        return real(value, **kwargs)
 
     monkeypatch.setattr(call_entries, "digest_and_size", spy)
     return calls
