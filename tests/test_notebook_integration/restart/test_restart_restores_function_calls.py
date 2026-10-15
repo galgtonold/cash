@@ -180,7 +180,13 @@ def test_a_path_a_directory_is_made_from_is_restored_after_a_restart(nb_runner, 
     assert ran == ["print('T', total)"], f"ran after the restart: {ran}"
 
 
-@pytest.mark.parametrize("floor", ["", "cash.configure(min_execution_time_to_cache_seconds=0.0)\n"])
+@pytest.mark.parametrize(
+    "floor",
+    [
+        pytest.param("", id="default_floor"),
+        pytest.param("cash.configure(min_execution_time_to_cache_seconds=0.0)\n", id="no_floor"),
+    ],
+)
 def test_names_from_a_module_not_loaded_yet_are_restored_after_a_restart(nb_runner, _teed, floor):
     """``from zipapp import get_interpreter`` (a function) and ``from wave import
     Wave_read`` (a class), read by a helper. The runtime folds both digests into
