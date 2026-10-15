@@ -76,6 +76,9 @@ def test_sdist_has_no_environment_or_build_junk(tmp_path):
 
     # Positive control: the exclusion must not have taken the package with it.
     assert any("/src/cash/__init__.py" in n for n in names), "sdist does not contain the package itself"
+    # The C extension is compiled from the sdist, so its sources and the hook ship.
+    assert any("/src/cash/_c/" in n and n.endswith(".c") for n in names), "sdist has no C sources"
+    assert any(n.endswith("/hatch_build.py") for n in names), "sdist has no build hook"
 
     # The sdist is MINIMAL: the package plus only the files needed to build it
     # (pyproject + the README/LICENSE the metadata references). Tests, docs,
@@ -90,7 +93,18 @@ def test_sdist_has_no_environment_or_build_junk(tmp_path):
     # beside it is what makes the bundle rebuildable rather than only
     # re-packageable. Its node_modules/ and lib/ are deliberately NOT in the
     # include list -- see [tool.hatch.build.targets.sdist].
-    allowed_top = {"src", "labextension", "pyproject.toml", "README.md", "LICENSE", "PKG-INFO", ".gitignore"}
+    # `hatch_build.py` is the build hook that compiles the optional C extension
+    # from src/cash/_c/; a wheel built from the sdist needs it for that.
+    allowed_top = {
+        "src",
+        "labextension",
+        "pyproject.toml",
+        "README.md",
+        "LICENSE",
+        "PKG-INFO",
+        ".gitignore",
+        "hatch_build.py",
+    }
     assert tops <= allowed_top, (
         f"sdist ships non-essential top-level entries {sorted(tops - allowed_top)}; "
         f"the sdist is a minimal include list — see [tool.hatch.build.targets.sdist]."

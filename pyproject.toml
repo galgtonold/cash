@@ -8,8 +8,15 @@ build-backend = "hatchling.build"
 packages = ["src/cash"]
 # The bundle reaches users through the shared-data mapping below. The copy
 # inside the package is only for `jupyter labextension develop` in a checkout,
-# so the wheel leaves it out instead of shipping it twice.
-exclude = ["/src/cash/labextension"]
+# so the wheel leaves it out instead of shipping it twice. The C sources under
+# _c/ are compiled into cash/_cwatch by the build hook below; the wheel ships
+# the compiled module, the sdist the sources.
+exclude = ["/src/cash/labextension", "/src/cash/_c"]
+
+# hatch_build.py compiles the optional C extension cash._cwatch (CPython 3.12+).
+# A failed compile leaves it out and the wheel is pure Python;
+# CASH_PURE_PYTHON=1 leaves it out on purpose (the py3-none-any wheel).
+[tool.hatch.build.targets.wheel.hooks.custom]
 
 # Ships the prebuilt JupyterLab extension that sends unsaved cell edits to cash.
 # The directory name must equal the npm package name in labextension/package.json
@@ -27,6 +34,8 @@ include = [
     "/pyproject.toml",
     "/README.md",
     "/LICENSE",
+    # The build hook that compiles the C extension from src/cash/_c/.
+    "/hatch_build.py",
     # The extension's source, so an sdist can rebuild the bundle. Listed file by
     # file so node_modules/ and lib/ never get in.
     "/labextension/install.json",
