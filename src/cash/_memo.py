@@ -146,6 +146,14 @@ ARGUMENTS = 1024
 #: while it is held, pandas copies a block before writing to it in place.
 FRAMES = 256
 
+#: One entry per Arrow table, batch or array whose memory Arrow allocated:
+#: a weakref and its digest, nothing that keeps it alive.
+ARROW_VALUES = 4096
+
+#: One entry per frozenset of primitives a key walk sorted: a weakref and
+#: its sorted items (8 bytes an item; nothing kept alive).
+SORTED_SETS = 256
+
 #: One entry per frozen=True result passed as an argument: its use count and
 #: audit baseline. One dropped starts its audit schedule over.
 FROZEN_RESULTS = 4096

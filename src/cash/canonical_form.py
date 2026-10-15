@@ -33,6 +33,7 @@ from itertools import chain
 from typing import Any, NamedTuple
 
 from . import _plain_data, kept_state
+from ._memo import SORTED_SETS, LruMemo
 from .sizing import SPARSE_PARTS, pandas_nbytes
 from .value_types import CODELESS_PRIMS, IMMUTABLE_PRIMS, LEAF_TYPES, PARSED_VALUE_TYPES
 
@@ -517,6 +518,27 @@ def _worth_opening(value: Any, content: ContentHashing) -> bool:
     return isinstance(size, int) and size >= OPEN_UP_BYTES
 
 
+#: The fewest items a frozenset needs for its form to be remembered
+#: (`_SORTED_SETS`): below it, sorting costs about what a lookup does.
+SORTED_SET_MIN = 256
+
+#: ``id(frozenset) -> (weak reference, its form)`` for frozensets holding
+#: only primitives. Such a set cannot change, nor can what it holds, so its
+#: form -- the items sorted by their pickled bytes, about 3.5 us an item --
+#: holds for as long as it lives; the weak reference tells it from a new set
+#: at the same address. A set holding anything else is walked every time.
+_SORTED_SETS: LruMemo[int, tuple[weakref.ref, Any]] = LruMemo(SORTED_SETS)
+
+
+def _remember_sorted(value: frozenset, form: Any) -> None:
+    key = id(value)
+    try:
+        wref = weakref.ref(value, lambda _ref, key=key, entries=_SORTED_SETS: entries.pop(key, None))
+    except TypeError:
+        return
+    _SORTED_SETS[key] = (wref, form)
+
+
 def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
     """The form of a container or object: a generator `_walk` drives, which
     yields each part to walk and is sent its form. *value* is on
@@ -527,10 +549,22 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
         prims = _IMMUTABLE_PRIMS
         items: list = []
         if isinstance(value, (set, frozenset)):
+            remembered = type(value) is frozenset and len(value) >= SORTED_SET_MIN
+            if remembered:
+                entry = _SORTED_SETS.get(id(value))
+                if entry is not None and entry[0]() is value:
+                    return entry[1]
             for v in value:
-                items.append(v if type(v) in prims else (yield v))
+                if type(v) in prims:
+                    items.append(v)
+                else:
+                    remembered = False
+                    items.append((yield v))
             items.sort(key=_plain_data.content_dumps)
-            return (yield from _typed(value, tuple(items), walk))
+            form = yield from _typed(value, tuple(items), walk)
+            if remembered:
+                _remember_sorted(value, form)
+            return form
         if isinstance(value, dict):
             for k, v in value.items():
                 k_form = k if type(k) in prims else (yield k)

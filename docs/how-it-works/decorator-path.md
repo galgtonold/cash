@@ -117,6 +117,12 @@ be written without pandas noticing is read in full every time: one built with
 `read_parquet` (its memory belongs to Arrow), and one with categorical or
 nullable columns.
 
+<!-- claim: cash/canonical_form.py:_object_steps @a3b63962, cash/canonical_form.py:SORTED_SET_MIN == 256 -->
+A frozenset of 256 or more numbers, strings and bytes is put in its sorted
+order once and recognised after that for as long as it exists, so a repeat
+call with a big frozenset costs milliseconds; a set, or a frozenset holding
+anything else, is sorted on every call.
+
 Content comes before any in-memory tag, so a stored entry is still found after
 a restart. Equal values share a key, but the type counts: `[1, 2]` and
 `(1, 2)`, or `0.5` and `np.float64(0.5)`, are separate entries. So does a
