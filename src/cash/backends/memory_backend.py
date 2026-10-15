@@ -10,6 +10,7 @@ import decimal
 import functools
 import gc
 import io
+import itertools
 import logging
 import pickle
 import sys
@@ -25,7 +26,7 @@ from cash.exceptions import CacheBackendError
 from .. import _plain_data, cost_model, kept_state
 from .._lazy_module import LazyModule
 from ..cost_model import GENERIC_FAMILY
-from ..sizing import memory_footprint
+from ..sizing import memory_footprint, pickled_size_estimate
 from ..value_types import IMMUTABLE_PRIMS
 from . import frame_sharing, iterative_copy
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, gdsf_value
@@ -179,6 +180,47 @@ def _snapshot(value: Any) -> _Pickled | None:
         return None
     kind = type(value)
     return _Pickled(stream, buffers, readonly, None if kind is dict or _copied_as_data(kind) else class_key(kind))
+
+
+def _at_least(value: Any, nbytes: int, nodes: int = 2048, items: int = 64) -> bool:
+    """Do the first objects in *value* -- what its dicts, lists, tuples and
+    instance dicts hold, level by level, at most *nodes* of them and
+    *items* from each container -- take at least *nbytes* themselves
+    (``sys.getsizeof``)? Cheap whatever *value*'s size: a graph's adjacency
+    dict alone is a megabyte at 40,000 nodes. True means big; False only
+    that these few objects are not."""
+    total = 0
+    seen: set[int] = set()
+    level = [value]
+    while level and len(seen) < nodes:
+        found: list = []
+        for obj in level:
+            if id(obj) in seen or len(seen) >= nodes:
+                continue
+            seen.add(id(obj))
+            kind = type(obj)
+            if kind.__sizeof__ is not object.__sizeof__ and kind not in _SIZED_CHEAPLY:
+                continue  # its own __sizeof__ may read it all (pandas: every string)
+            try:
+                total += sys.getsizeof(obj)
+            except TypeError:
+                continue
+            if total >= nbytes:
+                return True
+            if kind is dict:
+                found.extend(itertools.islice(obj.values(), items))
+            elif kind is list or kind is tuple:
+                found.extend(obj[:items])
+            elif kind not in _ATOMS and not isinstance(obj, type):
+                attrs = getattr(obj, "__dict__", None)
+                if type(attrs) is dict:
+                    found.extend(itertools.islice(attrs.values(), items))
+        level = found
+    return False
+
+
+#: Types whose ``__sizeof__`` `_at_least` calls: builtin containers and atoms.
+_SIZED_CHEAPLY = frozenset({dict, list, tuple, set, frozenset, str, bytes, bytearray, int, float})
 
 
 def _marshals(facts: Any) -> bool:
@@ -1373,7 +1415,36 @@ class InMemoryBackend(CacheBackend):
             shared = {}
         if whole:
             walk = None  # not copied a container at a time
-        if dict_rows_size is not None:
+        # An object of a class of its own is kept as its pickle bytes
+        # (`_Pickled`), which are made first: what the tier holds is those
+        # bytes, so they are its size. Walking the object for its footprint
+        # took four times its pickling (1.35 s against 0.35 s for a graph of
+        # 350,000 edges), on every store, for a number the bytes give.
+        pickled = None
+        if (
+            plain is None
+            and dict_rows_size is None
+            and facts is None
+            and not parts
+            and not shared
+            and _copied_by_round_trip(value, metadata)
+        ):
+            # Refused before it is pickled when its arrays alone are over the
+            # eviction target, or would be slower to read back than to
+            # compute (both checked again below, on the bytes).
+            estimate = pickled_size_estimate(value)
+            over = self._max_size_bytes is not None and estimate > self._max_size_bytes * 0.9
+            if over or _slower_than_its_compute(value, estimate, metadata):
+                with self._lock:
+                    self._drop(key)
+                return False
+            if estimate >= _ROUND_TRIP_MIN_BYTES or _at_least(value, _ROUND_TRIP_MIN_BYTES):
+                # Not for a small value, which is copied as any other: its
+                # pickle would be made only to be dropped.
+                pickled = _snapshot(value)
+        if pickled is not None and pickled.nbytes >= _ROUND_TRIP_MIN_BYTES:
+            size = pickled.nbytes
+        elif dict_rows_size is not None:
             size = dict_rows_size
         elif facts is not None:
             size = facts.size
@@ -1386,6 +1457,8 @@ class InMemoryBackend(CacheBackend):
             size = memory_footprint(value)
         else:
             size = plain[0]
+        if pickled is not None and size < _ROUND_TRIP_MIN_BYTES:
+            pickled = None  # small: copied as any other value (`_safe_deep_copy`)
 
         # A value above the eviction target can never stay: the byte cap evicts
         # down to 90% of the cap, so storing it would evict every older entry
@@ -1423,15 +1496,7 @@ class InMemoryBackend(CacheBackend):
         elif whole and (marshalled := _plain_data.marshal_dumps(value, facts)) is not None:
             immutable = False
             stored = _Marshalled(marshalled)
-        elif (
-            plain is None
-            and facts is None
-            and not parts
-            and not shared
-            and size >= _ROUND_TRIP_MIN_BYTES
-            and _copied_by_round_trip(value, metadata)
-            and (pickled := _snapshot(value)) is not None
-        ):
+        elif pickled is not None:
             # An object of a class of its own: kept as the bytes its pickle
             # round trip would have read back at once (`_Pickled`). A hit
             # reads them, and the disk tier writes them.
