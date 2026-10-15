@@ -142,13 +142,17 @@ def _dumps_also_keyed(
     *reducer_override* is the pickler's hook of that name. *after* is
     called with the pickler once it has pickled *value*, its memo still
     whole; not for a value pickled flat."""
-    if FLAT_FIRST:
-        if sink is not None:
-            raise RecursionError("pickled flat first on this Python: digested over its keyed bytes")
-        stream = dumps(value, protocol, buffer_callback=buffer_callback, extra=extra, on_retry=on_retry)
-        return stream, False
     differs: list[bool] = []
     table = _KeepDict(protocol, extra, watch=differs)
+    if FLAT_FIRST and not _surely_shallow(value):
+        walk = _Walk(getattr(sink, "walked", None), reducer_override)
+        if not _at_most_deep(value, _SAFE_DEPTH, table, _flat_leaf(None), walk):
+            if sink is not None:
+                raise RecursionError("pickled flat first on this Python: digested over its keyed bytes")
+            stream = dumps(value, protocol, buffer_callback=buffer_callback, extra=extra, on_retry=on_retry)
+            return stream, False
+        if walk.reduced:
+            reducer_override = walk.override()
     try:
         stream = _dumps(
             value,
@@ -191,14 +195,30 @@ def _dumps_walked_first(
     pickle follows elsewhere, and past that it raises RecursionError as the
     pickler raises on other Pythons."""
     reducers, leaf = _KeepDict(protocol, extra, keyed), _flat_leaf(persistent_id)
-    if _at_most_deep(value, _SAFE_DEPTH, reducers, leaf):
-        return _dumps(value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink)
-    deepest = sys.getrecursionlimit() // 2 if keyed else None
+    walk = _Walk(getattr(sink, "walked", None))
+    if _at_most_deep(value, _SAFE_DEPTH, reducers, leaf, walk):
+        override = walk.override() if walk.reduced else None
+        return _dumps(
+            value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink, reducers, override
+        )
+    deepest = _pickler_room() if keyed else None
     flat = flatten(value, reducers, leaf, deepest)
     return _dumps(flat, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink)
 
 
-def _at_most_deep(value: Any, limit: int, reducers: Any, leaf: Any) -> bool:
+def _pickler_room() -> int:
+    """How many objects deep the pickler would follow a value from here on
+    other Pythons: it counts each against the recursion limit, on top of
+    the frames already running."""
+    depth = 0
+    frame = sys._getframe(1)
+    while frame is not None:
+        depth += 1
+        frame = frame.f_back
+    return max(sys.getrecursionlimit() - depth, 0)
+
+
+def _at_most_deep(value: Any, limit: int, reducers: Any, leaf: Any, walk: _Walk | None = None) -> bool:
     """Is *value* at most *limit* objects deep, as the pickler follows it?
 
     `flatten` made a step for every object to learn the same, and on
@@ -214,6 +234,9 @@ def _at_most_deep(value: Any, limit: int, reducers: Any, leaf: Any) -> bool:
     `flatten`, which walks each object once (and refuses an object rebuilt
     from arguments that hold it, which the pickler would recurse through
     until the stack ran out).
+
+    With *walk*, each object's reduce is kept for the pickle that follows
+    (`_Walk.override`), so it runs once, and *walk*'s check runs after each.
     """
     level = _not_atoms([value])
     seen: set[int] = set()
@@ -235,7 +258,7 @@ def _at_most_deep(value: Any, limit: int, reducers: Any, leaf: Any) -> bool:
                 # way down. `flatten` walks each object once.
                 return False
         alive.append(level)
-        level = _next_level(level, reducers, leaf)
+        level = _next_level(level, reducers, leaf, walk)
     return not level
 
 
@@ -245,7 +268,7 @@ def _at_most_deep(value: Any, limit: int, reducers: Any, leaf: Any) -> bool:
 _REWALKED_FREE = 1024
 
 
-def _next_level(level: list, reducers: Any, leaf: Any) -> list:
+def _next_level(level: list, reducers: Any, leaf: Any, walk: _Walk | None = None) -> list:
     """What the objects of *level* hold that is not an atom."""
     kinds = list(map(type, level))
     opened = list(map(_OPENED_BY_ITEMS.__contains__, kinds))
@@ -257,7 +280,7 @@ def _next_level(level: list, reducers: Any, leaf: Any) -> list:
         found += _not_atoms(list(itertools.chain.from_iterable(map(dict.values, dicts))))
     if len(containers) < len(level):
         for obj in itertools.compress(level, map(operator.not_, opened)):
-            parts = _reduced_parts(obj, reducers, leaf)
+            parts = _reduced_parts(obj, reducers, leaf, walk)
             if parts:
                 found += _not_atoms(parts)
     return found
@@ -275,13 +298,89 @@ def _not_atoms(items: list) -> list:
     return list(itertools.compress(items, map(operator.not_, map(_FLAT_ATOMS.__contains__, map(type, items)))))
 
 
-def _reduced_parts(obj: Any, reducers: Any, leaf: Any) -> list:
+class _Walk:
+    """What a walk before a pickle (`_at_most_deep`) learned of each object
+    it reduced, for the pickle to take instead of reducing it again
+    (`override`): the user's ``__reduce_ex__`` runs once per pickle, as on
+    other Pythons. *check* runs after each reduce with the bytes of data
+    reduced so far (a digest's deadline, `stored_pickle._Sink.walked`):
+    the time a pickle takes is mostly its reduces, which here run first."""
+
+    __slots__ = ("check", "data", "first", "reduced")
+
+    def __init__(self, check: Callable[[int], Any] | None = None, first: Any = None) -> None:
+        self.check = check
+        self.data = 0
+        #: The pickle's own ``reducer_override``, asked before the table as
+        #: the pickler asks it.
+        self.first = first
+        #: id -> (object, reduce with its item iterators as lists)
+        self.reduced: dict[int, tuple[Any, tuple]] = {}
+
+    def reduce(self, obj: Any, reducers: Any) -> Any:
+        """*obj* reduced as the pickle will reduce it, kept: its iterators
+        made lists."""
+        reduced = NotImplemented if self.first is None else self.first(obj)
+        if reduced is NotImplemented:
+            reduced = reducers[type(obj)](obj)
+        if not isinstance(reduced, str):
+            reduced = tuple(list(part) if i in (3, 4) and part is not None else part for i, part in enumerate(reduced))
+        self.reduced[id(obj)] = (obj, reduced)
+        if self.check is not None:
+            self.data += _data_bytes(reduced)
+            self.check(self.data)
+        return reduced
+
+    def override(self) -> Callable[[Any], Any]:
+        """A ``reducer_override`` giving each object its kept reduce, with
+        fresh iterators (the pickler may save an object twice when it keeps
+        no memo); the pickle's own (`first`), or the table, for the rest."""
+        reduced = self.reduced
+        then = self.first
+
+        def override(obj: Any) -> Any:
+            found = reduced.get(id(obj))
+            if found is None or found[0] is not obj:
+                return NotImplemented if then is None else then(obj)
+            parts = found[1]
+            if isinstance(parts, str):
+                return parts
+            return tuple(iter(part) if i in (3, 4) and part is not None else part for i, part in enumerate(parts))
+
+        return override
+
+
+_DATA = (bytes, bytearray, str)
+
+
+def _data_bytes(reduced: Any) -> int:
+    """About the bytes of data a reduce hands the pickler at its first
+    level: its strings and bytes, in its arguments, its state and its
+    items. An estimate of how far a pickle is along, never more."""
+    if isinstance(reduced, str):
+        return 0
+    found = 0
+    for i, part in enumerate(reduced[1:5], 1):
+        if part is None:
+            continue
+        if isinstance(part, _DATA):
+            found += len(part)
+            continue
+        items = part.values() if isinstance(part, dict) else part if isinstance(part, (tuple, list)) else ()
+        if i == 4:  # dict items: (key, value) pairs
+            items = [v for pair in items for v in pair]
+        found += sum(len(item) for item in items if isinstance(item, _DATA))
+    return found
+
+
+def _reduced_parts(obj: Any, reducers: Any, leaf: Any, walk: _Walk | None = None) -> list:
     """What pickling *obj*, not a builtin container, saves inside it, as
-    `flatten` follows it: nothing for an object pickled whole."""
+    `flatten` follows it: nothing for an object pickled whole. *walk* keeps
+    the reduce (`_Walk`)."""
     obj_type = type(obj)
     if leaf(obj) or obj_type in _WHOLE or issubclass(obj_type, type) or _flat_array(obj):
         return []
-    reduced = reducers[obj_type](obj)
+    reduced = reducers[obj_type](obj) if walk is None else walk.reduce(obj, reducers)
     if isinstance(reduced, str):
         return []  # a global, pickled by name
     _rebuild, args, *rest = reduced

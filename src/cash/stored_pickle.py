@@ -178,6 +178,13 @@ class _Sink:
         if self._limit is not None and self.size + self.apart > self._limit:
             raise HashBudgetExceeded
 
+    def walked(self, done: int) -> None:
+        """`check` for a walk before the pickle (`kept_state._Walk`), which
+        reduces objects before anything is written: *done* is what it
+        estimates the pickle to hold by then. Only the deadline."""
+        if self._deadline is not None and perf_counter() > self._deadline:
+            self._deadline = run_on(self._deadline, done)
+
     def stream(self) -> bytes:
         return b"".join(self._parts or ())
 

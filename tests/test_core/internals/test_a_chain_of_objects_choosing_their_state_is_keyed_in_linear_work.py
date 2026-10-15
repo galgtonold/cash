@@ -62,9 +62,14 @@ class _TooMuchWork(BaseException):
     """Stops a keying past its bound: what catches ``Exception`` lets it by."""
 
 
-def _counting_dumps(monkeypatch, bound: int):
+def _counting_tells(monkeypatch, bound: int):
+    """Counts each pickle that tells whether a left-out attribute can be
+    pickled (`kept_state._picklable`). Counted there, not in the pickler
+    beneath it: on Python 3.10 on Windows (`kept_state.FLAT_FIRST`) a tell
+    walks its value before it pickles anything, and in a chain the walk
+    reaches the next tell first."""
     calls = [0]
-    real = kept_state._dumps
+    real = kept_state._picklable
 
     def counting(*args, **kwargs):
         calls[0] += 1
@@ -72,21 +77,21 @@ def _counting_dumps(monkeypatch, bound: int):
             raise _TooMuchWork
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(kept_state, "_dumps", counting)
+    monkeypatch.setattr(kept_state, "_picklable", counting)
     return calls
 
 
 @pytest.mark.parametrize("depth", [20, 200])
 def test_the_work_grows_with_the_depth_not_its_power(classes, monkeypatch, depth):
     bound = 2 * depth + 10
-    calls = _counting_dumps(monkeypatch, bound)
+    calls = _counting_tells(monkeypatch, bound)
     start = time.perf_counter()
     try:
         compute_hash(_chain(classes, depth))
     except _TooMuchWork:
         pytest.fail(f"more than {bound} pickles to key a chain {depth} deep")
-    # One keyed pickle, and a pickle per object telling its left-out
-    # attribute -- less what an earlier tell already found to pickle.
+    # A pickle per object telling its left-out attribute -- less what an
+    # earlier tell already found to pickle.
     assert calls[0] > depth // 2, "each object's left-out attributes are told"
     assert time.perf_counter() - start < 5
 

@@ -96,6 +96,24 @@ def test_a_flat_value_keeps_sharing_cycles_slots_and_containers():
     assert back["nested tuples"] == ((1, 2), (3, (4,))) and back["bytes"] == bytearray(b"ab")
 
 
+REDUCES: list[int] = []
+
+
+class Counted:
+    """Counted each time it is reduced; rebuilt with list items, which its
+    reduce hands over as an iterator."""
+
+    def __init__(self, v=None):
+        self.v = v
+
+    def __reduce_ex__(self, protocol):
+        REDUCES.append(1)
+        return (Counted, (), dict(vars(self)), iter([1, 2]))
+
+    def extend(self, items):
+        self.extended = list(items)
+
+
 class AttrDict(dict):
     """The common ``config.key`` idiom: its state is the dict itself."""
 
@@ -254,3 +272,26 @@ class TestWhereThePicklerRunsOutOfStackFirst:
 
         with pytest.raises(pickle.PicklingError):
             kept_state.dumps(Loop())
+
+    def test_a_shallow_value_is_reduced_once_and_its_store_bytes_are_its_keyed_ones(self):
+        """The walk before the pickle reduces each of the user's objects,
+        and the pickle takes those reduces: one ``__reduce_ex__`` per object
+        and pickle. The value is then pickled as on every other Python, its
+        store's bytes also its keyed ones, so one pickle serves a digest and
+        the store; every value was pickled twice there, once whole."""
+        REDUCES.clear()
+        value = {"a": Counted(1), "b": [Counted(2)]}
+        stream, also_keyed = kept_state.dumps_also_keyed(value, protocol=5)
+        assert len(REDUCES) == 2
+        assert also_keyed
+        back = pickle.loads(stream)
+        assert back["a"].v == 1 and back["b"][0].v == 2
+        assert back["a"].extended == [1, 2], "the items the walk read reached the pickle"
+
+    def test_a_value_as_deep_as_the_pickler_follows_elsewhere_keys(self):
+        """Flattened past `_SAFE_DEPTH`, a key goes as deep as the pickler
+        goes on other Pythons, not half as deep."""
+        value: list = []
+        for _ in range(300):
+            value = [("list", value)]
+        assert kept_state.dumps(value, keyed=True)
