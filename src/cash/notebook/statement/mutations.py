@@ -38,7 +38,7 @@ from cash.notebook.call_effects import DigestHandoff
 from cash.notebook.consumables import is_stream, watched_call_receivers
 from cash.notebook.magic_effects import magic_call_arguments
 from cash.notebook.restored_var import hashed_by_lineage
-from cash.value_hash import budgeted_hash, is_costly
+from cash.value_hash import budgeted_hash, compute_hash, is_costly
 
 if TYPE_CHECKING:
     from cash.notebook._protocols import ShellProtocol
@@ -451,6 +451,8 @@ class MutationClassifier:
         identity_hash = hashlib.sha256(str(id(val)).encode("utf-8")).hexdigest()
         if after == identity_hash:
             return True  # unpicklable -> identity hash -> mutation undetectable
+        if self.compute_hash is compute_hash:
+            self.digests.note_settled(val, after)
         before = self.tracking_state.current_session_hashes.get(base)
         return before is None or after != before
 

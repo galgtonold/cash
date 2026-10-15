@@ -144,6 +144,10 @@ class StatementRun:
     mut_observe: set[str] = field(default_factory=set)
     mut_assumed: set[str] = field(default_factory=set)
     mut_record: bool = False
+    #: ``id(value) -> (value, digest)``: the content digests the check after
+    #: execution read (`DigestHandoff.take_settled`), for the outputs'
+    #: lineage and session hash, with no user code run since.
+    settled_digests: dict[int, tuple[Any, str]] = field(default_factory=dict)
     #: Modules a ``set_*`` call is assumed to change until a name it is
     #: handed is seen changing (``ReceiverClasses.provisional``), and the
     #: reason they were skip-cached with.

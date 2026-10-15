@@ -466,6 +466,89 @@ def _call_shape(tree: ast.Module | None, namespace: Mapping[str, Any] | None = N
     return True, after
 
 
+def _first_call_source(tree: ast.Module | None, namespace: Mapping[str, Any] | None = None) -> str | None:
+    """The source of the call the statement *tree* makes first, when no code
+    can run before it starts, else ``None``.
+
+    ``components = sorted(nx.connected_components(G), key=len)`` reads
+    ``sorted``, ``nx.connected_components`` (a function in a plain
+    module's dict) and ``G``, and then calls ``connected_components``:
+    nothing of the user's runs before that call, though the statement is
+    not that one call (`_call_shape`). Everything evaluated before it must
+    be a bare name, a constant or a plain module's function; its own
+    arguments too. ``None`` as well when the same call source appears twice
+    in the statement, so the call that starts first is known by its source
+    (`CallSite.source`).
+    """
+    if tree is None or len(tree.body) != 1:
+        return None
+    node = tree.body[0]
+    if isinstance(node, ast.Assign):
+        value = node.value
+    elif isinstance(node, ast.Expr):
+        value = node.value
+    else:
+        return None
+    found = _first_call(value, namespace)
+    if not isinstance(found, ast.Call):
+        return None
+    try:
+        source = ast.unparse(found)
+        if sum(1 for n in ast.walk(value) if isinstance(n, ast.Call) and ast.unparse(n) == source) != 1:
+            return None
+    except (ValueError, TypeError, AttributeError, RecursionError):
+        return None
+    return source
+
+
+#: `_first_call`: the expression runs no code and makes no call.
+_NO_CALL = object()
+
+
+def _first_call(expr: ast.expr, namespace: Mapping[str, Any] | None) -> object:
+    """The first call *expr* starts when nothing runs before it, `_NO_CALL`
+    when it is only names, constants, plain module functions and tuples or
+    lists of them, else ``None``.
+
+    Python evaluates an operation's operands, a subscript's value and an
+    attribute's object before the operation itself runs, and a call's
+    callee, then its arguments, before calling it: the first call inside
+    those, with nothing before it that can run code, is the first call."""
+    if isinstance(expr, (ast.Name, ast.Constant)):
+        return _NO_CALL
+    if isinstance(expr, ast.Call):
+        parts: tuple = (expr.func, *expr.args, *(k.value for k in expr.keywords))
+    elif isinstance(expr, (ast.Tuple, ast.List)):
+        parts = tuple(expr.elts)
+    elif isinstance(expr, ast.Attribute):
+        parts = (expr.value,)
+    elif isinstance(expr, ast.BinOp):
+        parts = (expr.left, expr.right)
+    elif isinstance(expr, ast.UnaryOp):
+        parts = (expr.operand,)
+    elif isinstance(expr, ast.Compare):
+        parts = (expr.left, *expr.comparators)
+    elif isinstance(expr, ast.Subscript):
+        parts = (expr.value, expr.slice)
+    else:
+        return None
+    for part in parts:
+        if isinstance(part, ast.Starred):
+            return None
+        found = _first_call(part, namespace)
+        if found is not _NO_CALL:
+            return found
+    # Nothing inside ran: what is left is this node's own step.
+    if isinstance(expr, ast.Call):
+        return None if any(k.arg is None for k in expr.keywords) else expr
+    if isinstance(expr, (ast.Tuple, ast.List)):
+        return _NO_CALL
+    if isinstance(expr, ast.Attribute) and _module_function(expr, namespace):
+        return _NO_CALL
+    # An operator, an item or an attribute read may run code of the user's.
+    return None
+
+
 def _module_function(func: ast.expr, namespace: Mapping[str, Any] | None) -> bool:
     """Is *func* ``module.name`` for a plain module in *namespace* that has
     ``name`` in its own dict (no ``__getattr__``, no property to run)?"""
@@ -503,6 +586,9 @@ class DigestHandoff:
         self.fingerprints = ArgFingerprints()
         self._generation = 0
         self._before_ok = False
+        #: The source of the first call the statement makes, when nothing
+        #: runs before it starts (`_first_call_source`).
+        self._first_source: str | None = None
         self._watched = False
         self._after_ok = False
         #: ``id(value) -> (value, digest)``: what the statement's fingerprint
@@ -518,6 +604,9 @@ class DigestHandoff:
         #: The digests offered to a decorator call the statement makes
         #: (`offer_to_decorator`).
         self._offer: handed_digests.Offer | None = None
+        #: ``id(value) -> (value, digest)`` taken by `digest_after` since
+        #: `begin_settled`, or ``None`` when not collecting (`take_settled`).
+        self._settled: dict[int, tuple[Any, str]] | None = None
 
     def begin_cell(self) -> None:
         self.fingerprints.clear()
@@ -527,25 +616,32 @@ class DigestHandoff:
         self.fingerprints.begin_statement()
         self._generation += 1
         self._before_ok = self._after_ok = False
+        self._first_source = None
         self._before.clear()
         self._after.clear()
         self._started = 0
         self._after_at = -1
         self._offer = None
         self._watched = False
+        self._settled = None
         handed_digests.forget()
 
     def watch(self, tree: ast.Module | None, namespace: Mapping[str, Any] | None = None) -> None:
         """The statement *tree* is about to have its arguments fingerprinted;
         *namespace* is what it runs in."""
         self._before_ok, self._after_ok = _call_shape(tree, namespace)
+        self._first_source = None if self._before_ok else _first_call_source(tree, namespace)
         self._watched = True
 
     def digest(self, value: Any) -> str:
         """`compute_hash` of *value*, kept for the call's hash before the
         call when nothing can run in between."""
         digest = self.fingerprints.digest(value)
-        if self._before_ok and self._started == 0 and not is_identity_fallback_hash(value, digest):
+        if (
+            (self._before_ok or self._first_source is not None)
+            and self._started == 0
+            and not is_identity_fallback_hash(value, digest)
+        ):
             self._before[id(value)] = (value, digest)
         return digest
 
@@ -557,11 +653,23 @@ class DigestHandoff:
             self._before.clear()
         return self._generation, self._started
 
-    def digest_before(self, ticket: tuple[int, int]) -> Callable[[Any], str]:
-        """How the call holding *ticket* hashes an argument before it runs."""
-        if ticket != (self._generation, 1) or not self._before:
+    def digest_before(self, ticket: tuple[int, int], source: str | None = None) -> Callable[[Any], str]:
+        """How the call holding *ticket*, of the call *source*, hashes an
+        argument before it runs: with the statement's digest when it is the
+        first call and nothing ran before it (the statement is that call, or
+        it is the call `_first_call_source` names).
+
+        The statement's digests are let go here, whatever the answer: no
+        later call takes them, and the values they hold would read as held
+        from outside to the checks that count references (`storable`, the
+        statement's share check)."""
+        if ticket[0] != self._generation:
             return self.fingerprints.digest
-        before = self._before
+        before, self._before = self._before, {}
+        if ticket[1] != 1 or not before:
+            return self.fingerprints.digest
+        if not self._before_ok and (source is None or source != self._first_source):
+            return self.fingerprints.digest
 
         def digest(value: Any) -> str:
             found = before.get(id(value))
@@ -598,7 +706,32 @@ class DigestHandoff:
     def withdraw_offer(self) -> None:
         handed_digests.withdraw()
 
+    def begin_settled(self) -> None:
+        """The statement ran and nothing of the user's runs until its
+        outputs are recorded: keep what `digest_after` reads, for them
+        (`take_settled`). What was kept for a call before it is let go."""
+        self._before = {}
+        self._settled = {}
+
+    def take_settled(self) -> dict[int, tuple[Any, str]]:
+        """``id(value) -> (value, digest)``: what `digest_after` read since
+        `begin_settled`, each value held so its id stays its own. Collecting
+        stops here."""
+        settled, self._settled = self._settled, None
+        return settled or {}
+
+    def note_settled(self, value: Any, digest: str) -> None:
+        """*digest*, `compute_hash` of *value* read after the statement ran,
+        kept like `digest_after`'s while collecting."""
+        if self._settled is not None and not is_identity_fallback_hash(value, digest):
+            self._settled[id(value)] = (value, digest)
+
     def digest_after(self, value: Any) -> str:
+        digest = self._digest_after(value)
+        self.note_settled(value, digest)
+        return digest
+
+    def _digest_after(self, value: Any) -> str:
         """`compute_hash` of *value* for the statement's fingerprint after
         it ran: the call's own when no other call started since, or the one
         before it when the statement is a ``@cash.cache`` call that was

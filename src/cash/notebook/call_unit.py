@@ -965,7 +965,7 @@ class CallUnit:
         arg_hashes_before = (
             None
             if reads_its_arguments_only(call.fn, call.args, call.kwargs)
-            else hash_args(call.args, call.kwargs, digest=self._digests.digest_before(ticket))
+            else hash_args(call.args, call.kwargs, digest=self._digests.digest_before(ticket, call.site.source))
         )
         module_before = _module_globals(call.fn)
         started = _perf_counter()
