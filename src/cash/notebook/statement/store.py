@@ -872,23 +872,23 @@ class StatementStore:
 
 
 def _nestable(payload: dict[str, Any]) -> Any:
-    """The one variable of *payload* whose pickle its digest kept
+    """A variable of *payload* whose pickle its digest kept
     (`stored_pickle.kept`), when the entry may hold that pickle as it is
     (`stored_pickle.nest`): every other variable, and the echoed value, is
-    that value or immutable data, so nothing else in the entry can be a
-    part of it -- two pickles would make two objects of one. The rest of
-    the entry is cash's own (printed text, RNG states). None otherwise."""
-    found = None
-    for value in payload["variables"].values():
-        if value is found or _immutable(value):
-            continue
-        if found is not None or stored_pickle.kept(value) is None:
-            return None
-        found = value
+    that value, immutable data, or found by that digest to share no object
+    with it (`stored_pickle.apart`) -- two pickles would make two objects
+    of one. The rest of the entry is cash's own (printed text, RNG
+    states). None otherwise."""
+    parts = [value for value in payload["variables"].values() if not _immutable(value)]
     echo = payload.get(ECHO_FIELD)
-    if found is None or not (echo is None or echo is found or _immutable(echo)):
-        return None
-    return found
+    if echo is not None and not _immutable(echo):
+        parts.append(echo)
+    for found in parts:
+        if stored_pickle.kept(found) is not None and all(
+            other is found or stored_pickle.apart(found, other) for other in parts
+        ):
+            return found
+    return None
 
 
 #: The most items `_immutable` looks through.

@@ -14,9 +14,10 @@ from collections.abc import Callable, Collection, Generator, Iterable, Iterator,
 from contextlib import contextmanager
 from typing import Any
 
-from cash import _plain_data, stored_pickle
+from cash import _plain_data, stored_pickle, value_hash
 from cash._active import default_cash
 from cash._clock import perf_counter as _perf_counter
+from cash.backends import memory_backend
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, PersistencePolicy
 from cash.control_markers import has_marker
 from cash.diagnostics import log_diagnostic, warn_diagnostic
@@ -1774,7 +1775,7 @@ class StatementProcessor:
             # is the one the statement would take of ``x`` now.
             run.settled_digests = {**run.settled_digests, id(returned[0]): returned}
         del returned
-        with self._keeping_outputs(run):
+        with self._keeping_outputs(run, execution.echo, execution.cost or 0.0):
             # What it links, from its outputs' edges dropped to those found
             # now, is kept for the simulation (`note_share_edges`).
             with logging_edges() as linked:
@@ -1858,9 +1859,17 @@ class StatementProcessor:
             code_hash=run.cache_key,
         )
 
-    def _keeping_outputs(self, run: StatementRun) -> contextlib.AbstractContextManager[None]:
+    def _keeping_outputs(
+        self, run: StatementRun, echo: tuple[Any, ...] = (), cost: float = 0.0
+    ) -> contextlib.AbstractContextManager[None]:
         """`stored_pickle.keeping` the pickles of *run*'s outputs, the values
-        its store may hold; nothing for a statement that is not stored."""
+        its store may hold; nothing for a statement that is not stored.
+        The other outputs and the value it *echo*es are checked for objects
+        an output's pickle shares with them (`stored_pickle.apart`). A
+        pickle a change check's budget cut short is made on for the RAM tier
+        (`memory_backend.room_past_budget`) when the statement took longer
+        than that budget (*cost*): a value slower to pickle than its
+        statement was to run is not one its store keeps."""
         if run.skip_cache or not run.outputs:
             return contextlib.nullcontext()
         user_ns = self.shell.user_ns
@@ -1868,7 +1877,14 @@ class StatementProcessor:
         def stored(value: Any) -> bool:
             return any(user_ns.get(name, _ABSENT) is value for name in run.outputs)
 
-        return stored_pickle.keeping(stored)
+        def others(_value: Any) -> list[Any]:
+            found = [user_ns[name] for name in run.outputs if name in user_ns]
+            return [*found, *echo]
+
+        past = None
+        if cost > value_hash.CHANGE_CHECK_BUDGET_S:
+            past = memory_backend.room_past_budget(getattr(self.cash_instance, "backend", None))
+        return stored_pickle.keeping(stored, others, past)
 
     def _refuse_unrestorable_outputs(
         self, run: StatementRun, captured_vars: dict[str, Any], echo: tuple[Any, ...] = (), cost: float = 0.0

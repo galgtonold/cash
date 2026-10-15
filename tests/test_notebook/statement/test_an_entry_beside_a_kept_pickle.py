@@ -1,0 +1,203 @@
+"""A statement's entry holds an output's kept pickle beside its other parts.
+
+A statement's store takes the pickle the digest of an output made a moment
+before (`stored_pickle.kept`), nested in the entry's own, when nothing else
+in the entry is part of that output: two pickles restore an object both
+hold as two objects. That was proved only for immutable data, so an entry
+holding an echoed value or a second output beside a 900 MB model copied it
+the slow way (8.5 s for one store). The digest now proves it while its
+pickle is still being made: no object but immutable data, numpy dtypes and
+objects pickled by name is in both pickles (`stored_pickle.apart`).
+
+And a change check that ran out of its budget while pickling such an output
+(`value_hash.budgeted_hash`) gave up that pickle, and the store copied the
+value the slow way: 9.8 s for a statsmodels result whose pickle needed 0.7
+s. The pickle is now made on, for the store alone (`keeping`'s
+*past_budget*).
+
+What must hold: an object the echo or another output shares with the
+output comes back shared, from the RAM tier and from disk after a restart;
+what is stored is the value as the statement left it; each value is pickled
+once.
+"""
+
+from __future__ import annotations
+
+import time
+
+import numpy as np
+import pytest
+
+from cash import stored_pickle, value_hash
+from cash.backends import FileBackend, InMemoryBackend, TieredBackend, memory_backend
+from cash.notebook.statement.run import ECHO_FIELD
+from cash.value_hash import budgeted_hash, compute_hash
+from tests._cell_driver import run_cash_cell
+
+PICKLED: list[int] = []
+
+
+class Fit:
+    """A results object holding a 2 MiB array, counted each time it is pickled."""
+
+    def __init__(self, rows: int = 1 << 18) -> None:
+        self.coef = np.arange(rows, dtype=float)
+        self.names = ["a", "b"]
+
+    def __reduce_ex__(self, protocol):
+        PICKLED.append(1)
+        return object.__reduce_ex__(self, protocol)
+
+
+class SlowFit(Fit):
+    """A `Fit` whose pickling takes a while, past a short budget."""
+
+    def __reduce_ex__(self, protocol):
+        time.sleep(0.05)
+        return super().__reduce_ex__(protocol)
+
+
+# Slow enough to be stored; one statement binding ``fit`` and echoing a value.
+ECHO_APART = "(fit := Fit() if time.sleep(0.3) is None else None).names[:]"
+ECHO_SHARED = "(fit := Fit() if time.sleep(0.3) is None else None).names"
+
+
+@pytest.fixture
+def tiers(cash_magics, cash_instance, mock_shell, tmp_path):
+    ram, disk = InMemoryBackend(), FileBackend(str(tmp_path / "nbcache"), flush_interval=0)
+    cash_instance.backend = TieredBackend([ram, disk])
+    run_cash_cell(cash_magics, f"import time\nfrom {__name__} import Fit, SlowFit")
+    PICKLED.clear()
+    yield cash_magics, ram, disk, tmp_path / "nbcache"
+    disk.shutdown()
+
+
+def _entry(ram, name):
+    """``(key, payload as a hit reads it, kept as pickle bytes?)`` of the
+    RAM tier's entry holding *name*."""
+    for key, (_meta, stored) in list(ram._store.items()):
+        payload = ram.get(key)[1]
+        if name in payload.get("variables", {}):
+            return key, payload, type(stored) is memory_backend._Pickled
+    return None, None, False
+
+
+def _from_disk(cache_dir, key):
+    """The entry under *key* as a new process reads it from disk."""
+    fresh = FileBackend(str(cache_dir), flush_interval=0)
+    try:
+        return fresh.get(key)[1]
+    finally:
+        fresh.shutdown()
+
+
+def test_an_echo_apart_from_the_output_takes_the_digests_pickle(tiers, mock_shell):
+    magics, ram, disk, _cache_dir = tiers
+    run_cash_cell(magics, ECHO_APART)
+    disk._writes.wait_all()
+    _key, payload, as_bytes = _entry(ram, "fit")
+    assert payload is not None and payload.get(ECHO_FIELD) == ["a", "b"], "no echo in the entry: proves nothing"
+    assert as_bytes, "not kept as pickle bytes"
+    assert PICKLED == [1], "the output was pickled again for its store"
+    assert np.array_equal(payload["variables"]["fit"].coef, mock_shell.user_ns["fit"].coef)
+
+
+@pytest.mark.parametrize("source", ["ram", "disk"])
+def test_an_echo_sharing_an_object_with_the_output_comes_back_sharing_it(tiers, source):
+    magics, ram, disk, cache_dir = tiers
+    run_cash_cell(magics, ECHO_SHARED)
+    disk._writes.wait_all()
+    key, payload, _as_bytes = _entry(ram, "fit")
+    assert payload is not None and ECHO_FIELD in payload, "no echo in the entry: proves nothing"
+    if source == "disk":
+        payload = _from_disk(cache_dir, key)
+    assert payload[ECHO_FIELD] is payload["variables"]["fit"].names
+
+
+def test_a_second_output_apart_from_the_first_takes_the_digests_pickle(tiers, mock_shell):
+    magics, ram, disk, _cache_dir = tiers
+    run_cash_cell(magics, "fit, rows = (Fit(), {'r': [1, 2]}) if time.sleep(0.3) is None else (None, None)")
+    disk._writes.wait_all()
+    _key, payload, as_bytes = _entry(ram, "fit")
+    assert payload is not None and payload["variables"]["rows"] == {"r": [1, 2]}
+    assert as_bytes and PICKLED == [1]
+
+
+@pytest.mark.parametrize("source", ["ram", "disk"])
+def test_a_second_output_sharing_an_object_comes_back_sharing_it(tiers, source):
+    magics, ram, disk, cache_dir = tiers
+    run_cash_cell(magics, "fit, box = [(f, {'names': f.names}) for f in [Fit()] if time.sleep(0.3) is None][0]")
+    disk._writes.wait_all()
+    key, payload, _as_bytes = _entry(ram, "fit")
+    assert payload is not None and "box" in payload["variables"], "not stored together: proves nothing"
+    if source == "disk":
+        payload = _from_disk(cache_dir, key)
+    assert payload["variables"]["box"]["names"] is payload["variables"]["fit"].names
+
+
+def test_a_change_after_the_store_is_not_in_the_entry(tiers, mock_shell):
+    magics, ram, disk, _cache_dir = tiers
+    run_cash_cell(magics, ECHO_APART)
+    disk._writes.wait_all()
+    fit = mock_shell.user_ns["fit"]
+    fit.coef[0] = -1.0
+    fit.names.append("z")
+    _key, payload, _as_bytes = _entry(ram, "fit")
+    assert payload["variables"]["fit"].coef[0] == 0.0
+    assert payload["variables"]["fit"].names == ["a", "b"] and payload[ECHO_FIELD] == ["a", "b"]
+
+
+def test_a_change_check_past_its_budget_leaves_the_pickle_to_the_store(tiers, mock_shell, monkeypatch):
+    magics, ram, disk, _cache_dir = tiers
+    monkeypatch.setattr(value_hash, "CHANGE_CHECK_BUDGET_S", 0.02)
+    run_cash_cell(magics, "fit = SlowFit() if time.sleep(0.3) is None else None")
+    disk._writes.wait_all()
+    assert value_hash.is_costly(mock_shell.user_ns["fit"]), "the check did not run out of its budget: proves nothing"
+    _key, payload, as_bytes = _entry(ram, "fit")
+    assert as_bytes and PICKLED == [1], "the store pickled the output again"
+    assert np.array_equal(payload["variables"]["fit"].coef, mock_shell.user_ns["fit"].coef)
+
+
+# -- the proof itself ---------------------------------------------------------
+
+
+def _apart(value, others, past_budget=None):
+    """Digest *value* as a store's keeping does, and say which of *others*
+    it found apart."""
+    with stored_pickle.keeping(lambda v: v is value, lambda v: others, past_budget):
+        compute_hash(value)
+        assert stored_pickle.kept(value) is not None
+        return [stored_pickle.apart(value, other) for other in others]
+
+
+def test_only_objects_that_restore_alike_apart_may_be_shared():
+    fit = Fit()
+    names = list(fit.names)  # the same strings: alike apart
+    assert _apart(fit, [fit.names, names, {"coef": fit.coef}, [Fit, np.dtype(float)], [fit]]) == [
+        False,  # the list itself
+        True,
+        False,  # the array
+        True,  # a class and a dtype: by name, and identityless
+        False,  # the value itself, inside another
+    ]
+
+
+def test_an_other_too_big_to_check_is_not_apart(monkeypatch):
+    monkeypatch.setattr(stored_pickle, "_APART_MAX_BYTES", 1000)
+    fit = Fit()
+    assert _apart(fit, [[str(i) for i in range(1000)]]) == [False]
+
+
+def test_a_budgeted_digest_makes_its_pickle_on_only_within_its_bytes():
+    for past, kept in ((None, False), (1000, False), (1 << 30, True)):
+        fit = SlowFit()
+        with stored_pickle.keeping(lambda v, fit=fit: v is fit, None, past):
+            assert budgeted_hash(fit, seconds=0.01) is None, "within its budget: proves nothing"
+            part = stored_pickle.kept(fit)
+            assert (part is not None) is kept, past
+            if part is not None:
+                assert part.digest is None
+                payload = {"variables": {"fit": fit}}
+                stored_pickle.nest(payload, fit)
+                back = memory_backend._snapshot(payload).load()["variables"]["fit"]
+                assert np.array_equal(back.coef, fit.coef) and back.names == fit.names

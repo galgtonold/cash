@@ -74,7 +74,7 @@ order-sensitive code can treat them differently; a strided view and its
 contiguous copy share a key. The dtypes are in a pandas key, so `int64` and
 `Int64` columns, or a tz-naive and a tz-aware series, never share an entry.
 
-<!-- claim: cash/value_hash.py:_pickle_digest @9626284c, cash/content_hashers.py:hash_sparse @b0bdb6a6, cash/stored_pickle.py:pickle_value @bdaca716 -->
+<!-- claim: cash/value_hash.py:_pickle_digest @9626284c, cash/content_hashers.py:hash_sparse @b0bdb6a6, cash/stored_pickle.py:pickle_value @e469430b -->
 Any other value, such as a networkx graph or a fitted model, is pickled and
 the pickle is hashed, so it is compared by content too, at the cost of
 pickling it. That pickle is the one cash stores the value as, its large
