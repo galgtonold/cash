@@ -22,6 +22,12 @@ this names what they run, twice over:
 
 A module whose file cannot be read is named in the second part of the
 answer: the statement runs uncached.
+
+What the code reads is not all in the files: a cell setting ``mylib.K = 7``
+(or ``mylib.Order.scale = 7``, ``mylib.TABLE["k"] = 7``) changes what
+``total`` returns and leaves them as they were. `held_data_part` digests
+the module data the classes' methods read, as the key of a statement naming
+the module digests what it reads (``lineage_formula.module_data_component``).
 """
 
 from __future__ import annotations
@@ -30,16 +36,19 @@ import hashlib
 import os
 import sys
 import types
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 from .._memo import CODE_OBJECTS, LruMemo
 from ..code_digest import module_identity
 from ..loaded_code import class_functions
 from ..source_norm import bytecode_identity
-from ..tracking.function_tracker import _imports_of, is_local_module
+from ..tracking.function_tracker import imports_of, is_local_module
 from ..tracking.module_symbols import closure_digest
+from .callee_reach import class_data
+from .lineage_formula import module_data_digest
 
-__all__ = ["held_module_parts"]
+__all__ = ["held_data_part", "held_module_parts"]
 
 #: Code object -> its `bytecode_identity`: a module's functions are digested
 #: for every statement reading an object of one of its classes.
@@ -64,6 +73,17 @@ def held_module_parts(classes: Iterable[type]) -> tuple[list[str], set[str]]:
         else:
             parts.append(f"heldmod:{name}:{digest}")
     return parts, unkeyed
+
+
+def held_data_part(classes: Iterable[type], namespace: Mapping[str, Any]) -> str | None:
+    """``"helddata:<digest>"`` of the local modules' data the methods of
+    *classes* read (`callee_reach.class_data`), each piece digested as
+    `module_data_digest` digests it: None when they read none."""
+    data = class_data(classes, namespace)
+    if not data:
+        return None
+    joined = ":".join(f"{label}={module_data_digest(label, value)}" for label, value in data)
+    return "helddata:" + hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
 def _module_digest(name: str, qualnames: set[str]) -> str | None:
@@ -96,7 +116,7 @@ def _local_imports(name: str) -> list[types.ModuleType]:
     found: dict[str, types.ModuleType] = {}
     pending = [name]
     while pending:
-        imported = _imports_of(pending.pop()) or frozenset()
+        imported = imports_of(pending.pop()) or frozenset()
         for other in sorted(imported):
             module = sys.modules.get(other)
             if other == name or other in found or module is None or not _local(module):

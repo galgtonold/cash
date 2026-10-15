@@ -44,6 +44,7 @@ __all__ = [
     "CWD",
     "ENVIRON",
     "Reach",
+    "class_data",
     "helper_seeded_modules",
     "module_globals",
     "module_holders",
@@ -130,6 +131,21 @@ def reached_user_code(code: str, namespace: Mapping[str, Any] | None, *, close: 
         found.close_modules()
     data = tuple(sorted(item for item in found.data.items() if item[0] not in found.written))
     return Reach(tuple(found.functions), frozenset(found.modules), data)
+
+
+def class_data(classes: Iterable[type], namespace: Mapping[str, Any]) -> tuple[tuple[str, Any], ...]:
+    """``(label, value)`` of the local modules' data the methods of *classes*
+    read, as :attr:`Reach.data` gives it: their class attributes, the module
+    globals their code loads, and what the helpers they call read in turn.
+
+    For objects a statement reaches without naming their module
+    (``orders = pickle.load(f)``, then ``o.total()``): ``mylib.K = 7`` in
+    a cell changes what ``total`` returns, and no name the statement reads
+    leads to ``K``."""
+    found = _Found(namespace)
+    for cls in classes:
+        found._class(cls)
+    return tuple(sorted(item for item in found.data.items() if item[0] not in found.written))
 
 
 def _leads_nowhere(namespace: Mapping[str, Any], root: str, attrs: tuple[str, ...]) -> bool:

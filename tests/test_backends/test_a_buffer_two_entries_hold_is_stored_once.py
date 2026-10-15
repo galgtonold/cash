@@ -314,13 +314,14 @@ def test_a_new_process_restores_values_whose_buffers_are_chunks(tmp_path):
             out = (frame(400_000), wider(400_000))
             sys.stdout.write(pickle.dumps(out).hex())
             """
-        )
+        ),
+        encoding="utf-8",
     )
     first = run_python("-W", "ignore", "job.py", cwd=tmp_path, timeout=120)
     assert any((tmp_path / ".cash" / CHUNK_DIRNAME).iterdir())
-    ran = (tmp_path / "ran.log").read_text()
+    ran = (tmp_path / "ran.log").read_text(encoding="utf-8")
     second = run_python("-W", "ignore", "job.py", cwd=tmp_path, timeout=120)
-    assert (tmp_path / "ran.log").read_text() == ran, "the second process computed again"
+    assert (tmp_path / "ran.log").read_text(encoding="utf-8") == ran, "the second process computed again"
     want = pickle.loads(bytes.fromhex(first.stdout))
     got = pickle.loads(bytes.fromhex(second.stdout))
     for a, b in zip(got, want):
