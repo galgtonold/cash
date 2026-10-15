@@ -259,6 +259,13 @@ def in_multiprocessing_child() -> bool:
     return answer
 
 
+#: Seconds a writer thread waits for work before it ends; the next write
+#: starts another. A backend nobody shut down kept its thread for the rest of
+#: the process: one per cache a long session or a test suite made, until
+#: macOS refused to start another ("can't start new thread").
+WRITER_IDLE_S = 5.0
+
+
 class _DaemonWriterPool:
     """The small thread pool `PendingWrites` runs its writes on.
 
@@ -295,11 +302,22 @@ class _DaemonWriterPool:
             return
         thread = threading.Thread(target=self._work, name="cash-cache-writer", daemon=True)
         self._threads.append(thread)
-        thread.start()
+        try:
+            thread.start()
+        except BaseException:
+            self._threads.remove(thread)  # never started: nothing to join
+            raise
 
     def _work(self) -> None:
         while True:
-            item = self._queue.get()
+            try:
+                item = self._queue.get(timeout=WRITER_IDLE_S)
+            except queue.Empty:
+                with self._lock:
+                    if self._queue.empty():  # a submit puts under the lock
+                        self._threads.remove(threading.current_thread())
+                        return
+                continue
             if item is None:  # shutdown sentinel
                 return
             future, fn, args, kwargs = item
