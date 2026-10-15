@@ -52,7 +52,7 @@ _COMPARED = {
     ("networkx", "MultiDiGraph"),
 }
 
-#: A networkx graph's content hash (`compute_hash`) is the sha256 of its key
+#: A networkx graph's content hash (`compute_hash`) is the digest of its key
 #: pickle: its class by name, and its ``__dict__`` -- the graph, node and
 #: adjacency dicts in their order (so node order and, per node, edge order),
 #: every attribute dict and every value in it by content, and, for a view

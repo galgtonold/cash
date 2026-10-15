@@ -101,6 +101,8 @@ def dumps_also_keyed(
     buffer_callback: Any = None,
     extra: dict | None = None,
     on_retry: Any = None,
+    sink: Any = None,
+    reducer_override: Any = None,
 ) -> tuple[bytes, bool]:
     """``dumps(value, protocol, ...)``, the bytes a store keeps, and whether
     they are also the *keyed* bytes of the same call: True when no object
@@ -109,19 +111,38 @@ def dumps_also_keyed(
     attribute out, an object holding views of itself.
 
     Then one pickle serves both the store and a digest of the value's
-    content (`call_refs.digest_and_size`), where two were made before. False
-    also for a value pickled flat (too deep for the pickler), which keyed
-    bytes refuse."""
+    content (`stored_pickle.object_digest`), where two were made before.
+    False also for a value pickled flat (too deep for the pickler), which
+    keyed bytes refuse.
+
+    With *sink*, the bytes are written to it as they are made (as `dumps`
+    writes them) and the stream returned is empty; a value too deep for
+    the pickler then raises RecursionError, as keyed bytes do: its digest
+    is taken over its keyed bytes, which refuse it too.
+    *reducer_override* is the pickler's hook of that name."""
     if FLAT_FIRST:
+        if sink is not None:
+            raise RecursionError("pickled flat first on this Python: digested over its keyed bytes")
         stream = dumps(value, protocol, buffer_callback=buffer_callback, extra=extra, on_retry=on_retry)
         return stream, False
     differs: list[bool] = []
     table = _KeepDict(protocol, extra, watch=differs)
     try:
-        stream = _dumps(value, protocol, False, buffer_callback, extra, None, False, table=table)
+        stream = _dumps(
+            value,
+            protocol,
+            False,
+            buffer_callback,
+            extra,
+            None,
+            False,
+            sink=sink,
+            table=table,
+            override=reducer_override,
+        )
         return stream, not differs
     except (RecursionError, MemoryError) as exc:
-        if not too_deep(exc):
+        if sink is not None or not too_deep(exc):
             raise
     if on_retry is not None:
         on_retry()
@@ -323,9 +344,14 @@ def _dumps(
     aliases: bool = False,
     sink: Any = None,
     table: _KeepDict | None = None,
+    override: Any = None,
 ) -> bytes:
     buf = io.BytesIO() if sink is None else sink
-    pickler = pickle.Pickler(buf, protocol=protocol, buffer_callback=buffer_callback)
+    if override is None:
+        pickler = pickle.Pickler(buf, protocol=protocol, buffer_callback=buffer_callback)
+    else:
+        pickler = _Overriding(buf, protocol=protocol, buffer_callback=buffer_callback)
+        pickler.override = override
     pickler.fast = fast
     if persistent_id is not None:
         pickler.persistent_id = persistent_id
@@ -337,6 +363,16 @@ def _dumps(
     pickler.dispatch_table = _KeepDict(protocol, extra, keyed) if table is None else table
     pickler.dump(value)
     return b"" if sink is not None else buf.getvalue()
+
+
+class _Overriding(pickle.Pickler):
+    """A pickler whose ``reducer_override`` is *override* (the C pickler
+    takes the hook from its class only)."""
+
+    override: Any = None
+
+    def reducer_override(self, obj: Any) -> Any:
+        return self.override(obj)
 
 
 def key_aliases() -> Callable[[Any], Any]:

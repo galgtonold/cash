@@ -80,7 +80,12 @@ __all__ = [
 #: what it lists. An older build stored entries for some of them that this
 #: build would still find and serve, skipping the write or returning a
 #: stale listing, so they are cleared.
-CACHE_FORMAT_VERSION = 5
+#: 6: a value pickled whole is digested over the bytes a store keeps of it
+#: (`stored_pickle.object_digest`), so the keys, lineages and call digests
+#: built on such digests changed; and a statement's entry may hold a value's
+#: pickle nested in its own (`stored_pickle.load_part`), which an older
+#: build cannot load.
+CACHE_FORMAT_VERSION = 6
 
 #: The per-directory format stamp. No entry suffix, so entry globs skip it.
 VERSION_FILENAME = "CACHE_VERSION"

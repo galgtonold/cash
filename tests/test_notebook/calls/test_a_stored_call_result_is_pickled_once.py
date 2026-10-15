@@ -92,9 +92,9 @@ def test_a_pickle_made_for_a_store_is_taken_only_by_that_value():
     made = memory_backend.premade_snapshot(model)
     assert made is not None
     kept = memory_backend._snapshot(other)
-    assert kept is not made[0]
-    assert memory_backend._snapshot(model) is made[0]
-    assert memory_backend._snapshot(model) is not made[0], "taken twice"
+    assert kept.stream is not made.stream
+    assert memory_backend._snapshot(model).stream is made.stream
+    assert memory_backend._snapshot(model).stream is not made.stream, "taken twice"
 
 
 def test_a_digest_for_a_store_matches_a_later_digest():
