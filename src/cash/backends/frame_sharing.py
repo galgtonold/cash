@@ -387,7 +387,7 @@ def _freeze(frame: Any, *, cells_known: bool = False) -> bool:
         return False
 
 
-def copy_keeping_blocks(frame: Any, *, arrow: bool = True) -> Any:
+def copy_keeping_blocks(frame: Any, *, arrow: bool = True, reuse: Any = None) -> Any:
     """``frame.copy(deep=True)`` with *frame*'s blocks as they are, and
     nothing of *frame*'s left in it (`own_parts`).
 
@@ -406,6 +406,10 @@ def copy_keeping_blocks(frame: Any, *, arrow: bool = True) -> Any:
 
     *arrow* False: *frame* is the RAM tier's own, so its Arrow data, which
     no pandas handle writes, is shared rather than copied (a hit).
+
+    *reuse*, when storing: a `shared_blocks.BlockReuse` for *frame*, whose
+    ``find`` gives the values of a block of the same content the RAM tier
+    already keeps; such a block is not copied again.
     """
     try:
         mgr = frame._mgr
@@ -413,10 +417,12 @@ def copy_keeping_blocks(frame: Any, *, arrow: bool = True) -> Any:
             copied = frame.copy(deep=True)
             own_parts(copied, arrow=arrow)
             return copied
-        blocks = [
-            type(block)(_copy_values(block.values, arrow), placement=block._mgr_locs, ndim=block.ndim, refs=None)
-            for block in mgr.blocks
-        ]
+        blocks = []
+        for block in mgr.blocks:
+            values = reuse.find(block) if reuse is not None else None
+            if values is None:
+                values = _copy_values(block.values, arrow)
+            blocks.append(type(block)(values, placement=block._mgr_locs, ndim=block.ndim, refs=None))
         axes = [_owned_axis(axis, arrow) for axis in mgr.axes]
         copied_mgr = type(mgr).from_blocks(blocks, axes)
         return frame._constructor_from_mgr(copied_mgr, axes=copied_mgr.axes).__finalize__(frame, method="copy")
