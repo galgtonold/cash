@@ -14,8 +14,10 @@ instead of running the body. This page covers where results go, how to see what
 cash did, what makes an entry go stale, the parameters, and the limits.
 
 Good candidates are file loads, ETL steps, model fits, simulations and paid
-API calls. A function that takes microseconds gains nothing: building the key
-costs more than the body.
+API calls. A function that takes microseconds gains little: building the key
+of a call costs about a tenth of a millisecond. With the C extension, a hit
+met again is served in about half a microsecond while nothing it reads has
+changed; see [a hit met again](how-it-works/decorator-path.md#a-hit-met-again).
 
 ## The minimum
 

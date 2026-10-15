@@ -75,6 +75,10 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
         # Switches the C extension off, at build time (hatch_build.py) and at run
         # time (cash._native) alike; read before any config is, so not a setting.
         "CASH_PURE_PYTHON",
+        # Switch the remembered-hit path off, or check every hit it serves
+        # (cash.decorator.hit_memo); read once at import, so not a setting.
+        "CASH_HITPATH",
+        "CASH_HITPATH_VERIFY",
     }
 )
 
