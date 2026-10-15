@@ -29,8 +29,8 @@ the watch table fits its budget (``CASH_CWATCH_BUDGET``, 2% of RAM).
 
 from __future__ import annotations
 
+import abc
 import copyreg
-import functools
 import os
 import sys
 import types
@@ -39,7 +39,7 @@ from collections.abc import Callable
 from time import perf_counter
 from typing import Any
 
-from . import _native
+from . import _native, kept_state
 from ._native import REASON
 from ._native import cwatch as _cw
 
@@ -139,28 +139,30 @@ _FORBIDDEN = frozenset(
 _HEAPTYPE = 1 << 9
 
 
-def classify(t: type) -> tuple[bool, tuple]:
+def classify(t: type) -> tuple[bool, tuple, bool]:
     """Do instances of *t* pickle from their ``__dict__`` and slots alone,
     by cash's pickling (`kept_state.dumps` keyed) as by ``pickle``?
-    ``(ok, slot member descriptors)``.
+    ``(ok, slot member descriptors, views)``.
 
     Only a plain class: the ``type`` metaclass, every class of its MRO but
-    `object` defined in Python, none of `_FORBIDDEN` defined, no
-    ``functools.cached_property`` (cash leaves views out of the state it
-    keys, `kept_state.derived_views`), no reducer registered with
-    ``copyreg``, nothing a library content hasher claims, and a name pickle
-    can find (not defined inside a function). Its slots must resolve to its
-    own slot descriptors (a subclass property of a base slot's name would
-    be read instead).
+    `object` defined in Python, none of `_FORBIDDEN` defined, no reducer
+    registered with ``copyreg``, nothing a library content hasher claims,
+    and a name pickle can find (not defined inside a function). Its slots
+    must resolve to its own slot descriptors (a subclass property of a base
+    slot's name would be read instead).
+
+    *views*: cash's key leaves the ``functools.cached_property`` values of
+    such an instance that are views of it out of its state
+    (`kept_state.derived_views`, asked through `_views_of` while walking).
     """
     try:
         return _classify(t)
     except Exception:  # noqa: BLE001 - a class that cannot even be inspected: not watched
-        return False, ()
+        return False, (), False
 
 
-def _classify(t: type) -> tuple[bool, tuple]:
-    no = (False, ())
+def _classify(t: type) -> tuple[bool, tuple, bool]:
+    no = (False, (), False)
     if type(t) is not type or not (t.__flags__ & _HEAPTYPE) or t.__itemsize__:
         return no
     mro = t.__mro__
@@ -174,8 +176,6 @@ def _classify(t: type) -> tuple[bool, tuple]:
             return no
         held_dict = own.get("__dict__")
         if held_dict is not None and type(held_dict) is not types.GetSetDescriptorType:
-            return no
-        if any(isinstance(member, functools.cached_property) for member in own.values()):
             return no
     if not isinstance(t.__module__, str) or "<locals>" in t.__qualname__:
         return no
@@ -205,7 +205,64 @@ def _classify(t: type) -> tuple[bool, tuple]:
         # writes ``__slotnames__`` into the class on first use, which would
         # move its version tag right after the verdict.
         copyreg._slotnames(t)
-    return True, tuple(slots)
+    # What the keyed pickle asks, remembered per class as it remembers it.
+    views = bool(kept_state._cached_properties(t))
+    return True, tuple(slots), views
+
+
+def _views_of(obj: Any) -> frozenset | None:
+    """The attributes of *obj* its key leaves out as views of it
+    (`kept_state.derived_views`), when each is an object whose attributes
+    the walker can record as pointers (`_plain_view_class`); else None, and
+    *obj*'s value is hashed every time. Called by the C walker."""
+    try:
+        views = kept_state.derived_views(obj)
+        if views:
+            held = obj.__dict__
+            if not all(_plain_view_class(type(held[name])) for name in views):
+                return None
+        return frozenset(views)
+    except Exception:  # noqa: BLE001 - what the key's own call would raise: hashed every time
+        return None
+
+
+#: A view's class may have one of these metaclasses (networkx's views are
+#: ``collections.abc`` mappings and sets).
+_VIEW_METACLASSES = (type, abc.ABCMeta)
+
+
+def _plain_view_class(t: type) -> bool:
+    """Does reading an instance's attributes the way `derived_views` does
+    (its ``__dict__`` and its ``__slots__`` by name) read only the pointers
+    the instance holds, with no code of its class run?"""
+    if type(t) not in _VIEW_METACLASSES or not (t.__flags__ & _HEAPTYPE):
+        return False
+    mro = t.__mro__
+    for klass in mro[:-1]:
+        if type(klass) not in _VIEW_METACLASSES or not (klass.__flags__ & _HEAPTYPE):
+            return False
+        own = klass.__dict__
+        if "__getattribute__" in own or "__getattr__" in own:
+            return False
+        held_dict = own.get("__dict__")
+        if held_dict is not None and type(held_dict) is not types.GetSetDescriptorType:
+            return False
+        slots = own.get("__slots__")
+        for name in (slots,) if isinstance(slots, str) else (slots or ()):
+            if not isinstance(name, str):
+                return False
+            if name in ("__dict__", "__weakref__"):
+                continue
+            if name.startswith("__") and not name.endswith("__"):
+                name = f"_{klass.__name__.lstrip('_')}{name}"
+            first = next((k.__dict__[name] for k in mro if name in k.__dict__), None)
+            if type(first) is not types.MemberDescriptorType:
+                return False
+    return True
+
+
+if _cw is not None:
+    _cw.configure(views_of=_views_of)
 
 
 #: Shells cash runs a notebook in (`add_namespace`), newest first, held
@@ -257,8 +314,8 @@ def _arm(value: Any) -> int:
         status, detail = cw.arm(value, _anchors())
         if status != _NEED_TYPE:
             return status
-        ok, slots = classify(detail)
-        cw.set_type_verdict(detail, ok, slots)
+        ok, slots, views = classify(detail)
+        cw.set_type_verdict(detail, ok, slots, views)
     return -1
 
 
@@ -332,6 +389,7 @@ def reset() -> None:
         _cw.configure(
             dispatch_table=copyreg.dispatch_table,
             extension_registry=getattr(copyreg, "_extension_registry", None),
+            views_of=_views_of,
         )
 
 

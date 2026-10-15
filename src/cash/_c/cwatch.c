@@ -91,7 +91,7 @@ enum {
     A_NO_ANCHOR = 5, A_OVER_BUDGET = 6, A_BUSY = 7, A_ERROR = 8
 };
 /* snapshot record kinds */
-enum { R_LIST = 1, R_SET = 2, R_INST = 3, R_FUNC = 4, R_TYPE = 5 };
+enum { R_LIST = 1, R_SET = 2, R_INST = 3, R_FUNC = 4, R_TYPE = 5, R_VIEW = 6 };
 
 /* ------------------------------------------------------------ globals */
 typedef struct { uintptr_t addr; uint32_t root; uint32_t next; } WNode;
@@ -135,6 +135,7 @@ static int enabled = 1;
 static PyObject *dispatch_table = NULL;    /* copyreg.dispatch_table */
 static PyObject *ext_registry = NULL;      /* copyreg._extension_registry */
 static PyObject *cached_property_type = NULL;
+static PyObject *views_of = NULL;   /* obj -> frozenset of the view attributes its key leaves out, or None */
 
 /* interned names */
 static PyObject *s_module, *s_getstate, *s_reduce, *s_reduce_ex, *s_dot;
@@ -456,6 +457,7 @@ typedef struct {
     int ok;
     Py_ssize_t nslots;
     Py_ssize_t *offsets;
+    int views;            /* cash's keyed pickle leaves this class's view attributes out */
 } TypeInfo;
 
 static TypeInfo *tinfo = NULL; static size_t tinfo_cap = 0, tinfo_used = 0;
@@ -472,7 +474,7 @@ static TypeInfo *tinfo_find(PyTypeObject *t) {
 
 static TypeInfo *tinfo_put(PyTypeObject *t) {
     TypeInfo *e = tinfo_find(t);
-    if (e) { free(e->offsets); e->offsets = NULL; e->nslots = 0; return e; }
+    if (e) { free(e->offsets); e->offsets = NULL; e->nslots = 0; e->views = 0; return e; }
     if ((tinfo_used + 1) * 2 > tinfo_cap) {
         size_t nc = tinfo_cap ? tinfo_cap * 2 : 256;
         TypeInfo *nt = calloc(nc, sizeof *nt);
@@ -719,6 +721,96 @@ static size_t atom_size(PyObject *o, PyTypeObject *t) {
 
 static PyObject *set_dummy = NULL;
 
+/* a view the keyed pickle leaves out of its owner's state (`views_of`):
+   what decides that it is one -- its class and the pointers it holds in
+   its slots and dict -- is recorded, not what it points at (its owner's
+   own values, walked there). Python vetted its class (`views_of`). */
+static int view_record(Walk *W, PyObject *v) {
+    Root *R = W->R;
+    PyTypeObject *vt = Py_TYPE(v);
+    if (!(vt->tp_flags & Py_TPFLAGS_HEAPTYPE)) { stop(W, A_INELIGIBLE, v); return 1; }
+    if (vt->tp_version_tag == 0 && !PyUnstable_Type_AssignVersionTag(vt)) { stop(W, A_INELIGIBLE, v); return 1; }
+    int a = aset_add(&typeseen, (uintptr_t)vt);
+    if (a < 0) return -1;
+    if (a == 1) {
+        if (PyType_Watch(type_wid, (PyObject *)vt) < 0) return -1;
+        if (root_ref(R, (PyObject *)vt) < 0) return -1;
+        if (root_push_node(W, (uintptr_t)vt, NULL) < 0) return -1;
+        if (snap_reserve(R, 4) < 0) return -1;
+        R->snap[R->nsnap++] = R_TYPE;
+        R->snap[R->nsnap++] = (uintptr_t)vt;
+        R->snap[R->nsnap++] = (uintptr_t)vt->tp_version_tag;
+        R->snap[R->nsnap++] = (uintptr_t)((PyHeapTypeObject *)vt)->ht_qualname;
+        if (root_ref(R, ((PyHeapTypeObject *)vt)->ht_qualname) < 0) return -1;
+    }
+    /* every object slot of every class in its MRO */
+    PyObject *mro = vt->tp_mro;
+    if (!mro || !PyTuple_Check(mro)) { stop(W, A_INELIGIBLE, v); return 1; }
+    Py_ssize_t offs[64]; size_t n = 0;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); i++) {
+        PyTypeObject *k = (PyTypeObject *)PyTuple_GET_ITEM(mro, i);
+        if (k == &PyBaseObject_Type) continue;
+        if (!(k->tp_flags & Py_TPFLAGS_HEAPTYPE)) { stop(W, A_INELIGIBLE, v); return 1; }
+        PyMemberDef *m = k->tp_members;   /* a heap class: its __slots__ (and offsets of __dict__, __weakref__) */
+        for (; m && m->name; m++) {
+            if (m->type != Py_T_OBJECT_EX) continue;
+            if (m->offset <= 0 || m->offset + (Py_ssize_t)sizeof(PyObject *) > vt->tp_basicsize) { stop(W, A_INELIGIBLE, v); return 1; }
+            int dup = 0;
+            for (size_t j = 0; j < n; j++) if (offs[j] == m->offset) dup = 1;
+            if (dup) continue;
+            if (n == 64) { stop(W, A_INELIGIBLE, v); return 1; }
+            offs[n++] = m->offset;
+        }
+    }
+    PyObject *d = NULL;
+    if (vt->tp_dictoffset != 0 || (vt->tp_flags & Py_TPFLAGS_MANAGED_DICT)) {
+        d = PyObject_GenericGetDict(v, NULL);
+        if (!d) return -1;
+        if (!PyDict_CheckExact(d)) { Py_DECREF(d); stop(W, A_INELIGIBLE, v); return 1; }
+        /* any change to it: a node of its own, its values not walked */
+        if (root_push_node(W, (uintptr_t)d, NULL) < 0 || PyDict_Watch(dict_wid, d) < 0 ||
+            ovec_push(&keep, d) < 0) { Py_DECREF(d); return -1; }
+        Py_DECREF(d);   /* kept alive by keep for the walk, by v after it */
+    }
+    if (snap_reserve(R, 4 + 2 * n) < 0) return -1;
+    R->snap[R->nsnap++] = R_VIEW | ((uintptr_t)n << 8);
+    R->snap[R->nsnap++] = (uintptr_t)v;
+    R->snap[R->nsnap++] = (uintptr_t)vt;
+    R->snap[R->nsnap++] = (uintptr_t)d;
+    for (size_t j = 0; j < n; j++) {
+        R->snap[R->nsnap++] = (uintptr_t)offs[j];
+        R->snap[R->nsnap++] = (uintptr_t)*(PyObject **)((char *)v + offs[j]);
+    }
+    W->content += (size_t)vt->tp_basicsize;
+    return 0;
+}
+
+/* an instance's dict when its key leaves the views in *views* out: watched,
+   its other values walked, each view only recorded (`view_record`) */
+static int dict_with_views(Walk *W, PyObject *d, PyObject *views) {
+    int added = aset_add(&visited, (uintptr_t)d);
+    if (added < 0) return -1;
+    if (added == 0) return 0;       /* walked already, all of it as content */
+    if (ovec_push(&keep, d) < 0) return -1;
+    W->content += 64 + (size_t)PyDict_GET_SIZE(d) * 24;
+    if (root_push_node(W, (uintptr_t)d, NULL) < 0) return -1;
+    if (PyDict_Watch(dict_wid, d) < 0) return -1;
+    Py_ssize_t pos = 0; PyObject *k, *v;
+    while (PyDict_Next(d, &pos, &k, &v)) {
+        PyTypeObject *kt = Py_TYPE(k), *vt = Py_TYPE(v);
+        if (is_atom(k, kt)) W->content += atom_size(k, kt); else if (push(k) < 0) return -1;
+        int is_view = PyUnicode_CheckExact(k) ? PySet_Contains(views, k) : 0;
+        if (is_view < 0) return -1;
+        if (is_view) {
+            int r = view_record(W, v);
+            if (r) return r;
+            continue;
+        }
+        if (is_atom(v, vt)) W->content += atom_size(v, vt); else if (push(v) < 0) return -1;
+    }
+    return 0;
+}
+
 /* walk one container popped from the stack: 0 ok, 1 stop, -1 error */
 static int visit(Walk *W, PyObject *o) {
     Root *R = W->R;
@@ -843,6 +935,19 @@ static int visit(Walk *W, PyObject *o) {
             else if (push(x) < 0) { Py_XDECREF(d); return -1; }
         }
     }
+    if (d && ti->views && views_of) {
+        /* runs Python: `ti` may move, nothing below reads it */
+        PyObject *views = PyObject_CallOneArg(views_of, o);
+        if (!views) { Py_DECREF(d); return -1; }
+        if (!PyAnySet_CheckExact(views)) { Py_DECREF(views); Py_DECREF(d); stop(W, A_INELIGIBLE, o); return 1; }
+        if (PySet_GET_SIZE(views) > 0) {
+            int r = dict_with_views(W, d, views);
+            Py_DECREF(views);
+            Py_DECREF(d);
+            return r;
+        }
+        Py_DECREF(views);
+    }
     if (d) {
         int r = push(d);
         Py_DECREF(d);
@@ -913,6 +1018,23 @@ static int verify(Root *R) {
             for (size_t i = 0; i < n; i++)
                 if (*(uintptr_t *)((char *)o + ti->offsets[i]) != s[4 + i]) return 0;
             s += 4 + n;
+            break;
+        }
+        case R_VIEW: {
+            PyTypeObject *t = (PyTypeObject *)s[2];
+            if (Py_TYPE(o) != t) return 0;
+            if (s[3]) {
+                PyObject *d = PyObject_GenericGetDict(o, NULL);
+                if (!d) { PyErr_Clear(); return 0; }
+                int same = (uintptr_t)d == s[3];
+                Py_DECREF(d);
+                if (!same) return 0;
+            } else if (t->tp_dictoffset != 0 || (t->tp_flags & Py_TPFLAGS_MANAGED_DICT)) {
+                return 0;
+            }
+            for (size_t i = 0; i < n; i++)
+                if (*(uintptr_t *)((char *)o + (Py_ssize_t)s[4 + 2 * i]) != s[5 + 2 * i]) return 0;
+            s += 4 + 2 * n;
             break;
         }
         case R_FUNC: {
@@ -1306,7 +1428,10 @@ static PyObject *py_version(PyObject *self, PyObject *o) {
 /* set_type_verdict(type, ok, slot_descriptors): cash's Python side says
    whether instances of type pickle from their __dict__ and slots alone */
 static PyObject *py_set_type_verdict(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
-    if (nargs != 3) { PyErr_SetString(PyExc_TypeError, "set_type_verdict(type, ok, slots)"); return NULL; }
+    if (nargs != 3 && nargs != 4) { PyErr_SetString(PyExc_TypeError, "set_type_verdict(type, ok, slots, views=False)"); return NULL; }
+    if (busy) { PyErr_SetString(PyExc_RuntimeError, "cash._cwatch is busy"); return NULL; }
+    int views = nargs == 4 ? PyObject_IsTrue(args[3]) : 0;
+    if (views < 0) return NULL;
     if (!PyType_Check(args[0])) { PyErr_SetString(PyExc_TypeError, "not a type"); return NULL; }
     PyTypeObject *t = (PyTypeObject *)args[0];
     int ok = PyObject_IsTrue(args[1]);
@@ -1341,7 +1466,7 @@ static PyObject *py_set_type_verdict(PyObject *self, PyObject *const *args, Py_s
     }
     TypeInfo *e = tinfo_put(t);
     if (!e) { free(offs); return NULL; }
-    e->tag = t->tp_version_tag; e->ok = ok; e->nslots = ns; e->offsets = offs;
+    e->tag = t->tp_version_tag; e->ok = ok; e->nslots = ns; e->offsets = offs; e->views = ok && views;
     return PyBool_FromLong(ok);
 }
 
@@ -1354,16 +1479,21 @@ static PyObject *py_type_verdict(PyObject *self, PyObject *t) {
 
 static PyObject *py_configure(PyObject *self, PyObject *args, PyObject *kw) {
     static char *names[] = {"budget", "min_bytes", "enabled", "dispatch_table", "extension_registry",
-                            "cached_property", NULL};
+                            "cached_property", "views_of", NULL};
     Py_ssize_t b = -1, mb = -1; int en = -1;
-    PyObject *dt = NULL, *er = NULL, *cp = NULL;
-    if (!PyArg_ParseTupleAndKeywords(args, kw, "|nnpOOO", names, &b, &mb, &en, &dt, &er, &cp)) return NULL;
+    PyObject *dt = NULL, *er = NULL, *cp = NULL, *vo = NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "|nnpOOOO", names, &b, &mb, &en, &dt, &er, &cp, &vo)) return NULL;
+    if (busy) { PyErr_SetString(PyExc_RuntimeError, "cash._cwatch is busy"); return NULL; }
     if (b >= 0) budget = (size_t)b;
     if (mb >= 0) min_bytes = (size_t)mb;
     if (en >= 0) enabled = en;
     if (dt && dt != Py_None) { if (!PyDict_Check(dt)) { PyErr_SetString(PyExc_TypeError, "dispatch_table"); return NULL; } Py_XSETREF(dispatch_table, Py_NewRef(dt)); }
     if (er && er != Py_None) { if (!PyDict_Check(er)) { PyErr_SetString(PyExc_TypeError, "extension_registry"); return NULL; } Py_XSETREF(ext_registry, Py_NewRef(er)); }
     if (cp && cp != Py_None) Py_XSETREF(cached_property_type, Py_NewRef(cp));
+    if (vo && vo != Py_None) {
+        if (!PyCallable_Check(vo)) { PyErr_SetString(PyExc_TypeError, "views_of"); return NULL; }
+        Py_XSETREF(views_of, Py_NewRef(vo));
+    }
     Py_RETURN_NONE;
 }
 
