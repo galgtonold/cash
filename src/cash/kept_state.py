@@ -22,6 +22,7 @@ import itertools
 import operator
 import pickle
 import sys
+import threading
 import types
 import weakref
 from collections.abc import Callable, Iterator
@@ -45,7 +46,7 @@ __all__ = [
 
 def dumps(*args: Any, **kwargs: Any) -> bytes:
     """`_dumps_value` inside `one_keying`; see there."""
-    if _LEFT_OUT:
+    if _keying() is not None:
         return _dumps_value(*args, **kwargs)
     with one_keying():
         return _dumps_value(*args, **kwargs)
@@ -1196,10 +1197,30 @@ def _reduce_for_key(obj: Any, protocol: int, registered: Any = None) -> Any:
     return rebuild, args, ("__cash_left_out__", rest[0], left_out), *rest[1:4]
 
 
-#: Inside `one_keying`: ``id(obj)`` -> ``(obj, state, left_out_attrs(obj, state))``.
-_LEFT_OUT: list[dict[int, tuple[Any, Any, dict]]] = []
-#: Inside `one_keying`: ``id(value)`` -> ``(value, whether it pickles)`` (`_picklable`).
-_PICKLABLE: list[dict[int, tuple[Any, bool]]] = []
+class _Keying:
+    """What one keying has told (`one_keying`)."""
+
+    __slots__ = ("left_out", "picklable")
+
+    def __init__(self) -> None:
+        #: ``id(obj)`` -> ``(obj, state, left_out_attrs(obj, state))``, or
+        #: ``(obj, _TELLING, None)`` while its attributes are told.
+        self.left_out: dict[int, tuple[Any, Any, dict | None]] = {}
+        #: ``id(value)`` -> ``(value, whether it pickles)`` (`_picklable`).
+        self.picklable: dict[int, tuple[Any, bool]] = {}
+
+
+#: The keying this thread is in, if any. Per thread: another thread keying
+#: at the same time has objects of its own being told.
+_KEYING = threading.local()
+
+#: In `_Keying.left_out`, the state of an object whose left-out attributes
+#: are being told.
+_TELLING = object()
+
+
+def _keying() -> _Keying | None:
+    return getattr(_KEYING, "now", None)
 
 
 @contextlib.contextmanager
@@ -1211,17 +1232,19 @@ def one_keying() -> Iterator[None]:
     attribute that is itself an object of such a class has its own left-out
     attributes pickled to tell, and is pickled again as part of the state:
     a chain of them was pickled 2**depth times (16 deep, a second; 30 deep,
-    hours). Remembered, each object is told once."""
-    if _LEFT_OUT:
+    hours). Remembered, each object is told once.
+
+    What is remembered is about the object alone, never about where it was
+    met: the answer for a value is the same however deep the stack is and
+    whatever was keyed before it in the block."""
+    if _keying() is not None:
         yield
         return
-    _LEFT_OUT.append({})
-    _PICKLABLE.append({})
+    _KEYING.now = _Keying()
     try:
         yield
     finally:
-        _LEFT_OUT.pop()
-        _PICKLABLE.pop()
+        _KEYING.now = None
 
 
 def left_out_attrs(obj: Any, state: Any) -> dict:
@@ -1232,20 +1255,31 @@ def left_out_attrs(obj: Any, state: Any) -> dict:
 
     One that cannot be pickled (a lock or a connection the class leaves out
     for that reason) is given as its type: its content is nothing pickle can
-    read.
+    read. Whether one pickles does not depend on what any object leaves
+    out, as that is pickled or given as its type: an attribute that leads
+    back to *obj* pickles when the rest of it does, as pickle stores a cycle.
     """
-    if not _LEFT_OUT:
+    keying = _keying()
+    if keying is None:
         with one_keying():
             return left_out_attrs(obj, state)
     # Inline below: a chain of such objects nests a pickle per level, and
     # each frame here counts against the recursion limit.
-    memo = _LEFT_OUT[-1]
+    memo = keying.left_out
     known = memo.get(id(obj))
-    if known is not None and known[0] is obj and _same_state(known[1], state):
-        return known[2]
+    if known is not None and known[0] is obj:
+        if known[1] is _TELLING:
+            # Met again inside a pickle telling whether one of its own
+            # attributes pickles. What it leaves out cannot decide that (see
+            # above), and telling it again would recurse without end, until
+            # a stack -- however deep it already was -- ran out.
+            return {}
+        if known[1] is state:
+            return known[2]  # type: ignore[return-value]
     attrs = _instance_attrs(obj)
     if not attrs:
         return {}
+    memo[id(obj)] = (obj, _TELLING, None)
     saved: dict = {}
     if isinstance(state, tuple) and len(state) == 2 and isinstance(state[1], dict):
         if isinstance(state[0], dict):
@@ -1254,27 +1288,22 @@ def left_out_attrs(obj: Any, state: Any) -> dict:
     elif isinstance(state, dict):
         saved = state
     left_out = {}
-    for name, value in attrs.items():
-        if name in saved and _same(saved[name], value):
-            continue
-        if not _picklable(value):
-            value = ("__cash_unpicklable__", f"{type(value).__module__}.{type(value).__qualname__}")
-        left_out[name] = value
+    try:
+        for name, value in attrs.items():
+            if name in saved and _same(saved[name], value):
+                continue
+            if not _picklable(value):
+                value = ("__cash_unpicklable__", f"{type(value).__module__}.{type(value).__qualname__}")
+            left_out[name] = value
+    except BaseException:
+        memo.pop(id(obj), None)
+        raise
+    # Remembered for this state object only: a reduce that makes its state
+    # anew is told again, cheaply, as whether its attributes pickle is
+    # remembered (`_picklable`). An equal state is not taken for it:
+    # ``1 == True``.
     memo[id(obj)] = (obj, state, left_out)
     return left_out
-
-
-def _same_state(known: Any, state: Any) -> bool:
-    """Is *state* the one an object's left-out attributes were told for?
-    The same object, or equal plainly; anything else is told again."""
-    if known is state:
-        return True
-    if type(known) is not type(state):
-        return False
-    try:
-        return bool(known == state)
-    except Exception:  # noqa: BLE001 - an ambiguous or failing comparison
-        return False
 
 
 def _picklable(value: Any) -> bool:
@@ -1283,7 +1312,8 @@ def _picklable(value: Any) -> bool:
     to tell whether what holds it does: the bytes are thrown away, so it
     stands in by a persistent id. Each object is then pickled once to tell,
     however deep the attributes it leaves out nest."""
-    memo = _PICKLABLE[-1] if _PICKLABLE else None
+    keying = _keying()
+    memo = keying.picklable if keying is not None else None
     if memo is not None:
         known = memo.get(id(value))
         if known is not None and known[0] is value:
@@ -1301,6 +1331,15 @@ def _picklable(value: Any) -> bool:
         else:  # `dumps` itself, two frames fewer (see `left_out_attrs`)
             _dumps(value, pickle.DEFAULT_PROTOCOL, False, None, None, told, True)
         ok = True
+    except (RecursionError, MemoryError) as exc:
+        if not too_deep(exc):
+            ok = False
+        else:
+            # No answer about *value*: where the stack ran out depends on how
+            # deep it was when asked. Taken for one, the value would key one
+            # way from here and another from a deeper call; the keying as a
+            # whole is too deep instead, as a pickle of it would be.
+            raise
     except Exception:  # noqa: BLE001 - whatever pickle refuses
         ok = False
     if memo is not None:

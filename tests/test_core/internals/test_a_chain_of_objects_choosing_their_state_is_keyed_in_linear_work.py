@@ -104,16 +104,17 @@ def test_the_digest_is_the_one_every_attribute_told_alone_gives(classes, monkeyp
         return True
 
     monkeypatch.setattr(kept_state, "_picklable", alone, raising=False)
-    monkeypatch.setattr(kept_state, "_LEFT_OUT", _Forgetful(), raising=False)
+    monkeypatch.setattr(kept_state, "_Keying", _Forgetful, raising=False)
 
     assert compute_hash(value) == remembered
 
 
-class _Forgetful(list):
-    """A memo stack whose memo remembers nothing."""
+class _Forgetful:
+    """A keying that remembers nothing it told."""
 
-    def append(self, _memo):
-        super().append(_Nothing())
+    def __init__(self):
+        self.left_out = _Nothing()
+        self.picklable = _Nothing()
 
 
 class _Nothing(dict):

@@ -84,15 +84,16 @@ Each argument is fingerprinted by the first rule that applies:
 6. The pickled value, in one canonical form: sets in sorted order, every
    container tagged with its type.
 
-<!-- claim: cash/kept_state.py:chooses_its_state @2d177a27, cash/kept_state.py:left_out_attrs @a42e2e87 -->
+<!-- claim: cash/kept_state.py:chooses_its_state @2d177a27, cash/kept_state.py:left_out_attrs @28c3abed -->
 A class of yours whose own `__getstate__`, `__reduce__` or `__reduce_ex__`,
 or a reducer registered for it with `copyreg.pickle`, leaves instance
 attributes out of what it pickles (a precision, a device, a lock) is keyed
 with those attributes too, since its methods may still read them. That holds
 for attributes in `__slots__` and for one saved under its name with another
 value (a portable default in place of the live setting). One that cannot be
-pickled, such as a lock, is keyed by its type. A library's class is keyed by
-what it pickles.
+pickled, such as a lock, is keyed by its type; one that holds the object
+leaving it out is keyed by its content, as pickle stores the cycle. A
+library's class is keyed by what it pickles.
 
 Inside a list, tuple, set or dict argument, a value a registered hasher, a
 `__cash_key__` or a built-in content hasher covers is hashed by it too;
