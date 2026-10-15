@@ -35,7 +35,7 @@ def _hide_blake3(tmp_path) -> dict[str, str]:
     shadow = tmp_path / "no-blake3"
     (shadow / "blake3").mkdir(parents=True, exist_ok=True)
     (shadow / "blake3" / "__init__.py").write_text(
-        'raise ModuleNotFoundError("No module named blake3 (hidden by the test)")\n'
+        'raise ModuleNotFoundError("No module named blake3 (hidden by the test)")\n', encoding="utf-8"
     )
     path = [str(shadow), CASH_SRC, os.environ.get("PYTHONPATH", "")]
     return {"PYTHONPATH": os.pathsep.join(p for p in path if p)}
