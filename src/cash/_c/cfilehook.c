@@ -15,7 +15,8 @@
  * The slots are found from each object's dynamic section (JUMP_SLOT, GLOB_DAT
  * and absolute relocations with no addend against an undefined symbol).
  * Never hooked: the main program and libpython (Python's own opens are the
- * audit hook's), the dynamic loader and libc itself, sanitizer runtimes, and
+ * audit hook's), the dynamic loader and libc itself, sanitizer runtimes,
+ * OpenSSL (whose opens are CA bundles and openssl.cnf: machine state), and
  * this module. A slot is rebound only when it holds the very function
  * dlsym(RTLD_DEFAULT) returns for the name, or is still unresolved (a lazy
  * PLT slot pointing into its own object); a slot bound to anything else (an
@@ -38,7 +39,8 @@
  * FILE* of one must go back to the same one. Never hooked: the main program,
  * the python3xx DLL, modules under the Windows directory (the system's own
  * DLLs, and Defender's scanner, which injects itself from ProgramData), the
- * CRT itself (ucrtbase, vcruntime, msvcrt, api-ms-win-*) and this module. New modules are noticed through LdrRegisterDllNotification (a
+ * CRT itself (ucrtbase, vcruntime, msvcrt, api-ms-win-*), OpenSSL as on Linux
+ * and this module. New modules are noticed through LdrRegisterDllNotification (a
  * counter the next window open compares). Calls through an address fetched
  * with GetProcAddress (ctypes, a library's own dynamic loading, sqlite's
  * table of system calls) bypass the IAT, as dlsym'd pointers bypass the GOT.
@@ -526,7 +528,9 @@ static int skipped_object(const char *name, uintptr_t base) {
         "linux-vdso", "linux-gate", "ld-linux", "ld64.so", "ld-2.", "libc.so", "libc-", "libpthread",
         "libdl.", "libdl-", "librt.", "libm.so", "libm-", "libmvec", "libpython", "libasan", "libubsan",
         "liblsan", "libtsan", "libhwasan", "libgcc_s", "libresolv", "libnss_", "libutil", "libmemusage",
-        "libSegFault", "libpcprofile"};
+        "libSegFault", "libpcprofile",
+        /* OpenSSL: its opens are CA bundles and openssl.cnf, machine state like /etc/hosts */
+        "libcrypto", "libssl"};
     for (size_t i = 0; i < sizeof prefixes / sizeof prefixes[0]; i++)
         if (strncmp(b, prefixes[i], strlen(prefixes[i])) == 0) return 1;
     return 0;
@@ -1449,7 +1453,9 @@ static int skipped_module(uintptr_t base, const wchar_t *path) {
         if (_wcsnicmp(q, defender, wcslen(defender)) == 0) return 1;
     const wchar_t *b = basename_w(path);
     static const wchar_t *const prefixes[] = {L"python3", L"ucrtbase", L"vcruntime", L"api-ms-win-", L"ext-ms-",
-                                              L"msvcrt.", L"kernel32.", L"kernelbase."};
+                                              L"msvcrt.", L"kernel32.", L"kernelbase.",
+                                              /* OpenSSL: CA bundles and openssl.cnf, machine state */
+                                              L"libcrypto", L"libssl"};
     for (size_t i = 0; i < sizeof prefixes / sizeof prefixes[0]; i++)
         if (_wcsnicmp(b, prefixes[i], wcslen(prefixes[i])) == 0) return 1;
     return 0;

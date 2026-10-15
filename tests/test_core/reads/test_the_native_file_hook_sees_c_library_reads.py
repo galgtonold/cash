@@ -492,6 +492,9 @@ def test_nested_trackers_each_get_the_reads_made_while_open(tmp_path, clib, hook
     assert native_reads.stats()["buffered"] == 0, "events outlived every window"
 
 
+# On Windows the tracker takes ~20 s to record 65k missing paths (realpath is
+# slow there); the hook's own part is a fraction of a second.
+@pytest.mark.timeout(180)
 def test_a_full_buffer_makes_the_block_unverifiable(tmp_path, clib, hook):
     """More distinct opens than the buffer holds: the tracker records a
     dependency that is never fresh instead of silently missing some."""
