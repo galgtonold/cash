@@ -52,7 +52,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from .._paths import replace_with_retry
-from ..bulk_digest import LEAF_BYTES, bulk_digest
+from ..bulk_digest import LEAF_BYTES, PARALLEL_MIN_BYTES, bulk_digest, hashing_threads
 from .cache_dir import CHUNK_DIRNAME, CHUNK_SUFFIX, create_temp_file, owned_temp_prefix, write_all
 
 logger = logging.getLogger(__name__)
@@ -61,6 +61,8 @@ __all__ = [
     "CHUNK_MIN_BYTES",
     "ChunkError",
     "ChunkStore",
+    "as_bytes",
+    "digests",
     "read_chunk",
 ]
 
@@ -78,6 +80,59 @@ _CAN_MAP = os.name == "posix" and sys.version_info >= (3, 13)
 
 def chunk_name(digest: bytes) -> str:
     return digest.hex() + CHUNK_SUFFIX
+
+
+def as_bytes(buffer: Any) -> memoryview:
+    """*buffer* as a flat view of its bytes (a buffer handed out of band is
+    contiguous)."""
+    view = memoryview(buffer)
+    if view.ndim != 1 or view.format != "B":
+        view = view.cast("B")
+    return view
+
+
+def digests(views: list[memoryview]) -> list[bytes]:
+    """`bulk_digest` of each view. One under `PARALLEL_MIN_BYTES` is hashed
+    on one thread by `bulk_digest`, so an entry of many such columns is
+    spread over `hashing_threads` threads here: the writer hashes beside a
+    busy caller, and each leaf waits for the interpreter lock it hands back,
+    so one thread hashing leaf after leaf mostly waits."""
+    out: list[Any] = [None] * len(views)
+    small = []
+    for i, view in enumerate(views):
+        if view.nbytes >= PARALLEL_MIN_BYTES:
+            out[i] = bulk_digest(view)  # on several threads already
+        else:
+            small.append(i)
+    threads = min(hashing_threads(), len(small))
+    if threads < 2:
+        for i in small:
+            out[i] = bulk_digest(views[i])
+        return out
+    errors: list[BaseException] = []
+
+    def run(indices: list[int]) -> None:
+        try:
+            for i in indices:
+                out[i] = bulk_digest(views[i])
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's thread
+            errors.append(exc)
+
+    workers = []
+    for k in range(1, threads):
+        worker = threading.Thread(target=run, args=(small[k::threads],), name="cash-digest", daemon=True)
+        try:
+            worker.start()
+        except RuntimeError:  # no new threads (interpreter shutting down): do it here
+            run(small[k::threads])
+            continue
+        workers.append(worker)
+    run(small[0::threads])
+    for worker in workers:
+        worker.join()
+    if errors:
+        raise errors[0]
+    return out
 
 
 class ChunkError(OSError):
@@ -172,17 +227,17 @@ class ChunkStore:
 
     # -- writing ---------------------------------------------------------------
 
-    def put(self, buffer: Any) -> tuple[bytes, bytes, int]:
-        """Store *buffer* as a chunk unless it is stored already.
+    def put(self, buffer: Any, digest: bytes | None = None) -> tuple[bytes, bytes, int]:
+        """Store *buffer* as a chunk unless it is stored already. *digest*:
+        its `bulk_digest`, when the caller has it (`digests`).
 
         Returns ``(digest, crc32, bytes added to the folder)``. The chunk
         counts as held by a write in flight until `commit` or `abandon`.
         """
-        view = memoryview(buffer)
-        if view.ndim != 1 or view.format != "B":
-            view = view.cast("B")
+        view = as_bytes(buffer)
         nbytes = view.nbytes
-        digest = bulk_digest(view)
+        if digest is None:
+            digest = bulk_digest(view)
         name = chunk_name(digest)
         with self.lock:
             self._pending[name] = self._pending.get(name, 0) + 1

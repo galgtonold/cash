@@ -327,3 +327,13 @@ def test_a_new_process_restores_values_whose_buffers_are_chunks(tmp_path):
         assert a.equals(b)
         for col in a:
             assert a[col].to_numpy().tobytes() == b[col].to_numpy().tobytes()
+
+
+def test_a_buffer_is_named_by_its_digest_however_many_are_hashed_together():
+    """The writer hashes an entry's buffers on several threads at once; each
+    name is the buffer's own digest, whatever was hashed beside it."""
+    store = _chunk_store()
+    rng = np.random.default_rng(17)
+    arrays = [rng.random(n) for n in (200_000, 150_001, 2_000_000, 300_000, 131_072)]
+    views = [store.as_bytes(a) for a in arrays]
+    assert store.digests(views) == [bulk_digest_module.bulk_digest(v) for v in views]

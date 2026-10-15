@@ -339,7 +339,7 @@ in a new process.
 
 <span id="shared-buffers"></span>
 
-<!-- claim: cash/backends/chunk_store.py:ChunkStore.put @d0bbfbf9, cash/backends/chunk_store.py:CHUNK_MIN_BYTES @fdf218ec, cash/backends/file_backend.py:FileBackend._write_cache_files @8345402c -->
+<!-- claim: cash/backends/chunk_store.py:ChunkStore.put @1a6e2443, cash/backends/chunk_store.py:CHUNK_MIN_BYTES @fdf218ec, cash/backends/file_backend.py:FileBackend._write_cache_files @b971c62d -->
 Each buffer of a megabyte or more that a value is written with (a column of
 a table, an array's data) is stored once per cache folder, in its `chunks`
 folder, named by a digest of its bytes. An entry names the chunks it holds.

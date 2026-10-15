@@ -38,7 +38,7 @@ from .cache_dir import (
     warn_unusable,
     write_all,
 )
-from .chunk_store import CHUNK_MIN_BYTES, TRAILER, ChunkStore, chunk_name
+from .chunk_store import CHUNK_MIN_BYTES, TRAILER, ChunkStore, as_bytes, chunk_name, digests
 from .entry_format import (
     CHUNKS_FIELD,
     ENTRY_SUFFIX,
@@ -745,14 +745,14 @@ class FileBackend(CacheBackend):
         added = 0
         if isinstance(serialized_value, SplitPayload):
             apart: dict[int, tuple[bytes, bytes]] = {}
+            big = [(i, as_bytes(buf)) for i, buf in enumerate(serialized_value.buffers)]
+            big = [(i, view) for i, view in big if view.nbytes >= CHUNK_MIN_BYTES]
             try:
-                for i, buf in enumerate(serialized_value.buffers):
-                    nbytes = memoryview(buf).nbytes
-                    if nbytes >= CHUNK_MIN_BYTES:
-                        digest, crc, grew = self.chunks.put(buf)
-                        apart[i] = (digest, crc)
-                        held.append((chunk_name(digest), nbytes + TRAILER))
-                        added += grew
+                for (i, view), known in zip(big, digests([view for _i, view in big])):
+                    digest, crc, grew = self.chunks.put(view, known)
+                    apart[i] = (digest, crc)
+                    held.append((chunk_name(digest), view.nbytes + TRAILER))
+                    added += grew
             except BaseException:
                 self.chunks.abandon(held)
                 raise
