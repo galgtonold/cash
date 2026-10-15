@@ -73,3 +73,46 @@ def test_a_skipped_value_still_alive_stays_skipped(watching, counted):
     for _ in range(4):
         value_watch.digest(value, counted)
     assert counted.calls == 4
+
+
+#: The sighting table: 2**13 slots, by a mix of the address (cwatch.c's
+#: ``hmix`` and ``SIGHT_BITS``).
+_SIGHT_SLOTS = 1 << 13
+_U64 = (1 << 64) - 1
+
+
+def _sight_slot(address: int) -> int:
+    x = address
+    x ^= x >> 33
+    x = (x * 0xFF51AFD7ED558CCD) & _U64
+    x ^= x >> 33
+    x = (x * 0xC4CEB9FE1A85EC53) & _U64
+    x ^= x >> 33
+    return x % _SIGHT_SLOTS
+
+
+class _Changing:
+    def __init__(self) -> None:
+        self.n = 0
+
+
+def test_a_value_sharing_a_skipped_values_slot_is_watched(watching, counted):
+    """A sighting is kept in a slot chosen by address, and a skip kept its
+    slot from every other value for up to a million checks: a value whose
+    address landed there was seen for the first time on every check, and
+    never armed. It counts as seen twice instead."""
+    changing = _Changing()
+    for i in range(8):
+        changing.n = i
+        value_watch.digest(changing, counted)
+    assert value_watch._cw.check(changing, value_watch.KIND_VALUE) == SKIP
+    held = []
+    while True:
+        value = _rows()
+        if _sight_slot(id(value)) == _sight_slot(id(changing)):
+            break
+        held.append(value)
+    counted.calls = 0
+    for _ in range(4):
+        value_watch.digest(value, counted)
+    assert counted.calls < 4, "a value in a skipped value's slot was never armed"

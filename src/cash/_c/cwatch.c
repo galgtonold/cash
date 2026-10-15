@@ -1251,6 +1251,14 @@ static void sight_dict_gone(uintptr_t a) {
     }
 }
 
+/* does the slot hold a skip of an object that may still live? A dead one's
+   skip is worth nothing: it only keeps other values out of the slot */
+static int sight_holds_live_skip(Sight *g) {
+    if (g->state != SG_SKIP || tick >= g->until) return 0;
+    if (g->wref && weak_target(g->wref) == NULL) return 0;
+    return 1;
+}
+
 /* is the slot's skip still about `o`, not an object freed at its address? */
 static int sight_is(Sight *g, PyObject *o) {
     if (g->addr != (uintptr_t)o) return 0;
@@ -1388,6 +1396,13 @@ static PyObject *py_check(PyObject *self, PyObject *const *args, Py_ssize_t narg
         }
     }
     if (g->addr == a && g->state == SG_SEEN) { busy = 0; return PyLong_FromLong(ST_ARM); }
+    if (g->addr != a && sight_holds_live_skip(g)) {
+        /* another value's skip holds the slot, so this one's sighting could
+           not be kept, and every check would be its first: count this one
+           as its second instead */
+        busy = 0;
+        return PyLong_FromLong(ST_ARM);
+    }
     c_first++;
     busy = 0;
     return PyLong_FromLong(ST_FIRST);
@@ -1400,7 +1415,7 @@ static PyObject *py_seen(PyObject *self, PyObject *const *args, Py_ssize_t nargs
     if (secs == -1.0 && PyErr_Occurred()) return NULL;
     uintptr_t a = (uintptr_t)args[0];
     Sight *g = sight_of(a);
-    if (g->state == SG_SKIP && g->addr != a && tick < g->until) Py_RETURN_NONE;  /* keep a live skip */
+    if (g->addr != a && sight_holds_live_skip(g)) Py_RETURN_NONE;  /* keep a live skip */
     sight_clear(g);
     g->addr = a; g->state = SG_SEEN; g->secs = (float)secs; g->until = 0;
     Py_RETURN_NONE;
