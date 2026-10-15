@@ -25,7 +25,7 @@ key, and a miss.
 
 ## Hashing values
 
-<!-- claim: cash/content_hashers.py:builtin_hash @dd82c01b, cash/value_hash.py:compute_hash @829f2273 -->
+<!-- claim: cash/content_hashers.py:builtin_hash @54c21e7f, cash/value_hash.py:compute_hash @829f2273 -->
 Both paths fingerprint data values with the same built-in hashers. The
 decorator uses them for arguments; the notebook uses them wherever it hashes
 a value: a loop iteration's values, the arguments of a cached call inside a
@@ -37,10 +37,19 @@ statement, and a variable with no lineage.
 | `ndarray` | numpy | shape, dtype, memory order and every byte; an object array by its items, column by column |
 | `DataFrame`, `Series` | polars | schema and every value, each column from its Arrow memory; an `Object` column by its values' content |
 | `LazyFrame` | polars | the serialised plan, including in-memory data; a plan reading a file holds the path, not the contents |
-| `Table`, `RecordBatch` | pyarrow | schema and every row, each column from its offset; a dictionary column by its values |
+| `Table`, `RecordBatch`, `Array`, `ChunkedArray` | pyarrow | schema or type and every row, each column from its offset; a dictionary column by its values |
 | sparse matrices and arrays | scipy.sparse | type, shape, dtype, format and every array the format stores; a DOK or LIL matrix as the CSR matrix it converts to |
 | `DataFrame`, `Series` | modin | converted to pandas, then hashed as pandas |
 | any collection | dask | the task-graph keys and the schema |
+
+<!-- claim: cash/content_hashers.py:ArrowDigests.digest @55bde937, cash/backends/frame_sharing.py:arrow_data_owned @d173c9fa -->
+A pyarrow value whose memory Arrow allocated itself (read from a file,
+computed by Arrow, built from Python values) cannot change, so it is read
+once and then recognised for as long as it exists. One over memory something
+else can write, such as `pa.array(a)` or `pa.table({"x": a})` over a numpy
+array `a`, is read every time. A polars value is read every time: one built
+over a numpy array shares that array's memory, and polars cannot say which
+of its memory is its own.
 
 <!-- claim: cash/bulk_digest.py:_leaf_digests @ed5c5214, cash/bulk_digest.py:BulkHasher.digest @ba9b0195, cash/bulk_digest.py:LEAF_BYTES == 1048576, cash/bulk_digest.py:MAX_THREADS == 8 -->
 The bytes go through SHA-256, cut into 1 MiB pieces whose digests are

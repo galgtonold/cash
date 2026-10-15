@@ -43,13 +43,13 @@ module the code reaches is keyed already (`callee_reach`).
 from __future__ import annotations
 
 import ast
-import dis
 import sys
 import types
 from collections.abc import Iterable, Mapping
 from typing import Any, NamedTuple
 
 from .._memo import CODE_OBJECTS, NOTEBOOK_STATEMENTS, LruMemo
+from ..analysis.bytecode import instructions
 from ..analysis.code_analyzer import exec_literal
 
 __all__ = ["code_looks_up_by_string", "statement_looks_up_by_string"]
@@ -100,24 +100,23 @@ def _facts(code: types.CodeType) -> _Facts:
     modules_of: set[str] = set()
     for scope in _scopes(code):
         top_level = scope.co_name == "<module>"
-        instructions = [ins for ins in dis.get_instructions(scope) if ins.opname not in _FILLER]
-        for i, ins in enumerate(instructions):
-            name = ins.argval
+        instrs = [ins for ins in instructions(scope) if ins[0] not in _FILLER]
+        for i, (opname, name) in enumerate(instrs):
             if not isinstance(name, str):
                 continue
-            after = instructions[i + 1] if i + 1 < len(instructions) else None
-            if ins.opname in _ATTRIBUTE_LOADS:
+            after = instrs[i + 1] if i + 1 < len(instrs) else None
+            if opname in _ATTRIBUTE_LOADS:
                 if name in _ATTRIBUTES:
                     always = True
                 continue
-            if ins.opname not in _GLOBAL_LOADS:
+            if opname not in _GLOBAL_LOADS:
                 continue
             loaded.add(name)
             if name in _ALWAYS:
                 always = True
-            elif name in _TOP_LEVEL and top_level and after is not None and after.opname.startswith("CALL"):
+            elif name in _TOP_LEVEL and top_level and after is not None and after[0].startswith("CALL"):
                 always = True  # ``locals()``, ``vars()``: the notebook's names
-            if after is not None and after.opname in _ATTRIBUTE_LOADS and after.argval == "modules":
+            if after is not None and after[0] in _ATTRIBUTE_LOADS and after[1] == "modules":
                 modules_of.add(name)
     found = _Facts(always, frozenset(loaded), frozenset(modules_of))
     try:

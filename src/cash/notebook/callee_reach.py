@@ -11,7 +11,6 @@ statement text and the live namespace, so they reach the same answer.
 from __future__ import annotations
 
 import ast
-import dis
 import functools
 import importlib
 import inspect
@@ -29,6 +28,7 @@ from typing import Any, NamedTuple
 from .._memo import NOTEBOOK_STATEMENTS
 from ..analysis.analysis_budget import AnalysisBudgetExceeded
 from ..analysis.ast_util import parse_cached
+from ..analysis.bytecode import NAME_LOADS, argvals
 from ..analysis.callee_effects import source_global_mutations
 from ..analysis.handed_callables import handed_callable_values
 from ..analysis.helper_code import own_code_is_user
@@ -1309,11 +1309,7 @@ def _code_objects(code: types.CodeType) -> Iterable[types.CodeType]:
 def _loaded_globals(code: types.CodeType) -> frozenset[str]:
     """The global names *code* loads (not its attribute names)."""
     try:
-        return frozenset(
-            ins.argval
-            for ins in dis.get_instructions(code)
-            if ins.opname in ("LOAD_GLOBAL", "LOAD_NAME") and isinstance(ins.argval, str)
-        )
+        return frozenset(name for name in argvals(code, NAME_LOADS) if isinstance(name, str))
     except (TypeError, ValueError):
         return frozenset(code.co_names)
 

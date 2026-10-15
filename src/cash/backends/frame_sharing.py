@@ -54,6 +54,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "arrow_data_owned",
     "arrow_owned",
     "copy_keeping_blocks",
     "enabled",
@@ -765,6 +766,23 @@ def _chunk_owned(chunk: Any) -> bool:
 
 def _buffers_owned(buffers: list[Any]) -> bool:
     return all(buffer is None or arrow_owned(buffer) for buffer in buffers)
+
+
+def arrow_data_owned(data: Any) -> bool:
+    """Is the Arrow Array, ChunkedArray, Table or RecordBatch *data* held
+    in memory Arrow allocated alone (`arrow_owned`, every chunk of every
+    column)? Then nothing but a write through a ``pa.Buffer``'s own buffer
+    protocol can change it. False for anything else, and when that cannot
+    be told."""
+    import pyarrow as pa
+
+    if isinstance(data, pa.Array):
+        return _chunk_owned(data)
+    if isinstance(data, pa.ChunkedArray):
+        return all(_chunk_owned(chunk) for chunk in data.chunks)
+    if isinstance(data, (pa.Table, pa.RecordBatch)):
+        return all(arrow_data_owned(column) for column in data.columns)
+    return False
 
 
 def hand_out(stored: Any) -> Any:

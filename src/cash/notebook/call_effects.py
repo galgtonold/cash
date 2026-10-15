@@ -17,7 +17,6 @@ from __future__ import annotations
 import ast
 import collections
 import copy as _copy
-import dis as _dis
 import functools
 import logging
 import sys
@@ -27,6 +26,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from cash import handed_digests
+from cash.analysis.bytecode import DEREF_WRITES, argvals
 from cash.analysis.read_only_callees import reads_its_arguments_only
 from cash.content_hashers import builtin_family_of, polars_signature
 from cash.decorator.arg_hashing import (
@@ -283,9 +283,8 @@ def rebinds_its_closure(fn) -> bool:
 def _rebinds(code: _types.CodeType, cells: frozenset[str]) -> bool:
     """Whether *code*, or a function defined in it, stores to or deletes one
     of *cells*, the enclosing function's variables it reaches."""
-    for ins in _dis.get_instructions(code):
-        if ins.opname in ("STORE_DEREF", "DELETE_DEREF") and ins.argval in cells:
-            return True
+    if not cells.isdisjoint(argvals(code, DEREF_WRITES)):
+        return True
     for const in code.co_consts:
         if isinstance(const, _types.CodeType):
             # Its own variable of the same name shadows the outer one.

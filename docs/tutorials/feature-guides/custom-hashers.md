@@ -201,7 +201,7 @@ data changes.
 
 ## Overriding a built-in content hasher
 
-<!-- claim: cash/content_hashers.py:builtin_hash @dd82c01b broad="the list enumerates every type the builtin dispatcher recognises", cash/content_hashers.py:builtin_hash_family @b0c04a56 -->
+<!-- claim: cash/content_hashers.py:builtin_hash @54c21e7f broad="the list enumerates every type the builtin dispatcher recognises", cash/content_hashers.py:builtin_hash_family @b0c04a56 -->
 cash hashes these types by their full content, before it looks at your
 registrations:
 
@@ -210,7 +210,7 @@ registrations:
 | pandas `DataFrame`, `Series` | schema (names, dtypes with their categories, index and its `freq`), `attrs` and every value |
 | numpy `ndarray` | shape, dtype, memory order and the full buffer |
 | polars `DataFrame`, `Series`, `LazyFrame` | schema and row hashes, an `Object` column by its values' content; a `LazyFrame` by its serialized plan |
-| PyArrow `Table`, `RecordBatch` | schema and every row, dictionaries included |
+| PyArrow `Table`, `RecordBatch`, `Array`, `ChunkedArray` | schema or type and every row, dictionaries included |
 | modin `DataFrame`, `Series` | converted to pandas, then as pandas |
 | dask collections | the task keys and the schema |
 | scipy.sparse matrices and arrays | type, shape, dtype, format and the arrays the format stores |

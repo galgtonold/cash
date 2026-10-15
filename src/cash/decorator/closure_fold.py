@@ -4,7 +4,6 @@ instance it is bound to, its helpers' captures -- into its key."""
 from __future__ import annotations
 
 import ast
-import dis
 import functools
 import hashlib
 import inspect
@@ -19,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from .._memo import CODE_OBJECTS, LruMemo
 from .._plain_data import identity_changed, identity_snapshot
 from ..analysis.annotations import assume_safe_block_lines
+from ..analysis.bytecode import DEREF_WRITES, argvals, instructions
 from ..analysis.purity_policy import REPORTED_METHODS
 from ..effect_observer import line_waived
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
@@ -312,9 +312,7 @@ class CaptureAnalysis:
         if hit is not None:
             return hit
 
-        written = frozenset(
-            instr.argval for instr in dis.get_instructions(code) if instr.opname in ("STORE_DEREF", "DELETE_DEREF")
-        )
+        written = frozenset(argvals(code, DEREF_WRITES))
         cache[code] = written
         return written
 
@@ -334,17 +332,17 @@ class CaptureAnalysis:
             return cached
         reads: dict[str, set[str]] = {}
         for scope in iter_code_scopes(code):
-            instrs = list(dis.get_instructions(scope))
-            loaded = {i.argval for i in instrs if i.opname == "LOAD_DEREF" and isinstance(i.argval, str)}
+            instrs = instructions(scope)
+            loaded = {argval for opname, argval in instrs if opname == "LOAD_DEREF" and isinstance(argval, str)}
             if not loaded:
                 continue
             consts = [c for c in scope.co_consts or () if isinstance(c, str) and c.isidentifier()]
             for name in loaded:
                 reads.setdefault(name, set()).update(consts)
-            for prev, nxt in zip(instrs, instrs[1:]):
-                if prev.opname == "LOAD_DEREF" and nxt.opname in ("LOAD_ATTR", "LOAD_METHOD"):
-                    if isinstance(nxt.argval, str) and not nxt.argval.startswith("__"):
-                        reads.setdefault(prev.argval, set()).add(nxt.argval)
+            for (prev, prev_val), (nxt, nxt_val) in zip(instrs, instrs[1:]):
+                if prev == "LOAD_DEREF" and nxt in ("LOAD_ATTR", "LOAD_METHOD"):
+                    if isinstance(nxt_val, str) and not nxt_val.startswith("__"):
+                        reads.setdefault(prev_val, set()).add(nxt_val)
         result = {name: frozenset(attrs) for name, attrs in reads.items()}
         self._attr_reads[code] = result
         return result

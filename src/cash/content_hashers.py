@@ -22,10 +22,12 @@ import hashlib
 import logging
 import pickle
 import threading
+import weakref
 from collections.abc import Callable
 from typing import Any
 
 from . import _plain_data
+from ._memo import ARROW_VALUES, LruMemo
 from .bulk_digest import DIRECT_MAX_BYTES, BulkHasher, fold_buffer
 from .canonical_form import ContentHashing, canonical_bytes
 from .kept_state import packed_records
@@ -98,7 +100,7 @@ def builtin_hash(value: Any) -> str | None:
     if family == "polars":
         return hash_polars(value)
     if family == "pyarrow":
-        return hash_pyarrow(value)
+        return ARROW_DIGESTS.digest(value)
     if family == "modin":
         return hash_modin(value)
     if family == "dask":
@@ -1058,7 +1060,8 @@ class _HashSink:
 
 
 def hash_pyarrow(value: Any) -> str | None:
-    """Hash a PyArrow Table or RecordBatch by what it holds, schema included.
+    """Hash a PyArrow Table, RecordBatch, Array or ChunkedArray by what it
+    holds, schema or type included.
 
     Column by column (`fold_arrow_column`). The whole buffers are not the
     content: a slice (``t.slice(2, 2)``, each batch of ``to_batches()``)
@@ -1078,9 +1081,72 @@ def hash_pyarrow(value: Any) -> str | None:
                 h.update(b"|column|")
                 fold_arrow_column(h, column)
             return h.hexdigest()
+        if isinstance(value, (pa.Array, pa.ChunkedArray)):
+            h = hashlib.sha256(f"{type(value).__name__}:{len(value)}:{value.type}:".encode())
+            fold_arrow_column(h, value)
+            return h.hexdigest()
     except (ImportError, TypeError, ValueError, AttributeError, MemoryError, NotImplementedError):
         logger.debug("Failed to hash PyArrow %s", type(value).__name__)
     return None
+
+
+class ArrowDigests:
+    """The digests of Arrow values nothing can change: ``id(value) ->
+    (weak reference, digest)``.
+
+    A PyArrow Table, RecordBatch, Array or ChunkedArray never changes what it
+    holds -- every method returns a new one -- and the memory under it does
+    not change either when Arrow allocated it (`arrow_data_owned`: read from
+    a file, computed by Arrow, built from Python values): Arrow writes a
+    buffer only while building it, and hands out its memory read-only
+    (``to_numpy``, ``to_pandas``; polars copies before writing). So its
+    digest holds for as long as the object lives: read once, then looked up.
+    The weak reference tells a live object from a new one at the same
+    address. Arrow data over memory someone else owns -- a numpy array
+    (``pa.array(a)`` copies nothing), a Python buffer, polars' memory, a
+    memory-mapped file -- can change under it, and is read every time.
+
+    Not seen: a write through a ``pa.Buffer``'s own buffer protocol
+    (``np.frombuffer(arr.buffers()[1])``, a buffer from
+    ``pa.allocate_buffer`` written after an array was built over it), into
+    memory Arrow treats as immutable; a hit sharing a stored Arrow copy relies
+    on the same.
+    """
+
+    def __init__(self, maxsize: int) -> None:
+        self._entries: LruMemo[int, tuple[weakref.ref, str]] = LruMemo(maxsize)
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+    def digest(self, value: Any) -> str | None:
+        """`hash_pyarrow` of *value*, remembered while it lives when its
+        memory is Arrow's own."""
+        key = id(value)
+        entry = self._entries.get(key)
+        if entry is not None and entry[0]() is value:
+            return entry[1]
+        digest = hash_pyarrow(value)
+        if digest is None:
+            return None
+        try:
+            from .backends.frame_sharing import arrow_data_owned
+
+            if not arrow_data_owned(value):
+                return digest
+            entries = self._entries
+            wref = weakref.ref(value, lambda _ref, key=key, entries=entries: entries.pop(key, None))
+        except Exception:  # noqa: BLE001 - the memo is a speedup: read it next time
+            return digest
+        self._entries[key] = (wref, digest)
+        return digest
+
+
+#: The process's memo of unchangeable Arrow values' digests (`ArrowDigests`).
+ARROW_DIGESTS = ArrowDigests(ARROW_VALUES)
 
 
 def hash_modin(value: Any) -> str | None:
