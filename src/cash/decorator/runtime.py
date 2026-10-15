@@ -36,6 +36,7 @@ from ..tracking.randomness import (
     replay_argument_carriers,
     replayable,
 )
+from . import hit_memo
 from .arg_hashing import HANDED_DIGESTS, PLAIN_CENSUS
 from .arg_key import keyed_arguments
 from .cache_metadata import CacheMetadata
@@ -1033,6 +1034,9 @@ class CallRunner:
         # exception from the body of an uncached call must propagate, not run
         # the body a second time.
         handed = claim_handed_digests()
+        # Before the key: a fast hit remembered from this call must not
+        # outlive a change made while the key was built (`hit_memo`).
+        epochs_before = hit_memo.epochs(spec)
         token = HANDED_DIGESTS.set(handed) if handed is not None else None
         try:
             built, call.capture_watch, call.ledger = self._keys.resolve(spec, args, kwargs)
@@ -1066,6 +1070,10 @@ class CallRunner:
                 was_hit=True,
             )
             call.outcome = self._wrap_iterator_hit(call, call.metadata, hit)
+            if epochs_before is not None and handed is None and call.outcome is hit and not async_body:
+                memo = hit_memo.memo_for(spec, self)
+                if memo is not None:
+                    memo.offer(call, args, kwargs, hit, epochs_before)
             if handed is not None and call.outcome is hit:
                 # Served: the body does not run, nor anything else of the
                 # user's until the statement binds the result.

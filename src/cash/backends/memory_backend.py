@@ -23,7 +23,7 @@ from typing import Any
 
 from cash.exceptions import CacheBackendError
 
-from .. import _plain_data, cost_model, kept_state, stored_pickle
+from .. import _plain_data, cost_model, held_reads, kept_state, stored_pickle
 from .._lazy_module import LazyModule
 from ..cost_model import GENERIC_FAMILY
 from ..sizing import memory_footprint, pickled_size_estimate
@@ -1164,6 +1164,7 @@ class InMemoryBackend(CacheBackend):
 
     def peek_metadata(self, key: str) -> MetadataDict | None:
         """The metadata, without counting an access. See `BaseBackend.peek_metadata`."""
+        held_reads.flush()
         with self._lock:
             entry = self._store.get(key)
             return dict(entry[0]) if entry is not None else None
@@ -1277,6 +1278,7 @@ class InMemoryBackend(CacheBackend):
         Not through ``get()``, which deep-copies the value only to drop it --
         the upstream simulation reads many entries' metadata.
         """
+        held_reads.flush()
         with self._lock:
             entry = self._store.get(key)
             if entry is None:
@@ -1471,6 +1473,8 @@ class InMemoryBackend(CacheBackend):
         self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None
     ) -> bool | None:
         """Store *value*; returns False if it was refused (see below)."""
+        # Reads the fast hit path held back count in what eviction weighs.
+        held_reads.flush()
         metadata = self._init_metadata(metadata, key)
 
         # Plain data is sized, checked and copied from ONE look at it: three
@@ -1795,6 +1799,7 @@ class InMemoryBackend(CacheBackend):
         self._try_malloc_trim()
 
     def list_entries(self) -> list[dict[str, Any]]:
+        held_reads.flush()
         with self._lock:
             return [meta for meta, _ in self._store.values()]
 
@@ -1814,6 +1819,7 @@ class InMemoryBackend(CacheBackend):
 
     def _check_and_evict(self) -> None:
         """Check memory usage and evict items if threshold is exceeded."""
+        held_reads.flush()
         mem = _memory_reading()
         if mem is None:
             return

@@ -74,9 +74,23 @@ class Offer:
 _local = threading.local()
 
 
+def _count_open(before: Any, after: Any) -> None:
+    """Tell the decorator's fast hit path (`cash.decorator.hit_memo`) how many
+    offers are open: while one is, every call takes the ordinary path, which
+    is where an offer is claimed."""
+    if (before is None) == (after is None):
+        return
+    from ._native import cwatch
+
+    offers = getattr(cwatch, "offers", None)
+    if offers is not None:
+        offers(1 if after is not None else -1)
+
+
 def offer(filename: str, digests: dict[int, tuple[Any, str]], binds_result: bool = False) -> Offer:
     """Offer *digests* to a call the statement compiled under *filename* makes."""
     made = Offer(filename, dict(digests), binds_result)
+    _count_open(getattr(_local, "offer", None), made)
     _local.offer = made
     _local.last = made
     return made
@@ -85,11 +99,13 @@ def offer(filename: str, digests: dict[int, tuple[Any, str]], binds_result: bool
 def withdraw() -> None:
     """The statement ran: no later call may claim its offer. What the call
     that claimed it stored stays readable (`stored_result`) until `forget`."""
+    _count_open(getattr(_local, "offer", None), None)
     _local.offer = None
 
 
 def forget() -> None:
     """A new statement starts: nothing of the last one's call is handed on."""
+    _count_open(getattr(_local, "offer", None), None)
     _local.offer = None
     _local.last = None
 

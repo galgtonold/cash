@@ -23,6 +23,7 @@ from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
 from ..graph import DependencyGraph
 from ..source_norm import bytecode_identity
+from . import hit_memo
 from .cached_function import CachedFunction, PurityMode
 from .call_state import KeyBuildFailed
 from .explain import MissKind, MissReason
@@ -350,6 +351,8 @@ class FunctionRegistry:
         """Register *cf* and its ``depends_on``; return the declared callables
         that are inert, for the caller to warn about (`warn_inert_dependency`)."""
         func, func_name = cf.func, cf.name
+        # A new function may be another's callee: no remembered hit holds.
+        hit_memo.bump()
         previous = self.cached.get(func_name)
         if previous is not None:
             cf.carry_over(previous)

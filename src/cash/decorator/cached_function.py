@@ -280,6 +280,10 @@ class CachedFunction:
     argument_naming_retired: bool = False
     #: The ``key=`` function has been watched for file reads (`KeyBuilder.key_arguments`).
     key_reads_checked: bool = False
+    #: Its fast hits (`hit_memo.HitMemo`), made on the first ordinary hit.
+    hit_memo: Any = field(default=None, repr=False)
+    #: The state list its wrapper hands `_cwatch.fast_call` (`hit_memo.new_state`).
+    hit_state: Any = field(default=None, repr=False)
     _signature: Any = field(default=_UNREAD, repr=False)
 
     @property

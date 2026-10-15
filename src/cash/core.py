@@ -152,6 +152,9 @@ class _ExitWork:
         """Warn the run's verdicts, then drain. Never builds a backend: at exit
         that would start threads the interpreter can no longer register."""
         try:
+            from .decorator import hit_memo
+
+            hit_memo.flush_all()
             found = self.effectiveness.final_verdicts()
         except Exception:  # noqa: BLE001 - a notice must never block shutdown
             found = []

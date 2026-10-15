@@ -40,6 +40,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
+from cash import _native
 from cash._memo import PATCH_SITES, LruMemo
 from cash._paths import is_remote_url
 from cash.effect_observer import active_observer as _active_effect_observer
@@ -56,7 +57,10 @@ logger = logging.getLogger(__name__)
 # The wrappers installed while a tracker is open (see `install_patches`),
 # and the lock that serialises installing and removing them with the post-
 # import hook patching a module that was imported meanwhile.
-_patches = io_watch.Patches()
+_cw = _native.cwatch
+# Told each wrapper and its original: a swap between them is no change for a
+# remembered hit (`cash.decorator.hit_memo`), as keys look through it.
+_patches = io_watch.Patches(note=getattr(_cw, "world_swap", None))
 _install_lock = threading.RLock()
 
 #: Keyword names a reader may take its path under, first match wins. Covers

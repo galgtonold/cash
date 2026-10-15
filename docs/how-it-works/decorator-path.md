@@ -242,6 +242,35 @@ In a notebook, a statement that calls a decorated function shows that call's
 hits and misses on the statement's badge; see
 [the notebook path](notebook-path.md#decorated-functions-inside-a-cell).
 
+## A hit met again
+
+With the C extension, cash remembers each hit it serves and serves the same
+call again without building the key: about half a microsecond instead of a
+tenth of a millisecond. It does so only while nothing the key reads has
+changed, which the interpreter's watchers report as it happens: the
+function's code, defaults and closure, the globals, classes and helpers it
+reads, a list or dict argument edited in place, cash's settings and
+registrations, and the stored entry itself. A `ttl` and the files the
+function read are checked on every call, as on any hit. `cache_info()`, the
+call log and the warnings count such a hit like any other.
+
+A call is keyed in full, as above, when:
+
+- an argument is not a number, string, bytes, `None`, a tuple, or a small
+  list or dict of these, nor a large list or dict the extension already
+  watches;
+- what the key reads holds a value no watcher covers: a list or set global,
+  an instance of your own class, a random generator, an environment variable,
+  a data source;
+- the function is `async`, or uses `key=`, `dynamic_depends_on=`,
+  `file_depends_on=` or a seeded random generator;
+- it runs inside another cached call or a tracked notebook statement;
+- it missed since it was last met, or a cached function it calls did.
+
+Set `CASH_HITPATH=0` in the environment to turn this off.
+`CASH_HITPATH_VERIFY=1` builds the key behind every such hit as well and
+raises if the two differ; it exists to test cash itself.
+
 ## Related
 
 - [`@cash.cache` guide](../decorator.md): every parameter, with examples.

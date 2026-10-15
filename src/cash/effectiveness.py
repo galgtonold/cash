@@ -179,6 +179,47 @@ class EffectivenessLedger:
         led.warned = True
         return _message(func_name, led, waste, per_call_overhead, best_case_saving, culprit)
 
+    def record_hits(
+        self,
+        func_name: str,
+        *,
+        hits: int,
+        overhead_seconds: float,
+        saved_seconds: float,
+        body_seconds: float | None,
+        culprit: tuple | None = None,
+    ) -> tuple[str, str] | None:
+        """Account for *hits* hits at once, as that many `record` calls
+        would: the decorator's fast hit path (`cash.decorator.hit_memo`)
+        hands them over in batches. *overhead_seconds* and *saved_seconds*
+        are their sums, *body_seconds* the largest body time among them."""
+        if body_seconds is None or hits <= 0:
+            return None
+        led = self._ledgers.get(func_name)
+        if led is None:
+            if len(self._ledgers) >= MAX_TRACKED_FUNCTIONS:
+                return None
+            led = self._ledgers[func_name] = _FunctionLedger()
+        if culprit is not None:
+            self._culprits[func_name] = culprit
+        led.calls += hits
+        led.overhead_seconds += overhead_seconds
+        led.hit_overhead += overhead_seconds
+        led.hits += hits
+        led.body_samples.append(body_seconds)
+        led.saved_seconds += saved_seconds
+        if led.warned or led.calls < MIN_OBSERVATIONS:
+            return None
+        waste = led.overhead_seconds - led.saved_seconds
+        if waste < self._threshold:
+            return None
+        per_call_overhead = led.typical_overhead()
+        best_case_saving = max(led.body_samples)
+        if per_call_overhead <= best_case_saving:
+            return None
+        led.warned = True
+        return _message(func_name, led, waste, per_call_overhead, best_case_saving, culprit)
+
     def final_verdicts(self) -> list[tuple[str, str]]:
         """The verdicts a whole run supports, at its end.
 

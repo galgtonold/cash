@@ -201,9 +201,11 @@ class Patches:
     open.
     """
 
-    __slots__ = ("_installed", "_last", "version")
+    __slots__ = ("_installed", "_last", "_note", "version")
 
-    def __init__(self) -> None:
+    def __init__(self, note: Callable[[Any, Any], Any] | None = None) -> None:
+        #: Told ``(replacement, original)`` of each replacement made.
+        self._note = note
         #: Moves whenever what is installed changes.
         self.version = 0
         self._installed: list[tuple[Any, str, Any, Any]] = []
@@ -222,6 +224,8 @@ class Patches:
             setattr(owner, name, new)
         except (AttributeError, TypeError):
             return False
+        if self._note is not None and old is not _ABSENT:
+            self._note(new, old)
         self._installed.append((owner, name, new, old))
         self.version += 1
         return True
