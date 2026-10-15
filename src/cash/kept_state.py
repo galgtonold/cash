@@ -799,7 +799,7 @@ class _KeepDict(dict):
                 reducer = _reducer_with_dict(self._protocol)
             else:
                 reducer = operator.methodcaller("__reduce_ex__", self._protocol)
-            if _cached_properties(t) and (self._keyed or _leaves_views_out(t)):
+            if cached_properties(t) and (self._keyed or _leaves_views_out(t)):
                 which = None if self._keyed else stored_views
                 reducer = functools.partial(_reduce_without_views, reducer=reducer, which=which)
         self[t] = reducer
@@ -813,7 +813,7 @@ class _KeepDict(dict):
             reducer = _reducer_with_dict(self._protocol)
         else:
             reducer = operator.methodcaller("__reduce_ex__", self._protocol)
-        if _cached_properties(t) and _leaves_views_out(t):
+        if cached_properties(t) and _leaves_views_out(t):
             reducer = functools.partial(_reduce_without_views, reducer=reducer, which=stored_views)
         return reducer
 
@@ -846,7 +846,7 @@ def _watched(reducer: Any, t: type, registered: Any, watch: list) -> Any:
             return reduced
 
         return state
-    if registered is None and _cached_properties(t):
+    if registered is None and cached_properties(t):
 
         def views(obj: Any) -> Any:
             reduced = reducer(obj)
@@ -858,7 +858,7 @@ def _watched(reducer: Any, t: type, registered: Any, watch: list) -> Any:
     return reducer
 
 
-def _cached_properties(t: type) -> tuple[str, ...]:
+def cached_properties(t: type) -> tuple[str, ...]:
     """The attribute names *t*'s ``functools.cached_property`` members fill
     in an instance's ``__dict__``. Remembered per type."""
     try:
@@ -895,7 +895,7 @@ def derived_views(obj: Any) -> frozenset[str]:
     holds nothing the object does not, so a key leaves it out. A cached
     value that is a snapshot (a number, a list) is kept: it may be stale.
     """
-    names = _cached_properties(type(obj))
+    names = cached_properties(type(obj))
     state = getattr(obj, "__dict__", None)
     if not names or not isinstance(state, dict):
         return frozenset()

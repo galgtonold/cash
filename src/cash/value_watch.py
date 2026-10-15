@@ -206,7 +206,7 @@ def _classify(t: type) -> tuple[bool, tuple, bool]:
         # move its version tag right after the verdict.
         copyreg._slotnames(t)
     # What the keyed pickle asks, remembered per class as it remembers it.
-    views = bool(kept_state._cached_properties(t))
+    views = bool(kept_state.cached_properties(t))
     return True, tuple(slots), views
 
 
