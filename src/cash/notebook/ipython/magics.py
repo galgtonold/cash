@@ -22,7 +22,7 @@ from ..._console import safe_text
 from ...backends import _writes
 from ...backends.budget_notices import DiskBudget, claim_budget_notice, describe_budget
 from ...core import Cash
-from ...tracking import io_watch
+from ...tracking import io_watch, native_reads
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import capture_rng_state, rng_modules_changed, rng_virtual_var
 from ...value_hash import compute_hash
@@ -558,6 +558,9 @@ class CashMagics(Magics):
             - fast_path: "on (...)" when the C extension skips re-hashing
               values that provably did not change, with the size of its
               watch table, else "off: <why>"
+            - native_file_hook: the opt-in hook on files C libraries open
+              (``CASH_NATIVE_FILE_HOOK``): "on (...)", "off (...)" or
+              "off: not supported here ..."
         """
 
         mode = parse_mode(line, ("", "print", "json", "dict"))
@@ -576,6 +579,7 @@ class CashMagics(Magics):
             "auto_cache_enabled": self._auto_cache_enabled,
             "debug_enabled": self._debug,
             "fast_path": value_watch.status_line(),
+            "native_file_hook": native_reads.status_line(),
         }
 
         # Counted, not listed: listing reads every entry's metadata, which on a

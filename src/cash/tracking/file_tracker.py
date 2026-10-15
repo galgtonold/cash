@@ -23,7 +23,7 @@ from typing import Any, Optional
 from cash._clock import perf_counter as _perf_counter
 from cash._paths import is_remote_url, normalize_path
 from cash.effect_observer import reset_in_any_context
-from cash.tracking import io_watch
+from cash.tracking import io_watch, native_reads
 from cash.tracking.file_dep_snapshot import file_content_hash, realpath_of_read_this_run, remembered_file_digest
 from cash.tracking.pending_digest import PendingDigest
 from cash.tracking.read_classification import (
@@ -168,6 +168,9 @@ class FileAccessTracker:
         # FileAccessTracker()` nesting stays isolated by default.
         self._propagate_to_parent = propagate_to_parent
         self._parent_stack: list[Optional["FileAccessTracker"]] = []
+        # The native file hook's recording windows (`native_reads`), one per
+        # entry; None entries while the hook is off.
+        self._native_windows: list[int | None] = []
         # The user code that read a file in THIS block (see
         # `credit_read_to_stack`): its recorded reads are live, not remembered.
         self.reading_codes: set[Any] = set()
@@ -219,12 +222,17 @@ class FileAccessTracker:
         # read inside this block also registers with the outer tracker(s).
         self._parent_stack.append(active_tracker.get())
         self._token_stack.append(active_tracker.set(self))
+        # Opens made in C libraries, when the native file hook is on.
+        self._native_windows.append(native_reads.open_window())
         # A reader the block's own namespace bound by name (``from polars
         # import read_parquet``) after the wrappers went in.
         patch_reader_aliases(self.user_ns)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        if self._native_windows:
+            # Before the parent stack pops: the reads pass up like any other.
+            native_reads.close_window(self._native_windows.pop(), self)
         if self._token_stack:
             reset_in_any_context(active_tracker, self._token_stack.pop())
             io_watch.release()
