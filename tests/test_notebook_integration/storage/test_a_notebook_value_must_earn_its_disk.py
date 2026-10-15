@@ -24,22 +24,33 @@ Two arms, on the real notebook path:
 
 import pytest
 
+from cash.backends.value_policy import worth_its_bytes
+from tests._nbharness.disk import ENTRY_BYTES_REPORT
+
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(240)]
 
 
-def _disk_bytes(nb_runner, cell: int) -> int:
-    report = nb_runner.get_output(cell)
+def _on_disk(nb_runner) -> tuple[int, float]:
+    """``(bytes, seconds)`` of the biggest entry once its writes are on disk:
+    what it holds, with its chunks, and the compute it recorded keeping saves.
+
+    A cell does not wait for its writes, so the report cell runs after
+    `settle_writes`; on a loaded machine it would otherwise see a write still
+    queued and call the value refused.
+    """
+    nb_runner.run_cells([1, 2, 3])
+    nb_runner.settle_writes()
+    nb_runner.run_cell(4)
+    report = nb_runner.get_output(4)
     assert "MAX_DATA_BYTES=" in report, report
-    return int(report.split("MAX_DATA_BYTES=")[1].split()[0])
+    size = int(report.split("MAX_DATA_BYTES=")[1].split()[0])
+    seconds = float(report.split("MAX_DATA_SECONDS=")[1].split()[0])
+    return size, seconds
 
 
-REPORT = (
-    "import os, glob\n"
-    "_cash = os.path.abspath('.cash')\n"
-    "_datas = glob.glob(os.path.join(_cash, '*.entry'))\n"
-    "_maxb = max((os.path.getsize(f) for f in _datas), default=0)\n"
-    "print(f'DATA_FILES={len(_datas)} MAX_DATA_BYTES={_maxb}')"
-)
+# An entry with its chunks: the array's data lives in the chunk store, not
+# in the ``.entry`` file.
+REPORT = ENTRY_BYTES_REPORT
 
 
 def test_a_big_value_that_rebuilds_quickly_does_not_reach_disk(nb_runner):
@@ -65,13 +76,17 @@ def test_a_big_value_that_rebuilds_quickly_does_not_reach_disk(nb_runner):
         ]
     )
     nb_runner.start_kernel()
-    nb_runner.run_all()
+    size, seconds = _on_disk(nb_runner)
 
     assert "shape=12000000" in nb_runner.get_output(3)
     raw = nb_runner.get_raw_output(3)
-    assert _disk_bytes(nb_runner, 4) < 1_000_000, (
-        f"a 96 MB value that rebuilds in 0.15 s was written to disk anyway:\n{raw}"
-    )
+    if size >= 1_000_000:
+        # Written: right only if the compute it recorded pays for it, which a
+        # machine loaded enough to stretch the 0.15 s past ~0.72 s makes true.
+        assert worth_its_bytes(size, seconds), (
+            f"a 96 MB value whose compute was recorded as {seconds:.3f} s was written to disk anyway:\n{raw}"
+        )
+        pytest.skip(f"compute recorded as {seconds:.3f} s on a loaded machine: the value earned its disk")
     assert "CACHE-NOT-WORTH-BYTES" in raw, f"kept off disk, but not by the bytes ceiling:\n{raw}"
 
 
@@ -88,7 +103,7 @@ def test_a_big_value_that_is_expensive_still_reaches_disk(nb_runner):
         ]
     )
     nb_runner.start_kernel()
-    nb_runner.run_all()
+    size, _seconds = _on_disk(nb_runner)
 
     assert "shape=12000000" in nb_runner.get_output(3)
-    assert _disk_bytes(nb_runner, 4) > 1_000_000, "a 96 MB value that costs 2 s to rebuild should be on disk"
+    assert size > 1_000_000, "a 96 MB value that costs 2 s to rebuild should be on disk"

@@ -85,7 +85,9 @@ def test_the_work_grows_with_the_depth_not_its_power(classes, monkeypatch, depth
         compute_hash(_chain(classes, depth))
     except _TooMuchWork:
         pytest.fail(f"more than {bound} pickles to key a chain {depth} deep")
-    assert calls[0] > depth, "each object's left-out attributes are told"
+    # One keyed pickle, and a pickle per object telling its left-out
+    # attribute -- less what an earlier tell already found to pickle.
+    assert calls[0] > depth // 2, "each object's left-out attributes are told"
     assert time.perf_counter() - start < 5
 
 
