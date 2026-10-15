@@ -72,6 +72,9 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
     {
         "CASH_TIER_N_FIELD",  # the literal pattern placeholder in docs
         "CASH_TIER_",  # captured prefix of the ``CASH_TIER_<N>_FIELD`` pattern
+        # Switches the C extension off, at build time (hatch_build.py) and at run
+        # time (cash._native) alike; read before any config is, so not a setting.
+        "CASH_PURE_PYTHON",
     }
 )
 

@@ -28,6 +28,14 @@ pre-commit install                     # runs ruff on each commit
 `docs-test` holds the packages the documentation's examples import. Without it,
 `pytest tests/docs` fails on real imports.
 
+On Python 3.12 or newer with a C compiler, the editable install also compiles
+the C extension (`src/cash/_c/`) into `src/cash/`. After changing its C
+sources, rebuild it with `python hatch_build.py`. Without a compiler, or with
+`CASH_PURE_PYTHON=1`, cash runs its pure-Python path; `cash info` shows which.
+The build hook is `hatch_build.py`; the release wheels are built by
+`.github/workflows/wheels.yml` with cibuildwheel (`[tool.cibuildwheel]` in
+`pyproject.toml`).
+
 ## The code
 
 cash has two engines: the decorator (`@cash.cache`) and the notebook engine

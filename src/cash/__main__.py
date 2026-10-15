@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from cash import __version__
+from cash import __version__, _native
 from cash._console import survive_narrow_streams
 from cash._location import per_user_cache_root
 from cash.backends._base import effective_ttl, written_at
@@ -169,6 +169,9 @@ def cmd_info(args: argparse.Namespace) -> None:
     # else (a growing RSS is easily read as a leak).
     print(f"  Max size:   {_caps_text(config)}")
     print(f"  Persist:    {PersistencePolicy.from_config(config).describe()}")
+    # Whether the C extension is skipping re-hashes of unchanged values, or
+    # why not: the one place a decorator user can see it.
+    print(f"  Fast path:  {_native.status_line()}")
     if config.tiers:
         print(f"  Tiers:      {', '.join(_tier_text(t) for t in config.tiers)}")
     # Where this run looked, and what each layer set: the Source line names

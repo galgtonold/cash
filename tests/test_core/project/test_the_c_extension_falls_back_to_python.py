@@ -137,3 +137,8 @@ def test_the_compiled_extension_loads_and_turns_the_fast_path_on(no_loaded_modul
     loaded, reason = _native._load()
     assert reason is None or reason == getattr(module, "UNUSABLE_REASON", None)
     assert loaded is module or getattr(module, "USABLE", True) is False
+
+
+def test_cash_info_shows_the_fast_path_line(tmp_path):
+    done = run_python("-m", "cash", "info", cwd=tmp_path, env={"CASH_PURE_PYTHON": "1"})
+    assert "  Fast path:  off: CASH_PURE_PYTHON is set" in done.stdout.splitlines(), done.stdout
