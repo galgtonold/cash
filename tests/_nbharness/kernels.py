@@ -602,6 +602,14 @@ class _WarmKernel:
             "    get_ipython().run_line_magic('cash_persist', 'off')\n"
             "except Exception:\n"
             "    pass\n"
+            # `%cash_badge print` rides along on the same magics object;
+            # a later test that compares cell output then sees a text badge.
+            "try:\n"
+            "    import contextlib as _cl, io as _io\n"
+            "    with _cl.redirect_stdout(_io.StringIO()):\n"
+            "        get_ipython().run_line_magic('cash_badge', 'html')\n"
+            "except Exception:\n"
+            "    pass\n"
             + _REUSE_RESET_WARNING_REGISTRIES
             + _REUSE_CLOSE_FIGURES
             + _REUSE_UNSEED_RNG_STREAMS
