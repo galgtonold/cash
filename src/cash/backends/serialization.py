@@ -178,7 +178,7 @@ def _reduce_string_array(value: Any) -> Any:
         if (
             len(reduced) != 3
             or type(state) is not tuple
-            or len(state) != 2
+            or len(state) < 2  # (dtype, strings), and pandas 2 adds the attributes
             or state[1] is not value._ndarray
             or len(state[1]) < STRINGS_APART_MIN_ITEMS
         ):
@@ -187,14 +187,16 @@ def _reduce_string_array(value: Any) -> Any:
     except Exception:  # not the layout this expects: pandas' own pickle
         logger.debug("pickling a %s the pandas way", type(value).__name__, exc_info=True)
         return reduced
-    return _string_array_from_items, (func, args, state[0], pickle.PickleBuffer(items))
+    return _string_array_from_items, (func, args, state[0], pickle.PickleBuffer(items), state[2:])
 
 
-def _string_array_from_items(func: Callable[..., Any], args: tuple, dtype: Any, items: Any) -> Any:
+def _string_array_from_items(func: Callable[..., Any], args: tuple, dtype: Any, items: Any, rest: tuple = ()) -> Any:
     """The column `_reduce_string_array` stored: built as pandas' own pickle
-    builds it, with its strings read back from *items*."""
+    builds it, with its strings read back from *items*. *rest* is what
+    pandas' state holds after the strings: pandas 2 keeps the array's
+    attributes there, pandas 3 nothing."""
     array = func(*args)
-    array.__setstate__((dtype, pickle.loads(items)))
+    array.__setstate__((dtype, pickle.loads(items), *rest))
     return array
 
 
