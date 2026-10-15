@@ -24,7 +24,7 @@ import ast
 
 import pytest
 
-from cash import kept_state
+from cash import _native, kept_state, value_watch
 from cash.notebook.call_effects import DigestHandoff, _first_call_source
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
@@ -242,4 +242,9 @@ def test_a_graph_read_by_a_call_inside_print_is_read_once_before_the_call(cash_m
     reads = _pickles_of(monkeypatch, mock_shell, "G")
     run_cash_cell(cash_magics, "total = round(degree_sum(G), 2)")
     assert mock_shell.user_ns["total"] == 1600
-    assert len(reads) == 3, f"G was read {len(reads)} times"
+    # 3 reads in pure Python; with the C fast path on, the watchers prove G
+    # unchanged since an earlier read and one more read is skipped.
+    if value_watch.VERIFY:
+        pytest.skip("counts reads; CASH_CWATCH_VERIFY=1 hashes behind every reuse")
+    expected = 2 if _native.AVAILABLE else 3
+    assert len(reads) == expected, f"G was read {len(reads)} times"
