@@ -26,6 +26,7 @@ from cash.exceptions import (
     CashCacheIneffectiveWarning,
     CashWarning,
 )
+from cash.notebook import shadow as _shadow
 from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
 from cash.notebook.cache_key import (
     THE_STATEMENT,
@@ -686,19 +687,28 @@ class StatementProcessor:
         )
         # The analyses before the statement runs share their walks through
         # what it reads (`answers_shared`), up to the moment it runs.
+        shadow = _shadow.SHADOW
         with answers_shared():
             done = self._prepare(run)
             if done is not None:
+                if shadow is not None:
+                    shadow.statement_served(run, done)
                 self._advance_rng(run)
                 return done
             with self._executing(run) as runner:
                 self._offer_digests(run, runner)
+                unit = shadow.begin("stmt") if shadow is not None and not run.skip_cache else None
                 try:
                     runner.run()
                 finally:
+                    if unit is not None:
+                        shadow.end(unit)
                     self._mutations.digests.withdraw_offer()
         try:
-            return self._finish(run, runner.execution)
+            result = self._finish(run, runner.execution)
+            if shadow is not None:
+                shadow.statement_finished(run, unit, result)
+            return result
         finally:
             self._advance_rng(run)
 
@@ -744,15 +754,26 @@ class StatementProcessor:
             force_outputs=force_outputs,
             is_last=is_last,
         )
+        shadow = _shadow.SHADOW
         with answers_shared():
             done = self._prepare(run)
             if done is not None:
+                if shadow is not None:
+                    shadow.statement_served(run, done)
                 self._advance_rng(run)
                 return done
             with self._executing(run) as runner:
-                await runner.run_async()
+                unit = shadow.begin("stmt") if shadow is not None and not run.skip_cache else None
+                try:
+                    await runner.run_async()
+                finally:
+                    if unit is not None:
+                        shadow.end(unit)
         try:
-            return self._finish(run, runner.execution)
+            result = self._finish(run, runner.execution)
+            if shadow is not None:
+                shadow.statement_finished(run, unit, result)
+            return result
         finally:
             self._advance_rng(run)
 
@@ -812,6 +833,8 @@ class StatementProcessor:
             # It learns what it changes as it runs: a restore would not.
             metadata, cached_data = None, None
         run.entry_holders = bool(metadata is not None and metadata.holders)
+        if _shadow.SHADOW is not None:
+            _shadow.SHADOW.statement_lookup(self, run, bool(cached_data))
         if cached_data and self._live_objects_shared(run, metadata):
             cached_data = None
         if cached_data and not import_needs_reexecution(run.tree, self.shell.user_ns):
@@ -1230,6 +1253,8 @@ class StatementProcessor:
             if memo is not None:
                 tree = memo[0]
                 source = ast.unparse(tree)
+                run.memo_used = True
+        run.handed_iterable = handed
         runner = CodeRunner(code, source, tree, run.is_last, self.shell.user_ns)
         execution = runner.execution
         marks = self._calls.cash_time_marks()

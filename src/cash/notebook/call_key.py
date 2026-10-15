@@ -31,6 +31,7 @@ from cash.analysis.callee_effects import source_global_mutations
 from cash.analysis.namespace_effects import capturable_globals
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
 from cash.install_paths import is_user_path
+from cash.notebook import shadow as _shadow
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_effects import closure_cells, rebinds_its_closure
 from cash.sizing import pandas_nbytes
@@ -813,6 +814,13 @@ class CallKeys:
                 code_names=code_names,
             )
             self._note_key_parts(site, key, ctx, arg_digests, global_digests)
+            if _shadow.SHADOW is not None and key is not None:
+                _shadow.SHADOW.note_call(
+                    key,
+                    site,
+                    (arg_digests, name_digests, global_digests, self._current_loop_var_digests()),
+                    by_content=set(name_digests or ()) | (set(site.content_names) if by_content else set()),
+                )
             return key
         except Exception:  # noqa: BLE001 - never let keying break the call
             logger.debug("call unit: key build failed for %s", site.source)

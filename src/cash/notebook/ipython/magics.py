@@ -26,6 +26,7 @@ from ...tracking import io_watch
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import capture_rng_state, rng_modules_changed, rng_virtual_var
 from ...value_hash import compute_hash
+from .. import shadow
 from .._protocols import ShellProtocol
 from ..cache_status import CacheStatus
 from ..control_structures import ControlStructureProcessor
@@ -577,6 +578,10 @@ class CashMagics(Magics):
             "debug_enabled": self._debug,
             "fast_path": value_watch.status_line(),
         }
+        shadow_status = shadow.status()
+        if shadow_status is not None:
+            # Only with CASH_SHADOW=1: what verifying the traces found.
+            status["shadow"] = shadow_status
 
         # Counted, not listed: listing reads every entry's metadata, which on a
         # file cache of a few thousand entries takes seconds (see entry_count).
