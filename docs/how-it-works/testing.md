@@ -28,14 +28,19 @@ yourself. Figures on this page are derived from the repository by
 
 | Check | When | Platforms | What it runs |
 |---|---|---|---|
-| Unit | every push and pull request | Linux, Windows and macOS, Python 3.10 to 3.14: <!-- docnum:platforms -->15<!-- /docnum --> combinations | the unit suite, without the tests marked `perf` |
+| Unit | every push to main, every pull request | Linux, Windows and macOS, Python 3.10 to 3.14: <!-- docnum:platforms -->15<!-- /docnum --> combinations | the unit suite, without the tests marked `perf` |
 | Polars 1 | every push and pull request | Linux, Python 3.12 | the unit tests named for polars, on the newest polars 1 (the others run on polars 2) |
-| Integration core set | every push and pull request | Linux, Python 3.10 to 3.14 | about 340 integration tests (`tools/test_selection/core_set.txt`), chosen to cover every line, feature and step sequence the whole suite covers |
+| Integration core set | every push to main, every pull request | Linux, Python 3.10 to 3.14 | about 340 integration tests (`tools/test_selection/core_set.txt`), chosen to cover every line, feature and step sequence the whole suite covers |
 | Integration, full | nightly | Linux, Python 3.12, in 6 parallel shards | the whole integration suite |
 | Docs | every push and pull request | Linux, Python 3.12 | the docs suite, and a check that the derived numbers are current |
 | Lint | every push and pull request | Linux | `ruff check .` and `ruff format --check .` |
 | Benchmarks | weekly, and when `benchmarks/` changes | Linux | the benchmark tooling tests, and the `perf` tests, which never block |
 | Release | when a release is published | Linux | the claim-drift check, blocking; then the build and `twine check` |
+
+A push to a working branch (`claude/**`, `cext/**`) runs a smaller tier so it
+never queues: the unit suite on Linux with Python 3.13 in 4 shards, and on
+Windows and macOS with Python 3.10 and 3.14 (Windows in 2 shards each), and the
+integration core set on Python 3.10, 3.13 and 3.14; the other checks run as above.
 
 Two rules apply to every test run. `xfail_strict` is on, so a test marked as
 an expected failure fails the build once it passes. And a test fails if any

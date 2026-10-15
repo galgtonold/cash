@@ -248,6 +248,10 @@ format is cleared on first open.
   `fresh_kernel` when it needs a real restart, or set `CASH_TEST_REUSE_KERNEL=0`
   to rule out cross-test contamination.
 - `perf` marks wall-clock threshold tests; CI's unit job skips them.
+- CI (`ci.yml`) has two tiers: pushes to `claude/**` and `cext/**` run a
+  smaller, sharded matrix that fits the free runner limits; `main`, pull
+  requests and runs by hand run every OS and Python. Run it by hand on a
+  branch before merging a change that could differ by platform.
   `benchmarks/tests/` tests the benchmark tooling and runs separately.
 - Before moving main: `python tools/test_selection/impacted.py --run`. It runs
   the tests whose recorded coverage reaches the diff from `origin/main`

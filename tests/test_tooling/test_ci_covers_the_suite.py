@@ -26,6 +26,7 @@ with pytest itself, which CI installs for every job that runs this file.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -183,6 +184,74 @@ class TestExclusionsAreHonest:
         # Sanity: the directories we expect to be covered really are.
         for name in ("test_core", "test_backends", "test_ui", "test_notebook"):
             assert name in unaccounted, f"tests/{name} is not being run by CI — it is excluded or gone."
+
+
+def _tiers() -> dict[str, dict[str, object]]:
+    """The plan job's two tiers: ``{"full": {...}, "branch": {...}}``, each
+    holding the ``unit`` matrix and the ``core`` Python list as parsed JSON."""
+    text = CI_YML.read_text(encoding="utf-8")
+    full, branch = text.split('if [ "$FULL_TIER" = true ]; then', 1)[1].split("\n          else\n", 1)
+    branch = branch.split("\n          fi\n", 1)[0]
+    tiers = {}
+    for name, body in (("full", full), ("branch", branch)):
+        tiers[name] = {
+            key: json.loads(re.search(rf"\b{key}='(.*?)'", body, re.DOTALL).group(1)) for key in ("unit", "core")
+        }
+    return tiers
+
+
+def _supported_pythons() -> list[str]:
+    return re.findall(r'"Programming Language :: Python :: (3\.\d+)"', PYPROJECT.read_text(encoding="utf-8"))
+
+
+class TestBothTiersRunTheSuite:
+    """Working-branch pushes run a smaller matrix, with the unit suite split
+    into shards; main, pull requests and runs by hand run the full one."""
+
+    def test_the_unit_step_runs_the_matrix_shard(self, unit_step):
+        assert "-p tools.test_selection.shard --shard=${{ matrix.shard }}" in unit_step, unit_step
+        assert re.search(r"python -m pytest\s+tests/", unit_step), "-p tools... needs the repo root on sys.path"
+
+    def test_both_tiers_take_their_matrix_from_the_plan(self):
+        text = CI_YML.read_text(encoding="utf-8")
+        assert "matrix: ${{ fromJSON(needs.plan.outputs.unit) }}" in _job(text, "test")
+        assert "python-version: ${{ fromJSON(needs.plan.outputs.core) }}" in _job(text, "integration-core")
+        cond = re.search(r"FULL_TIER: \$\{\{ (.+) \}\}", text).group(1)
+        assert "github.event_name != 'push'" in cond and "refs/heads/main" in cond, cond
+
+    def test_the_full_tier_runs_every_os_and_python_whole(self):
+        full = _tiers()["full"]
+        assert full["unit"]["os"] == ["ubuntu-latest", "windows-latest", "macos-latest"]
+        assert full["unit"]["python-version"] == _supported_pythons()
+        assert full["unit"]["shard"] == ["1/1"]
+        assert full["core"] == _supported_pythons()
+
+    def test_branch_shards_run_every_test_once_per_os_and_python(self):
+        """The shards of one OS and Python are 1/N..N/N, so the shard plugin
+        runs each test in exactly one of them."""
+        groups: dict[tuple[str, str], list[str]] = {}
+        for entry in _tiers()["branch"]["unit"]["include"]:
+            assert set(entry) == {"os", "python-version", "shard"}, entry
+            groups.setdefault((entry["os"], entry["python-version"]), []).append(entry["shard"])
+        for key, shards in groups.items():
+            n = len(shards)
+            assert sorted(shards) == [f"{i}/{n}" for i in range(1, n + 1)], (key, shards)
+        oldest, newest = _supported_pythons()[0], _supported_pythons()[-1]
+        for os_name in ("windows-latest", "macos-latest"):
+            assert {(os_name, oldest), (os_name, newest)} <= set(groups), groups
+        assert any(os_name == "ubuntu-latest" for os_name, _ in groups), groups
+        assert {oldest, newest} <= set(_tiers()["branch"]["core"])
+
+    def test_the_branch_tier_fits_the_free_concurrency_limits(self):
+        """20 concurrent jobs, 5 of them on macOS, so a push never queues."""
+        text = CI_YML.read_text(encoding="utf-8")
+        branch = _tiers()["branch"]
+        jobs = re.findall(r"^  ([\w-]+):\n", text.split("\njobs:\n", 1)[1], re.MULTILINE)
+        single = [j for j in jobs if j not in ("test", "integration-core")]
+        total = len(single) + len(branch["unit"]["include"]) + len(branch["core"])
+        macos = sum(e["os"].startswith("macos") for e in branch["unit"]["include"])
+        assert total <= 20, total
+        assert macos <= 5, macos
 
 
 def _step_run(text: str, name: str) -> str:

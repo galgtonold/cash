@@ -147,10 +147,14 @@ def _count_claims() -> int:
 
 
 def _count_platforms() -> int:
-    """Size of the CI test matrix: operating systems x Python versions."""
+    """Size of the full CI test matrix: operating systems x Python versions.
+
+    The plan job in ci.yml writes it as JSON; working branches run a smaller
+    tier, listed entry by entry, which this does not count.
+    """
     text = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    oses = re.search(r"^\s*os:\s*\[([^\]]+)\]", text, re.MULTILINE)
-    pys = re.search(r"^\s*python-version:\s*\[([^\]]+)\]", text, re.MULTILINE)
+    oses = re.search(r'^\s*"os":\s*\[([^\]]+)\]', text, re.MULTILINE)
+    pys = re.search(r'^\s*"python-version":\s*\[([^\]]+)\]', text, re.MULTILINE)
     if oses is None or pys is None:
         raise SystemExit("could not parse the CI matrix from ci.yml")
     n_os = len([x for x in oses.group(1).split(",") if x.strip()])
