@@ -10,23 +10,92 @@ key at all.
 `run_autoreload_now` runs the extension's check at the point the cell's
 module check runs, and says which modules it reloaded, so cash treats them
 as an edit it saw itself: tracked from then on, and their readers re-keyed.
+
+A module cash reloads itself while the extension is on is reloaded the
+extension's way (`in_place_reload`): its old classes and functions are
+updated in place, and objects made before the edit run the new methods, as
+in a plain kernel. A plain ``importlib.reload`` made new classes, so
+``type(orders[0]) is mylib.Order`` was False and ``orders[0].total()`` ran
+the old method.
 """
 
 from __future__ import annotations
 
 import contextlib
+import inspect
 import logging
 import sys
 import tokenize
 import types
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from typing import Any
 
 from ...tracking.function_tracker import is_local_module
 
-__all__ = ["run_autoreload_now"]
+__all__ = ["in_place_reload", "run_autoreload_now"]
 
 logger = logging.getLogger(__name__)
+
+
+def _reloader_of(shell: Any) -> Any:
+    """The ``%autoreload`` extension's reloader, when it is loaded."""
+    registry = getattr(getattr(shell, "magics_manager", None), "registry", None)
+    magics = registry.get("AutoreloadMagics") if isinstance(registry, dict) else None
+    return getattr(magics, "_reloader", None)
+
+
+def in_place_reload(shell: Any) -> Callable[[types.ModuleType, Callable[[types.ModuleType], Any]], bool] | None:
+    """A reload for cash's own module check that does what ``%autoreload``
+    does to a module it reloads, or None when the extension is not on.
+
+    The returned function reloads a module the extension covers (every
+    module with ``%autoreload 2`` or ``3``, the ``%aimport``-ed ones with
+    ``1``) through IPython's ``superreload`` with the given plain reload, and
+    returns True; any other module it leaves alone and returns False.
+    ``superreload`` remembers the module's classes and functions, reloads it,
+    and updates the old ones in place: a class's methods and attributes, a
+    function's code, and the class of each object of an old class.
+    """
+    reloader = _reloader_of(shell)
+    old_objects = getattr(reloader, "old_objects", None)
+    if not getattr(reloader, "enabled", False) or not isinstance(old_objects, dict):
+        return None
+    try:
+        from IPython.extensions.autoreload import superreload
+    except ImportError:
+        return None
+    try:
+        accepted = set(inspect.signature(superreload).parameters)
+    except (TypeError, ValueError):
+        return None
+
+    def reload(module: types.ModuleType, plain_reload: Callable[[types.ModuleType], Any]) -> bool:
+        name = getattr(module, "__name__", None)
+        if not isinstance(name, str) or not _covers(reloader, name):
+            return False
+        kwargs: dict[str, Any] = {}
+        if getattr(reloader, "autoload_obj", False):
+            # ``%autoreload 3`` also binds what the reload added.
+            if "shell" in accepted:
+                kwargs["shell"] = shell
+            tracker = getattr(reloader, "import_from_tracker", None)
+            if "import_from_tracker" in accepted and getattr(tracker, "imports_froms", None):
+                kwargs["import_from_tracker"] = tracker
+        superreload(module, plain_reload, old_objects, **kwargs)
+        return True
+
+    return reload
+
+
+def _covers(reloader: Any, name: str) -> bool:
+    """Whether the extension reloads module *name* when its file changes."""
+    skipped = getattr(reloader, "skip_modules", None)
+    if isinstance(skipped, dict) and name in skipped:
+        return False
+    if getattr(reloader, "check_all", False):
+        return True
+    marked = getattr(reloader, "modules", None)
+    return isinstance(marked, dict) and name in marked
 
 
 def run_autoreload_now(shell: Any, reloaded: Iterable[str] = ()) -> set[str]:
@@ -46,9 +115,7 @@ def run_autoreload_now(shell: Any, reloaded: Iterable[str] = ()) -> set[str]:
     nothing computed after an edit was reused after a restart, and a failed
     call took its arguments for changed (the helper's source read as none).
     """
-    registry = getattr(getattr(shell, "magics_manager", None), "registry", None)
-    magics = registry.get("AutoreloadMagics") if isinstance(registry, dict) else None
-    reloader = getattr(magics, "_reloader", None)
+    reloader = _reloader_of(shell)
     mtimes = getattr(reloader, "modules_mtimes", None)
     if not getattr(reloader, "enabled", False) or not isinstance(mtimes, dict):
         return set()

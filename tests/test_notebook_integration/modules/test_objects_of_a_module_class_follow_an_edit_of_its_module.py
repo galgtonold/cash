@@ -4,7 +4,9 @@ that module, however the objects were made.
 ``orders = pickle.load(f)`` holds ``shop.Order`` objects and
 ``t = [o.total() for o in orders]`` runs ``Order.total`` and ``shop.rate()``.
 Neither the cell nor the lineage of ``orders`` (the pickle file's) names
-``shop``, so after ``rate`` was edited cash served the old ``t``.
+``shop``, so after ``rate`` was edited cash served the old ``t``. With
+``%autoreload 2`` an object made before the edit also kept the old class
+under cash, where a plain kernel updates the class in place.
 """
 
 import os
@@ -76,3 +78,27 @@ def test_after_a_restart_the_edit_is_not_served_the_old_result(nb_runner):
     nb_runner.run_all()
     assert nb_runner.peek("t") == "[0, 5, 10]", nb_runner.get_raw_output(3)
 
+
+def test_with_autoreload_objects_made_before_the_edit_run_the_edited_method(nb_runner):
+    """Objects a cell above would not rebuild (their lineage is the pickle
+    file's): with ``%autoreload 2`` they run the edited method, as in a
+    plain kernel, where cash's reload left them the old class."""
+    name, path = _shop(nb_runner, factor=2)
+    nb_runner.create_notebook(
+        [
+            f"%load_ext autoreload\n%autoreload 2\nimport pickle, {name}",
+            f"with open('orders.pkl', 'wb') as f:\n    pickle.dump([{name}.Order(i) for i in range(3)], f)",
+            "with open('orders.pkl', 'rb') as f:\n    orders = pickle.load(f)",
+            "t = [o.total() for o in orders]",
+            f"same = type(orders[0]) is {name}.Order",
+        ]
+    )
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert nb_runner.peek("t") == "[0, 2, 4]"
+
+    _edit(path, factor=3)
+    nb_runner.run_cell(4)
+    nb_runner.run_cell(5)
+    assert nb_runner.peek("t") == "[0, 3, 6]", nb_runner.get_raw_output(4)
+    assert nb_runner.peek("same") == "True"

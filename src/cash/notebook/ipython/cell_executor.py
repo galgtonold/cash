@@ -79,7 +79,7 @@ from ..statement import ProcessResult
 from ..statement.capture import replay_outputs
 from ..tracking_state import TrackingState
 from ._types import PipelineCompleted, PipelineSyntaxError, RunInstead
-from .autoreload_hook import run_autoreload_now
+from .autoreload_hook import in_place_reload, run_autoreload_now
 from .ipython_cell import CellMagic, IPythonCell, ipython_cell
 from .notifications import (
     function_change_rows,
@@ -782,6 +782,10 @@ class CellExecutor:
         try:
             changed_modules, per_module_changed_symbols = ft.check_and_reload_changed_modules(
                 self.shell.user_ns,
+                # With ``%autoreload`` on, as it reloads: the old classes
+                # updated in place, so objects made before the edit run the
+                # new methods, as in a plain kernel.
+                in_place_reload(self.shell),
             )
             if changed_modules:
                 self._module_invalidator.invalidate(

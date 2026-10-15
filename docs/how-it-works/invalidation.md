@@ -33,7 +33,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
 
     A statement recomputes when any of these changed:
 
-    <!-- claim: cash/notebook/held_modules.py:held_module_parts @34c0a619, cash/notebook/held_functions.py:held_notebook_code @875427ef -->
+    <!-- claim: cash/notebook/held_modules.py:held_module_parts @34c0a619, cash/notebook/held_functions.py:held_notebook_code @875427ef, cash/notebook/ipython/autoreload_hook.py:in_place_reload @91fc9ec5 -->
     - **Its source.**
     - **An input's lineage**, which changes whenever anything upstream of that
       input changed ([below](#lineage-propagation)).
@@ -45,7 +45,9 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       in the kernel when you edit it. With `%autoreload` on, its reloads run
       before the cell, as in a plain kernel, and a module it reloads (one
       `%aimport` loaded too) counts as edited. A module cash has just
-      reloaded is not reloaded a second time. Editing one function in a
+      reloaded is not reloaded a second time, and cash reloads it the way
+      `%autoreload` does: an object made before the edit runs the edited
+      methods and stays an instance of the module's class. Editing one function in a
       module re-runs only what uses that function. A statement that calls
       into objects of a class of your module uses the module however the
       objects were made: `[o.total() for o in orders]` after
@@ -97,7 +99,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
     - **An in-place change** to a variable it reads
       ([below](#mutation-bumps-the-receivers-lineage)).
 
-    <!-- claim: cash/tracking/function_tracker.py:FunctionTracker.check_and_reload_changed_modules @9a04e5bd, cash/notebook/ipython/cell_executor.py:CellExecutor._raise_failed_reload @c7525897 -->
+    <!-- claim: cash/tracking/function_tracker.py:FunctionTracker.check_and_reload_changed_modules @377dc190, cash/notebook/ipython/cell_executor.py:CellExecutor._raise_failed_reload @c7525897 -->
     If an edited module no longer loads (a syntax error, or an error in its
     top-level code), the kernel still holds its old code, so cash runs
     nothing on it: every cell you run fails with the error a fresh import of
