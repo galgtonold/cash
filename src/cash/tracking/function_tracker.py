@@ -25,7 +25,7 @@ from ..source_norm import bytecode_identity
 from ..source_reading import read_code_text
 from .module_symbols import analysis_for, registered_on
 
-__all__ = ["FunctionTracker", "is_local_module"]
+__all__ = ["FunctionTracker", "imports_of", "is_local_module"]
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ def _imported_names_of_source(source: str) -> frozenset[str]:
     return frozenset(_collect_imported_names(ast.parse(source)))
 
 
-def _imports_of(module_name: str) -> frozenset[str] | None:
+def imports_of(module_name: str) -> frozenset[str] | None:
     """The module names *module_name*'s source file imports, or None when it
     is not loaded, has no source file, or the file cannot be read or parsed."""
     mod = sys.modules.get(module_name)
@@ -551,7 +551,7 @@ class FunctionTracker:
                 continue
             visited.add(mod_name)
 
-            sub_module_names = _imports_of(mod_name)
+            sub_module_names = imports_of(mod_name)
             if sub_module_names is None:
                 logger.debug("No readable source for transitive dependency '%s'", mod_name)
                 continue
@@ -1114,7 +1114,7 @@ class FunctionTracker:
         """Return a map of tracked_module → set of other tracked modules it imports."""
         imports_map: dict[str, set[str]] = {}
         for mod_name in self.tracked_modules:
-            imported_names = _imports_of(mod_name)
+            imported_names = imports_of(mod_name)
             if imported_names is not None:
                 imports_map[mod_name] = imported_names & self.tracked_modules
         return imports_map
@@ -1133,7 +1133,7 @@ class FunctionTracker:
     @staticmethod
     def _build_imports_map_for_set(modules: set[str]) -> dict[str, set[str]]:
         """Build import graph restricted to *modules* (bottom-up dependency graph)."""
-        return {mod_name: set((_imports_of(mod_name) or frozenset()) & modules) for mod_name in modules}
+        return {mod_name: set((imports_of(mod_name) or frozenset()) & modules) for mod_name in modules}
 
     @staticmethod
     def _kahn_sort_bottom_up(modules: set[str], imports_map: dict[str, set[str]]) -> list[str]:

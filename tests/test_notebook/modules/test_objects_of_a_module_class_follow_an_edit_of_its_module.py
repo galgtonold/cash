@@ -88,11 +88,11 @@ def test_unedited_the_reader_is_served(cash_magics, mock_shell, shop, tmp_path):
     cells = [*_cells(name, pkl), f"u = [o.counted({str(log)!r}) for o in orders]"]
     for cell in cells:
         run_cash_cell(cash_magics, cell, cells=cells)
-    assert log.read_text() == "xxx"
+    assert log.read_text(encoding="utf-8") == "xxx"
 
     run_cash_cell(cash_magics, cells[3], cells=cells)
 
-    assert log.read_text() == "xxx"
+    assert log.read_text(encoding="utf-8") == "xxx"
     assert mock_shell.user_ns["u"] == [0, 2, 4]
 
 

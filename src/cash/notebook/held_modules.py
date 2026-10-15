@@ -36,7 +36,7 @@ from .._memo import CODE_OBJECTS, LruMemo
 from ..code_digest import module_identity
 from ..loaded_code import class_functions
 from ..source_norm import bytecode_identity
-from ..tracking.function_tracker import _imports_of, is_local_module
+from ..tracking.function_tracker import imports_of, is_local_module
 from ..tracking.module_symbols import closure_digest
 
 __all__ = ["held_module_parts"]
@@ -96,7 +96,7 @@ def _local_imports(name: str) -> list[types.ModuleType]:
     found: dict[str, types.ModuleType] = {}
     pending = [name]
     while pending:
-        imported = _imports_of(pending.pop()) or frozenset()
+        imported = imports_of(pending.pop()) or frozenset()
         for other in sorted(imported):
             module = sys.modules.get(other)
             if other == name or other in found or module is None or not _local(module):
