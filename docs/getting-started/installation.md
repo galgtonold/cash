@@ -35,6 +35,37 @@ big inputs and computes them again; it never serves one install's entry to
 the other. Give every machine that shares a cache (a team's S3 or Redis
 backend, CI and laptops) the same install to keep their hits.
 
+<!-- claim: cash/_native.py:_load @1ea87886, cash/__main__.py:cmd_info @3e16686c, cash/notebook/ipython/magics.py:CashMagics.cash_status @1bed8754 -->
+## The C fast path
+
+On CPython 3.12 or newer, pip installs a wheel with a small C extension for
+Linux (x86-64 and ARM64), macOS (Intel and Apple silicon) and Windows
+(x86-64). It tells cash which values have provably not changed since it
+last hashed them, so cash skips hashing them again. Nothing needs
+configuring.
+
+Everywhere else, on Python 3.10 and 3.11, other interpreters or other
+platforms, pip installs the pure-Python wheel and cash hashes those values
+as it always does. Results, cache keys and cache folders are the same with
+and without the extension, so installs of both kinds share a cache. When pip
+builds cash from source, it compiles the extension if it finds a C compiler
+and installs without it if it does not; the install never fails over it.
+
+To see whether the fast path is on, and why not when it is off:
+
+=== "Decorator"
+
+    Run `cash info` in a terminal. The `Fast path` line says `on`, or `off`
+    with the reason.
+
+=== "Notebook"
+
+    Run `%cash_status` in a cell. Its `fast_path` entry says `on`, or `off`
+    with the reason.
+
+Set `CASH_PURE_PYTHON=1` in the environment to run without the extension.
+Set while installing from source, it builds cash without the extension.
+
 ## Packages for specific features
 
 cash works with the libraries you already use, such as pandas and polars,

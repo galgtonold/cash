@@ -299,6 +299,20 @@ class TestTheWheelIsChecked:
             needs = re.search(r"^    needs: (.+)$", _job(text, name), re.MULTILINE)
             assert needs and "verify-wheel" in needs.group(1), f"{name} can upload an unverified wheel"
 
+    def test_a_release_uploads_the_platform_wheels_and_the_pure_wheel(self):
+        """The platform wheels come from cibuildwheel (wheels.yml), which
+        import-tests each one; the build job adds the universal
+        pure-Python wheel, which verify-wheel checks."""
+        text = PUBLISH_YML.read_text(encoding="utf-8")
+        assert "uses: ./.github/workflows/wheels.yml" in _job(text, "wheels")
+        assert "CASH_PURE_PYTHON=1 python -m build --wheel" in _job(text, "build")
+        for name in ("publish", "publish-test"):
+            job = _job(text, name)
+            assert re.search(r"^    needs: .*\bwheels\b", job, re.MULTILINE), (
+                f"{name} can run before the wheels are built"
+            )
+            assert "pattern: cibw-wheels-*" in job, f"{name} does not upload the platform wheels"
+
     def test_the_verification_checks_version_and_extension(self):
         job = _job(PUBLISH_YML.read_text(encoding="utf-8"), "verify-wheel")
         assert "python -m venv" in job

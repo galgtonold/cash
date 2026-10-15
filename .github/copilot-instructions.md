@@ -111,6 +111,15 @@ file is load-bearing and guarded by a build script and
 `tests/test_notebook/session/test_labextension_packaging.py`; read `labextension/README.md`
 before touching it.
 
+### C extension (`src/cash/_c/`)
+
+Optional: `hatch_build.py` compiles it into `cash._cwatch` on CPython 3.12+,
+and a failed compile builds a pure-Python wheel instead. Import it only
+through `cash._native` (`cwatch` is the module or None, `REASON` says why
+not; `cash info` and `%cash_status` show it). `CASH_PURE_PYTHON=1` leaves it
+out at build and at run time. Every key and digest must be the same with and
+without it.
+
 ## Critical conventions
 
 ### Unified cache-key computation
@@ -463,9 +472,17 @@ checks both.
 
 ```bash
 rm -rf dist/            # python -m build adds to dist/, it never clears it
-python -m build
-ls dist/                # exactly two files, both X.Y.Z: the wheel and the sdist
+python -m build --sdist
+CASH_PURE_PYTHON=1 python -m build --wheel   # the universal wheel, without the C extension
+ls dist/                # exactly two files, both X.Y.Z: the py3-none-any wheel and the sdist
 ```
+
+These are what `publish.yml` builds itself. The platform wheels with the C
+extension (`hatch_build.py` compiles it; plain `python -m build` on
+CPython 3.12+ gives one for this machine only) come from
+`.github/workflows/wheels.yml`, which `publish.yml` runs: cibuildwheel on
+Linux, macOS and Windows runners, each wheel import-tested. Run that
+workflow by hand before tagging when the C sources or the build changed.
 
 - `pytest tests/test_notebook -x`
 - `twine check dist/*`

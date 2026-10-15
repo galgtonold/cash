@@ -60,6 +60,7 @@ Cash v<!-- docnum:version -->0.13.0<!-- /docnum -->
               `cash inspect` lists them, with what each one saves
   Max size:   RAM 4.0 GiB (auto), disk 16.4 GiB (auto)
   Persist:    cost model (0.1s compute floor, 20% savings required; notebook statements: 0.01s store floor, 0.05s restore budget)
+  Fast path:  on (C extension cash._cwatch, API 1)
   Config files:
     user         /home/me/.config/cash/config.toml  (not found)
     project      /home/me/project/pyproject.toml  (read)
@@ -75,6 +76,8 @@ Cash v<!-- docnum:version -->0.13.0<!-- /docnum -->
   `cash inspect` and `cash clear` act on the same directory.
 - `Max size` shows the cap each tier is built with, in order, including the
   automatic ones (marked `auto`).
+- `Fast path` says whether the C extension is in use, or why not
+  ([The C fast path](getting-started/installation.md#the-c-fast-path)).
 - `Config files` lists every file looked for: `read`, `not found`,
   `no [tool.cash] section`, or `could not be read`.
 - `Settings` lists each setting some layer set, with the layer that won
@@ -256,7 +259,7 @@ Running `on` again with the same mode does nothing. To switch modes, run
 `cash autoload off` first, or pass `--force`: `on` refuses to overwrite an
 existing hook with a different body.
 
-<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @148bc6bb -->
+<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @3e16686c -->
 ## Exit codes
 
 | Code | When |

@@ -1,0 +1,126 @@
+name: Wheels
+
+# Builds every release artifact: the platform wheels with the C extension
+# (cibuildwheel; which Pythons and how they are tested is [tool.cibuildwheel]
+# in pyproject.toml), the universal pure-Python wheel and the sdist, and checks
+# that the sdist installs without a C compiler. publish.yml calls it for a
+# release; run it by hand, or push to the C extension branch, to test the
+# build on every platform without a release.
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches: [claude/c-extension]
+
+jobs:
+  platform-wheels:
+    name: Wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each runner builds its own architecture (archs = native): Linux
+        # x86_64 and aarch64 (manylinux and musllinux each), macOS x86_64 and
+        # arm64, Windows AMD64.
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-14, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build and test the wheels
+        uses: pypa/cibuildwheel@v4.2.1
+        with:
+          output-dir: wheelhouse
+
+      # upload-artifact@v6 and download-artifact@v7 are the lowest majors that
+      # run on node24. Newer pairs change unzip behaviour; bump both together.
+      - uses: actions/upload-artifact@v6
+        with:
+          name: cibw-wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+
+  pure-wheel-and-sdist:
+    name: Pure-Python wheel and sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Build
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build --sdist
+          CASH_PURE_PYTHON=1 python -m build --wheel
+          twine check dist/*
+
+      - name: Check the wheel is the universal one
+        run: |
+          set -euo pipefail
+          ls dist/
+          wheels=(dist/*.whl)
+          case "${wheels[*]}" in
+            *-py3-none-any.whl) ;;
+            *) echo "expected one py3-none-any wheel, found: ${wheels[*]}"; exit 1 ;;
+          esac
+          if unzip -l "${wheels[0]}" | grep -q "cash/_cwatch"; then
+            echo "the pure-Python wheel contains the C extension"; exit 1
+          fi
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: pure-wheel-and-sdist
+          path: dist/
+
+  # What a user without a matching platform wheel gets: pip falls back to the
+  # pure wheel, or, from the sdist, compiles the extension when it can and
+  # leaves it out when it cannot.
+  fallback-installs:
+    name: Fallback installs (Python ${{ matrix.python-version }})
+    needs: pure-wheel-and-sdist
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12", "3.14"]
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: pure-wheel-and-sdist
+          path: dist/
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Outside the checkout, so nothing but the installed package is imported.
+      - name: Install each way and import cash
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          check='import cash, cash._native as n; print(cash.__version__, "| fast path:", n.status_line())'
+          fresh() { rm -rf "$RUNNER_TEMP/v"; python -m venv "$RUNNER_TEMP/v"; "$RUNNER_TEMP/v/bin/python" -m pip install -q --upgrade pip; }
+
+          echo "== pure-Python wheel"
+          fresh
+          "$RUNNER_TEMP/v/bin/python" -m pip install -q "$GITHUB_WORKSPACE"/dist/*.whl
+          "$RUNNER_TEMP/v/bin/python" -c "$check"
+          "$RUNNER_TEMP/v/bin/python" -c "import cash._native as n, sys; sys.exit(n.AVAILABLE)"
+
+          echo "== sdist with a compiler"
+          fresh
+          "$RUNNER_TEMP/v/bin/python" -m pip install -q "$GITHUB_WORKSPACE"/dist/*.tar.gz
+          "$RUNNER_TEMP/v/bin/python" -c "$check"
+          if python -c "import sys; sys.exit(sys.version_info < (3, 12))"; then
+            "$RUNNER_TEMP/v/bin/python" -c "import cash._native as n, sys; sys.exit(not n.AVAILABLE)"
+          fi
+
+          echo "== sdist without a compiler (CC=false)"
+          fresh
+          CC=false "$RUNNER_TEMP/v/bin/python" -m pip install -q "$GITHUB_WORKSPACE"/dist/*.tar.gz
+          "$RUNNER_TEMP/v/bin/python" -c "$check"
+          "$RUNNER_TEMP/v/bin/python" -c "import cash._native as n, sys; sys.exit(n.AVAILABLE)"

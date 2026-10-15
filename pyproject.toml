@@ -8,8 +8,15 @@ build-backend = "hatchling.build"
 packages = ["src/cash"]
 # The bundle reaches users through the shared-data mapping below. The copy
 # inside the package is only for `jupyter labextension develop` in a checkout,
-# so the wheel leaves it out instead of shipping it twice.
-exclude = ["/src/cash/labextension"]
+# so the wheel leaves it out instead of shipping it twice. The C sources under
+# _c/ are compiled into cash/_cwatch by the build hook below; the wheel ships
+# the compiled module, the sdist the sources.
+exclude = ["/src/cash/labextension", "/src/cash/_c"]
+
+# hatch_build.py compiles the optional C extension cash._cwatch (CPython 3.12+).
+# A failed compile leaves it out and the wheel is pure Python;
+# CASH_PURE_PYTHON=1 leaves it out on purpose (the py3-none-any wheel).
+[tool.hatch.build.targets.wheel.hooks.custom]
 
 # Ships the prebuilt JupyterLab extension that sends unsaved cell edits to cash.
 # The directory name must equal the npm package name in labextension/package.json
@@ -27,6 +34,8 @@ include = [
     "/pyproject.toml",
     "/README.md",
     "/LICENSE",
+    # The build hook that compiles the C extension from src/cash/_c/.
+    "/hatch_build.py",
     # The extension's source, so an sdist can rebuild the bundle. Listed file by
     # file so node_modules/ and lib/ never get in.
     "/labextension/install.json",
@@ -40,6 +49,18 @@ include = [
 # The version lives only in src/cash/__init__.py's __version__.
 [tool.hatch.version]
 path = "src/cash/__init__.py"
+
+# The platform wheels with the C extension, built by .github/workflows/wheels.yml.
+# Only CPython 3.12+ has the watchers the extension uses; 3.10 and 3.11 install
+# the universal pure-Python wheel. Each runner builds its own architecture, so
+# no wheel is cross-compiled or emulated.
+[tool.cibuildwheel]
+build = ["cp312-*", "cp313-*", "cp314-*", "cp314t-*"]
+archs = ["native"]
+# A platform wheel without the extension would be a broken release artifact.
+environment = { CASH_REQUIRE_EXTENSION = "1" }
+# The installed wheel loads its extension (the import fails the job if not).
+test-command = 'python -c "import cash._cwatch, cash._native as n; print(n.status_line())"'
 
 [project]
 name = "cash-lib"
