@@ -77,7 +77,7 @@ print(json.dumps({"got": got, "counts": counts, "lambda_frames": frames.count("<
 
 @pytest.mark.skipif(_native.kernels is None, reason=f"no C extension: {_native.REASON}")
 def test_the_c_hook_delivers_and_counts_as_the_python_hook(tmp_path):
-    (tmp_path / "s.py").write_text(_SCRIPT)
+    (tmp_path / "s.py").write_text(_SCRIPT, encoding="utf-8")
     with_c = json.loads(run_python("s.py", cwd=tmp_path).stdout.splitlines()[-1])
     without = json.loads(run_python("s.py", cwd=tmp_path, env={"CASH_PURE_PYTHON": "1"}).stdout.splitlines()[-1])
     assert with_c.pop("c_hook") is True
