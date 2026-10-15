@@ -89,9 +89,18 @@ def test_a_collection_of_frames_is_hashed_frame_by_frame():
 
 
 def test_a_plain_small_collection_hash_is_unchanged():
-    """Keys of plain collections already on disk must not move."""
+    """Keys of plain collections must not move within a cache format.
+
+    Pinned for cache format 7, where a pickled value is digested over its
+    store pickle (`stored_pickle.object_digest`): a head, the stream's
+    digest, and the out-of-band buffers' (none here). A change here is a
+    change of every key: bump ``CACHE_FORMAT_VERSION`` with it."""
     import hashlib
     import pickle
 
+    from cash.stored_pickle import _HEAD
+
     value = {"a": [1, 2, 3], "b": "text", "c": 2.5}
-    assert compute_hash(value) == hashlib.sha256(pickle.dumps(value)).hexdigest()
+    stream = hashlib.sha256(pickle.dumps(value, protocol=5)).digest()
+    assert compute_hash(value) == hashlib.sha256(_HEAD + stream + hashlib.sha256().digest()).hexdigest()
+    assert compute_hash(value) == "dc261d39a8212f7195676b740edd510643434b99d3d9f7358d4dcf848a374d03"

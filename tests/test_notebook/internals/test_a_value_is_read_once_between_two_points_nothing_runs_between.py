@@ -184,15 +184,27 @@ nx = pytest.importorskip("networkx")
 
 
 def _pickles_of(monkeypatch, mock_shell, name):
+    """Count the pickles a digest takes of *name*: whole
+    (`kept_state.dumps_also_keyed` writing to a hashing sink) or keyed apart
+    (`kept_state.dumps`). A store's pickle of its own is not a read."""
     seen = []
-    real = kept_state.dumps
+    real, real_also = kept_state.dumps, kept_state.dumps_also_keyed
 
-    def dumps(value, *a, **k):
+    def counted(value):
         if value is not None and value is mock_shell.user_ns.get(name):
             seen.append(1)
+
+    def dumps(value, *a, **k):
+        counted(value)
         return real(value, *a, **k)
 
+    def dumps_also_keyed(value, *a, **k):
+        if k.get("sink") is not None:
+            counted(value)
+        return real_also(value, *a, **k)
+
     monkeypatch.setattr(kept_state, "dumps", dumps)
+    monkeypatch.setattr(kept_state, "dumps_also_keyed", dumps_also_keyed)
     return seen
 
 

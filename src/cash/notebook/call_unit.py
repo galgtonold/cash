@@ -585,6 +585,10 @@ class CallUnit:
         #: Emptied by :meth:`begin_cell`; holding the results that long keeps
         #: an ``id`` from being reused by another object meanwhile.
         self.held_results: dict[int, tuple[Any, str, str, int]] = {}
+        #: The ids among `held_results` of results this cell's calls ran and
+        #: stored, their digest taken of the very value returned (not of a
+        #: stored copy a hit read back).
+        self.digested_results: set[int] = set()
         #: The hashes of the frames this cell's calls received, checked
         #: rather than read again while unchanged; emptied by :meth:`begin_cell`.
         self._fingerprints = self._digests.fingerprints
@@ -597,6 +601,7 @@ class CallUnit:
         """A new cell: the results held for references, and the frames
         remembered for their hashes, are let go."""
         self.held_results.clear()
+        self.digested_results.clear()
         self._fingerprints.clear()
 
     def _hold(self, key: str, value: Any, digest: str | None, size: Any) -> None:
@@ -1108,6 +1113,7 @@ class CallUnit:
         )
         if held:
             self._hold(call.key, result, *held)
+            self.digested_results.add(id(result))
         return True
 
     def _func_name(self, fn) -> str:
@@ -1316,6 +1322,9 @@ class CallCache:
 
     def held_results(self) -> dict:
         return self._call_unit.held_results
+
+    def digested_results(self) -> set[int]:
+        return self._call_unit.digested_results
 
     def outermost_result(self):
         return self._call_unit.outermost_result()

@@ -85,7 +85,12 @@ __all__ = [
 #: stale listing, so they are cleared.
 #: 6: a split entry's table names the buffers kept in the chunk store
 #: (`chunk_store`); an older split entry has no such table.
-CACHE_FORMAT_VERSION = 6
+#: 7: a value pickled whole is digested over the bytes a store keeps of it
+#: (`stored_pickle.object_digest`), so the keys, lineages and call digests
+#: built on such digests changed; and a statement's entry may hold a value's
+#: pickle nested in its own (`stored_pickle.load_part`), which an older
+#: build cannot load.
+CACHE_FORMAT_VERSION = 7
 
 #: The per-directory format stamp. No entry suffix, so entry globs skip it.
 VERSION_FILENAME = "CACHE_VERSION"

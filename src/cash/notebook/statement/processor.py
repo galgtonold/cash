@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import contextlib
 import io
 import logging
 import os
@@ -13,7 +14,7 @@ from collections.abc import Callable, Collection, Generator, Iterable, Iterator,
 from contextlib import contextmanager
 from typing import Any
 
-from cash import _plain_data
+from cash import _plain_data, stored_pickle
 from cash._active import default_cash
 from cash._clock import perf_counter as _perf_counter
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, PersistencePolicy
@@ -210,6 +211,10 @@ INPUT_CHANGED_REASON = (
 
 
 logger = logging.getLogger(__name__)
+
+
+#: What `_keeping_outputs` reads an unbound name as.
+_ABSENT = object()
 
 
 class StatementProcessor:
@@ -1749,62 +1754,76 @@ class StatementProcessor:
         if inputs_moved:
             run.skip_cache = True
             run.metrics["uncacheable_reasons"].append(INPUT_CHANGED_REASON)
-        # What it links, from its outputs' edges dropped to those found
-        # now, is kept for the simulation (`note_share_edges`).
-        with logging_edges() as linked:
-            captured_vars = self.lineage_builder.capture_and_track_variables(
-                self.tracking_state,
-                run.outputs,
-                run.inputs,
-                run.code,
-                run.source_hash,
-                cache_key=run.cache_key,
-                accessed_files=execution.accessed_files,
-                tree=run.tree,
-                accessed_remote=execution.accessed_remote,
-                probes=execution.probes,
-                no_cache=(run.annotation is not None and run.annotation.no_cache)
-                or run.value_varies
-                or run.past_budget
-                or inputs_moved
-                or self._binds_a_stream(run),
-                replay_bumps=False,
-                lineage_reads=run.pyplot_drawn,
-                settled=run.settled_digests,
-            )
-        # Let go of the values they hold: the checks below count references.
-        run.settled_digests = {}
-        # The share check, the closure check and the RAM tier each look into
-        # the outputs; JSON-like ones are walked once for all of them.
-        with _plain_data.one_look(captured_vars):
-            holders = None
-            if not run.skip_cache:
-                holders = self._refuse_unrestorable_outputs(run, captured_vars, execution.echo, execution.cost)
-            with logging_edges() as shared:
-                self._record_shared_object_edges(run, captured_vars, holders, execution.echo, execution.cost)
-            if not is_control_body(run.code):
-                self._records.note_share_edges(run.source_hash, linked | shared)
-            with self._after_it_ran(run):
-                self._record_file_effects(run, execution)
-            self._note_per_item_rerun(run, execution)
-
-            # Detect in-place mutations (detection-only; do not modify lineage).
-            # Reuses the StatementAnalysis from process_statement to avoid a
-            # second pass of AST visitors over the same tree.
-            pure_mutations = run.analysis.all_mutated_vars - run.outputs
-            if pure_mutations:
-                logger.debug("%s Detected in-place mutations on: %s", _LOG_MUTATION, pure_mutations)
-
-            miss_guarded = self._miss_guarded(run, execution, captured_vars)
-            self._skip_a_newly_seen_draw(run)
-
-            saved_metadata = None
-            if not run.skip_cache:
-                saved_metadata = self._store.save(
-                    run, execution, captured_vars, miss_guarded=miss_guarded, seed_epochs=self._randomness.seed_epochs
+        # From here to the store, only cash's code runs: the pickle a digest
+        # of an output takes is kept for the store to take
+        # (`stored_pickle.keeping`), instead of pickling the value again.
+        returned = self._calls.returned_digest(run.code)
+        if returned is not None:
+            # ``x = f(...)``: the digest the call's store took of its result
+            # is the one the statement would take of ``x`` now.
+            run.settled_digests = {**run.settled_digests, id(returned[0]): returned}
+        del returned
+        with self._keeping_outputs(run):
+            # What it links, from its outputs' edges dropped to those found
+            # now, is kept for the simulation (`note_share_edges`).
+            with logging_edges() as linked:
+                captured_vars = self.lineage_builder.capture_and_track_variables(
+                    self.tracking_state,
+                    run.outputs,
+                    run.inputs,
+                    run.code,
+                    run.source_hash,
+                    cache_key=run.cache_key,
+                    accessed_files=execution.accessed_files,
+                    tree=run.tree,
+                    accessed_remote=execution.accessed_remote,
+                    probes=execution.probes,
+                    no_cache=(run.annotation is not None and run.annotation.no_cache)
+                    or run.value_varies
+                    or run.past_budget
+                    or inputs_moved
+                    or self._binds_a_stream(run),
+                    replay_bumps=False,
+                    lineage_reads=run.pyplot_drawn,
+                    settled=run.settled_digests,
                 )
-            else:
-                logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
+            # Let go of the values they hold: the checks below count references.
+            run.settled_digests = {}
+            # The share check, the closure check and the RAM tier each look into
+            # the outputs; JSON-like ones are walked once for all of them.
+            with _plain_data.one_look(captured_vars):
+                holders = None
+                if not run.skip_cache:
+                    holders = self._refuse_unrestorable_outputs(run, captured_vars, execution.echo, execution.cost)
+                with logging_edges() as shared:
+                    self._record_shared_object_edges(run, captured_vars, holders, execution.echo, execution.cost)
+                if not is_control_body(run.code):
+                    self._records.note_share_edges(run.source_hash, linked | shared)
+                with self._after_it_ran(run):
+                    self._record_file_effects(run, execution)
+                self._note_per_item_rerun(run, execution)
+
+                # Detect in-place mutations (detection-only; do not modify lineage).
+                # Reuses the StatementAnalysis from process_statement to avoid a
+                # second pass of AST visitors over the same tree.
+                pure_mutations = run.analysis.all_mutated_vars - run.outputs
+                if pure_mutations:
+                    logger.debug("%s Detected in-place mutations on: %s", _LOG_MUTATION, pure_mutations)
+
+                miss_guarded = self._miss_guarded(run, execution, captured_vars)
+                self._skip_a_newly_seen_draw(run)
+
+                saved_metadata = None
+                if not run.skip_cache:
+                    saved_metadata = self._store.save(
+                        run,
+                        execution,
+                        captured_vars,
+                        miss_guarded=miss_guarded,
+                        seed_epochs=self._randomness.seed_epochs,
+                    )
+                else:
+                    logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
         moved = self._move_holders(run, saved_metadata)
         # After the holders moved: a variable the entry stores moves as a hit
         # of it moves it (`held_lineage`), not through its edges, so a hit,
@@ -1827,6 +1846,18 @@ class StatementProcessor:
             saved_time=0.0,
             code_hash=run.cache_key,
         )
+
+    def _keeping_outputs(self, run: StatementRun) -> contextlib.AbstractContextManager[None]:
+        """`stored_pickle.keeping` the pickles of *run*'s outputs, the values
+        its store may hold; nothing for a statement that is not stored."""
+        if run.skip_cache or not run.outputs:
+            return contextlib.nullcontext()
+        user_ns = self.shell.user_ns
+
+        def stored(value: Any) -> bool:
+            return any(user_ns.get(name, _ABSENT) is value for name in run.outputs)
+
+        return stored_pickle.keeping(stored)
 
     def _refuse_unrestorable_outputs(
         self, run: StatementRun, captured_vars: dict[str, Any], echo: tuple[Any, ...] = (), cost: float = 0.0

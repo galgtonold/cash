@@ -23,7 +23,7 @@ from typing import Any
 
 from cash.exceptions import CacheBackendError
 
-from .. import _plain_data, cost_model, kept_state
+from .. import _plain_data, cost_model, kept_state, stored_pickle
 from .._lazy_module import LazyModule
 from ..cost_model import GENERIC_FAMILY
 from ..sizing import memory_footprint, pickled_size_estimate
@@ -31,7 +31,7 @@ from ..value_types import IMMUTABLE_PRIMS
 from . import frame_sharing, iterative_copy
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, gdsf_value
 from .entry_format import SplitPayload
-from .serialization import OUT_OF_BAND_MIN_BYTES, Serializer, stored_reducers
+from .serialization import Serializer
 
 psutil = LazyModule("psutil")  # imported on first use: ~11 ms off `import cash`
 
@@ -159,14 +159,63 @@ def _snapshot(value: Any) -> _Pickled | None:
     """*value* pickled as the file tier pickles it (`PickleSerializer.serialize_split`),
     each large buffer copied out of band; None when it does not pickle.
 
-    The one `premade_snapshot` made of this very value a moment ago, when
-    there is one: taken, not made again."""
+    The pickle made of this very value a moment ago, when there is one, is
+    taken, not made again: the one `premade_snapshot` made for a call's
+    store, or the one a digest of it made for the store that follows
+    (`stored_pickle.kept`). A statement's entry holding a value so digested
+    (`stored_pickle.nested`) holds that value's pickle as it is, nested in
+    its own (`_snapshot_nesting`)."""
     premade = getattr(_PREMADE, "entry", None)
     if premade is not None and premade[0] is value:
         _PREMADE.entry = None
         return premade[1]
-    made = _snapshot_also_keyed(value)
-    return None if made is None else made[0]
+    part = stored_pickle.kept(value)
+    if part is not None:
+        return _pickled(value, part)
+    inner = stored_pickle.nested(value) if type(value) is dict else None
+    if inner is not None:
+        made = _snapshot_nesting(value, *inner)
+        if made is not None:
+            return made
+    try:
+        part = stored_pickle.pickle_value(value, keep=True, digest=False)
+    except Exception:  # copied the usual way, which says why it cannot be
+        logger.debug("could not keep a %s as pickle bytes", type(value).__name__, exc_info=True)
+        return None
+    return _pickled(value, part)
+
+
+def _pickled(value: Any, part: stored_pickle.Part) -> _Pickled:
+    kind = type(value)
+    top_class = None if kind is dict or _copied_as_data(kind) else class_key(kind)
+    return _Pickled(part.stream, part.buffers, part.readonly, top_class)
+
+
+def _snapshot_nesting(value: dict, inner: Any, part: stored_pickle.Part) -> _Pickled | None:
+    """*value* pickled with *inner*, a value in it, as *part*, the pickle a
+    digest of *inner* made: nested as it is (`stored_pickle.load_part`),
+    its buffers handed out of band as they are, with no second pickle of
+    *inner*. The caller checked that nothing else in *value* is part of
+    *inner* (`stored_pickle.nest`), so the two pickles share no object."""
+    ours = {id(data): data for data in part.buffers}
+
+    def override(obj: Any) -> Any:
+        if obj is inner:
+            return stored_pickle.load_part, (part.stream, *map(pickle.PickleBuffer, part.buffers))
+        return NotImplemented
+
+    try:
+        made = stored_pickle.pickle_value(
+            value,
+            keep=True,
+            digest=False,
+            reducer_override=override,
+            kept_buffers=lambda data: ours.get(id(data)) is data,
+        )
+    except Exception:  # pickled the usual way
+        logger.debug("could not nest a kept pickle in a %s", type(value).__name__, exc_info=True)
+        return None
+    return _pickled(value, made)
 
 
 #: ``(value, _Pickled)``: the snapshot `premade_snapshot` made for the
@@ -181,52 +230,28 @@ def kept_as_pickle(value: Any) -> bool:
     return kind is not dict and not _copied_as_data(kind)
 
 
-def premade_snapshot(value: Any) -> tuple[_Pickled, bool] | None:
+def premade_snapshot(value: Any) -> stored_pickle.Part | None:
     """`_snapshot` of *value*, made now for the store that follows on this
-    thread, which takes it instead of pickling *value* again; and whether
-    its bytes are also *value*'s keyed bytes (`kept_state.dumps_also_keyed`),
-    so a digest of them is a digest of its content. None when it does not
-    pickle.
+    thread, which takes it instead of pickling *value* again, as the
+    `stored_pickle.Part` it was made as, its digest taken
+    (`stored_pickle.object_digest`). None when it does not pickle.
 
     Only for a store that runs before anything can change *value*: the
     bytes are what it was when they were made. `release_premade` drops one
     the store did not take."""
-    made = _snapshot_also_keyed(value)
-    _PREMADE.entry = None if made is None else (value, made[0])
-    return made
+    try:
+        part = stored_pickle.pickle_value(value, keep=True)
+    except Exception:  # copied the usual way, which says why it cannot be
+        logger.debug("could not keep a %s as pickle bytes", type(value).__name__, exc_info=True)
+        _PREMADE.entry = None
+        return None
+    _PREMADE.entry = (value, _pickled(value, part))
+    return part
 
 
 def release_premade() -> None:
     """Drop the snapshot `premade_snapshot` made, if no store took it."""
     _PREMADE.entry = None
-
-
-def _snapshot_also_keyed(value: Any) -> tuple[_Pickled, bool] | None:
-    buffers: list[bytes] = []
-    readonly: list[bool] = []
-
-    def take(buffer: pickle.PickleBuffer) -> bool:
-        raw = buffer.raw()
-        if raw.nbytes < OUT_OF_BAND_MIN_BYTES:
-            return True  # in band
-        buffers.append(raw.tobytes())
-        readonly.append(raw.readonly)
-        return False
-
-    def retry() -> None:
-        buffers.clear()
-        readonly.clear()
-
-    try:
-        stream, also_keyed = kept_state.dumps_also_keyed(
-            value, protocol=5, buffer_callback=take, on_retry=retry, extra=stored_reducers()
-        )
-    except Exception:  # copied the usual way, which says why it cannot be
-        logger.debug("could not keep a %s as pickle bytes", type(value).__name__, exc_info=True)
-        return None
-    kind = type(value)
-    top_class = None if kind is dict or _copied_as_data(kind) else class_key(kind)
-    return _Pickled(stream, buffers, readonly, top_class), also_keyed
 
 
 def _at_least(value: Any, nbytes: int, nodes: int = 2048, items: int = 64) -> bool:
@@ -1468,13 +1493,16 @@ class InMemoryBackend(CacheBackend):
         # took four times its pickling (1.35 s against 0.35 s for a graph of
         # 350,000 edges), on every store, for a number the bytes give.
         pickled = None
+        # An entry holding a value whose pickle its digest made a moment ago
+        # (`stored_pickle.nested`) is kept as bytes too: that pickle is made.
+        nested = type(value) is dict and stored_pickle.nested(value) is not None
         if (
             plain is None
             and dict_rows_size is None
             and facts is None
             and not parts
             and not shared
-            and _copied_by_round_trip(value, metadata)
+            and (nested or _copied_by_round_trip(value, metadata))
         ):
             # Refused before it is pickled when its arrays alone are over the
             # eviction target, or would be slower to read back than to
@@ -1485,7 +1513,7 @@ class InMemoryBackend(CacheBackend):
                 with self._lock:
                     self._drop(key)
                 return False
-            if estimate >= _ROUND_TRIP_MIN_BYTES or _at_least(value, _ROUND_TRIP_MIN_BYTES):
+            if nested or estimate >= _ROUND_TRIP_MIN_BYTES or _at_least(value, _ROUND_TRIP_MIN_BYTES):
                 # Not for a small value, which is copied as any other: its
                 # pickle would be made only to be dropped.
                 pickled = _snapshot(value)

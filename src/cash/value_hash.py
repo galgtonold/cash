@@ -2,7 +2,9 @@
 
 A value's whole content, never a sample: a frame, array or table through
 its library content hasher (`builtin_hash`), a collection of frames item by
-item, anything else pickled, and only when even pickling fails its identity
+item, anything else pickled -- over the bytes a store keeps of it
+(`stored_pickle.object_digest`), so a statement's store takes the pickle its
+digest made -- and only when even pickling fails its identity
 (`identity_hash`), which `is_identity_fallback_hash` lets a caller recognise.
 It is the ``compute_hash_fn`` seam threaded into ``StatementProcessor`` and
 ``UpstreamChecker``, and
@@ -21,9 +23,9 @@ from collections.abc import Callable
 from time import perf_counter
 from typing import Any
 
-from . import kept_state
 from .content_hashers import builtin_hash, builtin_hash_family, is_native_panic
 from .sizing import pandas_nbytes
+from .stored_pickle import HashBudgetExceeded, object_digest
 
 logger = logging.getLogger(__name__)
 
@@ -73,10 +75,6 @@ def _hash_collection(obj: Any) -> str:
     return _pickle_digest(obj)
 
 
-class HashBudgetExceeded(Exception):
-    """A hash taken under `budgeted_hash` ran past its budget."""
-
-
 #: How long a check whether a value changed may spend pickling it before
 #: the value counts as too costly to read (`budgeted_hash`). An openpyxl
 #: workbook of 400,000 cells pickles in about 3 s, and a formatting cell that
@@ -90,39 +88,14 @@ _budget = threading.local()
 _COSTLY: dict[int, weakref.ref] = {}
 
 
-class _BudgetedSink:
-    """Where a budgeted pickle writes: hashed as it comes, and stopped once
-    the deadline has passed (`HashBudgetExceeded`, raised from ``write``,
-    which the pickler calls a frame, at most 64 KiB, at a time)."""
-
-    __slots__ = ("_deadline", "_sha")
-
-    def __init__(self, deadline: float) -> None:
-        self._sha = hashlib.sha256()
-        self._deadline = deadline
-
-    def write(self, data: Any) -> int:
-        self._sha.update(data)
-        if perf_counter() > self._deadline:
-            raise HashBudgetExceeded
-        return len(data)
-
-    def hexdigest(self) -> str:
-        return self._sha.hexdigest()
-
-
 def _pickle_digest(obj: Any) -> str:
-    """The sha256 of *obj*'s key pickle; under a budget (`budgeted_hash`),
-    hashed as the pickler writes and stopped when the budget runs out. The
-    same digest either way: the same bytes in the same order."""
+    """The digest of *obj* over the bytes a store keeps of it
+    (`stored_pickle.object_digest`); under a budget (`budgeted_hash`),
+    stopped when the budget runs out. The same digest either way."""
     deadline = getattr(_budget, "deadline", None)
-    if deadline is None:
-        return hashlib.sha256(kept_state.dumps(obj, keyed=True)).hexdigest()
-    if perf_counter() > deadline:
+    if deadline is not None and perf_counter() > deadline:
         raise HashBudgetExceeded
-    sink = _BudgetedSink(deadline)
-    kept_state.dumps(obj, keyed=True, sink=sink)
-    return sink.hexdigest()
+    return object_digest(obj, deadline)
 
 
 def is_costly(obj: Any) -> bool:
@@ -239,6 +212,22 @@ def _memoised_frame_digest(obj: Any) -> str | None:
     return cow_frame_digest(obj)
 
 
+def digest_via_pickle(obj: Any) -> bool:
+    """Does `compute_hash` take *obj*'s digest over its whole pickle
+    (`stored_pickle.object_digest`), as a call's store digests its result
+    (`call_refs.digest_and_size`)? Then that digest is *obj*'s
+    `compute_hash`, when it pickles at all."""
+    kind = type(obj)
+    if kind.__name__ in _PANDAS_TYPE_NAMES or _is_bulky_type(kind):
+        return False
+    if isinstance(obj, tuple) and isinstance(getattr(kind, "_fields", None), tuple):
+        return False
+    if kind is dict or kind is list or kind is tuple:
+        values = obj.values() if kind is dict else obj
+        return not any(map(_is_bulky_type, set(map(type, values))))
+    return True
+
+
 def compute_hash(obj: Any) -> str:
     """Hash *obj* over its whole content, with explicit fallbacks.
 
@@ -246,7 +235,8 @@ def compute_hash(obj: Any) -> str:
     1. A frame, array or table through its built-in content hasher
        (`builtin_hash`), every byte and its schema; a collection item by item
        (`_hash_collection`)
-    2. Generic pickle hash
+    2. Generic pickle hash, over the store's own pickle
+       (`stored_pickle.object_digest`)
     3. Identity hash (always succeeds) -- see ``identity_hash`` /
        ``is_identity_fallback_hash`` for why this tier is content-BLIND, not
        merely a cruder content hash.

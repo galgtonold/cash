@@ -20,7 +20,7 @@ import types
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from cash import cost_model, handed_digests
+from cash import cost_model, handed_digests, stored_pickle
 from cash._clock import perf_counter as _perf_counter
 from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
 from cash.backends import memory_backend
@@ -37,6 +37,7 @@ from cash.sizing import estimate_object_size, pickled_size_estimate
 from cash.tracking import file_dep_snapshot
 from cash.tracking.file_dep_snapshot import snapshot_dependencies
 from cash.tracking.randomness import capture_object_rng_states, capture_rng_state
+from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 from ..call_key import holds_a_closure_with_state
 from ..call_refs import DECORATOR_ENTRY, REF_BYTES_FIELD, REFS_FIELD, CallRef
@@ -841,6 +842,9 @@ class StatementStore:
             # A RAM tier that keeps the entry as pickle bytes credits its first
             # hit's reading to this class (`InMemoryBackend._read_pickled`).
             wire[memory_backend.ROUND_TRIP_CLASS] = prediction["class_key"]
+        inner = _nestable(payload)
+        if inner is not None:
+            stored_pickle.nest(payload, inner)
         try:
             self.cash_instance.backend.set(cache_key, payload, wire)
         except (OSError, TypeError, ValueError, pickle.PicklingError, RuntimeError) as e:
@@ -865,6 +869,51 @@ class StatementStore:
                 backend.set_metadata_only(cache_key, wire)
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("[PROCESSOR] Best-effort metadata persistence failed")
+
+
+def _nestable(payload: dict[str, Any]) -> Any:
+    """The one variable of *payload* whose pickle its digest kept
+    (`stored_pickle.kept`), when the entry may hold that pickle as it is
+    (`stored_pickle.nest`): every other variable, and the echoed value, is
+    that value or immutable data, so nothing else in the entry can be a
+    part of it -- two pickles would make two objects of one. The rest of
+    the entry is cash's own (printed text, RNG states). None otherwise."""
+    found = None
+    for value in payload["variables"].values():
+        if value is found or _immutable(value):
+            continue
+        if found is not None or stored_pickle.kept(value) is None:
+            return None
+        found = value
+    echo = payload.get(ECHO_FIELD)
+    if found is None or not (echo is None or echo is found or _immutable(echo)):
+        return None
+    return found
+
+
+#: The most items `_immutable` looks through.
+_IMMUTABLE_ITEMS = 4096
+
+
+def _immutable(value: Any) -> bool:
+    """Is *value* data no object can be part of: an immutable leaf, a call
+    reference, or tuples and frozensets of those (at most
+    `_IMMUTABLE_ITEMS` in all)?"""
+    budget = [_IMMUTABLE_ITEMS]
+
+    def walk(item: Any) -> bool:
+        kind = type(item)
+        if kind in _LEAVES:
+            return True
+        if kind is tuple or kind is frozenset:
+            budget[0] -= len(item)
+            return budget[0] >= 0 and all(map(walk, item))
+        return False
+
+    return walk(value)
+
+
+_LEAVES = frozenset((*IMMUTABLE_LEAF_TYPES, CallRef))
 
 
 def _learn_round_trip(prediction: dict[str, Any] | None, wire: dict[str, Any]) -> None:

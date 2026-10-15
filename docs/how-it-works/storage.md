@@ -265,7 +265,7 @@ does. cash waits for a write only when something needs it on disk:
 A process this one did not start, reading the same folder at the same time,
 finds a result once its write has finished, and computes it until then.
 
-<!-- claim: cash/backends/memory_backend.py:_snapshot @12974f97, cash/backends/tiered_backend.py:TieredBackend._stored_payload @92ed63c1, cash/backends/memory_backend.py:InMemoryBackend.set @e6277181, cash/notebook/call_refs.py:digest_and_size @e214b154, cash/kept_state.py:stored_views @8fe0d16f -->
+<!-- claim: cash/backends/memory_backend.py:_snapshot @579b150a, cash/backends/tiered_backend.py:TieredBackend._stored_payload @92ed63c1, cash/backends/memory_backend.py:InMemoryBackend.set @3eb6a25c, cash/notebook/call_refs.py:digest_and_size @0dc444f6, cash/kept_state.py:stored_views @8fe0d16f, cash/stored_pickle.py:keeping @7af52dad, cash/notebook/statement/store.py:_nestable @73df97fe -->
 An object of a class of its own (a fitted model, a graph) is kept in memory
 as the bytes its disk entry holds, made when it is stored: its arrays are
 copied out of it then, so a later change to your object, by Python or by
@@ -274,7 +274,11 @@ out of the bytes, as a disk hit does, and the disk write is those same bytes,
 so the object is pickled once. It counts against the memory cap by those
 bytes. In a notebook, a cached call's result also gets a digest, so later
 statements can refer to the stored entry instead of storing the object again.
-That digest is taken from the same pickle, not from a second one. A networkx
+That digest is taken from the same pickle, not from a second one. The same
+holds for a statement: the content hash cash takes of a value the statement
+made is taken over the pickle its entry stores, and the entry holds those
+bytes as they are, unless another of the statement's values could share an
+object with it. A networkx
 graph's views (`G.adj`, `G.nodes`) are left out of the bytes, and networkx
 makes them again on first use.
 
@@ -394,7 +398,7 @@ stored a new result under the same entry meanwhile, the next read takes the
 new entry as it is on disk, and the counts are dropped rather than written over
 it.
 
-<!-- claim: cash/backends/cache_dir.py:CACHE_FORMAT_VERSION == 6, cash/backends/cache_dir.py:CacheDirStamp.check @7bdce11c -->
+<!-- claim: cash/backends/cache_dir.py:CACHE_FORMAT_VERSION == 7, cash/backends/cache_dir.py:CacheDirStamp.check @7bdce11c -->
 The cache folder records the storage format it was written in. When cash opens
 a folder written in a different format, by an older or newer cash, it logs a
 warning and deletes the old entries, so the first run afterwards recomputes.
