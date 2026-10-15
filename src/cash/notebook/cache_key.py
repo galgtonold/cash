@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 from cash._memo import CODE_OBJECTS, NOTEBOOK_STATEMENTS, LruMemo
+from cash.analysis.bytecode import argvals
 from cash.notebook.lineage_store import resolve_lineage
 from cash.source_norm import exact_source_digest, unparse_without_docstrings
 from cash.tracking.function_tracker import is_local_module
@@ -621,6 +622,9 @@ _ATTRIBUTE_OPS = frozenset(
 #: Opcodes whose argument indexes ``co_names``.
 _NAME_OPS = frozenset(dis.hasname)
 
+#: The names of `_NAME_OPS` that read a variable, not an attribute.
+_GLOBAL_NAME_OPS = frozenset(dis.opname[op] for op in _NAME_OPS if op < len(dis.opname)) - _ATTRIBUTE_OPS
+
 #: code object -> its global names. A code object never changes, and a call
 #: made per element of a comprehension disassembled its callee every time:
 #: 1,470 walks for 355 calls, a quarter of what caching them cost.
@@ -643,11 +647,7 @@ def _global_names(code_obj: Any) -> frozenset[str]:
     if found is not None:
         return found
     try:
-        found = frozenset(
-            ins.argval
-            for ins in dis.get_instructions(code_obj)
-            if ins.opcode in _NAME_OPS and ins.opname not in _ATTRIBUTE_OPS and isinstance(ins.argval, str)
-        )
+        found = frozenset(name for name in argvals(code_obj, _GLOBAL_NAME_OPS) if isinstance(name, str))
     except (TypeError, ValueError):
         return frozenset(code_obj.co_names)  # unknown: treat every name as a global
     try:

@@ -13,7 +13,6 @@ from __future__ import annotations
 import dataclasses
 import datetime as _dt
 import decimal as _decimal
-import dis as _dis
 import fractions as _fractions
 import functools
 import hashlib
@@ -27,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from cash import _plain_data
 from cash._memo import CODE_OBJECTS, LruMemo
+from cash.analysis.bytecode import NAME_LOADS, argvals
 from cash.analysis.callee_effects import source_global_mutations
 from cash.analysis.namespace_effects import capturable_globals
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -446,7 +446,7 @@ def _code_names(code: _types.CodeType) -> frozenset[str]:
     ``os.open`` would read as the global ``open`` -- cash's file-tracking
     wrapper in a notebook.
     """
-    names = {ins.argval for ins in _dis.get_instructions(code) if ins.opname in ("LOAD_GLOBAL", "LOAD_NAME")}
+    names = set(argvals(code, NAME_LOADS))
     for const in code.co_consts:
         if isinstance(const, _types.CodeType):
             names |= _code_names(const)

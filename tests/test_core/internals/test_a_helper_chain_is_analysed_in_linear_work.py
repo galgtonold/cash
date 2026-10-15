@@ -15,7 +15,6 @@ and a helper rebound after one pass is followed as it is in the next
 
 from __future__ import annotations
 
-import dis
 import importlib
 import os
 import sys
@@ -48,19 +47,23 @@ def _chain_module(tmp_path, monkeypatch, name: str, extra: str = "") -> object:
 def test_the_reach_walk_reads_each_helper_s_bytecode_about_once(tmp_path, monkeypatch, disk_cash):
     mod = _chain_module(tmp_path, monkeypatch, "chain_reach_mod")
     reads = []
-    real = dis.get_instructions
 
-    def counting(code, *args, **kwargs):
-        reads.append(code)
-        return real(code, *args, **kwargs)
+    def counting(real):
+        def read(code, *args, **kwargs):
+            reads.append(code)
+            return real(code, *args, **kwargs)
 
-    monkeypatch.setattr(global_reads_module.dis, "get_instructions", counting)
+        return read
+
+    # Every bytecode read the globals fold makes goes through these two.
+    for name in ("argvals", "instructions"):
+        monkeypatch.setattr(global_reads_module, name, counting(getattr(global_reads_module, name)))
     cached = disk_cash.cache(mod.top)
     assert cached(1) == CHAIN
     # Before: each helper's walk re-read every helper below it, about
     # CHAIN**2 / 2 = 3200 reads here. A few reads per helper are the
     # function's own folds (written and loaded globals, attribute pairs).
-    assert len(reads) <= 8 * CHAIN, len(reads)
+    assert CHAIN <= len(reads) <= 8 * CHAIN, len(reads)
 
 
 def test_loaded_code_is_matched_by_name_not_by_walking_the_module(tmp_path, monkeypatch, disk_cash):

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import ast
 import dataclasses
-import dis
 import enum
 import hashlib
 import inspect
@@ -19,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from .. import _plain_data, identity_refs
 from .._clock import perf_counter as _perf_counter
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
+from ..analysis.bytecode import GLOBAL_WRITES, argvals
 from ..analysis.cacheability_decision import identity_coupled_reason
 from ..analysis.helper_bindings import resolve_binding
 from ..analysis.purity_report import (
@@ -270,9 +270,8 @@ def helper_mutates_global(fn: Any, name: str) -> bool:
         return False
 
     for scope in iter_code_scopes(code):
-        for instr in dis.get_instructions(scope):
-            if instr.opname in ("STORE_GLOBAL", "DELETE_GLOBAL") and instr.argval == name:
-                return True
+        if name in argvals(scope, GLOBAL_WRITES):
+            return True
     try:
         tree = ast.parse(textwrap.dedent(getsource(fn)))
     except SOURCE_RETRIEVAL_ERRORS + (SyntaxError,):

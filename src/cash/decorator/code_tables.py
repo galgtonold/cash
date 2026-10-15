@@ -17,10 +17,10 @@ body. Anything else is built on every call, as before.
 
 from __future__ import annotations
 
-import dis
 import types
 from typing import Any
 
+from ..analysis.bytecode import opnames
 from ..install_paths import is_user_code_module
 from ..value_types import IMMUTABLE_PRIMS
 from .closure_fold import iter_code_scopes
@@ -80,7 +80,10 @@ def _function_state(fn: types.FunctionType) -> tuple | None:
 
 
 def _imports(code: types.CodeType) -> bool:
-    return any(ins.opname in ("IMPORT_NAME", "IMPORT_FROM") for ins in dis.get_instructions(code))
+    return not _IMPORTS.isdisjoint(opnames(code))
+
+
+_IMPORTS = frozenset({"IMPORT_NAME", "IMPORT_FROM"})
 
 
 class CodeTable:

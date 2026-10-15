@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import ast
 import contextlib
-import dis
 import sys
 import textwrap
 import threading
@@ -16,6 +15,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from .._memo import CODE_OBJECTS, LruMemo
+from ..analysis.bytecode import GLOBAL_WRITES, argvals, instructions
 from ..analysis.helper_bindings import local_import_map
 from ..analysis.helper_code import own_code_is_user
 from ..analysis.purity_policy import REPORTED_METHODS
@@ -70,23 +70,21 @@ def bytecode_written_attrs(code: types.CodeType) -> set[str]:
     ``type(self).seen.append(x)``. Exact shapes, as for
     `bytecode_mutated_globals`."""
     found: set[str] = set()
-    instrs = list(dis.get_instructions(code))
-    for i, ins in enumerate(instrs):
-        if ins.opname in ("STORE_ATTR", "DELETE_ATTR"):
-            found.add(ins.argval)
+    instrs = instructions(code)
+    for i, (opname, argval) in enumerate(instrs):
+        if opname in ("STORE_ATTR", "DELETE_ATTR"):
+            found.add(argval)
             continue
-        if ins.opname not in ("LOAD_ATTR", "LOAD_METHOD"):
+        if opname not in ("LOAD_ATTR", "LOAD_METHOD"):
             continue
         after = instrs[i + 1 : i + 3]
         if not after:
             continue
-        first = after[0]
-        if first.opname in ("LOAD_ATTR", "LOAD_METHOD") and first.argval in REPORTED_METHODS:
-            found.add(ins.argval)
-        elif (
-            len(after) == 2 and first.opname in _OPERAND_LOADS and after[1].opname in ("STORE_SUBSCR", "DELETE_SUBSCR")
-        ):
-            found.add(ins.argval)
+        first, first_val = after[0]
+        if first in ("LOAD_ATTR", "LOAD_METHOD") and first_val in REPORTED_METHODS:
+            found.add(argval)
+        elif len(after) == 2 and first in _OPERAND_LOADS and after[1][0] in ("STORE_SUBSCR", "DELETE_SUBSCR"):
+            found.add(argval)
     return {n for n in found if isinstance(n, str)}
 
 
@@ -102,25 +100,21 @@ def bytecode_mutated_globals(scopes: tuple, names: set[str]) -> set[str]:
     """
     found: set[str] = set()
     for scope in scopes:
-        instrs = list(dis.get_instructions(scope))
-        for i, ins in enumerate(instrs):
-            if ins.opname != "LOAD_GLOBAL" or ins.argval not in names:
+        instrs = instructions(scope)
+        for i, (opname, argval) in enumerate(instrs):
+            if opname != "LOAD_GLOBAL" or argval not in names:
                 continue
             after = instrs[i + 1 : i + 3]
             if not after:
                 continue
-            first = after[0]
-            if (first.opname in ("LOAD_ATTR", "LOAD_METHOD") and first.argval in REPORTED_METHODS) or first.opname in (
+            first, first_val = after[0]
+            if (first in ("LOAD_ATTR", "LOAD_METHOD") and first_val in REPORTED_METHODS) or first in (
                 "STORE_ATTR",
                 "DELETE_ATTR",
             ):
-                found.add(ins.argval)
-            elif (
-                len(after) == 2
-                and first.opname in _OPERAND_LOADS
-                and after[1].opname in ("STORE_SUBSCR", "DELETE_SUBSCR")
-            ):
-                found.add(ins.argval)
+                found.add(argval)
+            elif len(after) == 2 and first in _OPERAND_LOADS and after[1][0] in ("STORE_SUBSCR", "DELETE_SUBSCR"):
+                found.add(argval)
     return found
 
 
@@ -174,9 +168,9 @@ def _reach_facts(code: types.CodeType) -> tuple[bool, tuple[str, ...]]:
         for scope in iter_code_scopes(code):
             if NAMESPACE_BY_NAME.intersection(scope.co_names or ()):
                 accessor = True
-            for instr in dis.get_instructions(scope):
-                if instr.opname in _GLOBAL_LOADS and isinstance(instr.argval, str):
-                    loads[instr.argval] = None
+            for name in argvals(scope, _GLOBAL_LOADS):
+                if isinstance(name, str):
+                    loads[name] = None
         cached = (accessor, tuple(loads))
         _REACH_FACTS[code] = cached
     return cached
@@ -335,20 +329,15 @@ class GlobalReads:
             return cached[0]
 
         scopes = tuple(iter_code_scopes(code))
-        written = {
-            instr.argval
-            for scope in scopes
-            for instr in dis.get_instructions(scope)
-            if instr.opname in ("STORE_GLOBAL", "DELETE_GLOBAL")
-        }
+        written = {name for scope in scopes for name in argvals(scope, GLOBAL_WRITES)}
         # Names LOADED as globals, not every name in ``co_names``: that also
         # holds attribute names, so `b.lock` read the module's unrelated `lock`
         # and warned KEY-UNHASHABLE-GLOBAL about a global never read.
         loaded = {
-            instr.argval
+            name
             for scope in scopes
-            for instr in dis.get_instructions(scope)
-            if instr.opname in _GLOBAL_LOADS and instr.argval not in MACHINERY_DUNDERS and instr.argval not in written
+            for name in argvals(scope, _GLOBAL_LOADS)
+            if name not in MACHINERY_DUNDERS and name not in written
         }
         candidates = {name for name in loaded if name in g}
         # A loaded name the module has not bound yet (a builtin, or a global
@@ -540,17 +529,17 @@ class GlobalReads:
         scopes = list(iter_code_scopes(code))
         for scope in scopes:
             names.update(c for c in scope.co_consts or () if isinstance(c, str) and c.isidentifier())
-            instrs = [i for i in dis.get_instructions(scope) if i.opname != "EXTENDED_ARG"]
-            for i, ins in enumerate(instrs):
-                if ins.opname in _ATTR_OPS and isinstance(ins.argval, str):
-                    names.add(ins.argval)
-                if ins.opname != "LOAD_GLOBAL" or not isinstance(ins.argval, str):
+            instrs = [ins for ins in instructions(scope) if ins[0] != "EXTENDED_ARG"]
+            for i, (opname, argval) in enumerate(instrs):
+                if opname in _ATTR_OPS and isinstance(argval, str):
+                    names.add(argval)
+                if opname != "LOAD_GLOBAL" or not isinstance(argval, str):
                     continue
-                path = ins.argval
+                path = argval
                 value = g.get(path)
                 j = i + 1
-                while j < len(instrs) and instrs[j].opname in _ATTR_OPS and isinstance(instrs[j].argval, str):
-                    attr = instrs[j].argval
+                while j < len(instrs) and instrs[j][0] in _ATTR_OPS and isinstance(instrs[j][1], str):
+                    attr = instrs[j][1]
                     if attr.startswith("__"):
                         break
                     pairs.add((path, attr))
