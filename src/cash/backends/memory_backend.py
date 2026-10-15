@@ -28,7 +28,7 @@ from .._lazy_module import LazyModule
 from ..cost_model import GENERIC_FAMILY
 from ..sizing import memory_footprint, pickled_size_estimate
 from ..value_types import IMMUTABLE_PRIMS
-from . import frame_sharing, iterative_copy
+from . import frame_sharing, iterative_copy, shared_blocks
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, gdsf_value
 from .entry_format import SplitPayload
 from .serialization import Serializer
@@ -867,8 +867,13 @@ class InMemoryBackend(CacheBackend):
                     # Recorded as None: a store that must isolate its value
                     # refuses it (`set`), as it does a bare uncopiable object.
                     mutable = None
+        reuse = None
         if copied is None:
-            copied = frame_sharing.copy_keeping_blocks(frame, arrow=not _stored_frame(frame, known_cells, record_cells))
+            arrow = not _stored_frame(frame, known_cells, record_cells)
+            if record_cells is not None and mutable is False and arrow:
+                # Stored: columns the tier already keeps are not copied again.
+                reuse = shared_blocks.BlockReuse.for_frame(frame)
+            copied = frame_sharing.copy_keeping_blocks(frame, arrow=arrow, reuse=reuse)
         if not _own_metadata(frame, copied):
             # An attribute deepcopy refuses: the pickle round trip copies it,
             # as a disk hit would.
@@ -881,6 +886,8 @@ class InMemoryBackend(CacheBackend):
             if mutable is False and frame_sharing.freeze(copied, cells_known=True):
                 mutable = _SHARED  # private, now frozen: hits share it
             record_cells[id(copied)] = mutable
+            if reuse is not None and mutable in (False, _SHARED):
+                reuse.keep(copied)
         return copied
 
     @staticmethod

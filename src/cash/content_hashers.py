@@ -396,6 +396,30 @@ def column_pieces(pieces: ColumnPieces | None) -> ColumnPieces | None:
     return previous
 
 
+#: Who knows the pieces of a frame it vouches is unchanged now
+#: (`known_column_pieces`): the frame memo registers itself
+#: (`cash.decorator.arg_hashing.FrameDigests.pieces_of`).
+_PIECE_SOURCE: list[Callable[[Any], Any]] = []
+
+
+def set_piece_source(source: Callable[[Any], Any]) -> None:
+    """Make *source* what `known_column_pieces` asks."""
+    _PIECE_SOURCE[:] = [source]
+
+
+def known_column_pieces(frame: Any) -> Any:
+    """What the columns of the pandas frame *frame* fold into a digest, as
+    far as the frame memo can vouch for them now (`ColumnPieces`): an object
+    whose ``get(column memory key)`` is the piece, a function of the
+    column's content alone, or None. None when there is no memo."""
+    if not _PIECE_SOURCE:
+        return None
+    try:
+        return _PIECE_SOURCE[0](frame)
+    except Exception:  # noqa: BLE001 - only a speedup: nothing is known
+        return None
+
+
 #: The most bytes a column's piece may hold: a big column's part of a
 #: digest is a tag and a tree digest; one that adds its raw bytes is small
 #: enough to read again.

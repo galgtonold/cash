@@ -37,6 +37,7 @@ from ..content_hashers import (
     immutable_items,
     immutable_labels,
     is_native_panic,
+    set_piece_source,
 )
 from ..exceptions import CashCacheIneffectiveWarning
 from ..jit_functions import is_jit_type, jit_options, jit_python_function
@@ -1023,6 +1024,18 @@ class FrameDigests:
         entries.pop(id(obj), None)
         return None
 
+    def pieces_of(self, obj: Any) -> _KnownPieces:
+        """What each column of *obj* folds into a digest, by the column's
+        memory (`ColumnPieces`): from *obj*'s own entry while *obj* is
+        unchanged since it was hashed, else from another frame in the memo
+        that holds the same memory and is unchanged (``df.assign(...)``
+        shares its columns with ``df``). Nothing is read or hashed here."""
+        own = None
+        if self._entries.peek(id(obj)) is not None and self.lookup(obj) is not None:
+            entry = self._entries.peek(id(obj))
+            own = entry[5] if entry is not None else None
+        return _KnownPieces(self, own)
+
     def store(self, obj: Any, content_hash: str, since: int, pieces: dict[tuple, bytes] | None = None) -> None:
         """Remember *obj*'s content hash, and hold a shallow copy of it.
 
@@ -1071,6 +1084,24 @@ class FrameDigests:
                 columns[column] = (key, *alive)[:_COLUMN_OWNERS]
 
 
+class _KnownPieces:
+    """`FrameDigests.pieces_of`: ``get(column memory key)``, the piece or None."""
+
+    __slots__ = ("_checked", "_memo", "_own")
+
+    def __init__(self, memo: FrameDigests, own: dict[tuple, bytes] | None) -> None:
+        self._memo = memo
+        self._own = own
+        self._checked: dict[int, bool] = {}
+
+    def get(self, key: tuple) -> bytes | None:
+        if self._own is not None:
+            piece = self._own.get(key)
+            if piece is not None:
+                return piece
+        return self._memo.column_piece(key, self._checked)
+
+
 #: Frames remembered per shared column (`FrameDigests._columns`).
 _COLUMN_OWNERS = 4
 
@@ -1098,6 +1129,7 @@ class _FramePieces(ColumnPieces):
 
 #: The process's copy-on-write frame memo (`FrameDigests`).
 FRAME_DIGESTS = FrameDigests(FRAMES)
+set_piece_source(FRAME_DIGESTS.pieces_of)
 
 
 def cow_frame_digest(value: Any) -> str | None:
