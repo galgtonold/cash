@@ -37,7 +37,7 @@ def shadow_on(tmp_path, monkeypatch):
 def _events(log) -> list[dict]:
     if not log.exists():
         return []
-    return [json.loads(line) for line in log.read_text().splitlines()]
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
 
 
 def _run(processor, code):

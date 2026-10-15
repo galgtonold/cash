@@ -29,7 +29,7 @@ flowchart TB
     R2 --> BD
 ```
 
-<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @100752f2, cash/notebook/statement/processor.py:StatementProcessor.process_statement @c6e64a77 -->
+<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @100752f2, cash/notebook/statement/processor.py:StatementProcessor.process_statement @5f55d8b4 -->
 1. **Inputs.** cash reads from the cell's source which variables it uses.
 2. **Upstream check.** If an input is missing (after a restart) or a cell above
    it was edited, cash works out from the notebook's code which statements

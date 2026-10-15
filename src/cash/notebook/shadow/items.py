@@ -407,7 +407,7 @@ def class_digest(cls: type, within: _Digester | None = None) -> str:
             d.feed(value)
         except _Opaque:
             h.update(b"opaque:" + type(value).__qualname__.encode())
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - a value that cannot be digested is opaque
             h.update(b"opaque")
     return h.hexdigest()
 

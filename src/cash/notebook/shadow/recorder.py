@@ -250,7 +250,7 @@ class Recorder:
         if code.co_argcount and code.co_varnames[0] in ("self", "cls"):
             try:
                 recv = frame.f_locals.get(code.co_varnames[0])
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - a frame whose locals cannot be read has no receiver
                 recv = None
             if recv is not None:
                 unit.receivers[code] = recv if isinstance(recv, type) else type(recv)

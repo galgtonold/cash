@@ -150,7 +150,7 @@ class Shadow:
             base = None
             try:
                 base = backend.local_dir()
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - no local folder: shadow keeps its log elsewhere
                 base = None
             if not base:
                 base = os.environ.get("CASH_CACHE_DIR") or tempfile.gettempdir()
@@ -273,7 +273,7 @@ class Shadow:
         for module, ns in spaces:
             try:
                 pairs = list(ns.items())
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - a namespace that cannot be listed is skipped
                 continue
             for name, value in pairs:
                 if isinstance(name, str) and not name.startswith("__") and callable(value):
@@ -334,7 +334,7 @@ class Shadow:
             try:
                 if code_looks_up_by_string(code, g):
                     markers.add("string_lookup")
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - a check that fails leaves the trace usable as is
                 pass
             if qn == "<module>":
                 if not (module == nbn and g is nb):
@@ -530,7 +530,7 @@ class Shadow:
                     if peek is not None:
                         try:
                             present = peek(k) is not None
-                        except Exception:  # noqa: BLE001
+                        except Exception:  # noqa: BLE001 - an entry that cannot be peeked counts as gone
                             present = None
                     pending["miss"] = "missed_reuse" if present is not False else "missed_reuse_evicted"
                     pending["trace_key"] = k
@@ -616,7 +616,7 @@ class Shadow:
         """Before a statement is served or runs: verify its traces."""
         try:
             self.attach(proc.shell.user_ns, proc.tracking_state.variable_lineage, proc.cash_instance.backend)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - shadow never breaks a statement
             return
         if run.skip_cache or not run.cache_key:
             return
@@ -732,7 +732,7 @@ class Shadow:
                 f"{s['shadow_seconds']}s; log {s['log']}",
                 file=sys.stderr,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - the exit summary is best effort
             pass
 
 
