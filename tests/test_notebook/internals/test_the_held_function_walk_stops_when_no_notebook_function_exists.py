@@ -17,7 +17,18 @@ from __future__ import annotations
 import array
 import gc
 
+import pytest
+
 from cash.notebook import held_functions
+
+
+@pytest.fixture(autouse=True)
+def _a_library_s_classes(monkeypatch):
+    """The classes below stand in for a library's (openpyxl's): as this
+    file's own, they would be the user's, whose objects the walk looks for
+    to the end (``Held.module_classes``), as it would the test run's own."""
+    monkeypatch.setattr(held_functions, "_of_a_users_module", lambda cls: False)
+    monkeypatch.setattr(held_functions, "module_class_objects_exist", lambda: False)
 
 
 class Style(array.array):

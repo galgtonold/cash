@@ -14,6 +14,7 @@ import shutil
 import sys
 import tempfile
 import types
+from collections.abc import Callable
 from typing import Any
 
 from .._memo import NOTEBOOK_FUNCTIONS, LruMemo
@@ -104,7 +105,14 @@ def _importers_closure(seed: set[str], imports_map: dict[str, set[str]]) -> set[
     return closure
 
 
-def _reload_from_source(module) -> None:
+#: Reloads *module* itself with the given plain reload, as a reloader of the
+#: session's does (IPython's ``%autoreload``, which updates the old classes
+#: and functions in place), and says whether it did. False: cash's own
+#: ``importlib.reload`` runs.
+ReloadWith = Callable[[types.ModuleType, Callable[[types.ModuleType], Any]], bool]
+
+
+def _reload_from_source(module, reload_with: ReloadWith | None = None) -> None:
     """``importlib.reload(module)``, compiled from the source file whatever
     bytecode sits next to it.
 
@@ -116,13 +124,17 @@ def _reload_from_source(module) -> None:
     scan, the delete fails, and the reload ran the pre-edit function under a
     MODULE RELOADED badge (``test_a_from_import``, under load). An empty
     ``sys.pycache_prefix`` for the reload leaves the loader no bytecode to use.
+
+    *reload_with*, when given, may do the reload itself around
+    ``importlib.reload`` (`ReloadWith`).
     """
 
     previous = sys.pycache_prefix
     empty = tempfile.mkdtemp(prefix="cash-reload-")
     sys.pycache_prefix = empty
     try:
-        importlib.reload(module)
+        if reload_with is None or not reload_with(module, importlib.reload):
+            importlib.reload(module)
     finally:
         sys.pycache_prefix = previous
         shutil.rmtree(empty, ignore_errors=True)
@@ -856,7 +868,7 @@ class FunctionTracker:
             logger.warning("Failed to reload module '%s': %s", module_name, e)
             return False
 
-    def _reload_or_raise(self, module_name: str) -> bool:
+    def _reload_or_raise(self, module_name: str, reload_with: ReloadWith | None = None) -> bool:
         """`reload_module`, letting what the reload raised propagate.
 
         A module whose file no longer compiles raises ``SyntaxError`` here,
@@ -880,7 +892,7 @@ class FunctionTracker:
                 if os.path.isfile(cache_file):
                     os.remove(cache_file)
 
-        _reload_from_source(module)
+        _reload_from_source(module, reload_with)
         if file_path and os.path.isfile(file_path):
             with contextlib.suppress(OSError):
                 self.module_mtimes[module_name] = os.path.getmtime(file_path)
@@ -1011,7 +1023,7 @@ class FunctionTracker:
         return per_module
 
     def check_and_reload_changed_modules(
-        self, user_ns: dict[str, Any]
+        self, user_ns: dict[str, Any], reload_with: ReloadWith | None = None
     ) -> tuple[dict[str, str], dict[str, set[str] | None]]:
         """Check tracked modules for changes, reload if needed, and update user_ns.
 
@@ -1025,6 +1037,9 @@ class FunctionTracker:
         Args:
             user_ns: The user namespace (IPython shell.user_ns) — updated in-place
                 with fresh function objects from reloaded modules
+            reload_with: How to reload a module when not with a plain
+                ``importlib.reload`` (`ReloadWith`): ``%autoreload``'s way,
+                when it is on
 
         Returns:
             Tuple of:
@@ -1069,7 +1084,7 @@ class FunctionTracker:
                 # would bind the failed module's old code again.
                 continue
             try:
-                reloaded = self._reload_or_raise(mod_name)
+                reloaded = self._reload_or_raise(mod_name, reload_with)
             except Exception as exc:  # noqa: BLE001 - the module's own top level can raise anything
                 logger.debug("Failed to reload module '%s': %s", mod_name, exc)
                 self._reload_errors[mod_name] = exc

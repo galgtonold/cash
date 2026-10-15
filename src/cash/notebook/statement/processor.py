@@ -1031,7 +1031,7 @@ class StatementProcessor:
             run.skip_cache = True
             run.value_varies = varies
             return
-        unfollowed, by_string = unkeyed_reach(
+        unfollowed, by_string, unkeyed_modules = unkeyed_reach(
             run.code, run.inputs, self.shell.user_ns, self.tracking_state.variable_lineage
         )
         if unfollowed:
@@ -1052,6 +1052,17 @@ class StatementProcessor:
                 f"{who} looks names up by a string (globals(), eval, vars(), getattr on a module): "
                 f"which function that reaches, and what it reads, is known only when it runs, "
                 f"so the statement runs every time"
+            )
+            run.skip_cache = True
+            return
+        if unkeyed_modules:
+            # Its key names the code of the modules whose objects it calls
+            # into (``held_modules``), and the file of these cannot be read:
+            # served, it could be stale.
+            names = ", ".join(repr(n) for n in sorted(unkeyed_modules))
+            run.metrics["uncacheable_reasons"].append(
+                f"Reads objects of classes from your module {names}, whose file cannot be read: "
+                f"what their methods run cannot be keyed, so the statement runs every time"
             )
             run.skip_cache = True
             return

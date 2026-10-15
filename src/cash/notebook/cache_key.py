@@ -28,6 +28,7 @@ from cash.tracking.function_tracker import is_local_module
 from cash.tracking.randomness import rng_carrier_kind
 
 from .held_functions import held_notebook_code
+from .held_modules import held_module_parts
 from .installed_code import installed_code_parts
 from .lineage_formula import (
     bound_names,
@@ -390,6 +391,7 @@ def called_function_dependencies(
     keyed: bool = True,
     unfollowed: set[str] | None = None,
     by_string: set[str] | None = None,
+    module_classes: dict[int, type] | None = None,
 ) -> list[str]:
     """``"name:lineage"`` components for the globals a called function reaches for.
 
@@ -439,6 +441,10 @@ def called_function_dependencies(
     (``globals()['make']``, ``eval('make(3)')``: `string_lookups`) is added
     to *by_string*, when given: which function the string names is known
     only when the code runs, so what it reads is in no key.
+
+    The classes of the user's modules the walked values hold (an object of
+    ``mylib.Order`` in a list: `held_functions.Held.module_classes`) are
+    added to *module_classes*, when given.
     """
     seen: set[str] = set()
     stack = [name for name in inputs]
@@ -453,7 +459,7 @@ def called_function_dependencies(
         nonlocal used_virtual
         if name in codes:
             return codes[name]
-        found = _held_codes(name, user_ns, variable_lineage, unfollowed)
+        found = _held_codes(name, user_ns, variable_lineage, unfollowed, module_classes)
         own = getattr(user_ns.get(name), "__code__", None)
         held_only.update(id(code) for code in _nested_codes_of(c for c in found if c is not own))
         if not found and virtual is not None and name not in user_ns:
@@ -662,10 +668,12 @@ def _held_codes(
     user_ns: Mapping[str, Any],
     variable_lineage: Mapping[str, str] | None,
     unfollowed: set[str] | None,
+    module_classes: dict[int, type] | None = None,
 ) -> list[types.CodeType]:
     """The code *name*'s value runs when called, and the code of the
     notebook functions it holds (`held_notebook_code`). A function of a
-    module is walked by its own code, as it always was."""
+    module is walked by its own code, as it always was. The classes of the
+    user's modules the value holds go into *module_classes*, when given."""
     if name not in user_ns:
         return []
     value = user_ns.get(name)
@@ -683,6 +691,9 @@ def _held_codes(
         return found
     if not held.complete and unfollowed is not None:
         unfollowed.add(name)
+    if module_classes is not None:
+        for cls in held.module_classes:
+            module_classes.setdefault(id(cls), cls)
     found.extend(code for code in held.codes if code is not code_obj)
     return found
 
@@ -703,16 +714,28 @@ class UnkeyedReach(NamedTuple):
     #: (`string_lookups`): which function the string names, and what it
     #: reads, is known only when the code runs.
     by_string: set[str]
+    #: The user's modules whose classes' objects the statement reaches
+    #: (`held_module_parts`) but whose code cash cannot name: their file
+    #: cannot be read.
+    unkeyed_modules: set[str]
 
 
 def unkeyed_reach(
     code: str, inputs: Iterable[str], user_ns: Mapping[str, Any], variable_lineage: Mapping[str, str]
 ) -> UnkeyedReach:
     """:class:`UnkeyedReach` of the statement *code* reading *inputs*, in one walk."""
-    reach = UnkeyedReach(set(), {THE_STATEMENT} if statement_looks_up_by_string(code, user_ns) else set())
+    reach = UnkeyedReach(set(), {THE_STATEMENT} if statement_looks_up_by_string(code, user_ns) else set(), set())
+    classes: dict[int, type] = {}
     called_function_dependencies(
-        sorted(inputs), user_ns, variable_lineage, unfollowed=reach.unfollowed, by_string=reach.by_string
+        sorted(inputs),
+        user_ns,
+        variable_lineage,
+        unfollowed=reach.unfollowed,
+        by_string=reach.by_string,
+        module_classes=classes,
     )
+    if classes:
+        reach.unkeyed_modules.update(held_module_parts(classes.values())[1])
     return reach
 
 
@@ -887,6 +910,7 @@ def _callee_deps(
     ctx: CacheKeyContext,
     unfollowed: set[str] | None = None,
     by_string: set[str] | None = None,
+    module_classes: dict[int, type] | None = None,
 ) -> list[str]:
     """The key component for the globals the called functions reach for.
 
@@ -914,6 +938,7 @@ def _callee_deps(
         simulated=ctx.virtual_lineage,
         unfollowed=unfollowed,
         by_string=by_string,
+        module_classes=module_classes,
     )
 
 
@@ -1020,7 +1045,15 @@ def compute_cache_key(
     occurrence_component = f":occ{occurrence_index}"
     unfollowed: set[str] = set()
     by_string: set[str] = {THE_STATEMENT} if statement_looks_up_by_string(code, ctx.user_ns) else set()
-    callee_deps = _callee_deps(sorted_inputs, ctx, unfollowed, by_string)
+    module_classes: dict[int, type] = {}
+    callee_deps = _callee_deps(sorted_inputs, ctx, unfollowed, by_string, module_classes)
+    # The code of the user's modules whose classes' objects the inputs hold
+    # (``orders = pickle.load(f)`` of ``mylib.Order`` objects): no lineage
+    # of the inputs need pass through the module, yet ``o.total()`` runs its
+    # code. With the callees' globals, so the outputs' lineage carries it
+    # too (``recorded_reads_lineage_component``). None when they hold none.
+    held_modules, unkeyed_modules = held_module_parts(module_classes.values()) if module_classes else ([], set())
+    callee_deps.extend(held_modules)
     callee_component = f":callees:{':'.join(callee_deps)}" if callee_deps else ""
     if unfollowed:
         # A value too large to find every notebook function in: what those
@@ -1032,6 +1065,10 @@ def compute_cache_key(
         # Code reaching a function by a name spelled at run time: what that
         # function reads is not in the key either (``unkeyed_reach``).
         callee_component += f":by-string:{','.join(sorted(by_string))}:{secrets.token_hex(16)}"
+    if unkeyed_modules:
+        # A module of the user's whose file cannot be read: what its
+        # classes' methods run is in no key (``unkeyed_reach``).
+        callee_component += f":unkeyed-modules:{','.join(sorted(unkeyed_modules))}:{secrets.token_hex(16)}"
     # Code the notebook installed on a library class (a pandas accessor, a
     # patched method) that the statement reaches by attribute. Empty when
     # there is none, so every other key is unchanged.
@@ -1080,6 +1117,6 @@ def compute_cache_key(
         )
 
     result = CacheKeyResult(cache_key, source_hash, input_hashes, func_source_hashes, module_source_hashes)
-    if unfollowed or by_string:
+    if unfollowed or by_string or unkeyed_modules:
         result.matches_nothing = True
     return result

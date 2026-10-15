@@ -25,7 +25,7 @@ This is the setup cell: `import cash`, then any `cash.configure(...)` call, then
 cached. Do your work in the cells below. To skip this cell in every new kernel,
 run `cash autoload on` once in a terminal.
 
-<!-- claim: cash/tracking/function_tracker.py:FunctionTracker.check_and_reload_changed_modules @9a04e5bd -->
+<!-- claim: cash/tracking/function_tracker.py:FunctionTracker.check_and_reload_changed_modules @377dc190 -->
 **If you edit your own `.py` modules**, cash reloads an edited module by
 itself, so the next cell uses the new code. Plain Jupyter keeps the old code
 until you restart the kernel. A notebook that imports a module you edit then
