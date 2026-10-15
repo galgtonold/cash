@@ -6,8 +6,9 @@ after it runs, and the routed call's argument hash before and after the
 call. Four full reads of ``x`` on a first run: 19.1 s against 0.89 s
 without cash over a 257 MB frame. When the statement is nothing but that
 call, nothing can run between the statement's check and the call's, so
-they share one digest each side (`DigestHandoff`). Anything more in the
-statement and each check reads for itself.
+they share one digest each side (`DigestHandoff`). When the call is only
+the first thing the statement does, the digest before it is still shared;
+anything that may run code between two checks makes each read for itself.
 """
 
 from __future__ import annotations
@@ -87,11 +88,22 @@ def test_a_frame_is_read_once_when_it_provably_did_not_change(cash_magics, mock_
     assert len(reads_of_x) <= 1, f"x was hashed {len(reads_of_x)} times"
 
 
-def test_a_statement_that_is_more_than_the_call_reads_for_each_check(cash_magics, mock_shell, reads_of_x):
-    """Control: code may run between the checks, so none is shared."""
+@pytest.mark.parametrize(
+    "statement, reads",
+    [
+        # Nothing runs before the call (`_first_call_source`); the ``+ 0``
+        # after it may, so the after-checks each read for themselves.
+        ("y = normalize(x) + 0", 3),
+        # Control: ``x.sum()`` runs before the call, so none is shared.
+        ("y = (x.sum(), normalize(x))[1]", 4),
+    ],
+)
+def test_a_statement_that_is_more_than_the_call_reads_for_each_check(
+    cash_magics, mock_shell, reads_of_x, statement, reads
+):
     mock_shell.user_ns["__name__"] = "__main__"
     run_cash_cell(cash_magics, SETUP)
     run_cash_cell(cash_magics, ARRAY)
     reads_of_x.clear()
-    run_cash_cell(cash_magics, "y = normalize(x) + 0")
-    assert len(reads_of_x) == 4
+    run_cash_cell(cash_magics, statement)
+    assert len(reads_of_x) == reads

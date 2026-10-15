@@ -185,7 +185,7 @@ c = a + b      # lineage(c) folds in lineage(a) and lineage(b)
 d = c * 2      # lineage(d) folds in lineage(c)
 ```
 
-<!-- claim: cash/notebook/value_cutoff.py:ValueCutoff.lineage_for @7f9a2f17, cash/notebook/value_cutoff.py:_COMPARED @18236e1f, cash/notebook/statement/lineage.py:StatementLineageBuilder._hash_once @6214e8f5 -->
+<!-- claim: cash/notebook/value_cutoff.py:ValueCutoff.lineage_for @7f9a2f17, cash/notebook/value_cutoff.py:_COMPARED @18236e1f, cash/notebook/statement/lineage.py:StatementLineageBuilder._hash_once @5f30bf0b -->
 **A value rebuilt to the same content keeps its lineage.** When a statement
 runs again because an input moved on, and the pandas frame or series, numpy
 array or networkx graph (`Graph`, `DiGraph`, `MultiGraph`, `MultiDiGraph`)

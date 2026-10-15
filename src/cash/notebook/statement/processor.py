@@ -1770,7 +1770,10 @@ class StatementProcessor:
                 or self._binds_a_stream(run),
                 replay_bumps=False,
                 lineage_reads=run.pyplot_drawn,
+                settled=run.settled_digests,
             )
+        # Let go of the values they hold: the checks below count references.
+        run.settled_digests = {}
         # The share check, the closure check and the RAM tier each look into
         # the outputs; JSON-like ones are walked once for all of them.
         with _plain_data.one_look(captured_vars):

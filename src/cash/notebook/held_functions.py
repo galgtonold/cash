@@ -31,6 +31,7 @@ from typing import Any, NamedTuple
 from .._memo import CODE_OBJECTS, LruMemo
 from ..install_paths import is_user_code_module
 from ..value_types import LEAF_TYPES
+from .compiled_source import CASH_FILENAME_PREFIX
 
 __all__ = ["EXISTENCE_CHECK_AT", "WALK_LIMIT", "Held", "held_notebook_code", "notebook_functions_exist"]
 
@@ -171,12 +172,29 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
     the 140 objects that refer to the shell, and on: 1,300 objects and five
     seconds of ``gc.get_referrers`` in a plain IPython shell, more than the
     walk it would spare.
+
+    The statement cash is running is not one (`_running_statement`): since
+    Python 3.11 ``exec`` makes a function of the code it runs, which no
+    value can hold. Counted, it said yes to every call keyed inside a
+    statement, and each walked a whole networkx graph to its end (1.1 s).
+
+    A no is remembered (`_NO_FUNCTIONS`) until code could have made one:
+    a function is made only by code running with these globals, which
+    starts with an ``exec``, or by ``types.FunctionType``, both seen by an
+    audit hook (`_note_new_code`). A no is neither taken nor kept while
+    such code is on the stack (a call keyed inside a running statement,
+    which may define a lambda after the question). A statement's checks
+    asked it up to 13 times, 0.035-0.07 s each beside a big graph.
     """
     if gc.get_freeze_count():
         return True
     maps = getattr(namespace, "maps", None)
     dicts = list(maps) if isinstance(maps, list) else [namespace]
     globals_ids = _globals_ids(namespace)
+    running = _code_running_in(globals_ids)
+    if not running and _NO_FUNCTIONS.get(globals_ids) == _new_code[0]:
+        return False
+    seen_at = _new_code[0]
     function = types.FunctionType
     # A ``def`` binds its function in the namespace: found there, the scan of
     # every tracked object (0.12 s beside a 400,000-cell workbook, at each
@@ -187,9 +205,51 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
                 return True
     for mapping in dicts:
         for referrer in gc.get_referrers(mapping):
-            if type(referrer) is function and id(referrer.__globals__) in globals_ids:
+            if (
+                type(referrer) is function
+                and id(referrer.__globals__) in globals_ids
+                and not _running_statement(referrer)
+            ):
                 return True
+    if not running:
+        if len(_NO_FUNCTIONS) > 64:
+            _NO_FUNCTIONS.clear()
+        _NO_FUNCTIONS[globals_ids] = seen_at
     return False
+
+
+#: The ids of the globals a `notebook_functions_exist` no was answered for,
+#: and the `_new_code` count it was answered at.
+_NO_FUNCTIONS: dict[frozenset[int], int] = {}
+#: How many times code started running from an ``exec`` or a function was
+#: made from code (``types.FunctionType``) in this process.
+_new_code = [0]
+_NEW_CODE_EVENTS = frozenset(("exec", "function.__new__"))
+
+
+def _note_new_code(event: str, _args: tuple) -> None:
+    if event in _NEW_CODE_EVENTS:
+        _new_code[0] += 1
+
+
+sys.addaudithook(_note_new_code)
+
+
+def _code_running_in(globals_ids: frozenset[int]) -> bool:
+    """Is a frame on this thread's stack running with one of these globals?"""
+    frame = sys._getframe(1)
+    while frame is not None:
+        if id(frame.f_globals) in globals_ids:
+            return True
+        frame = frame.f_back
+    return False
+
+
+def _running_statement(fn: types.FunctionType) -> bool:
+    """Is *fn* the function ``exec`` made of a statement cash runs (its
+    module code, compiled under cash's file name)?"""
+    code = fn.__code__
+    return code.co_name == "<module>" and code.co_filename.startswith(CASH_FILENAME_PREFIX)
 
 
 def _walk(

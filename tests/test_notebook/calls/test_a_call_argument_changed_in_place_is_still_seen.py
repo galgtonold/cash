@@ -45,6 +45,14 @@ SETUP = (
     "    os.write(fd, b'.')\n"
     "    os.close(fd)\n"
     "    return float(a.sum())\n"
+    "def bumped(a):\n"
+    f"    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n"
+    "    a += 1\n"
+    "    return a\n"
+    "def unbump(a):\n"
+    f"    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n"
+    "    a -= 1\n"
+    "    return 0\n"
 )
 
 
@@ -56,8 +64,26 @@ SETUP = (
         ("x = np.zeros(100_000)", "bump_one(x)", "float(x[0])"),
         ("x = pd.DataFrame({'n': np.zeros(100_000)})", "y = count_in(x)", "float(x['n'].iloc[0])"),
         ("x = pd.DataFrame({'n': np.zeros(100_000)})", "y = bump_in_place_of_a_column(x)", "float(x['n'].iloc[0])"),
+        # The first call of a longer statement takes the statement's digest
+        # (`_first_call_source`); its own after-hash still sees the change.
+        ("x = np.zeros(100_000)", "y = bump(x) + 0", "float(x[0])"),
+        ("x = np.zeros(100_000)", "print(round(bump_one(x), 2))", "float(x[0])"),
+        # Two calls: the second hashes for itself, after the first changed x.
+        ("x = np.zeros(100_000)", "y = (bump(x), bump_one(x))", "float(x[0]) / 2"),
+        # The second call undoes the first: a hit on it would leave x bumped.
+        ("x = np.zeros(100_000)", "y = unbump(bumped(x))", "float(x[0]) + 3"),
     ],
-    ids=["array", "array, last item", "bare call", "frame column", "frame buffer past pandas"],
+    ids=[
+        "array",
+        "array, last item",
+        "bare call",
+        "frame column",
+        "frame buffer past pandas",
+        "first call of more",
+        "first call inside print",
+        "two calls",
+        "a call undoing the first",
+    ],
 )
 def test_each_run_changes_the_argument_as_without_cash(cash_magics, mock_shell, make, statement, read):
     mock_shell.user_ns["__name__"] = "__main__"

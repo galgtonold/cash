@@ -161,8 +161,13 @@ class StatementLineageBuilder:
         replay_bumps: bool = True,
         lineage_reads: frozenset[str] = frozenset(),
         probes: dict[str, str] | None = None,
+        settled: Mapping[int, tuple[Any, str]] | None = None,
     ) -> dict[str, Any]:
         """Capture output variables, compute their lineage, and update tracking state.
+
+        *settled* holds content digests (`compute_hash`) the statement's
+        check after it ran already took (`DigestHandoff.take_settled`), with
+        no user code run since: an output among them is not read again.
 
         *lineage_reads* are outputs changed without being read as inputs
         (the current figure a ``plt.plot`` draws on): their lineage before
@@ -237,6 +242,8 @@ class StatementLineageBuilder:
         # networkx graph has no cheaper digest and no sound "unchanged"
         # signal, so it is read once here, not twice.
         taken: dict[int, tuple[Any, str]] = {}
+        if settled and (self.compute_hash or compute_hash) is compute_hash:
+            taken.update(settled)
         content_hash = self._hash_once(taken)
         lineages: dict[str, str] = {}
         for var_name, value in bound.items():
@@ -393,6 +400,9 @@ class StatementLineageBuilder:
         hash_fn = self.compute_hash or compute_hash
 
         def content_hash(value: Any) -> str:
+            found = taken.get(id(value))
+            if found is not None and found[0] is value:
+                return found[1]
             digest = hash_fn(value)
             taken[id(value)] = (value, digest)
             return digest

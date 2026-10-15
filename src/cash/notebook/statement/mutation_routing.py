@@ -353,6 +353,14 @@ class MutationRouting:
         """
         self._observe_unit(run)
         body = is_control_body(run.code)
+        digests = self._classifier.digests
+        digests.begin_settled()
+        try:
+            self._observe_after(run, body)
+        finally:
+            run.settled_digests = digests.take_settled()
+
+    def _observe_after(self, run: StatementRun, body: bool) -> None:
         if run.mut_record:
             newly_mutated = self._observe_receivers(run, body)
             self._settle_provisional(run, newly_mutated)
