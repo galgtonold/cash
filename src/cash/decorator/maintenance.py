@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from ..backends._base import entry_expired
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheStoreFailedWarning
+from . import hit_memo
 from .cache_metadata import CacheMetadata
 
 if TYPE_CHECKING:
@@ -36,6 +37,7 @@ class Maintenance:
         generation is what tells them to drop those, as ``cash clear
         --function`` does; without it they went on serving what was cleared.
         """
+        hit_memo.bump()
         backend = self._backend_slot.backend
         keys = _function_keys(backend, func_name)
         deleted, survivors = _delete_keys(backend, keys)

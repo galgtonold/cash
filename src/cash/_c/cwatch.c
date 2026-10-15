@@ -122,6 +122,7 @@ static Root *roots = NULL; static uint32_t nroots = 0, caproots = 0, rfree = NON
 static uint32_t *rht = NULL; static size_t rht_cap = 0, rht_used = 0, rht_tomb = 0;
 
 static int dict_wid = -1, type_wid = -1, func_wid = -1;
+static int world_unwatchable_dict(PyObject *o);
 static int busy = 0;
 static int any_gone = 0;
 static uint64_t tick = 0;
@@ -327,10 +328,10 @@ static void root_clear(Root *R) {
         if (last && !dead && !(idx & KBIT)) {
             /* a dict or a type: (functions have one global watcher) */
             PyObject *o = (PyObject *)n->addr;
-            if (PyDict_Check(o)) { if (PyDict_Unwatch(dict_wid, o) < 0) PyErr_Clear(); }
+            if (PyDict_Check(o) && !world_unwatchable_dict(o)) { if (PyDict_Unwatch(dict_wid, o) < 0) PyErr_Clear(); }
         } else if (last && !dead && (idx & KBIT)) {
             PyObject *o = (PyObject *)n->addr;
-            if (PyDict_Unwatch(dict_wid, o) < 0) PyErr_Clear();
+            if (!world_unwatchable_dict(o) && PyDict_Unwatch(dict_wid, o) < 0) PyErr_Clear();
         }
         node_release(idx);
     }
@@ -382,6 +383,94 @@ static inline void mark_dirty(uint32_t r) {
     if (!roots[r].dirty) { roots[r].dirty = 1; c_dirty_marks++; }
 }
 
+
+/* ------------------------------------------------------------ world epoch (decorator hit path)
+ * The decorator's fast hit path (cash/decorator/hit_memo.py) keeps a
+ * call's result while nothing its key's state segment reads has changed.
+ * What that is, the Python side scans once (the code a cached function
+ * runs, the globals, closures, defaults and classes it reaches) and hands
+ * here to watch. Any change to any of it moves `world_epoch`:
+ *   - a world dict (module globals, builtins, sys.modules, os.environ, a
+ *     plain dict the code reads): any event, except a rebinding of a str
+ *     key that no scanned code names (not in `world_names`) where neither
+ *     the old nor the new value is callable or a module. A loop variable
+ *     of a script's top level is rebound on every iteration; the code a
+ *     key reads is not. A dict marked UNKEYED counts every event.
+ *   - a world type: any type watcher event (tags are assigned when it is
+ *     added, and the Python side compares them on every fast hit too).
+ *   - any function: any change of its code, defaults or kw-defaults.
+ * `cash_epoch` is moved by cash's Python side (`bump_cash`) after anything
+ * that is not a plain hit (a miss, a cleared cache, a new registration). */
+static uint64_t world_epoch = 1, cash_epoch = 1;
+static unsigned long long c_world_bumps, c_world_ignored, c_fast_hits, c_fast_misses;
+#define WD_KEYED 1u
+#define WD_UNKEYED 2u
+typedef struct { uintptr_t addr; unsigned flags; } WEnt;
+static WEnt *wds = NULL; static size_t wds_cap = 0, wds_used = 0, wds_tomb = 0;  /* world dicts */
+static WEnt *wts = NULL; static size_t wts_cap = 0, wts_used = 0, wts_tomb = 0;  /* world types */
+static PyObject *world_names = NULL;   /* set of str */
+#define WTOMB ((uintptr_t)1)
+
+static WEnt *went_find(WEnt *tab, size_t cap, uintptr_t a) {
+    if (!cap) return NULL;
+    size_t m = cap - 1, i = hmix(a) & m;
+    for (;;) {
+        WEnt *e = &tab[i];
+        if (e->addr == 0) return NULL;
+        if (e->addr == a) return e;
+        i = (i + 1) & m;
+    }
+}
+
+static int went_add(WEnt **tabp, size_t *capp, size_t *usedp, size_t *tombp, uintptr_t a, unsigned flags) {
+    WEnt *e = went_find(*tabp, *capp, a);
+    if (e) { e->flags |= flags; return 0; }
+    if ((*usedp + *tombp + 1) * 2 > *capp) {
+        size_t oc = *capp, nc = oc ? oc : 256;
+        while ((*usedp + 1) * 4 > nc) nc *= 2;
+        WEnt *nt = calloc(nc, sizeof *nt);
+        if (!nt) { PyErr_NoMemory(); return -1; }
+        for (size_t j = 0; j < oc; j++) {
+            WEnt *o = &(*tabp)[j];
+            if (o->addr == 0 || o->addr == WTOMB) continue;
+            size_t m = nc - 1, i = hmix(o->addr) & m;
+            while (nt[i].addr) i = (i + 1) & m;
+            nt[i] = *o;
+        }
+        free(*tabp); *tabp = nt; *capp = nc; *tombp = 0;
+    }
+    size_t m = *capp - 1, i = hmix(a) & m;
+    while ((*tabp)[i].addr && (*tabp)[i].addr != WTOMB) i = (i + 1) & m;
+    if ((*tabp)[i].addr == WTOMB) (*tombp)--;
+    (*tabp)[i].addr = a; (*tabp)[i].flags = flags; (*usedp)++;
+    return 0;
+}
+
+static inline void world_bump(void) { world_epoch++; c_world_bumps++; }
+
+static inline int codeish(PyObject *o) { return o != NULL && (PyCallable_Check(o) || PyModule_Check(o)); }
+
+static void world_dict_event(WEnt *e, PyDict_WatchEvent ev, PyObject *d, PyObject *key, PyObject *nv) {
+    if (ev == PyDict_EVENT_DEALLOCATED) {
+        e->addr = WTOMB; wds_used--; wds_tomb++;
+        world_bump();
+        return;
+    }
+    if ((e->flags & WD_UNKEYED) == 0 && key != NULL && PyUnicode_CheckExact(key) && world_names != NULL &&
+        (ev == PyDict_EVENT_ADDED || ev == PyDict_EVENT_MODIFIED || ev == PyDict_EVENT_DELETED)) {
+        /* str hashes are cached and compared without running Python code */
+        int named = PySet_Contains(world_names, key);
+        if (named < 0) { PyErr_Clear(); named = 1; }
+        if (!named) {
+            PyObject *old = ev == PyDict_EVENT_ADDED ? NULL : PyDict_GetItem(d, key);  /* borrowed */
+            if (!codeish(old) && !codeish(nv)) { c_world_ignored++; return; }
+        }
+    }
+    world_bump();
+}
+
+static int world_unwatchable_dict(PyObject *o) { return went_find(wds, wds_cap, (uintptr_t)o) != NULL; }
+
 /* ------------------------------------------------------------ callbacks */
 static int str_equal(PyObject *a, PyObject *b) {
     if (a == b) return 1;
@@ -392,8 +481,11 @@ static int str_equal(PyObject *a, PyObject *b) {
 }
 
 static int on_dict(PyDict_WatchEvent ev, PyObject *d, PyObject *key, PyObject *nv) {
-    (void)nv;
     c_events++;
+    if (wds_used) {
+        WEnt *e = went_find(wds, wds_cap, (uintptr_t)d);
+        if (e) world_dict_event(e, ev, d, key, nv);
+    }
     long s = ht_slot((uintptr_t)d);
     if (s < 0) return 0;
     for (uint32_t i = ht[s]; i != NONE32; i = NODE(i)->next) {
@@ -418,6 +510,7 @@ static int on_dict(PyDict_WatchEvent ev, PyObject *d, PyObject *key, PyObject *n
 
 static int on_type(PyTypeObject *t) {
     c_type_events++;
+    if (wts_used && went_find(wts, wts_cap, (uintptr_t)t)) world_bump();
     long s = ht_slot((uintptr_t)t);
     if (s < 0) return 0;
     for (uint32_t i = ht[s]; i != NONE32; i = NODE(i)->next) {
@@ -431,6 +524,7 @@ static int on_type(PyTypeObject *t) {
 static int on_func(PyFunction_WatchEvent ev, PyFunctionObject *f, PyObject *nv) {
     (void)nv;
     if (ev == PyFunction_EVENT_CREATE) return 0;
+    if (ev != PyFunction_EVENT_DESTROY) world_bump();
     long s = ht_slot((uintptr_t)f);
     if (s < 0) return 0;
     c_func_events++;
@@ -1555,6 +1649,537 @@ static PyObject *py_info(PyObject *self, PyObject *o) {
                          "kinds", kinds, "hash_seconds", R->hash_s);
 }
 
+
+/* ------------------------------------------------------------ world API (decorator hit path) */
+static PyObject *py_world_epoch(PyObject *self, PyObject *noargs) { return PyLong_FromUnsignedLongLong(world_epoch); }
+static PyObject *py_cash_epoch(PyObject *self, PyObject *noargs) { return PyLong_FromUnsignedLongLong(cash_epoch); }
+static PyObject *py_bump_cash(PyObject *self, PyObject *noargs) { cash_epoch++; Py_RETURN_NONE; }
+static PyObject *py_bump_world(PyObject *self, PyObject *noargs) { world_bump(); Py_RETURN_NONE; }
+
+/* world_watch_dict(d, unkeyed): count events on d (see world_dict_event) */
+static PyObject *py_world_watch_dict(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 2 || !PyDict_Check(args[0])) { PyErr_SetString(PyExc_TypeError, "world_watch_dict(dict, unkeyed)"); return NULL; }
+    int unkeyed = PyObject_IsTrue(args[1]);
+    if (unkeyed < 0) return NULL;
+    if (ensure_watchers() < 0) return NULL;
+    if (went_add(&wds, &wds_cap, &wds_used, &wds_tomb, (uintptr_t)args[0], unkeyed ? WD_UNKEYED : WD_KEYED) < 0) return NULL;
+    if (PyDict_Watch(dict_wid, args[0]) < 0) return NULL;
+    Py_RETURN_NONE;
+}
+
+/* world_watch_type(t) -> its version tag (assigned now), or None when it has none */
+static PyObject *py_world_watch_type(PyObject *self, PyObject *t) {
+    if (!PyType_Check(t)) { PyErr_SetString(PyExc_TypeError, "world_watch_type(type)"); return NULL; }
+    PyTypeObject *tp = (PyTypeObject *)t;
+    if (ensure_watchers() < 0) return NULL;
+    if (tp->tp_version_tag == 0 && !PyUnstable_Type_AssignVersionTag(tp)) Py_RETURN_NONE;
+    if (went_add(&wts, &wts_cap, &wts_used, &wts_tomb, (uintptr_t)t, 1) < 0) return NULL;
+    if (PyType_Watch(type_wid, t) < 0) return NULL;
+    return PyLong_FromUnsignedLong(tp->tp_version_tag);
+}
+
+/* world_add_names(iterable of str): names some scanned code reads */
+static PyObject *py_world_add_names(PyObject *self, PyObject *it) {
+    if (!world_names) { world_names = PySet_New(NULL); if (!world_names) return NULL; }
+    PyObject *iter = PyObject_GetIter(it);
+    if (!iter) return NULL;
+    PyObject *x;
+    while ((x = PyIter_Next(iter)) != NULL) {
+        int rc = PyUnicode_CheckExact(x) ? PySet_Add(world_names, x) : 0;
+        Py_DECREF(x);
+        if (rc < 0) { Py_DECREF(iter); return NULL; }
+    }
+    Py_DECREF(iter);
+    if (PyErr_Occurred()) return NULL;
+    Py_RETURN_NONE;
+}
+
+static PyObject *py_world_info(PyObject *self, PyObject *noargs) {
+    return Py_BuildValue("{sKsKsnsnsnsKsKsKsK}", "world_epoch", (unsigned long long)world_epoch,
+                         "cash_epoch", (unsigned long long)cash_epoch, "dicts", (Py_ssize_t)wds_used,
+                         "types", (Py_ssize_t)wts_used, "names", world_names ? PySet_GET_SIZE(world_names) : 0,
+                         "bumps", c_world_bumps, "ignored", c_world_ignored, "fast_hits", c_fast_hits,
+                         "fast_declined", c_fast_misses);
+}
+
+/* -- the memo key: the call's arguments as a typed, hashable tuple ------- */
+typedef struct { PyObject *vals; char *sig; size_t n, cap; int watched; } KeyB;
+
+static int kb_sig(KeyB *k, char c) {
+    if (k->n == k->cap) {
+        size_t nc = k->cap ? k->cap * 2 : 64;
+        char *p = k->sig == NULL ? NULL : k->sig;
+        p = realloc(p, nc);
+        if (!p) { PyErr_NoMemory(); return -1; }
+        k->sig = p; k->cap = nc;
+    }
+    k->sig[k->n++] = c;
+    return 0;
+}
+
+static int kb_val(KeyB *k, PyObject *v) { return PyList_Append(k->vals, v); }
+
+static int kb_bits(KeyB *k, double d) {
+    uint64_t b; memcpy(&b, &d, sizeof b);
+    PyObject *x = PyLong_FromUnsignedLongLong(b);
+    if (!x) return -1;
+    int rc = kb_val(k, x); Py_DECREF(x); return rc;
+}
+
+/* 1: encoded; 0: not a keyable value; -1: error */
+static int kb_atom(KeyB *k, PyObject *o, int depth) {
+    PyTypeObject *t = Py_TYPE(o);
+    if (o == Py_None) return kb_sig(k, 'N') < 0 ? -1 : 1;
+    if (o == Py_True) return kb_sig(k, 'T') < 0 ? -1 : 1;
+    if (o == Py_False) return kb_sig(k, 'F') < 0 ? -1 : 1;
+    if (t == &PyLong_Type) return (kb_sig(k, 'i') < 0 || kb_val(k, o) < 0) ? -1 : 1;
+    if (t == &PyUnicode_Type) return (kb_sig(k, 's') < 0 || kb_val(k, o) < 0) ? -1 : 1;
+    if (t == &PyBytes_Type) return (kb_sig(k, 'b') < 0 || kb_val(k, o) < 0) ? -1 : 1;
+    if (t == &PyFloat_Type) return (kb_sig(k, 'f') < 0 || kb_bits(k, PyFloat_AS_DOUBLE(o)) < 0) ? -1 : 1;
+    if (t == &PyComplex_Type) {
+        Py_complex c = PyComplex_AsCComplex(o);
+        return (kb_sig(k, 'c') < 0 || kb_bits(k, c.real) < 0 || kb_bits(k, c.imag) < 0) ? -1 : 1;
+    }
+    if (t == &PyTuple_Type) {
+        if (depth > 32) return 0;
+        if (kb_sig(k, '(') < 0) return -1;
+        Py_ssize_t n = PyTuple_GET_SIZE(o);
+        for (Py_ssize_t i = 0; i < n; i++) {
+            int r = kb_atom(k, PyTuple_GET_ITEM(o, i), depth + 1);
+            if (r <= 0) return r;
+        }
+        return kb_sig(k, ')') < 0 ? -1 : 1;
+    }
+    return 0;
+}
+
+/* a top-level argument the watchers prove unchanged: its plain-data key
+ * part (value_watch.KIND_PLAIN_KEY), as `peek` hands it out */
+static PyObject *watched_digest(PyObject *o) {
+    if (!enabled || busy) return NULL;
+    long r = rht_find((uintptr_t)o);
+    if (r < 0) return NULL;
+    busy = 1;
+    Root *R = &roots[r];
+    PyObject *res = NULL;
+    if (!R->dirty && same_object(R, o) && R->dg[1] && R->dgver[1] == R->version) {
+        int v = verify(R);
+        if (v < 0) { busy = 0; PyErr_Clear(); return NULL; }
+        R = &roots[r];
+        if (v == 1) { res = R->dg[1]; R->last_used = tick; R->reuses++; }
+        else { mark_dirty((uint32_t)r); c_verify_fail++; }
+    }
+    busy = 0;
+    return res;   /* borrowed */
+}
+
+static int kb_arg(KeyB *k, PyObject *o) {
+    int r = kb_atom(k, o, 0);
+    if (r != 0) return r;
+    if (k->watched) return 0;   /* two containers may share objects: the key says how */
+    PyTypeObject *t = Py_TYPE(o);
+    if (t == &PyBytes_Type || t == &PyUnicode_Type) return 0;
+    PyObject *d = watched_digest(o);
+    if (d == NULL) return 0;
+    k->watched = 1;
+    return (kb_sig(k, 'W') < 0 || kb_val(k, d) < 0) ? -1 : 1;
+}
+
+/* NULL with no error: no key for these arguments */
+static PyObject *memo_key(PyObject *args, PyObject *kwargs) {
+    KeyB k = {0};
+    k.vals = PyList_New(0);
+    if (!k.vals) return NULL;
+    PyObject *res = NULL;
+    Py_ssize_t n = PyTuple_GET_SIZE(args);
+    int r = 1;
+    for (Py_ssize_t i = 0; i < n && r > 0; i++) r = kb_arg(&k, PyTuple_GET_ITEM(args, i));
+    if (r > 0 && kwargs != NULL && kwargs != Py_None && PyDict_GET_SIZE(kwargs)) {
+        if (!PyDict_Check(kwargs)) r = 0;
+        Py_ssize_t pos = 0; PyObject *key, *val;
+        while (r > 0 && PyDict_Next(kwargs, &pos, &key, &val)) {
+            if (!PyUnicode_CheckExact(key)) { r = 0; break; }
+            if (kb_sig(&k, '=') < 0 || kb_val(&k, key) < 0) { r = -1; break; }
+            r = kb_arg(&k, val);
+        }
+    }
+    if (r > 0) {
+        PyObject *sig = PyBytes_FromStringAndSize(k.sig ? k.sig : "", (Py_ssize_t)k.n);
+        if (sig) {
+            if (PyList_Insert(k.vals, 0, sig) == 0) res = PyList_AsTuple(k.vals);
+            Py_DECREF(sig);
+        }
+    }
+    free(k.sig);
+    Py_DECREF(k.vals);
+    return res;
+}
+
+static PyObject *py_memo_key(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 2 || !PyTuple_Check(args[0])) { PyErr_SetString(PyExc_TypeError, "memo_key(args, kwargs)"); return NULL; }
+    PyObject *k = memo_key(args[0], args[1]);
+    if (k == NULL && !PyErr_Occurred()) Py_RETURN_NONE;
+    return k;
+}
+
+static int epoch_is(PyObject *o, uint64_t want) {
+    if (!PyLong_CheckExact(o)) return 0;
+    int overflow = 0;
+    long long v = PyLong_AsLongLongAndOverflow(o, &overflow);
+    if (overflow || v == -1) { PyErr_Clear(); return 0; }
+    return (uint64_t)v == want;
+}
+
+/* fast_lookup(memo, args, kwargs) -> entry | None
+ *   memo  = [world epoch, entries {key: entry}, (cell, held, ...), (type, tag, ...), ...]
+ *   entry = (cash epoch, store dict, cache key, store entry, ...)
+ * The entry when the world and cash epochs are those it was made at,
+ * every cell holds what it held, every class has its tag, and the store
+ * still holds that very entry under that key. */
+static PyObject *py_fast_lookup(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 3) { PyErr_SetString(PyExc_TypeError, "fast_lookup(memo, args, kwargs)"); return NULL; }
+    PyObject *memo = args[0];
+    if (!PyList_CheckExact(memo) || PyList_GET_SIZE(memo) < 4 || !PyTuple_CheckExact(args[1])) goto declined;
+    if (!epoch_is(PyList_GET_ITEM(memo, 0), world_epoch)) goto declined;
+    PyObject *cells = PyList_GET_ITEM(memo, 2), *types = PyList_GET_ITEM(memo, 3);
+    if (!PyTuple_CheckExact(cells) || !PyTuple_CheckExact(types)) goto declined;
+    for (Py_ssize_t i = 0; i + 1 < PyTuple_GET_SIZE(cells); i += 2) {
+        PyObject *c = PyTuple_GET_ITEM(cells, i);
+        if (!PyCell_Check(c) || PyCell_GET(c) != PyTuple_GET_ITEM(cells, i + 1)) goto declined;
+    }
+    for (Py_ssize_t i = 0; i + 1 < PyTuple_GET_SIZE(types); i += 2) {
+        PyObject *t = PyTuple_GET_ITEM(types, i);
+        if (!PyType_Check(t) || !epoch_is(PyTuple_GET_ITEM(types, i + 1), ((PyTypeObject *)t)->tp_version_tag))
+            goto declined;
+    }
+    PyObject *entries = PyList_GET_ITEM(memo, 1);
+    if (!PyDict_CheckExact(entries) || PyDict_GET_SIZE(entries) == 0) goto declined;
+    PyObject *key = memo_key(args[1], args[2]);
+    if (key == NULL) { if (PyErr_Occurred()) return NULL; goto declined; }
+    PyObject *entry = PyDict_GetItemWithError(entries, key);   /* borrowed */
+    Py_DECREF(key);
+    if (entry == NULL) { if (PyErr_Occurred()) return NULL; goto declined; }
+    if (!PyTuple_CheckExact(entry) || PyTuple_GET_SIZE(entry) < 4) goto declined;
+    if (!epoch_is(PyTuple_GET_ITEM(entry, 0), cash_epoch)) goto declined;
+    PyObject *store = PyTuple_GET_ITEM(entry, 1);
+    if (!PyDict_CheckExact(store)) goto declined;
+    PyObject *held = PyDict_GetItemWithError(store, PyTuple_GET_ITEM(entry, 2));
+    if (held != PyTuple_GET_ITEM(entry, 3)) { if (PyErr_Occurred()) return NULL; goto declined; }
+    c_fast_hits++;
+    return Py_NewRef(entry);
+declined:
+    c_fast_misses++;
+    Py_RETURN_NONE;
+}
+
+
+/* -- serving a fast hit in C ------------------------------------------- */
+/* memo state list slots (hit_memo keeps the same numbers) */
+enum { S_WORLD = 0, S_ENTRIES, S_CELLS, S_TYPES, S_SERVE, S_ACC, S_SPEC, S_LOG, S_SPARE, S_CLEAR_AT, S_FLAGS,
+       S_NSLOTS };
+/* entry tuple slots */
+enum { E_CASH = 0, E_STORE, E_KEY, E_HELD, E_HIT, E_VALUE, E_TOUCH, E_SAVED, E_LOG, E_BODY, E_NSLOTS };
+#define PENDING_MAX 4096
+
+static PyObject *hit_miss = NULL;          /* the "go the ordinary way" sentinel */
+static PyObject *cv_call_entry = NULL, *cv_tracker = NULL, *cv_nested = NULL;
+static long offers_open = 0;               /* notebook statements offering digests right now */
+
+static double clock_perf(void) {
+#if PY_VERSION_HEX >= 0x030D0000
+    PyTime_t t; if (PyTime_PerfCounterRaw(&t) < 0) { PyErr_Clear(); return 0.0; }
+    return PyTime_AsSecondsDouble(t);
+#else
+    return _PyTime_AsSecondsDouble(_PyTime_GetPerfCounter());
+#endif
+}
+static double clock_mono(void) {
+#if PY_VERSION_HEX >= 0x030D0000
+    PyTime_t t; if (PyTime_MonotonicRaw(&t) < 0) { PyErr_Clear(); return 0.0; }
+    return PyTime_AsSecondsDouble(t);
+#else
+    return _PyTime_AsSecondsDouble(_PyTime_GetMonotonicClock());
+#endif
+}
+static double clock_wall(void) {
+#if PY_VERSION_HEX >= 0x030D0000
+    PyTime_t t; if (PyTime_TimeRaw(&t) < 0) { PyErr_Clear(); return 0.0; }
+    return PyTime_AsSecondsDouble(t);
+#else
+    return _PyTime_AsSecondsDouble(_PyTime_GetSystemClock());
+#endif
+}
+
+/* Acc: one memo's fast hits not yet added to its statistics (`HitMemo.flush`) */
+typedef struct {
+    PyObject_HEAD
+    unsigned long long hits; double saved, lookup;
+    unsigned long long pn; double pover, psaved, pbody;   /* for the net-loss ledger; pbody < 0: none */
+    PyObject *last_key;
+} Acc;
+
+static void acc_dealloc(Acc *a) { Py_XDECREF(a->last_key); Py_TYPE(a)->tp_free((PyObject *)a); }
+static PyObject *acc_new(PyTypeObject *t, PyObject *args, PyObject *kw) {
+    Acc *a = (Acc *)t->tp_alloc(t, 0);
+    if (a) a->pbody = -1.0;
+    return (PyObject *)a;
+}
+/* take() -> (hits, saved, lookup, last_key, n, overhead, saved_bodies, max_body) | None; zeroes it */
+static PyObject *acc_take(Acc *a, PyObject *noargs) {
+    if (!a->hits && !a->pn) Py_RETURN_NONE;
+    PyObject *lk = a->last_key ? a->last_key : Py_None;
+    PyObject *body = a->pbody >= 0 ? PyFloat_FromDouble(a->pbody) : Py_NewRef(Py_None);
+    if (!body) return NULL;
+    PyObject *r = Py_BuildValue("(KddOKddN)", a->hits, a->saved, a->lookup, lk, a->pn, a->pover, a->psaved, body);
+    if (!r) return NULL;
+    a->hits = 0; a->saved = a->lookup = 0.0; a->pn = 0; a->pover = a->psaved = 0.0; a->pbody = -1.0;
+    Py_CLEAR(a->last_key);
+    return r;
+}
+static PyObject *acc_pending(Acc *a, void *c) { return PyBool_FromLong(a->hits || a->pn); }
+static PyMethodDef acc_methods[] = {{"take", (PyCFunction)acc_take, METH_NOARGS, ""}, {NULL}};
+static PyGetSetDef acc_getset[] = {{"pending", (getter)acc_pending, NULL, "", NULL}, {NULL}};
+static PyTypeObject AccType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "cash._cwatch.Acc", .tp_basicsize = sizeof(Acc), .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_new = acc_new, .tp_dealloc = (destructor)acc_dealloc, .tp_methods = acc_methods, .tp_getset = acc_getset};
+
+/* Touch: the RAM tier's read bookkeeping of one entry, held back
+ * (InMemoryBackend.get: last_access, access_count, _touch) */
+typedef struct {
+    PyObject_HEAD
+    PyObject *ram, *md, *key;
+    unsigned long long n; double last; int dirty;
+} Touch;
+static PyObject *touch_dirty = NULL;   /* list of Touch with reads held back */
+
+static void touch_dealloc(Touch *t) {
+    Py_XDECREF(t->ram); Py_XDECREF(t->md); Py_XDECREF(t->key);
+    Py_TYPE(t)->tp_free((PyObject *)t);
+}
+static PyObject *touch_new(PyTypeObject *tp, PyObject *args, PyObject *kw) {
+    PyObject *ram, *md, *key;
+    if (!PyArg_ParseTuple(args, "OOO", &ram, &md, &key)) return NULL;
+    Touch *t = (Touch *)tp->tp_alloc(tp, 0);
+    if (!t) return NULL;
+    t->ram = Py_NewRef(ram); t->md = Py_NewRef(md); t->key = Py_NewRef(key);
+    return (PyObject *)t;
+}
+static PyTypeObject TouchType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "cash._cwatch.Touch", .tp_basicsize = sizeof(Touch), .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_new = touch_new, .tp_dealloc = (destructor)touch_dealloc};
+
+/* take_touches() -> [(ram, md, key, reads, last read)]: every held-back read, once */
+static PyObject *py_take_touches(PyObject *self, PyObject *noargs) {
+    PyObject *out = PyList_New(0);
+    if (!out) return NULL;
+    if (!touch_dirty) return out;
+    PyObject *dirty = touch_dirty;
+    touch_dirty = NULL;
+    for (Py_ssize_t i = 0; i < PyList_GET_SIZE(dirty); i++) {
+        Touch *t = (Touch *)PyList_GET_ITEM(dirty, i);
+        if (t->n) {
+            PyObject *r = Py_BuildValue("(OOOKd)", t->ram, t->md, t->key, t->n, t->last);
+            if (!r || PyList_Append(out, r) < 0) { Py_XDECREF(r); Py_DECREF(out); Py_DECREF(dirty); return NULL; }
+            Py_DECREF(r);
+        }
+        t->n = 0; t->dirty = 0;
+    }
+    Py_DECREF(dirty);
+    return out;
+}
+
+/* the call log: (owner, template, timestamp, seconds) per fast hit, in order */
+#define LOGCAP 10000
+typedef struct { PyObject *owner, *tmpl; double ts, dt; } LogRec;
+static LogRec *ring = NULL; static size_t ring_head = 0, ring_n = 0;
+
+static int ring_push(PyObject *owner, PyObject *tmpl, double ts, double dt) {
+    if (!ring) { ring = calloc(LOGCAP, sizeof *ring); if (!ring) { PyErr_NoMemory(); return -1; } }
+    size_t i = (ring_head + ring_n) % LOGCAP;
+    if (ring_n == LOGCAP) {   /* full: the oldest goes, as from a bounded deque */
+        Py_CLEAR(ring[ring_head].owner); Py_CLEAR(ring[ring_head].tmpl);
+        ring_head = (ring_head + 1) % LOGCAP; ring_n--;
+        i = (ring_head + ring_n) % LOGCAP;
+    }
+    ring[i].owner = Py_NewRef(owner); ring[i].tmpl = Py_NewRef(tmpl); ring[i].ts = ts; ring[i].dt = dt;
+    ring_n++;
+    return 0;
+}
+
+/* take_log() -> [(owner, template, timestamp, seconds)], oldest first */
+static PyObject *py_take_log(PyObject *self, PyObject *noargs) {
+    PyObject *out = PyList_New((Py_ssize_t)ring_n);
+    if (!out) return NULL;
+    for (size_t j = 0; j < ring_n; j++) {
+        LogRec *r = &ring[(ring_head + j) % LOGCAP];
+        PyObject *t = Py_BuildValue("(NNdd)", r->owner, r->tmpl, r->ts, r->dt);   /* steals both */
+        r->owner = r->tmpl = NULL;
+        if (!t) {   /* drop the rest */
+            for (size_t k = j + 1; k < ring_n; k++) {
+                LogRec *q = &ring[(ring_head + k) % LOGCAP];
+                Py_CLEAR(q->owner); Py_CLEAR(q->tmpl);
+            }
+            ring_n = 0; ring_head = 0; Py_DECREF(out); return NULL;
+        }
+        PyList_SET_ITEM(out, (Py_ssize_t)j, t);
+    }
+    ring_n = 0; ring_head = 0;
+    return out;
+}
+
+static PyObject *py_hit_configure(PyObject *self, PyObject *args) {
+    PyObject *miss, *ce, *tr, *ne;
+    if (!PyArg_ParseTuple(args, "OOOO", &miss, &ce, &tr, &ne)) return NULL;
+    Py_XSETREF(hit_miss, Py_NewRef(miss));
+    Py_XSETREF(cv_call_entry, Py_NewRef(ce));
+    Py_XSETREF(cv_tracker, Py_NewRef(tr));
+    Py_XSETREF(cv_nested, Py_NewRef(ne));
+    Py_RETURN_NONE;
+}
+
+/* offers(+1 | -1): a notebook statement opened or closed its digest offer */
+static PyObject *py_offers(PyObject *self, PyObject *d) {
+    long v = PyLong_AsLong(d);
+    if (v == -1 && PyErr_Occurred()) return NULL;
+    offers_open += v;
+    if (offers_open < 0) offers_open = 0;
+    return PyLong_FromLong(offers_open);
+}
+
+static int cv_is_none(PyObject *cv) {
+    if (cv == NULL) return 0;
+    PyObject *v = NULL;
+    if (PyContextVar_Get(cv, NULL, &v) < 0) { PyErr_Clear(); return 0; }
+    int none = (v == NULL || v == Py_None);
+    Py_XDECREF(v);
+    return none;
+}
+
+/* the key of the commonest call: up to 20 positional atoms, no keywords.
+ * (code, value...) where code holds 3 bits per argument's kind and a
+ * leading 1; a float is its bits. NULL with no error: not this shape. */
+static PyObject *quick_key(PyObject *args, PyObject *kwargs) {
+    if (kwargs != NULL && kwargs != Py_None && (!PyDict_Check(kwargs) || PyDict_GET_SIZE(kwargs))) return NULL;
+    Py_ssize_t n = PyTuple_GET_SIZE(args);
+    if (n > 20) return NULL;
+    uint64_t code = 1;
+    for (Py_ssize_t i = 0; i < n; i++) {
+        PyObject *o = PyTuple_GET_ITEM(args, i);
+        PyTypeObject *t = Py_TYPE(o);
+        unsigned c;
+        if (o == Py_None) c = 1; else if (o == Py_True) c = 2; else if (o == Py_False) c = 3;
+        else if (t == &PyLong_Type) c = 4; else if (t == &PyUnicode_Type) c = 5; else if (t == &PyBytes_Type) c = 6;
+        else if (t == &PyFloat_Type) c = 7; else return NULL;
+        code = (code << 3) | c;
+    }
+    PyObject *k = PyTuple_New(n + 1);
+    if (!k) return NULL;
+    PyObject *cv = PyLong_FromUnsignedLongLong(code);
+    if (!cv) { Py_DECREF(k); return NULL; }
+    PyTuple_SET_ITEM(k, 0, cv);
+    for (Py_ssize_t i = 0; i < n; i++) {
+        PyObject *o = PyTuple_GET_ITEM(args, i);
+        PyObject *v;
+        if (Py_TYPE(o) == &PyFloat_Type) {
+            double d = PyFloat_AS_DOUBLE(o); uint64_t b; memcpy(&b, &d, sizeof b);
+            v = PyLong_FromUnsignedLongLong(b);
+            if (!v) { Py_DECREF(k); return NULL; }
+        } else v = Py_NewRef(o);
+        PyTuple_SET_ITEM(k, i + 1, v);
+    }
+    return k;
+}
+
+static PyObject *any_key(PyObject *args, PyObject *kwargs) {
+    PyObject *k = quick_key(args, kwargs);
+    if (k || PyErr_Occurred()) return k;
+    return memo_key(args, kwargs);
+}
+
+/* fast_call(state, args, kwargs) -> the result, or the miss sentinel
+ * A hit whose entry needs more than C does here (a ttl, files to check, a
+ * copy to make, verify mode, the clear check due, accounting to hand
+ * over) goes to state[S_SERVE](entry, args, kwargs, t0). */
+static PyObject *py_fast_call(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 3 || hit_miss == NULL || !PyTuple_CheckExact(args[1])) {
+        PyErr_SetString(PyExc_TypeError, "fast_call(state, args, kwargs)"); return NULL;
+    }
+    PyObject *st = args[0];
+    if (!PyList_Check(st) || PyList_GET_SIZE(st) < S_NSLOTS) goto miss;
+    if (!epoch_is(PyList_GET_ITEM(st, S_WORLD), world_epoch)) goto miss;
+    PyObject *entries = PyList_GET_ITEM(st, S_ENTRIES);
+    if (!PyDict_CheckExact(entries) || PyDict_GET_SIZE(entries) == 0) goto miss;
+    if (offers_open || !cv_is_none(cv_call_entry) || !cv_is_none(cv_tracker) || !cv_is_none(cv_nested)) goto miss;
+    double t0 = clock_perf();
+    PyObject *cells = PyList_GET_ITEM(st, S_CELLS), *types = PyList_GET_ITEM(st, S_TYPES);
+    if (!PyTuple_CheckExact(cells) || !PyTuple_CheckExact(types)) goto miss;
+    for (Py_ssize_t i = 0; i + 1 < PyTuple_GET_SIZE(cells); i += 2) {
+        PyObject *c = PyTuple_GET_ITEM(cells, i);
+        if (!PyCell_Check(c) || PyCell_GET(c) != PyTuple_GET_ITEM(cells, i + 1)) goto miss;
+    }
+    for (Py_ssize_t i = 0; i + 1 < PyTuple_GET_SIZE(types); i += 2) {
+        PyObject *t = PyTuple_GET_ITEM(types, i);
+        if (!PyType_Check(t) || !epoch_is(PyTuple_GET_ITEM(types, i + 1), ((PyTypeObject *)t)->tp_version_tag))
+            goto miss;
+    }
+    PyObject *key = any_key(args[1], args[2]);
+    if (key == NULL) { if (PyErr_Occurred()) return NULL; goto miss; }
+    PyObject *entry = PyDict_GetItemWithError(entries, key);   /* borrowed */
+    Py_DECREF(key);
+    if (entry == NULL) { if (PyErr_Occurred()) return NULL; goto miss; }
+    if (!PyTuple_CheckExact(entry) || PyTuple_GET_SIZE(entry) < E_NSLOTS) goto miss;
+    if (!epoch_is(PyTuple_GET_ITEM(entry, E_CASH), cash_epoch)) goto miss;
+    PyObject *store = PyTuple_GET_ITEM(entry, E_STORE), *ckey = PyTuple_GET_ITEM(entry, E_KEY);
+    if (!PyDict_CheckExact(store)) goto miss;
+    PyObject *held = PyDict_GetItemWithError(store, ckey);
+    if (held != PyTuple_GET_ITEM(entry, E_HELD)) { if (PyErr_Occurred()) return NULL; goto miss; }
+    c_fast_hits++;
+    PyObject *value = PyTuple_GET_ITEM(entry, E_VALUE), *accobj = PyList_GET_ITEM(st, S_ACC);
+    PyObject *clear_at = PyList_GET_ITEM(st, S_CLEAR_AT), *touchobj = PyTuple_GET_ITEM(entry, E_TOUCH);
+    PyObject *saved = PyTuple_GET_ITEM(entry, E_SAVED), *body = PyTuple_GET_ITEM(entry, E_BODY);
+    if (value == hit_miss || PyList_GET_ITEM(st, S_FLAGS) != Py_False || Py_TYPE(accobj) != &AccType ||
+        Py_TYPE(touchobj) != &TouchType || !PyFloat_CheckExact(clear_at) || !PyFloat_CheckExact(saved) ||
+        ((Acc *)accobj)->pn >= PENDING_MAX || clock_mono() >= PyFloat_AS_DOUBLE(clear_at)) {
+        PyObject *t = PyFloat_FromDouble(t0);
+        if (!t) return NULL;
+        PyObject *res = PyObject_CallFunctionObjArgs(PyList_GET_ITEM(st, S_SERVE), entry, args[1], args[2], t, NULL);
+        Py_DECREF(t);
+        return res;
+    }
+    /* served here: what an ordinary hit records, held back until read */
+    double wall = clock_wall();
+    Touch *tc = (Touch *)touchobj;
+    tc->n++; tc->last = wall;
+    if (!tc->dirty) {
+        if (!touch_dirty && !(touch_dirty = PyList_New(0))) return NULL;
+        if (PyList_Append(touch_dirty, touchobj) < 0) return NULL;
+        tc->dirty = 1;
+    }
+    double dt = clock_perf() - t0;
+    if (ring_push(PyList_GET_ITEM(st, S_LOG), PyTuple_GET_ITEM(entry, E_LOG), wall, dt) < 0) return NULL;
+    Acc *a = (Acc *)accobj;
+    a->hits++; a->saved += PyFloat_AS_DOUBLE(saved); a->lookup += dt;
+    if (a->last_key != ckey) Py_XSETREF(a->last_key, Py_NewRef(ckey));
+    if (PyFloat_CheckExact(body)) {
+        double b = PyFloat_AS_DOUBLE(body);
+        a->pn++; a->pover += dt; a->psaved += b;
+        if (b > a->pbody) a->pbody = b;
+    }
+    return Py_NewRef(value);
+miss:
+    c_fast_misses++;
+    return Py_NewRef(hit_miss);
+}
+
+static PyObject *py_any_key(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 2 || !PyTuple_Check(args[0])) { PyErr_SetString(PyExc_TypeError, "any_key(args, kwargs)"); return NULL; }
+    PyObject *k = any_key(args[0], args[1]);
+    if (k == NULL && !PyErr_Occurred()) Py_RETURN_NONE;
+    return k;
+}
+
 static PyMethodDef methods[] = {
     {"check", (PyCFunction)(void (*)(void))py_check, METH_FASTCALL, "check(value, kind) -> digest | status int"},
     {"seen", (PyCFunction)(void (*)(void))py_seen, METH_FASTCALL, "seen(value, seconds)"},
@@ -1569,6 +2194,22 @@ static PyMethodDef methods[] = {
     {"reset", py_reset, METH_NOARGS, "drop every root and verdict"},
     {"stats", py_stats, METH_NOARGS, ""},
     {"info", py_info, METH_O, ""},
+    {"world_epoch", py_world_epoch, METH_NOARGS, ""},
+    {"cash_epoch", py_cash_epoch, METH_NOARGS, ""},
+    {"bump_cash", py_bump_cash, METH_NOARGS, ""},
+    {"bump_world", py_bump_world, METH_NOARGS, ""},
+    {"world_watch_dict", (PyCFunction)(void (*)(void))py_world_watch_dict, METH_FASTCALL, ""},
+    {"world_watch_type", py_world_watch_type, METH_O, ""},
+    {"world_add_names", py_world_add_names, METH_O, ""},
+    {"world_info", py_world_info, METH_NOARGS, ""},
+    {"memo_key", (PyCFunction)(void (*)(void))py_memo_key, METH_FASTCALL, ""},
+    {"fast_lookup", (PyCFunction)(void (*)(void))py_fast_lookup, METH_FASTCALL, ""},
+    {"fast_call", (PyCFunction)(void (*)(void))py_fast_call, METH_FASTCALL, ""},
+    {"hit_configure", py_hit_configure, METH_VARARGS, ""},
+    {"take_touches", py_take_touches, METH_NOARGS, ""},
+    {"take_log", py_take_log, METH_NOARGS, ""},
+    {"any_key", (PyCFunction)(void (*)(void))py_any_key, METH_FASTCALL, ""},
+    {"offers", py_offers, METH_O, ""},
     {NULL, NULL, 0, NULL}};
 
 static int find_set_dummy(void) {
@@ -1613,6 +2254,9 @@ static int exec_module(PyObject *m) {
         {"OVER_BUDGET", A_OVER_BUDGET}, {"ARM_BUSY", A_BUSY}, {"KINDS", NKINDS}};
     for (size_t i = 0; i < sizeof consts / sizeof consts[0]; i++)
         if (PyModule_AddIntConstant(m, consts[i].n, consts[i].v) < 0) return -1;
+    if (PyType_Ready(&AccType) < 0 || PyType_Ready(&TouchType) < 0) return -1;
+    if (PyModule_AddObjectRef(m, "Acc", (PyObject *)&AccType) < 0) return -1;
+    if (PyModule_AddObjectRef(m, "Touch", (PyObject *)&TouchType) < 0) return -1;
 #else
     if (PyModule_AddObjectRef(m, "USABLE", Py_False) < 0) return -1;
     if (PyModule_AddStringConstant(m, "UNUSABLE_REASON",

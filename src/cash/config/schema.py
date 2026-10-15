@@ -92,6 +92,16 @@ def check_choice(name: str, value: Any) -> None:
         raise ValueError(f"{name}={value!r}: must be {span}{unset}")
 
 
+def _setting_changed() -> None:
+    """A setting changed: no hit the decorator's fast path remembered is
+    served again before an ordinary call (`cash.decorator.hit_memo`)."""
+    from .._native import cwatch
+
+    bump = getattr(cwatch, "bump_cash", None)
+    if bump is not None:
+        bump()
+
+
 @dataclass
 class TierConfig:
     """One entry of the ``tiers`` setting: a backend in a tier stack.
@@ -165,6 +175,10 @@ class TierConfig:
     # s3:
     bucket: str | None = None
     region: str | None = None
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        object.__setattr__(self, name, value)
+        _setting_changed()
 
     def __post_init__(self) -> None:
         if self.type not in TIER_TYPES:
@@ -358,6 +372,10 @@ class CashConfig:
 
     _files: list[tuple[str, str, str]] = field(default_factory=list)
     """Internal — every config file looked for: ``(layer, path, outcome)``."""
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        object.__setattr__(self, name, value)
+        _setting_changed()
 
     def to_dict(self) -> dict[str, Any]:
         """Public field-value mapping (skips internal ``_source``)."""

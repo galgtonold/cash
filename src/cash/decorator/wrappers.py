@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .._active import ACTIVE_CONFIG
+from . import hit_memo
 from .cached_function import new_stats
 from .call_state import CACHE_MISS, CALL_ENTRY, enter_cached_call, exit_cached_call
 from .script_pickling import expose_script_function, refuse_pickling_by_value
@@ -199,13 +200,28 @@ class Wrappers:
                     CALL_ENTRY.reset(slot_token)
                     ACTIVE_CONFIG.reset(token)
                     _count(stats, slot)
+                    if slot[0] is None or not slot[0]["cache_hit"]:
+                        hit_memo.bump()
                 warn_unseeded(func_name, result, allow_random)
                 return result
 
             return stats_wrapper
 
+        fast_call = hit_memo.fast_call
+        missed = hit_memo.MISS
+        bump = hit_memo.bump
+        fast_state = cf.hit_state = hit_memo.new_state()
+
         @functools.wraps(func)
         def sync_stats_wrapper(*args: Any, **kwargs: Any) -> Any:
+            if fast_state is not None:
+                # A call met before, while nothing its key reads has moved
+                # (`hit_memo`): served without building the key again.
+                result = fast_call(fast_state, args, kwargs)
+                if result is not missed:
+                    return result
+                if fast_state[hit_memo.S_ACC].pending:
+                    cf.hit_memo.flush()
             settings = self._config()
             # Before anything else: disabled means the function, and
             # nothing of cash's -- no key, no analysis, no lookup, no store.
@@ -225,6 +241,10 @@ class Wrappers:
                 CALL_ENTRY.reset(slot_token)
                 ACTIVE_CONFIG.reset(token)
                 _count(stats, slot)
+                if slot[0] is None or not slot[0]["cache_hit"]:
+                    # A miss stores, learns and may evict: no remembered
+                    # hit is served until it is met again (`hit_memo`).
+                    bump()
             warn_unseeded(func_name, result, allow_random)
             return result
 
@@ -284,6 +304,8 @@ class Wrappers:
                 changed"``) and ``warnings`` (the last 20, each with
                 ``category``, ``code``, ``message`` and ``timestamp``).
             """
+            if cf.hit_memo is not None:
+                cf.hit_memo.flush()
             total = stats["hits"] + stats["misses"]
             hit_rate = stats["hits"] / total if total > 0 else 0.0
             warnings_log = self._notices.log_of(cf)
@@ -306,6 +328,8 @@ class Wrappers:
         def cache_clear() -> None:
             """Delete this function's cache entries and reset its statistics
             and warning log, so its warnings are shown again."""
+            if cf.hit_memo is not None:
+                cf.hit_memo.flush()
             stats.update(new_stats())
             self._maintenance.delete_function_entries(cf.name)
             self._notices.forget(cf)

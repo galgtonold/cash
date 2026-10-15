@@ -383,8 +383,73 @@ class CallLog:
         #: processor drains them after each statement (`drain`) for its badge.
         #: Bounded: outside a notebook nothing drains them, and a long-running
         #: process must not keep every call.
-        self.entries: deque[dict[str, Any]] = deque(maxlen=CALL_LOG_MAX)
+        self._entries: deque[dict[str, Any]] = deque(maxlen=CALL_LOG_MAX)
+        #: Fast hits (`hit_memo`) not yet written out as entries:
+        #: ``(template, timestamp, seconds)``, made into entries when read.
+        self.fast_log: deque[tuple[dict[str, Any], float, float]] = deque(maxlen=CALL_LOG_MAX)
         self._lock = threading.Lock()
+
+    @property
+    def entries(self) -> deque[dict[str, Any]]:
+        """The recent call events, oldest first, fast hits included."""
+        self._write_fast()
+        return self._entries
+
+    def _write_fast(self) -> None:
+        from . import hit_memo
+
+        hit_memo.drain_log()
+        if not self.fast_log:
+            return
+        with self._lock:
+            fast = self.fast_log
+            for _ in range(len(fast)):
+                template, timestamp, seconds = fast.popleft()
+                entry = dict(template)
+                entry["timestamp"] = timestamp
+                entry["execution_time"] = seconds
+                entry["cash_seconds"] = seconds
+                self._entries.append(entry)
+
+    def fast_log_template(self, args_hash: str, cache_key: str, func_name: str, metadata: Any) -> dict[str, Any] | None:
+        """The entry a fast hit of *cache_key* logs, but for its time; None
+        when calls are logged one line each (verbose), which the fast path
+        leaves to the ordinary one."""
+        if self._config.verbose or self._config.debug:
+            return None
+        saved = (metadata.saves_seconds if metadata.saves_seconds is not None else metadata.execution_time) or 0.0
+        return {
+            "func_name": func_name,
+            "cache_hit": True,
+            "execution_time": 0.0,
+            "body_seconds": None,
+            "time_saved": saved,
+            "cash_seconds": 0.0,
+            "args_hash": args_hash,
+            "cache_key": cache_key,
+            "timestamp": 0.0,
+        }
+
+    def note_fast_effectiveness(
+        self, func_name: str, hits: int, overhead_seconds: float, saved_seconds: float, body_seconds: float | None
+    ) -> None:
+        """`note_effectiveness` for *hits* fast hits at once."""
+        cf = self._cached.get(func_name)
+        culprit = cf.arg_cost if cf is not None else None
+        try:
+            verdict = self.effectiveness.record_hits(
+                func_name,
+                hits=hits,
+                overhead_seconds=overhead_seconds,
+                saved_seconds=saved_seconds,
+                body_seconds=body_seconds,
+                culprit=culprit,
+            )
+        except Exception:  # noqa: BLE001 - accounting must never break a call
+            return
+        if verdict:
+            what, fix = verdict
+            warn_diagnostic(CashCacheIneffectiveWarning, "CACHE-NET-LOSS", what, fix)
 
     def log(
         self,
@@ -448,8 +513,9 @@ class CallLog:
                 outcome = {}
             entry["not_persisted"] = outcome.get("not_persisted")
             entry["not_stored"] = outcome.get("not_stored")
+        self._write_fast()
         with self._lock:
-            self.entries.append(entry)
+            self._entries.append(entry)
         slot = CALL_ENTRY.get()
         if slot is not None:
             slot[0] = entry
@@ -479,9 +545,10 @@ class CallLog:
 
     def drain(self) -> list[dict[str, Any]]:
         """Return and clear the recorded events, atomically."""
+        self._write_fast()
         with self._lock:
-            calls = list(self.entries)
-            self.entries.clear()
+            calls = list(self._entries)
+            self._entries.clear()
         return calls
 
     def note_effectiveness(

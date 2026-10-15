@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from .. import _log
 from ..backends._writes import in_multiprocessing_child
 from ..backends.budget_notices import DiskBudget, cap_text
+from . import hit_memo
 from .explain import MissKind
 
 if TYPE_CHECKING:
@@ -41,6 +42,7 @@ class RunSummary:
         Empty when no cached function was ever called, so a caller can print
         this unconditionally without emitting a header over nothing.
         """
+        hit_memo.flush_all()
         stats = [(name, cf.stats) for name, cf in self._registry.cached.items()]
         rows = [(name, s) for name, s in stats if s["hits"] or s["misses"]]
         bypassed = sum(s.get("bypassed", 0) for _, s in stats)

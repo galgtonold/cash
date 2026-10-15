@@ -1151,6 +1151,9 @@ class ArgHasher:
 
     def register_hasher(self, type_: type, hasher_fn: Callable[[Any], str], src_hash: str, *, override: bool) -> None:
         """Make *hasher_fn* the identity of *type_* values, replacing any earlier one."""
+        from . import hit_memo
+
+        hit_memo.bump()
         # One type, one registration: re-registering must not leave the
         # previous entry behind in the other registry, still winning.
         self.type_hashers.pop(type_, None)
