@@ -48,7 +48,8 @@
  * the whole table stays under `budget` bytes, evicting the roots with the
  * least hashing time saved per byte (aged by how long ago they were
  * checked). A root that keeps changing between checks is dropped and its
- * address skipped for a growing while.
+ * address skipped for a growing while, as long as the object lives (see
+ * "sightings").
  *
  * Threads: built for the GIL. On a free-threaded build the module imports
  * but reports USABLE = False (phase 1: the fast path is off there).
@@ -125,6 +126,8 @@ static uint32_t *rht = NULL; static size_t rht_cap = 0, rht_used = 0, rht_tomb =
 
 static int dict_wid = -1, type_wid = -1, func_wid = -1;
 static int world_unwatchable_dict(PyObject *o);
+static int sight_watches(uintptr_t a);
+static void sight_dict_gone(uintptr_t a);
 static int busy = 0;
 static int any_gone = 0;
 static uint64_t tick = 0;
@@ -330,10 +333,12 @@ static void root_clear(Root *R) {
         if (last && !dead && !(idx & KBIT)) {
             /* a dict or a type: (functions have one global watcher) */
             PyObject *o = (PyObject *)n->addr;
-            if (PyDict_Check(o) && !world_unwatchable_dict(o)) { if (PyDict_Unwatch(dict_wid, o) < 0) PyErr_Clear(); }
+            if (PyDict_Check(o) && !world_unwatchable_dict(o) && !sight_watches(n->addr)) {
+                if (PyDict_Unwatch(dict_wid, o) < 0) PyErr_Clear();
+            }
         } else if (last && !dead && (idx & KBIT)) {
             PyObject *o = (PyObject *)n->addr;
-            if (!world_unwatchable_dict(o) && PyDict_Unwatch(dict_wid, o) < 0) PyErr_Clear();
+            if (!world_unwatchable_dict(o) && !sight_watches(n->addr) && PyDict_Unwatch(dict_wid, o) < 0) PyErr_Clear();
         }
         node_release(idx);
     }
@@ -525,6 +530,7 @@ static int str_equal(PyObject *a, PyObject *b) {
 
 static int on_dict(PyDict_WatchEvent ev, PyObject *d, PyObject *key, PyObject *nv) {
     c_events++;
+    if (ev == PyDict_EVENT_DEALLOCATED) sight_dict_gone((uintptr_t)d);
     if (wds_used) {
         WEnt *e = went_find(wds, wds_cap, (uintptr_t)d);
         if (e) world_dict_event(e, ev, d, key, nv);
@@ -1204,15 +1210,65 @@ static int same_object(Root *R, PyObject *o) {
 }
 
 /* ------------------------------------------------------------ sightings */
-typedef struct { uintptr_t addr; uint64_t until; float secs; uint8_t state; } Sight;
+/* A sighting is kept by address, and an address outlives its object: the
+   next dict made often lands where the last one was freed. A skip therefore
+   holds what proves it is still about the same object, as a root does: a
+   dict stays watched, and its DEALLOCATED event ends the skip (`watched`);
+   another object is held by a weak reference (`wref`). A list, a tuple or a
+   set has neither and is skipped by address alone. Without the proof, a
+   dict skipped as too small, or for changing on every check, passed its skip
+   on to whatever dict was made at its address next: never armed for up to a
+   million checks, however big or still. */
+typedef struct { uintptr_t addr; uint64_t until; float secs; uint8_t state; uint8_t watched; PyObject *wref; } Sight;
 #define SIGHT_BITS 13
 static Sight sights[1 << SIGHT_BITS];
 enum { SG_NONE = 0, SG_SEEN = 1, SG_SKIP = 2 };
 
 static Sight *sight_of(uintptr_t a) { return &sights[hmix(a) & ((1u << SIGHT_BITS) - 1)]; }
 
-static void skip_for(uintptr_t a, uint64_t ticks) {
+/* empty the slot, giving up its proof: a watched dict is alive here (its
+   death empties the slot first), so unwatching it is safe */
+static void sight_clear(Sight *g) {
+    if (g->watched) {
+        PyObject *d = (PyObject *)g->addr;
+        g->watched = 0;
+        if (ht_slot(g->addr) < 0 && !world_unwatchable_dict(d) && PyDict_Unwatch(dict_wid, d) < 0) PyErr_Clear();
+    }
+    Py_CLEAR(g->wref);
+    g->addr = 0; g->state = SG_NONE; g->until = 0; g->secs = 0;
+}
+
+static int sight_watches(uintptr_t a) {
     Sight *g = sight_of(a);
+    return g->watched && g->addr == a;
+}
+
+static void sight_dict_gone(uintptr_t a) {
+    Sight *g = sight_of(a);
+    if (g->watched && g->addr == a) {
+        g->watched = 0;   /* being freed: nothing to unwatch */
+        sight_clear(g);
+    }
+}
+
+/* is the slot's skip still about `o`, not an object freed at its address? */
+static int sight_is(Sight *g, PyObject *o) {
+    if (g->addr != (uintptr_t)o) return 0;
+    if (g->wref) return weak_target(g->wref) == o;
+    return 1;
+}
+
+static void skip_for(PyObject *o, uint64_t ticks) {
+    uintptr_t a = (uintptr_t)o;
+    Sight *g = sight_of(a);
+    sight_clear(g);
+    if (PyDict_Check(o)) {
+        if (PyDict_Watch(dict_wid, o) < 0) { PyErr_Clear(); return; }
+        g->watched = 1;
+    } else {
+        g->wref = PyWeakref_NewRef(o, NULL);
+        if (!g->wref) PyErr_Clear();   /* a list, a tuple, a set: its address alone */
+    }
     g->addr = a; g->state = SG_SKIP; g->until = tick + ticks;
 }
 
@@ -1303,7 +1359,7 @@ static PyObject *py_check(PyObject *self, PyObject *const *args, Py_ssize_t narg
                 /* changed every time it was looked at: tracking costs more than it saves */
                 uint32_t st = R->streak;
                 root_free((uint32_t)r); c_dropped_streak++;
-                skip_for(a, (uint64_t)64 << (st < 14 ? st : 14));
+                skip_for(o, (uint64_t)64 << (st < 14 ? st : 14));
                 res = PyLong_FromLong(ST_SKIP);
             } else {
                 res = PyLong_FromLong(ST_ARM);
@@ -1322,10 +1378,14 @@ static PyObject *py_check(PyObject *self, PyObject *const *args, Py_ssize_t narg
     }
     Sight *g = sight_of(a);
     if (g->addr == a && g->state == SG_SKIP) {
-        busy = 0;
-        if (tick < g->until) return PyLong_FromLong(ST_SKIP);
-        g->state = SG_NONE;
-        return PyLong_FromLong(ST_ARM);
+        if (!sight_is(g, o)) {
+            sight_clear(g);   /* skipped an object freed since: this one is new */
+        } else {
+            busy = 0;
+            if (tick < g->until) return PyLong_FromLong(ST_SKIP);
+            sight_clear(g);
+            return PyLong_FromLong(ST_ARM);
+        }
     }
     if (g->addr == a && g->state == SG_SEEN) { busy = 0; return PyLong_FromLong(ST_ARM); }
     c_first++;
@@ -1341,6 +1401,7 @@ static PyObject *py_seen(PyObject *self, PyObject *const *args, Py_ssize_t nargs
     uintptr_t a = (uintptr_t)args[0];
     Sight *g = sight_of(a);
     if (g->state == SG_SKIP && g->addr != a && tick < g->until) Py_RETURN_NONE;  /* keep a live skip */
+    sight_clear(g);
     g->addr = a; g->state = SG_SEEN; g->secs = (float)secs; g->until = 0;
     Py_RETURN_NONE;
 }
@@ -1401,7 +1462,7 @@ static PyObject *py_arm(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
             if (f < 0) { busy = 0; return NULL; }
             if (!f) {
                 if (r >= 0) root_free((uint32_t)r);
-                c_no_anchor++; skip_for(a, 256);
+                c_no_anchor++; skip_for(o, 256);
                 busy = 0; return arm_result(A_NO_ANCHOR, NULL);
             }
         }
@@ -1420,7 +1481,7 @@ static PyObject *py_arm(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
         R = &roots[r];
         Sight *g = sight_of(a);
         if (g->addr == a && g->state == SG_SEEN) R->hash_s = g->secs;
-        if (g->addr == a) g->state = SG_NONE;
+        if (g->addr == a) sight_clear(g);
     }
     R->version++;
     R->dirty = 0; R->gone = 0;
@@ -1468,7 +1529,7 @@ static PyObject *py_arm(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
     }
     if (rc == 1 || st != A_ARMED) {
         root_free((uint32_t)r);
-        if (st == A_INELIGIBLE) { c_ineligible++; skip_for(a, 4096); }
+        if (st == A_INELIGIBLE) { c_ineligible++; skip_for(o, 4096); }
         PyObject *res = arm_result(st, detail);
         Py_XDECREF(detail);
         busy = 0;
@@ -1477,7 +1538,7 @@ static PyObject *py_arm(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
     R->content = W.content;
     if (W.content < min_bytes) {
         root_free((uint32_t)r);
-        c_too_small++; skip_for(a, 4096);
+        c_too_small++; skip_for(o, 4096);
         busy = 0;
         return arm_result(A_TOO_SMALL, NULL);
     }
@@ -1488,7 +1549,7 @@ static PyObject *py_arm(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
         double worth = R->hash_s > 0 ? R->hash_s / (double)R->bytes : 0.0;
         if (!make_room(0, worth, (uint32_t)r)) {
             root_free((uint32_t)r);
-            c_over_budget++; skip_for(a, 4096);
+            c_over_budget++; skip_for(o, 4096);
             busy = 0;
             return arm_result(A_OVER_BUDGET, NULL);
         }
@@ -1650,7 +1711,7 @@ static PyObject *py_reset(PyObject *self, PyObject *noargs) {
     free(ht); ht = NULL; ht_cap = ht_used = ht_tomb = 0;
     for (size_t i = 0; i < tinfo_cap; i++) free(tinfo[i].offsets);
     free(tinfo); tinfo = NULL; tinfo_cap = tinfo_used = 0;
-    memset(sights, 0, sizeof sights);
+    for (size_t i = 0; i < (size_t)1 << SIGHT_BITS; i++) sight_clear(&sights[i]);
     table_bytes_total = 0; any_gone = 0;
     c_checks = c_hits = c_first = c_arms = c_commits = c_events = c_dirty_marks = c_evicted =
         c_dropped_streak = c_too_small = c_ineligible = c_no_anchor = c_over_budget = c_busy =
