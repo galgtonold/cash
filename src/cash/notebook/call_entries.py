@@ -346,6 +346,11 @@ class CallEntries:
             return []
         return reached_objects(fn)
 
+    def peek_metadata(self, key: str) -> Any:
+        """The entry's metadata under *key* without reading its value; None
+        when there is none (shadow mode asks whether an entry is kept)."""
+        return self._cash.backend.peek_metadata(key)
+
     def lookup(self, key: str) -> tuple[bool, Any, float, dict]:
         """``(hit, value, recorded_execution_time, metadata)`` -- one backend read.
 

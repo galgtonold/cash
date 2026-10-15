@@ -244,6 +244,13 @@ class StatementRun:
     #: The working directory and the environment before it ran, kept for a
     #: statement past its budget, whose writes to them are seen, not read.
     process_before: tuple[str, dict[str, str]] | None = None
+    #: Shadow mode (``cash.notebook.shadow``): the verdict of its traces,
+    #: waiting for the lookup's outcome. Never read by anything else.
+    shadow: Any = None
+    #: It ran with a kept value standing in for part of it (``ExpressionMemo``).
+    memo_used: bool = False
+    #: It ran over a loop header cash evaluated before it (``loop_iterable``).
+    handed_iterable: bool = False
 
 
 @dataclass

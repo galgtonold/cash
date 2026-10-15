@@ -51,6 +51,7 @@ from cash.analysis.handed_callables import hands_a_state_changing_callable
 from cash.analysis.namespace_effects import user_callee_starting_workers, user_callee_using_pyplot
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, restore_kind
 from cash.cost_model import estimated_restore_time
+from cash.notebook import shadow as _shadow
 from cash.notebook._trace import trace_event
 from cash.notebook.cache_key import CacheKeyContext
 from cash.notebook.call_effects import (
@@ -877,6 +878,8 @@ class CallUnit:
             hit_started = _perf_counter()
             hit, value, recorded_cost, metadata = self._entries.lookup(key)
             self._last_key_s = _perf_counter() - key_started
+            if _shadow.SHADOW is not None:
+                _shadow.SHADOW.call_lookup(key, site, hit, self._entries.peek_metadata)
             if hit:
                 return self._serve_hit(call, value, recorded_cost, metadata, hit_started)
             return self._run_miss(call)
@@ -979,10 +982,14 @@ class CallUnit:
             propagate_to_parent=True,
         )
         self._running += 1
+        shadow = _shadow.SHADOW
+        unit = shadow.begin("call") if shadow is not None else None
         try:
             with call_tracker, observe_writes() as written:
                 result, stdout_text, stderr_text = call_capturing_output(call.fn, call.args, call.kwargs)
         finally:
+            if unit is not None:
+                shadow.end(unit)
             self._running -= 1
         elapsed = _perf_counter() - started
         # Read while `result` is this frame's only reference of its own.
@@ -1008,6 +1015,8 @@ class CallUnit:
             and not call_tracker.inputs_changed_since_read()
         ):
             stored = self._store_result(call, result, elapsed, call_tracker, stdout_text, stderr_text)
+        if unit is not None:
+            shadow.call_finished(call.key, call.site, unit, stored, disk=True)
         if stored:
             self._cached(
                 elapsed,
