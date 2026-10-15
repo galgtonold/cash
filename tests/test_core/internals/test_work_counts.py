@@ -57,6 +57,11 @@ def keyed_args(arr, frame, config, names):
 VALUES = [small_dict, nested_records, numpy_array, pandas_frame, dataclass_list]
 
 
+def _wait_for_writes() -> None:
+    for queue in all_pending_writes():
+        queue.wait_all()
+
+
 def _pickle_size(value) -> int:
     return len(pickle.dumps(value, protocol=5))
 
@@ -68,8 +73,7 @@ def test_a_miss_pickles_its_value_about_once(disk_cash, fn):
         f(1)
         # The disk write serializes the RAM tier's copy on the writer
         # thread after the call returns: count it too.
-        for queue in all_pending_writes():
-            queue.wait_all()
+        _wait_for_writes()
     size = _pickle_size(fn(1))
     # 1.0x today, 2.0x for the dataclass list (stored, and copied into RAM by
     # a pickle round trip); the bound catches one more pickle of the value.
@@ -82,6 +86,9 @@ def test_a_miss_pickles_its_value_about_once(disk_cash, fn):
 def test_a_hit_hashes_a_small_argument_little_and_copies_in_c(disk_cash, fn):
     f = disk_cash.cache(fn)
     f(1)
+    # The miss's disk write digests the value on the writer thread; let it
+    # finish so the counters see only the hit.
+    _wait_for_writes()
     with hashed_bytes() as hashed, pickled_bytes() as pickled, deepcopy_steps() as copies:
         f(1)
     assert f.cache_info()["hits"] == 1
