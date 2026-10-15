@@ -59,8 +59,13 @@ build = ["cp312-*", "cp313-*", "cp314-*", "cp314t-*"]
 archs = ["native"]
 # A platform wheel without the extension would be a broken release artifact.
 environment = { CASH_REQUIRE_EXTENSION = "1" }
-# The installed wheel loads its extension (the import fails the job if not).
-test-command = 'python -c "import cash._cwatch, cash._native as n; print(n.status_line())"'
+# Each wheel runs the C extension's own tests on its platform, against the
+# installed wheel (cibuildwheel copies test-sources to a folder of their own):
+# the watcher tests, a short differential fuzz and a verify-mode notebook
+# smoke. tests/_wheel_selftest.py says what runs and why these test deps.
+test-sources = ["tests", "pyproject.toml"]
+test-requires = ["pytest>=8.2", "pytest-timeout", "ipython", "networkx"]
+test-command = "python -m tests._wheel_selftest"
 
 [project]
 name = "cash-lib"

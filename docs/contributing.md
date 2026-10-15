@@ -34,7 +34,8 @@ sources, rebuild it with `python hatch_build.py`. Without a compiler, or with
 `CASH_PURE_PYTHON=1`, cash runs its pure-Python path; `cash info` shows which.
 The build hook is `hatch_build.py`; the release wheels are built by
 `.github/workflows/wheels.yml` with cibuildwheel (`[tool.cibuildwheel]` in
-`pyproject.toml`).
+`pyproject.toml`), and each one runs the C extension's tests on its own
+platform against the installed wheel (`tests/_wheel_selftest.py`).
 
 ## The code
 
