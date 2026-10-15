@@ -35,6 +35,7 @@ import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any, NamedTuple
 
+from .. import _native
 from .._memo import CODE_OBJECTS, LruMemo
 from ..install_paths import is_user_code_module
 from ..tracking.function_tracker import is_local_module
@@ -69,6 +70,11 @@ _PLAIN = frozenset((dict, list, tuple))
 _MAIN_NAMES = frozenset(("__main__", "builtins"))
 #: ``Py_TPFLAGS_HEAPTYPE``: set on every class a ``class`` statement makes.
 _HEAP_TYPE = 1 << 9
+#: The C walk kernels (`cash._native.kernels`), or None: each step they take
+#: gives what the Python step beside it gives, and the Python step runs
+#: when they are missing or say NotImplemented (a subclass, a metaclass of
+#: its own). A walk of a 350,000-edge graph took 1.2 s in Python.
+_K = _native.kernels
 
 
 class Held(NamedTuple):
@@ -217,9 +223,9 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
     dicts = list(maps) if isinstance(maps, list) else [namespace]
     globals_ids = _globals_ids(namespace)
     running = _code_running_in(globals_ids)
-    if not running and _NO_FUNCTIONS.get(globals_ids) == _new_code[0]:
+    if not running and _NO_FUNCTIONS.get(globals_ids) == _new_code():
         return False
-    seen_at = _new_code[0]
+    seen_at = _new_code()
     function = types.FunctionType
     # A ``def`` binds its function in the namespace: found there, the scan of
     # every tracked object (0.12 s beside a 400,000-cell workbook, at each
@@ -340,18 +346,26 @@ def _of_a_users_module(cls: type) -> bool:
 #: The ids of the globals a `notebook_functions_exist` no was answered for,
 #: and the `_new_code` count it was answered at.
 _NO_FUNCTIONS: dict[frozenset[int], int] = {}
-#: How many times code started running from an ``exec`` or a function was
-#: made from code (``types.FunctionType``) in this process.
-_new_code = [0]
 _NEW_CODE_EVENTS = frozenset(("exec", "function.__new__"))
+#: How many times code started running from an ``exec`` or a function was
+#: made from code (``types.FunctionType``) in this process: counted by the C
+#: extension's audit hook (``caudit.c``) when it is in, else by a Python one,
+#: which Python calls for every audited event (an ``id()`` included).
+_counted = [0]
 
 
 def _note_new_code(event: str, _args: tuple) -> None:
     if event in _NEW_CODE_EVENTS:
-        _new_code[0] += 1
+        _counted[0] += 1
 
 
-sys.addaudithook(_note_new_code)
+if _K is not None and _K.audit_hook_install():
+    _new_code = _K.audit_new_code
+else:
+    sys.addaudithook(_note_new_code)
+
+    def _new_code() -> int:
+        return _counted[0]
 
 
 def _code_running_in(globals_ids: frozenset[int]) -> bool:
@@ -416,18 +430,27 @@ def _walk(
 def _next_level(children: list[Any], seen: set[Any]) -> list[tuple[type, list[Any]]]:
     """What of *children* the walk visits next, by exact type, each object
     once and none it met before (*seen*, which this adds them to)."""
-    kinds_of = list(map(type, children))
-    child_kinds = set(kinds_of)
+    kernels = _K
+    child_kinds = kernels.type_set(children) if kernels is not None else set(map(type, children))
     # An object that leads only to its class (`_inert`: an openpyxl cell's
     # style array, 400,000 of them) is not visited: its class is.
     inert = {kind for kind in child_kinds if _inert(kind)}
     skipped = _LEAVES | inert if inert else _LEAVES
-    others = list(itertools.compress(children, map(operator.not_, map(skipped.__contains__, kinds_of))))
-    others.extend(inert)
+    groups = kernels.split_level(children, skipped, inert) if kernels is not None else NotImplemented
+    if groups is NotImplemented:
+        kinds_of = list(map(type, children))
+        others = list(itertools.compress(children, map(operator.not_, map(skipped.__contains__, kinds_of))))
+        others.extend(inert)
+        # Split by type once, without another pass when one type is left.
+        groups = _by_type(others, (child_kinds - skipped) | set(map(type, inert)))
     level = []
-    # Split by type once, without another pass when one type is left.
-    for kind, group in _by_type(others, (child_kinds - skipped) | set(map(type, inert))):
+    for kind, group in groups:
         if kind in _PLAIN and _plain_records(kind, group):
+            continue
+        if kernels is not None:
+            new = kernels.new_in(group, _identity_hashed(kind), seen)
+            if new:
+                level.append((kind, new))
             continue
         # Dedup by the objects themselves where that is identity: an
         # openpyxl sheet's 400,000 cells were each asked for their ``id``.
@@ -445,6 +468,10 @@ def _plain_records(kind: type, group: list[Any]) -> bool:
     *kind*, holds only plain values: a million records read as rows are
     dropped in one pass at C speed, before the walk dedups them (most of
     what a walk over them cost)."""
+    if _K is not None and type(group) is list:
+        found = _K.leaf_items(group, 2 if kind is dict else 0, _LEAVES)
+        if found is not NotImplemented:
+            return found
     if kind is dict:
         items = itertools.chain(
             itertools.chain.from_iterable(group), itertools.chain.from_iterable(map(dict.values, group))
@@ -466,6 +493,13 @@ def _visit_group(
     *kind*, and put what they lead to in *children*."""
     if issubclass(kind, types.ModuleType):
         return
+    if _K is not None and type(group) is list:
+        # The two branches below for exact dicts and sequences, in C.
+        if kind is dict:
+            if _K.dict_children(group, _LEAVES, children) is not NotImplemented:
+                return
+        elif kind in _SEQUENCES and _K.seq_children(group, _LEAVES, children) is not NotImplemented:
+            return
     if issubclass(kind, dict):
         keys = list(itertools.chain.from_iterable(group))
         key_kinds = set(map(type, keys))

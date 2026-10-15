@@ -22,10 +22,13 @@ import types
 import weakref
 from typing import Any
 
-from . import _plain_data
+from . import _native, _plain_data
 from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS
 
 logger = logging.getLogger(__name__)
+
+#: The C walk kernels (`cash._native.kernels`), or None.
+_K = _native.kernels
 
 
 #: The arrays a scipy sparse matrix is, by format: everything its values
@@ -261,6 +264,11 @@ def pickled_size_estimate(value: Any, _depth: int = 0, _seen: set[int] | None = 
         # 50,000 record dicts read each dict's module and name.
         if _depth >= _ESTIMATE_DEPTH:
             return 0
+        if _K is not None:
+            # The same loop in C: a call per record dict cost 0.1 s for 200,000.
+            return _K.items_estimate(
+                value, _depth + 1, _ESTIMATE_DEPTH, _NO_ARRAYS, _NO_ARRAYS_AT_LIMIT, pickled_size_estimate, seen
+            )
         return _items_estimate(value.values() if type(value) is dict else value, _depth + 1, seen)
     kind = type(value).__name__
     try:

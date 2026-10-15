@@ -31,10 +31,15 @@ from collections.abc import Mapping
 from itertools import accumulate, chain, compress, islice, repeat
 from typing import Any, NamedTuple
 
-from . import kept_state
+from . import _native, kept_state
 from .value_types import IMMUTABLE_LEAF_TYPES, LEAF_TYPES, PLAIN_SEQS
 
 MAX_LEVELS = 16
+
+#: The C walk kernels (`cash._native.kernels`), or None: `_tree_facts` takes
+#: its answer from them when no `one_look` part can be spliced in, and they
+#: give exactly what its Python walk gives (the walk's lists included).
+_K = _native.kernels
 
 
 def fake_clock() -> tuple[tuple, dict]:
@@ -626,6 +631,15 @@ def _tree_facts(
     containers in their order, so *walk*, when given, receives its levels
     (`tree_walk`). Parts *look* knows are taken whole, never with *walk*."""
     leaves = _facts_leaves()
+    if _K is not None and (walk is not None or look is None or not look[1]):
+        got = _K.tree_facts(value, leaves, walk is not None, top_extra, _picks)
+        if got is not NotImplemented:
+            if got is None:
+                raise _NotPlain
+            types, held_once, size, nodes, levels = got
+            if walk is not None:
+                walk.extend(levels)
+            return TreeFacts(types, held_once, size, nodes)
     allowed = leaves | _NODES
     found = {type(value)}
     held_once = True
@@ -1026,6 +1040,10 @@ def profile(value: Any) -> tuple[int, bool, list[set]] | None:
 
 def size_of(value: Any) -> int | None:
     """The size half of `profile`."""
+    if _K is not None:
+        got = _K.tree_facts(value, _facts_leaves(), False, 0, _picks, 2)
+        if got is not NotImplemented:
+            return None if got is None else got[2]
     found = profile(value)
     return None if found is None else found[0]
 
@@ -1270,6 +1288,10 @@ def tree_walk(value: Any) -> list | None:
     when a value is sized and then copied, each walk a pass over every leaf."""
     if type(value) not in TREE_NODES:
         return None
+    if _K is not None:
+        got = _K.tree_facts(value, _facts_leaves(), True, 0, _picks, 3)
+        if got is not NotImplemented:
+            return None if got is None else got[4]
     try:
         with _gc_paused():  # a dict's values view per dict, see `_gc_paused`
             return list(_tree_walk(value, frozenset(LEAF_TYPES + fake_clock()[0])))
@@ -1281,6 +1303,10 @@ def tree_size(value: Any, walk: list | None = None) -> int | None:
     """`profile`'s size for JSON-like data (`_tree_walk`): every container,
     key and leaf ``sys.getsizeof``-summed a level at a time; None for
     anything else. *walk* is `tree_walk` of *value*, when the caller has it."""
+    if walk is None and _K is not None:
+        got = _K.tree_facts(value, _facts_leaves(), False, 0, _picks, 1)
+        if got is not NotImplemented:
+            return None if got is None else got[2]
     levels = tree_walk(value) if walk is None else walk
     if levels is None:
         return None

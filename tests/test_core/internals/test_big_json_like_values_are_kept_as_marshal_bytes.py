@@ -95,6 +95,25 @@ def test_one_walk_inside_a_look_serves_every_check_and_the_store(monkeypatch):
         return real(dicts)
 
     monkeypatch.setattr(_plain_data, "_keys_size", counting)
+    kernels = _plain_data._K
+    if kernels is not None:
+        # The C walk (`cash._native.kernels`) sizes no keys in Python: a
+        # walk it makes that reaches the rows counts as one too.
+        def reaches(value, depth=0):
+            if value is records:
+                return True
+            return type(value) is dict and depth < 3 and any(reaches(v, depth + 1) for v in value.values())
+
+        class Counting:
+            def __getattr__(self, name):
+                return getattr(kernels, name)
+
+            def tree_facts(self, value, *args):
+                if reaches(value):
+                    rows_walked.append(1)
+                return kernels.tree_facts(value, *args)
+
+        monkeypatch.setattr(_plain_data, "_K", Counting())
     calls = _counting(monkeypatch, "tree_levels", "_tree_walk")
     named = {"records": records}
     with _plain_data.one_look(named):

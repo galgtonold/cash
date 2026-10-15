@@ -39,6 +39,28 @@ def test_the_records_rows_are_walked_once_and_kept_as_bytes(cash_magics, mock_sh
         return real(dicts)
 
     monkeypatch.setattr(_plain_data, "_keys_size", counting)
+    kernels = _plain_data._K
+    if kernels is not None:
+        # The C walk (`cash._native.kernels`) sizes no keys in Python: a
+        # walk it makes that reaches the rows counts as one too.
+        def rows_of(value, depth=0):
+            if type(value) is list and len(value) == N and type(value[0]) is dict:
+                return value
+            if type(value) is dict and depth < 3:
+                return next((found for v in value.values() if (found := rows_of(v, depth + 1)) is not None), None)
+            return None
+
+        class Counting:
+            def __getattr__(self, name):
+                return getattr(kernels, name)
+
+            def tree_facts(self, value, *args):
+                rows = rows_of(value)
+                if rows is not None:
+                    rows_walked.append(id(rows[0]))
+                return kernels.tree_facts(value, *args)
+
+        monkeypatch.setattr(_plain_data, "_K", Counting())
     walked_otherwise = []
     for name in ("tree_levels", "_tree_walk"):
         real_walk = getattr(_plain_data, name)

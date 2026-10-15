@@ -61,6 +61,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "cwalk.h"
+
 #define CWATCH_API_VERSION 1
 #define CWATCH_VERSION "0.1.0"
 
@@ -2334,6 +2336,7 @@ static int exec_module(PyObject *m) {
     if (PyType_Ready(&AccType) < 0 || PyType_Ready(&TouchType) < 0) return -1;
     if (PyModule_AddObjectRef(m, "Acc", (PyObject *)&AccType) < 0) return -1;
     if (PyModule_AddObjectRef(m, "Touch", (PyObject *)&TouchType) < 0) return -1;
+    if (cwalk_add_functions(m) < 0 || caudit_add_functions(m) < 0) return -1;
 #else
     if (PyModule_AddObjectRef(m, "USABLE", Py_False) < 0) return -1;
     if (PyModule_AddStringConstant(m, "UNUSABLE_REASON",
