@@ -46,6 +46,35 @@ class Outer:
         def __init__(self, v):
             self.v = v
 
+from collections.abc import Mapping
+from functools import cached_property
+
+class V(Mapping):
+    __slots__ = ("_d", "_w")
+    def __init__(self, d, w=None):
+        self._d = d
+        self._w = w
+    def __getitem__(self, k):
+        return self._d[k]
+    def __iter__(self):
+        return iter(self._d)
+    def __len__(self):
+        return len(self._d)
+
+class N:
+    def __init__(self, d, e):
+        self._d = d
+        self._e = e
+    @cached_property
+    def view(self):
+        return V(self._d)
+    @cached_property
+    def other(self):
+        return V(self._e, "w")
+    @cached_property
+    def snap(self):
+        return [len(self._d)]
+
 def f(x):
     return x
 
@@ -103,8 +132,13 @@ class Fuzz:
             if self.pool and r.random() < 0.15:
                 return r.choice(self.pool)  # an alias
             return self.atom()
-        k = r.randrange(12)
-        if k == 0:
+        k = r.randrange(13)
+        if k == 12:
+            v = m.N({self.atom(): self.value(depth + 1) for _ in range(r.randint(0, 3))}, self.value(depth + 1))
+            for name in ("view", "other", "snap"):
+                if r.random() < 0.6:
+                    getattr(v, name)
+        elif k == 0:
             v: Any = {f"k{i}": self.value(depth + 1) for i in range(r.randint(0, 5))}
         elif k == 1:
             v = [self.value(depth + 1) for _ in range(r.randint(0, 5))]
@@ -333,6 +367,28 @@ class Fuzz:
             else:
                 sys.modules[name] = m
             return "sys.modules"
+        if k == 21:
+            objs = self.targets(m.N)
+            if not objs:
+                return "none"
+            o = r.choice(objs)
+            op = r.randrange(7)
+            name = r.choice(["view", "other", "snap"])
+            if op == 0:
+                getattr(o, name)  # filled
+            elif op == 1:
+                o.__dict__.pop(name, None)
+            elif op == 2 and isinstance(o.__dict__.get(name), m.V):
+                o.__dict__[name]._d = r.choice([o._d, o._e, {"x": self.atom()}, o])
+            elif op == 3 and isinstance(o.__dict__.get(name), m.V):
+                o.__dict__[name]._w = r.choice([None, "w", 1, [1]])
+            elif op == 4:
+                o._d[self.atom()] = self.value(2)
+            elif op == 5 and isinstance(o.__dict__.get("snap"), list):
+                o.snap.append(self.atom())
+            else:
+                o._e = r.choice([self.value(2), o._d])
+            return "views"
         if k == 20:
             # roots rebuilt over and over: freed lists' addresses come back
             for i in range(r.randint(1, 4)):
@@ -392,6 +448,9 @@ def fuzz(seed: int, steps: int, ns: dict) -> Fuzz:
     return run
 
 
+_COUNTED = ("checks", "hits", "arms", "commits", "verify_changed", "dict_events", "roots")
+
+
 class _TooSlow(BaseException):  # cash catches what pickling raises
     pass
 
@@ -413,6 +472,7 @@ def main() -> None:
     seed = args.seed
     runs = 0
     slow = []
+    carried: dict = {}  # counters of the tables reset after a slow seed
 
     def too_slow(*_: Any) -> None:
         raise _TooSlow
@@ -430,13 +490,16 @@ def main() -> None:
             runs += 1
         except _TooSlow:
             slow.append(seed)
+            done = value_watch.stats()
+            for key in _COUNTED:
+                carried[key] = carried.get(key, 0) + done[key]
             value_watch.reset()
         finally:
             signal.alarm(0)
         seed += 1
     s = value_watch.stats()
     print(f"{runs} runs x {args.steps} steps, seeds {args.seed}..{seed - 1}: OK; too slow to hash: {slow}")
-    print({k: s[k] for k in ("checks", "hits", "arms", "commits", "verify_changed", "dict_events", "roots")})
+    print({k: s[k] + carried.get(k, 0) for k in _COUNTED})
 
 
 if __name__ == "__main__":
