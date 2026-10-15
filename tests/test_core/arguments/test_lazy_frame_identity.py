@@ -24,6 +24,7 @@ import pathlib
 import pytest
 
 import cash
+from cash.tracking import native_reads
 
 pl = pytest.importorskip("polars")
 
@@ -101,6 +102,9 @@ def test_eager_frames_were_never_affected(cached):
 
 
 @pytest.mark.xfail(
+    # The opt-in native file hook (CASH_NATIVE_FILE_HOOK=1) sees polars open
+    # the file inside the call, so the edit invalidates the entry there.
+    condition=not native_reads.active(),
     strict=True,
     reason=(
         "KNOWN GAP: a scan-backed plan serializes the PATH, not the file's "

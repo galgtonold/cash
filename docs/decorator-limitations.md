@@ -278,7 +278,10 @@ worker: about 20 µs a task, which only shows for tiny tasks sent one at a time
 (`pool.imap` with the default `chunksize=1`).
 
 A polars `LazyFrame` argument from `scan_csv` is keyed by its path, not the
-file's content; collect it first.
+file's content; collect it first. With the native file hook on
+(`CASH_NATIVE_FILE_HOOK=1`, Linux only, see
+[known limitations](known-limitations.md#reads-through-a-loader-cash-cannot-see)),
+the file polars opens inside the call is a dependency, so an edit is seen.
 
 ## An edit that keeps the size and timestamps
 
