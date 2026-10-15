@@ -14,6 +14,7 @@ code -- and never taken while code with the notebook's globals is running.
 from __future__ import annotations
 
 import gc
+import sys
 import types
 
 import pytest
@@ -31,7 +32,10 @@ def test_the_running_statement_is_not_a_notebook_function():
     assert namespace["answer"] is False
     code = compile("answer = nfe(globals())", "<other>", "exec")
     exec(code, namespace)
-    assert namespace["answer"] is True, "only cash's own statements are left out"
+    # Since 3.11 ``exec`` makes a function of the code it runs; 3.10 makes
+    # none, so there no statement is a function to leave out.
+    makes_a_function = sys.version_info >= (3, 11)
+    assert namespace["answer"] is makes_a_function, "only cash's own statements are left out"
 
 
 def test_a_lambda_made_by_the_running_statement_is_seen():

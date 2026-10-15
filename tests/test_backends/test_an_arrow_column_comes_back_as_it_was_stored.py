@@ -22,6 +22,10 @@ import pytest
 
 pa = pytest.importorskip("pyarrow")
 
+#: pandas 3's default ``str`` dtype, spelled so pandas 2 makes it too: there
+#: ``"str"`` still means a column of Python objects.
+STR = pd.StringDtype("pyarrow", na_value=np.nan)
+
 from cash.backends.file_backend import FileBackend
 from cash.backends.memory_backend import InMemoryBackend
 from cash.backends.serialization import OUT_OF_BAND_MIN_BYTES, PickleSerializer
@@ -29,7 +33,7 @@ from cash.backends.tiered_backend import TieredBackend
 from tests._scripts import run_python
 
 COLUMNS = {
-    "str": lambda: pd.Series(["a", None, "a long string", ""] * 3, dtype="str"),
+    "str": lambda: pd.Series(["a", None, "a long string", ""] * 3, dtype=STR),
     "string-pyarrow": lambda: pd.Series(["a", None, "b", "c"] * 3, dtype="string[pyarrow]"),
     "arrow-string": lambda: pd.Series(["x", None, "y", "z"] * 3, dtype=pd.ArrowDtype(pa.string())),
     "arrow-large-string": lambda: pd.Series(["x", "yy", None, "zzz"] * 3, dtype=pd.ArrowDtype(pa.large_string())),
@@ -47,7 +51,7 @@ COLUMNS = {
 def _frame() -> pd.DataFrame:
     df = pd.DataFrame({name: make() for name, make in COLUMNS.items()})
     df["x"] = np.arange(len(df), dtype=float)
-    df.index = pd.Index([f"r{i}" for i in range(len(df))], dtype="str", name="row")
+    df.index = pd.Index([f"r{i}" for i in range(len(df))], dtype=STR, name="row")
     # Two chunks per Arrow column, as a concat of two reads leaves them.
     return pd.concat([df.iloc[:5], df.iloc[5:]])
 
@@ -105,7 +109,7 @@ def test_a_new_process_reads_the_frame_back(tmp_path):
 
 
 def test_a_small_slice_of_a_big_column_is_written_as_its_rows():
-    big = pd.DataFrame({"s": pd.Series([f"value {i}" for i in range(200_000)], dtype="str")})
+    big = pd.DataFrame({"s": pd.Series([f"value {i}" for i in range(200_000)], dtype=STR)})
     head = big.iloc[1000:1005]
     assert head["s"].array._pa_array.chunk(0).get_total_buffer_size() > 1_000_000, "the slice owns its buffers"
     stream, buffers = PickleSerializer().serialize_split(head)

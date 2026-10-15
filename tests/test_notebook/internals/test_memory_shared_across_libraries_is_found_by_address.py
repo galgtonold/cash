@@ -33,7 +33,7 @@ def test_the_partners_found_by_address():
     # Copies, a numpy view of a numpy array (`view_bases`'s), and pandas
     # over pandas (copy-on-write keeps them apart) link nothing here.
     assert borrowed_memory_names([pl.Series(arr * 2)], ns) == set()
-    assert borrowed_memory_names([pd.Series(arr)], ns) == set()
+    assert borrowed_memory_names([pd.Series(arr, copy=True)], ns) == set()
     assert borrowed_memory_names([arr[:5]], ns) == set()
     assert borrowed_memory_names([frame[["a"]]], ns) == set()
     # Two polars frames over one array share memory nothing writes past.

@@ -19,6 +19,10 @@ pa = pytest.importorskip("pyarrow")
 
 from pandas.core.arrays.arrow import ArrowExtensionArray
 
+#: pandas 3's default ``str`` dtype, spelled so pandas 2 makes it too: there
+#: ``"str"`` still means a column of Python objects.
+STR = pd.StringDtype("pyarrow", na_value=np.nan)
+
 from cash.backends.serialization import OUT_OF_BAND_MIN_BYTES, PickleSerializer
 from cash.notebook.call_refs import digest_and_size
 
@@ -29,7 +33,7 @@ def _part(start: int) -> pd.DataFrame:
     rows = range(start, start + ROWS)
     return pd.DataFrame(
         {
-            "s": pd.Series([f"text {i}" for i in rows], dtype="str"),
+            "s": pd.Series([f"text {i}" for i in rows], dtype=STR),
             "n": pd.Series(np.array(rows), dtype="int64[pyarrow]"),
         }
     )

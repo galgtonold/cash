@@ -147,7 +147,7 @@ def test_a_write_to_the_memory_reaches_the_cached_call(cash_magics, count_fd, na
 
 @pytest.mark.parametrize(
     "make",
-    ["s = pd.Series(arr)", "s = pl.Series(arr * 1.0)", "s = pl.Series(arr.astype(np.int64))"],
+    ["s = pd.Series(arr, copy=True)", "s = pl.Series(arr * 1.0)", "s = pl.Series(arr.astype(np.int64))"],
     ids=["pandas-copies", "polars-of-a-new-array", "polars-of-a-cast"],
 )
 def test_a_frame_with_its_own_copy_stays_cached(cash_magics, tmp_path, count_fd, make):

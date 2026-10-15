@@ -65,6 +65,18 @@ def _reloader(name, check_all=False):
     return reloader
 
 
+def _record_sources(reloader):
+    """What the deduplicating reload records once a module is imported.
+    IPython 8 (the last on Python 3.10) has no such reload: its
+    ``%autoreload 2`` reloads the module whole, which the tests below
+    expect of it all the same."""
+    deduper = getattr(reloader, "deduper_reloader", None)
+    if deduper is not None:
+        assert deduper.enabled, "the extension's default these tests are about"
+        deduper.update_sources()
+    return deduper
+
+
 def test_an_import_beside_magics_is_tracked(lib):
     name, _path = lib
     __import__(name)
@@ -147,8 +159,7 @@ def test_a_module_the_extension_reloads_is_loaded_as_a_fresh_import_loads_it(lib
     name, path = lib
     module = __import__(name)
     reloader = _reloader(name)
-    assert reloader.deduper_reloader.enabled, "the extension's default this test is about"
-    reloader.deduper_reloader.update_sources()
+    deduper = _record_sources(reloader)
     shell = _autoreload_shell(reloader)
 
     before = os.stat(path).st_mtime_ns
@@ -160,7 +171,7 @@ def test_a_module_the_extension_reloads_is_loaded_as_a_fresh_import_loads_it(lib
     assert inspect.getsource(module.get).startswith("def get(x):")
     assert module.get.__code__.co_firstlineno == 5
     assert module.helper.__globals__ is module.__dict__
-    assert reloader.deduper_reloader.enabled, "the extension's setting is as it was"
+    assert deduper is None or deduper.enabled, "the extension's setting is as it was"
 
 
 def test_a_module_cash_reloaded_is_left_to_cash(lib):
@@ -205,7 +216,7 @@ def test_an_argument_to_a_call_that_raised_after_an_edit_keeps_its_lineage(
         for cell in cells:
             run_cash_cell(cash_magics, cell, cells=cells)
         reloader = _reloader(name)
-        reloader.deduper_reloader.update_sources()
+        _record_sources(reloader)
         mock_shell.magics_manager.registry = {"AutoreloadMagics": types.SimpleNamespace(_reloader=reloader)}
         state = cash_magics.tracking_state
         played = state.variable_lineage["played"]
