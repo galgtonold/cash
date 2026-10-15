@@ -15,6 +15,8 @@ def watching(monkeypatch):
     namespace values are anchored in (`value_watch._anchors`)."""
     if not value_watch.enabled():
         pytest.skip(f"the fast path is off: {value_watch.REASON}")
+    if value_watch.VERIFY:
+        pytest.skip("these tests count hashes; CASH_CWATCH_VERIFY=1 hashes behind every reuse")
     cw = value_watch._cw
     before = cw.stats()
     cw.reset()
