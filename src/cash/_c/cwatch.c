@@ -450,10 +450,33 @@ static inline void world_bump(void) { world_epoch++; c_world_bumps++; }
 
 static inline int codeish(PyObject *o) { return o != NULL && (PyCallable_Check(o) || PyModule_Check(o)); }
 
+/* id(wrapper) -> (wrapper, original): cash's own reader wrappers, which a
+ * scope installs and takes down around every miss (`io_watch.Patches`). A
+ * swap between the two is no change for a key (keys look through them). */
+static PyObject *world_swaps;
+
+static PyObject *swap_original(PyObject *w) {   /* borrowed or NULL, no error */
+    if (!world_swaps || !w) return NULL;
+    PyObject *id = PyLong_FromVoidPtr(w);
+    if (!id) { PyErr_Clear(); return NULL; }
+    PyObject *pair = PyDict_GetItemWithError(world_swaps, id);
+    Py_DECREF(id);
+    if (!pair) { PyErr_Clear(); return NULL; }
+    return PyTuple_GET_ITEM(pair, 0) == w ? PyTuple_GET_ITEM(pair, 1) : NULL;
+}
+
+static int is_swap(PyObject *old, PyObject *nv) {
+    if (!old || !nv) return 0;
+    return swap_original(nv) == old || swap_original(old) == nv;
+}
+
 static void world_dict_event(WEnt *e, PyDict_WatchEvent ev, PyObject *d, PyObject *key, PyObject *nv) {
     if (ev == PyDict_EVENT_DEALLOCATED) {
+        /* Forgotten, not a change: nothing a live memo reads can lead to a
+         * dict that dies, as cutting that path moved the epoch already (and
+         * the cells a memo starts from are held by it). A function or
+         * lambda made and dropped per call would stop every memo here. */
         e->addr = WTOMB; wds_used--; wds_tomb++;
-        world_bump();
         return;
     }
     if ((e->flags & WD_UNKEYED) == 0 && key != NULL && PyUnicode_CheckExact(key) && world_names != NULL &&
@@ -466,8 +489,26 @@ static void world_dict_event(WEnt *e, PyDict_WatchEvent ev, PyObject *d, PyObjec
             if (!codeish(old) && !codeish(nv)) { c_world_ignored++; return; }
         }
     }
+    if (ev == PyDict_EVENT_MODIFIED && world_swaps && key != NULL && PyUnicode_CheckExact(key) &&
+        is_swap(PyDict_GetItem(d, key), nv)) {
+        c_world_ignored++; return;
+    }
     world_bump();
 }
+/* world_swap(wrapper, original): see world_swaps */
+static PyObject *py_world_swap(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 2) { PyErr_SetString(PyExc_TypeError, "world_swap(wrapper, original)"); return NULL; }
+    if (!world_swaps && !(world_swaps = PyDict_New())) return NULL;
+    PyObject *id = PyLong_FromVoidPtr(args[0]);
+    if (!id) return NULL;
+    PyObject *pair = PyTuple_Pack(2, args[0], args[1]);
+    int rc = pair ? PyDict_SetItem(world_swaps, id, pair) : -1;
+    Py_DECREF(id); Py_XDECREF(pair);
+    if (rc < 0) return NULL;
+    Py_RETURN_NONE;
+}
+
+
 
 static int world_unwatchable_dict(PyObject *o) { return went_find(wds, wds_cap, (uintptr_t)o) != NULL; }
 
@@ -1703,7 +1744,11 @@ static PyObject *py_world_info(PyObject *self, PyObject *noargs) {
 }
 
 /* -- the memo key: the call's arguments as a typed, hashable tuple ------- */
-typedef struct { PyObject *vals; char *sig; size_t n, cap; int watched; } KeyB;
+typedef struct { PyObject *vals; char *sig; size_t n, cap; int watched; Py_ssize_t budget; } KeyB;
+
+/* Items of small lists and dicts keyed by value, over all arguments: past
+ * it a container is keyed only when the watchers vouch for it. */
+#define KB_BUDGET 1024
 
 static int kb_sig(KeyB *k, char c) {
     if (k->n == k->cap) {
@@ -1750,6 +1795,31 @@ static int kb_atom(KeyB *k, PyObject *o, int depth) {
         }
         return kb_sig(k, ')') < 0 ? -1 : 1;
     }
+    /* A small list or dict of keyable values, by value: an equal key is an
+     * equal value of the same exact types, which cash keys alike. */
+    if (t == &PyList_Type) {
+        if (depth > 32) return 0;
+        Py_ssize_t n = PyList_GET_SIZE(o);
+        if ((k->budget -= n + 1) < 0) return 0;
+        if (kb_sig(k, '[') < 0) return -1;
+        for (Py_ssize_t i = 0; i < PyList_GET_SIZE(o); i++) {
+            int r = kb_atom(k, PyList_GET_ITEM(o, i), depth + 1);
+            if (r <= 0) return r;
+        }
+        return kb_sig(k, ']') < 0 ? -1 : 1;
+    }
+    if (t == &PyDict_Type) {
+        if (depth > 32) return 0;
+        if ((k->budget -= 2 * PyDict_GET_SIZE(o) + 1) < 0) return 0;
+        if (kb_sig(k, '{') < 0) return -1;
+        Py_ssize_t pos = 0; PyObject *key, *val;
+        while (PyDict_Next(o, &pos, &key, &val)) {
+            int r = kb_atom(k, key, depth + 1);
+            if (r > 0) r = kb_atom(k, val, depth + 1);
+            if (r <= 0) return r;
+        }
+        return kb_sig(k, '}') < 0 ? -1 : 1;
+    }
     return 0;
 }
 
@@ -1774,8 +1844,13 @@ static PyObject *watched_digest(PyObject *o) {
 }
 
 static int kb_arg(KeyB *k, PyObject *o) {
+    size_t n0 = k->n;
+    Py_ssize_t v0 = PyList_GET_SIZE(k->vals);
     int r = kb_atom(k, o, 0);
     if (r != 0) return r;
+    /* not keyable by value: drop what it wrote, then ask the watchers */
+    k->n = n0;
+    if (PyList_SetSlice(k->vals, v0, PyList_GET_SIZE(k->vals), NULL) < 0) return -1;
     if (k->watched) return 0;   /* two containers may share objects: the key says how */
     PyTypeObject *t = Py_TYPE(o);
     if (t == &PyBytes_Type || t == &PyUnicode_Type) return 0;
@@ -1788,6 +1863,7 @@ static int kb_arg(KeyB *k, PyObject *o) {
 /* NULL with no error: no key for these arguments */
 static PyObject *memo_key(PyObject *args, PyObject *kwargs) {
     KeyB k = {0};
+    k.budget = KB_BUDGET;
     k.vals = PyList_New(0);
     if (!k.vals) return NULL;
     PyObject *res = NULL;
@@ -2203,6 +2279,7 @@ static PyMethodDef methods[] = {
     {"world_add_names", py_world_add_names, METH_O, ""},
     {"world_info", py_world_info, METH_NOARGS, ""},
     {"memo_key", (PyCFunction)(void (*)(void))py_memo_key, METH_FASTCALL, ""},
+    {"world_swap", (PyCFunction)(void (*)(void))py_world_swap, METH_FASTCALL, ""},
     {"fast_lookup", (PyCFunction)(void (*)(void))py_fast_lookup, METH_FASTCALL, ""},
     {"fast_call", (PyCFunction)(void (*)(void))py_fast_call, METH_FASTCALL, ""},
     {"hit_configure", py_hit_configure, METH_VARARGS, ""},

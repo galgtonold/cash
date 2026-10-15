@@ -201,7 +201,7 @@ class Wrappers:
                     ACTIVE_CONFIG.reset(token)
                     _count(stats, slot)
                     if slot[0] is None or not slot[0]["cache_hit"]:
-                        hit_memo.bump()
+                        hit_memo.forget(cf.hit_state)
                 warn_unseeded(func_name, result, allow_random)
                 return result
 
@@ -209,7 +209,7 @@ class Wrappers:
 
         fast_call = hit_memo.fast_call
         missed = hit_memo.MISS
-        bump = hit_memo.bump
+        forget = hit_memo.forget
         fast_state = cf.hit_state = hit_memo.new_state()
 
         @functools.wraps(func)
@@ -242,9 +242,10 @@ class Wrappers:
                 ACTIVE_CONFIG.reset(token)
                 _count(stats, slot)
                 if slot[0] is None or not slot[0]["cache_hit"]:
-                    # A miss stores, learns and may evict: no remembered
-                    # hit is served until it is met again (`hit_memo`).
-                    bump()
+                    # A miss stores, learns and may evict: none of this
+                    # function's remembered hits, nor its callers', is
+                    # served until it is met again (`hit_memo.forget`).
+                    forget(fast_state)
             warn_unseeded(func_name, result, allow_random)
             return result
 
@@ -271,6 +272,8 @@ class Wrappers:
         # machinery. functools.wraps copies __module__, which would
         # otherwise make the wrapper look like same-package user code.
         stats_wrapper._cash_cached = True
+        # What a caller's memo drops its hits by (`hit_memo.forget`).
+        hit_memo.own_state(stats_wrapper, cf.hit_state)
         # Declared TTL, exposed so the notebook statement cache can see it. A
         # ``ttl=0`` function must recompute every call; without this the
         # statement ``x = f()`` gets cached with no TTL under %cash_on and

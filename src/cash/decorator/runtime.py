@@ -1036,7 +1036,7 @@ class CallRunner:
         handed = claim_handed_digests()
         # Before the key: a fast hit remembered from this call must not
         # outlive a change made while the key was built (`hit_memo`).
-        epochs_before = hit_memo.epochs()
+        epochs_before = hit_memo.epochs(spec)
         token = HANDED_DIGESTS.set(handed) if handed is not None else None
         try:
             built, call.capture_watch, call.ledger = self._keys.resolve(spec, args, kwargs)

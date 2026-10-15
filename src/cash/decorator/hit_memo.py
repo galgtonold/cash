@@ -46,6 +46,7 @@ it differs. Without the extension there is no proof and no fast path.
 from __future__ import annotations
 
 import abc
+import ast
 import builtins
 import datetime
 import decimal
@@ -54,6 +55,7 @@ import operator
 import os
 import re
 import sys
+import textwrap
 import threading
 import time
 import types
@@ -98,18 +100,52 @@ class HitMemoMismatch(AssertionError):
 
 
 def bump() -> None:
-    """Something cash keeps changed in a way a key may read (a miss, a clear,
-    a registration, a setting): no remembered hit is served until it is met
+    """Something cash keeps changed in a way any key may read (a clear, a
+    registration, a setting): no remembered hit is served until it is met
     again through the ordinary path."""
     if _cw is not None:
         _cw.bump_cash()
 
 
-def epochs() -> tuple[int, int] | None:
-    """``(world, cash)`` epochs now, or None when the path is off."""
+#: A function's state -> the memos whose key reads it (callers that reached
+#: it as a cached callee): its miss drops their remembered hits too.
+_DEPENDENTS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+#: A cached function's wrapper -> its state, for the scan of a caller.
+_STATE_OF: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def own_state(wrapper: Any, state: list | None) -> None:
+    """Note that *wrapper*'s remembered hits live in *state*."""
+    if state is not None:
+        _STATE_OF[wrapper] = state
+
+
+def forget(state: list | None) -> None:
+    """A call of the function that owns *state* was not a plain hit: it
+    stored, learned or evicted. Its remembered hits, and those of the
+    functions whose key reads it, are served again only once met through
+    the ordinary path. A miss anywhere else leaves them be: what it changes
+    in the world the watchers see, and an entry it evicts or replaces the
+    RAM check sees."""
+    if state is None:
+        return
+    state[S_ENTRIES] = {}
+    callers = _DEPENDENTS.get(state)
+    if callers:
+        for memo in list(callers):
+            memo.state[S_ENTRIES] = {}
+
+
+def epochs(spec: CachedFunction) -> tuple | None:
+    """``(world, cash, entries)`` now for *spec*, or None when the path is
+    off: an ordinary hit is remembered only if none of them moved while its
+    key was built."""
     if _world_epoch is None:
         return None
-    return _world_epoch(), _cash_epoch()
+    state = spec.hit_state
+    return _world_epoch(), _cash_epoch(), state[S_ENTRIES] if state is not None else None
 
 
 #: Every memo with fast hits not yet handed to the net-loss accounting.
@@ -190,10 +226,37 @@ def _is_cash(v: Any, t: type) -> bool:
 
 
 def _code_names(code: types.CodeType, into: set[str]) -> None:
+    """The names *code* and its nested scopes read by name: globals and
+    attributes, and the identifier-like strings (``getattr(m, "x")``,
+    ``globals()["x"]``). Not its locals: a module-level loop rebinding ``i``
+    leaves a function whose own ``i`` is local alone."""
     into.update(code.co_names)
     for const in code.co_consts:
         if isinstance(const, types.CodeType):
             _code_names(const, into)
+        elif type(const) is str and const.isidentifier():
+            into.add(const)
+
+
+def _signature_names(source: str) -> set[str]:
+    """The names the annotations in *source*'s ``def`` line read (a key may
+    resolve them); every identifier of *source* when it does not parse."""
+    try:
+        tree = ast.parse(textwrap.dedent(source))
+    except (SyntaxError, ValueError):
+        return set(_IDENT.findall(source))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            a = node.args
+            parts = [*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg]
+            for part in (*(p.annotation for p in parts if p is not None), node.returns):
+                if part is not None:
+                    found.update(n.id for n in ast.walk(part) if isinstance(n, ast.Name))
+                    found.update(
+                        n.value for n in ast.walk(part) if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                    )
+    return found
 
 
 def _is_dunder(name: str) -> bool:
@@ -208,6 +271,7 @@ class _Scan:
         self.seen: set = set()
         self.keep: list = []
         self.cells: list = []
+        self.callees: list = []
         self.types: dict[int, tuple[type, int]] = {}
         self.names: set[str] = set()
         self.dicts: list[tuple[dict, bool]] = []
@@ -296,6 +360,9 @@ class _Scan:
         if is_cash_wrapper(f):
             # Another cached function, or this one called by name: its own
             # state is cash's (a registration, a setting) or its code.
+            callee = _STATE_OF.get(getattr(f, "__func__", f))
+            if callee is not None:
+                self.callees.append(callee)
             inner = getattr(f, "__wrapped__", None)
             if inner is not None:
                 self.value(inner, frozenset())
@@ -312,12 +379,13 @@ class _Scan:
         except Exception:  # noqa: BLE001 - no source: the bytecode names it reads
             source = ""
         if source:
-            self.names.update(_IDENT.findall(source))
             for line in source.splitlines():
                 if _DEF_LINE.match(line):
                     break
                 decorated.update(_IDENT.findall(line))
+            self.names.update(_signature_names(source))
         self.names.update(own)
+        self.names.update(decorated)
         names = frozenset(own | decorated)
         g = f.__globals__
         self.watch(g, False)
@@ -403,9 +471,10 @@ def _resolve(mod_name: str, chain: tuple) -> Any:
     return obj
 
 
-def scan(spec: CachedFunction, registry: Any) -> tuple[tuple, tuple]:
+def scan(spec: CachedFunction, registry: Any) -> tuple[tuple, tuple, list]:
     """Watch the world of *spec*'s key. Returns the cells and the class
-    tags a fast hit compares; raises `Ineligible`."""
+    tags a fast hit compares, and the states of the cached functions it
+    reaches; raises `Ineligible`."""
     func, name = spec.func, spec.name
     s = _Scan(getattr(func, "__module__", None))
     s.value(func, frozenset())
@@ -430,6 +499,9 @@ def scan(spec: CachedFunction, registry: Any) -> tuple[tuple, tuple]:
         dep_func = registry.functions.get(node)
         if dep_func is not None:
             s.value(dep_func, frozenset())
+        dep_cf = registry.cached.get(node) if node != name else None
+        if dep_cf is not None and dep_cf.hit_state is not None:
+            s.callees.append(dep_cf.hit_state)
         for dep in graph.get_dependencies(node):
             if dep not in visited:
                 visited.add(dep)
@@ -438,7 +510,7 @@ def scan(spec: CachedFunction, registry: Any) -> tuple[tuple, tuple]:
     s.commit()
     cells = tuple(x for pair in s.cells for x in pair)
     tags = tuple(x for pair in s.types.values() for x in pair)
-    return cells, tags
+    return cells, tags, s.callees
 
 
 # -- the memo --------------------------------------------------------------
@@ -462,7 +534,13 @@ class _State(list):
     """The slots `_cwatch.fast_call` reads; a wrapper closes over it, so it
     refuses pickling by value like the rest of what a wrapper holds."""
 
-    __slots__ = ()
+    __slots__ = ("__weakref__",)
+
+    # One function's state, keyed by identity (`_DEPENDENTS`).
+    __hash__ = object.__hash__
+
+    def __eq__(self, other: object) -> bool:
+        return self is other
 
     def __reduce__(self):
         from .script_pickling import refuse_pickling_by_value
@@ -606,14 +684,14 @@ class HitMemo:
 
     # -- learned ---------------------------------------------------------
 
-    def offer(self, call: Any, args: tuple, kwargs: dict, hit: Any, before: tuple[int, int]) -> None:
+    def offer(self, call: Any, args: tuple, kwargs: dict, hit: Any, before: tuple) -> None:
         """Remember the ordinary hit *call* just made, when it may be served
         again from here (see the module doc)."""
         spec, runner = self.spec, self.runner
         world_now = _world_epoch()
-        if world_now != before[0] or _cash_epoch() != before[1]:
-            return  # something moved while the key was built
         state = self.state
+        if world_now != before[0] or _cash_epoch() != before[1] or state[S_ENTRIES] is not before[2]:
+            return  # something moved while the key was built
         if state[S_WORLD] != world_now:
             if self.failed_epoch == world_now:
                 return
@@ -625,10 +703,13 @@ class HitMemo:
             state[S_WORLD] = -1
             state[S_ENTRIES] = {}
             try:
-                cells, tags = scan(spec, runner._registry)
+                cells, tags, callees = scan(spec, runner._registry)
             except Exception:  # noqa: BLE001 - Ineligible, or a scan that broke: the ordinary path
                 self.failed_epoch = world_now
                 return
+            for callee in callees:
+                if callee is not state:
+                    _DEPENDENTS.setdefault(callee, weakref.WeakSet()).add(self)
             # What changed between the key build and the watch is not
             # proven: this call is not remembered, the next one is.
             state[S_CELLS], state[S_TYPES] = cells, tags
@@ -649,7 +730,9 @@ class HitMemo:
         """``(store, key, held, _Hit, value, md, saved, log, body)``, or None."""
         runner = self.runner
         metadata = call.metadata
-        if metadata is None or call.capture_watch:
+        # `call.capture_watch` (globals, class data, helpers the key folded)
+        # is read by a miss only; the scan watched or refused each of them.
+        if metadata is None:
             return None
         if (
             metadata.iterator_storage == "chunked"

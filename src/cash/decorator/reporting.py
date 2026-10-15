@@ -18,6 +18,7 @@ from .._clock import perf_counter as _perf_counter
 from ..backends import adaptive_caps, budget_notices
 from ..diagnostics import format_diagnostic, full_warnings, short_diagnostic, warn_diagnostic, warn_diagnostic_message
 from ..exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
+from . import hit_memo
 from .cached_function import WARNINGS_MAX
 from .call_state import CALL_ENTRY, NESTED_CASH_SECONDS
 from .explain import MissKind, MissReason, entry_id_of
@@ -396,8 +397,8 @@ class CallLog:
         return self._entries
 
     def _write_fast(self) -> None:
-        from . import hit_memo
-
+        if not hit_memo.ENABLED:
+            return
         hit_memo.drain_log()
         if not self.fast_log:
             return
