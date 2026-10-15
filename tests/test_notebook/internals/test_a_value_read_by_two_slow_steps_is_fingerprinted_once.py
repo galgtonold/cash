@@ -24,6 +24,10 @@ def test_the_second_statement_reuses_the_fingerprint(cash_magics, monkeypatch):
         return real(value, **kw)
 
     monkeypatch.setattr(per_item_reruns, "fingerprint", counting)
+    # A loaded machine can take longer than the 3% budget allows; the
+    # budget has its own test below, this one checks the reuse.
+    monkeypatch.setattr(per_item_reruns, "HASH_SHARE", 1.0)
+    monkeypatch.setattr(per_item_reruns, "STEP_SHARE", 1.0)
     for cell in CELLS:
         run_cash_cell(cash_magics, cell)
 
