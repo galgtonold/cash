@@ -29,7 +29,7 @@ import platform
 import sys
 from types import ModuleType
 
-__all__ = ["AVAILABLE", "EXPECTED_API", "REASON", "cwatch", "status_line"]
+__all__ = ["AVAILABLE", "EXPECTED_API", "REASON", "cwatch", "kernels", "status_line"]
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,11 @@ cwatch, REASON = _load()
 AVAILABLE = cwatch is not None
 if REASON is not None:
     logger.debug("cash fast path off: %s", REASON)
+
+#: The module when it also has the walk kernels (``cwalk.c``): C versions of
+#: cash's hottest Python walks, each giving exactly the Python version's
+#: answer. None without them: the Python walks run, as they always did.
+kernels = cwatch if cwatch is not None and hasattr(cwatch, "leaf_items") else None
 
 
 def status_line() -> str:
