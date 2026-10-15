@@ -265,7 +265,7 @@ does. cash waits for a write only when something needs it on disk:
 A process this one did not start, reading the same folder at the same time,
 finds a result once its write has finished, and computes it until then.
 
-<!-- claim: cash/backends/memory_backend.py:_snapshot @579b150a, cash/backends/tiered_backend.py:TieredBackend._stored_payload @92ed63c1, cash/backends/memory_backend.py:InMemoryBackend.set @3eb6a25c, cash/notebook/call_refs.py:digest_and_size @0dc444f6, cash/kept_state.py:stored_views @8fe0d16f, cash/stored_pickle.py:keeping @475e6448, cash/notebook/statement/store.py:_nestable @8955c65a, cash/stored_pickle.py:object_digest @2bc1227b, cash/notebook/statement/processor.py:StatementProcessor._keeping_outputs @6ebf05a6 -->
+<!-- claim: cash/backends/memory_backend.py:_snapshot @579b150a, cash/backends/tiered_backend.py:TieredBackend._stored_payload @92ed63c1, cash/backends/memory_backend.py:InMemoryBackend.set @3eb6a25c, cash/notebook/call_refs.py:digest_and_size @0dc444f6, cash/kept_state.py:stored_views @8fe0d16f, cash/stored_pickle.py:keeping @475e6448, cash/notebook/statement/store.py:_nestable @8955c65a, cash/stored_pickle.py:object_digest @52191857, cash/notebook/statement/processor.py:StatementProcessor._keeping_outputs @6ebf05a6 -->
 An object of a class of its own (a fitted model, a graph) is kept in memory
 as the bytes its disk entry holds, made when it is stored: its arrays are
 copied out of it then, so a later change to your object, by Python or by

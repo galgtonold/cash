@@ -13,6 +13,9 @@ blob landed on disk, rather than a metadata-only stub carrying no value.
 
 import pytest
 
+from tests._nbharness.badge import shows_cached
+from tests._nbharness.disk import ENTRY_BYTES_REPORT
+
 pytestmark = [pytest.mark.restore]
 
 
@@ -26,34 +29,45 @@ class TestLargeFrameReachesDisk:
         """
         nb_runner.create_notebook(
             [
-                "import numpy as np\nimport time",
+                "import cash\n%load_ext cash\n%cash_badge print\n%cash_on\nimport numpy as np\nimport time",
                 # One cached statement whose compute (the sleep) clears the 0.1 s
                 # floor and whose output is large (~48 MB, incompressible enough
                 # that compress=False keeps it big on disk).
                 "def make_frame():\n    time.sleep(0.6)\n    return np.arange(6_000_000, dtype='float64')",
                 "big = make_frame()\nprint(f'shape={big.shape[0]} sum_ok={big[-1]}')",
                 # Report the on-disk cache contents from the kernel's own cwd, so
-                # the assertion is independent of where the work dir lives.
-                "import os, glob\n"
-                "_cash = os.path.abspath('.cash')\n"
-                "_datas = glob.glob(os.path.join(_cash, '*.entry'))\n"
-                "_maxb = max((os.path.getsize(f) for f in _datas), default=0)\n"
-                "print(f'DATA_FILES={len(_datas)} MAX_DATA_BYTES={_maxb}')",
+                # the assertion is independent of where the work dir lives. An
+                # entry counts with the chunks it holds: the array's data is in
+                # the chunk store, not in the ``.entry`` file.
+                ENTRY_BYTES_REPORT,
             ]
         )
         nb_runner.start_kernel()
-        nb_runner.run_all()
+        # The report reads the folder after the writes land: a cell does not
+        # wait for them, and on a loaded machine they may still be queued.
+        nb_runner.run_cells([1, 2, 3])
+        nb_runner.settle_writes()
+        nb_runner.run_cell(4)
 
         assert "shape=6000000" in nb_runner.get_output(3)
 
         report = nb_runner.get_output(4)
         assert "MAX_DATA_BYTES=" in report, report
         max_bytes = int(report.split("MAX_DATA_BYTES=")[1].split()[0])
-        # The 48 MB value blob must be on disk. A metadata-only entry is a few
-        # hundred bytes, so a multi-MB entry file proves the value persisted.
-        assert max_bytes > 1_000_000, f"expected a large entry file on disk, got {max_bytes} bytes: {report}"
+        # The 48 MB value must be on disk. A metadata-only entry is a few
+        # hundred bytes, so a multi-MB entry (with its chunks) proves the
+        # value persisted.
+        assert max_bytes > 1_000_000, f"expected a large entry on disk, got {max_bytes} bytes: {report}"
 
         # And it restores correctly after cash's tracking state is reset.
         nb_runner.reset_cash_state()
         nb_runner.run_all()
         assert "shape=6000000" in nb_runner.get_output(3)
+
+        # And from disk alone: a new kernel has nothing in RAM, so the
+        # statement comes back from the entry and its chunks or runs again.
+        nb_runner.restart()
+        nb_runner.run_all()
+        out = nb_runner.get_raw_output(3)
+        assert "shape=6000000" in out, out
+        assert shows_cached(out), f"the 48 MB value was not restored from disk after a restart:\n{out}"

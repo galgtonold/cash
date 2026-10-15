@@ -275,9 +275,14 @@ def object_digest(value: Any, deadline: float | None = None) -> str:
     for it (`kept`), even when they are made past *deadline* (up to
     `keeping`'s *past_budget* bytes). Raises what pickling raises, and
     `HashBudgetExceeded` past *deadline*."""
-    keep = _keeps(value)
+    if not _keeps(value):
+        # No store takes these bytes, so its pickle buys nothing: the digest
+        # is the keyed pickle's either way, and where the two differ (a
+        # fitted forest's trees are record arrays with padding) the store's
+        # was made only to be thrown away before the keyed one.
+        return _keyed_digest(value, deadline)[0]
     # Only a value kept by a weak reference is kept at all (`_remember`).
-    others = _others(value) if keep and _weakly_held(value) else ()
+    others = _others(value) if _weakly_held(value) else ()
     proven: list[frozenset[int]] = []
     after = None
     if others:
@@ -285,9 +290,9 @@ def object_digest(value: Any, deadline: float | None = None) -> str:
         def after(pickler: Any) -> None:
             proven.append(_proven_apart(pickler, others))
 
-    past = _past_budget() if keep and deadline is not None else None
-    part = pickle_value(value, keep=keep, deadline=deadline, after=after, past=past)
-    if keep and part.also_keyed:
+    past = _past_budget() if deadline is not None else None
+    part = pickle_value(value, keep=True, deadline=deadline, after=after, past=past)
+    if part.also_keyed:
         _remember(value, part, proven[0] if proven else frozenset())
     if part.digest is None:
         raise HashBudgetExceeded  # made on past the budget for the store alone
@@ -296,9 +301,6 @@ def object_digest(value: Any, deadline: float | None = None) -> str:
 
 def object_digest_and_size(value: Any) -> tuple[str, int]:
     """``(object_digest(value), the bytes of the pickle it is taken over)``."""
-    part = pickle_value(value, keep=False, as_keyed=False)
-    if part.also_keyed:
-        return part.digest, part.size
     return _keyed_digest(value, None)
 
 

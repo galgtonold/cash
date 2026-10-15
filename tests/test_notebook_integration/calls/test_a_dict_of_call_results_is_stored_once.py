@@ -11,6 +11,8 @@ import os
 
 import pytest
 
+from tests._nbharness.disk import cache_bytes
+
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
 SETUP = "import cash\n%load_ext cash\n%cash_badge print\n%cash_on"
@@ -25,8 +27,9 @@ EXPECTED = "M [(0, 3000000, 0), (1, 3000000, 1), (2, 3000000, 2)]"
 
 
 def _cache_bytes(nb_runner):
-    root = os.path.join(str(nb_runner.work_dir), ".cash")
-    return sum(e.stat().st_size for e in os.scandir(root) if e.name.endswith(".entry"))
+    # Entries and the chunk store: a big buffer is stored in ``chunks/``, so
+    # the entries alone would put any number of copies under the bound.
+    return cache_bytes(os.path.join(str(nb_runner.work_dir), ".cash"))
 
 
 def test_the_dict_restores_after_a_restart_without_a_second_copy(nb_runner):
