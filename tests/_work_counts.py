@@ -51,20 +51,29 @@ class _CountingHash:
 
 @contextlib.contextmanager
 def hashed_bytes() -> Iterator[Count]:
-    """Bytes fed to ``hashlib`` (sha256, blake2b, md5, sha1) inside the block:
-    every key and every content digest cash takes goes through one of them."""
+    """Bytes fed to ``hashlib`` (sha256, blake2b, md5, sha1) or to the leaf
+    hasher of big data (`cash.bulk_digest.leaf_hasher`: SHA-256 or BLAKE3)
+    inside the block: every key and every content digest cash takes goes
+    through one of them."""
+    from cash import bulk_digest, row_blocks
+
     count = Count()
+
+    def counting(real_ctor):
+        def make(data=b"", *args, **kwargs):
+            h = _CountingHash(real_ctor(*args, **kwargs), count)
+            if data:
+                h.update(data)
+            return h
+
+        return make
+
     with pytest.MonkeyPatch.context() as mp:
         for name in ("sha256", "blake2b", "md5", "sha1"):
-            real_ctor = getattr(hashlib, name)
-
-            def make(data=b"", *args, _real=real_ctor, **kwargs):
-                h = _CountingHash(_real(*args, **kwargs), count)
-                if data:
-                    h.update(data)
-                return h
-
-            mp.setattr(hashlib, name, make)
+            mp.setattr(hashlib, name, counting(getattr(hashlib, name)))
+        leaf = counting(bulk_digest.leaf_hasher)
+        mp.setattr(bulk_digest, "leaf_hasher", leaf)
+        mp.setattr(row_blocks, "leaf_hasher", leaf)
         yield count
 
 

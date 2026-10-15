@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ._clock import perf_counter as _perf_counter
-from .bulk_digest import PARALLEL_MIN_BYTES, hashing_threads
+from .bulk_digest import PARALLEL_MIN_BYTES, SCHEME, hashing_threads, leaf_hasher
 from .content_hashers import builtin_hash, builtin_hash_family, raw_view
 
 __all__ = [
@@ -55,6 +55,8 @@ MAX_BLOCKS = 64
 _MAX_REUSED_BLOCKS = 4 * MAX_BLOCKS
 #: Fewer rows than this are not worth cutting into blocks.
 MIN_ROWS = 16
+#: The scheme of a record written before records named theirs.
+_SHA256_SCHEME = "cash-bulk-sha256-tree-1"
 #: Hex digits kept of each block's digest: 64 bits, plenty to tell two
 #: blocks of one value apart.
 _DIGEST_CHARS = 16
@@ -154,11 +156,23 @@ class RowBlocks:
     digests: tuple[str, ...]
 
     def to_dict(self) -> dict:
-        return {"kind": self.kind, "rows": self.rows, "block": self.block, "digests": list(self.digests)}
+        return {
+            "kind": self.kind,
+            "rows": self.rows,
+            "block": self.block,
+            "digests": list(self.digests),
+            "scheme": SCHEME,
+        }
 
     @classmethod
     def from_dict(cls, data: dict) -> RowBlocks | None:
+        """The fingerprint *data* holds, or None for one this process cannot
+        compare with its own: unreadable, or taken with another digest
+        scheme (`cash.bulk_digest.SCHEME`; a record without one is from a
+        build that had only SHA-256)."""
         try:
+            if data.get("scheme", _SHA256_SCHEME) != SCHEME:
+                return None
             return cls(str(data["kind"]), int(data["rows"]), int(data["block"]), tuple(map(str, data["digests"])))
         except (KeyError, TypeError, ValueError):
             return None
@@ -247,14 +261,15 @@ def _array_fingerprint(
 ) -> tuple[RowBlocks, str | None]:
     """:func:`fingerprint` of a C-contiguous array: each block is a byte
     range of its buffer, digested behind the row shape and dtype, the
-    blocks on several threads when the array is big (hashlib lets go of
-    the GIL while it hashes)."""
+    blocks on several threads when the array is big (hashlib and blake3
+    let go of the GIL while they hash). The digest is the leaf algorithm's
+    (`cash.bulk_digest.leaf_hasher`)."""
     data = memoryview(raw_view(value)).cast("B")
     width = len(data) // rows if rows else 0
     prefix = f"{value.shape[1:]}:{value.dtype}:".encode()
 
     def digest(a: int, b: int) -> str:
-        h = hashlib.sha256(prefix)
+        h = leaf_hasher(prefix)
         h.update(data[a * width : b * width])
         return h.hexdigest()[:_DIGEST_CHARS]
 

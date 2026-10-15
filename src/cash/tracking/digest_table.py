@@ -17,9 +17,10 @@ inode change time still moves, on Windows nothing does (see
 known-limitations: an edit that keeps size and timestamps).
 
 The file is an append-only log of JSON lines, one per digest, each carrying
-the digest scheme's version (`cash.bulk_digest.TAG`): a line from another
-scheme, a torn or corrupt line is skipped, and an empty table means only
-that the file is read. When it grows past `_COMPACT_AT` lines it is
+the digest scheme's algorithm and version (`cash.bulk_digest.SCHEME`): a
+line from another scheme (an older cash, or an install with or without
+``blake3``), a torn or corrupt line is skipped, and an empty table means
+only that the file is read. When it grows past `_COMPACT_AT` lines it is
 rewritten with the newest `_KEEP` entries.
 """
 
@@ -33,14 +34,14 @@ import threading
 
 from .._paths import replace_with_retry
 from ..backends.cache_dir import FILE_DIGESTS_FILENAME
-from ..bulk_digest import TAG
+from ..bulk_digest import SCHEME
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["DigestTable", "current_table", "use_digest_table"]
 
-#: The scheme a line's digest was taken with.
-_SCHEME = TAG.rstrip(b"\x00").decode("ascii")
+#: The scheme a line's digest was taken with (its algorithm and version).
+_SCHEME = SCHEME
 _COMPACT_AT = 50_000
 _KEEP = 20_000
 
