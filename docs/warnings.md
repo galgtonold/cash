@@ -1624,6 +1624,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
 | [NOTEBOOK-FILE-ROUNDTRIP](#notebook-file-roundtrip) | notebook | a file written in this session is read back, so the read reruns after every write |
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
+| [NOTEBOOK-NO-LIVE-READER](#notebook-no-live-reader) | notebook | cells above are read from the saved file, so an unsaved edit there is not seen |
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook's cells cannot be read; cells above the one you run are not re-checked |
 | [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload or restart dropped state cells set on a module, and cash cannot rebuild it |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
@@ -1799,6 +1800,29 @@ it; a name that is gone raises NameError.
 
 **When it is safe to ignore.** When the change above does not affect what the
 command computes.
+
+### NOTEBOOK-NO-LIVE-READER {#notebook-no-live-reader}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/server_discovery.py:warn_no_live_reader_once @675af5d0 -->
+**What happened.** Before a cell runs, cash checks the cells above it. It
+read them from the saved notebook file, because no live reader sends it the
+cells as they are in the editor: neither cash's JupyterLab extension, nor VS
+Code's backup, nor Colab. That is the case in the classic Notebook, PyCharm,
+or a JupyterLab whose server does not have the extension installed.
+
+**Why it matters.** An edit you have not saved is checked as the code saved
+before it. Run a cell below an unsaved edit and cash answers for the old
+code, the way it would if you had not edited at all.
+
+**What to do.** Save (`Ctrl+S`) before running a cell below an edit. Or use
+JupyterLab with the `cash-live-cells` extension (installed with `pip install
+cash-lib` in the environment that runs JupyterLab), VS Code or Colab.
+
+**When it is safe to ignore.** When you save before running, or run cells
+top to bottom. It is shown once per session, for the first cell you run after
+a pause; a Run All, papermill or nbconvert run does not show it.
 
 ### NOTEBOOK-NOT-FOUND {#notebook-not-found}
 

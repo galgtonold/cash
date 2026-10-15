@@ -688,7 +688,10 @@ invisible unless your editor has a **live reader**:
 - **Google Colab**: cash reads the cells from the page.
 
 Elsewhere, or when the reader is unavailable, save (`Ctrl+S`) after editing a
-cell you are not about to run, and before a Run All on a fresh kernel.
+cell you are not about to run, and before a Run All on a fresh kernel. cash
+says so once per session there
+([NOTEBOOK-NO-LIVE-READER](warnings.md#notebook-no-live-reader)), at the first
+cell you run after a pause.
 JupyterLab's autosave runs on a timer, so a quick edit-then-run can miss it. When
 the cell you run is itself unsaved, cash can tell and adds a "Notebook file is
 stale" warning row.

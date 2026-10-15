@@ -22,6 +22,7 @@ from ..server_discovery import (
     get_notebook_cells_with_ids,
     get_notebook_path,
     invalidate_notebook_path_cache,
+    warn_no_live_reader_once,
     warn_notebook_not_found_once,
 )
 from ..staleness import StalenessTracker, normalise_source
@@ -542,6 +543,8 @@ class UpstreamChecker:
             self.last_cell_index = current_cell_idx
             if cell_id:
                 self.simulator.cache.last_index_by_cell_id[cell_id] = current_cell_idx
+            if current_cell_idx > 0:
+                warn_no_live_reader_once(notebook_path)
 
         return notebook_cells, current_cell_idx
 

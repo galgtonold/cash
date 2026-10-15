@@ -103,6 +103,15 @@ _NOTEBOOK_PATH_NEGATIVE_TTL: float = 2.0  # seconds
 # per session instead of once per cell.
 _warned_notebook_not_found: bool = False
 
+# One-shot session flag for the "unsaved edits are invisible" advisory
+# (NOTEBOOK-NO-LIVE-READER).
+_warned_no_live_reader: bool = False
+
+#: An idle gap, in seconds, before an execution that marks it as started by a
+#: person rather than queued behind the previous cell (Run All, papermill, a
+#: test harness): only a person can have edited a cell in between.
+_HUMAN_PAUSE_S = 2.0
+
 
 def _a_live_reader_can_answer() -> bool:
     """True when a reader that needs no notebook path can supply the cells.
@@ -164,6 +173,51 @@ def warn_notebook_not_found_once() -> None:
     # nearest frame outside cash is ipykernel's, and the warning opened with
     # ipykernel's file path, which reads as if something there went wrong.
     warn_diagnostic(CashNotebookDiscoveryWarning, "NOTEBOOK-NOT-FOUND", what, fix, location=("<cash>", 0))
+
+
+def warn_no_live_reader_once(notebook_path: str | None) -> None:
+    """Say once per session that unsaved edits above are invisible here.
+
+    Called by the upstream checker when it is about to check the cells above
+    the one being run. Without a live reader (cash's JupyterLab extension,
+    Colab, VS Code's backup) those cells come from the saved ``.ipynb``, so an
+    edit not yet saved is checked as the old code and its result is wrong
+    without a word (classic Notebook, PyCharm, a split install).
+
+    Only for an execution a person started: one that follows an idle pause
+    (``live_cells.seconds_since_last_run``). A Run All, papermill or CI queues
+    each cell right behind the previous one, nobody can have edited in
+    between, and the extension starts answering only from the run after the
+    one that imported cash, so warning there would be noise. Not set while a
+    live reader can answer, for the same reason as ``warn_notebook_not_found_once``.
+    """
+    global _warned_no_live_reader
+    if _warned_no_live_reader:
+        return
+    try:
+        idle = live_cells.seconds_since_last_run()
+        if idle is None or idle < _HUMAN_PAUSE_S:
+            return
+        if _a_live_reader_can_answer() or _in_vscode():
+            return
+        if read_notebook_cells(notebook_path).source != "file":
+            return
+    except Exception as e:  # noqa: BLE001 - an advisory gate must never break a cell
+        logger.debug("[UTILS] live-reader advisory probe failed: %s", e)
+        return
+    _warned_no_live_reader = True
+    what = (
+        "cash reads the cells above the one you run from the saved notebook "
+        "file, and no live reader sends it your unsaved edits, so a cell you "
+        "edited but did not save is checked as its saved code."
+    )
+    fix = (
+        "save (Ctrl+S) before running a cell below an edit, or use JupyterLab "
+        "with the cash-live-cells extension, VS Code or Colab, which send the "
+        "current cells."
+    )
+    log_diagnostic(logger, "NOTEBOOK-NO-LIVE-READER", what, fix)
+    warn_diagnostic(CashNotebookDiscoveryWarning, "NOTEBOOK-NO-LIVE-READER", what, fix, location=("<cash>", 0))
 
 
 def invalidate_notebook_path_cache() -> None:

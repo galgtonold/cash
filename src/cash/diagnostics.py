@@ -312,6 +312,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # depend on it stop being tracked
         "NOTEBOOK-MAGIC-STALE",  # a name a magic bound is kept as it is,
         # though what the magic read changed since it ran, or is gone
+        "NOTEBOOK-NO-LIVE-READER",  # cells above are read from the saved
+        # file and nothing sends unsaved edits; shown once per session
         "NOTEBOOK-NOT-FOUND",  # no notebook cells to read; cells above the one
         # run are not re-checked, statements still cache on their own inputs
         "NOTEBOOK-RELOAD-STATE",  # an edited module was reloaded, or the
