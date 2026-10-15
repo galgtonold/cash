@@ -2,11 +2,18 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    # Working branches too, so a change is green on every platform before
+    # main moves to it.
+    branches: [main, master, "claude/**", "cext/**"]
   pull_request:
     branches: [main, master]
   # Run by hand on any branch, e.g. one that is not ready for main.
   workflow_dispatch:
+
+# A newer push to the same working branch supersedes a run still going.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:
