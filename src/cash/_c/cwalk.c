@@ -15,10 +15,25 @@
  */
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <limits.h>
 #include <stdint.h>
 #include <string.h>
 
 #include "cwalk.h"
+
+/* Overflow-checked arithmetic without compiler builtins (MSVC has none):
+ * 1 on overflow, else 0 and *out set. */
+static int mul_overflows(long long a, long long b, long long *out) {
+    /* a, b >= 0 here: sizes and counts */
+    if (a < 0 || b < 0 || (a && b > LLONG_MAX / a)) return 1;
+    *out = a * b;
+    return 0;
+}
+static int add_overflows(long long a, long long b, long long *out) {
+    if ((b > 0 && a > LLONG_MAX - b) || (b < 0 && a < LLONG_MIN - b)) return 1;
+    *out = a + b;
+    return 0;
+}
 
 #ifndef Py_GIL_DISABLED
 
@@ -629,7 +644,7 @@ static long long level_size(PyObject **v, Py_ssize_t n) {
     }
     Py_DECREF(picks);
     long long out;
-    if (__builtin_mul_overflow(total, (long long)n, &out)) return -2;
+    if (mul_overflows(total, (long long)n, &out)) return -2;
     return out / SIZE_SAMPLE;
 }
 
@@ -784,7 +799,7 @@ static PyObject *py_tree_facts(PyObject *self, PyObject *const *args, Py_ssize_t
                     }
                 }
                 Py_DECREF(picks);
-                if (ks >= 0 && __builtin_mul_overflow(ks, (long long)dicts.n, &ks)) ks = -2;
+                if (ks >= 0 && mul_overflows(ks, (long long)dicts.n, &ks)) ks = -2;
                 if (ks >= 0) ks /= SIZE_SAMPLE;
             }
             if (ks == -1) goto fail;
@@ -992,7 +1007,7 @@ static int est_add(long long *total, PyObject **big, PyObject *x) {
         int overflow = 0;
         long long v = PyLong_AsLongLongAndOverflow(x, &overflow);
         if (v == -1 && PyErr_Occurred()) return -1;
-        if (!overflow && !__builtin_add_overflow(*total, v, total)) return 0;
+        if (!overflow && !add_overflows(*total, v, total)) return 0;
     }
     if (!*big) {
         *big = PyLong_FromLongLong(*total);
