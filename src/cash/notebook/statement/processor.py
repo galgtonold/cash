@@ -2146,7 +2146,7 @@ class StatementProcessor:
             try:
                 gave_up = GaveUp()
                 with walk_budget(budget):
-                    found, shared = share_group(
+                    _found, shared = share_group(
                         names, captured_vars, user_ns, cash_held, named, foreign=foreign, gave_up=gave_up
                     )
                 if not shared:
