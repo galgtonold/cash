@@ -218,4 +218,4 @@ def test_a_library_function_looking_names_up_is_not_the_notebooks():
     notebook's, and a statement calling them is keyed as before."""
     ns = _namespace("from collections import namedtuple\nfrom inspect import getmodule\n")
     for statement, inputs in (("P = namedtuple('P', 'a b')", {"namedtuple"}), ("m = getmodule(len)", {"getmodule"})):
-        assert unkeyed_reach(statement, inputs, ns, {}) == (set(), set())
+        assert unkeyed_reach(statement, inputs, ns, {}) == (set(), set(), set())

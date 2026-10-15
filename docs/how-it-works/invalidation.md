@@ -33,6 +33,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
 
     A statement recomputes when any of these changed:
 
+    <!-- claim: cash/notebook/held_modules.py:held_module_parts @34c0a619, cash/notebook/held_functions.py:held_notebook_code @875427ef -->
     - **Its source.**
     - **An input's lineage**, which changes whenever anything upstream of that
       input changed ([below](#lineage-propagation)).
@@ -45,7 +46,11 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       before the cell, as in a plain kernel, and a module it reloads (one
       `%aimport` loaded too) counts as edited. A module cash has just
       reloaded is not reloaded a second time. Editing one function in a
-      module re-runs only what uses that function. A reload puts the file's values back for what cells set on
+      module re-runs only what uses that function. A statement that calls
+      into objects of a class of your module uses the module however the
+      objects were made: `[o.total() for o in orders]` after
+      `orders = pickle.load(f)` runs again when `Order.total`, or a function
+      of the module it calls, is edited. A reload puts the file's values back for what cells set on
       the module (`mylib.K = k`, `mylib.set_k(k)`, `mylib.CACHE.append(x)`;
       the same through a name holding what the module holds, such as
       `CONFIG["k"] = k` after `from mylib import CONFIG` or `cfg["k"] = k`

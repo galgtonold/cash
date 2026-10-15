@@ -14,6 +14,12 @@ A walk that meets more objects than `WALK_LIMIT` stops and says so
 (`Held.complete`): what it did not see may hold a function, so the
 statement runs uncached, with a reason (``statement.processor``), rather
 than be keyed without it.
+
+The walk also notes the classes of the user's own modules it meets
+(`Held.module_classes`): ``orders = pickle.load(f)`` holding objects of
+``mylib.Order`` runs ``Order.total`` and the module's ``rate()`` when a
+statement calls ``o.total()``, though no lineage of ``orders`` passes
+through ``mylib``. The key names that code (``cache_key``).
 """
 
 from __future__ import annotations
@@ -25,15 +31,24 @@ import itertools
 import operator
 import sys
 import types
+import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any, NamedTuple
 
 from .._memo import CODE_OBJECTS, LruMemo
 from ..install_paths import is_user_code_module
+from ..tracking.function_tracker import is_local_module
 from ..value_types import LEAF_TYPES
 from .compiled_source import CASH_FILENAME_PREFIX
 
-__all__ = ["EXISTENCE_CHECK_AT", "WALK_LIMIT", "Held", "held_notebook_code", "notebook_functions_exist"]
+__all__ = [
+    "EXISTENCE_CHECK_AT",
+    "WALK_LIMIT",
+    "Held",
+    "held_notebook_code",
+    "module_class_objects_exist",
+    "notebook_functions_exist",
+]
 
 #: Objects one walk visits before it gives up. A model, a figure, a frame
 #: and their containers hold far fewer that are not plain values (a list of
@@ -64,13 +79,19 @@ class Held(NamedTuple):
     codes: tuple[types.CodeType, ...]
     #: False when the walk stopped at `WALK_LIMIT` before it saw everything.
     complete: bool = True
+    #: The classes of the user's own modules (not the notebook) along the
+    #: MRO of each class held or of an object held, in the order first met:
+    #: their methods, and what those read in their module, run when the
+    #: statement calls one.
+    module_classes: tuple[type, ...] = ()
 
 
 _NOTHING = Held(())
 
 
 class _NoNotebookFunctions(Exception):
-    """A walk stopped early: no notebook function exists to be found."""
+    """A walk stopped early: no notebook function, and no object of a
+    class of the user's modules, exists to be found."""
 
 
 #: What `_MEMO` keeps for a walk that stopped because no notebook function
@@ -109,7 +130,7 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
     memo_key = (id(value), lineage) if lineage else None
     found = _MEMO.get(memo_key) if memo_key is not None else None
     if found is _NONE_EXISTED:
-        if not notebook_functions_exist(namespace):
+        if not _anything_to_find(namespace):
             return _NOTHING
         found = None  # one exists now: walk to the end
     if found is None:
@@ -127,10 +148,14 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
         code = getattr(fn, "__code__", None)
         if isinstance(code, types.CodeType):
             codes.setdefault(id(code), code)
+    module_classes: dict[int, type] = {}
     for cls in classes:
         for code in _class_codes(cls, namespace):
             codes.setdefault(id(code), code)
-    return Held(tuple(codes.values()), complete)
+        for klass in cls.__mro__:
+            if _of_a_users_module(klass):
+                module_classes.setdefault(id(klass), klass)
+    return Held(tuple(codes.values()), complete, tuple(module_classes.values()))
 
 
 def _plain_function(fn: types.FunctionType) -> bool:
@@ -218,6 +243,100 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
     return False
 
 
+def _anything_to_find(namespace: Mapping[str, Any]) -> bool:
+    """Whether a walk could find anything: a notebook function, or an
+    object of a class of the user's modules (`module_class_objects_exist`)."""
+    return notebook_functions_exist(namespace) or module_class_objects_exist()
+
+
+def module_class_objects_exist() -> bool:
+    """Whether any object of a class defined at the top of one of the
+    user's loaded modules, or of a class derived from one, exists.
+
+    An object refers to its class, so ``gc.get_referrers`` of the classes
+    finds them all, in one pass at C speed. With no module of the user's
+    loaded there is nothing to ask. Objects ``gc.freeze`` moved out of the
+    collector's view are not searched, so then the answer is yes.
+    """
+    classes = _users_module_classes()
+    if not classes:
+        return False
+    if gc.get_freeze_count():
+        return True
+    kinds: set[type] = set()
+    pending = list(classes)
+    while pending:
+        cls = pending.pop()
+        if cls in kinds:
+            continue
+        kinds.add(cls)
+        try:
+            pending.extend(type.__subclasses__(cls))
+        except TypeError:
+            pass
+    return any(type(referrer) in kinds for referrer in gc.get_referrers(*kinds))
+
+
+def _users_module_classes() -> list[type]:
+    """The classes defined at the top of the user's loaded modules."""
+    found: list[type] = []
+    for module in list(sys.modules.values()):
+        if not _users_module(module):
+            continue
+        name = module.__name__
+        for value in list(vars(module).values()):
+            if isinstance(value, type) and value.__flags__ & _HEAP_TYPE and value.__module__ == name:
+                found.append(value)
+    return found
+
+
+#: Module name -> (the module, whether it is one of the user's), asked once
+#: per module object.
+_USERS_MODULE: dict[str, tuple[types.ModuleType, bool]] = {}
+
+
+def _users_module(module: Any) -> bool:
+    """Is *module* one of the user's own files (`is_local_module`), not the
+    notebook's ``__main__``?"""
+    if not isinstance(module, types.ModuleType):
+        return False
+    name = getattr(module, "__name__", None)
+    if not isinstance(name, str) or name in _MAIN_NAMES:
+        return False
+    held = _USERS_MODULE.get(name)
+    if held is not None and held[0] is module:
+        return held[1]
+    try:
+        verdict = is_local_module(module)
+    except (TypeError, AttributeError):
+        verdict = False
+    _USERS_MODULE[name] = (module, verdict)
+    return verdict
+
+
+#: Class -> whether a module of the user's defined it (`_of_a_users_module`).
+_USERS_CLASS: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
+
+
+def _of_a_users_module(cls: type) -> bool:
+    """Was *cls* defined by a ``class`` statement in one of the user's own
+    modules (not a cell)?"""
+    try:
+        known = _USERS_CLASS.get(cls)
+    except TypeError:
+        return False
+    if known is not None:
+        return known
+    verdict = bool(getattr(cls, "__flags__", 0) & _HEAP_TYPE) and _users_module(
+        sys.modules.get(getattr(cls, "__module__", None) or "")
+    )
+    try:
+        _USERS_CLASS[cls] = verdict
+    except TypeError:
+        pass
+    return verdict
+
+
 #: The ids of the globals a `notebook_functions_exist` no was answered for,
 #: and the `_new_code` count it was answered at.
 _NO_FUNCTIONS: dict[frozenset[int], int] = {}
@@ -273,7 +392,7 @@ def _walk(
         visited += sum(len(group) for _kind, group in level)
         if check_at is not None and visited > check_at:
             check_at = None
-            if not notebook_functions_exist(namespace):
+            if not _anything_to_find(namespace):
                 raise _NoNotebookFunctions
         if visited > WALK_LIMIT:
             return tuple(functions.values()), tuple(classes.values()), False
@@ -288,7 +407,7 @@ def _walk(
             # Asked before the next level is sorted: a sheet's 400,000
             # cells cost more to dedup than the question does.
             check_at = None
-            if not notebook_functions_exist(namespace):
+            if not _anything_to_find(namespace):
                 raise _NoNotebookFunctions
         level = _next_level(children, seen)
     return tuple(functions.values()), tuple(classes.values()), True
@@ -401,6 +520,10 @@ def _visit_group(
                 classes.setdefault(id(cls), cls)
                 for klass in _own_mro(cls, globals_ids):
                     children.extend(vars(klass).values())
+            elif any(map(_of_a_users_module, cls.__mro__)):
+                # Noted, not entered: its methods' code is keyed by its
+                # module (`Held.module_classes`).
+                classes.setdefault(id(cls), cls)
         return
     # Any other object: its class (a notebook class's methods run on it),
     # its attributes and its slots.

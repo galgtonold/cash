@@ -7,8 +7,10 @@ two formatting calls, ``wb_out.save(...)``. None of them is ever cached
 walked the workbook's 400,000 cells for the notebook functions it might
 hold: five walks a run, 3 s next to 12 s of work. The walk now stops once
 it is big and no function with the notebook's globals exists
-(`held_functions.notebook_functions_exist`). A function a cell did define
-and the workbook holds is still found and still keys its readers.
+(`held_functions.notebook_functions_exist`) and no object of a class of the
+user's modules does. A function a cell did define and the workbook holds is
+still found and still keys its readers; so is an object of a local module's
+class the workbook holds.
 """
 
 from __future__ import annotations
@@ -115,8 +117,13 @@ def _expected_total(base: float) -> float:
     return float(sum(base + i for i in range(N)))
 
 
-def test_the_workbook_is_not_walked_and_its_readers_follow_the_file(cash_magics, mock_shell, lib, tmp_path, visited):
+def test_the_workbook_is_not_walked_and_its_readers_follow_the_file(
+    cash_magics, mock_shell, lib, tmp_path, visited, monkeypatch
+):
     mock_shell.user_ns["__name__"] = "__main__"
+    # Nor does an object of a class of the user's modules: the test run's
+    # own (its conftest's watchdog) would count as one.
+    monkeypatch.setattr(held_functions, "module_class_objects_exist", lambda: False)
     path = tmp_path / "report.txt"
     path.write_text("1.0", encoding="utf-8")
     run_cash_cell(cash_magics, f"import {lib} as lib")
@@ -178,3 +185,36 @@ def test_with_a_function_a_cell_defined_the_workbook_is_walked_and_its_readers_f
     run_cash_cell(cash_magics, "report = total * 2")
     assert mock_shell.user_ns["total"] == _expected_total(5.0)
     assert mock_shell.user_ns["report"] == 2 * _expected_total(5.0)
+
+
+HOOK = "def amount():\n    return {n}\n\n\nclass Hook:\n    def __call__(self):\n        return amount()\n"
+
+
+def test_an_object_of_a_local_module_s_class_the_workbook_holds_keys_its_readers(
+    cash_magics, mock_shell, lib, tmp_path, visited, monkeypatch
+):
+    """No cell defines a function, but the workbook holds an object of a
+    class from the user's own module: the walk goes on to find it, and an
+    edit of that module reaches the reader (cash reloads it)."""
+    mock_shell.user_ns["__name__"] = "__main__"
+    name = f"_book_hook_{os.getpid()}_{id(tmp_path)}"
+    hook = tmp_path / f"{name}.py"
+    hook.write_text(HOOK.format(n=10), encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    try:
+        path = tmp_path / "report.txt"
+        path.write_text("1.0", encoding="utf-8")
+        run_cash_cell(cash_magics, f"import {lib} as lib\nimport {name} as hooks")
+        run_cash_cell(cash_magics, f"wb = lib.load({str(path)!r})\nlib.attach(wb, hooks.Hook())")
+        visited[0] = 0
+        run_cash_cell(cash_magics, "out = lib.apply(wb)")
+        assert mock_shell.user_ns["out"] == 10
+        assert visited[0] >= N  # an object of the user's class exists: walked to the end
+
+        before = os.stat(hook).st_mtime_ns
+        hook.write_text(HOOK.format(n=20), encoding="utf-8")
+        os.utime(hook, ns=(before + 2_000_000_000, before + 2_000_000_000))
+        run_cash_cell(cash_magics, "out = lib.apply(wb)")
+        assert mock_shell.user_ns["out"] == 20
+    finally:
+        sys.modules.pop(name, None)

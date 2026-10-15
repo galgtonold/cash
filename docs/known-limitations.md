@@ -454,7 +454,7 @@ it.
 
 ### A function reached by a name spelled at run time
 
-<!-- claim: cash/notebook/string_lookups.py:code_looks_up_by_string @bb240f70, cash/notebook/cache_key.py:unkeyed_reach @eae285ed -->
+<!-- claim: cash/notebook/string_lookups.py:code_looks_up_by_string @bb240f70, cash/notebook/cache_key.py:unkeyed_reach @f4481b35 -->
 A statement's key holds the functions its code names and the globals they
 read. Code that finds a function through a string instead
 (`globals()["make"](3)`, `eval("make(3)")`, `vars()[name]`,
