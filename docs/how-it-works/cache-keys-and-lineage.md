@@ -59,14 +59,14 @@ over a numpy array shares that array's memory, and polars cannot say which
 of its memory is its own.
 
 <!-- claim: cash/bulk_digest.py:_leaf_digests @60885a16, cash/bulk_digest.py:BulkHasher.digest @ce05cc07, cash/bulk_digest.py:LEAF_BYTES == 1048576, cash/bulk_digest.py:MAX_THREADS == 8, cash/bulk_digest.py:BLAKE3_MAX_THREADS == 4, cash/bulk_digest.py:_scheme @93bd31ed -->
-The bytes go through SHA-256, cut into 1 MiB pieces whose digests are
+The bytes are cut into 1 MiB pieces, hashed with BLAKE3, whose digests are
 digested together: a big array or column is hashed on several threads at
-once (up to eight), and the result is the same however many there are.
-With the `blake3` package installed (`pip install "cash-lib[fast]"`) the
-pieces are hashed with BLAKE3 instead, on up to four threads, and every
-buffer past 16 KiB goes in as its pieces' digest. The digest's tag names the
-algorithm, so an install with `blake3` and one without key the same array
-apart: a cache written by one misses under the other, never serves it.
+once (up to four), every buffer past 16 KiB goes in as its pieces' digest,
+and the result is the same however many threads there are. Where the
+`blake3` package cannot load, the pieces go through SHA-256 instead, on up
+to eight threads. The digest's tag names the algorithm, so an install
+hashing with BLAKE3 and one with SHA-256 key the same array apart: a cache
+written by one misses under the other, never serves it.
 
 Arrays are hashed in full, never sampled. Two arrays with equal values but
 different memory order (C and Fortran) are different keys, because

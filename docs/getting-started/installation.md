@@ -14,22 +14,18 @@ cash does not install Jupyter or IPython: the notebook path runs in the
 kernel you already use. In JupyterLab, the install adds a small extension (`cash-live-cells`) that sends your unsaved cells to
 the kernel, so cash sees your latest edits without a save.
 
-<!-- claim: cash/bulk_digest.py:_scheme @93bd31ed broad="the [fast] extra and the per-algorithm tags, checked by test_big_buffers_hash_with_blake3_when_it_is_installed" -->
-## Faster hashing of big data
+<!-- claim: cash/bulk_digest.py:_scheme @93bd31ed broad="blake3 as a dependency, the SHA-256 fallback and the per-algorithm tags, checked by test_big_buffers_hash_with_blake3_when_it_is_installed" -->
+## Hashing big data
 
 cash reads every byte of a big array, column or input file to tell whether
-it changed. The `fast` extra adds the `blake3` package, and cash then hashes
-that data with BLAKE3 instead of SHA-256:
+it changed. It hashes that data with BLAKE3, from the `blake3` package that
+installs with cash. On a CPU without SHA instructions BLAKE3 hashes a
+100 MiB array in about a tenth of the time SHA-256 needs; on one with them
+(most recent x86 and ARM chips) the gain is smaller.
 
-```bash
-pip install "cash-lib[fast]"
-```
-
-On a CPU without SHA instructions, BLAKE3 hashes a 100 MiB array in about a
-tenth of the time; on one with them (most recent x86 and ARM chips) the gain
-is smaller. Nothing else changes, and nothing needs configuring.
-
-Entries written by an install with `blake3` and one without are keyed
+Where the `blake3` package cannot load, cash falls back to SHA-256 from
+Python's standard library. Entries written by an install hashing with BLAKE3
+and one hashing with SHA-256 are keyed
 apart, so a cache folder shared between the two only misses for the other's
 big inputs and computes them again; it never serves one install's entry to
 the other. Give every machine that shares a cache (a team's S3 or Redis

@@ -354,7 +354,7 @@ When another entry already holds the same bytes -- a table with one column
 added, the same data stored by two statements, a loop whose every result
 carries its input's columns -- the write costs a digest of the buffer instead
 of writing it again. The digest is taken with the same algorithm as cash's
-other digests of big data (BLAKE3 with `cash-lib[fast]`, SHA-256 otherwise),
+other digests of big data (BLAKE3, or SHA-256 where `blake3` cannot load),
 and the name says which, so installs hashing differently never share a
 chunk. With `compress` on, values are not split this way.
 

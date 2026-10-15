@@ -1,5 +1,5 @@
 """Big buffers are hashed with BLAKE3 when ``blake3`` is installed
-(``cash-lib[fast]``), with SHA-256 when it is not, and the two never meet.
+(a dependency of cash), with SHA-256 when it is not, and the two never meet.
 
 What must hold:
 

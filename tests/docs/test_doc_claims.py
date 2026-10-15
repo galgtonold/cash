@@ -714,8 +714,8 @@ def test_every_public_exception_is_documented() -> None:
 
 _EXTRA_RE = re.compile(r"cash-lib\[([^\]]*)\]")
 _README_PAGES = (DOCS_ROOT.parent / "README.md", DOCS_ROOT.parent / "examples" / "README.md")
-#: The extras a user is told about; the others are for working on cash.
-_USER_EXTRAS = {"fast"}
+#: The extras a user is told about: none, the others are for working on cash.
+_USER_EXTRAS: set[str] = set()
 
 
 def _declared_extras() -> set[str]:
@@ -724,7 +724,7 @@ def _declared_extras() -> set[str]:
     return set(re.findall(r"^([A-Za-z0-9_-]+)\s*=\s*\[", section, flags=re.M))
 
 
-def test_docs_install_cash_with_no_extra_but_fast() -> None:
+def test_docs_install_cash_with_no_extra() -> None:
     assert _USER_EXTRAS <= _declared_extras()
     problems: list[str] = []
     for md in (*ALL_MD, *_README_PAGES):
@@ -733,6 +733,6 @@ def test_docs_install_cash_with_no_extra_but_fast() -> None:
                 if not {e.strip() for e in match.group(1).split(",")} <= _USER_EXTRAS:
                     problems.append(f"  {md.relative_to(DOCS_ROOT.parent).as_posix()}:{n}: {line.strip()}")
     assert not problems, (
-        "cash's only user extra is `fast`; install it with `pip install cash-lib` and name any "
+        "cash has no user extra; install it with `pip install cash-lib` and name any "
         "other package a feature needs directly:\n" + "\n".join(problems)
     )

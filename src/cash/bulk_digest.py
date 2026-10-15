@@ -1,7 +1,7 @@
 """The digest of big raw data: array buffers, table columns, file contents.
 
-The leaves are hashed with BLAKE3 when the ``blake3`` package is installed
-(``pip install cash-lib[fast]``), else with SHA-256 from ``hashlib``. Both
+The leaves are hashed with BLAKE3 from the ``blake3`` package, a dependency
+of cash, or with SHA-256 from ``hashlib`` where it cannot load. Both
 are collision resistant. SHA-256 is always there and runs on the CPU's SHA
 instructions where it has them (x86 SHA-NI, ARMv8 SHA2), about 2 GB/s a
 core; on a CPU without them about 0.4 GB/s. BLAKE3 runs on the vector
@@ -53,7 +53,7 @@ __all__ = [
     "leaf_hasher",
 ]
 
-try:  # optional: ``cash-lib[fast]``
+try:  # a dependency; a build that does not load here falls back to SHA-256
     from blake3 import blake3 as _blake3
 except ImportError:  # not installed, or a build that does not load here
     _blake3 = None
