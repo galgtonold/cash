@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -342,6 +343,25 @@ def cash_with_file_backend(file_backend):
 # ============================================================================
 
 
+class RecordingDisplayPub:
+    """The shell's display publisher: keeps what was published, in order.
+
+    Not a ``unittest.mock`` object. A real kernel's publisher is not one,
+    and cash refuses to store a ``@cash.cache`` result when any mock was
+    called while the body ran, from any thread (`EffectObserver.mock_called`).
+    The RUNNING badge is published from a timer thread once a statement has
+    run for ``BadgePresenter.MIN_RENDER_INTERVAL``; through a mock, that
+    publish turned every decorated call slower than the interval into one
+    that is never stored.
+    """
+
+    def __init__(self) -> None:
+        self.published: list[tuple[tuple, dict]] = []
+
+    def publish(self, *args: Any, **kwargs: Any) -> None:
+        self.published.append((args, kwargs))
+
+
 class MockShell(Configurable):
     """The IPython shell every unit test of the notebook code runs against.
 
@@ -362,7 +382,7 @@ class MockShell(Configurable):
         self.ast_transformers = []
         self.input_transformers_cleanup = []
         self.run_cell = MagicMock()
-        self.display_pub = type("MockDisplayPub", (), {"publish": MagicMock()})()
+        self.display_pub = RecordingDisplayPub()
         self.magics_manager = MagicMock()
         self.magics_manager.magics = {"cell": {}, "line": {}}
 
