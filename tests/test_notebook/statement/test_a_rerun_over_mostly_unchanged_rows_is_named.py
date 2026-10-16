@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import warnings
 
+import pytest
+
+from cash.notebook import per_item_reruns
 from cash.notebook.cache_status import CacheStatus
 from tests._cell_driver import run_cash_cell
 
@@ -18,6 +21,19 @@ CODE = "CACHE-PER-ITEM-RERUN"
 SLOW = 1.1
 
 SETUP = "import numpy as np, time"
+
+
+@pytest.fixture(autouse=True)
+def _time_to_fingerprint(monkeypatch):
+    """The fingerprints may take all of a statement's time. Their share of
+    it is 3% (`per_item_reruns.HASH_SHARE`): 33 ms of a 1.1 s step, which a
+    busy mac spent before the 3,000 rows were cut, so the base run kept no
+    record and the run after it had nothing to compare. What a fingerprint
+    past its budget does is pinned in test_a_changed_block_of_rows_is_located."""
+    monkeypatch.setattr(per_item_reruns, "HASH_SHARE", 1.0)
+    monkeypatch.setattr(per_item_reruns, "STEP_SHARE", 1.0)
+
+
 BASE = "imgs = np.arange(3000 * 16, dtype=np.int64).reshape(3000, 16)"
 GROWN = "imgs = np.concatenate([np.arange(3000 * 16, dtype=np.int64).reshape(3000, 16), np.ones((400, 16), np.int64)])"
 MIDDLE = "imgs = np.arange(3000 * 16, dtype=np.int64).reshape(3000, 16); imgs[1000:1100] = -1"
