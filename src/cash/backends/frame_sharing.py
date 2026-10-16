@@ -37,6 +37,13 @@ nothing of the caller's (`own_parts`): its labels are copied, and so is
 any Arrow data that may be the caller's numpy memory under Arrow's name;
 Arrow data in memory Arrow allocated itself is shared (`arrow_owned`).
 
+A big table of numbers and dates is not copied at all (`share_checked`):
+the tier keeps a shallow copy, which pandas copies before writing either
+side, with the digest of its data, and checks that digest before it serves
+the table. Once nothing but the tier reaches that data -- the caller has
+rebound the name (``df = df[...]``) -- the tier takes it over and freezes
+it as its own (`adopt`).
+
 Used only where pandas has copy-on-write (pandas 3, or opted in before) and
 these internals behave as described (`enabled`, checked once). Otherwise the
 tier copies as it always has.
@@ -385,6 +392,264 @@ def _freeze(frame: Any, *, cells_known: bool = False) -> bool:
     except Exception:
         logger.debug("cash: could not freeze a %s", type(frame).__name__, exc_info=True)
         return False
+
+
+# ------------------------------------------------- shared with the caller, checked
+
+#: The blocks of the tables `share_checked` made: the RAM tier's own block
+#: objects over data a caller may still hold.
+_CHECKED_BLOCKS: weakref.WeakSet = weakref.WeakSet()
+
+#: The smallest table `share_checked` keeps uncopied: its numbers and dates
+#: in bytes. A smaller one is copied, which costs about what its digest does.
+CHECKED_MIN_BYTES = 16 << 20
+
+_CHECKED_TAG = b"cash: a table's data, checked\0"
+
+
+def share_checked(frame: Any) -> tuple[Any, bytes] | None:
+    """A table for the RAM tier to keep in place of a copy of the caller's
+    *frame*, and the digest of its data (`checked_digest`); None when
+    *frame* is not one to keep so, and the tier copies it as before.
+
+    Copying a table into fresh memory is most of what storing a big one
+    costs: on a virtual machine that hands memory back to the host, 1.4 s
+    for 380 MB, where its digest takes 0.05 s. And the copy doubles the
+    memory the table takes, though the caller usually drops its own a
+    statement later (``df = df[df.fare > 0]``).
+
+    The table kept is a shallow copy: its blocks are the tier's own
+    objects over the caller's arrays, in the caller's blocks' copy-on-write
+    groups, so pandas copies a block before writing it on either side. A
+    write past pandas (``s.array[0] = ...``, a numpy array the table was
+    built over) is not copied first: the digest, taken now, is checked
+    before the table is served or written elsewhere, and a table whose data
+    changed is not served. Its labels are copied (`_owned_axis`), and so is
+    its Arrow data where it may be someone else's memory (`_copy_values`).
+
+    Only a plain DataFrame `freezable` with *cells_known* (the caller has
+    found no object column holding a changeable cell), holding at least
+    `CHECKED_MIN_BYTES` in numpy arrays of numbers, dates and durations,
+    each in one piece of memory. An object column is copied: its digest is
+    of pointers, and a cell written twice can come back to an address."""
+    if not _checked_works():
+        return None
+    try:
+        return _share_checked(frame)
+    except Exception:  # unknown internals: copied as before
+        logger.debug("cash: could not share a %s", type(frame).__name__, exc_info=True)
+        return None
+
+
+def _share_checked(frame: Any) -> tuple[Any, bytes] | None:
+    import pandas as pd
+
+    if type(frame) is not pd.DataFrame or not freezable(frame, cells_known=True):
+        return None
+    mgr = frame._mgr
+    blocks = []
+    checked = []
+    nbytes = 0
+    for block in mgr.blocks:
+        parts = _ndarray_parts(block.values)
+        if parts is None:
+            return None
+        if not parts:  # Arrow-backed: copied where it may be another's memory
+            values = _copy_values(block.values, True)
+            blocks.append(type(block)(values, placement=block._mgr_locs, ndim=block.ndim, refs=None))
+            continue
+        for _name, array in parts:
+            if array.dtype.hasobject or _flat_bytes(array) is None:
+                return None
+            nbytes += array.nbytes
+        shallow = block.copy(deep=False)
+        blocks.append(shallow)
+        if not any(ref is _PIN for ref in block.refs.referenced_blocks):
+            checked.append(shallow)  # frozen data (a hit's) is no one's to write
+    if nbytes < CHECKED_MIN_BYTES:
+        return None
+    axes = [_owned_axis(axis, True) for axis in mgr.axes]
+    shared_mgr = type(mgr).from_blocks(blocks, axes)
+    shared = frame._constructor_from_mgr(shared_mgr, axes=shared_mgr.axes).__finalize__(frame, method="copy")
+    if any(kept is not block for kept, block in zip(shared._mgr.blocks, blocks)):
+        return None  # pandas rebuilt the blocks: not the ones made here
+    for block in checked:
+        _CHECKED_BLOCKS.add(block)
+    digest = checked_digest(shared)
+    if digest is None:
+        return None
+    return shared, digest
+
+
+def _group(block: Any) -> list[Any]:
+    """The live blocks in *block*'s copy-on-write group, the pin left out."""
+    found = []
+    for ref in block.refs.referenced_blocks:
+        other = ref()
+        if other is not None and not is_pin(other):
+            found.append(other)
+    return found
+
+
+def _flat_bytes(array: Any) -> Any:
+    """*array*'s memory as one flat byte array, in its own order, without a
+    copy; None when it is not in one piece."""
+    import numpy as np
+
+    if array.flags.c_contiguous:
+        flat = array.reshape(-1)
+    elif array.flags.f_contiguous:
+        flat = array.T.reshape(-1)
+    else:
+        return None
+    return flat.view(np.uint8)  # a contiguous array reshapes to a view
+
+
+def checked_digest(frame: Any) -> bytes | None:
+    """The digest of the data a table `share_checked` made keeps in the
+    caller's arrays (its Arrow data and labels are its own); None when an
+    array is no longer in one piece."""
+    import hashlib
+
+    from cash import bulk_digest
+
+    digest = hashlib.sha256(_CHECKED_TAG)
+    for block in frame._mgr.blocks:
+        if block not in _CHECKED_BLOCKS:
+            continue
+        for _name, array in _ndarray_parts(block.values) or ():
+            flat = _flat_bytes(array)
+            if flat is None:
+                return None
+            bulk_digest.fold_buffer(digest, flat)
+    return digest.digest()
+
+
+def adopt(frame: Any) -> bool:
+    """Freeze a table `share_checked` made, in place, when nothing but the
+    RAM tier reaches its data any more (`_only_tier_reaches`): the caller's
+    table, and every handle to its arrays, are gone. Its data is then the
+    tier's own, as a copy's is, and hits share it. False, with nothing
+    done, while anything else may still write it. Check its digest first:
+    what is frozen is what is served from then on."""
+    try:
+        return _adoptable(frame) and _freeze(frame, cells_known=True)
+    except Exception:  # unknown internals: left as it is
+        logger.debug("cash: could not take over a %s", type(frame).__name__, exc_info=True)
+        return False
+
+
+def _only_tier_reaches(blocks: list[Any]) -> bool:
+    """Does nothing but the tier's own blocks reach the arrays of *blocks*?
+
+    Every live block in their copy-on-write groups must be one of the
+    tier's (`_CHECKED_BLOCKS`): a caller's table, or any table pandas made
+    over that data (a column, a view), is another block in the group. And
+    nothing outside a block may hold the arrays: a numpy view a caller
+    took (``a = df["x"].array``) holds its memory's array, which a
+    reference count shows. Each object is counted against the holders the
+    tier's blocks account for: the block holding the values, the wrapper
+    holding its numpy array (a date column), the views whose base is it."""
+    seen: dict[int, Any] = {}
+    for block in blocks:
+        for other in _group(block):
+            if other not in _CHECKED_BLOCKS:
+                return False
+            seen[id(other)] = other
+    counted = _holders(list(seen.values()))
+    if counted is None:
+        return False
+    objects, holders = counted
+    # Each object: the references counted, one from `objects`, one for the call.
+    return all(sys.getrefcount(objects[key]) == count + 2 for key, count in holders.items())
+
+
+def _holders(blocks: list[Any]) -> tuple[dict[int, Any], dict[int, int]] | None:
+    """For `_only_tier_reaches`: each object *blocks* keep their data in
+    (``id -> object``), and how many references to it they account for;
+    None for data held another way (memory an Arrow buffer or another
+    object owns)."""
+    import numpy as np
+
+    objects: dict[int, Any] = {}
+    holders: dict[int, int] = {}
+
+    def held(obj: Any) -> None:
+        objects[id(obj)] = obj
+        holders[id(obj)] = holders.get(id(obj), 0) + 1
+
+    for block in blocks:
+        parts = _ndarray_parts(block.values)
+        if not parts:
+            return None
+        held(block.values)
+        for name, array in parts:
+            if name:
+                held(array)  # the wrapper's array
+            base = array.base
+            if base is None:
+                continue
+            if not isinstance(base, np.ndarray) or base.base is not None:
+                return None
+            held(base)  # a view's reference to the array owning its memory
+    return objects, holders
+
+
+def _adoptable(frame: Any) -> bool:
+    """Would `adopt` take *frame* over now?"""
+    blocks = [block for block in frame._mgr.blocks if block in _CHECKED_BLOCKS]
+    return not blocks or _only_tier_reaches(blocks)  # none: frozen data and its own copies only
+
+
+def _checked_self_test() -> bool:
+    """Do the checks behave as `share_checked` and `adopt` need here? A
+    table shared with its caller is not adopted while the caller holds it,
+    nor while a numpy handle to its data lives; it is once both are gone.
+    A write past pandas changes its digest."""
+    import numpy as np
+    import pandas as pd
+
+    n = CHECKED_MIN_BYTES // 16 + 1
+    caller = pd.DataFrame({"f": np.arange(float(n)), "d": pd.date_range("2020-01-01", periods=n, freq="s")})
+    caller = caller[caller["f"] >= 0]  # blocks over views of fresh arrays, as most tables hold
+    kept = _share_checked(caller)
+    if kept is None:
+        return False
+    shared, digest = kept
+    if _adoptable(shared):
+        return False  # the caller's table still holds the data
+    handle = caller["f"].array
+    dates = caller["d"].array
+    del caller
+    if _adoptable(shared):
+        return False  # numpy handles still do
+    del dates
+    if _adoptable(shared):
+        return False
+    handle[0] = -1.0  # a write past pandas
+    if checked_digest(shared) == digest:
+        return False
+    del handle
+    return _adoptable(shared)
+
+
+_CHECKED_OK: list[bool] = []
+
+
+def _checked_works() -> bool:
+    """Is checked sharing on here: pandas tables shared (`enabled`), and the
+    checks it relies on behaving as expected (`_checked_self_test`, once)?"""
+    if _CHECKED_OK:
+        return _CHECKED_OK[0]
+    if not enabled():
+        return False
+    ok = False
+    try:
+        ok = _checked_self_test()
+    except Exception:  # off: tables are copied as before
+        logger.debug("cash: tables are copied, not shared with their caller", exc_info=True)
+    _CHECKED_OK.append(ok)
+    return ok
 
 
 def copy_keeping_blocks(frame: Any, *, arrow: bool = True, reuse: Any = None) -> Any:
