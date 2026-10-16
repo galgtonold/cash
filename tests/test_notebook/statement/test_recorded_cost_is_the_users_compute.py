@@ -60,7 +60,10 @@ def test_cash_tracking_time_is_not_counted_as_the_statements(cash_magics, mock_s
     run_cash_cell(cash_magics, "import time\nx = (time.sleep(0.5), 7)[1]")
     assert mock_shell.user_ns["x"] == 7
     wall, price = priced[-1]
-    assert wall >= 0.5
+    # Not ``>= 0.5``: on Windows a 0.5 s sleep under Python 3.10 came back
+    # at 0.4985 s by the statement's clock. What the check needs is a run
+    # longer than the tax, so the cost left after it is the run's own.
+    assert wall > 0.45, f"the run took {wall} s, no longer than the tax: proves nothing"
     assert price.tax == pytest.approx(0.45)
     assert price.cost == pytest.approx(wall - 0.45)
     assert _cost_of(clean_backend, "time.sleep(0.5)") == pytest.approx(price.cost)
