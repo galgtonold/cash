@@ -9,6 +9,8 @@ import hashlib
 import logging
 import pickle
 import re
+import sys
+import threading
 import types
 from typing import TYPE_CHECKING, Any
 
@@ -74,6 +76,9 @@ class CodeSurface:
         # id(), so a redefinition (a new object) is a distinct memo entry.
         self._code_surface_cache: LruMemo[Any, tuple[tuple | None, list, str]] = LruMemo(CODE_OBJECTS)
         self._refs = CodeRefs()
+        # The objects whose own surface is being computed on this thread,
+        # outermost first; see `_code_surface_own`.
+        self._in_progress = threading.local()
 
     def _code_identity(self, fn: Any) -> tuple:
         """The bytecode-level identity of a callable, or ``()`` if it has none.
@@ -271,24 +276,40 @@ class CodeSurface:
             cached = None
         if cached is not None and cached[0] == _defaults_pin(cached[1]):
             return cached[2]
-        layers: list[Any] = []
-        if is_type:
-            parts = self.class_surface_parts(obj)
-        else:
-            ident = self._code_identity(obj)
-            if not ident:
-                return None
-            parts = [(getattr(obj, "__qualname__", "?"), "", ident)]
-            # And the user functions it runs besides its own code: what a
-            # decorator wraps, a function a closure holds. A decorator's
-            # wrapper code is shared by every function it wraps; the
-            # function itself is what tells them apart.
-            layers = [obj, *user_layers(obj)]
-            for layer in layers[1:]:
-                parts.append((getattr(layer, "__qualname__", "?"), "runs", self._code_identity(layer)))
-        if not parts:
+        # A function can reach itself through its own defaults: networkx's
+        # argmap stores every function it wraps in that function's
+        # ``__kwdefaults__``. Digesting it again would recurse forever, so a
+        # surface already being computed is keyed as a back-reference: how
+        # many frames up the walk it sits, which is as stable across
+        # processes as the walk itself and leaves nothing out, since the
+        # frame it names is folding the object in full.
+        stack: list[list] = self._in_progress.__dict__.setdefault("stack", [])
+        for depth, frame in enumerate(stack):
+            if frame[0] is obj:
+                top = stack[-1]
+                top[1] = min(top[1], depth)
+                return f"<backref:{len(stack) - 1 - depth}>"
+        # Each frame: the object, and the outermost frame a back-reference
+        # in its walk pointed to (none yet).
+        stack.append([obj, sys.maxsize])
+        try:
+            digest, layers = self._own_digest(obj, is_type)
+        finally:
+            frame = stack.pop()
+        if digest is None:
             return None
-        digest = hashlib.sha256(repr(parts).encode("utf-8")).hexdigest()
+        # An object on a cycle is not memoized: its digest depends on where
+        # the walk entered the cycle (from *a*, *b* folds a back-reference
+        # to *a*; on its own, *b* folds *a* in full), and serving one
+        # walk's answer to another would make the key depend on which
+        # object was keyed first. A cycle closing above this frame makes
+        # the frame it closes on a cycle member too; a cycle closing on
+        # this frame leaves the frames above context-free.
+        here = len(stack)
+        if frame[1] <= here:
+            if frame[1] < here:
+                stack[-1][1] = min(stack[-1][1], frame[1])
+            return digest
         # A function's defaults are rebound (`f.__defaults__ = ...`) or
         # mutated in place on the same object: the memo holds only while
         # every default is immutable and the containers are unchanged.
@@ -299,6 +320,28 @@ class CodeSurface:
             except TypeError:
                 pass  # unhashable object - skip the memo, keep the answer
         return digest
+
+    def _own_digest(self, obj: Any, is_type: bool) -> tuple[str | None, list[Any]]:
+        """The digest `_code_surface_own` keys *obj* on, and the functions
+        whose defaults it read (the layers its memo entry is pinned on)."""
+        layers: list[Any] = []
+        if is_type:
+            parts = self.class_surface_parts(obj)
+        else:
+            ident = self._code_identity(obj)
+            if not ident:
+                return None, layers
+            parts = [(getattr(obj, "__qualname__", "?"), "", ident)]
+            # And the user functions it runs besides its own code: what a
+            # decorator wraps, a function a closure holds. A decorator's
+            # wrapper code is shared by every function it wraps; the
+            # function itself is what tells them apart.
+            layers = [obj, *user_layers(obj)]
+            for layer in layers[1:]:
+                parts.append((getattr(layer, "__qualname__", "?"), "runs", self._code_identity(layer)))
+        if not parts:
+            return None, layers
+        return hashlib.sha256(repr(parts).encode("utf-8")).hexdigest(), layers
 
     def code_surface_hash(self, obj: Any) -> str | None:
         """A digest of *obj*'s code AND the user code that code reaches.
@@ -317,6 +360,9 @@ class CodeSurface:
         own = self._code_surface_own(obj)
         if own is None:
             return None
+        if own.startswith("<backref:"):
+            # The frame it names folds what *obj*'s code reaches already.
+            return own
         reached = self._code_ref_closure(obj)
         if not reached:
             return own

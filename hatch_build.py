@@ -109,6 +109,25 @@ def module_filename() -> str:
     return "_cwatch" + sysconfig.get_config_var("EXT_SUFFIX")
 
 
+def install_module(built: Path, target: Path) -> None:
+    """Put the compiled module *built* at *target*, replacing the one there.
+
+    Written to a new file beside it, then renamed over it: a process that
+    has the old module loaded maps that file, and writing into it in place
+    (``uv pip install -e .`` while a kernel runs) crashed the process with
+    SIGSEGV or SIGBUS. A rename leaves the old file whole for whoever has
+    it open.
+    """
+    fd, tmp = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    os.close(fd)
+    try:
+        shutil.copy2(built, tmp)
+        os.replace(tmp, target)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
 def _warn(message: str) -> None:
     print(f"cash-lib build: {message}", file=sys.stderr, flush=True)
 
@@ -141,7 +160,7 @@ class CustomBuildHook(BuildHookInterface):
             return
         if version == "editable":
             # An editable install imports cash from src/, so the module goes there.
-            shutil.copy2(built, PACKAGE_DIR / module_filename())
+            install_module(built, PACKAGE_DIR / module_filename())
         else:
             build_data["force_include"][str(built)] = f"cash/{module_filename()}"
         build_data["pure_python"] = False
@@ -159,5 +178,5 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="cash-ext-") as tmp:
         built = compile_extension(Path(tmp) / "lib", Path(tmp) / "temp")
         target = PACKAGE_DIR / module_filename()
-        shutil.copy2(built, target)
+        install_module(built, target)
     print(f"built {target}")

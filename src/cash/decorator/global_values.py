@@ -21,7 +21,14 @@ from ..exceptions import CashImpurityWarning
 from ..jit_functions import jit_identity, jit_python_function
 from .code_tables import CodeTable
 from .function_identity import hash_callable_source
-from .key_values import carried_payload, code_ref, held_partials, reduced_state, stabilize_for_global_hash
+from .key_values import (
+    SYNC_TYPES,
+    carried_payload,
+    code_ref,
+    held_partials,
+    reduced_state,
+    stabilize_for_global_hash,
+)
 from .user_code import is_cash_wrapper
 
 if TYPE_CHECKING:
@@ -375,6 +382,12 @@ class GlobalValues:
 
     def safe_global_hash(self, value: Any, func_name: str, label: str) -> str | None:
         """Hash *value* for the key, warning once and skipping if it cannot be."""
+        if isinstance(value, SYNC_TYPES):
+            # A lock (`argmap._compile_lock`): no result is computed from
+            # one, so it is keyed by its kind, as when a closure, a default
+            # or a class attribute holds it.
+            cls = type(value)
+            return f"sync:{cls.__module__}.{cls.__qualname__}"
         try:
             return self.data_digest(value)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):

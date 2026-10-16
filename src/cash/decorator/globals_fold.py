@@ -6,6 +6,7 @@ import contextvars
 import hashlib
 import pickle
 import sys
+import threading
 import types
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -182,6 +183,8 @@ class GlobalsFold:
         #: The argument walk, which a data global's code goes through too;
         #: set by `CodeArgs`, which is built after this.
         self.code_args: CodeArgs | None = None
+        #: The folds running on this thread, by `fold_read_globals`'s key.
+        self._folding = threading.local()
 
     def fold_read_globals(
         self,
@@ -215,6 +218,32 @@ class GlobalsFold:
             # arguments alone): the fold would find nothing. Asked of the
             # code, once per code object, instead of on every hit.
             return state_hash
+        # What a function reads can lead back to it: a method reads its
+        # module, whose class's methods are folded, the method among them
+        # (networkx's `Graph.to_directed_class` through `nx.DiGraph`).
+        # The fold already running folds it in full, so it is keyed here
+        # as a back-reference to that fold, and the walk ends.
+        running: set = self._folding.__dict__.setdefault("keys", set())
+        fold_key = (id(func), id(owner_code), extra_names)
+        if fold_key in running:
+            back = f"{state_hash}|refold:{getattr(func, '__qualname__', '?')}"
+            return hashlib.sha256(back.encode("utf-8")).hexdigest()
+        running.add(fold_key)
+        try:
+            return self._fold_once(func, func_name, state_hash, owner_code, seen, extra_names)
+        finally:
+            running.discard(fold_key)
+
+    def _fold_once(
+        self,
+        func: Callable,
+        func_name: str,
+        state_hash: str,
+        owner_code: Any,
+        seen: set | None,
+        extra_names: tuple[str, ...],
+    ) -> str:
+        """`fold_read_globals` of a function no running fold is folding."""
         folded = READS_FOLDED.get() if seen is not None else None
         if folded is None:
             return self._fold_read_globals(func, func_name, state_hash, owner_code, seen, extra_names)
