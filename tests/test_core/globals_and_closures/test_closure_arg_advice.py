@@ -42,12 +42,8 @@ def _messages(rec, code):
 
 @pytest.mark.parametrize(
     "arg",
-    [
-        make_scaler(2),
-        lambda x: x,
-        functools.partial(make_scaler(2), 1),
-    ],
-    ids=["closure", "lambda", "partial-of-closure"],
+    [functools.partial(make_scaler(2), 1), functools.partial(lambda x, y: x, 1)],
+    ids=["partial-of-closure", "partial-of-lambda"],
 )
 def test_a_code_argument_is_not_told_to_register_a_type_wide_hasher(full_warning_text, disk_cash, arg):
     """THE BUG: the fix line said `register_hasher(function, ...)`."""
@@ -115,7 +111,7 @@ def test_registering_a_hasher_for_an_ordinary_type_is_silent(disk_cash):
 # ---------------------------------------------------------------------------
 
 
-def test_a_frame_next_to_a_lambda_blames_the_lambda(disk_cash):
+def test_a_frame_next_to_a_partial_of_a_lambda_blames_the_partial(disk_cash):
     pd = pytest.importorskip("pandas")
 
     @disk_cash.cache
@@ -124,10 +120,10 @@ def test_a_frame_next_to_a_lambda_blames_the_lambda(disk_cash):
 
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
-        score(pd.DataFrame({"a": [1, 2]}), lambda d: d * 2)
+        score(pd.DataFrame({"a": [1, 2]}), functools.partial(lambda d, k: d * k, k=2))
     found = _messages(rec, "KEY-UNHASHABLE-ARG")
     assert found
-    assert "of type function" in found[0]
+    assert "of type partial" in found[0]
     assert "DataFrame" not in found[0]
 
 

@@ -719,7 +719,7 @@ class KeyBuilder:
         arguments, as `ArgHasher.serialize_args` does for a default: that
         would key the parameters the user left out."""
         try:
-            return self._args.hash_payload(*keyed)
+            return self._args.hash_call_payload(*keyed)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
             failure.append(e)
             return None

@@ -1133,7 +1133,7 @@ for example in a test.
 
 ## Common questions
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3514afa3, cash/decorator/arg_hashing.py:ArgHasher.arg_hash @59bed08e -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3514afa3, cash/decorator/arg_hashing.py:ArgHasher.arg_hash @cdac9dca -->
 **Do new command-line flags make every cached function miss?** No. Only a
 function that reads `sys.argv` or calls `parse_args()` itself, or through a
 helper, is keyed by the command line. One that gets the parsed values as

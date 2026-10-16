@@ -819,6 +819,7 @@ class CodeArgs:
                 if is_user_code_carrier(carrier):
                     parts.extend(self._carrier_read_global_parts(carrier, func_name, owner_code))
                     parts.extend(self._carrier_capture_parts(carrier))
+                    parts.extend(self._function_capture_parts(carrier))
                     env |= self._carrier_environment_reads(carrier)
                     self._warn_untrackable_in_carrier_once(carrier, func_name, param)
                     self._warn_ambient_in_carrier_once(carrier, func_name, param)
@@ -846,6 +847,17 @@ class CodeArgs:
             f"captures:{fn.__qualname__}:{self._values.helper_identity(fn)}"
             for fn in self._capturing_functions(carrier)
         ]
+
+    def _function_capture_parts(self, carrier: Any) -> list[str]:
+        """Key parts for what a function *carrier*'s closure captured:
+        ``make(3)`` and ``make(4)`` return one code reading ``k`` from a
+        cell, and key apart by it, as a helper's captures do
+        (`HelperIdentity.captures_digest`). Its defaults are keyed with its
+        code (`CodeSurface.code_surface_hash`)."""
+        if type(carrier) is not types.FunctionType or not carrier.__closure__:
+            return []
+        captured = self._values.captures_digest(carrier)
+        return [f"captures:{carrier.__qualname__}:{captured}"] if captured else []
 
     def _capturing_functions(self, cls: type) -> tuple:
         """The functions of *cls* (`class_surface_functions`) with a closure

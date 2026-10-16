@@ -68,7 +68,7 @@ warning; `allow_random=True` accepts that on purpose.
 
 ## How arguments are hashed
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @cba92fc6, cash/decorator/arg_hashing.py:ArgHasher._nested_hasher @0488bded -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @cba92fc6, cash/decorator/arg_hashing.py:ArgHasher._nested_hasher @2c40e74b -->
 Each argument is fingerprinted by the first rule that applies:
 
 1. A hasher you registered with `cash.register_hasher(T, fn, override=True)`.
@@ -81,7 +81,10 @@ Each argument is fingerprinted by the first rule that applies:
 4. An identity tag cash keeps current, such as the one a `frozen=True`
    cached function puts on its result.
 5. A hasher you registered without `override=True`.
-6. The pickled value, in one canonical form: sets in sorted order, every
+6. For a lambda or a closure of yours, which pickle cannot write, its name;
+   its code, the globals that code reads and the values its closure captured
+   are keyed with the state, as code passed as an argument.
+7. The pickled value, in one canonical form: sets in sorted order, every
    container tagged with its type.
 
 <!-- claim: cash/kept_state.py:chooses_its_state @2d177a27, cash/kept_state.py:left_out_attrs @28c3abed -->
@@ -97,7 +100,8 @@ library's class is keyed by what it pickles.
 
 Inside a list, tuple, set or dict argument, a value a registered hasher, a
 `__cash_key__` or a built-in content hasher covers is hashed by it too;
-everything else is pickled. A numba-compiled function is keyed by the name of
+everything else is pickled, a lambda or a closure of yours keyed as at the top
+level. A numba-compiled function is keyed by the name of
 the function it compiles and its compile options, as a function is by its
 name; the code of either is keyed with the state, as code passed as an
 argument.

@@ -1491,8 +1491,8 @@ class DatabaseSession:
 cash.register_hasher(DatabaseSession, lambda s: s.database_url)
 ```
 
-For a closure, `lambda` or `functools.partial`, pass a module-level function
-and give the captured values as arguments
+For a `functools.partial` of a closure or `lambda`, or a library's closure,
+pass a module-level function and give the captured values as arguments
 ([Code you pass as an argument](decorator-limitations.md#code-you-pass-as-an-argument)).
 
 **When it is safe to ignore.** When you do not need that call cached.

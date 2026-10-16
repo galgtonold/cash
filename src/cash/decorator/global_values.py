@@ -99,6 +99,11 @@ class GlobalValues:
         closure captured (`HelperIdentity.identity`)."""
         return self._helpers.identity(fn)
 
+    def captures_digest(self, fn: Any) -> str:
+        """What *fn*'s closure captured, as a helper's captures are keyed
+        (`HelperIdentity.captures_digest`)."""
+        return self._helpers.captures_digest(fn)
+
     def data_callable_identity(self, fn: Any) -> str:
         """A callable found INSIDE a data global, identified by what calling it runs.
 

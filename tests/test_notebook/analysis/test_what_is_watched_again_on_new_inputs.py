@@ -41,6 +41,13 @@ SOURCES = {
     "seeded": "def seeded(n):\n    return random.random() * n\n",
     "log": "def log(msg):\n    with LOG.open('a') as fh:\n        fh.write(msg)\n",
     "push_global": "def push_global(x):\n    heapq.heappush(H, x)\n",
+    "push": "def push(h, x):\n    heapq.heappush(h, x)\n",
+    "push_all": "def push_all(h, xs):\n    for x in xs:\n        heapq.heappush(h, x)\n",
+    "push_max": "def push_max(h, xs):\n    if xs:\n        heapq.heappush(h, max(xs))\n",
+    "push_late": "def push_late(h, xs):\n    if not xs:\n        return 0\n    heapq.heappush(h, xs[0])\n",
+    "push_each": "def push_each(h, xs):\n    for x in xs:\n        push(h, x)\n",
+    "push_via": "def push_via(h, xs):\n    push_all(h, xs)\n",
+    "push_in_comp": "def push_in_comp(h, xs):\n    return [heapq.heappush(h, x) for x in xs]\n",
 }
 
 
@@ -94,6 +101,29 @@ def test_what_only_a_helper_is_handed_keeps_its_verdict(stmt, exempt):
 def test_what_reaches_library_code_is_watched_again(stmt):
     assert "data" not in _exempt(stmt)
     assert "h" not in _exempt(stmt)
+
+
+@pytest.mark.parametrize(
+    "stmt",
+    [
+        "push_all(h, data)",
+        "n = push_all(h, data)",
+        "n = push_max(h, data)",
+        "n = push_late(h, data)",
+        "n = push_each(h, data)",
+        "n = push_via(h, data)",
+        "n = push_in_comp(h, data)",
+        # A helper that always changes `h`, called on some runs only.
+        "for x in data:\n    n = push(h, x)",
+        "out = [push(h, x) for x in data]",
+    ],
+)
+def test_what_a_helper_changes_on_some_runs_only_is_watched_again(stmt):
+    assert "h" not in _exempt(stmt)
+
+
+def test_what_a_helper_changes_on_every_run_keeps_its_verdict():
+    assert "h" in _exempt("n = push(h, 3)")
 
 
 def test_a_frame_read_through_a_view_keeps_its_verdict():

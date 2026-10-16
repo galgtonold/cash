@@ -77,15 +77,10 @@ From here on:
 - Change `large_dataset.csv` on disk and the statements that read it re-run.
 - Restart the kernel and run the cell: expensive results come back from disk.
 
-Two habits keep the slow statements cached:
-
-- **Fit a model in the assignment that binds it**,
-  `model = Ridge().fit(X, y)`: a separate `model.fit(X, y)` changes `model`
-  in place and runs every time. See
-  [Fitting models](../notebook_caching_api.md#fitting-models).
-- **Build a new value instead of changing one from an earlier cell**,
-  `df = df.assign(c=...)` rather than `df["c"] = ...`: a change in place runs
-  every time. See [What gets cached](../notebook_caching_api.md#what-gets-cached).
+One habit keeps slow fits cached: **fit a model in the assignment that binds
+it**, `model = Ridge().fit(X, y)`. A separate `model.fit(X, y)` changes `model`
+in place and runs every time. See
+[Fitting models](../notebook_caching_api.md#fitting-models).
 
 ## Found a problem?
 
