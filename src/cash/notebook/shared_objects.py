@@ -39,6 +39,7 @@ import decimal
 import enum
 import fractions
 import gc
+import inspect
 import pathlib
 import sys
 import types
@@ -152,13 +153,38 @@ def _bound_objects(value: Any) -> list[Any] | None:
     object of the run that stored it; a closure (``make(store)``) keeps the
     cells of that run. Either way the restored hook would write into an
     object that is not the one the notebook's names are bound to.
+
+    A closure a library's module binds by its own name (sklearn's
+    ``load_iris``, wrapped by its parameter check) carries nothing: pickle
+    and a deep copy hand back that very function (`_found_by_name`). Counted
+    as carrying its cells, each import of one searched every object the
+    garbage collector tracks for their holders, and found the module: 2 s
+    on E11's ``from sklearn.datasets import load_iris``.
     """
     if isinstance(value, types.FunctionType):
-        return list(value.__closure__) if value.__closure__ else None
+        return list(value.__closure__) if value.__closure__ and not _found_by_name(value) else None
     owner = getattr(value, "__self__", None)
     if owner is None or isinstance(owner, (types.ModuleType, type)):
         return None
     return [owner]
+
+
+def _found_by_name(fn: types.FunctionType) -> bool:
+    """*fn* is found again by its module and qualified name, as pickle looks
+    it up, in a module other than the notebook's own (``__main__``, whose
+    functions a store keeps by value)."""
+    module = getattr(fn, "__module__", None) or ""
+    if module == "__main__":
+        return False
+    target: Any = sys.modules.get(module)
+    for part in (getattr(fn, "__qualname__", "") or "").split("."):
+        if target is None or part.startswith("<"):
+            return False
+        try:
+            target = inspect.getattr_static(target, part, None)
+        except Exception:  # noqa: BLE001 - an object that cannot be asked holds no such name
+            return False
+    return target is fn
 
 
 def is_value(value: Any, value_types: tuple[type, ...]) -> bool:
@@ -944,10 +970,13 @@ def _check_group(
         for mapping, key in named_held:
             if id(mapping.get(key)) in nodes:
                 inbound[id(mapping.get(key))] += 1
+        counted = dict(inbound)
         excess = excess_refs(nodes, inbound, checked)
         if excess and _count_leaf_attributes(nodes, inbound):
             excess = excess_refs(nodes, inbound, checked)
         if not excess:
+            return set(), set()
+        if _held_within(nodes, counted, excess, value_types):
             return set(), set()
         shared = {owner[k] for k in excess}
         if user_ns is None:
@@ -972,6 +1001,82 @@ def _check_group(
         # again of the full walk, with none of these references left.
         del nodes, inbound, checked, owner, breaks, internal, excess, found, partial
     return shared, None
+
+
+#: Most objects `_held_within` reads inside the walk's leaves, and most
+#: nodes a walk may have for it to try.
+_WITHIN_MAX_OBJECTS = 20_000
+_WITHIN_MAX_NODES = 5_000
+
+#: What `_held_within` never reads into: a holder of one of these is shared.
+_NOT_WITHIN = (
+    type,
+    types.ModuleType,
+    types.FunctionType,
+    types.BuiltinFunctionType,
+    types.MethodType,
+    types.CodeType,
+    types.FrameType,
+)
+
+
+def _held_within(nodes: dict[int, Any], inbound: dict[int, int], excess: list[int], value_types: tuple) -> bool:
+    """Whether each reference the walk left over on *excess* comes from
+    inside the walk's leaves, from objects held only from inside in turn.
+
+    A library's object the walk does not look into (`children_of` None)
+    can hold its parent: each trace and the layout of a plotly figure point
+    back at the figure (``_parent``), so the figure read as held from
+    outside, and a search of every object the garbage collector tracks ran
+    for each statement making one -- 147 times, 6.6 s, on E23. Here the
+    objects inside the leaves are read down (`gc.get_referents`), and each
+    reference to an excess node is looked for among them; the objects
+    holding it must have no reference from outside either, up to the
+    nodes. Anything not found -- an object outside, a C object that does
+    not list what it holds, too many objects -- leaves the answer False,
+    and the search up runs as before. *inbound* is the walk's own count,
+    before `_count_leaf_attributes`.
+    """
+    if len(nodes) > _WITHIN_MAX_NODES:
+        return False
+    within: dict[int, Any] = {}
+    refs: dict[int, int] = {}
+    holders: dict[int, list[int]] = {}
+    stack = [obj for obj in nodes.values() if not is_value(obj, value_types) and children_of(obj) is None]
+    if not stack:
+        return False
+    while stack:
+        parent = id(stack[-1])
+        referents = gc.get_referents(stack.pop())
+        for child in referents:
+            if is_value(child, value_types) or isinstance(child, _NOT_WITHIN):
+                continue
+            key = id(child)
+            refs[key] = refs.get(key, 0) + 1
+            holders.setdefault(key, []).append(parent)
+            if key in nodes or key in within:
+                continue
+            if len(within) >= _WITHIN_MAX_OBJECTS:
+                return False
+            within[key] = child
+            stack.append(child)
+        child = None  # no reference of this frame's left in the counts
+        del referents
+    todo = list(excess)
+    done: set[int] = set()
+    while todo:
+        key = todo.pop()
+        if key in done:
+            continue
+        done.add(key)
+        held = inbound.get(key, 0) + refs.get(key, 0)
+        if key in nodes:
+            if sys.getrefcount(nodes[key]) - held > _OVERHEAD:
+                return False
+        elif sys.getrefcount(within[key]) - held > _OVERHEAD:
+            return False
+        todo.extend(holder for holder in holders.get(key, ()) if holder in within)
+    return True
 
 
 def _count_leaf_attributes(nodes: dict[int, Any], inbound: dict[int, int]) -> bool:

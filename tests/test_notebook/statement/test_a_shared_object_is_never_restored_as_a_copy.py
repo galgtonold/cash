@@ -229,16 +229,26 @@ def test_a_hook_writes_into_the_notebooks_object(cash_magics, name):
         assert eval(probe, cash_magics.shell.user_ns) == [5], f"{run} Run All"
 
 
-def test_an_object_its_own_parts_hold_says_so(cash_magics, statement_processor):
+def test_an_object_only_its_own_parts_hold_is_cached(cash_magics, statement_processor):
     """A library object whose parts hold it (each node of a minidom
-    document holds the document, as each sheet of an openpyxl workbook
-    holds the workbook) is counted as held, and no variable holds it: the
-    reason says what holds it, not another variable."""
+    document holds the document, as each trace of a plotly figure holds the
+    figure) is read down to those parts (`_held_within`): when nothing
+    else holds them, nothing else holds it, and the statement is cached."""
     run_cash_cell(cash_magics, f"{SETUP}\nfrom xml.dom import minidom")
     metrics = statement_processor.process_statement("doc = minidom.parseString(slow('<a><b/><c/></a>'))")
     reasons = " ".join(metrics.get("uncacheable_reasons") or [])
-    assert "'doc' is a Document whose own parts hold it" in reasons, reasons
-    assert "another variable or container" not in reasons, reasons
+    assert "hold" not in reasons, reasons
+
+
+def test_a_part_held_from_outside_still_refuses(cash_magics, statement_processor):
+    """Control: a closure holding a node of the document holds the document
+    through it, and no restore can rebind it."""
+    run_cash_cell(cash_magics, f"{SETUP}\nfrom xml.dom import minidom")
+    statement_processor.process_statement("doc = minidom.parseString('<a><b/><c/></a>')")
+    statement_processor.process_statement("keep = (lambda held: lambda: held)(doc.documentElement)")
+    metrics = statement_processor.process_statement("docs = {'doc': doc, 'tag': slow('v1')}")
+    reasons = " ".join(metrics.get("uncacheable_reasons") or [])
+    assert "hold" in reasons, reasons
 
 
 def test_a_variable_holding_a_part_is_still_named(cash_magics, statement_processor):

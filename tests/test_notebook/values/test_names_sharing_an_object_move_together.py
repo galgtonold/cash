@@ -138,3 +138,40 @@ def test_a_numpy_view_moves_when_its_base_changes(cash_magics):
     run_cash_cell(cash_magics, cells[2], cells=cells)
     assert lineage["head"] != before
     assert lineage["other"] == control
+
+
+def test_a_name_reached_through_several_partners_is_read_once(cash_magics, monkeypatch):
+    """``voting.voting = "soft"`` moved on the four models the voting
+    classifier holds through each list that held them too, and read each
+    model again at every move: 2-3 s for a statement taking 0.1 ms. Each
+    name is moved once per partner, and its content read once, after."""
+    from cash.notebook.statement import lineage as lineage_module
+
+    cash_magics.cash_on("")
+    cash_magics.badges.mode = "off"
+    cells = [
+        "class Model:\n    def __init__(self, n):\n        self.n = n",
+        "a = Model(1)\nb = Model(2)",
+        "models = [a, b]\nnamed = [('a', a), ('b', b)]",
+        "holder = {'models': models, 'named': named}",
+        "holder['models'][0].n = 5",
+    ]
+    for cell in cells[:4]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    before = dict(cash_magics.tracking_state.variable_lineage)
+    reads = []
+    tracker = next(
+        v for v in vars(lineage_module).values() if isinstance(v, type) and "_update_variable_content_hashes" in vars(v)
+    )
+    real = tracker._update_variable_content_hashes
+    monkeypatch.setattr(
+        tracker,
+        "_update_variable_content_hashes",
+        lambda self, state, name, *rest, **kw: reads.append(name) or real(self, state, name, *rest, **kw),
+    )
+    run_cash_cell(cash_magics, cells[4], cells=cells)
+    after = cash_magics.tracking_state.variable_lineage
+    moved = {name for name in ("a", "b", "models", "named") if after[name] != before[name]}
+    assert "a" in moved and "models" in moved
+    assert all(reads.count(name) <= 1 for name in moved), reads
+    assert cash_magics.shell.user_ns["a"].n == 5

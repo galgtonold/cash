@@ -331,14 +331,31 @@ def _jupyter_runtime_dir() -> Path | None:
         return None
 
 
-def _pid_alive(pid: object) -> bool:
-    """False only when *pid* names a process that is known to be gone."""
+#: Clock rounding between a process's start time and a file's mtime.
+_PID_REUSE_SLACK_S = 1.0
+
+
+def _pid_alive(pid: object, written_at: float | None = None) -> bool:
+    """False only when *pid* names a process that is known to be gone.
+
+    A process started after its server file was written (*written_at*) is not
+    the server that wrote it: the server died and the system handed its pid
+    to a new process (Windows does so soon).
+    """
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return True
     try:
         import psutil
-
-        return psutil.pid_exists(pid)
+    except ImportError:
+        return True
+    try:
+        if not psutil.pid_exists(pid):
+            return False
+        if written_at is None:
+            return True
+        return psutil.Process(pid).create_time() <= written_at + _PID_REUSE_SLACK_S
+    except psutil.NoSuchProcess:
+        return False
     except Exception:  # noqa: BLE001 - an unknown answer must not demote a server
         return True
 
@@ -377,7 +394,7 @@ def _collect_running_servers() -> list[dict]:
         if not isinstance(info, dict) or not isinstance(info.get("url"), str):
             logger.debug("[UTILS] skipping server file %s: no url", info_file)
             continue
-        ranked.append((_pid_alive(info.get("pid")), mtime, info))
+        ranked.append((_pid_alive(info.get("pid"), mtime), mtime, info))
     ranked.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
     servers: list[dict] = []
     seen: set[str] = set()

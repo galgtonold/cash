@@ -375,14 +375,18 @@ class StatementLineageBuilder:
         from, not this cell's own prior output (`StaleValueGuard`).
         """
         user_ns = self.shell.user_ns
+        # A name the walk reaches from several of its partners is moved on
+        # once by each, and its content is read once, at its last lineage,
+        # after the walk: nothing runs in between to change it. Read at each
+        # move, a voting classifier's four fitted models were read again
+        # through each list that held them, 2-3 s per ``clf.voting = "soft"``.
+        moved: dict[str, str] = {}
 
         def record(target: str, lineage_hash: str) -> None:
-            value = user_ns.get(target)
-            tracking_state.lineage.record(target, lineage_hash, value=value)
-            if target in tracking_state.current_session_hashes:
-                self._update_variable_content_hashes(tracking_state, target, value, lineage_hash)
+            tracking_state.lineage.record(target, lineage_hash, value=user_ns.get(target))
+            moved[target] = lineage_hash
 
-        return bump_derived_lineages(
+        bumped = bump_derived_lineages(
             tracking_state.derivation_edges,
             tracking_state.variable_lineage,
             outputs,
@@ -392,6 +396,10 @@ class StatementLineageBuilder:
             skip=skip,
             code=code,
         )
+        for target, lineage_hash in moved.items():
+            if target in tracking_state.current_session_hashes:
+                self._update_variable_content_hashes(tracking_state, target, user_ns.get(target), lineage_hash)
+        return bumped
 
     def _record_output(
         self,

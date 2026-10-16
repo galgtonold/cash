@@ -137,9 +137,14 @@ def _write_server_file(runtime, name, *, url, root, token="", pid=None, age=0.0,
     }
     path = runtime / name
     path.write_text(json.dumps(info), encoding="utf-8")
-    stamp = time.time() - age
-    os.utime(path, (stamp, stamp))
+    os.utime(path, (_NOW - age, _NOW - age))
     return path
+
+
+# "Now" for the files' ages: a minute after this process started, at least, so
+# a file this process "wrote" 60 seconds ago is not older than the process
+# (cash takes a process started after its server's file for a reused pid).
+_NOW = max(time.time(), psutil.Process().create_time() + 120)
 
 
 def _closed_port_url() -> str:
@@ -227,6 +232,18 @@ def test_a_stale_entry_before_the_live_one_costs_at_most_one_timeout(runtime_dir
     assert elapsed < sd._SESSIONS_TIMEOUT_S + 1.0, f"lookup took {elapsed:.2f}s"
 
 
+def _a_dead_pid() -> int:
+    """The pid of a child process that has exited. Windows hands a freed pid
+    to the next process soon, and other test workers start processes all the
+    time: one child's pid was taken again before the check (CI, Windows)."""
+    for _ in range(20):
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()
+        if not psutil.pid_exists(proc.pid):
+            return proc.pid
+    pytest.fail("every exited child's pid was taken again at once")
+
+
 @pytest.mark.parametrize("where", ["same url", "another server"])
 def test_a_dead_servers_newer_file_does_not_shadow_the_live_one(runtime_dir, serve, tmp_path, where):
     """A dead server's file is asked after the live ones, or not at all.
@@ -236,10 +253,7 @@ def test_a_dead_servers_newer_file_does_not_shadow_the_live_one(runtime_dir, ser
     server": something still answers at the dead entry's address with the same
     kernel id (a forwarded port, say) and the wrong root.
     """
-    proc = subprocess.Popen([sys.executable, "-c", "pass"])
-    proc.wait()
-    dead_pid = proc.pid
-    assert not psutil.pid_exists(dead_pid), "precondition: the child process is gone"
+    dead_pid = _a_dead_pid()
 
     live = serve()
     right = tmp_path / "right"
@@ -249,6 +263,21 @@ def test_a_dead_servers_newer_file_does_not_shadow_the_live_one(runtime_dir, ser
     _write_server_file(runtime_dir, f"jpserver-{dead_pid}.json", url=dead_url, root=wrong, pid=dead_pid, age=0)
 
     assert sd.get_notebook_path() == os.path.join(str(right), NB_PATH)
+
+
+def test_a_dead_servers_pid_taken_by_a_new_process_counts_as_dead():
+    """Windows hands a dead server's pid to the next process soon. A process
+    that started after the server's file was written did not write it, so
+    that file ranks with the dead servers' ones."""
+    newcomer = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        started = psutil.Process(newcomer.pid).create_time()
+        assert not sd._pid_alive(newcomer.pid, started - 30), "written before the process started"
+        assert sd._pid_alive(newcomer.pid, started + 5), "written by the process"
+        assert sd._pid_alive(newcomer.pid), "no file time to compare"
+    finally:
+        newcomer.kill()
+        newcomer.wait()
 
 
 def test_empty_or_corrupt_server_files_are_skipped(runtime_dir, serve, tmp_path):

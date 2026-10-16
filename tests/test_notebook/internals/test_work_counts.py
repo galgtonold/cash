@@ -66,7 +66,11 @@ def test_a_module_table_is_not_hashed_again_before_an_unrelated_cell(cash_magics
     assert unrelated.bytes <= 64 * KB
 
 
-def test_a_comprehension_keys_a_bounded_number_of_calls(cash_magics):
+def test_a_comprehension_keys_a_bounded_number_of_calls(cash_magics, cash_instance):
+    # No call is stored, however slow the machine: a call stalled past the
+    # 3 ms floor in the first comprehension was stored and served in the
+    # second, and a site with hits is judged only after 50 keyed calls.
+    cash_instance.config.call_cost_floor_seconds = 10.0
     keyed = {}
     hashed = {}
     run_cash_cell(cash_magics, "def f(i):\n    return i * 2")

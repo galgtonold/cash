@@ -183,16 +183,26 @@ def test_a_statement_reads_its_argument_once_where_nothing_runs_between(
 nx = pytest.importorskip("networkx")
 
 
-def _pickles_of(monkeypatch, mock_shell, name):
+@pytest.fixture
+def unwatched():
+    """No value watched or sighted yet. The watchers live as long as the
+    process: a sighting left by an earlier test at the address a new value
+    takes counts as that value's first, so the value is watched one read
+    sooner and a later check is answered without a read."""
+    value_watch.reset()
+
+
+def _pickles_of(monkeypatch, mock_shell, name, label=lambda value: 1):
     """Count the pickles a digest takes of *name*: whole
     (`kept_state.dumps_also_keyed` writing to a hashing sink) or keyed apart
-    (`kept_state.dumps`). A store's pickle of its own is not a read."""
+    (`kept_state.dumps`). A store's pickle of its own is not a read. Each
+    read is recorded as ``label(value)``."""
     seen = []
     real, real_also = kept_state.dumps, kept_state.dumps_also_keyed
 
     def counted(value):
         if value is not None and value is mock_shell.user_ns.get(name):
-            seen.append(1)
+            seen.append(label(value))
 
     def dumps(value, *a, **k):
         counted(value)
@@ -208,27 +218,45 @@ def _pickles_of(monkeypatch, mock_shell, name):
     return seen
 
 
-def test_a_graph_a_statement_changes_is_read_once_after_it(cash_magics, mock_shell, monkeypatch):
+@pytest.mark.parametrize("watched_before", [False, True])
+def test_a_graph_a_statement_changes_is_read_once_after_it(
+    cash_magics, mock_shell, monkeypatch, unwatched, watched_before
+):
     """p20: ``nx.set_node_attributes(G, region, "region")``. The check
     after it reads ``G`` to see it changed; ``G`` is then an output, and
-    its session hash is that same digest: no code ran between."""
+    its session hash is that same digest: no code ran between. The check
+    before it reads ``G`` too, unless the watchers already prove ``G``
+    unchanged since a read before the statement."""
+    if watched_before and (not _native.AVAILABLE or value_watch.VERIFY):
+        pytest.skip("needs the C watchers, without CASH_CWATCH_VERIFY=1 hashing behind every reuse")
+    from cash.value_hash import compute_hash
+
     run_cash_cell(cash_magics, "import networkx as nx")
     run_cash_cell(cash_magics, "G = nx.gnm_random_graph(200, 800, seed=1)")
     run_cash_cell(cash_magics, "region = {n: n % 3 for n in G}")
-    reads = _pickles_of(monkeypatch, mock_shell, "G")
+    if watched_before:
+        # Watched from its second sighting on. Making G counts as one only
+        # when its session hash was read from G; a digest the statement
+        # already held (`taken`) is no sighting, so count them out here.
+        for _ in range(3):
+            if value_watch.peek(mock_shell.user_ns["G"]) is not None:
+                break
+            compute_hash(mock_shell.user_ns["G"])
+        assert value_watch.peek(mock_shell.user_ns["G"]) is not None
+    reads = _pickles_of(monkeypatch, mock_shell, "G", label=lambda g: "after" if "region" in g.nodes[5] else "before")
 
     run_cash_cell(cash_magics, 'nx.set_node_attributes(G, region, "region")')
 
     # Was 3: before, after, and the session hash.
-    assert len(reads) == 2
+    assert reads == (["after"] if watched_before else ["before", "after"])
     assert mock_shell.user_ns["G"].nodes[5]["region"] == 2
     state = cash_magics.tracking_state
-    from cash.value_hash import compute_hash
-
     assert state.current_session_hashes["G"] == compute_hash(mock_shell.user_ns["G"])
 
 
-def test_a_graph_read_by_a_call_inside_print_is_read_once_before_the_call(cash_magics, mock_shell, monkeypatch):
+def test_a_graph_read_by_a_call_inside_print_is_read_once_before_the_call(
+    cash_magics, mock_shell, monkeypatch, unwatched
+):
     """p20 ``print("density:", round(nx.density(G), 6))``-like: the call's
     argument hash before it takes the statement's own, when the statement
     took one; after the call it is read again."""
