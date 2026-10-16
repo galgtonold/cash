@@ -705,6 +705,19 @@ class DigestHandoff:
     def withdraw_offer(self) -> None:
         handed_digests.withdraw()
 
+    def held(self) -> list[dict[int, tuple[Any, str]]]:
+        """The mappings in which this handoff holds the values it took
+        digests of, until the next statement: cash's own references, which
+        the share check counts as such. Counted as a holder, the offer of
+        ``ds = Dataset(file_list, labels)`` made every such statement search
+        the heap (0.1-0.7 s on E11) and refuse it."""
+        held = [self._before, self._after]
+        if self._settled:
+            held.append(self._settled)
+        if self._offer is not None:
+            held.append(self._offer.digests)
+        return held
+
     def begin_settled(self) -> None:
         """The statement ran and nothing of the user's runs until its
         outputs are recorded: keep what `digest_after` reads, for them

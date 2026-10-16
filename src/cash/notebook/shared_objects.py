@@ -1487,6 +1487,8 @@ def _walk_held(
         seen.add(id(obj))
         out = edges.setdefault(id(obj), [])
         children = children_of(obj)
+        if children is None:
+            children = _iterator_parts(obj)
         if not children or exact.issuperset(map(type, children)):
             continue  # nothing but values, asked at C speed (see `_walk`)
         for child in children:
@@ -1515,6 +1517,23 @@ def _walk_held(
                 if not cut or ckey not in cut:
                     stack.append(child)
     return reach, refs, edges
+
+
+def _iterator_parts(value: Any) -> list[Any] | None:
+    """What an iterator written in C keeps (`gc.get_referents`), or None
+    for anything else.
+
+    ``enumerate``, ``zip`` and ``itertools.product`` keep the tuple they
+    hand out and fill it again for the next item, so once a loop over one
+    ends, that tuple still holds the item the loop took last. Inside what
+    cash holds (a loop's iterable), it is cash's: after ``for i, example in
+    enumerate(ds):`` it read as a second holder of ``example``, and the
+    search of the whole heap for it cost 0.2-0.5 s a run on E11.
+    """
+    kind = type(value)
+    if getattr(kind, "__next__", None) is None or hasattr(value, "__dict__"):
+        return None
+    return gc.get_referents(value)
 
 
 #: Most containers below a root of JSON-like data that `_walk` takes on
