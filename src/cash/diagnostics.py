@@ -276,6 +276,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # falling back to its process-local identity
         "KEY-ITERATOR-CONSUMED",  # building the key read an iterator argument
         # (a key= function, a registered hasher); the call ran uncached
+        "KEY-MEMO-BEFORE-IMPORT",  # a functools memo of the user's held results
+        # when cash was imported; a file it read then is not tracked
         "KEY-NETWORK-READ",  # the body fetches from a server; its answer is not
         # in the key, so it is served until a ttl= expires it
         "KEY-DYNAMIC-DEPENDENCY",  # code reached through an argument resolves a
@@ -303,6 +305,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # longer than caching it could save, so it ran uncached
         "NOTEBOOK-ANALYSIS-FAILED",  # a safety check on a statement raised, so
         # the statement ran uncached
+        "NOTEBOOK-FILE-REWRITE-CHAIN",  # cells that each read one file and
+        # write it back re-run the ones above them on every run
         "NOTEBOOK-FILE-ROUNDTRIP",  # a statement reads back a file a statement
         # of this session wrote, and each new write makes it and what is built
         # from it run again
@@ -320,6 +324,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # run are not re-checked, statements still cache on their own inputs
         "NOTEBOOK-RELOAD-STATE",  # an edited module was reloaded, or the
         # kernel restarted, and cash cannot rebuild the state a cell set on it
+        "NOTEBOOK-THREAD-ALIVE",  # a thread the cell started still runs after
+        # it ended; what it changes from then on is outside cash's view
         "NOTEBOOK-SAVEFIG-SKIP",  # refused to re-run plt.savefig() during
         # reconstruction; it would overwrite your chart
         "NOTEBOOK-SHARE-UNCHECKED",  # cash could not find every variable

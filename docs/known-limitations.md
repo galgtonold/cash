@@ -465,6 +465,11 @@ object, `vars(self)` and a library's own lookups (`namedtuple`) do not count.
 A thread that changes data after its cell has finished is outside cash's view.
 An earlier cell re-run can see the changed data.
 
+<!-- claim: cash/notebook/background_threads.py:BackgroundThreads.cell_ends @9fdaf2e9 -->
+cash names a cell that ends while a thread it started, running your code, is
+still alive: [NOTEBOOK-THREAD-ALIVE](warnings.md#notebook-thread-alive).
+**Fix:** join the thread before the cell ends (`t.join()`).
+
 ### A loop variable changed before it is read
 
 <!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @5304abe8 -->
@@ -525,7 +530,7 @@ recorded by their entry points.
 
 ### A file read into a memo before cash was imported
 
-<!-- claim: cash/__init__.py:_watch_reads_from_import @072f3639 -->
+<!-- claim: cash/__init__.py:_watch_reads_from_import @0d64857e -->
 **Symptom:** a cached function gets its config from a loader memoised with
 `functools.lru_cache`, you edit the config file, and the function returns
 the old result with no warning.
@@ -535,6 +540,11 @@ ran before that (it was imported, and called, ahead of `cash`) read the file
 where cash could not see it, so later calls get the memo and record no file.
 A loader first called after `import cash` is recorded, even when that call
 came from outside any cached function.
+
+<!-- claim: cash/tracking/memos_before_import.py:find_memos_filled_before_import @e09c920f -->
+At `import cash`, cash names each memo of yours (`lru_cache`, `cache`)
+that already holds results:
+[KEY-MEMO-BEFORE-IMPORT](warnings.md#key-memo-before-import).
 
 **Fix:** import `cash` before the modules that load config, or pass the path
 as an argument (`load_cfg("config.yaml")` inside the cached function).
@@ -663,8 +673,11 @@ global or a file runs again in full.
 
 ### Chained file-writing cells re-run each other
 
+<!-- claim: cash/notebook/file_round_trips.py:FileRoundTrips.cell_ends @21f64ea8 -->
 If N cells each read a file, change it and write it back, a Run All costs
 N(N+1)/2 executions, not N, because each writer re-runs the writers before it.
+cash names those cells as soon as the second one runs:
+[NOTEBOOK-FILE-REWRITE-CHAIN](warnings.md#notebook-file-rewrite-chain).
 **Fix:** write to separate files.
 
 ## Editing without saving

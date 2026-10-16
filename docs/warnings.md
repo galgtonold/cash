@@ -83,8 +83,8 @@ its warning class.
 | [Caching](#cache-codes) | `CACHE-` | 19 | Caching happened, or refused to, and it is worth saying. |
 | [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
 | [Side effects](#impure-codes) | `IMPURE-` | 4 | The function does something a cache hit will not repeat. |
-| [Cache keys](#key-codes) | `KEY-` | 24 | Something the result depends on may not be in the cache key. |
-| [Notebook](#notebook-codes) | `NOTEBOOK-` | 11 | Notebook-wide machinery rather than one statement. |
+| [Cache keys](#key-codes) | `KEY-` | 25 | Something the result depends on may not be in the cache key. |
+| [Notebook](#notebook-codes) | `NOTEBOOK-` | 16 | Notebook-wide machinery rather than one statement. |
 | [Randomness](#random-codes) | `RANDOM-` | 3 | A cached value that randomness makes non-reproducible. |
 | [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
 | [Storing results](#store-codes) | `STORE-` | 8 | The call succeeded, but its result was not written. |
@@ -974,6 +974,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-HELPERS-UNWALKABLE](#key-helpers-unwalkable) | both | the code a function runs cannot all be found; not cached |
 | [KEY-INSTANCE-STATE](#key-instance-state) | decorator | a bound method's instance cannot be hashed |
 | [KEY-ITERATOR-CONSUMED](#key-iterator-consumed) | decorator | building the key read an iterator argument; the call ran uncached |
+| [KEY-MEMO-BEFORE-IMPORT](#key-memo-before-import) | both | a `functools` memo already held results when cash was imported |
 | [KEY-NETWORK-READ](#key-network-read) | decorator | the body reads from a server or database |
 | [KEY-OPAQUE-CALLABLE](#key-opaque-callable) | decorator | a callable's code cannot be hashed |
 | [KEY-SOURCE-CHANGED](#key-source-changed) | decorator | a code file changed after import |
@@ -1327,6 +1328,30 @@ call by something that does not read it.
 been read and you know the key did not read it. When it says it was read,
 the result of that call came from an emptied iterator.
 
+### KEY-MEMO-BEFORE-IMPORT {#key-memo-before-import}
+
+<span class="md-tag cash-warning-path">both</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/tracking/memos_before_import.py:find_memos_filled_before_import @e09c920f, cash/tracking/memos_before_import.py:warn_memos_filled_before_import @f66dd90f -->
+**What happened.** When `import cash` ran, a function of yours memoised
+with `functools.lru_cache` or `functools.cache` already held results: it
+was imported and called ahead of cash. The message names the memo (up to
+three of them) and points at its definition. It is shown once, at the
+import. Only module-level memos in your own modules are looked at.
+
+**Why it matters.** cash watches file reads from `import cash` on. A file
+the memo read before that was read where cash could not see it, and later
+calls are served from the memo and read nothing. A cached function that
+gets its data from the memo records no file, so an edit to that file
+returns the old result with no other warning.
+
+**What to do.** Import `cash` before the modules that call the memo, or
+pass the file's path as an argument (`load_cfg("config.yaml")`) from inside
+the cached function.
+
+**When it is safe to ignore.** When the memo reads no file (it computes
+from its arguments), or no cached function uses it.
+
 ### KEY-NETWORK-READ {#key-network-read}
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
@@ -1634,6 +1659,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
 | [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
+| [NOTEBOOK-FILE-REWRITE-CHAIN](#notebook-file-rewrite-chain) | notebook | cells that each read one file and write it back re-run each other |
 | [NOTEBOOK-FILE-ROUNDTRIP](#notebook-file-roundtrip) | notebook | a file written in this session is read back, so the read reruns after every write |
 | [NOTEBOOK-FORWARD-READ](#notebook-forward-read) | notebook | the cell reads a name only a cell below binds, so it runs uncached |
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
@@ -1643,6 +1669,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
 | [NOTEBOOK-SHARE-UNCHECKED](#notebook-share-unchecked) | notebook | not every variable sharing an object with a statement's outputs was found in time |
 | [NOTEBOOK-SHARED-KEPT](#notebook-shared-kept) | notebook | a value a variable below shares is kept as it is for a cell re-run on its own |
+| [NOTEBOOK-THREAD-ALIVE](#notebook-thread-alive) | notebook | a thread the cell started still runs after the cell ended |
 
 ### NOTEBOOK-ANALYSIS-BUDGET {#notebook-analysis-budget}
 
@@ -1762,6 +1789,32 @@ see without cash, but a result built from them is not the notebook's result.
 cells below it.
 
 **When it is safe to ignore.** While you are still looking into the error.
+
+### NOTEBOOK-FILE-REWRITE-CHAIN {#notebook-file-rewrite-chain}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/notebook/file_round_trips.py:FileRoundTrips.cell_ends @21f64ea8, cash/notebook/ipython/cell_executor.py:CellExecutor._warn_at_cell_end @f63392bc -->
+**What happened.** Two or more cells each read the same file, change it
+and write it back (`df = pd.read_csv(P)`, `df["x"] += 1`,
+`df.to_csv(P)`), and running one of them re-ran another above it first.
+The message names the cells and the file. It is shown once per file per
+session, as soon as the second such cell runs, so it names the cells seen
+so far.
+
+**Why it matters.** Each write makes the file new for the cells above that
+read it, so before a cell runs, cash brings those cells up to date by
+running them again, and each of them writes the file again. A Run All of N
+such cells runs them N(N+1)/2 times instead of N, and a change that adds to
+the file (a column incremented, rows appended) is applied more than once.
+
+**What to do.** Have each cell write its own file (`data_step2.csv`) and
+read the one the cell before it wrote, or keep the data in a variable and
+write the file once, in the last cell.
+
+**When it is safe to ignore.** Never for a change that adds to what is in
+the file. For one that gives the same file however often it runs, when
+the cells are cheap.
 
 ### NOTEBOOK-FILE-ROUNDTRIP {#notebook-file-roundtrip}
 
@@ -1978,6 +2031,29 @@ the top, or from the cell that creates the value.
 
 **When it is safe to ignore.** When the cell's change is meant to accumulate,
 or applying it twice does not change the result (`s.add(x)` on a set).
+
+### NOTEBOOK-THREAD-ALIVE {#notebook-thread-alive}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/background_threads.py:BackgroundThreads.cell_ends @9fdaf2e9, cash/notebook/background_threads.py:user_code_of @310cd8c4 -->
+**What happened.** A cell started a thread and finished while the thread
+was still running. The message names the cell, the thread and the function
+it runs. Only a thread that runs your own code counts: a pool's idle
+workers or a library's helper thread run the library's code and are left
+out. It is shown once per cell.
+
+**Why it matters.** What the thread changes after the cell finished (a list
+it fills, a file it writes) is outside cash's view. The statements that read
+those values were keyed and stored on what they held when the cell ended,
+and a cell above that is re-run can see the changed values.
+
+**What to do.** Join the thread before the cell ends (`t.join()`), or have
+it hand back its result (`future.result()` with `concurrent.futures`) in the
+cell that uses it.
+
+**When it is safe to ignore.** When the thread changes nothing a cell reads,
+such as a progress display or a server you query from outside the notebook.
 
 ## Randomness {#random-codes}
 

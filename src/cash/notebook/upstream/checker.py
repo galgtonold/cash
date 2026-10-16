@@ -117,6 +117,9 @@ class UpstreamChecker:
         self.compute_hash_fn: Callable[[Any], str] | None = compute_hash_fn
         #: The index of the cell checked last, for a run whose own index is unknown.
         self.last_cell_index: int | None = None
+        #: The source of the cell checked last and its index in the notebook,
+        #: when it was found: what a warning about that cell calls it.
+        self.last_found_cell: tuple[str, int] | None = None
         #: What a statement's text last took to run, or None (set by the
         #: magics, as the statement processor's): the cell's analysis budget.
         self.expected_run_time: Callable[[str], float | None] = lambda code: None
@@ -563,6 +566,7 @@ class UpstreamChecker:
         notebook_cells = self._as_run(notebook_cells, cells_with_ids)
         if current_cell_idx is not None:
             self.last_cell_index = current_cell_idx
+            self.last_found_cell = (cell_code, current_cell_idx)
             if cell_id:
                 self.simulator.cache.last_index_by_cell_id[cell_id] = current_cell_idx
             if current_cell_idx > 0:
