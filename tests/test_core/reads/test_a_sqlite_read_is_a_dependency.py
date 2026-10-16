@@ -118,3 +118,20 @@ def test_the_uri_names_the_file(uri, path):
     if os.name == "nt" and path is not None and path.startswith("/"):
         pytest.skip("POSIX absolute paths")
     assert _sqlite_uri_path(uri) == path
+
+
+@pytest.mark.parametrize("name", [":memory:", ""], ids=["in memory", "temporary"])
+@pytest.mark.parametrize("by", ["position", "keyword"])
+def test_a_database_with_no_file_is_no_dependency(tmp_path, monkeypatch, name, by):
+    """``":memory:"`` was recorded as the file ``<cwd>/:memory:``: missing on
+    POSIX, a name Windows cannot resolve, so there every statement calling a
+    module that held such a connection was never fresh after a restart."""
+    from cash.tracking.file_tracker import FileAccessTracker
+
+    monkeypatch.chdir(tmp_path)
+    tracker = FileAccessTracker()
+    with tracker:
+        conn = sqlite3.connect(name) if by == "position" else sqlite3.connect(database=name)
+        conn.execute("select 1")
+        conn.close()
+    assert tracker.accessed_files == set()
