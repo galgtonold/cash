@@ -37,11 +37,8 @@ def _heavy_row(out):
     return rows[0]
 
 
-@pytest.mark.parametrize("annotate", [False, True], ids=["plain-fit", "cache-fit"])
-def test_the_first_restart_restores_the_downstream_statement(nb_runner, annotate):
+def test_the_first_restart_restores_the_downstream_statement(nb_runner):
     cells = list(CELLS)
-    if annotate:
-        cells[FIT - 1] = "\n".join("# @cash:cache-fit\n" + line for line in cells[FIT - 1].splitlines())
     nb_runner.create_notebook(cells)
     nb_runner.start_kernel()
     nb_runner.run_all()

@@ -124,8 +124,6 @@ class StatementRun:
     #: same key (``CacheabilityVerdict.varies``): the clock, a fresh id.
     value_varies: bool = False
     allow_random: bool = False
-    #: ``# @cash:cache-fit``: cache a bare estimator fit rather than re-run it.
-    cache_fit: bool = False
     unseeded_calls: list = field(default_factory=list)
     inputs: set[str] = field(default_factory=set)
     outputs: set[str] = field(default_factory=set)
@@ -170,7 +168,7 @@ class StatementRun:
     #: For a loop run as one unit whose watch is learning (``loop_watch``):
     #: the loop's code, the watch's name.
     loop_watch: str | None = None
-    #: Estimator-fit receivers cached under ``# @cash:cache-fit``.
+    #: Receivers of a bare estimator fit, cached with the statement.
     est_fit: set[str] = field(default_factory=set)
     #: The file whose change threw the statement's cache entry away, when
     #: that is why it runs (``CacheFreshnessChecker.last_stale_file``).

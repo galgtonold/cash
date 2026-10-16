@@ -49,6 +49,7 @@ from ...source_norm import exact_source_digest
 from ...source_reading import own_source
 from ..callee_reach import helper_seeded_modules, reached_user_code
 from .held_generators import HeldGenerators
+from .observed_draws import ObservedDrawStore
 
 _LIBRARY_DRAW_FIX = (
     "pass random_state=<int> (polars: seed=<int>) to make it reproducible, put "
@@ -139,6 +140,8 @@ class StatementRandomness:
         self._cell_pre: dict | None = None
         self._cell_pre_lineage: dict[str, str] = {}
         self._cell_post: dict | None = None
+        #: Where the hidden draws learnt are kept across kernels (`use_draw_store`).
+        self._draw_store: ObservedDrawStore | None = None
         #: `judged_draws` when this statement began: a cached
         #: function inside it that reported its own draw moves it.
         self._draw_warnings_at_start = 0
@@ -518,9 +521,7 @@ class StatementRandomness:
     def unseeded_estimator_fits(self, est_fit: set[str]) -> list[str]:
         """Return the sorted subset of *est_fit* receivers that are UNSEEDED.
 
-        A bare ``estimator.fit(X, y)`` under ``# @cash:cache-fit`` caches via the
-        cache-fit path, but cash's AST
-        randomness detector cannot see the randomness inside sklearn's compiled
+        A bare ``estimator.fit(X, y)`` is cached, but cash's AST randomness detector cannot see the randomness inside sklearn's compiled
         ``.fit()``. An estimator built without a ``random_state`` draws fresh
         entropy each fit, so the cached fitted model is a frozen replay -- two
         honest fits would differ. This flags exactly those receivers.
@@ -764,6 +765,20 @@ class StatementRandomness:
                 self.draw_newly_seen = True
             self.newly_seen_draws = hidden - known
         ledger[digest] = known | hidden
+        if self._draw_store is not None:
+            self._draw_store.record(digest, ledger[digest])
+
+    def use_draw_store(self, store: ObservedDrawStore | None) -> None:
+        """Keep the hidden draws learnt in *store*, and take in the ones an
+        earlier kernel learnt there: without them a statement that draws
+        unseen is looked up after a restart under a key without its stream,
+        and misses the entry it stored (`observed_draws`)."""
+        self._draw_store = store
+        if store is None:
+            return
+        ledger = self.tracking_state.observed_rng_statement_draws
+        for digest, modules in store.draws().items():
+            ledger[digest] = ledger.get(digest, set()) | modules
 
     def begin_cell(self) -> None:
         """Open a fresh per-cell RNG accumulation, before the cell's statements run."""

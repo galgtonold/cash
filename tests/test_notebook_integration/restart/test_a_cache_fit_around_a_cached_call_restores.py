@@ -1,4 +1,4 @@
-"""A ``# @cash:cache-fit`` fit that takes a cached call's result restores, on a
+"""A cached fit that takes a cached call's result restores, on a
 rerun and after a restart, on the default backend.
 
 The fit is the statement's own work -- well above every floor -- however much
@@ -22,7 +22,7 @@ CELLS = [
     "    time.sleep(0.3)\n"
     "    return [f'the cat {i % 97} sat by dog {i % 89} and bird {i % 83}' for i in range(n)]",
     "vec = TfidfVectorizer()",
-    "# @cash:cache-fit\nX = vec.fit_transform(prep(150_000))",
+    "X = vec.fit_transform(prep(150_000))",
     "# @cash:no-cache\nprint('X', X.shape[0], 'fitted', hasattr(vec, 'vocabulary_'))",
 ]
 

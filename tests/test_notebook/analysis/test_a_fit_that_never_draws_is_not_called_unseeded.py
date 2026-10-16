@@ -3,7 +3,7 @@
 Ridge uses its ``random_state`` only with ``solver='sag'`` or ``'saga'``, so
 with the default solver its fit is deterministic; the notebook still warned
 "Unseeded randomness detected ... two genuine fits would differ" for it, both
-for an inline fit and for a ``# @cash:cache-fit`` receiver. A sag fit still
+for an inline fit and for a bare fit's receiver. A sag fit still
 warns.
 """
 
@@ -37,7 +37,7 @@ def test_an_inline_ridge_fit_is_silent(cash_magics):
 
 
 def test_a_cache_fit_ridge_receiver_is_silent(cash_magics):
-    assert not _messages(cash_magics, ["m = Ridge()", "# @cash:cache-fit\nm.fit(X, y)"])
+    assert not _messages(cash_magics, ["m = Ridge()", "m.fit(X, y)"])
 
 
 def test_a_sag_fit_still_warns(cash_magics):

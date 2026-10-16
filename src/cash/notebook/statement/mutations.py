@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 
 __all__ = ["MutationClassifier"]
 
-#: Methods that fit an estimator in place, for `# @cash:cache-fit`.
+#: Methods that fit an estimator in place (`estimator_fit_receivers`).
 _FIT_METHODS = frozenset({"fit", "partial_fit", "fit_transform", "fit_predict"})
 
 
@@ -375,23 +375,18 @@ class MutationClassifier:
         """Receivers of a standalone ``est.fit(...)`` / ``est.partial_fit(...)``
         whose live value is a duck-typed sklearn estimator.
 
-        Called ONLY for a statement carrying ``# @cash:cache-fit``; the
-        default is to leave a bare fit on the skip-cache path, where it
-        re-executes.  That re-execution does NOT by itself make aliases correct —
-        ``backup = model`` breaks on its own restore, not on the fit.
-
         A bare ``model.fit(X, y)`` mutates its receiver in place, so the general
         mutation classifier routes it to skip-caching. But a fit is the most
-        expensive cell in an ML notebook and its cache key is already
-        input-lineage-based (the estimator is an input), so a user who asks for it
-        can have it cached. This narrow gate selects ONLY sklearn-style
+        expensive cell in an ML notebook, and a restart followed by Run All
+        trained it again every time. Its cache key is already
+        input-lineage-based (the estimator is an input), so it is cached and
+        restored like an output. This narrow gate selects ONLY sklearn-style
         estimators (``is_estimator``) called through a fit method, so the
         estimator-caching path never loosens general mutation caching.
 
         A module is never an estimator (``pkg.fit(...)`` is a module
         function call). Names already surfaced as AST outputs are excluded too -- those are produced by
-        an assignment (a fresh binding each run), so an in-place transfer onto a
-        pre-existing object would be wrong for them.
+        an assignment (a fresh binding each run), already stored as outputs.
         """
         # The assignment form too: `X = vec.fit_transform(texts)` fits `vec`
         # as it returns X.
@@ -405,17 +400,6 @@ class MutationClassifier:
             if is_estimator(self.shell.user_ns.get(base)):
                 receivers.add(base)
         return receivers - outputs
-
-    def cache_fit_hint(self, receivers) -> str:
-        """How to have a fitted estimator cached, when one of *receivers* is
-        one: the refusal otherwise gives no way out."""
-        for base in receivers:
-            if is_estimator(self.shell.user_ns.get(base)):
-                return (
-                    f" -- `{base}` is an estimator being fitted; add `# @cash:cache-fit` "
-                    "to cache the fit with it (see that directive's identity caveat)"
-                )
-        return ""
 
     def _receiver_observable(self, base: str) -> bool:
         """Return True if *base*'s value can be reliably content-hashed.

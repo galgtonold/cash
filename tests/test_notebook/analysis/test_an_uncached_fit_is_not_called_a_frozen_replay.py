@@ -1,7 +1,7 @@
 """RANDOM-UNSEEDED says "cash caches the fit ... frozen replay" only for a fit
 that is cached.
 
-A bare ``clf.fit(X, y)`` mutates its receiver, so it is NOT CACHED and fits
+A ``clf.fit(X, y)`` under ``# @cash:no-cache`` is NOT CACHED and fits
 afresh every run. On a re-run its receiver joins the statement's outputs (the
 mutation is pre-routed), and the inline-fit check read that as a cached fitted
 estimator: the second run warned that cash caches the fit as a frozen replay
@@ -49,15 +49,14 @@ def _run_twice(magics, fit_cell: str) -> tuple[list[str], dict]:
     return messages, captured[-1][-1]
 
 
-def test_a_bare_fit_rerun_does_not_claim_a_frozen_replay(cash_magics):
-    messages, metric = _run_twice(cash_magics, "clf.fit(X, y)")
-    assert any("In-place mutation on: clf" in r for r in metric.get("uncacheable_reasons") or []), metric
+def test_an_uncached_fit_rerun_does_not_claim_a_frozen_replay(cash_magics):
+    messages, metric = _run_twice(cash_magics, "# @cash:no-cache\nclf.fit(X, y)")
     assert not [m for m in messages if "frozen replay" in m or "clf.fit()" in m], messages
     assert not metric.get("random_unseeded"), "an uncached fit was badged as a frozen replay"
 
 
-def test_a_cache_fit_still_warns(cash_magics):
-    """Positive control: the opted-in fit is cached, so the warning is true."""
-    messages, metric = _run_twice(cash_magics, "# @cash:cache-fit\nclf.fit(X, y)")
+def test_a_bare_fit_warns(cash_magics):
+    """Positive control: the bare fit is cached, so the warning is true."""
+    messages, metric = _run_twice(cash_magics, "clf.fit(X, y)")
     assert any("frozen replay" in m for m in messages), messages
     assert metric.get("random_unseeded"), metric

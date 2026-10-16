@@ -77,10 +77,9 @@ From here on:
 - Change `large_dataset.csv` on disk and the statements that read it re-run.
 - Restart the kernel and run the cell: expensive results come back from disk.
 
-One habit keeps slow fits cached: **fit a model in the assignment that binds
-it**, `model = Ridge().fit(X, y)`. A separate `model.fit(X, y)` changes `model`
-in place and runs every time. See
-[Fitting models](../notebook_caching_api.md#fitting-models).
+Slow fits are cached too, `model.fit(X, y)` as well as
+`model = Ridge().fit(X, y)`, so a restart and Run All bring the trained model
+back. See [Fitting models](../notebook_caching_api.md#fitting-models).
 
 ## Found a problem?
 

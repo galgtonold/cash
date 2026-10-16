@@ -187,7 +187,7 @@ class MutationRouting:
             run.outputs,
             rewatch=True,
         )
-        run.est_fit = self._classifier.estimator_fit_receivers(tree, run.outputs) if run.cache_fit else set()
+        run.est_fit = self._classifier.estimator_fit_receivers(tree, run.outputs)
         self._route_unit(run)
         return mut_pre_route, set(), set()
 
@@ -254,42 +254,19 @@ class MutationRouting:
         """Add the mutated receivers and arguments to *run*'s outputs, and
         skip-cache it for a receiver that must be mutated on every run.
 
-        Fitted estimators are the exception, and only under
-        ``# @cash:cache-fit`` (``run.est_fit``). A bare ``estimator.fit(X, y)``
-        mutates its receiver in place, so it is routed to skip-caching: the
-        statement re-executes and is never serialised, which is net-NEUTRAL
-        -- a fit that keeps missing cannot cost more than it saves.
-
-        It does NOT make aliases safe. ``backup = clf`` is an ORDINARY
-        ASSIGNMENT that cash caches on its own, and restoring it rebinds
-        ``backup`` to a pre-fit deserialised copy -- the fit statement has no
-        bearing on it either way.
-
-        Caching a bare fit is the OPT-IN path, kept because it is a large win
-        when it lands but not the default because its correctness surface
-        exceeds what per-statement restore can guarantee:
-
-        * a cache HIT may REBIND the receiver, leaving an alias pointing at
-          the pre-fit object. Not fixable per-statement -- on a warm run-all
-          the CONSTRUCTOR statement's own hit-restore rebinds the receiver
-          before the fit's in-place transfer lands, so the alias graph is
-          already broken upstream; and
-        * the duck-type gate admits the whole sklearn-compatible universe
-          (xgboost/lightgbm/custom), each with its own ``__getstate__``
-          contract, and several never restore -- re-serialising every run for
-          a net LOSS.
-
-        For reliable ML caching, wrap training in a returning function under
-        ``@cash.cache`` instead.
-
-        When opted in, the receiver joins ``outputs`` (so its source-based
-        lineage is bumped AND the fitted value is captured/saved) but the
-        statement is NOT skip-cached, so the normal lookup runs (hit ->
-        in-place restore; miss -> execute + save). A receiver that is BOTH an
-        estimator fit AND another genuine skip receiver still skips (the skip
-        wins for that receiver). ``est_fit`` also threads to the cache-hit
-        path so its restore is IN PLACE. Without the directive ``est_fit`` is
-        empty and every site degrades to the skip-cache behaviour.
+        Fitted estimators are the exception (``run.est_fit``). A bare
+        ``estimator.fit(X, y)`` changes its receiver in place; the receiver
+        joins ``outputs`` (its lineage moves on and the fitted value is
+        stored) and the statement is NOT skip-cached, so a restart followed by
+        Run All restores the fit instead of training again. A hit rebinds the
+        receiver like any other output: the variables holding it or an object
+        inside it (``backup = clf``, the steps of a ``Pipeline``, the
+        ``param_grid`` of a ``GridSearchCV``) are found by the share check and
+        stored and restored with it, so they hold the restored objects again;
+        a holder that is not a variable, or an object it shares with an input
+        (``knn._fit_X is X``), refuses the store and the fit re-runs. A
+        receiver that is BOTH an estimator fit AND another genuine skip
+        receiver still skips.
         """
         est_fit = run.est_fit
         fam = effects.arg_mutations - run.outputs
@@ -300,8 +277,7 @@ class MutationRouting:
             if run.in_place:
                 _skip(
                     run,
-                    f"In-place mutation on: {', '.join(sorted(run.in_place))} (statement re-executes)"
-                    + self._classifier.cache_fit_hint(run.in_place),
+                    f"In-place mutation on: {', '.join(sorted(run.in_place))} (statement re-executes)",
                 )
             return
         skip_pre_route = mut_pre_route - est_fit
@@ -321,9 +297,7 @@ class MutationRouting:
             _skip(
                 run,
                 f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
-                "(receiver lineage bumped; statement re-executes)"
-                + self._classifier.cache_fit_hint(skip_pre_route)
-                + self._too_costly(skip_pre_route),
+                "(receiver lineage bumped; statement re-executes)" + self._too_costly(skip_pre_route),
             )
         if provisional:
             run.mut_provisional_reason = f"In-place mutation on: {', '.join(sorted(provisional))} (receiver lineage bumped; statement re-executes)"
@@ -443,14 +417,11 @@ class MutationRouting:
                     f"In-place mutation on: {', '.join(sorted(fresh))} (observed; statement re-executes)"
                 )
             return newly_mutated
-        # ``run.est_fit`` is non-empty only under ``# @cash:cache-fit``.
-        # Those receivers still enter the outputs (source-based lineage
-        # bump + fitted value capture) and are still recorded in
-        # ``mutation_verdicts`` (so the upstream simulation bumps
-        # downstream lineage on a data edit), but they are NOT
-        # skip-cached -- they cache + restore in place. Every
-        # other observed mutation -- including a bare fit WITHOUT the
-        # directive -- still skip-caches its receiver.
+        # Estimator-fit receivers (``run.est_fit``) still enter the outputs
+        # (lineage bump + fitted value capture) and are still recorded in
+        # ``mutation_verdicts`` (so the upstream simulation bumps downstream
+        # lineage on a data edit), but they are NOT skip-cached. Every
+        # other observed mutation still skip-caches its receiver.
         run.outputs = run.outputs | newly_mutated
         # The metrics hold their own copy of the outputs: without this the
         # badge row would say "Produced -" for ``sc.pp.normalize_total(adata)``
@@ -463,7 +434,6 @@ class MutationRouting:
             metrics.setdefault("uncacheable_reasons", []).append(
                 f"In-place mutation on: {', '.join(sorted(skip_observed))} "
                 "(observed; receiver lineage bumped; statement re-executes)"
-                + self._classifier.cache_fit_hint(skip_observed)
             )
         return newly_mutated
 

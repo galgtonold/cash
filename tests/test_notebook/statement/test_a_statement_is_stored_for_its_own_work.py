@@ -207,7 +207,7 @@ def test_a_cheap_statement_over_it_is_not_kept_for_rebuilding_the_call(tiers, mo
 
 
 def test_under_cache_fit_the_fit_is_the_statements_own_work(cash_magics, clean_backend):
-    """A fit is a method call, never a call unit: under ``cache-fit`` it is the
+    """A fit is a method call, never a call unit: cached, it is the
     statement's own work, and the statement is stored for it however much of
     its time a cached call took."""
     pytest.importorskip("sklearn")
@@ -231,7 +231,7 @@ def test_under_cache_fit_the_fit_is_the_statements_own_work(cash_magics, clean_b
         "def prep(n):\n    time.sleep(0.2)\n    return [f'the cat {i % 97} sat by dog {i % 89}' for i in range(n)]",
     )
     run("vec = TfidfVectorizer()")
-    code = "# @cash:cache-fit\nX = vec.fit_transform(prep(40_000))"
+    code = "X = vec.fit_transform(prep(40_000))"
     assert run(code)["status"] == CacheStatus.COMPUTED
     meta, value = _entry(clean_backend, "fit_transform")
     assert value is not None, "the fit was priced as the cached call's time"

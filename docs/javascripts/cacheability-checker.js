@@ -44,9 +44,9 @@
     },
     {
       code: "model.fit(X, y)",
-      verdict: "no",
-      title: "Not cached by default",
-      why: "A bare fit mutates its receiver in place, so it takes the ordinary mutation path: re-executed every run, never serialised. Opt in with the # @cash:cache-fit annotation, which caches the fitted state and restores it in place. For reliable ML caching, wrap training in a function that returns the model and decorate it with @cash.cache."
+      verdict: "ok",
+      title: "Cached",
+      why: "The fitted estimator is stored with the statement, together with the variables that hold it or its parts (a Pipeline's steps, a backup = model alias), so a restart followed by Run All restores the trained model. An estimator that keeps the training array itself (KNeighborsClassifier) is fitted again every run."
     },
     {
       code: "df.to_parquet('out.pq')",

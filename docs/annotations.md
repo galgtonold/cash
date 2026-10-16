@@ -20,7 +20,6 @@ shows when to reach for each one; this page is the reference.
 | [`# @cash:no-cache`](#cashno-cache) | Run the statement every time. Wins over every other directive. |
 | [`# @cash:ttl=N`](#cashttln) | Treat the stored result as expired after `N` seconds. |
 | [`# @cash:allow-random`](#cashallow-random) | Silence the unseeded-randomness warning. Does not change caching. |
-| [`# @cash:cache-fit`](#cashcache-fit) | Cache a bare estimator fit such as `clf.fit(X, y)`. |
 | [`# @cash:assume-safe`](#cashassume-safe) | Cache the statement despite a side effect that is harmless to skip. |
 | [`# @cash:no-cache-calls`](#call-level-caching-default-and-cashno-cache-calls) | Stop caching the calls inside the statement. |
 
@@ -124,35 +123,6 @@ keeps its normal caching. Write `# @cash:ttl=300` for five minutes.
 Silences the `RANDOM-UNSEEDED` and `RANDOM-REPLAYED` warnings for the statement.
 The value is still cached and replayed. To get a new draw every run, use
 `no-cache`. See [Randomness](known-limitations.md#randomness).
-
-### `# @cash:cache-fit`
-
-A bare fit such as `clf.fit(X, y)` changes `clf` in place, so by default it runs
-every time (the badge says `NOT CACHED` and names this directive). With
-`cache-fit`, cash caches the fit and a hit restores the fitted estimator. It also
-covers `X2 = vec.fit_transform(X)` and `labels = km.fit_predict(X)`, which fit in
-place while returning something else.
-
-<!-- test:skip reason="illustrative: needs a real estimator and training data" -->
-```python { .nb-cell }
-clf = RandomForestClassifier(n_estimators=100, random_state=42)
-# @cash:cache-fit
-clf.fit(X, y)
-```
-
-!!! warning "A hit can replace the object"
-    A cache hit may bind `clf` to the restored estimator instead of updating the
-    object in place, so another name for it (`backup = clf`) can be left pointing
-    at an unfitted estimator. Use `cache-fit` only when nothing else refers to the
-    estimator, and check that the badge reads `CACHED` on a re-run.
-
-A hit sets the fitted state on the estimator the name is bound to, and on the
-estimators it holds: a `Pipeline([('s', scaler), ('m', clf)])` comes out with
-`scaler` and `clf` themselves fitted, as `Pipeline.fit` leaves them.
-
-You rarely need it: an assignment that binds the fitted estimator,
-`clf = RandomForestClassifier(random_state=42).fit(X, y)`, caches with no
-directive and has no such caveat.
 
 ### `# @cash:assume-safe`
 

@@ -1,26 +1,13 @@
 """How cash treats sklearn's estimator.fit().
 
-Ground-truth probes for the design decision:
-  * bare ``model.fit(X, y)``       -> NOT cached by default; re-executes
-  * ``# @cash:cache-fit`` + bare fit -> caches + restores in place (opt-in)
+  * bare ``model.fit(X, y)``       -> cached; a hit restores the fitted model
   * ``model = model.fit(X, y)``    -> caches (pure reassignment shape)
   * ``m = Model().fit(X, y)``      -> caches; restores across a real restart
 
-A bare in-place fit re-executes, so the real ``.fit()`` mutates the shared object
-rather than a restored copy. Skipping the cache is also net-NEUTRAL rather than
-net-negative: the model is never serialised, so a perpetually-missing fit cannot
-cost more than it saves.
-
-**Withdrawn:** this file used to claim that a re-executing fit made
-aliases "correct BY CONSTRUCTION". It does not. ``backup = clf`` is an ORDINARY
-assignment, so cash cached *that statement* and restored ``backup`` to a
-deserialised copy taken before the fit -- the alias broke at a statement the fit
-has no bearing on. The fit was innocent. The fix is to refuse to cache a
-bare alias bind at all; ``test_bare_fit_alias_survives_warm_reruns`` below is the
-guard, and it only fails from the SECOND warm re-run, which is how the original
-one-repetition test came to confirm the wrong belief.
-
-``# @cash:cache-fit`` opts back in to fit caching for users who want it.
+A hit rebinds the receiver like any other output. The variables holding it,
+``backup = clf`` here, are found by the share check and stored and restored
+with it, so they name the restored estimator again: identity survives warm
+re-runs and restarts.
 """
 
 import pytest
@@ -61,52 +48,36 @@ def _restart(nb_runner):
 
 
 # ----------------------------------------------------------------------
-# The DEFAULT: a bare fit is not cached
+# The DEFAULT: a bare fit is cached
 # ----------------------------------------------------------------------
 
 
-def test_bare_fit_not_cached_by_default(nb_runner):
-    """A bare ``clf.fit(X, y)`` is NOT CACHED and re-executes every run.
-
-    The inverse of the old ``test_bare_fit_now_caches``. A bare fit used to be routed
-    to caching by default; four rounds of user testing found the correctness
-    surface exceeds what per-statement restore can guarantee (stale aliases) and
-    that the canonical paths perpetually MISS -- re-serialising the model every run
-    for a NET LOSS. So the default reverts to the general in-place-mutation path:
-    skip-cached, receiver lineage bumped, statement re-executes.
-
-    The badge reason IS the net-neutrality proof: ``skip_cache`` is what gates
-    ``_save_to_cache``, so a refused statement never serialises the model at all.
-
-    The fit cell holds exactly ONE statement so a bare ``not shows_cached(...)`` check
-    is unambiguous -- a second statement in the same cell (e.g. a ``print``) caches
-    on its own and would put an unrelated ``CACHED`` line in the same badge.
-    """
+def test_bare_fit_cached_by_default(nb_runner):
+    """A bare ``clf.fit(X, y)`` is stored, and Run All after a restart
+    restores it instead of training again."""
     nb_runner.create_notebook(
         [
             SETUP,
             DATA,
             MODEL,
             "clf.fit(X, y)",  # 4 (single statement)
-            "# @cash:no-cache\nprint('fitted', clf.n_estimators)",  # 5
+            "# @cash:no-cache\nprint('fitted', clf.n_estimators, round(clf.score(X, y), 6))",  # 5
         ]
     )
     nb_runner.start_kernel()
     nb_runner.run_all()
 
     cold = nb_runner.get_output(4)
-    assert "NOT CACHED" in cold, f"bare fit should not cache by default: {cold!r}"
-    assert "In-place mutation" in cold, cold
-    assert "fitted 160" in nb_runner.get_output(5)
+    assert "NOT CACHED" not in cold, cold
+    first = nb_runner.get_output(5)
+    assert "fitted 160" in first, first
+    nb_runner.settle_writes()
 
-    nb_runner.run_cell(4)  # isolated re-run must RE-EXECUTE, never restore
+    _restart(nb_runner)
+    nb_runner.run_all()
     warm = nb_runner.get_output(4)
-    assert not shows_cached(warm), f"bare fit restored from cache without @cash:cache-fit: {warm!r}"
-    assert "NOT CACHED" in warm, warm
-    assert "In-place mutation" in warm, warm
-
-    nb_runner.run_cell(5)
-    assert "fitted 160" in nb_runner.get_output(5)
+    assert shows_cached(warm), f"bare fit not restored after a restart: {warm!r}"
+    assert nb_runner.get_output(5).splitlines()[0] == first.splitlines()[0]
 
 
 def test_bare_fit_alias_survives_warm_reruns(nb_runner):
@@ -155,9 +126,8 @@ def test_bare_fit_alias_survives_warm_reruns(nb_runner):
     for rep in range(4):  # 1 cold + 3 warm; the alias restore lands on warm #2
         nb_runner.run_all()
 
-        assert not shows_cached(nb_runner.get_output(5)), (
-            f"rep {rep}: bare fit must not restore by default: {nb_runner.get_output(5)!r}"
-        )
+        if rep:
+            assert shows_cached(nb_runner.get_output(5)), f"rep {rep}: {nb_runner.get_output(5)!r}"
         out = nb_runner.get_output(6)
         assert not shows_cached(out), (
             f"rep {rep}: the probe cell replayed from cache instead of reading the "
@@ -172,12 +142,12 @@ def test_bare_fit_alias_survives_warm_reruns(nb_runner):
 
 
 # ----------------------------------------------------------------------
-# The OPT-IN: # @cash:cache-fit restores fit caching
+# Bare fits that restore
 # ----------------------------------------------------------------------
 
 
-def test_cache_fit_annotation_opts_in(nb_runner):
-    """``# @cash:cache-fit`` turns fit caching back on for one statement.
+def test_bare_fit_rerun_hits(nb_runner):
+    """A bare fit lands a cache HIT on an isolated re-run.
 
     The twin of ``test_bare_fit_not_cached_by_default``: the same notebook with
     the directive added must land a cache HIT on an isolated re-run. The receiver
@@ -189,7 +159,7 @@ def test_cache_fit_annotation_opts_in(nb_runner):
             SETUP,
             DATA,
             MODEL,
-            "# @cash:cache-fit\nclf.fit(X, y)\nprint('fitted', clf.n_estimators)",
+            "clf.fit(X, y)\nprint('fitted', clf.n_estimators)",
         ]
     )
     nb_runner.start_kernel()
@@ -197,23 +167,14 @@ def test_cache_fit_annotation_opts_in(nb_runner):
 
     nb_runner.run_cell(4)  # isolated re-run should be a cache hit
     out = nb_runner.get_output(4)
-    assert shows_cached(out), f"@cash:cache-fit did not cache the bare fit: {out!r}"
+    assert shows_cached(out), f"the bare fit was not cached: {out!r}"
     assert "fitted 160" in out
 
 
-def test_cache_fit_restores_in_place_when_receiver_is_live(nb_runner):
-    """GATE (opt-in): the ``cache-fit`` hit transfers state onto the
-    EXISTING receiver rather than rebinding, so a live alias sees the fit.
-
-    This is the in-place restore doing its job in the case it CAN handle: the
-    receiver present in ``user_ns`` at restore time is the one ``backup`` aliases,
-    so ``__setstate__`` onto it is observed through both names.
-
-    It is NOT a general guarantee, and the opt-in is documented as such: the
-    restore is per statement, so if the CONSTRUCTOR statement's own cache hit
-    rebinds the receiver first, the alias graph is already broken upstream and no
-    in-place transfer here can repair it. That is exactly why this path is opt-in
-    and the default (``test_bare_fit_alias_survives_warm_reruns``) is not.
+def test_cache_fit_restore_keeps_a_live_alias(nb_runner):
+    """A fit hit after a restart leaves a live alias naming the fitted model:
+    ``backup`` holds the receiver, so it is stored with the fit and restored
+    to the same object.
 
     Deterministic setup via a real restart: cells 1-4 run in order so ``backup``
     aliases the freshly rebuilt (unfitted) ``clf`` right before the fit cell,
@@ -225,7 +186,7 @@ def test_cache_fit_restores_in_place_when_receiver_is_live(nb_runner):
             DATA,
             MODEL,  # 1, 2, 3
             "backup = clf",  # 4
-            "# @cash:cache-fit\n"  # 5
+            ""  # 5
             "# @cash:persist\n"
             "clf.fit(X, y)",
             "# @cash:no-cache\n"  # 6
@@ -243,7 +204,7 @@ def test_cache_fit_restores_in_place_when_receiver_is_live(nb_runner):
     nb_runner.run_cell(3)  # clf (fresh, unfitted)
     nb_runner.run_cell(4)  # backup = clf (aliases the unfitted clf)
 
-    nb_runner.run_cell(5)  # cache HIT -> in-place restore onto the shared object
+    nb_runner.run_cell(5)  # cache HIT -> clf and backup restored as one object
     assert shows_cached(nb_runner.get_output(5)), (
         f"fit cell was not a cache hit after restart: {nb_runner.get_output(5)!r}"
     )
@@ -251,13 +212,13 @@ def test_cache_fit_restores_in_place_when_receiver_is_live(nb_runner):
     nb_runner.run_cell(6)
     out = nb_runner.get_output(6)
     assert "clf_fit True" in out, out
-    # THE assertion: the alias must see the fit. With a rebind it would be False.
-    assert "backup_fit True" in out, f"alias did not see the in-place restore: {out!r}"
-    assert "same True" in out, f"in-place restore must not rebind the name: {out!r}"
+    # THE assertion: the alias must see the fit.
+    assert "backup_fit True" in out, f"alias did not see the restored fit: {out!r}"
+    assert "same True" in out, f"the restore split clf from its alias: {out!r}"
 
 
 def test_cache_fit_pandas_input_restores_repeatedly(nb_runner):
-    """Opt-in: a ``cache-fit`` bare fit on a PANDAS DataFrame input is a
+    """A bare fit on a PANDAS DataFrame input is a
     CLEAN cache hit on every warm re-run -- no upstream churn.
 
     The fit's self-referential key (the receiver is both input and output) drifts
@@ -280,7 +241,7 @@ def test_cache_fit_pandas_input_restores_repeatedly(nb_runner):
             "X_train = pd.DataFrame(rs.rand(4000, 20), columns=[f'f{i}' for i in range(20)])\n"
             "y_train = (X_train['f0'] > 0.5).astype(int)",
             "clf = RandomForestClassifier(n_estimators=160, random_state=0)",
-            "# @cash:cache-fit\nclf.fit(X_train, y_train)",
+            "clf.fit(X_train, y_train)",
         ]
     )
     nb_runner.start_kernel()
@@ -289,12 +250,12 @@ def test_cache_fit_pandas_input_restores_repeatedly(nb_runner):
     for i in range(3):
         nb_runner.run_cell(4)  # isolated warm re-run -- must be a clean cache hit
         out = nb_runner.get_output(4)
-        assert shows_cached(out), f"pandas cache-fit warm re-run #{i + 1} did not restore: {out!r}"
+        assert shows_cached(out), f"pandas fit warm re-run #{i + 1} did not restore: {out!r}"
         # THE discriminator: no upstream constructor re-execution. Without the fix
         # the drifted self-referential key forces the constructor to re-run upstream
         # every warm re-run; with it the receiver's lineage is reset in place.
         assert "Upstream:" not in out, (
-            f"pandas cache-fit warm re-run #{i + 1} re-executed the constructor "
+            f"pandas fit warm re-run #{i + 1} re-executed the constructor "
             f"upstream instead of a clean cache hit (self-referential key drifted): {out!r}"
         )
 
@@ -303,7 +264,7 @@ def test_cache_fit_make_classification_split_restores_repeatedly(nb_runner):
     """The canonical beginner ML chain warm-re-runs as a CLEAN cache hit.
 
     ``make_classification`` -> ``pd.DataFrame`` -> ``train_test_split`` -> bare
-    ``cache-fit``: the shape a user reported as a perpetual MISS, blamed on
+    a bare fit: the shape a user reported as a perpetual MISS, blamed on
     ``make_classification`` specifically (an rng-derived control cached, so the
     data SOURCE looked like the discriminator).
 
@@ -331,7 +292,7 @@ def test_cache_fit_make_classification_split_restores_repeatedly(nb_runner):
             "df = pd.DataFrame(X, columns=[f'f{i}' for i in range(20)])",
             "X_train, X_test, y_train, y_test = train_test_split(df, y, random_state=42)",
             "clf = RandomForestClassifier(n_estimators=40, random_state=42)",
-            "# @cash:cache-fit\n# @cash:persist\nclf.fit(X_train, y_train)",  # 7
+            "# @cash:persist\nclf.fit(X_train, y_train)",  # 7
         ]
     )
     nb_runner.start_kernel()
@@ -340,13 +301,13 @@ def test_cache_fit_make_classification_split_restores_repeatedly(nb_runner):
     for i in range(3):
         nb_runner.run_cell(7)  # isolated warm re-run -- must be a clean cache hit
         out = nb_runner.get_output(7)
-        assert shows_cached(out), f"make_classification cache-fit warm re-run #{i + 1} did not restore: {out!r}"
+        assert shows_cached(out), f"make_classification fit warm re-run #{i + 1} did not restore: {out!r}"
         # THE discriminator, and the half a plain shows_cached() check would miss: a
         # full upstream re-derivation restores too, so without this a silent
         # re-run of the whole make_classification -> split chain every warm
         # re-run would pass as a technically-correct hit.
         assert "Upstream:" not in out, (
-            f"make_classification cache-fit warm re-run #{i + 1} re-executed the "
+            f"make_classification fit warm re-run #{i + 1} re-executed the "
             f"upstream chain instead of a clean cache hit: {out!r}"
         )
 
@@ -367,7 +328,7 @@ def test_cache_fit_constructor_edit_invalidates_cached_fit(nb_runner):
             SETUP,
             DATA,
             "clf = RandomForestClassifier(n_estimators=50, random_state=0)",  # 3
-            "# @cash:cache-fit\nclf.fit(X, y)",  # 4
+            "clf.fit(X, y)",  # 4
             "# @cash:no-cache\nprint('n', clf.n_estimators)",  # 5
         ]
     )
@@ -384,7 +345,7 @@ def test_cache_fit_constructor_edit_invalidates_cached_fit(nb_runner):
 
 
 def test_cache_fit_large_numpy_restores_after_restart(nb_runner):
-    """Opt-in: a >8 MiB numpy ``cache-fit`` bare fit RESTORES from disk
+    """A >8 MiB numpy bare fit RESTORES from disk
     after a real restart.
 
     Inputs over ~8 MiB take ``compute_hash``'s sampling path, and the drifting
@@ -399,7 +360,7 @@ def test_cache_fit_large_numpy_restores_after_restart(nb_runner):
             "X = np.random.RandomState(0).rand(110000, 10)\n"  # ~8.8 MiB > 8 MiB
             "y = (X[:, 0] > 0.5).astype(int)",
             "clf = RandomForestClassifier(n_estimators=12, random_state=0)",
-            "# @cash:cache-fit\n# @cash:persist\nclf.fit(X, y)\nprint('fitted', clf.n_estimators)",
+            "# @cash:persist\nclf.fit(X, y)\nprint('fitted', clf.n_estimators)",
         ]
     )
     nb_runner.start_kernel()
@@ -416,7 +377,7 @@ def test_cache_fit_large_numpy_restores_after_restart(nb_runner):
 
     nb_runner.run_cell(4)
     out = nb_runner.get_output(4)
-    assert shows_cached(out), f"large cache-fit did not restore from disk after restart: {out!r}"
+    assert shows_cached(out), f"large fit did not restore from disk after restart: {out!r}"
     assert "fitted 12" in out
 
 

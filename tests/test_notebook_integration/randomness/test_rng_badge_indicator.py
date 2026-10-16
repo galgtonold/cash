@@ -125,7 +125,7 @@ def test_helper_internal_unseeded_draw_flagged(nb_runner):
 
 @pytest.mark.timeout(180)
 def test_bare_uncached_fit_still_no_pill(nb_runner):
-    """A bare ``model.fit()`` is skip-cache (recomputes fresh) so nothing is frozen.
+    """A ``model.fit()`` under ``# @cash:no-cache`` recomputes fresh, so nothing is frozen.
 
     The observer sees the global stream advance, but the ``skip_cache`` gate keeps
     the pill off: there is no frozen replay to warn about. This is the F2 case —
@@ -137,7 +137,7 @@ def test_bare_uncached_fit_still_no_pill(nb_runner):
         "X, y = make_classification(n_samples=200, random_state=0)\n"
         "clf = RandomForestClassifier(n_estimators=20)"
     )
-    nb_runner.create_notebook([C_ON, setup, "clf.fit(X, y)"])  # bare, no @cash:cache-fit
+    nb_runner.create_notebook([C_ON, setup, "# @cash:no-cache\nclf.fit(X, y)"])
     nb_runner.start_kernel()
     nb_runner.run_all()
     html = _badge_html(nb_runner, 3)
