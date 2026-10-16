@@ -22,7 +22,7 @@ from ..._console import safe_text
 from ...backends import _writes
 from ...backends.budget_notices import DiskBudget, claim_budget_notice, describe_budget
 from ...core import Cash
-from ...tracking import io_watch, native_reads
+from ...tracking import io_watch, native_reads, reader_patches
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import capture_rng_state, rng_modules_changed, rng_virtual_var
 from ...value_hash import compute_hash
@@ -781,7 +781,17 @@ class CashMagics(Magics):
         finally:
             self._cell_history_stored = prev_stored
 
+    def _point_reader_names_at_wrappers(self) -> None:
+        """A reader the namespace holds unwrapped records its reads from now on
+        (`reader_patches.rebind_reader_names`); before the cell, never inside
+        a statement."""
+        try:
+            reader_patches.rebind_reader_names(self.shell.user_ns)
+        except Exception:  # must not break the cell
+            logger.debug("Rebinding reader names failed", exc_info=True)
+
     def _run_cell_cached(self, raw_cell: str, args: tuple, kwargs: dict) -> Any:
+        self._point_reader_names_at_wrappers()
         try:
             result = self._cell_executor.execute_cell(
                 raw_cell,
@@ -863,6 +873,7 @@ class CashMagics(Magics):
 
     async def _run_cell_cached_async(self, raw_cell: str, args: tuple, kwargs: dict) -> Any:
         try:
+            self._point_reader_names_at_wrappers()
             result = await self._cell_executor.execute_cell_async(
                 raw_cell,
                 ttl=self.global_ttl,

@@ -505,10 +505,10 @@ cash records a file when it is read through a reader it watches: `pd.read_*`,
 Windows the files C libraries open themselves (below). A read through anything
 else (a subprocess, a client library that makes the system call itself, and on
 macOS a C extension that opens the file itself or `os.open`) is invisible, and
-the statement is cached with no file recorded. So is a watched reader imported by name in a cell
-(`from polars import read_parquet`): call it through its module
-(`pl.read_parquet(...)`). A SQLite database in WAL mode is the same: a commit lands in the
-`-wal` file.
+the statement is cached with no file recorded. A watched reader imported by
+name counts like its module spelling, also when it was imported before `%cash_on`
+or from the submodule that defines it (`from polars.io.parquet import
+read_parquet`).
 
 **Fix:** read the file through a watched reader, or put `# @cash:no-cache` above
 the statement if the read is cheap.

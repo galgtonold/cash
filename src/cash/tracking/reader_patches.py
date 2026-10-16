@@ -329,6 +329,95 @@ def _patch_user_module_aliases() -> None:
         _patch_aliases_in(module)
 
 
+#: (number of modules when listed, the library submodules then); `_patch_library_reexports`.
+_library_modules: list[Any] = [-1, ()]
+#: module name -> (its namespace size when scanned, the names bound to a
+#: wrapped reader). Unbounded: one entry per imported library module, which
+#: lives as long as the process.
+_library_scans: dict[str, tuple[int, tuple[str, ...]]] = {}
+
+
+def _library_tops() -> frozenset[str]:
+    """The third-party packages a reader is registered for (polars, pandas, ...)."""
+    tops = {name.split(".", 1)[0] for name in file_registry().handlers}
+    return frozenset(t for t in tops if t not in sys.stdlib_module_names)
+
+
+def _patch_library_reexports() -> None:
+    """Wrap a reader where its library also exports it from a submodule.
+
+    polars defines ``read_parquet`` in ``polars.io.parquet.functions`` and
+    exports the same function from ``polars.io.parquet``, ``polars.io`` and
+    ``polars``; cash registers ``polars.read_parquet`` only. ``from
+    polars.io.parquet import read_parquet`` then bound the original, even under
+    a tracker, and the read went unrecorded. Every submodule of a registered
+    library that holds a wrapped original gets the wrapper too.
+    """
+    originals = _wrapped_originals()
+    if not originals:
+        return
+    if _library_modules[0] != len(sys.modules):
+        tops = _library_tops()
+        found = []
+        for name, module in list(sys.modules.items()):
+            top, dot, _ = name.partition(".")
+            if dot and top in tops and isinstance(module, types.ModuleType):
+                found.append((name, module))
+        _library_modules[:] = [len(sys.modules), tuple(found)]
+    for name, module in _library_modules[1]:
+        ns = getattr(module, "__dict__", None)
+        if not isinstance(ns, dict):
+            continue
+        size = len(ns)
+        known = _library_scans.get(name)
+        if known is not None and known[0] == size:
+            names = known[1]
+        else:
+            try:
+                names = tuple(n for n, v in list(ns.items()) if id(v) in originals)
+            except RuntimeError:  # changed size while scanned: another thread importing
+                continue
+            _library_scans[name] = (size, names)
+        for n in names:
+            hit = originals.get(id(ns.get(n)))
+            if hit is not None and hit[0] is ns.get(n):
+                _patches.replace(module, n, hit[1])
+
+
+def rebind_reader_names(ns: dict) -> None:
+    """Point the names in a notebook's namespace that hold an original reader
+    at cash's wrapper. Called before a cell runs, never inside a statement.
+
+    A name bound before cash's first tracked statement (an import above
+    ``%cash_on``, an IPython startup file) holds the original function, and
+    a call through it recorded no file. The wrapper stands for the same
+    library function in a key (it carries its module and name), and outside
+    a tracker it only calls the original.
+    """
+    if not isinstance(ns, dict):
+        return
+    if not len(_wrappers):
+        # No tracker has opened yet in this process: open and close one, so
+        # the wrappers exist to point at.
+        io_watch.hold()
+        io_watch.release()
+    wrapped = {}
+    for key in _wrappers.keys():
+        entry = _wrappers.peek(key)
+        if entry is not None and isinstance(key[0], int) and callable(entry[0]):
+            wrapped[id(entry[0])] = entry
+    if not wrapped:
+        return
+    try:
+        items = list(ns.items())
+    except RuntimeError:
+        return
+    for name, value in items:
+        hit = wrapped.get(id(value))
+        if hit is not None and hit[0] is value and not name.startswith("_"):
+            ns[name] = hit[1]
+
+
 def patch_reader_aliases(ns: Any) -> None:
     """`_patch_aliases_in` the module whose globals a tracker was opened for
     (the decorator's cached function), as its tracker opens.
@@ -1516,6 +1605,7 @@ def install_patches() -> None:
             _patch_process_pool_submit()
             _patch_multiprocessing_pool()
             _patch_user_module_aliases()
+            _patch_library_reexports()
             _installed_for = basis
         if _shared_import_hook not in sys.meta_path:
             sys.meta_path.insert(0, _shared_import_hook)

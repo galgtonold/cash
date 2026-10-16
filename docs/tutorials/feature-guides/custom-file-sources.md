@@ -76,9 +76,8 @@ with `pkgutil.get_data` or `importlib.resources`.
   hook](../../known-limitations.md#reads-through-a-loader-cash-cannot-see), on
   by default, sees those opens; it still misses the C library's `open`
   called directly through `ctypes`.
-- A tracked reader imported by name in a notebook cell
-  (`from polars import read_parquet`) or wrapped in `functools.partial`: call
-  it through its module (`pl.read_parquet(...)`) instead.
+- A tracked reader wrapped in `functools.partial`: call it through its
+  module (`pl.read_parquet(...)`) instead.
 - `os.open` on macOS, and files a subprocess reads.
 - Database engines other than `sqlite3.connect`, such as SQLAlchemy.
 

@@ -131,8 +131,10 @@ cash records a file when your code reads it through one of these:
 
 A reader counts however a script or a module of your code names it:
 `pq.read_table(...)`, `from pyarrow.parquet import read_table`, or an alias
-such as `reader = pl.read_csv`. In a notebook cell, and wrapped in
-`functools.partial`, only the module spelling (`pq.read_table(...)`) is seen.
+such as `reader = pl.read_csv`, also in a notebook cell, imported before
+`%cash_on`, or from the submodule that defines it (`from polars.io.parquet
+import read_parquet`). Wrapped in `functools.partial`, only the module spelling
+(`pq.read_table(...)`) is seen.
 
 <!-- claim: cash/tracking/file_tracker.py:FileAccessTracker.get_accessed_files @5c8d904e -->
 A file opened for writing only (`'w'`, `'x'`) is not a dependency. A file
