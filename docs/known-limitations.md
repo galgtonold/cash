@@ -413,22 +413,6 @@ print("end", file=log)       # cell 3: re-run alone, "end" twice
 **Fix:** open, write and close the file in one cell
 (`with open("run.log", "a") as log: ...`).
 
-### A function that calls one defined in a later cell
-
-<!-- test:skip reason="illustrative: shows staleness across an edit of a later cell" -->
-```python { .nb-cell }
-def a(n): return b(n) * 2      # cell 1: b does not exist yet
-def b(n): return n + 1         # cell 2
-r = a(3)                       # cell 3: 8
-
-# edit cell 2 to `return n + 10`, re-run cell 3 alone: still 8, not 26
-```
-
-cash follows dependencies upward, so `a` never learns it depends on `b`. cash can
-even serve `r` after cell 2 is deleted. **Fix:** define a function above the
-functions that call it. A module-level read of a name bound only below raises
-[`ForwardReferenceError`](#forwardreferenceerror) instead.
-
 ### A name a magic binds
 
 <!-- claim: cash/analysis/code_analyzer.py:_cell_magic_body @3566e904, cash/analysis/code_analyzer.py:_is_magic_line @d120bf9b, cash/notebook/statement/processor.py:StatementProcessor.forget_rebound @70d43250 -->

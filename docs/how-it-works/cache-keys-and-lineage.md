@@ -249,9 +249,20 @@ statement also seeds), the value is not stored on that run.
 `a` reads when it runs. cash follows the called functions' global names and
 adds `name:lineage` for each. A name that no longer exists counts as
 `ABSENT`, so deleting a function makes the call re-run and raise `NameError`,
-as a plain kernel would, instead of replaying a stored value. For the case of
-calling a function defined in a later cell, see
-[Writing cache-safe cells](../known-limitations.md#a-function-that-calls-one-defined-in-a-later-cell).
+as a plain kernel would, instead of replaying a stored value.
+
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._callee_globals @c63352d8 -->
+Those names count as the cell's inputs for the upstream check too, so a
+function defined in a later cell is followed like one above it:
+
+<!-- test:skip reason="illustrative: shows an edit of a later cell reaching an earlier caller" -->
+```python { .nb-cell }
+def a(n): return b(n) * 2      # cell 1: b does not exist yet
+def b(n): return n + 1         # cell 2
+r = a(3)                       # cell 3: 8
+
+# edit cell 2 to `return n + 10`, run cell 3 alone: cell 2 runs again, r is 26
+```
 
 ### Resolving an input
 
