@@ -232,7 +232,10 @@ something else holds it -- a closure, a library's module or registry, a pandas
 `.attrs` (pandas copies it apart) -- or the statement is in a loop body
 (`for d in dfs:`), a restored copy would not be that object, so the statement
 runs every time. IPython's output history
-(`Out`, `_`) holding a value you displayed is not such a holder. A slow call
+(`Out`, `_`) holding a value you displayed is not such a holder, and neither
+are an object's own parts: each trace of a plotly figure, or each node of an
+XML document, points back at the object it belongs to, and when nothing
+outside holds those parts either, the statement is cached. A slow call
 inside such a statement (`d["c"] = slow(d)` in the loop) is still cached on
 the value it is handed. Nothing to do.
 
