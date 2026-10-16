@@ -534,7 +534,15 @@ def _column_buffers(frame: Any) -> Callable[[int, Any], Any]:
     gives, so the digest is the same, without a Series built per column: a
     2,000-column frame spent half its hash in ``iloc``.
 
-    The array is a view into the block: read here, never handed on.
+    The array is a view into the block, or into a slab of it copied aside:
+    read here, never handed on. A block laid out row by row -- what
+    ``close.shift(21) / close.shift(252)`` and a ``pivot`` leave -- holds
+    each column with a stride of the whole row, and reading those one by
+    one is a gather that misses the cache at every value: a 3,131 x 2,000
+    price panel took 0.14 s of its 0.18 s hash there. Such a block is
+    copied `_SLAB_BYTES` at a time, a run of columns together, into one
+    buffer used again for the next run: the same bytes per column, read
+    in tiles that keep both sides in cache.
     """
     import numpy as np
 
@@ -543,18 +551,43 @@ def _column_buffers(frame: Any) -> Callable[[int, Any], Any]:
         blocks, blknos, blklocs = mgr.blocks, mgr.blknos, mgr.blklocs
     except Exception:  # noqa: BLE001 - pandas internals changed: through iloc
         return lambda pos, dtype: None
+    slab: list[Any] = [None, 0, 0, None]  # block values, first row, stop, the copy
+
+    def strided(values: Any, row: int) -> Any:
+        if slab[0] is not values or not slab[1] <= row < slab[2]:
+            rows = max(1, min(values.shape[0] - row, _SLAB_BYTES // max(1, values.shape[1] * values.itemsize)))
+            copy = slab[3]
+            if copy is None or copy.dtype != values.dtype or copy.shape[1] != values.shape[1] or copy.shape[0] < rows:
+                copy = np.empty((rows, values.shape[1]), dtype=values.dtype)
+            for start in range(0, values.shape[1], _SLAB_TILE):  # a tile at a time: both sides stay in cache
+                stop = start + _SLAB_TILE
+                np.copyto(copy[:rows, start:stop], values[row : row + rows, start:stop])
+            slab[:] = [values, row, row + rows, copy]
+        return slab[3][row - slab[1]]
 
     def buffer(pos: int, dtype: Any) -> Any:
         try:
             values = blocks[blknos[pos]].values
             if type(values) is not np.ndarray or values.ndim != 2:
                 return None
-            column = values[blklocs[pos]]
+            if values.dtype != dtype:
+                return None
+            row = blklocs[pos]
+            if values.flags.f_contiguous and not values.flags.c_contiguous and values.shape[1] > 1:
+                return strided(values, row)
+            return values[row]
         except Exception:  # noqa: BLE001 - through iloc
             return None
-        return column if column.dtype == dtype else None
 
     return buffer
+
+
+#: How much of a row-by-row block `_column_buffers` copies aside at once.
+_SLAB_BYTES = 4 << 20
+#: Rows of the table `_column_buffers` copies in one go, for each run of
+#: columns: 256 at a time took 0.014 s for a 48 MB block, the whole run
+#: at once 0.06 s, and the columns one by one 0.085 s.
+_SLAB_TILE = 256
 
 
 def raw_view(array: Any) -> Any:
