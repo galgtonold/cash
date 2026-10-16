@@ -154,7 +154,7 @@ Each of these misses a change, or applies one a second time.
 
 ### Mutating through an alias
 
-<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @1d3cdc8d, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @150acf16, cash/notebook/shared_objects.py:share_group @6b5f6133, cash/notebook/shared_objects.py:view_base_names @aea7d284, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @4fe4d23f -->
+<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @1d3cdc8d, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @948a7fba, cash/notebook/shared_objects.py:share_group @1523aede, cash/notebook/shared_objects.py:view_base_names @aea7d284, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @4fe4d23f, cash/notebook/statement/processor.py:StatementProcessor._link_inputs_kept_by @2f874738 -->
 When a statement leaves two names sharing an object, cash links them:
 
 - an alias: `log = history`;
@@ -176,7 +176,11 @@ also hold:
   (`for name, rows in pairs: splits[name] = rows`), from the end of the block;
 - after a kernel restart: each statement keeps what it linked. A statement
   edited since it last ran links what its text says (`d2 = df`, `y = x[0]`,
-  `runs = [cfg]`) until it runs.
+  `runs = [cfg]`) until it runs;
+- when code of yours keeps the object, or a part of it: a function appending
+  `rows` to a global, an object, class attribute or module global of yours
+  (`keep(rows)`, `Registry.add(rows)`). What keeps it is linked to `rows`, so
+  a later call that changes it there (`bump()`) moves `rows` too.
 
 A loop that changes the items it walks (`for r in rows: r.append(0)`) changes
 `rows`. A pyplot call that draws on the current figure (`plt.plot(...)`,

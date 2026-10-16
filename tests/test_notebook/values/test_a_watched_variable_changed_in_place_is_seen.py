@@ -7,12 +7,16 @@ its digest is not read again while it provably did not change
 a function, or to the class its objects belong to must still reach every
 statement that reads it: the statement reading it re-runs and gives the
 new answer, never the one stored before the change.
+
+Every statement is stored, however fast: under the store floor the reading
+statement re-ran anyway and nothing was checked, until a loaded CI runner
+made it slow enough to store and the change made by code holding the value
+elsewhere came back stale.
 """
 
 from __future__ import annotations
 
 import sys
-import types
 
 import pytest
 
@@ -45,30 +49,43 @@ def _expected(ns: dict) -> int:
     return sum(r["v"] for r in data["rows"]) + data["meta"]["n"] + sum(p.x for p in data["pts"])
 
 
+CLASSES = """
+class Pt:
+    def __init__(self, x):
+        self.x = x
+    def move(self, d):
+        self.x += d
+    @classmethod
+    def move_all(cls, pts, d):
+        for p in pts:
+            p.x += d
+    @staticmethod
+    def hold(d):
+        HELD.append(d)
+    @staticmethod
+    def bump_held(n):
+        HELD[-1]['n'] += n
+
+HELD = []
+"""
+
+
 @pytest.fixture
-def watched_notebook(cash_magics, monkeypatch):
-    """cash_magics with the fast path watching values of any size, and a
-    class the cells' objects belong to that pickle can find by name."""
+def watched_notebook(cash_magics, cash_instance, tmp_path, monkeypatch):
+    """cash_magics with the fast path watching values of any size, every
+    statement stored, and the cells' class in a module of the user's own,
+    as a notebook's helpers are."""
     if not value_watch.enabled():
         pytest.skip(f"the fast path is off: {value_watch.REASON}")
     cw = value_watch._cw
     old = cw.stats()["min_bytes"]
     cw.configure(min_bytes=0)
-    mod = types.ModuleType("_cwatch_nb_classes")
-    exec(
-        "class Pt:\n"
-        "    def __init__(self, x):\n        self.x = x\n"
-        "    def move(self, d):\n        self.x += d\n"
-        "    @classmethod\n"
-        "    def move_all(cls, pts, d):\n        for p in pts:\n            p.x += d\n"
-        "    @staticmethod\n"
-        "    def hold(d):\n        HELD.append(d)\n"
-        "    @staticmethod\n"
-        "    def bump_held(n):\n        HELD[-1]['n'] += n\n"
-        "HELD = []\n",
-        mod.__dict__,
-    )
-    monkeypatch.setitem(sys.modules, mod.__name__, mod)
+    cash_instance.config.min_execution_time_to_cache_seconds = 0.0
+    cash_instance.config.call_cost_floor_seconds = 0.0
+    (tmp_path / "_cwatch_nb_classes.py").write_text(CLASSES, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delitem(sys.modules, "_cwatch_nb_classes", raising=False)
     cash_magics.cash_on("")
     cash_magics.badges.mode = "off"
     yield cash_magics

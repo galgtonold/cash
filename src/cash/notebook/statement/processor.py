@@ -1170,7 +1170,9 @@ class StatementProcessor:
             recorded = self._records.recorded_share_edges(run.source_hash)
             if recorded:
                 apply_share_record(self.tracking_state.derivation_edges, (), recorded)
-        self.lineage_builder.replay_derivation_bumps(self.tracking_state, run.outputs, run.inputs, skip=moved)
+        self.lineage_builder.replay_derivation_bumps(
+            self.tracking_state, run.outputs, run.inputs, skip=moved, code=run.code
+        )
         # The restore put the generators where the run left them; their
         # lineages follow, as the run's did.
         self._advance_carriers(run.source_hash, advanced, run.cache_key, run.code)
@@ -1850,6 +1852,7 @@ class StatementProcessor:
                     holders = self._refuse_unrestorable_outputs(run, captured_vars, execution.echo, execution.cost)
                 with logging_edges() as shared:
                     self._record_shared_object_edges(run, captured_vars, holders, execution.echo, execution.cost)
+                    self._link_inputs_kept_by(run, execution.echo, execution.cost)
                 if not is_control_body(run.code):
                     self._records.note_share_edges(run.source_hash, linked | shared)
                 with self._after_it_ran(run):
@@ -1881,7 +1884,9 @@ class StatementProcessor:
         # After the holders moved: a variable the entry stores moves as a hit
         # of it moves it (`held_lineage`), not through its edges, so a hit,
         # a run and the simulation leave it alike.
-        self.lineage_builder.replay_derivation_bumps(self.tracking_state, run.outputs, run.inputs, skip=moved)
+        self.lineage_builder.replay_derivation_bumps(
+            self.tracking_state, run.outputs, run.inputs, skip=moved, code=run.code
+        )
         # After the save: the entry records each input's lineage as the
         # statement read it, before its draw moved it on.
         self._advance_carriers(run.source_hash, run.carriers_advanced, run.cache_key, run.code)
@@ -2074,6 +2079,70 @@ class StatementProcessor:
             record_shared_object_edges(self.tracking_state.derivation_edges, owners, names)
         if not complete:
             self._warn_share_unchecked(run, outputs, cost)
+
+    def _link_inputs_kept_by(self, run: StatementRun, echo: tuple[Any, ...] = (), cost: float = 0.0) -> None:
+        """Link each variable *run* handed to code with what that code now
+        keeps it in, among the names *run* changed in place.
+
+        ``K.hold(data["meta"])`` leaves a class attribute of ``K``, or a
+        global of a module of the user's, holding a part of ``data``; the
+        share check of the outputs looks down from ``K`` and
+        never finds it (a class or a module is no part of a value). Looked
+        for from ``data`` up, the holder is found (`share_group`), and
+        ``K.bump(5)`` changing it later moves ``data`` as a change through
+        an alias does (`bump_derived_lineages`). Only a holder the statement
+        changed is linked: one that read ``data`` and kept nothing links
+        nothing.
+        """
+        if is_control_body(run.code):
+            return
+        user_ns = self.shell.user_ns
+        # A class or a module: an object of the user's, or a list, is looked
+        # down into by the outputs' own check already.
+        changed = {
+            name
+            for name in run.outputs & run.inputs
+            if name in user_ns and isinstance(user_ns[name], (type, types.ModuleType))
+        }
+        if not changed:
+            return
+        value_types = VALUE_TYPES + library_value_types()
+        handed = [
+            name
+            for name in sorted(run.inputs - run.outputs)
+            if name in user_ns
+            and not isinstance(user_ns[name], (type, types.ModuleType, types.FunctionType))
+            and not is_value(user_ns[name], value_types)
+        ]
+        if not handed:
+            return
+        history, named = output_history(user_ns, self.shell)
+        hidden = getattr(self.shell, "user_ns_hidden", None) or {}
+        cash_held = [*self._calls.held_call_results(), echo, run.metrics, *history]
+        gave_up = GaveUp()
+        try:
+            with walk_budget(share_check_budget(cost)):
+                share_group(
+                    handed,
+                    user_ns,
+                    user_ns,
+                    cash_held,
+                    named,
+                    foreign=lambda name: name in hidden or is_history_name(name),
+                    gave_up=gave_up,
+                )
+        except WalkBudgetExceeded:
+            pass  # what was found by then is linked; the rest stays unlinked
+        edges = self.tracking_state.derivation_edges
+        for owners, holders in gave_up.links:
+            kept_by = set(holders) & changed
+            if kept_by:
+                record_shared_object_edges(edges, set(owners) & set(handed), kept_by)
+        if gave_up.modules & run.state_modules:
+            # A global of a module the statement set state on holds it: the
+            # names through which it did (``Pt`` of ``Pt.hold(...)``) stand
+            # for the module, as they do for its rebuild.
+            record_shared_object_edges(edges, handed, run.state_names & changed)
 
     def record_structure_share_edges(
         self,
