@@ -34,6 +34,8 @@ import sysconfig
 import textwrap
 from types import ModuleType
 
+from .detect import get_value_seeding_rng_modules
+
 #: The modules whose global stream cash keys, and their import names.
 WATCHED_STREAM_MODULES = ("random", "numpy.random", "torch")
 
@@ -53,16 +55,9 @@ def _library_roots() -> tuple[str, ...]:
 _CASH_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
 
-def _value_seeded_modules(code: str) -> set[str]:
-    """Modules *code* seeds with a value (not ``seed()`` / ``seed(None)``)."""
-    from .detect import _is_entropy_seed, _rng_scan
-
-    return {module for module, node in _rng_scan(code).seed_calls if not _is_entropy_seed(node)}
-
-
 def _scan(code: str) -> set[str]:
     try:
-        return _value_seeded_modules(code)
+        return get_value_seeding_rng_modules(code)
     except (SyntaxError, ValueError, RecursionError):
         return set()
 
@@ -77,7 +72,7 @@ def _frame_prefix_seeds(frame) -> set[str]:
     start = max(frame.f_code.co_firstlineno - 1, 0) if frame.f_code.co_name != "<module>" else 0
     prefix = "".join(lines[start:stop])
     try:
-        return _value_seeded_modules(textwrap.dedent(prefix))
+        return get_value_seeding_rng_modules(textwrap.dedent(prefix))
     except (SyntaxError, ValueError, RecursionError):
         # The line stands inside a block, so the lines above it are not a
         # whole program: read the whole file. A seed below the line is then
