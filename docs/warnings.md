@@ -84,7 +84,7 @@ its warning class.
 | [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
 | [Side effects](#impure-codes) | `IMPURE-` | 4 | The function does something a cache hit will not repeat. |
 | [Cache keys](#key-codes) | `KEY-` | 25 | Something the result depends on may not be in the cache key. |
-| [Notebook](#notebook-codes) | `NOTEBOOK-` | 15 | Notebook-wide machinery rather than one statement. |
+| [Notebook](#notebook-codes) | `NOTEBOOK-` | 16 | Notebook-wide machinery rather than one statement. |
 | [Randomness](#random-codes) | `RANDOM-` | 3 | A cached value that randomness makes non-reproducible. |
 | [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
 | [Storing results](#store-codes) | `STORE-` | 8 | The call succeeded, but its result was not written. |
@@ -1655,6 +1655,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
 | [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
+| [NOTEBOOK-FILE-REWRITE-CHAIN](#notebook-file-rewrite-chain) | notebook | cells that each read one file and write it back re-run each other |
 | [NOTEBOOK-FILE-ROUNDTRIP](#notebook-file-roundtrip) | notebook | a file written in this session is read back, so the read reruns after every write |
 | [NOTEBOOK-FORWARD-READ](#notebook-forward-read) | notebook | the cell reads a name only a cell below binds, so it runs uncached |
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
@@ -1784,6 +1785,32 @@ see without cash, but a result built from them is not the notebook's result.
 cells below it.
 
 **When it is safe to ignore.** While you are still looking into the error.
+
+### NOTEBOOK-FILE-REWRITE-CHAIN {#notebook-file-rewrite-chain}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/notebook/file_round_trips.py:FileRoundTrips.cell_ends @21f64ea8, cash/notebook/ipython/cell_executor.py:CellExecutor._warn_at_cell_end @f63392bc -->
+**What happened.** Two or more cells each read the same file, change it
+and write it back (`df = pd.read_csv(P)`, `df["x"] += 1`,
+`df.to_csv(P)`), and running one of them re-ran another above it first.
+The message names the cells and the file. It is shown once per file per
+session, as soon as the second such cell runs, so it names the cells seen
+so far.
+
+**Why it matters.** Each write makes the file new for the cells above that
+read it, so before a cell runs, cash brings those cells up to date by
+running them again, and each of them writes the file again. A Run All of N
+such cells runs them N(N+1)/2 times instead of N, and a change that adds to
+the file (a column incremented, rows appended) is applied more than once.
+
+**What to do.** Have each cell write its own file (`data_step2.csv`) and
+read the one the cell before it wrote, or keep the data in a variable and
+write the file once, in the last cell.
+
+**When it is safe to ignore.** Never for a change that adds to what is in
+the file. For one that gives the same file however often it runs, when
+the cells are cheap.
 
 ### NOTEBOOK-FILE-ROUNDTRIP {#notebook-file-roundtrip}
 

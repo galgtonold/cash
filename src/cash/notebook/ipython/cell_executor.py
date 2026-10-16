@@ -569,6 +569,7 @@ class CellExecutor:
         builtin trap. Containers are looked into afresh: code ran since."""
         begin_file_state_epoch()
         new_analysis_round()
+        self.tracking_state.file_round_trips.cell_starts()
         backend = self._cell_warning_backend()
         if backend is not None:
             backend.hold_notices()
@@ -663,6 +664,7 @@ class CellExecutor:
         self._statement_processor.begin_cell_rng_observation()
         self._statement_processor.begin_cell_statement_log()
         self._threads.cell_starts()
+        self.tracking_state.file_round_trips.own_statements_start()
         # Remote freshness checks (a cached function reading s3:// and friends)
         # are network round trips that land on the HIT path, where the badge
         # reports a saving and nothing reports what establishing it cost.
@@ -670,18 +672,25 @@ class CellExecutor:
             with _measured_validation(sink=cell.timing_breakdown):
                 yield
         finally:
-            self._warn_threads_left_running(cell)
+            self._warn_at_cell_end(cell)
         t_persist = _perf_counter()
         self._statement_processor.end_cell_persistence()
         cell.timing_breakdown["persist_final"] = _perf_counter() - t_persist
 
-    def _warn_threads_left_running(self, cell: _CellRun) -> None:
+    def _cell_number(self, raw_cell: str) -> int | None:
+        """The running cell's place in the notebook, 1-based, when the
+        upstream check found it."""
+        found = self._upstream_checker.last_found_cell
+        return found[1] + 1 if found is not None and found[0] == raw_cell else None
+
+    def _warn_at_cell_end(self, cell: _CellRun) -> None:
         """NOTEBOOK-THREAD-ALIVE for a thread of the user's this cell started
-        and left running."""
+        and left running; NOTEBOOK-FILE-REWRITE-CHAIN for a file this cell
+        and one above it each read and write back."""
         try:
-            found = self._upstream_checker.last_found_cell
-            number = found[1] + 1 if found is not None and found[0] == cell.raw_cell else None
+            number = self._cell_number(cell.raw_cell)
             self._threads.cell_ends(cell.raw_cell, number)
+            self.tracking_state.file_round_trips.cell_ends(cell.raw_cell, number)
         except Warning:
             raise  # an "error" warning filter asked for it
         except Exception:  # noqa: BLE001 - a diagnostic must never break a cell
