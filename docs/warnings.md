@@ -956,7 +956,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 
 | Code | Applies to | Meaning |
 |---|---|---|
-| [KEY-AMBIENT-READ](#key-ambient-read) | decorator | the body reads the clock or a fresh UUID |
+| [KEY-AMBIENT-READ](#key-ambient-read) | both | the body reads the clock or a fresh UUID |
 | [KEY-BOOL-STATE-TOKEN](#key-bool-state-token) | decorator | `state_token()` returned a bool |
 | [KEY-BUILD-FAILED](#key-build-failed) | decorator | building the key raised; the call ran uncached |
 | [KEY-CALLABLE-HASHER](#key-callable-hasher) | decorator | a hasher registered for every function |
@@ -983,7 +983,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 
 ### KEY-AMBIENT-READ {#key-ambient-read}
 
-<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
 <!-- claim: cash/effects.py:MODULE_CALLS @91df07f5, cash/analysis/purity_visitor.py:PurityVisitor.visit_Subscript @3b13759e -->
 <!-- claim: cash/analysis/ambient_reads.py:ambient_call @00d7cd08, cash/effects.py:_canonical_names @e0692d46 -->
@@ -1017,6 +1017,14 @@ reading that only goes into a log line is not reported either.
 
 **Why it matters.** The value is an input the key cannot see. The first call's
 value is stored and returned to every later call, in every later process.
+
+<!-- claim: cash/analysis/cacheability_decision.py:_helper_ambient_reasons @5edc872e -->
+In a notebook, a statement that calls a function of yours making such a read
+(`s = stamp(1)`, where `stamp` returns `time.time()`), there or in a helper it
+calls, is not cached: it runs every time, as it would without cash, and the
+warning names the function and the read once per session. A clock that
+measures time passing (`time.perf_counter()`, `time.monotonic()`) does not
+count there.
 
 **What to do.** Pass the value in, so it reaches the key:
 
@@ -1623,7 +1631,9 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
 | [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
 | [NOTEBOOK-FILE-ROUNDTRIP](#notebook-file-roundtrip) | notebook | a file written in this session is read back, so the read reruns after every write |
+| [NOTEBOOK-FORWARD-READ](#notebook-forward-read) | notebook | the cell reads a name only a cell below binds, so it runs uncached |
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
+| [NOTEBOOK-NO-LIVE-READER](#notebook-no-live-reader) | notebook | cells above are read from the saved file, so an unsaved edit there is not seen |
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook's cells cannot be read; cells above the one you run are not re-checked |
 | [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload or restart dropped state cells set on a module, and cash cannot rebuild it |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
@@ -1776,6 +1786,26 @@ last step. For a formatting pass, format while writing (through the
 such as a check that the saved file opens. A file an earlier session wrote,
 such as a checkpoint read after a restart, never gives this warning.
 
+### NOTEBOOK-FORWARD-READ {#notebook-forward-read}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/notebook/upstream/notebook_vetting.py:NotebookVetter._refuse_forward_references @a173133d, cash/notebook/ipython/upstream_phase.py:UpstreamResolution._step_aside @90bc587e -->
+**What happened.** The cell reads, at module level, a name that only a later
+cell binds (`y = x + 1` above `x = 10`). It works now because that cell already
+ran, so the cell runs as plain Jupyter runs it, on the value in memory, but
+uncached. The message names the variable and the cell that binds it. A name
+used inside a `def` does not count; a decorator, default argument or base class
+does.
+
+**Why it matters.** A run from the top raises `NameError` at this cell, and a
+cached result would stand for an order of cells the notebook does not have.
+
+**What to do.** Move the binding above this cell, or move this cell below it.
+
+**When it is safe to ignore.** Never for long: the notebook does not run from
+the top.
+
 ### NOTEBOOK-MAGIC-STALE {#notebook-magic-stale}
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
@@ -1799,6 +1829,29 @@ it; a name that is gone raises NameError.
 
 **When it is safe to ignore.** When the change above does not affect what the
 command computes.
+
+### NOTEBOOK-NO-LIVE-READER {#notebook-no-live-reader}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/server_discovery.py:warn_no_live_reader_once @675af5d0 -->
+**What happened.** Before a cell runs, cash checks the cells above it. It
+read them from the saved notebook file, because no live reader sends it the
+cells as they are in the editor: neither cash's JupyterLab extension, nor VS
+Code's backup, nor Colab. That is the case in the classic Notebook, PyCharm,
+or a JupyterLab whose server does not have the extension installed.
+
+**Why it matters.** An edit you have not saved is checked as the code saved
+before it. Run a cell below an unsaved edit and cash answers for the old
+code, the way it would if you had not edited at all.
+
+**What to do.** Save (`Ctrl+S`) before running a cell below an edit. Or use
+JupyterLab with the `cash-live-cells` extension (installed with `pip install
+cash-lib` in the environment that runs JupyterLab), VS Code or Colab.
+
+**When it is safe to ignore.** When you save before running, or run cells
+top to bottom. It is shown once per session, for the first cell you run after
+a pause; a Run All, papermill or nbconvert run does not show it.
 
 ### NOTEBOOK-NOT-FOUND {#notebook-not-found}
 
@@ -1981,7 +2034,7 @@ random source.
 first result is returned from then on, and clearing the cache or running on
 another machine gives a different frozen value.
 
-<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/tracking/randomness/detect.py:RandomnessDetector.analyze_code @2471d11d -->
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/tracking/randomness/detect.py:RandomnessDetector.analyze_code @4890c3ec -->
 In a notebook, a draw too cheap to cache is frozen too when it comes from the
 `random`, `numpy.random` or `torch` stream, because cash rewinds those streams
 before a re-run. A cheap draw from a generator held in a variable
@@ -1992,7 +2045,7 @@ The message for a generator draw says both.
 for a stable, reproducible value. Or accept the frozen value and silence the
 warning, as below.
 
-<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @494a3663, cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @79868eb7 -->
+<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @494a3663, cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @0a570907 -->
 In a notebook: for a fresh draw every run, put `# @cash:no-cache` on the
 statement, on the line above it or at the end of its line. It turns off the
 rewind as well as caching, and the statement no longer raises this warning.
@@ -2008,7 +2061,7 @@ generator warns for calls that leave it out; pass `seed=i` per replicate. To
 keep the frozen value, use `@cash.cache(allow_random=True)`. For a fresh draw,
 do not cache the function.
 
-<!-- claim: cash/decorator/rng.py:unseeded_library_calls @1a8de838 -->
+<!-- claim: cash/decorator/rng.py:unseeded_library_calls @54a3c86b -->
 A library call that draws inside its own compiled code warns too when the
 function passes it no seed: `train_test_split(X)`, `KFold(shuffle=True)`,
 `make_classification()`, an estimator such as `SGDClassifier()` or
@@ -2018,6 +2071,15 @@ warns only when the call picks them: `Ridge()` is silent, `Ridge(solver='sag')`
 warns. When cash cannot read the setting (a variable, or `PCA()`, whose
 `svd_solver='auto'` picks by the data's shape), the message says what the draw
 depends on rather than that one happened.
+
+<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness._warn_hidden_unseeded @f80cb855 -->
+In a notebook the same library calls warn when a statement makes them without
+a seed (`df.sample(100)`, `train_test_split(X)`), as does a statement that
+calls one of your functions which builds its own unseeded generator
+(`rng = make_rng()` with `return np.random.default_rng()`) and an anonymous
+generator (`z = np.random.default_rng().normal()`). A pandas or scikit-learn
+call left at `random_state=None` draws from numpy's global stream, so after
+`np.random.seed(0)` it is reproducible and does not warn; a polars call does.
 
 <!-- claim: cash/decorator/rng.py:RngWatch.warn_observed_draw @4bad64b0, cash/notebook/statement/randomness.py:StatementRandomness.flag_observed_hidden_draw @71b1e7ff, cash/tracking/randomness/lineage.py:unseeded_streams @5abf622f -->
 A draw that neither the function's source nor the statement's shows is caught

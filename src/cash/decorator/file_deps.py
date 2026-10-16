@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from .._clock import perf_counter as _perf_counter
 from .._paths import normalize_path
 from ..code_digest import own_source_digest
+from ..content_hashers import lazy_frame_sources
 from ..exceptions import CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
 from ..file_source import FileDataSource
 from ..remote_source import (
@@ -337,6 +338,29 @@ class FileDeps:
 
         for path in cf.declared_files:
             _track_declared(tracker, path)
+
+    def track_scanned_files(self, tracker: Any, args: tuple, kwargs: dict) -> None:
+        """Record the files a polars ``LazyFrame`` argument scans on *tracker*.
+
+        The frame is keyed by its plan, which names a ``scan_csv`` file by
+        path, so after the file was edited the old result was served, with no
+        warning (where no native file hook saw polars open it). Recorded as
+        reads, like ``file_depends_on=``: a glob counts its matches and new
+        ones, a relative path is resolved here. One container deep, as
+        `argument_paths` reads.
+        """
+        values: list[Any] = [*args, *kwargs.values()]
+        for value in list(values):
+            if isinstance(value, (list, tuple)) and len(value) <= 64:
+                values.extend(value)
+            elif isinstance(value, dict) and len(value) <= 64:
+                values.extend(value.values())
+        for value in values:
+            cls = type(value)
+            if cls.__name__ != "LazyFrame" or not cls.__module__.startswith("polars"):
+                continue
+            for path in lazy_frame_sources(value) or ():
+                _track_declared(tracker, path)
 
     def auto_file_deps_fresh(self, metadata: CacheMetadata, *, quiet: bool = False) -> bool:
         """Return True if every file recorded in ``metadata.auto_file_deps``

@@ -64,15 +64,17 @@ the rest of the session, but not `random.random()` and not a generator from
 the random stream back where the computed run left it, so the next draw matches a
 full run.
 
-cash finds a draw by following the generator from where it was created, so these
-are **not** flagged and are cached silently:
+cash finds a draw by following the generator from where it was created. It also
+warns about `df.sample(100)` and other library calls without `random_state`, an
+anonymous generator (`z = np.random.default_rng().normal(size=3)`), and a call to
+one of your functions that builds its own unseeded generator (`rng = make_rng()`).
+These are **not** flagged and are cached silently:
 
-- a generator cash never saw created: `self.rng.normal()`, a generator returned
-  by a helper, `df.sample(100)` without `random_state`;
+- a draw from a generator cash never saw created, held in an attribute:
+  `self.rng.normal()`;
 - a draw inside a helper function (`arr = make_data()`) from a generator the
-  helper makes or holds. One from the global `random`, `np.random` or torch
-  stream is flagged once the statement has run, by comparing the streams;
-- an anonymous generator: `z = np.random.default_rng().normal(size=3)`.
+  helper holds rather than makes. One from the global `random`, `np.random` or
+  torch stream is flagged once the statement has run, by comparing the streams.
 
 <!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @4ebbcaa0, cash/tracking/randomness/lineage.py:advanced_carrier_lineage @eaa66fca, cash/notebook/upstream/statement_lineage.py:StatementLineage._recorded_draws @3b7507d9, cash/notebook/upstream/statement_lineage.py:StatementLineage._reachable_generators @bb6221ba -->
 A statement that draws from a generator held in a variable, or calls a function
@@ -115,28 +117,36 @@ import cash
 warnings.filterwarnings("ignore", category=cash.CashRandomnessWarning)
 ```
 
-## A helper that reads the clock is frozen
+## A helper that reads the clock runs every time
 
-**Symptom:** a timestamp, `uuid4()` or random id from your own function never
-changes.
+**Symptom:** a statement that calls one of your functions runs on every run,
+with a KEY-AMBIENT-READ warning.
 
+<!-- claim: cash/analysis/cacheability_decision.py:_helper_ambient_reasons @5edc872e, cash/notebook/lineage_formula.py:helper_ambient_reads @609ad208 -->
 A clock read written in the statement itself (`t = datetime.now()`) runs every
-time, and so does a call to a function of yours that only returns one
-(`def tick(): return time.time()`). One inside a function that does more is
-not seen, and the call is cached with the first value:
+time, and so does a statement that calls a function of yours which reads the
+clock, a fresh UUID or random bytes from the system (`time.time()`,
+`uuid.uuid4()`, `os.urandom()`), there or in a helper it calls. A cached result
+would return the first value on every run, so cash runs the statement instead
+and says so once:
 
-<!-- test:skip reason="illustrative: shows a value frozen across two runs of one cell" -->
+<!-- test:skip reason="illustrative: shows a statement that runs on every run" -->
 ```python { .nb-cell }
 def stamp(x):
     time.sleep(0.2)
     return x, time.time()
 
-# re-run: the same time.time() as the first run, no warning
+# runs every time: KEY-AMBIENT-READ, "stamp(), which reads time.time()"
 s = stamp(1)
 ```
 
-**Fix:** pass the time in (`stamp(1, now=time.time())`), or put
-`# @cash:no-cache` on the line above the statement.
+A read whose value only goes into a log line or a `print` does not count, and
+neither do the clocks that measure time passing (`time.perf_counter()`,
+`time.monotonic()`, `time.process_time()`), as in a timeout loop or a measured
+duration: a value built from one differs between two runs without cash too.
+
+**Fix:** to cache it, pass the time in (`stamp(1, now=time.time())`). To cache
+the first value on purpose, mark the line `# @cash:assume-safe`.
 
 ## Changes cash cannot see
 
@@ -403,22 +413,6 @@ print("end", file=log)       # cell 3: re-run alone, "end" twice
 **Fix:** open, write and close the file in one cell
 (`with open("run.log", "a") as log: ...`).
 
-### A function that calls one defined in a later cell
-
-<!-- test:skip reason="illustrative: shows staleness across an edit of a later cell" -->
-```python { .nb-cell }
-def a(n): return b(n) * 2      # cell 1: b does not exist yet
-def b(n): return n + 1         # cell 2
-r = a(3)                       # cell 3: 8
-
-# edit cell 2 to `return n + 10`, re-run cell 3 alone: still 8, not 26
-```
-
-cash follows dependencies upward, so `a` never learns it depends on `b`. cash can
-even serve `r` after cell 2 is deleted. **Fix:** define a function above the
-functions that call it. A module-level read of a name bound only below raises
-[`ForwardReferenceError`](#forwardreferenceerror) instead.
-
 ### A name a magic binds
 
 <!-- claim: cash/analysis/code_analyzer.py:_cell_magic_body @3566e904, cash/analysis/code_analyzer.py:_is_magic_line @d120bf9b, cash/notebook/statement/processor.py:StatementProcessor.forget_rebound @70d43250 -->
@@ -499,32 +493,35 @@ the statement.
 `CACHED` badge and no warning.
 
 cash records a file when it is read through a reader it watches: `pd.read_*`,
-`np.load`, `joblib.load`, polars, `sqlite3.connect`, `open()` and
-[others](how-it-works/invalidation.md#what-counts-as-a-change). A read through
-anything else (a C extension that opens the file itself, a client library, a
-subprocess, `os.open`) is invisible, and the statement is cached with no file
-recorded. So is a watched reader imported by name in a cell
-(`from polars import read_parquet`): call it through its module
-(`pl.read_parquet(...)`). A SQLite database in WAL mode is the same: a commit lands in the
-`-wal` file.
+`np.load`, `joblib.load`, polars, `sqlite3.connect`, `h5py.File`,
+`xarray.open_dataset`, `rasterio.open`, `open()` and
+[others](how-it-works/invalidation.md#what-counts-as-a-change), and on Linux and
+Windows the files C libraries open themselves (below). A read through anything
+else (a subprocess, a client library that makes the system call itself, and on
+macOS a C extension that opens the file itself or `os.open`) is invisible, and
+the statement is cached with no file recorded. A watched reader imported by
+name counts like its module spelling, also when it was imported before `%cash_on`
+or from the submodule that defines it (`from polars.io.parquet import
+read_parquet`).
 
 **Fix:** read the file through a watched reader, or put `# @cash:no-cache` above
 the statement if the read is cheap.
 
 <!-- claim: cash/tracking/native_reads.py:close_window @0e2917f4 -->
-On Linux (glibc, x86-64 or aarch64) and on Windows (x64) you can also turn
-on the native file hook with `CASH_NATIVE_FILE_HOOK=1` (off by default;
-`%cash_status` shows it as `native_file_hook`). cash then also sees the files a
+On Linux (glibc, x86-64 or aarch64) and on Windows (x64) the native file hook
+is on by default (`%cash_status` shows it as `native_file_hook`;
+`CASH_NATIVE_FILE_HOOK=0` turns it off). cash then also sees the files a
 C, C++ or Rust library opens itself through the C library's `open`, `fopen` or
 `opendir`, or on Windows through `CreateFileW` or the CRT's `_wopen`,
-`_wsopen_s` and `fopen` family: `pyarrow.fs`, a polars `scan_csv`, a database
-`ATTACH`-ed in SQLite, a compiled extension of your own. It still misses a
-library that makes the system call itself, one linked statically against the
-C library, a call through a function pointer the library looked up itself
-(`dlsym`, `GetProcAddress`, ctypes), and a library first loaded inside the
-cached call. A file such a library opens while several cached calls run at
-once, in different threads, counts for all of them. On macOS the hook is not
-available yet.
+`_wsopen_s` and `fopen` family: `pyarrow.fs`, a polars `scan_csv`, netCDF4, a
+database `ATTACH`-ed in SQLite, `os.open`, a compiled extension of your own.
+It still misses a library that makes the system call itself, one linked
+statically against the C library, a call through a function pointer the
+library looked up itself (`dlsym`, `GetProcAddress`, ctypes), and a library
+first loaded inside the cached call. A file such a library opens while several
+cached calls run at once, in different threads, counts for all of them. On
+macOS the hook is not available yet; there the readers listed above are still
+recorded by their entry points.
 
 ### A file read into a memo before cash was imported
 
@@ -688,7 +685,10 @@ invisible unless your editor has a **live reader**:
 - **Google Colab**: cash reads the cells from the page.
 
 Elsewhere, or when the reader is unavailable, save (`Ctrl+S`) after editing a
-cell you are not about to run, and before a Run All on a fresh kernel.
+cell you are not about to run, and before a Run All on a fresh kernel. cash
+says so once per session there
+([NOTEBOOK-NO-LIVE-READER](warnings.md#notebook-no-live-reader)), at the first
+cell you run after a pause.
 JupyterLab's autosave runs on a timer, so a quick edit-then-run can miss it. When
 the cell you run is itself unsaved, cash can tell and adds a "Notebook file is
 stale" warning row.
@@ -720,14 +720,15 @@ Two cells have byte-identical content and cash cannot get a cell ID to tell
 them apart, so it refuses to guess. JupyterLab and VS Code normally supply cell
 IDs. **Fix:** add a comment to one of the cells, or save the notebook.
 
-### `ForwardReferenceError`
+### A cell reads a name a later cell binds
 
 <!-- claim: cash/exceptions.py:ForwardReferenceError, cash/notebook/upstream/notebook_vetting.py:NotebookVetter._refuse_forward_references -->
 A cell reads, at module level, a name that only a later cell binds. It works now
 because that cell already ran, but a top-to-bottom run would raise `NameError`.
-A name used inside a `def` does not count; a decorator, default argument or base
-class does. **Fix:** move the binding above this cell. The error names both
-cells.
+cash runs the cell uncached, on the value in memory, and warns with
+[NOTEBOOK-FORWARD-READ](warnings.md#notebook-forward-read), which
+names both cells. A name used inside a `def` does not count; a decorator,
+default argument or base class does. **Fix:** move the binding above this cell.
 
 ## Others
 

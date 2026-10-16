@@ -1,5 +1,6 @@
 """The environment variables a cached function reads, folded into its key
-at their current values."""
+at their current values, and the installed versions of the libraries it
+calls into (`library_versions`)."""
 
 from __future__ import annotations
 
@@ -9,6 +10,8 @@ from typing import TYPE_CHECKING
 
 from ..dependency_state import ledger_note
 from ..effects import environment_component
+from .library_versions import library_versions
+from .user_code import own_package
 
 if TYPE_CHECKING:
     from ..analysis.purity_report import PurityReport
@@ -36,10 +39,28 @@ class EnvironmentFold:
         Nothing is added when there are none, so such a key is unchanged.
         """
         entries = self._environment_reads(func_name, set(), self._registry.report_for(func, func_name))
-        if not entries:
+        if entries:
+            component = environment_component(entries, note=lambda label, digest: ledger_note(("env", label), digest))
+            state_hash = hashlib.sha256(f"{state_hash}{component}".encode("utf-8")).hexdigest()
+        return self._fold_library_versions(func, func_name, state_hash)
+
+    def _fold_library_versions(self, func: Callable, func_name: str, state_hash: str) -> str:
+        """Fold the installed version of each library the call reaches.
+
+        A library is keyed by name, its code not read, so ``pip install -U``
+        served the old version's results (`library_versions`). The function,
+        its helpers and the cached functions it calls are asked
+        (`FunctionRegistry.code_functions`), as their stored results would not
+        move with a dependency's own key. Nothing is added when they reach no
+        library, so such a key is unchanged.
+        """
+        versions = library_versions(self._registry.code_functions(func, func_name), own_package(func))
+        if not versions:
             return state_hash
-        component = environment_component(entries, note=lambda label, digest: ledger_note(("env", label), digest))
-        return hashlib.sha256(f"{state_hash}{component}".encode("utf-8")).hexdigest()
+        for dist, version in versions:
+            ledger_note(("installed library", dist), version)
+        payload = ",".join(f"{dist}=={version}" for dist, version in versions)
+        return hashlib.sha256(f"{state_hash}:libraries:{payload}".encode("utf-8")).hexdigest()
 
     def _environment_reads(
         self, func_name: str, visited: set[str], report: PurityReport | None = None

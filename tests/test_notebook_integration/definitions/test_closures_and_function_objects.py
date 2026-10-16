@@ -170,29 +170,10 @@ class TestFunctionObjectChannels:
         assert "r=4" in nb_runner.get_output(3)
         nb_runner.set_cell_source(2, "def b_fn(n):\n    return 0 if n == 0 else a_fn(n - 1) + 2")
         nb_runner.run_cell(3)
-        # ADJUDICATED: a DOWNWARD dependency, which cash's upstream model does
-        # not follow. Diagnosed precisely — it is not about recursion:
-        #
-        #   * b_fn defined BEFORE a_fn, edit b_fn, run the call site  -> works.
-        #     `def a_fn` names b_fn as an input, so lineage flows normally.
-        #   * b_fn defined AFTER  a_fn, edit b_fn, run the call site  -> stale,
-        #     with no cycle anywhere.
-        #
-        # The only difference is direction. `def a_fn` here depends on a name
-        # bound in a LATER cell, and cash reconstructs upstream — it looks at
-        # cells above, so a dependency pointing down is invisible. Mutual
-        # recursion always contains one (each function forward-references the
-        # other), which is why it surfaced here first.
-        #
-        # Fixing it means resolving a function's free names at CALL time and
-        # folding the callees' hashes into the call site's key — a second
-        # dependency mechanism alongside the existing input-lineage one, with
-        # real over-invalidation risk. Deliberately not attempted as a patch.
-        #
-        # Pinned as the real behaviour; see docs/known-limitations.md.
-        assert "r=4" in nb_runner.get_output(3), (
-            f"expected the documented downward-dependency behaviour: {nb_runner.get_output(3)!r}"
-        )
+        # b_fn is defined in a LATER cell than a_fn: what a_fn reads when
+        # called counts as the call site's input, so b_fn's edited cell runs
+        # again first. a(4) = b(3)+1, b(3) = a(2)+2, a(2) = b(1)+1, b(1) = 2.
+        assert "r=6" in nb_runner.get_output(3), f"got {nb_runner.get_output(3)!r}"
 
     def test_lambda_in_dict_edit_run_callsite_only(self, nb_runner):
         """Lambdas stored in a dict, called downstream; edit one lambda, run call site."""

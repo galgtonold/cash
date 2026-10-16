@@ -1,12 +1,13 @@
-"""The opt-in native file hook sees files that C libraries open themselves.
+"""The native file hook sees files that C libraries open themselves.
 
 Python's audit hook reports every open made through Python; a C library that
 opens its file itself raised nothing, and only the entry points
 `reader_patches` wraps by name were tracked. With the hook on
 (``CASH_NATIVE_FILE_HOOK=1``, `native_reads.enable`) the open family is
 rebound in the loaded libraries' symbol tables, so a cached result depends on
-those files too. Each case below shows today's behaviour with the hook off (a
-stale answer) and the fix with it on:
+those files too. The hook is on by default where it is supported
+(``CASH_NATIVE_FILE_HOOK=0`` keeps it off). Each case below shows the
+behaviour with the hook off (a stale answer) and the fix with it on:
 
 - a small C library of the test's own that reads with ``fopen``/``open``
   (and on Windows with ``CreateFileW`` and ``_wfopen_s``);
@@ -526,20 +527,30 @@ def test_disable_puts_every_slot_back(tmp_path, clib):
 
 
 def test_status_line_says_on_or_off():
+    was = native_reads.active()
     native_reads.disable()
-    assert native_reads.status_line().startswith("off (set CASH_NATIVE_FILE_HOOK=1")
-    native_reads.enable()
     try:
+        assert native_reads.status_line().startswith("off (CASH_NATIVE_FILE_HOOK=0")
+        native_reads.enable()
         assert native_reads.status_line().startswith("on (")
     finally:
-        native_reads.disable()
+        (native_reads.enable if was else native_reads.disable)()
 
 
-def test_the_environment_switch_turns_it_on_at_import(tmp_path):
-    code = "from cash.tracking import native_reads as n; print(n.active(), n.stats()['slots'] > 0)"
-    env = dict(os.environ, CASH_NATIVE_FILE_HOOK="1")
-    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True)
+_AT_IMPORT = "from cash.tracking import native_reads as n; print(n.active(), n.stats().get('slots', 0) > 0)"
+
+
+def test_the_hook_is_on_at_import_by_default():
+    env = {k: v for k, v in os.environ.items() if k != "CASH_NATIVE_FILE_HOOK"}
+    out = subprocess.run([sys.executable, "-c", _AT_IMPORT], env=env, capture_output=True, text=True, check=True)
     assert out.stdout.split() == ["True", "True"]
+
+
+@pytest.mark.parametrize("value", ["0", "off", "false"])
+def test_the_environment_switch_keeps_it_off_at_import(value):
+    env = dict(os.environ, CASH_NATIVE_FILE_HOOK=value)
+    out = subprocess.run([sys.executable, "-c", _AT_IMPORT], env=env, capture_output=True, text=True, check=True)
+    assert out.stdout.split() == ["False", "False"]
 
 
 # -- Windows: import address tables ----------------------------------------------

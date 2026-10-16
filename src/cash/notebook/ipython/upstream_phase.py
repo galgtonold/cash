@@ -260,15 +260,32 @@ class UpstreamResolution:
         banner.
 
         - SyntaxError (a cell above does not parse): run the cell as written.
-        - RuntimeError / AmbiguousCellError / UpstreamStateError /
-          ForwardReferenceError: a fresh raise of the same error, run as the
-          cell, so the cell fails loudly and IPython attributes it there.
+        - ForwardReferenceError (the cell reads a name only a cell below
+          binds): NOTEBOOK-FORWARD-READ, and the cell runs uncached.
+        - RuntimeError / AmbiguousCellError / UpstreamStateError: a fresh
+          raise of the same error, run as the cell, so the cell fails loudly
+          and IPython attributes it there.
         - anything else: an internal failure; warn and run the cell uncached.
         """
         if isinstance(caught, SyntaxError):
             self._badges.close(badge_display_id)
             return RunInstead(raw_cell, caught)
-        if isinstance(caught, (RuntimeError, AmbiguousCellError, UpstreamStateError, ForwardReferenceError)):
+        if isinstance(caught, ForwardReferenceError):
+            # The cell runs as plain Jupyter runs it, on the name in memory,
+            # uncached: a key built on it would stand for a namespace a run
+            # from the top cannot rebuild. Refusing blocked a cell that runs.
+            try:
+                warn_diagnostic(
+                    CashCacheIneffectiveWarning,
+                    "NOTEBOOK-FORWARD-READ",
+                    what=f"{caught} This cell ran uncached, on the value in memory.",
+                    fix="Move the binding above this cell, or move this cell below it.",
+                )
+            except Exception:  # noqa: BLE001 - a diagnostic must never break a cell
+                pass
+            self._badges.close(badge_display_id, status="BYPASSED")
+            return RunInstead(raw_cell, caught)
+        if isinstance(caught, (RuntimeError, AmbiguousCellError, UpstreamStateError)):
             # Re-raise inside the user's cell so IPython renders the traceback
             # as if the cell itself raised.  Import the exception class
             # explicitly because the user's namespace may not have it.  The

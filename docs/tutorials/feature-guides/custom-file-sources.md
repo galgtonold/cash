@@ -42,9 +42,10 @@ cheap. Every file is hashed in full, whatever its size. The full rule is in
 
 ## What's automatically tracked
 
-<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @b76337da, cash/tracking/read_events.py:_on_open @ac42db2f, cash/tracking/read_events.py:_on_listing @41ce1606 -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @fa9f8714, cash/tracking/read_events.py:_on_open @ac42db2f, cash/tracking/read_events.py:_on_listing @41ce1606 -->
 cash tracks `open()` in a read mode and what reads through it, the pandas, polars,
-pyarrow, numpy and soundfile readers, `sqlite3.connect`, directory listings (a new
+pyarrow, numpy and soundfile readers, `h5py`, `tables`, `rasterio` and xarray's
+`open_*`, `sqlite3.connect`, directory listings (a new
 matching file recomputes the call) and existence checks (the call recomputes
 once a missing file appears, or once a file it found is gone). A library
 that opens your file with Python's `open()` is covered the same way, such as
@@ -68,14 +69,16 @@ with `pkgutil.get_data` or `importlib.resources`.
 
 ## What is not tracked
 
-- Readers that open files in C without going through `open()`: `h5py`,
-  `netCDF4`, `fastparquet`, `pyarrow.fs` file systems
+- On macOS, readers that open files in C without going through `open()`
+  and are not in the list above: `netCDF4`, `pyarrow.fs` file systems
   (`LocalFileSystem().open_input_file(...)`), a library called through
-  `ctypes`.
-- A tracked reader imported by name in a notebook cell
-  (`from polars import read_parquet`) or wrapped in `functools.partial`: call
-  it through its module (`pl.read_parquet(...)`) instead.
-- `os.open`, and files a subprocess reads.
+  `ctypes`. On Linux and Windows the [native file
+  hook](../../known-limitations.md#reads-through-a-loader-cash-cannot-see), on
+  by default, sees those opens; it still misses the C library's `open`
+  called directly through `ctypes`.
+- A tracked reader wrapped in `functools.partial`: call it through its
+  module (`pl.read_parquet(...)`) instead.
+- `os.open` on macOS, and files a subprocess reads.
 - Database engines other than `sqlite3.connect`, such as SQLAlchemy.
 
 Name such files with `file_depends_on=`, or teach cash the reader with

@@ -23,6 +23,7 @@ JavaScript, and a malformed one must cost the fallback, never an exception.
 from __future__ import annotations
 
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +141,24 @@ def reset() -> None:
     _store["cells"] = None
 
 
+#: ``time.monotonic()`` when the last non-silent execution ended, or None
+#: before the first one. Kernel-wide, like ``_store``.
+_last_run_end: float | None = None
+
+
+def seconds_since_last_run() -> float | None:
+    """How long the kernel sat idle before the execution now running.
+
+    None before any execution ended. A Run All, papermill or a test harness
+    sends the next cell the moment the last one ends; a person editing and
+    running a cell leaves a pause. Read before ``post_run_cell`` of the
+    current execution, it measures the gap that preceded it.
+    """
+    if _last_run_end is None:
+        return None
+    return time.monotonic() - _last_run_end
+
+
 # Thread-safety note. The extension forces its comm onto the MAIN shell
 # (`commsOverSubshells = 'disabled'`), so `handle_message` runs on the kernel's
 # own thread and the plain dict above needs no lock. If that is ever relaxed --
@@ -157,7 +176,9 @@ def _on_post_run_cell(result=None) -> None:
     and ``install_expiry_hook`` can unregister the previous registration by
     passing this same object.
     """
+    global _last_run_end
     expire()
+    _last_run_end = time.monotonic()
 
 
 def install_expiry_hook(shell) -> bool:

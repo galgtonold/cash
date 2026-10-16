@@ -310,8 +310,12 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # changed is kept as that run left it, or could not be put back
         "NOTEBOOK-CELL-SYNTAX",  # an upstream cell does not parse, so cells that
         # depend on it stop being tracked
+        "NOTEBOOK-FORWARD-READ",  # the cell reads a name only a cell
+        # below binds; it runs uncached on the value in memory
         "NOTEBOOK-MAGIC-STALE",  # a name a magic bound is kept as it is,
         # though what the magic read changed since it ran, or is gone
+        "NOTEBOOK-NO-LIVE-READER",  # cells above are read from the saved
+        # file and nothing sends unsaved edits; shown once per session
         "NOTEBOOK-NOT-FOUND",  # no notebook cells to read; cells above the one
         # run are not re-checked, statements still cache on their own inputs
         "NOTEBOOK-RELOAD-STATE",  # an edited module was reloaded, or the

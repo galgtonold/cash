@@ -19,9 +19,12 @@ their canonical key form (`cash.canonical_form.canonical_bytes`).
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import pickle
+import re
 import threading
+import warnings
 import weakref
 from collections.abc import Callable
 from typing import Any
@@ -879,6 +882,49 @@ def hash_numpy(value: Any) -> str | None:
         return None
 
 
+def _plan_paths(node: Any, found: list[str]) -> None:
+    """Collect the ``Scan`` sources of a serialized polars plan (its JSON)."""
+    if isinstance(node, dict):
+        scan = node.get("Scan")
+        if isinstance(scan, dict):
+            sources = scan.get("sources")
+            paths = sources.get("Paths") if isinstance(sources, dict) else None
+            for item in paths if isinstance(paths, list) else ():
+                path = item.get("inner") if isinstance(item, dict) else item
+                if isinstance(path, str):
+                    found.append(path)
+        for value in node.values():
+            _plan_paths(value, found)
+    elif isinstance(node, list):
+        for value in node:
+            _plan_paths(value, found)
+
+
+#: ``Csv SCAN [data.csv]`` / ``Parquet SCAN [a.parquet, b.parquet]`` in a
+#: plan's text, the fallback when it cannot be serialized as JSON.
+_EXPLAIN_SCAN = re.compile(r"SCAN \[([^\]]*)\]")
+
+
+def lazy_frame_sources(value: Any) -> list[str] | None:
+    """The files a polars ``LazyFrame``'s plan scans, as written (a glob stays
+    a glob), or None when the plan cannot be read. Remote sources
+    (``s3://...``) are left out; they are keyed by their path as before."""
+    found: list[str] = []
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # the JSON format is deprecated, not gone
+            plan = json.loads(value.serialize(format="json"))
+        _plan_paths(plan, found)
+    except Exception:  # noqa: BLE001 - polars raises its own types
+        try:
+            text = value.explain(optimized=False)
+        except Exception:  # noqa: BLE001 - polars raises its own types
+            return None
+        for listed in _EXPLAIN_SCAN.findall(text):
+            found.extend(p.strip() for p in listed.split(",") if p.strip() and not p.strip().startswith("..."))
+    return [p for p in dict.fromkeys(found) if "://" not in p]
+
+
 def hash_polars(value: Any) -> str | None:
     """Hash a polars DataFrame, Series, or LazyFrame, schema included.
 
@@ -904,12 +950,11 @@ def hash_polars(value: Any) -> str | None:
     processes, so persisted entries still hit after a restart. A plan
     ``serialize()`` refuses gets no built-in hash at all.
 
-    KNOWN GAP: a plan that reads from an external source
-    (``scan_csv``/``scan_parquet``/...) serializes the PATH, not the file's
-    contents, so editing that file in place does not move the key. Closing
-    that would mean collecting the frame to build a cache key, which defeats
-    the point of a LazyFrame and can be arbitrarily expensive. Collect before
-    passing, or name the file with ``file_depends_on=``.
+    A plan that reads from an external source (``scan_csv``/``scan_parquet``/...)
+    serializes the PATH, not the file's contents, so the key alone does not
+    move when the file is edited. The decorator records the files the plan
+    scans as the call's reads instead (`lazy_frame_sources`), so the entry
+    checks them on every lookup as it does a file the body opened.
     """
     try:
         import polars as pl

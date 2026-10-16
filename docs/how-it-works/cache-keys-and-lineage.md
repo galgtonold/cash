@@ -43,7 +43,7 @@ value the watchers cannot fully cover is hashed every time.
 | `DataFrame`, `Series` | pandas | column and index labels and axis names, dtypes (with a categorical's categories and order), an index's `freq`, `attrs`, and every value: numbers, booleans and dates from their memory, text columns of the Arrow-backed `str` type from their Arrow memory, other Python objects and strings by their pickled form, so `1` and `'1'` differ (a column holding only floats, only bools or only ints as the typed array it converts to) |
 | `ndarray` | numpy | shape, dtype, memory order and every byte; an object array by its items, column by column |
 | `DataFrame`, `Series` | polars | schema and every value, each column from its Arrow memory; an `Object` column by its values' content |
-| `LazyFrame` | polars | the serialised plan, including in-memory data; a plan reading a file holds the path, not the contents |
+| `LazyFrame` | polars | the serialised plan, including in-memory data; a plan reading a file holds the path, and the decorator records the files it scans as the call's reads |
 | `Table`, `RecordBatch`, `Array`, `ChunkedArray` | pyarrow | schema or type and every row, each column from its offset; a dictionary column by its values |
 | sparse matrices and arrays | scipy.sparse | type, shape, dtype, format and every array the format stores; a DOK or LIL matrix as the CSR matrix it converts to |
 | `DataFrame`, `Series` | modin | converted to pandas, then hashed as pandas |
@@ -249,9 +249,21 @@ statement also seeds), the value is not stored on that run.
 `a` reads when it runs. cash follows the called functions' global names and
 adds `name:lineage` for each. A name that no longer exists counts as
 `ABSENT`, so deleting a function makes the call re-run and raise `NameError`,
-as a plain kernel would, instead of replaying a stored value. For the case of
-calling a function defined in a later cell, see
-[Writing cache-safe cells](../known-limitations.md#a-function-that-calls-one-defined-in-a-later-cell).
+as a plain kernel would, instead of replaying a stored value.
+
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._callee_globals @c63352d8 -->
+Those names count as the cell's inputs for the upstream check too, so a
+function defined in a later cell is followed like one above it:
+
+<!-- test:skip reason="illustrative: shows an edit of a later cell reaching an earlier caller" -->
+```python { .nb-cell }
+def a(n): return b(n) * 2      # cell 1: b does not exist yet
+def b(n): return n + 1         # cell 2
+r = a(3)                       # cell 3: 8
+
+# edit cell 2 to `return n + 10`, run cell 3 alone:
+# cell 2 runs again, r is 26
+```
 
 ### Resolving an input
 

@@ -19,6 +19,7 @@ a data-derived token.
 
 from __future__ import annotations
 
+import os
 import pathlib
 
 import pytest
@@ -101,31 +102,67 @@ def test_eager_frames_were_never_affected(cached):
     assert len(calls) == 2
 
 
-@pytest.mark.xfail(
-    # The opt-in native file hook (CASH_NATIVE_FILE_HOOK=1) sees polars open
-    # the file inside the call, so the edit invalidates the entry there.
-    condition=not native_reads.active(),
-    strict=True,
-    reason=(
-        "KNOWN GAP: a scan-backed plan serializes the PATH, not the file's "
-        "contents, so editing the file in place does not move the key. Closing it "
-        "means collecting the frame to build a cache key, which defeats the point "
-        "of a LazyFrame. Documented in known-limitations; xfail so that if polars "
-        "ever starts folding source state in, we find out."
-    ),
-)
-def test_a_scan_backed_plan_notices_its_file_changing(tmp_path):
+@pytest.fixture(params=["hook on", "hook off"])
+def hook(request):
+    """Both ways: on macOS there is no native file hook to see polars open
+    the file, so the scanned files must be recorded from the plan."""
+    was = native_reads.active()
+    if request.param == "hook off":
+        native_reads.disable()
+    elif not native_reads.enable():
+        pytest.skip("the native file hook is not supported here")
+    yield
+    (native_reads.enable if was else native_reads.disable)()
+
+
+def _settle(path):
+    st = os.stat(path)
+    os.utime(path, ns=(st.st_atime_ns - 3600 * 10**9, st.st_mtime_ns - 3600 * 10**9))
+
+
+def test_a_scan_backed_plan_notices_its_file_changing(tmp_path, hook):
+    """A scan-backed plan serializes the PATH, not the file's contents, so the
+    key alone does not move; the files it scans are the call's reads."""
     c = cash.Cash(cache_dir=str(tmp_path / "cache"))
     csv = pathlib.Path(tmp_path) / "data.csv"
     csv.write_text("x\n1\n2\n3\n", encoding="utf-8")
+    _settle(csv)
+    runs = []
+
+    @c.cache(assume_safe=True)
+    def total(frame):
+        runs.append(1)
+        return int(frame.collect()["x"].sum())
+
+    assert total(pl.scan_csv(csv)) == 6
+    assert total(pl.scan_csv(csv)) == 6
+    assert len(runs) == 1, "an unchanged file recomputed"
+    csv.write_text("x\n10\n20\n30\n", encoding="utf-8")
+    assert total(pl.scan_csv(csv)) == 60
+
+
+def test_a_new_file_matching_a_scanned_glob_counts(tmp_path, hook):
+    c = cash.Cash(cache_dir=str(tmp_path / "cache"))
+    folder = tmp_path / "parts"
+    folder.mkdir()
+    pl.DataFrame({"x": [1, 2]}).write_parquet(folder / "a.parquet")
 
     @c.cache(assume_safe=True)
     def total(frame):
         return int(frame.collect()["x"].sum())
 
-    assert total(pl.scan_csv(csv)) == 6
-    csv.write_text("x\n10\n20\n30\n", encoding="utf-8")
-    assert total(pl.scan_csv(csv)) == 60
+    pattern = str(folder / "*.parquet")
+    assert total(pl.scan_parquet(pattern)) == 3
+    pl.DataFrame({"x": [10]}).write_parquet(folder / "b.parquet")
+    assert total(pl.scan_parquet(pattern)) == 13
+
+
+def test_the_sources_of_a_plan():
+    from cash.content_hashers import lazy_frame_sources
+
+    lf = pl.scan_csv("a.csv").join(pl.scan_parquet("data/*.parquet"), on="x").filter(pl.col("x") > 1)
+    assert lazy_frame_sources(lf) == ["a.csv", "data/*.parquet"]
+    assert lazy_frame_sources(pl.DataFrame({"x": [1]}).lazy()) == []
 
 
 def test_no_plan_digest_when_serialize_refuses(monkeypatch):

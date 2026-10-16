@@ -362,11 +362,11 @@ class NotebookVetter:
         ``NameError``. Only the uncached oracle caught it; cash reported
         success on a notebook that was already broken.
 
-        It fails rather than warns. A warning would leave cash caching against
-        a namespace its own in-order run could not produce, and everything
-        keyed on that state would be built on an ordering the notebook does not
-        have. ``NameError`` is what the user is going to get anyway; the only
-        question is whether they get it now, with the cell number, or on the
+        The cell is not cached: a key built on that state would stand for an
+        ordering the notebook does not have. It still runs, uncached, as plain
+        Jupyter runs it (NOTEBOOK-FORWARD-READ, from
+        ``UpstreamResolution._step_aside``): refusing blocked a cell that works today, and the
+        warning gives the cell number now rather than a ``NameError`` the
         morning they restart.
 
         Deliberately conservative, because a false positive here stops a cell
@@ -420,9 +420,7 @@ class NotebookVetter:
             f"this cell reads {names}, which nothing above it binds. It works "
             f"right now only because that cell has already run and the name is "
             f"still in memory -- a run from the top, or tomorrow's kernel, "
-            f"raises NameError here. cash refuses rather than cache against a "
-            f"namespace your own notebook cannot rebuild in order. Move the "
-            f"binding above this cell, or move this cell below it."
+            f"raises NameError here."
         )
 
     def _warn_broken_upstream_cells(

@@ -16,12 +16,13 @@ from ...diagnostics import warn_diagnostic
 from ...exceptions import AmbiguousCellError, CashWarning, UpstreamStateError
 from ...value_types import BUILTIN_NAMES
 from .._protocols import CashInstanceProtocol, ShellProtocol
-from ..cache_key import statement_source_hash
+from ..cache_key import called_function_globals, statement_source_hash
 from ..server_discovery import (
     get_notebook_cells,
     get_notebook_cells_with_ids,
     get_notebook_path,
     invalidate_notebook_path_cache,
+    warn_no_live_reader_once,
     warn_notebook_not_found_once,
 )
 from ..staleness import StalenessTracker, normalise_source
@@ -125,6 +126,9 @@ class UpstreamChecker:
         # code and the file's copy of that cell are already in hand.
         self.staleness = StalenessTracker()
         self._notebook_path_for_staleness: str | None = None
+        #: Names the cell's inputs gained from what the functions it calls
+        #: read (`_callee_globals`), for this cell check.
+        self._callee_inputs: set[str] = set()
         #: Cell id -> (the file's source, the source that ran) for a cell cash
         #: ran with an edit the saved notebook does not have yet. The kernel
         #: holds what ran, so the cells above a later cell are read as run
@@ -251,6 +255,17 @@ class UpstreamChecker:
             f"Ambiguous cell execution! The current cell content appears {len(matches)} times in the notebook and no cell ID could be resolved. Please ensure cells are unique or save the notebook."
         )
 
+    def _callee_globals(self, inputs: set[str]) -> set[str]:
+        """The notebook names the functions in *inputs* read when called
+        (`called_function_globals`), among those a cell bound."""
+        lineage = self.tracking_state.variable_lineage
+        try:
+            names = called_function_globals(inputs, self.shell.user_ns, variable_lineage=lineage)
+        except Exception:  # advisory widening: a walk fault keeps the cell's own inputs
+            logger.debug("[UPSTREAM_DEBUG] callee globals walk failed", exc_info=True)
+            return set()
+        return {name for name in names if name in lineage}
+
     def check_and_reexecute(
         self,
         cell_code: str,
@@ -317,6 +332,14 @@ class UpstreamChecker:
         required_inputs = required_inputs | reachable_generators(
             required_inputs, self.shell.user_ns, self.tracking_state.variable_lineage
         )
+        # What the functions the cell calls read when called, transitively:
+        # ``def a(n): return b(n) * 2`` above ``def b`` named no ``b`` the
+        # cell reads, so an edit of ``b``'s cell was never checked and the
+        # old ``b`` answered.
+        # Not for the forward-reference vetting: a body may name what a cell
+        # below binds, as Python resolves it only when called.
+        self._callee_inputs = self._callee_globals(required_inputs) - required_inputs
+        required_inputs = required_inputs | self._callee_inputs
         # A reloaded module whose state cells set is rebuilt now, whatever the
         # cell reads (``ModuleInvalidator._schedule_state_rebuild``).
         rebuilds = {name for name in self.tracking_state.module_state_rebuilds if name in self.shell.user_ns}
@@ -542,6 +565,8 @@ class UpstreamChecker:
             self.last_cell_index = current_cell_idx
             if cell_id:
                 self.simulator.cache.last_index_by_cell_id[cell_id] = current_cell_idx
+            if current_cell_idx > 0:
+                warn_no_live_reader_once(notebook_path)
 
         return notebook_cells, current_cell_idx
 
@@ -680,7 +705,7 @@ class UpstreamChecker:
             )
             if notebook_cells is None or current_cell_idx is None:
                 return UpstreamResult([], 0.0, 0.0)
-            self.vetter.vet(notebook_cells, cell_code, current_cell_idx, required_inputs)
+            self.vetter.vet(notebook_cells, cell_code, current_cell_idx, required_inputs - self._callee_inputs)
             self._simulated = True
 
             unsaved = self._unsaved_bindings(notebook_cells, notebook_path)
