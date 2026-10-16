@@ -126,7 +126,7 @@ class ForwardReferenceError(CashError):
 
     It works in this kernel because the later cell already ran, but a run
     from the top would raise ``NameError``. Not shown as an error: the cell
-    runs uncached and cash warns with ``NOTEBOOK-FORWARD-REFERENCE``. Fix:
+    runs uncached and cash warns with ``NOTEBOOK-FORWARD-READ``. Fix:
     move the definition above the cell that reads it.
     """
 

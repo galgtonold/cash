@@ -726,7 +726,7 @@ IDs. **Fix:** add a comment to one of the cells, or save the notebook.
 A cell reads, at module level, a name that only a later cell binds. It works now
 because that cell already ran, but a top-to-bottom run would raise `NameError`.
 cash runs the cell uncached, on the value in memory, and warns with
-[NOTEBOOK-FORWARD-REFERENCE](warnings.md#notebook-forward-reference), which
+[NOTEBOOK-FORWARD-READ](warnings.md#notebook-forward-read), which
 names both cells. A name used inside a `def` does not count; a decorator,
 default argument or base class does. **Fix:** move the binding above this cell.
 

@@ -1,7 +1,7 @@
 """A notebook that only works because you ran the cells out of order is broken.
 
 The cell still runs, as plain Jupyter runs it, but uncached and with
-NOTEBOOK-FORWARD-REFERENCE naming the name and the cell that binds it:
+NOTEBOOK-FORWARD-READ naming the name and the cell that binds it:
 refusing it with ForwardReferenceError blocked a cell that works.
 
 A cell read a variable that only a cell BELOW it binds. Under
@@ -41,7 +41,7 @@ def test_reading_a_name_only_a_later_cell_binds_warns_and_runs(nb_runner):
     nb_runner.run_cell(2)  # now read it from above
 
     text = nb_runner.get_raw_output(2)
-    assert "NOTEBOOK-FORWARD-REFERENCE" in text, text
+    assert "NOTEBOOK-FORWARD-READ" in text, text
     assert "Y 11" in text, text
     # The message has to be actionable on its own: which name, which cell.
     assert "`x`" in text and "cell 3" in text, text
@@ -95,7 +95,7 @@ def test_a_function_defined_below_and_called_above_warns(nb_runner):
     nb_runner.run_cell(2)
 
     text = nb_runner.get_raw_output(2)
-    assert "NOTEBOOK-FORWARD-REFERENCE" in text, text
+    assert "NOTEBOOK-FORWARD-READ" in text, text
     assert "V 6" in text, text
     assert "`helper`" in text and "cell 3" in text, text
 
@@ -136,5 +136,5 @@ def test_a_decorator_bound_below_still_warns(nb_runner):
     nb_runner.run_cell(3)
     nb_runner.run_cell(2)
     text = nb_runner.get_raw_output(2)
-    assert "NOTEBOOK-FORWARD-REFERENCE" in text, text
+    assert "NOTEBOOK-FORWARD-READ" in text, text
     assert "`deco`" in text, text

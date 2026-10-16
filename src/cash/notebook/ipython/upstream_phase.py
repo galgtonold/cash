@@ -261,7 +261,7 @@ class UpstreamResolution:
 
         - SyntaxError (a cell above does not parse): run the cell as written.
         - ForwardReferenceError (the cell reads a name only a cell below
-          binds): NOTEBOOK-FORWARD-REFERENCE, and the cell runs uncached.
+          binds): NOTEBOOK-FORWARD-READ, and the cell runs uncached.
         - RuntimeError / AmbiguousCellError / UpstreamStateError: a fresh
           raise of the same error, run as the cell, so the cell fails loudly
           and IPython attributes it there.
@@ -277,7 +277,7 @@ class UpstreamResolution:
             try:
                 warn_diagnostic(
                     CashCacheIneffectiveWarning,
-                    "NOTEBOOK-FORWARD-REFERENCE",
+                    "NOTEBOOK-FORWARD-READ",
                     what=f"{caught} This cell ran uncached, on the value in memory.",
                     fix="Move the binding above this cell, or move this cell below it.",
                 )

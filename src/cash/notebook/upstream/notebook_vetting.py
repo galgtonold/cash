@@ -364,7 +364,7 @@ class NotebookVetter:
 
         The cell is not cached: a key built on that state would stand for an
         ordering the notebook does not have. It still runs, uncached, as plain
-        Jupyter runs it (NOTEBOOK-FORWARD-REFERENCE, from
+        Jupyter runs it (NOTEBOOK-FORWARD-READ, from
         ``UpstreamResolution._step_aside``): refusing blocked a cell that works today, and the
         warning gives the cell number now rather than a ``NameError`` the
         morning they restart.
