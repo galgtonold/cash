@@ -171,6 +171,7 @@ from ..shared_objects import (
 )
 from ..value_cutoff import LineageAliasStore
 from ..write_observer import kept_writes, observe_writes
+from .lineage import note_own_writes
 
 __all__ = ["StatementProcessor", "is_control_body"]
 
@@ -1282,6 +1283,7 @@ class StatementProcessor:
         wall_time = 0.0
         if run.annotation is not None and run.annotation.no_cache:
             self._randomness.resume_live_stream(run.code)
+        self._randomness.before_compute(run.code)
         # Snapshot the global RNG streams around execution so a before/after
         # diff catches a draw that static analysis and object-introspection
         # both miss -- one hidden inside a called function.
@@ -2404,6 +2406,8 @@ class StatementProcessor:
         # A write the code does not spell (``save_chart(kind)``, whose savefig
         # is in the helper) counts too: it was observed (``write_observer``).
         written = self._records.user_written_paths(execution.written_paths)
+        if written:
+            note_own_writes(self.tracking_state, written)
         try:
             if (
                 written

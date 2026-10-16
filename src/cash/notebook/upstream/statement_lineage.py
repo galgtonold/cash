@@ -38,6 +38,7 @@ from ...analysis.namespace_effects import (
     rewatch_exempt,
 )
 from ...control_markers import strip_markers
+from ...tracking.file_dep_snapshot import dep_is_fresh
 from ...tracking.randomness import (
     advanced_carrier_lineage,
     advanced_rng_lineage,
@@ -72,7 +73,7 @@ from ..lineage_formula import (
 from ..loop_watch import branch_changes, loop_watch_hash, watch_candidates
 from ..pyplot_draws import pyplot_draw_names
 from ..restored_var import present_holders
-from ..run_memo import stats_this_run
+from ..run_memo import file_state_this_run, stats_this_run
 from ..stateful_carriers import carrier_kind_from_producer
 from ..statement import is_control_body
 from ..statement.carrier_advances import reachable_generators
@@ -83,6 +84,7 @@ from ..statement.derivation_edges import (
     static_share_edges,
 )
 from ..statement.file_deps import compute_file_hash_component
+from ..statement.lineage import rewritten_by_the_notebook_since
 from ..tracking_state import TrackingState
 from .cache_probe import CacheProbe
 from .simulated_callables import SimulatedCallables
@@ -899,6 +901,12 @@ class StatementLineage:
                 hist_files = metadata.get("file_dependencies", {})
                 output_lineages = metadata.get("output_lineages", {})
                 files_valid = not hist_files or self.probe.files_fresh(hist_files, memo_key=cache_key)
+                if not files_valid and rewritten_by_the_notebook_since(
+                    self.tracking_state, cache_key, self._stale_paths(hist_files)
+                ):
+                    # Changed by the notebook's own write after this read
+                    # (`rewritten_by_the_notebook_since`): what it read stands.
+                    files_valid = True
                 # As the runtime: one not bound when the statement runs holds
                 # nothing (`present_holders`), nor is it moved on.
                 holders = present_holders(metadata.get("holders") or {}, self._bound(virtual_lineage))
@@ -951,6 +959,13 @@ class StatementLineage:
             logger.debug("[UPSTREAM] Virtual lookup failed: %s", e)
 
         return _CacheLookup(False, lookup_time, files_stale, stmt_file_deps, files_to_check, held, carriers)
+
+    @staticmethod
+    def _stale_paths(hist_files: Mapping[str, Any]) -> list[str]:
+        """The paths of *hist_files* that are no longer as recorded."""
+        run = file_state_this_run()
+        memo = run["memo"] if run is not None else None
+        return [path for path, recorded in hist_files.items() if not dep_is_fresh(path, recorded, memo)[1]]
 
     # -- One statement ---------------------------------------------------------
 

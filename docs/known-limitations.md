@@ -20,8 +20,6 @@ section when a cell does something you did not expect.
 
 - Seed your random draws, or mark the ones that must change `# @cash:no-cache`.
   See [Randomness](#randomness).
-- Rebind instead of changing an earlier cell's object in place:
-  `df = df.assign(...)`, not `df["c"] = ...`.
 - Pass the time into helpers instead of reading the clock inside them.
 - Read files through the usual readers (`pd.read_*`, `np.load`, `open`).
 - Define a function above the functions that call it.
@@ -87,17 +85,17 @@ draws where a top-to-bottom run does, also after a restart and when a draw
 above it was too cheap to store. So running a draw cell twice gives the same
 numbers both times, where plain Jupyter would draw new ones. A stored draw from such a generator is
 kept apart from one made with it in another position, so a reseed or a restart
-does not bring back a value drawn elsewhere in its stream. Four gaps on an
+does not bring back a value drawn elsewhere in its stream. Three gaps on an
 isolated re-run:
 
-- **A generator held by an object.** One reached only through an attribute
-  (`self.rng.normal()`, `model.rng`) is not followed: re-running a later draw
-  alone draws from wherever it is now. Draw from such a generator in the cell
-  that creates it.
-- **An edited seed cell you did not re-run.** Edit `np.random.seed(0)` to
-  `seed(1)` and run only a later draw: the draw does not see the new seed,
-  because a bare `seed()` binds no variable. Re-run the seed cell after editing
-  it, or seed in the cell that draws.
+- **A generator held by an object cash does not rebuild.** One reached
+  through an attribute is followed when the object holding it is rebuilt for
+  the re-run (`self.rng` set in `__init__`, then `m.rng.normal()`). A class
+  attribute read through an instance (`c.rng`, `self.rng` in a method), a
+  module's or a function's is not: re-running a later draw alone draws from
+  wherever it is now, and cash warns
+  [RANDOM-HELD-GENERATOR](warnings.md#random-held-generator). Draw from such a
+  generator in the cell that creates it, or hold it in a variable.
 - **A cache kept only in memory, after a restart.** Which generator a cheap
   draw moved is noted on disk for the next kernel. Without a disk tier that
   note is gone, and cash recognises the generator only by the call that made
@@ -212,16 +210,19 @@ last one, as a plain re-run does, and says so with
 
 ### Mutating an object created in an earlier cell
 
-<!-- test:skip reason="illustrative: contrasts in-place mutation with rebinding across cells" -->
+<!-- test:skip reason="illustrative: in-place changes to a frame from an earlier cell" -->
 ```python { .nb-cell }
-# df came from an earlier cell: runs every time
-df["score"] = expensive(df)
-# cached
-df = df.assign(score=expensive(df))
+# df came from an earlier cell
+df["score"] = expensive(df)            # cached
+# runs every time, but expensive(df) is cached
+df.insert(1, "rank", expensive(df))
 ```
 
-A statement that changes an object made in an earlier cell runs every time. The
-same statement on an object made in the same cell caches normally. When
+A new column assigned to a frame from an earlier cell (`df["score"] = ...`) is
+cached like any other statement. A statement that changes such an object
+through a method (`df.insert(...)`, `lst.append(...)`) runs every time, but a
+slow call inside it is cached on the values it is handed, `df` included, so
+only the cheap change itself repeats. When
 another variable holds that object too (`d = dfs[0]`, `b = a`), directly or in
 a list, dict, `deque`, `UserDict`, object array or attribute of one (a
 `__slots__` attribute too), or the result holds an object that already
@@ -231,8 +232,9 @@ something else holds it -- a closure, a library's module or registry, a pandas
 `.attrs` (pandas copies it apart) -- or the statement is in a loop body
 (`for d in dfs:`), a restored copy would not be that object, so the statement
 runs every time. IPython's output history
-(`Out`, `_`) holding a value you displayed is not such a holder. **Fix:**
-rebind with `df = df.assign(...)`.
+(`Out`, `_`) holding a value you displayed is not such a holder. A slow call
+inside such a statement (`d["c"] = slow(d)` in the loop) is still cached on
+the value it is handed. Nothing to do.
 
 ### Mutating global state inside a function
 
@@ -368,9 +370,13 @@ out = summarize(s)  # cell 2: re-run this alone...
 s.iloc[0] = 1e9     # cell 3: ...and it does not see this
 ```
 
-cash answers cell 2 as a top-to-bottom run would, so it computes with `0.0`
-while the live `s` holds `1e9`. **Fix:** move the change above the cells that
-must see it, or make it a new value (`s = s.copy(); s.iloc[0] = 1e9`).
+<!-- claim: cash/notebook/upstream/changed_below.py:warn_changed_below @bbf25145 -->
+cash answers cell 2 as a top-to-bottom run would: it rebuilds `s` as cell 1
+leaves it, so cell 2 computes with `0.0`, and `s` holds `0.0` until cell 3 runs
+again. cash warns [NOTEBOOK-CHANGED-BELOW](warnings.md#notebook-changed-below)
+when this happens, naming the variable and the cell that changed it.
+**Fix:** move the change above the cells that must see it, or run cell 3 again
+after the re-run.
 
 ### Changing and rebinding the same name in one cell
 
@@ -469,6 +475,11 @@ object, `vars(self)` and a library's own lookups (`namedtuple`) do not count.
 A thread that changes data after its cell has finished is outside cash's view.
 An earlier cell re-run can see the changed data.
 
+<!-- claim: cash/notebook/background_threads.py:BackgroundThreads.cell_ends @b6d8c938 -->
+cash names a cell that ends while a thread it started, running your code, is
+still alive: [NOTEBOOK-THREAD-ALIVE](warnings.md#notebook-thread-alive).
+**Fix:** join the thread before the cell ends (`t.join()`).
+
 ### A loop variable changed before it is read
 
 <!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @5304abe8 -->
@@ -483,6 +494,8 @@ for q in [[1], [1]]:           # two iterations, equal when bound
     accm.append(pull(handle))  # 2nd iteration gets the 1st's result
 ```
 
+cash warns [KEY-LOOP-VAR-CHANGED](warnings.md#key-loop-var-changed) when a
+loop body changes its loop variable in place before work it caches for each pass.
 **Fix:** make the distinguishing value part of the `for` target:
 `for i, base in enumerate(items):`. Only names bound by the `for` statement reach
 the per-iteration key. If there is no such value, put `# @cash:no-cache` above
@@ -529,7 +542,7 @@ recorded by their entry points.
 
 ### A file read into a memo before cash was imported
 
-<!-- claim: cash/__init__.py:_watch_reads_from_import @072f3639 -->
+<!-- claim: cash/__init__.py:_watch_reads_from_import @0d64857e -->
 **Symptom:** a cached function gets its config from a loader memoised with
 `functools.lru_cache`, you edit the config file, and the function returns
 the old result with no warning.
@@ -539,6 +552,11 @@ ran before that (it was imported, and called, ahead of `cash`) read the file
 where cash could not see it, so later calls get the memo and record no file.
 A loader first called after `import cash` is recorded, even when that call
 came from outside any cached function.
+
+<!-- claim: cash/tracking/memos_before_import.py:find_memos_filled_before_import @e09c920f -->
+At `import cash`, cash names each memo of yours (`lru_cache`, `cache`)
+that already holds results:
+[KEY-MEMO-BEFORE-IMPORT](warnings.md#key-memo-before-import).
 
 **Fix:** import `cash` before the modules that load config, or pass the path
 as an argument (`load_cfg("config.yaml")` inside the cached function).
@@ -626,7 +644,7 @@ out = [fetch(e) for e in entities]
 
 ### The first run of a loop hashes what it hands to a library
 
-<!-- claim: cash/notebook/loop_watch.py:LoopWatch.start @31a0eadb, cash/analysis/namespace_effects.py:rewatch_exempt @73357899 -->
+<!-- claim: cash/notebook/loop_watch.py:LoopWatch.start @31a0eadb, cash/analysis/namespace_effects.py:rewatch_exempt @e0de76f8 -->
 cash cannot tell from the text whether a library function changes what it is
 handed (`heapq.heappush(h, x)` does, `np.mean(a)` does not), nor whether a
 function of yours that hands its argument or a global to one changes it
@@ -648,14 +666,15 @@ Two catches:
   library. Each later run on inputs not seen before in the session hashes
   those objects again, until the record lists them. So a loop whose inputs
   keep changing pays the hashing on each such run.
-- What only a function of yours is handed (`bt = run_backtest(series, 3)`),
-  what a chart is drawn from (`ax.bar(names, totals)`), and a frame or an
-  array a library call reads through an index or an attribute
-  (`pd.Categorical(obs[r])`, `df.loc[k].plot()`) keep the record of their
-  first run. A helper whose change to its argument depends on the data
-  (`def push_all(h, xs): for x in xs: heapq.heappush(h, x)`, first run with
-  no `xs`) is then not seen changing it later. Re-run the cell that reads the
-  object, or call the library directly in the cell.
+- What a function of yours hands to a library on every run
+  (`bt = run_backtest(series, 3)`), what a chart is drawn from
+  (`ax.bar(names, totals)`), and a frame or an array a library call reads
+  through an index or an attribute (`pd.Categorical(obs[r])`,
+  `df.loc[k].plot()`) keep the record of their first run. What your function
+  hands on only on some runs (in a loop over its input, a branch, after an
+  early `return`: `def push_all(h, xs): for x in xs: heapq.heappush(h, x)`),
+  or what a call of it in a loop hands on, is hashed again on new inputs, as
+  a library call's is.
 
 ### Reordering a loop's items re-runs the tail
 
@@ -664,12 +683,6 @@ on everything before it, so reordering the items runs the statement again from
 the first change. The call inside is cached by its arguments, so a reorder costs
 no new `compute()` calls; only a new value does. A function that also writes a
 global or a file runs again in full.
-
-### Chained file-writing cells re-run each other
-
-If N cells each read a file, change it and write it back, a Run All costs
-N(N+1)/2 executions, not N, because each writer re-runs the writers before it.
-**Fix:** write to separate files.
 
 ## Editing without saving
 
@@ -736,8 +749,6 @@ default argument or base class does. **Fix:** move the binding above this cell.
 
 ## Others
 
-- **`from math import pi`-style imports** can block restoring after a restart
-  where `import math` restores.
 - **An empty cached value** (an empty list or frame) may be computed again
   instead of restored.
 - **A pandas table from the cache is read-only past pandas.** Under

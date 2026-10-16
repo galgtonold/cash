@@ -635,7 +635,7 @@ class PurityChecks:
         arg_key = getattr(cf, "arg_key", None)
         if arg_key is None or arg_key.key_fn is not None:
             return self._args.serialize_args(func_name, args, kwargs)
-        return self._args.hash_payload(*self._checked_arguments(func_name, args, kwargs))
+        return self._args.hash_call_payload(*self._checked_arguments(func_name, args, kwargs))
 
     def argument_snapshot(self, func_name: str, args: tuple, kwargs: dict) -> dict[str, str] | None:
         """``{parameter: hash}`` of the arguments that CAN change, before the body.

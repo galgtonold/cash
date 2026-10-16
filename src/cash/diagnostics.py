@@ -274,8 +274,12 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # function on every read, or finding it raised); the function runs uncached
         "KEY-INSTANCE-STATE",  # a bound method's instance could not be hashed;
         # falling back to its process-local identity
+        "KEY-LOOP-VAR-CHANGED",  # a loop body changes its loop variable in place
+        # before work cached per pass, whose key took the variable as bound
         "KEY-ITERATOR-CONSUMED",  # building the key read an iterator argument
         # (a key= function, a registered hasher); the call ran uncached
+        "KEY-MEMO-BEFORE-IMPORT",  # a functools memo of the user's held results
+        # when cash was imported; a file it read then is not tracked
         "KEY-NETWORK-READ",  # the body fetches from a server; its answer is not
         # in the key, so it is served until a ttl= expires it
         "KEY-DYNAMIC-DEPENDENCY",  # code reached through an argument resolves a
@@ -308,6 +312,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # from it run again
         "NOTEBOOK-FAILED-CELL",  # a cell raised part way, and a name it
         # changed is kept as that run left it, or could not be put back
+        "NOTEBOOK-CHANGED-BELOW",  # a cell re-run on its own reads a value rebuilt
+        # without the in-place change a cell below made to it
         "NOTEBOOK-CELL-SYNTAX",  # an upstream cell does not parse, so cells that
         # depend on it stop being tracked
         "NOTEBOOK-FORWARD-READ",  # the cell reads a name only a cell
@@ -320,6 +326,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # run are not re-checked, statements still cache on their own inputs
         "NOTEBOOK-RELOAD-STATE",  # an edited module was reloaded, or the
         # kernel restarted, and cash cannot rebuild the state a cell set on it
+        "NOTEBOOK-THREAD-ALIVE",  # a thread the cell started still runs after
+        # it ended; what it changes from then on is outside cash's view
         "NOTEBOOK-SAVEFIG-SKIP",  # refused to re-run plt.savefig() during
         # reconstruction; it would overwrite your chart
         "NOTEBOOK-SHARE-UNCHECKED",  # cash could not find every variable
@@ -327,6 +335,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "NOTEBOOK-SHARED-KEPT",  # a value another name below still shares
         # is kept as it is rather than rebuilt for a cell re-run on its own
         # -- RANDOM: a cached value that randomness makes non-reproducible ------
+        "RANDOM-HELD-GENERATOR",  # a cell re-run on its own draws from a generator
+        # held by an object, which cash does not put back where a run from the top has it
         "RANDOM-REPLAYED",  # what you are seeing is a replay of an earlier
         # draw, not a fresh one
         "RANDOM-SEED-NONE",  # seed(None) cannot refresh cached values below

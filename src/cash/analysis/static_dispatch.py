@@ -37,7 +37,7 @@ def _is_identifier(node: ast.AST) -> bool:
     return key is not None and key.isidentifier()
 
 
-def _namespace_spelled(base: ast.AST) -> str | None:
+def namespace_spelled(base: ast.AST) -> str | None:
     """How *base* is spelled when it is a runtime namespace: ``globals()``,
     ``vars(x)``, ``x.__dict__``."""
     if isinstance(base, ast.Call) and isinstance(base.func, ast.Name) and not base.keywords:
@@ -56,7 +56,7 @@ def computed_namespace_lookup(node: ast.AST) -> str | None:
     ``globals()[k]``, ``vars(m)[k]``, ``m.__dict__[k]``, ``globals().get(k)``
     -- else None. What it finds is known only when the code runs."""
     if isinstance(node, ast.Subscript) and not _is_identifier(node.slice):
-        spelled = _namespace_spelled(node.value)
+        spelled = namespace_spelled(node.value)
         return f"{spelled}[...]" if spelled else None
     if (
         isinstance(node, ast.Call)
@@ -65,7 +65,7 @@ def computed_namespace_lookup(node: ast.AST) -> str | None:
         and node.args
         and not _is_identifier(node.args[0])
     ):
-        spelled = _namespace_spelled(node.func.value)
+        spelled = namespace_spelled(node.func.value)
         return f"{spelled}.get(...)" if spelled else None
     return None
 

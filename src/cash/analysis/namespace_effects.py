@@ -1771,6 +1771,148 @@ def handed_to_params(
     return out
 
 
+def conditional_param_handoffs(
+    fdef: ast.FunctionDef | ast.AsyncFunctionDef,
+    user_ns: Mapping[str, Any],
+    resolve_source: Callable[[str], str | None] | None,
+    seen: frozenset[str] = frozenset(),
+) -> frozenset[str]:
+    """The parameters *fdef* hands to code whose effect it cannot decide
+    (:func:`function_handoffs`) only on some runs: in a loop's body, a
+    branch, a comprehension, after an early ``return``, or through a
+    further function of the user's that does so.
+
+    ``def push_all(h, xs): for x in xs: heapq.heappush(h, x)`` changes
+    ``h`` only when ``xs`` has items, so a run on no items that saw ``h``
+    unchanged says nothing about the next one. A handoff on every run
+    (``def run_backtest(series, n): return list(series.iterrows())``) was
+    made by the run that first watched it."""
+    params, local, iterated, calls, reads, called = _function_shape(fdef)
+    key = (
+        fdef,
+        seen,
+        tuple((name, id(value), type(value)) for name in reads for value in (user_ns.get(name, _UNBOUND),)),
+        tuple(_source_or_none(resolve_source, name) for name in called if name not in seen),
+    )
+    found = _CONDITIONAL_HANDOFFS.get(key)
+    if found is not None:
+        return found
+    some_runs = _some_runs_only_memo(fdef)
+    roots: set[str] = set()
+    for call in calls:
+        if id(call) in some_runs:
+            _call_handoffs(call, local, iterated, user_ns, resolve_source, seen, roots, set())
+            continue
+        func = call.func
+        if isinstance(func, ast.Name) and func.id not in local and func.id not in seen:
+            callee = _readable_function(func.id, resolve_source)
+            if callee is not None:
+                inner = conditional_param_handoffs(callee, user_ns, resolve_source, seen | {func.id})
+                roots.update(handed_to_params(call, callee, inner, iterated))
+    found = frozenset(roots & params)
+    if len(_CONDITIONAL_HANDOFFS) >= 1024:
+        _CONDITIONAL_HANDOFFS.clear()
+    _CONDITIONAL_HANDOFFS[key] = found
+    return found
+
+
+#: `conditional_param_handoffs` answers, by text and bindings.
+_CONDITIONAL_HANDOFFS: dict[tuple, frozenset[str]] = {}
+
+
+@functools.lru_cache(maxsize=512)
+def _some_runs_only_memo(fdef: ast.AST) -> frozenset[int]:
+    """:func:`_some_runs_only`, memoised per function tree
+    (`resolve_function_def` hands out one per source), which is only read."""
+    return _some_runs_only(fdef)
+
+
+def _some_runs_only(tree: ast.AST) -> frozenset[int]:
+    """The ids of the nodes in *tree* that run on some runs only: a loop's
+    body, a branch, an ``except``, a comprehension past its first
+    iterable, the operands a ``and``/``or`` may skip, a ``lambda``, and
+    what follows a statement that may ``return`` early. A loop's iterable,
+    a test, a ``try`` body and a ``with`` body run each time the code
+    around them does."""
+    out: set[int] = set()
+
+    def mark(node: ast.AST) -> None:
+        out.update(id(n) for n in ast.walk(node))
+
+    def block(stmts: list[ast.stmt], some: bool) -> None:
+        for stmt in stmts:
+            visit(stmt, some)
+            if not some and not isinstance(stmt, ast.Return) and _may_return(stmt):
+                some = True
+
+    def visit(node: ast.AST, some: bool) -> None:
+        if some:
+            mark(node)
+            return
+        if isinstance(node, (ast.For, ast.AsyncFor)):
+            visit(node.target, False)
+            visit(node.iter, False)
+            block(node.body, True)
+            block(node.orelse, True)
+        elif isinstance(node, (ast.While, ast.If, ast.IfExp)):
+            visit(node.test, False)
+            for part in (node.body, node.orelse):
+                if isinstance(part, list):
+                    block(part, True)
+                else:
+                    visit(part, True)
+        elif isinstance(node, (ast.Try, getattr(ast, "TryStar", ast.Try))):
+            block(node.body, False)
+            for handler in node.handlers:
+                visit(handler, True)
+            block(node.orelse, True)
+            block(node.finalbody, False)
+        elif isinstance(node, ast.Match):
+            visit(node.subject, False)
+            for case in node.cases:
+                visit(case, True)
+        elif isinstance(node, ast.BoolOp):
+            visit(node.values[0], False)
+            for value in node.values[1:]:
+                visit(value, True)
+        elif isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+            first = node.generators[0]
+            runs_once = {id(n) for n in ast.walk(first.iter)}
+            out.update(
+                id(child)
+                for child in ast.walk(node)
+                if child is not node and child is not first and id(child) not in runs_once
+            )
+            visit(first.iter, False)
+        elif isinstance(node, (ast.Lambda, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node is not tree:
+            mark(node)
+        else:
+            for _field, value in ast.iter_fields(node):
+                if isinstance(value, list) and value and isinstance(value[0], ast.stmt):
+                    block(value, False)
+                    continue
+                for child in value if isinstance(value, list) else (value,):
+                    if isinstance(child, ast.AST):
+                        visit(child, False)
+
+    visit(tree, False)
+    return frozenset(out)
+
+
+def _may_return(stmt: ast.stmt) -> bool:
+    """*stmt* holds a ``return`` that may leave the function before the
+    statements after it run (a nested ``def`` or ``lambda`` aside)."""
+    pending: list[ast.AST] = [stmt]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.Return):
+            return True
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        pending.extend(ast.iter_child_nodes(node))
+    return False
+
+
 def rewatch_exempt(
     tree: ast.Module | None,
     user_ns: Mapping[str, Any],
@@ -1796,6 +1938,7 @@ def rewatch_exempt(
 
     parents = {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
     safe_nodes: set[int] = set()
+    some_runs: frozenset[int] | None = None
     for call in calls_with_lambdas(tree):
         func = call.func
         if isinstance(func, ast.Attribute):
@@ -1814,10 +1957,22 @@ def rewatch_exempt(
             continue
         if resolve_source is None or not isinstance(func, ast.Name) or not users_callee(func, user_ns):
             continue
-        if _readable_function(func.id, resolve_source) is None or not _result_kept(call, parents, user_ns):
+        callee = _readable_function(func.id, resolve_source)
+        if callee is None or not _result_kept(call, parents, user_ns):
             continue
+        # What the helper changes on some runs only (in a loop over its
+        # input, a branch) is watched again: a run that did not take that
+        # path says nothing about the next. So is all it hands such code
+        # when the call itself runs on some runs only (in a loop's body).
+        if some_runs is None:
+            some_runs = _some_runs_only(tree)
+        if id(call) in some_runs:
+            handed, _free = function_handoffs(callee, user_ns, resolve_source, frozenset({func.id}))
+        else:
+            handed = conditional_param_handoffs(callee, user_ns, resolve_source, frozenset({func.id}))
+        watched = handed_to_params(call, callee, handed, {}) if handed else set()
         for arg in [*call.args, *(kw.value for kw in call.keywords if kw.arg is not None)]:
-            if isinstance(arg, ast.Name):
+            if isinstance(arg, ast.Name) and arg.id not in watched:
                 safe_nodes.add(id(arg))
     for node in ast.walk(tree):
         if (

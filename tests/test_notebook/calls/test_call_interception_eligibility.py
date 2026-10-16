@@ -2,17 +2,19 @@
 
 One structural rule decides it: **a call is eligible when its free variables do
 not include the statement's assignment / mutation target.** If the call reads
-the target, it *is* the fold and there is nothing order-independent to extract.
+the target, it *is* the fold and the statement caches it. A method that changes
+the target in place (``df.insert(1, "c", slow(df))``) runs every time, so a
+call handed the target there is taken, keyed on the value it holds.
 
 The rule is doing more work than it looks like. In ``out.append(compute(x))``
-the *append* is itself a Call whose func reads ``out`` — the target — so it is
-excluded by the same rule that admits ``compute(x)``. No special case needed
+the *append* is itself a Call whose callee reads ``out`` — the target — so it
+is excluded by the same rule that admits ``compute(x)``. No special case needed
 for "don't cache the mutation itself".
 """
 
 import ast
 
-from cash.notebook.call_interception import eligible_call_nodes
+from cash.notebook.call_interception import _eligible_calls_in_scope, eligible_call_nodes
 
 
 def _calls(src: str) -> list[str]:
@@ -37,6 +39,15 @@ class TestEligibility:
     def test_fold_reading_the_accumulator_is_excluded(self):
         """``s = merge(s, x)`` — the call reads `s`; it IS the fold."""
         assert _calls("s = merge(s, x)") == []
+        assert _calls("df['c'] = slow(df)") == []
+
+    def test_a_call_handed_what_a_method_changes_is_keyed_on_its_value(self):
+        """``df.insert(1, 'c', slow(df))`` runs every time; `slow(df)` is taken
+        with `df`'s value in its key."""
+        stmt = ast.parse("df.insert(1, 'c', slow(df))").body[0]
+        [(call, local)] = _eligible_calls_in_scope(stmt)
+        assert ast.unparse(call) == "slow(df)"
+        assert local == {"df"}
 
     def test_inplace_method_on_the_target_is_excluded(self):
         """``df.sort_values(inplace=True)`` — the mutation is the expensive part."""
@@ -60,8 +71,12 @@ class TestEligibility:
         """
         assert _calls("out.append(f(g(x)))") == ["f(g(x))", "g(x)"]
 
-    def test_a_nested_call_reading_the_target_is_still_excluded(self):
-        assert _calls("out.append(f(g(out)))") == []
+    def test_a_nested_call_handed_the_target_is_taken(self):
+        assert _calls("out.append(f(g(out)))") == ["f(g(out))", "g(out)"]
+
+    def test_a_call_whose_callee_reads_the_target_is_excluded(self):
+        assert _calls("df['c'] = df.apply(f)") == []
+        assert _calls("df['c'] = df['a'].map(f)") == []
 
     def test_multiple_independent_calls_are_all_returned(self):
         """Siblings are separate work and each deserves its own entry."""

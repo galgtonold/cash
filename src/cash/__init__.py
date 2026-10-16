@@ -60,6 +60,17 @@ from .tracking.file_tracker import install_read_watch
 from .tracking.randomness import CashRandomnessWarning
 
 
+def _read_watch_on() -> bool:
+    """Is file reading watched from ``import cash`` on? Not with
+    ``CASH_DISABLE`` set: caching off promises nothing is watched."""
+    from .config.schema import validate_value
+
+    try:
+        return not validate_value("disable", os.environ.get("CASH_DISABLE", "").strip() or "0")
+    except ValueError:
+        return True  # the config load reports the bad value
+
+
 def _watch_reads_from_import() -> None:
     """Credit file reads to the code that made them from ``import cash`` on.
 
@@ -70,13 +81,8 @@ def _watch_reads_from_import() -> None:
     recorded no file, and an edit to the file was served the old result.
     Not with ``CASH_DISABLE`` set: caching off promises nothing is watched.
     """
-    from .config.schema import validate_value
-
-    try:
-        if validate_value("disable", os.environ.get("CASH_DISABLE", "").strip() or "0"):
-            return
-    except ValueError:
-        pass  # the config load reports the bad value
+    if not _read_watch_on():
+        return
     try:
         install_read_watch()
     except Exception:  # noqa: BLE001 - decorating a function installs it anyway
@@ -84,6 +90,22 @@ def _watch_reads_from_import() -> None:
 
 
 _watch_reads_from_import()
+
+
+def _warn_memos_filled_before_import() -> None:
+    """Name the user's ``lru_cache`` memos that already hold results: what
+    they read before ``import cash`` is outside the watch started above."""
+    if not _read_watch_on():
+        return
+    from .tracking.memos_before_import import warn_memos_filled_before_import
+
+    try:
+        warn_memos_filled_before_import()
+    except Exception:  # noqa: BLE001 - an "error" warning filter must not break the import
+        pass
+
+
+_warn_memos_filled_before_import()
 
 
 def _watch_seeds_from_import() -> None:

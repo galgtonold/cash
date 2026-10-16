@@ -112,6 +112,17 @@ class TrackingState:
     # W/R: NotebookSimulator (MismatchClassifier).
     cell_text_at: dict[int, str] = field(default_factory=dict)
 
+    # The notebook position (0-based) of the cell whose own statements run
+    # now; None while the upstream check rebuilds the cells above it, and
+    # when the check could not place the cell. For warnings that name it.
+    # W: UpstreamChecker. R: ForLoopHandler, StatementRandomness.
+    running_cell: int | None = None
+
+    # Whether that cell runs on its own: not the first cell, and not right
+    # after the cell above it (a re-run, or out of order).
+    # W: UpstreamChecker. R: StatementRandomness.
+    running_cell_rerun: bool = False
+
     # sha256(cell source) -> the global RNG state after that cell ran, so a
     # downstream draw can be restored to its position-correct state.
     # W: CellExecutor. R: UpstreamChecker.
@@ -207,6 +218,18 @@ class TrackingState:
     # its file component as whether each path is there now.
     # W: StatementLineageBuilder. R: StatementLineage.
     statement_probes: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    # The order statements read and wrote files in this session: a counter,
+    # the count at each cache key's last read, and per path the count at the
+    # notebook's last write of it with the file's `stat_key` right after. A
+    # file a statement read and the notebook itself rewrote LATER (``n =
+    # int(open(P).read())`` then ``open(P, 'w').write(str(n + 1))``) is no
+    # change to that read: a top-to-bottom run read it before the write too.
+    # W: _record_file_reads, StatementProcessor._record_file_effects.
+    # R: StatementLineage (`rewritten_by_the_notebook_since`).
+    file_event_seq: int = 0
+    file_read_seq: dict[str, int] = field(default_factory=dict)
+    own_file_writes: dict[str, tuple[int, tuple[int, int, int]]] = field(default_factory=dict)
 
     # Cache key -> {output: digest of the value} a ``no-cache`` statement bound
     # on its last run. It goes into those outputs' lineage, so a reader below

@@ -32,6 +32,7 @@ from ._types import (
     normalize_stmt,
 )
 from .cache_restore import CacheRestorer
+from .changed_below import warn_changed_below
 from .library_rules import self_call_resets_lineage
 from .loop_rules import LoopRules
 from .simulated_callables import SimulatedCallables
@@ -124,6 +125,8 @@ class MismatchClassifier:
         self.loop_rules = loop_rules
         self.unsaved_edits = unsaved_edits
         self.callables = callables
+        #: ``(cell, name, statement)`` already reported as NOTEBOOK-CHANGED-BELOW.
+        self._warned_changed_below: set[tuple[int, str, str]] = set()
 
     def _check_loop_var_inputs_changed(
         self,
@@ -565,6 +568,14 @@ class MismatchClassifier:
             m.var_name,
         )
         m.broken_vars.add(m.var_name)
+        # Rebuilt, it loses an in-place change a cell below made: say so.
+        warn_changed_below(
+            m.var_name,
+            self.tracking_state.executed_cell_codes.get(m.var_name),
+            m.check.notebook_cells,
+            m.check.current_cell_idx,
+            self._warned_changed_below,
+        )
         return True
 
     def _rebuild_after_a_gone_change(self, m: _Mismatch) -> bool:

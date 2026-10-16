@@ -205,7 +205,9 @@ bare call that changes its argument, such as
 `sc.pp.calculate_qc_metrics(adata, inplace=True)`, and for a function of your
 own that changes its argument and returns a result, such as
 `summary = add_features(df)`: cash compares the arguments before and after,
-and runs the call every time from then on.
+and runs the call every time from then on. A slow call inside the statement
+that only reads the object (`df.insert(1, "c", slow(df))`) is still cached on
+the value it is handed, so only the change itself repeats.
 
 **Fix:** assign a new value instead: `out = [f(e) for e in items]`,
 `df = df.sort_values(...)`. For estimators, see

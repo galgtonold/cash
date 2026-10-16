@@ -138,13 +138,13 @@ def test_calling_a_parameter_is_not_flagged(analyzer):
     assert not any(i.kind == ISSUE_DYNAMIC_PATTERN for i in r.issues), [i.description for i in r.issues]
 
 
-def test_a_table_built_in_the_body_IS_flagged(analyzer):
+def test_a_call_through_a_runtime_namespace_IS_flagged(analyzer):
     """The shape that measurably goes stale, kept as the positive arm so the
     test above cannot pass merely because the rule stopped existing."""
 
     def f(key):
-        table = {"a": len}
-        return table[key]("xy")
+        ns = globals()
+        return ns[key]("xy")
 
     r = analyzer.analyze(f)
     assert any(i.kind == ISSUE_DYNAMIC_PATTERN for i in r.issues), [i.description for i in r.issues]

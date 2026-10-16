@@ -106,6 +106,12 @@ backend, need a package of their own; see
     is as safe as the code that wrote it. See the
     [trust model](api/backends.md#security).
 
+## Found a problem?
+
+A wrong result, a run slower than without cash, or a warning you cannot
+make sense of: please [tell us](report-a-bug.md). A wrong result is the most
+important kind of report, and the page lists what to include.
+
 ## Related
 
 - [Why cash?](why-cash.md): what each path does, and how cash compares with

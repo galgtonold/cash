@@ -647,6 +647,16 @@ class FileWriterScheduler:
                     stmt_code[:60],
                 )
                 continue
+            # A write of what was read from the same file (``n =
+            # int(open(P).read())`` above it, then ``open(P, 'w').write(str(n +
+            # 1))``) moves the file on from where it is each time it runs, as
+            # an append does: re-firing it, with its read, adds once more.
+            if self._rewrites_what_it_read(stmt_code, inputs, simulation_trace):
+                logger.debug(
+                    "[UPSTREAM] File-writer rewrites the file its input was read from; not re-firing: %s",
+                    stmt_code[:60],
+                )
+                continue
             # A write through a file handle held in a variable continues
             # that handle: re-firing it writes the same bytes a second time.
             # Its producer is never re-run either (``is_write_stream``).
@@ -893,6 +903,21 @@ class FileWriterScheduler:
             for p in written:
                 forms |= self._normalize_path_forms(p)
         return forms
+
+    def _rewrites_what_it_read(self, stmt_code: str, inputs, simulation_trace: list) -> bool:
+        """The writer writes a file one of its *inputs* was read from, as the
+        runtime recorded it (``executed_file_deps``)."""
+        read_from = self.tracking_state.executed_file_deps
+        sources: set[str] = set()
+        for name in inputs:
+            sources.update(read_from.get(name, ()))
+        if not sources:
+            return False
+        written = self._writer_paths(stmt_code, simulation_trace)
+        if not written:
+            return False
+        read_real = {os.path.realpath(p) for p in sources}
+        return any(os.path.realpath(p) in read_real for p in written)
 
     def _writer_paths(self, stmt_code: str, simulation_trace: list | None = None) -> set[str] | None:
         """The paths a writer writes: from its code, else from the record it

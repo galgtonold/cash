@@ -2,8 +2,13 @@
 
 Mechanism probe: WHY do N writer cells cost N(N+1)/2 executions?
 
-STATUS: mechanism NOT yet identified. This file records what it is NOT, and
-the measurement problem that makes it hard to see.
+STATUS: fixed. Each cell re-ran the cells above it: their read of the file
+had been changed since, by the next cell's write, so their output lineage
+drifted and the writer after the read was re-fired with it. A read the
+notebook's own later write changed is no longer read again, and a writer that
+writes back what was read from the same file is not re-fired
+(`test_four_cells_sharing_one_state_file_run_once_each`). The notes below
+are the earlier search, kept for the witnesses' sake.
 
 RULED OUT
   * Sharing one state file  — four private files amplify byte-identically
@@ -463,15 +468,19 @@ def test_single_writer_cell_does_not_amplify(nb_runner, tmp_path):
 
 
 @pytest.mark.timeout(600)
-def test_four_cells_sharing_one_state_file_amplify_quadratically(nb_runner, tmp_path):
-    """The ticket's shape: nothing ever stabilises, and it gets worse per cell."""
+def test_four_cells_sharing_one_state_file_run_once_each(nb_runner, tmp_path):
+    """The ticket's shape. Each cell re-ran the cells above it, whose read of
+    the file the next cell's write had changed: 4/3/2/1 per run_all, and the
+    file held what a plain kernel never writes. A writer that writes back what
+    was read from the same file is not re-fired, and a read the notebook's own
+    later write changed is not read again: once each, as in a plain kernel."""
     shared = tmp_path / "shared.json"
     per_run = _measure(
         nb_runner,
         {k: shared for k in ("a", "b", "c", "d")},
         "4 cells, ONE SHARED file",
     )
-    assert per_run == {"a": 4.0, "b": 3.0, "c": 2.0, "d": 1.0}, per_run
+    assert per_run == {"a": 1.0, "b": 1.0, "c": 1.0, "d": 1.0}, per_run
 
 
 @pytest.mark.timeout(600)
@@ -479,8 +488,8 @@ def test_four_cells_with_separate_files_run_once_each(nb_runner, tmp_path):
     """The falsifier used to show four private files amplifying exactly like one
     shared file. A writer is now re-run only for a cell that depends on what it
     wrote, so with private files every cell runs once per run_all, as in a
-    plain kernel. The shared file still amplifies: each cell
-    reads the file the one before it wrote."""
+    plain kernel. So does the shared file now
+    (`test_four_cells_sharing_one_state_file_run_once_each`)."""
     per_run = _measure(
         nb_runner,
         {k: tmp_path / f"s_{k}.json" for k in ("a", "b", "c", "d")},
