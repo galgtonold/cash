@@ -16,8 +16,16 @@ from __future__ import annotations
 import os
 
 from cash.notebook.statement.file_deps import compute_file_hash_component
+from cash.tracking import file_versions
 from cash.tracking.file_dep_snapshot import file_dep_is_fresh, snapshot_file_deps
 from tests._cell_driver import run_cash_cell
+
+
+def _written_before_this_process(monkeypatch):
+    """The files count as written before the process started: no hashing on
+    their stat alone (`file_versions.content_version`), only the content check
+    links a rewrite."""
+    monkeypatch.setattr(file_versions, "_STARTED_NS", 1 << 62)
 
 
 def _rewrite(path, text):
@@ -27,7 +35,8 @@ def _rewrite(path, text):
     os.utime(path, ns=(before + 2_000_000_000, before + 2_000_000_000))
 
 
-def test_a_content_check_names_the_new_stat_by_the_old(tmp_path):
+def test_a_content_check_names_the_new_stat_by_the_old(tmp_path, monkeypatch):
+    _written_before_this_process(monkeypatch)
     data = tmp_path / "meters.csv"
     data.write_text("a,b\n1,2\n", encoding="utf-8", newline="\n")
     snapshot = snapshot_file_deps({str(data)})[str(data)]
@@ -40,7 +49,8 @@ def test_a_content_check_names_the_new_stat_by_the_old(tmp_path):
     assert compute_file_hash_component({str(data)}) == before
 
 
-def test_new_bytes_still_move_the_lineage(tmp_path):
+def test_new_bytes_still_move_the_lineage(tmp_path, monkeypatch):
+    _written_before_this_process(monkeypatch)
     data = tmp_path / "meters.csv"
     data.write_text("a,b\n1,2\n", encoding="utf-8", newline="\n")
     snapshot = snapshot_file_deps({str(data)})[str(data)]

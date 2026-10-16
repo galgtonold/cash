@@ -29,8 +29,8 @@ from typing import TYPE_CHECKING, Any
 
 from ..._paths import normalize_path
 from ...remote_source import RemoteFileDataSource
-from ...tracking.file_dep_snapshot import probe_state_parts, realpath_of_read_this_run
-from ...tracking.file_versions import file_version
+from ...tracking.file_dep_snapshot import file_content_hash, probe_state_parts, realpath_of_read_this_run
+from ...tracking.file_versions import content_version
 from ...value_types import IMMUTABLE_PRIMS
 from ..server_discovery import get_notebook_path
 
@@ -117,9 +117,11 @@ def compute_file_hash_component(
         # writes a file -- which no stored entry checks by content -- with
         # its old lineage, and the cells below served the old result.
         # A version found to hold the bytes of an earlier one is named by
-        # that one (`file_version`): a file rewritten unchanged keeps its
+        # that one (`content_version`): a file rewritten unchanged keeps its
         # readers' lineage, whether they were restored or ran again.
-        mtime_ns, size, ctime_ns = file_version(canonical_path, stat)
+        mtime_ns, size, ctime_ns = content_version(
+            canonical_path, stat, lambda p=canonical_path, st=stat: file_content_hash(p, st.st_size, st)
+        )
         file_components.append(f"{display_path}:{mtime_ns}:{size}:{ctime_ns}")
 
     for url in sorted(accessed_remote or ()):
