@@ -3,6 +3,7 @@ lineage tag it carries."""
 
 from __future__ import annotations
 
+import contextvars
 import dataclasses
 import functools
 import hashlib
@@ -755,33 +756,50 @@ class ResultStore:
         chunks = _ChunkStream(chunk_prefix(call.cache_key, stream), stream)
         committed = False
         returned: Any = None
+        # Set when the stream ends at a `yield`: the caller closed it, threw
+        # into it, or the garbage collector finalized it, at whatever point
+        # some other code was running. The context then holds the CALLER's
+        # tracker and observer, and resetting this stream's tokens there would
+        # rewind them: a collection inside another cached call switched that
+        # call's tracker off, and the file it read next was left out of its
+        # key (a stale hit after the file changed).
+        dropped = False
 
         try:
             # Entered ONCE. Per item we only suspend around the `yield`, which
             # is a ContextVar swap; `__enter__` reinstalls patches and rechecks
             # the import hook, which costs microseconds per item.
-            with tracker, observer:
-                while True:
-                    started = _perf_counter()
-                    try:
-                        item = next(source)
-                    except StopIteration as stop:
+            tracker.__enter__()
+            try:
+                observer.__enter__()
+                try:
+                    while True:
+                        started = _perf_counter()
+                        try:
+                            item = next(source)
+                        except StopIteration as stop:
+                            chunks.produced_seconds += _perf_counter() - started
+                            # What `yield from` evaluates to: the caller gets it
+                            # now, and a replay hands it back from the manifest.
+                            returned = stop.value
+                            break
                         chunks.produced_seconds += _perf_counter() - started
-                        # What `yield from` evaluates to: the caller gets it
-                        # now, and a replay hands it back from the manifest.
-                        returned = stop.value
-                        break
-                    chunks.produced_seconds += _perf_counter() - started
-                    self._buffer_item(spec, call, chunks, item)
+                        self._buffer_item(spec, call, chunks, item)
 
-                    # The caller's own reads and effects are its own.
-                    tracker_token = tracker.suspend()
-                    observer_token = observer.suspend()
-                    try:
-                        yield item
-                    finally:
+                        # The caller's own reads and effects are its own.
+                        tracker_token = tracker.suspend()
+                        observer_token = observer.suspend()
+                        try:
+                            yield item
+                        except BaseException:
+                            dropped = True
+                            raise
                         observer.resume(observer_token)
                         tracker.resume(tracker_token)
+                finally:
+                    _leave(observer, dropped)
+            finally:
+                _leave(tracker, dropped)
 
             self._finish_stream(spec, call, run, chunks, returned)
             committed = True
@@ -1015,3 +1033,17 @@ class ResultStore:
                 self._backend_slot.backend.delete(f"{prefix}:chunk_{index}")
             except Exception:  # noqa: BLE001 - cleanup must not raise
                 logger.debug("[CORE] could not drop replaced chunk %d of %s", index, prefix)
+
+
+def _leave(scope: Any, dropped: bool) -> None:
+    """Exit a stream's tracker or observer *scope*.
+
+    A stream *dropped* at a ``yield`` leaves in a copy of the context: its
+    bookkeeping ends as usual, and the caller's context, which holds the
+    caller's own tracker and observer, is left as it is (`reset_in_any_context`
+    sets the restored value in the copy).
+    """
+    if dropped:
+        contextvars.copy_context().run(scope.__exit__, None, None, None)
+    else:
+        scope.__exit__(None, None, None)
