@@ -235,7 +235,14 @@ def test_a_graph_a_statement_changes_is_read_once_after_it(
     run_cash_cell(cash_magics, "G = nx.gnm_random_graph(200, 800, seed=1)")
     run_cash_cell(cash_magics, "region = {n: n % 3 for n in G}")
     if watched_before:
-        compute_hash(mock_shell.user_ns["G"])  # a second sighting: watched from here on
+        # Watched from its second sighting on. Making G counts as one only
+        # when its session hash was read from G; a digest the statement
+        # already held (`taken`) is no sighting, so count them out here.
+        for _ in range(3):
+            if value_watch.peek(mock_shell.user_ns["G"]) is not None:
+                break
+            compute_hash(mock_shell.user_ns["G"])
+        assert value_watch.peek(mock_shell.user_ns["G"]) is not None
     reads = _pickles_of(monkeypatch, mock_shell, "G", label=lambda g: "after" if "region" in g.nodes[5] else "before")
 
     run_cash_cell(cash_magics, 'nx.set_node_attributes(G, region, "region")')
