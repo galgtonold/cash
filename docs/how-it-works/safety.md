@@ -283,7 +283,7 @@ streams to where the cell started, so the draw repeats. cash does not rewind a
 generator held in a variable, so a cheap draw from an unseeded `rng` changes on
 every run.
 
-<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @79868eb7 -->
+<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @0a570907 -->
 `# @cash:allow-random` silences the warning and changes nothing else.
 `# @cash:no-cache` on the statement draws fresh on every run, with no warning.
 The badge marks the row `seed`, `random` (a seeded draw) or `unseeded`. A cached fit (`# @cash:cache-fit`) of an estimator with

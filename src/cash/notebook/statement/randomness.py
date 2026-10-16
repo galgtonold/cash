@@ -35,10 +35,47 @@ from cash.tracking.randomness import (
     warn_unseeded_estimator_fit,
     watch_seeds,
 )
+from cash.tracking.randomness.detect import RandomnessCallInfo, mints_unseeded_generator
 from cash.tracking.randomness.estimator_draws import estimator_draws
 
+from ...decorator.rng import unseeded_library_calls_in
+from ...exceptions import SOURCE_RETRIEVAL_ERRORS
 from ...source_norm import exact_source_digest
-from ..callee_reach import helper_seeded_modules
+from ...source_reading import own_source
+from ..callee_reach import helper_seeded_modules, reached_user_code
+
+_LIBRARY_DRAW_FIX = (
+    "pass random_state=<int> (polars: seed=<int>) to make it reproducible, put "
+    "`# @cash:no-cache` on a line of its own above the statement for a fresh "
+    "draw each run, or `# @cash:allow-random` to keep it frozen on purpose."
+)
+_HELPER_GENERATOR_FIX = (
+    "seed the generator where the function creates it (np.random.default_rng(0), "
+    "random.Random(0)), or pass one in; put `# @cash:no-cache` on a line of its "
+    "own above the statement for a fresh draw each run, or `# @cash:allow-random` "
+    "to keep it frozen on purpose."
+)
+#: code object -> (it, whether its function makes an unseeded generator).
+_MINTS: dict[int, tuple[object, bool]] = {}
+
+
+def _function_mints_unseeded_generator(fn: Callable) -> bool:
+    """Does *fn*'s own source build a generator no seed reproduces
+    (`mints_unseeded_generator`)? Memoised per code object."""
+    import textwrap
+
+    code = getattr(fn, "__code__", None)
+    known = _MINTS.get(id(code))
+    if known is not None and known[0] is code:
+        return known[1]
+    try:
+        verdict = mints_unseeded_generator(textwrap.dedent(own_source(fn)))
+    except SOURCE_RETRIEVAL_ERRORS:
+        verdict = False
+    if code is not None and len(_MINTS) < 4096:
+        _MINTS[id(code)] = (code, verdict)
+    return verdict
+
 
 if TYPE_CHECKING:
     from cash.notebook._protocols import ShellProtocol
@@ -198,10 +235,74 @@ class StatementRandomness:
                 self.detector,
                 suppress_warning=allow_random or skip_cache,
             )
-            return list(unseeded_calls)
+            unseeded_calls = list(unseeded_calls)
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             logger.debug("%s Randomness detection failed for statement", _LOG_PROCESSOR)
             return []
+        if not unseeded_calls:
+            try:
+                unseeded_calls = self._warn_hidden_unseeded(code, suppress=allow_random or skip_cache)
+            except Exception:  # advisory: a scan fault must not break the statement
+                logger.debug("%s Hidden-draw scan failed for statement", _LOG_PROCESSOR, exc_info=True)
+        return unseeded_calls
+
+    def _warn_hidden_unseeded(self, code: str, *, suppress: bool) -> list:
+        """RANDOM-UNSEEDED for draws the source scan cannot attribute to a
+        generator: a library call that takes ``random_state`` and gets none
+        (``df.sample(100)``, ``train_test_split(X)``), and a function of the
+        user's that builds its own unseeded generator (``rng = make_rng()``,
+        ``z = simulate()``). Both were cached and frozen without a word when
+        the draw moved no global stream or bound no name (a bare
+        ``df.sample(100)`` shown as the cell's output).
+
+        A class built without a seed (an estimator) is left to the fit
+        check, which judges the fitted object; a call whose draw depends on
+        settings cash cannot read is left to the runtime stream check.
+        """
+        namespace = getattr(self.shell, "user_ns", None)
+        if not isinstance(namespace, dict):
+            return []
+        tree = ast.parse(code)
+        found: list[tuple[RandomnessCallInfo, str, str]] = []
+        for call, line, condition in unseeded_library_calls_in(tree, namespace, classes=False):
+            if condition is not None:
+                continue
+            info = RandomnessCallInfo(module="library", function=call, lineno=line, col_offset=0, label=call)
+            found.append(
+                (
+                    info,
+                    f"Unseeded randomness detected: {call} without random_state at line {line}. "
+                    f"The first result is cached and replayed from then on, so the value is "
+                    f"frozen rather than reproducible.",
+                    _LIBRARY_DRAW_FIX,
+                )
+            )
+        for fn in reached_user_code(code, namespace).functions:
+            if not _function_mints_unseeded_generator(fn):
+                continue
+            name = getattr(fn, "__qualname__", getattr(fn, "__name__", "a function"))
+            info = RandomnessCallInfo(module="helper", function=name, lineno=1, col_offset=0, label=f"{name}()")
+            found.append(
+                (
+                    info,
+                    f"Unseeded randomness detected: this statement calls {name}(), which makes "
+                    f"a random generator with no seed, so a plain run gives different numbers "
+                    f"each time. The first result is cached and replayed from then on, so the "
+                    f"value is frozen rather than reproducible.",
+                    _HELPER_GENERATOR_FIX,
+                )
+            )
+        if not suppress:
+            for info, message, fix in found:
+                if self.detector.mark_warned(code, message):
+                    warn_diagnostic(
+                        CashRandomnessWarning,
+                        code="RANDOM-UNSEEDED",
+                        what=message,
+                        fix=fix,
+                        location=("<cash>", info.lineno),
+                    )
+        return [info for info, _message, _fix in found]
 
     def warn_entropy_reseed(self, code: str) -> None:
         """Warn that ``seed(None)`` cannot make cached values below it fresh.

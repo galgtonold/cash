@@ -2005,7 +2005,7 @@ random source.
 first result is returned from then on, and clearing the cache or running on
 another machine gives a different frozen value.
 
-<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/tracking/randomness/detect.py:RandomnessDetector.analyze_code @2471d11d -->
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/tracking/randomness/detect.py:RandomnessDetector.analyze_code @4890c3ec -->
 In a notebook, a draw too cheap to cache is frozen too when it comes from the
 `random`, `numpy.random` or `torch` stream, because cash rewinds those streams
 before a re-run. A cheap draw from a generator held in a variable
@@ -2016,7 +2016,7 @@ The message for a generator draw says both.
 for a stable, reproducible value. Or accept the frozen value and silence the
 warning, as below.
 
-<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @494a3663, cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @79868eb7 -->
+<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._opts_out_of_rng_rewind @494a3663, cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @0a570907 -->
 In a notebook: for a fresh draw every run, put `# @cash:no-cache` on the
 statement, on the line above it or at the end of its line. It turns off the
 rewind as well as caching, and the statement no longer raises this warning.
@@ -2032,7 +2032,7 @@ generator warns for calls that leave it out; pass `seed=i` per replicate. To
 keep the frozen value, use `@cash.cache(allow_random=True)`. For a fresh draw,
 do not cache the function.
 
-<!-- claim: cash/decorator/rng.py:unseeded_library_calls @1a8de838 -->
+<!-- claim: cash/decorator/rng.py:unseeded_library_calls @54a3c86b -->
 A library call that draws inside its own compiled code warns too when the
 function passes it no seed: `train_test_split(X)`, `KFold(shuffle=True)`,
 `make_classification()`, an estimator such as `SGDClassifier()` or
@@ -2042,6 +2042,13 @@ warns only when the call picks them: `Ridge()` is silent, `Ridge(solver='sag')`
 warns. When cash cannot read the setting (a variable, or `PCA()`, whose
 `svd_solver='auto'` picks by the data's shape), the message says what the draw
 depends on rather than that one happened.
+
+<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness._warn_hidden_unseeded @653a91de -->
+In a notebook the same library calls warn when a statement makes them without
+a seed (`df.sample(100)`, `train_test_split(X)`), as does a statement that
+calls one of your functions which builds its own unseeded generator
+(`rng = make_rng()` with `return np.random.default_rng()`) and an anonymous
+generator (`z = np.random.default_rng().normal()`).
 
 <!-- claim: cash/decorator/rng.py:RngWatch.warn_observed_draw @4bad64b0, cash/notebook/statement/randomness.py:StatementRandomness.flag_observed_hidden_draw @71b1e7ff, cash/tracking/randomness/lineage.py:unseeded_streams @5abf622f -->
 A draw that neither the function's source nor the statement's shows is caught

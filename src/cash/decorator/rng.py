@@ -188,9 +188,7 @@ def unseeded_library_calls(func: Callable, src: str) -> list[tuple[str, int, str
     *condition* to say instead when that is undecided (`call_draws`).
     Lines are relative to *src*.
     """
-    from ..analysis.ast_util import resolve_callee
     from ..analysis.helper_bindings import build_namespace, local_import_map, resolve_local_import
-    from ..tracking.randomness.estimator_draws import call_draws, draw_condition
 
     try:
         tree = ast.parse(src)
@@ -204,6 +202,20 @@ def unseeded_library_calls(func: Callable, src: str) -> list[tuple[str, int, str
         obj = resolve_local_import(module_name, prefix, None)
         if obj is not None:
             namespace[local] = obj
+    return unseeded_library_calls_in(fn, namespace)
+
+
+def unseeded_library_calls_in(
+    tree: ast.AST, namespace: dict, *, classes: bool = True
+) -> list[tuple[str, int, str | None]]:
+    """`unseeded_library_calls` over any parsed code, its names looked up in
+    *namespace*: a cached body, or a notebook statement in the user's
+    namespace. ``classes=False`` leaves out a class built without a seed
+    (an estimator), for a caller that judges the fitted object instead."""
+    from ..analysis.ast_util import resolve_callee
+    from ..tracking.randomness.estimator_draws import call_draws, draw_condition
+
+    fn = tree
     # Names the body binds to a generator (`r = random.Random(0)`): their
     # `.sample()` is a generator's draw, which the source scan judges.
     generators = {
@@ -235,6 +247,8 @@ def unseeded_library_calls(func: Callable, src: str) -> list[tuple[str, int, str
             continue
         callee = resolve_callee(func_node, namespace)
         if callee is None or not callable(callee):
+            continue
+        if not classes and isinstance(callee, type):
             continue
         param = _random_state_param(callee)
         if param is None:

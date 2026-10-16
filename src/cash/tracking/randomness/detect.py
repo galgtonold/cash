@@ -57,6 +57,10 @@ class RandomnessCallInfo:
     lineno: int
     col_offset: int
     carrier: str | None = None
+    #: How to name the call when neither form above fits: a library call
+    #: (``df.sample()``) or a function of the user's that makes its own
+    #: generator (``make_rng()``).
+    label: str | None = None
 
 
 # Comprehensive mapping of randomness functions by module
@@ -344,6 +348,10 @@ class RandomnessVisitor(ast.NodeVisitor):
         # positional one — naming that slot needs the callee's signature, which
         # is session state, so the detector maps it at resolve time.
         self.call_arg_candidates: list[tuple[str, str | tuple[str, int], tuple, int, int]] = []
+        # Draws off a generator made in the same expression and never named:
+        # ``np.random.default_rng().normal()``. Unseeded ones only; whether a
+        # module was seeded does not matter, a generator is its own stream.
+        self.anonymous_draws: list[RandomnessCallInfo] = []
 
     def visit_Import(self, node: ast.Import):
         """Track imports like 'import random', 'import numpy as np'."""
@@ -519,8 +527,33 @@ class RandomnessVisitor(ast.NodeVisitor):
         self._check_seed_call(chain, full_name, node)
         self._check_carrier_call(chain, node)
         self._check_call_args(chain, node)
+        self._check_anonymous_draw(node)
 
         self.generic_visit(node)
+
+    def _check_anonymous_draw(self, node: ast.Call):
+        """``np.random.default_rng().normal(size=3)``: a draw off a generator
+        built in place. Its call chain stops at the inner call, so neither the
+        module path nor the carrier path saw it, and the value was cached and
+        frozen without a word."""
+        func = node.func
+        if not isinstance(func, ast.Attribute) or not isinstance(func.value, ast.Call):
+            return
+        kind = self._carrier_kind_of(func.value)
+        if kind is None or func.attr not in _CARRIER_DRAW_FUNCTIONS.get(kind, frozenset()):
+            return
+        if _rng_constructor_is_seeded(func.value):
+            return
+        maker = ast.unparse(func.value.func)
+        self.anonymous_draws.append(
+            RandomnessCallInfo(
+                module=_CARRIER_MODULES.get(kind, kind),
+                function=func.attr,
+                lineno=node.lineno,
+                col_offset=node.col_offset,
+                carrier=f"{maker}()",
+            )
+        )
 
     def _check_call_args(self, chain: list[str], node: ast.Call):
         """Record an argument that hands a candidate RNG to a bare-name callee.
@@ -740,6 +773,8 @@ class _ScanResult(NamedTuple):
     # ``param_ref`` is a parameter name (keyword arg) or ``('pos', index)``
     # (positional arg) — see ``RandomnessVisitor._check_call_args``.
     call_arg_candidates: tuple[tuple[str, str | tuple[str, int], tuple, int, int], ...]
+    # Unseeded draws off a generator built in the same expression.
+    anonymous_draws: tuple[RandomnessCallInfo, ...] = ()
 
 
 _EMPTY_SCAN = _ScanResult((), (), (), (), frozenset(), (), (), (), ())
@@ -774,6 +809,7 @@ def _scan(code: str) -> _ScanResult:
         tuple(visitor.carrier_aliases),
         tuple((fn, tuple(draws)) for fn, draws in visitor.param_draws.items()),
         tuple(visitor.call_arg_candidates),
+        tuple(visitor.anonymous_draws),
     )
 
 
@@ -1110,6 +1146,7 @@ class RandomnessDetector:
             if not self.is_seeded(call.module):
                 unseeded_calls.append(call)
 
+        unseeded_calls.extend(scan.anonymous_draws)
         unseeded_calls.extend(self._resolve_carrier_calls(scan.carrier_calls))
         unseeded_calls.extend(self._resolve_call_arg_carriers(scan.call_arg_candidates))
         # Source order, so a statement with several draws reads top-to-bottom.
@@ -1182,6 +1219,8 @@ _REPLAY_FIT_FIX = (
 
 def describe_random_call(call: RandomnessCallInfo) -> str:
     """Render a call the way the user wrote it: ``rng.normal()``/``np.random.rand()``."""
+    if call.label is not None:
+        return call.label
     if call.carrier is not None:
         return f"{call.carrier}.{call.function}()"
     return f"{call.module}.{call.function}()"
