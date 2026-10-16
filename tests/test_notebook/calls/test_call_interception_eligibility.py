@@ -1,9 +1,10 @@
 """Which call nodes may be cached independently of their statement.
 
-One structural rule decides it: **a call is eligible unless its callee reads
-the statement's assignment / mutation target.** A target the call is only
-handed (``df.insert(1, "c", slow(df))``) is keyed on the value it holds when
-the call runs, as a comprehension's variable is.
+One structural rule decides it: **a call is eligible when its free variables do
+not include the statement's assignment / mutation target.** If the call reads
+the target, it *is* the fold and the statement caches it. A method that changes
+the target in place (``df.insert(1, "c", slow(df))``) runs every time, so a
+call handed the target there is taken, keyed on the value it holds.
 
 The rule is doing more work than it looks like. In ``out.append(compute(x))``
 the *append* is itself a Call whose callee reads ``out`` — the target — so it
@@ -35,12 +36,18 @@ class TestEligibility:
         """``prices[t] = compute(t)`` — target base is `prices`."""
         assert _calls("prices[t] = compute(t)") == ["compute(t)"]
 
-    def test_a_call_handed_the_target_is_keyed_on_its_value(self):
-        """``s = merge(s, x)`` — `s` is handed in, so its value is in the key."""
-        stmt = ast.parse("s = merge(s, x)").body[0]
+    def test_fold_reading_the_accumulator_is_excluded(self):
+        """``s = merge(s, x)`` — the call reads `s`; it IS the fold."""
+        assert _calls("s = merge(s, x)") == []
+        assert _calls("df['c'] = slow(df)") == []
+
+    def test_a_call_handed_what_a_method_changes_is_keyed_on_its_value(self):
+        """``df.insert(1, 'c', slow(df))`` runs every time; `slow(df)` is taken
+        with `df`'s value in its key."""
+        stmt = ast.parse("df.insert(1, 'c', slow(df))").body[0]
         [(call, local)] = _eligible_calls_in_scope(stmt)
-        assert ast.unparse(call) == "merge(s, x)"
-        assert local == {"s"}
+        assert ast.unparse(call) == "slow(df)"
+        assert local == {"df"}
 
     def test_inplace_method_on_the_target_is_excluded(self):
         """``df.sort_values(inplace=True)`` — the mutation is the expensive part."""
@@ -75,11 +82,10 @@ class TestEligibility:
         """Siblings are separate work and each deserves its own entry."""
         assert _calls("out.append(f(x) + g(y))") == ["f(x)", "g(y)"]
 
-    def test_call_reading_the_target_deep_inside_keys_it_by_value(self):
-        """The target check sees through attributes and subscripts."""
-        for src in ("s += compute(s.total)", "s += compute(s[0])"):
-            [(_call, local)] = _eligible_calls_in_scope(ast.parse(src).body[0])
-            assert local == {"s"}
+    def test_call_reading_the_target_deep_inside_is_excluded(self):
+        """The target check must see through attributes and subscripts."""
+        assert _calls("s += compute(s.total)") == []
+        assert _calls("s += compute(s[0])") == []
 
     def test_no_calls_yields_nothing(self):
         assert _calls("s += 1") == []

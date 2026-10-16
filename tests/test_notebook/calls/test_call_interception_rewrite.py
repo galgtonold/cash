@@ -55,8 +55,8 @@ class TestRewrite:
         assert len(sites) == 1
 
     def test_ineligible_statement_is_untouched(self):
-        out, sites = _rewrite("df.sort_values(inplace=True)")
-        assert out == "df.sort_values(inplace=True)"
+        out, sites = _rewrite("s = merge(s, x)")
+        assert out == "s = merge(s, x)"
         assert len(sites) == 0
 
     def test_argument_unpacking_survives(self):

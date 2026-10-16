@@ -11,11 +11,12 @@ In both, the expensive thing is ``compute(x)`` and the cheap thing is the
 wrapper. Caching the wrapper either fails outright or attaches an irrelevant
 dependency; caching the call is right in both.
 
-**The rule.** A call is eligible unless its callee reads the statement's
-assignment / mutation target. A target the call is only handed
-(``df.insert(1, "c", slow(df))``, ``s = merge(s, x)``) is keyed on the value it
-holds when the call runs, as a comprehension's variable is: the statement's own
-change moves its lineage on every run, its value does not lie.
+**The rule.** A call is eligible when its free variables do **not** include the
+statement's assignment / mutation target: ``s = merge(s, x)`` is the fold, and
+the statement caches it. Where the statement changes the target in place
+through a method (``df.insert(1, "c", slow(df))``), it runs every time, so a
+call it is handed the target in is taken, keyed on the value the target holds
+when the call runs, as a comprehension's variable is.
 
 That single rule does more work than it appears to. In ``out.append(f(x))`` the
 append is itself a ``Call`` whose callee reads ``out`` — the target — so the
@@ -320,6 +321,7 @@ def wrap_eligible_calls(
     gate: Callable[[ast.Call], bool] | None = None,
     namespace=None,
     slot_for: Callable[[CallSite], int] | None = None,
+    loop_names: frozenset[str] = frozenset(),
 ) -> tuple[ast.Module, list[CallSite]]:
     """Return ``(rewritten_copy, sites)``; *tree* is left untouched.
 
@@ -366,6 +368,10 @@ def wrap_eligible_calls(
     *slot_for* numbers each site for the rewritten line (see
     :class:`SiteSlots`); without it a site is numbered by its index in
     *sites*.
+
+    *loop_names* are the names the enclosing loop iteration binds: a call
+    handed one that its statement changes (``d["c"] = slow(d)`` in
+    ``for d in dfs:``) is taken, keyed on the value it holds.
     """
 
     try:
@@ -389,7 +395,7 @@ def wrap_eligible_calls(
     seen: Counter[str] = Counter()
     for stmt in new_tree.body:
         in_loop_unit = isinstance(stmt, ast.For) and namespace is not None
-        calls = _eligible_calls_in_scope(stmt, skip, namespace=namespace)
+        calls = _eligible_calls_in_scope(stmt, skip, namespace=namespace, loop_names=loop_names)
         if not calls:
             continue
         # Computed ONCE per enclosing statement, before any call inside it is
@@ -631,6 +637,7 @@ def _eligible_calls_in_scope(
     stmt: ast.stmt,
     skip: Callable[[ast.Call, frozenset[str]], bool] | None = None,
     namespace: Mapping[str, object] | None = None,
+    loop_names: frozenset[str] = frozenset(),
 ) -> list[tuple[ast.Call, frozenset[str]]]:
     """:func:`eligible_call_nodes`, each call paired with the names an enclosing
     comprehension or lambda binds around it (see ``CallSite.local_arg_positions``).
@@ -645,7 +652,7 @@ def _eligible_calls_in_scope(
     targets = _target_names(stmt)
     found: list[tuple[ast.Call, frozenset[str]]] = []
     for root in _search_roots(stmt):
-        _collect(root, targets, found, frozenset(), skip)
+        _collect(root, targets, found, frozenset(), skip, isinstance(stmt, ast.Expr), loop_names)
     return found
 
 
@@ -703,7 +710,7 @@ def _eligible_calls_in_loop(
     for stmt in _loop_simple_statements(loop.body):
         targets = _target_names(stmt)
         for root in _search_roots(stmt):
-            _collect(root, targets, found, local, loop_skip)
+            _collect(root, targets, found, local, loop_skip, isinstance(stmt, ast.Expr))
     return found
 
 
@@ -781,18 +788,24 @@ def _collect(
     found: list,
     local: frozenset[str],
     skip: Callable[[ast.Call, frozenset[str]], bool] | None = None,
+    changed_in_place: bool = False,
+    loop_names: frozenset[str] = frozenset(),
 ) -> None:
     if isinstance(node, _LOCAL_SCOPES):
         local = local | _bound_names(node)
-    # A target the call is handed (`slow(df)` in `df["c"] = slow(df)` or
-    # `df.insert(1, "c", slow(df))`) is keyed on the value it holds when the
-    # call runs, as a comprehension's variable is: its lineage moves with the
-    # statement's own change, its value does not lie. The call is still the
-    # fold when its callee reads the target (`out.append(...)`).
+    # A target the call is handed is keyed on the value it holds when the
+    # call runs, as a comprehension's variable is, where nothing else would
+    # cache the call: in a method that changes the target in place
+    # (`df.insert(1, "c", slow(df))`), which runs every time, and on a name
+    # a loop binds (`d["c"] = slow(d)` in `for d in dfs:`). An
+    # assignment (`arr = step(arr, 2)`, `df["c"] = slow(df)`) is cached as a
+    # statement and keeps its call. The call is the change itself when its
+    # callee reads the target (`out.append(...)`).
     handed = names_read(node) & targets if isinstance(node, ast.Call) else set()
     if (
         isinstance(node, ast.Call)
         and not (names_read(node.func) & targets)
+        and (not handed or changed_in_place or handed <= local | loop_names)
         # A callee that reads a comprehension's own variable is a different
         # callable per element (`m.predict(X)` over `models.items()`), and
         # nothing in the key can see which: never intercepted.
@@ -807,10 +820,10 @@ def _collect(
         # whether the outer call hits or not, and an expensive one nested
         # there was never reused.
         for child in node.args + [kw.value for kw in node.keywords]:
-            _collect(child, targets, found, local, skip)
+            _collect(child, targets, found, local, skip, changed_in_place, loop_names)
         return
     for child in ast.iter_child_nodes(node):
-        _collect(child, targets, found, local, skip)
+        _collect(child, targets, found, local, skip, changed_in_place, loop_names)
 
 
 def names_read(node: ast.AST) -> set[str]:

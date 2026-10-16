@@ -4,8 +4,7 @@
 runs every time. ``slow(df)`` inside it is the work, and it is keyed on the
 frame it receives: on an unchanged run it is served from the cache and the
 statement puts the stored column in. The same holds in a loop body
-(``for d in dfs: d["c"] = slow(d)``) and for a second column added in the cell
-that added the first.
+(``for d in dfs: d["c"] = slow(d)``).
 
 Oracle: an external counter file, written by ``slow`` on every real run.
 """
@@ -34,12 +33,6 @@ CASES = {
         ["dfs = [pd.DataFrame({'a': [1, 2]}), pd.DataFrame({'a': [3, 4]})]", "for d in dfs:\n    d['c'] = slow(d)"],
         "print('C', [list(d['c']) for d in dfs])",
         "C [[2, 4], [6, 8]]",
-        2,
-    ),
-    "two_columns_in_one_cell": (
-        [FRAME, "df['c'] = slow(df)\ndf['d'] = slow(df, 3)"],
-        "print('C', list(df['c']), list(df['d']))",
-        "C [2, 4, 6, 8, 10] [3, 6, 9, 12, 15]",
         2,
     ),
 }

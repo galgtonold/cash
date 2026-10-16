@@ -488,6 +488,7 @@ class CallRouting:
                 # generator expression runs its line later, in another
                 # statement (see `SiteSlots`).
                 slot_for=call_cache.slot_for,
+                loop_names=frozenset(self._loop_vars[-1]) if self._loop_vars else frozenset(),
             )
             if not sites:
                 # Under default-on, "nothing here was eligible" is the

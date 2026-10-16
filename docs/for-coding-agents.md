@@ -117,7 +117,8 @@ Default: annotate nothing.
   `__cash_key__(self)` returning a version or id that changes with the data.
 - **Wrong case or a blank line above an annotation**: it does nothing, with no
   error (a misspelled name warns `ANNOT-UNKNOWN-DIRECTIVE`). Check the badge.
-- **Cache-safe cells:** seed in the same cell as the draw; pass state in and out of functions. Full list:
+- **Cache-safe cells:** seed in the same cell as the draw; pass state in and
+  out of functions. Full list:
   [Writing cache-safe cells](https://cash-lib.readthedocs.io/en/latest/known-limitations/).
   For `@cash.cache`:
   [Known limitations of `@cash.cache`](https://cash-lib.readthedocs.io/en/latest/decorator-limitations/).
