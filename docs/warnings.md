@@ -905,14 +905,18 @@ Each finding has a line number and a label:
 | `scope_mutation` | `global` / `nonlocal`, or assigning to another object's attribute or item. An object the function made is its own: a literal, a copy, or what a numpy, pandas or polars function returns (`load = np.bincount(...); load[c] -= d`, `counts = pd.crosstab(...); counts.columns = [...]`), except a view of an argument (`np.reshape`, `np.asarray`, `out=`) | this code |
 | `discarded_call` | A call whose return value is thrown away, except on an object the function made itself (`d = deque(xs); d.popleft()`, `m = LinearRegression(); m.fit(X, y)`) | this code |
 | `mutable_global` | A module global that other code in the module reassigns, and that the key does not fold | this code |
-| `dynamic_pattern` | A callable picked at run time from a table built in the body (`t = {...}; t[kind]()`), from a parameter (`router.table[key]()`), or an object looked up in `globals()[name]` or `vars(mod)[name]` and called through (`globals()[name].fit(x)`) | this code |
+| `dynamic_pattern` | A callable picked at run time from a runtime namespace: `globals()[name]` or `vars(mod)[name]` called through (`globals()[name].fit(x)`), a local bound to one (`ns = globals(); ns[name]()`), or a table holding `eval` / `exec` | this code |
 | `ambient_read` | The clock, a fresh UUID, an environment variable named at run time | [KEY-AMBIENT-READ](#key-ambient-read) |
 | `network_read` | A GET request or a read-only SQL query | [KEY-NETWORK-READ](#key-network-read) |
 | `untrackable_dep` | `eval` / `exec` / `compile`, a call to a function that `exec` / `eval` built from a string into a namespace of no module (`ns = {}; exec(rules_text, ns)`), `getattr(obj, name)()`, `globals()[name]()`, `globals().get(name)()` or `vars(mod)[name]()`, `operator.attrgetter(name)` or `methodcaller(name)` with a run-time name, `importlib.import_module`, `sys.modules[name]` | [KEY-UNTRACKABLE-DEP](#key-untrackable-dep) |
 
 Log lines (`logging`, `print(..., file=sys.stderr)`) are not reported. A
-module-level table such as `HANDLERS[kind]()` is hashed as a global and is not
-reported either, nor is a lookup whose name is written out
+table of functions is not reported either, wherever it lives: a module-level
+one (`HANDLERS[kind]()`) is hashed as a global, one built in the body
+(`t = {...}; t[kind]()`) names its functions there, and one an argument holds
+(`router.table[key]()`) is keyed with the argument; see
+[Dispatch tables](decorator-limitations.md#dispatch-tables). Nor is a lookup
+whose name is written out
 (`sys.modules["helper"].g`, `getattr(helper, "g")`, `attrgetter("g")(helper)`):
 cash follows the code it names.
 

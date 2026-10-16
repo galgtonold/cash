@@ -355,9 +355,8 @@ changed. The second list is what cash does not see, and what to do about it.
     - The **clock**, a random UUID, or the whole environment
       (`os.environ.copy()`): pass the value as an argument
       ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)).
-    - **Code picked at run time** from a dict built in the body: name it with
-      `depends_on=`. A `getattr(mod, name)()`, `importlib.import_module` or
-      `eval` runs uncached
+    - **Code picked by a run-time name**: a `getattr(mod, name)()`,
+      `importlib.import_module` or `eval` runs uncached
       ([`KEY-UNTRACKABLE-DEP`](warnings.md#key-untrackable-dep)).
     - A file read by a reader cash does not know: use `file_depends_on=`.
     - The decorator's own parameters (`ttl`, `cache_if`, `strict`, ...):
