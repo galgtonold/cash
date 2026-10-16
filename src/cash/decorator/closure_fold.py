@@ -553,6 +553,13 @@ class HelperIdentity:
     def _capture_part(self, fn: Callable) -> str:
         return self._captures_of(fn, {})[0]
 
+    def captures_digest(self, fn: Callable) -> str:
+        """Digest of the values *fn*'s closure captured and only reads
+        (`_captures_of`), or "" when it captured none: what tells two
+        closures one factory made apart. Hashed on every call."""
+        captured, _mutable = self._captures_of(fn, {})
+        return captured
+
     def _captures_of(self, fn: Callable, watch: dict) -> tuple[str, list]:
         """Digest of the values a helper's closure captured and only reads, or "".
 

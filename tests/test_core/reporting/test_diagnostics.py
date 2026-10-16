@@ -104,6 +104,7 @@ def test_an_explicit_location_keeps_both_the_location_and_the_code():
 
 import os
 import tempfile
+import threading
 
 from cash import Cash
 from cash.backends.file_backend import FileBackend
@@ -156,7 +157,7 @@ def _unhashable_arg():
     def f(x):
         return 1
 
-    f(lambda z: z)
+    f(threading.Lock())
 
 
 def _unseeded_randomness():

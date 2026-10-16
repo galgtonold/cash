@@ -200,6 +200,43 @@ NO_SUSPECT = object()
 CODE_VALUE_TYPES = (types.FunctionType, types.MethodType, functools.partial)
 
 
+#: Set while the arguments of a call are hashed (`ArgHasher.hash_call_payload`):
+#: there the code-argument fold keys every function the arguments carry, so a
+#: lambda or a closure stands by its name (`code_value_stand_in`). Elsewhere
+#: (a helper's defaults, a global's value) nothing else keys its code.
+_CALL_ARGUMENTS = contextvars.ContextVar("cash_call_arguments", default=False)
+
+
+def code_value_stand_in(value: Any) -> tuple | None:
+    """What a lambda or a closure of the user's stands for in a call's
+    arguments' payload, or None for any other value, or outside one.
+
+    Pickle writes a function by its module and name, and finds neither for
+    ``lambda d: d * 2`` or the ``g`` that ``make(3)`` returns: such an
+    argument made the call run uncached. Its identity is its code, what that
+    code reads and what it captured, all of which the code-argument fold
+    puts in the key (`CodeArgs.carrier_parts`); here it stands by name. A
+    library's closure is not the user's code and keeps failing, so the call
+    runs uncached with KEY-UNHASHABLE-ARG."""
+    if not _CALL_ARGUMENTS.get() or type(value) is not types.FunctionType or _pickles_by_reference(value):
+        return None
+    from .code_args import defined_in_user_code  # it imports this module
+
+    if not defined_in_user_code(value):
+        return None
+    return ("__cash_code_value__", getattr(value, "__module__", None), getattr(value, "__qualname__", None))
+
+
+def _pickles_by_reference(fn: types.FunctionType) -> bool:
+    """*fn* is found again by its module and qualified name, as pickle looks it up."""
+    target: Any = sys.modules.get(getattr(fn, "__module__", None) or "")
+    for part in (getattr(fn, "__qualname__", "") or "").split("."):
+        if target is None or part.startswith("<"):
+            return False
+        target = getattr(target, part, None)
+    return target is fn
+
+
 #: The fix for an unhashable code value. It must NOT suggest
 #: `register_hasher(function, ...)`: following that advice is how a second
 #: closure got the first one's result.
@@ -208,7 +245,7 @@ CODE_ARG_FIX = (
     "captures to the cached function as plain arguments, where they reach the "
     "key. Do not register a hasher for function: every closure one factory "
     "makes shares a name, so a hasher keyed on it hands one closure's result "
-    "to another. See known-limitations.md, 'A closure or lambda passed as an "
+    "to another. See decorator-limitations.md, 'Code you pass as an "
     "argument'."
 )
 
@@ -1462,6 +1499,10 @@ class ArgHasher:
                 for type_, (hasher_fn, src_hash) in registry.items():
                     if isinstance(value, type_):
                         return ("__cash_hashed__", f"{src_hash}:{hasher_fn(value)}")
+        if type(value) is types.FunctionType:
+            stand_in = code_value_stand_in(value)
+            if stand_in is not None:
+                return stand_in
         kind = _hook_kind(type(value))
         if kind is _KEYED:
             return ("__cash_hashed__", self.cash_key_hash(value, cash_key_method(value)))
@@ -1504,6 +1545,16 @@ class ArgHasher:
         if marker is value:
             return None
         return hashlib.sha256(canonical_marker_bytes(marker)).hexdigest()
+
+    def hash_call_payload(self, args: tuple, kwargs: dict) -> str:
+        """`hash_payload` of a call's arguments, whose code the code-argument
+        fold keys (`CodeArgs.fold_code_args`): a lambda or a closure of the
+        user's among them stands by its name (`code_value_stand_in`)."""
+        token = _CALL_ARGUMENTS.set(True)
+        try:
+            return self.hash_payload(args, kwargs)
+        finally:
+            _CALL_ARGUMENTS.reset(token)
 
     def hash_payload(self, args: tuple, kwargs: dict) -> str:
         """Hash one concrete ``(args, kwargs)`` form. May raise on unpicklable
@@ -1678,6 +1729,9 @@ class ArgHasher:
                 # hasher's body invalidates dependent cache entries
                 # even when the hasher's output coincidentally matches.
                 return f"{src_hash}:{hasher_fn(arg)}"
+        stand_in = code_value_stand_in(arg)
+        if stand_in is not None:
+            return stand_in
         return arg
 
     def _trusted_lineage(self, arg: Any) -> str | None:
@@ -1731,7 +1785,7 @@ class ArgHasher:
         if normalized is None:
             normalized = self.normalize_call_args(func_name, args, kwargs)
         try:
-            return self.hash_payload(*normalized)
+            return self.hash_call_payload(*normalized)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
             # Normalization can fold a default value into the payload (so
             # f(1) keys identically to f(1, y=<default>)). If that default is
@@ -1739,7 +1793,7 @@ class ArgHasher:
             # caching - retry with the raw, un-normalized form first.
             if normalized[0] is not args or normalized[1] is not kwargs:
                 try:
-                    return self.hash_payload(args, kwargs)
+                    return self.hash_call_payload(args, kwargs)
                 except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
                     pass
             # Pickle failure here is surfaced via CashCacheIneffectiveWarning in

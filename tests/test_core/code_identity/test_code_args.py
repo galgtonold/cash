@@ -416,22 +416,12 @@ def test_a_changed_default_on_a_passed_callable_invalidates(c):
     assert len(calls) == 2
 
 
-def test_a_changed_closure_cell_does_NOT_invalidate(c):
-    """A decision on the record, not an oversight.
+def test_a_changed_closure_cell_invalidates(c):
+    """What a passed closure captured is in the key, as a helper's captures are.
 
-    ``__closure__`` cells hold arbitrary live objects, and folding them would
-    drag the whole argument-hashing problem into the code channel. If this test
-    ever starts failing because someone added closure support deliberately,
-    delete it -- but do not let it start passing by accident.
-
-    The ``__qualname__`` rebind is what makes the test able to measure anything
-    at all: a factory-made closure's qualname is ``make.<locals>.f``, which
-    pickle refuses outright, and an unpicklable argument means the call never
-    caches -- so BOTH halves would "miss" and the test would read as a pass for
-    closure-sensitivity when it is really a pass for not-caching. Rebinding to
-    the module-level name the object is actually stored under makes it pickle
-    by reference, identically for both versions. The final arm is the control:
-    an edit to the same carrier's BODY must still invalidate.
+    The ``__qualname__`` rebind makes the closure pickle by reference, so both
+    halves cache and the difference is only what the cell holds. The final arm
+    is the control: an edit to the same carrier's BODY still invalidates.
     """
     takes, calls = _counting(c)
     nb = _nb_module()
@@ -444,12 +434,14 @@ def test_a_changed_closure_cell_does_NOT_invalidate(c):
         return g
 
     takes(_publish("V1"))
+    takes(_publish("V1"))
+    assert len(calls) == 1, "control: the same captured value must HIT"
     takes(_publish("V2"))
-    assert len(calls) == 1
+    assert len(calls) == 2
 
     _define(nb, "def make(v):\n    def f(): return (v, 'edited')\n    return f\n", name="make")
     takes(_publish("V2"))
-    assert len(calls) == 2, "control: editing the closure's BODY must invalidate"
+    assert len(calls) == 3, "control: editing the closure's BODY must invalidate"
 
 
 def test_explain_agrees_with_a_real_call_for_a_code_argument(c):
