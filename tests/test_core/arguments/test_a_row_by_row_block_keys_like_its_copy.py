@@ -47,7 +47,9 @@ def test_a_row_by_row_block_keys_as_its_c_ordered_copy(build):
     days = _SLAB_BYTES // (8 * 40) + 77
     frame = build(_panel(days, 300))
     assert _row_by_row(frame)
-    copy = pd.DataFrame(np.ascontiguousarray(frame.to_numpy()), index=frame.index, columns=frame.columns)
+    # Built column by column: pandas stacks them into a block laid out column by column.
+    copy = pd.DataFrame({name: frame[name].to_numpy() for name in frame.columns}, index=frame.index)
+    copy.columns = frame.columns
     assert not _row_by_row(copy)
     assert hash_pandas(frame) == hash_pandas(copy)
 
