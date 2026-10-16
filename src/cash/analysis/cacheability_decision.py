@@ -50,7 +50,7 @@ from cash.analysis.ast_util import called_dotted_names, parse_cached
 from cash.analysis.cacheability import StatementAnalysis
 from cash.analysis.namespace_effects import statement_user_pyplot_call, statement_user_writer_call
 from cash.diagnostics import warn_diagnostic
-from cash.exceptions import CashCacheIneffectiveWarning
+from cash.exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
 from cash.value_types import BUILTIN_NAMES, mro_kind
 
 logger = logging.getLogger(__name__)
@@ -318,6 +318,13 @@ def cacheability_verdict(
         return CacheabilityVerdict(False, [analysis_failed("scan the statement for calls it must not cache", exc)])
     if forbidden:
         return CacheabilityVerdict(False, list(forbidden), varies=True)
+    if not waived:
+        try:
+            ambient = _helper_ambient_reasons(code, user_ns)
+        except Exception as exc:  # noqa: BLE001 - an unjudged statement is not a pure one
+            return CacheabilityVerdict(False, [analysis_failed("check the functions the statement calls", exc)])
+        if ambient:
+            return CacheabilityVerdict(False, ambient, varies=True)
 
     try:
         # Bare names first, then ``helpers.announce(...)`` -- how a @stateful
@@ -365,6 +372,43 @@ def cacheability_verdict(
         return CacheabilityVerdict(False, ["Input variable missing lineage"])
 
     return CacheabilityVerdict(True, [])
+
+
+#: (function's code, read) pairs already warned about this session.
+_AMBIENT_WARNED: set[tuple[int, str]] = set()
+
+
+def _helper_ambient_reasons(code: str, user_ns: Mapping[str, Any]) -> list[str]:
+    """Why *code* runs every time: a function of the user's it calls reads
+    the clock, a fresh UUID or random bytes (`helper_ambient_reads`). Cached,
+    the first value came back on every run without a word; KEY-AMBIENT-READ
+    says so once per function and read."""
+    from cash.notebook.lineage_formula import helper_ambient_reads
+
+    reasons = []
+    for fn, issue in helper_ambient_reads(code, user_ns):
+        name = getattr(fn, "__qualname__", getattr(fn, "__name__", "a function"))
+        read = issue.description.partition(" - ")[0]
+        via = f"{name}()"
+        reasons.append(f"Runs {via}, which reads {read}: a cached result would freeze it, so it runs every time")
+        mark = (id(getattr(fn, "__code__", fn)), f"{issue.where}:{read}")
+        if mark in _AMBIENT_WARNED:
+            continue
+        _AMBIENT_WARNED.add(mark)
+        warn_diagnostic(
+            CashImpurityWarning,
+            code="KEY-AMBIENT-READ",
+            what=(
+                f"this statement runs {via}, which reads {read}. That value is not in "
+                f"the cache key, so a cached result would return the first one on every run: "
+                f"the statement runs every time instead."
+            ),
+            fix=(
+                "pass the value in (stamp(x, now=time.time())) so the call can be cached, "
+                "or mark the line `# @cash:assume-safe` to cache the first value on purpose."
+            ),
+        )
+    return reasons
 
 
 def _has_missing_lineage(

@@ -554,6 +554,65 @@ def callee_environment_reads(
     return found
 
 
+#: Clocks that only measure time passing: a busy-wait, a timeout loop or a
+#: measured duration reads them, and a value built from one differs between
+#: two plain runs too. Left out of `helper_ambient_reads`.
+_DURATION_CLOCKS = tuple(
+    f"time.{name}("
+    for name in (
+        "perf_counter",
+        "perf_counter_ns",
+        "monotonic",
+        "monotonic_ns",
+        "process_time",
+        "process_time_ns",
+        "thread_time",
+        "thread_time_ns",
+    )
+)
+
+
+def helper_ambient_reads(
+    code: str, user_ns: Mapping[str, Any] | None, reach: Reach | None = None
+) -> list[tuple[Any, Any]]:
+    """``(function called, ambient-read issue)`` for each clock, UUID or
+    random-bytes read inside the user's functions *code* calls.
+
+    ``s = stamp(1)`` with ``stamp`` doing work and returning ``time.time()``:
+    the statement's text reads no clock, so it was cached and the first time
+    came back on every run. The functions are those
+    :func:`~cash.notebook.callee_reach.reached_user_code` finds, read by the
+    decorator's own analysis (``ISSUE_AMBIENT_READ``), which follows the
+    helpers they call and leaves out a read that only reaches a log line. A
+    ``@cash.cache`` function is left to its own warning.
+    """
+    if not user_ns or "(" not in code:
+        return []
+    from ..analysis.purity_report import ISSUE_AMBIENT_READ
+    from ..decorator.user_code import is_cash_wrapper
+
+    if reach is None:
+        reach = reached_user_code(code, user_ns)
+    found: list[tuple[Any, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for fn in reach.functions:
+        if is_cash_wrapper(fn):
+            continue
+        try:
+            issues = get_analyzer().analyze(fn).issues
+        except Exception:
+            logger.debug("Could not analyse %r for the ambient state it reads", fn, exc_info=True)
+            continue
+        for issue in issues:
+            mark = (issue.where, issue.description)
+            if issue.kind != ISSUE_AMBIENT_READ or issue.description.startswith(_DURATION_CLOCKS):
+                continue
+            if mark not in seen:
+                seen.add(mark)
+                found.append((fn, issue))
+    return found
+
+
 def module_data_component(reach: Reach) -> str:
     """What the data of the user's modules that *reach* reads holds now,
     digested: empty when it reads none.

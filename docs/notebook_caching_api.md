@@ -128,11 +128,11 @@ they talk to the outside world.
 | reads a file | cached; runs again when the file's contents change |
 | reads an environment variable (`os.getenv`) | cached; the value is part of the key, so a new value runs it again |
 
-Only effects written in the statement count, plus file writes in your own
-functions. A function of yours that only returns the clock
-(`def tick(): return time.perf_counter_ns()`) counts as the clock read itself.
-Any other clock read inside a function you call is not seen; see
-[Writing cache-safe cells](known-limitations.md#a-helper-that-reads-the-clock-is-frozen).
+Only effects written in the statement count, plus file writes and clock or
+UUID reads in your own functions. A function of yours that reads the clock
+(`def tick(): return time.perf_counter_ns()`, or one that does more work and
+returns `time.time()`) makes the statement run every time; see
+[A helper that reads the clock](known-limitations.md#a-helper-that-reads-the-clock-runs-every-time).
 
 A statement that runs every time because what it binds can change (the clock,
 a fresh id, pyplot's current figure read through a function of yours) hands

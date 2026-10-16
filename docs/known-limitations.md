@@ -117,28 +117,36 @@ import cash
 warnings.filterwarnings("ignore", category=cash.CashRandomnessWarning)
 ```
 
-## A helper that reads the clock is frozen
+## A helper that reads the clock runs every time
 
-**Symptom:** a timestamp, `uuid4()` or random id from your own function never
-changes.
+**Symptom:** a statement that calls one of your functions runs on every run,
+with a KEY-AMBIENT-READ warning.
 
+<!-- claim: cash/analysis/cacheability_decision.py:_helper_ambient_reasons @5edc872e, cash/notebook/lineage_formula.py:helper_ambient_reads @609ad208 -->
 A clock read written in the statement itself (`t = datetime.now()`) runs every
-time, and so does a call to a function of yours that only returns one
-(`def tick(): return time.time()`). One inside a function that does more is
-not seen, and the call is cached with the first value:
+time, and so does a statement that calls a function of yours which reads the
+clock, a fresh UUID or random bytes from the system (`time.time()`,
+`uuid.uuid4()`, `os.urandom()`), there or in a helper it calls. A cached result
+would return the first value on every run, so cash runs the statement instead
+and says so once:
 
-<!-- test:skip reason="illustrative: shows a value frozen across two runs of one cell" -->
+<!-- test:skip reason="illustrative: shows a statement that runs on every run" -->
 ```python { .nb-cell }
 def stamp(x):
     time.sleep(0.2)
     return x, time.time()
 
-# re-run: the same time.time() as the first run, no warning
+# runs every time: KEY-AMBIENT-READ, "stamp(), which reads time.time()"
 s = stamp(1)
 ```
 
-**Fix:** pass the time in (`stamp(1, now=time.time())`), or put
-`# @cash:no-cache` on the line above the statement.
+A read whose value only goes into a log line or a `print` does not count, and
+neither do the clocks that measure time passing (`time.perf_counter()`,
+`time.monotonic()`, `time.process_time()`), as in a timeout loop or a measured
+duration: a value built from one differs between two runs without cash too.
+
+**Fix:** to cache it, pass the time in (`stamp(1, now=time.time())`). To cache
+the first value on purpose, mark the line `# @cash:assume-safe`.
 
 ## Changes cash cannot see
 

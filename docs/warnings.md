@@ -956,7 +956,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 
 | Code | Applies to | Meaning |
 |---|---|---|
-| [KEY-AMBIENT-READ](#key-ambient-read) | decorator | the body reads the clock or a fresh UUID |
+| [KEY-AMBIENT-READ](#key-ambient-read) | both | the body reads the clock or a fresh UUID |
 | [KEY-BOOL-STATE-TOKEN](#key-bool-state-token) | decorator | `state_token()` returned a bool |
 | [KEY-BUILD-FAILED](#key-build-failed) | decorator | building the key raised; the call ran uncached |
 | [KEY-CALLABLE-HASHER](#key-callable-hasher) | decorator | a hasher registered for every function |
@@ -983,7 +983,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 
 ### KEY-AMBIENT-READ {#key-ambient-read}
 
-<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
 <!-- claim: cash/effects.py:MODULE_CALLS @91df07f5, cash/analysis/purity_visitor.py:PurityVisitor.visit_Subscript @3b13759e -->
 <!-- claim: cash/analysis/ambient_reads.py:ambient_call @00d7cd08, cash/effects.py:_canonical_names @e0692d46 -->
@@ -1017,6 +1017,14 @@ reading that only goes into a log line is not reported either.
 
 **Why it matters.** The value is an input the key cannot see. The first call's
 value is stored and returned to every later call, in every later process.
+
+<!-- claim: cash/analysis/cacheability_decision.py:_helper_ambient_reasons @5edc872e -->
+In a notebook, a statement that calls a function of yours making such a read
+(`s = stamp(1)`, where `stamp` returns `time.time()`), there or in a helper it
+calls, is not cached: it runs every time, as it would without cash, and the
+warning names the function and the read once per session. A clock that
+measures time passing (`time.perf_counter()`, `time.monotonic()`) does not
+count there.
 
 **What to do.** Pass the value in, so it reaches the key:
 
