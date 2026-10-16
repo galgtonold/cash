@@ -171,6 +171,7 @@ from ..shared_objects import (
 )
 from ..value_cutoff import LineageAliasStore
 from ..write_observer import kept_writes, observe_writes
+from .lineage import note_own_writes
 
 __all__ = ["StatementProcessor", "is_control_body"]
 
@@ -2335,6 +2336,8 @@ class StatementProcessor:
         # A write the code does not spell (``save_chart(kind)``, whose savefig
         # is in the helper) counts too: it was observed (``write_observer``).
         written = self._records.user_written_paths(execution.written_paths)
+        if written:
+            note_own_writes(self.tracking_state, written)
         try:
             if (
                 written

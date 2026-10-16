@@ -25,12 +25,14 @@ from __future__ import annotations
 
 import ast
 import logging
+import os
 import types
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...tracking.module_symbols import static_attribute_reads
+from ...tracking.read_classification import regular_file_stat
 from ...value_hash import budgeted_hash, compute_hash, costly_after
 from ..cache_key import statement_source_hash
 from ..lineage_formula import (
@@ -89,11 +91,47 @@ def _record_file_reads(
             frozenset(accessed_files or ()),
             frozenset(accessed_remote or ()),
         )
+        if accessed_files:
+            tracking_state.file_event_seq += 1
+            tracking_state.file_read_seq[cache_key] = tracking_state.file_event_seq
         if probes:
             tracking_state.statement_probes[cache_key] = dict(probes)
         else:
             tracking_state.statement_probes.pop(cache_key, None)
     return file_hash_component
+
+
+def note_own_writes(tracking_state: "TrackingState", paths) -> None:
+    """Record that the notebook wrote *paths* just now, with each file's
+    `stat_key` after the write (`TrackingState.own_file_writes`)."""
+    tracking_state.file_event_seq += 1
+    for path in paths:
+        where = os.path.realpath(path)
+        st = regular_file_stat(where)
+        if st is None:
+            tracking_state.own_file_writes.pop(where, None)
+        else:
+            tracking_state.own_file_writes[where] = (tracking_state.file_event_seq, st)
+
+
+def rewritten_by_the_notebook_since(tracking_state: "TrackingState", cache_key: str, paths) -> bool:
+    """Every one of *paths* is as the notebook's own write left it, and that
+    write came after the statement under *cache_key* last read its files.
+
+    ``n = int(open(P).read())`` then ``open(P, 'w').write(str(n + 1))``:
+    the file the read recorded has changed, but by the notebook, after the
+    read, as in a top-to-bottom run. Re-running the read to catch up would
+    re-run the write after it as well. A change from outside, or a write
+    before the read, still counts."""
+    read_at = tracking_state.file_read_seq.get(cache_key)
+    if read_at is None or not paths:
+        return False
+    for path in paths:
+        where = os.path.realpath(path)
+        own = tracking_state.own_file_writes.get(where)
+        if own is None or own[0] <= read_at or regular_file_stat(where) != own[1]:
+            return False
+    return True
 
 
 def clear_rebound_edges(

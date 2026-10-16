@@ -208,6 +208,18 @@ class TrackingState:
     # W: StatementLineageBuilder. R: StatementLineage.
     statement_probes: dict[str, dict[str, str]] = field(default_factory=dict)
 
+    # The order statements read and wrote files in this session: a counter,
+    # the count at each cache key's last read, and per path the count at the
+    # notebook's last write of it with the file's `stat_key` right after. A
+    # file a statement read and the notebook itself rewrote LATER (``n =
+    # int(open(P).read())`` then ``open(P, 'w').write(str(n + 1))``) is no
+    # change to that read: a top-to-bottom run read it before the write too.
+    # W: _record_file_reads, StatementProcessor._record_file_effects.
+    # R: StatementLineage (`rewritten_by_the_notebook_since`).
+    file_event_seq: int = 0
+    file_read_seq: dict[str, int] = field(default_factory=dict)
+    own_file_writes: dict[str, tuple[int, tuple[int, int, int]]] = field(default_factory=dict)
+
     # Cache key -> {output: digest of the value} a ``no-cache`` statement bound
     # on its last run. It goes into those outputs' lineage, so a reader below
     # misses when the value changed; the simulation reads it back to reach the

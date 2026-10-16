@@ -658,12 +658,6 @@ the first change. The call inside is cached by its arguments, so a reorder costs
 no new `compute()` calls; only a new value does. A function that also writes a
 global or a file runs again in full.
 
-### Chained file-writing cells re-run each other
-
-If N cells each read a file, change it and write it back, a Run All costs
-N(N+1)/2 executions, not N, because each writer re-runs the writers before it.
-**Fix:** write to separate files.
-
 ## Editing without saving
 
 <!-- claim: cash/notebook/live_cells.py:handle_message @f101a60b, cash/notebook/server_discovery.py:_try_extension_cells @766cbfd6, cash/notebook/vscode_backup.py:live_cells @b86cd33f -->

@@ -184,7 +184,7 @@ the cells that use the module as one run does, so they are found in the
 cache after a restart that ran it once. Another value, or the same settings
 in another order, counts as a change.
 
-<!-- claim: cash/notebook/upstream/file_writers.py:FileWriterScheduler._writer_output_already_fresh @982cbefa, cash/notebook/upstream/file_writers.py:FileWriterScheduler.find_stale_file_writer_indices @7bfb9393 -->
+<!-- claim: cash/notebook/upstream/file_writers.py:FileWriterScheduler._writer_output_already_fresh @982cbefa, cash/notebook/upstream/file_writers.py:FileWriterScheduler.find_stale_file_writer_indices @6c67ce2a -->
 A cell that writes files (`df.to_csv(...)`, `fig.savefig(...)`) is not re-run
 after a restart just because it ran in an earlier kernel. cash records the
 files it wrote and the lineages of what it read. It re-runs the writer only
@@ -193,6 +193,13 @@ and the file is gone or changed, or what the writer read has changed. A read
 whose path cash cannot work out rules nothing out, so a writer above may be
 re-run to be safe. Files written by a C extension without Python's `open` are
 not seen; such a writer is re-run.
+
+A cell that writes back what it read from the same file (`n =
+int(open(p).read())`, then `open(p, "w").write(str(n + 1))`) is not re-run
+for a cell below: each run moves the file on once more. Nor is a read the
+notebook's own later write changed: the cell read the file before that write,
+as in a top-to-bottom run. So cells that each read, change and rewrite one file
+run once each on Run All, as in a plain kernel.
 
 A writer whose file the cell does not read is left alone. If an edit upstream
 changed what it would write, the badge adds a `STALE FILE: … not rewritten`
