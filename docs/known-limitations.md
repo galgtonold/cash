@@ -87,17 +87,13 @@ draws where a top-to-bottom run does, also after a restart and when a draw
 above it was too cheap to store. So running a draw cell twice gives the same
 numbers both times, where plain Jupyter would draw new ones. A stored draw from such a generator is
 kept apart from one made with it in another position, so a reseed or a restart
-does not bring back a value drawn elsewhere in its stream. Four gaps on an
+does not bring back a value drawn elsewhere in its stream. Three gaps on an
 isolated re-run:
 
 - **A generator held by an object.** One reached only through an attribute
   (`self.rng.normal()`, `model.rng`) is not followed: re-running a later draw
   alone draws from wherever it is now. Draw from such a generator in the cell
   that creates it.
-- **An edited seed cell you did not re-run.** Edit `np.random.seed(0)` to
-  `seed(1)` and run only a later draw: the draw does not see the new seed,
-  because a bare `seed()` binds no variable. Re-run the seed cell after editing
-  it, or seed in the cell that draws.
 - **A cache kept only in memory, after a restart.** Which generator a cheap
   draw moved is noted on disk for the next kernel. Without a disk tier that
   note is gone, and cash recognises the generator only by the call that made
@@ -622,7 +618,7 @@ out = [fetch(e) for e in entities]
 
 ### The first run of a loop hashes what it hands to a library
 
-<!-- claim: cash/notebook/loop_watch.py:LoopWatch.start @31a0eadb, cash/analysis/namespace_effects.py:rewatch_exempt @73357899 -->
+<!-- claim: cash/notebook/loop_watch.py:LoopWatch.start @31a0eadb, cash/analysis/namespace_effects.py:rewatch_exempt @e0de76f8 -->
 cash cannot tell from the text whether a library function changes what it is
 handed (`heapq.heappush(h, x)` does, `np.mean(a)` does not), nor whether a
 function of yours that hands its argument or a global to one changes it
@@ -644,14 +640,15 @@ Two catches:
   library. Each later run on inputs not seen before in the session hashes
   those objects again, until the record lists them. So a loop whose inputs
   keep changing pays the hashing on each such run.
-- What only a function of yours is handed (`bt = run_backtest(series, 3)`),
-  what a chart is drawn from (`ax.bar(names, totals)`), and a frame or an
-  array a library call reads through an index or an attribute
-  (`pd.Categorical(obs[r])`, `df.loc[k].plot()`) keep the record of their
-  first run. A helper whose change to its argument depends on the data
-  (`def push_all(h, xs): for x in xs: heapq.heappush(h, x)`, first run with
-  no `xs`) is then not seen changing it later. Re-run the cell that reads the
-  object, or call the library directly in the cell.
+- What a function of yours hands to a library on every run
+  (`bt = run_backtest(series, 3)`), what a chart is drawn from
+  (`ax.bar(names, totals)`), and a frame or an array a library call reads
+  through an index or an attribute (`pd.Categorical(obs[r])`,
+  `df.loc[k].plot()`) keep the record of their first run. What your function
+  hands on only on some runs (in a loop over its input, a branch, after an
+  early `return`: `def push_all(h, xs): for x in xs: heapq.heappush(h, x)`),
+  or what a call of it in a loop hands on, is hashed again on new inputs, as
+  a library call's is.
 
 ### Reordering a loop's items re-runs the tail
 
@@ -732,8 +729,6 @@ default argument or base class does. **Fix:** move the binding above this cell.
 
 ## Others
 
-- **`from math import pi`-style imports** can block restoring after a restart
-  where `import math` restores.
 - **An empty cached value** (an empty list or frame) may be computed again
   instead of restored.
 - **A pandas table from the cache is read-only past pandas.** Under

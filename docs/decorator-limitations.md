@@ -9,8 +9,8 @@ cases that need a change on your side, and what that change is.
 ## Arguments cash cannot hash
 
 <!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @cba92fc6 -->
-An argument that cannot be pickled (a lock, an open file, a live connection, a
-closure) cannot be keyed. The call runs uncached and warns
+An argument that cannot be pickled (a lock, an open file, a live connection)
+cannot be keyed. The call runs uncached and warns
 [`KEY-UNHASHABLE-ARG`](warnings.md#key-unhashable-arg); any other failure while
 building the key does the same. Pass a plain value that identifies the object
 instead. For a class of yours, give it a
@@ -124,8 +124,11 @@ what that code reads, so editing it recomputes. Three cases are not covered:
 
 - **Library classes and functions** are keyed by name, not code. See
   [Code in installed packages](#code-in-installed-packages).
-- **A closure or `lambda`** can't be pickled, so the call runs uncached. Pass a
-  module-level function and give it the captured value as an argument.
+- **A `functools.partial` of a closure or `lambda`** can't be pickled, so the
+  call runs uncached. A closure or a `lambda` passed on its own is keyed by its
+  code, the globals it reads and the values it captured (`make(3)` and
+  `make(4)` key apart). Pass the function itself, with the bound values as
+  arguments.
 - **An implementation picked from a table built inside the body**
   (`handlers = {...}; handlers[name]()`) or from an attribute of an argument
   (`router.table[name]()`) is not reached. Name the
