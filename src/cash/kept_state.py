@@ -938,6 +938,8 @@ class _KeepDict(dict):
         registered = copyreg.dispatch_table.get(t)
         if self._watch is not None:
             reducer = _watched(self._store_reducer(t, registered), t, registered, self._watch)
+            if t.__name__ in _GLOBAL_RNG_TYPE_NAMES:
+                reducer = functools.partial(_watched_rng, reducer=reducer, watch=self._watch)
             self[t] = reducer
             return reducer
         if self._keyed and t.__name__ == "ndarray" and t is getattr(sys.modules.get("numpy"), "ndarray", None):
@@ -960,6 +962,9 @@ class _KeepDict(dict):
             if cached_properties(t) and (self._keyed or _leaves_views_out(t)):
                 which = None if self._keyed else stored_views
                 reducer = functools.partial(_reduce_without_views, reducer=reducer, which=which)
+        if self._keyed and t.__name__ in _GLOBAL_RNG_TYPE_NAMES:
+            # One instance of the class may be a module's global RNG.
+            reducer = functools.partial(_reduce_rng_for_key, reducer=reducer)
         self[t] = reducer
         return reducer
 
@@ -974,6 +979,55 @@ class _KeepDict(dict):
         if cached_properties(t) and _leaves_views_out(t):
             reducer = functools.partial(_reduce_without_views, reducer=reducer, which=stored_views)
         return reducer
+
+
+#: The class names of the module-global RNGs (`global_rng_module`): the
+#: cheap test, made once per type, before the identity one.
+_GLOBAL_RNG_TYPE_NAMES = frozenset({"Random", "RandomState"})
+
+
+def global_rng_module(obj: object) -> str | None:
+    """The module whose global RNG *obj* is (``"random"``,
+    ``"numpy.random"``), or None.
+
+    The module functions (``random.random``, ``np.random.normal``) draw
+    from these singletons, and cash's global RNG channel owns their state:
+    it is seeded, captured and replayed as the module's, not as an
+    object's. Unseeded, that state is fresh entropy in every process, so a
+    value that merely holds the singleton (a scipy distribution's
+    ``_random_state``) could not be keyed by it: it missed in every new
+    process.
+    """
+    if obj is getattr(sys.modules.get("random"), "_inst", None):
+        return "random"
+    if obj is getattr(sys.modules.get("numpy.random.mtrand"), "_rand", None):
+        return "numpy.random"
+    return None
+
+
+def _reduce_rng_for_key(obj: Any, reducer: Any) -> Any:
+    """A module's global RNG by the module's name; any other generator of
+    the class as *reducer* reduces it, by its state."""
+    module = global_rng_module(obj)
+    if module is not None:
+        return (_global_rng, (module,))
+    return reducer(obj)
+
+
+def _global_rng(module: str) -> Any:
+    """The global RNG of *module* (`global_rng_module`): what a key's
+    stand-in for it loads back as."""
+    if module == "random":
+        return sys.modules["random"]._inst
+    return sys.modules["numpy.random.mtrand"]._rand
+
+
+def _watched_rng(obj: Any, reducer: Any, watch: list) -> Any:
+    """*reducer*'s reduce of *obj*, noting in *watch* a module's global RNG,
+    which a key names and a store keeps the state of."""
+    if global_rng_module(obj) is not None:
+        watch.append(True)
+    return reducer(obj)
 
 
 def _watched(reducer: Any, t: type, registered: Any, watch: list) -> Any:
