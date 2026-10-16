@@ -128,11 +128,15 @@ _IMMUTABLE_CONTAINERS = (tuple, frozenset)
 
 
 def library_value_types() -> tuple[type, ...]:
-    """The value types of numpy and pandas, when they are already imported."""
+    """The value types of numpy and pandas, when they are already imported.
+
+    A ufunc (``np.log`` in a ``FunctionTransformer``) is pickled by its name,
+    so a restore hands back the very same object; the numpy modules that
+    import it by name are not holders a restore must keep."""
     found: list[type] = []
     np = sys.modules.get("numpy")
     if np is not None:
-        found += [np.generic, np.dtype]
+        found += [np.generic, np.dtype, np.ufunc]
     pd = sys.modules.get("pandas")
     if pd is not None:
         found += [pd.Timestamp, pd.Timedelta, pd.Period, pd.Interval, type(pd.NA), type(pd.NaT)]

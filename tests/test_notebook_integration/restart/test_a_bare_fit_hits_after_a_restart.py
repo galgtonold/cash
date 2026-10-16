@@ -37,6 +37,15 @@ CASES = {
         "with warnings.catch_warnings():\n    warnings.simplefilter('ignore')\n    clf.fit(X, y)",
         "print('P', hasattr(clf, 'classes_'), round(clf.score(X, y), 6))",
     ),
+    "numpy_function_step": (
+        "from sklearn.pipeline import make_pipeline\n"
+        "from sklearn.preprocessing import FunctionTransformer\n"
+        "from sklearn.ensemble import RandomForestClassifier\n"
+        "abs_step = FunctionTransformer(np.abs)\n"
+        "pipe = make_pipeline(abs_step, RandomForestClassifier(n_estimators=60, random_state=0))",
+        "pipe.fit(X, y)",
+        "print('P', pipe[0] is abs_step, abs_step.func is np.abs, round(pipe.score(X, y), 6))",
+    ),
     "list_holder": (
         "from sklearn.ensemble import RandomForestClassifier\n"
         "clf = RandomForestClassifier(n_estimators=60, random_state=0)\n"
