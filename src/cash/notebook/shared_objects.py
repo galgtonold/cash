@@ -39,6 +39,7 @@ import decimal
 import enum
 import fractions
 import gc
+import inspect
 import pathlib
 import sys
 import types
@@ -148,13 +149,38 @@ def _bound_objects(value: Any) -> list[Any] | None:
     object of the run that stored it; a closure (``make(store)``) keeps the
     cells of that run. Either way the restored hook would write into an
     object that is not the one the notebook's names are bound to.
+
+    A closure a library's module binds by its own name (sklearn's
+    ``load_iris``, wrapped by its parameter check) carries nothing: pickle
+    and a deep copy hand back that very function (`_found_by_name`). Counted
+    as carrying its cells, each import of one searched every object the
+    garbage collector tracks for their holders, and found the module: 2 s
+    on E11's ``from sklearn.datasets import load_iris``.
     """
     if isinstance(value, types.FunctionType):
-        return list(value.__closure__) if value.__closure__ else None
+        return list(value.__closure__) if value.__closure__ and not _found_by_name(value) else None
     owner = getattr(value, "__self__", None)
     if owner is None or isinstance(owner, (types.ModuleType, type)):
         return None
     return [owner]
+
+
+def _found_by_name(fn: types.FunctionType) -> bool:
+    """*fn* is found again by its module and qualified name, as pickle looks
+    it up, in a module other than the notebook's own (``__main__``, whose
+    functions a store keeps by value)."""
+    module = getattr(fn, "__module__", None) or ""
+    if module == "__main__":
+        return False
+    target: Any = sys.modules.get(module)
+    for part in (getattr(fn, "__qualname__", "") or "").split("."):
+        if target is None or part.startswith("<"):
+            return False
+        try:
+            target = inspect.getattr_static(target, part, None)
+        except Exception:  # noqa: BLE001 - an object that cannot be asked holds no such name
+            return False
+    return target is fn
 
 
 def is_value(value: Any, value_types: tuple[type, ...]) -> bool:
