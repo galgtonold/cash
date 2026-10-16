@@ -23,7 +23,11 @@ import threading
 from collections.abc import Iterator
 from typing import Any
 
-from . import _active, _streams_at_import
+from . import (
+    _active,
+    _gc_context,  # noqa: F401 - collections run in a context of their own on 3.10/3.11
+    _streams_at_import,
+)
 from .backends import FileBackend, InMemoryBackend, TieredBackend
 from .backends.sqlite_backend import SQLiteBackend
 from .config.resolve import get_config
