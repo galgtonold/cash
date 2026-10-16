@@ -648,6 +648,22 @@ class FileBackend(CacheBackend):
             except Exception:
                 logger.debug("Sibling write for key %r failed", key, exc_info=True)
 
+    def _wait_for_all_writes(self) -> None:
+        """Wait for every live write in this cache directory, own queue first,
+        then every sibling backend's (see ``_wait_for_writes``): a clear or a
+        listing must see what another instance in this process already set.
+        `f.cache_clear()` through one `Cash` listed nothing while a second
+        one's write was still queued, so it told no one, and the second went
+        on serving the cleared result."""
+        self._writes.wait_all()
+        if PendingWrites.in_worker_thread():
+            return
+        for sibling in _sibling_writers(self._writer_scope, self._writes):
+            try:
+                sibling.wait_all()
+            except Exception:
+                logger.debug("A sibling's writes failed", exc_info=True)
+
     def _atomic_write(self, path: str, payload: bytes | list) -> None:
         """Write *payload* (bytes, or a list of pieces to write in order) to
         *path* so no reader can observe a partial file.
@@ -1143,7 +1159,7 @@ class FileBackend(CacheBackend):
             return
         # Drain pending writes so they don't fire after the clear and
         # resurrect entries we just removed from disk.
-        self._writes.wait_all()
+        self._wait_for_all_writes()
         for f in self.stamp.entry_files():
             try:
                 os.remove(f)
@@ -1174,7 +1190,7 @@ class FileBackend(CacheBackend):
         # Drain pending writes so the listing reflects everything the
         # caller has already set() — otherwise async writes still in
         # flight would be invisible.
-        self._writes.wait_all()
+        self._wait_for_all_writes()
         entries = []
         for path in self.stamp.entry_files():
             try:
@@ -1194,7 +1210,7 @@ class FileBackend(CacheBackend):
         self._ensure_initialized()
         if self._unusable:
             return 0
-        self._writes.wait_all()
+        self._wait_for_all_writes()
         return len(self.stamp.entry_files())
 
     def entries(self) -> list[StoredEntry]:
@@ -1203,7 +1219,7 @@ class FileBackend(CacheBackend):
         Unlike the other operations it neither creates nor stamps the
         directory, so looking at a cache (``cash inspect``) never changes it.
         """
-        self._writes.wait_all()
+        self._wait_for_all_writes()
         found = []
         for path in self.stamp.entry_files():
             try:

@@ -40,12 +40,14 @@ class Maintenance:
         hit_memo.bump()
         backend = self._backend_slot.backend
         keys = _function_keys(backend, func_name)
-        deleted, survivors = _delete_keys(backend, keys)
-        if deleted:
-            try:
-                backend.bump_generation()
-            except Exception:  # the local clear is done either way
-                logger.debug("Could not tell other processes about the clear", exc_info=True)
+        _, survivors = _delete_keys(backend, keys)
+        # Also when nothing here was deleted: another process may hold a
+        # result in RAM whose disk copy it never wrote (a full disk) or is
+        # still writing.
+        try:
+            backend.bump_generation()
+        except Exception:  # the local clear is done either way
+            logger.debug("Could not tell other processes about the clear", exc_info=True)
         if survivors:
             warn_diagnostic(
                 CashCacheStoreFailedWarning,
