@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @00051bf9 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @cf332841 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -83,9 +83,9 @@ its warning class.
 | [Caching](#cache-codes) | `CACHE-` | 19 | Caching happened, or refused to, and it is worth saying. |
 | [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
 | [Side effects](#impure-codes) | `IMPURE-` | 4 | The function does something a cache hit will not repeat. |
-| [Cache keys](#key-codes) | `KEY-` | 25 | Something the result depends on may not be in the cache key. |
-| [Notebook](#notebook-codes) | `NOTEBOOK-` | 16 | Notebook-wide machinery rather than one statement. |
-| [Randomness](#random-codes) | `RANDOM-` | 3 | A cached value that randomness makes non-reproducible. |
+| [Cache keys](#key-codes) | `KEY-` | 26 | Something the result depends on may not be in the cache key. |
+| [Notebook](#notebook-codes) | `NOTEBOOK-` | 17 | Notebook-wide machinery rather than one statement. |
+| [Randomness](#random-codes) | `RANDOM-` | 4 | A cached value that randomness makes non-reproducible. |
 | [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
 | [Storing results](#store-codes) | `STORE-` | 8 | The call succeeded, but its result was not written. |
 
@@ -975,6 +975,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-INSTANCE-STATE](#key-instance-state) | decorator | a bound method's instance cannot be hashed |
 | [KEY-ITERATOR-CONSUMED](#key-iterator-consumed) | decorator | building the key read an iterator argument; the call ran uncached |
 | [KEY-MEMO-BEFORE-IMPORT](#key-memo-before-import) | both | a `functools` memo already held results when cash was imported |
+| [KEY-LOOP-VAR-CHANGED](#key-loop-var-changed) | notebook | a loop body changes its loop variable before work cached for each pass |
 | [KEY-NETWORK-READ](#key-network-read) | decorator | the body reads from a server or database |
 | [KEY-OPAQUE-CALLABLE](#key-opaque-callable) | decorator | a callable's code cannot be hashed |
 | [KEY-SOURCE-CHANGED](#key-source-changed) | decorator | a code file changed after import |
@@ -1352,6 +1353,31 @@ the cached function.
 **When it is safe to ignore.** When the memo reads no file (it computes
 from its arguments), or no cached function uses it.
 
+### KEY-LOOP-VAR-CHANGED {#key-loop-var-changed}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/control_structures/loop_target_change.py:target_changed_before_cached_work @1d8505cf, cash/notebook/control_structures/for_handler.py:ForLoopHandler._warn_target_changed @e307b4b5 -->
+**What happened.** A `for` loop that cash runs pass by pass changes its loop
+variable in place (`q.append(...)`, `q[0] = ...`, `q += ...`, `q.n = ...`)
+before a statement of the same pass that cash caches: a call of yours or of a
+library, or a binding that reads the variable. The message names the cell, the
+line that changes the variable and the line of the cached work. It is shown
+once per loop, when the loop first runs, and read from the loop's text alone.
+
+**Why it matters.** Each pass is keyed on the loop variable as the `for`
+binds it. The change comes after that, so it is not in the key: two passes
+whose values were equal when bound share one cached result, and the second
+gets the first's answer, on the first Run All too.
+
+**What to do.** Make the value that tells the passes apart part of the `for`
+target (`for i, q in enumerate(items):`): only names the `for` binds reach
+the key of each pass. If there is no such value, put `# @cash:no-cache` on a
+line of its own above the statement the message names.
+
+**When it is safe to ignore.** When the passes never start out equal (each
+`q` differs when bound), or the cached work does not depend on the change.
+
 ### KEY-NETWORK-READ {#key-network-read}
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
@@ -1658,6 +1684,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-ANALYSIS-FAILED](#notebook-analysis-failed) | notebook | a safety check raised; the statement ran uncached |
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
+| [NOTEBOOK-CHANGED-BELOW](#notebook-changed-below) | notebook | a cell re-run on its own reads a value rebuilt without the in-place change a cell below made |
 | [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
 | [NOTEBOOK-FILE-REWRITE-CHAIN](#notebook-file-rewrite-chain) | notebook | cells that each read one file and write it back re-run each other |
 | [NOTEBOOK-FILE-ROUNDTRIP](#notebook-file-roundtrip) | notebook | a file written in this session is read back, so the read reruns after every write |
@@ -1752,6 +1779,30 @@ longer invalidated when it changes.
 If it is not code, delete it or make it a markdown cell.
 
 **When it is safe to ignore.** When nothing below uses that cell.
+
+### NOTEBOOK-CHANGED-BELOW {#notebook-changed-below}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/upstream/mismatch_classifier.py:MismatchClassifier._reject_read_only_input @d536a0ab, cash/notebook/upstream/changed_below.py:warn_changed_below @bbf25145 -->
+**What happened.** You re-ran a cell on its own, and a cell below it had
+changed one of its inputs in place (`s.iloc[0] = 1e9`, `rows.append(r)`).
+cash gives the re-run the input as the cells above leave it, as a run from the
+top does: it rebuilt the value, so the cell computed without the change below,
+and the variable no longer holds that change. The message names the variable,
+the cell below and its statement. It is shown once per cell, variable and
+statement.
+
+**Why it matters.** Plain Jupyter would run the cell on the changed value.
+Here the result is the one a run from the top gives, and the change the cell
+below made is gone until that cell runs again, so a cell further down that
+expects it reads the value without it.
+
+**What to do.** Run the cell below again to apply its change. For the cell
+you re-ran to see the change, move the change into a cell above it.
+
+**When it is safe to ignore.** When you want the value as a run from the top
+leaves it, and will run the cells below again.
 
 ### NOTEBOOK-FAILED-CELL {#notebook-failed-cell}
 
@@ -2061,9 +2112,35 @@ A cached value that randomness makes non-reproducible. Every code here starts `R
 
 | Code | Applies to | Meaning |
 |---|---|---|
+| [RANDOM-HELD-GENERATOR](#random-held-generator) | notebook | a cell re-run on its own draws from a generator held by an object, from where it stands |
 | [RANDOM-REPLAYED](#random-replayed) | notebook | a restored value is an earlier random draw |
 | [RANDOM-SEED-NONE](#random-seed-none) | notebook | `seed(None)` cannot refresh cached values |
 | [RANDOM-UNSEEDED](#random-unseeded) | both | a draw from an unseeded source is not reproducible |
+
+### RANDOM-HELD-GENERATOR {#random-held-generator}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashRandomnessWarning</span>
+
+<!-- claim: cash/notebook/statement/held_generators.py:HeldGenerators.before_run @57d870a1, cash/tracking/randomness/detect.py:attribute_draws @9a5150b6 -->
+**What happened.** You ran a cell on its own (again, or not right after the
+cell above it), and a statement in it draws from a generator reached through
+an attribute: `c.rng.normal()` with `rng` a class attribute, `mod.rng`,
+`f.rng`, or `self.rng.normal()` in a method of yours the statement calls. The
+generator is the one the statement drew from last time, and it has moved on
+since. cash does not put such a generator back where a run from the top has
+it, so the draw continues from where the last run left it. The message names
+the cell, the statement and the generator, once per statement.
+
+**Why it matters.** The numbers differ from the ones a run from the top
+gives. A generator held in a variable (`rng.normal()`), or by an object the
+re-run rebuilds (`self.rng` set in `__init__`), is put back, and does not warn.
+
+**What to do.** Draw from such a generator in the cell that creates it, or
+hold it in a variable and draw from that. For the numbers a run from the top
+gives, run the notebook from the top.
+
+**When it is safe to ignore.** When the draw only needs to be random, not the
+same as a run from the top.
 
 ### RANDOM-REPLAYED {#random-replayed}
 

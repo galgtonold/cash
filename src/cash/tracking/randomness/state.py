@@ -613,3 +613,21 @@ def _digest_rng_state(value: object) -> str:
 
     feed(value)
     return h.hexdigest()
+
+
+def object_carrier_state(obj: object) -> object | None:
+    """Where the generator *obj* stands (its state), or None when *obj* is not
+    one (`rng_carrier_kind`) or its state cannot be read. Compare two with
+    :func:`same_carrier_state`."""
+    kind = rng_carrier_kind(obj)
+    if kind is None:
+        return None
+    try:
+        return _flatten_state(_carrier_state(obj, kind))
+    except (TypeError, ValueError, AttributeError, NotImplementedError):
+        return None
+
+
+def same_carrier_state(before: object, after: object) -> bool:
+    """Whether two states from :func:`object_carrier_state` are the same position."""
+    return _rng_states_equal(before, after)

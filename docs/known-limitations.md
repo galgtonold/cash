@@ -90,10 +90,14 @@ kept apart from one made with it in another position, so a reseed or a restart
 does not bring back a value drawn elsewhere in its stream. Four gaps on an
 isolated re-run:
 
-- **A generator held by an object.** One reached only through an attribute
-  (`self.rng.normal()`, `model.rng`) is not followed: re-running a later draw
-  alone draws from wherever it is now. Draw from such a generator in the cell
-  that creates it.
+- **A generator held by an object cash does not rebuild.** One reached
+  through an attribute is followed when the object holding it is rebuilt for
+  the re-run (`self.rng` set in `__init__`, then `m.rng.normal()`). A class
+  attribute read through an instance (`c.rng`, `self.rng` in a method), a
+  module's or a function's is not: re-running a later draw alone draws from
+  wherever it is now, and cash warns
+  [RANDOM-HELD-GENERATOR](warnings.md#random-held-generator). Draw from such a
+  generator in the cell that creates it, or hold it in a variable.
 - **An edited seed cell you did not re-run.** Edit `np.random.seed(0)` to
   `seed(1)` and run only a later draw: the draw does not see the new seed,
   because a bare `seed()` binds no variable. Re-run the seed cell after editing
@@ -364,9 +368,13 @@ out = summarize(s)  # cell 2: re-run this alone...
 s.iloc[0] = 1e9     # cell 3: ...and it does not see this
 ```
 
-cash answers cell 2 as a top-to-bottom run would, so it computes with `0.0`
-while the live `s` holds `1e9`. **Fix:** move the change above the cells that
-must see it, or make it a new value (`s = s.copy(); s.iloc[0] = 1e9`).
+<!-- claim: cash/notebook/upstream/changed_below.py:warn_changed_below @bbf25145 -->
+cash answers cell 2 as a top-to-bottom run would: it rebuilds `s` as cell 1
+leaves it, so cell 2 computes with `0.0`, and `s` holds `0.0` until cell 3 runs
+again. cash warns [NOTEBOOK-CHANGED-BELOW](warnings.md#notebook-changed-below)
+when this happens, naming the variable and the cell that changed it.
+**Fix:** move the change above the cells that must see it, or run cell 3 again
+after the re-run.
 
 ### Changing and rebinding the same name in one cell
 
@@ -484,6 +492,8 @@ for q in [[1], [1]]:           # two iterations, equal when bound
     accm.append(pull(handle))  # 2nd iteration gets the 1st's result
 ```
 
+cash warns [KEY-LOOP-VAR-CHANGED](warnings.md#key-loop-var-changed) when a
+loop body changes its loop variable in place before work it caches for each pass.
 **Fix:** make the distinguishing value part of the `for` target:
 `for i, base in enumerate(items):`. Only names bound by the `for` statement reach
 the per-iteration key. If there is no such value, put `# @cash:no-cache` above

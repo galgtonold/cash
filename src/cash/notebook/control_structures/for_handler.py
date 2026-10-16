@@ -29,6 +29,8 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from cash.control_markers import iteration_digest, mark_iteration
 
 from ...analysis.mutations import accumulator_loop_body_shape, seeded_accumulator_loop
+from ...diagnostics import warn_diagnostic
+from ...exceptions import CashWarning
 from ...tracking.file_tracker import FileAccessTracker
 from ...value_hash import compute_hash
 from .. import heavy_loops
@@ -46,6 +48,7 @@ from .common import (
     extract_target_names,
     is_control_structure,
 )
+from .loop_target_change import target_changed_before_cached_work
 from .split_policy import PROBE_ITERS as _SPLIT_PROBE_ITERS
 from .split_policy import LoopSplitPolicy
 
@@ -119,6 +122,10 @@ def _rebound_names(node: ast.For) -> set[str]:
     }
 
 
+def _no_cache(annotation) -> bool:
+    return annotation is not None and bool(annotation.no_cache)
+
+
 class ForLoopHandler:
     """Per-iteration caching for ``for`` loops.
 
@@ -136,6 +143,8 @@ class ForLoopHandler:
         self.dispatcher = dispatcher
         self._split_policy = LoopSplitPolicy(statement_processor)
         self._heavy_store: heavy_loops.HeavyLoopStore | None | object = _UNSET
+        #: ``(cell, loop body)`` already warned about with KEY-LOOP-VAR-CHANGED.
+        self._warned_target_change: set[tuple[int | None, str]] = set()
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -547,6 +556,7 @@ class ForLoopHandler:
         of `for (name, act) in parsed:` over 87,464 items went through the
         per-statement machinery: 21.9 s against 0.19 s plain.
         """
+        self._warn_target_changed(node, target_names, raw_cell, loop_annotation)
         iterable_lineage = _helpers.get_iterable_lineage(self.shell, self.statement_processor, node.iter)
         logger.debug("[CONTROL] Iterable lineage: %s...", iterable_lineage[:20] if iterable_lineage else "None")
 
@@ -655,6 +665,40 @@ class ForLoopHandler:
             held=(iterable,),
         )
         return total_iterations, cached_iterations
+
+    def _warn_target_changed(self, node: ast.For, target_names: list, raw_cell: str | None, loop_annotation) -> None:
+        """KEY-LOOP-VAR-CHANGED, once per loop, when its body changes the loop
+        variable in place before a statement cash caches per pass
+        (`target_changed_before_cached_work`): each pass is keyed on the
+        variable as the ``for`` bound it, so the change is not in the key."""
+        if _no_cache(loop_annotation):
+            return
+        cell = self.statement_processor.tracking_state.running_cell
+        # The loop's text with its comments: an added `# @cash:no-cache` is a new loop.
+        text = (ast.get_source_segment(raw_cell, node) if raw_cell else None) or ast.unparse(node)
+        key = (cell, text)
+        if key in self._warned_target_change:
+            return
+        change = target_changed_before_cached_work(
+            node,
+            {name for name in target_names if isinstance(name, str)},
+            lambda stmt: _no_cache(_helpers.resolve_statement_annotation(raw_cell, stmt, loop_annotation)),
+        )
+        self._warned_target_change.add(key)
+        if change is None:
+            return
+        where = f"cell {cell + 1}, line {change.change_line}" if cell is not None else f"line {change.change_line}"
+        warn_diagnostic(
+            CashWarning,
+            "KEY-LOOP-VAR-CHANGED",
+            f"{where}: the loop body changes its loop variable '{change.name}' in place before work "
+            f"cash caches for each pass (line {change.work_line}). Each pass is keyed on '{change.name}' "
+            "as the `for` binds it, so two passes that were equal then share one cached result.",
+            "make the value that tells the passes apart part of the `for` target "
+            f"(`for i, {change.name} in enumerate(...)`), or put `# @cash:no-cache` above the statement "
+            f"on line {change.work_line}.",
+            location=("<cash>", cell + 1 if cell is not None else change.change_line),
+        )
 
     # ------------------------------------------------------------------
     # Per-iteration processing

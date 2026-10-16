@@ -48,6 +48,7 @@ from ...exceptions import SOURCE_RETRIEVAL_ERRORS
 from ...source_norm import exact_source_digest
 from ...source_reading import own_source
 from ..callee_reach import helper_seeded_modules, reached_user_code
+from .held_generators import HeldGenerators
 
 _LIBRARY_DRAW_FIX = (
     "pass random_state=<int> (polars: seed=<int>) to make it reproducible, put "
@@ -152,6 +153,15 @@ class StatementRandomness:
         #: seeded (see :meth:`observe_statement`), and only those: what a
         #: hit on it replays.
         self.moved_streams: dict = {}
+        #: Where the generators a statement reaches through an attribute stood.
+        self._held = HeldGenerators()
+
+    def before_compute(self, code: str) -> None:
+        """RANDOM-HELD-GENERATOR for a statement about to be computed in a
+        cell run again on its own, when it draws from a generator held by an
+        object that has moved since it last started (`HeldGenerators`)."""
+        state = self.tracking_state
+        self._held.before_run(code, self.shell.user_ns, state.running_cell, state.running_cell_rerun)
 
     def adopt_unseen_seeds(self) -> None:
         """Put a seed no statement set into the ledger, from where the stream stands.

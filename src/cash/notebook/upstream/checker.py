@@ -120,6 +120,8 @@ class UpstreamChecker:
         #: The source of the cell checked last and its index in the notebook,
         #: when it was found: what a warning about that cell calls it.
         self.last_found_cell: tuple[str, int] | None = None
+        #: Whether the cell being checked does not come right after the one checked before it.
+        self._reran = False
         #: What a statement's text last took to run, or None (set by the
         #: magics, as the statement processor's): the cell's analysis budget.
         self.expected_run_time: Callable[[str], float | None] = lambda code: None
@@ -312,6 +314,10 @@ class UpstreamChecker:
 
         # A name the previous cell's forward probe held and no restore filled.
         self.simulator.restorer.drop_probe_placeholders()
+        # Unplaced until the check has found the cell and rebuilt what is above it.
+        self.tracking_state.running_cell = None
+        self.tracking_state.running_cell_rerun = False
+        self._reran = False
 
         # Resolve the notebook path ONCE for the whole cell check and
         # thread it through the analysis helpers + Phase 2, instead of each site
@@ -565,6 +571,8 @@ class UpstreamChecker:
         self._note_how_it_ran(cell_code, cell_id, cells_with_ids, current_cell_idx)
         notebook_cells = self._as_run(notebook_cells, cells_with_ids)
         if current_cell_idx is not None:
+            # Not right after the cell above it: run on its own, not in a pass down the notebook.
+            self._reran = current_cell_idx > 0 and self.last_cell_index != current_cell_idx - 1
             self.last_cell_index = current_cell_idx
             self.last_found_cell = (cell_code, current_cell_idx)
             if cell_id:
@@ -764,6 +772,8 @@ class UpstreamChecker:
             # collection the cell may change in place: the very object it
             # starts from, which its next run compares with.
             self.simulator.stale_values.note_cell_start(current_cell_idx, required_inputs)
+            self.tracking_state.running_cell = current_cell_idx
+            self.tracking_state.running_cell_rerun = self._reran
 
             all_metrics = self.replay.in_notebook_order(restored_info + executed_metrics, notebook_cells)
             return UpstreamResult(all_metrics, total_restore_time, total_execution_time)
