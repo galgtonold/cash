@@ -1191,6 +1191,7 @@ class CallRunner:
             nested_token = NESTED_CASH_SECONDS.set(nested)
             try:
                 self._files.track_declared_files(run.tracker, spec)
+                self._files.track_scanned_files(run.tracker, args, kwargs)
                 yield run
             except Exception as exc:  # the user's body can raise anything; logged, then re-raised
                 self._calls.log_raised(func_name, exc, call.call_start)

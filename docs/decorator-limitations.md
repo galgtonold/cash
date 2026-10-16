@@ -259,11 +259,12 @@ scikit-learn `n_jobs=`). Each task then runs under a tracker of its own in the
 worker: about 20 µs a task, which only shows for tiny tasks sent one at a time
 (`pool.imap` with the default `chunksize=1`).
 
-A polars `LazyFrame` argument from `scan_csv` is keyed by its path, not the
-file's content; collect it first. With the native file hook on
-(`CASH_NATIVE_FILE_HOOK=1`, Linux and Windows, see
-[known limitations](known-limitations.md#reads-through-a-loader-cash-cannot-see)),
-the file polars opens inside the call is a dependency, so an edit is seen.
+<!-- claim: cash/decorator/file_deps.py:FileDeps.track_scanned_files @3260dfbc -->
+A polars `LazyFrame` argument from `scan_csv` or `scan_parquet` names its file
+by path, so cash records the files its plan scans as reads of the call, as if
+the body had opened them: an edited file recomputes, and so does a new file
+that matches a scanned glob. A remote source (`s3://...`) is keyed by its path
+only; collect such a frame first.
 
 ## An edit that keeps the size and timestamps
 
