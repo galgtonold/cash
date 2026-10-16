@@ -188,6 +188,13 @@ class MutationRouting:
             rewatch=True,
         )
         run.est_fit = self._classifier.estimator_fit_receivers(tree, run.outputs)
+        if run.est_fit and _is_structure(tree):
+            # Stored and restored as outputs: the structure's own lineage
+            # update leaves them be (`_finalize_single_unit`), or a hit would
+            # move them on from the restored model, whose digest is not the
+            # fitted one's (equal dtypes that are one object in a fitted
+            # model, copies in a loaded one).
+            run.metrics["estimator_fits"] = sorted(run.est_fit)
         self._route_unit(run)
         return mut_pre_route, set(), set()
 
@@ -243,7 +250,10 @@ class MutationRouting:
                     # Seen running on new inputs: what it changes now is
                     # compared once it ran (`_observe_unit`).
                     run.loop_watch = run.code
-        run.in_place = set(changed) - run.outputs
+        # An estimator fitted in the body (`with warnings.catch_warnings():
+        # gs.fit(X, y)`) is stored as the fit at cell level is
+        # (`_route_receivers`).
+        run.in_place = set(changed) - run.outputs - run.est_fit
         if run.in_place:
             _skip(
                 run,

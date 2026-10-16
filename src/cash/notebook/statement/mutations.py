@@ -50,6 +50,23 @@ __all__ = ["MutationClassifier"]
 _FIT_METHODS = frozenset({"fit", "partial_fit", "fit_transform", "fit_predict"})
 
 
+def _with_bodies(tree: ast.Module | None) -> ast.Module | None:
+    """The statements inside *tree*'s top-level ``with`` blocks (and the
+    ``with`` blocks nested in those), as one module."""
+    if tree is None:
+        return None
+    body: list[ast.stmt] = []
+    pending = [node for node in tree.body if isinstance(node, (ast.With, ast.AsyncWith))]
+    while pending:
+        block = pending.pop(0)
+        for node in block.body:
+            if isinstance(node, (ast.With, ast.AsyncWith)):
+                pending.append(node)
+            else:
+                body.append(node)
+    return ast.Module(body=body, type_ignores=[]) if body else None
+
+
 class MutationClassifier:
     """Classifies a statement's method-call receivers and observes the ones
     it could not decide before execution."""
@@ -389,8 +406,12 @@ class MutationClassifier:
         an assignment (a fresh binding each run), already stored as outputs.
         """
         # The assignment form too: `X = vec.fit_transform(texts)` fits `vec`
-        # as it returns X.
-        candidates = standalone_method_call_receivers(tree) | assigned_method_call_receivers(tree)
+        # as it returns X. And a fit inside a `with` block
+        # (`with warnings.catch_warnings(): gs.fit(X, y)`): the block runs
+        # its body once, so it fits as the bare call does.
+        candidates: set[tuple[str, str]] = set()
+        for body in (tree, _with_bodies(tree)):
+            candidates |= standalone_method_call_receivers(body) | assigned_method_call_receivers(body)
         if not candidates:
             return set()
         receivers: set[str] = set()

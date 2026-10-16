@@ -30,6 +30,13 @@ CASES = {
         "clf.fit(X, y)",
         "print('P', backup is clf, hasattr(backup, 'classes_'), round(clf.score(X, y), 6))",
     ),
+    "inside_a_with_block": (
+        "import warnings\n"
+        "from sklearn.ensemble import RandomForestClassifier\n"
+        "clf = RandomForestClassifier(n_estimators=60, random_state=0)",
+        "with warnings.catch_warnings():\n    warnings.simplefilter('ignore')\n    clf.fit(X, y)",
+        "print('P', hasattr(clf, 'classes_'), round(clf.score(X, y), 6))",
+    ),
     "list_holder": (
         "from sklearn.ensemble import RandomForestClassifier\n"
         "clf = RandomForestClassifier(n_estimators=60, random_state=0)\n"
@@ -102,3 +109,36 @@ def test_a_bare_fit_hits_after_a_restart(nb_runner, case):
         assert not shows_cached(again), again
         facts = [line for line in again.splitlines() if line[:2] in ("P ", "Q ")]
         assert facts == [line for line in first.splitlines() if line[:2] in ("P ", "Q ")], (first, again)
+
+
+FITS = {
+    "bare": "clf.fit(X, y)",
+    "inside_a_with_block": "with warnings.catch_warnings():\n    warnings.simplefilter('ignore')\n    clf.fit(X, y)",
+}
+
+
+@pytest.mark.parametrize("fit", sorted(FITS))
+def test_a_cell_reading_the_fit_hits_after_a_restart(nb_runner, fit):
+    """The restored model leaves the cells below keyed as the fitted one
+    did: a restore that moved its lineage on made each of them run again."""
+    build = (
+        "import time, warnings\n"
+        "from sklearn.ensemble import RandomForestClassifier\n"
+        "clf = RandomForestClassifier(n_estimators=60, random_state=0)"
+    )
+    score = "def slow(m):\n    time.sleep(0.3)\n    return m.score(X, y)\ns = slow(clf)\nprint('S', s)"
+    cells = [SETUP, DATA, build, "# @cash:persist\n" + FITS[fit], score]
+    nb_runner.create_notebook(cells)
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    first = nb_runner.get_output(5)
+    assert "S " in first, first
+    nb_runner.settle_writes()
+
+    nb_runner.restart()
+    nb_runner._init_cash()
+    nb_runner.run_all()
+    assert shows_cached(nb_runner.get_output(4)), nb_runner.get_output(4)
+    again = nb_runner.get_output(5)
+    assert "CACHED: s = slow(clf)" in again, again
+    assert again.split("S ")[1].split()[0] == first.split("S ")[1].split()[0], (first, again)

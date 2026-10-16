@@ -160,8 +160,9 @@ the reasoning.
 A fit changes the estimator it is called on, and cash caches it all the same:
 `model.fit(X, y)`, `X_train = vec.fit_transform(train_texts)` and
 `labels = km.fit_predict(X)` store the fitted estimator with the statement,
-keyed on the data and on the estimator as built. After a restart, Run All
-restores the fitted model instead of training it again.
+keyed on the data and on the estimator as built. So is a fit inside a
+`with` block, such as `with warnings.catch_warnings():`. After a restart, Run
+All restores the fitted model instead of training it again.
 
 <!-- test:skip reason="illustrative: needs training data" -->
 ```python { .nb-cell }
