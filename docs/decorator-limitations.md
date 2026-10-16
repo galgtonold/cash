@@ -208,10 +208,12 @@ that code is yours. Yours means:
   cached function in `mytool.jobs` is keyed by the code it calls anywhere in
   `mytool`, even when `mytool` is installed with a plain `pip install`.
 
+<!-- claim: cash/decorator/environment_fold.py:EnvironmentFold._fold_library_versions @9c6400f4 -->
 Any other code in `site-packages` is a library, and that includes your team's
-internal package when it is installed with a plain `pip install`. cash keys a
-call into it by name and does not look inside, so after an upgrade the old
-results are still served.
+internal package when it is installed with a plain `pip install`. cash does not
+read a library's code; it puts the library's installed version in the key. So
+`pip install -U pandas` recomputes the calls that use pandas, and with the same
+versions installed, a call hits as before.
 
 <!-- claim: cash/install_paths.py:installed_outside_project @b6219f35, cash/install_paths.py:_record_tops @c35eade7 -->
 A package installed into a plain folder is a library too: `pip install
@@ -223,46 +225,23 @@ the script you run. A folder of source on `PYTHONPATH` with no such record,
 say a checkout of a shared module, stays your code, and so does a package
 installed into a folder inside your project. Its edits recompute.
 
-Pinning versions does not change this: the version is not part of the key. A
-pin keeps everyone on the same code; it does not make an upgrade recompute.
-After an upgrade that changes results, clear the affected entries
-(`f.cache_clear()` or [`cash clear --function`](cli.md#cash-clear-path-all)),
-or tell cash what to watch:
+What counts is a library the function, its helpers or the cached functions it
+calls name in their code (`np` in `np.mean(x)`, `Ridge` imported from
+scikit-learn, `read_csv` imported from pandas), and every package that library
+requires, as its install metadata lists them: a numpy upgrade under pandas
+recomputes a `pd.read_csv(...)` result too. A library's optional extras are
+left out. Only the version number is read, so changed code reinstalled under
+the same number (a team package rebuilt without a version bump) keeps the old
+results. Then clear the affected entries (`f.cache_clear()` or
+[`cash clear --function`](cli.md#cash-clear-path-all)), or tell cash what to
+watch:
 
 - **While you work on the package**, install it with `pip install -e`. Its
   code is then tracked like your project's.
 - **`depends_on=[teamlib.score]`** puts the source of that function, as
-  installed, in the key, so an upgrade that changes `score` recomputes. Only
-  that function's own code counts, not the functions it calls: an upgrade that
-  changes only a helper inside `teamlib` keeps the old results. Name each
-  function whose change matters.
-- **To recompute on every release**, depend on the installed version with a
-  `DataSource`. A new version number recomputes; changed code reinstalled
-  under the same version number does not.
-
-<!-- test:skip reason="needs an installed package named teamlib" -->
-```python
-import importlib.metadata
-
-import cash
-import teamlib
-
-
-class InstalledVersion(cash.DataSource):
-    def __init__(self, dist):
-        self.dist = dist
-
-    def get_id(self):
-        return f"installed:{self.dist}"
-
-    def state_token(self):
-        return importlib.metadata.version(self.dist)
-
-
-@cash.cache(depends_on=[InstalledVersion("teamlib")])
-def forecast(region):
-    return teamlib.score(region)
-```
+  installed, in the key, so a change to `score` recomputes. Only that
+  function's own code counts, not the functions it calls. Name each function
+  whose change matters.
 
 ## Reads cash cannot see
 
