@@ -13,15 +13,21 @@ processes and checking which spelling still returned the old value:
     mod.TABLE[k]()      global in a module     -> fresh
     fn()                parameter called       -> fresh
     map(fn, xs)         parameter to map       -> fresh
-    t = {...}; t[k]()   built in the body      -> STALE
+    t = {...}; t[k]()   built in the body      -> fresh
+    t.get(k)()          built in the body      -> fresh
+    r.table[k]()        attribute of a param   -> fresh
+    table[k]()          parameter              -> fresh
     vars(mod)[k]()      runtime namespace      -> STALE (runs uncached)
-    r.table[k]()        attribute of a param   -> STALE
+    ns = globals(); ns[k]()  runtime namespace -> STALE
 
 A module-level table is READ AS A GLOBAL, and hashing that global hashes the
-functions inside it -- so cash already tracks it. A callable passed as an
-ARGUMENT is hashed by its source, transitively. Both were warned about in an
-earlier revision of this rule; both warnings were wrong, and told the user to
-declare something cash already handles.
+functions inside it -- so cash already tracks it. A table built in the body
+names its functions there, so they are folded as globals the body reads. A
+callable passed as an ARGUMENT, or held in one, is hashed by its source,
+transitively. Each of these was warned about in an earlier revision of this
+rule; each warning was wrong, and told the user to declare something cash
+already handles (`test_a_table_built_in_the_body_or_held_by_an_argument_is_keyed`
+measures them).
 """
 
 from __future__ import annotations
@@ -130,15 +136,66 @@ def test_a_callable_ARGUMENT_is_NOT_flagged(tmp_path, fn, args):
     assert _run(_cash(tmp_path), fn, *args)[0] == ""
 
 
+def _local_dict(key):
+    table = {"a": alpha, "b": beta}
+    return table[key]()
+
+
+def _local_get(key):
+    table = {"a": alpha, "b": beta}
+    return table.get(key, beta)()
+
+
+def _local_list(key):
+    steps = [alpha, beta]
+    return steps[0 if key == "a" else 1]()
+
+
+def _argument_table(table, key):
+    return table[key]()
+
+
+def _through_a_temporary(key):
+    table = {"a": alpha}
+    fn = table[key]
+    return fn()
+
+
+@pytest.mark.parametrize(
+    "fn, args",
+    [
+        (_local_dict, ("a",)),
+        (_local_get, ("a",)),
+        (_local_list, ("a",)),
+        (_argument_table, (HANDLERS, "a")),
+        (_through_a_temporary, ("a",)),
+    ],
+)
+def test_a_table_built_INSIDE_the_body_or_passed_in_is_NOT_flagged(tmp_path, fn, args):
+    """Measured fresh: the body names the functions it puts in the table, and
+    a table passed in is an argument, keyed by the code it holds."""
+    assert _run(_cash(tmp_path), fn, *args) == ("", "")
+
+
+def test_a_body_table_is_NOT_flagged_alongside_depends_on(tmp_path):
+    """Naming the candidates as well changes nothing: nothing to warn about."""
+    c = _cash(tmp_path)
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        c.cache(depends_on=[alpha, beta])(_local_dict)("a")
+    assert [w for w in rec if issubclass(type(w.message), CashImpurityWarning)] == []
+
+
 # --------------------------- tables that cannot reach the key: MUST be flagged
-def test_a_table_built_INSIDE_the_body_warns(tmp_path):
-    """Measured STALE: the dict is a local, so its contents never reach the key."""
+def test_a_runtime_namespace_bound_to_a_local_warns(tmp_path):
+    """Measured STALE: `ns = globals(); ns[k]()` is `globals()[k]()` one line
+    apart; what it finds is named at run time."""
 
     def dispatch(key):
-        table = {"a": alpha, "b": beta}
-        return table[key]()
+        ns = globals()
+        return ns[key]()
 
-    verdict, message = _run(_cash(tmp_path), dispatch, "a")
+    verdict, message = _run(_cash(tmp_path), dispatch, "alpha")
     assert verdict == "warned"
     assert "depends_on" in message, "the warning must name the remedy"
 
@@ -161,9 +218,9 @@ def test_a_vars_namespace_lookup_runs_uncached(tmp_path):
     assert _run(_cash(tmp_path), dispatch, "lib_func", 1)[0] == "uncached"
 
 
-def test_a_table_on_a_PARAMETER_warns(tmp_path):
-    """Measured STALE: `r.table[k]()` -- the receiver is an argument, and its
-    attribute dict is not hashed as code."""
+def test_a_table_on_a_PARAMETER_is_NOT_flagged(tmp_path):
+    """Measured fresh: `r.table[k]()` -- the receiver is an argument, and the
+    functions its attribute holds are keyed by their code."""
 
     class Router:
         def __init__(self):
@@ -172,7 +229,7 @@ def test_a_table_on_a_PARAMETER_warns(tmp_path):
     def dispatch(r, key):
         return r.table[key]()
 
-    assert _run(_cash(tmp_path), dispatch, Router(), "a")[0] == "warned"
+    assert _run(_cash(tmp_path), dispatch, Router(), "a") == ("", "")
 
 
 def test_eval_hidden_in_a_body_local_dict_is_not_missed(tmp_path):
@@ -191,28 +248,28 @@ def test_a_lookup_through_a_TEMPORARY_warns_like_the_direct_form(tmp_path):
     form only warned."""
 
     def via_temporary(key):
-        table = {"a": alpha}
-        fn = table[key]
+        ns = globals()
+        fn = ns[key]
         return fn()
 
     def direct(key):
-        table = {"a": alpha}
-        return table[key]()
+        ns = globals()
+        return ns[key]()
 
     c = _cash(tmp_path)
-    assert _run(c, via_temporary, "a")[0] == _run(c, direct, "a")[0] == "warned"
+    assert _run(c, via_temporary, "alpha")[0] == _run(c, direct, "alpha")[0] == "warned"
 
 
 def test_rebinding_to_a_known_function_clears_the_taint(tmp_path):
     """The taint rule fires only when EVERY binding is dynamic."""
 
     def rebound(key):
-        table = {"a": alpha}
-        fn = table[key]
+        ns = globals()
+        fn = ns[key]
         fn = alpha
         return fn()
 
-    assert _run(_cash(tmp_path), rebound, "a")[0] == ""
+    assert _run(_cash(tmp_path), rebound, "alpha")[0] == ""
 
 
 # ------------------------------------------- the documented uncached-vectors

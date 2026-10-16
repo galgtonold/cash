@@ -120,7 +120,7 @@ uncached, and a large one (a frame, a model) is read on every call. A
 ## Code you pass as an argument
 
 A class or function of yours passed as an argument is keyed by its code and by
-what that code reads, so editing it recomputes. Three cases are not covered:
+what that code reads, so editing it recomputes. Two cases are not covered:
 
 - **Library classes and functions** are keyed by name, not code. See
   [Code in installed packages](#code-in-installed-packages).
@@ -129,24 +129,26 @@ what that code reads, so editing it recomputes. Three cases are not covered:
   code, the globals it reads and the values it captured (`make(3)` and
   `make(4)` key apart). Pass the function itself, with the bound values as
   arguments.
-- **An implementation picked from a table built inside the body**
-  (`handlers = {...}; handlers[name]()`) or from an attribute of an argument
-  (`router.table[name]()`) is not reached. Name the
-  candidates: `@cash.cache(depends_on=[FastPath, ExactPath])`. A module-level
-  table or registry is reached; see
-  [Dispatch tables and strategy registries](#dispatch-tables).
+
+A table of functions you pass in, or an attribute of an argument that holds
+one (`router.table[name](x)`), is part of that argument, so the functions in
+it are keyed the same way; see
+[Dispatch tables and strategy registries](#dispatch-tables).
 
 A marker class you pass but whose code never affects the result can be excluded
 with `@cash.opaque`; see [Purity markers](tutorials/feature-guides/purity-decorators.md#cashopaque-leave-a-class-out-of-the-key).
 
 ## Dispatch tables and strategy registries {#dispatch-tables}
 
-<!-- claim: cash/analysis/purity_visitor.py:PurityVisitor._table_is_reachable_from_the_key @f40e5656, cash/decorator/global_values.py:GlobalValues.data_callable_identity @f5ef89ae -->
-A cached function that picks a function from a module-level table caches
-correctly. The table can be a dict of functions, a registry a `@register`
-decorator fills, a dict of classes, or a `.get()` on any of them. cash reads
-the table as a global and keys it by the code of every function in it, so an
-edit to any of them recomputes:
+<!-- claim: cash/analysis/purity_visitor.py:PurityVisitor._table_is_reachable_from_the_key @9018bbca, cash/decorator/global_values.py:GlobalValues.data_callable_identity @f5ef89ae -->
+A cached function that picks a function from a table caches correctly. The
+table can be a dict of functions, a registry a `@register` decorator fills, a
+dict of classes, or a `.get()` on any of them, and it can live at module level,
+be built in the body (`handlers = {"a": fa, "b": fb}; handlers[name](x)`) or be
+passed in (`router.table[name](x)`). A module-level table is read as a global,
+a table built in the body names its functions there, and a table passed in is
+part of an argument; each is keyed by the code of every function in it and the
+helpers that code calls, so an edit to any of them recomputes:
 
 ```python
 import cash

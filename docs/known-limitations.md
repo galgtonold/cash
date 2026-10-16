@@ -88,10 +88,14 @@ kept apart from one made with it in another position, so a reseed or a restart
 does not bring back a value drawn elsewhere in its stream. Three gaps on an
 isolated re-run:
 
-- **A generator held by an object.** One reached only through an attribute
-  (`self.rng.normal()`, `model.rng`) is not followed: re-running a later draw
-  alone draws from wherever it is now. Draw from such a generator in the cell
-  that creates it.
+- **A generator held by an object cash does not rebuild.** One reached
+  through an attribute is followed when the object holding it is rebuilt for
+  the re-run (`self.rng` set in `__init__`, then `m.rng.normal()`). A class
+  attribute read through an instance (`c.rng`, `self.rng` in a method), a
+  module's or a function's is not: re-running a later draw alone draws from
+  wherever it is now, and cash warns
+  [RANDOM-HELD-GENERATOR](warnings.md#random-held-generator). Draw from such a
+  generator in the cell that creates it, or hold it in a variable.
 - **A cache kept only in memory, after a restart.** Which generator a cheap
   draw moved is noted on disk for the next kernel. Without a disk tier that
   note is gone, and cash recognises the generator only by the call that made
@@ -362,9 +366,13 @@ out = summarize(s)  # cell 2: re-run this alone...
 s.iloc[0] = 1e9     # cell 3: ...and it does not see this
 ```
 
-cash answers cell 2 as a top-to-bottom run would, so it computes with `0.0`
-while the live `s` holds `1e9`. **Fix:** move the change above the cells that
-must see it, or make it a new value (`s = s.copy(); s.iloc[0] = 1e9`).
+<!-- claim: cash/notebook/upstream/changed_below.py:warn_changed_below @bbf25145 -->
+cash answers cell 2 as a top-to-bottom run would: it rebuilds `s` as cell 1
+leaves it, so cell 2 computes with `0.0`, and `s` holds `0.0` until cell 3 runs
+again. cash warns [NOTEBOOK-CHANGED-BELOW](warnings.md#notebook-changed-below)
+when this happens, naming the variable and the cell that changed it.
+**Fix:** move the change above the cells that must see it, or run cell 3 again
+after the re-run.
 
 ### Changing and rebinding the same name in one cell
 
@@ -463,6 +471,11 @@ object, `vars(self)` and a library's own lookups (`namedtuple`) do not count.
 A thread that changes data after its cell has finished is outside cash's view.
 An earlier cell re-run can see the changed data.
 
+<!-- claim: cash/notebook/background_threads.py:BackgroundThreads.cell_ends @b6d8c938 -->
+cash names a cell that ends while a thread it started, running your code, is
+still alive: [NOTEBOOK-THREAD-ALIVE](warnings.md#notebook-thread-alive).
+**Fix:** join the thread before the cell ends (`t.join()`).
+
 ### A loop variable changed before it is read
 
 <!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @5304abe8 -->
@@ -477,6 +490,8 @@ for q in [[1], [1]]:           # two iterations, equal when bound
     accm.append(pull(handle))  # 2nd iteration gets the 1st's result
 ```
 
+cash warns [KEY-LOOP-VAR-CHANGED](warnings.md#key-loop-var-changed) when a
+loop body changes its loop variable in place before work it caches for each pass.
 **Fix:** make the distinguishing value part of the `for` target:
 `for i, base in enumerate(items):`. Only names bound by the `for` statement reach
 the per-iteration key. If there is no such value, put `# @cash:no-cache` above
@@ -523,7 +538,7 @@ recorded by their entry points.
 
 ### A file read into a memo before cash was imported
 
-<!-- claim: cash/__init__.py:_watch_reads_from_import @072f3639 -->
+<!-- claim: cash/__init__.py:_watch_reads_from_import @0d64857e -->
 **Symptom:** a cached function gets its config from a loader memoised with
 `functools.lru_cache`, you edit the config file, and the function returns
 the old result with no warning.
@@ -533,6 +548,11 @@ ran before that (it was imported, and called, ahead of `cash`) read the file
 where cash could not see it, so later calls get the memo and record no file.
 A loader first called after `import cash` is recorded, even when that call
 came from outside any cached function.
+
+<!-- claim: cash/tracking/memos_before_import.py:find_memos_filled_before_import @e09c920f -->
+At `import cash`, cash names each memo of yours (`lru_cache`, `cache`)
+that already holds results:
+[KEY-MEMO-BEFORE-IMPORT](warnings.md#key-memo-before-import).
 
 **Fix:** import `cash` before the modules that load config, or pass the path
 as an argument (`load_cfg("config.yaml")` inside the cached function).

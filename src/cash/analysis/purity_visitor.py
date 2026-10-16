@@ -59,7 +59,7 @@ from .purity_report import (
     ISSUE_UNTRACKABLE_DEP,
     PurityIssue,
 )
-from .static_dispatch import computed_namespace_lookup
+from .static_dispatch import computed_namespace_lookup, namespace_spelled
 
 #: What a `network_read` finding names as the source of the answer.
 _SOURCE: dict[EffectKind, str] = {EffectKind.NETWORK_READ: "server", EffectKind.DB_READ: "database"}
@@ -184,6 +184,7 @@ class PurityVisitor(ast.NodeVisitor):
         "_assign_kinds",
         "_name_call_nodes",
         "_subscript_call_nodes",
+        "_lookup_bases",
         "_fresh_nodes",
         "_log_only",
         "_namespace",
@@ -250,6 +251,9 @@ class PurityVisitor(ast.NodeVisitor):
         # Calls whose function is a Subscript, judged in `finalize_taint`
         # once every local assignment in the body is known.
         self._subscript_call_nodes: list[ast.Call] = []
+        # For a local bound from a subscript (``f = TABLE[k]``), the table
+        # each such binding read: the call through the local is judged by it.
+        self._lookup_bases: dict[str, list[ast.AST]] = {}
         self._param_names = param_names
         #: Loop variables over a parameter (``for r in rows``): changing one
         #: changes an element of the caller's object.
@@ -435,6 +439,18 @@ class PurityVisitor(ast.NodeVisitor):
                 return True
         return False
 
+    def _holds_a_dynamic_source(self, value: ast.AST) -> bool:
+        """True when *value* is a literal table holding one
+        (``{"run": eval}``): calling what it yields runs code named at run
+        time, which the key cannot reach however the table is reached."""
+        if isinstance(value, ast.Dict):
+            elements = [v for v in value.values if v is not None]
+        elif isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+            elements = list(value.elts)
+        else:
+            return False
+        return any(self._is_dynamic_source(e) or self._holds_a_dynamic_source(e) for e in elements)
+
     def finalize_taint(self) -> None:
         """Flag calling a local that was bound ONLY from a dynamic source.
 
@@ -462,7 +478,9 @@ class PurityVisitor(ast.NodeVisitor):
                         line=getattr(node, "lineno", 0),
                     )
                 )
-            elif name in looked_up:
+            elif name in looked_up and not all(
+                self._table_is_reachable_from_the_key(base) for base in self._lookup_bases.get(name, ())
+            ):
                 self.issues.append(
                     PurityIssue(
                         kind=ISSUE_DYNAMIC_PATTERN,
@@ -494,28 +512,36 @@ class PurityVisitor(ast.NodeVisitor):
             )
 
     def _table_is_reachable_from_the_key(self, base: ast.AST) -> bool:
-        """True when cash already folds this dispatch table into the key.
+        """True when cash already folds the functions in this dispatch table
+        into the key.
 
-        A module-level table -- ``MODELS[k]()``, ``mod.MODELS[k]()`` -- is read
+        A module-level table (``MODELS[k]()``, ``mod.MODELS[k]()``) is read
         as a global, and hashing that global hashes the functions inside it.
-        Measured: editing any function IN the table invalidates (even one never
-        dispatched to), while editing one outside it does not. Warning there
-        would tell the user to declare something cash already tracks, on the
-        single most common dispatch idiom there is.
+        A table the body builds (``t = {"a": fa}; t[k]()``) names its
+        functions in the body, so they are folded as globals the body reads.
+        A table a parameter holds (``table[k]()``, ``router.table[k]()``)
+        is part of an argument, and an argument that holds a function is
+        keyed by its code. Measured for each: editing a function in the
+        table, or a helper it calls, recomputes.
 
-        A table that is a body-local, a parameter, an attribute of one, or a
-        runtime namespace (``globals()[k]``, ``vars(mod)[k]``) never reaches the
-        key. Those measurably serve STALE results, and are what this rule is
-        for.
+        What does not reach the key is a runtime namespace (``globals()[k]``,
+        ``vars(mod)[k]``, ``obj.__dict__[k]``, or a local bound to one or to
+        a dynamic lookup) and a table some call returns.
         """
         root = base
-        while isinstance(root, ast.Attribute):
-            root = root.value
+        while True:
+            if namespace_spelled(root) is not None:
+                return False
+            if isinstance(root, (ast.Attribute, ast.Subscript)):
+                root = root.value
+                continue
+            break
         if isinstance(root, ast.Call):
-            return False  # globals()[k], vars(mod)[k]
-        if not isinstance(root, ast.Name):
-            return False
-        return not (root.id in self._param_names or root.id in self._assign_kinds)
+            return False  # what a call returns: not judged here
+        if isinstance(root, ast.Name):
+            kinds = self._assign_kinds.get(root.id, set())
+            return not (kinds & {"dynamic", "namespace"})
+        return True
 
     def _record_call(self, node: ast.Call) -> None:
         """Judge one call by the first rule in `_CALL_RULES` that claims it; a
@@ -960,13 +986,16 @@ class PurityVisitor(ast.NodeVisitor):
         # Record the RHS kind for a simple ``name = ...`` so a dynamically-bound
         # local that is later called can be flagged (see finalize_taint).
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            if self._is_dynamic_source(node.value):
+            if self._is_dynamic_source(node.value) or self._holds_a_dynamic_source(node.value):
                 kind = "dynamic"
+            elif namespace_spelled(node.value) is not None:
+                kind = "namespace"  # `ns = globals()`: `ns[k]()` is `globals()[k]()`
             elif isinstance(node.value, ast.Subscript):
                 # `cls = REGISTRY[k]; cls()` is the same runtime lookup as
                 # `REGISTRY[k]()` one line apart, and must not be punished
                 # harder for using a temporary: it warns, it does not raise.
                 kind = "lookup"
+                self._lookup_bases.setdefault(node.targets[0].id, []).append(node.value.value)
             else:
                 kind = "other"
             self._assign_kinds.setdefault(node.targets[0].id, set()).add(kind)
