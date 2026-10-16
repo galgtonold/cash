@@ -73,6 +73,7 @@ from ...tracking.file_dep_snapshot import begin_file_state_epoch, end_file_state
 from ...tracking.function_tracker import is_local_module
 from ...tracking.randomness import get_drawing_rng_modules, rng_lineage_fingerprint
 from .._protocols import ShellProtocol
+from ..background_threads import BackgroundThreads
 from ..cache_status import CacheStatus
 from ..control_structures import contains_top_level_await, is_control_structure
 from ..statement import ProcessResult
@@ -496,6 +497,7 @@ class CellExecutor:
         self._upstream_checker = upstream_checker
         self._module_invalidator = module_invalidator
         self._control_structure_processor = control_structure_processor
+        self._threads = BackgroundThreads()
         self._upstream = UpstreamResolution(
             shell,
             badges,
@@ -660,14 +662,30 @@ class CellExecutor:
         logger.debug("[TIMING_PROXY] Start executing statements")
         self._statement_processor.begin_cell_rng_observation()
         self._statement_processor.begin_cell_statement_log()
+        self._threads.cell_starts()
         # Remote freshness checks (a cached function reading s3:// and friends)
         # are network round trips that land on the HIT path, where the badge
         # reports a saving and nothing reports what establishing it cost.
-        with _measured_validation(sink=cell.timing_breakdown):
-            yield
+        try:
+            with _measured_validation(sink=cell.timing_breakdown):
+                yield
+        finally:
+            self._warn_threads_left_running(cell)
         t_persist = _perf_counter()
         self._statement_processor.end_cell_persistence()
         cell.timing_breakdown["persist_final"] = _perf_counter() - t_persist
+
+    def _warn_threads_left_running(self, cell: _CellRun) -> None:
+        """NOTEBOOK-THREAD-ALIVE for a thread of the user's this cell started
+        and left running."""
+        try:
+            found = self._upstream_checker.last_found_cell
+            number = found[1] + 1 if found is not None and found[0] == cell.raw_cell else None
+            self._threads.cell_ends(cell.raw_cell, number)
+        except Warning:
+            raise  # an "error" warning filter asked for it
+        except Exception:  # noqa: BLE001 - a diagnostic must never break a cell
+            pass
 
     def _complete_cell(
         self,

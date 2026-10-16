@@ -465,6 +465,11 @@ object, `vars(self)` and a library's own lookups (`namedtuple`) do not count.
 A thread that changes data after its cell has finished is outside cash's view.
 An earlier cell re-run can see the changed data.
 
+<!-- claim: cash/notebook/background_threads.py:BackgroundThreads.cell_ends @9fdaf2e9 -->
+cash names a cell that ends while a thread it started, running your code, is
+still alive: [NOTEBOOK-THREAD-ALIVE](warnings.md#notebook-thread-alive).
+**Fix:** join the thread before the cell ends (`t.join()`).
+
 ### A loop variable changed before it is read
 
 <!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @5304abe8 -->

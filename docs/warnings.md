@@ -84,7 +84,7 @@ its warning class.
 | [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
 | [Side effects](#impure-codes) | `IMPURE-` | 4 | The function does something a cache hit will not repeat. |
 | [Cache keys](#key-codes) | `KEY-` | 25 | Something the result depends on may not be in the cache key. |
-| [Notebook](#notebook-codes) | `NOTEBOOK-` | 11 | Notebook-wide machinery rather than one statement. |
+| [Notebook](#notebook-codes) | `NOTEBOOK-` | 15 | Notebook-wide machinery rather than one statement. |
 | [Randomness](#random-codes) | `RANDOM-` | 3 | A cached value that randomness makes non-reproducible. |
 | [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
 | [Storing results](#store-codes) | `STORE-` | 8 | The call succeeded, but its result was not written. |
@@ -1664,6 +1664,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
 | [NOTEBOOK-SHARE-UNCHECKED](#notebook-share-unchecked) | notebook | not every variable sharing an object with a statement's outputs was found in time |
 | [NOTEBOOK-SHARED-KEPT](#notebook-shared-kept) | notebook | a value a variable below shares is kept as it is for a cell re-run on its own |
+| [NOTEBOOK-THREAD-ALIVE](#notebook-thread-alive) | notebook | a thread the cell started still runs after the cell ended |
 
 ### NOTEBOOK-ANALYSIS-BUDGET {#notebook-analysis-budget}
 
@@ -1999,6 +2000,29 @@ the top, or from the cell that creates the value.
 
 **When it is safe to ignore.** When the cell's change is meant to accumulate,
 or applying it twice does not change the result (`s.add(x)` on a set).
+
+### NOTEBOOK-THREAD-ALIVE {#notebook-thread-alive}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/background_threads.py:BackgroundThreads.cell_ends @9fdaf2e9, cash/notebook/background_threads.py:user_code_of @310cd8c4 -->
+**What happened.** A cell started a thread and finished while the thread
+was still running. The message names the cell, the thread and the function
+it runs. Only a thread that runs your own code counts: a pool's idle
+workers or a library's helper thread run the library's code and are left
+out. It is shown once per cell.
+
+**Why it matters.** What the thread changes after the cell finished (a list
+it fills, a file it writes) is outside cash's view. The statements that read
+those values were keyed and stored on what they held when the cell ended,
+and a cell above that is re-run can see the changed values.
+
+**What to do.** Join the thread before the cell ends (`t.join()`), or have
+it hand back its result (`future.result()` with `concurrent.futures`) in the
+cell that uses it.
+
+**When it is safe to ignore.** When the thread changes nothing a cell reads,
+such as a progress display or a server you query from outside the notebook.
 
 ## Randomness {#random-codes}
 
