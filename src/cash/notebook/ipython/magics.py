@@ -1293,6 +1293,9 @@ class CashMagics(Magics):
             }
             if served[0] or served[1]:
                 row["calls"] = {"restored": served[0], "computed": served[1], "saved_time": served[2]}
+            if m.get("skipped_reason"):
+                # Why its value was not kept: computed again on the next run.
+                row["skipped_reason"] = m["skipped_reason"]
             statements.append(row)
         self._last_cell_metrics = {
             "statements": statements,

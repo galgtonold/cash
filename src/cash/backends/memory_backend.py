@@ -877,7 +877,11 @@ class InMemoryBackend(CacheBackend):
             if record_cells is not None and mutable is False and arrow:
                 # Stored: columns the tier already keeps are not copied again.
                 reuse = shared_blocks.BlockReuse.for_frame(frame)
+            timed = shared_blocks.bytes_to_copy(frame) if record_cells is not None and frame.ndim == 2 else 0
+            started = time.perf_counter()
             copied = frame_sharing.copy_keeping_blocks(frame, arrow=arrow, reuse=reuse)
+            if timed >= _STORE_TIMED_BYTES:
+                _note_store_copy_speed(timed, time.perf_counter() - started)
         if not _own_metadata(frame, copied):
             # An attribute deepcopy refuses: the pickle round trip copies it,
             # as a disk hit would.
@@ -2535,6 +2539,57 @@ def copy_seconds(nbytes: int) -> float:
 
 
 _PROBE_BYTES = 8 << 20
+
+#: Bytes per second the stores of tables copied at, the fastest of the last
+#: `_COPY_READINGS`. Apart from `_COPY_SPEED`: a stored table is copied into
+#: fresh pages, which on some machines took five times as long as the
+#: copy of an array whose pages were reused, and a hit's cost is priced by
+#: the latter.
+_STORE_COPY_SPEED: list[float] = []
+
+#: Smaller table stores are not timed: a copy that fits in pages the
+#: process has just freed runs ten times faster than a big one. Timed by
+#: the wall clock: in a virtual machine the faults on fresh pages are
+#: mostly spent outside the thread's CPU time, and they are the cost.
+_STORE_TIMED_BYTES = 16 << 20
+
+
+def _note_store_copy_speed(nbytes: int, seconds: float) -> None:
+    if seconds <= 0:
+        return
+    _STORE_COPY_SPEED.append(nbytes / seconds)
+    del _STORE_COPY_SPEED[:-_COPY_READINGS]
+
+
+def store_copy_seconds(value: Any) -> float | None:
+    """What storing *value* in this tier costs in copying, at the speed
+    stores of tables were measured at (`_STORE_COPY_SPEED`, else
+    `copy_seconds`), or None when the tier cannot say: a numpy array
+    of plain data, or a pandas table it shares (its blocks the tier copied
+    before and Arrow data left out, `shared_blocks.bytes_to_copy`). Any
+    other value -- Python objects, a table copied deep -- is None."""
+    kind = type(value)
+    try:
+        if _is_pandas_frame(kind):
+            dtypes = [value.dtype] if value.ndim == 1 else list(value.dtypes)
+            if any(str(dtype) == "object" for dtype in dtypes):
+                return None
+            if not (frame_sharing.enabled() and frame_sharing.freezable(value)):
+                return None
+            if value.ndim == 1:
+                nbytes = int(value.array.nbytes) if getattr(value.array, "_pa_array", None) is None else 0
+            else:
+                nbytes = shared_blocks.bytes_to_copy(value)
+            if _STORE_COPY_SPEED:
+                return nbytes / max(_STORE_COPY_SPEED)
+            return copy_seconds(nbytes)
+        if kind.__name__ == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
+            if not value.dtype.hasobject:
+                return copy_seconds(value.nbytes)
+    except Exception:
+        logger.debug("no store cost for a %s", kind.__name__, exc_info=True)
+    return None
+
 
 #: What a hit of a table the tier shares costs (`frame_sharing`): a shallow
 #: copy, whatever its size.

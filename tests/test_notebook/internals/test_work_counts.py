@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import sys
 
+import pytest
+
 from cash.notebook.call_key import CallKeys
 from cash.notebook.statement import StatementProcessor
 from tests._cell_driver import run_cash_cell
-from tests._work_counts import deepcopy_steps, hashed_bytes, method_calls, pickled_bytes
+from tests._work_counts import deepcopy_steps, hashed_bytes, method_calls, pickled_bytes, ram_copied_bytes
+from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 KB = 1024
 
@@ -112,3 +115,92 @@ def test_a_fast_cell_draws_its_badge_twice(cash_magics):
 
     # Three before: RUNNING, the first statement's progress, DONE.
     assert renders.calls == 2, renders.calls
+
+
+def test_a_cell_adding_columns_to_a_table_copies_each_column_once(cash_magics):
+    """``df["hour"] = ...`` statement after statement: each stores the table
+    again, and the RAM tier copied all of it each time (440 MB a statement
+    for a 2.9-million-row table). It copies the new column now, and takes
+    the others from the entry before."""
+    from cash.backends import frame_sharing
+
+    pytest.importorskip("pandas")
+    if not frame_sharing.enabled():
+        pytest.skip("needs pandas copy-on-write")
+    n = 200_000
+    run_cash_cell(
+        cash_magics,
+        "import time\nimport numpy as np\nimport pandas as pd\n"
+        "def slow(s):\n"
+        f"    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n"
+        "    return s * 2",
+    )
+    cell = (
+        f"df = pd.DataFrame({{'a': np.arange({n}, dtype=float), 'b': np.ones({n}), 'c': np.zeros({n})}})\n"
+        "df['d'] = slow(df['a'])\n"
+        "df['e'] = slow(df['b'])\n"
+        "df['f'] = slow(df['c'])"
+    )
+    with ram_copied_bytes() as copied:
+        run_cash_cell(cash_magics, cell)
+    df = cash_magics.shell.user_ns["df"]
+    assert list(df.columns) == ["a", "b", "c", "d", "e", "f"]
+    column = n * 8
+    # Three stored versions of a growing table: each new column copied once
+    # (3 columns) beside the first version's 3 -- ~6 columns today; every
+    # version copied whole was 4 + 5 + 6 = 15.
+    assert column * 3 <= copied.bytes <= column * 8, copied.bytes / column
+
+
+_CLEANING_CELL = (
+    "df = (time.sleep({s}), pd.DataFrame({{'a': np.arange(200_000.0), 'z': np.zeros(200_000)}}))[1]\n"
+    "df = (time.sleep({s}), df[df['a'] > 5])[1]\n"
+    "df['b'] = (time.sleep({s}), df['a'] * 2)[1]"
+).format(s=ABOVE_PERSISTENCE_FLOOR_S)
+
+
+def _cleaning_cell_work(cash_magics, monkeypatch, bytes_per_second: float):
+    from cash.backends import frame_sharing, memory_backend
+
+    pytest.importorskip("pandas")
+    if not frame_sharing.enabled():
+        pytest.skip("needs pandas copy-on-write")
+    run_cash_cell(cash_magics, "import time\nimport numpy as np\nimport pandas as pd")
+    # The speed table stores were measured at: what a copy is priced by.
+    monkeypatch.setattr(memory_backend, "_STORE_COPY_SPEED", [bytes_per_second])
+    with ram_copied_bytes() as copied:
+        run_cash_cell(cash_magics, _CLEANING_CELL)
+    rows = cash_magics.cash_status("dict")["last_cell"]["statements"]
+    return copied, [row.get("skipped_reason") for row in rows]
+
+
+def test_an_intermediate_dearer_to_copy_than_to_compute_is_not_copied(cash_magics, monkeypatch):
+    """``df = df[...]`` again and again in a cleaning cell: each version was
+    copied into the RAM tier, though only a re-run of part of the cell could
+    restore it, and on a 2.9-million-row table each copy cost more than the
+    filter. A version every name of which the cell rebinds later, and whose
+    copy costs more than computing it did, is kept out of RAM now; the
+    cell's last version is stored as before."""
+    from cash.notebook.statement.store import KEPT_OUT_OF_RAM
+
+    copied, reasons = _cleaning_cell_work(cash_magics, monkeypatch, 1e6)  # 1 MB/s: dear
+    assert [bool(r and r.startswith(KEPT_OUT_OF_RAM)) for r in reasons] == [True, True, False], reasons
+    df = cash_magics.shell.user_ns["df"]
+    # The last version alone is copied: 3 columns of ~200,000 rows (8 bytes),
+    # where every version copied was 2 + 2 + 3.
+    assert copied.bytes <= 3 * 200_000 * 8 + 4096, copied.bytes
+    assert list(df.columns) == ["a", "z", "b"] and len(df) == 200_000 - 6
+
+    # The cell run again is served by its last version.
+    run_cash_cell(cash_magics, "df = None")
+    run_cash_cell(cash_magics, _CLEANING_CELL)
+    rows = cash_magics.cash_status("dict")["last_cell"]["statements"]
+    assert str(rows[-1]["status"]).endswith("RESTORED"), rows
+    assert cash_magics.shell.user_ns["df"]["b"].iloc[0] == 12.0
+
+
+def test_an_intermediate_cheap_to_copy_is_still_kept(cash_magics, monkeypatch):
+    """Positive control: priced at a fast copy, every version is stored."""
+    copied, reasons = _cleaning_cell_work(cash_magics, monkeypatch, 1e12)
+    assert reasons == [None, None, None], reasons
+    assert copied.bytes >= (2 + 2) * 200_000 * 8

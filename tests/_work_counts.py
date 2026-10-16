@@ -140,6 +140,25 @@ def deepcopy_steps() -> Iterator[Count]:
 
 
 @contextlib.contextmanager
+def ram_copied_bytes() -> Iterator[Count]:
+    """Blocks of pandas tables the RAM tier copies inside the block, and
+    their bytes: each goes through `frame_sharing._copy_values`."""
+    from cash.backends import frame_sharing
+
+    count = Count()
+    real = frame_sharing._copy_values
+
+    def copy_values(values, *args, **kwargs):
+        count.calls += 1
+        count.bytes += int(getattr(values, "nbytes", 0))
+        return real(values, *args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(frame_sharing, "_copy_values", copy_values)
+        yield count
+
+
+@contextlib.contextmanager
 def method_calls(owner, name: str) -> Iterator[Count]:
     """Calls of ``owner.name`` (a function or method) inside the block."""
     count = Count()
