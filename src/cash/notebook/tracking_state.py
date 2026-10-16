@@ -115,8 +115,13 @@ class TrackingState:
     # The notebook position (0-based) of the cell whose own statements run
     # now; None while the upstream check rebuilds the cells above it, and
     # when the check could not place the cell. For warnings that name it.
-    # W: UpstreamChecker. R: ForLoopHandler.
+    # W: UpstreamChecker. R: ForLoopHandler, StatementRandomness.
     running_cell: int | None = None
+
+    # Whether that cell runs on its own: not the first cell, and not right
+    # after the cell above it (a re-run, or out of order).
+    # W: UpstreamChecker. R: StatementRandomness.
+    running_cell_rerun: bool = False
 
     # sha256(cell source) -> the global RNG state after that cell ran, so a
     # downstream draw can be restored to its position-correct state.

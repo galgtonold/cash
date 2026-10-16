@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @bc4412e5 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @43c50c78 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -85,7 +85,7 @@ its warning class.
 | [Side effects](#impure-codes) | `IMPURE-` | 4 | The function does something a cache hit will not repeat. |
 | [Cache keys](#key-codes) | `KEY-` | 25 | Something the result depends on may not be in the cache key. |
 | [Notebook](#notebook-codes) | `NOTEBOOK-` | 15 | Notebook-wide machinery rather than one statement. |
-| [Randomness](#random-codes) | `RANDOM-` | 3 | A cached value that randomness makes non-reproducible. |
+| [Randomness](#random-codes) | `RANDOM-` | 4 | A cached value that randomness makes non-reproducible. |
 | [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
 | [Storing results](#store-codes) | `STORE-` | 8 | The call succeeded, but its result was not written. |
 
@@ -2032,9 +2032,35 @@ A cached value that randomness makes non-reproducible. Every code here starts `R
 
 | Code | Applies to | Meaning |
 |---|---|---|
+| [RANDOM-HELD-GENERATOR](#random-held-generator) | notebook | a cell re-run on its own draws from a generator held by an object, from where it stands |
 | [RANDOM-REPLAYED](#random-replayed) | notebook | a restored value is an earlier random draw |
 | [RANDOM-SEED-NONE](#random-seed-none) | notebook | `seed(None)` cannot refresh cached values |
 | [RANDOM-UNSEEDED](#random-unseeded) | both | a draw from an unseeded source is not reproducible |
+
+### RANDOM-HELD-GENERATOR {#random-held-generator}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashRandomnessWarning</span>
+
+<!-- claim: cash/notebook/statement/held_generators.py:HeldGenerators.before_run @57d870a1, cash/tracking/randomness/detect.py:attribute_draws @9a5150b6 -->
+**What happened.** You ran a cell on its own (again, or not right after the
+cell above it), and a statement in it draws from a generator reached through
+an attribute: `c.rng.normal()` with `rng` a class attribute, `mod.rng`,
+`f.rng`, or `self.rng.normal()` in a method of yours the statement calls. The
+generator is the one the statement drew from last time, and it has moved on
+since. cash does not put such a generator back where a run from the top has
+it, so the draw continues from where the last run left it. The message names
+the cell, the statement and the generator, once per statement.
+
+**Why it matters.** The numbers differ from the ones a run from the top
+gives. A generator held in a variable (`rng.normal()`), or by an object the
+re-run rebuilds (`self.rng` set in `__init__`), is put back, and does not warn.
+
+**What to do.** Draw from such a generator in the cell that creates it, or
+hold it in a variable and draw from that. For the numbers a run from the top
+gives, run the notebook from the top.
+
+**When it is safe to ignore.** When the draw only needs to be random, not the
+same as a run from the top.
 
 ### RANDOM-REPLAYED {#random-replayed}
 

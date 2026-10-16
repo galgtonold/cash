@@ -331,6 +331,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "NOTEBOOK-SHARED-KEPT",  # a value another name below still shares
         # is kept as it is rather than rebuilt for a cell re-run on its own
         # -- RANDOM: a cached value that randomness makes non-reproducible ------
+        "RANDOM-HELD-GENERATOR",  # a cell re-run on its own draws from a generator
+        # held by an object, which cash does not put back where a run from the top has it
         "RANDOM-REPLAYED",  # what you are seeing is a replay of an earlier
         # draw, not a fresh one
         "RANDOM-SEED-NONE",  # seed(None) cannot refresh cached values below

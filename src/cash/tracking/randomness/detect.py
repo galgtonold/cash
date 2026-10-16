@@ -19,6 +19,7 @@ from typing import NamedTuple
 
 from cash.control_markers import strip_markers
 
+from ...analysis.ast_util import parse_cached
 from ...diagnostics import warn_diagnostic
 from ...exceptions import CashWarning
 
@@ -1589,3 +1590,62 @@ def mints_unseeded_generator(code: str) -> bool:
         if name == "SystemRandom" or not _rng_constructor_is_seeded(node):
             return True
     return False
+
+
+class AttributeDraw(NamedTuple):
+    """``m.rng.normal()``: a draw off an object reached through attributes.
+
+    ``root`` is the name the chain starts from (``m``), ``attrs`` the
+    attributes from there to the receiver (``("rng",)``), ``line`` the line
+    of the call. With ``method`` set, the chain is a call of a method of the
+    object (``m.sample()``), whose own body may draw from ``self.rng``.
+    """
+
+    root: str
+    attrs: tuple[str, ...]
+    line: int
+    method: str | None = None
+
+
+def _attribute_chain(node: ast.expr) -> tuple[str, tuple[str, ...]] | None:
+    attrs: list[str] = []
+    while isinstance(node, ast.Attribute):
+        attrs.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    return node.id, tuple(reversed(attrs))
+
+
+@functools.lru_cache(maxsize=4096)
+def attribute_draws(code: str, self_name: str | None = None) -> tuple[AttributeDraw, ...]:
+    """The draws in *code* off an object reached through at least one
+    attribute (``self.rng.normal()``, ``model.rng.integers(5)``), and the
+    method calls on a name (``m.sample()``) whose body may hold such a draw.
+
+    Read from the text alone: whether ``m.rng`` is a generator is for the
+    caller to settle on the live object. With *self_name*, only chains from
+    that name count (the first parameter of a method) and method calls are
+    not listed. A draw off a name (``rng.normal()``) is followed by its
+    variable and not listed.
+    """
+    if "." not in code:
+        return ()
+    tree = parse_cached(strip_markers(code))
+    if tree is None:
+        return ()
+    found: list[AttributeDraw] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        chain = _attribute_chain(node.func.value)
+        if chain is None:
+            continue
+        root, attrs = chain
+        if self_name is not None and root != self_name:
+            continue
+        if node.func.attr in _ANY_CARRIER_DRAW_FUNCTION and attrs:
+            found.append(AttributeDraw(root, attrs, node.lineno))
+        elif self_name is None and not attrs and root not in MODULE_ALIASES:
+            found.append(AttributeDraw(root, (), node.lineno, method=node.func.attr))
+    return tuple(found)

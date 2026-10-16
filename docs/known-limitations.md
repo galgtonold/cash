@@ -90,10 +90,14 @@ kept apart from one made with it in another position, so a reseed or a restart
 does not bring back a value drawn elsewhere in its stream. Four gaps on an
 isolated re-run:
 
-- **A generator held by an object.** One reached only through an attribute
-  (`self.rng.normal()`, `model.rng`) is not followed: re-running a later draw
-  alone draws from wherever it is now. Draw from such a generator in the cell
-  that creates it.
+- **A generator held by an object cash does not rebuild.** One reached
+  through an attribute is followed when the object holding it is rebuilt for
+  the re-run (`self.rng` set in `__init__`, then `m.rng.normal()`). A class
+  attribute read through an instance (`c.rng`, `self.rng` in a method), a
+  module's or a function's is not: re-running a later draw alone draws from
+  wherever it is now, and cash warns
+  [RANDOM-HELD-GENERATOR](warnings.md#random-held-generator). Draw from such a
+  generator in the cell that creates it, or hold it in a variable.
 - **An edited seed cell you did not re-run.** Edit `np.random.seed(0)` to
   `seed(1)` and run only a later draw: the draw does not see the new seed,
   because a bare `seed()` binds no variable. Re-run the seed cell after editing
