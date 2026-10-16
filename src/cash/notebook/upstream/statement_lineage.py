@@ -820,6 +820,7 @@ class StatementLineage:
             record=lambda t, h: virtual_lineage.__setitem__(t, h),
             present=lambda t: True,
             skip=moved,
+            code=stmt_code,
         )
         if is_import:
             for out in outputs:
@@ -1209,6 +1210,7 @@ class StatementLineage:
             record=lambda t, h: virtual_lineage.__setitem__(t, h),
             present=lambda t: True,
             skip=lookup.bumped,
+            code=stmt_code,
         )
         outputs = outputs | bumped
 

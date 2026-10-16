@@ -798,6 +798,9 @@ class GaveUp:
     names: set[str] = dataclasses.field(default_factory=set)
     links: list[tuple[frozenset[str], frozenset[str]]] = dataclasses.field(default_factory=list)
     complete: bool = True
+    #: The modules whose namespace was found holding an object of the
+    #: outputs, by their ``sys.modules`` name.
+    modules: set[str] = dataclasses.field(default_factory=set)
 
     def add(self, owners: Iterable[str], holders: Iterable[str]) -> None:
         """Note that *holders* share an object with *owners*."""
@@ -868,6 +871,7 @@ def share_group(
         for owners, holders in links:
             gave_up.add(owners, (name for name in holders if not foreign(name)))
         gave_up.add(shared, (name for name in partial.names if not foreign(name)))
+        gave_up.modules |= partial.modules
         gave_up.complete = gave_up.complete and partial.complete
     outputs = set(group) - joined
     return {}, (shared & outputs) or outputs
@@ -954,6 +958,7 @@ def _check_group(
         if found is not None or breaks.isdisjoint(excess):
             if found is None and gave_up is not None and partial is not None:
                 gave_up.names |= partial.names
+                gave_up.modules |= partial.modules
                 gave_up.complete = gave_up.complete and partial.complete
             return shared, found
         # A container a root read a level at a time holds besides its parent
@@ -1251,6 +1256,14 @@ def _gave_up(
                 if id(value) in outside
                 and name not in known
                 and (isinstance(value, (type, types.FunctionType)) or not is_value(value, value_types))
+            )
+            # A module's namespace holding it (``HELD.append(rows)`` in a
+            # module's function) is named for the caller to weigh: a module
+            # is no variable, but a statement may have set its state.
+            gave_up.modules.update(
+                name
+                for name, module in list(sys.modules.items())
+                if isinstance(module, types.ModuleType) and id(module.__dict__) in outside
             )
         gave_up.complete = gave_up.complete and complete
     return None

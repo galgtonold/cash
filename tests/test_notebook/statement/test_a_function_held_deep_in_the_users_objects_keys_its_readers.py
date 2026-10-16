@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import pytest
 
+from cash.analysis import analysis_budget
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
@@ -65,6 +66,17 @@ for k in range(200):
     orders.append(o)
 scale = 2
 """
+
+
+@pytest.fixture(autouse=True)
+def _no_budget_trip(monkeypatch):
+    """These tests are about what keys the readers, not the analysis budget
+    (`test_a_statement_past_its_analysis_budget_runs_uncached_and_keys_its_outputs_by_value`).
+    The analysis here takes about 10 ms, but the budget is wall time, and a
+    loaded CI worker once spent the
+    0.5 s floor on it: the statement ran uncached and ran again."""
+    monkeypatch.setattr(analysis_budget, "ANALYSIS_BUDGET_FLOOR_S", 60.0)
+
 
 #: Plain total of the 200 orders: each order is 2 * (1 + 2 + 3).
 PLAIN = 200 * 12.0

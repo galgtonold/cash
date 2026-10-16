@@ -50,11 +50,16 @@ def started(tmp_path, monkeypatch):
 
 
 def _shutdown_recording_warnings(runner) -> list[str]:
+    # Garbage an earlier test in this worker left -- a Popen whose process
+    # still ran warns "subprocess ... is still running" when collected --
+    # is not this shutdown's: collected first, and its ResourceWarnings
+    # (a stand-in client opens nothing) are not counted.
+    gc.collect()
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         runner.shutdown()
         gc.collect()  # an unawaited coroutine warns when it is collected
-    return [str(w.message) for w in caught]
+    return [str(w.message) for w in caught if not issubclass(w.category, ResourceWarning)]
 
 
 def test_shutdown_saves_the_kernels_coverage_then_kills_it(started):

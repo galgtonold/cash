@@ -11,6 +11,9 @@ it served would have cost goes on.
 
 from __future__ import annotations
 
+import pytest
+
+from cash.notebook.statement import call_routing
 from tests._cell_driver import run_cash_cell
 
 
@@ -35,16 +38,32 @@ def test_calls_served_from_the_cache_count_toward_the_statements_cost(cash_magic
 def test_cash_tracking_time_is_not_counted_as_the_statements(cash_magics, mock_shell, clean_backend, monkeypatch):
     clock = [0.0]
 
-    # Every statement is charged 0.45 s of tracking against a 0.5 s sleep, so
-    # the right record is ~0.05 s plus whatever the machine adds, and one that
-    # kept the tracking is over 0.5 s. The bound sits between with 350 ms of
-    # room: macOS runners add up to ~170 ms to a statement this size, which
-    # used up the 25 ms the first version of this test left.
+    # Every statement is charged 0.45 s of tracking. The record is checked
+    # against the statement's own wall time, not a fixed bound: one with
+    # 350 ms of room under a 0.5 s sleep failed on a loaded Windows runner
+    # at 0.52 s, which says nothing on whether the tracking was taken off
+    # when the machine stretched the run itself.
     def tracked():
         clock[0] += 0.45
         return clock[0]
 
-    monkeypatch.setattr("cash.notebook.statement.call_routing.tracking_seconds", tracked)
+    priced = []
+    real_price = call_routing.statement_price
+
+    def recording_price(wall_time, spent):
+        price = real_price(wall_time, spent)
+        priced.append((wall_time, price))
+        return price
+
+    monkeypatch.setattr(call_routing, "tracking_seconds", tracked)
+    monkeypatch.setattr(call_routing, "statement_price", recording_price)
     run_cash_cell(cash_magics, "import time\nx = (time.sleep(0.5), 7)[1]")
     assert mock_shell.user_ns["x"] == 7
-    assert _cost_of(clean_backend, "time.sleep(0.5)") < 0.4
+    wall, price = priced[-1]
+    # Not ``>= 0.5``: on Windows a 0.5 s sleep under Python 3.10 came back
+    # at 0.4985 s by the statement's clock. What the check needs is a run
+    # longer than the tax, so the cost left after it is the run's own.
+    assert wall > 0.45, f"the run took {wall} s, no longer than the tax: proves nothing"
+    assert price.tax == pytest.approx(0.45)
+    assert price.cost == pytest.approx(wall - 0.45)
+    assert _cost_of(clean_backend, "time.sleep(0.5)") == pytest.approx(price.cost)

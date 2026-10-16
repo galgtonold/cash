@@ -24,8 +24,12 @@ from cash.tracking import io_watch
 from cash.notebook import held_functions as hf
 
 got = []
-for event in ("open", "os.listdir", "os.scandir", "exec", "compile", "builtins.id"):
+for event in ("open", "os.listdir", "os.scandir", "exec", "compile"):
     io_watch.subscribe(event, lambda args, event=event: got.append((event, args[0] if isinstance(args[0], str) else type(args[0]).__name__)))
+# only this script's own id(): a tracer's (coverage calls id() on each code
+# object it first sees, and the Python hook's are more of those) is not ours
+GOT = id(got)
+io_watch.subscribe("builtins.id", lambda args: args[0] == GOT and got.append(("builtins.id", "int")))
 io_watch.subscribe("os.remove", lambda args: got.append(("os.remove", "outside")), outside_scopes=True)
 
 def run(tag):

@@ -690,6 +690,11 @@ def track_dataset(tracker: Any, target: Any) -> None:
     tracker.track_path(target)
 
 
+#: Database names SQLite opens no file for: in memory, and a private
+#: temporary database.
+_SQLITE_NO_FILE = (":memory:", b":memory:", "", b"")
+
+
 def _sqlite_uri_path(uri: str) -> str | None:
     """The file a SQLite ``file:`` URI opens, or None for an in-memory one.
 
@@ -1338,7 +1343,11 @@ class FileDependencyRegistry:
         With ``uri=True`` the database is a ``file:`` URI --
         ``file:d.db?mode=ro`` for a read-only connection -- which as written
         names no file. The URI's path is the file; an in-memory database has
-        none.
+        none, and neither has ``":memory:"`` or ``""`` (a private temporary
+        database) as a plain name. Read as file names they were dependencies
+        on ``<cwd>/:memory:``, a missing file on POSIX and a name Windows
+        cannot resolve: an unresolved dependency, so a statement calling a
+        module that connects to ``":memory:"`` never hit after a restart.
         """
         path_handler = FileDependencyRegistry._create_path_arg_handler(original_func, track_callback)
 
@@ -1346,6 +1355,8 @@ class FileDependencyRegistry:
         def tracked_connect(*args, **kwargs):
             uri = kwargs.get("uri", args[7] if len(args) > 7 else False)
             target = args[0] if args else kwargs.get("database")
+            if not uri and target in _SQLITE_NO_FILE:
+                return original_func(*args, **kwargs)
             if not uri or not isinstance(target, (str, bytes)):
                 if isinstance(target, (str, bytes, os.PathLike)) and active_tracker.get() is not None:
                     _track_sqlite_wal(active_tracker.get(), target)
