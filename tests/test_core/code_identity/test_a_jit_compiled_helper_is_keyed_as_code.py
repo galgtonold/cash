@@ -43,10 +43,31 @@ def kern(a):
 """
 
 BY_NAME = """
+import ast
+import linecache
+import os
 import time
+import numba
 import numpy as np
 import cash
 from helpers import kern
+
+# what the first call reads: numba's own source files, and sources parsed
+NUMBA = os.path.dirname(numba.__file__)
+numba_files = set()
+parses = [0]
+_getlines, _parse = linecache.getlines, ast.parse
+
+def getlines(filename, *args, **kwargs):
+    if filename.startswith(NUMBA):
+        numba_files.add(filename)
+    return _getlines(filename, *args, **kwargs)
+
+def parse(*args, **kwargs):
+    parses[0] += 1
+    return _parse(*args, **kwargs)
+
+linecache.getlines, ast.parse = getlines, parse
 
 @cash.cache
 def backtest(n):
@@ -55,7 +76,7 @@ def backtest(n):
 
 t0 = time.perf_counter()
 print("RESULT", backtest(4), flush=True)
-print("FIRST_CALL_S", time.perf_counter() - t0, flush=True)
+print("FIRST_CALL_S", time.perf_counter() - t0, len(numba_files), parses[0], flush=True)
 """
 
 BY_MODULE = """
@@ -139,10 +160,17 @@ SUM_OF_SQUARES = "14.0"
 @pytest.mark.timeout(120)
 def test_a_jitted_function_imported_by_name_caches(tmp_path):
     output = _assert_caches(_project(tmp_path, BY_NAME), SUM_OF_SQUARES)
-    first_call = float(next(line.split()[1] for line in output.splitlines() if line.startswith("FIRST_CALL_S")))
+    seconds, numba_files, parses = next(
+        line.split()[1:] for line in output.splitlines() if line.startswith("FIRST_CALL_S")
+    )
     # The whole first call of the process -- analysis, key build and the
-    # lookup -- once took about 8 seconds walking numba's own source.
-    assert first_call < 1.0, first_call
+    # lookup -- once took about 8 seconds walking numba's own source. Checked
+    # by the work it does: no numba source read, a couple of dozen parses
+    # (24 today). The time is a loose second check: 0.2 s here, but 1.2 s on a
+    # loaded Windows runner.
+    assert int(numba_files) == 0, f"read {numba_files} of numba's source files"
+    assert int(parses) < 100, f"parsed {parses} sources"
+    assert float(seconds) < 4.0, seconds
 
 
 @needs_numba
