@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import sys
 
+import pytest
+
 from cash.notebook.call_key import CallKeys
 from cash.notebook.statement import StatementProcessor
 from tests._cell_driver import run_cash_cell
-from tests._work_counts import deepcopy_steps, hashed_bytes, method_calls, pickled_bytes
+from tests._work_counts import deepcopy_steps, hashed_bytes, method_calls, pickled_bytes, ram_copied_bytes
+from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 KB = 1024
 
@@ -112,3 +115,38 @@ def test_a_fast_cell_draws_its_badge_twice(cash_magics):
 
     # Three before: RUNNING, the first statement's progress, DONE.
     assert renders.calls == 2, renders.calls
+
+
+def test_a_cell_adding_columns_to_a_table_copies_each_column_once(cash_magics):
+    """``df["hour"] = ...`` statement after statement: each stores the table
+    again, and the RAM tier copied all of it each time (440 MB a statement
+    for a 2.9-million-row table). It copies the new column now, and takes
+    the others from the entry before."""
+    from cash.backends import frame_sharing
+
+    pytest.importorskip("pandas")
+    if not frame_sharing.enabled():
+        pytest.skip("needs pandas copy-on-write")
+    n = 200_000
+    run_cash_cell(
+        cash_magics,
+        "import time\nimport numpy as np\nimport pandas as pd\n"
+        "def slow(s):\n"
+        f"    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n"
+        "    return s * 2",
+    )
+    cell = (
+        f"df = pd.DataFrame({{'a': np.arange({n}, dtype=float), 'b': np.ones({n}), 'c': np.zeros({n})}})\n"
+        "df['d'] = slow(df['a'])\n"
+        "df['e'] = slow(df['b'])\n"
+        "df['f'] = slow(df['c'])"
+    )
+    with ram_copied_bytes() as copied:
+        run_cash_cell(cash_magics, cell)
+    df = cash_magics.shell.user_ns["df"]
+    assert list(df.columns) == ["a", "b", "c", "d", "e", "f"]
+    column = n * 8
+    # Three stored versions of a growing table: each new column copied once
+    # (3 columns) beside the first version's 3 -- ~6 columns today; every
+    # version copied whole was 4 + 5 + 6 = 15.
+    assert column * 3 <= copied.bytes <= column * 8, copied.bytes / column
