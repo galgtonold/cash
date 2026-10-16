@@ -20,6 +20,7 @@ reinstalled under the same number keys as before.
 from __future__ import annotations
 
 import importlib.metadata
+import inspect
 import re
 import sys
 import types
@@ -42,11 +43,39 @@ _REQ_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
 _CODE_NAMES: dict[int, tuple[Any, tuple[str, ...]]] = {}
 
 
+def _packages_distributions() -> dict[str, list[str]]:
+    """Top-level module name -> the distributions that provide it.
+
+    ``importlib.metadata.packages_distributions`` on Python 3.10 reads only
+    ``top_level.txt``, which wheels built by anything but setuptools (numpy,
+    pandas, scikit-learn, ...) do not ship, so it named no distribution for
+    them and their upgrades went unseen. Python 3.11+ falls back to the
+    distribution's file list; this does the same on every version.
+    """
+    by_top: dict[str, list[str]] = {}
+    for dist in importlib.metadata.distributions():
+        name = dist.metadata["Name"]
+        if not name:
+            continue
+        tops = (dist.read_text("top_level.txt") or "").split()
+        if not tops:
+            seen: dict[str, None] = {}
+            for f in dist.files or ():
+                parts = f.parts
+                top = parts[0] if len(parts) > 1 else (inspect.getmodulename(str(f)) or str(f))
+                if "." not in top:
+                    seen[top] = None
+            tops = list(seen)
+        for top in tops:
+            by_top.setdefault(top, []).append(name)
+    return by_top
+
+
 def _dists_for(top: str) -> list[str]:
     global _DISTS_BY_TOP
     if _DISTS_BY_TOP is None:
         try:
-            _DISTS_BY_TOP = {k: list(v) for k, v in importlib.metadata.packages_distributions().items()}
+            _DISTS_BY_TOP = _packages_distributions()
         except Exception:  # noqa: BLE001 - broken metadata: no versions to fold
             _DISTS_BY_TOP = {}
     return _DISTS_BY_TOP.get(top, [])

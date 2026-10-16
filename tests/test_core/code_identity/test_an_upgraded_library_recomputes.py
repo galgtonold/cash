@@ -52,7 +52,7 @@ print({"by_module": by_module, "by_name": by_name, "through_a_helper": through_a
 """
 
 
-def _install(folder, version, factor):
+def _install(folder, version, factor, top_level_txt=True):
     shutil.rmtree(folder, ignore_errors=True)
     package = folder / "fakelib"
     package.mkdir(parents=True)
@@ -72,7 +72,8 @@ def _install(folder, version, factor):
     info = folder / f"fakelib-{version}.dist-info"
     info.mkdir()
     (info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: fakelib\nVersion: {version}\n", encoding="utf-8")
-    (info / "top_level.txt").write_text("fakelib\n", encoding="utf-8")
+    if top_level_txt:
+        (info / "top_level.txt").write_text("fakelib\n", encoding="utf-8")
     (info / "RECORD").write_text(
         f"fakelib/__init__.py,,\nfakelib-{version}.dist-info/RECORD,,\nfakelib-{version}.dist-info/METADATA,,\n",
         encoding="utf-8",
@@ -103,6 +104,17 @@ def test_an_upgrade_recomputes_and_the_same_version_hits(proj, tmp_path, which):
     _install(lib, "2.0", 5)
     assert _run(proj, lib, which) == ("15", True), "the upgrade served the old version's result"
     assert _run(proj, lib, which) == ("15", False)
+
+
+def test_a_library_installed_without_top_level_txt_recomputes_on_upgrade(proj, tmp_path):
+    # Wheels built by meson-python, flit, hatchling or maturin (numpy,
+    # pandas, ...) ship no top_level.txt; the library is found by its files.
+    lib = tmp_path / "site"
+    _install(lib, "1.0", 2, top_level_txt=False)
+    assert _run(proj, lib, "by_module") == ("6", True)
+    assert _run(proj, lib, "by_module") == ("6", False), "an unchanged library recomputed"
+    _install(lib, "2.0", 5, top_level_txt=False)
+    assert _run(proj, lib, "by_module") == ("15", True), "the upgrade served the old version's result"
 
 
 def test_only_libraries_count():
