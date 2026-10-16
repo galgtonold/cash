@@ -269,7 +269,10 @@ def test_a_list_variable_rebound_in_its_namespace_is_not_reused(watching, counte
         ns["x"] = [str(i) * 3, [i]]
         value_watch.digest(ns["x"], counted)
         assert value_watch.digest(ns["x"], counted) == _compute_hash(ns["x"])
-        gc.collect()
+        # the youngest generation only: what the last round left is young.
+        # A full collection walks every object the worker holds -- 1-2 s
+        # each in a long-lived worker, and 50 of them overran the timeout.
+        gc.collect(0)
 
 
 def test_a_list_no_namespace_holds_is_not_watched(watching, counted):
