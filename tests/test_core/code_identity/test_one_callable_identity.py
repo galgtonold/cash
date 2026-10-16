@@ -12,7 +12,9 @@ folds in the identity of what it wraps.
 
 from __future__ import annotations
 
+import sys
 import textwrap
+import types
 
 import pytest
 
@@ -101,12 +103,17 @@ def test_the_same_code_keeps_its_identity(tmp_path, identities, path):
     assert identities[path](_load(tmp_path, "same_a")["area"]) == identities[path](_load(tmp_path, "same_b")["area"])
 
 
-def test_the_notebook_tracker_gives_a_class_with_no_source_no_digest():
+def test_the_notebook_tracker_gives_a_class_with_no_source_no_digest(monkeypatch):
     """A class defined in a cell has neither source nor code, only its name.
     After a restart the upstream simulation meets ``b = Box(3)`` before
     ``class Box`` runs again and cannot rebuild a name-only digest, so a
     digest here put a component in ``b``'s lineage the restored run never
-    matched, and every statement over ``b`` re-ran."""
+    matched, and every statement over ``b`` re-ran.
+
+    A kernel's ``__main__`` has no file. Under ``pytest -n 0`` it is pytest's
+    ``__main__.py``, and ``inspect`` read the class's "source" from that
+    file's lines at ``Box.__firstlineno__``."""
+    monkeypatch.setitem(sys.modules, "__main__", types.ModuleType("__main__"))
     ns: dict = {"__name__": "__main__"}
     exec("class Box:\n    def __init__(self, n):\n        self.n = n\n", ns)
     assert FunctionTracker().get_function_source_hash(ns["Box"]) is None
