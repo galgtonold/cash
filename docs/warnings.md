@@ -2053,10 +2053,10 @@ rewind as well as caching, and the statement no longer raises this warning.
 
 <!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @37dc56c2 -->
 With `@cash.cache`: the check runs when the decorator is applied, once per
-function, and reads only that function's source, so a `random.seed(0)`
-elsewhere does not silence it. Such a seed is still keyed when it is set after
-the decoration: the message says so for a draw from the global `random` or
-`numpy.random` stream. A `seed=None` parameter passed on to the
+function, and reads only that function's source. A draw from the global
+`random` or `numpy.random` stream is not reported when a seed of that stream
+is already in force, wherever it was set (module level, before `import cash`);
+a seed set later, before the call, is keyed too, and the message says so. A `seed=None` parameter passed on to the
 generator warns for calls that leave it out; pass `seed=i` per replicate. To
 keep the frozen value, use `@cash.cache(allow_random=True)`. For a fresh draw,
 do not cache the function.

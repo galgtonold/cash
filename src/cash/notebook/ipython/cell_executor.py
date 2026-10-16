@@ -610,6 +610,10 @@ class CellExecutor:
         hook_start = _perf_counter()
         logger.debug("[TIMING_PROXY] Start cached_run_cell")
 
+        # A seed set outside any statement cash read (before `%cash_on`) is
+        # in the lineage before the upstream check simulates a draw on it.
+        self._statement_processor.adopt_unseen_seeds()
+
         # 3. Module change detection (must precede upstream check)
         pre_upstream_metrics = self._detect_module_changes(raw_cell)
         self._raise_failed_reload(raw_cell, badge_display_id, pre_upstream_metrics, hook_start, timing_breakdown)

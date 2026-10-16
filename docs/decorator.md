@@ -788,7 +788,8 @@ A seed of the global stream set by the caller counts: after
 `np.random.seed(s)` or `random.seed(s)` (at module level, or in the function
 that calls this one), a function seen drawing from that stream is keyed by
 where the stream stands, so each seed and each draw after it gets its own
-entry. A seed set before the function is decorated is not seen. A function
+entry. That holds whenever the seed was set: before the function was
+decorated, or before `import cash` in the same script. A function
 whose own body seeds the stream is not keyed by where the caller left it.
 
 <!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @164e7c5c -->

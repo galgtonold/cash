@@ -422,9 +422,16 @@ class RngWatch:
         return modules
 
     def _store_rng_draw_marker(self, func_name: str, modules: set[str]) -> None:
-        """Persist the verdict so the next process applies it on its first call."""
+        """Persist the verdict so the next process applies it on its first call.
+
+        ``force_persist``: the marker is tiny and costs nothing to compute, so
+        the tiered backend's policy kept it in RAM only, and the next process
+        never learned that the function draws. It keyed every seeded call
+        without the seed, found nothing (the call that revealed the draw is
+        never stored), and so no seeded call ever hit across processes.
+        """
         try:
-            self._backend_slot.backend.set(rng_marker_key(func_name), set(modules))
+            self._backend_slot.backend.set(rng_marker_key(func_name), set(modules), {"force_persist": True})
         except Exception:  # noqa: BLE001 - best effort; correctness degrades to today's
             logger.debug("could not persist RNG draw marker for %s", func_name)
 
@@ -656,6 +663,12 @@ class RngWatch:
         if not unseeded:
             self._warn_unseeded_library_calls(func, func_name, src, first_lineno)
             return
+        # A draw from a global stream that a seed already stands behind is
+        # keyed on where that stream stands when the function is called
+        # (`fold_rng_epoch`), however long before the decoration it was set.
+        unseeded = [call for call in unseeded if not _global_stream_seeded(call)]
+        if not unseeded:
+            return
 
         call = unseeded[0]
         extra = ""
@@ -674,8 +687,8 @@ class RngWatch:
         then = "The first"
         if call.carrier is None and call.module in ("random", "numpy.random", "np.random", "numpy"):
             then = (
-                "A seed set with random.seed() or np.random.seed() after this "
-                "decoration, by the caller too, is part of the key; without one, the first"
+                "A seed set with random.seed() or np.random.seed() before the "
+                "call, by the caller too, is part of the key; without one, the first"
             )
         message = (
             f"@cash.cache on {func_name}: Unseeded randomness detected: "
@@ -864,6 +877,26 @@ def _random_state_left_unset(result: Any) -> bool:
     try:
         return get_params(deep=False).get("random_state", "absent") is None
     except Exception:  # noqa: BLE001 - advisory only; never break a call
+        return False
+
+
+#: The global stream a source-scan draw (`RandomnessCallInfo.module`) is on.
+_GLOBAL_STREAM_OF = {
+    "random": "random",
+    "numpy.random": "numpy.random",
+    "np.random": "numpy.random",
+    "numpy": "numpy.random",
+}
+
+
+def _global_stream_seeded(call: Any) -> bool:
+    """Is *call* a draw from a global stream seeded now (`unseeded_streams`)?"""
+    stream = _GLOBAL_STREAM_OF.get(call.module) if call.carrier is None else None
+    if stream is None:
+        return False
+    try:
+        return not unseeded_streams({stream})
+    except Exception:  # noqa: BLE001 - an advisory never breaks decoration
         return False
 
 

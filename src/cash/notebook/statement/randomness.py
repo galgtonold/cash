@@ -15,6 +15,7 @@ from cash.diagnostics import warn_diagnostic
 from cash.tracking.randomness import (
     CashRandomnessWarning,
     RandomnessDetector,
+    adopted_seed_lineage,
     capture_rng_state,
     check_and_warn_randomness,
     describe_stream,
@@ -25,10 +26,13 @@ from cash.tracking.randomness import (
     hidden_lineage_writes,
     hidden_write_lineage,
     judged_draws,
+    process_seeded_streams,
     publish_seed_epochs,
     restore_rng_state,
     rng_modules_changed,
     rng_virtual_var,
+    seed_generation,
+    stream_position,
     unseeded_streams,
     warn_observed_draw,
     warn_stale_estimator_fit,
@@ -137,6 +141,71 @@ class StatementRandomness:
         #: `judged_draws` when this statement began: a cached
         #: function inside it that reported its own draw moves it.
         self._draw_warnings_at_start = 0
+        #: module -> the `seed_generation` the ledger accounts for: the
+        #: seeds this processor's statements set, or adopted.
+        self._ledgered_generation: dict[str, int] = {}
+        #: Streams whose lineage `adopt_unseen_seeds` set.
+        self._adopted: set[str] = set()
+        #: `seed_generation` per stream when the statement began.
+        self._generation_at_start: dict[str, int] = {}
+
+    def adopt_unseen_seeds(self) -> None:
+        """Put a seed no statement set into the ledger, from where the stream stands.
+
+        The ledger learns of a seed from a seeding statement's source. A seed
+        set before ``%cash_on`` (or before cash was loaded), or by a function
+        cash does not read as seeding, went unrecorded: the draws below took
+        the stream for unseeded and replayed the value drawn under another
+        seed. The process's watch saw that seed (`watch_seeds`), and the
+        stream's position now is a pure function of it and the draws since,
+        so that position gives the RNG variable its lineage
+        (`adopted_seed_lineage`) as a seeding statement's key would.
+
+        Called before a cell's upstream check and before each statement's
+        key, so the simulation and the key read the same lineage. A stream an
+        adopted seed stood behind that has since been re-randomised
+        (``seed(None)`` cash did not read) takes a lineage fresh per run.
+        """
+        try:
+            watch_seeds()
+            seeded = process_seeded_streams()
+            for module in ("random", "numpy.random"):
+                generation = seed_generation(module)
+                if self._ledgered_generation.get(module, 0) == generation:
+                    continue
+                self._ledgered_generation[module] = generation
+                var = rng_virtual_var(module)
+                if module not in seeded:
+                    if module in self._adopted:
+                        fresh = entropy_write_lineage()
+                        self.tracking_state.lineage.record(var, fresh)
+                        self.seed_epochs[module] = fresh
+                        self._adopted.discard(module)
+                    continue
+                position = stream_position(module)
+                if position is None:
+                    continue
+                lineage = adopted_seed_lineage(module, position)
+                self.tracking_state.lineage.record(var, lineage)
+                self.seed_epochs[module] = lineage
+                self.detector.mark_seeded(module)
+                self._adopted.add(module)
+        except Exception:
+            logger.debug("%s could not adopt an unseen seed", _LOG_PROCESSOR, exc_info=True)
+
+    def note_ledgered_seeds(self, code: str | None) -> None:
+        """Account for the seeds a statement the ledger read as seeding just
+        set (`record_seeds`), so they are not adopted a second time."""
+        if not code:
+            return
+        try:
+            stripped = strip_markers(code)
+            modules = get_seeding_rng_modules(stripped) | self.helper_seeds(stripped)
+        except (SyntaxError, ValueError, AttributeError, RecursionError):
+            return
+        for module in modules:
+            self._ledgered_generation[module] = seed_generation(module)
+            self._adopted.discard(module)
 
     def resume_live_stream(self, code: str) -> None:
         """Move the unseeded streams a ``no-cache`` statement draws from back
@@ -179,6 +248,7 @@ class StatementRandomness:
         # statement is wrapped now.
         watch_seeds()
         self._draw_warnings_at_start = judged_draws()
+        self._generation_at_start = {m: seed_generation(m) for m in ("random", "numpy.random")}
         return capture_rng_state()
 
     def record_seeds(self, code: str, cache_key: str) -> None:
@@ -612,6 +682,8 @@ class StatementRandomness:
             self._cell_changed |= changed
             self._cell_post = post
             self._record_hidden_draws(code, self.observed_draw)
+            if any(seed_generation(m) != g for m, g in self._generation_at_start.items()):
+                self.note_ledgered_seeds(code)
         except (TypeError, AttributeError):  # pragma: no cover - defensive
             self.observed_draw = set()
 
