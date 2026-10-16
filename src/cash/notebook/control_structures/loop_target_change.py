@@ -12,15 +12,13 @@ loop's text alone, once per loop.
 from __future__ import annotations
 
 import ast
-import builtins
 from collections.abc import Callable
 from typing import NamedTuple
 
 from ...analysis.cacheability import analyze_statement
+from ...value_types import BUILTIN_NAMES
 
 __all__ = ["TargetChange", "target_changed_before_cached_work"]
-
-_BUILTINS = frozenset(dir(builtins))
 
 
 class TargetChange(NamedTuple):
@@ -57,7 +55,7 @@ def _work_calls(stmt: ast.stmt) -> list[ast.Call]:
         func = node.func
         if node is outer and isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
             continue
-        if isinstance(func, ast.Name) and func.id in _BUILTINS:
+        if isinstance(func, ast.Name) and func.id in BUILTIN_NAMES:
             continue
         found.append(node)
     return found
