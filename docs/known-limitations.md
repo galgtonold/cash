@@ -61,8 +61,8 @@ unless its own settings rule a draw out: `Ridge()` uses the seed only with
 Seeding counts per source. `np.random.seed(0)` covers `np.random.*` draws for
 the rest of the session, but not `random.random()` and not a generator from
 `np.random.default_rng()`, which you seed in its constructor. A cache hit puts
-the random stream back where the computed run left it, so the next draw matches a
-full run.
+each random stream the statement drew from or seeded where the computed run left it, and
+leaves every other stream where it is, so the next draw matches a full run.
 
 cash finds a draw by following the generator from where it was created. It also
 warns about `df.sample(100)` and other library calls without `random_state`, an

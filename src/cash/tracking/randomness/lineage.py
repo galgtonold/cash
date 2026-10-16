@@ -88,11 +88,26 @@ def seed_epochs() -> dict[str, str]:
 # a drawing function is then keyed on where the seeded stream stands when it is
 # called. That position is a pure function of the seed and the draws since, so
 # it is the same in the next process and moves with every draw in between.
+#
+# The watch starts at ``import cash`` (`start_seed_watch`) and wraps a stream
+# module imported later as it loads, so a seed set at any time after that is
+# seen, however long before the decoration or the call. A stream loaded before
+# ``import cash`` is judged by `prior_seeds.seeded_before_watch`.
 # ---------------------------------------------------------------------------
 #: RNG modules a watched ``seed(<value>)`` seeded in this process.
 _PROCESS_SEEDED: set[str] = set()
 #: The seed functions wrapped so far, by module.
 _WATCHED: set[str] = set()
+#: Stream modules cash saw load (during ``import cash`` or through the import
+#: hook): their state is the fresh entropy of the import, until a seed.
+_LOADED_UNDER_WATCH: set[str] = set()
+#: The import hook, once installed (`start_seed_watch`).
+_IMPORT_HOOK: list = []
+#: module -> how many seeds cash has seen set on its global stream: every
+#: watched ``seed(...)``, and a seed found set before the watch began. The
+#: notebook compares it with the seeds its own statements set
+#: (`StatementRandomness.adopt_unseen_seeds`).
+_SEED_GENERATION: dict[str, int] = {}
 
 
 #: ``torch`` when a watched ``torch.manual_seed(<value>)`` ran in this
@@ -104,6 +119,8 @@ _TORCH_SEEDED: set[str] = set()
 def _note_seed(module: str, args: tuple, kwargs: dict) -> None:
     value = args[0] if args else kwargs.get("seed", kwargs.get("a"))
     seeded = _TORCH_SEEDED if module == "torch" else _PROCESS_SEEDED
+    if module != "torch":
+        _SEED_GENERATION[module] = _SEED_GENERATION.get(module, 0) + 1
     if value is None:
         # ``seed()`` / ``seed(None)`` re-randomises: the stream is unseeded
         # again, and the freeze contract applies to it.
@@ -125,12 +142,42 @@ def _seed_wrapper(module: str, original):
     return seed
 
 
+def start_seed_watch(loaded_before: Iterable[str]) -> None:
+    """Watch the global ``seed`` functions from ``import cash`` on.
+
+    *loaded_before* names the stream modules already imported when
+    ``import cash`` began; the others cash loaded itself (``random``), so
+    they hold the fresh entropy of their import. A stream module imported
+    later is wrapped as it loads (`prior_seeds.RngImportHook`).
+    """
+    from .prior_seeds import WATCHED_STREAM_MODULES, RngImportHook
+
+    before = set(loaded_before)
+    _LOADED_UNDER_WATCH.update(m for m in WATCHED_STREAM_MODULES if m in sys.modules and m not in before)
+    if not _IMPORT_HOOK:
+        hook = RngImportHook(_on_stream_module_loaded)
+        _IMPORT_HOOK.append(hook)
+        sys.meta_path.insert(0, hook)
+    watch_seeds()
+
+
+def _on_stream_module_loaded(module: str) -> None:
+    if module in _WATCHED:
+        return
+    _LOADED_UNDER_WATCH.add(module)
+    if module == "torch":
+        return  # wrapped by the next `watch_seeds`, once torch is whole
+    watch_seeds()
+
+
 def watch_seeds() -> None:
     """Wrap ``random.seed``, ``numpy.random.seed`` and ``torch.manual_seed``
     (once each, when imported).
 
-    Cheap to call again: a module already wrapped is skipped. A seed set before
-    the wrap -- before cash saw ``numpy`` imported -- is not seen.
+    Cheap to call again: a module already wrapped is skipped. A stream
+    already loaded before cash watched it may carry a seed set in that time:
+    `prior_seeds.seeded_before_watch` judges it, and a stream it takes as
+    seeded counts as seeded from then on.
     """
     if "numpy.random" not in _WATCHED and "numpy" in sys.modules and "numpy.random" not in sys.modules:
         # numpy loads `numpy.random` on first attribute access, which is the
@@ -144,6 +191,7 @@ def watch_seeds() -> None:
         ("numpy.random", "numpy.random", "seed"),
         ("torch", "torch", "manual_seed"),
     )
+    newly: set[str] = set()
     for module, rng, attr in targets:
         if rng in _WATCHED:
             continue
@@ -156,7 +204,42 @@ def watch_seeds() -> None:
                 setattr(mod, attr, _seed_wrapper(rng, original))
             except (AttributeError, TypeError):  # pragma: no cover - read-only module
                 continue
+            newly.add(rng)
         _WATCHED.add(rng)
+    unseen = newly - _LOADED_UNDER_WATCH - {"torch"}
+    if unseen:
+        from .prior_seeds import seeded_before_watch
+
+        for module in seeded_before_watch(unseen):
+            _PROCESS_SEEDED.add(module)
+            _SEED_GENERATION[module] = _SEED_GENERATION.get(module, 0) + 1
+
+
+def seed_generation(module: str) -> int:
+    """How many seeds cash has seen set on *module*'s global stream."""
+    return _SEED_GENERATION.get(module, 0)
+
+
+def process_seeded_streams() -> set[str]:
+    """The global streams a seed with a value stands behind now, by this
+    process's watch alone (not the notebook's ledger)."""
+    return set(_PROCESS_SEEDED)
+
+
+def stream_position(module: str) -> str | None:
+    """Digest of where *module*'s global stream stands, or None."""
+    return _stream_position(module)
+
+
+def adopted_seed_lineage(module: str, position: str) -> str:
+    """Lineage of *module*'s RNG variable for a seed no statement set.
+
+    A seed set before ``%cash_on``, or by code cash does not read as a seed
+    (a function of an imported module), leaves the stream at a position
+    that is a pure function of that seed and the draws since. That position
+    stands for it, as a seeding statement's key does for a seed written out.
+    """
+    return hashlib.sha256(f"rng-adopted:{module}:{position}".encode()).hexdigest()
 
 
 def seeded_rng_modules() -> set[str]:

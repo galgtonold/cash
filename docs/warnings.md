@@ -2053,10 +2053,10 @@ rewind as well as caching, and the statement no longer raises this warning.
 
 <!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @37dc56c2 -->
 With `@cash.cache`: the check runs when the decorator is applied, once per
-function, and reads only that function's source, so a `random.seed(0)`
-elsewhere does not silence it. Such a seed is still keyed when it is set after
-the decoration: the message says so for a draw from the global `random` or
-`numpy.random` stream. A `seed=None` parameter passed on to the
+function, and reads only that function's source. A draw from the global
+`random` or `numpy.random` stream is not reported when a seed of that stream
+is already in force, wherever it was set (module level, before `import cash`);
+a seed set later, before the call, is keyed too, and the message says so. A `seed=None` parameter passed on to the
 generator warns for calls that leave it out; pass `seed=i` per replicate. To
 keep the frozen value, use `@cash.cache(allow_random=True)`. For a fresh draw,
 do not cache the function.
@@ -2066,7 +2066,10 @@ A library call that draws inside its own compiled code warns too when the
 function passes it no seed: `train_test_split(X)`, `KFold(shuffle=True)`,
 `make_classification()`, an estimator such as `SGDClassifier()` or
 `RandomForestClassifier()`, and `df.sample(3)`. Pass `random_state=0`
-(`seed=0` in polars). An estimator that uses its seed only with some settings
+(`seed=0` in polars). A `.sample()` on one of the function's parameters
+(`seed.sample(xs, k)` with a `random.Random` passed in) draws from the
+argument, which is keyed by its state, so it does not warn; a DataFrame passed
+in that draws from numpy's global stream is reported when the call runs. An estimator that uses its seed only with some settings
 warns only when the call picks them: `Ridge()` is silent, `Ridge(solver='sag')`
 warns. When cash cannot read the setting (a variable, or `PCA()`, whose
 `svd_solver='auto'` picks by the data's shape), the message says what the draw

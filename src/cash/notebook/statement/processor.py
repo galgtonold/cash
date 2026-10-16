@@ -592,6 +592,11 @@ class StatementProcessor:
         )
         return key
 
+    def adopt_unseen_seeds(self) -> None:
+        """Record a seed no statement set, before the cell's upstream check
+        (see :meth:`StatementRandomness.adopt_unseen_seeds`)."""
+        self._randomness.adopt_unseen_seeds()
+
     def begin_cell_rng_observation(self) -> None:
         """Open a fresh per-cell RNG accumulation, before the cell's statements run."""
         self._randomness.begin_cell()
@@ -970,6 +975,9 @@ class StatementProcessor:
             run.annotation, run.ttl, self.persist_all
         )
         self._calls.begin_statement(run.effective_ttl, run.force_persist)
+        # A seed set where no statement shows it (before `%cash_on`, inside an
+        # imported function, or by the statement above) is in force from here.
+        self._randomness.adopt_unseen_seeds()
         run.unseeded_calls = self._randomness.warn_unseeded(code, run.allow_random, skip_cache=run.skip_cache)
         self._randomness.warn_entropy_reseed(code)
         run.metrics = {
@@ -1353,6 +1361,7 @@ class StatementProcessor:
                 # the simulation look the observation up by the statement's
                 # own text.
                 self._randomness.observe_statement(pre_rng, run.code)
+                execution.rng_moved = self._randomness.moved_streams
                 execution.result = ExecutionResult(success=True)
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code
             execution.result = error_result(e)

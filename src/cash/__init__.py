@@ -23,7 +23,7 @@ import threading
 from collections.abc import Iterator
 from typing import Any
 
-from . import _active
+from . import _active, _streams_at_import
 from .backends import FileBackend, InMemoryBackend, TieredBackend
 from .backends.sqlite_backend import SQLiteBackend
 from .config.resolve import get_config
@@ -80,6 +80,25 @@ def _watch_reads_from_import() -> None:
 
 
 _watch_reads_from_import()
+
+
+def _watch_seeds_from_import() -> None:
+    """See every ``random.seed`` / ``np.random.seed`` from ``import cash`` on.
+
+    A seed decides what a cached function that draws from the global stream
+    returns, so it is part of the key. The watch began at the first
+    decoration, so ``np.random.seed(int(sys.argv[1]))`` at module level, above
+    the decorated function, went unseen: every seed got the first seed's value.
+    """
+    from .tracking.randomness.lineage import start_seed_watch
+
+    try:
+        start_seed_watch(_streams_at_import.LOADED_BEFORE_CASH)
+    except Exception:  # noqa: BLE001 - decorating a function starts the watch anyway
+        pass
+
+
+_watch_seeds_from_import()
 
 
 def opaque(cls: type) -> type:

@@ -24,6 +24,7 @@ from .detect import (
     warn_unseeded_estimator_fit,
 )
 from .lineage import (
+    adopted_seed_lineage,
     advanced_carrier_lineage,
     advanced_rng_lineage,
     describe_stream,
@@ -35,13 +36,16 @@ from .lineage import (
     judged_draws,
     note_judged_draw,
     observed_rng_reads,
+    process_seeded_streams,
     publish_seed_epochs,
     rng_lineage_fingerprint,
     rng_virtual_var,
     seed_cells_not_yet_run,
     seed_epoch_component,
     seed_epochs,
+    seed_generation,
     seeded_rng_modules,
+    stream_position,
     unseeded_streams,
     watch_seeds,
 )
@@ -66,6 +70,7 @@ from .state import (
 
 __all__ = [
     "CashRandomnessWarning",
+    "adopted_seed_lineage",
     "advanced_carrier_lineage",
     "advanced_rng_lineage",
     "describe_stream",
@@ -96,6 +101,7 @@ __all__ = [
     "hidden_write_lineage",
     "judged_draws",
     "observed_rng_reads",
+    "process_seeded_streams",
     "publish_seed_epochs",
     "restore_object_rng_states",
     "restore_rng_state",
@@ -106,7 +112,9 @@ __all__ = [
     "seed_cells_not_yet_run",
     "seed_epoch_component",
     "seed_epochs",
+    "seed_generation",
     "seeded_rng_modules",
+    "stream_position",
     "unseeded_streams",
     "warn_observed_draw",
     "warn_stale_estimator_fit",

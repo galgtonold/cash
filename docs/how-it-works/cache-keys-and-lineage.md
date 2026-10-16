@@ -235,7 +235,10 @@ or a draw cell inserted, removed or moved. A draw from a stream no seed set
 leaves the variable unset, so an unseeded draw stays frozen. A seed set
 through a function defined in the notebook (`set_seed(42)`, whose body calls
 `random.seed` and `np.random.seed`) writes the variables as the calls written
-out would.
+out would. A seed no statement shows, set before `%cash_on` or inside a
+function of an imported module, writes them too: cash sees the stream seeded
+and takes where it stands as the variable's lineage, before the next cell's
+upstream check.
 
 <!-- claim: cash/notebook/statement/processor.py:StatementProcessor._key_a_newly_seen_draw @0ff7f4ba -->
 A draw inside a function the statement calls (`X = make_data(1000)`) names no

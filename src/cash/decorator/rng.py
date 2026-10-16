@@ -226,6 +226,7 @@ def unseeded_library_calls_in(
         if isinstance(target, ast.Name)
         and ast.unparse(node.value.func).rsplit(".", 1)[-1] in (*_SEEDING_CALLS, "check_random_state")
     }
+    arguments = _parameter_receivers(fn)
     found: list[tuple[str, int, str | None]] = []
     for node in ast.walk(fn):
         if not isinstance(node, ast.Call) or any(kw.arg is None for kw in node.keywords):
@@ -242,6 +243,13 @@ def unseeded_library_calls_in(
             spelled = ast.unparse(func_node.value)
             last = spelled.rsplit(".", 1)[-1]
             if spelled in generators or _GENERATOR_NAME.search(last):
+                continue
+            if isinstance(func_node.value, ast.Name) and func_node.value.id in arguments:
+                # `seed.sample(xs, k)` on a parameter draws from the argument:
+                # a `random.Random` (networkx's `@py_random_state` hands one
+                # in) is keyed by its state. A DataFrame passed in that draws
+                # from numpy's global stream is caught as the call runs
+                # (`RngWatch.warn_observed_draw`).
                 continue
             found.append((f"{spelled if len(spelled) <= 24 else ''}.sample()", node.lineno, None))
             continue
@@ -263,6 +271,21 @@ def unseeded_library_calls_in(
             continue  # its own settings rule a draw out
         found.append((f"{ast.unparse(func_node)}()", node.lineno, None if draws else draw_condition(callee)))
     return found
+
+
+def _parameter_receivers(tree: ast.AST) -> set[str]:
+    """The parameters of the functions in *tree* that their bodies never
+    rebind: a name among them stands for what the caller passed."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        args = node.args
+        params = {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)}
+        params |= {a.arg for a in (args.vararg, args.kwarg) if a is not None}
+        rebound = {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))}
+        names |= params - rebound
+    return names
 
 
 _SEED_UNREADABLE = object()
@@ -422,9 +445,16 @@ class RngWatch:
         return modules
 
     def _store_rng_draw_marker(self, func_name: str, modules: set[str]) -> None:
-        """Persist the verdict so the next process applies it on its first call."""
+        """Persist the verdict so the next process applies it on its first call.
+
+        ``force_persist``: the marker is tiny and costs nothing to compute, so
+        the tiered backend's policy kept it in RAM only, and the next process
+        never learned that the function draws. It keyed every seeded call
+        without the seed, found nothing (the call that revealed the draw is
+        never stored), and so no seeded call ever hit across processes.
+        """
         try:
-            self._backend_slot.backend.set(rng_marker_key(func_name), set(modules))
+            self._backend_slot.backend.set(rng_marker_key(func_name), set(modules), {"force_persist": True})
         except Exception:  # noqa: BLE001 - best effort; correctness degrades to today's
             logger.debug("could not persist RNG draw marker for %s", func_name)
 
@@ -656,6 +686,12 @@ class RngWatch:
         if not unseeded:
             self._warn_unseeded_library_calls(func, func_name, src, first_lineno)
             return
+        # A draw from a global stream that a seed already stands behind is
+        # keyed on where that stream stands when the function is called
+        # (`fold_rng_epoch`), however long before the decoration it was set.
+        unseeded = [call for call in unseeded if not _global_stream_seeded(call)]
+        if not unseeded:
+            return
 
         call = unseeded[0]
         extra = ""
@@ -674,8 +710,8 @@ class RngWatch:
         then = "The first"
         if call.carrier is None and call.module in ("random", "numpy.random", "np.random", "numpy"):
             then = (
-                "A seed set with random.seed() or np.random.seed() after this "
-                "decoration, by the caller too, is part of the key; without one, the first"
+                "A seed set with random.seed() or np.random.seed() before the "
+                "call, by the caller too, is part of the key; without one, the first"
             )
         message = (
             f"@cash.cache on {func_name}: Unseeded randomness detected: "
@@ -864,6 +900,26 @@ def _random_state_left_unset(result: Any) -> bool:
     try:
         return get_params(deep=False).get("random_state", "absent") is None
     except Exception:  # noqa: BLE001 - advisory only; never break a call
+        return False
+
+
+#: The global stream a source-scan draw (`RandomnessCallInfo.module`) is on.
+_GLOBAL_STREAM_OF = {
+    "random": "random",
+    "numpy.random": "numpy.random",
+    "np.random": "numpy.random",
+    "numpy": "numpy.random",
+}
+
+
+def _global_stream_seeded(call: Any) -> bool:
+    """Is *call* a draw from a global stream seeded now (`unseeded_streams`)?"""
+    stream = _GLOBAL_STREAM_OF.get(call.module) if call.carrier is None else None
+    if stream is None:
+        return False
+    try:
+        return not unseeded_streams({stream})
+    except Exception:  # noqa: BLE001 - an advisory never breaks decoration
         return False
 
 

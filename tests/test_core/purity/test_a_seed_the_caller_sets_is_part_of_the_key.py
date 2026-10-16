@@ -115,7 +115,7 @@ def test_the_warning_says_a_callers_seed_is_keyed(full_warning_text, inst):
 
     text = " ".join(str(w.message) for w in caught)
     assert "RANDOM-UNSEEDED" in text or "Unseeded randomness" in text
-    assert "np.random.seed() after this decoration" in text
+    assert "np.random.seed() before the call" in text
 
 
 def test_a_function_that_seeds_itself_is_not_keyed_by_the_stream(inst):
