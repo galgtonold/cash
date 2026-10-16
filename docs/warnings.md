@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @65bfe54e -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @bc4412e5 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -84,7 +84,7 @@ its warning class.
 | [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
 | [Side effects](#impure-codes) | `IMPURE-` | 4 | The function does something a cache hit will not repeat. |
 | [Cache keys](#key-codes) | `KEY-` | 25 | Something the result depends on may not be in the cache key. |
-| [Notebook](#notebook-codes) | `NOTEBOOK-` | 11 | Notebook-wide machinery rather than one statement. |
+| [Notebook](#notebook-codes) | `NOTEBOOK-` | 15 | Notebook-wide machinery rather than one statement. |
 | [Randomness](#random-codes) | `RANDOM-` | 3 | A cached value that randomness makes non-reproducible. |
 | [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
 | [Storing results](#store-codes) | `STORE-` | 8 | The call succeeded, but its result was not written. |
@@ -1655,6 +1655,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-ANALYSIS-FAILED](#notebook-analysis-failed) | notebook | a safety check raised; the statement ran uncached |
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
+| [NOTEBOOK-CHANGED-BELOW](#notebook-changed-below) | notebook | a cell re-run on its own reads a value rebuilt without the in-place change a cell below made |
 | [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
 | [NOTEBOOK-FILE-ROUNDTRIP](#notebook-file-roundtrip) | notebook | a file written in this session is read back, so the read reruns after every write |
 | [NOTEBOOK-FORWARD-READ](#notebook-forward-read) | notebook | the cell reads a name only a cell below binds, so it runs uncached |
@@ -1747,6 +1748,30 @@ longer invalidated when it changes.
 If it is not code, delete it or make it a markdown cell.
 
 **When it is safe to ignore.** When nothing below uses that cell.
+
+### NOTEBOOK-CHANGED-BELOW {#notebook-changed-below}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/upstream/mismatch_classifier.py:MismatchClassifier._reject_read_only_input @d536a0ab, cash/notebook/upstream/changed_below.py:warn_changed_below @bbf25145 -->
+**What happened.** You re-ran a cell on its own, and a cell below it had
+changed one of its inputs in place (`s.iloc[0] = 1e9`, `rows.append(r)`).
+cash gives the re-run the input as the cells above leave it, as a run from the
+top does: it rebuilt the value, so the cell computed without the change below,
+and the variable no longer holds that change. The message names the variable,
+the cell below and its statement. It is shown once per cell, variable and
+statement.
+
+**Why it matters.** Plain Jupyter would run the cell on the changed value.
+Here the result is the one a run from the top gives, and the change the cell
+below made is gone until that cell runs again, so a cell further down that
+expects it reads the value without it.
+
+**What to do.** Run the cell below again to apply its change. For the cell
+you re-ran to see the change, move the change into a cell above it.
+
+**When it is safe to ignore.** When you want the value as a run from the top
+leaves it, and will run the cells below again.
 
 ### NOTEBOOK-FAILED-CELL {#notebook-failed-cell}
 

@@ -364,9 +364,13 @@ out = summarize(s)  # cell 2: re-run this alone...
 s.iloc[0] = 1e9     # cell 3: ...and it does not see this
 ```
 
-cash answers cell 2 as a top-to-bottom run would, so it computes with `0.0`
-while the live `s` holds `1e9`. **Fix:** move the change above the cells that
-must see it, or make it a new value (`s = s.copy(); s.iloc[0] = 1e9`).
+<!-- claim: cash/notebook/upstream/changed_below.py:warn_changed_below @bbf25145 -->
+cash answers cell 2 as a top-to-bottom run would: it rebuilds `s` as cell 1
+leaves it, so cell 2 computes with `0.0`, and `s` holds `0.0` until cell 3 runs
+again. cash warns [NOTEBOOK-CHANGED-BELOW](warnings.md#notebook-changed-below)
+when this happens, naming the variable and the cell that changed it.
+**Fix:** move the change above the cells that must see it, or run cell 3 again
+after the re-run.
 
 ### Changing and rebinding the same name in one cell
 

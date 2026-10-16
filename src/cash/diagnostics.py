@@ -310,6 +310,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # from it run again
         "NOTEBOOK-FAILED-CELL",  # a cell raised part way, and a name it
         # changed is kept as that run left it, or could not be put back
+        "NOTEBOOK-CHANGED-BELOW",  # a cell re-run on its own reads a value rebuilt
+        # without the in-place change a cell below made to it
         "NOTEBOOK-CELL-SYNTAX",  # an upstream cell does not parse, so cells that
         # depend on it stop being tracked
         "NOTEBOOK-FORWARD-READ",  # the cell reads a name only a cell
