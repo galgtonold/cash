@@ -2066,7 +2066,10 @@ A library call that draws inside its own compiled code warns too when the
 function passes it no seed: `train_test_split(X)`, `KFold(shuffle=True)`,
 `make_classification()`, an estimator such as `SGDClassifier()` or
 `RandomForestClassifier()`, and `df.sample(3)`. Pass `random_state=0`
-(`seed=0` in polars). An estimator that uses its seed only with some settings
+(`seed=0` in polars). A `.sample()` on one of the function's parameters
+(`seed.sample(xs, k)` with a `random.Random` passed in) draws from the
+argument, which is keyed by its state, so it does not warn; a DataFrame passed
+in that draws from numpy's global stream is reported when the call runs. An estimator that uses its seed only with some settings
 warns only when the call picks them: `Ridge()` is silent, `Ridge(solver='sag')`
 warns. When cash cannot read the setting (a variable, or `PCA()`, whose
 `svd_solver='auto'` picks by the data's shape), the message says what the draw

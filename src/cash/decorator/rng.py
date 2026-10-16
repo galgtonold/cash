@@ -226,6 +226,7 @@ def unseeded_library_calls_in(
         if isinstance(target, ast.Name)
         and ast.unparse(node.value.func).rsplit(".", 1)[-1] in (*_SEEDING_CALLS, "check_random_state")
     }
+    arguments = _parameter_receivers(fn)
     found: list[tuple[str, int, str | None]] = []
     for node in ast.walk(fn):
         if not isinstance(node, ast.Call) or any(kw.arg is None for kw in node.keywords):
@@ -242,6 +243,13 @@ def unseeded_library_calls_in(
             spelled = ast.unparse(func_node.value)
             last = spelled.rsplit(".", 1)[-1]
             if spelled in generators or _GENERATOR_NAME.search(last):
+                continue
+            if isinstance(func_node.value, ast.Name) and func_node.value.id in arguments:
+                # `seed.sample(xs, k)` on a parameter draws from the argument:
+                # a `random.Random` (networkx's `@py_random_state` hands one
+                # in) is keyed by its state. A DataFrame passed in that draws
+                # from numpy's global stream is caught as the call runs
+                # (`RngWatch.warn_observed_draw`).
                 continue
             found.append((f"{spelled if len(spelled) <= 24 else ''}.sample()", node.lineno, None))
             continue
@@ -263,6 +271,21 @@ def unseeded_library_calls_in(
             continue  # its own settings rule a draw out
         found.append((f"{ast.unparse(func_node)}()", node.lineno, None if draws else draw_condition(callee)))
     return found
+
+
+def _parameter_receivers(tree: ast.AST) -> set[str]:
+    """The parameters of the functions in *tree* that their bodies never
+    rebind: a name among them stands for what the caller passed."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        args = node.args
+        params = {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)}
+        params |= {a.arg for a in (args.vararg, args.kwarg) if a is not None}
+        rebound = {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))}
+        names |= params - rebound
+    return names
 
 
 _SEED_UNREADABLE = object()
