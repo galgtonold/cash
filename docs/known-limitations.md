@@ -479,6 +479,8 @@ for q in [[1], [1]]:           # two iterations, equal when bound
     accm.append(pull(handle))  # 2nd iteration gets the 1st's result
 ```
 
+cash warns [KEY-LOOP-VAR-CHANGED](warnings.md#key-loop-var-changed) when a
+loop body changes its loop variable in place before work it caches for each pass.
 **Fix:** make the distinguishing value part of the `for` target:
 `for i, base in enumerate(items):`. Only names bound by the `for` statement reach
 the per-iteration key. If there is no such value, put `# @cash:no-cache` above

@@ -112,6 +112,12 @@ class TrackingState:
     # W/R: NotebookSimulator (MismatchClassifier).
     cell_text_at: dict[int, str] = field(default_factory=dict)
 
+    # The notebook position (0-based) of the cell whose own statements run
+    # now; None while the upstream check rebuilds the cells above it, and
+    # when the check could not place the cell. For warnings that name it.
+    # W: UpstreamChecker. R: ForLoopHandler.
+    running_cell: int | None = None
+
     # sha256(cell source) -> the global RNG state after that cell ran, so a
     # downstream draw can be restored to its position-correct state.
     # W: CellExecutor. R: UpstreamChecker.

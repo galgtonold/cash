@@ -309,6 +309,8 @@ class UpstreamChecker:
 
         # A name the previous cell's forward probe held and no restore filled.
         self.simulator.restorer.drop_probe_placeholders()
+        # Unplaced until the check has found the cell and rebuilt what is above it.
+        self.tracking_state.running_cell = None
 
         # Resolve the notebook path ONCE for the whole cell check and
         # thread it through the analysis helpers + Phase 2, instead of each site
@@ -760,6 +762,7 @@ class UpstreamChecker:
             # collection the cell may change in place: the very object it
             # starts from, which its next run compares with.
             self.simulator.stale_values.note_cell_start(current_cell_idx, required_inputs)
+            self.tracking_state.running_cell = current_cell_idx
 
             all_metrics = self.replay.in_notebook_order(restored_info + executed_metrics, notebook_cells)
             return UpstreamResult(all_metrics, total_restore_time, total_execution_time)

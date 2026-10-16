@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @00051bf9 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @65bfe54e -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -83,7 +83,7 @@ its warning class.
 | [Caching](#cache-codes) | `CACHE-` | 19 | Caching happened, or refused to, and it is worth saying. |
 | [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
 | [Side effects](#impure-codes) | `IMPURE-` | 4 | The function does something a cache hit will not repeat. |
-| [Cache keys](#key-codes) | `KEY-` | 24 | Something the result depends on may not be in the cache key. |
+| [Cache keys](#key-codes) | `KEY-` | 25 | Something the result depends on may not be in the cache key. |
 | [Notebook](#notebook-codes) | `NOTEBOOK-` | 11 | Notebook-wide machinery rather than one statement. |
 | [Randomness](#random-codes) | `RANDOM-` | 3 | A cached value that randomness makes non-reproducible. |
 | [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
@@ -970,6 +970,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-HELPERS-UNWALKABLE](#key-helpers-unwalkable) | both | the code a function runs cannot all be found; not cached |
 | [KEY-INSTANCE-STATE](#key-instance-state) | decorator | a bound method's instance cannot be hashed |
 | [KEY-ITERATOR-CONSUMED](#key-iterator-consumed) | decorator | building the key read an iterator argument; the call ran uncached |
+| [KEY-LOOP-VAR-CHANGED](#key-loop-var-changed) | notebook | a loop body changes its loop variable before work cached for each pass |
 | [KEY-NETWORK-READ](#key-network-read) | decorator | the body reads from a server or database |
 | [KEY-OPAQUE-CALLABLE](#key-opaque-callable) | decorator | a callable's code cannot be hashed |
 | [KEY-SOURCE-CHANGED](#key-source-changed) | decorator | a code file changed after import |
@@ -1322,6 +1323,31 @@ call by something that does not read it.
 **When it is safe to ignore.** When the message says the iterator *may* have
 been read and you know the key did not read it. When it says it was read,
 the result of that call came from an emptied iterator.
+
+### KEY-LOOP-VAR-CHANGED {#key-loop-var-changed}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/control_structures/loop_target_change.py:target_changed_before_cached_work @1d8505cf, cash/notebook/control_structures/for_handler.py:ForLoopHandler._warn_target_changed @e307b4b5 -->
+**What happened.** A `for` loop that cash runs pass by pass changes its loop
+variable in place (`q.append(...)`, `q[0] = ...`, `q += ...`, `q.n = ...`)
+before a statement of the same pass that cash caches: a call of yours or of a
+library, or a binding that reads the variable. The message names the cell, the
+line that changes the variable and the line of the cached work. It is shown
+once per loop, when the loop first runs, and read from the loop's text alone.
+
+**Why it matters.** Each pass is keyed on the loop variable as the `for`
+binds it. The change comes after that, so it is not in the key: two passes
+whose values were equal when bound share one cached result, and the second
+gets the first's answer, on the first Run All too.
+
+**What to do.** Make the value that tells the passes apart part of the `for`
+target (`for i, q in enumerate(items):`): only names the `for` binds reach
+the key of each pass. If there is no such value, put `# @cash:no-cache` on a
+line of its own above the statement the message names.
+
+**When it is safe to ignore.** When the passes never start out equal (each
+`q` differs when bound), or the cached work does not depend on the change.
 
 ### KEY-NETWORK-READ {#key-network-read}
 

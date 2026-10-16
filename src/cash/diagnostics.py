@@ -274,6 +274,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # function on every read, or finding it raised); the function runs uncached
         "KEY-INSTANCE-STATE",  # a bound method's instance could not be hashed;
         # falling back to its process-local identity
+        "KEY-LOOP-VAR-CHANGED",  # a loop body changes its loop variable in place
+        # before work cached per pass, whose key took the variable as bound
         "KEY-ITERATOR-CONSUMED",  # building the key read an iterator argument
         # (a key= function, a registered hasher); the call ran uncached
         "KEY-NETWORK-READ",  # the body fetches from a server; its answer is not
