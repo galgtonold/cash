@@ -34,10 +34,13 @@ def test_an_edit_to_a_later_helper_reruns_it(cash_magics, mock_shell, caller):
 
 
 def test_a_later_helper_left_as_it_is_is_not_rerun(cash_magics, mock_shell):
-    cells = ["def a(n):\n    return b(n) * 2", "calls = []\ndef b(n):\n    calls.append(n)\n    return n + 1", "r = a(3)"]
+    cells = [
+        "def a(n):\n    return b(n) * 2",
+        "calls = []\ndef b(n):\n    calls.append(n)\n    return n + 1",
+        "r = a(3)",
+    ]
     for cell in cells:
         run_cash_cell(cash_magics, cell, cells=cells)
     run_cash_cell(cash_magics, cells[2], cells=cells)
     assert mock_shell.user_ns["r"] == 8
     assert mock_shell.user_ns["calls"] == [3]
-

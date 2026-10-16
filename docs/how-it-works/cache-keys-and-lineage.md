@@ -261,7 +261,8 @@ def a(n): return b(n) * 2      # cell 1: b does not exist yet
 def b(n): return n + 1         # cell 2
 r = a(3)                       # cell 3: 8
 
-# edit cell 2 to `return n + 10`, run cell 3 alone: cell 2 runs again, r is 26
+# edit cell 2 to `return n + 10`, run cell 3 alone:
+# cell 2 runs again, r is 26
 ```
 
 ### Resolving an input

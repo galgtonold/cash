@@ -78,19 +78,6 @@ def test_callee_below_caller_propagates_an_edit_on_run_all(nb_runner):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "OPEN, the remaining half of downward function dependencies. The call site's KEY now carries the "
-        "callee's lineage, which is enough whenever the callee cell actually runs "
-        "(Run All, or a restart). Re-running ONLY the call site does not re-execute "
-        "the edited callee, so user_ns and variable_lineage still hold the OLD b "
-        "and the key legitimately does not change. Closing it means putting the "
-        "callee into the statement's INPUTS so upstream reconstruction re-executes "
-        "its cell — inputs also drive cacheability and mutation analysis, which is "
-        "why it is not a one-line follow-on. strict=True: global xfail_strict is OFF."
-    ),
-)
 def test_callee_below_caller_propagates_an_edit_on_isolated_rerun(nb_runner):
     """Callee BELOW: editing it and re-running ONLY the call site."""
     nb_runner.create_notebook([C_ON, CALLER, CALLEE, CALLSITE])
