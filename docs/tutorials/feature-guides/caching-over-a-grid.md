@@ -21,7 +21,7 @@ CALLS = []
 @app.cache(assume_safe=True)
 def field(axis):
     CALLS.append(len(axis))
-    modes = np.arange(1, 400)[:, None]
+    modes = np.arange(1, 4000)[:, None]
     return np.sin(modes * axis[None, :]).sum(axis=0)
 
 field(np.linspace(0.0, 1.0, 200))     # first call: computes
@@ -80,7 +80,7 @@ CHUNK = 100
 @app.cache(assume_safe=True)
 def field_chunk(block):
     CALLS.append(len(block))
-    modes = np.arange(1, 400)[:, None]
+    modes = np.arange(1, 4000)[:, None]
     return np.sin(modes * block[None, :]).sum(axis=0)
 
 axis = np.arange(0.0, 1.0, dx)           # 200 points = 2 blocks
