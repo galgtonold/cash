@@ -34,7 +34,7 @@ CASES = {
 def test_hits_after_a_restart(nb_runner, case, rerun):
     if case == "star" and rerun == "only_the_cell":
         pytest.skip("a star import binds no name the text shows; plain Python raises NameError here too")
-    (nb_runner.work_dir / "helpers.py").write_text(HELPERS)
+    (nb_runner.work_dir / "helpers.py").write_text(HELPERS, encoding="utf-8")
     imports, use = CASES[case]
     cells = [f"%cash_badge print\nimport time\n{SLOW}", imports, f"{use}\nprint('X', x)"]
     nb_runner.create_notebook(cells)

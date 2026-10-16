@@ -28,7 +28,7 @@ def _cells(start=0):
 
 
 def _holds(nb_runner):
-    return (nb_runner.work_dir / "count.txt").read_text()
+    return (nb_runner.work_dir / "count.txt").read_text(encoding="utf-8")
 
 
 def test_run_all_twice_gives_what_plain_python_gives(nb_runner):
@@ -56,7 +56,7 @@ def test_a_change_from_outside_is_still_read(nb_runner):
     nb_runner.create_notebook(_cells())
     nb_runner.start_kernel()
     nb_runner.run_all()
-    (nb_runner.work_dir / "count.txt").write_text("10")
+    (nb_runner.work_dir / "count.txt").write_text("10", encoding="utf-8")
     nb_runner.run_cell(5)
     nb_runner.run_cell(6)
     assert "HOLDS 11" in nb_runner.get_output(6), nb_runner.get_output(6)
