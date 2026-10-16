@@ -75,7 +75,13 @@ REFUSED = {"neighbors_hold_the_data"}
 def test_a_bare_fit_hits_after_a_restart(nb_runner, case):
     build, fit, probe = CASES[case]
     # ``persist``: a fit under 0.1 s on a fast machine is kept in memory only.
-    cells = [SETUP, DATA, build, "# @cash:persist\n" + fit, "# @cash:no-cache\n" + probe.replace("\n", "\n# @cash:no-cache\n")]
+    cells = [
+        SETUP,
+        DATA,
+        build,
+        "# @cash:persist\n" + fit,
+        "# @cash:no-cache\n" + probe.replace("\n", "\n# @cash:no-cache\n"),
+    ]
     nb_runner.create_notebook(cells)
     nb_runner.start_kernel()
     nb_runner.run_all()
