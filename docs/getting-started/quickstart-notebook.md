@@ -87,6 +87,12 @@ Two habits keep the slow statements cached:
   `df = df.assign(c=...)` rather than `df["c"] = ...`: a change in place runs
   every time. See [What gets cached](../notebook_caching_api.md#what-gets-cached).
 
+## Found a problem?
+
+A wrong result, a run slower than without cash, or a warning you cannot
+make sense of: please [tell us](../report-a-bug.md). A wrong result is the most
+important kind of report, and the page lists what to include.
+
 ## Related
 
 - [Notebook guide](../notebook_caching_api.md#what-gets-cached): what cash caches, what it

@@ -128,6 +128,12 @@ costs a little once, and later runs get it back.
 [Seeing what cash did](../decorator.md#seeing-what-cash-did) explains every
 line, and `CASH_VERBOSE=1` prints one line per call.
 
+## Found a problem?
+
+A wrong result, a run slower than without cash, or a warning you cannot
+make sense of: please [tell us](../report-a-bug.md). A wrong result is the most
+important kind of report, and the page lists what to include.
+
 ## Related
 
 - [`@cash.cache` guide](../decorator.md): every parameter, and what invalidates
