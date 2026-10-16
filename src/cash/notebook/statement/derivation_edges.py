@@ -353,7 +353,10 @@ def _detect_matplotlib_figure_edge(
     probe = value
     np = _imported("numpy")
     if np is not None and isinstance(value, np.ndarray) and value.dtype == object and value.size:
-        probe = value.flat[0]  # plt.subplots(1, 2) -> array of Axes
+        # plt.subplots(1, 2) -> array of Axes. The base-class item(), not
+        # ``value.flat[0]``: a subclass's own indexing runs its code, and a
+        # masked object array's raises AttributeError ('int' has no 'view').
+        probe = np.ndarray.item(value, 0)
     if not isinstance(probe, artist_mod.Artist):
         return
     fig = getattr(probe, "figure", None)

@@ -73,3 +73,13 @@ def test_clearing_the_figure_before_detecting_keeps_the_edge():
         assert edges == {"ax": {"fig"}}
     finally:
         plt.close(fig)
+
+
+def test_a_masked_object_array_is_no_axes_and_does_not_raise():
+    """``np.ma.asarray(rows, dtype=object)``: indexing ``.flat`` on it raises in numpy
+    itself, so probing it for Axes made the user's cell fail under cash only."""
+    np = pytest.importorskip("numpy")
+    masked = np.ma.asarray([[1985, np.nan, "Biking"], [1984, 3, "Dancing"]], dtype=object)
+    edges: dict[str, set[str]] = {}
+    detect_derivation_edges(edges, "masked", masked, {"masked": masked})
+    assert edges == {}
