@@ -512,6 +512,9 @@ class StatementStore:
         cost_fields = _cost_fields(prediction)
         if should_skip:
             return self._store_metadata_only(run, execution, skip_reason, cost_fields)
+        kept_out = self._copy_dearer_than_compute(run, execution, payload["variables"])
+        if kept_out is not None:
+            return self._store_metadata_only(run, execution, kept_out, cost_fields)
 
         metadata = StatementCacheMetadata(
             timestamp=time.time(),
@@ -611,6 +614,40 @@ class StatementStore:
             policy.store_floor_s * 1000,
         )
         return True
+
+    def _copy_dearer_than_compute(
+        self, run: StatementRun, execution: StatementExecution, variables: dict[str, Any]
+    ) -> str | None:
+        """Why *run*'s value is kept out of the RAM tier, or None to store it.
+
+        Only for an intermediate of the cell -- every output rebound later
+        in it (``written_later_in_cell``), so only a re-run of part of the
+        cell in this session could restore it -- whose copy into the RAM
+        tier costs more than computing it did (`memory_backend.store_copy_seconds`).
+        Running it again on such a re-run is then no slower than restoring
+        it was, and the copy is paid on every miss: a cleaning cell
+        filtering a 2.9-million-row table five times (``df = df[...]``)
+        spent 9 s of a 4 s cell copying versions nothing restored. Its
+        disk write is deferred to the end of the cell already, and the
+        cell's last version is stored as before. Not in a loop, not under
+        ``@cash:persist``, and not for a value whose copy the tier cannot
+        price."""
+        later = self.written_later_in_cell
+        if run.force_persist or self._calls.in_loop or not run.outputs or not later or not set(run.outputs) <= later:
+            return None
+        if restore_kind(getattr(self.cash_instance, "backend", None)) != "ram":
+            return None
+        copy = 0.0
+        for value in variables.values():
+            seconds = memory_backend.store_copy_seconds(value)
+            if seconds is None:
+                return None
+            copy += seconds
+        compute = execution.store_cost
+        if copy <= compute:
+            return None
+        logger.debug("[SIZE_AWARE] intermediate kept out of RAM: copy %.2fs > compute %.2fs", copy, compute)
+        return f"{KEPT_OUT_OF_RAM}: copying it (~{copy:.2f}s) costs more than computing it ({compute:.2f}s)"
 
     def _refusal(
         self,
@@ -884,6 +921,11 @@ class StatementStore:
                 backend.set_metadata_only(cache_key, wire)
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("[PROCESSOR] Best-effort metadata persistence failed")
+
+
+#: The start of the skip reason of an intermediate the RAM tier does not
+#: keep (`StatementStore._copy_dearer_than_compute`).
+KEPT_OUT_OF_RAM = "kept out of RAM: copy dearer than compute"
 
 
 def _nestable(payload: dict[str, Any]) -> tuple[Any, list[Any]] | None:

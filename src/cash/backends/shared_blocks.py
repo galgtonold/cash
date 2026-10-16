@@ -37,7 +37,7 @@ from ..content_hashers import column_memory_key, known_column_pieces, pandas_val
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["BlockReuse", "compared_count", "is_kept", "reused_count"]
+__all__ = ["BlockReuse", "bytes_to_copy", "compared_count", "is_kept", "reused_count"]
 
 #: ``content key -> weak reference`` to block values a stored table holds.
 _KEPT: dict[tuple, Any] = {}
@@ -199,6 +199,25 @@ class BlockReuse:
                     _KEPT_IDS[id(values)] = ref
         except Exception:  # only a saving: nothing kept
             logger.debug("cash: stored blocks not kept for reuse", exc_info=True)
+
+
+def bytes_to_copy(frame: Any) -> int:
+    """About the bytes storing the pandas *frame* copies: its blocks, less
+    those the tier copied from these very arrays and still keeps (taken
+    again when their bytes still match, `BlockReuse.find`) and Arrow data
+    (shared when Arrow allocated it, `frame_sharing.arrow_owned`). An
+    estimate for the store's cost, never a promise of what is shared."""
+    total = 0
+    for block in frame._mgr.blocks:
+        values = block.values
+        if getattr(values, "_pa_array", None) is not None:
+            continue
+        with _LOCK:
+            refs = _COPIED_FROM.get(id(values))
+        if refs is not None and refs[0]() is values and refs[1]() is not None:
+            continue
+        total += int(getattr(values, "nbytes", 0))
+    return total
 
 
 def _sources(frame: Any) -> dict[tuple, tuple[Any, tuple]]:
