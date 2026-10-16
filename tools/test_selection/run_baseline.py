@@ -64,7 +64,7 @@ def main() -> int:
 
     env = dict(os.environ)
     env["COVERAGE_PROCESS_START"] = str(rc)
-    env["PYTHONPATH"] = os.pathsep.join([str(HERE), str(ROOT)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
+    env["PYTHONPATH"] = os.pathsep.join([str(HERE)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
     env["TESTSEL_RESULTS"] = str(out / "results.json")
 
     cmd = [

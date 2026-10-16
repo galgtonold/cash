@@ -350,7 +350,7 @@ class StatementLineageBuilder:
                 tracking_state.no_cache_values.pop(cache_key, None)
 
         if replay_bumps:
-            self.replay_derivation_bumps(tracking_state, outputs, inputs)
+            self.replay_derivation_bumps(tracking_state, outputs, inputs, code=code)
 
         return captured_vars
 
@@ -360,9 +360,11 @@ class StatementLineageBuilder:
         outputs: set[str],
         inputs: set[str],
         skip: set[str] | frozenset[str] = frozenset(),
+        code: str | None = None,
     ) -> set[str]:
         """Move on the variables a statement with *outputs* changed through
-        another name (`bump_derived_lineages`); the names moved.
+        another name (`bump_derived_lineages`); the names moved. *code*, the
+        statement's text, says which outputs it changed without naming them.
 
         A mutation of a base/frame bumps its live-alias derivatives, a change
         to a list bumps every other variable bound to it or holding it. The
@@ -388,6 +390,7 @@ class StatementLineageBuilder:
             record=record,
             present=lambda t: t in user_ns,
             skip=skip,
+            code=code,
         )
 
     def _record_output(

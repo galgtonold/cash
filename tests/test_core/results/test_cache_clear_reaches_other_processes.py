@@ -17,12 +17,13 @@ own RAM tier and its own clear watcher.
 from __future__ import annotations
 
 import os
+import time
 import warnings
 
 import pytest
 
 from cash import Cash
-from cash.backends import clear_watch, file_eviction
+from cash.backends import clear_watch, file_backend, file_eviction
 from cash.exceptions import CashCacheStoreFailedWarning
 
 
@@ -56,6 +57,46 @@ def test_a_clear_elsewhere_stops_a_running_process_serving_it(tmp_path):
     runs.clear()
 
     served(1)
+    served(1)
+    assert runs == [1]
+
+    cleared.cache_clear()
+
+    served(1)
+    assert runs == [1, 1], "the running process kept serving what was cleared"
+
+
+def test_a_clear_while_the_other_write_is_still_queued_reaches_it(tmp_path, monkeypatch):
+    """The served result's disk write was still queued when the clear listed
+    the folder (a slow CI disk): the clear found nothing, told no one, and
+    the server went on serving it."""
+    real_write = file_backend.FileBackend._write_cache_files
+
+    def slow_write(self, *args, **kwargs):
+        time.sleep(0.2)
+        return real_write(self, *args, **kwargs)
+
+    monkeypatch.setattr(file_backend.FileBackend, "_write_cache_files", slow_write)
+    test_a_clear_elsewhere_stops_a_running_process_serving_it(tmp_path)
+
+
+@pytest.mark.expects_failed_writes
+def test_a_clear_reaches_a_result_that_never_reached_the_disk(tmp_path, monkeypatch):
+    """A result whose disk write failed (a full disk) lives only in the
+    server's RAM tier: a clear that finds nothing on disk still tells it."""
+    server, admin = _pair(tmp_path)
+    served = server.cache(assume_safe=True)(model)
+    cleared = admin.cache(assume_safe=True)(model)
+    runs.clear()
+
+    def disk_full(self, *args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    with monkeypatch.context() as m, warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        m.setattr(file_backend.FileBackend, "_write_cache_files", disk_full)
+        served(1)
+        server.backend.backends[1]._writes.wait_all()
     served(1)
     assert runs == [1]
 

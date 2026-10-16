@@ -46,6 +46,7 @@ from contextlib import contextmanager
 from typing import Any, Callable
 
 from ... import _plain_data
+from ...analysis.ast_util import parse_cached
 from ..borrowed_memory import borrowed_memory_names
 from ..shared_objects import (
     EXACT_CONTAINER_TYPES,
@@ -526,6 +527,37 @@ def shared_object_partners(derivation_edges: dict[str, set[str]], var: str) -> s
     return partners
 
 
+def text_bound_names(code: str) -> frozenset[str] | None:
+    """The names *code*'s own text binds -- assignment, ``for``, ``with`` and
+    walrus targets, imports, ``def`` and ``class`` names, ``except ... as``
+    -- outside the bodies of the functions, classes and lambdas it defines;
+    None when it does not parse (then nothing is taken as changed unseen)."""
+    tree = parse_cached(code)
+    if tree is None:
+        return None
+    bound: set[str] = set()
+    stack: list[ast.AST] = list(tree.body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+            stack.extend(node.decorator_list)
+            if not isinstance(node, ast.ClassDef):
+                stack.extend(node.args.defaults)
+                stack.extend(d for d in node.args.kw_defaults if d is not None)
+            continue
+        if isinstance(node, ast.Lambda):
+            continue
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            bound.add(node.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            bound.update((alias.asname or alias.name).split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+        stack.extend(ast.iter_child_nodes(node))
+    return frozenset(bound)
+
+
 def bump_derived_lineages(
     derivation_edges: dict[str, set[str]],
     lineage_map: dict[str, str],
@@ -535,6 +567,7 @@ def bump_derived_lineages(
     record: Callable[[str, str], None],
     present: Callable[[str], bool],
     skip: Iterable[str] = (),
+    code: str | None = None,
 ) -> set[str]:
     """Replay derivation bumps after outputs' lineages were written.
 
@@ -570,6 +603,15 @@ def bump_derived_lineages(
         Variables this statement already moved on another way -- those stored
         with its entry (``held_lineage``): neither bumped nor bumped through,
         on every path alike, so the runtime and the simulation agree.
+    code:
+        The statement's text. An output it changed without naming it -- a
+        global a function it calls changes (``bump()`` doing
+        ``HELD[-1]["n"] += 5``) -- is no input, yet changed in place: the
+        object it shares with ``data`` since ``hold(data["meta"])`` changed
+        under ``data`` too. An output the text does not bind
+        (`text_bound_names`) is taken as changed in place; one a callee
+        rebinds (``global K; K = [...]``) bumps its partners needlessly,
+        never wrongly.
     """
     bumped: set[str] = set()
     if not derivation_edges:
@@ -584,6 +626,11 @@ def bump_derived_lineages(
     # edges it had are no reason to bump anything. A bump can cascade
     # (mutating ``a`` bumps view ``v``, which may itself be a base for ``w``).
     frontier: list[str] = [o for o in outputs if o in derivation_edges and o in inputs]
+    unread = [o for o in outputs if o in derivation_edges and o not in inputs]
+    if unread and code is not None:
+        bound = text_bound_names(code)
+        if bound is not None:
+            frontier += [o for o in unread if o not in bound]
     while frontier:
         src = frontier.pop()
         if src in visited:

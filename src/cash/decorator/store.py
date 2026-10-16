@@ -10,6 +10,7 @@ import hashlib
 import inspect
 import logging
 import secrets
+import sys
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -806,14 +807,22 @@ class ResultStore:
             return returned
         finally:
             if not committed:
-                # Abandoned or failed: the chunks written so far are
-                # unreferenced (no manifest names them). Best effort -- a
-                # killed process can still leave some behind.
-                for index in range(chunks.written):
-                    try:
-                        self._backend_slot.backend.delete(f"{chunks.prefix}:chunk_{index}")
-                    except Exception:  # noqa: BLE001 - cleanup must not raise
-                        logger.debug("[CORE] could not drop orphan chunk %d", index)
+                self._drop_orphan_chunks(chunks)
+
+    def _drop_orphan_chunks(self, chunks: _ChunkStream, _finalizing: Callable[[], bool] = sys.is_finalizing) -> None:
+        """Delete the chunks an abandoned or failed stream wrote: no manifest
+        names them. Best effort -- a killed process can still leave some
+        behind, and so does a stream closed while the interpreter shuts down
+        (its modules half torn down: a failed delete's own log line raised,
+        logging's lock already gone). *_finalizing* is bound when this is
+        defined, for the same reason."""
+        if _finalizing():
+            return
+        for index in range(chunks.written):
+            try:
+                self._backend_slot.backend.delete(f"{chunks.prefix}:chunk_{index}")
+            except Exception:  # noqa: BLE001 - cleanup must not raise
+                logger.debug("[CORE] could not drop orphan chunk %d", index)
 
     def _buffer_item(self, spec: CachedFunction, call: Call, chunks: _ChunkStream, item: Any) -> None:
         """Add a streamed *item* to the open chunk, writing the chunk once it is full.
@@ -1035,15 +1044,29 @@ class ResultStore:
                 logger.debug("[CORE] could not drop replaced chunk %d of %s", index, prefix)
 
 
-def _leave(scope: Any, dropped: bool) -> None:
+def _leave(
+    scope: Any,
+    dropped: bool,
+    _copy_context: Callable[[], contextvars.Context] = contextvars.copy_context,
+    _finalizing: Callable[[], bool] = sys.is_finalizing,
+) -> None:
     """Exit a stream's tracker or observer *scope*.
 
     A stream *dropped* at a ``yield`` leaves in a copy of the context: its
     bookkeeping ends as usual, and the caller's context, which holds the
     caller's own tracker and observer, is left as it is (`reset_in_any_context`
     sets the restored value in the copy).
+
+    A stream still open when the interpreter shuts down is closed while the
+    modules are torn down, their globals (``contextvars`` here, ``sys.meta_path``
+    in the reader patches) already None: nothing is left to restore then, so
+    what fails is let go. The helpers are bound when this is defined.
     """
-    if dropped:
-        contextvars.copy_context().run(scope.__exit__, None, None, None)
-    else:
-        scope.__exit__(None, None, None)
+    try:
+        if dropped:
+            _copy_context().run(scope.__exit__, None, None, None)
+        else:
+            scope.__exit__(None, None, None)
+    except Exception:
+        if not _finalizing():
+            raise
