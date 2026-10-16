@@ -267,6 +267,14 @@ class Wrappers:
         stats_wrapper.cache_clear = self._cache_clear(cf)
         stats_wrapper.explain = self._explain(cf)
         stats_wrapper.__wrapped__ = func
+        # `functools.wraps` copies no defaults, so the wrapper's own were
+        # None, while `inspect.signature` (which follows `__wrapped__`)
+        # reports *func*'s. A decorator over this one that copies the
+        # defaults off what it wraps (networkx's `_dispatchable`) built a
+        # function that required every argument. The wrapper takes
+        # ``*args, **kwargs`` only, so these change nothing about its call.
+        stats_wrapper.__defaults__ = getattr(func, "__defaults__", None)
+        stats_wrapper.__kwdefaults__ = getattr(func, "__kwdefaults__", None)
         # Marker so the purity analyzer treats a call to this wrapper as a
         # dependency-graph edge rather than recursing into cash's own wrapper
         # machinery. functools.wraps copies __module__, which would
