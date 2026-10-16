@@ -2060,7 +2060,7 @@ or applying it twice does not change the result (`s.add(x)` on a set).
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/background_threads.py:BackgroundThreads.cell_ends @9fdaf2e9, cash/notebook/background_threads.py:user_code_of @310cd8c4 -->
+<!-- claim: cash/notebook/background_threads.py:BackgroundThreads.cell_ends @b6d8c938, cash/notebook/background_threads.py:user_code_of @310cd8c4 -->
 **What happened.** A cell started a thread and finished while the thread
 was still running. The message names the cell, the thread and the function
 it runs. Only a thread that runs your own code counts: a pool's idle

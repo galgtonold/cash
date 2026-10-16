@@ -6,8 +6,11 @@ the statements that read those values were keyed, and stored, on what they
 held when the cell ended. Cash cannot follow the thread; the user can join
 it before the cell ends.
 
-Cheap: the threads alive before the cell, as a set of the ``Thread`` objects
-``threading.enumerate`` returns, compared with the ones alive after it. A
+Cheap: the idents of the threads alive before the cell, compared with the
+threads alive after it. Idents, not the ``Thread`` objects: a set of those
+held for the whole cell would put every live thread, and all its target and
+arguments hold, in reach of the walks that look for the functions a value
+holds. A
 new thread counts only when the code it runs is the user's (its target, or
 the ``run`` of a ``Thread`` subclass, by its code's file): the workers of a
 pool, a library's monitor thread and cash's own writers run library code and
@@ -78,16 +81,16 @@ def _label(fn: object) -> str:
 class BackgroundThreads:
     """The threads alive as a cell starts, and the cells already warned of."""
 
-    _before: frozenset[threading.Thread] = frozenset()
+    _before: frozenset[int | None] = frozenset()
     _warned: set[str] = field(default_factory=set)
 
     def cell_starts(self) -> None:
-        self._before = frozenset(threading.enumerate())
+        self._before = frozenset(t.ident for t in threading.enumerate())
 
     def cell_ends(self, raw_cell: str, cell_number: int | None) -> None:
         """Warn when a thread of the user's that this cell started is alive."""
         before, self._before = self._before, frozenset()
-        started = [t for t in threading.enumerate() if t not in before and t.is_alive()]
+        started = [t for t in threading.enumerate() if t.ident not in before and t.is_alive()]
         if not started:
             return
         alive = [(t, fn) for t in started if (fn := user_code_of(t)) is not None]
