@@ -36,7 +36,7 @@ from cash.notebook.statement.run import ECHO_FIELD
 from cash.sizing import estimate_object_size, pickled_size_estimate
 from cash.tracking import file_dep_snapshot
 from cash.tracking.file_dep_snapshot import snapshot_dependencies
-from cash.tracking.randomness import capture_object_rng_states, capture_rng_state
+from cash.tracking.randomness import capture_object_rng_states
 from cash.value_hash import known_size
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
@@ -773,7 +773,9 @@ class StatementStore:
             # the sibling ``metadata`` dict holds variable NAMES — two distinct
             # concepts; keep them on different keys here too.
             "rich_outputs": captured_output.outputs,
-            "rng_state": capture_rng_state(),
+            # Only the streams the statement moved or seeded: a hit leaves
+            # every other stream where it stands, as a run would.
+            "rng_state": dict(execution.rng_moved),
             # The seeding regime this state was captured under, so a later
             # restore can tell whether replaying it would clobber a re-seed
             # rather than continue the stream.

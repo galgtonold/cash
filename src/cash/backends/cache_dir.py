@@ -90,7 +90,11 @@ __all__ = [
 #: built on such digests changed; and a statement's entry may hold a value's
 #: pickle nested in its own (`stored_pickle.load_part`), which an older
 #: build cannot load.
-CACHE_FORMAT_VERSION = 7
+#: 8: a statement's entry keeps only the RNG streams the statement moved or
+#: seeded, and a hit replays only those. An older entry holds every stream,
+#: and a hit on it put back streams the statement never touched, so the
+#: next draw repeated one already made; they are cleared.
+CACHE_FORMAT_VERSION = 8
 
 #: The per-directory format stamp. No entry suffix, so entry globs skip it.
 VERSION_FILENAME = "CACHE_VERSION"

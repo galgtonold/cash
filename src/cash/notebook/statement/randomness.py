@@ -148,6 +148,10 @@ class StatementRandomness:
         self._adopted: set[str] = set()
         #: `seed_generation` per stream when the statement began.
         self._generation_at_start: dict[str, int] = {}
+        #: Where the LAST statement left each global stream it moved or
+        #: seeded (see :meth:`observe_statement`), and only those: what a
+        #: hit on it replays.
+        self.moved_streams: dict = {}
 
     def adopt_unseen_seeds(self) -> None:
         """Put a seed no statement set into the ledger, from where the stream stands.
@@ -241,6 +245,7 @@ class StatementRandomness:
         :meth:`observe_statement` once the statement has run.
         """
         self.observed_draw = set()
+        self.moved_streams = {}
         self.draw_newly_seen = False
         self.newly_seen_draws = set()
         # A seed set inside a function the statement calls is seen as it is
@@ -682,10 +687,34 @@ class StatementRandomness:
             self._cell_changed |= changed
             self._cell_post = post
             self._record_hidden_draws(code, self.observed_draw)
-            if any(seed_generation(m) != g for m, g in self._generation_at_start.items()):
+            reseeded = {m for m, g in self._generation_at_start.items() if seed_generation(m) != g}
+            if reseeded:
                 self.note_ledgered_seeds(code)
+            self.moved_streams = self._moved_streams(code, post, changed | reseeded)
         except (TypeError, AttributeError):  # pragma: no cover - defensive
             self.observed_draw = set()
+            self.moved_streams = {}
+
+    def _moved_streams(self, code: str | None, post: dict, moved: set[str]) -> dict:
+        """Where the statement *code* left the global streams it moved,
+        out of *post* (all of them after it ran).
+
+        A hit replays these and nothing else. The streams it did not touch
+        stay where the kernel has them: replaying their position from when
+        the entry was written rewinds them, and the next draw repeats one
+        already made. *moved* is what changed and what was seeded while it
+        ran (a seed to the position the stream already held moves nothing,
+        yet a run puts the stream there from wherever it stands); a seed
+        cash does not count (``torch.manual_seed``) is read from the source.
+        """
+        if code is not None:
+            try:
+                moved |= get_seeding_rng_modules(strip_markers(code)) - set(self._generation_at_start)
+            except (SyntaxError, ValueError, AttributeError, RecursionError):
+                pass
+        if "torch" in moved:
+            moved.add("torch.cuda")
+        return {module: post[module] for module in moved if module in post}
 
     def _record_hidden_draws(self, code: str | None, drew: set[str]) -> None:
         """Remember that *code* drew from RNG modules its AST does not mention.

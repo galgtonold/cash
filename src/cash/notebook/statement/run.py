@@ -293,6 +293,9 @@ class StatementExecution:
     #: Whether it printed, warned or displayed anything before its value
     #: was shown: a value reused elsewhere would lose that.
     printed: bool = False
+    #: Where it left the global RNG streams it moved or seeded, and only
+    #: those (`StatementRandomness.moved_streams`): what a hit replays.
+    rng_moved: dict[str, Any] = field(default_factory=dict)
 
 
 def echoes(code: str, tree: ast.Module | None, is_last: bool) -> bool:
