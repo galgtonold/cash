@@ -83,7 +83,7 @@ its warning class.
 | [Caching](#cache-codes) | `CACHE-` | 19 | Caching happened, or refused to, and it is worth saying. |
 | [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
 | [Side effects](#impure-codes) | `IMPURE-` | 4 | The function does something a cache hit will not repeat. |
-| [Cache keys](#key-codes) | `KEY-` | 24 | Something the result depends on may not be in the cache key. |
+| [Cache keys](#key-codes) | `KEY-` | 25 | Something the result depends on may not be in the cache key. |
 | [Notebook](#notebook-codes) | `NOTEBOOK-` | 11 | Notebook-wide machinery rather than one statement. |
 | [Randomness](#random-codes) | `RANDOM-` | 3 | A cached value that randomness makes non-reproducible. |
 | [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
@@ -970,6 +970,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-HELPERS-UNWALKABLE](#key-helpers-unwalkable) | both | the code a function runs cannot all be found; not cached |
 | [KEY-INSTANCE-STATE](#key-instance-state) | decorator | a bound method's instance cannot be hashed |
 | [KEY-ITERATOR-CONSUMED](#key-iterator-consumed) | decorator | building the key read an iterator argument; the call ran uncached |
+| [KEY-MEMO-BEFORE-IMPORT](#key-memo-before-import) | both | a `functools` memo already held results when cash was imported |
 | [KEY-NETWORK-READ](#key-network-read) | decorator | the body reads from a server or database |
 | [KEY-OPAQUE-CALLABLE](#key-opaque-callable) | decorator | a callable's code cannot be hashed |
 | [KEY-SOURCE-CHANGED](#key-source-changed) | decorator | a code file changed after import |
@@ -1322,6 +1323,30 @@ call by something that does not read it.
 **When it is safe to ignore.** When the message says the iterator *may* have
 been read and you know the key did not read it. When it says it was read,
 the result of that call came from an emptied iterator.
+
+### KEY-MEMO-BEFORE-IMPORT {#key-memo-before-import}
+
+<span class="md-tag cash-warning-path">both</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/tracking/memos_before_import.py:find_memos_filled_before_import @e09c920f, cash/tracking/memos_before_import.py:warn_memos_filled_before_import @f66dd90f -->
+**What happened.** When `import cash` ran, a function of yours memoised
+with `functools.lru_cache` or `functools.cache` already held results: it
+was imported and called ahead of cash. The message names the memo (up to
+three of them) and points at its definition. It is shown once, at the
+import. Only module-level memos in your own modules are looked at.
+
+**Why it matters.** cash watches file reads from `import cash` on. A file
+the memo read before that was read where cash could not see it, and later
+calls are served from the memo and read nothing. A cached function that
+gets its data from the memo records no file, so an edit to that file
+returns the old result with no other warning.
+
+**What to do.** Import `cash` before the modules that call the memo, or
+pass the file's path as an argument (`load_cfg("config.yaml")`) from inside
+the cached function.
+
+**When it is safe to ignore.** When the memo reads no file (it computes
+from its arguments), or no cached function uses it.
 
 ### KEY-NETWORK-READ {#key-network-read}
 

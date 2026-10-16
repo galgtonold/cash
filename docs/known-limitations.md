@@ -525,7 +525,7 @@ recorded by their entry points.
 
 ### A file read into a memo before cash was imported
 
-<!-- claim: cash/__init__.py:_watch_reads_from_import @072f3639 -->
+<!-- claim: cash/__init__.py:_watch_reads_from_import @0d64857e -->
 **Symptom:** a cached function gets its config from a loader memoised with
 `functools.lru_cache`, you edit the config file, and the function returns
 the old result with no warning.
@@ -535,6 +535,11 @@ ran before that (it was imported, and called, ahead of `cash`) read the file
 where cash could not see it, so later calls get the memo and record no file.
 A loader first called after `import cash` is recorded, even when that call
 came from outside any cached function.
+
+<!-- claim: cash/tracking/memos_before_import.py:find_memos_filled_before_import @e09c920f -->
+At `import cash`, cash names each memo of yours (`lru_cache`, `cache`)
+that already holds results:
+[KEY-MEMO-BEFORE-IMPORT](warnings.md#key-memo-before-import).
 
 **Fix:** import `cash` before the modules that load config, or pass the path
 as an argument (`load_cfg("config.yaml")` inside the cached function).

@@ -276,6 +276,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # falling back to its process-local identity
         "KEY-ITERATOR-CONSUMED",  # building the key read an iterator argument
         # (a key= function, a registered hasher); the call ran uncached
+        "KEY-MEMO-BEFORE-IMPORT",  # a functools memo of the user's held results
+        # when cash was imported; a file it read then is not tracked
         "KEY-NETWORK-READ",  # the body fetches from a server; its answer is not
         # in the key, so it is served until a ttl= expires it
         "KEY-DYNAMIC-DEPENDENCY",  # code reached through an argument resolves a
