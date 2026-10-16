@@ -52,13 +52,6 @@ transactions = transactions.assign(
 Each statement is cached on its own. Change the `dropna` and only it, and what
 depends on it, runs again.
 
-<!-- claim: cash/analysis/mutations.py:MutationVisitor @d6981bbd broad="the subscript-store verdict is one branch of the visitor, read together with the outputs rule" -->
-!!! tip "Use `.assign()` for columns worth caching"
-    `df["col"] = ...` on a frame from an earlier cell changes that frame in
-    place, so it runs every time. `df = df.assign(col=...)` makes a new frame
-    and is cached. On a frame built in the same cell, both are cached. It only
-    matters for expensive columns.
-
 ### Cell 4: features
 
 ```python { .nb-cell }

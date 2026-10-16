@@ -20,8 +20,6 @@ section when a cell does something you did not expect.
 
 - Seed your random draws, or mark the ones that must change `# @cash:no-cache`.
   See [Randomness](#randomness).
-- Rebind instead of changing an earlier cell's object in place:
-  `df = df.assign(...)`, not `df["c"] = ...`.
 - Pass the time into helpers instead of reading the clock inside them.
 - Read files through the usual readers (`pd.read_*`, `np.load`, `open`).
 - Define a function above the functions that call it.
@@ -204,16 +202,19 @@ last one, as a plain re-run does, and says so with
 
 ### Mutating an object created in an earlier cell
 
-<!-- test:skip reason="illustrative: contrasts in-place mutation with rebinding across cells" -->
+<!-- test:skip reason="illustrative: in-place changes to a frame from an earlier cell" -->
 ```python { .nb-cell }
-# df came from an earlier cell: runs every time
-df["score"] = expensive(df)
-# cached
-df = df.assign(score=expensive(df))
+# df came from an earlier cell
+df["score"] = expensive(df)            # cached
+# runs every time, but expensive(df) is cached
+df.insert(1, "rank", expensive(df))
 ```
 
-A statement that changes an object made in an earlier cell runs every time. The
-same statement on an object made in the same cell caches normally. When
+A new column assigned to a frame from an earlier cell (`df["score"] = ...`) is
+cached like any other statement. A statement that changes such an object
+through a method (`df.insert(...)`, `lst.append(...)`) runs every time, but a
+slow call inside it is cached on the values it is handed, `df` included, so
+only the cheap change itself repeats. When
 another variable holds that object too (`d = dfs[0]`, `b = a`), directly or in
 a list, dict, `deque`, `UserDict`, object array or attribute of one (a
 `__slots__` attribute too), or the result holds an object that already
@@ -223,8 +224,9 @@ something else holds it -- a closure, a library's module or registry, a pandas
 `.attrs` (pandas copies it apart) -- or the statement is in a loop body
 (`for d in dfs:`), a restored copy would not be that object, so the statement
 runs every time. IPython's output history
-(`Out`, `_`) holding a value you displayed is not such a holder. **Fix:**
-rebind with `df = df.assign(...)`.
+(`Out`, `_`) holding a value you displayed is not such a holder. A slow call
+inside such a statement (`d["c"] = slow(d)` in the loop) is still cached on
+the value it is handed. Nothing to do.
 
 ### Mutating global state inside a function
 

@@ -11,14 +11,16 @@ In both, the expensive thing is ``compute(x)`` and the cheap thing is the
 wrapper. Caching the wrapper either fails outright or attaches an irrelevant
 dependency; caching the call is right in both.
 
-**The rule.** A call is eligible when its free variables do **not** include the
-statement's assignment / mutation target. If the call reads the target it *is*
-the fold, and no order-independent value can be extracted from it.
+**The rule.** A call is eligible unless its callee reads the statement's
+assignment / mutation target. A target the call is only handed
+(``df.insert(1, "c", slow(df))``, ``s = merge(s, x)``) is keyed on the value it
+holds when the call runs, as a comprehension's variable is: the statement's own
+change moves its lineage on every run, its value does not lie.
 
 That single rule does more work than it appears to. In ``out.append(f(x))`` the
-append is itself a ``Call`` whose func reads ``out`` — the target — so the same
-rule that admits ``f(x)`` excludes the mutation. There is no special case for
-"don't cache the mutation itself".
+append is itself a ``Call`` whose callee reads ``out`` — the target — so the
+same rule that admits ``f(x)`` excludes the mutation. There is no special case
+for "don't cache the mutation itself".
 
 **Scope of this module.** *Structural* eligibility only, from the AST. Whether a
 particular callee is worth intercepting at runtime — already ``@cash.cache``-d,
@@ -782,15 +784,22 @@ def _collect(
 ) -> None:
     if isinstance(node, _LOCAL_SCOPES):
         local = local | _bound_names(node)
+    # A target the call is handed (`slow(df)` in `df["c"] = slow(df)` or
+    # `df.insert(1, "c", slow(df))`) is keyed on the value it holds when the
+    # call runs, as a comprehension's variable is: its lineage moves with the
+    # statement's own change, its value does not lie. The call is still the
+    # fold when its callee reads the target (`out.append(...)`).
+    handed = names_read(node) & targets if isinstance(node, ast.Call) else set()
     if (
         isinstance(node, ast.Call)
-        and not (names_read(node) & targets)
+        and not (names_read(node.func) & targets)
         # A callee that reads a comprehension's own variable is a different
         # callable per element (`m.predict(X)` over `models.items()`), and
         # nothing in the key can see which: never intercepted.
         and not (names_read(node.func) & local)
-        and not (skip is not None and skip(node, local))
+        and not (skip is not None and skip(node, local | handed))
     ):
+        local = local | handed
         found.append((node, local))
         # Accepted -- its callee expression is now this site's, so nothing
         # there may be taken again. Its ARGUMENTS are a different matter:

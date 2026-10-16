@@ -1,18 +1,19 @@
 """Which call nodes may be cached independently of their statement.
 
-One structural rule decides it: **a call is eligible when its free variables do
-not include the statement's assignment / mutation target.** If the call reads
-the target, it *is* the fold and there is nothing order-independent to extract.
+One structural rule decides it: **a call is eligible unless its callee reads
+the statement's assignment / mutation target.** A target the call is only
+handed (``df.insert(1, "c", slow(df))``) is keyed on the value it holds when
+the call runs, as a comprehension's variable is.
 
 The rule is doing more work than it looks like. In ``out.append(compute(x))``
-the *append* is itself a Call whose func reads ``out`` — the target — so it is
-excluded by the same rule that admits ``compute(x)``. No special case needed
+the *append* is itself a Call whose callee reads ``out`` — the target — so it
+is excluded by the same rule that admits ``compute(x)``. No special case needed
 for "don't cache the mutation itself".
 """
 
 import ast
 
-from cash.notebook.call_interception import eligible_call_nodes
+from cash.notebook.call_interception import _eligible_calls_in_scope, eligible_call_nodes
 
 
 def _calls(src: str) -> list[str]:
@@ -34,9 +35,12 @@ class TestEligibility:
         """``prices[t] = compute(t)`` — target base is `prices`."""
         assert _calls("prices[t] = compute(t)") == ["compute(t)"]
 
-    def test_fold_reading_the_accumulator_is_excluded(self):
-        """``s = merge(s, x)`` — the call reads `s`; it IS the fold."""
-        assert _calls("s = merge(s, x)") == []
+    def test_a_call_handed_the_target_is_keyed_on_its_value(self):
+        """``s = merge(s, x)`` — `s` is handed in, so its value is in the key."""
+        stmt = ast.parse("s = merge(s, x)").body[0]
+        [(call, local)] = _eligible_calls_in_scope(stmt)
+        assert ast.unparse(call) == "merge(s, x)"
+        assert local == {"s"}
 
     def test_inplace_method_on_the_target_is_excluded(self):
         """``df.sort_values(inplace=True)`` — the mutation is the expensive part."""
@@ -60,17 +64,22 @@ class TestEligibility:
         """
         assert _calls("out.append(f(g(x)))") == ["f(g(x))", "g(x)"]
 
-    def test_a_nested_call_reading_the_target_is_still_excluded(self):
-        assert _calls("out.append(f(g(out)))") == []
+    def test_a_nested_call_handed_the_target_is_taken(self):
+        assert _calls("out.append(f(g(out)))") == ["f(g(out))", "g(out)"]
+
+    def test_a_call_whose_callee_reads_the_target_is_excluded(self):
+        assert _calls("df['c'] = df.apply(f)") == []
+        assert _calls("df['c'] = df['a'].map(f)") == []
 
     def test_multiple_independent_calls_are_all_returned(self):
         """Siblings are separate work and each deserves its own entry."""
         assert _calls("out.append(f(x) + g(y))") == ["f(x)", "g(y)"]
 
-    def test_call_reading_the_target_deep_inside_is_excluded(self):
-        """The target check must see through attributes and subscripts."""
-        assert _calls("s += compute(s.total)") == []
-        assert _calls("s += compute(s[0])") == []
+    def test_call_reading_the_target_deep_inside_keys_it_by_value(self):
+        """The target check sees through attributes and subscripts."""
+        for src in ("s += compute(s.total)", "s += compute(s[0])"):
+            [(_call, local)] = _eligible_calls_in_scope(ast.parse(src).body[0])
+            assert local == {"s"}
 
     def test_no_calls_yields_nothing(self):
         assert _calls("s += 1") == []

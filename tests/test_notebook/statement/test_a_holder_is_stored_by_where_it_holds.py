@@ -1,7 +1,7 @@
 """A variable stored with a statement's outputs because it holds one of their
 objects is stored by where it holds it, not whole.
 
-``train = data['train']``, then ``train['f1'] = slow(...)``: ``data`` holds the
+``train = data['train']``, then a slow ``train['f1'] = ...``: ``data`` holds the
 frame the statement changes, so a hit must leave ``data['train']`` the restored
 frame. Stored whole, ``data`` brought every other frame it holds (``raw``)
 into the entry of each feature statement: three statements on an 8 MB frame
@@ -16,13 +16,15 @@ from cash.notebook.holder_patches import HolderPatch, apply_patch, holder_patche
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
-SETUP = f"import time\ndef slow(x):\n    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n    return x"
+# The work is in the statement itself: a slow call of the user's would be
+# cached on its own, and the statement then stores nothing.
+SLEEP = f"time.sleep({ABOVE_PERSISTENCE_FLOOR_S})"
 CELLS = [
-    SETUP,
+    "import time",
     "data = {'train': {'a': 1}, 'raw': list(range(100_000)), 'meta': [{'n': 1}]}",
     "train = data['train']",
-    "train['f1'] = slow(train['a'] * 2)",
-    "train['f2'] = slow(train['a'] * 3)",
+    f"train['f1'] = [{SLEEP}, train['a'] * 2][1]",
+    f"train['f2'] = [{SLEEP}, train['a'] * 3][1]",
 ]
 
 
