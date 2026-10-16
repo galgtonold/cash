@@ -683,11 +683,8 @@ global or a file runs again in full.
 
 ### Chained file-writing cells re-run each other
 
-<!-- claim: cash/notebook/file_round_trips.py:FileRoundTrips.cell_ends @21f64ea8 -->
 If N cells each read a file, change it and write it back, a Run All costs
 N(N+1)/2 executions, not N, because each writer re-runs the writers before it.
-cash names those cells as soon as the second one runs:
-[NOTEBOOK-FILE-REWRITE-CHAIN](warnings.md#notebook-file-rewrite-chain).
 **Fix:** write to separate files.
 
 ## Editing without saving

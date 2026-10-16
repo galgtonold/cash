@@ -307,8 +307,6 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # longer than caching it could save, so it ran uncached
         "NOTEBOOK-ANALYSIS-FAILED",  # a safety check on a statement raised, so
         # the statement ran uncached
-        "NOTEBOOK-FILE-REWRITE-CHAIN",  # cells that each read one file and
-        # write it back re-run the ones above them on every run
         "NOTEBOOK-FILE-ROUNDTRIP",  # a statement reads back a file a statement
         # of this session wrote, and each new write makes it and what is built
         # from it run again
