@@ -637,6 +637,8 @@ class InMemoryBackend(CacheBackend):
         #: their digest (`_store_polars`), ``key -> [(clone, digest)]``: a
         #: hit, and a disk write of it, first checks they still hash so.
         self._checked: dict[str, list[tuple[Any, str]]] = {}
+        #: Held while tables kept uncopied are taken over (`_adopt_tables`).
+        self._adopt_lock = threading.Lock()
         #: GreedyDual-Size-Frequency state for the byte cap (see
         #: `_evict_to_byte_cap`): the clock L, and each key's L as of its last
         #: write or read. Kept here, not in the entry's metadata dict, because
@@ -874,6 +876,17 @@ class InMemoryBackend(CacheBackend):
         reuse = None
         if copied is None:
             arrow = not _stored_frame(frame, known_cells, record_cells)
+            checked = getattr(_CHECKED, "frames", None) if record_cells is not None else None
+            if checked is not None and mutable is False and arrow and frame.ndim == 2:
+                # Stored by `set`: a big table of numbers and dates is kept
+                # uncopied, with its digest, checked on every hit
+                # (`_still_as_stored`), and adopted once its caller lets go
+                # of it (`InMemoryBackend._adopt_tables`).
+                kept = frame_sharing.share_checked(frame)
+                if kept is not None and _own_metadata(frame, kept[0]):
+                    checked.append(kept)
+                    record_cells[id(kept[0])] = False
+                    return kept[0]
             if record_cells is not None and mutable is False and arrow:
                 # Stored: columns the tier already keeps are not copied again.
                 reuse = shared_blocks.BlockReuse.for_frame(frame)
@@ -1360,6 +1373,8 @@ class InMemoryBackend(CacheBackend):
                 if entry is not None and entry[1] is value:
                     self._drop(key)
             return None, None
+        if checked is not None:
+            known_cells = self._adopt_tables(key, value, checked, known_cells)
         if type(value) is _Marshalled:
             return metadata, _plain_data.marshal_loads(value.data)
         if type(value) is _Pickled:
@@ -1392,6 +1407,40 @@ class InMemoryBackend(CacheBackend):
             if copied is not None:
                 return metadata, copied
         return metadata, self._safe_deep_copy(value, key, known_cells=known_cells)
+
+    def _adopt_tables(
+        self, key: str, value: Any, checked: list[tuple[Any, Any]], known_cells: dict[int, Any] | None
+    ) -> dict[int, Any] | None:
+        """Take over the pandas tables of *key*'s entry kept uncopied
+        (`frame_sharing.share_checked`) whose caller let go of their data,
+        their digests just checked: frozen, they are the tier's own, and
+        this hit and every later one shares them (`frame_sharing.adopt`).
+        One the caller still holds stays as it is, and a hit copies it.
+        Returns the entry's table verdicts, updated.
+
+        The entry's list of checked values is replaced, never changed: a
+        background write of the entry checks the list it was handed, which
+        still names the tables it wrote."""
+        if known_cells is None or not any(_is_pandas_frame(type(kept)) for kept, _digest in checked):
+            return known_cells
+        with self._adopt_lock:
+            adopted = [kept for kept, _digest in checked if _is_pandas_frame(type(kept)) and frame_sharing.adopt(kept)]
+        if not adopted:
+            return known_cells
+        with self._lock:
+            entry = self._store.get(key)
+            if entry is None or entry[1] is not value or self._checked.get(key) is not checked:
+                return known_cells
+            cells = dict(known_cells)
+            for kept in adopted:
+                cells[id(kept)] = _SHARED
+            self._frame_cells[key] = cells
+            left = [(kept, digest) for kept, digest in checked if not any(kept is done for done in adopted)]
+            if left:
+                self._checked[key] = left
+            else:
+                self._checked.pop(key, None)
+            return cells
 
     def _read_pickled(self, key: str, metadata: MetadataDict, kept: _Pickled) -> tuple[MetadataDict | None, Any]:
         """A hit of a value kept as pickle bytes: a new copy read out of them.
@@ -2561,6 +2610,22 @@ def _note_store_copy_speed(nbytes: int, seconds: float) -> None:
     del _STORE_COPY_SPEED[:-_COPY_READINGS]
 
 
+def _probe_store_copy_speed() -> None:
+    """Time one copy into fresh memory, as a store of a table copies, when no
+    store has been timed yet (`_STORE_COPY_SPEED`). A big table the tier
+    keeps uncopied (`frame_sharing.share_checked`) is never timed, and the
+    memory it holds is what the caller's next tables then take fresh:
+    priced by `copy_seconds` alone, from pages a probe had just reused, a
+    cleaning cell's every version looked free to keep, and the tier filled
+    with them, evicting what a re-run would have restored."""
+    import numpy as np
+
+    source = np.ones(_STORE_TIMED_BYTES // 8)
+    started = time.perf_counter()
+    fresh = source.copy()
+    _note_store_copy_speed(fresh.nbytes, max(time.perf_counter() - started, 1e-9))
+
+
 def store_copy_seconds(value: Any) -> float | None:
     """What storing *value* in this tier costs in copying, at the speed
     stores of tables were measured at (`_STORE_COPY_SPEED`, else
@@ -2580,6 +2645,8 @@ def store_copy_seconds(value: Any) -> float | None:
                 nbytes = int(value.array.nbytes) if getattr(value.array, "_pa_array", None) is None else 0
             else:
                 nbytes = shared_blocks.bytes_to_copy(value)
+            if not _STORE_COPY_SPEED:
+                _probe_store_copy_speed()
             if _STORE_COPY_SPEED:
                 return nbytes / max(_STORE_COPY_SPEED)
             return copy_seconds(nbytes)
@@ -2954,9 +3021,16 @@ def _polars_digest(frame: Any) -> str | None:
     return hash_polars(frame)
 
 
-def _still_as_stored(checked: list[tuple[Any, str]]) -> bool:
-    """Do the clones `_store_polars` kept still hash to their digests?"""
-    return all(_polars_digest(clone) == digest for clone, digest in checked)
+def _still_as_stored(checked: list[tuple[Any, Any]]) -> bool:
+    """Do the clones `_store_polars` kept, and the pandas tables kept
+    uncopied (`frame_sharing.share_checked`), still hash to their digests?"""
+    return all(_checked_digest(kept) == digest for kept, digest in checked)
+
+
+def _checked_digest(kept: Any) -> Any:
+    if _is_pandas_frame(type(kept)):
+        return frame_sharing.checked_digest(kept)
+    return _polars_digest(kept)
 
 
 def _is_polars_frame(value_type: type) -> bool:
