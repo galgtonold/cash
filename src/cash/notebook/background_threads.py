@@ -6,11 +6,12 @@ the statements that read those values were keyed, and stored, on what they
 held when the cell ended. Cash cannot follow the thread; the user can join
 it before the cell ends.
 
-Cheap: the idents of the threads alive before the cell, compared with the
-threads alive after it. Idents, not the ``Thread`` objects: a set of those
-held for the whole cell would put every live thread, and all its target and
-arguments hold, in reach of the walks that look for the functions a value
-holds. A
+Cheap: the threads alive before the cell, held weakly, compared with the
+threads alive after it. Weakly: a set holding them for the whole cell would
+put every live thread, and all its target and arguments hold, in reach of
+the walks that look for the functions a value holds. Not by ident either: a
+thread that ends during the cell (one of cash's own writers) frees its
+ident, and the thread the cell starts next can be given it. A
 new thread counts only when the code it runs is the user's (its target, or
 the ``run`` of a ``Thread`` subclass, by its code's file): the workers of a
 pool, a library's monitor thread and cash's own writers run library code and
@@ -22,6 +23,7 @@ from __future__ import annotations
 import functools
 import logging
 import threading
+import weakref
 from dataclasses import dataclass, field
 
 from cash.diagnostics import log_diagnostic, warn_diagnostic
@@ -81,16 +83,16 @@ def _label(fn: object) -> str:
 class BackgroundThreads:
     """The threads alive as a cell starts, and the cells already warned of."""
 
-    _before: frozenset[int | None] = frozenset()
+    _before: weakref.WeakSet[threading.Thread] = field(default_factory=weakref.WeakSet)
     _warned: set[str] = field(default_factory=set)
 
     def cell_starts(self) -> None:
-        self._before = frozenset(t.ident for t in threading.enumerate())
+        self._before = weakref.WeakSet(threading.enumerate())
 
     def cell_ends(self, raw_cell: str, cell_number: int | None) -> None:
         """Warn when a thread of the user's that this cell started is alive."""
-        before, self._before = self._before, frozenset()
-        started = [t for t in threading.enumerate() if t.ident not in before and t.is_alive()]
+        before, self._before = self._before, weakref.WeakSet()
+        started = [t for t in threading.enumerate() if t not in before and t.is_alive()]
         if not started:
             return
         alive = [(t, fn) for t in started if (fn := user_code_of(t)) is not None]
