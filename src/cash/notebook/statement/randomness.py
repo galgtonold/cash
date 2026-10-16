@@ -6,6 +6,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import logging
+import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -57,6 +58,15 @@ _HELPER_GENERATOR_FIX = (
 )
 #: code object -> (it, whether its function makes an unseeded generator).
 _MINTS: dict[int, tuple[object, bool]] = {}
+
+
+def _draws_from_its_own_generator(call: str, namespace: dict) -> bool:
+    """Does the library behind *call* (``df.sample``) draw from a generator
+    of its own rather than numpy's global stream when given no seed? polars
+    does; pandas and scikit-learn take ``np.random`` for ``random_state=None``."""
+    value = namespace.get(call.partition(".")[0])
+    module = getattr(value, "__name__", None) if isinstance(value, types.ModuleType) else type(value).__module__
+    return isinstance(module, str) and module.partition(".")[0] == "polars"
 
 
 def _function_mints_unseeded_generator(fn: Callable) -> bool:
@@ -264,8 +274,13 @@ class StatementRandomness:
             return []
         tree = ast.parse(code)
         found: list[tuple[RandomnessCallInfo, str, str]] = []
+        numpy_seeded = "numpy.random" not in unseeded_streams({"numpy.random"})
         for call, line, condition in unseeded_library_calls_in(tree, namespace, classes=False):
             if condition is not None:
+                continue
+            if numpy_seeded and not _draws_from_its_own_generator(call, namespace):
+                # ``random_state=None`` takes numpy's global stream, and a
+                # seed stands behind it (``np.random.seed(0)`` above).
                 continue
             info = RandomnessCallInfo(module="library", function=call, lineno=line, col_offset=0, label=call)
             found.append(

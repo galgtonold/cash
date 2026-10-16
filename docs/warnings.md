@@ -2051,12 +2051,14 @@ warns. When cash cannot read the setting (a variable, or `PCA()`, whose
 `svd_solver='auto'` picks by the data's shape), the message says what the draw
 depends on rather than that one happened.
 
-<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness._warn_hidden_unseeded @653a91de -->
+<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness._warn_hidden_unseeded @f80cb855 -->
 In a notebook the same library calls warn when a statement makes them without
 a seed (`df.sample(100)`, `train_test_split(X)`), as does a statement that
 calls one of your functions which builds its own unseeded generator
 (`rng = make_rng()` with `return np.random.default_rng()`) and an anonymous
-generator (`z = np.random.default_rng().normal()`).
+generator (`z = np.random.default_rng().normal()`). A pandas or scikit-learn
+call left at `random_state=None` draws from numpy's global stream, so after
+`np.random.seed(0)` it is reproducible and does not warn; a polars call does.
 
 <!-- claim: cash/decorator/rng.py:RngWatch.warn_observed_draw @4bad64b0, cash/notebook/statement/randomness.py:StatementRandomness.flag_observed_hidden_draw @71b1e7ff, cash/tracking/randomness/lineage.py:unseeded_streams @5abf622f -->
 A draw that neither the function's source nor the statement's shows is caught

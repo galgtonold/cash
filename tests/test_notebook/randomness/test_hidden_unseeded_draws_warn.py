@@ -61,8 +61,9 @@ def test_a_hidden_unseeded_draw_warns(full_warning_text, cash_magics, cells, nam
         ["z = np.random.default_rng(0).normal()"],
         [_SEEDED_HELPER, "rng = make_rng()"],
         ["# @cash:allow-random\ndf.sample(100)"],
+        ["np.random.seed(0)", "s = df.sample(100)"],
     ],
-    ids=["seeded-sample", "seeded-generator", "seeded-helper", "allow-random"],
+    ids=["seeded-sample", "seeded-generator", "seeded-helper", "allow-random", "numpy-stream-seeded"],
 )
 def test_a_seeded_or_allowed_draw_stays_silent(full_warning_text, cash_magics, cells):
     found = [m for m in _messages(cash_magics, cells) if "RANDOM-UNSEEDED" in m]
