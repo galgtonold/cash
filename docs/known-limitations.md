@@ -720,14 +720,15 @@ Two cells have byte-identical content and cash cannot get a cell ID to tell
 them apart, so it refuses to guess. JupyterLab and VS Code normally supply cell
 IDs. **Fix:** add a comment to one of the cells, or save the notebook.
 
-### `ForwardReferenceError`
+### A cell reads a name a later cell binds
 
 <!-- claim: cash/exceptions.py:ForwardReferenceError, cash/notebook/upstream/notebook_vetting.py:NotebookVetter._refuse_forward_references -->
 A cell reads, at module level, a name that only a later cell binds. It works now
 because that cell already ran, but a top-to-bottom run would raise `NameError`.
-A name used inside a `def` does not count; a decorator, default argument or base
-class does. **Fix:** move the binding above this cell. The error names both
-cells.
+cash runs the cell uncached, on the value in memory, and warns with
+[NOTEBOOK-FORWARD-REFERENCE](warnings.md#notebook-forward-reference), which
+names both cells. A name used inside a `def` does not count; a decorator,
+default argument or base class does. **Fix:** move the binding above this cell.
 
 ## Others
 

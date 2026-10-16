@@ -1,5 +1,9 @@
 """A notebook that only works because you ran the cells out of order is broken.
 
+The cell still runs, as plain Jupyter runs it, but uncached and with
+NOTEBOOK-FORWARD-REFERENCE naming the name and the cell that binds it:
+refusing it with ForwardReferenceError blocked a cell that works.
+
 A cell read a variable that only a cell BELOW it binds. Under
 cash the notebook worked, because the later cell had been run at some point and
 the name was still in the namespace. A clean in-order run died with
@@ -9,8 +13,8 @@ on a notebook that could not reproduce itself.
 cash already knows which cell binds each name: ``_evict_orphaned_definitions``
 walks every cell for exactly that, to catch the sibling case where NO cell
 produces a name any more. This is the other half -- a name only a LATER cell
-produces -- and it fails rather than warns, because a warning leaves cash
-building on state its own in-order run would not have.
+produces -- and nothing is cached on it, because cash would be building on state its own
+in-order run would not have.
 
 The control arms matter as much as the failing one: a name bound above, and a
 name bound both above and below, must keep working. The second is the common
@@ -19,12 +23,11 @@ it would make cash unusable.
 """
 
 import pytest
-from nbclient.exceptions import CellExecutionError
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(240)]
 
 
-def test_reading_a_name_only_a_later_cell_binds_fails(nb_runner):
+def test_reading_a_name_only_a_later_cell_binds_warns_and_runs(nb_runner):
     """The reported shape: run the later binding first, then the earlier reader."""
     nb_runner.create_notebook(
         [
@@ -35,12 +38,11 @@ def test_reading_a_name_only_a_later_cell_binds_fails(nb_runner):
     )
     nb_runner.start_kernel()
     nb_runner.run_cell(3)  # bind x, so the name exists
-    with pytest.raises(CellExecutionError) as exc:
-        nb_runner.run_cell(2)  # now read it from above
+    nb_runner.run_cell(2)  # now read it from above
 
-    text = str(exc.value)
-    assert "ForwardReferenceError" in text, text
-    assert "Y 11" not in text, "the cell produced a value from a binding below it:\n" + text
+    text = nb_runner.get_raw_output(2)
+    assert "NOTEBOOK-FORWARD-REFERENCE" in text, text
+    assert "Y 11" in text, text
     # The message has to be actionable on its own: which name, which cell.
     assert "`x`" in text and "cell 3" in text, text
 
@@ -79,7 +81,7 @@ def test_a_name_bound_above_and_again_below_still_works(nb_runner):
     assert "Y 11" in nb_runner.get_output(3), nb_runner.get_raw_output(3)
 
 
-def test_a_function_defined_below_and_called_above_fails(nb_runner):
+def test_a_function_defined_below_and_called_above_warns(nb_runner):
     """Same rule for a def, which is how it usually happens in practice."""
     nb_runner.create_notebook(
         [
@@ -90,12 +92,11 @@ def test_a_function_defined_below_and_called_above_fails(nb_runner):
     )
     nb_runner.start_kernel()
     nb_runner.run_cell(3)
-    with pytest.raises(CellExecutionError) as exc:
-        nb_runner.run_cell(2)
+    nb_runner.run_cell(2)
 
-    text = str(exc.value)
-    assert "ForwardReferenceError" in text, text
-    assert "V 6" not in text, text
+    text = nb_runner.get_raw_output(2)
+    assert "NOTEBOOK-FORWARD-REFERENCE" in text, text
+    assert "V 6" in text, text
     assert "`helper`" in text and "cell 3" in text, text
 
 
@@ -122,7 +123,7 @@ def test_a_function_body_may_name_something_bound_below(nb_runner):
     assert "r=8" in nb_runner.get_output(4), nb_runner.get_raw_output(4)
 
 
-def test_a_decorator_bound_below_still_fails(nb_runner):
+def test_a_decorator_bound_below_still_warns(nb_runner):
     """...but a decorator IS evaluated at definition time, so it is a read."""
     nb_runner.create_notebook(
         [
@@ -133,7 +134,7 @@ def test_a_decorator_bound_below_still_fails(nb_runner):
     )
     nb_runner.start_kernel()
     nb_runner.run_cell(3)
-    with pytest.raises(CellExecutionError) as exc:
-        nb_runner.run_cell(2)
-    assert "ForwardReferenceError" in str(exc.value), str(exc.value)
-    assert "`deco`" in str(exc.value), str(exc.value)
+    nb_runner.run_cell(2)
+    text = nb_runner.get_raw_output(2)
+    assert "NOTEBOOK-FORWARD-REFERENCE" in text, text
+    assert "`deco`" in text, text

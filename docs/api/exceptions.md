@@ -40,9 +40,9 @@ catches them all.
 
 | Exception | Cause | Fix |
 |---|---|---|
-| `ForwardReferenceError` | The cell reads a name only a later cell defines. | Move the definition above the cell. |
 | `UpstreamStateError` | An earlier statement the cell needs failed when cash re-ran it. | Fix that statement, or run the notebook from the top. |
 | `AmbiguousCellError` | The cell's code appears more than once and cash cannot tell which copy is running. | Save the notebook, or make the copies differ. |
+| `ForwardReferenceError` | The cell reads a name only a later cell defines. Not shown as an error: the cell runs uncached and cash warns [`NOTEBOOK-FORWARD-REFERENCE`](../warnings.md#notebook-forward-reference). | Move the definition above the cell. |
 | `CacheKeyComputationError` | No key could be built for a statement. Not shown as an error: the statement runs uncached and cash warns [`NOTEBOOK-BAILOUT`](../warnings.md#notebook-bailout). | See that code. |
 
 ::: cash.CashError

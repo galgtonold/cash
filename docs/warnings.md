@@ -1631,6 +1631,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
 | [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
 | [NOTEBOOK-FILE-ROUNDTRIP](#notebook-file-roundtrip) | notebook | a file written in this session is read back, so the read reruns after every write |
+| [NOTEBOOK-FORWARD-REFERENCE](#notebook-forward-reference) | notebook | the cell reads a name only a cell below binds, so it runs uncached |
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
 | [NOTEBOOK-NO-LIVE-READER](#notebook-no-live-reader) | notebook | cells above are read from the saved file, so an unsaved edit there is not seen |
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook's cells cannot be read; cells above the one you run are not re-checked |
@@ -1784,6 +1785,26 @@ last step. For a formatting pass, format while writing (through the
 **When it is safe to ignore.** When reading the file back is the point,
 such as a check that the saved file opens. A file an earlier session wrote,
 such as a checkpoint read after a restart, never gives this warning.
+
+### NOTEBOOK-FORWARD-REFERENCE {#notebook-forward-reference}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/notebook/upstream/notebook_vetting.py:NotebookVetter._refuse_forward_references @be2702ad, cash/notebook/ipython/upstream_phase.py:UpstreamResolution._step_aside @eaab45ec -->
+**What happened.** The cell reads, at module level, a name that only a later
+cell binds (`y = x + 1` above `x = 10`). It works now because that cell already
+ran, so the cell runs as plain Jupyter runs it, on the value in memory, but
+uncached. The message names the variable and the cell that binds it. A name
+used inside a `def` does not count; a decorator, default argument or base class
+does.
+
+**Why it matters.** A run from the top raises `NameError` at this cell, and a
+cached result would stand for an order of cells the notebook does not have.
+
+**What to do.** Move the binding above this cell, or move this cell below it.
+
+**When it is safe to ignore.** Never for long: the notebook does not run from
+the top.
 
 ### NOTEBOOK-MAGIC-STALE {#notebook-magic-stale}
 
