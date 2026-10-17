@@ -105,3 +105,16 @@ def test_figures_whose_parts_hold_them_are_stored_alone(cash_magics, statement_p
     metrics = statement_processor.process_statement(f"second = go.Figure(go.Scatter(x=[1, 2], y=[{SLOW}, 2]))")
     assert metrics["status"] == CacheStatus.COMPUTED and not metrics.get("uncacheable_reasons")
     assert not any(statement_processor.tracking_state.held_with.values())
+
+
+def test_an_object_whose_attributes_raise_is_read_as_a_library_object(cash_magics, statement_processor, tmp_path):
+    """``np.load(...)`` holds a ``BagObj`` that answers every attribute from
+    its file, ``__class__`` too, and raises for a name the file lacks: an
+    ``isinstance`` on it raised out of the share check, and the cell failed."""
+    np = pytest.importorskip("numpy")
+    path = tmp_path / "r.npz"
+    np.savez(path, u=np.zeros(3))
+    run_cash_cell(cash_magics, "import numpy as np")
+    metrics = statement_processor.process_statement(f"loaded = np.load({str(path)!r})")
+    assert metrics["status"] == CacheStatus.COMPUTED
+    assert cash_magics.shell.user_ns["loaded"]["u"].tolist() == [0.0, 0.0, 0.0]

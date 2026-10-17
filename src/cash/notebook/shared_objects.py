@@ -1091,6 +1091,10 @@ def _held_within(nodes: dict[int, Any], inbound: dict[int, int], excess: list[in
 #: Most objects `_inside_library_objects` reads inside the library objects
 #: of a walk before it gives up, which refuses the statement.
 _INSIDE_MAX_OBJECTS = 50_000
+#: Above how many objects one level of `_variables_holding`'s climb reads
+#: the heap once itself: `gc.get_referrers` takes time in proportion to the
+#: heap times the objects it is given (33 s for 18,000 on a test worker).
+_REFERRERS_BY_CALL = 128
 
 #: IPython's own names, and cash's: never a holder of what a library object
 #: holds (`_variables_holding`).
@@ -1138,10 +1142,38 @@ def _inside_library_objects(
 def _reads_inside(node: Any, value_types: tuple[type, ...]) -> bool:
     """Whether *node* is a library's own object the walk does not read: not
     a value, nor pandas or numpy data (read by their own rules)."""
-    if is_value(node, value_types) or isinstance(node, _NOT_WITHIN) or children_of(node) is not None:
+    try:
+        if is_value(node, value_types) or isinstance(node, _NOT_WITHIN) or children_of(node) is not None:
+            return False
+    except Exception:  # noqa: BLE001 - see `_read_down`
         return False
     kind = _LIBRARY_KINDS.get(type(node))
     return (kind or _library_kind(type(node))) is _LEAF
+
+
+def _read_down(obj: Any, value_types: tuple[type, ...]) -> bool | None:
+    """None when *obj*, met inside a library object, is not one to look for
+    (a value, a type, a function, cash's own record); else whether to read
+    what it holds in turn (a library's own object, not pandas or numpy data).
+
+    Only *obj*'s type is asked first: numpy's ``BagObj`` (``np.load(...).f``)
+    answers every attribute from its file, ``__class__`` too, and raises, so
+    an ``isinstance`` that falls back to ``__class__`` raises with it. Such
+    an object is read as a library's own."""
+    if _is_cash_own(obj):
+        return None
+    try:
+        if is_value(obj, value_types) or isinstance(obj, _NOT_WITHIN):
+            return None
+    except Exception:  # noqa: BLE001 - an object whose attributes raise
+        return True
+    return (_LIBRARY_KINDS.get(type(obj)) or _library_kind(type(obj))) is _LEAF
+
+
+def _is_cash_own(obj: Any) -> bool:
+    """Whether *obj* is one of cash's own records (its type is cash's)."""
+    module = type(obj).__module__
+    return isinstance(module, str) and (module == "cash" or module.startswith("cash."))
 
 
 def _held_from_outside(
@@ -1172,7 +1204,8 @@ def _held_from_outside(
         if not pops & 255:
             check_walk_budget()
         for child in gc.get_referents(parent):
-            if is_value(child, value_types) or isinstance(child, _NOT_WITHIN):
+            read_down = _read_down(child, value_types)
+            if read_down is None:
                 continue
             key = id(child)
             if key == root:
@@ -1187,8 +1220,7 @@ def _held_from_outside(
                 return None, {roots[root]}
             within[key] = child
             root_of[key] = root
-            kind = _LIBRARY_KINDS.get(type(child)) or _library_kind(type(child))
-            if kind is _LEAF:
+            if read_down:
                 # pandas and numpy data are read by their own rules, not down.
                 stack.append((child, root))
         child = None  # no reference of this frame's left in the counts
@@ -1208,11 +1240,14 @@ def _variables_holding(
 ) -> set[str] | None:
     """The variables of *user_ns* not in *skip* that hold an object of
     *inside*, found up `gc.get_referrers`; None when the climb did not end
-    within `_REFERRER_DEPTH` levels. It stops at a variable, a module, a
-    frame and the objects of *ignore* (cash's own references)."""
+    within `_REFERRER_DEPTH` levels, or a level reached more than
+    `_INSIDE_MAX_OBJECTS` objects. It stops at a variable, a module, a
+    frame, cash's own records (`_is_cash_own`: what they hold is the
+    statement's bookkeeping) and the objects of *ignore* (cash's own
+    references)."""
     by_id: dict[int, list[str]] = {}
     for name, value in list(user_ns.items()):
-        if name not in skip and not _SHELL_NAME.fullmatch(name) and not is_value(value, value_types):
+        if name not in skip and not _SHELL_NAME.fullmatch(name) and not _is_value_or_raises(value, value_types):
             by_id.setdefault(id(value), []).append(name)
     stop = {id(user_ns), id(inside), id(by_id), *ignore}
     stop.update(id(vars(module)) for module in list(sys.modules.values()) if module is not None)
@@ -1226,24 +1261,50 @@ def _variables_holding(
         if not frontier:
             return names
         check_walk_budget()
+        if len(frontier) > _INSIDE_MAX_OBJECTS:
+            return None
         args = tuple(frontier)
         stop.add(id(args))
-        referrers = gc.get_referrers(*args)
+        referrers = gc.get_referrers(*args) if len(args) <= _REFERRERS_BY_CALL else _referrers_of(args, stop)
         stop.add(id(referrers))
         following: list[Any] = []
         stop.add(id(following))
         for obj in referrers:
             key = id(obj)
-            if key in seen or key in stop or isinstance(obj, (types.FrameType, types.ModuleType)):
+            if key in seen or key in stop or issubclass(type(obj), (types.FrameType, types.ModuleType)):
                 continue
             seen.add(key)
             if key in by_id:
                 names.update(by_id[key])
                 continue
-            following.append(obj)
+            if not _is_cash_own(obj):
+                following.append(obj)
         del referrers, args
         frontier[:] = following
     return names if not frontier else None
+
+
+def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
+    """`gc.get_referrers` of *objs*, in one read of the heap whatever their
+    number. The heap's list goes in *stop*."""
+    ids = {id(obj) for obj in objs}
+    heap = gc.get_objects()
+    stop.add(id(heap))
+    found = []
+    for i, obj in enumerate(heap):
+        if not i & 4095:
+            check_walk_budget()
+        if any(id(child) in ids for child in gc.get_referents(obj)):
+            found.append(obj)
+    return found
+
+
+def _is_value_or_raises(value: Any, value_types: tuple[type, ...]) -> bool:
+    """`is_value`, False when asking raises (see `_read_down`)."""
+    try:
+        return is_value(value, value_types)
+    except Exception:  # noqa: BLE001 - an object whose attributes raise
+        return False
 
 
 def _count_leaf_attributes(nodes: dict[int, Any], inbound: dict[int, int]) -> bool:
