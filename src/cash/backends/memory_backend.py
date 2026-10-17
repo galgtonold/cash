@@ -3090,6 +3090,34 @@ def _frame_types() -> tuple[type, ...]:
 _FRAME_TYPES: list = []
 
 
+#: A value whose store would copy this many bytes or more goes to the disk
+#: tier alone, when the disk tier takes it (`TieredBackend.set`).
+DISK_ALONE_MIN_BYTES = 64 * 1024**2
+
+
+def bytes_a_store_copies(value: Any, _depth: int = 0) -> int:
+    """About how many bytes `InMemoryBackend.set` would copy to keep *value*:
+    its size (`pickled_size_estimate`), less the tables and polars frames it
+    keeps uncopied (`frame_sharing.keeps_uncopied`, `_checkable_polars`).
+    Looks into the dicts, lists and tuples around them (a notebook entry is
+    a dict of the statement's variables). Copies nothing."""
+    value_type = type(value)
+    if _depth < 4:
+        if value_type is dict:
+            return sum(bytes_a_store_copies(item, _depth + 1) for item in value.values())
+        if (value_type is list or value_type is tuple) and len(value) <= _PREMADE_ITEMS_MAX:
+            return sum(bytes_a_store_copies(item, _depth + 1) for item in value)
+    if _is_pandas_frame(value_type) and frame_sharing.keeps_uncopied(value):
+        return 0
+    if _is_polars_frame(value_type):
+        try:
+            if _checkable_polars(value):
+                return 0
+        except Exception:  # noqa: BLE001 - counted as copied
+            pass
+    return pickled_size_estimate(value)
+
+
 def _is_pandas_frame(value_type: type) -> bool:
     """A pandas DataFrame or Series, or any subclass of one.
 

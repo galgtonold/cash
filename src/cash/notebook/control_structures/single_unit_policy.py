@@ -24,7 +24,9 @@ import inspect
 import io
 import logging
 import os
+import statistics
 import types
+from collections.abc import Sequence
 from typing import Any
 
 from ...analysis.cacheability import statement_writes_files
@@ -325,11 +327,17 @@ def iterations_for_one_unit(node: ast.For) -> int | None:
     return n
 
 
-def passes_were_cheap(passes: int, work_seconds: float, wall_seconds: float) -> bool:
-    """Whether *passes* passes that took *wall_seconds*, of which their
-    statements' own work was *work_seconds*, were bookkeeping more than
-    work (`CHEAP_PASSES`)."""
-    return passes >= CHEAP_PASSES and work_seconds < CHEAP_WORK_SHARE * wall_seconds
+def passes_were_cheap(work_shares: Sequence[float]) -> bool:
+    """Whether the passes so far, each the share of its time its statements'
+    own work took, were bookkeeping more than work (`CHEAP_PASSES`).
+
+    Judged by the middle pass, not their sums: one pass held up -- the first
+    one's work took 8-28 ms against 0.1 ms for the rest on a busy machine --
+    counted as work for every pass after it, and the loop ran up to 20 more
+    passes one by one before the rest went as one unit."""
+    if len(work_shares) < CHEAP_PASSES:
+        return False
+    return statistics.median(work_shares) < CHEAP_WORK_SHARE
 
 
 def header_names_the_iterator(iter_node: ast.AST, iterable: Any, user_ns: dict[str, Any]) -> bool:

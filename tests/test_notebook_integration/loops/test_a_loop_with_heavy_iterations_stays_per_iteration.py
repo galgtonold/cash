@@ -7,9 +7,11 @@ the last statement re-runs every iteration. The first run of such a loop is
 still one unit, and measures it (``cash/notebook/heavy_loops.py``); runs after
 that keep the iterations apart, so an edit re-runs only what it touches.
 
-The seeded tests pin the decision without a clock. The learned one runs a body
-of about 0.15 s, well over the 0.1 s the policy needs for three statements;
-a slower machine only raises it.
+The seeded tests pin the decision without a clock. Every run measures the
+loop again, so the body's heavy statement sleeps 0.2 s on top of a little
+counting: over the 0.1 s the policy needs for three statements on any
+machine. Counting alone took 0.15 s here and under 0.1 s on a faster one,
+which measured the loop cheap and ran it as one unit.
 """
 
 import json
@@ -20,12 +22,16 @@ pytestmark = [pytest.mark.loops, pytest.mark.timeout(240)]
 
 SINGLE_UNIT = "Fast-loop: executing as single unit"
 # ``print`` badge so the CACHED status lands in the cell's text output.
-SETUP = "import cash\n%cash_on\n%cash_badge print\n"
+HELPER = "import time\n"
+START = "import cash\n%cash_on\n" + HELPER
+SETUP = "import cash\n%cash_on\n%cash_badge print\n" + HELPER
 
 # More than 50 iterations and 51 x 3 x 8 ms = 1.2 s of estimated overhead,
 # so the static rule sends this loop to one unit.
 N = 51
-HEAVY = "sum(k % 7 for k in range(3000000))"
+# The sleep does not shrink on a faster machine. Written in the statement:
+# a helper's calls are cached apart, and the loop measures their hits.
+HEAVY = "time.sleep(0.2) or sum(k % 7 for k in range(300000))"
 
 
 def _loop(n=N, tail="res.append(s + i + 1)"):
@@ -46,12 +52,12 @@ def _seed(work_dir, loop_src, seconds):
 
 
 def _expected(n, c):
-    base = sum(k % 7 for k in range(3000000))
+    base = sum(k % 7 for k in range(300000))
     return sum(base + i + c for i in range(n))
 
 
 def test_a_loop_without_a_measurement_runs_as_one_unit(nb_runner):
-    nb_runner.create_notebook(["import cash\n%cash_on\n", _loop(tail="res.append(1)")])
+    nb_runner.create_notebook([START, _loop(tail="res.append(1)")])
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.run_all()
@@ -77,7 +83,7 @@ def test_a_loop_measured_heavy_keeps_its_iterations_apart(nb_runner, tmp_path):
 def test_a_measured_cheap_loop_stays_one_unit(nb_runner, tmp_path):
     cell = _loop()
     _seed(tmp_path, cell, 0.0005)
-    nb_runner.create_notebook(["import cash\n%cash_on\n", cell])
+    nb_runner.create_notebook([START, cell])
     nb_runner.start_kernel()
     nb_runner.enable_debug()
     nb_runner.run_all()

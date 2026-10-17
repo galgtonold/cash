@@ -60,9 +60,12 @@ def test_instance_method_appends_and_returns(nb_runner):
 def test_init_increments_class_counter(nb_runner):
     # A class counter incremented by an UPSTREAM cell (w0) AND this cell (w): the
     # class-def reset is suppressed (it would clobber w0), so the re-run still
-    # accumulates.
+    # accumulates. The re-run must execute the statement: a busy machine took
+    # the cheap ``w = Widget()`` past the store floor, and its hit, with no
+    # increment, read 'count 2' and passed. Never stored, it always runs.
     _rerun(
         nb_runner,
+        "import cash\ncash.configure(min_execution_time_to_cache_seconds=60.0)\n"
         "class Widget:\n    count = 0\n    def __init__(self):\n        Widget.count += 1\nw0 = Widget()",
         "w = Widget()\nprint('count', Widget.count)",
         "count 2",

@@ -76,3 +76,19 @@ def test_a_short_cheap_loop_keeps_its_first_passes_and_runs_the_rest_as_one_unit
     assert ns["seen"] == list(range(40))
     # `it = ...`, `seen = []`, five passes, and the rest's unit.
     assert len(statements) == 2 + single_unit_policy.CHEAP_PASSES + 1, len(statements)
+
+
+def test_one_slow_pass_does_not_hold_the_rest_back(cash_magics, statements):
+    """One pass held up (its work took 30 ms; on a busy machine a stall did
+    the same to the first pass) was counted as work for every pass after it:
+    the loop ran up to 20 more passes one by one. Judged by the middle pass,
+    the rest goes as one unit after the first five, as on a quiet machine."""
+    ns = cash_magics.shell.user_ns
+    run_cash_cell(cash_magics, "import time\nrows = list(range(40))")
+    statements.clear()
+    run_cash_cell(
+        cash_magics,
+        "it = iter(rows)\nseen = []\nfor r in it:\n    seen.append([r, time.sleep(0.03) if r == 0 else None][0])",
+    )
+    assert ns["seen"] == list(range(40))
+    assert len(statements) == 2 + single_unit_policy.CHEAP_PASSES + 1, len(statements)
