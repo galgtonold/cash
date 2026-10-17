@@ -18,13 +18,29 @@ from cash.backends import frame_sharing
 
 SCRIPT = """
 import io, sys
+import pandas  # some pandas versions load urllib.request themselves
 from IPython.core.interactiveshell import InteractiveShell
 sh = InteractiveShell.instance()
+WATCHED = ("ipykernel", "jupyter_client", "urllib.request", "http.client")
+before = {m for m in WATCHED if m in sys.modules}  # what the shell itself loaded
+who = []
+
+
+class _Who:  # where a watched module gets imported from, for the failure message
+    def find_spec(self, name, path, target=None):
+        if name in WATCHED:
+            import traceback
+
+            who.append(name + " <- " + " | ".join(f"{f.filename}:{f.lineno}" for f in traceback.extract_stack()[-12:-1]))
+
+
+sys.meta_path.insert(0, _Who())
 out, sys.stdout = sys.stdout, io.StringIO()
 sh.run_cell("import cash\\n%cash_on\\n%cash_badge print")
 sh.run_cell("import pandas as pd\\ndf = pd.DataFrame({'a': range(1000)})\\nprint(df.a.sum())")
 sys.stdout = out
-print(sorted(m for m in ("ipykernel", "jupyter_client", "urllib.request", "http.client") if m in sys.modules))
+print("\\n".join(who))
+print(sorted(m for m in WATCHED if m in sys.modules and m not in before))
 """
 
 
@@ -41,6 +57,8 @@ def test_a_small_table_is_copied_without_the_self_test(monkeypatch):
     monkeypatch.setattr(frame_sharing, "_checked_self_test", lambda: ran.append(1) or True)
     assert frame_sharing.share_checked(pd.DataFrame({"a": np.arange(1000.0)})) is None
     assert ran == []
+    if not frame_sharing.enabled():
+        return  # tables are always copied here: there is nothing to ask
     # Control: a table big enough to keep uncopied still asks first.
     big = pd.DataFrame({"a": np.arange(float(frame_sharing.CHECKED_MIN_BYTES // 8 + 1))})
     frame_sharing.share_checked(big)

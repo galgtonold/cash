@@ -21,7 +21,9 @@ class _Recorder:
 
 
 def test_a_long_html_string_is_not_tracked_as_a_path():
-    page = "<table>" + "<tr><td>a/b/c</td><td>[1]</td></tr>" * 400 + "</table>"
+    row = "<tr><td>a/b/c</td><td>[1]</td></tr>"
+    # Longer than this OS opens (Windows allows 32,767 characters).
+    page = "<table>" + row * (reader_patches._PATH_MAX // len(row) + 1) + "</table>"
     tracker = _Recorder()
     track_dataset(tracker, page)
     assert tracker.paths == []
