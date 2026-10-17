@@ -13,6 +13,7 @@ import textwrap
 from collections.abc import Iterable
 
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from .analysis_budget import check_analysis_budget
 from .ast_util import CallScope, called_names, handed_names
 from .mutations import MutationVisitor, iter_store_targets
 
@@ -75,31 +76,94 @@ def _params_mutated_via_nested_calls(
 ) -> set[str]:
     """Params of *func* mutated only by being passed to another resolvable call.
 
-    For each ``Name`` call in the body, resolve the callee, recursively find which
-    of ITS params it mutates, and map those back to any of *func*'s params passed
-    at the matching position / keyword.
+    For each ``Name`` call in the body, resolve the callee, find which of ITS
+    params it mutates (through its own calls too), and map those back to any
+    of *func*'s params passed at the matching position / keyword.
+
+    The callees are read once each and settled together (`_callee_mutations`):
+    walking them path by path re-read a shared helper once per path, and a
+    library reached through ``from sympy import *`` has enough of them that
+    ``factor(e)`` was analysed for minutes.
     """
+    callee_muts = _callee_mutations(func, resolve_source, seen)
+    return _passed_mutated(func, params, callee_muts)
+
+
+def _passed_mutated(
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+    params: set[str] | frozenset[str],
+    callee_muts: dict[str, tuple[list[str], frozenset[str]]],
+) -> set[str]:
+    """*params* of *func* handed to a callee at a slot it mutates."""
     out: set[str] = set()
     for node in statement_calls(func):
-        if not isinstance(node.func, ast.Name):
+        if not isinstance(node.func, ast.Name) or node.func.id not in callee_muts:
             continue
-        callee_name = node.func.id
-        if callee_name in seen:
-            continue  # recursion guard (mutual / self recursion)
-        callee = resolve_function_def(callee_name, resolve_source)
-        if callee is None:
+        pos_params, mutated = callee_muts[node.func.id]
+        if not mutated:
             continue
-        callee_muts = params_mutated_in_function(callee, resolve_source, seen | {callee_name})
-        if not callee_muts:
-            continue
-        pos_params = positional_param_names(callee)
         for i, arg in enumerate(node.args):
-            if isinstance(arg, ast.Name) and arg.id in params and i < len(pos_params) and pos_params[i] in callee_muts:
+            if isinstance(arg, ast.Name) and arg.id in params and i < len(pos_params) and pos_params[i] in mutated:
                 out.add(arg.id)
         for kw in node.keywords:
-            if kw.arg and isinstance(kw.value, ast.Name) and kw.value.id in params and kw.arg in callee_muts:
+            if kw.arg and isinstance(kw.value, ast.Name) and kw.value.id in params and kw.arg in mutated:
                 out.add(kw.value.id)
     return out
+
+
+def _callee_mutations(
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+    resolve_source,
+    seen: frozenset[str],
+) -> dict[str, tuple[list[str], frozenset[str]]]:
+    """Every function *func* reaches through ``Name`` calls, by name, with its
+    positional params and the params it mutates, its own calls included.
+
+    Each callee is read once, then the mutations are carried from callee to
+    caller until nothing changes: the sets only grow and are bounded by the
+    params, so this ends, and a cycle (``a`` calls ``b`` calls ``a``) finds
+    every mutation either makes. *seen* are names never followed: the caller
+    being analysed, which it reached by name.
+    """
+    defs: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+    pending = [func]
+    while pending:
+        check_analysis_budget()
+        current = pending.pop()
+        for node in statement_calls(current):
+            if not isinstance(node.func, ast.Name):
+                continue
+            name = node.func.id
+            if name in seen or name in defs:
+                continue
+            callee = resolve_function_def(name, resolve_source)
+            if callee is None:
+                continue
+            defs[name] = callee
+            pending.append(callee)
+    direct = {name: _direct_param_mutations(fdef) for name, fdef in defs.items()}
+    mutated = dict(direct)
+    changed = True
+    while changed:
+        changed = False
+        table = {name: (positional_param_names(fdef), mutated[name]) for name, fdef in defs.items()}
+        for name, fdef in defs.items():
+            found = mutated[name] | _passed_mutated(fdef, all_param_names(fdef), table)
+            if found != mutated[name]:
+                mutated[name] = frozenset(found)
+                changed = True
+    return {name: (positional_param_names(fdef), mutated[name]) for name, fdef in defs.items()}
+
+
+def _direct_param_mutations(func: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:
+    """The params *func*'s own body mutates in place, not through a call."""
+    params = all_param_names(func)
+    if not params:
+        return frozenset()
+    visitor = _RunningMutationVisitor()
+    for stmt in func.body:
+        visitor.visit(stmt)
+    return frozenset({m.variable for m in visitor.mutations} & params)
 
 
 def resolve_function_def(name, resolve_source):
@@ -172,10 +236,7 @@ def params_mutated_in_function(
     params = all_param_names(func)
     if not params:
         return frozenset()
-    visitor = _RunningMutationVisitor()
-    for stmt in func.body:
-        visitor.visit(stmt)
-    mutated = {m.variable for m in visitor.mutations} & params
+    mutated = set(_direct_param_mutations(func))
     if resolve_source is not None:
         mutated |= _params_mutated_via_nested_calls(func, params, resolve_source, seen)
     return frozenset(mutated)

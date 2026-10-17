@@ -649,6 +649,17 @@ def _record_negative_probe(path: Any, caller: Any) -> None:
     _record_path_answer(path, kind, caller)
 
 
+def _path_max() -> int:
+    """The longest path the OS opens; longer strings are never file names."""
+    try:
+        return os.pathconf("/", "PC_PATH_MAX")
+    except (AttributeError, OSError, ValueError):
+        return 32767  # Windows' extended-length limit
+
+
+_PATH_MAX = _path_max()
+
+
 def _dataset_member(name: str) -> bool:
     """Is *name* part of a dataset directory's data? pyarrow's rule, which
     pandas and polars follow: names starting with ``.`` or ``_`` are
@@ -684,6 +695,12 @@ def track_dataset(tracker: Any, target: Any) -> None:
     if not isinstance(text, str) or is_remote_url(text):
         tracker.track_path(target)
         return
+    if len(text) > _PATH_MAX or "\0" in text:
+        # No file can have this name, so the reader takes the string as
+        # content (``pd.read_html(page)``, ``pd.read_json(text)``) and reads
+        # nothing from disk. The string itself is already in the key, as code
+        # or as an input.
+        return
     try:
         if os.path.isdir(text):
             tracker.track_path(target)
@@ -704,7 +721,9 @@ def track_dataset(tracker: Any, target: Any) -> None:
                 if os.path.isfile(match):
                     tracker.track_path(match)
             return
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
+        # RecursionError: glob recurses once per directory level, so a deep
+        # pattern can exhaust the stack; the name is then recorded as is.
         pass
     tracker.track_path(target)
 

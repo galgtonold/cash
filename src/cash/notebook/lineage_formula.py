@@ -29,6 +29,7 @@ from ..analysis.mutations import repeatable_setting_receiver
 from ..analysis.purity_analyzer import get_analyzer
 from ..code_digest import module_identity
 from ..effects import ENVIRONMENT_TEXT_MARKERS, environment_component, environment_input
+from ..source_norm import unparse_without_docstrings
 from ..tracking.module_symbols import closure_digest, static_attribute_reads
 from ..tracking.randomness import hidden_lineage_reads, observed_rng_reads
 from ..value_hash import compute_hash, is_identity_fallback_hash
@@ -210,6 +211,39 @@ def output_lineage(
         f"{environment}{value_component}"
     )
     return resolve_lineage_alias(hashlib.sha256(lineage_str.encode("utf-8")).hexdigest())
+
+
+def binding_source_hash(source_hash: str, code: str, name: str) -> str:
+    """The code half of *name*'s lineage when *code* bound it: *source_hash*,
+    the statement's, except for an import, where it is the one clause that
+    bound *name*.
+
+    ``import pandas as pd, json`` and ``import json, pandas as pd`` bind the
+    same ``pd``, but hashed whole they gave it two lineages, and an agent
+    that wrote its imports in another order re-ran every ``pd.read_csv``
+    after it. The clause keeps all that decides the binding (the module, its
+    dots, the alias, a ``from`` and its level), and the module's own source
+    is still in the module component. A name no clause binds by name (``from
+    m import *``) keeps the statement's hash. ``import pandas as pd`` alone
+    is its own clause, so its lineage is what it was.
+    """
+    tree = parse_cached(code)
+    if tree is None or not tree.body or not all(isinstance(n, (ast.Import, ast.ImportFrom)) for n in tree.body):
+        return source_hash
+    clause: ast.stmt | None = None
+    for node in tree.body:
+        for alias in node.names:
+            bound = alias.asname or (alias.name.split(".")[0] if isinstance(node, ast.Import) else alias.name)
+            if bound != name:
+                continue
+            if isinstance(node, ast.Import):
+                clause = ast.Import(names=[alias])
+            else:
+                clause = ast.ImportFrom(module=node.module, names=[alias], level=node.level)
+    if clause is None:
+        return source_hash
+    narrowed = ast.unparse(ast.fix_missing_locations(ast.Module(body=[clause], type_ignores=[])))
+    return hashlib.sha256(unparse_without_docstrings(narrowed).encode("utf-8")).hexdigest()
 
 
 def setting_output_lineage(

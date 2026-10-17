@@ -457,6 +457,12 @@ def share_checked(frame: Any) -> tuple[Any, bytes] | None:
     `CHECKED_MIN_BYTES` in numpy arrays of numbers, dates and durations,
     each in one piece of memory. An object column is copied: its digest is
     of pointers, and a cell written twice can come back to an address."""
+    if _total_bytes(frame) < CHECKED_MIN_BYTES:
+        # Too small to keep uncopied whatever it holds: no need to know yet
+        # whether the checks work here. Finding out builds a 16 MB table
+        # (`_checked_self_test`), which a process storing only small tables
+        # paid at its first store.
+        return None
     if not _checked_works():
         return None
     try:
@@ -464,6 +470,16 @@ def share_checked(frame: Any) -> tuple[Any, bytes] | None:
     except Exception:  # unknown internals: copied as before
         logger.debug("cash: could not share a %s", type(frame).__name__, exc_info=True)
         return None
+
+
+def _total_bytes(frame: Any) -> int:
+    """All of *frame*'s block data in bytes, numbers or not; at least what
+    `_share_checked` counts. A frame of unknown shape counts as big, so it
+    goes through the checks as before."""
+    try:
+        return sum(block.values.nbytes for block in frame._mgr.blocks)
+    except Exception:  # noqa: BLE001 - not a pandas frame as known here
+        return CHECKED_MIN_BYTES
 
 
 def _share_checked(frame: Any) -> tuple[Any, bytes] | None:
