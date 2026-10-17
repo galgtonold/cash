@@ -66,6 +66,9 @@ def unrestorable_output_reason(
     holders: dict[str, Any] | None = None,
     gave_up: list[GaveUp] | None = None,
     inputs: Iterable[str] = (),
+    anchorable: Callable[[str], bool] | None = None,
+    anchors: dict[str, Any] | None = None,
+    anchor_links: set[str] | None = None,
 ) -> str | None:
     """Why one of *outputs* cannot be cached, the first refusal found; None
     when every captured value can. *cash_held* are containers cash itself
@@ -88,7 +91,7 @@ def unrestorable_output_reason(
     cash_held = list(cash_held)
     inputs = set(inputs)
     reason = _value_refusal(outputs, captured_vars, user_ns, cash_held, inputs) or shared_output_reason(
-        outputs, captured_vars, user_ns, cash_held, shell, holders, gave_up
+        outputs, captured_vars, user_ns, cash_held, shell, holders, gave_up, anchorable, anchors, anchor_links
     )
     if reason is None and holders:
         reason = _value_refusal(set(holders), holders, user_ns, cash_held)
@@ -140,6 +143,9 @@ def shared_output_reason(
     shell: Any = None,
     holders: dict[str, Any] | None = None,
     gave_up: list[GaveUp] | None = None,
+    anchorable: Callable[[str], bool] | None = None,
+    anchors: dict[str, Any] | None = None,
+    anchor_links: set[str] | None = None,
 ) -> str | None:
     """Nor an output whose object, or one inside it, something else holds too
     (`shared_names`): a restore would bind a copy, and that holder would keep
@@ -152,6 +158,10 @@ def shared_output_reason(
     (`share_group`): stored and restored with the outputs as one graph, they
     hold the restored objects again. A holder cash cannot restore -- a
     library's registry, a closure, IPython's own names -- still refuses.
+    With *anchorable*, a variable the statement left as it was is first
+    asked to be an anchor, which *anchors* gets: its object is not stored
+    but bound again on a restore, so nothing else that holds it is looked
+    for (`share_group`).
 
     Asked by reference count, so the frames above must not hold an output's
     value in a local: `unrestorable_output_reason` keeps the per-value loop
@@ -176,6 +186,11 @@ def shared_output_reason(
             named,
             foreign=lambda name: name in hidden or is_history_name(name),
             gave_up=partial,
+            anchorable=(lambda name: name not in hidden and not is_history_name(name) and anchorable(name))
+            if anchorable is not None
+            else None,
+            anchors=anchors,
+            anchor_links=anchor_links,
         )
         holders.update(found)
         del found

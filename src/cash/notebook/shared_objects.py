@@ -54,6 +54,8 @@ from cash.tracking.function_tracker import is_local_module
 
 __all__ = [
     "GaveUp",
+    "Leaves",
+    "anchors_held",
     "attrs_copied_apart",
     "holds_part_of",
     "output_history",
@@ -816,6 +818,20 @@ def referring_names(
 
 
 @dataclasses.dataclass
+@dataclasses.dataclass
+class Leaves:
+    """Objects a walk leaves out, by id: an anchor of `share_group`, which a
+    restore does not copy but binds to the live object again, is neither a
+    node nor walked below. *met* gets the ids the walk reached."""
+
+    ids: set[int] = dataclasses.field(default_factory=set)
+    met: set[int] = dataclasses.field(default_factory=set)
+
+    def __bool__(self) -> bool:
+        return bool(self.ids)
+
+
+@dataclasses.dataclass
 class GaveUp:
     """What `share_group` found: the links of a check that succeeded, or what
     it still found when it gave up.
@@ -856,6 +872,9 @@ def share_group(
     named_held: Iterable[tuple[Mapping[str, Any], str]] = (),
     foreign: Callable[[str], bool] = lambda name: False,
     gave_up: GaveUp | None = None,
+    anchorable: Callable[[str], bool] | None = None,
+    anchors: dict[str, Any] | None = None,
+    anchor_links: set[str] | None = None,
 ) -> tuple[dict[str, Any], set[str]]:
     """``(holders, shared)`` for the outputs *names*, bound in *values*.
 
@@ -877,6 +896,19 @@ def share_group(
     it, without climbing through it. When the check succeeds, *gave_up*
     gets each round's links all the same: which names were shared, and the
     variables found holding them.
+
+    With *anchorable*, a variable found holding an object of the outputs is
+    asked first whether it can be an anchor instead (the statement left its
+    value as it was): then its object is not copied with the outputs but
+    bound again to the variable's live object on a restore, so whatever else
+    holds that object holds the same one the restored outputs do, as in
+    plain Python, and is not looked for. *anchors* gets each anchor the
+    outputs reach, by name, and no holder that only held an anchor's object
+    joins. An anchor that holds an object of the group is not one: the live
+    object would hold the old one, not its restored copy. *anchor_links* gets
+    the variables found holding an object of the outputs in the rounds that
+    took anchors: they share objects with the outputs all the same, so a
+    change through one of them moves the outputs on.
     """
     group = {name: values[name] for name in names if values.get(name) is not None}
     bindings = [values, user_ns]
@@ -889,22 +921,42 @@ def share_group(
     memo: dict[int, list | None] = {}
     links: list[tuple[set[str], set[str]]] = []
     partial = GaveUp() if gave_up is not None else None
-    for _round in range(_MAX_ROUNDS):
-        shared, found = _check_group(group, bindings, cash_held, named_held, None, user_ns, memo, partial)
+    leaves = Leaves()
+    #: The anchor tried for each object, by id; None when it can be none.
+    tried: dict[int, str | None] = {}
+    rounds = anchor_rounds = 0
+    while True:
+        leaves.met.clear()
+        shared, found = _check_group(group, bindings, cash_held, named_held, None, user_ns, memo, partial, leaves)
         if not shared:
+            if anchors is not None:
+                anchors.update(_met_anchors(leaves, tried, user_ns))
             if gave_up is not None:
                 for owners, holders in links:
                     gave_up.add(owners, holders)
             return {name: group[name] for name in joined}, set()
+        if found and anchorable is not None and anchor_rounds < _MAX_ANCHOR_ROUNDS:
+            fresh = _anchor_candidates(found, user_ns, tried, anchorable)
+            leaves.ids.update(fresh)
+            _take_back_holding(group, leaves, fresh, tried, user_ns)
+            if fresh & leaves.ids:
+                # Counted again with the new anchors left out: a holder that
+                # held only their objects is no holder any more.
+                anchor_rounds += 1
+                if anchor_links is not None:
+                    anchor_links |= found
+                continue
         if found:
             links.append((shared, found))
-        if not found or any(foreign(name) for name in found) or _copies_keep_old_objects(group):
+        if not found or any(foreign(name) for name in found) or _copies_keep_old_objects(group, leaves):
             break
         joined |= found
         group.update((name, user_ns[name]) for name in found)
-    else:
-        if partial is not None:
-            partial.complete = False
+        rounds += 1
+        if rounds >= _MAX_ROUNDS:
+            if partial is not None:
+                partial.complete = False
+            break
     if gave_up is not None and partial is not None:
         for owners, holders in links:
             gave_up.add(owners, (name for name in holders if not foreign(name)))
@@ -915,7 +967,75 @@ def share_group(
     return {}, (shared & outputs) or outputs
 
 
-def _copies_keep_old_objects(group: Mapping[str, Any]) -> bool:
+#: More rounds `share_group` may take when it finds anchors: each one takes
+#: at least one new anchor or ends.
+_MAX_ANCHOR_ROUNDS = 8
+
+
+def _anchor_candidates(
+    found: set[str], user_ns: Mapping[str, Any], tried: dict[int, str | None], anchorable: Callable[[str], bool]
+) -> set[int]:
+    """The ids of the objects of *found* not tried as anchors yet that
+    *anchorable* takes, each noted in *tried* under its name (the first in
+    order of two bound to one object)."""
+    fresh: set[int] = set()
+    for name in sorted(found):
+        value = user_ns.get(name)
+        key = id(value)
+        if value is None or key in tried:
+            continue
+        ok = anchorable(name)
+        tried[key] = name if ok else None
+        if ok:
+            fresh.add(key)
+    return fresh
+
+
+def _take_back_holding(
+    group: Mapping[str, Any], leaves: Leaves, fresh: set[int], tried: dict[int, str | None], user_ns: Mapping[str, Any]
+) -> None:
+    """Take back from *leaves* the anchors among *fresh* whose object holds
+    an object of *group* (`share_group`): bound again on a restore, the live
+    anchor would hold the old object, not the restored one."""
+    if not fresh:
+        return
+    value_types = VALUE_TYPES + library_value_types()
+    nodes: dict[int, Any] = {}
+    _descend(list(group.values()), "", nodes, {}, {}, [], value_types, Leaves(set(leaves.ids)))
+    nodes.update((id(root), root) for root in group.values())
+    for key in fresh:
+        anchor = user_ns.get(tried[key] or "")
+        if id(anchor) != key:
+            continue
+        inner: dict[int, Any] = {}
+        _descend([anchor], "", inner, {}, {}, [], value_types, Leaves(leaves.ids - {key}))
+        if not nodes.keys().isdisjoint(inner):
+            leaves.ids.discard(key)
+            tried[key] = None
+
+
+def anchors_held(value: Any, anchors: Mapping[str, Any]) -> set[str]:
+    """The names of *anchors* (``{name: object}``) whose object *value* is or
+    holds, by identity: a walk that stops at each of them."""
+    by_id = {id(obj): name for name, obj in anchors.items()}
+    if id(value) in by_id:
+        return {by_id[id(value)]}
+    leaves = Leaves(set(by_id))
+    _descend([value], "", {}, {}, {}, [], VALUE_TYPES + library_value_types(), leaves)
+    return {by_id[key] for key in leaves.met}
+
+
+def _met_anchors(leaves: Leaves, tried: dict[int, str | None], user_ns: Mapping[str, Any]) -> dict[str, Any]:
+    """The anchors the last walk reached, by name, bound to their objects."""
+    met: dict[str, Any] = {}
+    for key in leaves.met:
+        name = tried.get(key)
+        if name is not None and id(user_ns.get(name)) == key:
+            met[name] = user_ns[name]
+    return met
+
+
+def _copies_keep_old_objects(group: Mapping[str, Any], leaves: Leaves | None = None) -> bool:
     """Whether *group* holds a closure or a builtin bound method that carries
     an object (``lambda v: store.append(v)``, ``results.append``).
 
@@ -934,7 +1054,7 @@ def _copies_keep_old_objects(group: Mapping[str, Any]) -> bool:
         if not pops & 1023:
             check_walk_budget()
         obj = stack.pop()
-        if is_value(obj, value_types) or id(obj) in seen:
+        if is_value(obj, value_types) or id(obj) in seen or (leaves and id(obj) in leaves.ids):
             continue
         seen.add(id(obj))
         if isinstance(obj, (types.FunctionType, types.BuiltinFunctionType)):
@@ -952,19 +1072,21 @@ def _check_group(
     user_ns: Mapping[str, Any] | None = None,
     memo: dict[int, list | None] | None = None,
     gave_up: GaveUp | None = None,
+    leaves: Leaves | None = None,
 ) -> tuple[set[str], set[str] | None]:
     """``(shared, found)`` for *group*: the names whose objects are held
     beyond what the group, *bindings*, *cash_held* and *named_held* account
     for, and -- with *user_ns* -- the variables of *user_ns* outside the
     group that hold them (`_find_holders`), None when one holder is not such
     a variable (*gave_up* then gets the variables found all the same).
-    *memo* is `_walk`'s, kept by the caller across rounds."""
+    *memo* is `_walk`'s, kept by the caller across rounds. *leaves* are
+    `_walk`'s."""
     value_types = VALUE_TYPES + library_value_types()
     if memo is None:
         memo = {}
     for fast in (True, False):
         nodes, inbound, checked, owner, breaks = _walk(
-            group, bindings, value_types, keep_identity, fast=fast, memo=memo
+            group, bindings, value_types, keep_identity, fast=fast, memo=memo, leaves=leaves
         )
         _count_memo(memo, nodes, inbound)
         if not excess_refs(nodes, inbound, checked):
@@ -1829,6 +1951,7 @@ def _walk(
     *,
     fast: bool = True,
     memo: dict[int, list | None] | None = None,
+    leaves: Leaves | None = None,
 ) -> tuple[dict[int, Any], dict[int, int], list[int], dict[int, str], set[int]]:
     """``(nodes, inbound, checked, owner, breaks)`` for the objects
     reachable from the roots in *group*, walked as one graph.
@@ -1853,6 +1976,9 @@ def _walk(
     *memo*, when given, keeps what a level-at-a-time read found below each
     root by its id, for a later walk over the same objects with no code run
     in between; its lists are references the caller must count.
+
+    *leaves*, when given, are objects the walk does not take: neither counted
+    nor walked below, and noted in ``leaves.met`` when reached.
     """
     nodes: dict[int, Any] = {}
     inbound: dict[int, int] = {}
@@ -1897,11 +2023,11 @@ def _walk(
                 breaks = _plain_data.held_beyond_parents(root, TREE_LEAVES, _MAX_BREAKS)
                 if memo is not None:
                     memo[key] = breaks
-            if breaks is not None and _take_breaks(breaks, name, nodes, inbound, owner, order, value_types):
+            if breaks is not None and _take_breaks(breaks, name, nodes, inbound, owner, order, value_types, leaves):
                 taken.update(map(id, breaks))
                 continue
             del breaks
-        _descend([root], name, nodes, inbound, owner, order, value_types)
+        _descend([root], name, nodes, inbound, owner, order, value_types, leaves)
     if reached is None:
         reached = len(order)
     # Children before parents: a tuple counts only when something mutable
@@ -1949,10 +2075,11 @@ def _descend(
     owner: dict[int, str],
     order: list[int],
     value_types: tuple[type, ...],
+    leaves: Leaves | None = None,
 ) -> None:
     """`_walk` one container at a time below the objects on *stack*, which
     are nodes already: each reference to a node counted once in *inbound*,
-    each new node taken under *name*."""
+    each new node taken under *name*. One of *leaves* is not taken."""
     exact = EXACT_VALUE_TYPES
     containers = EXACT_CONTAINER_TYPES
     pops = 0
@@ -1973,6 +2100,9 @@ def _descend(
             if (ctype is tuple or ctype is frozenset) and not _is_node(child, value_types):
                 continue
             ckey = id(child)
+            if leaves and ckey in leaves.ids:
+                leaves.met.add(ckey)
+                continue
             inbound[ckey] = inbound.get(ckey, 0) + 1
             if ckey not in nodes:
                 nodes[ckey] = child
@@ -1989,6 +2119,7 @@ def _take_breaks(
     owner: dict[int, str],
     order: list[int],
     value_types: tuple[type, ...],
+    leaves: Leaves | None = None,
 ) -> bool:
     """Count the root *name* of JSON-like data from the containers below it
     that something besides their parent holds (*breaks*,
@@ -2007,6 +2138,8 @@ def _take_breaks(
     step per record.
     """
     breaks = [obj for obj in breaks if _is_node(obj, value_types)]
+    if leaves and any(id(obj) in leaves.ids for obj in breaks):
+        return False
     if not breaks:
         return True
     ids = {id(obj) for obj in breaks}
@@ -2035,5 +2168,5 @@ def _take_breaks(
             nodes[ckey] = obj
             owner[ckey] = name
             order.append(ckey)
-            _descend([obj], name, nodes, inbound, owner, order, value_types)
+            _descend([obj], name, nodes, inbound, owner, order, value_types, leaves)
     return True

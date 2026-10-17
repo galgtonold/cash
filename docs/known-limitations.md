@@ -231,7 +231,12 @@ and a hit restores them as one object, as running it would leave them. When
 something else holds it -- a closure, a library's module or registry, a pandas
 `.attrs` (pandas copies it apart) -- or the statement is in a loop body
 (`for d in dfs:`), a restored copy would not be that object, so the statement
-runs every time. IPython's output history
+runs every time. When that object belongs to a variable the statement leaves
+as it was (`grid_search.fit(X, y)` keeps the `full_pipeline` it is handed),
+the entry keeps it as that variable instead: a hit binds the live object,
+which everything else still holds, after a restart too, and the statement
+runs when that variable's content, or which object another variable shares
+with it, changed. IPython's output history
 (`Out`, `_`) holding a value you displayed is not such a holder, and neither
 are an object's own parts: each trace of a plotly figure, or each node of an
 XML document, points back at the object it belongs to, and when nothing

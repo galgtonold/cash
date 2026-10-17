@@ -14,7 +14,9 @@ from typing import TYPE_CHECKING, Any
 
 from cash._clock import perf_counter as _perf_counter
 from cash.exceptions import CacheBackendError, CacheSerializationError
+from cash.notebook.anchors import resolve_anchors
 from cash.notebook.cache_status import CacheStatus
+from cash.notebook.statement.derivation_edges import record_shared_object_edges
 from cash.notebook.statement.results import COST_MODEL_KEYS
 from cash.notebook.statement.run import ECHO_FIELD, echoes
 
@@ -69,6 +71,20 @@ class CacheHitServer:
             # another statement) a plain run does not show.
             logger.debug("[CACHE] Entry holds an echoed value this statement does not show, running it instead.")
             return None
+        if metadata is not None and metadata.anchors:
+            # The variables' objects the entry holds by reference: the live
+            # ones, or a miss when one changed (`anchors`).
+            try:
+                cached_data = resolve_anchors(
+                    cached_data,
+                    metadata.anchors,
+                    self._restorer.shell.user_ns,
+                    self._restorer.compute_hash,
+                    metadata.anchor_holds,
+                )
+            except (KeyError, pickle.UnpicklingError) as e:
+                logger.debug("[CACHE] %s, running it instead.", e)
+                return None
         try:
             self._log_hit(cache_key, inputs, metadata)
             self._restorer.restore_from_cache(
@@ -80,6 +96,13 @@ class CacheHitServer:
                 seed_epochs=seed_epochs,
             )
 
+            if metadata is not None and metadata.anchor_links:
+                user_ns = self._restorer.shell.user_ns
+                record_shared_object_edges(
+                    self.tracking_state.derivation_edges,
+                    [name for name in metadata.outputs or () if name in user_ns],
+                    [name for name in metadata.anchor_links if name in user_ns],
+                )
             self._report_hit(run, cached_data, metadata)
             return metrics
         except (
