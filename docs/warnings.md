@@ -1685,7 +1685,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
 | [NOTEBOOK-CHANGED-BELOW](#notebook-changed-below) | notebook | a cell re-run on its own reads a value rebuilt without the in-place change a cell below made |
-| [NOTEBOOK-CLASS-STATE-KEPT](#notebook-class-state-kept) | notebook | a class's own state a cell changes could not be put back for a re-run, and another cell changes it too |
+| [NOTEBOOK-CLASS-KEPT](#notebook-class-kept) | notebook | a class's own state a cell changes could not be put back for a re-run, and another cell changes it too |
 | [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
 | [NOTEBOOK-FILE-ROUNDTRIP](#notebook-file-roundtrip) | notebook | a file written in this session is read back, so the read reruns after every write |
 | [NOTEBOOK-FORWARD-READ](#notebook-forward-read) | notebook | the cell reads a name only a cell below binds, so it runs uncached |
@@ -1804,11 +1804,11 @@ you re-ran to see the change, move the change into a cell above it.
 **When it is safe to ignore.** When you want the value as a run from the top
 leaves it, and will run the cells below again.
 
-### NOTEBOOK-CLASS-STATE-KEPT {#notebook-class-state-kept}
+### NOTEBOOK-CLASS-KEPT {#notebook-class-kept}
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/upstream/stale_values.py:StaleValueGuard._class_state_at_start @2f2a45fc, cash/notebook/upstream/class_state.py:ClassState @19213b5b, cash/analysis/mutation_effects.py:_object_protocol_effects @33c97c7b -->
+<!-- claim: cash/notebook/upstream/stale_values.py:StaleValueGuard._class_state_at_start @2f2a45fc, cash/notebook/upstream/class_state.py:ClassState.put_back @b3b3a5bc, cash/analysis/mutation_effects.py:_object_protocol_effects @33c97c7b -->
 **What happened.** You re-ran on its own a cell whose constructor or method
 calls change an attribute of the class itself (`Widget.count += 1` in
 `__init__`, a registry the class appends to), and another cell changes that

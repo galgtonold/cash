@@ -6,7 +6,7 @@ def. When another cell changes the class too, that would undo the other
 cell's change, so the def is not re-run: the change applied again on top of
 the last one, silently. The class's state is now saved where the cell starts
 and put back before its re-run, the class staying the same object; when it
-cannot be saved, the re-run keeps it and warns NOTEBOOK-CLASS-STATE-KEPT.
+cannot be saved, the re-run keeps it and warns NOTEBOOK-CLASS-KEPT.
 """
 
 import pytest
@@ -29,7 +29,7 @@ def _rerun(nb_runner, cells, expect, *, same=()):
     nb_runner.run_cell(2)
     again = nb_runner.get_output(2)
     assert expect in again, f"re-run: {again!r}"
-    assert "NOTEBOOK-CLASS-STATE-KEPT" not in nb_runner.get_raw_output(2)
+    assert "NOTEBOOK-CLASS-KEPT" not in nb_runner.get_raw_output(2)
     if same:
         ids = [line for line in first.splitlines() if line.startswith("ids")]
         assert ids and ids == [line for line in again.splitlines() if line.startswith("ids")], "same objects"
@@ -93,10 +93,10 @@ def test_state_that_cannot_be_saved_is_kept_with_a_warning(nb_runner):
     nb_runner.create_notebook([widget, "w = Widget()\nprint('count', Widget.count)"])
     nb_runner.start_kernel()
     nb_runner.run_all()
-    assert "NOTEBOOK-CLASS-STATE-KEPT" not in nb_runner.get_raw_output(2), "a first run starts as plain Jupyter does"
+    assert "NOTEBOOK-CLASS-KEPT" not in nb_runner.get_raw_output(2), "a first run starts as plain Jupyter does"
     nb_runner.run_cell(2)
     assert "count 3" in nb_runner.get_output(2)
-    assert "NOTEBOOK-CLASS-STATE-KEPT" in nb_runner.get_raw_output(2)
+    assert "NOTEBOOK-CLASS-KEPT" in nb_runner.get_raw_output(2)
 
 
 def test_a_class_only_the_rerun_cell_changes_is_reset_without_a_warning(nb_runner):
@@ -128,4 +128,4 @@ def test_a_class_edited_above_is_rebuilt_not_put_back(nb_runner):
     nb_runner.set_cell_source(1, cells[0].replace("count = 0", "count = 10"))
     nb_runner.run_cell(2)
     assert "count 12 True" in nb_runner.get_output(2), "as a run from the top gives"
-    assert "NOTEBOOK-CLASS-STATE-KEPT" not in nb_runner.get_raw_output(2)
+    assert "NOTEBOOK-CLASS-KEPT" not in nb_runner.get_raw_output(2)

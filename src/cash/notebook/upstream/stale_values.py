@@ -794,7 +794,7 @@ class StaleValueGuard:
         leave it: saved afresh, nothing put back. When the state could not
         be saved (over `class_state.CLASS_STATE_BUDGET`, or not copyable) or
         put back, the class is kept as it is and the re-run warns
-        (``NOTEBOOK-CLASS-STATE-KEPT``)."""
+        (``NOTEBOOK-CLASS-KEPT``)."""
         pending, self._class_pending = self._class_pending, {}
         module = self.shell.user_ns.get("__name__", "__main__")
         for name, rerun in pending.items():
@@ -819,7 +819,7 @@ class StaleValueGuard:
                     self._warn_class_state_kept(cell_idx, name, f"it could not be saved ({e})")
 
     def _warn_class_state_kept(self, cell_idx: int, name: str, why: str) -> None:
-        """Warn (``NOTEBOOK-CLASS-STATE-KEPT``) that class *name* is kept as
+        """Warn (``NOTEBOOK-CLASS-KEPT``) that class *name* is kept as
         it is for a re-run of cell *cell_idx*, its state not put back."""
         key = (cell_idx, name)
         if key in self._warned_class_kept:
@@ -832,8 +832,8 @@ class StaleValueGuard:
             "cash keeps the class as it is: the cell's change applies again on top of the one it made last time."
         )
         fix = f"run the notebook from the top (or from the cell that defines '{name}') for a first-run value."
-        log_diagnostic(logger, "NOTEBOOK-CLASS-STATE-KEPT", what, fix)
-        warn_diagnostic(CashWarning, "NOTEBOOK-CLASS-STATE-KEPT", what, fix, location=("<cash>", cell_idx + 1))
+        log_diagnostic(logger, "NOTEBOOK-CLASS-KEPT", what, fix)
+        warn_diagnostic(CashWarning, "NOTEBOOK-CLASS-KEPT", what, fix, location=("<cash>", cell_idx + 1))
         trace_event("class_state_kept", cls=name)
 
     @staticmethod

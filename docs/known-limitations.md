@@ -399,12 +399,12 @@ An isolated re-run raises `KeyError`, because it reads the renamed frame.
 
 ### A class edited above a cell that changes it
 
-<!-- claim: cash/notebook/upstream/class_state.py:ClassState @19213b5b -->
+<!-- claim: cash/notebook/upstream/class_state.py:ClassState.put_back @b3b3a5bc -->
 A class whose constructor changes the class itself (`Widget.count += 1`) can
 be changed from several cells, and an isolated re-run of one of them counts as
 a run from the top does: cash puts the class's attributes back where the cell
 started. When they cannot be saved (a lock, over 64 MiB) the re-run keeps the
-class as it is and warns ([NOTEBOOK-CLASS-STATE-KEPT](warnings.md#notebook-class-state-kept)).
+class as it is and warns ([NOTEBOOK-CLASS-KEPT](warnings.md#notebook-class-kept)).
 
 What is not covered is an edit of the class itself:
 
@@ -417,7 +417,7 @@ class Widget:          # cell 1, edited to count = 10
 
 w0 = Widget()          # cell 2
 
-w = Widget()           # cell 3, run alone: count 11, a run from the top gives 12
+w = Widget()           # cell 3, run alone: 11 (from the top: 12)
 print(Widget.count)
 ```
 
