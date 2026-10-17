@@ -85,6 +85,11 @@ if os.environ.get("CASH_TEST_FAULTHANDLER", "1") == "1":
 # 11-hour hang into a 5-minute one.
 # ---------------------------------------------------------------------------
 _STALL_TIMEOUT = float(os.environ.get("CASH_TEST_STALL_TIMEOUT", "300"))
+#: The watchdog's clock, taken before any test can patch ``time.monotonic``:
+#: the file-state epoch tests freeze it at 1,000 s, which on a Windows runner
+#: (its clock starts at boot) read as minutes without progress and killed
+#: the worker mid-test.
+_monotonic = time.monotonic
 
 
 class _StallWatchdog:
@@ -95,7 +100,7 @@ class _StallWatchdog:
 
         self.timeout = timeout
         self._lock = threading.Lock()
-        self._last = time.monotonic()
+        self._last = _monotonic()
         self._current = "<none yet>"
         self._started = False
         self._allowance: float | None = None
@@ -116,7 +121,7 @@ class _StallWatchdog:
 
     def poke(self, what: str | None = None) -> None:
         with self._lock:
-            self._last = time.monotonic()
+            self._last = _monotonic()
             self._parked = False
             if what is not None:
                 self._current = what
@@ -165,7 +170,7 @@ class _StallWatchdog:
         while True:
             self._tick.wait(self.poll_interval)
             with self._lock:
-                idle = time.monotonic() - self._last
+                idle = _monotonic() - self._last
                 current = self._current
                 limit = self._allowance or self.timeout
                 parked = self._parked

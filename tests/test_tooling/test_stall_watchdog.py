@@ -189,3 +189,18 @@ def test_the_master_is_never_parked(monkeypatch):
     time.sleep(1.5)
 
     assert fired
+
+
+def test_a_patched_monotonic_clock_does_not_fire_it(monkeypatch):
+    """A test that freezes `time.monotonic` (the file-state epoch tests set it
+    to 1,000 s) must not move the watchdog's clock. On a Windows runner, whose
+    monotonic clock starts at boot, a frozen 1,010 s read as 553 s without
+    progress: the watchdog killed the worker mid-run, and xdist reported a
+    crash in whichever test the worker had been sent next."""
+    w, fired = _watchdog(2)  # polls every 0.5 s
+    ahead = time.monotonic() + 10_000
+    monkeypatch.setattr(time, "monotonic", lambda: ahead)
+    w.start()
+    time.sleep(1.5)
+
+    assert not fired, "a patched clock read as a stall"
