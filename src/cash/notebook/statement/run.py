@@ -433,18 +433,14 @@ class CodeRunner:
     def _show(self, value: Any) -> None:
         if not self._echo:
             return
-        # IPython's output history (``_``, ``Out``) is filled once the cell is
-        # done, from this value (``CashMagics._record_output_history``); a hit
-        # needs it as much as the display, so a None is recorded too.
+        # Shown once the cell is done, by IPython's display hook, which also
+        # fills its output history (``_``, ``Out``): ``CashMagics._showing_result``.
+        # A hit needs it as much as the display, so a None is recorded too.
         self.execution.echo = (value,)
         captured = self.execution.captured
         self.execution.printed = bool(
             getattr(captured, "stdout", "") or getattr(captured, "stderr", "") or getattr(captured, "outputs", None)
         )
-        if value is not None:
-            from IPython.display import display
-
-            display(value)
 
 
 def error_result(exception: Exception) -> ExecutionResult:
