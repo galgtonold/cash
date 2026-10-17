@@ -1100,6 +1100,8 @@ def _check_group(
         for mapping, key in named_held:
             if id(mapping.get(key)) in nodes:
                 inbound[id(mapping.get(key))] += 1
+        if user_ns is not None:
+            _count_index_data(nodes, inbound, user_ns)
         counted = dict(inbound)
         excess = excess_refs(nodes, inbound, checked)
         if excess and _count_leaf_attributes(nodes, inbound):
@@ -1523,6 +1525,41 @@ def _count_memo(memo: dict[int, list | None], nodes: dict[int, Any], inbound: di
                 inbound[key] += 1
 
 
+def _count_index_data(nodes: dict[int, Any], inbound: dict[int, int], user_ns: Mapping[str, Any]) -> None:
+    """Count in *inbound* what the indexes of the frames in *user_ns* hold
+    of *nodes*: an index's data and its engine's values.
+
+    An index is immutable: pandas never writes its data in place, and every
+    change to a frame's labels (``df.columns = ...``, ``rename``) binds a
+    new index. Holding its data is holding a value, which keys and restores
+    the same shared or not (K10). Under pandas 2 a fitted model's
+    ``feature_names_in_`` is ``X.columns._data`` itself, and every fit on a
+    frame was refused as sharing it with ``X``; pandas 3 hands out a copy.
+    A frame of the group itself, or an index the walk read, is counted by
+    the walk already."""
+    pd = sys.modules.get("pandas")
+    if pd is None:
+        return
+    frame_types = (pd.DataFrame, pd.Series)
+    seen: set[int] = set()
+    try:
+        for value in list(user_ns.values()):
+            if not isinstance(value, frame_types) or id(value) in nodes or id(value) in seen:
+                continue
+            seen.add(id(value))
+            for axis in vars(value)["_mgr"].axes:
+                if id(axis) in nodes or id(axis) in seen:
+                    continue
+                seen.add(id(axis))
+                slots = vars(axis)
+                engine = slots.get("_cache", {}).get("_engine")
+                for item in (slots.get("_data"), getattr(engine, "values", None)):
+                    if item is not None and id(item) in inbound:
+                        inbound[id(item)] += 1
+    except Exception:  # noqa: BLE001 - another layout: counted as held elsewhere
+        return
+
+
 def _held_in_pandas_slots(
     nodes: dict[int, Any],
     inbound: dict[int, int],
@@ -1533,12 +1570,11 @@ def _held_in_pandas_slots(
     """The variables bound to the pandas frames whose own slots hold every
     reference left over on *excess*, or None when any is held elsewhere.
 
-    The slots are pandas' data layout: a frame's item cache (``y =
-    df['t']`` stays in ``df._item_cache``; pandas 2 without copy-on-write,
-    where ``y[0] = 99`` changes ``df`` too), and an index's data and its
-    engine's values (scikit-learn's ``feature_names_in_`` is
-    ``X.columns._data``). `_holders_from_referrers` climbs to the same
-    frame or index and stops there, a library's object, after one search
+    The slot is pandas' item cache (``y = df['t']`` stays in
+    ``df._item_cache``; pandas 2 without copy-on-write, where ``y[0] = 99``
+    changes ``df`` too); an index's data is counted before
+    (`_count_index_data`). `_holders_from_referrers` climbs to the same
+    frame and stops there, a library's object, after one search
     of every object the garbage collector tracks per level: 20-60 ms a
     statement. The references are counted, so a reference from anywhere
     else leaves the search to run.
@@ -1563,15 +1599,6 @@ def _held_in_pandas_slots(
                     if id(item) in wanted:
                         wanted[id(item)] -= 1
                         held = True
-            for axis in own["_mgr"].axes:
-                if id(axis) in seen:
-                    continue
-                seen.add(id(axis))
-                slots = vars(axis)
-                engine = slots.get("_cache", {}).get("_engine")
-                for item in (slots.get("_data"), getattr(engine, "values", None)):
-                    if item is not None and id(item) in wanted:
-                        wanted[id(item)] -= 1
             if held:
                 names.add(name)
     except Exception:  # noqa: BLE001 - another layout: the search up decides

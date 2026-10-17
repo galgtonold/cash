@@ -144,3 +144,46 @@ def test_a_collection_near_the_recursion_limit_still_runs_in_its_own_context():
     result = subprocess.run([sys.executable, "-c", DEEP], capture_output=True, text=True, timeout=120)
     assert "own_context" not in result.stderr, result.stderr[-2000:]
     assert result.returncode == 0 and result.stdout.strip() == "ok", (result.returncode, result.stderr[-2000:])
+
+
+DEEP_WITH_EVERY_ALLOCATION = textwrap.dedent(
+    """
+    import contextvars, gc, sys
+    import cash
+
+    RUNNING = contextvars.ContextVar("running", default="none")
+    errors = []
+    sys.unraisablehook = lambda u: errors.append(u.exc_type.__name__)
+
+    class Garbage:
+        def __init__(self):
+            self.me = self
+
+    def down(n):
+        Garbage()  # with a threshold of 1 every allocation collects
+        return n if n == 0 else down(n - 1) + 0
+
+    token = RUNNING.set("the code")
+    gc.set_threshold(1, 1, 1)
+    try:
+        down(100_000)
+    except RecursionError:
+        pass
+    gc.set_threshold(700, 10, 10)
+    assert RUNNING.get() == "the code", "a collection left its own context entered"
+    RUNNING.reset(token)
+    print("ok" if not errors else errors[:3])
+    """
+)
+
+
+def test_a_collection_at_the_recursion_limit_raises_nothing():
+    """A collection that starts a few frames short of the recursion limit
+    (deep in a pickle or a deepcopy) is one ctypes cannot enter a context
+    for: it runs in the interrupted context, as without cash, rather than
+    raising an unraisable error, which pytest reports as a failure of the
+    test it fell in (macOS 3.10, copying a 20,000-node chain)."""
+    result = subprocess.run(
+        [sys.executable, "-c", DEEP_WITH_EVERY_ALLOCATION], capture_output=True, text=True, timeout=120
+    )
+    assert result.returncode == 0 and result.stdout.strip() == "ok", (result.stdout[-500:], result.stderr[-2000:])
