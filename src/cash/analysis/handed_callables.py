@@ -1890,6 +1890,7 @@ class _Found:
             # ``partial(apply_, record)``: ``apply_`` runs ``record``.
             opened = _opened_by(value.func, None)
             self.add(value.func, root, False)
+            self._partial_args_changed(value, root)
             for position, arg in enumerate(value.args):
                 if type(arg) not in _ATOMS:
                     self.add(arg, root, opened.opens(position, None))
@@ -1947,6 +1948,35 @@ class _Found:
                     self._changed(value, root)
                 if _reaches_its_class(source):
                     self._changed(type(value), None)
+
+    def _partial_args_changed(self, value: functools.partial, root: str | None) -> None:
+        """The objects the partial *value* hands its function in parameters
+        that function changes in place: with ``def add(store, x):
+        store.append(x)``, each call of ``partial(add, bucket)`` changes
+        ``bucket``, which the statement calling it never names."""
+        if not self.objects:
+            return
+        func, args, keywords = value.func, value.args, dict(value.keywords)
+        seen = {id(value)}
+        while isinstance(func, functools.partial) and id(func) not in seen:
+            seen.add(id(func))
+            func, args, keywords = func.func, func.args + args, {**func.keywords, **keywords}
+        if isinstance(func, types.FunctionType):
+            source = _source_of(func) if self._users(func) else None
+            node = parse_function_source(source) if source is not None else None
+            if node is None:
+                return
+            mutated = params_mutated_in_function(node)
+            params = [a.arg for a in (*node.args.posonlyargs, *node.args.args)]
+            changed = [arg for param, arg in zip(params, args) if param in mutated]
+            changed += [arg for param, arg in keywords.items() if param in mutated]
+        elif isinstance(func, types.MethodDescriptorType) and func.__name__ in MUTATING_METHODS:
+            changed = list(args[:1])  # ``partial(list.append, bucket)``
+        else:
+            return
+        for arg in changed:
+            if type(arg) not in _ATOMS:
+                self._changed(arg, root)
 
     def _users(self, fn: types.FunctionType) -> bool:
         return fn.__globals__ is self.namespace or _is_users(fn)

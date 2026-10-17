@@ -132,6 +132,7 @@ from ...tracking.randomness import (
     rng_carrier_kind,
     rng_virtual_var,
 )
+from ..anchors import anchor_digests
 from ..borrowed_memory import borrowed_memory_names, lazy_frame_sources
 from ..callee_reach import (
     CWD,
@@ -167,6 +168,7 @@ from ..shared_objects import (
     VALUE_TYPES,
     GaveUp,
     WalkBudgetExceeded,
+    anchors_held,
     is_value,
     library_value_types,
     output_history,
@@ -1976,18 +1978,48 @@ class StatementProcessor:
         budget = share_check_budget(cost)
         found: dict[str, Any] | None = None
         gave_up: list[GaveUp] = []
+        anchors: dict[str, Any] = {}
+        anchor_links: set[str] = set()
+        anchor_holds: dict[str, list[str]] = {}
         try:
             with walk_budget(budget):
+                cash_held = [*self._calls.held_call_results(), echo, run.metrics, *self._mutations.digests.held()]
                 reason = unrestorable_output_reason(
                     run.outputs,
                     captured_vars,
                     self.shell.user_ns,
-                    cash_held=[*self._calls.held_call_results(), echo, run.metrics, *self._mutations.digests.held()],
+                    cash_held=cash_held,
                     shell=self.shell,
                     holders=holders,
                     gave_up=gave_up,
                     inputs=run.inputs,
                 )
+                if reason is not None and holders is not None:
+                    # Anchors only where holders alone refuse: an anchor binds
+                    # the live object only while its digest is the one stored,
+                    # which a holder restored with the outputs never needs
+                    # (a restored ColumnTransformer can digest apart from the
+                    # one it was stored from, and the entry would miss).
+                    retry_holders: dict[str, Any] = {}
+                    retry_gave_up: list[GaveUp] = []
+                    retry = unrestorable_output_reason(
+                        run.outputs,
+                        captured_vars,
+                        self.shell.user_ns,
+                        cash_held=cash_held,
+                        shell=self.shell,
+                        holders=retry_holders,
+                        gave_up=retry_gave_up,
+                        inputs=run.inputs,
+                        anchorable=self._anchorable(run),
+                        anchors=anchors,
+                        anchor_links=anchor_links,
+                    )
+                    if retry is None and anchors:
+                        reason, holders, gave_up = None, retry_holders, retry_gave_up
+                    else:
+                        anchors.clear()
+                        anchor_links.clear()
                 if reason is None and echo:
                     reason = identity_coupled_reason("the value it echoes", echo[0])
                 if reason is None:
@@ -1995,12 +2027,23 @@ class StatementProcessor:
                 if reason is None and holders:
                     found = dict(holders)
                     reason = self._take_holders(run, captured_vars, holders)
+                if reason is None and anchors:
+                    user_ns = self.shell.user_ns
+                    anchor_holds = {
+                        name: sorted(anchors_held(user_ns[name], anchors))
+                        for name in anchor_links - set(anchors)
+                        if name in user_ns
+                    }
         except WalkBudgetExceeded:
             run.share_unchecked = True
             reason = (
                 f"finding which other variables hold objects of its outputs would take longer than "
                 f"{budget:.1f}s, more than the statement is worth, so it re-runs every time"
             )
+        if reason is None and anchors:
+            run.anchors = {name: self.tracking_state.current_session_hashes[name] for name in anchors}
+            run.anchor_links = anchor_links | set(anchors)
+            run.anchor_holds = anchor_holds
         if reason is None and found is not None:
             return found
         # Gave up on a holder that is not a variable: the variables it found
@@ -2089,7 +2132,7 @@ class StatementProcessor:
             return
         complete = True
         if holders is not None:
-            links = [(outputs, set(holders))]
+            links = [(outputs, set(holders) | run.anchor_links)]
         else:
             links, complete = self._holders_of(run, outputs, captured_vars, echo, cost, fallback_floor, held)
         bases, bases_complete = self._view_bases_of(outputs, captured_vars, cost, run.inputs)
@@ -2386,6 +2429,26 @@ class StatementProcessor:
                 compute_hash=self.compute_hash,
             )
         return set(holders)
+
+    def _anchorable(self, run: StatementRun) -> Callable[[str], bool]:
+        """Whether a variable holding an object of *run*'s outputs can be
+        their anchor (`share_group`): not an output, and with the content it
+        had when its lineage was last recorded, by a content digest a restore
+        can check again (`anchors`)."""
+        session = self.tracking_state.current_session_hashes
+        lineage = self.tracking_state.variable_lineage
+        user_ns = self.shell.user_ns
+
+        def anchorable(name: str) -> bool:
+            if name in run.outputs or name not in user_ns:
+                return False
+            before = session.get(name)
+            if before is None or before == lineage.get(name):
+                return False
+            digests = anchor_digests({name: user_ns[name]}, self.compute_hash)
+            return digests is not None and digests[name] == before
+
+        return anchorable
 
     def _unchanged_holders(self, holders: dict[str, Any]) -> set[str]:
         """The *holders* whose content is what it was when their lineage was
