@@ -118,3 +118,19 @@ def test_an_object_whose_attributes_raise_is_read_as_a_library_object(cash_magic
     metrics = statement_processor.process_statement(f"loaded = np.load({str(path)!r})")
     assert metrics["status"] == CacheStatus.COMPUTED
     assert cash_magics.shell.user_ns["loaded"]["u"].tolist() == [0.0, 0.0, 0.0]
+
+
+def test_an_object_whose_class_raises_is_read_by_its_type():
+    """As ``BagObj`` does once its file is closed: every attribute raises,
+    ``__class__`` too, so an ``isinstance`` against an ABC raises (on 3.10
+    an AttributeError does as well) unless only the type is asked."""
+    import collections.abc
+
+    from cash.notebook.shared_objects import is_value
+
+    class Bag:
+        def __getattribute__(self, key):
+            raise ReferenceError("weakly-referenced object no longer exists")
+
+    assert is_value(Bag(), (collections.abc.Hashable, int)) is True, "its type is hashable"
+    assert is_value(Bag(), (collections.abc.Sequence,)) is False

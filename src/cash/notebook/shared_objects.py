@@ -190,10 +190,17 @@ def _found_by_name(fn: types.FunctionType) -> bool:
 
 def is_value(value: Any, value_types: tuple[type, ...]) -> bool:
     """Whether *value* has no identity a restore must keep (`VALUE_TYPES`,
-    a function or method that carries nothing)."""
-    if isinstance(value, value_types):
-        return True
-    return isinstance(value, _CALLABLE_TYPES) and _bound_objects(value) is None
+    a function or method that carries nothing).
+
+    An object whose attributes all raise, ``__class__`` too (numpy's
+    ``BagObj``, ``np.load(...).f``), makes an ``isinstance`` against an ABC
+    raise: it is read by its type alone."""
+    try:
+        if isinstance(value, value_types):
+            return True
+        return isinstance(value, _CALLABLE_TYPES) and _bound_objects(value) is None
+    except Exception:  # noqa: BLE001 - see above
+        return issubclass(type(value), value_types)
 
 
 _ESTIMATOR_CLASSES: dict[type, bool] = {}
@@ -1058,7 +1065,7 @@ def _held_within(nodes: dict[int, Any], inbound: dict[int, int], excess: list[in
         parent = id(stack[-1])
         referents = gc.get_referents(stack.pop())
         for child in referents:
-            if is_value(child, value_types) or isinstance(child, _NOT_WITHIN):
+            if is_value(child, value_types) or issubclass(type(child), _NOT_WITHIN):
                 continue
             key = id(child)
             refs[key] = refs.get(key, 0) + 1
@@ -1143,9 +1150,9 @@ def _reads_inside(node: Any, value_types: tuple[type, ...]) -> bool:
     """Whether *node* is a library's own object the walk does not read: not
     a value, nor pandas or numpy data (read by their own rules)."""
     try:
-        if is_value(node, value_types) or isinstance(node, _NOT_WITHIN) or children_of(node) is not None:
+        if is_value(node, value_types) or issubclass(type(node), _NOT_WITHIN) or children_of(node) is not None:
             return False
-    except Exception:  # noqa: BLE001 - see `_read_down`
+    except Exception:  # noqa: BLE001 - an object whose attributes raise (see `is_value`)
         return False
     kind = _LIBRARY_KINDS.get(type(node))
     return (kind or _library_kind(type(node))) is _LEAF
@@ -1154,19 +1161,9 @@ def _reads_inside(node: Any, value_types: tuple[type, ...]) -> bool:
 def _read_down(obj: Any, value_types: tuple[type, ...]) -> bool | None:
     """None when *obj*, met inside a library object, is not one to look for
     (a value, a type, a function, cash's own record); else whether to read
-    what it holds in turn (a library's own object, not pandas or numpy data).
-
-    Only *obj*'s type is asked first: numpy's ``BagObj`` (``np.load(...).f``)
-    answers every attribute from its file, ``__class__`` too, and raises, so
-    an ``isinstance`` that falls back to ``__class__`` raises with it. Such
-    an object is read as a library's own."""
-    if _is_cash_own(obj):
+    what it holds in turn (a library's own object, not pandas or numpy data)."""
+    if _is_cash_own(obj) or is_value(obj, value_types) or issubclass(type(obj), _NOT_WITHIN):
         return None
-    try:
-        if is_value(obj, value_types) or isinstance(obj, _NOT_WITHIN):
-            return None
-    except Exception:  # noqa: BLE001 - an object whose attributes raise
-        return True
     return (_LIBRARY_KINDS.get(type(obj)) or _library_kind(type(obj))) is _LEAF
 
 
@@ -1247,7 +1244,7 @@ def _variables_holding(
     references)."""
     by_id: dict[int, list[str]] = {}
     for name, value in list(user_ns.items()):
-        if name not in skip and not _SHELL_NAME.fullmatch(name) and not _is_value_or_raises(value, value_types):
+        if name not in skip and not _SHELL_NAME.fullmatch(name) and not is_value(value, value_types):
             by_id.setdefault(id(value), []).append(name)
     stop = {id(user_ns), id(inside), id(by_id), *ignore}
     stop.update(id(vars(module)) for module in list(sys.modules.values()) if module is not None)
@@ -1297,14 +1294,6 @@ def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
         if any(id(child) in ids for child in gc.get_referents(obj)):
             found.append(obj)
     return found
-
-
-def _is_value_or_raises(value: Any, value_types: tuple[type, ...]) -> bool:
-    """`is_value`, False when asking raises (see `_read_down`)."""
-    try:
-        return is_value(value, value_types)
-    except Exception:  # noqa: BLE001 - an object whose attributes raise
-        return False
 
 
 def _count_leaf_attributes(nodes: dict[int, Any], inbound: dict[int, int]) -> bool:
