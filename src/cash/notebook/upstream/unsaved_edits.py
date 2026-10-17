@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from cash.control_markers import strip_markers
 
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
+from ...analysis.mutation_effects import classify_receivers
 from ..cache_key import (
     statement_source_hash,
 )
@@ -144,6 +145,16 @@ class UnsavedEdits:
 
             if required_dependency and required_dependency not in inputs:
                 return False
+            # A receiver it changes in place (``label = df.pop('label')``,
+            # ``del df['label']``) is an output too, as the runtime counts it.
+            source_hash = statement_source_hash(code)
+            verdict = self.tracking_state.mutation_verdicts.get(source_hash)
+            outputs = set(outputs) | (
+                classify_receivers(
+                    ast.parse(code), self.statements.shell.user_ns, lambda: verdict, arguments=()
+                ).mutated
+                & set(inputs)
+            )
 
             input_lineage_map: dict[str, str] = {}
             # Note: CodeAnalyzer inputs are a set. We sort for deterministic hashing order.
@@ -162,7 +173,6 @@ class UnsavedEdits:
                     # Input missing entirely. Cannot verify.
                     return False
 
-            source_hash = statement_source_hash(code)
             # Route through the shared func-inclusive projection (matches the
             # recorder in statement/lineage.py) so an unsaved edit that calls a
             # user-defined function is not spuriously rejected for lacking the
