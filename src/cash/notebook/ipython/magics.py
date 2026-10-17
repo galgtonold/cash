@@ -60,6 +60,11 @@ __all__ = ["CashMagics"]
 logger = logging.getLogger(__name__)
 
 
+#: The name the stand-in cell shows a cell's echoed value under
+#: (`CashMagics._showing_result`).
+_CELL_RESULT = "__cash_cell_result__"
+
+
 def _is_silent(args: tuple, kwargs: dict) -> bool:
     """Whether ``run_cell(raw_cell, store_history, silent, ...)`` was asked to be silent.
 
@@ -1121,10 +1126,8 @@ class CashMagics(Magics):
         # Delegate to original run_cell with "pass" so IPython keeps its
         # execution count + history consistent; the history records the
         # user's cell, not the stand-in.
-        with self._history_records():
-            result = self._original_run_cell("pass", *args, **kwargs)
-        self._record_output_history(done, result)
-        return result
+        with self._history_records(), self._showing_result(done) as stand_in:
+            return self._original_run_cell(stand_in, *args, **kwargs)
 
     def _finalize_cell_body(self, raw_cell: str, done: PipelineCompleted) -> None:
         """Finaliser body shared by the sync and async tails.
@@ -1216,23 +1219,24 @@ class CashMagics(Magics):
         self._finalize_cell_body(raw_cell, done)
         # Replace ``transformed_cell`` so IPython runs our ``"pass"`` and NOT
         # the original user cell again (see _substitute_cell_kwargs).
-        with self._history_records():
-            result = await self._original_run_cell_async(
-                "pass",
+        with self._history_records(), self._showing_result(done) as stand_in:
+            return await self._original_run_cell_async(
+                stand_in,
                 *args,
-                **self._substitute_cell_kwargs("pass", kwargs),
+                **self._substitute_cell_kwargs(stand_in, kwargs),
             )
-        self._record_output_history(done, result)
-        return result
 
-    def _record_output_history(self, done: PipelineCompleted, result: Any) -> None:
-        """Give IPython's output history the value the cell echoed as its result.
+    @contextlib.contextmanager
+    def _showing_result(self, done: PipelineCompleted) -> Iterator[str]:
+        """The stand-in cell that ends a cell cash ran: ``pass``, or, when the
+        cell's last line echoed a value, a name bound to it.
 
-        cash runs the cell's statements itself and shows the last expression
-        with ``display``, so IPython's display hook never saw it: ``_`` and
-        ``Out`` stayed as they were and ``res = _`` bound the previous result.
-        Called after the ``"pass"`` stand-in ran, so the execution count is the
-        cell's own, as when IPython's hook runs inside the cell.
+        cash runs the statements itself, so IPython's display hook never saw
+        the value: shown with ``display`` it went out as display data, with no
+        ``Out[N]:``, and ``_`` and ``Out`` stayed as they were. Given the value
+        as the stand-in's own last line, IPython shows it as plain does -- an
+        execute result under the cell's count, before ``post_execute`` draws
+        the figures -- and records it in ``_``, ``Out`` and the cell's result.
         """
         # Taken out of every row, which outlive the cell (``%cash_status``
         # reads them): one held there was one more holder of the value to the
@@ -1240,18 +1244,16 @@ class CashMagics(Magics):
         # cell re-ran every time.
         echoed = [(m.pop(ECHO_FIELD, None), m.get("is_upstream")) for m in done.all_metrics]
         cell_echoes = [value for value, upstream in echoed if not upstream]
-        if not cell_echoes:
+        value = cell_echoes[-1] if cell_echoes else None
+        user_ns = getattr(self.shell, "user_ns", None)
+        if value is None or not isinstance(user_ns, dict):
+            yield "pass"
             return
-        value = cell_echoes[-1]
-        if value is None:
-            return
+        user_ns[_CELL_RESULT] = value
         try:
-            self.shell.displayhook.update_user_ns(value)
-        except (AttributeError, KeyError, TypeError):  # a shell without IPython's history
-            logger.debug("Recording the cell result in the output history failed", exc_info=True)
-            return
-        if result is not None and hasattr(result, "result"):
-            result.result = value
+            yield _CELL_RESULT
+        finally:
+            user_ns.pop(_CELL_RESULT, None)
 
     def _update_last_cell_metrics(self, all_metrics: list[ProcessResult], hook_total: float) -> None:
         """Compute and store ``_last_cell_metrics`` for ``%cash_status``.
