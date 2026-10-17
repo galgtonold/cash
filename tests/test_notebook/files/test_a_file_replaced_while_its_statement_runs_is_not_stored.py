@@ -10,16 +10,28 @@ from __future__ import annotations
 
 import os
 import threading
-import time
 import warnings
 
 import pytest
 
 from tests._cell_driver import run_cash_cell
 
-#: When the file is replaced, and how long the statement runs after its read.
-REPLACE_AFTER_S = 0.4
-RUNS_FOR_S = 1.2
+#: The longest the statement and the replacing thread wait for each other.
+WAIT_S = 30.0
+
+#: Set by the statement once it has read the file, and by the thread once it
+#: has replaced it: the replace lands between the read and the store however
+#: slow the machine. A fixed 0.4 s window landed before the read on a slow
+#: Windows runner, and the cell read the new file.
+_READ = threading.Event()
+_REPLACED = threading.Event()
+
+
+def handoff() -> None:
+    """Called by the statement right after its read: the file is replaced
+    before the statement goes on."""
+    _READ.set()
+    assert _REPLACED.wait(WAIT_S), "the file was not replaced"
 
 
 @pytest.fixture
@@ -38,14 +50,19 @@ def data(tmp_path):
 
 def _replace_soon(path, text):
     """Replace *path* from a thread of the test's own, as another process
-    would: nothing of the statement's sees the write."""
+    would, once the statement has read it: nothing of the statement's sees
+    the write."""
+    _READ.clear()
+    _REPLACED.clear()
 
     def later():
-        time.sleep(REPLACE_AFTER_S)
+        if not _READ.wait(WAIT_S):
+            return
         tmp = str(path) + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
             fh.write(text)
         os.replace(tmp, path)
+        _REPLACED.set()
 
     thread = threading.Thread(target=later, daemon=True)
     thread.start()
@@ -61,8 +78,8 @@ def _run(magics, code):
 
 def test_a_statement_whose_file_was_replaced_mid_run_is_not_served(cash_magics, stores_everything, data):
     path = str(data).replace("\\", "/")
-    run_cash_cell(cash_magics, "import time")
-    statement = f"text = [open({path!r}).read(), time.sleep({RUNS_FOR_S})][0]"
+    run_cash_cell(cash_magics, f"from {__name__} import handoff")
+    statement = f"text = [open({path!r}).read(), handoff()][0]"
     ns = cash_magics.shell.user_ns
     thread = _replace_soon(data, "2")
     codes = _run(cash_magics, statement)
@@ -79,8 +96,8 @@ def test_a_call_whose_file_was_replaced_mid_run_is_not_served(cash_magics, store
     path = str(data).replace("\\", "/")
     run_cash_cell(
         cash_magics,
-        f"import time\ndef load(p):\n    with open(p) as fh:\n        text = fh.read()\n"
-        f"    time.sleep({RUNS_FOR_S})\n    return text",
+        f"from {__name__} import handoff\ndef load(p):\n    with open(p) as fh:\n        text = fh.read()\n"
+        "    handoff()\n    return text",
     )
     ns = cash_magics.shell.user_ns
     thread = _replace_soon(data, "2")
@@ -99,8 +116,8 @@ def test_a_statement_below_is_not_served_from_the_replaced_run(cash_magics, stor
     path = str(data).replace("\\", "/")
     run_cash_cell(
         cash_magics,
-        f"import time\ndef load(p):\n    with open(p) as fh:\n        text = fh.read()\n"
-        f"    time.sleep({RUNS_FOR_S})\n    return text",
+        f"from {__name__} import handoff\ndef load(p):\n    with open(p) as fh:\n        text = fh.read()\n"
+        "    handoff()\n    return text",
     )
     ns = cash_magics.shell.user_ns
     thread = _replace_soon(data, "2")
