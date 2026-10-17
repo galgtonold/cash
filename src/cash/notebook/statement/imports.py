@@ -108,7 +108,24 @@ def import_needs_reexecution(tree: ast.Module | None, ns: Mapping[str, Any]) -> 
     """
     if tree is None:
         return False
+    if _is_star_import(tree):
+        # ``from m import *`` binds names known only by running it, so a
+        # restore binds none of them: always run it.
+        return True
     names = redundant_import_names(tree)
     if not names:
         return False
     return not all(name in ns for name in names)
+
+
+def _is_star_import(tree: ast.Module) -> bool:
+    """Is *tree* import-only with at least one ``from m import *``?"""
+    star = False
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            star = star or any(alias.name == "*" for alias in node.names)
+        elif not isinstance(node, ast.Import) and not (
+            isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+        ):
+            return False
+    return star

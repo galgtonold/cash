@@ -156,15 +156,16 @@ def _self_test(pd: Any) -> bool:
     through pandas with the stored table gone, and check nothing leaked."""
     import numpy as np
 
-    df = pd.DataFrame(
-        {
-            "f": np.arange(4.0),
-            "i": np.arange(4),
-            "d": pd.date_range("2020-01-01", periods=4),
-            "s": ["a", "b", "c", "d"],
-        },
-        index=pd.date_range("2024-01-01", periods=4, freq="D"),
-    )
+    columns = {"f": np.arange(4.0), "i": np.arange(4), "d": pd.date_range("2020-01-01", periods=4)}
+    text = pd.array(["a", "b", "c", "d"])
+    if _ndarray_parts(text) is not None:
+        # Text is frozen where pandas keeps it in Arrow. Without pyarrow,
+        # pandas 3 keeps it in a numpy array of str a table hands out
+        # writable (``.array``): such a table is copied, as before, and
+        # the test is of the kinds frozen, so tables of numbers and dates
+        # are still shared.
+        columns["s"] = text
+    df = pd.DataFrame(columns, index=pd.date_range("2024-01-01", periods=4, freq="D"))
     by_date = pd.Series(np.arange(4.0), index=pd.timedelta_range("1D", periods=4, freq="h"))
     stored = df.copy(deep=True)
     stored_series = by_date.copy(deep=True)
@@ -185,10 +186,13 @@ def _self_test(pd: Any) -> bool:
     del stored
     hit.iloc[0, 0] = 100.0
     hit.iloc[1, 2] = pd.Timestamp("2021-01-01")
-    hit.iloc[2, 3] = "z"
     hit.iloc[3, 1] = 9
-    if other["f"].iloc[0] != 0.0 or other["i"].iloc[3] != 3 or other["s"].iloc[2] != "c":
+    if other["f"].iloc[0] != 0.0 or other["i"].iloc[3] != 3:
         return False
+    if "s" in columns:
+        hit.iloc[2, 3] = "z"
+        if other["s"].iloc[2] != "c":
+            return False
     try:
         other["f"].array[1] = 5.0
     except ValueError:
@@ -244,6 +248,24 @@ def _freezable_values(values: Any, cells_known: bool = False) -> bool:
     return True
 
 
+def _label_parts(data: Any) -> list[tuple[str, Any]] | None:
+    """`_ndarray_parts` of an index's labels, and the numpy array of str
+    pandas 3 keeps text labels in without pyarrow: a column kind tables are
+    copied for, as its ``.array`` is written in place, but an index is never
+    written through pandas, and its cells are str or missing. Without it,
+    every table with named columns was copied, and so was each hit."""
+    parts = _ndarray_parts(data)
+    if parts is None and _python_text(data):
+        return [("_ndarray", data._ndarray)]
+    return parts
+
+
+def _python_text(data: Any) -> bool:
+    import pandas as pd
+
+    return isinstance(data, pd.arrays.StringArray)
+
+
 def _freezable_index(index: Any) -> bool:
     import pandas as pd
 
@@ -251,7 +273,7 @@ def _freezable_index(index: Any) -> bool:
         return True
     if isinstance(index, pd.MultiIndex):
         return False
-    return _freezable_values(index._data)
+    return _python_text(index._data) or _freezable_values(index._data)
 
 
 def freezable(frame: Any, *, cells_known: bool = False) -> bool:
@@ -319,6 +341,9 @@ def _frozen_index(index: Any) -> Any:
     if isinstance(index, pd.RangeIndex):
         return index
     data = index._data
+    if _python_text(data):
+        copied = data.copy()
+        return type(index)._simple_new(copied._from_backing_data(_read_only(copied._ndarray)), name=index.name)
     if not _ndarray_parts(data):
         return index  # Arrow labels: immutable memory (`_private_axes`)
     return type(index)._simple_new(_freeze_values(data.copy()), name=index.name)
@@ -338,7 +363,7 @@ def frozen_already(frame: Any) -> bool:
                 return False
         axes = (frame.index,) if frame.ndim == 1 else (frame.index, frame.columns)
         for axis in axes:
-            parts = _ndarray_parts(getattr(axis, "_data", None)) if not _is_range(axis) else []
+            parts = _label_parts(getattr(axis, "_data", None)) if not _is_range(axis) else []
             if parts is None or not all(not array.flags.writeable and is_frozen(array) for _name, array in parts):
                 return False
         return type(frame).__module__.startswith("pandas") and freezable(frame, cells_known=True)
@@ -432,6 +457,12 @@ def share_checked(frame: Any) -> tuple[Any, bytes] | None:
     `CHECKED_MIN_BYTES` in numpy arrays of numbers, dates and durations,
     each in one piece of memory. An object column is copied: its digest is
     of pointers, and a cell written twice can come back to an address."""
+    if _total_bytes(frame) < CHECKED_MIN_BYTES:
+        # Too small to keep uncopied whatever it holds: no need to know yet
+        # whether the checks work here. Finding out builds a 16 MB table
+        # (`_checked_self_test`), which a process storing only small tables
+        # paid at its first store.
+        return None
     if not _checked_works():
         return None
     try:
@@ -452,7 +483,9 @@ def keeps_uncopied(frame: Any) -> bool:
             return True
         import pandas as pd
 
-        if type(frame) is not pd.DataFrame or not _checked_works() or not freezable(frame, cells_known=True):
+        if type(frame) is not pd.DataFrame or _total_bytes(frame) < CHECKED_MIN_BYTES:
+            return False  # before `_checked_works`, which builds a 16 MB table
+        if not _checked_works() or not freezable(frame, cells_known=True):
             return False
         nbytes = 0
         for block in frame._mgr.blocks:
@@ -466,6 +499,16 @@ def keeps_uncopied(frame: Any) -> bool:
         return nbytes >= CHECKED_MIN_BYTES
     except Exception:  # noqa: BLE001 - unknown internals: copied
         return False
+
+
+def _total_bytes(frame: Any) -> int:
+    """All of *frame*'s block data in bytes, numbers or not; at least what
+    `_share_checked` counts. A frame of unknown shape counts as big, so it
+    goes through the checks as before."""
+    try:
+        return sum(block.values.nbytes for block in frame._mgr.blocks)
+    except Exception:  # noqa: BLE001 - not a pandas frame as known here
+        return CHECKED_MIN_BYTES
 
 
 def _share_checked(frame: Any) -> tuple[Any, bytes] | None:

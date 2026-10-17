@@ -37,6 +37,7 @@ from ..cache_status import CacheStatus
 from ..callee_reach import module_state_names, module_state_writes, state_holders
 from ..compiled_source import is_cash_filename
 from ..pyplot_draws import holds_artists, pyplot_draw_names
+from ..statement.capture import replay_outputs
 from .common import extract_target_names
 from .share_candidates import share_candidates
 
@@ -129,18 +130,22 @@ def resolve_unit_annotation(
 
 
 def flush_metrics_output(metrics: dict[str, Any]) -> None:
-    """Immediately print stdout/stderr from a metrics dict.
+    """Immediately show stdout/stderr and the displays from a metrics dict.
 
     This is called after each body statement so that output streams
     in real-time instead of being batched until the entire control
-    structure finishes.  The metrics dict is marked with
-    ``_output_flushed=True`` so that the caller in ``magics.py``
-    does not replay the same output a second time.
+    structure finishes, each pass's displays after its printed output as
+    plain shows them. The metrics dict is marked with
+    ``_output_flushed=True`` and its displays taken out, so that the caller
+    in ``magics.py`` does not replay the same output a second time.
     """
     if metrics.get("stdout"):
         print(metrics["stdout"], end="", flush=True)
     if metrics.get("stderr"):
         print(metrics["stderr"], end="", file=sys.stderr, flush=True)
+    rich = metrics.pop("rich_outputs", None)
+    if rich:
+        replay_outputs(rich=rich)
     metrics["_output_flushed"] = True
 
 

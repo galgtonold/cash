@@ -38,6 +38,7 @@ from ...tracking.read_classification import regular_file_stat
 from ...value_hash import budgeted_hash, compute_hash, costly_after
 from ..cache_key import statement_source_hash
 from ..lineage_formula import (
+    binding_source_hash,
     call_time_reads,
     callable_source_component,
     changed_module_environment,
@@ -310,13 +311,16 @@ class StatementLineageBuilder:
             # A module set by a setting that is the same when run again
             # (``pd.set_option('display.width', 120)``) keeps one run's
             # lineage however often it ran.
+            # An import's name hangs on the clause that bound it, not on the
+            # line's other names or their order.
+            own_hash = binding_source_hash(source_hash, code, var_name)
             output_lineage_hash = setting_output_lineage(
                 var_name,
                 value,
                 code,
                 input_lineage_map,
-                lambda others: output_lineage(source_hash, others, *components),
-            ) or output_lineage(source_hash, input_lineage_hashes, *components)
+                lambda others: output_lineage(own_hash, others, *components),
+            ) or output_lineage(own_hash, input_lineage_hashes, *components)
             # A new object only: ``t = raw`` binds the input itself, which
             # keeps the lineage the formula gives it.
             if cut_off:
@@ -649,7 +653,7 @@ class StatementLineageBuilder:
             tracking_state, inputs | lineage_hidden_reads(code), user_ns, code
         )
         return output_lineage(
-            statement_source_hash(code),
+            binding_source_hash(statement_source_hash(code), code, var_name),
             input_lineage_hashes,
             "",
             callable_source_component(self.function_tracker, inputs, user_ns),

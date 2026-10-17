@@ -15,6 +15,7 @@ import traceback as tb_mod
 from typing import TYPE_CHECKING
 
 from ..compiled_source import is_cash_filename
+from .cell_count import running_cell_count
 
 if TYPE_CHECKING:
     from cash.notebook._protocols import ShellProtocol
@@ -57,10 +58,7 @@ def show_clean_error(
         return
 
     # Determine the cell filename that IPython would use.
-    try:
-        exec_count = shell.execution_count
-    except AttributeError:
-        exec_count = 0
+    exec_count = running_cell_count(shell)
     cell_name = f"Cell In[{exec_count}]"
 
     # Register the full cell source in linecache so the traceback

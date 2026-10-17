@@ -26,6 +26,7 @@ standalone. The ``c3-`` class names form a stable contract for tests.
 
 from __future__ import annotations
 
+import functools
 import html as _html
 import uuid as _uuid
 from dataclasses import dataclass
@@ -74,10 +75,17 @@ def _load_stylesheet() -> str:
     return theme.css_custom_properties() + rules
 
 
-# Kept readable for the tests; what ships is minified once, at import: it is
-# inlined into every badge, so a saved notebook carries one copy per cell.
+# Kept readable for the tests; what ships is minified, once: it is inlined
+# into every badge, so a saved notebook carries one copy per cell.
 _CSS = _load_stylesheet()
-_STYLE_BLOCK = f"<style>{minify_css(_CSS)}</style>"
+
+
+@functools.cache
+def _style_block() -> str:
+    """The minified stylesheet as a ``<style>`` block. Made at the first
+    HTML badge, not at import: minifying takes about 10 ms, and a process
+    that never shows an HTML badge (a script, a terminal) never pays it."""
+    return f"<style>{minify_css(_CSS)}</style>"
 
 
 @dataclass(frozen=True)
@@ -1519,7 +1527,7 @@ def _render_html(badge: InteractiveBadge) -> str:
     chips = _filter_chips_html(badge.header)
 
     return (
-        _STYLE_BLOCK
+        _style_block()
         + '<div class="c3-wrap">'
         + f'<details class="c3-card" data-kind="{kind}">'
         + '<summary class="c3-summary">'

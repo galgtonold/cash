@@ -36,7 +36,7 @@ from cash.decorator.arg_hashing import (
     is_cow_pandas,
     watch_array_handles,
 )
-from cash.notebook._tee import TeeWriter
+from cash.notebook._tee import StreamTaken, TeeWriter
 from cash.sizing import pandas_nbytes
 from cash.source_reading import wrapper_layers
 from cash.tracking.file_dep_snapshot import dep_path_for_this_process
@@ -107,14 +107,10 @@ def call_capturing_output(fn, args: tuple, kwargs: dict) -> tuple[Any, str, str]
     output is simply gone, since the callee does not run at all on a hit.
     """
     __tracebackhide__ = True
-    old_stdout, old_stderr = sys.stdout, sys.stderr
-    tee_out = TeeWriter(old_stdout)
-    tee_err = TeeWriter(old_stderr)
     callers = _statement_globals(sys._getframe(1))
     if callers is not None and getattr(fn, "__globals__", None) is callers:
         callers = None  # a function of the cell's: nothing to name
-    sys.stdout, sys.stderr = tee_out, tee_err
-    try:
+    with StreamTaken("stdout", TeeWriter) as tee_out, StreamTaken("stderr", TeeWriter) as tee_err:
         if callers is None:
             result = fn(*args, **kwargs)
         else:
@@ -126,8 +122,6 @@ def call_capturing_output(fn, args: tuple, kwargs: dict) -> tuple[Any, str, str]
                 callers,
                 {"__cash_fn__": fn, "__cash_args__": args, "__cash_kwargs__": kwargs, "__tracebackhide__": True},
             )
-    finally:
-        sys.stdout, sys.stderr = old_stdout, old_stderr
     return result, tee_out.getvalue(), tee_err.getvalue()
 
 

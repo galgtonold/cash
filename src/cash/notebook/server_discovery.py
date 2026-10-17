@@ -14,7 +14,6 @@ shared state for the lifetime of a kernel session.  All callers go through
 
 from __future__ import annotations
 
-import http.client
 import ipaddress
 import json
 import logging
@@ -22,10 +21,9 @@ import os
 import site
 import sys
 import time as _time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlsplit
 
 from ..diagnostics import log_diagnostic, warn_diagnostic
@@ -34,6 +32,13 @@ from . import live_cells
 from .live_cells import latest_cells
 from .vscode_backup import find_backup
 from .vscode_backup import live_cells as vscode_live_cells
+
+if TYPE_CHECKING:
+    import urllib.request
+
+# ``urllib.request`` and ``http.client`` are imported where a server is asked:
+# they bring ssl and the email package, about 25 ms of every process's start,
+# and a process that is not a Jupyter kernel never asks one.
 
 logger = logging.getLogger(__name__)
 
@@ -429,6 +434,8 @@ def _open_sessions(req: urllib.request.Request):
     first ``urlopen`` in the process, so a proxy set later in the kernel would
     be ignored.
     """
+    import urllib.request
+
     if _is_loopback(req.full_url):
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     else:
@@ -438,6 +445,10 @@ def _open_sessions(req: urllib.request.Request):
 
 def _search_servers_for_notebook(kernel_id: str) -> str | None:
     """Query running Jupyter servers to find the notebook matching kernel_id."""
+    import http.client
+    import urllib.error
+    import urllib.request
+
     for server in _collect_running_servers():
         try:
             url = server["url"].rstrip("/") + "/api/sessions"
@@ -553,6 +564,14 @@ def get_notebook_path() -> str | None:
 
     if result := _try_vscode_path():
         return _cache_and_return(result)
+
+    if "ipykernel" not in sys.modules:
+        # A Jupyter kernel imported ipykernel to start: this process is not
+        # one (a terminal IPython, a script driving a shell), so no server
+        # runs a notebook on it. Importing it to ask cost about 0.1 s of
+        # every such process's start, jupyter_client and zmq included.
+        logger.debug("[UTILS] Not a Jupyter kernel (ipykernel not loaded)")
+        return _cache_not_found()
 
     try:
         from traitlets.config.configurable import MultipleInstanceError
