@@ -324,7 +324,25 @@ def held_lineage(before: str, cache_key: str) -> str:
     ``a['x'] = ...``), so it moves on, as a derivation alias of a mutated base
     does, and the next statement sharing the object cannot be served the
     entry written before this change.
+
+    Unless the statement was seen to leave the variable's content as it was
+    (`keep_held_lineage`): then it keeps *before*.
     """
+    return resolve_lineage_alias(_held_hash(before, cache_key))
+
+
+def keep_held_lineage(before: str, cache_key: str) -> None:
+    """Note that the statement with *cache_key* left a variable it holds with
+    lineage *before* as it was, so `held_lineage` keeps *before*, in the
+    runtime, the simulation and, through the alias store, the next session.
+    ``pre.fit_transform(X)`` fits clones of the pipelines a ColumnTransformer
+    holds; each fit moved those pipelines on all the same, so a session that
+    fitted twice keyed everything built on them apart from a Run All after a
+    restart, which fitted once, and 400 s of model fits ran again."""
+    record_lineage_alias(_held_hash(before, cache_key), before)
+
+
+def _held_hash(before: str, cache_key: str) -> str:
     return hashlib.sha256(f"held:{before}:{cache_key}".encode("utf-8")).hexdigest()
 
 
