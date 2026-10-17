@@ -71,6 +71,11 @@ def show_clean_error(
         raw_cell.splitlines(True),
         cell_name,
     )
+    # IPython labels a frame "Cell In[N], line L" only for a filename its
+    # compiler knows; any other reads "File Cell In[N]:L".
+    named = getattr(getattr(shell, "compile", None), "_filename_map", None)
+    if isinstance(named, dict):
+        named[cell_name] = exec_count
 
     # Determine the line number in the original cell for the failing
     # statement.  For control structures (for/if/while/with/try),
