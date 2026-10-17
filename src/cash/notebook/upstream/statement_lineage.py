@@ -54,6 +54,7 @@ from ..cache_key import CacheKeyContext, compute_cache_key, statement_source_has
 from ..callee_reach import helper_seeded_modules, module_state_names
 from ..consumables import is_stream, watched_call_receivers
 from ..lineage_formula import (
+    binding_source_hash,
     call_time_reads,
     callable_source_component,
     changed_module_environment,
@@ -636,6 +637,7 @@ class StatementLineage:
                 changed_module_environment(out, value, stmt_code, environment, virtual_modules or ()),
                 no_cache_value_component(no_cache_values, out),
             )
+            own_hash = binding_source_hash(source_hash, stmt_code, out)
             setting = None
             if input_lineage_map is not None:
                 setting = setting_output_lineage(
@@ -643,10 +645,12 @@ class StatementLineage:
                     value,
                     stmt_code,
                     input_lineage_map,
-                    lambda others, components=components: output_lineage(source_hash, others, *components),
+                    lambda others, components=components, own_hash=own_hash: output_lineage(
+                        own_hash, others, *components
+                    ),
                     virtual_modules or (),
                 )
-            lineages[out] = setting or output_lineage(source_hash, input_lineages_all, *components)
+            lineages[out] = setting or output_lineage(own_hash, input_lineages_all, *components)
         return lineages
 
     def _func_component(self, inputs: set[str], virtual_lineage: Mapping[str, str] | None) -> str:
