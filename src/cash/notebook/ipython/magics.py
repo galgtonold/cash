@@ -49,6 +49,7 @@ from ._args import parse_mode, strip_inline_comment
 from ._help import help_text
 from ._types import CellMetrics, PipelineCompleted, PipelineSyntaxError, RunInstead
 from .badges import BadgePresenter
+from .cell_count import counting_as_ipython
 from .cell_executor import CellExecutor
 from .inspection import show_provenance, show_stats
 from .notifications import discarded_writes_notification
@@ -58,6 +59,11 @@ from .shell_hooks import register_event, remove_previous_hooks, signature_preser
 __all__ = ["CashMagics"]
 
 logger = logging.getLogger(__name__)
+
+
+def _stores_history(args: tuple, kwargs: dict) -> bool:
+    """Whether ``run_cell(raw_cell, store_history, ...)`` was asked to store history."""
+    return bool(kwargs.get("store_history", args[0] if args else False))
 
 
 def _is_silent(args: tuple, kwargs: dict) -> bool:
@@ -793,11 +799,12 @@ class CashMagics(Magics):
     def _run_cell_cached(self, raw_cell: str, args: tuple, kwargs: dict) -> Any:
         self._point_reader_names_at_wrappers()
         try:
-            result = self._cell_executor.execute_cell(
-                raw_cell,
-                ttl=self.global_ttl,
-                cell_id=self.resolve_cell_id(),
-            )
+            with counting_as_ipython(self.shell, _stores_history(args, kwargs)):
+                result = self._cell_executor.execute_cell(
+                    raw_cell,
+                    ttl=self.global_ttl,
+                    cell_id=self.resolve_cell_id(),
+                )
         except (Exception, KeyboardInterrupt, SystemExit) as e:  # noqa: BLE001 - surfaces the cell's error to IPython
             # An interrupt or a ``sys.exit()`` too: IPython's own run_cell ends
             # the cell on them with an error reply. Raised past it, ipykernel
@@ -874,11 +881,12 @@ class CashMagics(Magics):
     async def _run_cell_cached_async(self, raw_cell: str, args: tuple, kwargs: dict) -> Any:
         try:
             self._point_reader_names_at_wrappers()
-            result = await self._cell_executor.execute_cell_async(
-                raw_cell,
-                ttl=self.global_ttl,
-                cell_id=self.resolve_cell_id(),
-            )
+            with counting_as_ipython(self.shell, _stores_history(args, kwargs)):
+                result = await self._cell_executor.execute_cell_async(
+                    raw_cell,
+                    ttl=self.global_ttl,
+                    cell_id=self.resolve_cell_id(),
+                )
         except (Exception, KeyboardInterrupt, SystemExit) as e:  # noqa: BLE001 - see _execute_cell_inner
             return await self._synthesize_run_cell_raise_async(e, args, kwargs)
 
@@ -1019,7 +1027,7 @@ class CashMagics(Magics):
         at the count IPython then gives the stand-in, and
         :meth:`_history_records` drops the stand-in's entry.
         Returns whether it stored one."""
-        store = kwargs.get("store_history", args[0] if args else False)
+        store = _stores_history(args, kwargs)
         history = getattr(self.shell, "history_manager", None)
         if not store or history is None or not raw_cell or raw_cell.isspace():
             return False

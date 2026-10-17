@@ -82,6 +82,7 @@ from ..statement.capture import replay_outputs
 from ..tracking_state import TrackingState
 from ._types import PipelineCompleted, PipelineSyntaxError, RunInstead
 from .autoreload_hook import in_place_reload, run_autoreload_now
+from .cell_count import running_cell_count
 from .ipython_cell import CellMagic, IPythonCell, ipython_cell
 from .notifications import (
     function_change_rows,
@@ -1299,9 +1300,7 @@ class CellExecutor:
         """
         _set_written_later(self, written_later)
         shell = getattr(self, "shell", None)
-        place = statement_place(
-            getattr(shell, "compile", None), getattr(shell, "execution_count", 0), first_line, cell.raw_cell
-        )
+        place = statement_place(getattr(shell, "compile", None), running_cell_count(shell), first_line, cell.raw_cell)
         try:
             with place:
                 metrics = yield _Step(
