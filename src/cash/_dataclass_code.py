@@ -7,14 +7,16 @@ builds that compiling was about 0.05 s of every fresh process, more than a
 quarter of the import.
 
 While cash imports, `dataclasses` is handed an ``exec`` that compiles a given
-text once and keeps the code object, by the text, in a file under the
-per-user cache root. A later process runs the kept code object. The text is
-the one `dataclasses` wrote for this Python and these fields, and the code
-object is what compiling it gives (same file name, no inherited flags), so
-every method is the one ``@dataclass`` makes, by construction. A text not
-kept yet is compiled as before. The file is named by the Python's bytecode
-magic, so another Python never reads it; an unreadable file is ignored and
-rewritten.
+text once and keeps the code object, by the text, in a file beside cash's own
+bytecode (its ``__pycache__``, or under ``PYTHONPYCACHEPREFIX``), the way
+Python keeps a module's ``.pyc``: nothing is written where cash keeps
+results, and nothing when Python writes no bytecode. A later process runs
+the kept code object. The text is the one `dataclasses` wrote for this
+Python and these fields, and the code object is what compiling it gives
+(same file name, no inherited flags), so every method is the one
+``@dataclass`` makes, by construction. A text not kept yet is compiled as
+before. The file is named by the Python's bytecode magic, so another Python
+never reads it; an unreadable file is ignored and rewritten.
 """
 
 from __future__ import annotations
@@ -41,11 +43,15 @@ ENV_SWITCH = "CASH_DATACLASS_CODE_CACHE"
 _MAX_ENTRIES = 4096
 
 
-def _cache_file() -> Path:
-    from ._location import per_user_cache_root
-
+def _cache_file() -> Path | None:
+    """Beside this module's ``.pyc``; None when it has no source file to
+    place one by (a sourceless install)."""
+    try:
+        pyc = importlib.util.cache_from_source(__file__)
+    except (NotImplementedError, ValueError):  # no cache_tag, or a .pyc-only install
+        return None
     tag = importlib.util.MAGIC_NUMBER.hex() + "-" + (sys.implementation.cache_tag or "py")
-    return per_user_cache_root() / f"dataclass-code-{tag}.marshal"
+    return Path(pyc).parent / f"dataclass-code-{tag}.marshal"
 
 
 class _KeptCode:
@@ -77,7 +83,7 @@ class _KeptCode:
 
     def save(self) -> None:
         """Write the file when this import compiled a text it lacked."""
-        if not self.added:
+        if not self.added or sys.dont_write_bytecode:
             return
         kept = self.kept
         if len(kept) > _MAX_ENTRIES:
@@ -101,10 +107,11 @@ def compiled_dataclass_methods():
     texts it has seen before (see the module docstring)."""
     import dataclasses
 
-    if os.environ.get(ENV_SWITCH) == "0" or "exec" in vars(dataclasses):
+    path = _cache_file()
+    if path is None or os.environ.get(ENV_SWITCH) == "0" or "exec" in vars(dataclasses):
         yield
         return
-    kept = _KeptCode(_cache_file())
+    kept = _KeptCode(path)
     dataclasses.exec = kept  # found before the builtin by the module's own code
     try:
         yield

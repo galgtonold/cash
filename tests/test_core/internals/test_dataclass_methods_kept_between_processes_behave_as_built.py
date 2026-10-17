@@ -27,7 +27,7 @@ FINGERPRINT = textwrap.dedent(
     InteractiveShell.instance().run_cell("import cash")  # as in a notebook: the whole engine loads
 
     def same(text):  # an address differs from process to process
-        return re.sub(r" at 0x[0-9a-f]+", " at ADDRESS", text)
+        return re.sub(r" at 0x[0-9a-fA-F]+", " at ADDRESS", text)
 
     def code(c):
         return [
@@ -96,8 +96,9 @@ FINGERPRINT = textwrap.dedent(
 
 def _fingerprint(cache: Path, *, kept: bool) -> dict:
     env = dict(os.environ)
-    # The per-user cache root on every platform (see `per_user_cache_root`).
-    env.update(HOME=str(cache), XDG_CACHE_HOME=str(cache), LOCALAPPDATA=str(cache))
+    # The file sits beside cash's bytecode, which this prefix moves here.
+    env["PYTHONPYCACHEPREFIX"] = str(cache)
+    env.pop("PYTHONDONTWRITEBYTECODE", None)
     env["CASH_DATACLASS_CODE_CACHE"] = "1" if kept else "0"
     done = subprocess.run(
         [sys.executable, "-c", FINGERPRINT], env=env, capture_output=True, text=True, encoding="utf-8", timeout=300
@@ -136,3 +137,11 @@ def test_an_unreadable_file_is_compiled_past_and_rewritten(tmp_path):
     compiled = _fingerprint(tmp_path / "off", kept=False)
     assert _fingerprint(tmp_path, kept=True) == compiled
     assert written.read_bytes() != b"not marshal data"
+
+
+def test_no_file_is_written_when_python_writes_no_bytecode(tmp_path, monkeypatch):
+    monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "1")
+    env = dict(os.environ, PYTHONPYCACHEPREFIX=str(tmp_path))
+    done = subprocess.run([sys.executable, "-c", "import cash"], env=env, capture_output=True, text=True, timeout=300)
+    assert done.returncode == 0, done.stderr
+    assert not _kept_files(tmp_path)
