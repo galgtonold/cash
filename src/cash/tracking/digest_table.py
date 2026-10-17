@@ -16,7 +16,8 @@ them, except one that puts the timestamps back: on Linux and macOS the
 inode change time still moves, on Windows nothing does (see
 known-limitations: an edit that keeps size and timestamps).
 
-The file is an append-only log of JSON lines, one per digest, each carrying
+The file is an append-only log of JSON lines, one per digest, written a
+batch at a time (`cash.tracking.log_lines`), each carrying
 the digest scheme's algorithm and version (`cash.bulk_digest.SCHEME`): a
 line from another scheme (an older cash, or an install with or without
 ``blake3``), a torn or corrupt line is skipped, and an empty table means
@@ -35,6 +36,7 @@ import threading
 from .._paths import replace_with_retry
 from ..backends.cache_dir import FILE_DIGESTS_FILENAME
 from ..bulk_digest import SCHEME
+from .log_lines import LogLines, flush_all
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +59,7 @@ class DigestTable:
         self._lines = 0
         self._loaded = False
         self._lock = threading.Lock()
+        self._log = LogLines(self.path, self._lock, "FILE_DEP")
 
     def get(self, key: StatKey) -> tuple[str, float] | None:
         self._ensure_loaded()
@@ -69,23 +72,19 @@ class DigestTable:
         line = json.dumps([_SCHEME, *key, digest, hashed_at], separators=(",", ":")) + "\n"
         with self._lock:
             self._items[key] = (digest, hashed_at)
-            if not os.path.isdir(os.path.dirname(self.path)):
-                return  # a cache dir that is gone: never recreated from here
-            try:
-                # One write of one short line, in append mode: lines from two
-                # processes interleave whole.
-                with open(self.path, "a", encoding="utf-8") as fh:
-                    fh.write(line)
-            except OSError:
-                logger.debug("[FILE_DEP] could not note a digest in %s", self.path, exc_info=True)
-                return
+            self._log.add(line)
             self._lines += 1
             if self._lines > _COMPACT_AT:
                 self._compact()
 
+    def flush(self) -> None:
+        """Write the lines still waiting (`cash.tracking.log_lines`)."""
+        self._log.flush()
+
     def _ensure_loaded(self) -> None:
         if self._loaded:
             return
+        flush_all()  # this process's own lines, still waiting, are read too
         with self._lock:
             if self._loaded:
                 return
@@ -104,6 +103,7 @@ class DigestTable:
         """Rewrite the log with the newest `_KEEP` entries (lock held)."""
         newest = sorted(self._items.items(), key=lambda kv: kv[1][1])[-_KEEP:]
         self._items = dict(newest)
+        self._log.drop()  # in the rewrite, if among the newest
         tmp = f"{self.path}.{os.getpid()}.tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as fh:
