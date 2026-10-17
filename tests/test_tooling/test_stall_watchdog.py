@@ -137,7 +137,10 @@ def test_a_patched_time_sleep_does_not_make_it_spin(monkeypatch):
     real = type(w).poll_interval
 
     def counted(self):
-        polls[0] += 1
+        # Its own polls only: a watchdog an earlier test parked in this process
+        # never fires, and it goes on polling through the patched property.
+        if self is w:
+            polls[0] += 1
         return real.fget(self)
 
     monkeypatch.setattr(type(w), "poll_interval", property(counted))

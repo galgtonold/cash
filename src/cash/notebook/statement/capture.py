@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from io import StringIO
 from typing import TYPE_CHECKING, Any
 
-from .._tee import TeeWriter
+from .._tee import StreamTaken, TeeWriter
 
 if TYPE_CHECKING:
     from cash.notebook.statement.results import ProcessResult
@@ -108,16 +108,15 @@ def tee_output() -> Generator[Any, None, None]:
     stdout_chunks: list[str] = []
     stderr_chunks: list[str] = []
     teed = TeedOutput(stdout_chunks, stderr_chunks)
-    old_stdout, old_stderr = sys.stdout, sys.stderr
-
-    sys.stdout = TeeWriter(old_stdout, stdout_chunks)
-    sys.stderr = TeeWriter(old_stderr, stderr_chunks)
-    try:
-        yield teed
-    finally:
-        sys.stdout.flush()
-        sys.stderr.flush()
-        sys.stdout, sys.stderr = old_stdout, old_stderr
+    with (
+        StreamTaken("stdout", lambda real: TeeWriter(real, stdout_chunks)) as out,
+        StreamTaken("stderr", lambda real: TeeWriter(real, stderr_chunks)) as err,
+    ):
+        try:
+            yield teed
+        finally:
+            out.sink.flush()
+            err.sink.flush()
 
 
 # ``capture_output`` (below) falls back to this when IPython is missing,
@@ -242,6 +241,38 @@ def _kernel_safe_capture(cls: Any) -> Any:
     return _KernelSafeCaptureOutput
 
 
+class _Captured:
+    """What a statement wrote and displayed: ``.stdout``, ``.stderr`` and
+    ``.outputs``, as IPython's ``CapturedIO`` gives them."""
+
+    def __init__(self, shown: Any, out: StreamTaken | None, err: StreamTaken | None) -> None:
+        self._shown = shown
+        self._out = out
+        self._err = err
+
+    @property
+    def stdout(self) -> str:
+        return self._out.getvalue() if self._out is not None else ""
+
+    @property
+    def stderr(self) -> str:
+        return self._err.getvalue() if self._err is not None else ""
+
+    @property
+    def outputs(self) -> list:
+        return list(getattr(self._shown, "outputs", None) or [])
+
+
+@contextmanager
+def _capture_in_place(cls: Any, stdout: bool, stderr: bool, display: bool) -> Generator[Any, None, None]:
+    """IPython's capture for the displays; the streams taken in place."""
+    with contextlib.ExitStack() as stack:
+        shown = stack.enter_context(cls(stdout=False, stderr=False, display=display))
+        out = stack.enter_context(StreamTaken("stdout", lambda _real: StringIO())) if stdout else None
+        err = stack.enter_context(StreamTaken("stderr", lambda _real: StringIO())) if stderr else None
+        yield _Captured(shown, out, err)
+
+
 def capture_output(stdout: bool = True, stderr: bool = True, display: bool = True):
     """Resolve IPython's ``capture_output`` on FIRST USE, not at import.
 
@@ -266,7 +297,9 @@ def capture_output(stdout: bool = True, stderr: bool = True, display: bool = Tru
         except ImportError:
             # The fallback never touches `display_pub`, so it has nothing to fix.
             _CAPTURE_OUTPUT = _fallback_capture_output
-    return _CAPTURE_OUTPUT(stdout=stdout, stderr=stderr, display=display)
+    if _CAPTURE_OUTPUT is _fallback_capture_output:
+        return _CAPTURE_OUTPUT(stdout=stdout, stderr=stderr, display=display)
+    return _capture_in_place(_CAPTURE_OUTPUT, stdout, stderr, display)
 
 
 def make_capture_ctx(stream_output: bool, skip_capture: bool) -> Any:
@@ -303,8 +336,19 @@ def replay_outputs(stdout: str = "", stderr: str = "", rich: list | None = None)
     for output in rich:
         if isinstance(output, dict) and "data" in output:
             publish_display_data(data=output["data"], metadata=output.get("metadata", {}))
+        elif _is_captured_display(output):
+            # Sent again as it was sent. ``display(output)`` formats the capture
+            # as an object, and a bundle with no ``text/plain`` (a plotly
+            # figure's) gets the object's repr there: ``<RichOutput at 0x..>``.
+            output.display()
         else:
             display(output)
+
+
+def _is_captured_display(output: Any) -> bool:
+    """A display that ``capture_output`` recorded (IPython's ``RichOutput``):
+    the mime bundle it was sent with, and a ``display()`` that sends it again."""
+    return isinstance(getattr(output, "data", None), dict) and callable(getattr(output, "display", None))
 
 
 def display_execution_output(captured: Any, silent: bool, stream_output: bool, metrics: ProcessResult) -> None:

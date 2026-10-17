@@ -82,6 +82,7 @@ from ..statement.capture import replay_outputs
 from ..tracking_state import TrackingState
 from ._types import PipelineCompleted, PipelineSyntaxError, RunInstead
 from .autoreload_hook import in_place_reload, run_autoreload_now
+from .cell_count import running_cell_count
 from .ipython_cell import CellMagic, IPythonCell, ipython_cell
 from .notifications import (
     function_change_rows,
@@ -969,16 +970,21 @@ class CellExecutor:
         all_metrics: list[ProcessResult],
         buffered_result_outputs: list,
     ) -> list:
-        """Flush outputs from all metrics in a control structure result."""
-        for metrics in ctrl_result.metrics:
-            if not metrics:
-                continue
+        """Flush outputs from all metrics in a control structure result.
+
+        Each part's displays are shown with its printed output, in order, as
+        plain shows a loop's. Only the last part's are held back as the
+        cell's result: holding every part's kept the last pass's alone (a
+        ``display()`` in a loop showed only its last item).
+        """
+        parts = [metrics for metrics in ctrl_result.metrics if metrics]
+        for n, metrics in enumerate(parts):
             all_metrics.append(metrics)
             if not metrics.get("_output_flushed"):
                 replay_outputs(metrics.get("stdout", ""), metrics.get("stderr", ""))
             buffered_result_outputs = self._flush_rich_outputs(
                 metrics.get("rich_outputs", []),
-                is_last_statement,
+                is_last_statement and n == len(parts) - 1,
                 buffered_result_outputs,
             )
         return buffered_result_outputs
@@ -1299,9 +1305,7 @@ class CellExecutor:
         """
         _set_written_later(self, written_later)
         shell = getattr(self, "shell", None)
-        place = statement_place(
-            getattr(shell, "compile", None), getattr(shell, "execution_count", 0), first_line, cell.raw_cell
-        )
+        place = statement_place(getattr(shell, "compile", None), running_cell_count(shell), first_line, cell.raw_cell)
         try:
             with place:
                 metrics = yield _Step(
