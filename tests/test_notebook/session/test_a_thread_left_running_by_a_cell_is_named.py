@@ -69,3 +69,38 @@ def test_a_joined_thread_no_thread_and_a_pool_s_workers_are_quiet(cash_magics):
         )
     finally:
         _stop(cash_magics)
+
+
+def test_a_new_thread_given_a_finished_threads_ident_is_named():
+    """A thread that ends during the cell frees its ident, and the thread the
+    cell starts next can be given it (macOS reuses them at once): the new
+    thread is told apart by itself, not by its ident."""
+    import threading as _threading
+
+    from cash.notebook.background_threads import BackgroundThreads
+
+    stop = _threading.Event()
+
+    def work():
+        stop.wait(10)
+
+    old = _threading.Thread(target=stop.wait, args=(10,), name="old")
+    old.start()
+    threads = BackgroundThreads()
+    try:
+        threads.cell_starts()
+        new = _threading.Thread(target=work, name="filler")
+        new.start()
+        real_ident = new._ident
+        new._ident = old.ident  # what the cell would see had `old` ended and freed it
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                threads.cell_ends(LEFT_RUNNING, 2)
+        finally:
+            new._ident = real_ident
+        assert [w for w in caught if getattr(w.message, "code", None) == CODE]
+    finally:
+        stop.set()
+        old.join(5)
+        new.join(5)

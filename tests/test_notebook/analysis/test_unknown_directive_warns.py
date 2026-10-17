@@ -42,7 +42,6 @@ def _unknown_directive_warnings(*lines: str) -> list[warnings.WarningMessage]:
     [
         ("nocache", "no-cache"),
         ("allowrandom", "allow-random"),
-        ("cachefit", "cache-fit"),
         ("nocachecalls", "no-cache-calls"),
         ("no_cache", "no-cache"),
         ("NoCache", "no-cache"),

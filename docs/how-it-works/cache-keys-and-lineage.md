@@ -248,6 +248,10 @@ that key on the run that saw the draw, so the next Run All restores it. When
 that key cannot be built yet (an input changed while the statement ran, or the
 statement also seeds), the value is not stored on that run.
 
+<!-- claim: cash/notebook/statement/observed_draws.py:ObservedDrawStore.record @855810da -->
+What a run saw drawn is kept in the cache folder (`observed_draws.json`), so the
+first run after a kernel restart builds the same key and restores the value.
+
 **Globals that called functions read.** `r = a(3)` names `a`, not the globals
 `a` reads when it runs. cash follows the called functions' global names and
 adds `name:lineage` for each. A name that no longer exists counts as

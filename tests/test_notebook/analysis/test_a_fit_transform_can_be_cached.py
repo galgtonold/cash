@@ -1,11 +1,8 @@
-"""``X = vec.fit_transform(texts)`` can be cached -- by asking for it.
+"""``X = vec.fit_transform(texts)`` is cached with the fitted vectorizer.
 
-TF-IDF was never cached ("NOT CACHED - In-place mutation on:
-vec") and cost 11-17 s on every pass. ``# @cash:cache-fit`` exists for exactly
-this trade, but covered only a bare ``est.fit(...)`` / ``partial_fit``: the
-assignment form of ``fit_transform`` was refused even when asked. It stays
-opt-in (see the directive's identity caveat), and the refusal now says how
-to opt in.
+TF-IDF that is not cached costs 11-17 s on every pass. The statement binds the
+matrix and fits ``vec`` in place; both are stored, so a hit leaves ``vec``
+fitted too.
 """
 
 import pytest
@@ -37,7 +34,7 @@ def test_asked_for_it_is_cached_with_the_fitted_vectorizer(cash_magics):
     ns = cash_magics.shell.user_ns
     for line in SETUP.strip().splitlines() + ["vec = TfidfVectorizer()"]:
         _run(cash_magics, line)
-    code = "# @cash:cache-fit\nX = vec.fit_transform(texts)"
+    code = "X = vec.fit_transform(texts)"
     first = _run(cash_magics, code)
     assert first["status"] == CacheStatus.COMPUTED
     assert not first.get("uncacheable_reasons"), first.get("uncacheable_reasons")
@@ -52,10 +49,15 @@ def test_asked_for_it_is_cached_with_the_fitted_vectorizer(cash_magics):
     assert hasattr(ns["vec"], "vocabulary_"), "the restore left the vectorizer unfitted"
 
 
-def test_not_asked_says_how(cash_magics):
+def test_cached_without_the_directive(cash_magics):
+    ns = cash_magics.shell.user_ns
     for line in SETUP.strip().splitlines() + ["vec = TfidfVectorizer()"]:
         _run(cash_magics, line)
-    m = _run(cash_magics, "X = vec.fit_transform(texts)")
-    reasons = " ".join(m.get("uncacheable_reasons") or [])
-    assert "In-place mutation on: vec" in reasons, reasons
-    assert "@cash:cache-fit" in reasons, reasons
+    first = _run(cash_magics, "X = vec.fit_transform(texts)")
+    assert not first.get("uncacheable_reasons"), first.get("uncacheable_reasons")
+
+    _run(cash_magics, "vec = TfidfVectorizer()")
+    del ns["X"]
+    again = _run(cash_magics, "X = vec.fit_transform(texts)")
+    assert again["status"] == CacheStatus.RESTORED, again
+    assert hasattr(ns["vec"], "vocabulary_"), "the restore left the vectorizer unfitted"

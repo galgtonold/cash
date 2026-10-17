@@ -16,8 +16,8 @@ def statement_directives(
     annotation: CacheAnnotation | None,
     ttl: int | None,
     persist_all: bool,
-) -> tuple[int | None, bool, bool, bool, bool]:
-    """Return ``(effective_ttl, force_persist, skip_cache, allow_random, cache_fit)``.
+) -> tuple[int | None, bool, bool, bool]:
+    """Return ``(effective_ttl, force_persist, skip_cache, allow_random)``.
 
     *persist_all* (config / ``%cash_persist`` magic) forces persistence
     for every statement, as if each carried ``# @cash:persist``.
@@ -26,27 +26,18 @@ def statement_directives(
     suppresses the unseeded-randomness warning and nothing else.  It must
     never reach the cacheability decision: an unseeded random statement is
     cacheable by design, with or without the directive.
-
-    ``cache_fit`` (``# @cash:cache-fit``) opts a bare ``estimator.fit(X, y)``
-    statement IN to the estimator-fit caching path.  It is off by
-    default: without it a bare fit is skip-cached and simply re-executes,
-    which is net-neutral.  It does NOT keep aliases correct:
-    ``backup = model`` is an ordinary assignment whose own restore rebinds a
-    pre-fit copy, independently of the fit.
     """
     effective_ttl = ttl
     force_persist = persist_all
     skip_cache = False
     allow_random = False
-    cache_fit = False
     if annotation:
         if annotation.ttl is not None:
             effective_ttl = annotation.ttl
         force_persist = force_persist or annotation.persist
         skip_cache = annotation.no_cache
         allow_random = annotation.allow_random
-        cache_fit = annotation.cache_fit
-    return effective_ttl, force_persist, skip_cache, allow_random, cache_fit
+    return effective_ttl, force_persist, skip_cache, allow_random
 
 
 def ttl_floor_from_called_functions(inputs: set[str], effective_ttl: int | None, user_ns: dict[str, Any]) -> int | None:

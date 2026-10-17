@@ -210,8 +210,8 @@ that only reads the object (`df.insert(1, "c", slow(df))`) is still cached on
 the value it is handed, so only the change itself repeats.
 
 **Fix:** assign a new value instead: `out = [f(e) for e in items]`,
-`df = df.sort_values(...)`. For estimators, see
-[`# @cash:cache-fit`](annotations.md#cashcache-fit).
+`df = df.sort_values(...)`. A fit is cached; see
+[Fitting models](notebook_caching_api.md#fitting-models).
 
 ### Shared with another variable
 

@@ -691,6 +691,7 @@ class ControlStructureProcessor:
                 self.statement_processor,
                 node,
                 code,
+                unchanged=frozenset(metrics.get("estimator_fits", ())),
                 unit_digest=self._unit_digest(node, code, metrics),
                 also=self.statement_processor.in_loop.close_watch(code, ran=status == CacheStatus.COMPUTED),
                 link_shares=_helpers.current_loop_pass(self) is None,

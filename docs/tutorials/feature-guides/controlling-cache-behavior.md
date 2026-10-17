@@ -188,8 +188,6 @@ know:
 
 `# @cash:allow-random` silences the warning about an unseeded draw without
 changing what is cached; see [Randomness](../../known-limitations.md#randomness).
-`# @cash:cache-fit` caches a bare `clf.fit(X, y)`; see
-[Annotations](../../annotations.md#cashcache-fit).
 
 ## Related
 

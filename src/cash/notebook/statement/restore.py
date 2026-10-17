@@ -94,16 +94,10 @@ class StatementRestorer:
         metadata: "StatementCacheMetadata | None",
         silent: bool,
         process_start: float,
-        inplace_restore: "set[str] | frozenset[str] | None" = None,
         *,
         seed_epochs: Mapping[str, str],
     ) -> None:
         """Restore a cached statement's outputs into ``user_ns`` and replay display.
-
-        *inplace_restore* names estimator-fit receivers whose fitted
-        state must be transferred onto the EXISTING object rather than rebinding
-        the name, so every alias sees the fit. Empty/None for every other
-        statement, which keeps the plain-rebind behaviour.
 
         *seed_epochs* is the seeding regime in force now; the entry's RNG state
         is replayed only while it still holds (:func:`rng_replay_is_current`).
@@ -131,7 +125,6 @@ class StatementRestorer:
                 object_rng_states = None
 
             t_var = _perf_counter()
-            inplace = inplace_restore or frozenset()
             holders = (metadata.holders if metadata is not None else None) or {}
             moved = holders if metadata is not None and metadata.holders_moved else {}
             if metadata is not None and metadata.key:
@@ -158,7 +151,7 @@ class StatementRestorer:
                         compute_hash=self.compute_hash,
                     )
                     continue
-                self._restore_one_var(tracking_state, var_name, value, metadata, inplace)
+                self._restore_one_var(tracking_state, var_name, value, metadata)
 
             # advance object-held generators to the post-state the
             # cached statement left them in — the module-global equivalent of
@@ -204,65 +197,15 @@ class StatementRestorer:
         var_name: str,
         value: Any,
         metadata: "StatementCacheMetadata | None",
-        inplace_restore: "set[str] | frozenset[str]" = frozenset(),
     ) -> None:
         """Write one restored variable into the shell namespace and record it.
 
-        For a var in *inplace_restore* (a bare ``estimator.fit(...)``
-        receiver) the fitted state is transferred ONTO the existing object
-        rather than rebinding the name, so every alias of the receiver
-        (``backup = clf``) observes the fit -- mirroring what an in-place
-        ``.fit()`` does at runtime.
+        A fitted estimator is rebound like any other output: the variables
+        holding it, or an object inside it, were stored with it as holders
+        and are rebound to the same restored objects above.
         """
-        self._write_restored_value(var_name, value, inplace_restore)
-        apply_restored_var(tracking_state, var_name, value, metadata, compute_hash=self.compute_hash)
-
-    def _write_restored_value(
-        self,
-        var_name: str,
-        value: Any,
-        inplace_restore: "set[str] | frozenset[str]",
-    ) -> None:
-        """Land a restored *value* into ``user_ns`` -- in place for an
-        estimator-fit receiver, else a plain rebind.
-
-        An in-place transfer mutates the EXISTING receiver object so every alias
-        (``backup = clf``) observes the restored (fitted) state, matching what
-        the original in-place ``.fit()`` did. Falls back to a rebind when the
-        name is absent (no alias can exist, so a rebind is safe), the existing
-        object and the cached value are not the SAME class, or the transfer
-        raises for any reason -- a restore must never crash.
-        """
-        if var_name in inplace_restore and var_name in self.shell.user_ns:
-            existing = self.shell.user_ns[var_name]
-            if type(existing) is type(value):
-                try:
-                    self._transfer_state_in_place(existing, value)
-                    return
-                except Exception as e:  # noqa: BLE001 -- never crash a restore
-                    logger.debug(
-                        "[CACHE DEBUG] In-place restore of '%s' failed (%s); rebinding",
-                        var_name,
-                        e,
-                    )
         self.shell.user_ns[var_name] = value
-
-    @staticmethod
-    def _transfer_state_in_place(existing: Any, value: Any) -> None:
-        """Copy *value*'s state onto *existing* in place.
-
-        Prefers the pickle protocol (``__setstate__`` fed from ``__getstate__``)
-        so an object with a custom state contract -- sklearn estimators define
-        both -- is transferred exactly as it would be unpickled. Falls back to a
-        ``__dict__`` swap for a plain object (whose ``object.__setstate__`` is
-        absent). Raises on failure; the caller catches and rebinds.
-
-        The estimators *existing* holds keep their identity too
-        (`_keep_estimators`): ``Pipeline.fit`` fits the very step objects it
-        was built from, so ``scaler`` and ``clf`` must come out fitted, and
-        ``pipe.named_steps['s']`` still be ``scaler``.
-        """
-        transfer_state_in_place(existing, value)
+        apply_restored_var(tracking_state, var_name, value, metadata, compute_hash=self.compute_hash)
 
     def _replay_cached_outputs(
         self,
@@ -277,49 +220,3 @@ class StatementRestorer:
         t_output = _perf_counter()
         replay_outputs(stdout, stderr, rich_outputs)
         return _perf_counter() - t_output
-
-
-def _is_estimator(value: Any) -> bool:
-    """An object with scikit-learn's estimator interface."""
-    return callable(getattr(value, "get_params", None)) and callable(getattr(value, "fit", None))
-
-
-def _state_of(obj: Any) -> Any:
-    getstate = getattr(obj, "__getstate__", None)
-    state = getstate() if callable(getstate) else None
-    return state if state is not None else dict(obj.__dict__)
-
-
-def transfer_state_in_place(existing: Any, value: Any, seen: set[int] | None = None) -> None:
-    """Set *value*'s state on *existing*, keeping the estimators *existing*
-    holds where the state holds their counterparts (`_keep_estimators`)."""
-    seen = set() if seen is None else seen
-    seen.add(id(existing))
-    state = _keep_estimators(_state_of(existing), _state_of(value), seen)
-    setstate = getattr(existing, "__setstate__", None)
-    if callable(setstate) and callable(getattr(value, "__getstate__", None)):
-        setstate(state)
-        return
-    existing.__dict__.clear()
-    existing.__dict__.update(state)
-
-
-def _keep_estimators(old: Any, new: Any, seen: set[int]) -> Any:
-    """*new*, with each estimator in it that stands where *old* has one of the
-    same type replaced by *old*'s, given *new*'s state in place.
-
-    Matched by position: the same key of a dict, the same index of a list or
-    a tuple of the same length. A restored state holds copies; the run fitted
-    the objects themselves, which other variables may name.
-    """
-    if old is new:
-        return new
-    if _is_estimator(new) and type(old) is type(new) and id(old) not in seen:
-        transfer_state_in_place(old, new, seen)
-        return old
-    if type(new) in (list, tuple) and type(old) is type(new) and len(old) == len(new):
-        items = [_keep_estimators(o, n, seen) for o, n in zip(old, new)]
-        return items if type(new) is list else tuple(items)
-    if type(new) is dict and type(old) is dict:
-        return {k: _keep_estimators(old[k], v, seen) if k in old else v for k, v in new.items()}
-    return new

@@ -53,7 +53,7 @@ The sections below explain each rule.
       <tr><td><code>data.append(4)</code></td><td>Not cached — changes a variable it does not produce</td></tr>
       <tr><td><code>del lookup['stale']</code></td><td>Not cached — a deletion with no output</td></tr>
       <tr><td><code>x = np.random.randn(100)</code></td><td>Cached + warning — unseeded</td></tr>
-      <tr><td><code>model.fit(X, y)</code></td><td>Not cached unless <code>@cash:cache-fit</code></td></tr>
+      <tr><td><code>model.fit(X, y)</code></td><td>Cached — with the variables that hold the model</td></tr>
       <tr><td><code>df.to_parquet('out.pq')</code></td><td>Not cached — writes a file</td></tr>
       <tr><td><code>r = requests.post(url, json=payload)</code></td><td>Not cached — sends a request</td></tr>
       <tr><td><code>r = session.post(url, json=payload)</code></td><td>Not cached — the same request through a client object</td></tr>
@@ -90,7 +90,8 @@ statement is not cached.
 | Item or attribute store | `d['k'] = v`, `obj.attr = v` | Cached: `d` or `obj` is the output |
 | pandas in place | `df.dropna(inplace=True)` | Cached: `df` is the output |
 | Known mutating method | `data.append(4)`, `d.update(o)`, `lst.pop()` | Not cached |
-| Other method call that changed its object | `bus.on(fn)`, `model.fit(X, y)` | Not cached |
+| Other method call that changed its object | `bus.on(fn)` | Not cached |
+| Estimator fit | `model.fit(X, y)` | Cached: `model` is the output, with the variables that hold it |
 | `del` of an item | `del d['k']` | Not cached |
 | numpy `out=` | `np.add(a, 1, out=a)` | Not cached |
 
@@ -181,12 +182,8 @@ not cache as a statement, but the expensive call inside it does, so a re-run
 reuses every element already computed. `out = [slow(e) for e in it]` assigns
 its result and caches as a whole.
 
-<!-- claim: cash/analysis/annotations.py:CacheAnnotation.cache_fit == False -->
-A bare `model.fit(X, y)` runs every time. `# @cash:cache-fit` on the line
-stores the fitted state and restores it into the existing estimator. To cache
-training reliably, put it in a function that returns the model and move it
-into a module; see
-[moving to a module](../tutorials/feature-guides/production-transition.md).
+A bare `model.fit(X, y)` is cached like an assignment of the fitted model; see
+[Fitting models](../notebook_caching_api.md#fitting-models).
 
 ### Side effects
 
@@ -286,7 +283,7 @@ every run.
 <!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.warn_unseeded @0a570907 -->
 `# @cash:allow-random` silences the warning and changes nothing else.
 `# @cash:no-cache` on the statement draws fresh on every run, with no warning.
-The badge marks the row `seed`, `random` (a seeded draw) or `unseeded`. A cached fit (`# @cash:cache-fit`) of an estimator with
+The badge marks the row `seed`, `random` (a seeded draw) or `unseeded`. A cached fit of an estimator with
 `random_state=None` warns the same way.
 
 ### Values that cannot survive a round trip

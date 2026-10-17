@@ -125,7 +125,7 @@ on (a file, a `DataSource`) and the TTL was only a backup.
 <!-- claim: cash/analysis/annotations.py:KNOWN_DIRECTIVES @91e03db7, cash/analysis/annotations.py:_warn_unknown_directive @24d9ef6e -->
 **What happened.** A comment starts `# @cash:` but the word after it is not a
 directive, so cash ignored it. The known directives are `no-cache`, `persist`,
-`ttl=N`, `allow-random`, `cache-fit`, `no-cache-calls` and `assume-safe`. When
+`ttl=N`, `allow-random`, `no-cache-calls` and `assume-safe`. When
 your spelling is close to one, the message suggests it.
 
 **Why it matters.** The code behaves as if the comment were not there. A

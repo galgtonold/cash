@@ -53,12 +53,6 @@ class CacheHitServer:
         Returns the completed *metrics* dict on success, or ``None`` if
         restoration fails (caller should fall through to execution).
 
-        ``run.est_fit`` names the estimator-fit receivers whose fitted state
-        must be transferred onto the EXISTING object rather than rebound, so
-        every alias observes the fit. It is recomputed each call from
-        the live namespace (never read from ``mutation_verdicts``, which is empty
-        right after a kernel restart).
-
         *seed_epochs* is the seeding regime in force now
         (``StatementRandomness.seed_epochs``).
         """
@@ -83,7 +77,6 @@ class CacheHitServer:
                 metadata,
                 run.silent,
                 process_start,
-                run.est_fit,
                 seed_epochs=seed_epochs,
             )
 

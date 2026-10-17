@@ -1,10 +1,10 @@
-"""``# @cash:cache-fit`` on a Pipeline fits the step objects themselves on a hit.
+"""A cached ``pipe.fit`` hit leaves the step objects themselves fitted.
 
 ``Pipeline.fit`` fits the very estimators the pipeline was built from, so
 after ``pipe.fit(X, y)`` the ``scaler`` and ``clf`` variables are fitted and
-``pipe.named_steps['s'] is scaler``. The in-place restore set a state whose
-steps were deserialised copies: the receiver kept its identity, but
-``scaler`` and ``clf`` stayed unfitted and the pipeline held other objects.
+``pipe.named_steps['s'] is scaler``. ``scaler`` and ``clf`` hold the
+pipeline's steps, so they are stored and restored with it and name the
+restored, fitted steps.
 """
 
 import ast
@@ -27,7 +27,7 @@ SETUP = [
 BUILD = "scaler = StandardScaler(); clf = LogisticRegression(); pipe = Pipeline([('s', scaler), ('m', clf)])"
 # The fit takes a few ms, under the store floor on a fast machine or an older
 # scikit-learn (1.7 on Python 3.10), so ``persist`` keeps it stored either way.
-FIT = "# @cash:cache-fit\n# @cash:persist\npipe.fit(X, y)"
+FIT = "# @cash:persist\npipe.fit(X, y)"
 
 
 def _run(cash_magics, code):

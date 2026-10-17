@@ -156,46 +156,28 @@ the reasoning.
 
 ## Fitting models
 
-<!-- claim: cash/notebook/statement/mutations.py:MutationClassifier.estimator_fit_receivers @6f64bb3f, cash/notebook/statement/mutations.py:MutationClassifier.cache_fit_hint @fd7eea71 -->
-A fit changes the estimator it is called on. So a separate `model.fit(X, y)`,
-on a `model` made in an earlier statement, changes an object in place and runs
-every time. Keep the fit in the assignment that binds the model, and the
-fitted model is cached like any other value, keyed on the data and the
-hyperparameters:
+<!-- claim: cash/notebook/statement/mutations.py:MutationClassifier.estimator_fit_receivers @d9df12ae -->
+A fit changes the estimator it is called on, and cash caches it all the same:
+`model.fit(X, y)`, `X_train = vec.fit_transform(train_texts)` and
+`labels = km.fit_predict(X)` store the fitted estimator with the statement,
+keyed on the data and on the estimator as built. So is a fit inside a
+`with` block, such as `with warnings.catch_warnings():`. After a restart, Run
+All restores the fitted model instead of training it again.
 
 <!-- test:skip reason="illustrative: needs training data" -->
 ```python { .nb-cell }
-model = RandomForestClassifier(random_state=42).fit(X_train, y_train)
+model = RandomForestClassifier(random_state=42)
+model.fit(X_train, y_train)                    # cached
+X = TfidfVectorizer().fit_transform(texts)     # cached
 ```
 
-`fit_transform` and `fit_predict` fit the estimator too, while returning
-something else. `X_train = vec.fit_transform(train_texts)` on a `vec` made
-earlier is an assignment, but it binds the matrix, not the fitted `vec`, so
-it runs every time. Fit in one assignment and transform in the next:
-
-<!-- test:skip reason="illustrative: needs training data" -->
-```python { .nb-cell }
-vec = TfidfVectorizer().fit(train_texts)   # cached
-X_train = vec.transform(train_texts)       # cached
-X_test = vec.transform(test_texts)         # cached
-```
-
-Or keep `fit_transform`, which reads the training data once instead of twice,
-and add [`# @cash:cache-fit`](annotations.md#cashcache-fit) to it; read that
-directive's caveat first. The badge row of a fit that runs every time names
-the directive.
-
-An estimator made in the same statement as its fit changes nothing that
-existed before, so these are cached as they are:
-
-<!-- test:skip reason="illustrative: needs training data" -->
-```python { .nb-cell }
-emb = TSNE(random_state=0).fit_transform(Z)        # cached
-X = TfidfVectorizer().fit_transform(train_texts)   # cached
-```
-
-The second form keeps no fitted vectorizer to transform test data with; use
-it when you need only the matrix.
+The variables that hold the estimator, or an object inside it, are stored and
+restored with it: `backup = model` still names the fitted model after a hit,
+and so do the steps of a `Pipeline` and the `param_grid` of a `GridSearchCV`.
+When the fitted estimator keeps an object cash cannot restore with it, such
+as the very array it was fitted on (`KNeighborsClassifier` keeps `X`), the
+fit runs every time and the badge says why. Running only the fit cell again
+fits the already fitted model, so it runs again too.
 
 ## After a restart
 

@@ -1,6 +1,6 @@
 """Warn when caching an UNSEEDED estimator fit as a frozen replay.
 
-``# @cash:cache-fit`` makes a bare ``estimator.fit(X, y)`` cacheable (opt-in). But cash's AST randomness detector cannot see the
+A bare ``estimator.fit(X, y)`` is cached. But cash's AST randomness detector cannot see the
 randomness inside sklearn's compiled ``.fit()`` (bootstrap sampling, feature
 subsampling, weight init). An estimator built WITHOUT a ``random_state`` therefore
 gets cached and frozen on re-run with no warning of any kind -- the notebook-path
@@ -8,16 +8,16 @@ analogue of the inline unseeded-randomness hazard cash already warns about (and 
 object-cache hazard the unseeded-randomness check covers on the decorator path). Two genuine fits
 differ; the cached fit is a replay.
 
-The fix is advisory only -- it does NOT change cacheability. An opted-in unseeded
+The fix is advisory only -- it does NOT change cacheability. An unseeded
 fit still caches, it just announces that the cached fit is frozen: at COMPUTE time
 ("Unseeded randomness detected ... frozen replay") and, on a cache hit, at RESTORE
 time ("restored from cache ... a replay"), through the SAME
 ``CashRandomnessWarning`` path the inline warning uses so existing filters catch it.
 
-Every notebook here carries ``# @cash:cache-fit``: the warning is about a FROZEN
-cached fit, so it is scoped to the path that actually freezes one. A bare fit
-without the directive re-executes every run -- nothing is replayed, so
-there is nothing to warn about (``test_default_bare_fit_does_not_warn``).
+The warning is about a FROZEN cached fit, so it is scoped to the path that
+actually freezes one. A fit under ``# @cash:no-cache`` re-executes every run --
+nothing is replayed, so there is nothing to warn about
+(``test_an_uncached_fit_does_not_warn``).
 
 Real-kernel end of the contract: the warning must reach the notebook's cell
 output through a live kernel. The seeded / deterministic / allow-random controls
@@ -52,7 +52,7 @@ def test_unseeded_estimator_fit_warns(nb_runner):
     """An opted-in ``clf.fit(X, y)`` on an UNSEEDED estimator warns at compute
     time, and the isolated re-run's restore announces the replay.
 
-    Fails WITHOUT the fix (the cache-fit path caches the fit silently);
+    Fails WITHOUT the fix (the fit is cached silently);
     passes with it. ``RandomForestClassifier(n_estimators=160)`` carries no
     ``random_state``, so ``get_params()['random_state']`` is ``None`` -> unseeded.
     """
@@ -61,7 +61,7 @@ def test_unseeded_estimator_fit_warns(nb_runner):
             SETUP,
             DATA,
             "clf = RandomForestClassifier(n_estimators=160)",  # UNSEEDED: no random_state
-            "# @cash:cache-fit\nclf.fit(X, y)\nprint('fitted', clf.n_estimators)",
+            "clf.fit(X, y)\nprint('fitted', clf.n_estimators)",
         ]
     )
     nb_runner.start_kernel()
@@ -94,7 +94,7 @@ def test_seeded_estimator_fit_does_not_warn(nb_runner):
             SETUP,
             DATA,
             "clf = RandomForestClassifier(n_estimators=40, random_state=42)",  # SEEDED
-            "# @cash:cache-fit\nclf.fit(X, y)\nprint('fitted', clf.n_estimators)",
+            "clf.fit(X, y)\nprint('fitted', clf.n_estimators)",
         ]
     )
     nb_runner.start_kernel()
@@ -119,7 +119,7 @@ def test_deterministic_estimator_fit_does_not_warn(nb_runner):
             "%cash_badge print",
             "X, y = make_regression(n_samples=6000, n_features=20, random_state=0)",
             "reg = LinearRegression()",
-            "# @cash:cache-fit\nreg.fit(X, y)\nprint('coef', reg.coef_.shape[0])",
+            "reg.fit(X, y)\nprint('coef', reg.coef_.shape[0])",
         ]
     )
     nb_runner.start_kernel()
@@ -132,18 +132,16 @@ def test_deterministic_estimator_fit_does_not_warn(nb_runner):
 
 
 def test_allow_random_suppresses_unseeded_estimator_fit(nb_runner):
-    """``# @cash:allow-random`` on an opted-in unseeded fit suppresses the warning
-    -- the documented opt-out has to cover this detection too.
-
-    Stacks with ``# @cash:cache-fit``: the two directives merge (both are sticky
-    booleans), so the fit caches AND stays quiet.
+    """``# @cash:allow-random`` on a cached unseeded fit suppresses the warning
+    -- the documented opt-out has to cover this detection too: the fit
+    caches AND stays quiet.
     """
     nb_runner.create_notebook(
         [
             SETUP,
             DATA,
             "clf = RandomForestClassifier(n_estimators=40)",  # UNSEEDED
-            "# @cash:cache-fit\n# @cash:allow-random\nclf.fit(X, y)\nprint('fitted', clf.n_estimators)",
+            "# @cash:allow-random\nclf.fit(X, y)\nprint('fitted', clf.n_estimators)",
         ]
     )
     nb_runner.start_kernel()
@@ -155,16 +153,9 @@ def test_allow_random_suppresses_unseeded_estimator_fit(nb_runner):
     assert "fitted 40" in nb_runner.get_output(4)
 
 
-def test_default_bare_fit_does_not_warn(nb_runner):
-    """Control: WITHOUT ``# @cash:cache-fit`` an unseeded bare fit is not
-    cached, so there is no frozen replay to warn about.
-
-    The identical notebook to ``test_unseeded_estimator_fit_warns`` minus the
-    directive. The warning's whole claim is "the value you are seeing is a
-    replay"; on the default path the fit re-executes every run and the claim would
-    be FALSE. This is what keeps the warning honest rather than a blanket
-    ``.fit()`` alarm.
-    """
+def test_a_bare_fit_warns_without_the_directive(nb_runner):
+    """The identical notebook to ``test_unseeded_estimator_fit_warns`` minus the
+    old directive: the bare fit is cached all the same, so it warns all the same."""
     nb_runner.create_notebook(
         [
             SETUP,
@@ -177,25 +168,24 @@ def test_default_bare_fit_does_not_warn(nb_runner):
     nb_runner.run_all()
 
     out = nb_runner.get_raw_output(4)
-    assert DETECTED_TEXT not in out, f"uncached bare fit warned about a replay that cannot happen: {out!r}"
-    assert "frozen replay" not in out, out
+    assert DETECTED_TEXT in out, f"a cached unseeded bare fit did not warn: {out!r}"
     assert "fitted 40" in nb_runner.get_output(4)
 
 
-def test_rerun_bare_fit_does_not_warn(nb_runner):
-    """A re-run of an uncached bare fit stays quiet too.
+def test_an_uncached_fit_does_not_warn(nb_runner):
+    """A fit under ``# @cash:no-cache`` stays quiet, on its re-run too.
 
     On the re-run the fit's receiver is pre-routed as a mutation and joins the
-    statement's outputs, which the inline-fit check read as a cached fitted
-    estimator: the second run warned "cash caches the fit ... frozen replay"
-    and badged the row ``[random: unseeded]`` for a fit that re-runs.
+    statement's outputs, which the inline-fit check could read as a cached
+    fitted estimator: "cash caches the fit ... frozen replay" and a
+    ``[random: unseeded]`` badge for a fit that re-runs.
     """
     nb_runner.create_notebook(
         [
             SETUP,
             DATA,
             "clf = RandomForestClassifier(n_estimators=40)",  # UNSEEDED
-            "clf.fit(X, y)\nprint('fitted', clf.n_estimators)",
+            "# @cash:no-cache\nclf.fit(X, y)\nprint('fitted', clf.n_estimators)",
         ]
     )
     nb_runner.start_kernel()
@@ -204,7 +194,7 @@ def test_rerun_bare_fit_does_not_warn(nb_runner):
 
     out = nb_runner.get_raw_output(4)
     assert "fitted 40" in nb_runner.get_output(4)
-    assert "NOT CACHED" in out, out
+    assert not shows_cached(out), out
     assert DETECTED_TEXT not in out, f"a re-run of an uncached bare fit claimed a frozen replay: {out!r}"
     assert "frozen replay" not in out, out
     assert "random: unseeded" not in out, out

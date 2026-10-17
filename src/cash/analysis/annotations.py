@@ -38,7 +38,6 @@ class CacheAnnotation:
     no_cache: bool = False  # Disable caching entirely
     ttl: int | None = None  # Override TTL in seconds
     allow_random: bool = False  # Suppress randomness warnings
-    cache_fit: bool = False  # Opt in to caching a bare ``estimator.fit(X, y)``
     no_cache_calls: bool = False  # Opt OUT of caching CALLS inside the statement
     # Cache the statement despite its side effects: a hit skips them. For a
     # call that only looks like a write -- a POST that runs a query. Never
@@ -52,7 +51,6 @@ class CacheAnnotation:
             no_cache=self.no_cache or other.no_cache,
             ttl=other.ttl if other.ttl is not None else self.ttl,
             allow_random=self.allow_random or other.allow_random,
-            cache_fit=self.cache_fit or other.cache_fit,
             no_cache_calls=self.no_cache_calls or other.no_cache_calls,
             assume_safe=self.assume_safe or other.assume_safe,
         )
@@ -64,7 +62,6 @@ class CacheAnnotation:
             or self.no_cache
             or self.ttl is not None
             or self.allow_random
-            or self.cache_fit
             or self.no_cache_calls
             or self.assume_safe
         )
@@ -92,7 +89,6 @@ KNOWN_DIRECTIVES: tuple[str, ...] = (
     "persist",
     "ttl",
     "allow-random",
-    "cache-fit",
     "no-cache-calls",
     "assume-safe",
 )
@@ -179,8 +175,6 @@ def _parse_directive(directive: str, value: str | None, lineno: int | None, warn
         return CacheAnnotation(no_cache=True)
     if directive == "allow-random":
         return CacheAnnotation(allow_random=True)
-    if directive == "cache-fit":
-        return CacheAnnotation(cache_fit=True)
     if directive == "no-cache-calls":
         return CacheAnnotation(no_cache_calls=True)
     if directive == "assume-safe":

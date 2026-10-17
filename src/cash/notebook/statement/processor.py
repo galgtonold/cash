@@ -172,6 +172,7 @@ from ..shared_objects import (
 from ..value_cutoff import LineageAliasStore
 from ..write_observer import kept_writes, observe_writes
 from .lineage import note_own_writes
+from .observed_draws import ObservedDrawStore
 
 __all__ = ["StatementProcessor", "is_control_body"]
 
@@ -319,6 +320,7 @@ class StatementProcessor:
         except (AttributeError, TypeError):
             _guard_dir = None
         self._miss_guard = MissGuard(_guard_dir)
+        self._randomness.use_draw_store(ObservedDrawStore(_guard_dir) if _guard_dir else None)
         self._evicted = EvictedRecomputes()
 
         # Statement-level file-dep tracker. Stateless w.r.t. tracking state —
@@ -972,7 +974,7 @@ class StatementProcessor:
         """Read *run*'s annotation, warn about its randomness, start its
         metrics and parse it."""
         code = run.code
-        run.effective_ttl, run.force_persist, run.skip_cache, run.allow_random, run.cache_fit = statement_directives(
+        run.effective_ttl, run.force_persist, run.skip_cache, run.allow_random = statement_directives(
             run.annotation, run.ttl, self.persist_all
         )
         self._calls.begin_statement(run.effective_ttl, run.force_persist)
@@ -1196,18 +1198,15 @@ class StatementProcessor:
         are bound to now (`live_shared_reason`), with the miss reason set.
 
         Asked of the objects whose identity the run keeps: the outputs it
-        changes in place and the variables the entry stores with them. A
-        ``# @cash:cache-fit`` receiver is restored in place, onto the object
-        every holder holds. Nor is a name the upstream check's forward probe
+        changes in place (a fitted estimator among them) and the variables the
+        entry stores with them. Nor is a name the upstream check's forward probe
         holds the place of (``FORWARD_PROBE_PLACEHOLDER``): no object of the
         notebook's, it is there for this very hit to replace.
         """
         held = set((metadata.holders or {}) if metadata is not None else ())
         mutated = set(run.analysis.all_mutated_vars) & run.outputs if run.analysis is not None else set()
         user_ns = self.shell.user_ns
-        names = {
-            name for name in (run.outputs | held) - run.est_fit if user_ns.get(name) is not FORWARD_PROBE_PLACEHOLDER
-        }
+        names = {name for name in run.outputs | held if user_ns.get(name) is not FORWARD_PROBE_PLACEHOLDER}
         keep = (held | mutated) & names
         if not keep:
             return False
@@ -1947,9 +1946,8 @@ class StatementProcessor:
 
         The statement's own echo, in *echo* and in its metrics row, is cash's
         reference, not another holder: `clf.fit(X, y)` echoes `clf` itself.
-        A ``# @cash:cache-fit`` receiver (``run.est_fit``) is restored in place,
-        onto the object every holder already holds, so its holders are no
-        reason to refuse.
+        A fitted estimator (``run.est_fit``) is checked like any output: the
+        variables holding it, or its steps and parameters, are stored with it.
         """
         holders: dict[str, Any] | None = None if is_control_body(run.code) else {}
         # The check may not take longer than the statement is worth: a hit
@@ -1961,7 +1959,7 @@ class StatementProcessor:
         try:
             with walk_budget(budget):
                 reason = unrestorable_output_reason(
-                    run.outputs - run.est_fit,
+                    run.outputs,
                     captured_vars,
                     self.shell.user_ns,
                     cash_held=[*self._calls.held_call_results(), echo, run.metrics],
@@ -2000,7 +1998,7 @@ class StatementProcessor:
         arr})``) is not stored: a restored copy would not see the next write
         to ``arr`` (`lazy_frame_sources`)."""
         user_ns = self.shell.user_ns
-        for name in sorted(run.outputs - run.est_fit):
+        for name in sorted(run.outputs):
             if name in captured_vars:
                 sources = lazy_frame_sources([captured_vars[name]], run.inputs - {name}, user_ns)
                 if sources:
