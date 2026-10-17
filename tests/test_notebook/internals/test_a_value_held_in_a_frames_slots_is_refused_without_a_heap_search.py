@@ -1,12 +1,13 @@
-"""A value pandas keeps in a frame's or an index's own slots is refused
-without searching the heap, with the same answer.
+"""A value pandas keeps in a frame's own slots is refused without
+searching the heap, with the same answer; one an index holds is no share.
 
-``y = df['t']`` stays in ``df._item_cache``, and a fitted model's
-``feature_names_in_`` is ``X.columns._data``: the search up the garbage
-collector's referrers climbed to that frame or index, stopped there (a
-library's object), and refused the store, 20-60 ms a statement for one
-search of every tracked object per level. The references are now counted
-against those slots; one from anywhere else still sends the search.
+``y = df['t']`` stays in ``df._item_cache``: the search up the garbage
+collector's referrers climbed to that frame, stopped there (a library's
+object), and refused the store, 20-60 ms a statement for one search of
+every tracked object per level. The references are now counted against
+those slots; one from anywhere else still sends the search. A fitted
+model's ``feature_names_in_`` is ``X.columns._data`` under pandas 2; an
+index is immutable, so that reference is counted as held (K10).
 """
 
 from __future__ import annotations
@@ -55,18 +56,27 @@ def test_a_column_the_frame_caches_is_refused_as_the_search_refuses_it():
     assert searched[3] >= 1 and counted[3] == 0
 
 
-def test_an_array_an_index_holds_is_refused_as_the_search_refuses_it():
+def test_an_array_an_index_holds_is_not_shared_and_needs_no_search():
+    """An index is immutable, so holding its data is holding a value (K10):
+    ``feature_names_in_`` being ``X.columns._data`` (pandas 2) is no share."""
     df = _frame()
     X = df[["a", "b"]]
     if not isinstance(X.columns._data, np.ndarray):
         pytest.skip("this pandas keeps the index in another array type")
     # No local name for the array: a reference from this frame is one more holder.
     ns = {"X": X, "model": {"feature_names_in_": X.columns._data}}
-    searched = _check(["model"], ns, search=True)
-    counted = _check(["model"], ns, search=False)
-    assert searched[:3] == counted[:3], (searched, counted)
-    assert searched[0] == {"model"}
-    assert counted[3] == 0
+    assert _check(["model"], ns, search=False) == (set(), set(), True, 0)
+
+
+def test_an_array_an_index_holds_is_shared_when_held_elsewhere_too():
+    df = _frame()
+    X = df[["a", "b"]]
+    if not isinstance(X.columns._data, np.ndarray):
+        pytest.skip("this pandas keeps the index in another array type")
+    elsewhere = [X.columns._data]  # held by a list no variable names
+    ns = {"X": X, "model": {"feature_names_in_": X.columns._data}}
+    assert _check(["model"], ns, search=False)[0] == {"model"}
+    del elsewhere
 
 
 def test_a_reference_from_anywhere_else_still_searches():

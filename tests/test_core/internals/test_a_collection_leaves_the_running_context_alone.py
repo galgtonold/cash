@@ -89,3 +89,101 @@ def test_collections_inside_context_variable_calls_lose_nothing():
     that set and reset variables: cash's own sets and resets all hold."""
     result = subprocess.run([sys.executable, "-c", STRESS], capture_output=True, text=True, timeout=120)
     assert result.returncode == 0 and result.stdout.strip() == "ok", (result.returncode, result.stderr[-2000:])
+
+
+DEEP = textwrap.dedent(
+    """
+    import contextvars, gc, sys
+    import cash
+
+    RUNNING = contextvars.ContextVar("running", default="none")
+    seen = []
+
+    class Garbage:
+        def __init__(self):
+            self.me = self
+        def __del__(self):
+            seen.append(RUNNING.get())
+
+    def down(n):
+        if n:
+            return down(n - 1)
+        Garbage()
+        gc.collect()
+
+    RUNNING.set("the code")
+    depth = 0
+    frame = sys._getframe()
+    while frame is not None:
+        depth += 1
+        frame = frame.f_back
+    # Ever closer to the limit, until the collection itself can no longer
+    # be called: its callback then runs a frame or two short of it.
+    ran = 0
+    for spare in range(30, 0, -1):
+        seen.clear()
+        try:
+            down(sys.getrecursionlimit() - depth - spare)
+        except RecursionError:
+            break
+        # Nearest the limit the finalizer itself may not get a frame: as
+        # without cash, it is then not run.
+        assert seen in (["none"], []), (spare, seen)
+        ran += 1
+    assert ran, "no collection ran"
+    print("ok")
+    """
+)
+
+
+def test_a_collection_near_the_recursion_limit_still_runs_in_its_own_context():
+    """A collection can start a frame short of the recursion limit (a pickler
+    deep in a 20,000-object chain): entering its context raised there, the
+    finalizers ran in the interrupted code's context, and a test failed on
+    the unraisable error."""
+    result = subprocess.run([sys.executable, "-c", DEEP], capture_output=True, text=True, timeout=120)
+    assert "own_context" not in result.stderr, result.stderr[-2000:]
+    assert result.returncode == 0 and result.stdout.strip() == "ok", (result.returncode, result.stderr[-2000:])
+
+
+DEEP_WITH_EVERY_ALLOCATION = textwrap.dedent(
+    """
+    import contextvars, gc, sys
+    import cash
+
+    RUNNING = contextvars.ContextVar("running", default="none")
+    errors = []
+    sys.unraisablehook = lambda u: errors.append(u.exc_type.__name__)
+
+    class Garbage:
+        def __init__(self):
+            self.me = self
+
+    def down(n):
+        Garbage()  # with a threshold of 1 every allocation collects
+        return n if n == 0 else down(n - 1) + 0
+
+    token = RUNNING.set("the code")
+    gc.set_threshold(1, 1, 1)
+    try:
+        down(100_000)
+    except RecursionError:
+        pass
+    gc.set_threshold(700, 10, 10)
+    assert RUNNING.get() == "the code", "a collection left its own context entered"
+    RUNNING.reset(token)
+    print("ok" if not errors else errors[:3])
+    """
+)
+
+
+def test_a_collection_at_the_recursion_limit_raises_nothing():
+    """A collection that starts a few frames short of the recursion limit
+    (deep in a pickle or a deepcopy) is one ctypes cannot enter a context
+    for: it runs in the interrupted context, as without cash, rather than
+    raising an unraisable error, which pytest reports as a failure of the
+    test it fell in (macOS 3.10, copying a 20,000-node chain)."""
+    result = subprocess.run(
+        [sys.executable, "-c", DEEP_WITH_EVERY_ALLOCATION], capture_output=True, text=True, timeout=120
+    )
+    assert result.returncode == 0 and result.stdout.strip() == "ok", (result.stdout[-500:], result.stderr[-2000:])

@@ -94,7 +94,11 @@ __all__ = [
 #: seeded, and a hit replays only those. An older entry holds every stream,
 #: and a hit on it put back streams the statement never touched, so the
 #: next draw repeated one already made; they are cleared.
-CACHE_FORMAT_VERSION = 8
+#: 9: a cell's value is no longer kept among its statement's displays: IPython's
+#: display hook sends it, with its Out[N] label, on a computed and a served
+#: run alike. An older entry still holds it as a display, and a hit on it
+#: would show the value twice; they are cleared.
+CACHE_FORMAT_VERSION = 9
 
 #: The per-directory format stamp. No entry suffix, so entry globs skip it.
 VERSION_FILENAME = "CACHE_VERSION"

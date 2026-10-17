@@ -134,6 +134,38 @@ jobs:
             -n auto --tb=short -q -rs
         shell: bash
 
+  # The Linux, Windows and macOS runs above get pandas 3 on every Python but
+  # 3.10, which pandas 3 does not support. Under pandas 2 frames share more
+  # with what is built from them (no copy-on-write; a fitted model's
+  # ``feature_names_in_`` is the frame's own column array), so the tests
+  # named for pandas, frames, series, columns, scikit-learn and fits run
+  # once more on a newer Python with pandas 2: about a tenth of the suite.
+  pandas-2:
+    name: Pandas tests on pandas 2
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" "pandas>=2.2,<3"
+
+      - name: Run the pandas tests
+        run: |
+          pytest tests/ \
+            --ignore=tests/test_notebook_integration \
+            --ignore=tests/test_wheel_gate \
+            --ignore=tests/docs \
+            -m "not perf" -k "pandas or frame or sklearn or fit or series or column" \
+            -n auto --tb=short -q -rs
+        shell: bash
+
   # The integration core set: the tests picked (tools/test_selection/) to cover
   # every line, feature and step sequence the whole integration suite covers,
   # in about a tenth of its time. The whole suite runs nightly (nightly.yml).

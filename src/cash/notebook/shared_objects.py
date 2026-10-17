@@ -1100,6 +1100,8 @@ def _check_group(
         for mapping, key in named_held:
             if id(mapping.get(key)) in nodes:
                 inbound[id(mapping.get(key))] += 1
+        if user_ns is not None:
+            _count_index_data(nodes, inbound, user_ns)
         counted = dict(inbound)
         excess = excess_refs(nodes, inbound, checked)
         if excess and _count_leaf_attributes(nodes, inbound):
@@ -1286,7 +1288,22 @@ def _read_down(obj: Any, value_types: tuple[type, ...]) -> bool | None:
     what it holds in turn (a library's own object, not pandas or numpy data)."""
     if _is_cash_own(obj) or is_value(obj, value_types) or issubclass(type(obj), _NOT_WITHIN):
         return None
+    if _holds_only_values(obj, value_types):
+        return None
     return (_LIBRARY_KINDS.get(type(obj)) or _library_kind(type(obj))) is _LEAF
+
+
+def _holds_only_values(obj: Any, value_types: tuple[type, ...], depth: int = 3) -> bool:
+    """Whether *obj* is a tuple or frozenset of values (or of such tuples):
+    nothing in it can change, so no identity of it a restore must keep.
+
+    The empty tuple a fitted ``HistGradientBoostingRegressor`` holds is the
+    interpreter's one ``()``, held by thousands of objects: looked for up its
+    referrers, the climb read the heap seven times over (3 s), never ended,
+    and the fit was refused as shared, every run."""
+    if type(obj) not in (tuple, frozenset) or depth <= 0:
+        return False
+    return all(is_value(item, value_types) or _holds_only_values(item, value_types, depth - 1) for item in obj)
 
 
 def _is_cash_own(obj: Any) -> bool:
@@ -1360,8 +1377,9 @@ def _variables_holding(
     """The variables of *user_ns* not in *skip* that hold an object of
     *inside*, found up `gc.get_referrers`; None when the climb did not end
     within `_REFERRER_DEPTH` levels, or a level reached more than
-    `_INSIDE_MAX_OBJECTS` objects. It stops at a variable, a module, a
-    frame, cash's own records (`_is_cash_own`: what they hold is the
+    `_INSIDE_MAX_OBJECTS` objects, or when an object is held in a container a
+    module or a library's class keeps. It stops at a variable, a module, a
+    library's class, a frame, cash's own records (`_is_cash_own`: what they hold is the
     statement's bookkeeping) and the objects of *ignore* (cash's own
     references)."""
     by_id: dict[int, list[str]] = {}
@@ -1369,7 +1387,13 @@ def _variables_holding(
         if name not in skip and not _SHELL_NAME.fullmatch(name) and not is_value(value, value_types):
             by_id.setdefault(id(value), []).append(name)
     stop = {id(user_ns), id(inside), id(by_id), *ignore}
-    stop.update(id(vars(module)) for module in list(sys.modules.values()) if module is not None)
+    module_dicts = {id(vars(module)) for module in list(sys.modules.values()) if module is not None}
+    module_dicts.discard(id(user_ns))
+    stop.update(module_dicts)
+    # Held in a container a library keeps, a library's own object is still
+    # the library's (a module-level loss holding sklearn's ``Interval``); the
+    # notebook's data or its own object is not, and no copy of it is that one.
+    notebook_own = not all(_is_library_own(obj) for obj in inside.values())
     names: set[str] = set()
     for key in inside:
         names.update(by_id.get(key, ()))
@@ -1390,17 +1414,52 @@ def _variables_holding(
         stop.add(id(following))
         for obj in referrers:
             key = id(obj)
+            if key in module_dicts and _level and notebook_own:
+                # Held in a container a module keeps (``lib.registry.append(df)``):
+                # not the module's own global, and no copy is that object.
+                return None
             if key in seen or key in stop or issubclass(type(obj), (types.FrameType, types.ModuleType)):
                 continue
             seen.add(key)
             if key in by_id:
                 names.update(by_id[key])
                 continue
+            if isinstance(obj, type) and _is_library_class(obj):
+                # A library's class, found again by its name as its module
+                # is: what it holds itself (sklearn's ``interval_y_pred``) is
+                # the library's own, as its globals are. Reached through a
+                # container it holds (``SomeLibClass.registry.append(df)``),
+                # the object is the notebook's, held where no copy reaches.
+                if _level > 1 and notebook_own:
+                    return None
+                continue
             if not _is_cash_own(obj):
                 following.append(obj)
         del referrers, args
         frontier[:] = following
     return names if not frontier else None
+
+
+def _is_library_own(obj: Any) -> bool:
+    """Whether *obj* is a library's own object: of a library's class
+    (`_is_library_class`), read as one (not pandas or numpy data). A list,
+    a dict or the notebook's own object is not."""
+    cls = type(obj)
+    if cls.__module__ == "builtins" or not _is_library_class(cls):
+        return False
+    return (_LIBRARY_KINDS.get(cls) or _library_kind(cls)) is _LEAF
+
+
+def _is_library_class(cls: type) -> bool:
+    """Whether *cls* is a class of a library: not the notebook's (``__main__``)
+    nor one of the user's own modules (`_is_local_module_class`).
+
+    sklearn's link classes hold the ``Interval`` a fitted boosting model's
+    loss holds too (``interval_y_pred``): climbing past the class, through
+    its subclasses, methods and module, read the heap seven times and never
+    ended, so the fit was refused as shared."""
+    module = getattr(cls, "__module__", None)
+    return isinstance(module, str) and module != "__main__" and not _is_local_module_class(cls)
 
 
 def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
@@ -1466,6 +1525,41 @@ def _count_memo(memo: dict[int, list | None], nodes: dict[int, Any], inbound: di
                 inbound[key] += 1
 
 
+def _count_index_data(nodes: dict[int, Any], inbound: dict[int, int], user_ns: Mapping[str, Any]) -> None:
+    """Count in *inbound* what the indexes of the frames in *user_ns* hold
+    of *nodes*: an index's data and its engine's values.
+
+    An index is immutable: pandas never writes its data in place, and every
+    change to a frame's labels (``df.columns = ...``, ``rename``) binds a
+    new index. Holding its data is holding a value, which keys and restores
+    the same shared or not (K10). Under pandas 2 a fitted model's
+    ``feature_names_in_`` is ``X.columns._data`` itself, and every fit on a
+    frame was refused as sharing it with ``X``; pandas 3 hands out a copy.
+    A frame of the group itself, or an index the walk read, is counted by
+    the walk already."""
+    pd = sys.modules.get("pandas")
+    if pd is None:
+        return
+    frame_types = (pd.DataFrame, pd.Series)
+    seen: set[int] = set()
+    try:
+        for value in list(user_ns.values()):
+            if not isinstance(value, frame_types) or id(value) in nodes or id(value) in seen:
+                continue
+            seen.add(id(value))
+            for axis in vars(value)["_mgr"].axes:
+                if id(axis) in nodes or id(axis) in seen:
+                    continue
+                seen.add(id(axis))
+                slots = vars(axis)
+                engine = slots.get("_cache", {}).get("_engine")
+                for item in (slots.get("_data"), getattr(engine, "values", None)):
+                    if item is not None and id(item) in inbound:
+                        inbound[id(item)] += 1
+    except Exception:  # noqa: BLE001 - another layout: counted as held elsewhere
+        return
+
+
 def _held_in_pandas_slots(
     nodes: dict[int, Any],
     inbound: dict[int, int],
@@ -1476,12 +1570,11 @@ def _held_in_pandas_slots(
     """The variables bound to the pandas frames whose own slots hold every
     reference left over on *excess*, or None when any is held elsewhere.
 
-    The slots are pandas' data layout: a frame's item cache (``y =
-    df['t']`` stays in ``df._item_cache``; pandas 2 without copy-on-write,
-    where ``y[0] = 99`` changes ``df`` too), and an index's data and its
-    engine's values (scikit-learn's ``feature_names_in_`` is
-    ``X.columns._data``). `_holders_from_referrers` climbs to the same
-    frame or index and stops there, a library's object, after one search
+    The slot is pandas' item cache (``y = df['t']`` stays in
+    ``df._item_cache``; pandas 2 without copy-on-write, where ``y[0] = 99``
+    changes ``df`` too); an index's data is counted before
+    (`_count_index_data`). `_holders_from_referrers` climbs to the same
+    frame and stops there, a library's object, after one search
     of every object the garbage collector tracks per level: 20-60 ms a
     statement. The references are counted, so a reference from anywhere
     else leaves the search to run.
@@ -1506,15 +1599,6 @@ def _held_in_pandas_slots(
                     if id(item) in wanted:
                         wanted[id(item)] -= 1
                         held = True
-            for axis in own["_mgr"].axes:
-                if id(axis) in seen:
-                    continue
-                seen.add(id(axis))
-                slots = vars(axis)
-                engine = slots.get("_cache", {}).get("_engine")
-                for item in (slots.get("_data"), getattr(engine, "values", None)):
-                    if item is not None and id(item) in wanted:
-                        wanted[id(item)] -= 1
             if held:
                 names.add(name)
     except Exception:  # noqa: BLE001 - another layout: the search up decides
