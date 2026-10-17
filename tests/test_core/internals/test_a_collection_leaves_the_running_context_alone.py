@@ -164,6 +164,7 @@ DEEP_WITH_EVERY_ALLOCATION = textwrap.dedent(
         return n if n == 0 else down(n - 1) + 0
 
     token = RUNNING.set("the code")
+    limit = sys.getrecursionlimit()
     gc.set_threshold(1, 1, 1)
     try:
         down(100_000)
@@ -171,6 +172,8 @@ DEEP_WITH_EVERY_ALLOCATION = textwrap.dedent(
         pass
     gc.set_threshold(700, 10, 10)
     assert RUNNING.get() == "the code", "a collection left its own context entered"
+    gc.collect()  # puts back a limit a collection deep in the recursion could not
+    assert sys.getrecursionlimit() == limit, (sys.getrecursionlimit(), limit)
     RUNNING.reset(token)
     print("ok" if not errors else errors[:3])
     """

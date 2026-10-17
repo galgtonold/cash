@@ -22,7 +22,6 @@ context at a moment nothing chose.
 
 from __future__ import annotations
 
-import contextlib
 import contextvars
 import gc
 import platform
@@ -48,6 +47,13 @@ def _install() -> bool:
     enter = prototype(("PyContext_Enter", ctypes.pythonapi))
     leave = prototype(("PyContext_Exit", ctypes.pythonapi))
     entered: list[contextvars.Context] = []
+    # The program's own limit while one is raised for a collection: a
+    # collection that cannot put it back leaves it for the next one. Read
+    # back from the raised value instead, the limit climbed 50 frames a
+    # collection under a recursion that collects at every allocation, past
+    # the C stack (a crash on Windows and macOS, 3.10). Kept by plain
+    # assignment: deeper than the limit even a call to a list method raises.
+    program_limit: int | None = None
 
     def own_context(phase: str, info: dict[str, Any]) -> None:
         # A collection can start at any depth, also a frame short of the
@@ -55,18 +61,27 @@ def _install() -> bool:
         # checks its argument's type in Python, which then raised there, and
         # the collection ran in the interrupted code's context. The calls
         # get a few frames more than the limit for themselves.
-        limit = sys.getrecursionlimit()
-        sys.setrecursionlimit(limit + _HEADROOM)
+        nonlocal program_limit
         try:
-            if phase == "start":
-                context = contextvars.Context()
-                enter(context)
-                entered.append(context)
-            elif entered:
-                leave(entered.pop())
-        finally:
-            with contextlib.suppress(RecursionError):  # deeper than the old limit now: left raised
-                sys.setrecursionlimit(limit)
+            limit = sys.getrecursionlimit()
+            if program_limit is not None and limit == program_limit + _HEADROOM:
+                limit = program_limit  # still raised for an earlier collection
+            program_limit = limit
+            sys.setrecursionlimit(limit + _HEADROOM)
+            try:
+                if phase == "start":
+                    context = contextvars.Context()
+                    enter(context)
+                    entered.append(context)
+                elif entered:
+                    leave(entered.pop())
+            finally:
+                sys.setrecursionlimit(limit)  # deeper than *limit* now: raises, and the next collection puts it back
+                program_limit = None
+        except (RecursionError, ctypes.ArgumentError):
+            # Too deep even with the frames above: the collection runs in the
+            # interrupted code's context, as without cash.
+            pass
 
     own_context._cash_own_context = True  # type: ignore[attr-defined]
     gc.callbacks.append(own_context)
