@@ -1017,10 +1017,16 @@ def cell_effects(cell_code: str, sources: NotebookSources, namespace: Mapping[st
     try:
         facts = _CellFacts(cell_code, ast.parse(cell_code))
         writes = _CellWrites.of(facts, sources, namespace)
-        writes.add_argument_mutations(facts, sources)
-        writes.add_callee_state(facts, sources)
-        writes.add_object_protocol(facts, sources)
-        writes.add_aliases_and_views(facts, namespace)
+        # Only what the cell hands over is read from its objects, under the
+        # budget (`_CellWrites.of`). The rest is read from the cell and the
+        # functions it names and is answered in full, as a statement's is
+        # (`_effects_past_the_budget`): a budget that ran out above stays
+        # tripped, and its raise here ran the whole cell without cash.
+        with no_analysis_budget():
+            writes.add_argument_mutations(facts, sources)
+            writes.add_callee_state(facts, sources)
+            writes.add_object_protocol(facts, sources)
+            writes.add_aliases_and_views(facts, namespace)
         return writes.effects(facts)
     except (SyntaxError, ValueError):
         return CellEffects()

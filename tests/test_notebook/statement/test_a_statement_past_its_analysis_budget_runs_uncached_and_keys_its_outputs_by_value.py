@@ -243,3 +243,18 @@ def test_past_the_budget_the_cell_check_takes_every_notebook_function_as_run():
     with analysis_budget(budget):
         past = cell_effects(code, NotebookSources(lambda: cells, code), namespace)
     assert "hits" in past.mutated
+
+
+def test_past_the_budget_the_cell_check_still_reads_the_functions_it_names():
+    """What a named helper changes is read from its source, not from the
+    objects: past the budget it is still answered, not raised. The raise ran
+    the whole cell without cash (a loaded machine, a first run: ``@deco``
+    callees missed after a restart, nothing stored)."""
+    cells = ["def push(d):\n    d.append(1)\n", "def add(d):\n    push(d)\n"]
+    code = "add(data)"
+    namespace = {"data": []}
+    budget = AnalysisBudget(0.0)
+    budget.tripped = True
+    with analysis_budget(budget):
+        past = cell_effects(code, NotebookSources(lambda: cells, code), namespace)
+    assert "data" in past.mutated
