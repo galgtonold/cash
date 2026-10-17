@@ -142,7 +142,13 @@ from ..callee_reach import (
     rebound_modules,
 )
 from ..holder_patches import holder_patches
-from ..lineage_formula import held_lineage, key_hidden_reads, no_cache_value_digest, use_lineage_alias_store
+from ..lineage_formula import (
+    held_lineage,
+    keep_held_lineage,
+    key_hidden_reads,
+    no_cache_value_digest,
+    use_lineage_alias_store,
+)
 from ..magic_effects import (
     is_magic_statement,
     is_rerun_magic,
@@ -2346,6 +2352,8 @@ class StatementProcessor:
             self.tracking_state.held_with[cache_key] = dict(holders or {})
         if not holders:
             return set()
+        for name in run.holders_unchanged & set(holders):
+            keep_held_lineage(holders[name], cache_key)
         for name, before in holders.items():
             apply_held_var(
                 self.tracking_state,
@@ -2355,6 +2363,28 @@ class StatementProcessor:
                 compute_hash=self.compute_hash,
             )
         return set(holders)
+
+    def _unchanged_holders(self, holders: dict[str, Any]) -> set[str]:
+        """The *holders* whose content is what it was when their lineage was
+        last recorded: the statement changed the object they share with an
+        output elsewhere (``pre.fit_transform(X)`` fits ``pre``, not the
+        ``cat_pipeline`` it holds). Known only by a content digest: a lineage
+        standing in for a big value's content, or an identity digest, says
+        nothing."""
+        session = self.tracking_state.current_session_hashes
+        lineage = self.tracking_state.variable_lineage
+        unchanged: set[str] = set()
+        for name, value in holders.items():
+            before = session.get(name)
+            if before is None or before == lineage.get(name) or self.compute_hash is None:
+                continue
+            try:
+                after = value_hash.budgeted_hash(value, self.compute_hash)
+            except Exception:  # noqa: BLE001 - a value that cannot be read moves on
+                continue
+            if after == before and not value_hash.is_identity_fallback_hash(value, after):
+                unchanged.add(name)
+        return unchanged
 
     def _take_holders(self, run: StatementRun, captured_vars: dict[str, Any], holders: dict[str, Any]) -> str | None:
         """Store *holders*, the variables holding an output's object too, with
@@ -2378,6 +2408,8 @@ class StatementProcessor:
         run.moves_holders = any(
             id(captured_vars[name]) == run.bound_before.get(name) for name in run.outputs if name in captured_vars
         )
+        if run.moves_holders:
+            run.holders_unchanged = self._unchanged_holders(holders)
         # By where they hold the outputs' objects, when every place can be
         # set again (`holder_patches`): stored whole, `data` brought along
         # every other frame it holds into each entry. Not after a loop: the

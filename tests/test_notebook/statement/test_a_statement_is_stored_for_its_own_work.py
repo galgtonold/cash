@@ -100,8 +100,16 @@ def _floor_between_own_work_and_the_call(magics):
     running. A Windows runner measured 29 ms for ``c = shifted(a) + [2]``
     around a served call, over the default 0.01 s floor, and kept the value.
     Its whole cost, the call's included, stays above this floor, so a
-    statement priced by that instead is still caught."""
+    statement priced by that instead is still caught.
+
+    The same clock prices the setup statements the inputs come from, ``a =
+    list(range(1000))`` and the ``def``s. A cheap statement over inputs whose
+    unsaved setup measured 0.1 s (``RebuildCostLedger.COSTLY_INPUTS_S``)
+    keeps its value, so a restart need not rebuild them; a contended Windows
+    runner measured that once and kept ``b``. These inputs cost nothing to
+    rebuild, so that rule is held off here."""
     magics._cash_instance.config.min_execution_time_to_cache_seconds = 0.1
+    magics._statement_processor._rebuild_cost.COSTLY_INPUTS_S = float("inf")
 
 
 def test_a_cheap_rest_around_a_cached_call_keeps_no_value(tiers, mock_shell):
