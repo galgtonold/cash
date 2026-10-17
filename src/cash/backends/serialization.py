@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
 
-from .. import kept_state
+from .. import _cash_views, kept_state
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,11 @@ class PickleSerializer(Serializer):
             raw = buffer.raw()
             if raw.nbytes < OUT_OF_BAND_MIN_BYTES:
                 return True  # in band
-            buffers.append(raw.tobytes() if copy else raw)
+            if copy:
+                buffers.append(raw.tobytes())
+            else:
+                _cash_views.note(raw)
+                buffers.append(raw)
             return False
 
         stream = kept_state.dumps(

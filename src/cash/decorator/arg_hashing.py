@@ -15,7 +15,7 @@ import weakref
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from .. import _plain_data, value_watch
+from .. import _cash_views, _plain_data, value_watch
 from .._clock import perf_counter as _perf_counter
 from .._memo import ARGUMENTS, FRAMES, LruMemo
 from ..backends.frame_sharing import is_pin
@@ -451,7 +451,11 @@ def frame_borrows_its_data(obj: Any, held: Any = None, since: int = 0) -> bool:
         arrays, pandas_refs = found
         if _EXPOSED and any(_EXPOSED.get(id(array), _NOT_EXPOSED)[1] > since for array in arrays):
             return True
-        return any(extra != _refcount_baseline() for extra in _refs_beyond(arrays, pandas_refs))
+        baseline = _refcount_baseline()
+        return any(
+            extra - _cash_views.held(array) != baseline
+            for array, extra in zip(arrays, _refs_beyond(arrays, pandas_refs))
+        )
     except Exception:  # noqa: BLE001 - a pandas internals change: re-hash, the safe answer
         return True
 
