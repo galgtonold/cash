@@ -1211,6 +1211,10 @@ class TopLevelCalls:
 
     #: `standalone_method_mutation_receivers`
     mutation_receivers: frozenset[str] = frozenset()
+    #: The names a statement changes in place by a known-mutating call or a
+    #: ``del name[...]``, wherever the call stands: ``label = df.pop('label')``,
+    #: ``print(rows.pop())``, ``del df['label']`` (`MutationVisitor`).
+    changed_receivers: frozenset[str] = frozenset()
     #: `standalone_method_call_receivers`
     method_calls: frozenset[tuple[str, str]] = frozenset()
     #: The methods called INSIDE each receiver of ``method_calls``, keyed like
@@ -1265,11 +1269,17 @@ def _nested_statements(body: list[ast.stmt]):
             yield node
 
 
+#: The kinds of `MutationInfo` that change a receiver no assignment binds:
+#: an assigned ``df['a'] = ...`` or ``x += 1`` makes its name an output anyway.
+_RECEIVER_MUTATION_KINDS = frozenset({"method_call", "inplace_kwarg", "subscript_delete"})
+
+
 class _TopLevelCallCollector:
     """Fills a :class:`TopLevelCalls`, one top-level statement at a time."""
 
     def __init__(self) -> None:
         self.mutation_receivers: set[str] = set()
+        self.changed_receivers: set[str] = set()
         self.method_calls: set[tuple[str, str]] = set()
         self.inner_methods: dict[tuple[str, str], frozenset[str]] = {}
         self.setting_receivers: set[str] = set()
@@ -1292,6 +1302,8 @@ class _TopLevelCallCollector:
                 root = _argument_root(arg)
                 if root:
                     self.argument_bases.add(root)
+        if isinstance(node, (ast.Expr, ast.Assign, ast.AnnAssign, ast.Delete)):
+            self._known_mutations(node)
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
             self._bare_call(node.value)
         elif isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
@@ -1302,6 +1314,17 @@ class _TopLevelCallCollector:
                     base = _extract_receiver_base_name(sub.func.value)
                     if base:
                         self.assigned_method_calls.add((base, sub.func.attr))
+
+    def _known_mutations(self, node: ast.stmt) -> None:
+        """The names *node* changes in place by a call it does not stand
+        alone as, or by ``del``: ``label = df.pop('label')``,
+        ``print(rows.pop())``, ``del df['label']``. The cacheability check
+        counts them (`MutationVisitor`), so the statement re-executes; as
+        receivers their lineage moves too, or what reads them next is
+        served from before the change."""
+        visitor = MutationVisitor()
+        visitor.visit(node)
+        self.changed_receivers.update(m.variable for m in visitor.mutations if m.kind in _RECEIVER_MUTATION_KINDS)
 
     def _bare_call(self, call: ast.Call) -> None:
         # numpy ``out=`` writes its target in place (however the call's own
@@ -1350,6 +1373,7 @@ class _TopLevelCallCollector:
     def result(self) -> TopLevelCalls:
         return TopLevelCalls(
             mutation_receivers=frozenset(self.mutation_receivers),
+            changed_receivers=frozenset(self.changed_receivers),
             method_calls=frozenset(self.method_calls),
             inner_methods=self.inner_methods,
             setting_receivers=frozenset(self.setting_receivers),
