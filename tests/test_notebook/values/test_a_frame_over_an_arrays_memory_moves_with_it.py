@@ -145,6 +145,18 @@ def test_a_write_to_the_memory_reaches_the_cached_call(cash_magics, count_fd, na
     assert cash_magics.shell.user_ns["r"] == expected
 
 
+@pytest.mark.parametrize("name", list(NOTEBOOKS))
+def test_a_write_reaches_the_cached_call_when_the_check_runs_out_of_time(cash_magics, count_fd, name, monkeypatch):
+    """With no time for the check that finds the memory an output sits on,
+    as on a busy Windows runner, the output is linked to what the statement
+    read: the write still reaches the cached call."""
+    from cash.notebook.statement import processor
+
+    monkeypatch.setattr(processor, "SHARE_CHECK_FLOOR_S", 0.0)
+    monkeypatch.setattr(processor, "SHARE_CHECK_FACTOR", 0.0)
+    test_a_write_to_the_memory_reaches_the_cached_call(cash_magics, count_fd, name)
+
+
 @pytest.mark.parametrize(
     "make",
     ["s = pd.Series(arr, copy=True)", "s = pl.Series(arr * 1.0)", "s = pl.Series(arr.astype(np.int64))"],
