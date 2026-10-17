@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
-from ..sizing import pickled_size_estimate
+from ..sizing import memory_footprint, pickled_size_estimate
 from . import memory_backend
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, entry_expired, store_seconds
 from .clear_watch import ClearWatcher
@@ -20,6 +20,10 @@ from .store_notices import DECORATED_CALLS_FIELD, StoreNotices
 from .value_policy import WORTH_FLOOR_BYTES
 
 logger = logging.getLogger(__name__)
+
+#: On an entry kept on disk alone (`TieredBackend.set`): never promoted to
+#: the RAM tier.
+DISK_ALONE = "kept_on_disk_alone"
 
 __all__ = ["TieredBackend"]
 
@@ -360,7 +364,8 @@ class TieredBackend(CacheBackend):
                 # Read-Repair / Promotion to faster tiers
                 # If found in Tier 2 (File), promote to Tier 1 (Memory)
                 read_before = self._read_once.pop(key, False) is None
-                for j in range(i):
+                # One kept on disk alone stays there: each hit reads it again.
+                for j in range(0 if metadata.get(DISK_ALONE) else i):
                     # Always offered: a faster tier should hold what is being
                     # read. One it can never hold -- over the RAM tier's
                     # eviction target -- that tier refuses itself
@@ -390,6 +395,21 @@ class TieredBackend(CacheBackend):
 
                 return metadata, value
         return None, None
+
+    @staticmethod
+    def _goes_to_disk_alone(value: Any) -> bool:
+        try:
+            return memory_backend.bytes_a_store_copies(value) >= memory_backend.DISK_ALONE_MIN_BYTES
+        except Exception:  # the RAM tier takes it, as before
+            logger.debug("could not size a value for the disk tier alone", exc_info=True)
+            return False
+
+    def _drop_from_first_tier(self, key: str) -> None:
+        """An older RAM copy of *key* is not served over the one on disk."""
+        try:
+            self.backends[0].delete(key)
+        except Exception:  # the RAM tier holds nothing under a new key
+            logger.debug("could not drop %r from the RAM tier", key, exc_info=True)
 
     def _private_copy(self, key: str, metadata: MetadataDict) -> Any:
         """The first tier's own copy of *key*'s value for a persistent tier
@@ -675,23 +695,39 @@ class TieredBackend(CacheBackend):
         if metadata.get("ttl") is None and self.default_ttl is not None:
             metadata["ttl"] = self.default_ttl
 
-        # Always write to the first tier. The RAM tier may refuse a value its cap could
-        # never hold (`InMemoryBackend.set` returns False); then it is not a
-        # destination, and the badge and the miss explanation must not say so.
-        try:
-            if self.backends[0].set(key, value, metadata, serializer) is not False:
-                stored_destinations.append(self.backends[0].source_label)
-        except Exception as e:  # noqa: BLE001 - backend errors must not propagate
-            logger.warning(
-                "Failed to write key '%s' to tier 0 (%s): %s",
-                key,
-                type(self.backends[0]).__name__,
-                e,
-            )
-            # And on the entry's metadata, so the caller hears it: the RAM tier
-            # refuses a value it cannot copy, and nothing else would say why the
-            # call recomputes every time.
-            store_errors.append(f"{type(self.backends[0]).__name__}: {type(e).__name__}: {e}")
+        def write_first_tier() -> None:
+            # The RAM tier may refuse a value its cap could never hold
+            # (`InMemoryBackend.set` returns False); then it is not a
+            # destination, and the badge and the miss explanation must not say so.
+            try:
+                if self.backends[0].set(key, value, metadata, serializer) is not False:
+                    stored_destinations.append(self.backends[0].source_label)
+            except Exception as e:  # noqa: BLE001 - backend errors must not propagate
+                logger.warning(
+                    "Failed to write key '%s' to tier 0 (%s): %s",
+                    key,
+                    type(self.backends[0]).__name__,
+                    e,
+                )
+                # And on the entry's metadata, so the caller hears it: the RAM tier
+                # refuses a value it cannot copy, and nothing else would say why the
+                # call recomputes every time.
+                store_errors.append(f"{type(self.backends[0]).__name__}: {type(e).__name__}: {e}")
+
+        # A value the RAM tier would copy 64 MB or more of goes to disk alone
+        # when a disk tier writes it: the copy doubled the memory the value
+        # took (a retail pipeline peaked at 2.9 GB, plain Python at 1.2 GB),
+        # and fresh memory cost seconds of system time a cell. It is written
+        # from the value itself, its bytes made before this returns, and
+        # every hit reads it from disk (`DISK_ALONE`). Otherwise, or when no
+        # disk tier takes it, the RAM tier is written first, as always.
+        disk_alone = len(self.backends) > 1 and self._goes_to_disk_alone(value)
+        if not disk_alone:
+            write_first_tier()
+        elif not metadata.get("size"):
+            # What the RAM tier would have put there: the bytes ceiling below
+            # judges the value by it.
+            metadata["size"] = memory_footprint(value)
 
         decision = None
         if len(self.backends) == 1:
@@ -724,7 +760,15 @@ class TieredBackend(CacheBackend):
                     )
                 self._drop_persisted_call_refs(metadata.get("call_refs"))
             try:
-                if decision.persist:
+                if decision.persist and disk_alone:
+                    metadata[DISK_ALONE] = True
+                    self._drop_from_first_tier(key)
+                    writes = self._write_persistent_tiers(key, value, metadata, serializer, cap_size)
+                    if not self._persisted(writes.stored):
+                        metadata.pop(DISK_ALONE, None)
+                        disk_alone = False
+                        write_first_tier()
+                elif decision.persist:
                     # The RAM tier's own copy, when it has one nothing changes: a
                     # tier that takes it serializes it in the background, and the
                     # caller pays one copy (or none, for a table) instead of two.
@@ -758,6 +802,9 @@ class TieredBackend(CacheBackend):
                     )
                 else:
                     writes = _TierWrites([], False, cap_size, [], [])
+                    if disk_alone:
+                        disk_alone = False
+                        write_first_tier()
             finally:
                 self._release_handoff()
             stored_destinations.extend(writes.stored)
