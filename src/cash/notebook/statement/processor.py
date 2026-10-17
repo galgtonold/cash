@@ -1983,19 +1983,43 @@ class StatementProcessor:
         anchor_holds: dict[str, list[str]] = {}
         try:
             with walk_budget(budget):
+                cash_held = [*self._calls.held_call_results(), echo, run.metrics, *self._mutations.digests.held()]
                 reason = unrestorable_output_reason(
                     run.outputs,
                     captured_vars,
                     self.shell.user_ns,
-                    cash_held=[*self._calls.held_call_results(), echo, run.metrics, *self._mutations.digests.held()],
+                    cash_held=cash_held,
                     shell=self.shell,
                     holders=holders,
                     gave_up=gave_up,
                     inputs=run.inputs,
-                    anchorable=self._anchorable(run) if holders is not None else None,
-                    anchors=anchors,
-                    anchor_links=anchor_links,
                 )
+                if reason is not None and holders is not None:
+                    # Anchors only where holders alone refuse: an anchor binds
+                    # the live object only while its digest is the one stored,
+                    # which a holder restored with the outputs never needs
+                    # (a restored ColumnTransformer can digest apart from the
+                    # one it was stored from, and the entry would miss).
+                    retry_holders: dict[str, Any] = {}
+                    retry_gave_up: list[GaveUp] = []
+                    retry = unrestorable_output_reason(
+                        run.outputs,
+                        captured_vars,
+                        self.shell.user_ns,
+                        cash_held=cash_held,
+                        shell=self.shell,
+                        holders=retry_holders,
+                        gave_up=retry_gave_up,
+                        inputs=run.inputs,
+                        anchorable=self._anchorable(run),
+                        anchors=anchors,
+                        anchor_links=anchor_links,
+                    )
+                    if retry is None and anchors:
+                        reason, holders, gave_up = None, retry_holders, retry_gave_up
+                    else:
+                        anchors.clear()
+                        anchor_links.clear()
                 if reason is None and echo:
                     reason = identity_coupled_reason("the value it echoes", echo[0])
                 if reason is None:

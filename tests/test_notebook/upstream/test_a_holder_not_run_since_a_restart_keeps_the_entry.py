@@ -104,11 +104,10 @@ def test_a_holder_run_again_is_given_the_restored_list(cash_magics, clean_backen
     assert ns["hgb"]["cols"] is ns["cols"] is ns["lr"]["cols"]
 
 
-def test_a_holder_that_is_there_but_changed_keeps_its_own_value(cash_magics, clean_backend):
-    """``lr`` bound since the restart to something else holding ``cols``.
-    ``hgb``'s statement leaves ``cols`` as it was, so the entry stores it as
-    the variable (an anchor), not ``lr`` with it: the restore binds the live
-    list and leaves ``lr`` alone, as a plain run does."""
+def test_a_holder_that_is_there_but_changed_still_refuses_the_entry(cash_magics, clean_backend):
+    """``lr`` bound since the restart to something else holding ``cols``:
+    the entry would restore it as it was, so the statement runs, and shares
+    the list with it as a plain run does."""
     _first_session(cash_magics)
     _restart(cash_magics)
     _run(cash_magics, 0, 1)
@@ -116,7 +115,7 @@ def test_a_holder_that_is_there_but_changed_keeps_its_own_value(cash_magics, cle
 
     statuses = _run(cash_magics, 3)
 
-    assert statuses[CELLS[3]] == CacheStatus.RESTORED, statuses
+    assert statuses[CELLS[3]] != CacheStatus.RESTORED, statuses
     ns = cash_magics.shell.user_ns
     assert ns["lr"]["w"] == 9, "the live holder is kept"
     assert ns["hgb"]["cols"] is ns["cols"] is ns["lr"]["cols"]
