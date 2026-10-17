@@ -64,3 +64,15 @@ def test_passes_whose_work_is_most_of_their_time_stay_one_by_one(cash_magics, st
     )
     assert ns["sizes"] == [20] * 30
     assert len(statements) >= 30, len(statements)
+
+
+def test_a_short_cheap_loop_keeps_its_first_passes_and_runs_the_rest_as_one_unit(cash_magics, statements):
+    """Under the static rule's 125 passes too: 40 passes keep the first five
+    one by one, and the other 35 go as one unit."""
+    ns = cash_magics.shell.user_ns
+    run_cash_cell(cash_magics, "rows = list(range(40))")
+    statements.clear()
+    run_cash_cell(cash_magics, "it = iter(rows)\nseen = []\nfor r in it:\n    seen.append(r)")
+    assert ns["seen"] == list(range(40))
+    # `it = ...`, `seen = []`, five passes, and the rest's unit.
+    assert len(statements) == 2 + single_unit_policy.CHEAP_PASSES + 1, len(statements)
