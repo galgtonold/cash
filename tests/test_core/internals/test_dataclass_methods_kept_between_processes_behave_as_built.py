@@ -145,3 +145,32 @@ def test_no_file_is_written_when_python_writes_no_bytecode(tmp_path, monkeypatch
     done = subprocess.run([sys.executable, "-c", "import cash"], env=env, capture_output=True, text=True, timeout=300)
     assert done.returncode == 0, done.stderr
     assert not _kept_files(tmp_path)
+
+
+def test_kept_code_is_found_by_the_exact_text_only(tmp_path):
+    from cash._dataclass_code import _KeptCode
+
+    path = tmp_path / "kept.marshal"
+    one, two = "def f():\n return 1\n", "def f():\n return 2\n"  # a changed template, same name
+    writer = _KeptCode(path)
+    space: dict = {}
+    writer(one, space)
+    writer.save()
+    reader = _KeptCode(path)
+    reader(two, space)
+    assert space["f"]() == 2, "a different text ran the code kept for another"
+    reader(one, space)
+    assert space["f"]() == 1
+
+
+def test_a_file_cut_short_by_a_crash_is_ignored(tmp_path):
+    from cash._dataclass_code import _KeptCode
+
+    path = tmp_path / "kept.marshal"
+    writer = _KeptCode(path)
+    writer("def f():\n return 1\n", {})
+    writer.save()
+    whole = path.read_bytes()
+    path.write_bytes(whole[: len(whole) // 2])
+    assert _KeptCode(path).kept == {}
+    assert [p.name for p in tmp_path.iterdir()] == ["kept.marshal"], "a temporary file was left behind"
