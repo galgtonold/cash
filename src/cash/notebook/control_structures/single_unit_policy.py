@@ -49,6 +49,15 @@ ASSUMED_INNER_ITERATIONS = 10
 # Minimum estimated overhead (in seconds) to trigger single-unit mode.
 MIN_OVERHEAD_SEC = 1.0
 
+# A loop over an iterator of unknown length whose first passes MEASURED this
+# cheap runs the rest as one unit without waiting for the passes the static
+# rule above asks for (`iterations_for_one_unit`): after CHEAP_PASSES passes,
+# when the body's own work was under CHEAP_WORK_SHARE of their time, the rest
+# is bookkeeping. `for part in chunks(df, 20):` ran 125 passes of `sizes.append(
+# len(part))` through the machinery, 1.1 s against 8 ms plain.
+CHEAP_PASSES = 5
+CHEAP_WORK_SHARE = 0.1
+
 # Builtin callables that PRODUCE an iterable without side effects, so a
 # header built only from them may be left to the unit to evaluate
 # (`runs_whole_unevaluated`): skipping it on a cache hit loses nothing. Any
@@ -314,6 +323,13 @@ def iterations_for_one_unit(node: ast.For) -> int | None:
     while n * factor <= MIN_ITERATIONS_FOR_SINGLE_UNIT or n * n_body_stmts * PER_STMT_OVERHEAD_SEC < MIN_OVERHEAD_SEC:
         n += 1
     return n
+
+
+def passes_were_cheap(passes: int, work_seconds: float, wall_seconds: float) -> bool:
+    """Whether *passes* passes that took *wall_seconds*, of which their
+    statements' own work was *work_seconds*, were bookkeeping more than
+    work (`CHEAP_PASSES`)."""
+    return passes >= CHEAP_PASSES and work_seconds < CHEAP_WORK_SHARE * wall_seconds
 
 
 def header_names_the_iterator(iter_node: ast.AST, iterable: Any, user_ns: dict[str, Any]) -> bool:
