@@ -115,6 +115,21 @@ def _stamp_body_index(m: dict, body_idx: int) -> None:
     m.setdefault("body_index", body_idx)
 
 
+def _work(metrics: Sequence) -> float:
+    """What *metrics*' statements cost to compute: a restored one at the time
+    it saved (`ForLoopHandler._refresh_cost`)."""
+    work = 0.0
+    for m in metrics:
+        if not isinstance(m, dict):
+            continue
+        status = m.get("status")
+        if status == CacheStatus.COMPUTED:
+            work += m.get("execution_time", 0.0)
+        elif status == CacheStatus.RESTORED:
+            work += m.get("saved_time", 0.0)
+    return work
+
+
 def _rebound_names(node: ast.For) -> set[str]:
     """The names a statement of *node*'s body binds."""
     return {
@@ -445,16 +460,7 @@ class ForLoopHandler:
                 return
         except (OSError, ValueError, RecursionError):
             return
-        work = 0.0
-        for m in metrics:
-            if not isinstance(m, dict):
-                continue
-            status = m.get("status")
-            if status == CacheStatus.COMPUTED:
-                work += m.get("execution_time", 0.0)
-            elif status == CacheStatus.RESTORED:
-                work += m.get("saved_time", 0.0)
-        self._remember_cost(node, work, iterations)
+        self._remember_cost(node, _work(metrics), iterations)
 
     def _remember_cost(self, node: ast.For, work_seconds: float, iterations: int, as_unit: bool = False) -> None:
         """Keep what an iteration of this loop cost, measured while it computed
@@ -585,6 +591,10 @@ class ForLoopHandler:
         ) is None:
             rest_after = single_unit_policy.iterations_for_one_unit(node)
         run_rest = False
+        # What the passes took, and what their statements' own work was
+        # (`single_unit_policy.passes_were_cheap`).
+        passes_wall = passes_work = 0.0
+        measured = 0
 
         total_iterations = 0
         cached_iterations = 0
@@ -626,7 +636,14 @@ class ForLoopHandler:
                 # gathering quadratic.
                 for name in body_names:
                     body_files.update(file_deps.get(name, ()))
-                if rest_after is not None and total_iterations >= rest_after:
+                if rest_after is not None:
+                    passes_wall += _time.perf_counter() - iter_started
+                    passes_work += _work(all_metrics[measured:])
+                    measured = len(all_metrics)
+                if rest_after is not None and (
+                    total_iterations >= rest_after
+                    or single_unit_policy.passes_were_cheap(total_iterations, passes_work, passes_wall)
+                ):
                     # Still the very iterator this loop draws from: the unit
                     # evaluates the header again, or is handed it.
                     run_rest = not named or user_ns.get(node.iter.id) is iterable

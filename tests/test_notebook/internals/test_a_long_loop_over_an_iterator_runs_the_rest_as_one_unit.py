@@ -44,8 +44,10 @@ def test_a_loop_over_map_or_filter_in_its_header_is_sized(cash_magics):
 
 
 def test_a_short_loop_over_an_iterator_stays_per_pass(cash_magics):
-    """Below the count, every pass keeps its own entries, as before."""
-    run_cash_cell(cash_magics, "data = [('u%d' % i, [1] * (i % 3)) for i in range(40)]")
+    """Below the count, every pass whose work is real keeps its own entries,
+    as before. Passes measured cheap hand the rest to the unit after a few
+    (test_a_loop_over_an_iterator_with_cheap_passes_stops_early)."""
+    run_cash_cell(cash_magics, "import time\ndata = [('u%d' % i, [1] * (i % 3)) for i in range(40)]")
     with method_calls(StatementProcessor, "process_statement") as statements:
-        run_cash_cell(cash_magics, "it = filter(lambda x: True, data)\n" + LOOP)
+        run_cash_cell(cash_magics, "it = filter(lambda x: True, data)\n" + LOOP + "\n    time.sleep(0.01)")
     assert statements.calls >= 40  # `m = len(act)`, once a pass
