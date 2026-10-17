@@ -456,10 +456,7 @@ def share_checked(frame: Any) -> tuple[Any, bytes] | None:
     found no object column holding a changeable cell), holding at least
     `CHECKED_MIN_BYTES` in numpy arrays of numbers, dates and durations,
     each in one piece of memory. An object column is copied: its digest is
-    of pointers, and a cell written twice can come back to an address.
-    Text pandas keeps in a numpy array of str (pandas 3 without pyarrow)
-    is copied too, as Arrow text is: a pointer a row, and the table, not
-    `freezable` then, is copied on each hit, as it was."""
+    of pointers, and a cell written twice can come back to an address."""
     if not _checked_works():
         return None
     try:
@@ -472,7 +469,7 @@ def share_checked(frame: Any) -> tuple[Any, bytes] | None:
 def _share_checked(frame: Any) -> tuple[Any, bytes] | None:
     import pandas as pd
 
-    if type(frame) is not pd.DataFrame or not all(_freezable_index(axis) for axis in (frame.index, frame.columns)):
+    if type(frame) is not pd.DataFrame or not freezable(frame, cells_known=True):
         return None
     mgr = frame._mgr
     blocks = []
@@ -480,8 +477,6 @@ def _share_checked(frame: Any) -> tuple[Any, bytes] | None:
     nbytes = 0
     for block in mgr.blocks:
         parts = _ndarray_parts(block.values)
-        if parts is None and _python_text(block.values):
-            parts = []  # str or missing in each cell: its pointers copied
         if parts is None:
             return None
         if not parts:  # Arrow-backed: copied where it may be another's memory

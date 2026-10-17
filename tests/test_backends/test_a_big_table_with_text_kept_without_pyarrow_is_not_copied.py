@@ -1,14 +1,14 @@
-"""Without pyarrow, a big table is kept uncopied and checked, as with it.
+"""Without pyarrow, a big table of numbers and dates is kept uncopied and
+checked, as with it.
 
 pandas 3 keeps text in a numpy array of str when pyarrow is missing, and
 column names are text. The start-up check of table sharing froze a table
 with a text column, failed on that kind, and turned sharing off: every
 table was copied when stored and again on each hit. In a retail pipeline
-the RAM tier held 3.1 GB of copies (plain Python peaked at 1.2 GB), and the
-fresh memory took 10 s of system time in one cell. Now text labels are
-frozen like other labels, and a table's text columns are copied alone
-(a pointer a row), so its numbers and dates are kept uncopied, checked on
-each hit.
+the RAM tier's copies took peak memory to 3.2 GB (plain Python 1.2 GB).
+Now text labels are frozen like other labels, and the check tries only the
+column kinds frozen here. A table with a text column is still copied, as
+before: kept uncopied, its digest would be taken again on every hit.
 """
 
 from __future__ import annotations
@@ -24,6 +24,10 @@ from cash.backends.file_backend import FileBackend
 from cash.backends.memory_backend import InMemoryBackend
 from cash.backends.tiered_backend import TieredBackend
 
+pytestmark = pytest.mark.skipif(
+    int(pd.__version__.split(".", 1)[0]) < 3, reason="pandas 3 keeps text as str: an older one keeps objects"
+)
+
 ROWS = frame_sharing.CHECKED_MIN_BYTES // 24 * 11 // 10
 
 
@@ -37,18 +41,17 @@ def text_without_arrow(monkeypatch):
         yield
 
 
-def _table(rows: int = ROWS) -> pd.DataFrame:
-    raw = pd.DataFrame(
-        {
-            "fare": np.linspace(-1.0, 100.0, rows),
-            "n": np.arange(rows),
-            "when": pd.date_range("2024-01-01", periods=rows, freq="s"),
-            "zone": ["a", "b", "c", "d"] * (rows // 4) + ["a"] * (rows % 4),
-        }
-    )
+def _table(rows: int = ROWS, text: bool = False) -> pd.DataFrame:
+    columns = {
+        "fare": np.linspace(-1.0, 100.0, rows),
+        "n": np.arange(rows),
+        "when": pd.date_range("2024-01-01", periods=rows, freq="s"),
+    }
+    if text:
+        columns["zone"] = ["a", "b", "c", "d"] * (rows // 4) + ["a"] * (rows % 4)
+    raw = pd.DataFrame(columns)
     table = raw[raw["fare"] > 0]
-    assert type(table["zone"].array) is pd.arrays.StringArray  # text as pandas keeps it here
-    assert type(table.columns._data) is pd.arrays.StringArray
+    assert type(table.columns._data) is pd.arrays.StringArray  # text as pandas keeps it here
     return table
 
 
@@ -68,12 +71,25 @@ def test_the_store_keeps_its_numbers_and_dates_uncopied():
     assert backend._checked["k"]
     stored = backend._store["k"][1]
     assert np.shares_memory(_numpy(stored, "fare"), _numpy(df, "fare"))
-    assert not np.shares_memory(stored["zone"].array._ndarray, df["zone"].array._ndarray)
+
+
+def test_a_table_with_a_text_column_is_copied_as_before():
+    backend = InMemoryBackend()
+    df = _table(text=True)
+    expected = df.copy()
+    backend.set("k", df, {"execution_time": 1.0})
+    assert "k" not in backend._checked
+    assert not np.shares_memory(_numpy(backend._store["k"][1], "fare"), _numpy(df, "fare"))
+    df["zone"].array[0] = "q"
+    hit = backend.get("k")[1]
+    pd.testing.assert_frame_equal(hit, expected)
+    hit["zone"].array[1] = "r"
+    pd.testing.assert_frame_equal(backend.get("k")[1], expected)
 
 
 MUTATORS = {
     "iloc": lambda df: df.iloc.__setitem__((0, 0), -5.0),
-    "text_cell": lambda df: df.iloc.__setitem__((0, 3), "z"),
+    "label": lambda df: df.rename(columns={"n": "count"}, inplace=True),
     "replace_column": lambda df: df.__setitem__("fare", 0.0),
     "fillna_inplace": lambda df: df.fillna({"fare": 0.0}, inplace=True),
     "rename_inplace": lambda df: df.rename(columns={"fare": "price"}, inplace=True),
@@ -117,8 +133,8 @@ def test_a_hit_is_a_copy_the_caller_can_change():
     backend.set("k", df, {"execution_time": 1.0})
     hit = backend.get("k")[1]
     hit.iloc[0, 0] = -7.0
-    hit["zone"].array[1] = "q"
     hit["n"].array[2] = -3
+    hit.columns = ["a", "b", "c"]
     pd.testing.assert_frame_equal(backend.get("k")[1], expected)
     pd.testing.assert_frame_equal(df, expected)
 
@@ -132,8 +148,11 @@ def test_a_hit_after_the_caller_lets_go_matches_and_can_be_changed():
     gc.collect()
     first = backend.get("k")[1]["variables"]["df"]
     pd.testing.assert_frame_equal(first, expected)
-    first["zone"].array[0] = "q"
-    first["fare"].array[0] = -9.0
+    first.iloc[0, 1] = -9
+    with pytest.raises(ValueError):
+        first["fare"].array[0] = -9.0  # frozen: shared by every hit, no handle writes it
+    with pytest.raises(ValueError):
+        first.columns.array[0] = "x"  # its labels too
     pd.testing.assert_frame_equal(backend.get("k")[1]["variables"]["df"], expected)
 
 
