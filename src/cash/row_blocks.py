@@ -113,6 +113,12 @@ def _frame_seconds(value: Any) -> float:
     return len(value) * ns * 1e-9
 
 
+#: Rows hashed in one go when a frame's rows are hashed together: whole,
+#: a 21-million-row frame made temporaries of 170 MB a step, and the kernel
+#: time to map them was 3-10 s of a 1 s hash. The hashes are the same.
+_ROWS_PER_CHUNK = 1 << 18
+
+
 def _pandas_rows(value: Any) -> Callable[[int, int], Any]:
     """Rows of a pandas frame or series as ``(schema, row hashes)`` slices.
 
@@ -120,11 +126,91 @@ def _pandas_rows(value: Any) -> Callable[[int, int], Any]:
     is built on) gives a 64-bit hash per row, index included; the schema
     (column names, dtypes) comes from cash's hash of the empty frame. Far
     cheaper than hashing 64 frame slices one by one."""
+    import numpy as np
     import pandas as pd
 
     schema = (builtin_hash(value.iloc[:0]) or "?").encode()
-    hashes = pd.util.hash_pandas_object(value, index=True).to_numpy()
+    hashes = np.empty(len(value), dtype=np.uint64)
+    for start in range(0, len(value), _ROWS_PER_CHUNK):
+        rows = value.iloc[start : start + _ROWS_PER_CHUNK]
+        hashes[start : start + len(rows)] = pd.util.hash_pandas_object(rows, index=True).to_numpy()
     return lambda a, b: (schema, hashes[a:b])
+
+
+#: Kinds of numpy dtype whose items are their bytes: a column of them is
+#: hashed as its buffer.
+_PLAIN_KINDS = "biufcmM"
+
+
+def _plain_columns(value: Any) -> tuple[bytes, Any, list[Any]] | None:
+    """``(schema, range index, columns)`` of a pandas frame or series whose
+    columns and index are all of a plain numpy dtype, or None.
+
+    *range index* is the ``(start, step)`` of a ``RangeIndex``, which has no
+    buffer; any other index is the first of *columns*, the 1-D numpy
+    arrays (views, no copies) whose bytes the rows are."""
+    import numpy as np
+    import pandas as pd
+
+    index = value.index
+    series = isinstance(value, pd.Series)
+    dtypes = [value.dtype] if series else list(value.dtypes)
+    if not all(isinstance(dt, np.dtype) and dt.kind in _PLAIN_KINDS for dt in dtypes):
+        return None
+    columns = []
+    if isinstance(index, pd.RangeIndex):
+        range_index = (index.start, index.step)
+    elif index.nlevels == 1 and isinstance(index.dtype, np.dtype) and index.dtype.kind in _PLAIN_KINDS:
+        range_index = None
+        columns.append(index.to_numpy())
+    else:
+        return None
+    columns += [value.to_numpy()] if series else [value.iloc[:, j].to_numpy() for j in range(len(dtypes))]
+    if any(column.ndim != 1 or column.dtype.kind not in _PLAIN_KINDS for column in columns):
+        return None
+    schema = (builtin_hash(value.iloc[:0]) or "?").encode()
+    return schema, range_index, columns
+
+
+def _columns_fingerprint(
+    plain: tuple[bytes, Any, list[Any]], rows: int, block: int, like: RowBlocks | None, deadline: float | None
+) -> tuple[RowBlocks, str | None]:
+    """:func:`fingerprint` of a pandas frame or series of plain columns
+    (`_plain_columns`): each block is the byte ranges of its rows in every
+    column's buffer, behind the schema and the block's row count (and its
+    first label, for a ``RangeIndex``), in the leaf algorithm. Some 25 times
+    quicker than ``hash_pandas_object``'s row hashes, which take several
+    passes and temporaries of the frame's size."""
+    import numpy as np
+
+    schema, range_index, columns = plain
+
+    def digest(a: int, b: int) -> str:
+        head = f"{b - a}:" + (f"{range_index[0] + a * range_index[1]}:{range_index[1]}" if range_index else "")
+        h = leaf_hasher(schema + head.encode())
+        for column in columns:
+            h.update(np.ascontiguousarray(column[a:b]).view(np.uint8))
+        return h.hexdigest()[:_DIGEST_CHARS]
+
+    count = math.ceil(rows / block)
+    spans = [(i * block, min((i + 1) * block, rows)) for i in range(count)]
+    started = _perf_counter()
+    first = digest(*spans[0])
+    nbytes = sum(column.nbytes for column in columns)
+    threads = hashing_threads() if nbytes >= PARALLEL_MIN_BYTES else 1
+    if deadline is not None:
+        now = _perf_counter()
+        if now + (now - started) * (count - 1) / threads > deadline:
+            raise HashBudgetSpent
+    if threads > 1 and count > 2:
+        with ThreadPoolExecutor(max_workers=threads) as pool:
+            rest = list(pool.map(lambda span: digest(*span), spans[1:]))
+    else:
+        rest = [digest(*span) for span in spans[1:]]
+    cut = None
+    if like is not None and like.rows % block and rows > like.rows:
+        cut = digest(like.rows // block * block, like.rows)
+    return RowBlocks("pandas", rows, block, (first, *rest)), cut
 
 
 def _block_digest(kind: str, part: Any) -> str:
@@ -226,6 +312,8 @@ def fingerprint(
     try:
         if kind == "ndarray" and _plain_buffer(value):
             return _array_fingerprint(value, rows, block, like, deadline)
+        if kind == "pandas" and (plain := _plain_columns(value)) is not None:
+            return _columns_fingerprint(plain, rows, block, like, deadline)
         if kind == "pandas":
             if deadline is not None and _perf_counter() + _frame_seconds(value) > deadline:
                 raise HashBudgetSpent
