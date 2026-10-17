@@ -28,21 +28,22 @@ pytest.importorskip("sklearn")
 #: A cost above what the disk tier keeps, so a restart restores the
 #: pipeline rather than building it again.
 SLOW = f"(time.sleep({ABOVE_PERSISTENCE_FLOOR_S}), 0.3)[1]"
+#: An array, not a frame: under pandas 2 a fitted model's
+#: ``feature_names_in_`` is the frame's own column array, and a fit sharing
+#: an object with ``df`` is refused before any digest is read.
 DATA = (
-    "import time\nimport numpy as np\nimport pandas as pd\n"
-    "df = pd.DataFrame({'a': np.arange(40.0), 'c': ['x', 'y'] * 20})\ny = np.arange(40.0)"
+    "import time\nimport numpy as np\n"
+    "X = np.array(list(zip(np.arange(40.0), ['x', 'y'] * 20)), dtype=object)\ny = np.arange(40.0)"
 )
 PIPELINE = (
     "from sklearn.compose import ColumnTransformer\nfrom sklearn.pipeline import make_pipeline\n"
     "from sklearn.preprocessing import OneHotEncoder, StandardScaler\n"
     "from sklearn.linear_model import LinearRegression\n"
-    "pre = ColumnTransformer([('num', StandardScaler(), ['a']), "
-    "('cat', OneHotEncoder(handle_unknown='ignore'), ['c'])], sparse_threshold=" + SLOW + ")"
+    "pre = ColumnTransformer([('num', StandardScaler(), [0]), "
+    "('cat', OneHotEncoder(handle_unknown='ignore'), [1])], sparse_threshold=" + SLOW + ")"
 )
-#: Changed in place: the fit after it is keyed on the pipeline's content.
-TUNE = "pre.set_params(n_jobs=1)"
-FIT = "model = make_pipeline(pre, LinearRegression()).fit(df, y) if time.sleep(" + SLOW + ") is None else None"
-NAMES = ["time", "np", "pd", "df", "y", "pre", "model", "ColumnTransformer", "make_pipeline"]
+FIT = "model = make_pipeline(pre, LinearRegression(fit_intercept=" + SLOW + " > 0)).fit(X, y)"
+NAMES = ["time", "np", "X", "y", "pre", "model", "ColumnTransformer", "make_pipeline"]
 
 
 @pytest.fixture
@@ -79,22 +80,22 @@ def test_a_pickled_pipeline_digests_as_the_one_it_was_pickled_from():
 
 
 def test_after_a_restart_the_fit_on_the_restored_pipeline_is_served(cash_magics, clean_backend):
-    _run(cash_magics, [DATA, PIPELINE, TUNE, FIT])
+    _run(cash_magics, [DATA, PIPELINE, FIT])
     _restart(cash_magics)
 
-    statuses = _run(cash_magics, [DATA, PIPELINE, TUNE, FIT])
+    statuses = _run(cash_magics, [DATA, PIPELINE, FIT])
     assert statuses[1] == CacheStatus.RESTORED
-    assert statuses[3] == CacheStatus.RESTORED, "the fit reads the restored pipeline, unchanged"
+    assert statuses[2] == CacheStatus.RESTORED, "the fit reads the restored pipeline, unchanged"
     ns = cash_magics.shell.user_ns
-    assert ns["model"].predict(ns["df"])[:2].round(6).tolist() == pytest.approx([0.0, 1.0], abs=1e-6)
+    assert ns["model"].predict(ns["X"])[:2].round(6).tolist() == pytest.approx([0.0, 1.0], abs=1e-6)
 
 
 def test_after_a_restart_a_changed_pipeline_still_misses(cash_magics, clean_backend):
-    _run(cash_magics, [DATA, PIPELINE, TUNE, FIT])
+    _run(cash_magics, [DATA, PIPELINE, FIT])
     _restart(cash_magics)
 
     changed = PIPELINE.replace("handle_unknown='ignore'", "handle_unknown='error'")
-    statuses = _run(cash_magics, [DATA, changed, TUNE, FIT])
+    statuses = _run(cash_magics, [DATA, changed, FIT])
     assert statuses[1] != CacheStatus.RESTORED
-    assert statuses[3] != CacheStatus.RESTORED
+    assert statuses[2] != CacheStatus.RESTORED
     assert cash_magics.shell.user_ns["model"].steps[0][1].transformers[1][1].handle_unknown == "error"
