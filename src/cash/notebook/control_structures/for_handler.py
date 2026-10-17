@@ -591,9 +591,9 @@ class ForLoopHandler:
         ) is None:
             rest_after = single_unit_policy.iterations_for_one_unit(node)
         run_rest = False
-        # What the passes took, and what their statements' own work was
+        # The share of each pass's time its statements' own work took
         # (`single_unit_policy.passes_were_cheap`).
-        passes_wall = passes_work = 0.0
+        work_shares: list[float] = []
         measured = 0
 
         total_iterations = 0
@@ -637,12 +637,11 @@ class ForLoopHandler:
                 for name in body_names:
                     body_files.update(file_deps.get(name, ()))
                 if rest_after is not None:
-                    passes_wall += _time.perf_counter() - iter_started
-                    passes_work += _work(all_metrics[measured:])
+                    wall = _time.perf_counter() - iter_started
+                    work_shares.append(_work(all_metrics[measured:]) / wall if wall > 0 else 1.0)
                     measured = len(all_metrics)
                 if rest_after is not None and (
-                    total_iterations >= rest_after
-                    or single_unit_policy.passes_were_cheap(total_iterations, passes_work, passes_wall)
+                    total_iterations >= rest_after or single_unit_policy.passes_were_cheap(work_shares)
                 ):
                     # Still the very iterator this loop draws from: the unit
                     # evaluates the header again, or is handed it.
