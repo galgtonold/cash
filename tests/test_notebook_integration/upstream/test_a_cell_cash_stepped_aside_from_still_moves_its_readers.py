@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = [pytest.mark.integration]
+#: Its own kernel: the patch below stays in a kernel process, and a reused
+#: warm kernel would hand it to the next test on the worker, whose every
+#: cell with an ``append`` would then run without cash.
+pytestmark = [pytest.mark.integration, pytest.mark.fresh_kernel]
 
 #: In the kernel: the cell check of a cell that appends raises, as one past
 #: its budget did, so cash steps aside and the cell runs as plain Python.
