@@ -31,6 +31,8 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.mutations import assigned_method_call_receivers, standalone_method_call_receivers
+from ...analysis.namespace_effects import fits_its_receiver
 from ...tracking.module_symbols import static_attribute_reads
 from ...tracking.read_classification import regular_file_stat
 from ...value_hash import budgeted_hash, compute_hash, costly_after
@@ -271,7 +273,14 @@ class StatementLineageBuilder:
         # earlier statement bound the same names to the same values
         # (`ValueCutoff.lineage_for_outputs`).
         bound = {name: user_ns[name] for name in outputs if name in user_ns}
-        rebuilt = not no_cache and not any(user_ns.get(name) is value for name in inputs for value in bound.values())
+        # An estimator the statement fits in place (``model.fit(X, y)``,
+        # ``fitted = model.fit(X, y)``) is an input that is also an output;
+        # refitted to the model it was, it takes that model's lineage back
+        # (`value_cutoff._refitted`).
+        refitted = fitted_in_place(tree, bound)
+        rebuilt = not no_cache and not any(
+            user_ns.get(name) is value and name not in refitted for name in inputs for value in bound.values()
+        )
         cut_off = rebuilt and len(bound) == 1
 
         func_component = callable_source_component(self.function_tracker, inputs, user_ns)
@@ -678,3 +687,15 @@ class StatementLineageBuilder:
         else:
             tracking_state.from_import_components.pop(var_name, None)
         return component
+
+
+def fitted_in_place(tree: ast.Module | None, bound: Mapping[str, Any]) -> frozenset[str]:
+    """The outputs in *bound* that *tree* fits in place (``model.fit(X, y)``,
+    ``X2 = enc.fit_transform(X)``; `fits_its_receiver`)."""
+    if tree is None:
+        return frozenset()
+    return frozenset(
+        base
+        for base, method in standalone_method_call_receivers(tree) | assigned_method_call_receivers(tree)
+        if base in bound and fits_its_receiver(method, bound[base])
+    )

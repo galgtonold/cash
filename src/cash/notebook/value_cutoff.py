@@ -7,7 +7,8 @@ code from an input that moved on (``temptastic = tsimp[...]`` after
 table holds the same rows -- so a 150 s loop reading it ran again in a
 student's notebook. When a frame, series, array or networkx graph a statement
 executed to bind has the same content as one an earlier statement bound, its
-output takes that one's lineage, and what was cached from it is served.
+output takes that one's lineage, and what was cached from it is served. So
+does an estimator, bound or fitted in place (`_refitted`).
 
 Content is compared by `compute_hash`, which reads the whole value: values,
 index, column names, dtypes and ``attrs``; for a graph its class, nodes and
@@ -28,7 +29,8 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from .._plain_data import is_plain
-from ..value_hash import is_identity_fallback_hash
+from ..analysis.namespace_effects import is_estimator
+from ..value_hash import digest_via_pickle, is_identity_fallback_hash
 from ..value_types import IMMUTABLE_LEAF_TYPES
 from .lineage_formula import record_lineage_alias, resolve_lineage_alias
 from .versioned_json_store import VersionedJsonStore
@@ -76,6 +78,18 @@ def _compared(value: Any) -> bool:
     # An array of objects (``axes`` from ``plt.subplots``) is hashed by
     # pickling what it holds -- a whole figure.
     return getattr(getattr(value, "dtype", None), "kind", "") != "O"
+
+
+def _refitted(value: Any) -> bool:
+    """An estimator (`is_estimator`) whose digest is its whole pickle
+    (`digest_via_pickle`): the bytes a restore gives back, so an equal digest
+    is an equal model. ``model.fit(X, y)`` run again on the model it already
+    fitted gave it a new lineage each run, so what was built on it missed and
+    the next identical fit ran again: a held-out session re-ran a 95 s
+    CatBoost fit five times. The statement compares it even though it
+    changed the model in place (`StatementLineageBuilder`).
+    """
+    return is_estimator(value) and digest_via_pickle(value)
 
 
 def _is_plain_value(value: Any) -> bool:
@@ -221,8 +235,9 @@ class ValueCutoff:
     @staticmethod
     def _digest(value: Any, compute_hash: Callable[[Any], str], plain: bool = False) -> str | None:
         """*value*'s typed content digest, or None when it is not compared
-        (`_compared`; with *plain*, plain data too) or has no content hash."""
-        if not (_compared(value) or (plain and _is_plain_value(value))):
+        (`_compared`, `_refitted`; with *plain*, plain data too) or has no
+        content hash."""
+        if not (_compared(value) or _refitted(value) or (plain and _is_plain_value(value))):
             return None
         try:
             digest = compute_hash(value)
