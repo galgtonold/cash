@@ -197,6 +197,14 @@ SHARE_CHECK_FLOOR_S = 0.1
 SHARE_FALLBACK_FLOOR_S = 1.0
 
 
+def _may_hold_memory(value: Any) -> bool:
+    """Could another value borrow *value*'s memory? Not a module, class or
+    function, nor a number or a string."""
+    if isinstance(value, (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType)):
+        return False
+    return not isinstance(value, (int, float, complex, str, bool, type(None)))
+
+
 def share_check_budget(cost: float) -> float:
     """Seconds the share check of a statement that took *cost* may take."""
     return max(SHARE_CHECK_FLOOR_S, SHARE_CHECK_FACTOR * cost)
@@ -2296,6 +2304,7 @@ class StatementProcessor:
         def skip_name(other: str) -> bool:
             return other in hidden or is_history_name(other)
 
+        done = 0
         try:
             with walk_budget(share_check_budget(cost)):
                 for name in outputs:
@@ -2307,7 +2316,21 @@ class StatementProcessor:
                     found.discard(name)
                     if found:
                         links.append(([name], found))
+                    done += 1
         except WalkBudgetExceeded:
+            # Out of time: an output not looked at may sit on the memory of
+            # any value the statement read (``s = pl.Series(arr)`` on a busy
+            # machine), and unlinked, a write to it left what was cached from
+            # the output answering with the old data. Linked to each of them,
+            # such a write moves it on: a needless miss at worst.
+            readable = {
+                other
+                for other in inputs
+                if other in user_ns and not skip_name(other) and _may_hold_memory(user_ns[other])
+            }
+            for name in outputs[done:]:
+                if readable - {name}:
+                    links.append(([name], readable - {name}))
             return links, False
         return links, True
 
