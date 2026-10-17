@@ -41,6 +41,7 @@ import fractions
 import gc
 import inspect
 import pathlib
+import re
 import sys
 import types
 import uuid
@@ -189,10 +190,17 @@ def _found_by_name(fn: types.FunctionType) -> bool:
 
 def is_value(value: Any, value_types: tuple[type, ...]) -> bool:
     """Whether *value* has no identity a restore must keep (`VALUE_TYPES`,
-    a function or method that carries nothing)."""
-    if isinstance(value, value_types):
-        return True
-    return isinstance(value, _CALLABLE_TYPES) and _bound_objects(value) is None
+    a function or method that carries nothing).
+
+    An object whose attributes all raise, ``__class__`` too (numpy's
+    ``BagObj``, ``np.load(...).f``), makes an ``isinstance`` against an ABC
+    raise: it is read by its type alone."""
+    try:
+        if isinstance(value, value_types):
+            return True
+        return isinstance(value, _CALLABLE_TYPES) and _bound_objects(value) is None
+    except Exception:  # noqa: BLE001 - see above
+        return issubclass(type(value), value_types)
 
 
 _ESTIMATOR_CLASSES: dict[type, bool] = {}
@@ -965,7 +973,7 @@ def _check_group(
             # not walked. It was walked for every statement, ``x = 0`` too
             # -- the output history holding a displayed list of 400,000
             # tuples, 1.2 s a statement.
-            return set(), set()
+            return _inside_library_objects(group, nodes, owner, value_types, user_ns, bindings, cash_held)
         internal = count_held(cash_held, nodes, inbound, value_types, named_held, user_ns)
         for mapping, key in named_held:
             if id(mapping.get(key)) in nodes:
@@ -975,9 +983,9 @@ def _check_group(
         if excess and _count_leaf_attributes(nodes, inbound):
             excess = excess_refs(nodes, inbound, checked)
         if not excess:
-            return set(), set()
+            return _inside_library_objects(group, nodes, owner, value_types, user_ns, bindings, cash_held)
         if _held_within(nodes, counted, excess, value_types):
-            return set(), set()
+            return _inside_library_objects(group, nodes, owner, value_types, user_ns, bindings, cash_held)
         shared = {owner[k] for k in excess}
         if user_ns is None:
             return shared, None
@@ -1057,7 +1065,7 @@ def _held_within(nodes: dict[int, Any], inbound: dict[int, int], excess: list[in
         parent = id(stack[-1])
         referents = gc.get_referents(stack.pop())
         for child in referents:
-            if is_value(child, value_types) or isinstance(child, _NOT_WITHIN):
+            if is_value(child, value_types) or issubclass(type(child), _NOT_WITHIN):
                 continue
             key = id(child)
             refs[key] = refs.get(key, 0) + 1
@@ -1085,6 +1093,207 @@ def _held_within(nodes: dict[int, Any], inbound: dict[int, int], excess: list[in
             return False
         todo.extend(holder for holder in holders.get(key, ()) if holder in within)
     return True
+
+
+#: Most objects `_inside_library_objects` reads inside the library objects
+#: of a walk before it gives up, which refuses the statement.
+_INSIDE_MAX_OBJECTS = 50_000
+#: Above how many objects one level of `_variables_holding`'s climb reads
+#: the heap once itself: `gc.get_referrers` takes time in proportion to the
+#: heap times the objects it is given (33 s for 18,000 on a test worker).
+_REFERRERS_BY_CALL = 128
+
+#: IPython's own names, and cash's: never a holder of what a library object
+#: holds (`_variables_holding`).
+_SHELL_NAME = re.compile(r"_+|_i+\d*|_\d+|_oh|_ih|_dh|In|Out|exit|quit|get_ipython|__cash_\w*")
+
+
+def _inside_library_objects(
+    group: Mapping[str, Any],
+    nodes: dict[int, Any],
+    owner: dict[int, str],
+    value_types: tuple[type, ...],
+    user_ns: Mapping[str, Any] | None,
+    bindings: list[Mapping[str, Any]],
+    cash_held: list[Any],
+) -> tuple[set[str], set[str] | None]:
+    """`_check_group`'s ``(shared, found)`` for what the library objects
+    among *nodes* hold, which the walk does not read (`children_of` None).
+
+    ``torch.optim.SGD(model.parameters())`` holds ``model``'s parameters
+    inside its ``param_groups``; read as one closed object, nothing else held
+    it, and a hit bound a copy whose parameters were not ``model``'s, so
+    training stepped the copy and ``model`` never trained. Here the objects
+    inside are read down (`gc.get_referents`), and each one something
+    outside them holds too is looked for up its referrers: the variables
+    found join the group and are stored with it, as for a holder the walk
+    finds. A library's own globals (a plotly validator) are not variables
+    and do not count, as for the library object itself. ``(owners, None)``,
+    which refuses the statement, when the search could not finish."""
+    if user_ns is None:
+        return set(), set()
+    inside, owners = _held_from_outside(nodes, owner, value_types)
+    if inside is None:
+        return owners, None
+    if not inside:
+        return set(), set()
+    ignore = {id(nodes), id(group), id(owner), id(bindings), id(cash_held), *nodes}
+    ignore.update(id(binding) for binding in bindings if binding is not user_ns)
+    ignore.update(id(obj) for obj in cash_held)
+    names = _variables_holding(inside, user_ns, set(group), ignore, value_types)
+    if names is None:
+        return owners, None
+    return (owners, names) if names else (set(), set())
+
+
+def _reads_inside(node: Any, value_types: tuple[type, ...]) -> bool:
+    """Whether *node* is a library's own object the walk does not read: not
+    a value, nor pandas or numpy data (read by their own rules)."""
+    try:
+        if is_value(node, value_types) or issubclass(type(node), _NOT_WITHIN) or children_of(node) is not None:
+            return False
+    except Exception:  # noqa: BLE001 - an object whose attributes raise (see `is_value`)
+        return False
+    kind = _LIBRARY_KINDS.get(type(node))
+    return (kind or _library_kind(type(node))) is _LEAF
+
+
+def _read_down(obj: Any, value_types: tuple[type, ...]) -> bool | None:
+    """None when *obj*, met inside a library object, is not one to look for
+    (a value, a type, a function, cash's own record); else whether to read
+    what it holds in turn (a library's own object, not pandas or numpy data)."""
+    if _is_cash_own(obj) or is_value(obj, value_types) or issubclass(type(obj), _NOT_WITHIN):
+        return None
+    return (_LIBRARY_KINDS.get(type(obj)) or _library_kind(type(obj))) is _LEAF
+
+
+def _is_cash_own(obj: Any) -> bool:
+    """Whether *obj* is one of cash's own records (its type is cash's)."""
+    module = type(obj).__module__
+    return isinstance(module, str) and (module == "cash" or module.startswith("cash."))
+
+
+def _held_from_outside(
+    nodes: dict[int, Any], owner: dict[int, str], value_types: tuple[type, ...]
+) -> tuple[dict[int, Any] | None, set[str]]:
+    """``(inside, owners)``: the objects inside the library objects among
+    *nodes* that something besides them holds, by id, and the names of the
+    group they are in; *inside* None when there were too many to read.
+
+    A library object one of whose parts holds it back (each trace of a
+    plotly figure, each node of a minidom document) is left out: those keep
+    the library-object rule (`_held_within`), and their parts share the
+    library's own validators and the like with every other such object."""
+    roots = {key: owner[key] for key, node in nodes.items() if _reads_inside(node, value_types)}
+    if not roots:
+        return {}, set()
+    stack = [(nodes[key], key) for key in roots]
+    within: dict[int, Any] = {}
+    refs: dict[int, int] = {}
+    root_of: dict[int, int] = {}
+    held_back: set[int] = set()
+    pops = 0
+    while stack:
+        parent, root = stack.pop()
+        if root in held_back:
+            continue
+        pops += 1
+        if not pops & 255:
+            check_walk_budget()
+        for child in gc.get_referents(parent):
+            read_down = _read_down(child, value_types)
+            if read_down is None:
+                continue
+            key = id(child)
+            if key == root:
+                held_back.add(root)
+                break
+            if key in nodes:
+                continue
+            refs[key] = refs.get(key, 0) + 1
+            if key in within:
+                continue
+            if len(within) >= _INSIDE_MAX_OBJECTS:
+                return None, {roots[root]}
+            within[key] = child
+            root_of[key] = root
+            if read_down:
+                # pandas and numpy data are read by their own rules, not down.
+                stack.append((child, root))
+        child = None  # no reference of this frame's left in the counts
+    parent = None
+    held = [
+        key for key in within if root_of[key] not in held_back and sys.getrefcount(within[key]) - refs[key] > _OVERHEAD
+    ]
+    return {key: within[key] for key in held}, {roots[root_of[key]] for key in held}
+
+
+def _variables_holding(
+    inside: dict[int, Any],
+    user_ns: Mapping[str, Any],
+    skip: set[str],
+    ignore: set[int],
+    value_types: tuple[type, ...],
+) -> set[str] | None:
+    """The variables of *user_ns* not in *skip* that hold an object of
+    *inside*, found up `gc.get_referrers`; None when the climb did not end
+    within `_REFERRER_DEPTH` levels, or a level reached more than
+    `_INSIDE_MAX_OBJECTS` objects. It stops at a variable, a module, a
+    frame, cash's own records (`_is_cash_own`: what they hold is the
+    statement's bookkeeping) and the objects of *ignore* (cash's own
+    references)."""
+    by_id: dict[int, list[str]] = {}
+    for name, value in list(user_ns.items()):
+        if name not in skip and not _SHELL_NAME.fullmatch(name) and not is_value(value, value_types):
+            by_id.setdefault(id(value), []).append(name)
+    stop = {id(user_ns), id(inside), id(by_id), *ignore}
+    stop.update(id(vars(module)) for module in list(sys.modules.values()) if module is not None)
+    names: set[str] = set()
+    for key in inside:
+        names.update(by_id.get(key, ()))
+    seen = set(inside)
+    frontier = [obj for key, obj in inside.items() if key not in by_id]
+    stop.add(id(frontier))
+    for _level in range(_REFERRER_DEPTH):
+        if not frontier:
+            return names
+        check_walk_budget()
+        if len(frontier) > _INSIDE_MAX_OBJECTS:
+            return None
+        args = tuple(frontier)
+        stop.add(id(args))
+        referrers = gc.get_referrers(*args) if len(args) <= _REFERRERS_BY_CALL else _referrers_of(args, stop)
+        stop.add(id(referrers))
+        following: list[Any] = []
+        stop.add(id(following))
+        for obj in referrers:
+            key = id(obj)
+            if key in seen or key in stop or issubclass(type(obj), (types.FrameType, types.ModuleType)):
+                continue
+            seen.add(key)
+            if key in by_id:
+                names.update(by_id[key])
+                continue
+            if not _is_cash_own(obj):
+                following.append(obj)
+        del referrers, args
+        frontier[:] = following
+    return names if not frontier else None
+
+
+def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
+    """`gc.get_referrers` of *objs*, in one read of the heap whatever their
+    number. The heap's list goes in *stop*."""
+    ids = {id(obj) for obj in objs}
+    heap = gc.get_objects()
+    stop.add(id(heap))
+    found = []
+    for i, obj in enumerate(heap):
+        if not i & 4095:
+            check_walk_budget()
+        if any(id(child) in ids for child in gc.get_referents(obj)):
+            found.append(obj)
+    return found
 
 
 def _count_leaf_attributes(nodes: dict[int, Any], inbound: dict[int, int]) -> bool:
