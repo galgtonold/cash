@@ -49,6 +49,10 @@ def _write_events(db_path: str, buffer: list[tuple]) -> None:
     buffer.clear()
     try:
         with contextlib.closing(sqlite3.connect(db_path)) as conn, conn:
+            # Telemetry, never a result: a crash may lose these rows, so the
+            # commit need not wait for the disk (an fsync, 15-30 ms, paid at
+            # every process's exit).
+            conn.execute("PRAGMA synchronous=OFF")
             conn.executemany(
                 """
                 INSERT INTO events (session_id, timestamp, status, execution_time, saved_time, code_hash)
