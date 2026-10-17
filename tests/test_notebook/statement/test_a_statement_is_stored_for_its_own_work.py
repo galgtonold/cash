@@ -261,8 +261,10 @@ def test_a_call_under_the_persistence_floor_is_the_statements_work(tiers, mock_s
     _setup(magics)
     # Far under the floor. Not a sleep: macOS runners coalesce timers, and
     # there even sleep(0.02) took 0.12-0.16 s. A counted loop takes the same
-    # CPU time however the OS schedules wake-ups.
-    n = _loop_count_for(0.035)
+    # CPU time however the OS schedules wake-ups. The call's time is wall
+    # time, though: with the whole suite at once a 0.035 s loop took 0.109 s,
+    # past the floor. 0.02 s keeps five times that under it.
+    n = _loop_count_for(0.02)
     run_cash_cell(magics, f"def quick(x):\n    for _ in range({n}):\n        pass\n    return list(x)")
     run_cash_cell(magics, "b = quick(a) + [1]")
     quick_s = _call_seconds(ram, "quick")

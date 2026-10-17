@@ -107,11 +107,14 @@ def test_a_rerun_restores_built_records_without_a_step_per_item(cash_magics):
         assert pickled.bytes <= 4 * KB, (cell, pickled.bytes)
 
 
-def test_a_fast_cell_draws_its_badge_twice(cash_magics):
+def test_a_fast_cell_draws_its_badge_twice(cash_magics, monkeypatch):
     """RUNNING, then the final badge: a progress render between them, for a
     statement that finished at once, was ~2 ms of a trivial cell."""
     from cash.notebook.ipython.badges import BadgePresenter
 
+    # Fast however busy the machine: a cell past the interval earns its
+    # progress render.
+    monkeypatch.setattr(BadgePresenter, "MIN_RENDER_INTERVAL", 60.0)
     cash_magics._cell_executor._badges.mode = "html"
     run_cash_cell(cash_magics, "base = 1")
     with method_calls(BadgePresenter, "render") as renders:
