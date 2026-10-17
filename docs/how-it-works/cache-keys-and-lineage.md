@@ -202,14 +202,18 @@ c = a + b      # lineage(c) folds in lineage(a) and lineage(b)
 d = c * 2      # lineage(d) folds in lineage(c)
 ```
 
-<!-- claim: cash/notebook/value_cutoff.py:ValueCutoff.lineage_for @7f9a2f17, cash/notebook/value_cutoff.py:_COMPARED @18236e1f, cash/notebook/statement/lineage.py:StatementLineageBuilder._hash_once @5f30bf0b -->
+<!-- claim: cash/notebook/value_cutoff.py:ValueCutoff.lineage_for @7f9a2f17, cash/notebook/value_cutoff.py:_COMPARED @18236e1f, cash/notebook/value_cutoff.py:_refitted @b0ffca7a, cash/notebook/statement/lineage.py:fitted_in_place @62ad3c00, cash/notebook/statement/lineage.py:StatementLineageBuilder._hash_once @5f30bf0b -->
 **A value rebuilt to the same content keeps its lineage.** When a statement
 runs again because an input moved on, and the pandas frame or series, numpy
 array or networkx graph (`Graph`, `DiGraph`, `MultiGraph`, `MultiDiGraph`)
 it binds has the same content as one an earlier statement bound, it takes
 that one's lineage, and what was built on it is served. A table filtered
 back to the rows it held, or a giant component that new data outside it left
-unchanged, does not run the analyses below it again. The comparison reads
+unchanged, does not run the analyses below it again. A fitted model counts
+too, compared by its whole pickle: `model.fit(X, y)` run again on the model
+it already fitted runs once more, gives back the same model and takes its
+lineage back, so every later identical fit, and what is built on the model,
+is served. The comparison reads
 the whole value: for a graph its class, its nodes and each node's edges in
 order, and every node, edge and graph attribute by content. Any difference
 keeps the new lineage. The graph's digest is the one cash already takes of a
