@@ -441,6 +441,33 @@ def share_checked(frame: Any) -> tuple[Any, bytes] | None:
         return None
 
 
+def keeps_uncopied(frame: Any) -> bool:
+    """Would the RAM tier keep *frame* without copying its data, frozen
+    already (`frozen_already`) or shared and checked (`share_checked`)?
+    Looked at from its blocks alone: nothing is copied or hashed."""
+    try:
+        if not enabled():
+            return False
+        if frozen_already(frame):
+            return True
+        import pandas as pd
+
+        if type(frame) is not pd.DataFrame or not _checked_works() or not freezable(frame, cells_known=True):
+            return False
+        nbytes = 0
+        for block in frame._mgr.blocks:
+            parts = _ndarray_parts(block.values)
+            if parts is None:
+                return False
+            for _name, array in parts:
+                if array.dtype.hasobject or _flat_bytes(array) is None:
+                    return False
+                nbytes += array.nbytes
+        return nbytes >= CHECKED_MIN_BYTES
+    except Exception:  # noqa: BLE001 - unknown internals: copied
+        return False
+
+
 def _share_checked(frame: Any) -> tuple[Any, bytes] | None:
     import pandas as pd
 
