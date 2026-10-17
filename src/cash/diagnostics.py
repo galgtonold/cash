@@ -316,6 +316,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # without the in-place change a cell below made to it
         "NOTEBOOK-CELL-SYNTAX",  # an upstream cell does not parse, so cells that
         # depend on it stop being tracked
+        "NOTEBOOK-CLASS-STATE-KEPT",  # a class's own state a cell changes is kept
+        # as it is for a re-run, as another cell changes it too
         "NOTEBOOK-FORWARD-READ",  # the cell reads a name only a cell
         # below binds; it runs uncached on the value in memory
         "NOTEBOOK-MAGIC-STALE",  # a name a magic bound is kept as it is,

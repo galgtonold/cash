@@ -65,6 +65,11 @@ class StaleValueGuard:
         #: ``(cell index, name, partners)`` already warned about as kept
         #: (`_kept_for_partner_below`), so a cell re-run in a loop warns once.
         self._warned_kept: set[tuple[int, str, tuple[str, ...]]] = set()
+        #: Class name -> the last cell checked that changes its state while
+        #: another cell does too (see :meth:`_warn_class_state_kept`).
+        self._class_changed_in: dict[str, int] = {}
+        #: ``(cell index, class)`` already warned about (`_warn_class_state_kept`).
+        self._warned_class_kept: set[tuple[int, str]] = set()
         #: The cell the current check is for.
         self._cell_idx: int | None = None
         self._cells: list[str] | None = None
@@ -116,6 +121,7 @@ class StaleValueGuard:
         Builtins are skipped.
         """
         self._mark_stateful_funcs_broken(effects.stateful_funcs, broken_vars, current_cell_idx)
+        self._warn_class_state_kept(effects.class_state_kept, notebook_cells, current_cell_idx)
         self._cell_idx = current_cell_idx
         self._cells = notebook_cells
         if not required_inputs:
@@ -715,6 +721,52 @@ class StaleValueGuard:
                 broken_vars.add(fn)
             if current_cell_idx is not None:
                 self._stateful_called_in[fn] = current_cell_idx
+
+    def _warn_class_state_kept(
+        self, classes: frozenset[str], notebook_cells: list[str] | None, current_cell_idx: int | None
+    ) -> None:
+        """Warn (``NOTEBOOK-CLASS-STATE-KEPT``) for each class whose state the
+        current cell changes, kept as it is for a re-run of the cell.
+
+        A class whose constructor or methods change its own attributes
+        (``Widget.count += 1`` in ``__init__``) is reset for a re-run by
+        re-running its def; when another cell changes it too, that would lose
+        the other cell's change, so the def is not re-run
+        (`CellEffects.class_state_kept`) and the cell starts from the state it
+        left last time. A first run in order starts where plain Jupyter does,
+        so only a cell checked again after itself or a cell below warns; a
+        cell defining the class rebuilds it anyway.
+        """
+        if not classes or current_cell_idx is None:
+            return
+        defined: set[str] = set()
+        if notebook_cells and 0 <= current_cell_idx < len(notebook_cells):
+            tree = parse_cached(notebook_cells[current_cell_idx].replace("\r\n", "\n"))
+            if tree is not None:
+                defined = {node.name for node in tree.body if isinstance(node, ast.ClassDef)}
+        for name in sorted(classes - defined):
+            if not isinstance(self.shell.user_ns.get(name), type):
+                continue
+            last = self._class_changed_in.get(name)
+            self._class_changed_in[name] = current_cell_idx
+            if last is None or last < current_cell_idx:
+                continue
+            key = (current_cell_idx, name)
+            if key in self._warned_class_kept:
+                continue
+            self._warned_class_kept.add(key)
+            what = (
+                f"cell {current_cell_idx + 1} changes the state of class '{name}' (an attribute its "
+                f"constructor or methods set on the class), and another cell changes it too. Re-running "
+                f"the class definition would undo that cell's change, so cash keeps '{name}' as it is: "
+                "the cell's change applies again on top of the one it made last time."
+            )
+            fix = f"run the notebook from the top (or from the cell that defines '{name}') for a first-run value."
+            log_diagnostic(logger, "NOTEBOOK-CLASS-STATE-KEPT", what, fix)
+            warn_diagnostic(
+                CashWarning, "NOTEBOOK-CLASS-STATE-KEPT", what, fix, location=("<cash>", current_cell_idx + 1)
+            )
+            trace_event("class_state_kept", cls=name)
 
     @staticmethod
     def _lineage_invisible_writes(
