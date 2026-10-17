@@ -986,6 +986,14 @@ def _check_group(
         internal |= {id(memo), *(id(listed) for listed in memo.values() if listed is not None)}
         internal |= {id(m) for m in bindings if m is not user_ns}
         discounted = {key for mapping, key in named_held if mapping is user_ns}
+        if breaks.isdisjoint(excess):
+            # Held only in a pandas object's own slots: the search up would
+            # stop at that object, so its answer is known without it.
+            in_frames = _held_in_pandas_slots(nodes, inbound, excess, user_ns, set(group) | discounted)
+            if in_frames is not None:
+                if gave_up is not None:
+                    gave_up.names |= in_frames
+                return shared, None
         partial = GaveUp() if gave_up is not None else None
         found = _find_holders([nodes[k] for k in excess], internal, user_ns, set(group) | discounted, partial)
         if found is not None or breaks.isdisjoint(excess):
@@ -1125,6 +1133,64 @@ def _count_memo(memo: dict[int, list | None], nodes: dict[int, Any], inbound: di
         for key in map(id, listed or ()):
             if key in nodes:
                 inbound[key] += 1
+
+
+def _held_in_pandas_slots(
+    nodes: dict[int, Any],
+    inbound: dict[int, int],
+    excess: list[int],
+    user_ns: Mapping[str, Any],
+    known: set[str],
+) -> set[str] | None:
+    """The variables bound to the pandas frames whose own slots hold every
+    reference left over on *excess*, or None when any is held elsewhere.
+
+    The slots are pandas' data layout: a frame's item cache (``y =
+    df['t']`` stays in ``df._item_cache``; pandas 2 without copy-on-write,
+    where ``y[0] = 99`` changes ``df`` too), and an index's data and its
+    engine's values (scikit-learn's ``feature_names_in_`` is
+    ``X.columns._data``). `_holders_from_referrers` climbs to the same
+    frame or index and stops there, a library's object, after one search
+    of every object the garbage collector tracks per level: 20-60 ms a
+    statement. The references are counted, so a reference from anywhere
+    else leaves the search to run.
+    """
+    pd = sys.modules.get("pandas")
+    if pd is None:
+        return None
+    frame_types = (pd.DataFrame, pd.Series)
+    wanted = {key: sys.getrefcount(nodes[key]) - inbound[key] - _OVERHEAD for key in excess}
+    names: set[str] = set()
+    seen: set[int] = set(nodes)
+    try:
+        for name, value in list(user_ns.items()):
+            if name in known or not isinstance(value, frame_types) or id(value) in seen:
+                continue
+            seen.add(id(value))
+            own = vars(value)
+            cache = own.get("_item_cache")
+            held = False
+            if type(cache) is dict:
+                for item in cache.values():
+                    if id(item) in wanted:
+                        wanted[id(item)] -= 1
+                        held = True
+            for axis in own["_mgr"].axes:
+                if id(axis) in seen:
+                    continue
+                seen.add(id(axis))
+                slots = vars(axis)
+                engine = slots.get("_cache", {}).get("_engine")
+                for item in (slots.get("_data"), getattr(engine, "values", None)):
+                    if item is not None and id(item) in wanted:
+                        wanted[id(item)] -= 1
+            if held:
+                names.add(name)
+    except Exception:  # noqa: BLE001 - another layout: the search up decides
+        return None
+    if any(left != 0 for left in wanted.values()):
+        return None
+    return names
 
 
 def _find_holders(
