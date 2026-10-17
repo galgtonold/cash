@@ -16,7 +16,9 @@ import pytest
 
 pytest.importorskip("numpy")
 
+from cash.backends.cache_dir import VERSIONS_INDEX_FILENAME
 from cash.backends.entry_format import read_entry
+from cash.backends.versions import Version, superseded_to_drop
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(240)]
 
@@ -58,13 +60,36 @@ def _runs(work_dir, name):
     return log.read_text(encoding="utf-8").count(name + "|") if log.exists() else 0
 
 
-def _versions_on_disk(work_dir, output):
-    n = 0
+def _entries(work_dir, output):
     for p in (Path(work_dir) / ".cash").glob("*.entry"):
         meta, _ = read_entry(str(p), with_payload=False)
         if meta.get("outputs") == [output] and not meta.get("metadata_only"):
-            n += 1
-    return n
+            yield meta
+
+
+def _versions_on_disk(work_dir, output):
+    return sum(1 for _meta in _entries(work_dir, output))
+
+
+def _versions_the_budget_keeps(work_dir, output):
+    """How many versions of *output* the budget keeps for the costs this run
+    measured: every version written, less those `superseded_to_drop` drops
+    with the newest current. Each prune at a write drops what the last one
+    does, as newer versions only add bytes ahead of an older one.
+
+    The cost is the time a version took on this machine: 0.4 s here when
+    it is idle, up to 1.5 s with six of these tests at once, and a version
+    over 1.2 s pays for a second spare. The count is the budget's, not a
+    machine's."""
+    (slot,) = {meta["version_slot"] for meta in _entries(work_dir, output)}
+    written = {}
+    log = Path(work_dir) / ".cash" / VERSIONS_INDEX_FILENAME
+    for line in log.read_text(encoding="ascii").splitlines():
+        parts = line.split()
+        if len(parts) == 5 and parts[0] == slot:
+            written[parts[1]] = Version(parts[1], int(parts[2]), float(parts[3]), float(parts[4]))
+    current = max(written.values(), key=lambda v: v.used).key
+    return len(written) - len(superseded_to_drop(written, current))
 
 
 def test_a_big_cheap_value_keeps_one_old_version_a_small_costly_one_keeps_all(nb_runner):
@@ -79,7 +104,9 @@ def test_a_big_cheap_value_keeps_one_old_version_a_small_costly_one_keeps_all(nb
     assert "X 5.0 score 10.0" in nb_runner.get_output(6)
 
     nb_runner.settle_writes()
-    assert _versions_on_disk(nb_runner.work_dir, "X") == 2
+    kept = _versions_the_budget_keeps(nb_runner.work_dir, "X")
+    assert 2 <= kept < 5, "a big value cheap to rebuild keeps one or two spare versions, not every one"
+    assert _versions_on_disk(nb_runner.work_dir, "X") == kept
     assert _versions_on_disk(nb_runner.work_dir, "score") == 5
 
 

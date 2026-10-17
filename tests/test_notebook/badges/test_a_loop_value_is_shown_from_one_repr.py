@@ -22,7 +22,12 @@ ITEMS = (
 )
 
 
-def test_each_value_is_repr_d_once(cash_magics, mock_shell):
+def test_each_value_is_repr_d_once(cash_magics, mock_shell, monkeypatch):
+    from cash.notebook.ipython.badges import BadgePresenter
+
+    # One render: a cell running past the interval (a busy machine) draws a
+    # progress badge too, which shows each value again.
+    monkeypatch.setattr(BadgePresenter, "MIN_RENDER_INTERVAL", 60.0)
     mock_shell.user_ns["__name__"] = "__main__"
     run_cash_cell(cash_magics, ITEMS)
     run_cash_cell(cash_magics, "for item in items:\n    a = item.k\n    b = a + 1\n    c = b * 2")

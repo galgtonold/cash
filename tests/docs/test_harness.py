@@ -452,6 +452,16 @@ def test_expect_badge_fails_when_the_badge_differs(tmp_path):
         run_page(page)
 
 
+def test_expect_badge_takes_either_of_two_words(tmp_path):
+    from tests.docs._harness import PageBadgeError, run_page
+
+    page = _badge_page(tmp_path, "<!-- test:expect-badge rerun=MIXED|CACHED -->")
+    assert run_page(page).tested_fences == 3
+    page = _badge_page(tmp_path, "<!-- test:expect-badge rerun=EXECUTED|MIXED -->")
+    with pytest.raises(PageBadgeError, match="the badge reads CACHED, the page expects EXECUTED, MIXED"):
+        run_page(page)
+
+
 def test_expect_badge_rejects_an_unknown_word(tmp_path):
     page = _badge_page(tmp_path, "<!-- test:expect-badge HIT -->")
     with pytest.raises(ValueError, match="bad test:expect-badge token 'HIT'"):
@@ -470,7 +480,11 @@ def test_rerun_mode_fails_a_cell_that_executes_again(tmp_path, monkeypatch):
     from tests.docs import _harness
 
     monkeypatch.setattr(_harness, "_RERUN_NB_CELLS", True)
-    cheap = _badge_page(tmp_path, "").read_text(encoding="utf-8").replace("# @cash:persist\n", "")
+    # Run every time by its annotation, not by being cheap: a statement under
+    # the 10 ms store floor is stored when a busy machine holds it past the
+    # floor (2 runs in 12 with twelve busy loops beside them), and the rerun
+    # then reads CACHED.
+    cheap = _badge_page(tmp_path, "").read_text(encoding="utf-8").replace("# @cash:persist\n", "# @cash:no-cache\n")
     page = tmp_path / "cheap.md"
     page.write_text(cheap, encoding="utf-8")
     with pytest.raises(_harness.PageBadgeError, match="rerun run: the badge reads EXECUTED"):
@@ -478,7 +492,8 @@ def test_rerun_mode_fails_a_cell_that_executes_again(tmp_path, monkeypatch):
 
     page.write_text(
         cheap.replace(
-            "```python { .nb-cell }\nvalue", "<!-- test:expect-badge rerun=EXECUTED -->\n```python { .nb-cell }\nvalue"
+            "```python { .nb-cell }\n# @cash:no-cache",
+            "<!-- test:expect-badge rerun=EXECUTED -->\n```python { .nb-cell }\n# @cash:no-cache",
         ),
         encoding="utf-8",
     )

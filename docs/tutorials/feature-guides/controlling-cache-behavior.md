@@ -101,7 +101,7 @@ cash runs every POST, PUT or upload every time, because a cache hit would skip
 sending it. Some APIs use POST for plain queries, such as a search endpoint or an
 LLM completion. Tell cash that skipping the request is harmless:
 
-<!-- test:expect-badge rerun=EXECUTED -->
+<!-- test:expect-badge rerun=EXECUTED|MIXED -->
 ```python { .nb-cell }
 class SearchSession:
     def post(self, url, json=None):
@@ -128,7 +128,7 @@ cannot be cached, such as `results.append(compute(x))`. If the function has an
 effect cash cannot see, turn this off for the statement, or for a whole loop by
 putting the comment on its header:
 
-<!-- test:expect-badge rerun=EXECUTED -->
+<!-- test:expect-badge rerun=EXECUTED|MIXED -->
 ```python { .nb-cell }
 results = []
 # @cash:no-cache-calls

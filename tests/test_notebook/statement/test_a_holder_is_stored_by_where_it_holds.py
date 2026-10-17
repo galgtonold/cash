@@ -12,6 +12,8 @@ wrote the 80 MB one next to it three times. The entry now records the place
 
 from __future__ import annotations
 
+import pytest
+
 from cash.notebook.holder_patches import HolderPatch, apply_patch, holder_patches
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
@@ -24,6 +26,16 @@ CELLS = [
     "train['f1'] = slow(train['a'] * 2)",
     "train['f2'] = slow(train['a'] * 3)",
 ]
+
+
+@pytest.fixture(autouse=True)
+def time_to_find_the_holders(monkeypatch):
+    """Time to walk ``raw``'s 100,000 items on a busy machine: past the
+    0.4 s a statement of 0.2 s is given, the statement is not stored at all
+    (it re-runs every time, with a warning), which is not what these test."""
+    from cash.notebook.statement import processor
+
+    monkeypatch.setattr(processor, "SHARE_CHECK_FLOOR_S", 30.0)
 
 
 def _payload(cash_magics, statement_processor, code):

@@ -123,7 +123,10 @@ def find_expect_badge_for_fence(lines: list[str], fence_start_line: int) -> dict
 
     ``<!-- test:expect-badge EXECUTED -->`` sets the first run's badge;
     ``first=`` and ``rerun=`` name either run, e.g.
-    ``<!-- test:expect-badge first=EXECUTED rerun=CACHED -->``. The walk passes
+    ``<!-- test:expect-badge first=EXECUTED rerun=CACHED -->``; ``|`` allows
+    either of two, e.g. ``rerun=EXECUTED|MIXED`` for a cell whose cheap
+    statement is stored when a busy machine holds it past the 10 ms store
+    floor. The walk passes
     blank lines and other ``test:`` annotations. The other annotation finders
     stop at a comment they do not know, so this one goes at the top of a stack.
     """
@@ -138,14 +141,14 @@ def find_expect_badge_for_fence(lines: list[str], fence_start_line: int) -> dict
             return {}
         expected: dict[str, str] = {}
         for token in m.group("args").replace(",", " ").split():
-            key, _, word = token.rpartition("=")
+            key, _, words = token.rpartition("=")
             key = key or "first"
-            if key not in ("first", "rerun") or word not in BADGE_WORDS:
+            if key not in ("first", "rerun") or not set(words.split("|")) <= BADGE_WORDS:
                 raise ValueError(
                     f"line {i + 1}: bad test:expect-badge token {token!r}; "
-                    f"use [first=|rerun=]{{{','.join(sorted(BADGE_WORDS))}}}"
+                    f"use [first=|rerun=]{{{','.join(sorted(BADGE_WORDS))}}}, alternatives joined by |"
                 )
-            expected[key] = word
+            expected[key] = ", ".join(words.split("|"))
         return expected
     return {}
 
