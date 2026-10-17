@@ -76,7 +76,7 @@ from .namespace_effects import (
     notebook_global_rebinds,
     users_callee,
 )
-from .object_protocol import ObjectProtocolResets, object_protocol_mutations
+from .object_protocol import ObjectProtocolResets, changed_through_their_objects, object_protocol_mutations
 
 __all__ = [
     "CellEffects",
@@ -1195,7 +1195,12 @@ class _CellWrites:
         return CellEffects(
             outputs=frozenset(facts.outputs),
             reassigned=frozenset(facts.reassigned - nocache),
-            mutated=frozenset(self.mutated),
+            # A kept class's state is put back before a re-run of the cell
+            # (`class_state.ClassState`), whichever channel changes it: one
+            # passed to a call (``id(Widget)``, a handed callable that may
+            # construct it) re-running its def instead would drop what the
+            # other cells' instances did to it.
+            mutated=frozenset(self.mutated - self.class_state_kept),
             method_receivers=frozenset(self.method_receivers),
             selfref=frozenset(self.selfref),
             # ``a, b = b, a`` reads its own pre-cell value but, re-run alone,
@@ -1214,7 +1219,7 @@ def _object_protocol_effects(
     """Hidden state reached through the object protocol, per reset channel:
     ``(free_vars, receivers, class_defs, init_subclass_free_vars, kept)``,
     *kept* the classes whose def is not re-run because another cell changes
-    them too (`CellEffects.class_state_kept`).
+    them too, or because their objects change them (`CellEffects.class_state_kept`).
 
     A ``with``, a custom-dunder operation, a constructor, a decorated call or a
     method whose body mutates hidden state. None when the cell has nothing
@@ -1274,8 +1279,11 @@ def _object_protocol_effects(
             other_class_defs |= other.class_defs
             other_init_free |= other.init_subclass_free_vars
         receivers -= other_receivers
-        kept = class_defs & other_class_defs
-        class_defs -= other_class_defs
+        # A class changed through its objects (``type(self).count += 1``)
+        # is kept too: re-running its def would leave the instances made
+        # before on the old class, still changing that one.
+        kept = (class_defs & other_class_defs) | changed_through_their_objects(class_defs, sources.classes.get)
+        class_defs -= kept
         init_free -= other_init_free
     return free, receivers, class_defs, init_free, kept
 

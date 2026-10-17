@@ -52,15 +52,10 @@ def test_instance_method_appends_and_returns(nb_runner):
     )
 
 
-@pytest.mark.xfail(
-    reason="cross-cell class-var accumulator needs a "
-    "per-cell snapshot; class-def re-run is suppressed to "
-    "avoid clobbering the upstream cell's contribution",
-)
 def test_init_increments_class_counter(nb_runner):
     # A class counter incremented by an UPSTREAM cell (w0) AND this cell (w): the
-    # class-def reset is suppressed (it would clobber w0), so the re-run still
-    # accumulates.
+    # class-def reset is suppressed (it would clobber w0), so the class's state
+    # saved where the cell started is put back for the re-run.
     _rerun(
         nb_runner,
         "class Widget:\n    count = 0\n    def __init__(self):\n        Widget.count += 1\nw0 = Widget()",

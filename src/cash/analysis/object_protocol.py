@@ -20,7 +20,7 @@ from .mutations import (
     iter_store_targets,
 )
 
-__all__ = ["object_protocol_mutations"]
+__all__ = ["changed_through_their_objects", "object_protocol_mutations"]
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +276,60 @@ def _first_attr_after_root(chain: ast.expr) -> str | None:
     return None
 
 
+def _attr_on_receivers_class(chain: ast.expr, recv: str | None) -> str | None:
+    """For a chain reaching the receiver's class, ``type(self).count`` or
+    ``self.__class__.registry[k]``, the attribute taken on that class
+    (``count`` / ``registry``); None for any other chain."""
+    if recv is None:
+        return None
+    node: ast.AST = chain
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        base = node.value
+        is_type_call = (
+            isinstance(base, ast.Call)
+            and isinstance(base.func, ast.Name)
+            and base.func.id == "type"
+            and len(base.args) == 1
+            and not base.keywords
+            and isinstance(base.args[0], ast.Name)
+            and base.args[0].id == recv
+        )
+        is_dunder_class = (
+            isinstance(base, ast.Attribute)
+            and base.attr == "__class__"
+            and isinstance(base.value, ast.Name)
+            and base.value.id == recv
+        )
+        if is_type_call or is_dunder_class:
+            return node.attr if isinstance(node, ast.Attribute) else None
+        node = base
+    return None
+
+
+def changed_through_their_objects(class_names, resolve_class_source) -> frozenset[str]:
+    """The classes of *class_names* with a method that changes the class
+    through its object (``type(self).count += 1``, ``self.__class__.seen``).
+
+    Re-running such a class's def does not reset it for the instances made
+    before: they keep the class they were made from, and their methods
+    change that one."""
+    found = set()
+    for name in class_names:
+        cdef = _resolve_class_def(name, resolve_class_source)
+        if cdef is None:
+            continue
+        for method in cdef.body:
+            if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if _has_named_decorator(method, "staticmethod"):
+                continue
+            recv = _first_param_name(method)
+            if any(_attr_on_receivers_class(c, recv) is not None for c in _iter_inplace_mutation_chains(method)):
+                found.add(name)
+                break
+    return frozenset(found)
+
+
 def _iter_inplace_mutation_chains(method: ast.FunctionDef | ast.AsyncFunctionDef):
     """Yield the receiver-chain expr of every IN-PLACE mutation in *method*'s
     body: a known-mutating method call, an augmented assignment, a subscript
@@ -377,6 +431,13 @@ def _classify_method_mutations(
         class_targets.add(owner or recv_class_name)
 
     for chain in _iter_inplace_mutation_chains(method):
+        on_class = None if is_staticmethod else _attr_on_receivers_class(chain, recv)
+        if on_class is not None:
+            # ``type(self).count += 1``: the class of the receiver, which a
+            # subclass's instance makes the subclass (`class_state`). It
+            # still changes the receiver's class too, as below: a call on it
+            # runs again rather than being served.
+            _add_class_var(on_class)
         root = extract_base_name(chain)
         if root is None:
             continue

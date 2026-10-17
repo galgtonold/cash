@@ -1685,7 +1685,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
 | [NOTEBOOK-CHANGED-BELOW](#notebook-changed-below) | notebook | a cell re-run on its own reads a value rebuilt without the in-place change a cell below made |
-| [NOTEBOOK-CLASS-STATE-KEPT](#notebook-class-state-kept) | notebook | a class's own state a cell changes is kept as it is for a re-run, as another cell changes it too |
+| [NOTEBOOK-CLASS-STATE-KEPT](#notebook-class-state-kept) | notebook | a class's own state a cell changes could not be put back for a re-run, and another cell changes it too |
 | [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
 | [NOTEBOOK-FILE-ROUNDTRIP](#notebook-file-roundtrip) | notebook | a file written in this session is read back, so the read reruns after every write |
 | [NOTEBOOK-FORWARD-READ](#notebook-forward-read) | notebook | the cell reads a name only a cell below binds, so it runs uncached |
@@ -1808,15 +1808,17 @@ leaves it, and will run the cells below again.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/upstream/stale_values.py:StaleValueGuard._warn_class_state_kept @8d9db6f6, cash/analysis/mutation_effects.py:_object_protocol_effects @33c97c7b -->
+<!-- claim: cash/notebook/upstream/stale_values.py:StaleValueGuard._class_state_at_start @2f2a45fc, cash/notebook/upstream/class_state.py:ClassState @19213b5b, cash/analysis/mutation_effects.py:_object_protocol_effects @33c97c7b -->
 **What happened.** You re-ran on its own a cell whose constructor or method
 calls change an attribute of the class itself (`Widget.count += 1` in
 `__init__`, a registry the class appends to), and another cell changes that
-class too. cash normally re-runs the class definition before such a re-run,
-so the change is not applied twice. Here that would also undo the other
-cell's change, so cash kept the class as it is: the cell's change applies
-again on top of the one it made last time, as in a plain re-run. The message
-names the cell and the class. It is shown once per cell and class.
+class too. Re-running the class definition would undo the other cell's
+change, so cash saves the class's attributes where the cell starts and puts
+them back before a re-run. Here they could not be saved or put back: their
+estimated size is over 64 MiB, or a value cannot be copied (a lock, an open
+file). So cash kept the class as it is: the cell's change applies again on
+top of the one it made last time, as in a plain re-run. The message names the
+cell, the class and the reason. It is shown once per cell and class.
 
 **Why it matters.** The class holds both runs' changes (a counter counts the
 cell's objects twice), which no run of the notebook from the top gives.
