@@ -23,6 +23,13 @@ import threading
 from collections.abc import Iterator
 from typing import Any
 
+from ._dataclass_code import compiled_dataclass_methods
+
+# Every dataclass built while cash imports runs method code compiled by an
+# earlier process (`_dataclass_code`); closed at the end of this module.
+_compiled_methods = compiled_dataclass_methods()
+_compiled_methods.__enter__()
+
 from . import (
     _active,
     _gc_context,  # noqa: F401 - collections run in a context of their own on 3.10/3.11
@@ -444,3 +451,5 @@ def _auto_load_in_ipython() -> None:
 
 
 _auto_load_in_ipython()
+_compiled_methods.__exit__(None, None, None)
+del _compiled_methods
