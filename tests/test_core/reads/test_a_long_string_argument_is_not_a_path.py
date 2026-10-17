@@ -37,7 +37,7 @@ def test_a_deep_pattern_within_the_limit_is_recorded_as_named(monkeypatch):
 
 def test_a_short_path_is_still_tracked(tmp_path):
     f = tmp_path / "data.csv"
-    f.write_text("a\n1\n")
+    f.write_text("a\n1\n", encoding="utf-8")
     tracker = _Recorder()
     track_dataset(tracker, str(f))
     assert tracker.paths == [str(f)]
