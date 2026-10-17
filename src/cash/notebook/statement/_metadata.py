@@ -86,6 +86,20 @@ class StatementCacheMetadata:
     #: builds a new object around theirs (``report = {'totals': totals}``)
     #: leaves them as they were.
     holders_moved: bool | None = None
+    #: ``{variable: its content digest}`` for each variable whose object the
+    #: outputs hold but the entry does not: stored as a reference to the
+    #: variable, and bound to its live object again by a restore, which
+    #: misses when the digest is not this one any more (`anchors`).
+    anchors: dict[str, str] | None = None
+    #: The ``anchors`` and the variables found holding an object of the
+    #: outputs beside them: a hit links them to the outputs, as the run did,
+    #: so a change through one moves the outputs on.
+    anchor_links: list[str] | None = None
+    #: For each of the ``anchor_links`` that is not an anchor, the anchors
+    #: whose object it held. A restore misses when one bound now holds other
+    #: ones: ``box = {'full': full}`` and then ``full`` bound to an equal new
+    #: dict leaves the outputs holding ``box``'s, not ``full``'s.
+    anchor_holds: dict[str, list[str]] | None = None
     storage: list[str] | None = None
     source: str | None = None
     skipped_reason: str | None = None

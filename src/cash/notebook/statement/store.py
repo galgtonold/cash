@@ -28,6 +28,7 @@ from cash.backends.persistence_policy import PersistencePolicy, restore_kind
 from cash.backends.store_notices import DECORATED_CALLS_FIELD
 from cash.diagnostics import log_diagnostic, warn_diagnostic
 from cash.exceptions import CashCacheStoreFailedWarning
+from cash.notebook.anchors import with_anchor_refs
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.capture import replay_record
 from cash.notebook.statement.carrier_advances import PAYLOAD_FIELD as CARRIERS_FIELD
@@ -141,6 +142,11 @@ def _is_only_definitions(code: str) -> bool:
     except (SyntaxError, ValueError):
         return False
     return bool(body) and all(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for node in body)
+
+
+class _AnchorsUnstorable(Exception):
+    """The value of a statement with anchors could not be pickled with them
+    (`with_anchor_refs`): it is not stored."""
 
 
 class StatementStore:
@@ -499,7 +505,11 @@ class StatementStore:
                 # What it showed is kept for a cell run that skips it.
                 return self._store_metadata_only(run, execution, None, {})
             return None
-        payload, referenced = self._payload(run, execution, captured_vars, seed_epochs)
+        try:
+            payload, referenced = self._payload(run, execution, captured_vars, seed_epochs)
+        except _AnchorsUnstorable as exc:
+            reason = f"its value holds variables' objects by reference, and it cannot be stored so ({exc})"
+            return self._store_metadata_only(run, execution, reason, {})
         if not referenced and self._too_cheap_to_store(run, execution, file_dependencies, execution.store_cost):
             # Its own work is not worth an entry: the calls inside it are what
             # was, and the cache holds them. The metadata still records its
@@ -544,6 +554,9 @@ class StatementStore:
             carriers_advanced=_carriers_advanced(run),
             holders=run.holders or None,
             holders_moved=True if run.holders and run.moves_holders else None,
+            anchors=run.anchors or None,
+            anchor_links=sorted(run.anchor_links) if run.anchors else None,
+            anchor_holds=run.anchor_holds or None,
             ttl=run.effective_ttl,
             version_slot=_version_slot(run.source_hash, run.outputs),
             replay=replay_record(execution.captured),
@@ -797,9 +810,9 @@ class StatementStore:
         variables = self._filter_safe_vars(captured_vars)
         referenced: dict[str, int] = {}
         decorated = False
-        if not run.holders:
+        if not run.holders and not run.anchors:
             # A reference restores a call's result on its own: with holders
-            # it would no longer be the object they hold.
+            # or anchors it would no longer be the object they hold.
             variables = self._calls.with_call_refs(variables, run.code, referenced)
             variables, decorated = self._with_decorator_ref(variables, run.offered_as)
         payload = {
@@ -824,6 +837,19 @@ class StatementStore:
         # hands to IPython's output history as a run does.
         if execution.echo:
             payload[ECHO_FIELD] = execution.echo[0]
+        if run.anchors:
+            # The objects of the variables the outputs hold as they were, as a
+            # reference each (`anchors`): one round trip for the values and
+            # the echo, which hold the same objects.
+            user_ns = self.shell.user_ns
+            held = {"variables": variables, ECHO_FIELD: payload.get(ECHO_FIELD)}
+            try:
+                held = with_anchor_refs(held, {name: user_ns[name] for name in run.anchors})
+            except Exception as exc:
+                raise _AnchorsUnstorable(str(exc)) from exc
+            payload["variables"] = held["variables"]
+            if ECHO_FIELD in payload:
+                payload[ECHO_FIELD] = held[ECHO_FIELD]
 
         # the module-global RNG post-state above misses generators the
         # user holds in a variable (``rng = np.random.default_rng(42)``).

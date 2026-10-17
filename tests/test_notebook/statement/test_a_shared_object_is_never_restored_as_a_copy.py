@@ -240,15 +240,35 @@ def test_an_object_only_its_own_parts_hold_is_cached(cash_magics, statement_proc
     assert "hold" not in reasons, reasons
 
 
-def test_a_part_held_from_outside_still_refuses(cash_magics, statement_processor):
-    """Control: a closure holding a node of the document holds the document
-    through it, and no restore can rebind it."""
+def test_a_part_held_from_outside_is_kept_by_the_variable(cash_magics, statement_processor):
+    """A closure holding a node of the document holds the document through
+    it. The statement leaves ``doc`` as it was, so the entry stores it as the
+    variable (an anchor): a hit puts the live ``doc`` back, the one the
+    closure holds."""
     run_cash_cell(cash_magics, f"{SETUP}\nfrom xml.dom import minidom")
     statement_processor.process_statement("doc = minidom.parseString('<a><b/><c/></a>')")
     statement_processor.process_statement("keep = (lambda held: lambda: held)(doc.documentElement)")
-    metrics = statement_processor.process_statement("docs = {'doc': doc, 'tag': slow('v1')}")
-    reasons = " ".join(metrics.get("uncacheable_reasons") or [])
-    assert "hold" in reasons, reasons
+    statement = f"docs = {{'doc': doc, 'tag': (time.sleep({ABOVE_PERSISTENCE_FLOOR_S}), 'v1')[1]}}"
+    metrics = statement_processor.process_statement(statement)
+    assert _stored(metrics), metrics.get("uncacheable_reasons")
+
+    ns = cash_magics.shell.user_ns
+    metrics = statement_processor.process_statement(statement)
+    assert metrics["status"] == CacheStatus.RESTORED, metrics
+    assert ns["docs"]["doc"] is ns["doc"]
+    assert ns["keep"]().ownerDocument is ns["docs"]["doc"]
+
+
+def test_a_part_held_from_outside_of_an_object_the_statement_changes_still_runs(cash_magics, statement_processor):
+    """Control: the statement changes ``doc``, so it is not left as it was
+    and cannot be an anchor: the statement runs every time."""
+    run_cash_cell(cash_magics, f"{SETUP}\nfrom xml.dom import minidom")
+    statement_processor.process_statement("doc = minidom.parseString('<a><b/><c/></a>')")
+    statement_processor.process_statement("keep = (lambda held: lambda: held)(doc.documentElement)")
+    statement = "docs = {'doc': doc, 'tag': slow(doc.documentElement.setAttribute('k', 'v') or 'v1')}"
+    metrics = statement_processor.process_statement(statement)
+    assert metrics.get("uncacheable_reasons"), "a statement changing the held document was stored"
+    assert statement_processor.process_statement(statement)["status"] != CacheStatus.RESTORED
 
 
 def test_a_variable_holding_a_part_is_still_named(cash_magics, statement_processor):

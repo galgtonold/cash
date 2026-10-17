@@ -205,6 +205,18 @@ class StatementRun:
     #: The ``holders`` the run left as they were, by their content digest:
     #: they keep their lineage (``lineage_formula.keep_held_lineage``).
     holders_unchanged: set[str] = field(default_factory=set)
+    #: The variables whose objects the outputs hold that are stored as the
+    #: variable, not copied, each with its content digest: a restore binds
+    #: the live object again, when its digest is still this one
+    #: (``StatementCacheMetadata.anchors``, `share_group`).
+    anchors: dict[str, str] = field(default_factory=dict)
+    #: The ``anchors`` and the variables found holding an object of the
+    #: outputs beside them: linked to the outputs as holders are.
+    anchor_links: set[str] = field(default_factory=set)
+    #: For each of the ``anchor_links`` that is not an anchor, the anchors
+    #: whose object it held: a restore misses unless it still holds those
+    #: live objects (``StatementCacheMetadata.anchor_holds``).
+    anchor_holds: dict[str, list[str]] = field(default_factory=dict)
     #: ``id()`` of the object each output and observed receiver was bound to
     #: before the run: an id, not the object, so it adds no reference the
     #: shared-object check would count.

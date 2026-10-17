@@ -20,6 +20,7 @@ from ..._paths import resolve_file_dep_path
 from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
 from ...tracking.file_dep_snapshot import snapshot_is_fresh
+from ..anchors import resolve_anchors
 from ..cache_key import compute_cache_key
 from ..cache_status import CacheStatus
 from ..call_refs import resolve_call_refs
@@ -31,6 +32,7 @@ from ..lineage_formula import (
 )
 from ..lineage_store import restore_frozen_tag, tag_value
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var, present_holders
+from ..statement.derivation_edges import record_shared_object_edges
 from ._types import key_inputs, key_lineages
 from .cache_probe import CacheProbe
 
@@ -141,6 +143,11 @@ class CacheRestorer:
             if cached_data is not None:
                 # Call results the entry refers to rather than copies (call_refs).
                 cached_data = resolve_call_refs(cached_data, self.probe.backend())
+                if metadata:
+                    # Raises KeyError, a failed restore, when an anchor changed.
+                    cached_data = resolve_anchors(
+                        cached_data, metadata.get("anchors"), self.shell.user_ns, holds=metadata.get("anchor_holds")
+                    )
 
             # Extract saved execution time
             saved_time = metadata.get("execution_time", 0.0) if metadata else 0.0
@@ -185,6 +192,13 @@ class CacheRestorer:
                 )
                 if holders and restored_vars:
                     self.tracking_state.held_with[cache_key] = dict(holders) if metadata.get("holders_moved") else {}
+                if restored_vars and metadata.get("anchor_links"):
+                    # As the run linked them (`anchors`).
+                    record_shared_object_edges(
+                        self.tracking_state.derivation_edges,
+                        sorted(restored_vars),
+                        [name for name in metadata["anchor_links"] if name in self.shell.user_ns],
+                    )
                 self._update_tracking_after_restore(restored_vars, metadata, input_hashes)
                 self.last_outputs = {
                     "stdout": cached_data.get("stdout", "") or "",
