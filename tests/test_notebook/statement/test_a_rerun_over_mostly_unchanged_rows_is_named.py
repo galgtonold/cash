@@ -8,6 +8,7 @@ reason), when the statement is cheap, and after the first time.
 
 from __future__ import annotations
 
+import logging
 import warnings
 
 import pytest
@@ -69,12 +70,19 @@ def test_a_costly_rerun_over_appended_rows_names_them(cash_magics):
     assert "Fix: do the work in a @cash.cache function that takes one chunk of rows" in text
 
 
-def test_a_block_changed_in_the_middle_is_named(cash_magics):
+def test_a_block_changed_in_the_middle_is_named(cash_magics, caplog):
+    # Failed on macOS 3.10 CI only (twice in one run, not reproduced on
+    # Linux 3.10 alone, under load, or in a full suite run): the hint's own
+    # debug trail and the step's status say which check it stopped at.
+    caplog.set_level(logging.DEBUG, logger="cash.notebook.per_item_reruns")
+    caplog.set_level(logging.DEBUG, logger="cash.notebook.statement.processor")
     _run(cash_magics, SETUP, BASE, STEP)
 
     found = _run(cash_magics, MIDDLE, STEP)
 
-    assert len(found) == 1, found
+    trail = [r.getMessage() for r in caplog.records if "PER-ITEM" in r.getMessage() or "per-item" in r.getMessage()]
+    assert _status(cash_magics, STEP) == CacheStatus.COMPUTED, "control: it ran again"
+    assert len(found) == 1, (found, trail, cash_magics.tracking_state.per_item_reruns._records)
     text = " ".join(str(found[0].message).split())
     assert "re-ran over all 3,000 rows of `imgs`" in text
     # The 100 rows sit inside 47-row blocks: the blocks around them.
