@@ -151,3 +151,13 @@ def test_a_value_the_disk_tier_cannot_write_is_kept_in_ram(tiers, monkeypatch):
 def test_a_small_value_goes_to_the_ram_tier_as_before(tiers):
     metadata = _store(tiers, np.arange(1000, dtype=np.float64))
     assert metadata["storage"][0] == "RAM", metadata["storage"]
+
+
+def test_a_value_not_worth_its_disk_bytes_is_kept_in_ram(tiers):
+    """The bytes ceiling judges a value by the size the RAM tier records: a
+    value sent to disk alone has it too, so 32 MiB made in 0.15 s (over
+    128 MiB a second) is not written."""
+    metadata = {"execution_time": 0.15}
+    tiers.set("k", np.arange(ROWS * 16, dtype=np.float64), metadata)
+    assert metadata["storage"] == ["RAM"], metadata["storage"]
+    assert not tiers.backends[1].list_entries()

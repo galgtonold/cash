@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
-from ..sizing import pickled_size_estimate
+from ..sizing import memory_footprint, pickled_size_estimate
 from . import memory_backend
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, entry_expired, store_seconds
 from .clear_watch import ClearWatcher
@@ -724,6 +724,10 @@ class TieredBackend(CacheBackend):
         disk_alone = len(self.backends) > 1 and self._goes_to_disk_alone(value)
         if not disk_alone:
             write_first_tier()
+        elif not metadata.get("size"):
+            # What the RAM tier would have put there: the bytes ceiling below
+            # judges the value by it.
+            metadata["size"] = memory_footprint(value)
 
         decision = None
         if len(self.backends) == 1:
