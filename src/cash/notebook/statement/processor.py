@@ -1962,7 +1962,7 @@ class StatementProcessor:
                     run.outputs,
                     captured_vars,
                     self.shell.user_ns,
-                    cash_held=[*self._calls.held_call_results(), echo, run.metrics],
+                    cash_held=[*self._calls.held_call_results(), echo, run.metrics, *self._mutations.digests.held()],
                     shell=self.shell,
                     holders=holders,
                     gave_up=gave_up,
@@ -2211,7 +2211,14 @@ class StatementProcessor:
         hidden = getattr(self.shell, "user_ns_hidden", None) or {}
         # *held* are containers cash holds itself (a loop's iterable), each
         # one counted as such whatever else refers to it.
-        cash_held = [*self._calls.held_call_results(), echo, run.metrics, *history, *held]
+        cash_held = [
+            *self._calls.held_call_results(),
+            echo,
+            run.metrics,
+            *history,
+            *held,
+            *self._mutations.digests.held(),
+        ]
 
         def foreign(name: str) -> bool:
             return name in hidden or is_history_name(name)

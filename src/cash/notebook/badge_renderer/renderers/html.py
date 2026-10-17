@@ -595,7 +595,7 @@ def _iter_histogram_html(iterations: tuple[IterationRow, ...]) -> str:
         h = max(3, int((it.time_s / max_t) * 16))
         kind = theme.kind_of(it.status)
         bar_color = theme.bar_color(kind)
-        bindings = ", ".join(f"{name}={value!r}" for name, value in it.loop_bindings)
+        bindings = ", ".join(f"{name}={_binding_repr(value)}" for name, value in it.loop_bindings)
         title = f"{bindings} · {it.status.value} · {it.time_s:.3f}s"
         bars.append(
             f'<span class="c3-iter-bar" style="height:{h}px;background:{bar_color};" title="{_esc(title)}"></span>'
@@ -604,6 +604,29 @@ def _iter_histogram_html(iterations: tuple[IterationRow, ...]) -> str:
 
 
 _ITER_VALUE_MAX = 40
+
+
+#: ``id(value) -> repr`` of the loop bindings shown by the badge being
+#: rendered (`_binding_repr`); None outside `render_html`.
+_REPRS: dict[int, str] | None = None
+
+
+def _binding_repr(value: Any) -> str:
+    """``repr(value)``, once per value in one render.
+
+    Each iteration's bindings show in every statement's histogram and
+    drill-down, and a badge is drawn again as the cell runs: on E11 the
+    item of a 6-image loop, a tuple holding a tensor, was repr'd hundreds
+    of times a run, 0.4-0.8 s. The values are the badge's, alive for the
+    whole render, so no id is reused within it.
+    """
+    memo = _REPRS
+    if memo is None:
+        return repr(value)
+    found = memo.get(id(value))
+    if found is None:
+        found = memo[id(value)] = repr(value)
+    return found
 
 
 def _fmt_iter_value(v: Any) -> str:
@@ -621,7 +644,7 @@ def _fmt_iter_value(v: Any) -> str:
     if isinstance(v, (list, tuple, set)) and len(v) > 4:
         opener, closer = ("[", "]") if isinstance(v, list) else ("(", ")") if isinstance(v, tuple) else ("{", "}")
         return f"{opener}{len(v)} items{closer}"
-    r = repr(v)
+    r = _binding_repr(v)
     if len(r) <= _ITER_VALUE_MAX:
         return r
     keep = (_ITER_VALUE_MAX - 1) // 2
@@ -818,11 +841,11 @@ def _for_loop_group_html(g: ForLoopGroup, rp: _RenderPass) -> str:
             kept = tuple(v for name, v in it.loop_bindings if name in header_var_set)
             if not kept:
                 continue
-            key = tuple(repr(v) for v in kept)
+            key = tuple(_binding_repr(v) for v in kept)
             if key in seen_values:
                 continue
             seen_values.add(key)
-            sample_values.append(", ".join(_esc(repr(v)) for v in kept))
+            sample_values.append(", ".join(_esc(_binding_repr(v)) for v in kept))
             if len(sample_values) >= 4:
                 break
         if len(seen_values) > len(sample_values) or iters_per_stmt > len(sample_values):
@@ -1420,6 +1443,15 @@ def _footer_html(footer: BugReportLink | None) -> str:
 
 def render_html(badge: InteractiveBadge) -> str:
     """Render an :class:`InteractiveBadge` to v3-design HTML."""
+    global _REPRS
+    outer, _REPRS = _REPRS, {}
+    try:
+        return _render_html(badge)
+    finally:
+        _REPRS = outer
+
+
+def _render_html(badge: InteractiveBadge) -> str:
     kind, label, sub = _summary_meta(badge.header)
     rp = _RenderPass(max_time=_max_time(badge), tiers=badge.configured_tiers)
     max_time = rp.max_time
