@@ -1306,14 +1306,20 @@ class _TopLevelCallCollector:
             self._known_mutations(node)
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
             self._bare_call(node.value)
+            # A method call nested in the bare one (``print(m.fit(x))``)
+            # can change its receiver as much as one standing alone.
+            self._nested_method_calls(node.value, skip=node.value)
         elif isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
             # The whole RHS, so a draw nested in a larger expression
             # (``h = [ax.hist(d) for d in data]``) is caught too.
-            for sub in ast.walk(node.value):
-                if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute):
-                    base = _extract_receiver_base_name(sub.func.value)
-                    if base:
-                        self.assigned_method_calls.add((base, sub.func.attr))
+            self._nested_method_calls(node.value)
+
+    def _nested_method_calls(self, value: ast.expr, skip: ast.Call | None = None) -> None:
+        for sub in ast.walk(value):
+            if sub is not skip and isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute):
+                base = _extract_receiver_base_name(sub.func.value)
+                if base:
+                    self.assigned_method_calls.add((base, sub.func.attr))
 
     def _known_mutations(self, node: ast.stmt) -> None:
         """The names *node* changes in place by a call it does not stand
