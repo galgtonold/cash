@@ -1542,9 +1542,10 @@ def classify_receivers(
     assigned = calls.assigned_method_calls
     drawn_args = _drawn_on(calls, namespace)
     args = frozenset(arguments) - drawn_args
-    if not candidates and not assigned and not drawn_args and not args:
-        return ReceiverClasses()
     tier1 = calls.mutation_receivers
+    changed = calls.changed_receivers
+    if not candidates and not assigned and not drawn_args and not args and not changed:
+        return ReceiverClasses()
     inner = calls.inner_methods
     settings = calls.setting_receivers
     verdict = load_verdict()
@@ -1599,6 +1600,9 @@ def classify_receivers(
         receiver = namespace.get(base)
         if receiver_is_identity_coupled(receiver) or fits_its_receiver(method, receiver):
             mutated.add(base)
+    # A call whose value is kept (``label = df.pop('label')``) or a ``del
+    # df['label']`` changes its receiver all the same.
+    mutated |= {base for base in changed if not is_module_name(base, namespace, virtual_modules)}
     mutated |= drawn_args
     if verdict is None:
         unknown_args = args
