@@ -133,3 +133,33 @@ def test_a_frame_too_slow_to_hash_in_time_is_skipped_before_hashing():
     df = pd.DataFrame({"name": ["x"] * 200_000, "v": np.arange(200_000)})
     with pytest.raises(HashBudgetSpent):
         fingerprint(df, deadline=0.0)
+
+
+def test_a_frame_of_plain_columns_is_compared_by_its_buffers():
+    # Built from one 2-D array: each column is a strided view of it.
+    values = np.random.default_rng(5).normal(size=(6000, 3))
+    df = pd.DataFrame(values, columns=list("abc"), index=pd.date_range("2024", periods=6000, freq="h"))
+    df["when"] = df.index
+    redone = df.copy()
+    redone.iloc[3000:3100, 1] = 0.0
+
+    change = _change(df, redone)
+
+    ((start, stop),) = change.changed
+    assert start <= 3000 and stop >= 3100 and change.unchanged_share > 0.9
+    assert _change(df, df.copy()).changed == ()
+    assert _change(df, df.set_axis(df.index + pd.Timedelta("1s"))).changed_rows == 6000, "the index is part of a row"
+
+
+def test_a_range_index_shifted_changes_every_row():
+    df = pd.DataFrame({"v": np.arange(1000)})
+    assert _change(df, df.set_axis(pd.RangeIndex(1, 1001))).changed_rows == 1000
+
+
+def test_a_frame_hashed_by_rows_is_hashed_in_chunks_the_same(monkeypatch):
+    from cash import row_blocks
+
+    df = pd.DataFrame({"name": [f"n{i % 97}" for i in range(5000)], "v": np.arange(5000)})
+    whole, _ = fingerprint(df)
+    monkeypatch.setattr(row_blocks, "_ROWS_PER_CHUNK", 333)
+    assert fingerprint(df)[0] == whole
