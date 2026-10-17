@@ -147,8 +147,10 @@ def test_no_file_is_written_when_python_writes_no_bytecode(tmp_path, monkeypatch
     assert not _kept_files(tmp_path)
 
 
-def test_kept_code_is_found_by_the_exact_text_only(tmp_path):
+def test_kept_code_is_found_by_the_exact_text_only(tmp_path, monkeypatch):
     from cash._dataclass_code import _KeptCode
+
+    monkeypatch.setattr(sys, "dont_write_bytecode", False)  # a shell's PYTHONDONTWRITEBYTECODE would skip the save
 
     path = tmp_path / "kept.marshal"
     one, two = "def f():\n return 1\n", "def f():\n return 2\n"  # a changed template, same name
@@ -163,8 +165,10 @@ def test_kept_code_is_found_by_the_exact_text_only(tmp_path):
     assert space["f"]() == 1
 
 
-def test_a_file_cut_short_by_a_crash_is_ignored(tmp_path):
+def test_a_file_cut_short_by_a_crash_is_ignored(tmp_path, monkeypatch):
     from cash._dataclass_code import _KeptCode
+
+    monkeypatch.setattr(sys, "dont_write_bytecode", False)  # a shell's PYTHONDONTWRITEBYTECODE would skip the save
 
     path = tmp_path / "kept.marshal"
     writer = _KeptCode(path)
