@@ -33,6 +33,7 @@ from ..restored_var import hashed_by_lineage
 from ..shared_objects import holds_part_of
 from ..statement.derivation_edges import shared_object_partners
 from ..tracking_state import TrackingState
+from .class_state import ClassState
 from .unsaved_edits import UnsavedEdits
 
 __all__ = ["StaleValueGuard"]
@@ -65,6 +66,17 @@ class StaleValueGuard:
         #: ``(cell index, name, partners)`` already warned about as kept
         #: (`_kept_for_partner_below`), so a cell re-run in a loop warns once.
         self._warned_kept: set[tuple[int, str, tuple[str, ...]]] = set()
+        #: Class name -> the last cell checked that changes its state while
+        #: another cell does too (see :meth:`_warn_class_state_kept`).
+        self._class_changed_in: dict[str, int] = {}
+        #: ``(cell index, class)`` already warned about (`_warn_class_state_kept`).
+        self._warned_class_kept: set[tuple[int, str]] = set()
+        #: The classes the current cell keeps, each with whether this run is a
+        #: re-run; acted on where the cell starts (`note_cell_start`).
+        self._class_pending: dict[str, bool] = {}
+        #: ``(cell index, class) -> ClassState`` saved where the cell started
+        #: on its last run in order (`class_state.ClassState`).
+        self._class_saved: dict[tuple[int, str], ClassState] = {}
         #: The cell the current check is for.
         self._cell_idx: int | None = None
         self._cells: list[str] | None = None
@@ -116,6 +128,8 @@ class StaleValueGuard:
         Builtins are skipped.
         """
         self._mark_stateful_funcs_broken(effects.stateful_funcs, broken_vars, current_cell_idx)
+        self._keep_class_state(effects.class_state_kept, notebook_cells, current_cell_idx)
+        self._put_back_instead_of_rerun(broken_vars, current_cell_idx, virtual_lineage)
         self._cell_idx = current_cell_idx
         self._cells = notebook_cells
         if not required_inputs:
@@ -677,6 +691,7 @@ class StaleValueGuard:
         Only for values whose content is not compared (`hashed_by_lineage`),
         which :meth:`_started_from_before` asks about on the cell's next run.
         """
+        self._class_state_at_start(cell_idx)
         user_ns = self.shell.user_ns
         for var_name in names:
             value = user_ns.get(var_name)
@@ -715,6 +730,111 @@ class StaleValueGuard:
                 broken_vars.add(fn)
             if current_cell_idx is not None:
                 self._stateful_called_in[fn] = current_cell_idx
+
+    def _keep_class_state(
+        self, classes: frozenset[str], notebook_cells: list[str] | None, current_cell_idx: int | None
+    ) -> None:
+        """Decide, for each class whose own state the current cell changes
+        while another cell changes it too (`CellEffects.class_state_kept`),
+        whether this run is a re-run of the cell: acted on where the cell
+        starts (:meth:`_class_state_at_start`).
+
+        Re-running the class def would undo the other cell's change, so the
+        class's state is saved where the cell starts on a run in order, and
+        put back before a re-run. A first run in order starts where plain
+        Jupyter does; so does a cell checked after a cell above it changed
+        the class last. A cell defining the class rebuilds it anyway.
+        """
+        self._class_pending = {}
+        if not classes or current_cell_idx is None:
+            return
+        defined: set[str] = set()
+        if notebook_cells and 0 <= current_cell_idx < len(notebook_cells):
+            tree = parse_cached(notebook_cells[current_cell_idx].replace("\r\n", "\n"))
+            if tree is not None:
+                defined = {node.name for node in tree.body if isinstance(node, ast.ClassDef)}
+        for name in sorted(classes - defined):
+            if not isinstance(self.shell.user_ns.get(name), type):
+                continue
+            last = self._class_changed_in.get(name)
+            self._class_changed_in[name] = current_cell_idx
+            self._class_pending[name] = last is not None and last >= current_cell_idx
+
+    def _put_back_instead_of_rerun(
+        self, broken_vars: set[str], current_cell_idx: int | None, virtual_lineage: dict[str, str] | None
+    ) -> None:
+        """Take a class this re-run puts back off *broken_vars*.
+
+        The cell's own change to the class (any channel: a constructor, a
+        method, the class passed to a call) runs its lineage ahead of the
+        simulation's, which would re-run the def and drop the other cells'
+        changes. Only while the class is the one saved, at the lineage the
+        simulation gives it before the cell: an edit above rebuilds it."""
+        if virtual_lineage is None:
+            return
+        for name, rerun in self._class_pending.items():
+            saved = self._class_saved.get((current_cell_idx, name))
+            if (
+                rerun
+                and name in broken_vars
+                and saved is not None
+                and saved.is_for(self.shell.user_ns.get(name))
+                and saved.lineage is not None
+                and virtual_lineage.get(name) == saved.lineage
+            ):
+                broken_vars.discard(name)
+                trace_event("class_state_not_rerun", cls=name)
+
+    def _class_state_at_start(self, cell_idx: int) -> None:
+        """Save, or put back for a re-run, the state of the classes
+        :meth:`_keep_class_state` decided on, now that the upstream check
+        has restored and re-run what it found stale.
+
+        A class whose def ran again above is a new object, as the cells above
+        leave it: saved afresh, nothing put back. When the state could not
+        be saved (over `class_state.CLASS_STATE_BUDGET`, or not copyable) or
+        put back, the class is kept as it is and the re-run warns
+        (``NOTEBOOK-CLASS-KEPT``)."""
+        pending, self._class_pending = self._class_pending, {}
+        module = self.shell.user_ns.get("__name__", "__main__")
+        for name, rerun in pending.items():
+            cls = self.shell.user_ns.get(name)
+            if not isinstance(cls, type):
+                continue
+            key = (cell_idx, name)
+            saved = self._class_saved.get(key)
+            if rerun and saved is not None and saved.is_for(cls):
+                try:
+                    saved.put_back()
+                except Exception as e:  # noqa: BLE001 - a class refusing it keeps its state, with the warning
+                    self._warn_class_state_kept(cell_idx, name, f"putting it back failed ({type(e).__name__})")
+                else:
+                    trace_event("class_state_put_back", cls=name)
+                continue
+            try:
+                self._class_saved[key] = ClassState(cls, module, self.tracking_state.variable_lineage.get(name))
+            except Exception as e:  # noqa: BLE001 - too big, or not copyable: kept as it is
+                self._class_saved.pop(key, None)
+                if rerun:
+                    self._warn_class_state_kept(cell_idx, name, f"it could not be saved ({e})")
+
+    def _warn_class_state_kept(self, cell_idx: int, name: str, why: str) -> None:
+        """Warn (``NOTEBOOK-CLASS-KEPT``) that class *name* is kept as
+        it is for a re-run of cell *cell_idx*, its state not put back."""
+        key = (cell_idx, name)
+        if key in self._warned_class_kept:
+            return
+        self._warned_class_kept.add(key)
+        what = (
+            f"cell {cell_idx + 1} changes the state of class '{name}' (an attribute its constructor or "
+            f"methods set on the class), and another cell changes it too. Re-running the class definition "
+            f"would undo that cell's change, and the state the cell started from was not put back: {why}. "
+            "cash keeps the class as it is: the cell's change applies again on top of the one it made last time."
+        )
+        fix = f"run the notebook from the top (or from the cell that defines '{name}') for a first-run value."
+        log_diagnostic(logger, "NOTEBOOK-CLASS-KEPT", what, fix)
+        warn_diagnostic(CashWarning, "NOTEBOOK-CLASS-KEPT", what, fix, location=("<cash>", cell_idx + 1))
+        trace_event("class_state_kept", cls=name)
 
     @staticmethod
     def _lineage_invisible_writes(

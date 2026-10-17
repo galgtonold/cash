@@ -334,8 +334,8 @@ def scen_hidden_global_mutation(r):
 
 
 def scen_class_var_accumulator(r):
-    """DOCUMENTED limitation: a class variable incremented by two cells keeps
-    climbing on isolated re-run."""
+    """A class variable incremented by two cells: the class's state is put
+    back for an isolated re-run, which counts as a run from the top does."""
     _start(
         r,
         [
@@ -346,6 +346,25 @@ def scen_class_var_accumulator(r):
         ],
     )
     r.run_all()
+    r.run_cell(4)  # re-run alone
+    return {"rerun": r.get_output(4)}, {"rerun": 4}
+
+
+def scen_class_edited_above_a_constructing_cell(r):
+    """DOCUMENTED limitation: the class def edited above a cell that builds an
+    instance cell 4 does not read; the def re-runs, that cell does not, so its
+    change to the class is missing."""
+    _start(
+        r,
+        [
+            PRE,
+            "class W:\n    count = 0\n    def __init__(self):\n        W.count += 1",
+            "w0 = W()",
+            "w1 = W()\nprint('COUNT', W.count)",
+        ],
+    )
+    r.run_all()
+    r.set_cell_source(2, "class W:\n    count = 10\n    def __init__(self):\n        W.count += 1")
     r.run_cell(4)  # re-run alone
     return {"rerun": r.get_output(4)}, {"rerun": 4}
 
@@ -429,6 +448,7 @@ def scen_expensive_consumer_upstream_edit(r):
 
 
 SCENARIOS = [
+    scen_class_var_accumulator,
     scen_mutate_upstream_recompute,
     scen_alias_downstream_consumer,
     scen_helper_edit_invalidates,
@@ -466,7 +486,7 @@ SCENARIOS = [
 # non-vacuity proof: they demonstrate the oracle DOES catch a real divergence, so
 # the green passes above are meaningful rather than trivially matching.
 CANARY_SCENARIOS = [
-    scen_class_var_accumulator,  # docs: "Class variables shared across cells"
+    scen_class_edited_above_a_constructing_cell,  # docs: "A class edited above a cell that changes it"
 ]
 
 

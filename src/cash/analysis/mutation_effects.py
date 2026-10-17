@@ -76,7 +76,7 @@ from .namespace_effects import (
     notebook_global_rebinds,
     users_callee,
 )
-from .object_protocol import ObjectProtocolResets, object_protocol_mutations
+from .object_protocol import ObjectProtocolResets, changed_through_their_objects, object_protocol_mutations
 
 __all__ = [
     "CellEffects",
@@ -337,6 +337,11 @@ class CellEffects:
     #: a partial, a ``reduce`` callback or an object-protocol method): they join
     #: the cell's inputs so their producer's base is restored.
     hidden_inputs: frozenset[str] = frozenset()
+    #: Classes whose own state the cell changes (``Widget.count += 1`` in
+    #: ``__init__``) that another cell changes too: re-running the class def
+    #: would lose that cell's change, so it is not re-run, and an isolated
+    #: re-run of this cell starts from the state it left last time.
+    class_state_kept: frozenset[str] = frozenset()
 
 
 def nocache_written_vars(cell_code: str, tree: ast.Module | None = None) -> frozenset[str]:
@@ -1069,6 +1074,7 @@ class _CellWrites:
     callee_globals: frozenset[str]
     stateful: set[str] = field(default_factory=set)
     hidden: set[str] = field(default_factory=set)
+    class_state_kept: set[str] = field(default_factory=set)
 
     @classmethod
     def of(cls, facts: _CellFacts, sources: NotebookSources, namespace: Mapping[str, Any]) -> _CellWrites:
@@ -1159,11 +1165,12 @@ class _CellWrites:
         op = _object_protocol_effects(facts.code, facts.tree, sources, facts.nocache)
         if op is None:
             return
-        op_free, op_receivers, op_class_defs, op_init_free = op
+        op_free, op_receivers, op_class_defs, op_init_free, op_kept = op
         self.mutated |= op_free | op_receivers | op_init_free
         self.hidden |= op_free | op_init_free
         self.method_receivers |= op_receivers
         self.stateful |= op_class_defs
+        self.class_state_kept |= op_kept
 
     def add_aliases_and_views(self, facts: _CellFacts, namespace: Mapping[str, Any]) -> None:
         tree, nocache = facts.tree, facts.nocache
@@ -1188,7 +1195,12 @@ class _CellWrites:
         return CellEffects(
             outputs=frozenset(facts.outputs),
             reassigned=frozenset(facts.reassigned - nocache),
-            mutated=frozenset(self.mutated),
+            # A kept class's state is put back before a re-run of the cell
+            # (`class_state.ClassState`), whichever channel changes it: one
+            # passed to a call (``id(Widget)``, a handed callable that may
+            # construct it) re-running its def instead would drop what the
+            # other cells' instances did to it.
+            mutated=frozenset(self.mutated - self.class_state_kept),
             method_receivers=frozenset(self.method_receivers),
             selfref=frozenset(self.selfref),
             # ``a, b = b, a`` reads its own pre-cell value but, re-run alone,
@@ -1197,14 +1209,17 @@ class _CellWrites:
             stateful_funcs=frozenset(self.stateful),
             nocache=nocache,
             hidden_inputs=frozenset(self.hidden),
+            class_state_kept=frozenset(self.class_state_kept),
         )
 
 
 def _object_protocol_effects(
     cell_code: str, tree: ast.Module, sources: NotebookSources, nocache: frozenset[str]
-) -> tuple[frozenset[str], frozenset[str], frozenset[str], frozenset[str]] | None:
+) -> tuple[frozenset[str], frozenset[str], frozenset[str], frozenset[str], frozenset[str]] | None:
     """Hidden state reached through the object protocol, per reset channel:
-    ``(free_vars, receivers, class_defs, init_subclass_free_vars)``.
+    ``(free_vars, receivers, class_defs, init_subclass_free_vars, kept)``,
+    *kept* the classes whose def is not re-run because another cell changes
+    them too, or because their objects change them (`CellEffects.class_state_kept`).
 
     A ``with``, a custom-dunder operation, a constructor, a decorated call or a
     method whose body mutates hidden state. None when the cell has nothing
@@ -1242,6 +1257,7 @@ def _object_protocol_effects(
     # creation, so the simulator's content-base guard cannot see a sibling
     # subclass cell also appending to it; it gets the cross-cell check below.
     init_free = resets.init_subclass_free_vars - nocache
+    kept: frozenset[str] = frozenset()
     if receivers or class_defs or init_free:
         # Re-deriving a receiver or re-running a class def is safe only when
         # this cell is the SOLE in-place mutator: another cell's contribution
@@ -1263,9 +1279,13 @@ def _object_protocol_effects(
             other_class_defs |= other.class_defs
             other_init_free |= other.init_subclass_free_vars
         receivers -= other_receivers
-        class_defs -= other_class_defs
+        # A class changed through its objects (``type(self).count += 1``)
+        # is kept too: re-running its def would leave the instances made
+        # before on the old class, still changing that one.
+        kept = (class_defs & other_class_defs) | changed_through_their_objects(class_defs, sources.classes.get)
+        class_defs -= kept
         init_free -= other_init_free
-    return free, receivers, class_defs, init_free
+    return free, receivers, class_defs, init_free, kept
 
 
 # ---------------------------------------------------------------------------

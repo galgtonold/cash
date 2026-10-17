@@ -397,21 +397,34 @@ df = df.rename(columns={"a": "x"})
 An isolated re-run raises `KeyError`, because it reads the renamed frame.
 **Fix:** split the two statements into two cells.
 
-### Class variables changed from two cells
+### A class edited above a cell that changes it
 
-<!-- test:skip reason="illustrative: cross-cell class-variable accumulator" -->
+<!-- claim: cash/notebook/upstream/class_state.py:ClassState.put_back @b3b3a5bc -->
+A class whose constructor changes the class itself (`Widget.count += 1`) can
+be changed from several cells, and an isolated re-run of one of them counts as
+a run from the top does: cash puts the class's attributes back where the cell
+started. When they cannot be saved (a lock, over 64 MiB) the re-run keeps the
+class as it is and warns ([NOTEBOOK-CLASS-KEPT](warnings.md#notebook-class-kept)).
+
+What is not covered is an edit of the class itself:
+
+<!-- test:skip reason="illustrative: edited class def above a constructing cell" -->
 ```python { .nb-cell }
-class Widget:          # cell 1
+class Widget:          # cell 1, edited to count = 10
     count = 0
     def __init__(self):
         Widget.count += 1
-w0 = Widget()
 
-w = Widget()           # cell 2: each re-run pushes count higher
+w0 = Widget()          # cell 2
+
+w = Widget()           # cell 3, run alone: 11 (from the top: 12)
+print(Widget.count)
 ```
 
-This needs the counter to be changed from both cells; one cell is fine.
-**Fix:** keep the counter in a variable, not on the class.
+cash runs the edited class def again, but not cell 2, which cell 3 does not
+read, so cell 2's change to the class is missing.
+**Fix:** run the cells from the edited class down, or keep the counter in a
+variable, not on the class.
 
 ### Writing to a file opened in an earlier cell
 
