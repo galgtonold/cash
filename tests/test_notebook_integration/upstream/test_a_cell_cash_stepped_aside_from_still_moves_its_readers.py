@@ -66,9 +66,9 @@ def test_the_plain_cell_run_again_reaches_the_reader(nb_runner, tmp_path):
 def test_a_file_the_plain_cell_reads_reaches_the_reader(nb_runner, tmp_path, restart):
     """Same cell text, another value: nothing in the notebook says so."""
     src = tmp_path / "n.txt"
-    src.write_text("3")
+    src.write_text("3", encoding="utf-8")
     runs = _notebook(nb_runner, tmp_path, f"int(open(r'{src}').read())")
-    src.write_text("4")
+    src.write_text("4", encoding="utf-8")
     if restart:
         nb_runner.restart()
         nb_runner.peek(_FAIL_ON_APPEND)
