@@ -178,6 +178,9 @@ dev = [
     "setuptools",
     # Integration tests import it inside a real kernel, where no stub reaches.
     "scikit-learn",
+    # A figure's fig.show() sends a bundle with no text/plain; the display
+    # replay test shows it as plain shows it.
+    "plotly",
     # test_a_jit_compiled_helper_is_keyed_as_code.py runs real @njit functions.
     "numba",
     # The soundfile reader tests read real .wav files through libsndfile.

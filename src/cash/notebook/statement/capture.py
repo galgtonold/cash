@@ -303,8 +303,19 @@ def replay_outputs(stdout: str = "", stderr: str = "", rich: list | None = None)
     for output in rich:
         if isinstance(output, dict) and "data" in output:
             publish_display_data(data=output["data"], metadata=output.get("metadata", {}))
+        elif _is_captured_display(output):
+            # Sent again as it was sent. ``display(output)`` formats the capture
+            # as an object, and a bundle with no ``text/plain`` (a plotly
+            # figure's) gets the object's repr there: ``<RichOutput at 0x..>``.
+            output.display()
         else:
             display(output)
+
+
+def _is_captured_display(output: Any) -> bool:
+    """A display that ``capture_output`` recorded (IPython's ``RichOutput``):
+    the mime bundle it was sent with, and a ``display()`` that sends it again."""
+    return isinstance(getattr(output, "data", None), dict) and callable(getattr(output, "display", None))
 
 
 def display_execution_output(captured: Any, silent: bool, stream_output: bool, metrics: ProcessResult) -> None:
