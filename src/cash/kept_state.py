@@ -931,8 +931,15 @@ class _KeepDict(dict):
         #: Store bytes only (`dumps_also_keyed`): gets an item when an
         #: object is reduced otherwise than a key reduces it.
         self._watch = watch
+        #: This pickle's one object for each attribute name (`_names_apart`).
+        self._names: dict[str, str] = {}
 
     def __missing__(self, t: type) -> Any:
+        reducer = _names_apart(self._reducer(t), self._names)
+        self[t] = reducer
+        return reducer
+
+    def _reducer(self, t: type) -> Any:
         if issubclass(t, type):
             raise KeyError(t)  # a class: pickled by name, as pickle does
         registered = copyreg.dispatch_table.get(t)
@@ -940,14 +947,11 @@ class _KeepDict(dict):
             reducer = _watched(self._store_reducer(t, registered), t, registered, self._watch)
             if t.__name__ in _GLOBAL_RNG_TYPE_NAMES:
                 reducer = functools.partial(_watched_rng, reducer=reducer, watch=self._watch)
-            self[t] = reducer
             return reducer
         if self._keyed and t.__name__ == "ndarray" and t is getattr(sys.modules.get("numpy"), "ndarray", None):
             # A record array's padding bytes are whatever memory held:
             # keyed without them (`packed_records`).
-            reducer = functools.partial(_reduce_array_for_key, protocol=self._protocol)
-            self[t] = reducer
-            return reducer
+            return functools.partial(_reduce_array_for_key, protocol=self._protocol)
         if self._keyed and (chooses_its_state(t) or (registered is not None and _is_users_class(t))):
             # A user's class whose state its own reduce -- or one registered
             # with ``copyreg.pickle`` -- decides: key it with what it leaves out.
@@ -965,7 +969,6 @@ class _KeepDict(dict):
         if self._keyed and t.__name__ in _GLOBAL_RNG_TYPE_NAMES:
             # One instance of the class may be a module's global RNG.
             reducer = functools.partial(_reduce_rng_for_key, reducer=reducer)
-        self[t] = reducer
         return reducer
 
     def _store_reducer(self, t: type, registered: Any) -> Any:
@@ -979,6 +982,57 @@ class _KeepDict(dict):
         if cached_properties(t) and _leaves_views_out(t):
             reducer = functools.partial(_reduce_without_views, reducer=reducer, which=stored_views)
         return reducer
+
+
+def _names_apart(reducer: Any, names: dict[str, str]) -> Callable[[Any], Any]:
+    """*reducer*, giving each attribute name of an object's state (a dict,
+    or ``__slots__``' ``(dict, slots)``) this pickle's own object for it,
+    never one the value also holds elsewhere.
+
+    The pickle's memo writes an object met twice as a back-reference, by
+    identity. A fitted ``ColumnTransformer``'s ``remainder='drop'`` is the
+    very string object of its ``OneHotEncoder``'s attribute name ``drop``
+    (both interned): the second came out as a back-reference to the first.
+    Loading interns the attribute names again (to Python's own ``'drop'``),
+    so the restored ``remainder`` is the pickle's object and no name: its
+    pickle wrote the string twice, and the restored pipeline digested apart
+    from the one it was stored from (every fit reading it missed after a
+    restart). The names are written as objects of their own, the same
+    whichever objects the value held, as loading leaves them."""
+
+    def reduce(obj: Any) -> Any:
+        reduced = reducer(obj)
+        if type(reduced) is not tuple or len(reduced) < 3:
+            return reduced
+        state = reduced[2]
+        if type(state) is dict:
+            try:
+                apart = {names[key]: value for key, value in state.items()}
+            except (KeyError, TypeError):
+                apart = _state_apart(state, names)
+        elif type(state) is tuple and len(state) == 2 and all(part is None or type(part) is dict for part in state):
+            apart = tuple(None if part is None else _state_apart(part, names) for part in state)
+        else:
+            return reduced
+        return (reduced[0], reduced[1], apart, *reduced[3:])
+
+    return reduce
+
+
+def _state_apart(state: dict, names: dict[str, str]) -> dict:
+    """*state* with each string key the pickle's own object for it; as it
+    is when a key is not a string."""
+    try:
+        return {names[key]: value for key, value in state.items()}
+    except (KeyError, TypeError):
+        pass
+    for key in state:
+        if type(key) is not str:
+            return state
+        if key not in names:
+            # A new object, equal (one character is Python's one object).
+            names[key] = key[:1] + key[1:] if len(key) > 1 else key
+    return {names[key]: value for key, value in state.items()}
 
 
 #: The class names of the module-global RNGs (`global_rng_module`): the
