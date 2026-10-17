@@ -224,6 +224,12 @@ logger = logging.getLogger(__name__)
 #: gives them up having spent at most that.
 PAST_BUDGET_SHARE = 0.5
 
+#: The level a hint's own error is logged at (`_note_per_item_rerun`,
+#: `_note_round_trips`): debug, as a hint never breaks a statement. The test
+#: suite raises it to warning, so an error there shows with a failing test
+#: instead of passing for a hint that had nothing to say.
+HINT_ERROR_LEVEL = logging.DEBUG
+
 #: What `_keeping_outputs` reads an unbound name as.
 _ABSENT = object()
 
@@ -2448,7 +2454,13 @@ class StatementProcessor:
                 cost=execution.cost,
             )
         except Exception:  # a hint never breaks a statement
-            logger.debug("%s could not check %r for a file round trip", _LOG_PROCESSOR, code[:80], exc_info=True)
+            logger.log(
+                HINT_ERROR_LEVEL,
+                "%s could not check %r for a file round trip",
+                _LOG_PROCESSOR,
+                code[:80],
+                exc_info=True,
+            )
 
     def _note_per_item_rerun(self, run: StatementRun, execution: StatementExecution) -> None:
         """Fingerprint the inputs made of rows of a costly statement that was
@@ -2477,7 +2489,13 @@ class StatementProcessor:
                 save=records.persist_row_blocks,
             )
         except Exception:  # a hint never breaks a statement
-            logger.debug("%s could not check %r for a per-item rerun", _LOG_PROCESSOR, run.code[:80], exc_info=True)
+            logger.log(
+                HINT_ERROR_LEVEL,
+                "%s could not check %r for a per-item rerun",
+                _LOG_PROCESSOR,
+                run.code[:80],
+                exc_info=True,
+            )
 
     def _miss_guarded(self, run: StatementRun, execution: StatementExecution, captured_vars: dict[str, Any]) -> bool:
         """Whether the perpetual-miss guard keeps *run*'s value from being written.
