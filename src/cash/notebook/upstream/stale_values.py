@@ -725,7 +725,7 @@ class StaleValueGuard:
     def _warn_class_state_kept(
         self, classes: frozenset[str], notebook_cells: list[str] | None, current_cell_idx: int | None
     ) -> None:
-        """Warn (``NOTEBOOK-CLASS-STATE-KEPT``) for each class whose state the
+        """Warn (``NOTEBOOK-CLASS-KEPT``) for each class whose state the
         current cell changes, kept as it is for a re-run of the cell.
 
         A class whose constructor or methods change its own attributes
@@ -762,10 +762,8 @@ class StaleValueGuard:
                 "the cell's change applies again on top of the one it made last time."
             )
             fix = f"run the notebook from the top (or from the cell that defines '{name}') for a first-run value."
-            log_diagnostic(logger, "NOTEBOOK-CLASS-STATE-KEPT", what, fix)
-            warn_diagnostic(
-                CashWarning, "NOTEBOOK-CLASS-STATE-KEPT", what, fix, location=("<cash>", current_cell_idx + 1)
-            )
+            log_diagnostic(logger, "NOTEBOOK-CLASS-KEPT", what, fix)
+            warn_diagnostic(CashWarning, "NOTEBOOK-CLASS-KEPT", what, fix, location=("<cash>", current_cell_idx + 1))
             trace_event("class_state_kept", cls=name)
 
     @staticmethod

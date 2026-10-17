@@ -1685,7 +1685,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
 | [NOTEBOOK-CHANGED-BELOW](#notebook-changed-below) | notebook | a cell re-run on its own reads a value rebuilt without the in-place change a cell below made |
-| [NOTEBOOK-CLASS-STATE-KEPT](#notebook-class-state-kept) | notebook | a class's own state a cell changes is kept as it is for a re-run, as another cell changes it too |
+| [NOTEBOOK-CLASS-KEPT](#notebook-class-kept) | notebook | a class's own state a cell changes is kept as it is for a re-run, as another cell changes it too |
 | [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
 | [NOTEBOOK-FILE-ROUNDTRIP](#notebook-file-roundtrip) | notebook | a file written in this session is read back, so the read reruns after every write |
 | [NOTEBOOK-FORWARD-READ](#notebook-forward-read) | notebook | the cell reads a name only a cell below binds, so it runs uncached |
@@ -1804,7 +1804,7 @@ you re-ran to see the change, move the change into a cell above it.
 **When it is safe to ignore.** When you want the value as a run from the top
 leaves it, and will run the cells below again.
 
-### NOTEBOOK-CLASS-STATE-KEPT {#notebook-class-state-kept}
+### NOTEBOOK-CLASS-KEPT {#notebook-class-kept}
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
