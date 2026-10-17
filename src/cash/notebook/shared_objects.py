@@ -1286,7 +1286,22 @@ def _read_down(obj: Any, value_types: tuple[type, ...]) -> bool | None:
     what it holds in turn (a library's own object, not pandas or numpy data)."""
     if _is_cash_own(obj) or is_value(obj, value_types) or issubclass(type(obj), _NOT_WITHIN):
         return None
+    if _holds_only_values(obj, value_types):
+        return None
     return (_LIBRARY_KINDS.get(type(obj)) or _library_kind(type(obj))) is _LEAF
+
+
+def _holds_only_values(obj: Any, value_types: tuple[type, ...], depth: int = 3) -> bool:
+    """Whether *obj* is a tuple or frozenset of values (or of such tuples):
+    nothing in it can change, so no identity of it a restore must keep.
+
+    The empty tuple a fitted ``HistGradientBoostingRegressor`` holds is the
+    interpreter's one ``()``, held by thousands of objects: looked for up its
+    referrers, the climb read the heap seven times over (3 s), never ended,
+    and the fit was refused as shared, every run."""
+    if type(obj) not in (tuple, frozenset) or depth <= 0:
+        return False
+    return all(is_value(item, value_types) or _holds_only_values(item, value_types, depth - 1) for item in obj)
 
 
 def _is_cash_own(obj: Any) -> bool:
@@ -1396,11 +1411,27 @@ def _variables_holding(
             if key in by_id:
                 names.update(by_id[key])
                 continue
+            if isinstance(obj, type) and _is_library_class(obj):
+                # A library's class, found again by its name as its module
+                # is: what it holds is the library's own, as its globals are.
+                continue
             if not _is_cash_own(obj):
                 following.append(obj)
         del referrers, args
         frontier[:] = following
     return names if not frontier else None
+
+
+def _is_library_class(cls: type) -> bool:
+    """Whether *cls* is a class of a library: not the notebook's (``__main__``)
+    nor one of the user's own modules (`_is_local_module_class`).
+
+    sklearn's link classes hold the ``Interval`` a fitted boosting model's
+    loss holds too (``interval_y_pred``): climbing past the class, through
+    its subclasses, methods and module, read the heap seven times and never
+    ended, so the fit was refused as shared."""
+    module = getattr(cls, "__module__", None)
+    return isinstance(module, str) and module != "__main__" and not _is_local_module_class(cls)
 
 
 def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
