@@ -1375,8 +1375,9 @@ def _variables_holding(
     """The variables of *user_ns* not in *skip* that hold an object of
     *inside*, found up `gc.get_referrers`; None when the climb did not end
     within `_REFERRER_DEPTH` levels, or a level reached more than
-    `_INSIDE_MAX_OBJECTS` objects. It stops at a variable, a module, a
-    frame, cash's own records (`_is_cash_own`: what they hold is the
+    `_INSIDE_MAX_OBJECTS` objects, or when an object is held in a container a
+    module or a library's class keeps. It stops at a variable, a module, a
+    library's class, a frame, cash's own records (`_is_cash_own`: what they hold is the
     statement's bookkeeping) and the objects of *ignore* (cash's own
     references)."""
     by_id: dict[int, list[str]] = {}
@@ -1384,7 +1385,13 @@ def _variables_holding(
         if name not in skip and not _SHELL_NAME.fullmatch(name) and not is_value(value, value_types):
             by_id.setdefault(id(value), []).append(name)
     stop = {id(user_ns), id(inside), id(by_id), *ignore}
-    stop.update(id(vars(module)) for module in list(sys.modules.values()) if module is not None)
+    module_dicts = {id(vars(module)) for module in list(sys.modules.values()) if module is not None}
+    module_dicts.discard(id(user_ns))
+    stop.update(module_dicts)
+    # Held in a container a library keeps, a library's own object is still
+    # the library's (a module-level loss holding sklearn's ``Interval``); the
+    # notebook's data or its own object is not, and no copy of it is that one.
+    notebook_own = not all(_is_library_own(obj) for obj in inside.values())
     names: set[str] = set()
     for key in inside:
         names.update(by_id.get(key, ()))
@@ -1405,6 +1412,10 @@ def _variables_holding(
         stop.add(id(following))
         for obj in referrers:
             key = id(obj)
+            if key in module_dicts and _level and notebook_own:
+                # Held in a container a module keeps (``lib.registry.append(df)``):
+                # not the module's own global, and no copy is that object.
+                return None
             if key in seen or key in stop or issubclass(type(obj), (types.FrameType, types.ModuleType)):
                 continue
             seen.add(key)
@@ -1413,13 +1424,28 @@ def _variables_holding(
                 continue
             if isinstance(obj, type) and _is_library_class(obj):
                 # A library's class, found again by its name as its module
-                # is: what it holds is the library's own, as its globals are.
+                # is: what it holds itself (sklearn's ``interval_y_pred``) is
+                # the library's own, as its globals are. Reached through a
+                # container it holds (``SomeLibClass.registry.append(df)``),
+                # the object is the notebook's, held where no copy reaches.
+                if _level > 1 and notebook_own:
+                    return None
                 continue
             if not _is_cash_own(obj):
                 following.append(obj)
         del referrers, args
         frontier[:] = following
     return names if not frontier else None
+
+
+def _is_library_own(obj: Any) -> bool:
+    """Whether *obj* is a library's own object: of a library's class
+    (`_is_library_class`), read as one (not pandas or numpy data). A list,
+    a dict or the notebook's own object is not."""
+    cls = type(obj)
+    if cls.__module__ == "builtins" or not _is_library_class(cls):
+        return False
+    return (_LIBRARY_KINDS.get(cls) or _library_kind(cls)) is _LEAF
 
 
 def _is_library_class(cls: type) -> bool:

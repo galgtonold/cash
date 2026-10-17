@@ -36,3 +36,39 @@ def test_a_boosting_fit_is_stored_without_reading_the_heap(cash_magics, monkeypa
     row = cash_magics._last_cell_metrics["statements"][-1]
     assert str(row["status"]) == "COMPUTED"
     assert not row.get("uncacheable_reasons"), row.get("uncacheable_reasons")
+
+
+LIBRARY = (
+    "import sys, types\n"
+    "lib = types.ModuleType('fakelib')\n"
+    "exec('''\n"
+    "import time\n"
+    "kept = []\n"
+    "class Registry:\n"
+    "    items = []\n"
+    "class Model:\n"
+    "    def fit(self, data):\n"
+    "        time.sleep(0.3)\n"
+    "        self.data = data\n"
+    "        KEEP.append(data)\n"
+    "        return self\n"
+    "''', lib.__dict__)\n"
+    "sys.modules['fakelib'] = lib\n"
+    "from fakelib import Model, Registry"
+)
+
+
+@pytest.mark.parametrize("keep", ["Registry.items", "kept"], ids=["in_a_library_class_attribute", "in_a_module_global"])
+def test_the_notebooks_object_kept_by_a_library_is_never_copied(cash_magics, keep):
+    """A library that keeps the notebook's own object in a container of its
+    class or its module (``SomeLibClass.registry.append(df)``) shares it with
+    the model holding it too. The climb stops at a library's class and
+    module, but not then: a stored copy would not be the list the library
+    keeps. Both were served as a copy before."""
+    ns = cash_magics.shell.user_ns
+    run_cash_cell(cash_magics, LIBRARY.replace("KEEP", keep))
+    for _ in range(2):  # computed, then run again
+        run_cash_cell(cash_magics, "m = Model().fit([1, 2, 3])")
+        fakelib = ns["sys"].modules["fakelib"]
+        kept = fakelib.Registry.items if keep == "Registry.items" else fakelib.kept
+        assert ns["m"].data is kept[-1], "m.data is a copy of the list the library keeps"
