@@ -202,6 +202,9 @@ class StatementRun:
     #: the variables in ``holders`` hold a changed object and their lineages
     #: move on (``StatementCacheMetadata.holders_moved``).
     moves_holders: bool = False
+    #: The ``holders`` the run left as they were, by their content digest:
+    #: they keep their lineage (``lineage_formula.keep_held_lineage``).
+    holders_unchanged: set[str] = field(default_factory=set)
     #: ``id()`` of the object each output and observed receiver was bound to
     #: before the run: an id, not the object, so it adds no reference the
     #: shared-object check would count.
