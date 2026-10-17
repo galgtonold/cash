@@ -62,13 +62,14 @@ def test_an_instance_of_a_c_type_is_not_walked_for_methods(monkeypatch):
     np = pytest.importorskip("numpy")
     callee_reach.names_read.cache_clear()
     walked: list[object] = []
-    real = callee_reach._class_member_functions
+    real = callee_reach._Found._decide_users_class
 
-    def counting(member):
-        walked.append(member)
-        return real(member)
+    def counting(self, cls):
+        if not callee_reach._is_c_type(cls):  # told by its type alone
+            walked.extend(vars(cls).values())
+        return real(self, cls)
 
-    monkeypatch.setattr(callee_reach, "_class_member_functions", counting)
+    monkeypatch.setattr(callee_reach._Found, "_decide_users_class", counting)
     ns: dict = {"__name__": "__main__", "x": 3, "a": np.arange(3), "d": {"k": 1}}
     for _ in range(3):
         assert callee_reach.reached_user_code("y = x + a[1] + d['k']", ns).functions == ()
