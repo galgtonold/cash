@@ -88,7 +88,11 @@ def test_a_comprehension_keys_a_bounded_number_of_calls(cash_magics, cash_instan
     assert hashed[8_000] <= 96 * KB and hashed[8_000] <= hashed[2_000] + 8 * KB, hashed
 
 
-def test_a_rerun_restores_built_records_without_a_step_per_item(cash_magics):
+def test_a_rerun_restores_built_records_without_a_step_per_item(cash_magics, cash_instance):
+    # Stored however fast the machine: each cell takes ~0.05 s here, and an
+    # M1 runner built the index in under the 0.01 s store floor, so its
+    # re-run computed instead of restoring (macOS CI, Python 3.10).
+    cash_instance.config.min_execution_time_to_cache_seconds = 0.0
     cells = [
         "N = 100_000",
         "recs = [{'id': i, 'user': 'u', 'amount': i * 0.5} for i in range(N)]",
