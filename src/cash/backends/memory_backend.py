@@ -671,6 +671,35 @@ class InMemoryBackend(CacheBackend):
     #: entries it had at the first check.
     _PRESSURE_KEEPS_BYTES = 16 * 1024**2
 
+    #: A value at least this big is checked against the machine's memory
+    #: before the tier copies it, and before a copy is made for a background
+    #: write (`_no_room_for`). Smaller ones wait for the check every
+    #: ``check_interval`` writes: a reading costs about what copying a few
+    #: megabytes does.
+    _ROOM_CHECK_MIN_BYTES = 64 * 1024**2
+
+    def _no_room_for(self, nbytes: int) -> bool:
+        """Whether another copy of *nbytes* would take the machine's memory in
+        use past the level the tier sheds down to (90% of
+        ``max_memory_percent``).
+
+        The check every ``check_interval`` writes sheds entries after they
+        were copied: with six notebooks at once on one Windows machine, a
+        frame of 460 MB was copied, pickled and written in 27-134 s for a
+        cell of 0.6 s. Such a value is refused here instead, and
+        goes to the disk tier alone (the store still happens; only this
+        tier's copy is skipped). A reading that fails skips the check."""
+        if nbytes < self._ROOM_CHECK_MIN_BYTES:
+            return False
+        mem = _memory_reading()
+        if mem is None:
+            return False
+        in_use = mem.total * mem.percent / 100.0
+        tight = in_use + nbytes > mem.total * self.max_memory_percent * 0.9
+        if tight:
+            logger.debug("[RAM] no room for %d bytes: %.0f%% of memory in use", nbytes, mem.percent)
+        return tight
+
     @staticmethod
     def _time_copy(
         value: Any, key: str, *, required: bool, walk: list | None, premade: dict[int, Any] | None
@@ -1307,6 +1336,8 @@ class InMemoryBackend(CacheBackend):
         try:
             if not _write_copyable(value):
                 return default
+            if self._no_room_for(pickled_size_estimate(value)):
+                return default  # serialized from the value itself: no second copy
             return _write_copy(value, {})
         except Exception:  # serialized by the caller instead, as before
             logger.debug("no copy of %r to write", key, exc_info=True)
@@ -1635,7 +1666,7 @@ class InMemoryBackend(CacheBackend):
             # compute (both checked again below, on the bytes).
             estimate = pickled_size_estimate(value)
             over = self._max_size_bytes is not None and estimate > self._max_size_bytes * 0.9
-            if over or _slower_than_its_compute(value, estimate, metadata):
+            if over or self._no_room_for(estimate) or _slower_than_its_compute(value, estimate, metadata):
                 with self._lock:
                     self._drop(key)
                 return False
@@ -1677,6 +1708,11 @@ class InMemoryBackend(CacheBackend):
         # gigabytes only to throw it away is its own cost. The previous value
         # for the key goes too, or a later read would serve it as current.
         if self._max_size_bytes is not None and size > self._max_size_bytes * 0.9:
+            with self._lock:
+                self._drop(key)
+            return False
+
+        if self._no_room_for(size):
             with self._lock:
                 self._drop(key)
             return False
