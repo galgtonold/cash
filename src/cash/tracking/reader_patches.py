@@ -37,7 +37,7 @@ import sys
 import threading
 import types
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from cash import _native
@@ -315,6 +315,25 @@ def _patch_aliases_in(module: types.ModuleType) -> None:
             _patches.replace(module, name, hit[1])
 
 
+def _modules_now(modules: Mapping[str, Any] | None = None) -> list[tuple[str, Any]]:
+    """The items of *modules* (``sys.modules``), listed again when an import
+    changed it while they were listed.
+
+    Listing allocates a tuple per module, and an allocation can run the
+    collector, whose finalizers run Python code and let another thread in:
+    its import changed ``sys.modules`` mid-list, the tracker's install
+    raised "dictionary changed size during iteration", and every read the
+    worker tracked after that went unrecorded (macOS 3.10 CI)."""
+    if modules is None:
+        modules = sys.modules
+    for _attempt in range(16):
+        try:
+            return list(modules.items())
+        except RuntimeError:
+            continue
+    return list(dict(modules).items())
+
+
 #: (number of modules when listed, the user's modules then); `_patch_user_module_aliases`.
 _user_modules: list[Any] = [-1, ()]
 
@@ -324,7 +343,7 @@ def _patch_user_module_aliases() -> None:
     if not _wrapped_originals():
         return
     if _user_modules[0] != len(sys.modules):
-        _user_modules[:] = [len(sys.modules), tuple(m for m in list(sys.modules.values()) if _is_user_module(m))]
+        _user_modules[:] = [len(sys.modules), tuple(m for _name, m in _modules_now() if _is_user_module(m))]
     for module in _user_modules[1]:
         _patch_aliases_in(module)
 
@@ -359,7 +378,7 @@ def _patch_library_reexports() -> None:
     if _library_modules[0] != len(sys.modules):
         tops = _library_tops()
         found = []
-        for name, module in list(sys.modules.items()):
+        for name, module in _modules_now():
             top, dot, _ = name.partition(".")
             if dot and top in tops and isinstance(module, types.ModuleType):
                 found.append((name, module))

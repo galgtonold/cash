@@ -574,10 +574,15 @@ class ForLoopHandler:
         body_files: set[str] = set(header_files)
 
         rest_after = None
-        if (
-            single_unit_policy.header_names_the_iterator(node.iter, iterable, user_ns)
-            and single_unit_policy.estimated_iterations(node.iter, iterable, user_ns) is None
-        ):
+        # The rest of any other iterator goes to the unit as the value it
+        # draws from (``header_value``): ``re.finditer(...)``, a generator,
+        # ``itertools.product(...)``. Only a bare name was continued, so a
+        # loop of 10,000 matches ran each pass through the machinery, 18 s
+        # against 2 ms plain.
+        named = single_unit_policy.header_names_the_iterator(node.iter, iterable, user_ns)
+        if (named or single_unit_policy.is_own_iterator(iterable)) and single_unit_policy.estimated_iterations(
+            node.iter, iterable, user_ns
+        ) is None:
             rest_after = single_unit_policy.iterations_for_one_unit(node)
         run_rest = False
 
@@ -623,8 +628,8 @@ class ForLoopHandler:
                     body_files.update(file_deps.get(name, ()))
                 if rest_after is not None and total_iterations >= rest_after:
                     # Still the very iterator this loop draws from: the unit
-                    # evaluates the header again.
-                    run_rest = user_ns.get(node.iter.id) is iterable
+                    # evaluates the header again, or is handed it.
+                    run_rest = not named or user_ns.get(node.iter.id) is iterable
                     if run_rest:
                         break
         finally:
@@ -637,8 +642,9 @@ class ForLoopHandler:
 
         if run_rest:
             logger.debug("[CONTROL] %d passes over an iterator: the rest runs as one unit", total_iterations)
+            handed = {} if named else {"header_value": iterable, "header_files": frozenset(header_files)}
             rest = self.dispatcher.execute_as_single_unit(
-                node, ttl, silent, raw_cell, inherited_annotation, update_lineage=False
+                node, ttl, silent, raw_cell, inherited_annotation, update_lineage=False, **handed
             )
             if rest_metrics is not None:
                 rest_metrics.extend(rest.metrics)

@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from cash.notebook.cache_status import ExecutionResult
-from cash.notebook.compiled_source import is_cash_filename, register_cell_source
+from cash.notebook.compiled_source import is_cash_filename, line_offset, register_cell_source, shifted
 from cash.notebook.statement.capture import NoCapture
 
 if TYPE_CHECKING:
@@ -377,8 +377,10 @@ class CodeRunner:
         # One linecache-registered filename per statement, so a traceback
         # inside a function defined here shows its source.
         filename = register_cell_source(self.source)
+        # At its line in the cell, as IPython compiles the whole cell.
+        lines = line_offset()
         if not (tree and tree.body and isinstance(tree.body[-1], ast.Expr)):
-            return [compile(self.source, filename, "exec", flags=flags, dont_inherit=True)]
+            return [shifted(compile(self.source, filename, "exec", flags=flags, dont_inherit=True), lines)]
         units = []
         if tree.body[:-1]:
             units.append(
@@ -389,6 +391,7 @@ class CodeRunner:
         expression = ast.Expression(body=tree.body[-1].value)
         ast.fix_missing_locations(expression)
         units.append(compile(expression, filename, "eval", flags=flags, dont_inherit=True))
+        units = [shifted(unit, lines) for unit in units]
         self._echo = echoes(self.code, tree, self.is_last)
         return units
 

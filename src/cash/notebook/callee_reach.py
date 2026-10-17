@@ -1189,12 +1189,21 @@ class _Found:
             # above, grew a cell at the end of a 400-cell notebook by 60 ms.
             _FOREIGN_C_TYPES.add(cls)
             return False
-        return any(
-            fn.__globals__ is self.namespace
-            for member in list(vars(cls).values())
-            for fn in _class_member_functions(member)
-            if isinstance(fn, types.FunctionType)
-        )
+        # A plain function first, by its type: asked of every library class
+        # an instance of which a statement reads, each with hundreds of
+        # members (``pd.DataFrame``), for every statement -- the generator
+        # per member was a fifth of a short cell's analysis.
+        namespace = self.namespace
+        function = types.FunctionType
+        for member in list(vars(cls).values()):
+            if type(member) is function:
+                if member.__globals__ is namespace:
+                    return True
+            elif isinstance(member, (staticmethod, classmethod, property)) and any(
+                isinstance(fn, function) and fn.__globals__ is namespace for fn in _class_member_functions(member)
+            ):
+                return True
+        return False
 
     def chain(self, root: str, attrs: tuple[str, ...]) -> None:
         """``mod.sub.attr`` (*root* ``mod``, *attrs* innermost first): each
