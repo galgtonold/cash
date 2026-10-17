@@ -43,15 +43,29 @@ def _install() -> bool:
     prototype = ctypes.PYFUNCTYPE(ctypes.c_int, ctypes.py_object)
     enter = prototype(("PyContext_Enter", ctypes.pythonapi))
     leave = prototype(("PyContext_Exit", ctypes.pythonapi))
-    entered: list[contextvars.Context] = []
+    entered: list[contextvars.Context | None] = []
 
     def own_context(phase: str, info: dict[str, Any]) -> None:
         if phase == "start":
+            # A collection can start a few frames short of the recursion
+            # limit (deep in a pickle or a deepcopy), where ctypes cannot
+            # take the call: that collection runs in the interrupted
+            # context, as it does without this module, and its stop leaves
+            # nothing. Raising here made every such collection an
+            # unraisable error, and pytest failed the test it fell in.
             context = contextvars.Context()
-            enter(context)
+            try:
+                enter(context)
+            except (RecursionError, ctypes.ArgumentError):
+                # ctypes reports the RecursionError of converting the
+                # argument as an ArgumentError; the argument itself is
+                # always a context, so nothing else raises it.
+                context = None
             entered.append(context)
         elif entered:
-            leave(entered.pop())
+            context = entered.pop()
+            if context is not None:
+                leave(context)
 
     own_context._cash_own_context = True  # type: ignore[attr-defined]
     gc.callbacks.append(own_context)
