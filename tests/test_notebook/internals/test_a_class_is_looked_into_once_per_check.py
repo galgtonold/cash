@@ -23,14 +23,17 @@ pd = pytest.importorskip("pandas")
 
 
 def _member_reads(monkeypatch) -> list:
+    """The members read to tell whether a cell gave a class a method: all of
+    the class's members each time it is told (`_Found._decide_users_class`)."""
     reads: list = []
-    real = callee_reach._class_member_functions
+    real = callee_reach._Found._decide_users_class
 
-    def counting(member):
-        reads.append(member)
-        return real(member)
+    def counting(self, cls):
+        if not callee_reach._is_c_type(cls):  # told by its type alone
+            reads.extend(vars(cls).values())
+        return real(self, cls)
 
-    monkeypatch.setattr(callee_reach, "_class_member_functions", counting)
+    monkeypatch.setattr(callee_reach._Found, "_decide_users_class", counting)
     return reads
 
 

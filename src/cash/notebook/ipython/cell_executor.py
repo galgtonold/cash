@@ -75,6 +75,7 @@ from ...tracking.randomness import get_drawing_rng_modules, rng_lineage_fingerpr
 from .._protocols import ShellProtocol
 from ..background_threads import BackgroundThreads
 from ..cache_status import CacheStatus
+from ..compiled_source import statement_place
 from ..control_structures import contains_top_level_await, is_control_structure
 from ..statement import ProcessResult
 from ..statement.capture import replay_outputs
@@ -1154,6 +1155,7 @@ class CellExecutor:
                     is_last=is_last,
                     written_later=written_later[i],
                     buffered=buffered_result_outputs,
+                    first_line=node.lineno,
                 )
             try:
                 buffered_result_outputs, render_time = yield from self._badged_steps(
@@ -1193,6 +1195,7 @@ class CellExecutor:
                         is_last=False,
                         written_later=frozenset(),
                         buffered=[],
+                        first_line=tree.body[k].lineno,
                     )
                 raise
             badge_render_time += render_time
@@ -1284,6 +1287,7 @@ class CellExecutor:
         is_last: bool,
         written_later: frozenset[str],
         buffered: list,
+        first_line: int = 0,
     ) -> Generator[_Step, Any, list]:
         """Run one regular top-level statement; returns the buffered result
         outputs with its own added.
@@ -1294,21 +1298,26 @@ class CellExecutor:
         (``exec_source_for_node``).
         """
         _set_written_later(self, written_later)
+        shell = getattr(self, "shell", None)
+        place = statement_place(
+            getattr(shell, "compile", None), getattr(shell, "execution_count", 0), first_line, cell.raw_cell
+        )
         try:
-            metrics = yield _Step(
-                {
-                    "code": stmt_code,
-                    "ttl": cell.ttl,
-                    "silent": True,
-                    "annotation": annotation,
-                    "display_code": display_code,
-                    "exec_source": exec_source,
-                    "occurrence_index": occurrence_index,
-                    # IPython echoes only the CELL's last expression;
-                    # cash executes each statement as its own unit.
-                    "is_last": is_last,
-                }
-            )
+            with place:
+                metrics = yield _Step(
+                    {
+                        "code": stmt_code,
+                        "ttl": cell.ttl,
+                        "silent": True,
+                        "annotation": annotation,
+                        "display_code": display_code,
+                        "exec_source": exec_source,
+                        "occurrence_index": occurrence_index,
+                        # IPython echoes only the CELL's last expression;
+                        # cash executes each statement as its own unit.
+                        "is_last": is_last,
+                    }
+                )
             return self._handle_regular_stmt_metrics(metrics, is_last, cell.all_metrics, buffered)
         finally:
             _set_written_later(self, frozenset())

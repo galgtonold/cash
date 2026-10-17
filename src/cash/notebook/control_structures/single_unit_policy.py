@@ -108,6 +108,10 @@ FRESH_ITERATOR_METHODS = frozenset(
     }
 )
 
+#: Of those, the ones that iterate a frame's columns rather than its rows:
+#: what their object's length counts is not the number of passes.
+_COLUMN_ITERATORS = frozenset({"items", "iteritems"})
+
 # Call names that read or write a file. A loop calling one is never split
 # (see :mod:`.split_policy`).
 _FILE_IO_CALLS = frozenset(
@@ -361,6 +365,15 @@ def _numpy_array_of_a_sequence(call: ast.Call, user_ns: dict[str, Any]) -> bool:
     )
 
 
+def is_own_iterator(value: Any) -> bool:
+    """`_is_own_iterator`, False when asking raises (a user ``__iter__``)."""
+    try:
+        return _is_own_iterator(value)
+    except Exception:  # user code: not an iterator to continue
+        logger.debug("[FAST_LOOP] iter() on the loop's iterable raised", exc_info=True)
+        return False
+
+
 def _is_own_iterator(value: Any) -> bool:
     """``iter(value) is value``, asked without running a user ``__iter__``
     when it cannot be so: ``iter`` refuses a result with no ``__next__``,
@@ -543,7 +556,12 @@ def _wrap_sized(node: ast.expr, wrap) -> ast.expr:
         return node
     func = node.func
     if isinstance(func, ast.Attribute) and func.attr in FRESH_ITERATOR_METHODS:
-        func.value = _wrap_sized(func.value, wrap)
+        if isinstance(func.value, ast.Call) and func.attr not in _COLUMN_ITERATORS:
+            # ``df.head(500).iterrows()``: the frame the call made, sized as
+            # the header's own evaluation makes it, never by calling again.
+            func.value = wrap(func.value)
+        else:
+            func.value = _wrap_sized(func.value, wrap)
     elif isinstance(func, ast.Name) and node.args:
         if func.id == "zip":
             node.args = [_wrap_sized(a, wrap) for a in node.args]
@@ -636,6 +654,12 @@ def estimated_iterations(
         return _lines_in_file(wrapped)
 
     def length_of(node: ast.AST) -> int | None:
+        if isinstance(node, ast.Call) and sizes is not None:
+            # A call the evaluation of the header recorded the length of
+            # (`_wrap_sized`); any other call is not sized by running it.
+            text = ast.unparse(node)
+            if text in sizes:
+                return sizes[text]
         if isinstance(node, ast.Name):
             value = user_ns.get(node.id)
             try:
