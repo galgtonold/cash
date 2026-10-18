@@ -228,12 +228,14 @@ def test_a_picked_function_with_a_side_effect_is_not_served(load):
         _BY_NAME,
         plugins=_PLUGINS + "\n\ndef noisy(x):\n    print('hello')\n    return x\n",
     )
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
         assert m.pick("noisy", 5) == 5
         assert m.pick("noisy", 5) == 5
     assert m.RUNS == ["noisy", "noisy"]
-    texts = [str(w.message) for w in caught if "KEY-UNTRACKABLE-DEP" in str(w.message)]
+    # The function's own list: the shown warning is shortened to "also on
+    # pick" when a test before this one in the process gave the same reason.
+    texts = [w["message"] for w in m.pick.cache_info()["warnings"] if w["code"] == "KEY-UNTRACKABLE-DEP"]
     assert texts and "noisy" in texts[0], texts
 
 
