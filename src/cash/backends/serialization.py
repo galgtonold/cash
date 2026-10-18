@@ -203,9 +203,55 @@ def _reduce_chunked_array(value: Any) -> Any:
                 buffers.append(buffer)
             refs.append(index[key])
         layout.append((len(chunk), chunk.null_count, chunk.offset, tuple(refs)))
+    small = [i for i, buffer in enumerate(buffers) if buffer.size < OUT_OF_BAND_MIN_BYTES]
+    if len(small) > 1:
+        return _packed_chunked_array, (value.type, *_packed(buffers, small), layout)
     if len(buffers) == listed:
         return value.__reduce__()  # nothing shared
     return _chunked_array, (value.type, buffers, layout)
+
+
+#: Where `_packed` puts each buffer in its pack: at a multiple of this.
+_PACK_ALIGN = 64
+
+
+def _packed(buffers: list, small: list[int]) -> tuple[list, Any, list]:
+    """*buffers* with the *small* ones copied into one buffer of their own:
+    ``(buffers, pack, places)``, *places* naming for each buffer its index in
+    *buffers* or its ``(offset, size)`` in *pack*.
+
+    A buffer under `OUT_OF_BAND_MIN_BYTES` is pickled into the stream. p08's
+    log frame, 1,280 chunks per column, was 708 MB of stream, copied as it
+    grew: 6.6 s on Windows. One pack goes out of band, written once."""
+    import pyarrow as pa
+
+    picked = set(small)
+    places: list = [None] * len(buffers)
+    at = 0
+    for i in small:
+        places[i] = (at, buffers[i].size)
+        at += -(-buffers[i].size // _PACK_ALIGN) * _PACK_ALIGN
+    pack = bytearray(at)
+    view = memoryview(pack)
+    for i in small:
+        start, size = places[i]
+        view[start : start + size] = memoryview(buffers[i]).cast("B")
+    kept = []
+    for i, buffer in enumerate(buffers):
+        if i not in picked:
+            places[i] = len(kept)
+            kept.append(buffer)
+    return kept, pa.py_buffer(pack), places
+
+
+def _packed_chunked_array(type_: Any, buffers: list, pack: Any, places: list, layout: list) -> Any:
+    """The column `_reduce_chunked_array` stored with its small buffers in
+    *pack* (`_packed`)."""
+    import pyarrow as pa
+
+    pack = pa.py_buffer(pack)
+    whole = [buffers[place] if isinstance(place, int) else pack.slice(*place) for place in places]
+    return _chunked_array(type_, whole, layout)
 
 
 def _chunked_array(type_: Any, buffers: list, layout: list) -> Any:
