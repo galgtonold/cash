@@ -8,6 +8,7 @@ import contextlib
 import contextvars
 import hashlib
 import inspect
+import itertools
 import logging
 import operator
 import os
@@ -169,6 +170,57 @@ def iterator_arguments(signature: Any, args: tuple, kwargs: dict) -> list[tuple[
     return [(label, v, _iterator_position(v)) for label, v in named if is_one_shot_iterator(v)]
 
 
+class _KeyCopies(NamedTuple):
+    """A ``key=`` call's iterator arguments, each split in two
+    (`split_for_key`): the key function reads one copy, the body gets the
+    other with every item, as in plain."""
+
+    args: tuple
+    kwargs: dict
+    # (position or name, the caller's iterator, where it stood, the body's copy)
+    splits: list[tuple[int | str, Any, Any, Any]]
+
+    def body_arguments(self, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
+        """The arguments the body runs with: the caller's own iterator
+        when the key function did not read it, else the copy that still
+        holds every item."""
+        body_args, body_kwargs = list(args), dict(kwargs)
+        for where, original, before, copy in self.splits:
+            kept = before is not None and _iterator_position(original) == before
+            if isinstance(where, int):
+                body_args[where] = original if kept else copy
+            else:
+                body_kwargs[where] = original if kept else copy
+        return tuple(body_args), body_kwargs
+
+
+def split_for_key(spec: CachedFunction, args: tuple, kwargs: dict) -> _KeyCopies | None:
+    """`_KeyCopies` when *spec* has a ``key=`` function and an argument is
+    a one-shot iterator; None otherwise.
+
+    ``key=lambda rows: tuple(rows)`` reads the iterator before the body
+    runs, which then saw it emptied (``total(iter([1, 2, 3]))`` gave 0).
+    With a copy each, the key is made of every item and the body sums them.
+    """
+    if spec.arg_key is None or spec.arg_key.key_fn is None:
+        return None
+    splits: list[tuple[int | str, Any, Any, Any]] = []
+    key_args, key_kwargs = list(args), dict(kwargs)
+    for where, value in [*enumerate(args), *kwargs.items()]:
+        if not is_one_shot_iterator(value):
+            continue
+        before = _iterator_position(value)
+        for_key, for_body = itertools.tee(value)
+        if isinstance(where, int):
+            key_args[where] = for_key
+        else:
+            key_kwargs[where] = for_key
+        splits.append((where, value, before, for_body))
+    if not splits:
+        return None
+    return _KeyCopies(tuple(key_args), key_kwargs, splits)
+
+
 def _unkeyed_parameters(spec: CachedFunction) -> frozenset[str]:
     """The parameters *spec* leaves out of its key, defaults and all: the
     ignored ones, or every one under ``key=``."""
@@ -316,7 +368,9 @@ class KeyBuilder:
             )
         return handed
 
-    def resolve(self, spec: CachedFunction, args: tuple, kwargs: dict) -> tuple[BuiltKey | Unkeyable, dict, dict]:
+    def resolve(
+        self, spec: CachedFunction, args: tuple, kwargs: dict, split: frozenset[int] = frozenset()
+    ) -> tuple[BuiltKey | Unkeyable, dict, dict]:
         """The key for a real call, or why it has none; its `CAPTURE_WATCH`;
         and its `STATE_LEDGER`.
 
@@ -336,7 +390,7 @@ class KeyBuilder:
         watch: dict = {}
         watch_token = CAPTURE_WATCH.set(watch)
         try:
-            built = self.build(spec, args, kwargs)
+            built = self.build(spec, args, kwargs, split)
         except UnhashableDefault:
             # `ClosureFold.fold_defaults` has warned: an unhashable default means cash
             # cannot tell whether it changed, so caching at all risks a stale
@@ -505,7 +559,7 @@ class KeyBuilder:
             STATE_LEDGER.reset(ledger_token)
             _CALLEE_STATES.reset(token)
 
-    def build(self, spec: CachedFunction, args: tuple, kwargs: dict) -> BuiltKey:
+    def build(self, spec: CachedFunction, args: tuple, kwargs: dict, split: frozenset[int] = frozenset()) -> BuiltKey:
         """The cache key for calling *spec*'s function with these arguments.
 
         The ONE key build: a real call (`KeyBuilder.resolve`) and ``explain()``
@@ -515,7 +569,8 @@ class KeyBuilder:
         Raises when there is no key: `UnhashableDefault`, `UnhashableArgs`,
         `KeyBuildFailed`, or whatever else a step raised. Never keys the call
         without a part that failed. Warnings from the steps are silent while
-        `_EXPLAINING` is set.
+        `_EXPLAINING` is set. *split* holds the ids of the iterator copies
+        made for the key alone (`split_for_key`).
         """
         func, func_name = spec.func, spec.name
         iterators = iterator_arguments(spec.signature, args, kwargs) if args or kwargs else []
@@ -602,7 +657,7 @@ class KeyBuilder:
             READS_FOLDED.reset(reads_token)
             CLASSES_FOLDED.reset(classes_token)
         if iterators:
-            self._check_iterators_unread(spec, iterators)
+            self._check_iterators_unread(spec, iterators, split)
         if args_hash is None:
             raise UnhashableArgs(*failure[:1], keyed=None if keyed is normalized_args else keyed)
         cache_key = decorator_key(func_name, state_hash, dynamic_state_hash, args_hash)
@@ -646,7 +701,9 @@ class KeyBuilder:
             PLAIN_CENSUS.memo = previous
         return ledger
 
-    def _check_iterators_unread(self, spec: CachedFunction, iterators: list[tuple[str, Any, Any]]) -> None:
+    def _check_iterators_unread(
+        self, spec: CachedFunction, iterators: list[tuple[str, Any, Any]], split: frozenset[int] = frozenset()
+    ) -> None:
         """Raise `KeyBuildFailed` when building the key read an iterator
         argument, or may have and cash cannot tell.
 
@@ -658,6 +715,8 @@ class KeyBuilder:
         readers = spec.arg_key is not None and spec.arg_key.key_fn is not None
         readers = readers or bool(self._args.type_hashers or self._args.override_hashers)
         for label, value, before in iterators:
+            if id(value) in split:
+                continue  # the key's own copy (`split_for_key`): the body has another
             after = _iterator_position(value)
             if before is not None and after == before:
                 continue
@@ -1038,11 +1097,19 @@ class CallRunner:
         # outlive a change made while the key was built (`hit_memo`).
         epochs_before = hit_memo.epochs(spec)
         token = HANDED_DIGESTS.set(handed) if handed is not None else None
+        copies = split_for_key(spec, args, kwargs)
         try:
-            built, call.capture_watch, call.ledger = self._keys.resolve(spec, args, kwargs)
+            if copies is None:
+                built, call.capture_watch, call.ledger = self._keys.resolve(spec, args, kwargs)
+            else:
+                split = frozenset(id(copy) for copy in (*copies.args, *copies.kwargs.values()))
+                built, call.capture_watch, call.ledger = self._keys.resolve(spec, copies.args, copies.kwargs, split)
         finally:
             if token is not None:
                 HANDED_DIGESTS.reset(token)
+            if copies is not None:
+                args, kwargs = copies.body_arguments(args, kwargs)
+                call.args, call.kwargs = args, kwargs
         if handed is not None:
             handed.ran_body = True  # until the call is seen to be a plain hit
             call.handed = handed

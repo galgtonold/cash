@@ -402,10 +402,11 @@ def test_a_key_function_holding_what_cannot_be_hashed_runs_uncached(cash_instanc
     assert f.cache_info()["hits"] == 0
 
 
-def test_a_key_function_that_consumes_an_iterator_does_not_store_the_result(cash_instance):
-    """``key=lambda rows: tuple(rows)`` empties a generator before the body
-    runs. The body's sum of nothing was stored under (1, 2, 3) and served
-    later even for a list of those rows."""
+def test_a_key_function_that_reads_an_iterator_leaves_the_body_every_item(cash_instance):
+    """``key=lambda rows: tuple(rows)`` read the generator before the body
+    ran, and the body summed what was left: 0 where plain gives 6. The key
+    function and the body each get a copy, so the key is made of every item,
+    the body sums them, and the call is cached."""
 
     @cash_instance.cache(key=lambda rows: tuple(rows))
     def total(rows):
@@ -413,9 +414,21 @@ def test_a_key_function_that_consumes_an_iterator_does_not_store_the_result(cash
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        total(r for r in [1, 2, 3])
-    assert "KEY-ITERATOR-CONSUMED" in _codes(caught)
-    assert total([1, 2, 3]) == 6, "the result computed from the emptied generator was stored"
+        assert total(r for r in [1, 2, 3]) == 6
+        assert total(iter([1, 2, 3])) == 6
+        assert total(rows=iter([1, 2, 4])) == 7
+    assert "KEY-ITERATOR-CONSUMED" not in _codes(caught)
+    assert total([1, 2, 3]) == 6
+    assert total.cache_info()["hits"] == 2
+
+
+def test_a_key_function_that_reads_part_of_an_iterator_leaves_the_body_every_item(cash_instance):
+    @cash_instance.cache(key=lambda rows: next(rows))
+    def rest(rows):
+        return list(rows)
+
+    assert rest(iter([1, 2, 3])) == [1, 2, 3]
+    assert rest(iter([1, 5])) == [1, 2, 3]  # keyed by the first item, as declared
 
 
 def test_a_registered_hasher_that_consumes_an_iterator_does_not_store_the_result(cash_instance):
@@ -444,6 +457,16 @@ def test_an_iterator_the_key_function_does_not_read_is_cached(cash_instance):
 
     gen = (r for r in [1, 2, 3])
     assert twice(gen, 2) == 4
+    hand = []
+
+    @cash_instance.cache(key=lambda rows: 0)
+    def seen(rows):
+        hand.append(rows)
+        return 0
+
+    own = iter([1])
+    seen(own)
+    assert hand == [own], "the body got a copy of an iterator the key function did not read"
     assert twice(iter([1]), 2) == 4 and twice.cache_info()["hits"] == 1
     assert list(gen) == [1, 2, 3]
 
