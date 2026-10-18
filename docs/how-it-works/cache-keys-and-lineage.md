@@ -131,7 +131,9 @@ example `stmt:ffd3d255…`.
   with a reason. So does code that finds a function through a string
   (`globals()["make"]`, `eval("make(3)")`), in the statement or in a function
   of yours it reaches, with `by-string:`: the function it finds, and what that
-  reads, is known only when it runs. So does an object of a class whose module
+  reads, is known only when it runs. On Python 3.12+ a lookup whose value is
+  called at once is keyed as usual instead, with `by-string-traced:`, and
+  served only when the record of what it ran says nothing changed. So does an object of a class whose module
   file cannot be read, with `unkeyed-modules:`. A call inside such a statement
   stores no entry either.
 - The namespace is `stmt` for a statement and `call` for a

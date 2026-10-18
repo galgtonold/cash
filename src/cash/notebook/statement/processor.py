@@ -763,6 +763,8 @@ class StatementProcessor:
         spent = shadow.spent
         unit = shadow.begin("stmt")
         run.record_time = shadow.spent - spent
+        if unit is not None and run.needs_trace:
+            unit.lookups_followed = True
         return unit
 
     @staticmethod
@@ -897,6 +899,12 @@ class StatementProcessor:
             if cached_data and _shadow.SHADOW.stale(run.shadow):
                 # Code it ran changed since it was stored: it runs again.
                 cached_data = None
+            elif cached_data and run.needs_trace and not _shadow.SHADOW.agreed(run.shadow):
+                # Its key does not name what a string found: only a trace
+                # checked unchanged serves it.
+                cached_data = None
+        elif run.needs_trace:
+            cached_data = None
         if cached_data and self._live_objects_shared(run, metadata):
             cached_data = None
         if cached_data and not import_needs_reexecution(run.tree, self.shell.user_ns):
@@ -1120,7 +1128,7 @@ class StatementProcessor:
             run.skip_cache = True
             run.value_varies = varies
             return
-        unfollowed, by_string, unkeyed_modules = unkeyed_reach(
+        unfollowed, by_string, unkeyed_modules, followed = unkeyed_reach(
             run.code, run.inputs, self.shell.user_ns, self.tracking_state.variable_lineage
         )
         if unfollowed:
@@ -1133,7 +1141,11 @@ class StatementProcessor:
             )
             run.skip_cache = True
             return
-        if by_string:
+        if by_string and followed and _shadow.SHADOW is not None:
+            # What the string found is recorded as it runs, and its trace is
+            # checked before a hit is served (``cache_key.lookups_followed``).
+            run.needs_trace = True
+        elif by_string:
             # Its key cannot name the function a string spells at run time
             # (``string_lookups``): served, it could be stale.
             who = "The statement" if THE_STATEMENT in by_string else ", ".join(repr(n) for n in sorted(by_string))
@@ -2980,6 +2992,7 @@ class StatementProcessor:
                 compute_hash_fn=self.compute_hash,
                 reads=self.tracking_state.reads if record else None,
                 record_reads=record,
+                traced=True,
             ),
             outputs=outputs,
             occurrence_index=occurrence_index,

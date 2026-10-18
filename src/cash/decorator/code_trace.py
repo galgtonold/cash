@@ -99,6 +99,32 @@ def on() -> bool:
 #: Names a code object holds when it may look code up by name: CALL events
 #: are armed on it (`_Recorder._on_start`).
 _LOOKUP_NAMES = frozenset({"getattr", "__import__", "import_module"})
+#: Names in a code object that may look a name up by a string
+#: (`string_lookups`): ``globals()``, ``vars()``, ``sys.modules``, ...
+_BY_STRING_NAMES = frozenset(
+    {
+        "globals",
+        "eval",
+        "exec",
+        "__import__",
+        "locals",
+        "vars",
+        "import_module",
+        "f_globals",
+        "f_locals",
+        "user_ns",
+        "user_global_ns",
+        "modules",
+    }
+)
+
+
+def _namespace_like(value: Any, g: dict) -> bool:
+    """Is *value* a namespace a string is looked up in: *g* itself, the
+    module table, or the module *g* is?"""
+    return value is g or value is sys.modules or (isinstance(value, types.ModuleType) and value.__dict__ is g)
+
+
 #: Markers that leave a trace nothing can check (`recorder` module).
 _UNUSABLE = {
     "thread_alive": "a thread it started still runs",
@@ -132,7 +158,7 @@ def _unit_class() -> type:
         """What one traced call saw: `Unit`'s fields, its lookups by name
         and the items of what was served inside it."""
 
-        __slots__ = ("cached_codes", "lookups")
+        __slots__ = ("cached_codes", "callees", "lookups", "lookups_followed")
 
         def __init__(self, kind: str) -> None:
             super().__init__(kind)
@@ -140,6 +166,18 @@ def _unit_class() -> type:
             self.cached_codes: dict[str, types.CodeType] = {}
             #: ``(kind, id(target), name)`` -> ``(kind, target, name)``.
             self.lookups: dict[tuple, tuple] = {}
+            #: A notebook unit's: ``id(callable)`` -> ``(callable, globals of
+            #: the caller)``, for what code that looks names up by a string
+            #: called (`_Recorder.by_string`).
+            self.callees: dict[int, tuple[Any, dict]] = {}
+            #: A notebook statement's: its own lookups by a string are ones
+            #: its trace follows (``cache_key.lookups_followed``).
+            self.lookups_followed = False
+
+        def absorb(self, inner: Any) -> None:
+            super().absorb(inner)
+            for key, callee in getattr(inner, "callees", {}).items():
+                self.callees.setdefault(key, callee)
 
     return TraceUnit
 
@@ -198,6 +236,10 @@ def _recorder_class() -> type:
             mon.register_callback(self.tool, ev.CALL, self._on_call)
             self.user_codes: dict[types.CodeType, int] = {}
             self.rearm: set[types.CodeType] = set()
+            #: The user's code that looks names up by a string in its own
+            #: globals (`string_lookups`): what it calls is recorded for a
+            #: notebook unit, the callable a string found among it.
+            self.by_string: set[types.CodeType] = set()
             return True
 
         def _rearm_works(self) -> bool:
@@ -261,6 +303,9 @@ def _recorder_class() -> type:
             mon = sys.monitoring
             events = mon.events.PY_START | mon.events.PY_RESUME
             if not pool and _LOOKUP_NAMES.intersection(code.co_names):
+                events |= mon.events.CALL
+            if not pool and self._looks_up_by_string(code, g):
+                self.by_string.add(code)
                 events |= mon.events.CALL
             self.user_codes[code] = events
             mon.set_local_events(self.tool, code, events)
@@ -400,9 +445,32 @@ def _recorder_class() -> type:
                         unit.codes[code] = (g, kind[1])
                         unit.markers.add("generator_resumed")
 
+        @staticmethod
+        def _looks_up_by_string(code: types.CodeType, g: dict) -> bool:
+            """Might *code* look a name up by a string in *g*? Its names
+            first, so most code costs a set intersection."""
+            names = code.co_names
+            if not _BY_STRING_NAMES.intersection(names):
+                get = g.get
+                if not any(_namespace_like(get(n), g) for n in names if n in g):
+                    return False
+            from ..notebook.string_lookups import code_looks_up_by_string
+
+            try:
+                return code_looks_up_by_string(code, g)
+            except Exception:  # noqa: BLE001 - a check that fails arms the events, which cost only time
+                return True
+
         def _on_call(self, code: types.CodeType, offset: int, fn: Any, arg0: Any) -> Any:
             units = self.active
+            stack = self.stack
+            if stack and code in self.by_string:
+                callees = stack[-1].callees
+                if id(fn) not in callees:
+                    callees[id(fn)] = (fn, sys._getframe(1).f_globals)
             if not units:
+                if stack and code in self.by_string:
+                    return None
                 self.rearm.add(code)
                 return DISABLE
             try:

@@ -371,7 +371,7 @@ class Shadow:
             table = name_table(code)
             optimized = bool(code.co_flags & 0x1)
             try:
-                if code_looks_up_by_string(code, g):
+                if code_looks_up_by_string(code, g) and not self._followed(code, g, unit, nb):
                     markers.add("string_lookup")
             except Exception:  # noqa: BLE001 - a check that fails leaves the trace usable as is
                 pass
@@ -407,11 +407,38 @@ class Shadow:
                             add(("environ", "", ""), _environ_digest())
                         elif is_user_code_module(value):
                             add(("attr", module, chain), self._attr_digest(module, chain))
+        # What code looking names up by a string called: by the names that
+        # hold it, where the string could have found it (`_followed`).
+        for fn, g in getattr(unit, "callees", {}).values():
+            for module, ns in ((nbn, nb), (g.get("__name__"), g)):
+                if not isinstance(module, str) or (ns is not nb and module == nbn):
+                    continue
+                try:
+                    names = [n for n, v in list(ns.items()) if v is fn]
+                except Exception:  # noqa: BLE001 - a namespace that cannot be listed holds nothing found
+                    names = []
+                for name in names:
+                    if not isinstance(name, str) or name.startswith("__") or (ns is nb and name in defined):
+                        continue
+                    add(("global", module, name), self._global_digest(module, name, ns, snap if ns is nb else None))
         for name in inputs:
             add(("global", nbn, name), self._global_digest(nbn, name, nb, snap))
         out = [_interned((*k, v), self._items) for k, v in found_items.items()]
         out.extend(unit.extra)
         return tuple(dict.fromkeys(out)), markers, notes
+
+    def _followed(self, code: types.CodeType, g: Mapping[str, Any], unit, nb: Mapping[str, Any]) -> bool:
+        """Does the trace follow *code*'s lookups by a string: what it called
+        recorded (`code_trace._Recorder.by_string`), and each lookup's value
+        called at once? A statement's own code is the processor's to judge
+        (``cache_key.lookups_followed``): the unit says so."""
+        from ..string_lookups import code_lookups_traceable
+
+        if code not in getattr(self.recorder, "by_string", ()):
+            return False
+        if code.co_name == "<module>":
+            return g is nb and getattr(unit, "lookups_followed", False)
+        return code_lookups_traceable(code, g)
 
     def _code_items(self, code, g, module, add, add_class, user_class) -> None:
         """The items naming *code*, a function or method that ran: by its
@@ -677,6 +704,12 @@ class Shadow:
         run.shadow = self.check(
             "stmt", run.cache_key, _stmt_group(run), found, run.code, getattr(backend, "peek_metadata", None)
         )
+
+    @staticmethod
+    def agreed(pending: dict | None) -> bool:
+        """Did the check before a lookup (`check`) find the entry's trace,
+        usable, with nothing it names changed?"""
+        return pending is not None and pending.get("hit") == "agree"
 
     @staticmethod
     def stale(pending: dict | None) -> bool:

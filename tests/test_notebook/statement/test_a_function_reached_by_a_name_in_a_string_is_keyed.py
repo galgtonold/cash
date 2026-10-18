@@ -119,9 +119,10 @@ def test_a_changed_global_of_a_module_function_is_seen(run, mock_shell, lib_modu
 
 def test_it_runs_every_time_and_says_why(cash_magics, cash_instance, mock_shell):
     """No entry is stored for it, the call inside it included: none could
-    ever be found again."""
+    ever be found again. (A lookup whose value is called at once is served
+    on its trace on 3.12+: `test_a_lookup_by_a_string_that_is_called_is_served_on_its_trace`.)"""
     cash_magics.cash_on("")
-    cells = [DEFINITIONS, CASES["globals-in-a-helper"][0], "r = g()"]
+    cells = [DEFINITIONS, CASES["eval-in-a-helper"][0], "r = g()"]
     reasons = []
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -218,4 +219,4 @@ def test_a_library_function_looking_names_up_is_not_the_notebooks():
     notebook's, and a statement calling them is keyed as before."""
     ns = _namespace("from collections import namedtuple\nfrom inspect import getmodule\n")
     for statement, inputs in (("P = namedtuple('P', 'a b')", {"namedtuple"}), ("m = getmodule(len)", {"getmodule"})):
-        assert unkeyed_reach(statement, inputs, ns, {}) == (set(), set(), set())
+        assert unkeyed_reach(statement, inputs, ns, {})[:3] == (set(), set(), set())
