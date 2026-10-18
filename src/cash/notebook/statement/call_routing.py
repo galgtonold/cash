@@ -698,6 +698,20 @@ class CallRouting:
             return None
         return result, digest
 
+    def referred_result(self, code: str) -> int | None:
+        """``id`` of the result the statement's entry refers to its call's
+        entry for, rather than holding it (`with_call_refs`'s *trusted*), when
+        the statement is ``name = call(...)``; None otherwise."""
+        if self._call_cache is None:
+            return None
+        trusted, unpacked = self.plain_call_result(code)
+        if trusted is None or unpacked:
+            return None
+        entry = self._call_cache.held_results().get(trusted[1])
+        if entry is None or entry[1] != trusted[0]:
+            return None
+        return trusted[1]
+
     def plain_call_result(self, code: str) -> tuple[tuple[str, int] | None, dict[str, int] | None]:
         """``(trusted, unpacked)`` for `with_call_refs` when the statement is
         ``name = call(...)`` or ``a, b = call(...)``: nothing but binding the
