@@ -818,14 +818,22 @@ class CallUnit:
             self.cached_compute_s += compute
             self.cached_restore_s += restore
 
-    def _cached(self, compute: float, value: Any, reads: frozenset[str]) -> None:
+    def _cached(self, compute: float, value: Any, reads: frozenset[str], *, kept: bool = True) -> None:
         """The call under way is now held by the cache: it stands for
         *compute* seconds, returned *value*, and read *reads*.
 
         Only a call its entry keeps past a restart counts: one that took the
         persistence floor (``COMPUTE_FLOOR_S``), or that ``persist`` sends to
         disk. A quicker one lives in RAM only, so after a restart the
-        statement around it is what would bring its result back."""
+        statement around it is what would bring its result back. *kept*,
+        when the entry was just written, says where it went: a result whose
+        bytes were worth more than its compute stays in RAM however long it
+        took, and is not counted. Counted, it priced the statement around it
+        under what a restart costs (the patch cell of a face detector: 3.5 s
+        of its own work for 4.2-4.5 s), for its disk decision and its rank in
+        eviction alike."""
+        if not kept:
+            return
         if compute < COMPUTE_FLOOR_S and not self._entries.persists():
             return
         if self._invocations:
@@ -1058,6 +1066,7 @@ class CallUnit:
                 elapsed,
                 result,
                 frozenset(call_tracker.get_accessed_files()) | frozenset(call_tracker.get_accessed_remote_urls()),
+                kept=self._entries.last_store_kept,
             )
         self._record(call.func_name, call.site, call.key, cache_hit=False, elapsed=elapsed, stored=stored)
         self._outcome(elapsed, hit=False)
