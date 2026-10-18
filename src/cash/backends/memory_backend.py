@@ -1741,6 +1741,10 @@ class InMemoryBackend(CacheBackend):
             by_deepcopy: list[bool] = []
             _UNPICKLED.seconds = 0.0
             _CHECKED.frames = checked = []
+            # A frozen function's frame was hashed for its entry a moment
+            # ago (`content_digest`): its clone is not hashed again.
+            known = (metadata or {}).get("content_digest")
+            _CHECKED.known = (value, known) if known and _is_polars_frame(type(value)) else None
             try:
                 stored = self._safe_deep_copy(
                     value,
@@ -1754,7 +1758,7 @@ class InMemoryBackend(CacheBackend):
                     by_deepcopy=by_deepcopy,
                 )
             finally:
-                _CHECKED.frames = None
+                _CHECKED.frames = _CHECKED.known = None
             if not (fell_back or by_deepcopy) and size >= _ROUND_TRIP_MIN_BYTES:
                 # The unpickling alone: what a disk hit does again, after
                 # reading the bytes (the pickling and the array copies here
@@ -2972,6 +2976,8 @@ _CHECKED_POLARS_MIN_BYTES = 1 << 20
 
 #: The polars frames the store in progress on this thread kept as a clone
 #: (`_store_polars`), ``[(clone, digest)]``; None outside `InMemoryBackend.set`.
+#: ``known``: ``(frame, digest)`` of the value stored, when its entry
+#: carries the `hash_polars` digest of it already.
 _CHECKED = threading.local()
 
 
@@ -2994,7 +3000,8 @@ def _store_polars(frame: Any) -> Any:
     checked = getattr(_CHECKED, "frames", None)
     if checked is not None and _checkable_polars(frame):
         clone = frame.clone()
-        digest = _polars_digest(clone)
+        known = getattr(_CHECKED, "known", None)
+        digest = known[1] if known is not None and known[0] is frame else _polars_digest(clone)
         if digest is not None:
             checked.append((clone, digest))
             _remember_own_polars(clone)
