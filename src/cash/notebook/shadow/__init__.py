@@ -1,11 +1,13 @@
-"""Shadow mode: record which code a unit ran, verify that trace on the next
-lookup, and log where the verdict disagrees with the key's.
+"""Traces: record which code a unit ran, and verify that trace before the
+unit's entry is served again.
 
-Opt in with ``CASH_SHADOW=1`` (Python 3.12 or newer, ``sys.monitoring``).
-Off, nothing here is loaded beyond this module, and the hooks in the
-statement processor and the call unit cost one attribute read each.
+On by default on Python 3.12 or newer (``sys.monitoring``); ``CASH_TRACE=0``
+turns it off. Off, nothing here is loaded beyond this module, and the hooks
+in the statement processor and the call unit cost one attribute read each.
 
-On, nothing is served differently and no key changes. Beside the key, each
+No key changes, and an entry whose trace says something it ran changed is
+not served: the statement or call runs again (``stale_suspect`` below).
+``CASH_SHADOW=1`` adds the diagnosis this started as (shadow mode). Beside the key, each
 statement and cached call that runs and is stored gets a *trace*: the user
 code that ran (``recorder``), turned into verify items (``items``). On each
 lookup the stored traces are checked again, and:
@@ -29,6 +31,7 @@ from __future__ import annotations
 
 import atexit
 import collections
+import contextlib
 import contextvars
 import json
 import os
@@ -46,6 +49,8 @@ _ENV = "CASH_SHADOW"
 _LOG_ENV = "CASH_SHADOW_LOG"
 #: Traces kept per statement (per call and arguments): the newest keys.
 _PER_GROUP = 4
+#: Lines past which a traces file mostly of replaced traces is rewritten.
+_COMPACT_AT = 2000
 _TEXT = 300
 #: Markers that make a trace give no verdict.
 UNUSABLE = frozenset(
@@ -70,8 +75,16 @@ SHADOW: Shadow | None = None
 _REASON: str | None = None
 
 
-def requested() -> bool:
+def diagnosing() -> bool:
+    """``CASH_SHADOW=1``: log disagreements, check misses against earlier
+    traces, and report at exit."""
     return os.environ.get(_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def requested() -> bool:
+    from ...decorator import code_trace
+
+    return diagnosing() or code_trace.on()
 
 
 def _interned(item: tuple, table: dict[tuple, tuple]) -> tuple:
@@ -99,6 +112,7 @@ class Shadow:
         self.recorder = code_trace.recorder_or_reason()
         self.ok = self.recorder.tool is not None
         self.reason = self.recorder.reason
+        self.diagnose = diagnosing()
         self.dir: str | None = None
         self._backend: Any = None
         self.notebook: dict | None = None
@@ -140,7 +154,7 @@ class Shadow:
         self.notebook = user_ns
         name = user_ns.get("__name__")
         self.notebook_name = name if isinstance(name, str) else "__main__"
-        from . import items
+        from ...tracking import trace_items as items
 
         items.NOTEBOOK[0] = self.notebook_name
         if self.recorder.notebook_name != self.notebook_name:
@@ -168,9 +182,11 @@ class Shadow:
         if not os.path.exists(path):
             return
         me = os.getpid()
+        lines = 0
         try:
             with open(path, encoding="utf-8") as fh:
                 for line in fh:
+                    lines += 1
                     try:
                         t = json.loads(line)
                     except ValueError:
@@ -182,6 +198,22 @@ class Shadow:
         except OSError:
             return
         self.counts["traces_loaded"] = len(self.traces)
+        if lines > _COMPACT_AT and lines > 4 * len(self.traces):
+            self._compact(path)
+
+    def _compact(self, path: str) -> None:
+        """Rewrite the traces file with the traces kept: it is appended to
+        on every store, and read whole by every new kernel."""
+        tmp = f"{path}.{os.getpid()}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                for t in self.traces.values():
+                    fh.write(json.dumps({**t, "items": [list(i) for i in t["items"]]}, default=str) + "\n")
+            os.replace(tmp, path)
+            self.counts["traces_compacted"] += 1
+        except OSError:
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
 
     def _keep(self, trace: dict) -> None:
         key, group = trace["k"], trace["g"]
@@ -247,7 +279,7 @@ class Shadow:
 
     # -- items ------------------------------------------------------------
     def _global_digest(self, module: str, name: str, ns: Mapping[str, Any] | None, snap: _Snap | None) -> str:
-        from .items import value_digest
+        from ...tracking.trace_items import value_digest
 
         if ns is None:
             return "missing"
@@ -269,7 +301,7 @@ class Shadow:
         return value_digest(ns[name])
 
     def _holder(self, code: types.CodeType, spaces: Iterable[tuple[str, Mapping[str, Any]]]):
-        from .items import candidates
+        from ...tracking.trace_items import candidates
 
         for module, ns in spaces:
             try:
@@ -285,7 +317,7 @@ class Shadow:
 
     def build(self, unit, inputs: Iterable[str] = ()) -> tuple[tuple, set[str], set[str]]:
         """The verify items of a finished *unit*, its markers and notes."""
-        from .items import call_starts
+        from ...tracking.trace_items import call_starts
 
         with call_starts(unit.cells):
             return self._build(unit, inputs)
@@ -293,8 +325,8 @@ class Shadow:
     def _build(self, unit, inputs: Iterable[str]) -> tuple[tuple, set[str], set[str]]:
         from ...install_paths import is_user_code_module
         from ...jit_functions import jit_python_function
+        from ...tracking.trace_items import class_digest, name_table
         from ..string_lookups import code_looks_up_by_string
-        from .items import class_digest, name_table
 
         inputs = [n for n in inputs if isinstance(n, str) and not n.startswith("__cash")]
         markers = set(unit.markers)
@@ -385,7 +417,7 @@ class Shadow:
         """The items naming *code*, a function or method that ran: by its
         qualified name, or through the global holding it; and the class it
         was found on, with that class's subclasses."""
-        from .items import code_digest, namespace_of, resolve, value_digest
+        from ...tracking.trace_items import code_digest, namespace_of, resolve, value_digest
 
         nb, nbn = self.notebook or {}, self.notebook_name
         qn = code.co_qualname
@@ -415,7 +447,7 @@ class Shadow:
                     add_class(sub)
 
     def _attr_digest(self, module: str, chain: str) -> str:
-        from .items import inspect_getattr, namespace_of, value_digest
+        from ...tracking.trace_items import inspect_getattr, namespace_of, value_digest
 
         ns = namespace_of(module, self.notebook or {}, self.notebook_name)
         parts = chain.split(".")
@@ -437,7 +469,14 @@ class Shadow:
         got = memo.get(item[:-1], _UNSET)
         if got is not _UNSET:
             return got
-        from .items import class_digest, code_digest, inspect_getattr, namespace_of, resolve, value_digest
+        from ...tracking.trace_items import (
+            class_digest,
+            code_digest,
+            inspect_getattr,
+            namespace_of,
+            resolve,
+            value_digest,
+        )
 
         kind = item[0]
         nb, nbn = self.notebook or {}, self.notebook_name
@@ -507,6 +546,11 @@ class Shadow:
             self._ensure_loaded()
             memo: dict = {}
             pending: dict = {"kind": kind, "key": key, "group": group, "code": code[:_TEXT], "found": found}
+            if not found and not self.diagnose:
+                # Whether an earlier trace would have served it is a
+                # question for the diagnosis alone.
+                pending["miss"] = "unchecked"
+                return pending
             if found:
                 trace = self.traces.get(key)
                 if trace is None:
@@ -565,8 +609,10 @@ class Shadow:
             verdict = "found_not_served"
         else:
             verdict = pending.get("miss", "no_candidates")
+        if not served and pending.get("hit") == "stale_suspect":
+            verdict = "rerun"
         self.counts[f"{kind}:{'hit' if served else 'miss'}:{verdict}"] += 1
-        if verdict in ("stale_suspect", "missed_reuse", "missed_reuse_evicted"):
+        if self.diagnose and verdict in ("stale_suspect", "rerun", "missed_reuse", "missed_reuse_evicted"):
             row = {
                 "event": verdict,
                 "unit": kind,
@@ -632,6 +678,12 @@ class Shadow:
             "stmt", run.cache_key, _stmt_group(run), found, run.code, getattr(backend, "peek_metadata", None)
         )
 
+    @staticmethod
+    def stale(pending: dict | None) -> bool:
+        """Does the check before a lookup (`check`) say the entry found is
+        stale: something its unit ran changed since it was stored?"""
+        return pending is not None and pending.get("hit") == "stale_suspect"
+
     def statement_served(self, run: Any, done: Mapping[str, Any]) -> None:
         from ..cache_status import CacheStatus
 
@@ -681,11 +733,16 @@ class Shadow:
         while len(self._call_groups) > 4096:
             self._call_groups.popitem(last=False)
 
-    def call_lookup(self, key: str, site: Any, hit: bool, peek: Callable[[str], Any] | None) -> None:
+    def call_lookup(self, key: str, site: Any, hit: bool, peek: Callable[[str], Any] | None) -> bool:
+        """Check a call's entry before it is served: False when its trace
+        says it is stale, and the call runs again."""
         noted = self._call_groups.get(key)
         if noted is None:
-            return
+            return hit
         pending = self.check("call", key, noted[0], hit, site.source, peek)
+        if hit and self.stale(pending):
+            self.resolve(pending, False)
+            return False
         self.resolve(pending, hit)
         if hit:
             unit = self.current()
@@ -696,6 +753,7 @@ class Shadow:
                 else:
                     unit.extra.extend(trace["items"])
                     unit.markers.update(trace.get("markers", ()))
+        return hit
 
     def call_finished(self, key: str, site: Any, unit, stored: bool, disk: bool) -> None:
         noted = self._call_groups.get(key)
@@ -753,7 +811,7 @@ def _defaults(fn: Any, code: Any, value_digest: Callable[[Any], str]) -> str:
 
 
 def _environ_digest() -> str:
-    from .items import value_digest
+    from ...tracking.trace_items import value_digest
 
     return value_digest(sorted(os.environ.items()))
 
@@ -775,7 +833,8 @@ def enable() -> Shadow | None:
         _REASON = shadow.reason
         return None
     SHADOW = shadow
-    atexit.register(shadow.report_at_exit)
+    if shadow.diagnose:
+        atexit.register(shadow.report_at_exit)
     return shadow
 
 
@@ -785,14 +844,17 @@ def disable() -> None:
     shadow, SHADOW = SHADOW, None
     if shadow is not None:
         shadow.recorder.notebook_ns = None
-        atexit.unregister(shadow.report_at_exit)
+        if shadow.diagnose:
+            atexit.unregister(shadow.report_at_exit)
         for fh in (shadow._log, shadow._trace_file):
             if fh is not None:
                 fh.close()
 
 
 def status() -> dict | None:
-    """The summary for ``%cash_status``; None when shadow mode was not asked for."""
+    """The summary for ``%cash_status``; None unless ``CASH_SHADOW=1``."""
+    if not diagnosing():
+        return None
     if SHADOW is not None:
         return SHADOW.summary()
     if requested():
@@ -800,5 +862,7 @@ def status() -> dict | None:
     return None
 
 
-if requested():
+# The diagnosis from import, as before; traces alone from the notebook's
+# start (`CashMagics`), so a script that never runs a cell installs nothing.
+if diagnosing():
     enable()

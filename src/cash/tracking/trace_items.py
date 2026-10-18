@@ -223,7 +223,7 @@ NOTEBOOK = ["__main__"]
 
 
 def _is_user_type(t: type) -> bool:
-    from ...install_paths import is_user_code_module
+    from ..install_paths import is_user_code_module
 
     if getattr(t, "__module__", None) == NOTEBOOK[0]:
         return True
@@ -319,7 +319,7 @@ class _Digester:
             for f in (v.fget, v.fset, v.fdel):
                 self.feed(f)
             return
-        from ...jit_functions import jit_python_function
+        from ..jit_functions import jit_python_function
 
         jitted = jit_python_function(v)
         if jitted is not None:
@@ -453,7 +453,22 @@ def value_digest(value: Any) -> str:
     return h.hexdigest()
 
 
-_CLASS_SKIP = frozenset({"__dict__", "__weakref__", "__doc__", "__module__", "__qualname__", "__annotations__"})
+#: Not what a class holds: ``__slotnames__`` is copyreg's cache, set the
+#: first time an instance is pickled; the line a class starts on and the
+#: attributes its methods assign come with its code.
+_CLASS_SKIP = frozenset(
+    {
+        "__dict__",
+        "__weakref__",
+        "__doc__",
+        "__module__",
+        "__qualname__",
+        "__annotations__",
+        "__slotnames__",
+        "__firstlineno__",
+        "__static_attributes__",
+    }
+)
 
 
 def class_digest(cls: type, within: _Digester | None = None) -> str:
@@ -488,7 +503,7 @@ def candidates(obj: Any) -> Iterable[types.FunctionType]:
     classmethod, bound method, property, partial or JIT dispatcher holds,
     and what a ``functools.wraps`` wrapper wraps. Read off known types
     only: no attribute lookup runs on an object of the user's."""
-    from ...jit_functions import jit_python_function
+    from ..jit_functions import jit_python_function
 
     stack = [obj]
     seen = 0

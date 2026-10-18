@@ -914,7 +914,8 @@ class CallUnit:
             hit, value, recorded_cost, metadata = self._entries.lookup(key)
             self._last_key_s = _perf_counter() - key_started
             if _shadow.SHADOW is not None:
-                _shadow.SHADOW.call_lookup(key, site, hit, self._entries.peek_metadata)
+                # False when what it ran changed since it was stored.
+                hit = _shadow.SHADOW.call_lookup(key, site, hit, self._entries.peek_metadata)
             if hit:
                 return self._serve_hit(call, value, recorded_cost, metadata, hit_started)
             return self._run_miss(call)

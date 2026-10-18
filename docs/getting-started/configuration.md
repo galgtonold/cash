@@ -152,6 +152,14 @@ all, and one faster than 0.1 s is kept in memory only, never on disk. The
 | `check_cash_keys` | `true` | <span class="md-tag">decorator only</span> Check each [`__cash_key__`](../tutorials/feature-guides/custom-hashers.md#cash-key) against the data it stands for, once per object per process, on a background thread; one key for two contents warns [`KEY-STALE-CASH-KEY`](../warnings.md#key-stale-cash-key). |
 | `analytics` | `true` | <span class="md-tag">notebook only</span> Record each statement's hit, miss and timing in `analytics.db` under the per-user cache root, for the `cash.show_stats()` dashboard. `false` creates no file. |
 
+<!-- claim: cash/decorator/code_trace.py:on @5a4beff8 -->
+On Python 3.12 and newer, cash also records which of your functions each cached
+call and statement ran, and checks that record before serving the result: a
+result whose code changed in a way the key missed runs again. `CASH_TRACE=0`
+turns that check off (an environment variable only, not a field). Calls that
+pick code by a run-time name are still recorded, since they are only cached on
+that record.
+
 ### Backend
 
 | Field | Default | Description |

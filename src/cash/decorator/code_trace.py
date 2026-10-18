@@ -69,6 +69,7 @@ from ..analysis.purity_report import (
     PurityIssue,
     is_name_lookup,
 )
+from ..tracking.tracker_context import untracked
 
 __all__ = [
     "TRACEABLE",
@@ -85,6 +86,15 @@ __all__ = [
 
 #: ``sys.monitoring`` is there: Python 3.12 or newer.
 TRACEABLE = sys.version_info >= (3, 12)
+_OFF = ("0", "off", "false", "no")
+
+
+def on() -> bool:
+    """Is every cached call recorded and served on its trace? On 3.12+
+    unless ``CASH_TRACE=0``; a call that picks code by name is recorded
+    either way."""
+    return TRACEABLE and os.environ.get("CASH_TRACE", "").strip().lower() not in _OFF
+
 
 #: Names a code object holds when it may look code up by name: CALL events
 #: are armed on it (`_Recorder._on_start`).
@@ -116,16 +126,18 @@ def covers(issues: Iterable[PurityIssue]) -> bool:
 
 # -- recording -------------------------------------------------------------
 def _unit_class() -> type:
-    from ..notebook.shadow.recorder import Unit
+    from ..tracking.trace_recorder import Unit
 
     class TraceUnit(Unit):
         """What one traced call saw: `Unit`'s fields, its lookups by name
         and the items of what was served inside it."""
 
-        __slots__ = ("lookups",)
+        __slots__ = ("cached_codes", "lookups")
 
         def __init__(self, kind: str) -> None:
             super().__init__(kind)
+            #: name -> code of the cached functions served inside (`note_cached_hit`).
+            self.cached_codes: dict[str, types.CodeType] = {}
             #: ``(kind, id(target), name)`` -> ``(kind, target, name)``.
             self.lookups: dict[tuple, tuple] = {}
 
@@ -137,7 +149,7 @@ TraceUnit: Any = None
 
 def _recorder_class() -> type:
     from ..install_paths import is_user_path
-    from ..notebook.shadow import recorder as rec
+    from ..tracking import trace_recorder as rec
 
     DISABLE = sys.monitoring.DISABLE
 
@@ -350,9 +362,10 @@ def _recorder_class() -> type:
             if code.co_freevars and not self._in_callback:
                 self._in_callback = True
                 try:
-                    from ..notebook.shadow.items import start_cells
+                    from ..tracking.trace_items import start_cells
 
-                    cells = start_cells(frame, code)
+                    with untracked():
+                        cells = start_cells(frame, code)
                 finally:
                     self._in_callback = False
             for unit in units:
@@ -415,7 +428,7 @@ def _recorder_class() -> type:
 
 
 _RECORDER: Any = None
-_RECORDER_LOCK = threading.Lock()
+_RECORDER_LOCK = threading.RLock()
 
 
 def _recorder() -> Any:
@@ -458,9 +471,11 @@ def active() -> bool:
     return _RECORDER is not None and bool(_RECORDER.active)
 
 
-def note_cached_hit(func_name: str, state: str | None, trace: list | None) -> None:
+def note_cached_hit(func_name: str, code: types.CodeType | None, state: str | None, trace: list | None) -> None:
     """A cached function was served inside the traced calls in progress: its
-    body did not run, so what it stands for goes in their traces."""
+    body did not run, so what it stands for goes in their traces. *code* is
+    its code: a call whose key already covers it (`static_codes`) leaves the
+    state out (`build`)."""
     rec = _RECORDER
     if rec is None:
         return
@@ -469,6 +484,8 @@ def note_cached_hit(func_name: str, state: str | None, trace: list | None) -> No
             unit.markers.add("cached_hit_unkeyed")
             continue
         unit.extra.append(("cached", func_name, state))
+        if code is not None:
+            unit.cached_codes[func_name] = code
         unit.extra.extend(tuple(item) for item in trace or ())
 
 
@@ -531,7 +548,7 @@ def _digest(value: Any) -> str | None:
     """*value*'s digest, the same in another process for an equal value; None
     when it is too big or cannot be read."""
     from ..install_paths import is_cash_path
-    from ..notebook.shadow.items import value_digest
+    from ..tracking.trace_items import value_digest
 
     wrapped = getattr(value, "__wrapped__", None) if isinstance(value, types.FunctionType) else None
     if wrapped is not None and is_cash_path(value.__code__.co_filename):
@@ -543,7 +560,7 @@ def _digest(value: Any) -> str | None:
 
 
 def _code_digest(code: types.CodeType, fn: Any) -> str | None:
-    from ..notebook.shadow.items import code_digest
+    from ..tracking.trace_items import code_digest
 
     got = code_digest(code)
     if isinstance(fn, types.FunctionType) and fn.__code__ is code and (fn.__defaults__ or fn.__kwdefaults__):
@@ -562,7 +579,7 @@ def _namespace(module: str) -> Mapping[str, Any] | None:
 
 def _find(module: str, qualname: str) -> Any:
     """The object *qualname* names in *module* now, or None."""
-    from ..notebook.shadow.items import inspect_getattr
+    from ..tracking.trace_items import inspect_getattr
 
     ns = _namespace(module)
     if ns is None or "<locals>" in qualname:
@@ -578,9 +595,9 @@ def _find(module: str, qualname: str) -> Any:
 
 
 def _user_module(mod: Any) -> bool:
-    from ..install_paths import is_user_code_module
+    from ..tracking.trace_recorder import is_user_code
 
-    return isinstance(mod, types.ModuleType) and is_user_code_module(mod)
+    return isinstance(mod, types.ModuleType) and is_user_code(mod)
 
 
 def _user_class(cls: Any) -> bool:
@@ -589,7 +606,7 @@ def _user_class(cls: Any) -> bool:
 
 def _classes_digest(cls: type) -> str | None:
     """The user classes of *cls*'s MRO, each by what it holds."""
-    from ..notebook.shadow.items import class_digest
+    from ..tracking.trace_items import class_digest
 
     parts = []
     for klass in cls.__mro__:
@@ -620,7 +637,7 @@ def _namespace_digest(ns: Mapping[str, Any]) -> str | None:
 def _lookup_digest(module: str, qualname: str, name: str) -> str | None:
     """What a ``getattr(target, name)`` finds on the module or class the
     item names, now; None when that cannot be told."""
-    from ..notebook.shadow.items import inspect_getattr
+    from ..tracking.trace_items import inspect_getattr
 
     if qualname:
         target = _find(module, qualname)
@@ -700,7 +717,7 @@ class _Build:
         self.items.setdefault(item, digest)
 
     def run(self) -> list[tuple]:
-        from ..notebook.shadow.items import name_table
+        from ..tracking.trace_items import name_table
 
         unit = self.unit
         for marker in sorted(unit.markers):
@@ -746,11 +763,13 @@ class _Build:
         for kind, target, name in unit.lookups.values():
             self._lookup(kind, target, name)
         out = [(*k, v) for k, v in self.items.items()]
-        out.extend(tuple(x) for x in unit.extra)
+        out.extend(
+            tuple(x) for x in unit.extra if not (x[0] == "cached" and unit.cached_codes.get(x[1]) in self.static)
+        )
         return list(dict.fromkeys(out))
 
     def _code(self, code: types.CodeType, g: Mapping[str, Any], module: str, ran: set[str]) -> None:
-        from ..notebook.shadow.items import candidates, resolve
+        from ..tracking.trace_items import candidates, resolve
 
         qn = code.co_qualname
         rc, fn, _owner = resolve(module, qn, {}, "\x00")
@@ -777,7 +796,7 @@ class _Build:
         raise _Untraceable(f"it ran {module}.{qn}, which no name of {module} holds")
 
     def _class(self, cls: type, ran: set[str]) -> None:
-        from ..notebook.shadow.items import class_digest
+        from ..tracking.trace_items import class_digest
 
         qn = cls.__qualname__
         if "<locals>" in qn:
@@ -822,7 +841,7 @@ _MISSING = object()
 
 
 def _chain_digest(module: str, chain: str) -> str | None:
-    from ..notebook.shadow.items import inspect_getattr
+    from ..tracking.trace_items import inspect_getattr
 
     ns = _namespace(module)
     parts = chain.split(".")
@@ -862,17 +881,19 @@ def _refusal_in(functions: Iterable[Any]) -> str | None:
     return None
 
 
-def build(unit: Any, static_codes: set[types.CodeType]) -> tuple[list[tuple] | None, str]:
+def build(unit: Any, static_codes: set[types.CodeType], *, strict: bool = True) -> tuple[list[tuple] | None, str]:
     """The items of a traced call's finished *unit*, or None and why the
     call's result cannot be served from a trace. *static_codes* are the
-    code the key covers, left out."""
-    from ..notebook.shadow.items import call_starts
+    code the key covers, left out. *strict*: the call picks code by name,
+    so code with effects a hit would skip is refused too; a call the key
+    already accepted is not second-guessed for those."""
+    from ..tracking.trace_items import call_starts
 
     try:
         with call_starts(unit.cells):
             b = _Build(unit, static_codes)
             items = b.run()
-        why = _refusal_in(b.functions)
+        why = _refusal_in(b.functions) if strict else None
         if why is not None:
             return None, why
         return items, ""
@@ -886,7 +907,7 @@ def static_codes(functions: Iterable[Any], reports: Iterable[Any]) -> set[types.
     """The code objects the key covers: those of *functions*, nested code
     included, and those of the helpers each report's walk read
     (``walked_code``, ``helper_bindings``)."""
-    from ..notebook.shadow.items import candidates
+    from ..tracking.trace_items import candidates
 
     out: set[types.CodeType] = set()
     stack: list[Any] = [getattr(getattr(f, "__func__", f), "__code__", None) for f in functions]
@@ -929,7 +950,7 @@ def verify(items: list, cached_state: Callable[[str], str | None]) -> str | None
             if kind == "import":
                 continue
             if kind == "code":
-                from ..notebook.shadow.items import resolve
+                from ..tracking.trace_items import resolve
 
                 rc, fn, _ = resolve(item[1], item[2], {}, "\x00")
                 now = None if rc is None else _code_digest(rc, fn)
@@ -939,7 +960,7 @@ def verify(items: list, cached_state: Callable[[str], str | None]) -> str | None
                 now = None if ns is None else (_digest(ns[item[2]]) if item[2] in ns else _ABSENT)
                 what = f"{item[1]}.{item[2]}"
             elif kind == "class":
-                from ..notebook.shadow.items import class_digest
+                from ..tracking.trace_items import class_digest
 
                 cls = _find(item[1], item[2])
                 now = class_digest(cls) if isinstance(cls, type) else None

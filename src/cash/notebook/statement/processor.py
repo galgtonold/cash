@@ -282,6 +282,10 @@ class StatementProcessor:
         self.shell: ShellProtocol = shell
         self.cash_instance: CashInstanceProtocol = cash_instance
         self.compute_hash: Callable[[Any], str] | None = compute_hash_fn
+        if _shadow.SHADOW is None and _shadow.requested():
+            # What each statement ran is recorded and checked before it is
+            # served (`cash.notebook.shadow`).
+            _shadow.enable()
 
         self._amplification = AmplificationGuard()
         #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
@@ -875,6 +879,9 @@ class StatementProcessor:
         run.entry_holders = bool(metadata is not None and metadata.holders)
         if _shadow.SHADOW is not None:
             _shadow.SHADOW.statement_lookup(self, run, bool(cached_data))
+            if cached_data and _shadow.SHADOW.stale(run.shadow):
+                # Code it ran changed since it was stored: it runs again.
+                cached_data = None
         if cached_data and self._live_objects_shared(run, metadata):
             cached_data = None
         if cached_data and not import_needs_reexecution(run.tree, self.shell.user_ns):

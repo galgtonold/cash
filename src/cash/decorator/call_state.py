@@ -63,9 +63,12 @@ class BuiltKey(NamedTuple):
     #: The shortest ttl among the cached functions the key reached outside
     #: the dependency graph (`REACHED_TTLS`), or None.
     reached_ttl: int | None = None
-    #: The call picks code by a run-time name: its entry is served only while
-    #: the trace of what it ran holds (`code_trace`).
+    #: Its body is recorded and the trace of what ran stored with the entry,
+    #: which is served only while that trace holds (`code_trace`).
     traced: bool = False
+    #: The call picks code by a run-time name: without a trace it is not
+    #: stored, and an entry without one is not served.
+    needs_trace: bool = False
 
 
 class Call:
@@ -91,6 +94,7 @@ class Call:
         "handed",
         "stored_in",
         "traced",
+        "needs_trace",
         "trace_unit",
     )
 
@@ -111,8 +115,10 @@ class Call:
         self.handed: Any = None
         #: The tiers the store put the result in (``storage``), once stored.
         self.stored_in: list[str] | None = None
-        #: The key's `BuiltKey.traced`, and what recorded the body (`code_trace`).
+        #: The key's `BuiltKey.traced` and ``needs_trace``, and what recorded
+        #: the body (`code_trace`).
         self.traced = False
+        self.needs_trace = False
         self.trace_unit: Any = None
 
 

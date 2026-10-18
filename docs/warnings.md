@@ -984,7 +984,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-UNHASHABLE-CAPTURE](#key-unhashable-capture) | decorator | a value a closure reads cannot be hashed; not cached |
 | [KEY-UNHASHABLE-DEFAULT](#key-unhashable-default) | decorator | a parameter default cannot be hashed; not cached |
 | [KEY-UNHASHABLE-GLOBAL](#key-unhashable-global) | decorator | a global the function reads cannot be hashed |
-| [KEY-UNRESOLVED-CALL](#key-unresolved-call) | decorator | a call goes through a property or `__getattr__`; what it reaches is not in the key |
+| [KEY-UNRESOLVED-CALL](#key-unresolved-call) | decorator | before 3.12: a call goes through a property or `__getattr__` to code the key cannot name; not cached |
 | [KEY-UNTRACKABLE-DEP](#key-untrackable-dep) | decorator | the body picks code by a run-time name in a way cash cannot check; not cached |
 
 ### KEY-AMBIENT-READ {#key-ambient-read}
@@ -1627,16 +1627,22 @@ code if you must. See [Silencing one code](#silencing-one-code).
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
 <!-- claim: cash/analysis/code_analyzer.py:CodeAnalyzer.find_called_functions_and_gaps @f44cc346 -->
+<!-- claim: cash/decorator/registry.py:FunctionRegistry.unresolved_gaps @02dff8c9 -->
 **What happened.** The function calls something through an object of your own
 code whose attribute is a property, or whose class answers missing names with
 `__getattr__`: `api.inner(x)`. cash never runs that code to find what it
 returns. It reads the getter's body instead, and keys every cached function the
 getter names, or failing that every cached function called `inner`. Here it
 found none, or only a plain function, so the function the call reaches is not
-in the key.
+in the key. Calls of the function run uncached.
 
-**Why it matters.** Editing that function does not invalidate the cached
-results: the old result is served.
+On Python 3.12 and newer this code is not shown: the call is cached, its body
+is recorded as it runs, and a later call is served only while every function
+it ran is unchanged, the one the property handed out included (see
+[KEY-UNTRACKABLE-DEP](#key-untrackable-dep)).
+
+**Why it matters.** Caching the call would serve an old result after that
+function is edited, so it is not cached.
 
 **What to do.** Call the function by its own name (`impl.inner(x)`), or name
 it on the decorator: `@cash.cache(depends_on=[impl.inner])`.
