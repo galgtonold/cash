@@ -6,12 +6,14 @@ A config is resolved more than once -- the module default, then each
 
 from __future__ import annotations
 
-import difflib
 import logging
 from typing import Any
 
+from .._lazy_module import LazyModule
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
+
+difflib = LazyModule("difflib")  # imported on first use: only for a mistyped setting
 
 logger = logging.getLogger(__name__)
 

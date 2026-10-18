@@ -19,7 +19,6 @@ reinstalled under the same number keys as before.
 
 from __future__ import annotations
 
-import importlib.metadata
 import inspect
 import re
 import sys
@@ -27,7 +26,12 @@ import types
 from collections.abc import Callable, Iterable
 from typing import Any
 
+from .._lazy_module import LazyModule
 from ..install_paths import in_own_package, is_cash_path, is_user_path, top_package
+
+# Imported on first use (6 ms, with zipfile and email): asked only when a
+# cached function reaches an installed library.
+importlib_metadata = LazyModule("importlib.metadata")
 
 __all__ = ["library_versions"]
 
@@ -53,7 +57,7 @@ def _packages_distributions() -> dict[str, list[str]]:
     distribution's file list; this does the same on every version.
     """
     by_top: dict[str, list[str]] = {}
-    for dist in importlib.metadata.distributions():
+    for dist in importlib_metadata.distributions():
         name = dist.metadata["Name"]
         if not name:
             continue
@@ -84,7 +88,7 @@ def _dists_for(top: str) -> list[str]:
 def _version(dist: str) -> str | None:
     if dist not in _VERSIONS:
         try:
-            _VERSIONS[dist] = importlib.metadata.version(dist)
+            _VERSIONS[dist] = importlib_metadata.version(dist)
         except Exception:  # noqa: BLE001 - no metadata: nothing to fold
             _VERSIONS[dist] = None
     return _VERSIONS[dist]
@@ -93,7 +97,7 @@ def _version(dist: str) -> str | None:
 def _requires(dist: str) -> list[str]:
     """The distributions *dist* requires unconditionally (no ``extra ==``)."""
     try:
-        lines = importlib.metadata.requires(dist) or []
+        lines = importlib_metadata.requires(dist) or []
     except Exception:  # noqa: BLE001 - no metadata: requires nothing we can name
         return []
     names = []
