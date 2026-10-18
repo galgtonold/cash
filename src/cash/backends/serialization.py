@@ -141,7 +141,8 @@ def rebuild(load: Callable[..., Any], *args: Any) -> Any:
 def stored_reducers() -> dict | None:
     """The reducers cash pickles a value it stores with, by exact type
     (`kept_state.dumps` *extra*): `_reduce_polars` for polars' DataFrame
-    and Series, `_reduce_arrow_array` for pandas' Arrow-backed arrays. Each
+    and Series, `_reduce_arrow_array` for pandas' Arrow-backed arrays,
+    `_reduce_chunked_array` for an Arrow column of chunks. Each
     only once its library is imported (a value cannot hold one before). A
     subclass keeps its own reduce."""
     reducers: dict = {}
@@ -155,7 +156,66 @@ def stored_reducers() -> dict | None:
     string_array = getattr(getattr(pd, "arrays", None), "StringArray", None)
     if isinstance(string_array, type):
         reducers[string_array] = _reduce_string_array
+    chunked = getattr(sys.modules.get("pyarrow"), "ChunkedArray", None)
+    if isinstance(chunked, type):
+        reducers[chunked] = _reduce_chunked_array
     return reducers or None
+
+
+def _reduce_chunked_array(value: Any) -> Any:
+    """An Arrow column whose chunks share buffers, each buffer pickled once
+    (`_chunked_array`); any other column as pyarrow pickles it.
+
+    The chunks of a polars text column (Arrow ``string_view``) each list
+    every data buffer of the column, not only the ones their rows point
+    into: pickled chunk by chunk, each buffer went into the entry once per
+    chunk. A frame filtered on 32 threads has 32 chunks: 438 MB stored as
+    10.3 GB on Windows, 39 s of writing beside the next cell. Rebuilt from
+    the same buffers, at the same offsets, the column is the one stored.
+    Never more than pyarrow writes: it pickles a sliced chunk's buffers
+    whole too."""
+    import pyarrow as pa
+
+    chunks = value.chunks
+    kind = value.type
+    if len(chunks) < 2 or kind.num_fields or pa.types.is_dictionary(kind) or isinstance(kind, pa.ExtensionType):
+        # One chunk, or a type whose children or dictionary carry buffers
+        # of their own that ``buffers()`` flattens: as pyarrow pickles it.
+        return value.__reduce__()
+    index: dict[tuple[int, int], int] = {}
+    buffers: list = []
+    layout: list[tuple[int, int, int, tuple[int | None, ...]]] = []
+    listed = 0
+    for chunk in chunks:
+        refs: list[int | None] = []
+        for buffer in chunk.buffers():
+            if buffer is None:
+                refs.append(None)
+                continue
+            listed += 1
+            key = (buffer.address, buffer.size)
+            if key not in index:
+                index[key] = len(buffers)
+                buffers.append(buffer)
+            refs.append(index[key])
+        layout.append((len(chunk), chunk.null_count, chunk.offset, tuple(refs)))
+    if len(buffers) == listed:
+        return value.__reduce__()  # nothing shared
+    return _chunked_array, (value.type, buffers, layout)
+
+
+def _chunked_array(type_: Any, buffers: list, layout: list) -> Any:
+    """The column `_reduce_chunked_array` stored: each chunk over the shared
+    *buffers*, as ``(length, null count, offset, buffer indices)``."""
+    import pyarrow as pa
+
+    return pa.chunked_array(
+        [
+            pa.Array.from_buffers(type_, length, [None if i is None else buffers[i] for i in refs], nulls, offset)
+            for length, nulls, offset, refs in layout
+        ],
+        type=type_,
+    )
 
 
 #: Python-string columns at least this long go out of band as one buffer
