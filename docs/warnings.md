@@ -973,7 +973,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-FUNCTION-RAISED](#key-function-raised) | decorator | the `key=` function raised; the call ran uncached |
 | [KEY-HELPERS-UNWALKABLE](#key-helpers-unwalkable) | both | the code a function runs cannot all be found; not cached |
 | [KEY-INSTANCE-STATE](#key-instance-state) | decorator | a bound method's instance cannot be hashed |
-| [KEY-ITERATOR-CONSUMED](#key-iterator-consumed) | decorator | building the key read an iterator argument; the call ran uncached |
+| [KEY-ITERATOR-CONSUMED](#key-iterator-consumed) | decorator | a registered hasher read an iterator argument; the call ran uncached |
 | [KEY-MEMO-BEFORE-IMPORT](#key-memo-before-import) | both | a `functools` memo already held results when cash was imported |
 | [KEY-LOOP-VAR-CHANGED](#key-loop-var-changed) | notebook | a loop body changes its loop variable before work cached for each pass |
 | [KEY-NETWORK-READ](#key-network-read) | decorator | the body reads from a server or database |
@@ -1311,19 +1311,25 @@ cash.register_hasher(Config, lambda c: c.fingerprint)
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/decorator/runtime.py:KeyBuilder._check_iterators_unread @dd5b4fdd -->
-**What happened.** An argument is an iterator (a generator, `map(...)`,
-`iter(rows)`), and building the key read it: a `key=` function such as
-`key=lambda rows: tuple(rows)`, or a hasher registered for its type. An
-iterator can be read once, so the body got what was left of it. The call
-ran uncached. When cash cannot tell how far an iterator was read and a
-`key=` function or a registered hasher could have read it, it says so too.
+**What happened.** An argument is an iterator (`map(...)`, `iter(rows)`,
+an iterator class of your own), and building the key read it: a hasher
+registered for its type, or some other part of the key. An iterator can be
+read once, so the body got what was left of it. The call ran uncached.
+When cash cannot tell how far an iterator was read and a registered hasher
+could have read it, it says so too.
+
+Two cases do not lose items. A `key=` function reads a copy of the
+iterator. A generator keyed by a hasher registered for generators is read
+once, and the hasher and the body each get a generator over its items; only
+one with more than 100,000 items runs uncached with this warning, and its
+body still gets every item.
 
 **Why it matters.** The body's result was computed from an emptied
 iterator. Stored, it would be served to every later call with the same
 key, a list of the same rows included.
 
-**What to do.** Pass a list or a tuple instead of the iterator, or key the
-call by something that does not read it.
+**What to do.** Pass a list or a tuple instead of the iterator, or use
+`key=` to key the call by its items.
 
 **When it is safe to ignore.** When the message says the iterator *may* have
 been read and you know the key did not read it. When it says it was read,

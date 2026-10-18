@@ -59,7 +59,7 @@ from ..cache_key import called_function_globals, control_outcome_key
 from ..cache_status import CacheStatus
 from ..callee_reach import helper_seeded_modules, reached_user_code
 from ..consumables import is_stream
-from ..lineage_formula import statement_environment_reads
+from ..lineage_formula import is_cash_instrumentation, statement_environment_reads
 from ..statement.carrier_advances import carrier_candidates
 from ..statement.derivation_edges import apply_share_record, logging_edges
 from ..statement.file_deps import compute_file_hash_component
@@ -365,9 +365,16 @@ class ControlStructureProcessor:
         outcome is all it did, as a trusted outcome record requires
         (:meth:`_persistable_callees`: no global RNG moved, no clock, no
         environment or module data read outside the key, no file written,
-        no hidden global write), it read no file, and it drew from no
-        iterator. A restored loop is named the same way, by the key it was
-        found under.
+        no hidden global write), and it drew from no iterator. A restored
+        loop is named the same way, by the key it was found under and the
+        file state its entry was stored with.
+
+        The files it read, and the paths it only checked for, join the name
+        as they join a statement's lineage (`compute_file_hash_component`):
+        ``for line in open(path): rows.append(parse(line))`` filled a list
+        of 1.5M dicts in 9.7 s, and reading it back for its lineage took
+        7-9 s more. A changed file is a new name, so what was built on the
+        list misses.
         """
         frame = self._unit_frame
         key = metrics.get("cache_key")
@@ -376,9 +383,7 @@ class ControlStructureProcessor:
         _node, reads, before, rng_before, reads_before = frame
         state = self.statement_processor.tracking_state
         try:
-            for file_key, (local, remote) in state.statement_file_reads.items():
-                if reads_before.get(file_key, (None,))[0] is not local and (local or remote):
-                    return None
+            files = _files_read_since(state, reads_before)
             user_ns = self.shell.user_ns
             if any(is_stream(user_ns.get(name)) for name in reads):
                 return None
@@ -388,8 +393,22 @@ class ControlStructureProcessor:
             return None
         if callees is None:
             return None
-        named = ":".join([str(key), *(f"{name}={lin}" for name, lin in sorted(callees.items()))])
-        return hashlib.sha256(named.encode()).hexdigest()
+        parts = [str(key), *(f"{name}={lin}" for name, lin in sorted(callees.items()))]
+        if metrics.get("status") == CacheStatus.RESTORED:
+            # Restored, the loop read nothing now: the files it read when
+            # stored are the entry's, which still matched them to be used.
+            stored = state.restored_file_states.get(str(key))
+            if stored is None:
+                return None
+            if stored:
+                parts.append(f"stored-files={stored}")
+        elif files is not None:
+            try:
+                parts.append(f"files={compute_file_hash_component(*files)}")
+            except Exception:  # never let bookkeeping break the user's loop; the values say it
+                logger.debug("[CONTROL] could not name a loop's files", exc_info=True)
+                return None
+        return hashlib.sha256(":".join(parts).encode()).hexdigest()
 
     def _persistable_callees(self, node, code, reads, before, rng_before) -> dict[str, str] | None:
         """What a later kernel must find unchanged to trust this loop's record, or None.
@@ -450,11 +469,14 @@ class ControlStructureProcessor:
         handed = handed_callables(tree, user_ns)
         if handed.unreadable or handed.receivers:
             return None  # a callable it cannot read, or one that changes an object in place
-        # Each body read with the globals its names are looked up in.
+        # Each body read with the globals its names are looked up in. Not
+        # IPython's ``open`` or a reader cash wraps (`is_cash_instrumentation`),
+        # which have no source of the user's: what they read is recorded,
+        # and joins the loop's name (`_unit_digest`).
         scanned: list[tuple[str | None, Any]] = [
             (resolve(name), user_ns)
             for name in set(reads) | callee_names
-            if isinstance(user_ns.get(name), types.FunctionType)
+            if isinstance(user_ns.get(name), types.FunctionType) and not is_cash_instrumentation(user_ns.get(name))
         ]
         # Every function of the user's the loop can reach or hands over: a
         # function of their module (``tools.stamp(i)``), a method of their
@@ -744,3 +766,21 @@ def _drawn_rng_vars_left(left: dict[str, str], code: str, namespace) -> list[str
         seeded = set()
     prefix = rng_virtual_var("")
     return [var for var in left if var.startswith(prefix) and var not in seeded]
+
+
+def _files_read_since(state, reads_before) -> tuple[set[str], set[str], dict[str, str]] | None:
+    """The files, remote objects and probed paths (``{path: answer}``) the
+    statements of a structure recorded since *reads_before* (a copy of
+    ``statement_file_reads``), or None when they recorded none."""
+    local: set[str] = set()
+    remote: set[str] = set()
+    probes: dict[str, str] = {}
+    for file_key, (files, objects) in state.statement_file_reads.items():
+        if reads_before.get(file_key, (None,))[0] is files:
+            continue
+        local.update(files)
+        remote.update(objects)
+        probes.update(state.statement_probes.get(file_key) or {})
+    if not (local or remote or probes):
+        return None
+    return local, remote, probes
