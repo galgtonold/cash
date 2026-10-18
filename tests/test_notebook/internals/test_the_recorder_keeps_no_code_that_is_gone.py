@@ -58,15 +58,23 @@ def _clear_bounded_caches():
     code_trace._INSTRUCTIONS.clear()
 
 
-def test_a_long_session_keeps_no_statement_code(traced, statement_processor):
-    recorder = code_trace._recorder()
-    _run(statement_processor, "def f(x):\n    return x + 1")
-    for i in range(300):
-        _run(statement_processor, f"y{i} = f({i})")
+def _kept(recorder):
     _clear_bounded_caches()
     gc.collect()
-    assert len(_statement_codes(recorder)) < 10
-    assert len(recorder.user_codes) < 50
+    return len(_statement_codes(recorder)), len(recorder.user_codes)
+
+
+def test_a_long_session_keeps_no_statement_code(traced, statement_processor):
+    """Counted against what the recorder kept before: it is one per process,
+    and other tests in the same process leave code of their own alive."""
+    recorder = code_trace._recorder()
+    _run(statement_processor, "def f(x):\n    return x + 1")
+    statements, codes = _kept(recorder)
+    for i in range(300):
+        _run(statement_processor, f"y{i} = f({i})")
+    statements_after, codes_after = _kept(recorder)
+    assert statements_after - statements < 10
+    assert codes_after - codes < 50
 
 
 def test_a_function_whose_old_code_is_gone_is_still_checked(traced, statement_processor, mock_shell):
