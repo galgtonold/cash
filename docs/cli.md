@@ -61,6 +61,7 @@ Cash v<!-- docnum:version -->0.13.0<!-- /docnum -->
   Max size:   RAM 4.0 GiB (auto), disk 16.4 GiB (auto)
   Persist:    cost model (0.1s compute floor, 20% savings required; notebook statements: 0.01s store floor, 0.05s restore budget)
   Fast path:  on (C extension cash._cwatch, API 1)
+  File hook:  on (14 slots in 3 libraries)
   Config files:
     user         /home/me/.config/cash/config.toml  (not found)
     project      /home/me/project/pyproject.toml  (read)
@@ -78,6 +79,10 @@ Cash v<!-- docnum:version -->0.13.0<!-- /docnum -->
   automatic ones (marked `auto`).
 - `Fast path` says whether the C extension is in use, or why not
   ([The C fast path](getting-started/installation.md#the-c-fast-path)).
+- `File hook` says whether cash sees the files that C libraries open
+  themselves (the
+  [native file hook](known-limitations.md#reads-through-a-loader-cash-cannot-see)),
+  and in how many places it is hooked, or why it is off.
 - `Config files` lists every file looked for: `read`, `not found`,
   `no [tool.cash] section`, or `could not be read`.
 - `Settings` lists each setting some layer set, with the layer that won

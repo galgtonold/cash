@@ -81,6 +81,7 @@ class Call:
         "ledger",
         "args_hash",
         "call_args_hash",
+        "checked",
         "metadata",
         "cash_overhead",
         "outcome",
@@ -93,6 +94,10 @@ class Call:
         self.kwargs = kwargs
         self.metadata: CacheMetadata | None = None
         self.call_args_hash: str | None = None
+        #: The arguments the in-place-change check hashes, when they are not
+        #: the body's: an iterator split for the key (`split_for_key`) stands
+        #: as a placeholder, since the body reading its copy is no change.
+        self.checked: tuple[tuple, dict] | None = None
         #: What the key's state segment was made of, by name (`STATE_LEDGER`).
         self.ledger: dict | None = None
         self.cash_overhead = 0.0

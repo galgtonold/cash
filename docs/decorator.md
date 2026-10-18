@@ -745,9 +745,9 @@ reads a file, the clock, a random number, the network or the environment
 gets [`KEY-FUNCTION-IMPURE`](warnings.md#key-function-impure)
 (`strict=True` raises instead, `assume_safe=True` silences it). One that
 raises runs the call uncached with
-[`KEY-FUNCTION-RAISED`](warnings.md#key-function-raised), and so does one
-that reads an iterator argument, which leaves the body an emptied iterator
-([`KEY-ITERATOR-CONSUMED`](warnings.md#key-iterator-consumed)).
+[`KEY-FUNCTION-RAISED`](warnings.md#key-function-raised). One that reads an
+iterator argument (`key=lambda rows: tuple(rows)`) reads a copy of it: the
+body still gets every item, as without cash.
 
 <!-- claim: cash/decorator/explain.py:Explainer._note_matched_by @1d34c690, cash/decorator/runtime.py:KeyBuilder.call_args_hash @18fb6b48 -->
 A hit whose arguments differ from those of the call that stored the entry

@@ -133,6 +133,30 @@ class RebuildCostLedger:
         except Exception:  # noqa: BLE001 - the floor is the safe answer
             return False
 
+    def final_rebuild_seconds(
+        self, inputs, outputs, seconds: float, *, in_loop: bool, written_later: frozenset[str]
+    ) -> float:
+        """What getting a statement's value back costs without its entry:
+        its own *seconds*, plus, for a final value of the cell, the entries
+        not on disk its inputs came through, each counted once.
+
+        ``arr = step(arr, 3.0)`` took 0.27 s and restoring its 38 MB took
+        about as long, so its value was refused, by a hair and only on some
+        runs: the end-of-cell pass then had no value to write, and after a
+        restart the cell rebuilt ``arr`` from ``load()`` up. Judged by what a
+        restart would re-run, it is kept. An intermediate, or a value inside
+        a loop, is judged by its own time.
+        """
+        try:
+            if in_loop or not outputs or set(outputs) & set(written_later):
+                return seconds
+            ancestry: dict[str, float] = {}
+            for name in inputs:
+                ancestry.update(self._unsaved_ancestry.get(name, {}))
+            return seconds + sum(ancestry.values())
+        except Exception:  # noqa: BLE001 - its own time is the safe answer
+            return seconds
+
     def end_cell_persistence(self) -> None:
         """Write to disk what this cell left that would be costly to rebuild.
 

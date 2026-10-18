@@ -406,6 +406,10 @@ def format_diagnostic(code: str, what: str, fix: str) -> str:
 #: ``e.g. a`` do not end one.
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z`'\"(])")
 
+#: Inline code as messages spell it, two backticks a side as in the docs: a
+#: terminal shows them as typed, so the one-line form keeps one a side.
+_INLINE_CODE = re.compile(r"``([^`]+)``")
+
 #: An absolute path in a listed item, shortened to its last two parts.
 _LONG_PATH = re.compile(r"(?:[A-Za-z]:)?[\\/](?:[^\s\\/,:]+[\\/]){2,}([^\s\\/,:]+[\\/][^\s\\/,]+)")
 
@@ -436,7 +440,7 @@ def short_diagnostic(code: str, what: str, fix: str | None = None, *, more: str 
     follows, on the same line: the way out (``# @cash:allow-random``,
     "re-run cell 3") is what a reader acts on, and it is often the last
     clause. The rest is in the doc section the link points at; *more* names where the full text of this one is kept
-    (``f.cache_info()['warnings']``).
+    (``f.cache_info()['warnings']``). Inline code keeps one backtick a side.
     """
     head, _, rest = what.partition("\n")
     sentences = _SENTENCE_END.split(head.strip(), maxsplit=2)
@@ -452,6 +456,7 @@ def short_diagnostic(code: str, what: str, fix: str | None = None, *, more: str 
     if fix and fix.strip():
         sentence = f"{sentence} Fix: {' '.join(fix.split())}"
     where = doc_url(code) if more is None else f"{more}; {doc_url(code)}"
+    sentence = _INLINE_CODE.sub(r"`\1`", sentence)
     return f"[{code}] {sentence} ({where})"
 
 

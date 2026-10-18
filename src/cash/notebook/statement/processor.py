@@ -197,6 +197,9 @@ SHARE_CHECK_FLOOR_S = 0.1
 #: statement's outputs takes when the share check could not say
 #: (`referring_names`).
 SHARE_FALLBACK_FLOOR_S = 1.0
+#: The packages of the kernel's own objects, left out of the share check
+#: (`StatementProcessor._kernel_object`).
+_KERNEL_PACKAGES = frozenset({"IPython", "ipykernel"})
 
 
 def _may_hold_memory(value: Any) -> bool:
@@ -2138,7 +2141,9 @@ class StatementProcessor:
         """
         if is_control_body(run.code):
             return
-        outputs = [name for name in run.outputs if name in captured_vars]
+        outputs = [
+            name for name in run.outputs if name in captured_vars and not self._kernel_object(captured_vars[name])
+        ]
         if not outputs:
             return
         complete = True
@@ -2153,6 +2158,17 @@ class StatementProcessor:
             record_shared_object_edges(self.tracking_state.derivation_edges, owners, names)
         if not complete:
             self._warn_share_unchecked(run, outputs, cost)
+
+    def _kernel_object(self, value: Any) -> bool:
+        """Whether *value* is the kernel's own machinery: the shell
+        (``ip = get_ipython()``), or an object of IPython's or ipykernel's. It
+        holds the whole session, user namespace included, so the share check
+        ran out of time on it and warned NOTEBOOK-SHARE-UNCHECKED on a
+        harmless line; no cell's data is changed in place through it."""
+        if value is self.shell:
+            return True
+        module = getattr(type(value), "__module__", None) or ""
+        return module.partition(".")[0] in _KERNEL_PACKAGES
 
     def _link_inputs_kept_by(self, run: StatementRun, echo: tuple[Any, ...] = (), cost: float = 0.0) -> None:
         """Link each variable *run* handed to code with what that code now
@@ -2409,7 +2425,13 @@ class StatementProcessor:
             "(x = x + [v]) or re-run the cells that read them yourself."
         )
         log_diagnostic(logger, "NOTEBOOK-SHARE-UNCHECKED", what, fix)
-        warn_diagnostic(CashWarning, "NOTEBOOK-SHARE-UNCHECKED", what, fix)
+        # At the cell, as cash's other notebook warnings are: with no
+        # location the nearest frame outside cash is ipykernel's, and it
+        # read ``ipkernel.py:460``.
+        from cash.notebook.ipython.cell_count import running_cell_count  # the ipython package imports this one
+
+        location = ("<cash>", running_cell_count(self.shell))
+        warn_diagnostic(CashWarning, "NOTEBOOK-SHARE-UNCHECKED", what, fix, location=location)
 
     def _move_holders(self, run: StatementRun, metadata: StatementCacheMetadata | None) -> set[str]:
         """Move on the lineages of the variables *metadata*'s entry stores

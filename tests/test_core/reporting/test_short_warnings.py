@@ -90,6 +90,33 @@ def test_a_first_sentence_that_says_only_what_takes_the_next_one():
     )
 
 
+def test_inline_code_prints_with_one_backtick():
+    text = short_diagnostic("CACHE-THRASH", "the cache is full: ``max_cache_size`` is 500 MB.", "raise ``x``.")
+    assert "``" not in text
+    assert "`max_cache_size`" in text and "`x`" in text
+
+
+def test_a_handed_state_changing_function_says_the_call_runs_uncached(cash_instance):
+    """The first sentence of IMPURE-HANDED-CALLABLE carries the consequence:
+    a longer one was cut before it, and the line said only what was found."""
+    count = []
+
+    def bump():
+        count.append(1)
+
+    @cash_instance.cache
+    def run(fn):
+        fn()
+        return 1
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        run(bump)
+    [line] = [str(w.message) for w in caught if getattr(w.message, "code", None) == "IMPURE-HANDED-CALLABLE"]
+    assert "so calls like this run uncached" in line, line
+    assert "``" not in line, line
+
+
 def test_full_detail_prints_the_full_text_unchanged():
     expected = format_diagnostic("CACHE-THRASH", "the cache is full at its 500 MB cap. It evicts.", "raise it.")
     assert _emitted(warning_detail="full") == expected
