@@ -7,10 +7,16 @@ cash's own open hooks ~120 us each on Linux, and more on Windows, where a
 virus scanner looks at every open; E10's loop over 50,000 files spent ~10 s
 there. A line now waits for others and is written with them, at once in one
 ``write``, when `FLUSH_LINES` are waiting, when the oldest has waited
-`FLUSH_SECONDS` and another comes, when a cell ends, and when the process
-exits. A kernel killed in the middle of a cell (a restart waits for the cell
-to end) loses only lines of that cell: a version or a digest the next
-process does not know is found again by reading the file.
+`FLUSH_SECONDS` and another comes, when a cell ends, when the process
+starts another (``subprocess``, ``os.system``, ``os.fork``, ...), so a
+script a cell runs knows what the cell noted, and when the process exits.
+
+A line that is not written costs a read, never a wrong answer: a digest is
+looked up under the exact stat it was taken at, and a version links two
+stats only where the bytes were found the same, so a process that lacks the
+line hashes the file, or keys a reader on the file's own stat and runs it
+again. A kernel killed in the middle of a cell (a restart waits for the
+cell to end), or a process that ends by ``os._exit``, loses only that.
 """
 
 from __future__ import annotations
@@ -18,6 +24,7 @@ from __future__ import annotations
 import atexit
 import logging
 import os
+import sys
 import threading
 import time
 import weakref
@@ -86,4 +93,20 @@ def flush_all() -> None:
             logger.debug("could not write a log's lines", exc_info=True)
 
 
+#: Audit events of a process starting another, which may read the logs.
+#: (``multiprocessing``'s ``spawn`` on POSIX starts its worker with no
+#: event: it reads the lines written so far.)
+_STARTS = frozenset(
+    {"subprocess.Popen", "os.system", "os.posix_spawn", "os.spawn", "os.exec", "os.startfile", "_winapi.CreateProcess"}
+)
+
+
+def _on_audit(event: str, _args: tuple) -> None:
+    if event in _STARTS:
+        flush_all()
+
+
 atexit.register(flush_all)
+sys.addaudithook(_on_audit)
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(before=flush_all)
