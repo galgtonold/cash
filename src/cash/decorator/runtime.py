@@ -8,6 +8,7 @@ import contextlib
 import contextvars
 import hashlib
 import inspect
+import itertools
 import logging
 import operator
 import os
@@ -36,7 +37,7 @@ from ..tracking.randomness import (
     replay_argument_carriers,
     replayable,
 )
-from . import hit_memo
+from . import code_trace, hit_memo
 from .arg_hashing import HANDED_DIGESTS, PLAIN_CENSUS
 from .arg_key import keyed_arguments
 from .cache_metadata import CacheMetadata
@@ -167,6 +168,117 @@ def iterator_arguments(signature: Any, args: tuple, kwargs: dict) -> list[tuple[
                 else:
                     named.append((name, value))
     return [(label, v, _iterator_position(v)) for label, v in named if is_one_shot_iterator(v)]
+
+
+#: The most items of a generator argument a registered hasher reads that
+#: are taken out to hand the hasher and the body a copy each
+#: (`split_for_key`). Past it the call runs uncached, the body getting every
+#: item still.
+MATERIALISED_ITEMS = 100_000
+
+
+class _KeyCopies(NamedTuple):
+    """The iterator arguments of a call whose key would read them, each
+    split in two (`split_for_key`): the key reads one copy, the body gets
+    the other with every item, as in plain."""
+
+    args: tuple
+    kwargs: dict
+    # (position or name, the caller's iterator, where it stood, the body's copy)
+    splits: list[tuple[int | str, Any, Any, Any]]
+    #: Set when a generator was longer than `MATERIALISED_ITEMS`: the key
+    #: cannot be built without reading it all, so the call runs uncached.
+    refused: KeyBuildFailed | None = None
+
+    def body_arguments(self, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
+        """The arguments the body runs with: the caller's own iterator
+        when the key did not read it, else the copy that still holds every
+        item."""
+        body_args, body_kwargs = list(args), dict(kwargs)
+        for where, original, before, copy in self.splits:
+            kept = before is not None and _iterator_position(original) == before
+            if isinstance(where, int):
+                body_args[where] = original if kept else copy
+            else:
+                body_kwargs[where] = original if kept else copy
+        return tuple(body_args), body_kwargs
+
+    def checked_arguments(self, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
+        """*args* and *kwargs* with each split iterator a placeholder: what
+        the in-place-change check hashes before and after the body, which
+        reads its copy and so leaves it changed."""
+        checked_args, checked_kwargs = list(args), dict(kwargs)
+        for where, _original, _before, _copy in self.splits:
+            if isinstance(where, int):
+                checked_args[where] = _SPLIT_ITERATOR
+            else:
+                checked_kwargs[where] = _SPLIT_ITERATOR
+        return tuple(checked_args), checked_kwargs
+
+
+#: What a split iterator argument stands as in the in-place-change check.
+_SPLIT_ITERATOR = "<an iterator split for the key>"
+
+
+def _generator_over(items: Any) -> Iterator[Any]:
+    """A generator yielding *items*: of the type a hasher registered for
+    generators matches, as the caller's was."""
+    return (item for item in items)
+
+
+def split_for_key(
+    spec: CachedFunction, args: tuple, kwargs: dict, registered: Callable[[Any], bool] | None = None
+) -> _KeyCopies | None:
+    """`_KeyCopies` when an argument is a one-shot iterator the key would
+    read; None otherwise.
+
+    A ``key=`` function reads an `itertools.tee` copy: ``key=lambda rows:
+    tuple(rows)`` read the iterator before the body ran, which then saw it
+    emptied (``total(iter([1, 2, 3]))`` gave 0). A generator that a hasher
+    registered for its type (*registered*) keys is read into a list once,
+    and the hasher and the body each get a generator over it: a tee copy is
+    not a generator, and the hasher would not match it. The key is what the
+    hasher makes of the same items. Past `MATERIALISED_ITEMS` the call runs
+    uncached (``refused``), the body getting every item.
+    """
+    key_fn = spec.arg_key is not None and spec.arg_key.key_fn is not None
+    if not key_fn and registered is None:
+        return None
+    splits: list[tuple[int | str, Any, Any, Any]] = []
+    key_args, key_kwargs = list(args), dict(kwargs)
+    refused: KeyBuildFailed | None = None
+    for where, value in [*enumerate(args), *kwargs.items()]:
+        if not is_one_shot_iterator(value):
+            continue
+        before = _iterator_position(value)
+        if key_fn:
+            for_key, for_body = itertools.tee(value)
+        elif registered is not None and inspect.isgenerator(value) and registered(value):
+            items = list(itertools.islice(value, MATERIALISED_ITEMS + 1))
+            if len(items) > MATERIALISED_ITEMS:
+                for_key = for_body = _generator_over(itertools.chain(items, value))
+                label = f"argument {where}" if isinstance(where, int) else repr(where)
+                refused = refused or KeyBuildFailed(
+                    "KEY-ITERATOR-CONSUMED",
+                    f"@cash.cache on {spec.name}: the generator passed as {label} is keyed by a hasher "
+                    f"registered for its type, which reads it, and it holds more than "
+                    f"{MATERIALISED_ITEMS:,} items, too many to read ahead of the body, so the call "
+                    f"ran uncached. The body got every item.",
+                    "pass a list or a tuple instead of the generator, or key the call by something "
+                    "that does not read it.",
+                )
+            else:
+                for_key, for_body = _generator_over(items), _generator_over(items)
+        else:
+            continue
+        if isinstance(where, int):
+            key_args[where] = for_key
+        else:
+            key_kwargs[where] = for_key
+        splits.append((where, value, before, for_body))
+    if not splits:
+        return None
+    return _KeyCopies(tuple(key_args), key_kwargs, splits, refused)
 
 
 def _unkeyed_parameters(spec: CachedFunction) -> frozenset[str]:
@@ -301,13 +413,12 @@ class KeyBuilder:
                 CashImpurityWarning,
                 spec.name,
                 "handed_callable",
-                f"@cash.cache on {spec.name}: an argument is a function of yours, "
-                f"or holds one, that changes a global or what it closes over when "
-                f"it is called (or whose source cannot be read), or an object of "
-                f"your class whose special methods or properties (``with cm:``, "
-                f"``b[k]``, ``b.value``) change a global. "
-                f"A cache hit would skip that change, so calls like this run "
-                f"uncached.",
+                f"@cash.cache on {spec.name}: an argument changes state when it is "
+                f"used, so calls like this run uncached, since a cache hit would skip "
+                f"that change. It is a function of yours, or holds one, that changes a "
+                f"global or what it closes over when it is called (or whose source "
+                f"cannot be read), or an object of your class whose special methods "
+                f"or properties (``with cm:``, ``b[k]``, ``b.value``) change a global.",
                 code="IMPURE-HANDED-CALLABLE",
                 fix="return the new value from the function you pass instead of "
                 "changing state in it, or call it outside the cached function. "
@@ -316,7 +427,21 @@ class KeyBuilder:
             )
         return handed
 
-    def resolve(self, spec: CachedFunction, args: tuple, kwargs: dict) -> tuple[BuiltKey | Unkeyable, dict, dict]:
+    def split_for_key(self, spec: CachedFunction, args: tuple, kwargs: dict) -> _KeyCopies | None:
+        """`split_for_key` with this cache's registered hashers."""
+        hashers = self._args
+        registered = hashers.keys_by_registration_only if hashers.type_hashers or hashers.override_hashers else None
+        return split_for_key(spec, args, kwargs, registered)
+
+    def resolve(
+        self,
+        spec: CachedFunction,
+        args: tuple,
+        kwargs: dict,
+        split: frozenset[int] = frozenset(),
+        *,
+        refused: KeyBuildFailed | None = None,
+    ) -> tuple[BuiltKey | Unkeyable, dict, dict]:
         """The key for a real call, or why it has none; its `CAPTURE_WATCH`;
         and its `STATE_LEDGER`.
 
@@ -327,8 +452,14 @@ class KeyBuilder:
         """
         func, func_name = spec.func, spec.name
         unkeyable = self._registry.refresh_helper_bindings(func, func_name)
+        traced = False
         if unkeyable is not None:
-            return Unkeyable(unkeyable), {}, {}
+            # A lookup by name is keyed as any call and served on a trace of
+            # what it ran (`code_trace`): not a coroutine, whose body other
+            # tasks' code runs in the middle of.
+            if not unkeyable.traced or inspect.iscoroutinefunction(func):
+                return Unkeyable(unkeyable._replace(traced=False)), {}, {}
+            traced = True
         if self._hands_a_state_changing_callable(spec, args, kwargs):
             return Unkeyable(_HANDED), {}, {}
         ledger: dict = {}
@@ -336,7 +467,9 @@ class KeyBuilder:
         watch: dict = {}
         watch_token = CAPTURE_WATCH.set(watch)
         try:
-            built = self.build(spec, args, kwargs)
+            if refused is not None:
+                raise refused
+            built = self.build(spec, args, kwargs, split)
         except UnhashableDefault:
             # `ClosureFold.fold_defaults` has warned: an unhashable default means cash
             # cannot tell whether it changed, so caching at all risks a stale
@@ -359,6 +492,8 @@ class KeyBuilder:
             slot = (func_name, built.state_hash)
             if not self._misses.has_ledger(slot):
                 self._misses.keep_state_ledger(slot, ledger)
+        if traced:
+            built = built._replace(traced=True)
         return built, watch, ledger
 
     def _code_state(self, spec: CachedFunction, chain: list[str], *, note: bool = False) -> str:
@@ -505,7 +640,7 @@ class KeyBuilder:
             STATE_LEDGER.reset(ledger_token)
             _CALLEE_STATES.reset(token)
 
-    def build(self, spec: CachedFunction, args: tuple, kwargs: dict) -> BuiltKey:
+    def build(self, spec: CachedFunction, args: tuple, kwargs: dict, split: frozenset[int] = frozenset()) -> BuiltKey:
         """The cache key for calling *spec*'s function with these arguments.
 
         The ONE key build: a real call (`KeyBuilder.resolve`) and ``explain()``
@@ -515,7 +650,8 @@ class KeyBuilder:
         Raises when there is no key: `UnhashableDefault`, `UnhashableArgs`,
         `KeyBuildFailed`, or whatever else a step raised. Never keys the call
         without a part that failed. Warnings from the steps are silent while
-        `_EXPLAINING` is set.
+        `_EXPLAINING` is set. *split* holds the ids of the iterator copies
+        made for the key alone (`split_for_key`).
         """
         func, func_name = spec.func, spec.name
         iterators = iterator_arguments(spec.signature, args, kwargs) if args or kwargs else []
@@ -602,7 +738,7 @@ class KeyBuilder:
             READS_FOLDED.reset(reads_token)
             CLASSES_FOLDED.reset(classes_token)
         if iterators:
-            self._check_iterators_unread(spec, iterators)
+            self._check_iterators_unread(spec, iterators, split)
         if args_hash is None:
             raise UnhashableArgs(*failure[:1], keyed=None if keyed is normalized_args else keyed)
         cache_key = decorator_key(func_name, state_hash, dynamic_state_hash, args_hash)
@@ -646,7 +782,9 @@ class KeyBuilder:
             PLAIN_CENSUS.memo = previous
         return ledger
 
-    def _check_iterators_unread(self, spec: CachedFunction, iterators: list[tuple[str, Any, Any]]) -> None:
+    def _check_iterators_unread(
+        self, spec: CachedFunction, iterators: list[tuple[str, Any, Any]], split: frozenset[int] = frozenset()
+    ) -> None:
         """Raise `KeyBuildFailed` when building the key read an iterator
         argument, or may have and cash cannot tell.
 
@@ -658,6 +796,8 @@ class KeyBuilder:
         readers = spec.arg_key is not None and spec.arg_key.key_fn is not None
         readers = readers or bool(self._args.type_hashers or self._args.override_hashers)
         for label, value, before in iterators:
+            if id(value) in split:
+                continue  # the key's own copy (`split_for_key`): the body has another
             after = _iterator_position(value)
             if before is not None and after == before:
                 continue
@@ -744,6 +884,17 @@ class KeyBuilder:
         self._args.note_arg_cost(spec.name, unkeyed=True)
         return digest
 
+    def checked_arguments_hash(self, spec: CachedFunction, args: tuple, kwargs: dict) -> str | None:
+        """The hash of *args* and *kwargs* the in-place-change check
+        compares, for a call whose iterators were split for the key
+        (`_KeyCopies.checked_arguments`); None when they cannot all be
+        hashed."""
+        try:
+            return self._args.serialize_args(spec.name, args, kwargs)
+        except Exception:  # a hash for the check only, never the key
+            logger.debug("[CORE] could not hash every argument of %s", spec.name, exc_info=True)
+            return None
+
 
 class CallRunner:
     """The steps of a cached call, shared by the sync and async wrappers: the
@@ -811,6 +962,7 @@ class CallRunner:
         args_hash: str,
         func_name: str,
         ttl: int | None,
+        traced: bool = False,
     ) -> Any:
         """Return cached_data if valid, else CACHE_MISS sentinel.
 
@@ -825,7 +977,7 @@ class CallRunner:
             self._misses.note_miss(func_name, cache_key, self._misses.absent_entry_reason(func_name, cache_key))
             return CACHE_MISS
         try:
-            verdict = self.entry_verdict(cache_key, metadata, ttl)
+            verdict = self.entry_verdict(cache_key, metadata, ttl, traced=traced)
             if verdict is not None:
                 self._misses.note_miss(func_name, cache_key, verdict)
                 return CACHE_MISS
@@ -880,7 +1032,7 @@ class CallRunner:
         return CACHE_MISS
 
     def entry_verdict(
-        self, cache_key: str, metadata: CacheMetadata, ttl: int | None, *, quiet: bool = False
+        self, cache_key: str, metadata: CacheMetadata, ttl: int | None, *, quiet: bool = False, traced: bool = False
     ) -> MissReason | None:
         """Why the entry found under *cache_key* is not served, or None to
         serve it: its age against the ttl, its recorded files, its chunks.
@@ -888,8 +1040,9 @@ class CallRunner:
         The one judgement a lookup (`CallRunner._try_get_cached`) and
         ``explain()`` both apply, so a check added here holds for both.
         *quiet* leaves out the warnings the file check gives, for
-        ``explain()``. Raises ``TypeError``/``KeyError`` on metadata that
-        does not validate.
+        ``explain()``. *traced*: the call picks code by a run-time name, so
+        an entry without a trace of what it ran is not served. Raises
+        ``TypeError``/``KeyError`` on metadata that does not validate.
         """
         ttl = self._backend_slot.entry_ttl(ttl, metadata)
         if ttl_expired(written_at(metadata), ttl):
@@ -906,7 +1059,24 @@ class CallRunner:
             )
         if not self._chunks_are_intact(cache_key, metadata):
             return MissReason(MissKind.INCOMPLETE, "a chunk of the stored result is missing")
+        if metadata.code_trace is not None:
+            changed = code_trace.verify(metadata.code_trace, self._cached_state)
+            if changed is not None:
+                return MissReason(MissKind.TRACE, f"{changed} since the entry was stored")
+        elif traced:
+            return MissReason(MissKind.TRACE, "the entry has no trace of the code the call picked by name")
         return None
+
+    def _cached_state(self, func_name: str) -> str | None:
+        """The state segment of cached function *func_name* now, for a trace
+        item naming it (`code_trace`); None when there is none."""
+        spec = self._registry.cached.get(func_name)
+        if spec is None:
+            return None
+        try:
+            return self._keys.callee_state(spec)
+        except Exception:  # noqa: BLE001 - a state that cannot be built is not the one recorded
+            return None
 
     def _stored_source(self, key: str) -> Any:
         """What the backend holds under *key*: a pickled source a caller's
@@ -1038,11 +1208,21 @@ class CallRunner:
         # outlive a change made while the key was built (`hit_memo`).
         epochs_before = hit_memo.epochs(spec)
         token = HANDED_DIGESTS.set(handed) if handed is not None else None
+        copies = self._keys.split_for_key(spec, args, kwargs)
         try:
-            built, call.capture_watch, call.ledger = self._keys.resolve(spec, args, kwargs)
+            if copies is None:
+                built, call.capture_watch, call.ledger = self._keys.resolve(spec, args, kwargs)
+            else:
+                split = frozenset(id(copy) for copy in (*copies.args, *copies.kwargs.values()))
+                built, call.capture_watch, call.ledger = self._keys.resolve(
+                    spec, copies.args, copies.kwargs, split, refused=copies.refused
+                )
         finally:
             if token is not None:
                 HANDED_DIGESTS.reset(token)
+            if copies is not None:
+                args, kwargs = copies.body_arguments(args, kwargs)
+                call.args, call.kwargs = args, kwargs
         if handed is not None:
             handed.ran_body = True  # until the call is seen to be a plain hit
             call.handed = handed
@@ -1050,6 +1230,7 @@ class CallRunner:
             call.outcome = self._run_uncached(spec, call, built.reason)
             return call
         call.cache_key, call.state_hash, call.args_hash = built.cache_key, built.state_hash, built.args_hash
+        call.traced = built.traced
         if built.reached_ttl is not None:
             # A cached function the key reached as a value, not by a graph
             # edge: its ttl is per call, not per function.
@@ -1058,10 +1239,21 @@ class CallRunner:
         raw_metadata, cached_data = self._backend_slot.read(call.cache_key)
         call.metadata = CacheMetadata.from_dict(raw_metadata) if raw_metadata is not None else None
         hit = self._try_get_cached(
-            call.cache_key, call.metadata, cached_data, call.call_start, call.args_hash, func_name, call.ttl
+            call.cache_key,
+            call.metadata,
+            cached_data,
+            call.call_start,
+            call.args_hash,
+            func_name,
+            call.ttl,
+            call.traced,
         )
         call.cash_overhead = _perf_counter() - overhead_t0
         if hit is not CACHE_MISS:
+            if code_trace.active():
+                # Served inside a traced call: its body did not run, so what
+                # it stands for goes in that call's trace.
+                code_trace.note_cached_hit(func_name, self._cached_state(func_name), call.metadata.code_trace)
             self._replay_argument_rng(func_name, args, kwargs, call.metadata)
             self._calls.note_effectiveness(
                 func_name,
@@ -1070,7 +1262,13 @@ class CallRunner:
                 was_hit=True,
             )
             call.outcome = self._wrap_iterator_hit(call, call.metadata, hit)
-            if epochs_before is not None and handed is None and call.outcome is hit and not async_body:
+            if (
+                epochs_before is not None
+                and handed is None
+                and call.outcome is hit
+                and not async_body
+                and not call.traced
+            ):
                 memo = hit_memo.memo_for(spec, self)
                 if memo is not None:
                     memo.offer(call, args, kwargs, hit, epochs_before)
@@ -1081,7 +1279,11 @@ class CallRunner:
                 self._hand_back_entry(call, hit, call.metadata, getattr(call.metadata, "storage", None))
         else:
             # Before the body runs: the mutation check compares against it.
-            call.call_args_hash = self._keys.call_args_hash(spec, args, kwargs, built)
+            if copies is None:
+                call.call_args_hash = self._keys.call_args_hash(spec, args, kwargs, built)
+            else:
+                call.checked = copies.checked_arguments(args, kwargs)
+                call.call_args_hash = self._keys.checked_arguments_hash(spec, *call.checked)
         return call
 
     def _hand_back_entry(self, call: Call, value: Any, metadata: Any, storage: list[str] | None) -> None:
@@ -1123,7 +1325,7 @@ class CallRunner:
             return CACHE_MISS
         metadata = CacheMetadata.from_dict(raw_metadata)
         hit = self._try_get_cached(
-            call.cache_key, metadata, cached_data, call.call_start, call.args_hash, spec.name, call.ttl
+            call.cache_key, metadata, cached_data, call.call_start, call.args_hash, spec.name, call.ttl, call.traced
         )
         if hit is CACHE_MISS:
             return CACHE_MISS
@@ -1189,6 +1391,8 @@ class CallRunner:
             body_t0 = _perf_counter()
             nested = [0.0]
             nested_token = NESTED_CASH_SECONDS.set(nested)
+            # What a call that picks code by name ran, for its trace.
+            call.trace_unit = code_trace.begin() if call.traced else None
             try:
                 self._files.track_declared_files(run.tracker, spec)
                 self._files.track_scanned_files(run.tracker, args, kwargs)
@@ -1197,6 +1401,7 @@ class CallRunner:
                 self._calls.log_raised(func_name, exc, call.call_start)
                 raise
             finally:
+                code_trace.end(call.trace_unit)
                 NESTED_CASH_SECONDS.reset(nested_token)
             # The user's own work, isolated. Everything cash does sits outside
             # this pair, which is the whole point: it is the only number that
@@ -1231,6 +1436,11 @@ class CallRunner:
         """Everything a missed call does after its body: check, store, log."""
         func, func_name, args, kwargs = spec.func, spec.name, call.args, call.kwargs
         res = run.res
+        if call.traced and is_one_shot_iterator(res):
+            # Its body runs as the caller iterates, after the trace ended.
+            call.trace_unit = None
+            return self._untraced(spec, call, "returns an iterator, whose code runs after the call", res)
+        trace, untraced = self._trace_of(spec, call)
         # A generator is handed straight back, wrapped, and cached only once
         # the caller has drained it. Draining it here instead meant a streamed
         # response arrived in one lump after the full latency, so
@@ -1258,7 +1468,9 @@ class CallRunner:
         # (`replay_argument_carriers`), so that draw is not a mutation the
         # caller would lose: the check sees it where the call found it.
         with carriers_put_back(run.arg_carriers_pre if run.arg_carriers_moved else []):
-            self._purity.check_argument_mutation(func_name, args, kwargs, call.call_args_hash, run.observer)
+            self._purity.check_argument_mutation(
+                func_name, *(call.checked or (args, kwargs)), call.call_args_hash, run.observer
+            )
         self._purity.report_observed_effects(func_name, run.observer)
         self._files.credit_remembered_reads(func_name, run.tracker, args, kwargs)
         auto_file_deps = snapshot_tracked_deps(run.tracker, func.__module__)
@@ -1279,6 +1491,8 @@ class CallRunner:
             observer=run.observer,
             inputs_moved=self._inputs_moved_check(spec, call),
         )
+        if refusal is None and untraced:
+            refusal = self._refuse_untraced(spec, untraced)
         if refusal is None and not replayable(run.carriers_moved + run.arg_carriers_moved):
             # A hit must leave the generator where the body did, or the
             # caller's next draw repeats what this call drew. One only a
@@ -1307,6 +1521,7 @@ class CallRunner:
                         run.arg_carriers_moved,
                     ),
                     dynamic_sources=recorded_sources(run.tracker),
+                    code_trace=trace,
                 ),
                 res,
             )
@@ -1328,6 +1543,59 @@ class CallRunner:
             cash_seconds=miss_overhead,
         )
         self._calls.note_effectiveness(func_name, miss_overhead, body_seconds=run.body_seconds, was_hit=False)
+        return res
+
+    def _trace_of(self, spec: CachedFunction, call: Call) -> tuple[list | None, str]:
+        """The trace of what a call that picks code by name ran
+        (`code_trace.build`), or why there is none: ``(None, "")`` for a call
+        that needs none."""
+        if not call.traced:
+            return None, ""
+        unit, call.trace_unit = call.trace_unit, None
+        if unit is None:
+            return None, "no sys.monitoring tool id was free to record what it ran"
+        # What the key covers: the function, the cached functions it calls
+        # (their state is in the key), and the helpers each walk read.
+        functions, reports, names = [], [], [spec.name]
+        seen: set[str] = set()
+        while names:
+            name = names.pop()
+            fn = spec.func if name == spec.name else self._registry.functions.get(name)
+            if name in seen or fn is None:
+                continue
+            seen.add(name)
+            functions.append(fn)
+            report = self._registry.report_for(fn, name)
+            if report is not None:
+                reports.append(report)
+            names.extend(self._registry.graph.get_dependencies(name))
+        return code_trace.build(unit, code_trace.static_codes(functions, reports))
+
+    def _refuse_untraced(self, spec: CachedFunction, why: str) -> str:
+        """Say once why a call that picks code by name is not stored; the
+        refusal `MissHistory.note_not_stored` keeps."""
+        self._notices.warn_once(
+            CashCacheIneffectiveWarning,
+            spec.name,
+            "untrackable_trace:" + why,
+            f"{spec.name} picks code by a run-time name and {why}, so cash cannot check the code a later "
+            "call would pick: calls like this run uncached.",
+            code="KEY-UNTRACKABLE-DEP",
+            fix="call the function by name, or pass it in as an argument; "
+            "`# @cash:assume-safe` on that line caches anyway.",
+        )
+        return f"it picks code by a run-time name and {why}"
+
+    def _untraced(self, spec: CachedFunction, call: Call, why: str, res: Any) -> Any:
+        """Hand back *res* of a traced call that cannot be stored."""
+        self._misses.note_not_stored(call.cache_key, self._refuse_untraced(spec, why))
+        self._calls.log(
+            spec.name,
+            cache_hit=False,
+            execution_time=_perf_counter() - call.call_start,
+            args_hash=call.args_hash,
+            cache_key=call.cache_key,
+        )
         return res
 
     async def single_flight(self, spec: CachedFunction, call: Call, compute: Callable[[], Any]) -> Any:

@@ -148,6 +148,7 @@ class MissKind(str, Enum):
     UNWALKABLE = "helpers could not all be keyed"
     HANDED = "handed a function that changes state"
     UNTRACKABLE = "code picked by a run-time name"
+    TRACE = "code picked by a run-time name changed"
     RAISED = "raised"
 
     __str__ = str.__str__
@@ -174,6 +175,10 @@ class MissReason(NamedTuple):
     #: calls: the name the body calls it by ("" when cash cannot tell),
     #: for explain()'s pass-the-data-in hint (`callee_to_pass_in`).
     lift: str | None = None
+    #: For an UNTRACKABLE reason from `FunctionRegistry.refresh_helper_bindings`:
+    #: every run-time lookup is one by name, so the call is keyed and served
+    #: on a trace of what it ran (`code_trace`), not run uncached.
+    traced: bool = False
 
     @property
     def text(self) -> str:
@@ -946,7 +951,7 @@ class Explainer:
         # Same binding check a real call makes first: a patched helper
         # changes the key, and a mock means the call would run uncached.
         unkeyable = self._registry.refresh_helper_bindings(func, func_name)
-        if unkeyable is None:
+        if unkeyable is None or unkeyable.traced:
             return None
         return _uncomputable(
             func_name,

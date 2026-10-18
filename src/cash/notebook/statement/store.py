@@ -687,9 +687,18 @@ class StatementStore:
         # load: ~400 MiB frames restoring slower than they computed, served as
         # hits. Nor for a file read inside a call the cache holds.
         reads_files = self._reads_files(execution, set(execution.accessed_files or ()))
+        # A final value is weighed against what a restart would re-run to
+        # get it back, not only its own statement (`final_rebuild_seconds`).
+        rebuild = self._rebuild_cost.final_rebuild_seconds(
+            run.inputs,
+            run.outputs,
+            execution.store_cost,
+            in_loop=self._calls.in_loop,
+            written_later=self.written_later_in_cell,
+        )
         should_skip, skip_reason, prediction = self.should_skip_large_object_caching(
             captured_vars,
-            execution.store_cost,
+            rebuild,
             force_persist,
             has_file_dependencies=reads_files,
             exempt=by_reference,

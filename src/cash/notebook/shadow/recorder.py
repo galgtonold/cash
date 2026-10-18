@@ -36,10 +36,10 @@ TOOL_NAME = "cash-shadow"
 #: Tried in this order; 0-2 belong to debuggers, coverage and profilers.
 _TOOL_IDS = (4, 3)
 
-_RESUMABLE = 0x20 | 0x80 | 0x200  # CO_GENERATOR | CO_COROUTINE | CO_ASYNC_GENERATOR
+RESUMABLE = 0x20 | 0x80 | 0x200  # CO_GENERATOR | CO_COROUTINE | CO_ASYNC_GENERATOR
 
 #: Library code whose start means the unit's work runs in other processes.
-_POOL_STARTS = frozenset(
+POOL_STARTS = frozenset(
     {
         ("multiprocessing.process", "BaseProcess.start"),
         ("multiprocessing.pool", "Pool.apply_async"),
@@ -102,6 +102,9 @@ class Unit:
 class Recorder:
     """The monitoring tool: one per process."""
 
+    tool_name = TOOL_NAME
+    tool_ids = _TOOL_IDS
+
     def __init__(self, notebook_ns: Any = None) -> None:
         self.tool: int | None = None
         self.reason: str | None = None
@@ -118,14 +121,14 @@ class Recorder:
         if mon is None:
             self.reason = "sys.monitoring needs Python 3.12 or newer"
             return False
-        for tool in _TOOL_IDS:
+        for tool in self.tool_ids:
             if mon.get_tool(tool) is None:
-                mon.use_tool_id(tool, TOOL_NAME)
+                mon.use_tool_id(tool, self.tool_name)
                 self.tool = tool
                 break
         else:
-            held = {t: mon.get_tool(t) for t in _TOOL_IDS}
-            self.reason = f"monitoring tool ids 4 and 3 are taken ({held})"
+            held = {t: mon.get_tool(t) for t in self.tool_ids}
+            self.reason = f"monitoring tool ids {' and '.join(map(str, self.tool_ids))} are taken ({held})"
             return False
         ev = mon.events
         mon.register_callback(self.tool, ev.PY_START, self._on_start)
@@ -135,7 +138,7 @@ class Recorder:
 
     def uninstall(self) -> None:
         mon = sys.monitoring
-        if self.tool is None or mon.get_tool(self.tool) != TOOL_NAME:
+        if self.tool is None or mon.get_tool(self.tool) != self.tool_name:
             return
         mon.set_events(self.tool, 0)
         mon.register_callback(self.tool, mon.events.PY_START, None)
@@ -151,7 +154,7 @@ class Recorder:
 
     def _intact(self) -> bool:
         mon = sys.monitoring
-        if self.tool is None or mon.get_tool(self.tool) != TOOL_NAME:
+        if self.tool is None or mon.get_tool(self.tool) != self.tool_name:
             return False
         return mon.get_events(self.tool) == mon.events.PY_START | mon.events.PY_RESUME
 
@@ -161,7 +164,7 @@ class Recorder:
         if not self._intact():
             unit.markers.add("tool_conflict")
             mon = sys.monitoring
-            if self.tool is not None and mon.get_tool(self.tool) == TOOL_NAME:
+            if self.tool is not None and mon.get_tool(self.tool) == self.tool_name:
                 # Still ours, its events turned off: arm them again.
                 mon.set_events(self.tool, mon.events.PY_START | mon.events.PY_RESUME)
         unit.threads_before = frozenset(t.ident for t in threading.enumerate() if t.ident is not None)
@@ -241,7 +244,7 @@ class Recorder:
             kind = self._classify(g)
         unit = stack[-1]
         if kind[1] is None:
-            if (kind[2], code.co_qualname) in _POOL_STARTS:
+            if (kind[2], code.co_qualname) in POOL_STARTS:
                 unit.markers.add("process_pool")
             return sys.monitoring.DISABLE
         unit.codes[code] = (g, kind[1])
@@ -258,7 +261,7 @@ class Recorder:
 
     def _on_resume(self, code: types.CodeType, offset: int) -> Any:
         stack = self.stack
-        if not stack or not code.co_flags & _RESUMABLE:
+        if not stack or not code.co_flags & RESUMABLE:
             return sys.monitoring.DISABLE
         unit = stack[-1]
         if code in unit.codes:

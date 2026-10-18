@@ -973,7 +973,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-FUNCTION-RAISED](#key-function-raised) | decorator | the `key=` function raised; the call ran uncached |
 | [KEY-HELPERS-UNWALKABLE](#key-helpers-unwalkable) | both | the code a function runs cannot all be found; not cached |
 | [KEY-INSTANCE-STATE](#key-instance-state) | decorator | a bound method's instance cannot be hashed |
-| [KEY-ITERATOR-CONSUMED](#key-iterator-consumed) | decorator | building the key read an iterator argument; the call ran uncached |
+| [KEY-ITERATOR-CONSUMED](#key-iterator-consumed) | decorator | a registered hasher read an iterator argument; the call ran uncached |
 | [KEY-MEMO-BEFORE-IMPORT](#key-memo-before-import) | both | a `functools` memo already held results when cash was imported |
 | [KEY-LOOP-VAR-CHANGED](#key-loop-var-changed) | notebook | a loop body changes its loop variable before work cached for each pass |
 | [KEY-NETWORK-READ](#key-network-read) | decorator | the body reads from a server or database |
@@ -985,7 +985,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-UNHASHABLE-DEFAULT](#key-unhashable-default) | decorator | a parameter default cannot be hashed; not cached |
 | [KEY-UNHASHABLE-GLOBAL](#key-unhashable-global) | decorator | a global the function reads cannot be hashed |
 | [KEY-UNRESOLVED-CALL](#key-unresolved-call) | decorator | a call goes through a property or `__getattr__`; what it reaches is not in the key |
-| [KEY-UNTRACKABLE-DEP](#key-untrackable-dep) | decorator | the body picks code by a run-time name; not cached |
+| [KEY-UNTRACKABLE-DEP](#key-untrackable-dep) | decorator | the body picks code by a run-time name in a way cash cannot check; not cached |
 
 ### KEY-AMBIENT-READ {#key-ambient-read}
 
@@ -1311,19 +1311,25 @@ cash.register_hasher(Config, lambda c: c.fingerprint)
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/decorator/runtime.py:KeyBuilder._check_iterators_unread @dd5b4fdd -->
-**What happened.** An argument is an iterator (a generator, `map(...)`,
-`iter(rows)`), and building the key read it: a `key=` function such as
-`key=lambda rows: tuple(rows)`, or a hasher registered for its type. An
-iterator can be read once, so the body got what was left of it. The call
-ran uncached. When cash cannot tell how far an iterator was read and a
-`key=` function or a registered hasher could have read it, it says so too.
+**What happened.** An argument is an iterator (`map(...)`, `iter(rows)`,
+an iterator class of your own), and building the key read it: a hasher
+registered for its type, or some other part of the key. An iterator can be
+read once, so the body got what was left of it. The call ran uncached.
+When cash cannot tell how far an iterator was read and a registered hasher
+could have read it, it says so too.
+
+Two cases do not lose items. A `key=` function reads a copy of the
+iterator. A generator keyed by a hasher registered for generators is read
+once, and the hasher and the body each get a generator over its items; only
+one with more than 100,000 items runs uncached with this warning, and its
+body still gets every item.
 
 **Why it matters.** The body's result was computed from an emptied
 iterator. Stored, it would be served to every later call with the same
 key, a list of the same rows included.
 
-**What to do.** Pass a list or a tuple instead of the iterator, or key the
-call by something that does not read it.
+**What to do.** Pass a list or a tuple instead of the iterator, or use
+`key=` to key the call by its items.
 
 **When it is safe to ignore.** When the message says the iterator *may* have
 been read and you know the key did not read it. When it says it was read,
@@ -1655,9 +1661,18 @@ by a name known only at run time: `getattr(module, name)()`,
 the line. The function runs uncached, and so does every cached function that
 calls it.
 
-**Why it matters.** cash cannot tell which code that name lands on, so an edit
-to it, or to a global it reads, would not change the key. Nothing stale is served: the call is not
-cached.
+<!-- claim: cash/decorator/code_trace.py:build @ff4bd8fd, cash/decorator/code_trace.py:verify @823e1f0a -->
+On Python 3.12 and newer, a lookup by name (`getattr(module, name)`,
+`importlib.import_module(name)`, `__import__(name)`) is cached instead: cash
+records the code the call ran and what each lookup found, and serves a later
+call only while all of it is unchanged. This warning then comes only when that
+record cannot be checked again, and says why: the call ran a function that has
+side effects or reads the clock, a function no name finds, a value too big to
+digest, or it left a thread running.
+
+**Why it matters.** cash cannot tell from the source which code that name
+lands on, so an edit to it, or to a global it reads, would not change the key.
+Nothing stale is served: the call is not cached.
 
 **What to do.** Call the function by name, or pass the function itself in as
 an argument, where its code reaches the key. A module-level table of

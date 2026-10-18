@@ -136,7 +136,8 @@ class Wrappers:
 
             async def compute() -> Any:
                 with runner.body_scope(spec, call) as run:
-                    run.res = await func(*args, **kwargs)
+                    # call.args: a ``key=`` call's iterators are copies (`split_for_key`).
+                    run.res = await func(*call.args, **call.kwargs)
                 return runner.finish_miss(spec, call, run)
 
             if not locking():
@@ -159,7 +160,8 @@ class Wrappers:
 
             def compute() -> Any:
                 with runner.body_scope(spec, call) as run:
-                    run.res = func(*args, **kwargs)
+                    # call.args: a ``key=`` call's iterators are copies (`split_for_key`).
+                    run.res = func(*call.args, **call.kwargs)
                 return runner.finish_miss(spec, call, run)
 
             if locking():

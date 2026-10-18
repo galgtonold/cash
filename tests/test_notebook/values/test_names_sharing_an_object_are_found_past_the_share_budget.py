@@ -85,3 +85,23 @@ def test_an_incomplete_search_warns_once(cash_magics, no_budget, monkeypatch):
         run_cash_cell(cash_magics, cells[1], cells=cells)
     codes = [getattr(w.message, "code", None) for w in caught]
     assert codes.count("NOTEBOOK-SHARE-UNCHECKED") == 1
+    warned = [w for w in caught if getattr(w.message, "code", None) == "NOTEBOOK-SHARE-UNCHECKED"]
+    # At the cell, as cash's other notebook warnings are, not at ipykernel's frame.
+    assert warned[0].filename == "<cash>", warned[0].filename
+
+
+def test_the_shell_is_left_out_of_the_check(cash_magics, no_budget, monkeypatch):
+    """``ip = get_ipython()`` binds an object that holds the whole session:
+    the check ran out of time on it and warned on a harmless line."""
+    monkeypatch.setattr(shared_objects, "_REFERRER_DEPTH", 0)
+    shell = cash_magics.shell
+    shell.user_ns["get_ipython"] = lambda: shell
+    cells = ["ip = get_ipython()", "same = ip"]
+    cash_magics.cash_on("")
+    cash_magics.badges.mode = "off"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+    assert shell.user_ns["same"] is shell
+    assert not [w for w in caught if getattr(w.message, "code", None) == "NOTEBOOK-SHARE-UNCHECKED"]
