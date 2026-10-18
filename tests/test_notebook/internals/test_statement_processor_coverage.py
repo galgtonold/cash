@@ -355,6 +355,16 @@ class TestModuleLineage:
 class TestPurityChecks:
     """Test purity check branches in process()."""
 
+    @pytest.fixture(autouse=True)
+    def _a_budget_no_runner_spends(self, monkeypatch):
+        """These ask which reason the purity check gives, so its analysis must
+        not run out of time first: past its 0.5 s floor a statement runs
+        uncached for the budget's reason alone, as one did on a slow Windows
+        runner."""
+        import cash.analysis.analysis_budget as analysis_budget
+
+        monkeypatch.setattr(analysis_budget, "ANALYSIS_BUDGET_FLOOR_S", 60.0)
+
     def test_stateful_function_skips_cache(self, statement_processor, mock_shell):
         """@stateful functions should skip cache."""
         from cash.purity import stateful

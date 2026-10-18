@@ -189,6 +189,11 @@ class CallEntries:
         #: for the same site (``CallCache.resolve`` re-wraps per statement
         #: execution).
         self._refused: set[str] = set()
+        #: Whether the entry the last `store` wrote is kept as the backend
+        #: keeps anything: False when a backend with a tier past RAM held it
+        #: back from that tier (``persist_skipped``: its bytes were worth more
+        #: than its compute there, say), so it is gone after a restart.
+        self.last_store_kept = True
 
     def persists(self) -> bool:
         """Whether the statement under way asked for its calls to reach disk."""
@@ -579,8 +584,10 @@ class CallEntries:
         if callee_globals:
             metadata["has_callee_globals"] = True
             value = (value, dict(callee_globals))
+        self.last_store_kept = False
         try:
             self._cash.backend.set(key, value, metadata)
+            self.last_store_kept = "persist_skipped" not in metadata
         except Exception:  # noqa: BLE001 - a failed store costs a recompute, never the call
             logger.debug("call unit: store failed for %s", key)
         finally:
