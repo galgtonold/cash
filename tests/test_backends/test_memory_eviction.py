@@ -21,7 +21,7 @@ class TestSmartMemoryBackend:
 
         reading = SimpleNamespace(percent=50.0, total=100_000_000)
         with (
-            patch.object(memory_backend, "psutil", SimpleNamespace(virtual_memory=lambda: reading)),
+            patch.object(memory_backend, "_virtual_memory", lambda: reading),
             patch.object(InMemoryBackend, "_PRESSURE_KEEPS_BYTES", 0),
         ):
             self.backend.set("item1", "A" * 100_000, metadata={"execution_time": 0.1})

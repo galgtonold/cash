@@ -126,9 +126,9 @@ def test_pressure_eviction_ranks_an_unread_costly_result_above_a_cheap_read_one(
 
     from cash.backends import memory_backend
 
-    fake = SimpleNamespace(virtual_memory=lambda: SimpleNamespace(percent=95.0, total=100 * MB))
+    fake = lambda: SimpleNamespace(percent=95.0, total=100 * MB)
     b = InMemoryBackend(check_interval=3)
-    monkeypatch.setattr(memory_backend, "psutil", fake)
+    monkeypatch.setattr(memory_backend, "_virtual_memory", fake)
     monkeypatch.setattr(InMemoryBackend, "_PRESSURE_KEEPS_BYTES", 0)
     _put(b, "costly", MB, 30.0)
     _put(b, "cheap", MB, 0.001)

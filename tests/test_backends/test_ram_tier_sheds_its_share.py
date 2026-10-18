@@ -43,8 +43,8 @@ def machine(monkeypatch):
     state = SimpleNamespace(percent=50.0, total=16 * GB)
     monkeypatch.setattr(
         memory_backend,
-        "psutil",
-        SimpleNamespace(virtual_memory=lambda: SimpleNamespace(percent=state.percent, total=state.total)),
+        "_virtual_memory",
+        lambda: SimpleNamespace(percent=state.percent, total=state.total),
     )
     return state
 

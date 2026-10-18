@@ -22,7 +22,7 @@ statements as "unstable key".
 
 On a quiet machine this loop restores ten of ten on the old code as well; the
 pressure below is what makes it one of ten. The machine's memory is reported
-at 95% by patching the backend's psutil, so what cash decides does not depend
+at 95% by patching the backend's memory reading, so what cash decides does not depend
 on what else is running.
 
 A tier that holds more than 16 MiB still gives back its SHARE, and holds
@@ -68,8 +68,7 @@ SETUP = (
     "import psutil as _ps, types as _ty\n"
     "import cash.backends.memory_backend as _mb\n"
     "_tot = _ps.virtual_memory().total\n"
-    "_mb.psutil = _ty.SimpleNamespace(virtual_memory="
-    "lambda: _ty.SimpleNamespace(percent=95.0, total=_tot))"
+    "_mb._virtual_memory = lambda: _ty.SimpleNamespace(percent=95.0, total=_tot)"
 )
 
 KEYS = 'KEYS = ["k%02d" % i for i in range(10)]'

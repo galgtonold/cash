@@ -19,7 +19,7 @@ import time
 import types
 import weakref
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NamedTuple
 
 from cash.exceptions import CacheBackendError
 
@@ -27,6 +27,7 @@ from .. import _native, _plain_data, cost_model, held_reads, kept_state, stored_
 from .._lazy_module import LazyModule
 from ..cost_model import GENERIC_FAMILY
 from ..sizing import memory_footprint, pickled_size_estimate
+from ..source_reading import read_code_file
 from ..value_types import IMMUTABLE_PRIMS
 from . import frame_sharing, iterative_copy, shared_blocks
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, gdsf_value
@@ -2101,6 +2102,51 @@ class InMemoryBackend(CacheBackend):
 _READING_FAILURE_LOGGED: list[bool] = []
 
 
+class _MeminfoReading(NamedTuple):
+    """The two numbers of psutil's ``virtual_memory()`` the RAM tier reads."""
+
+    total: int
+    percent: float
+
+
+def _meminfo_reading() -> _MeminfoReading | None:
+    """``virtual_memory()``'s total and percent, read from ``/proc/meminfo``
+    as psutil reads them on Linux, or None where that file says otherwise.
+
+    psutil takes ``MemTotal`` and ``MemAvailable`` (kB) and gives the percent
+    in use as ``(total - available) / total``, rounded to one decimal. Read
+    directly, a process need not import psutil (16-27 ms) at its first store.
+    A kernel without ``MemAvailable`` (before 3.14), one that reports none
+    available or more than the total (psutil estimates those from other
+    lines), or a reading that does not parse, leaves the answer to psutil.
+    """
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        # Untracked (`read_code_file`): cash's own read, never a statement's input.
+        fields: dict[bytes, int] = {}
+        for line in read_code_file("/proc/meminfo").splitlines():
+            name, _, rest = line.partition(b":")
+            if name in (b"MemTotal", b"MemAvailable"):
+                number, unit = rest.split()
+                if unit != b"kB":
+                    return None
+                fields[name] = int(number) * 1024
+        total, available = fields[b"MemTotal"], fields[b"MemAvailable"]
+    except Exception:  # noqa: BLE001 - no /proc, or a format it does not have: psutil answers
+        return None
+    if not 0 < available <= total:
+        return None
+    return _MeminfoReading(total, round((total - available) / total * 100, 1))
+
+
+def _virtual_memory() -> Any:
+    """The machine's memory, with psutil's ``total`` and ``percent``: from
+    ``/proc/meminfo`` on Linux (`_meminfo_reading`), from psutil elsewhere."""
+    reading = _meminfo_reading()
+    return reading if reading is not None else psutil.virtual_memory()
+
+
 def _memory_reading() -> Any | None:
     """psutil's reading of the machine's memory, or None when there is none.
 
@@ -2112,7 +2158,7 @@ def _memory_reading() -> Any | None:
     run stays that way, and a line per ten writes would say nothing new.
     """
     try:
-        mem = psutil.virtual_memory()
+        mem = _virtual_memory()
         percent = mem.percent
     except Exception as exc:  # noqa: BLE001 - see docstring: a probe never fails a write
         if not _READING_FAILURE_LOGGED:
