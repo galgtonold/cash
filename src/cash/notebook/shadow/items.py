@@ -33,12 +33,12 @@ unverified.
 from __future__ import annotations
 
 import builtins
+import contextlib
 import dis
 import functools
 import hashlib
 import pickle
 import struct
-import contextlib
 import sys
 import threading
 import types
