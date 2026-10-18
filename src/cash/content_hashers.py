@@ -1176,7 +1176,10 @@ def fold_view_column(h: Any, column: Any, large: str) -> None:
 
     The C extension's ``view_lengths`` and ``view_values`` write each
     value's length (int64, 0 for a missing one) and its bytes into blocks
-    that are hashed and used again (`VIEW_BLOCK_BYTES`)."""
+    that are hashed and used again (`VIEW_BLOCK_BYTES`). A block is hashed
+    when it is full, not at the end of each chunk: p08's log frame comes in
+    1,280 chunks of ~2,900 rows, and hashing each chunk's few KB apart,
+    on one thread, was most of what the frame cost."""
     import numpy as np
     import pyarrow as pa
 
@@ -1185,6 +1188,8 @@ def fold_view_column(h: Any, column: Any, large: str) -> None:
     chunks = column.chunks if isinstance(column, pa.ChunkedArray) else [column]
     lengths_block, values_block = _view_blocks()
     nulls, lengths, values = BulkHasher(), BulkHasher(), BulkHasher()
+    lengths_view, values_view = memoryview(lengths_block), memoryview(values_block)
+    lengths_at = values_at = 0  # bytes of the blocks filled and not yet hashed
     base = 0
     for chunk in chunks:
         n = len(chunk)
@@ -1199,14 +1204,22 @@ def fold_view_column(h: Any, column: Any, large: str) -> None:
         start, stop = chunk.offset, chunk.offset + n
         row = start
         while row < stop:
-            rows = kernels.view_lengths(views, validity, row, stop, lengths_block)
-            lengths.update(memoryview(lengths_block)[: rows * 8])
+            if len(lengths_block) - lengths_at < 8:
+                lengths.update(lengths_view[:lengths_at])
+                lengths_at = 0
+            rows = kernels.view_lengths(views, validity, row, stop, lengths_view[lengths_at:])
+            lengths_at += rows * 8
             row += rows
         row, skip = start, 0
         while row < stop:
-            row, skip, written = kernels.view_values(views, datas, validity, row, skip, stop, values_block)
-            values.update(memoryview(values_block)[:written])
+            if values_at == len(values_block):
+                values.update(values_view[:values_at])
+                values_at = 0
+            row, skip, written = kernels.view_values(views, datas, validity, row, skip, stop, values_view[values_at:])
+            values_at += written
         base += n
+    lengths.update(lengths_view[:lengths_at])
+    values.update(values_view[:values_at])
     h.update(f"|arrow:{large}:offsets:{base}|".encode())
     h.update(nulls.digest() + lengths.digest() + values.digest())
 
