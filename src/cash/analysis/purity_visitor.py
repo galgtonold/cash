@@ -245,6 +245,9 @@ class PurityVisitor(ast.NodeVisitor):
         # untrackable dispatch obscured by a local; requiring "dynamic only"
         # keeps a name later reassigned to a safe value from false-positiving.
         self._assign_kinds: dict[str, set[str]] = {}
+        # The names some dynamic source bound that was not a name lookup
+        # (`_is_name_lookup_source`): eval, a table holding one, a namespace.
+        self._bound_by_more_than_a_lookup: set[str] = set()
         # Calls whose function is a bare Name, checked against the taint set in
         # :meth:`finalize_taint` after the whole body is walked.
         self._name_call_nodes: list[ast.Call] = []
@@ -439,6 +442,17 @@ class PurityVisitor(ast.NodeVisitor):
                 return True
         return False
 
+    @staticmethod
+    def _is_name_lookup_source(value: ast.AST) -> bool:
+        """``getattr(obj, name)``, ``importlib.import_module(name)`` or
+        ``__import__(name)``: a `_is_dynamic_source` a trace can follow."""
+        if not isinstance(value, ast.Call):
+            return False
+        f = value.func
+        if isinstance(f, ast.Name):
+            return f.id in ("getattr", "__import__")
+        return isinstance(f, ast.Attribute) and f.attr == "import_module"
+
     def _holds_a_dynamic_source(self, value: ast.AST) -> bool:
         """True when *value* is a literal table holding one
         (``{"run": eval}``): calling what it yields runs code named at run
@@ -468,12 +482,19 @@ class PurityVisitor(ast.NodeVisitor):
         for node in self._name_call_nodes:
             name = node.func.id  # type: ignore[attr-defined]
             if name in tainted:
+                if name in self._bound_by_more_than_a_lookup:
+                    description = (
+                        f"calls {name!r}, which was bound from a runtime value (dynamic dispatch through a local)"
+                    )
+                else:
+                    description = (
+                        f"a name lookup bound to a local: calls {name!r}, which getattr() or an import "
+                        "by a run-time name bound (dynamic dispatch through a local)"
+                    )
                 self.issues.append(
                     PurityIssue(
                         kind=ISSUE_UNTRACKABLE_DEP,
-                        description=(
-                            f"calls {name!r}, which was bound from a runtime value (dynamic dispatch through a local)"
-                        ),
+                        description=description,
                         where=self._qualname,
                         line=getattr(node, "lineno", 0),
                     )
@@ -988,6 +1009,8 @@ class PurityVisitor(ast.NodeVisitor):
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             if self._is_dynamic_source(node.value) or self._holds_a_dynamic_source(node.value):
                 kind = "dynamic"
+                if not self._is_name_lookup_source(node.value):
+                    self._bound_by_more_than_a_lookup.add(node.targets[0].id)
             elif namespace_spelled(node.value) is not None:
                 kind = "namespace"  # `ns = globals()`: `ns[k]()` is `globals()[k]()`
             elif isinstance(node.value, ast.Subscript):

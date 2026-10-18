@@ -355,8 +355,8 @@ changed. The second list is what cash does not see, and what to do about it.
     - The **clock**, a random UUID, or the whole environment
       (`os.environ.copy()`): pass the value as an argument
       ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)).
-    - **Code picked by a run-time name**: a `getattr(mod, name)()`,
-      `importlib.import_module` or `eval` runs uncached
+    - **Code picked by a run-time name**: `eval` runs uncached, and so do
+      `getattr(mod, name)()` and `importlib.import_module` before Python 3.12
       ([`KEY-UNTRACKABLE-DEP`](warnings.md#key-untrackable-dep)).
     - A file read by a reader cash does not know: use `file_depends_on=`.
     - The decorator's own parameters (`ttl`, `cache_if`, `strict`, ...):
@@ -927,7 +927,7 @@ would skip or get wrong:
 | Reads the network or a database (`requests.get`, `pd.read_sql`) | Warns ([`KEY-NETWORK-READ`](warnings.md#key-network-read)) and caches. `ttl=` answers it and silences the warning |
 | Reads the clock, a random UUID, or an environment variable by computed name | Warns ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)) and caches the first value |
 | Reads an environment variable by literal name, the working directory, or the command line (`sys.argv`, `parser.parse_args()`) | Puts the value in the key. No warning |
-| Uses `eval`/`exec`, `importlib`, or `getattr(obj, name)()` with a computed name, or calls a function `exec`/`eval` built from a string (rules or formulas loaded from a file) | Warns ([`KEY-UNTRACKABLE-DEP`](warnings.md#key-untrackable-dep)) and runs uncached, because edits to that code can't be tracked. `strict=True` raises `CashImpureFunctionError` |
+| Uses `eval`/`exec`, `importlib`, or `getattr(obj, name)()` with a computed name, or calls a function `exec`/`eval` built from a string (rules or formulas loaded from a file) | Warns ([`KEY-UNTRACKABLE-DEP`](warnings.md#key-untrackable-dep)) and runs uncached, because edits to that code can't be tracked; on Python 3.12+ a `getattr` or `importlib` lookup is cached on a checked record of the code it ran instead. `strict=True` raises `CashImpureFunctionError` |
 
 **When writing a file is part of the job** (a report, a thumbnail, a saved
 model), a hit skips the write. Split the function: cache the computation, and

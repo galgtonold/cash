@@ -985,7 +985,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-UNHASHABLE-DEFAULT](#key-unhashable-default) | decorator | a parameter default cannot be hashed; not cached |
 | [KEY-UNHASHABLE-GLOBAL](#key-unhashable-global) | decorator | a global the function reads cannot be hashed |
 | [KEY-UNRESOLVED-CALL](#key-unresolved-call) | decorator | a call goes through a property or `__getattr__`; what it reaches is not in the key |
-| [KEY-UNTRACKABLE-DEP](#key-untrackable-dep) | decorator | the body picks code by a run-time name; not cached |
+| [KEY-UNTRACKABLE-DEP](#key-untrackable-dep) | decorator | the body picks code by a run-time name in a way cash cannot check; not cached |
 
 ### KEY-AMBIENT-READ {#key-ambient-read}
 
@@ -1655,9 +1655,18 @@ by a name known only at run time: `getattr(module, name)()`,
 the line. The function runs uncached, and so does every cached function that
 calls it.
 
-**Why it matters.** cash cannot tell which code that name lands on, so an edit
-to it, or to a global it reads, would not change the key. Nothing stale is served: the call is not
-cached.
+<!-- claim: cash/decorator/code_trace.py:build @ff4bd8fd, cash/decorator/code_trace.py:verify @823e1f0a -->
+On Python 3.12 and newer, a lookup by name (`getattr(module, name)`,
+`importlib.import_module(name)`, `__import__(name)`) is cached instead: cash
+records the code the call ran and what each lookup found, and serves a later
+call only while all of it is unchanged. This warning then comes only when that
+record cannot be checked again, and says why: the call ran a function that has
+side effects or reads the clock, a function no name finds, a value too big to
+digest, or it left a thread running.
+
+**Why it matters.** cash cannot tell from the source which code that name
+lands on, so an edit to it, or to a global it reads, would not change the key.
+Nothing stale is served: the call is not cached.
 
 **What to do.** Call the function by name, or pass the function itself in as
 an argument, where its code reaches the key. A module-level table of

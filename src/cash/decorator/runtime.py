@@ -36,7 +36,7 @@ from ..tracking.randomness import (
     replay_argument_carriers,
     replayable,
 )
-from . import hit_memo
+from . import code_trace, hit_memo
 from .arg_hashing import HANDED_DIGESTS, PLAIN_CENSUS
 from .arg_key import keyed_arguments
 from .cache_metadata import CacheMetadata
@@ -327,8 +327,14 @@ class KeyBuilder:
         """
         func, func_name = spec.func, spec.name
         unkeyable = self._registry.refresh_helper_bindings(func, func_name)
+        traced = False
         if unkeyable is not None:
-            return Unkeyable(unkeyable), {}, {}
+            # A lookup by name is keyed as any call and served on a trace of
+            # what it ran (`code_trace`): not a coroutine, whose body other
+            # tasks' code runs in the middle of.
+            if not unkeyable.traced or inspect.iscoroutinefunction(func):
+                return Unkeyable(unkeyable._replace(traced=False)), {}, {}
+            traced = True
         if self._hands_a_state_changing_callable(spec, args, kwargs):
             return Unkeyable(_HANDED), {}, {}
         ledger: dict = {}
@@ -359,6 +365,8 @@ class KeyBuilder:
             slot = (func_name, built.state_hash)
             if not self._misses.has_ledger(slot):
                 self._misses.keep_state_ledger(slot, ledger)
+        if traced:
+            built = built._replace(traced=True)
         return built, watch, ledger
 
     def _code_state(self, spec: CachedFunction, chain: list[str], *, note: bool = False) -> str:
@@ -811,6 +819,7 @@ class CallRunner:
         args_hash: str,
         func_name: str,
         ttl: int | None,
+        traced: bool = False,
     ) -> Any:
         """Return cached_data if valid, else CACHE_MISS sentinel.
 
@@ -825,7 +834,7 @@ class CallRunner:
             self._misses.note_miss(func_name, cache_key, self._misses.absent_entry_reason(func_name, cache_key))
             return CACHE_MISS
         try:
-            verdict = self.entry_verdict(cache_key, metadata, ttl)
+            verdict = self.entry_verdict(cache_key, metadata, ttl, traced=traced)
             if verdict is not None:
                 self._misses.note_miss(func_name, cache_key, verdict)
                 return CACHE_MISS
@@ -880,7 +889,7 @@ class CallRunner:
         return CACHE_MISS
 
     def entry_verdict(
-        self, cache_key: str, metadata: CacheMetadata, ttl: int | None, *, quiet: bool = False
+        self, cache_key: str, metadata: CacheMetadata, ttl: int | None, *, quiet: bool = False, traced: bool = False
     ) -> MissReason | None:
         """Why the entry found under *cache_key* is not served, or None to
         serve it: its age against the ttl, its recorded files, its chunks.
@@ -888,8 +897,9 @@ class CallRunner:
         The one judgement a lookup (`CallRunner._try_get_cached`) and
         ``explain()`` both apply, so a check added here holds for both.
         *quiet* leaves out the warnings the file check gives, for
-        ``explain()``. Raises ``TypeError``/``KeyError`` on metadata that
-        does not validate.
+        ``explain()``. *traced*: the call picks code by a run-time name, so
+        an entry without a trace of what it ran is not served. Raises
+        ``TypeError``/``KeyError`` on metadata that does not validate.
         """
         ttl = self._backend_slot.entry_ttl(ttl, metadata)
         if ttl_expired(written_at(metadata), ttl):
@@ -906,7 +916,24 @@ class CallRunner:
             )
         if not self._chunks_are_intact(cache_key, metadata):
             return MissReason(MissKind.INCOMPLETE, "a chunk of the stored result is missing")
+        if metadata.code_trace is not None:
+            changed = code_trace.verify(metadata.code_trace, self._cached_state)
+            if changed is not None:
+                return MissReason(MissKind.TRACE, f"{changed} since the entry was stored")
+        elif traced:
+            return MissReason(MissKind.TRACE, "the entry has no trace of the code the call picked by name")
         return None
+
+    def _cached_state(self, func_name: str) -> str | None:
+        """The state segment of cached function *func_name* now, for a trace
+        item naming it (`code_trace`); None when there is none."""
+        spec = self._registry.cached.get(func_name)
+        if spec is None:
+            return None
+        try:
+            return self._keys.callee_state(spec)
+        except Exception:  # noqa: BLE001 - a state that cannot be built is not the one recorded
+            return None
 
     def _stored_source(self, key: str) -> Any:
         """What the backend holds under *key*: a pickled source a caller's
@@ -1050,6 +1077,7 @@ class CallRunner:
             call.outcome = self._run_uncached(spec, call, built.reason)
             return call
         call.cache_key, call.state_hash, call.args_hash = built.cache_key, built.state_hash, built.args_hash
+        call.traced = built.traced
         if built.reached_ttl is not None:
             # A cached function the key reached as a value, not by a graph
             # edge: its ttl is per call, not per function.
@@ -1058,10 +1086,21 @@ class CallRunner:
         raw_metadata, cached_data = self._backend_slot.read(call.cache_key)
         call.metadata = CacheMetadata.from_dict(raw_metadata) if raw_metadata is not None else None
         hit = self._try_get_cached(
-            call.cache_key, call.metadata, cached_data, call.call_start, call.args_hash, func_name, call.ttl
+            call.cache_key,
+            call.metadata,
+            cached_data,
+            call.call_start,
+            call.args_hash,
+            func_name,
+            call.ttl,
+            call.traced,
         )
         call.cash_overhead = _perf_counter() - overhead_t0
         if hit is not CACHE_MISS:
+            if code_trace.active():
+                # Served inside a traced call: its body did not run, so what
+                # it stands for goes in that call's trace.
+                code_trace.note_cached_hit(func_name, self._cached_state(func_name), call.metadata.code_trace)
             self._replay_argument_rng(func_name, args, kwargs, call.metadata)
             self._calls.note_effectiveness(
                 func_name,
@@ -1070,7 +1109,13 @@ class CallRunner:
                 was_hit=True,
             )
             call.outcome = self._wrap_iterator_hit(call, call.metadata, hit)
-            if epochs_before is not None and handed is None and call.outcome is hit and not async_body:
+            if (
+                epochs_before is not None
+                and handed is None
+                and call.outcome is hit
+                and not async_body
+                and not call.traced
+            ):
                 memo = hit_memo.memo_for(spec, self)
                 if memo is not None:
                     memo.offer(call, args, kwargs, hit, epochs_before)
@@ -1123,7 +1168,7 @@ class CallRunner:
             return CACHE_MISS
         metadata = CacheMetadata.from_dict(raw_metadata)
         hit = self._try_get_cached(
-            call.cache_key, metadata, cached_data, call.call_start, call.args_hash, spec.name, call.ttl
+            call.cache_key, metadata, cached_data, call.call_start, call.args_hash, spec.name, call.ttl, call.traced
         )
         if hit is CACHE_MISS:
             return CACHE_MISS
@@ -1189,6 +1234,8 @@ class CallRunner:
             body_t0 = _perf_counter()
             nested = [0.0]
             nested_token = NESTED_CASH_SECONDS.set(nested)
+            # What a call that picks code by name ran, for its trace.
+            call.trace_unit = code_trace.begin() if call.traced else None
             try:
                 self._files.track_declared_files(run.tracker, spec)
                 self._files.track_scanned_files(run.tracker, args, kwargs)
@@ -1197,6 +1244,7 @@ class CallRunner:
                 self._calls.log_raised(func_name, exc, call.call_start)
                 raise
             finally:
+                code_trace.end(call.trace_unit)
                 NESTED_CASH_SECONDS.reset(nested_token)
             # The user's own work, isolated. Everything cash does sits outside
             # this pair, which is the whole point: it is the only number that
@@ -1231,6 +1279,11 @@ class CallRunner:
         """Everything a missed call does after its body: check, store, log."""
         func, func_name, args, kwargs = spec.func, spec.name, call.args, call.kwargs
         res = run.res
+        if call.traced and is_one_shot_iterator(res):
+            # Its body runs as the caller iterates, after the trace ended.
+            call.trace_unit = None
+            return self._untraced(spec, call, "returns an iterator, whose code runs after the call", res)
+        trace, untraced = self._trace_of(spec, call)
         # A generator is handed straight back, wrapped, and cached only once
         # the caller has drained it. Draining it here instead meant a streamed
         # response arrived in one lump after the full latency, so
@@ -1279,6 +1332,8 @@ class CallRunner:
             observer=run.observer,
             inputs_moved=self._inputs_moved_check(spec, call),
         )
+        if refusal is None and untraced:
+            refusal = self._refuse_untraced(spec, untraced)
         if refusal is None and not replayable(run.carriers_moved + run.arg_carriers_moved):
             # A hit must leave the generator where the body did, or the
             # caller's next draw repeats what this call drew. One only a
@@ -1307,6 +1362,7 @@ class CallRunner:
                         run.arg_carriers_moved,
                     ),
                     dynamic_sources=recorded_sources(run.tracker),
+                    code_trace=trace,
                 ),
                 res,
             )
@@ -1328,6 +1384,59 @@ class CallRunner:
             cash_seconds=miss_overhead,
         )
         self._calls.note_effectiveness(func_name, miss_overhead, body_seconds=run.body_seconds, was_hit=False)
+        return res
+
+    def _trace_of(self, spec: CachedFunction, call: Call) -> tuple[list | None, str]:
+        """The trace of what a call that picks code by name ran
+        (`code_trace.build`), or why there is none: ``(None, "")`` for a call
+        that needs none."""
+        if not call.traced:
+            return None, ""
+        unit, call.trace_unit = call.trace_unit, None
+        if unit is None:
+            return None, "no sys.monitoring tool id was free to record what it ran"
+        # What the key covers: the function, the cached functions it calls
+        # (their state is in the key), and the helpers each walk read.
+        functions, reports, names = [], [], [spec.name]
+        seen: set[str] = set()
+        while names:
+            name = names.pop()
+            fn = spec.func if name == spec.name else self._registry.functions.get(name)
+            if name in seen or fn is None:
+                continue
+            seen.add(name)
+            functions.append(fn)
+            report = self._registry.report_for(fn, name)
+            if report is not None:
+                reports.append(report)
+            names.extend(self._registry.graph.get_dependencies(name))
+        return code_trace.build(unit, code_trace.static_codes(functions, reports))
+
+    def _refuse_untraced(self, spec: CachedFunction, why: str) -> str:
+        """Say once why a call that picks code by name is not stored; the
+        refusal `MissHistory.note_not_stored` keeps."""
+        self._notices.warn_once(
+            CashCacheIneffectiveWarning,
+            spec.name,
+            "untrackable_trace:" + why,
+            f"{spec.name} picks code by a run-time name and {why}, so cash cannot check the code a later "
+            "call would pick: calls like this run uncached.",
+            code="KEY-UNTRACKABLE-DEP",
+            fix="call the function by name, or pass it in as an argument; "
+            "`# @cash:assume-safe` on that line caches anyway.",
+        )
+        return f"it picks code by a run-time name and {why}"
+
+    def _untraced(self, spec: CachedFunction, call: Call, why: str, res: Any) -> Any:
+        """Hand back *res* of a traced call that cannot be stored."""
+        self._misses.note_not_stored(call.cache_key, self._refuse_untraced(spec, why))
+        self._calls.log(
+            spec.name,
+            cache_hit=False,
+            execution_time=_perf_counter() - call.call_start,
+            args_hash=call.args_hash,
+            cache_key=call.cache_key,
+        )
         return res
 
     async def single_flight(self, spec: CachedFunction, call: Call, compute: Callable[[], Any]) -> Any:

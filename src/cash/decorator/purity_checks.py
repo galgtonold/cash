@@ -45,6 +45,7 @@ from ..install_paths import is_user_code_module, is_user_module
 from ..source_reading import getsource, getsourcelines
 from ..tracking.randomness import capture_argument_carrier_states, moved_carriers, rng_carrier_kind
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
+from . import code_trace
 from .arg_key import keyed_arguments
 from .cash_key import cash_key_method_of_type
 from .closure_fold import capture_digest, iter_code_scopes, unsafe_uses_of
@@ -1105,6 +1106,10 @@ class PurityChecks:
         if untrackable:
             issues = [i for i in issues if getattr(i, "kind", None) != ISSUE_UNTRACKABLE_DEP]
             self._static_flagged.add(func_name)
+            if code_trace.covers(untrackable):
+                # Lookups by name only: cached on a trace of what the call
+                # ran, which says itself when it cannot be (`code_trace`).
+                return issues
             self._notices.warn_once(
                 CashCacheIneffectiveWarning,
                 func_name,

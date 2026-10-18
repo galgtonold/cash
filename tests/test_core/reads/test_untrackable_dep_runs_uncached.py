@@ -8,11 +8,17 @@ function runs uncached and KEY-UNTRACKABLE-DEP says why; ``strict=True``
 raises, ``assume_safe=True`` (or ``# @cash:assume-safe`` on the line) caches
 anyway.
 
+On Python 3.12+ a lookup by name (``getattr``, ``import_module``) is cached on
+a trace of what the call ran instead
+(``test_a_lookup_by_name_is_cached_on_a_trace.py``); ``eval`` still runs
+uncached.
+
 A statically-named call (the tracked, common case) is unaffected.
 """
 
 from __future__ import annotations
 
+import sys
 import textwrap
 import warnings
 
@@ -21,6 +27,9 @@ import pytest
 from cash import Cash, CashCacheIneffectiveWarning, CashImpureFunctionError
 from cash.backends import InMemoryBackend
 
+#: A lookup by name is cached on a trace of what it ran (`cash.decorator.code_trace`).
+TRACED = sys.version_info >= (3, 12)
+
 
 def _runs(tmp_path) -> int:
     """How many times a body wrote its marker (`os.write`, not restored on a hit)."""
@@ -28,14 +37,24 @@ def _runs(tmp_path) -> int:
     return len(marker.read_bytes()) if marker.exists() else 0
 
 
+@pytest.fixture(autouse=True)
+def _forget_modules():
+    """The modules `_load` imports stay loaded for the test (a trace finds
+    the code that ran through them), then go: a later test that writes its
+    own helpers.py would otherwise import this one."""
+    yield
+    sys.modules.pop("m", None)
+    sys.modules.pop("helpers", None)
+
+
 def _load(tmp_path, body):
     """Write *body* as a real module and import it (analysis needs a source file)."""
     import importlib.util
-    import sys
 
     (tmp_path / "helpers.py").write_text("def strategy(x):\n    return x + 1\n", encoding="utf-8")
     mod_path = tmp_path / "m.py"
     mod_path.write_text(textwrap.dedent(body), encoding="utf-8")
+    sys.modules.pop("helpers", None)
     sys.path.insert(0, str(tmp_path))
     try:
         spec = importlib.util.spec_from_file_location("m", mod_path)
@@ -45,10 +64,6 @@ def _load(tmp_path, body):
         return mod
     finally:
         sys.path.remove(str(tmp_path))
-        sys.modules.pop("m", None)
-        # The module body may have imported it; a later test that writes its
-        # own helpers.py would otherwise import this one.
-        sys.modules.pop("helpers", None)
 
 
 _COUNT = """
@@ -82,9 +97,13 @@ def test_untrackable_pattern_runs_uncached_with_a_warning(tmp_path, name, line):
         warnings.simplefilter("always")
         assert f(10) == 11
         assert f(10) == 11
-    assert _runs(tmp_path) == 2  # no hit: the second call ran the body again
     texts = [str(w.message) for w in caught if issubclass(w.category, CashCacheIneffectiveWarning)]
     untrackable = [t for t in texts if "KEY-UNTRACKABLE-DEP" in t]
+    if TRACED and name != "by_eval":
+        assert _runs(tmp_path) == 1  # the second call was served, its trace unchanged
+        assert not untrackable, texts
+        return
+    assert _runs(tmp_path) == 2  # no hit: the second call ran the body again
     assert len(untrackable) == 1, texts
     assert "runs uncached" in untrackable[0]
 
@@ -119,7 +138,8 @@ def test_a_waived_line_caches(tmp_path):
 
 def test_a_cached_caller_of_an_untrackable_function_runs_uncached_too(tmp_path):
     """The caller's result contains what the lookup returned, so caching it
-    would serve the stale answer the callee itself does not."""
+    would serve the stale answer the callee itself does not. On 3.12+ both
+    are cached on the trace of what they ran."""
     mod = _load(
         tmp_path,
         "import cash, helpers, os\nNAME = 'strategy'\n"
@@ -131,7 +151,7 @@ def test_a_cached_caller_of_an_untrackable_function_runs_uncached_too(tmp_path):
         warnings.simplefilter("ignore")
         assert mod.outer(10) == 22
         assert mod.outer(10) == 22
-    assert _runs(tmp_path) == 2
+    assert _runs(tmp_path) == (1 if TRACED else 2)
 
 
 def test_assume_safe_opts_in(tmp_path):

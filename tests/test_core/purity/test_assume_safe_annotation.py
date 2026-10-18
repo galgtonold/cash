@@ -177,20 +177,17 @@ def test_strict_mode_honours_the_annotation(tmp_path):
 
 def test_it_waives_the_class_that_runs_uncached(tmp_path):
     """``untrackable_dep`` runs uncached by default; the per-line waiver is the
-    statement-scoped equivalent of ``assume_safe=True`` for it."""
+    statement-scoped equivalent of ``assume_safe=True`` for it. (``eval``: a
+    lookup by name is cached on a trace on Python 3.12+.)"""
 
-    def audited(name):
-        import importlib
+    def audited(text):
+        return eval(text)  # @cash:assume-safe
 
-        return importlib.import_module(name).__name__  # @cash:assume-safe
+    def bare(text):
+        return eval(text)
 
-    def bare(name):
-        import importlib
-
-        return importlib.import_module(name).__name__
-
-    assert _run(audited, "json", tmp_path=tmp_path) == ""
-    assert _run(bare, "json", tmp_path=tmp_path) == "uncached"
+    assert _run(audited, "1 + 1", tmp_path=tmp_path) == ""
+    assert _run(bare, "1 + 1", tmp_path=tmp_path) == "uncached"
 
 
 def test_a_multiline_call_is_waived_from_its_OPENING_line(tmp_path):
