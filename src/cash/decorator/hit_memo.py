@@ -513,6 +513,39 @@ def scan(spec: CachedFunction, registry: Any) -> tuple[tuple, tuple, list]:
     return cells, tags, s.callees
 
 
+def scan_trace(spec: CachedFunction, registry: Any, items: list) -> tuple[tuple, tuple, list]:
+    """Watch what a stored trace (`code_trace`) names, as `scan` watches the
+    key's world: while none of it moves, the trace still holds, and a fast
+    hit needs no check of its own. Raises `Ineligible`."""
+    s = _Scan(getattr(spec.func, "__module__", None))
+    for item in items:
+        kind = item[0]
+        if kind in ("code", "class", "global", "held", "attr"):
+            # From the module the item names, through the names it reads:
+            # a function scanned is its code, globals, cells and defaults; a
+            # class every attribute of it.
+            mod = sys.modules.get(item[1])
+            if mod is None:
+                raise Ineligible("a traced module that is not loaded")
+            path = item[2].split(".")
+            names = frozenset(path if kind == "attr" else path[:1])
+            s.names.update(names)
+            s.value(mod, names)
+        elif kind == "cached":
+            cf = registry.cached.get(item[1])
+            if cf is None or cf.hit_state is None:
+                raise Ineligible("a cached function served inside without a fast path")
+            s.callees.append(cf.hit_state)
+        else:
+            # A lookup by name or an import by name: checked on each hit.
+            raise Ineligible(f"a traced {kind}")
+    _watch_modules()
+    s.commit()
+    cells = tuple(x for pair in s.cells for x in pair)
+    tags = tuple(x for pair in s.types.values() for x in pair)
+    return cells, tags, s.callees
+
+
 # -- the memo --------------------------------------------------------------
 
 #: What `_cwatch.fast_call` hands back for "take the ordinary path".
@@ -580,6 +613,8 @@ class HitMemo:
         state[S_SPEC] = spec
         state[S_LOG] = runner._calls
         self.failed_epoch = -1
+        #: Traces watched (`scan_trace`) -> the world epoch they were at.
+        self.traces: dict[tuple, int] = {}
         self.slow_since_scan = 0
         self.backoff = 1
         self.served_since_scan = 0
@@ -714,6 +749,10 @@ class HitMemo:
             # proven: this call is not remembered, the next one is.
             state[S_CELLS], state[S_TYPES] = cells, tags
             state[S_WORLD] = world_now
+            self.traces = {}
+            return
+        trace = call.metadata.code_trace if call.metadata is not None else None
+        if trace and not self._watch_trace(trace, world_now):
             return
         entry = self._entry(call, hit)
         if entry is None:
@@ -725,6 +764,34 @@ class HitMemo:
         if len(entries) >= self.MAX_ENTRIES:
             entries.clear()
         entries[key] = (before[1], *entry)
+
+    def _watch_trace(self, trace: list, world_now: int) -> bool:
+        """Is *trace* watched since this world epoch? Watches it when not
+        (and the call is not remembered: what moved before the watch is not
+        proven), adding its cells and class tags to those every fast hit
+        compares."""
+        try:
+            key = tuple(tuple(item) for item in trace)
+            hash(key)
+        except TypeError:
+            return False
+        if self.traces.get(key) == world_now:
+            return True
+        if key in self.traces:
+            return False  # watched before, and something moved since: Ineligible then
+        state = self.state
+        try:
+            cells, tags, callees = scan_trace(self.spec, self.runner._registry, trace)
+        except Exception:  # noqa: BLE001 - Ineligible, or a scan that broke: the ordinary path
+            self.traces[key] = -1
+            return False
+        for callee in callees:
+            if callee is not state:
+                _DEPENDENTS.setdefault(callee, weakref.WeakSet()).add(self)
+        state[S_CELLS] = state[S_CELLS] + cells
+        state[S_TYPES] = state[S_TYPES] + tags
+        self.traces[key] = world_now
+        return False
 
     def _entry(self, call: Any, hit: Any) -> tuple | None:
         """``(store, key, held, _Hit, value, md, saved, log, body)``, or None."""

@@ -1277,13 +1277,9 @@ class CallRunner:
             )
             call.outcome = self._wrap_iterator_hit(call, call.metadata, hit)
             if (
-                epochs_before is not None
-                and handed is None
-                and call.outcome is hit
-                and not async_body
-                # Code the key does not cover ran: its trace is checked on
-                # every hit, which the fast path skips.
-                and not (call.traced and call.metadata.code_trace)
+                epochs_before is not None and handed is None and call.outcome is hit and not async_body
+                # An entry with a trace is remembered once what the trace
+                # names is watched (`hit_memo.scan_trace`).
             ):
                 memo = hit_memo.memo_for(spec, self)
                 if memo is not None:
@@ -1551,7 +1547,9 @@ class CallRunner:
                         run.arg_carriers_moved,
                     ),
                     dynamic_sources=recorded_sources(run.tracker),
-                    code_trace=trace,
+                    # An empty trace stands for nothing unless the call picks
+                    # code by name, whose entry is served only on a trace.
+                    code_trace=trace if trace or call.needs_trace else None,
                 ),
                 res,
             )

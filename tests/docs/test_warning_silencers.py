@@ -233,6 +233,18 @@ def _wrap_in_block(body: str) -> str:
     return "import cash\n" + "".join(lines[:first]) + head + "".join(inside) + "".join(lines[end:])
 
 
+#: Codes shown only on some Pythons: KEY-UNRESOLVED-CALL before 3.12 (from
+#: 3.12 the call is served on a trace of what it ran instead).
+_FIRES_ON = {"KEY-UNRESOLVED-CALL": sys.version_info < (3, 12)}
+
+PARAMS = [
+    pytest.param(code, marks=pytest.mark.skipif(not _FIRES_ON[code], reason="not shown on this Python"))
+    if code in _FIRES_ON
+    else code
+    for code in sorted(CASES)
+]
+
+
 def _fires(tmp_path: Path, code: str, variant: str) -> bool:
     body, call = CASES[code]
     body = textwrap.dedent(body)
@@ -260,26 +272,26 @@ def _fires(tmp_path: Path, code: str, variant: str) -> bool:
     return any(getattr(w.message, "code", None) == code for w in record)
 
 
-@pytest.mark.parametrize("code", sorted(CASES))
+@pytest.mark.parametrize("code", PARAMS)
 def test_the_code_fires_without_a_waiver(tmp_path, code):
     """The positive control: without it every 'silenced' below is vacuous."""
     assert _fires(tmp_path, code, "plain")
 
 
-@pytest.mark.parametrize("code", sorted(CASES))
+@pytest.mark.parametrize("code", PARAMS)
 def test_the_line_waiver_does_what_the_page_says(tmp_path, code):
     per_line, _, _ = _documented(code)
     assert _fires(tmp_path, code, "line") is not per_line, _silencing_line(code)
 
 
-@pytest.mark.parametrize("code", sorted(CASES))
+@pytest.mark.parametrize("code", PARAMS)
 def test_the_block_waiver_does_what_the_page_says(tmp_path, code):
     per_line, per_block, _ = _documented(code)
     assert per_block is per_line, f"the block reaches what the line reaches: {_silencing_line(code)}"
     assert _fires(tmp_path, code, "block") is not per_block, _silencing_line(code)
 
 
-@pytest.mark.parametrize("code", sorted(CASES))
+@pytest.mark.parametrize("code", PARAMS)
 def test_assume_safe_does_what_the_page_says(tmp_path, code):
     _, _, whole = _documented(code)
     assert _fires(tmp_path, code, "func") is not whole, _silencing_line(code)

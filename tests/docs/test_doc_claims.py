@@ -82,6 +82,9 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
         # Switches the native file hook off (cash.tracking.native_reads); one
         # process-wide switch read once at import, so not a setting.
         "CASH_NATIVE_FILE_HOOK",
+        # Turns the check of each hit against what its call ran off
+        # (cash.decorator.code_trace); read per call, not a setting.
+        "CASH_TRACE",
     }
 )
 
