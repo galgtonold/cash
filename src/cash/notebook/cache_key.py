@@ -38,7 +38,12 @@ from .lineage_formula import (
     module_read_lineage,
 )
 from .recorded_reads import ReadRecord, choose, read_parts, watch
-from .string_lookups import code_looks_up_by_string, statement_looks_up_by_string
+from .string_lookups import (
+    code_looks_up_by_string,
+    code_lookups_traceable,
+    statement_looks_up_by_string,
+    statement_lookups_traceable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -300,6 +305,11 @@ class CacheKeyContext:
     #: Whether a statement's text is one of the notebook's cells: a change it
     #: made is the notebook's own (``recorded_reads.choose``). None: none is.
     in_notebook: Callable[[str], bool] | None = None
+    #: The runtime's own key for a statement it runs recorded: one that looks
+    #: names up by a string its trace follows (`lookups_followed`) is keyed
+    #: as any other, and served only once its trace is checked. Every other
+    #: key of it (the simulation's, a restore's) matches nothing.
+    traced: bool = False
 
 
 class _CacheKeyFields(NamedTuple):
@@ -392,6 +402,7 @@ def called_function_dependencies(
     unfollowed: set[str] | None = None,
     by_string: set[str] | None = None,
     module_classes: dict[int, type] | None = None,
+    by_string_traced: set[str] | None = None,
 ) -> list[str]:
     """``"name:lineage"`` components for the globals a called function reaches for.
 
@@ -440,7 +451,9 @@ def called_function_dependencies(
     A name whose code reaches the notebook's names through a string
     (``globals()['make']``, ``eval('make(3)')``: `string_lookups`) is added
     to *by_string*, when given: which function the string names is known
-    only when the code runs, so what it reads is in no key.
+    only when the code runs, so what it reads is in no key. And to
+    *by_string_traced* too, when given, when every such lookup is one a trace
+    follows (`string_lookups.code_lookups_traceable`).
 
     The classes of the user's modules the walked values hold (an object of
     ``mylib.Order`` in a list: `held_functions.Held.module_classes`) are
@@ -469,6 +482,10 @@ def called_function_dependencies(
         codes[name] = found
         if by_string is not None and _looks_up_by_string(found, own, user_ns.get(name), user_ns):
             by_string.add(name)
+            if by_string_traced is not None and not _looks_up_by_string(
+                found, own, user_ns.get(name), user_ns, untraceable_only=True
+            ):
+                by_string_traced.add(name)
         return found
 
     def is_module(ref: str) -> bool:
@@ -536,16 +553,41 @@ def called_function_dependencies(
 
 
 def _looks_up_by_string(
-    codes: Iterable[types.CodeType], own: types.CodeType | None, value: Any, user_ns: Mapping[str, Any]
+    codes: Iterable[types.CodeType],
+    own: types.CodeType | None,
+    value: Any,
+    user_ns: Mapping[str, Any],
+    *,
+    untraceable_only: bool = False,
 ) -> bool:
     """Does any of *codes*, what a name holding *value* runs, look the
     notebook's names up by a string? *own* is *value*'s own code, read only
-    when it is the user's; the rest is notebook code it holds."""
+    when it is the user's; the rest is notebook code it holds. With
+    *untraceable_only*, only a lookup a trace cannot follow counts."""
     for code in codes:
         namespace = _users_own_globals(value, user_ns) if code is own else user_ns
         if namespace is not None and code_looks_up_by_string(code, namespace):
-            return True
+            if not untraceable_only or not code_lookups_traceable(code, namespace):
+                return True
     return False
+
+
+def lookups_followed(code: str, by_string: set[str], traced: set[str], user_ns: Mapping[str, Any]) -> bool:
+    """Does the trace of the statement *code* follow every lookup by a string
+    in *by_string* (`string_lookups`): Python 3.12+ with traces on, and each
+    lookup's value called at once? Its run is then keyed as any other, and
+    served only when the trace is checked."""
+    from ..decorator import code_trace
+
+    if not by_string or not code_trace.on():
+        return False
+    for name in by_string:
+        if name == THE_STATEMENT:
+            if not statement_lookups_traceable(code, user_ns):
+                return False
+        elif name not in traced:
+            return False
+    return True
 
 
 def _users_own_globals(fn: Any, user_ns: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -718,6 +760,9 @@ class UnkeyedReach(NamedTuple):
     #: (`held_module_parts`) but whose code cash cannot name: their file
     #: cannot be read.
     unkeyed_modules: set[str]
+    #: Whether its trace follows every lookup in *by_string*
+    #: (`lookups_followed`): it is keyed, and served on its trace.
+    followed: bool = False
 
 
 def unkeyed_reach(
@@ -726,6 +771,7 @@ def unkeyed_reach(
     """:class:`UnkeyedReach` of the statement *code* reading *inputs*, in one walk."""
     reach = UnkeyedReach(set(), {THE_STATEMENT} if statement_looks_up_by_string(code, user_ns) else set(), set())
     classes: dict[int, type] = {}
+    traced: set[str] = set()
     called_function_dependencies(
         sorted(inputs),
         user_ns,
@@ -733,9 +779,12 @@ def unkeyed_reach(
         unfollowed=reach.unfollowed,
         by_string=reach.by_string,
         module_classes=classes,
+        by_string_traced=traced,
     )
     if classes:
         reach.unkeyed_modules.update(held_module_parts(classes.values())[1])
+    if lookups_followed(code, reach.by_string, traced, user_ns):
+        reach = reach._replace(followed=True)
     return reach
 
 
@@ -911,6 +960,7 @@ def _callee_deps(
     unfollowed: set[str] | None = None,
     by_string: set[str] | None = None,
     module_classes: dict[int, type] | None = None,
+    by_string_traced: set[str] | None = None,
 ) -> list[str]:
     """The key component for the globals the called functions reach for.
 
@@ -939,6 +989,7 @@ def _callee_deps(
         unfollowed=unfollowed,
         by_string=by_string,
         module_classes=module_classes,
+        by_string_traced=by_string_traced,
     )
 
 
@@ -1046,7 +1097,9 @@ def compute_cache_key(
     unfollowed: set[str] = set()
     by_string: set[str] = {THE_STATEMENT} if statement_looks_up_by_string(code, ctx.user_ns) else set()
     module_classes: dict[int, type] = {}
-    callee_deps = _callee_deps(sorted_inputs, ctx, unfollowed, by_string, module_classes)
+    traced: set[str] = set()
+    callee_deps = _callee_deps(sorted_inputs, ctx, unfollowed, by_string, module_classes, traced)
+    followed = ctx.traced and lookups_followed(code, by_string, traced, ctx.user_ns)
     # The code of the user's modules whose classes' objects the inputs hold
     # (``orders = pickle.load(f)`` of ``mylib.Order`` objects): no lineage
     # of the inputs need pass through the module, yet ``o.total()`` runs its
@@ -1066,7 +1119,11 @@ def compute_cache_key(
         # runtime runs the statement uncached and says why
         # (``unkeyed_reach``).
         callee_component += f":unfollowed:{','.join(sorted(unfollowed))}:{secrets.token_hex(16)}"
-    if by_string:
+    if by_string and followed:
+        # What the string found is in the trace of the run, checked before
+        # it is served (``lookups_followed``).
+        callee_component += f":by-string-traced:{','.join(sorted(by_string))}"
+    elif by_string:
         # Code reaching a function by a name spelled at run time: what that
         # function reads is not in the key either (``unkeyed_reach``).
         callee_component += f":by-string:{','.join(sorted(by_string))}:{secrets.token_hex(16)}"
@@ -1122,6 +1179,6 @@ def compute_cache_key(
         )
 
     result = CacheKeyResult(cache_key, source_hash, input_hashes, func_source_hashes, module_source_hashes)
-    if unfollowed or by_string or unkeyed_modules:
+    if unfollowed or (by_string and not followed) or unkeyed_modules:
         result.matches_nothing = True
     return result

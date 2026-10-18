@@ -489,6 +489,16 @@ statement runs every time, uncached, and the badge says why: when the
 statement does it itself, and when a function of yours it calls does, at any
 depth, in a cell or in a module of your own. `getattr(obj, name)` on an
 object, `vars(self)` and a library's own lookups (`namedtuple`) do not count.
+
+<!-- claim: cash/notebook/cache_key.py:lookups_followed @f277d3b1, cash/notebook/string_lookups.py:tree_lookups_traceable @ac8f00df -->
+On Python 3.12 and newer, a lookup whose value is called at once
+(`globals()[name](3)`, `NS[name](3)` with `NS = globals()`,
+`getattr(__main__, name)(3)`) is cached all the same: what it ran is
+recorded, the function the string found and the name holding it included,
+and a stored result is served only when none of that changed. A value read
+by a string and used as data (`globals()[name] + 1`, `f = globals()[name]`),
+a name bound through the namespace, `eval`, `exec` of a computed string and
+`sys.modules` still run every time.
 **Fix:** call the function by its name, or pass it in as an argument.
 
 ### Background threads

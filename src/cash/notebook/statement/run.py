@@ -260,6 +260,9 @@ class StatementRun:
     #: Shadow mode (``cash.notebook.shadow``): the verdict of its traces,
     #: waiting for the lookup's outcome. Never read by anything else.
     shadow: Any = None
+    #: It looks names up by a string, which its trace follows
+    #: (``cache_key.lookups_followed``): served only on a checked trace.
+    needs_trace: bool = False
     #: Seconds recording what it ran took (``Shadow.begin`` / ``end``), inside
     #: its timed run but cash's cost, not the statement's.
     record_time: float = 0.0

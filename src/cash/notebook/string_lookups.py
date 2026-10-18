@@ -212,3 +212,148 @@ def statement_looks_up_by_string(code: str, namespace: Mapping[str, Any] | None)
         codes = _statement_codes(code)
         _STATEMENT_CODES[code] = codes
     return any(code_looks_up_by_string(compiled, namespace) for compiled in codes or ())
+
+
+# -- lookups a trace can follow ---------------------------------------------
+#
+# On Python 3.12+ a statement's run is recorded (`cash.notebook.shadow`), and
+# with CALL events on the code that looks a name up, so is every callable it
+# calls: the one a string found among them, and the name that holds it, are
+# then in the trace, checked before a hit is served. That covers a lookup
+# whose value is called at once -- ``globals()[k](x)``, ``NS.get(k)(x)``,
+# ``getattr(__main__, k)(x)`` -- and nothing else: a value read by a string
+# and used as data, a name bound through the namespace, ``eval``, ``exec``
+# of a computed string, a module looked up by name, run no code to record.
+
+#: Names whose any use a trace cannot follow (`_ALWAYS` but ``globals``).
+_NEVER = frozenset({"eval", "exec", "__import__"})
+
+
+def _calls_at_once(node: ast.AST, parents: Mapping[int, ast.AST]) -> bool:
+    """Is *node*, the value of a lookup, the callable of the call around it?"""
+    parent = parents.get(id(node))
+    return isinstance(parent, ast.Call) and parent.func is node
+
+
+def _followed(node: ast.AST, parents: Mapping[int, ast.AST], kind: str) -> bool:
+    """Is the namespace *node* (``kind`` ``"dict"`` or ``"module"``) only
+    looked up in, by a string, with the value called at once?"""
+    parent = parents.get(id(node))
+    if kind == "dict":
+        if isinstance(parent, ast.Subscript) and parent.value is node and isinstance(parent.ctx, ast.Load):
+            return _calls_at_once(parent, parents)
+        if isinstance(parent, ast.Attribute) and parent.value is node and parent.attr == "get":
+            call = parents.get(id(parent))
+            if isinstance(call, ast.Call) and call.func is parent and 1 <= len(call.args) <= 2 and not call.keywords:
+                return _calls_at_once(call, parents)
+        return False
+    if (
+        isinstance(parent, ast.Call)
+        and isinstance(parent.func, ast.Name)
+        and parent.func.id == "getattr"
+        and parent.args
+        and parent.args[0] is node
+        and 2 <= len(parent.args) <= 3
+        and not parent.keywords
+    ):
+        return _calls_at_once(parent, parents)
+    return False
+
+
+def tree_lookups_traceable(tree: ast.AST, namespace: Mapping[str, Any], *, top_level: bool) -> bool:
+    """Is every lookup by a string in *tree* one a trace follows (see above)?
+
+    It reads the same forms as `code_looks_up_by_string`, and more: what it
+    cannot place is untraceable. *top_level* is whether the tree is a
+    statement, where ``locals()`` and ``vars()`` are the notebook's names.
+    """
+    parents: dict[int, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parents[id(child)] = parent
+    get = namespace.get
+    sys_module = sys.modules.get("sys")
+
+    def nested(node: ast.AST) -> bool:
+        current = parents.get(id(node))
+        while current is not None:
+            if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+                return True
+            current = parents.get(id(current))
+        return False
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            if node.attr in _ATTRIBUTES:
+                return False
+            if node.attr == "modules" and isinstance(node.value, ast.Name) and get(node.value.id) is sys_module:
+                return False
+            continue
+        if not isinstance(node, ast.Name) or not isinstance(node.ctx, ast.Load):
+            continue
+        name = node.id
+        if name in _NEVER:
+            return False
+        if name == "globals" or (name in _TOP_LEVEL and top_level and not nested(node)):
+            call = parents.get(id(node))
+            if not (isinstance(call, ast.Call) and call.func is node and not call.args and not call.keywords):
+                return False
+            if not _followed(call, parents, "dict"):
+                return False
+            continue
+        if name not in namespace:
+            continue
+        value = get(name)
+        if value is namespace:
+            if not _followed(node, parents, "dict"):
+                return False
+        elif value is sys.modules:
+            return False
+        elif _is_notebook_module(value, namespace):
+            if not _followed(node, parents, "module"):
+                return False
+    return True
+
+
+_TRACEABLE: LruMemo[Any, bool] = LruMemo(CODE_OBJECTS)
+
+
+def code_lookups_traceable(code: types.CodeType, namespace: Mapping[str, Any]) -> bool:
+    """Is every lookup by a string in *code*, a function's, one a trace
+    follows? Read from its source; a function whose source cannot be read
+    or parsed is not."""
+    found = _TRACEABLE.get(code)
+    if found is not None:
+        return found
+    import inspect
+    import textwrap
+
+    try:
+        tree: ast.AST | None = ast.parse(textwrap.dedent(inspect.getsource(code)))
+    except (OSError, TypeError, SyntaxError, ValueError, IndentationError):
+        tree = None
+    if isinstance(tree, ast.Module) and code.co_name != "<module>":
+        # The source of a function is its whole ``def``, the decorators too.
+        defs = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        tree = defs[0] if len(tree.body) == 1 and defs else None
+    found = tree is not None and code.co_name != "<module>" and tree_lookups_traceable(tree, namespace, top_level=False)
+    try:
+        _TRACEABLE[code] = found
+    except TypeError:
+        pass
+    return found
+
+
+def statement_lookups_traceable(code: str, namespace: Mapping[str, Any] | None) -> bool:
+    """Is every lookup by a string in the statement *code* one a trace
+    follows?"""
+    if not code or namespace is None:
+        return False
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return False
+    literals = _ExecLiterals()
+    if not tree_lookups_traceable(literals.visit(tree), namespace, top_level=True):
+        return False
+    return all(statement_lookups_traceable(text, namespace) for text in literals.texts)
