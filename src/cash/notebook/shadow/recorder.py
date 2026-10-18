@@ -72,7 +72,7 @@ def _target_name(t: threading.Thread) -> str:
 class Unit:
     """What one unit saw run."""
 
-    __slots__ = ("codes", "extra", "kind", "markers", "notes", "receivers", "snap", "thread", "threads_before")
+    __slots__ = ("cells", "codes", "extra", "kind", "markers", "notes", "receivers", "snap", "thread", "threads_before")
 
     def __init__(self, kind: str) -> None:
         self.kind = kind
@@ -80,6 +80,8 @@ class Unit:
         self.codes: dict[types.CodeType, tuple[dict, str]] = {}
         #: code -> the class of ``self`` (or ``cls``) the method first ran on.
         self.receivers: dict[types.CodeType, type] = {}
+        #: code -> its closure cells' digests as it first started (`start_cells`).
+        self.cells: dict[types.CodeType, tuple] = {}
         self.markers: set[str] = set()
         self.notes: set[str] = set()
         #: Item lists of cached calls served inside the unit (they did not run).
@@ -94,6 +96,8 @@ class Unit:
             self.codes.setdefault(code, where)
         for code, cls in inner.receivers.items():
             self.receivers.setdefault(code, cls)
+        for code, cells in inner.cells.items():
+            self.cells.setdefault(code, cells)
         self.markers |= inner.markers
         self.notes |= inner.notes
         self.extra.extend(inner.extra)

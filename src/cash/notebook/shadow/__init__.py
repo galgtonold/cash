@@ -93,10 +93,11 @@ class _Snap:
 
 class Shadow:
     def __init__(self) -> None:
-        from .recorder import Recorder
+        from ...decorator import code_trace
 
-        self.recorder = Recorder()
-        self.ok = self.recorder.install()
+        # The one the decorator's traced calls use: a process has one.
+        self.recorder = code_trace.recorder_or_reason()
+        self.ok = self.recorder.tool is not None
         self.reason = self.recorder.reason
         self.dir: str | None = None
         self._backend: Any = None
@@ -135,7 +136,7 @@ class Shadow:
                 self._log = None
         if self.recorder.notebook_ns is not user_ns:
             self.recorder.notebook_ns = user_ns
-            self.recorder._kinds.clear()
+            self.recorder.reclassify()
         self.notebook = user_ns
         name = user_ns.get("__name__")
         self.notebook_name = name if isinstance(name, str) else "__main__"
@@ -144,7 +145,7 @@ class Shadow:
         items.NOTEBOOK[0] = self.notebook_name
         if self.recorder.notebook_name != self.notebook_name:
             self.recorder.notebook_name = self.notebook_name
-            self.recorder._kinds.clear()
+            self.recorder.reclassify()
         self.lineage = lineage
         if self.dir is None:
             base = None
@@ -284,6 +285,12 @@ class Shadow:
 
     def build(self, unit, inputs: Iterable[str] = ()) -> tuple[tuple, set[str], set[str]]:
         """The verify items of a finished *unit*, its markers and notes."""
+        from .items import call_starts
+
+        with call_starts(unit.cells):
+            return self._build(unit, inputs)
+
+    def _build(self, unit, inputs: Iterable[str]) -> tuple[tuple, set[str], set[str]]:
         from ...install_paths import is_user_code_module
         from ...jit_functions import jit_python_function
         from ..string_lookups import code_looks_up_by_string
@@ -773,11 +780,11 @@ def enable() -> Shadow | None:
 
 
 def disable() -> None:
-    """Turn shadow mode off and give the monitoring tool id back."""
+    """Turn shadow mode off. The recorder stays: traced calls use it too."""
     global SHADOW
     shadow, SHADOW = SHADOW, None
     if shadow is not None:
-        shadow.recorder.uninstall()
+        shadow.recorder.notebook_ns = None
         atexit.unregister(shadow.report_at_exit)
         for fh in (shadow._log, shadow._trace_file):
             if fh is not None:

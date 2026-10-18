@@ -142,9 +142,11 @@ def _recorder_class() -> type:
     DISABLE = sys.monitoring.DISABLE
 
     class _Recorder(rec.Recorder):
-        """The shadow recorder for traced calls: its own tool id, CALL
-        events on code that may look a name up, and every traced call in
-        progress (on any thread) sees what runs."""
+        """The process's one recorder, for traced calls and for the
+        notebook's units (`cash.notebook.shadow`): CALL events on code that
+        may look a name up, every traced call in progress (on any thread)
+        sees what runs, and the innermost notebook unit what its thread
+        runs."""
 
         tool_name = "cash-trace"
         tool_ids = (3, 4)
@@ -152,6 +154,7 @@ def _recorder_class() -> type:
         def __init__(self) -> None:
             super().__init__()
             self.active: list[Any] = []
+            self._in_callback = False
             self._lock = threading.Lock()
             self._import_module = importlib.import_module
 
@@ -249,18 +252,40 @@ def _recorder_class() -> type:
                 events |= mon.events.CALL
             self.user_codes[code] = events
             mon.set_local_events(self.tool, code, events)
-            if self.active:
+            if self.active or self.stack:
                 if code.co_flags & rec.RESUMABLE and offset:
                     self._seen_resume(code, g, kind)
                 else:
                     self._seen_start(code, frame, g, kind)
             return DISABLE
 
+        def reclassify(self) -> None:
+            """The notebook's namespace changed: what was not the user's
+            code may be now, so every code is seen once more."""
+            self._kinds.clear()
+            sys.monitoring.restart_events()
+
         def begin(self, kind: str) -> Any:
             unit = TraceUnit(kind)
             if not self._intact():
                 unit.markers.add("tool_conflict")
+                mon = sys.monitoring
+                if mon.get_tool(self.disc) == self.tool_name:
+                    # Still ours, its events turned off: arm them again.
+                    mon.set_events(self.disc, mon.events.PY_START | mon.events.PY_RESUME)
             unit.threads_before = frozenset(t.ident for t in threading.enumerate() if t.ident is not None)
+            self._rearm()
+            self.restarts += 1
+            if kind != "decorator":
+                # A notebook unit: the innermost one of its thread sees what
+                # runs, and hands it to the one around it when it ends.
+                self.stack.append(unit)
+                return unit
+            with self._lock:
+                self.active = [*self.active, unit]
+            return unit
+
+        def _rearm(self) -> None:
             rearm, self.rearm = self.rearm, set()
             mon = sys.monitoring
             if not self.rearm_works:
@@ -272,12 +297,10 @@ def _recorder_class() -> type:
                     if events is not None:
                         mon.set_local_events(self.tool, code, 0)
                         mon.set_local_events(self.tool, code, events)
-            with self._lock:
-                self.active = [*self.active, unit]
-            self.restarts += 1
-            return unit
 
         def end(self, unit: Any) -> Any:
+            if unit.kind != "decorator":
+                return super().end(unit)
             with self._lock:
                 self.active = [u for u in self.active if u is not unit]
             if not self._intact():
@@ -289,7 +312,7 @@ def _recorder_class() -> type:
 
         def _on_start(self, code: types.CodeType, offset: int) -> Any:
             self.rearm.add(code)
-            if self.active:
+            if self.active or self.stack:
                 frame = sys._getframe(1)
                 g = frame.f_globals
                 kind = self._kinds.get(id(g))
@@ -300,11 +323,18 @@ def _recorder_class() -> type:
 
         def _seen_start(self, code: types.CodeType, frame: Any, g: dict, kind: tuple) -> None:
             units = self.active
+            stack = self.stack
+            if stack:
+                units = [*units, stack[-1]]
+                if threading.get_ident() != stack[-1].thread:
+                    stack[-1].notes.add("other_thread")
             module = kind[1]
             if module is None:
                 if (kind[2], code.co_qualname) in rec.POOL_STARTS:
                     for unit in units:
                         unit.markers.add("process_pool")
+                if stack and not self.active:
+                    return
                 if not self._unregistered_user_code(kind[2], code):
                     return
                 # A file of the user's run as a module no name in sys.modules
@@ -316,8 +346,19 @@ def _recorder_class() -> type:
                     recv = frame.f_locals.get(code.co_varnames[0])
                 except Exception:  # noqa: BLE001 - a frame whose locals cannot be read has no receiver
                     recv = None
+            cells = None
+            if code.co_freevars and not self._in_callback:
+                self._in_callback = True
+                try:
+                    from ..notebook.shadow.items import start_cells
+
+                    cells = start_cells(frame, code)
+                finally:
+                    self._in_callback = False
             for unit in units:
                 unit.codes.setdefault(code, (g, module))
+                if cells is not None:
+                    unit.cells.setdefault(code, cells)
                 if recv is not None:
                     unit.receivers.setdefault(code, recv if isinstance(recv, type) else type(recv))
 
@@ -330,7 +371,7 @@ def _recorder_class() -> type:
 
         def _on_resume(self, code: types.CodeType, offset: int) -> Any:
             self.rearm.add(code)
-            if self.active and code.co_flags & rec.RESUMABLE:
+            if (self.active or self.stack) and code.co_flags & rec.RESUMABLE:
                 g = sys._getframe(1).f_globals
                 kind = self._kinds.get(id(g))
                 if kind is None or kind[0] is not g:
@@ -340,7 +381,8 @@ def _recorder_class() -> type:
 
         def _seen_resume(self, code: types.CodeType, g: dict, kind: tuple) -> None:
             if kind[1] is not None:
-                for unit in self.active:
+                units = [*self.active, self.stack[-1]] if self.stack else self.active
+                for unit in units:
                     if code not in unit.codes:
                         unit.codes[code] = (g, kind[1])
                         unit.markers.add("generator_resumed")
@@ -391,6 +433,13 @@ def _recorder() -> Any:
                 atexit.register(r.uninstall)
             _RECORDER = r
     return _RECORDER if _RECORDER.tool is not None else None
+
+
+def recorder_or_reason() -> Any:
+    """The process's recorder, installed or not: its ``reason`` says why
+    when its ``tool`` is None."""
+    _recorder()
+    return _RECORDER
 
 
 def begin() -> Any:
@@ -817,9 +866,12 @@ def build(unit: Any, static_codes: set[types.CodeType]) -> tuple[list[tuple] | N
     """The items of a traced call's finished *unit*, or None and why the
     call's result cannot be served from a trace. *static_codes* are the
     code the key covers, left out."""
+    from ..notebook.shadow.items import call_starts
+
     try:
-        b = _Build(unit, static_codes)
-        items = b.run()
+        with call_starts(unit.cells):
+            b = _Build(unit, static_codes)
+            items = b.run()
         why = _refusal_in(b.functions)
         if why is not None:
             return None, why

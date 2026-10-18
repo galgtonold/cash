@@ -38,9 +38,11 @@ import functools
 import hashlib
 import pickle
 import struct
+import contextlib
 import sys
+import threading
 import types
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 
 __all__ = [
@@ -136,20 +138,31 @@ def _const_bytes(value: Any, out: list[bytes]) -> None:
 _CO_HAS_DOCSTRING = 0x4000000
 
 
-def _has_docstring(code: types.CodeType) -> bool:
-    """Is ``co_consts[0]`` *code*'s docstring slot? Flagged from 3.14;
-    before, a function's first constant is its docstring, or None for
-    one without."""
-    if not code.co_flags & 0x1 or code.co_name.startswith("<"):
-        return False
-    if sys.version_info >= (3, 14):
-        return bool(code.co_flags & _CO_HAS_DOCSTRING)
-    return bool(code.co_consts) and (code.co_consts[0] is None or isinstance(code.co_consts[0], str))
+_HAS_CONST = frozenset(dis.hasconst)
+
+
+def _instructions(code: types.CodeType) -> bytes:
+    """*code*'s instructions with each constant by value, not by its index
+    in ``co_consts``: 3.14 keeps a docstring there only when there is one,
+    which moves every other index (the key reads source and does not
+    see it)."""
+    out: list[bytes] = []
+    for ins in dis.get_instructions(code):
+        out.append(ins.opname.encode())
+        if ins.opcode in _HAS_CONST:
+            if isinstance(ins.argval, types.CodeType):
+                out.append(b"<code>")
+            else:
+                _const_bytes(ins.argval, out)
+        else:
+            out.append(str(ins.arg).encode())
+    return b" ".join(out)
 
 
 def code_digest(code: types.CodeType) -> str:
-    """A digest of *code* as a re-run would see it: its bytecode, constants
-    (nested code included, frozensets in a fixed order), names and shape."""
+    """A digest of *code* as a re-run would see it: its instructions with
+    the constants they load (nested code included, frozensets in a fixed
+    order), names and shape."""
     got = _DIGESTS.get(code)
     if got is not None:
         return got
@@ -157,7 +170,7 @@ def code_digest(code: types.CodeType) -> str:
     stack = [code]
     while stack:
         c = stack.pop()
-        h.update(c.co_code)
+        h.update(_instructions(c))
         h.update(
             repr(
                 (
@@ -167,22 +180,13 @@ def code_digest(code: types.CodeType) -> str:
                     c.co_cellvars,
                     c.co_argcount,
                     c.co_kwonlyargcount,
-                    c.co_flags,
+                    c.co_flags & ~_CO_HAS_DOCSTRING,
                 )
             ).encode()
         )
-        parts: list[bytes] = []
-        consts = c.co_consts
-        if _has_docstring(c):
-            # Not what it computes: the key leaves docstrings out too.
-            consts = consts[1:]
-        for k in consts:
-            if isinstance(k, types.CodeType):
-                stack.append(k)
-                parts.append(b"<code>")
-            else:
-                _const_bytes(k, parts)
-        h.update(b"|".join(parts))
+        # The constants it loads are in its instructions; a docstring, which
+        # it does not load, is left out as the key leaves it out.
+        stack.extend(k for k in c.co_consts if isinstance(k, types.CodeType))
     got = h.hexdigest()
     _bounded(_DIGESTS)
     _DIGESTS[code] = got
@@ -355,13 +359,16 @@ class _Digester:
             self.feed(fn.__defaults__)
         if fn.__kwdefaults__:
             self.feed(fn.__kwdefaults__)
-        for cell in fn.__closure__ or ():
-            try:
-                contents = cell.cell_contents
-            except ValueError:
-                h.update(b"empty")
-                continue
-            self.feed(contents)
+        starts = getattr(_STARTS, "cells", None)
+        cells = starts.get(fn.__code__) if starts else None
+        if cells is None or len(cells) != len(fn.__closure__ or ()):
+            cells = _cell_digests(fn.__closure__ or (), self)
+        # Each cell by its own digest, so the cells a function had as it
+        # started (`start_cells`) stand in for what it left in them.
+        for got in cells:
+            if got is None:
+                raise _Opaque
+            h.update(b"c" + got.encode())
 
     def _type(self, t: type) -> None:
         h = self.h
@@ -370,6 +377,67 @@ class _Digester:
             return
         self.types.add(id(t))
         h.update(class_digest(t, self).encode())
+
+
+_STARTS = threading.local()
+
+
+def _cell_digests(closure: Iterable[Any], within: _Digester | None) -> tuple[str | None, ...]:
+    out: list[str | None] = []
+    for cell in closure:
+        try:
+            contents = cell.cell_contents
+        except ValueError:
+            out.append("empty")
+            continue
+        out.append(_sub_digest(contents, within))
+    return tuple(out)
+
+
+def _sub_digest(v: Any, within: _Digester | None) -> str | None:
+    """*v*'s digest inside another's, sharing its count of what was read
+    (a closure that holds itself ends there); None when opaque."""
+    h = hashlib.blake2b(digest_size=12)
+    d = _Digester(h)
+    if within is not None:
+        d.nodes, d.active, d.types = within.nodes, within.active, within.types
+    try:
+        d.feed(v)
+    except _Opaque:
+        return None
+    except Exception:  # noqa: BLE001 - a value that breaks on being read
+        return None
+    finally:
+        if within is not None:
+            within.nodes = d.nodes
+    return h.hexdigest()
+
+
+def start_cells(frame: Any, code: types.CodeType) -> tuple[str | None, ...] | None:
+    """What *code*'s closure cells held as its *frame* started: a call
+    that writes to them (a counter, a log list) is then checked by what it
+    was called with, the way its key was built, not by what it left."""
+    try:
+        local = frame.f_locals
+        values = [local.get(name, _EMPTY) for name in code.co_freevars]
+    except Exception:  # noqa: BLE001 - cells that cannot be read are digested afterwards
+        return None
+    return tuple("empty" if v is _EMPTY else _sub_digest(v, None) for v in values)
+
+
+_EMPTY = object()
+
+
+@contextlib.contextmanager
+def call_starts(cells: Mapping[types.CodeType, tuple] | None) -> Iterator[None]:
+    """Digest functions by the cells they started with (`start_cells`)
+    while building a unit's items."""
+    before = getattr(_STARTS, "cells", None)
+    _STARTS.cells = cells
+    try:
+        yield
+    finally:
+        _STARTS.cells = before
 
 
 def value_digest(value: Any) -> str:
