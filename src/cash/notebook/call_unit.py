@@ -830,7 +830,7 @@ class CallUnit:
         bytes were worth more than its compute stays in RAM however long it
         took, and is not counted. Counted, it priced the statement around it
         under what a restart costs (the patch cell of a face detector: 3.5 s
-        of its own work for 4.5 s), for its disk decision and its rank in
+        of its own work for 4.2-4.5 s), for its disk decision and its rank in
         eviction alike."""
         if not kept:
             return
