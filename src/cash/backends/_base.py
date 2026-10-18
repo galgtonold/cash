@@ -133,6 +133,9 @@ class EntryMetadata(TypedDict, total=False):
     copy_required: bool
     #: The RAM tier could not copy the value and keeps the object itself.
     by_reference: bool
+    #: A ``frozen=True`` function's result's `builtin_hash`: the RAM tier
+    #: takes it as the digest its clone of a polars frame is checked by.
+    content_digest: str
     # Read by the persistence policy (`persistence_policy.PersistencePolicy`).
     #: Persist whatever the policy says (``@cash:persist``, ``persist_all``).
     force_persist: bool
