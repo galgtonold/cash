@@ -14,7 +14,8 @@ Where a content check found the bytes unchanged under a new stat
 (`note_same_content`), the new stat is recorded as a version of the old
 one, and `file_version` answers the old stat for it from then on. The
 record is kept in the cache directory (`use_file_versions`), one line per
-version appended, so that a restarted kernel answers the same.
+version appended (a batch at a time, `cash.tracking.log_lines`), so that a
+restarted kernel answers the same.
 
 A file nothing stored checks by content is linked the same way when it was
 written while this process ran (`content_version`): ``tarfile.extractall``
@@ -36,6 +37,7 @@ from typing import Any
 from .._memo import FILE_DIGESTS, LruMemo
 from .._paths import normalize_path, replace_with_retry
 from ..backends.cache_dir import FILE_VERSIONS_FILENAME
+from .log_lines import LogLines, flush_all
 
 logger = logging.getLogger(__name__)
 
@@ -132,9 +134,11 @@ class _VersionLog:
         self.path = os.path.join(cache_dir, FILE_VERSIONS_FILENAME)
         self._lines = 0
         self._lock = threading.Lock()
+        self._log = LogLines(self.path, self._lock, "FILE_VERSIONS")
 
     def load(self) -> None:
         """Take the versions the log holds into this process's."""
+        flush_all()  # this process's own lines, still waiting, are read too
         try:
             with open(self.path, encoding="utf-8", errors="replace") as fh:
                 for raw in fh:
@@ -157,24 +161,22 @@ class _VersionLog:
 
     def _write(self, line: str) -> None:
         with self._lock:
-            if not os.path.isdir(os.path.dirname(self.path)):
-                return  # a cache dir that is gone: never recreated from here
-            try:
-                # One short line in append mode, written at once: a restart
-                # kills the kernel without an exit hook.
-                with open(self.path, "a", encoding="utf-8") as fh:
-                    fh.write(line)
-            except OSError:
-                logger.debug("[FILE_VERSIONS] could not note a version in %s", self.path, exc_info=True)
-                return
+            # Written with the next lines, by the end of the cell at the
+            # latest: a restart kills the kernel without an exit hook.
+            self._log.add(line)
             self._lines += 1
             if self._lines > _COMPACT_AT:
                 self._compact()
+
+    def flush(self) -> None:
+        """Write the lines still waiting (`cash.tracking.log_lines`)."""
+        self._log.flush()
 
     def _compact(self) -> None:
         """Rewrite the log with the newest `_KEEP` versions (lock held)."""
         newest = [(key, root) for key in _EARLIER.keys()[-_KEEP:] if (root := _EARLIER.get(key)) is not None]
         contents = [(key, v) for key in _BY_CONTENT.keys()[-_KEEP:] if (v := _BY_CONTENT.get(key)) is not None]
+        self._log.drop()  # in the rewrite
         tmp = f"{self.path}.{os.getpid()}.tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as fh:

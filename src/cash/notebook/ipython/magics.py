@@ -22,7 +22,7 @@ from ..._console import safe_text
 from ...backends import _writes
 from ...backends.budget_notices import DiskBudget, claim_budget_notice, describe_budget
 from ...core import Cash
-from ...tracking import io_watch, native_reads, reader_patches
+from ...tracking import io_watch, log_lines, native_reads, reader_patches
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import capture_rng_state, rng_modules_changed, rng_virtual_var
 from ...value_hash import compute_hash
@@ -1148,6 +1148,8 @@ class CashMagics(Magics):
         """
         all_metrics, timing_breakdown = done.all_metrics, done.timing_breakdown
         hook_total = _perf_counter() - done.hook_start
+        # The file digests and versions the cell noted, before a restart can kill the kernel.
+        log_lines.flush_all()
 
         # Analytics events are intentionally NOT flushed here, per cell.
         # The AnalyticsManager buffers events and flushes on its own policy —

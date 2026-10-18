@@ -42,3 +42,31 @@ def test_a_line_the_table_wrote_is_read_back(tmp_path):
     table = digest_table.DigestTable(str(tmp_path))
     table.put(("", 1, 2, 3, 4, 5), "b" * 64, 12.5)
     assert digest_table.DigestTable(str(tmp_path)).get(("", 1, 2, 3, 4, 5)) == ("b" * 64, 12.5)
+
+
+def test_lines_are_written_together_and_none_is_lost_at_exit(tmp_path):
+    from tests._scripts import run_python
+
+    script = tmp_path / "job.py"
+    script.write_text(
+        "import sys\n"
+        "from cash.tracking import digest_table\n"
+        "table = digest_table.DigestTable(sys.argv[1])\n"
+        "for i in range(600):\n"
+        "    table.put(('p', 1, i, 3, 4, 5), 'c' * 64, 1.0)\n",
+        encoding="utf-8",
+    )
+    run_python(str(script), str(tmp_path), cwd=tmp_path)
+
+    table = digest_table.DigestTable(str(tmp_path))
+    assert all(table.get(("p", 1, i, 3, 4, 5)) == ("c" * 64, 1.0) for i in range(600)), "the last batch at exit"
+
+
+def test_a_table_read_in_the_same_process_sees_lines_still_waiting(tmp_path):
+    from cash.tracking import log_lines
+
+    table = digest_table.DigestTable(str(tmp_path))
+    table.put(("q", 1, 2, 3, 4, 5), "d" * 64, 2.0)
+    assert digest_table.DigestTable(str(tmp_path)).get(("q", 1, 2, 3, 4, 5)) == ("d" * 64, 2.0)
+    log_lines.flush_all()
+    assert len((tmp_path / "_file_digests.log").read_text(encoding="utf-8").splitlines()) == 1, "written once"

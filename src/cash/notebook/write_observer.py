@@ -113,27 +113,32 @@ def _appended_by_user_code() -> bool:
     return frame is not None and is_user_code_file(frame.f_code.co_filename)
 
 
-#: A code object -> ``None`` when it is not a function of the user's, else
-#: ``(waived lines, whole body)`` (`code_waived_lines`). Asked for every frame
-#: of every write; the code objects of a run are few.
-_frame_verdicts: dict[types.CodeType, tuple[frozenset[int], bool] | None] = {}
+#: ``id(code)`` -> ``(code, verdict)``: *verdict* is ``None`` when the code
+#: object is not a function of the user's, else ``(waived lines, whole
+#: body)`` (`code_waived_lines`). Asked for every frame of every write; the
+#: code objects of a run are few. Keyed by identity, the code object kept
+#: beside its verdict so its id is not reused: a code object's own hash is
+#: computed afresh each time, over its constants and every code object
+#: nested in them, ~100 us for a module's (E10's loop over 50,000 files
+#: spent 12 s looking up the cell's and IPython's module frames).
+_frame_verdicts: dict[int, tuple[types.CodeType, tuple[frozenset[int], bool] | None]] = {}
 
 
 def _frame_verdict(code: types.CodeType) -> tuple[frozenset[int], bool] | None:
-    verdict = _frame_verdicts.get(code, _UNSEEN)
-    if verdict is _UNSEEN:
-        user = is_user_code_file(code.co_filename)
-        if user and code.co_name == "<module>":
-            verdict = _TOP  # the cell (or script) itself: nothing of the user's above
-        else:
-            verdict = code_waived_lines(code) if user else None
-        if len(_frame_verdicts) > 4096:
-            _frame_verdicts.clear()
-        _frame_verdicts[code] = verdict
-    return verdict  # type: ignore[return-value]
+    seen = _frame_verdicts.get(id(code))
+    if seen is not None and seen[0] is code:
+        return seen[1]
+    user = is_user_code_file(code.co_filename)
+    if user and code.co_name == "<module>":
+        verdict = _TOP  # the cell (or script) itself: nothing of the user's above
+    else:
+        verdict = code_waived_lines(code) if user else None
+    if len(_frame_verdicts) > 4096:
+        _frame_verdicts.clear()
+    _frame_verdicts[id(code)] = (code, verdict)
+    return verdict
 
 
-_UNSEEN = object()
 _TOP: tuple[frozenset[int], bool] = (frozenset(), False)
 
 

@@ -362,7 +362,7 @@ class FileAccessTracker:
         the enclosing ones): not an input from here on (`created_by_block`)."""
         try:
             raw = os.fsdecode(path) if isinstance(path, bytes) else str(path)
-            resolved = normalize_path(os.path.realpath(raw))
+            resolved = normalize_path(realpath_of_read_this_run(raw)[0])  # its folder resolved once a run
         except (TypeError, ValueError, OSError):
             return
         for tracker in self._self_and_parents():

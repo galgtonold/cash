@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import ast
 import logging
-import os
 import types
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
@@ -33,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutations import assigned_method_call_receivers, standalone_method_call_receivers
 from ...analysis.namespace_effects import fits_its_receiver
+from ...tracking.file_dep_snapshot import realpath_of_read_this_run
 from ...tracking.module_symbols import static_attribute_reads
 from ...tracking.read_classification import regular_file_stat
 from ...value_hash import budgeted_hash, compute_hash, costly_after
@@ -109,7 +109,7 @@ def note_own_writes(tracking_state: "TrackingState", paths) -> None:
     `stat_key` after the write (`TrackingState.own_file_writes`)."""
     tracking_state.file_event_seq += 1
     for path in paths:
-        where = os.path.realpath(path)
+        where = realpath_of_read_this_run(path)[0]  # once per folder in a run, not per file
         st = regular_file_stat(where)
         if st is None:
             tracking_state.own_file_writes.pop(where, None)
@@ -130,7 +130,7 @@ def rewritten_by_the_notebook_since(tracking_state: "TrackingState", cache_key: 
     if read_at is None or not paths:
         return False
     for path in paths:
-        where = os.path.realpath(path)
+        where = realpath_of_read_this_run(path)[0]
         own = tracking_state.own_file_writes.get(where)
         if own is None or own[0] <= read_at or regular_file_stat(where) != own[1]:
             return False
