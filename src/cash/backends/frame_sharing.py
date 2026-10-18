@@ -912,6 +912,19 @@ def _owned_chunk(chunk: Any) -> Any:
         owned = pa.DictionaryArray.from_arrays(indices, dictionary, ordered=chunk.type.ordered)
         if owned.type == chunk.type:
             return owned
+    elif pa.types.is_string_view(chunk.type) or pa.types.is_binary_view(chunk.type):
+        # Its rows written out and back: a polars text chunk lists every data
+        # buffer of its column, and ``concat_arrays`` keeps them while the IPC
+        # stream writes them all, so a 23-chunk frame of 5,760 rows sliced
+        # from a big one took 7.6 s to copy, each chunk ~1 GB of IPC. The
+        # cast may keep the validity bitmap: ``concat_arrays`` writes it anew.
+        large = pa.large_string() if pa.types.is_string_view(chunk.type) else pa.large_binary()
+        try:
+            owned = pa.concat_arrays([chunk.cast(large)]).cast(chunk.type)
+        except (pa.ArrowNotImplementedError, pa.ArrowInvalid):
+            owned = None
+        if owned is not None and not _overlapping(owned.buffers(), chunk.buffers()):
+            return owned
     elif not _holds_dictionary(chunk.type):
         # ``concat_arrays`` writes every buffer anew, but a type it may
         # append as it is (views over data buffers) is checked, not trusted.

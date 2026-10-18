@@ -2365,9 +2365,9 @@ def _full_frame_copy(frame: Any) -> Any:
 
 
 def _frames_in(value: Any, depth: int = 0) -> list:
-    """The pandas tables `_cheap_to_keep` found in *value*."""
+    """The pandas tables and polars frames `_cheap_to_keep` found in *value*."""
     kind = type(value)
-    if _is_pandas_frame(kind):
+    if _is_pandas_frame(kind) or _is_polars_frame(kind):
         return [value]
     if kind in (dict, list, tuple) and depth < _CHEAP_DEPTH:
         items = value.values() if kind is dict else value
