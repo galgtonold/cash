@@ -22,7 +22,9 @@ from polars.testing import assert_frame_equal, assert_series_equal
 
 from cash.backends import serialization
 from cash.backends.file_backend import FileBackend
+from cash.backends.memory_backend import InMemoryBackend
 from cash.backends.serialization import PickleSerializer
+from cash.backends.tiered_backend import TieredBackend
 
 ROWS = 64_000
 CHUNKS = 32
@@ -143,3 +145,77 @@ def test_the_file_tier_restores_the_frame(tmp_path):
     assert_frame_equal(back, frame)
     assert back.n_chunks("all") == frame.n_chunks("all")
     assert sum(f.stat().st_size for f in tmp_path.rglob("*") if f.is_file()) < 1.5 * _one_copy(frame)
+
+
+# -- the key is not the stored bytes: only how the entry is written changed --
+
+
+def _without_the_column_reducer(monkeypatch):
+    real = serialization.stored_reducers
+    monkeypatch.setattr(
+        serialization,
+        "stored_reducers",
+        lambda **kw: {k: v for k, v in (real(**kw) or {}).items() if k is not pa.ChunkedArray},
+    )
+
+
+def test_a_frame_keys_alike_in_one_chunk_or_many_and_as_before(monkeypatch):
+    from cash.value_hash import compute_hash
+
+    chunked = _frame()
+    whole = chunked.rechunk()
+    keys = {compute_hash(chunked), compute_hash(whole)}
+    table = chunked.to_arrow(compat_level=pl.CompatLevel.newest())
+    arrow_key = compute_hash(table)
+    nested_key = compute_hash({"frame": chunked, "table": table})
+    _without_the_column_reducer(monkeypatch)
+
+    assert whole.n_chunks("all") == [1] * 4
+    assert keys == {compute_hash(chunked)} == {compute_hash(whole)}
+    assert arrow_key == compute_hash(table)
+    assert nested_key == compute_hash({"frame": chunked, "table": table})
+
+
+def test_a_call_on_the_frame_in_many_chunks_hits_the_entry_of_one_chunk(tmp_path):
+    import cash
+
+    calls = []
+    c = cash.Cash(cache_dir=str(tmp_path), register_magic=False)
+
+    @c.cache
+    def rows(frame):
+        calls.append(1)
+        return frame.height
+
+    chunked = _frame()
+    assert rows(chunked.rechunk()) == ROWS - ROWS % CHUNKS
+    assert rows(chunked) == ROWS - ROWS % CHUNKS
+    assert calls == [1]
+
+
+def test_the_restored_frame_passes_the_ram_tiers_check():
+    """The RAM tier keeps a value only while it still hashes to the digest
+    taken when it was stored (`memory_backend._still_as_stored`)."""
+    from cash.backends import memory_backend
+
+    frame = _frame()
+    digest = memory_backend._polars_digest(frame)
+    stream, buffers = PickleSerializer().serialize_split(frame, copy=False)
+    back = PickleSerializer().deserialize_split(stream, buffers)
+
+    assert memory_backend._polars_digest(back) == digest
+    assert memory_backend._still_as_stored([(back, digest)])
+
+
+def test_a_frame_read_from_disk_is_served_from_ram_again(tmp_path):
+    writer = FileBackend(str(tmp_path / "cache"), flush_interval=0)
+    writer.set("k", _frame(), {"execution_time": 5.0, "decorator_entry": True})
+    writer.shutdown()
+    tiers = TieredBackend([InMemoryBackend(), FileBackend(str(tmp_path / "cache"), flush_interval=0)])
+    _meta, first = tiers.get("k")
+    meta, again = tiers.get("k")
+    tiers.shutdown()
+
+    assert_frame_equal(first, _frame())
+    assert_frame_equal(again, _frame())
+    assert meta["source"] == "RAM"

@@ -54,7 +54,7 @@ class PickleSerializer(Serializer):
     """
 
     def serialize(self, data: Any) -> bytes:
-        return kept_state.dumps(data, protocol=5, extra=stored_reducers())
+        return kept_state.dumps(data, protocol=5, extra=stored_reducers(for_write=True))
 
     def deserialize(self, data: bytes) -> Any:
         return pickle.loads(data)
@@ -85,7 +85,7 @@ class PickleSerializer(Serializer):
             return False
 
         stream = kept_state.dumps(
-            data, protocol=5, buffer_callback=take, on_retry=buffers.clear, extra=stored_reducers()
+            data, protocol=5, buffer_callback=take, on_retry=buffers.clear, extra=stored_reducers(for_write=True)
         )
         return stream, buffers
 
@@ -138,13 +138,17 @@ def rebuild(load: Callable[..., Any], *args: Any) -> Any:
         raise pickle.UnpicklingError(f"rebuilding the stored value raised {type(exc).__name__}: {exc}") from exc
 
 
-def stored_reducers() -> dict | None:
+def stored_reducers(*, for_write: bool = False) -> dict | None:
     """The reducers cash pickles a value it stores with, by exact type
     (`kept_state.dumps` *extra*): `_reduce_polars` for polars' DataFrame
-    and Series, `_reduce_arrow_array` for pandas' Arrow-backed arrays,
-    `_reduce_chunked_array` for an Arrow column of chunks. Each
+    and Series, `_reduce_arrow_array` for pandas' Arrow-backed arrays. Each
     only once its library is imported (a value cannot hold one before). A
-    subclass keeps its own reduce."""
+    subclass keeps its own reduce.
+
+    *for_write*: for the bytes `PickleSerializer` writes, also
+    `_reduce_chunked_array` for an Arrow column of chunks. Not for the
+    pickles a digest is taken over (`stored_pickle`): how an entry is
+    written changes no key."""
     reducers: dict = {}
     pl = sys.modules.get("polars")
     frame, series = getattr(pl, "DataFrame", None), getattr(pl, "Series", None)
@@ -157,7 +161,7 @@ def stored_reducers() -> dict | None:
     if isinstance(string_array, type):
         reducers[string_array] = _reduce_string_array
     chunked = getattr(sys.modules.get("pyarrow"), "ChunkedArray", None)
-    if isinstance(chunked, type):
+    if for_write and isinstance(chunked, type):
         reducers[chunked] = _reduce_chunked_array
     return reducers or None
 
