@@ -156,20 +156,124 @@ def _recorder_class() -> type:
             self._import_module = importlib.import_module
 
         def install(self) -> bool:
+            # Two ids: one sees each code once (global events, disabled at
+            # once), the other has local events on the user's code alone, so
+            # arming them again before a call touches only that code, not
+            # every function the process ran (`restart_events`).
             if not super().install():
                 return False
             mon = sys.monitoring
-            mon.register_callback(self.tool, mon.events.CALL, self._on_call)
+            self.disc = self.tool
+            mon.register_callback(self.disc, mon.events.PY_START, self._discover)
+            mon.register_callback(self.disc, mon.events.PY_RESUME, self._discover)
+            self.tool = None
+            for tool in self.tool_ids:
+                if mon.get_tool(tool) is None:
+                    mon.use_tool_id(tool, self.tool_name)
+                    self.tool = tool
+                    break
+            if self.tool is None:
+                self.tool = self.disc
+                self.uninstall()
+                return False
+            ev = mon.events
+            self.rearm_works = self._rearm_works()
+            mon.register_callback(self.tool, ev.PY_START, self._on_start)
+            mon.register_callback(self.tool, ev.PY_RESUME, self._on_resume)
+            mon.register_callback(self.tool, ev.CALL, self._on_call)
+            self.user_codes: dict[types.CodeType, int] = {}
+            self.rearm: set[types.CodeType] = set()
             return True
+
+        def _rearm_works(self) -> bool:
+            """Does setting a code's local events again arm the ones its
+            callback disabled? CPython does from 3.12 on; checked, not
+            assumed, and `restart_events` does it where it does not."""
+            mon = sys.monitoring
+            seen: list[int] = []
+
+            def probe() -> None:
+                pass
+
+            def on_start(code: types.CodeType, offset: int) -> Any:
+                seen.append(1)
+                return DISABLE
+
+            code = probe.__code__
+            mon.register_callback(self.tool, mon.events.PY_START, on_start)
+            try:
+                mon.set_local_events(self.tool, code, mon.events.PY_START)
+                probe()
+                probe()
+                mon.set_local_events(self.tool, code, 0)
+                mon.set_local_events(self.tool, code, mon.events.PY_START)
+                probe()
+            finally:
+                mon.set_local_events(self.tool, code, 0)
+                mon.register_callback(self.tool, mon.events.PY_START, None)
+            return len(seen) == 2
+
+        def uninstall(self) -> None:
+            mon = sys.monitoring
+            for tool in {getattr(self, "disc", None), self.tool} - {None}:
+                if mon.get_tool(tool) == self.tool_name:
+                    mon.set_events(tool, 0)
+                    for ev in (mon.events.PY_START, mon.events.PY_RESUME, mon.events.CALL):
+                        mon.register_callback(tool, ev, None)
+                    mon.free_tool_id(tool)
+            self.tool = None
+
+        def _intact(self) -> bool:
+            mon = sys.monitoring
+            return (
+                self.tool is not None
+                and mon.get_tool(self.tool) == self.tool_name
+                and mon.get_tool(self.disc) == self.tool_name
+                and mon.get_events(self.disc) == mon.events.PY_START | mon.events.PY_RESUME
+            )
+
+        def _discover(self, code: types.CodeType, offset: int) -> Any:
+            """First sight of *code*: arm local events on it when it is the
+            user's (or starts a process pool), and record this run of it."""
+            frame = sys._getframe(1)
+            g = frame.f_globals
+            kind = self._kinds.get(id(g))
+            if kind is None or kind[0] is not g:
+                kind = self._classify(g)
+            pool = (kind[2], code.co_qualname) in rec.POOL_STARTS
+            if kind[1] is None and not pool and not self._unregistered_user_code(kind[2], code):
+                return DISABLE
+            mon = sys.monitoring
+            events = mon.events.PY_START | mon.events.PY_RESUME
+            if not pool and _LOOKUP_NAMES.intersection(code.co_names):
+                events |= mon.events.CALL
+            self.user_codes[code] = events
+            mon.set_local_events(self.tool, code, events)
+            if self.active:
+                if code.co_flags & rec.RESUMABLE and offset:
+                    self._seen_resume(code, g, kind)
+                else:
+                    self._seen_start(code, frame, g, kind)
+            return DISABLE
 
         def begin(self, kind: str) -> Any:
             unit = TraceUnit(kind)
             if not self._intact():
                 unit.markers.add("tool_conflict")
             unit.threads_before = frozenset(t.ident for t in threading.enumerate() if t.ident is not None)
+            rearm, self.rearm = self.rearm, set()
+            mon = sys.monitoring
+            if not self.rearm_works:
+                if rearm:
+                    mon.restart_events()
+            else:
+                for code in rearm:
+                    events = self.user_codes.get(code)
+                    if events is not None:
+                        mon.set_local_events(self.tool, code, 0)
+                        mon.set_local_events(self.tool, code, events)
             with self._lock:
                 self.active = [*self.active, unit]
-            sys.monitoring.restart_events()
             self.restarts += 1
             return unit
 
@@ -184,21 +288,25 @@ def _recorder_class() -> type:
             return unit
 
         def _on_start(self, code: types.CodeType, offset: int) -> Any:
+            self.rearm.add(code)
+            if self.active:
+                frame = sys._getframe(1)
+                g = frame.f_globals
+                kind = self._kinds.get(id(g))
+                if kind is None or kind[0] is not g:
+                    kind = self._classify(g)
+                self._seen_start(code, frame, g, kind)
+            return DISABLE
+
+        def _seen_start(self, code: types.CodeType, frame: Any, g: dict, kind: tuple) -> None:
             units = self.active
-            if not units:
-                return DISABLE
-            frame = sys._getframe(1)
-            g = frame.f_globals
-            kind = self._kinds.get(id(g))
-            if kind is None or kind[0] is not g:
-                kind = self._classify(g)
             module = kind[1]
             if module is None:
                 if (kind[2], code.co_qualname) in rec.POOL_STARTS:
                     for unit in units:
                         unit.markers.add("process_pool")
                 if not self._unregistered_user_code(kind[2], code):
-                    return DISABLE
+                    return
                 # A file of the user's run as a module no name in sys.modules
                 # finds (a plugin loaded from its path): `build` refuses it.
                 module = kind[2]
@@ -212,10 +320,6 @@ def _recorder_class() -> type:
                 unit.codes.setdefault(code, (g, module))
                 if recv is not None:
                     unit.receivers.setdefault(code, recv if isinstance(recv, type) else type(recv))
-            if _LOOKUP_NAMES.intersection(code.co_names):
-                mon = sys.monitoring
-                mon.set_local_events(self.tool, code, mon.get_local_events(self.tool, code) | mon.events.CALL)
-            return DISABLE
 
         @staticmethod
         def _unregistered_user_code(name: str, code: types.CodeType) -> bool:
@@ -225,23 +329,26 @@ def _recorder_class() -> type:
             return bool(filename) and not filename.startswith("<") and is_user_path(filename)
 
         def _on_resume(self, code: types.CodeType, offset: int) -> Any:
-            units = self.active
-            if not units or not code.co_flags & rec.RESUMABLE:
-                return DISABLE
-            g = sys._getframe(1).f_globals
-            kind = self._kinds.get(id(g))
-            if kind is None or kind[0] is not g:
-                kind = self._classify(g)
+            self.rearm.add(code)
+            if self.active and code.co_flags & rec.RESUMABLE:
+                g = sys._getframe(1).f_globals
+                kind = self._kinds.get(id(g))
+                if kind is None or kind[0] is not g:
+                    kind = self._classify(g)
+                self._seen_resume(code, g, kind)
+            return DISABLE
+
+        def _seen_resume(self, code: types.CodeType, g: dict, kind: tuple) -> None:
             if kind[1] is not None:
-                for unit in units:
+                for unit in self.active:
                     if code not in unit.codes:
                         unit.codes[code] = (g, kind[1])
                         unit.markers.add("generator_resumed")
-            return DISABLE
 
         def _on_call(self, code: types.CodeType, offset: int, fn: Any, arg0: Any) -> Any:
             units = self.active
             if not units:
+                self.rearm.add(code)
                 return DISABLE
             try:
                 if fn is getattr:

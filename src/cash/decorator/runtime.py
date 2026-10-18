@@ -1114,7 +1114,9 @@ class CallRunner:
                 and handed is None
                 and call.outcome is hit
                 and not async_body
-                and not call.traced
+                # Code the key does not cover ran: its trace is checked on
+                # every hit, which the fast path skips.
+                and not (call.traced and call.metadata.code_trace)
             ):
                 memo = hit_memo.memo_for(spec, self)
                 if memo is not None:
