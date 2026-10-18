@@ -45,7 +45,7 @@ from cash.notebook.read_handles import reaches_read_handle
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.amplification import AmplificationGuard
 from cash.notebook.statement.call_routing import CallRouting
-from cash.notebook.statement.capture import display_execution_output, make_capture_ctx
+from cash.notebook.statement.capture import display_execution_output, make_capture_ctx, unshown_output
 from cash.notebook.statement.carrier_advances import (
     advance_carriers,
     carrier_candidates,
@@ -1390,6 +1390,12 @@ class StatementProcessor:
                 execution.result = ExecutionResult(success=True)
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code
             execution.result = error_result(e)
+        except BaseException as e:
+            # An interrupt leaves the statement here, past the step that
+            # shows what it printed, which plain has shown by the time the
+            # KeyboardInterrupt's traceback comes.
+            unshown_output(e, execution.captured, run.silent, run.stream_output)
+            raise
         if figures_before is not None and execution.result.success and pyplot_state() != figures_before:
             run.skip_cache = True
             run.metrics["uncacheable_reasons"].append(CHANGED_PYPLOT_REASON)

@@ -30,6 +30,8 @@ __all__ = [
     "make_capture_ctx",
     "REPLAY_RECORD_CAP",
     "replay_outputs",
+    "show_unshown_output",
+    "unshown_output",
     "replay_record",
     "tee_output",
 ]
@@ -349,6 +351,45 @@ def _is_captured_display(output: Any) -> bool:
     """A display that ``capture_output`` recorded (IPython's ``RichOutput``):
     the mime bundle it was sent with, and a ``display()`` that sends it again."""
     return isinstance(getattr(output, "data", None), dict) and callable(getattr(output, "display", None))
+
+
+#: What an interrupted statement printed or displayed and nobody has shown
+#: yet, on the interrupt (`unshown_output`).
+_UNSHOWN = "_cash_unshown_output"
+
+
+def unshown_output(exc: BaseException, captured: Any, silent: bool, stream_output: bool) -> None:
+    """Show what a statement *exc* interrupts printed and displayed, or keep
+    it on *exc* for the cell to show (*silent*: the cell shows a statement's
+    output once it ends, and this one does not end).
+
+    Streamed, the prints have been shown as they came; the displays have not.
+    An upstream replay's statement keeps it on *exc* too, and nothing shows
+    it: plain never ran that statement."""
+    stdout = "" if stream_output else (getattr(captured, "stdout", "") or "")
+    stderr = "" if stream_output else (getattr(captured, "stderr", "") or "")
+    rich = list(getattr(captured, "outputs", None) or ())
+    if not (stdout or stderr or rich):
+        return
+    if not silent:
+        replay_outputs(stdout, stderr, rich)
+        return
+    try:
+        setattr(exc, _UNSHOWN, (stdout, stderr, rich))
+    except (AttributeError, TypeError):  # an exception class with __slots__
+        replay_outputs(stdout, stderr, rich)
+
+
+def show_unshown_output(exc: BaseException) -> None:
+    """Show, once, what the statement *exc* interrupted printed and displayed."""
+    held = getattr(exc, _UNSHOWN, None)
+    if held is None:
+        return
+    try:
+        delattr(exc, _UNSHOWN)
+    except AttributeError:
+        pass
+    replay_outputs(*held)
 
 
 def display_execution_output(captured: Any, silent: bool, stream_output: bool, metrics: ProcessResult) -> None:
