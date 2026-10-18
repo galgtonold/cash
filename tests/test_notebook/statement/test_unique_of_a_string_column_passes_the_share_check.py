@@ -18,7 +18,7 @@ from cash.notebook.shared_objects import share_group, walk_budget
 
 def _namespace() -> dict:
     pd = pytest.importorskip("pandas")
-    df = pd.DataFrame({"card_scheme": ["GlobalCard", "NexPay", "SwiftCharge"] * 2000})
+    df = pd.DataFrame({"card_scheme": pd.array(["GlobalCard", "NexPay", "SwiftCharge"] * 2000, dtype="string")})
     return {"pd": pd, "df": df, "schemes": df["card_scheme"].unique()}
 
 
