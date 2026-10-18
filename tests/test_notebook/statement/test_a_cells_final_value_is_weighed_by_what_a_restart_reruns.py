@@ -18,26 +18,17 @@ np = pytest.importorskip("numpy")
 from cash.backends import memory_backend
 from tests._cell_driver import run_cash_cell
 
-SETUP = (
-    "import time\n"
-    "import numpy as np\n"
-    "def load():\n"
-    "    time.sleep(0.4)\n"
-    "    return np.full(2_000_000, 1.0)\n"
-    "def step(a, k):\n"
-    "    time.sleep(0.02)\n"
-    "    return a * k"
-)
+SETUP = "import time\nimport numpy as np\ndef step(a, k):\n    time.sleep(0.05)\n    return a * k"
 
 
 @pytest.fixture
 def slow_copy(monkeypatch):
-    """A 16 MB array costs 0.16 s to copy back: more than one step (0.02 s),
-    less than the chain behind it (0.4 s). Pinned, not measured: the RAM
-    tier's own readings would take over as it copies."""
+    """Copying the 1.6 MB array back costs 0.25 s: more than one step
+    (0.05 s), less than the cell's chain behind the last one (0.5 s). Pinned,
+    not measured: the RAM tier's own readings would take over as it copies."""
 
     def hit_seconds(value, nbytes):
-        return 0.16 if nbytes > 10_000_000 else None
+        return 0.25 if nbytes > 1_000_000 else None
 
     monkeypatch.setattr(memory_backend, "hit_seconds", hit_seconds)
 
@@ -51,21 +42,23 @@ def _kept(cash, code):
 
 
 def test_the_final_value_over_an_unsaved_chain_is_kept(cash_magics, cash_instance, slow_copy):
-    cell = "arr = load()\narr = step(arr, 2.0)\narr = step(arr, 3.0)"
+    cell = "arr = time.sleep(0.4) or np.full(200_000, 1.0)\narr = step(arr, 2.0)\narr = step(arr, 3.0)"
     cells = [SETUP, cell]
     cash_magics.cash_on("")
     cash_magics.badges.mode = "off"
     for c in cells:
         run_cash_cell(cash_magics, c, cells=cells)
     assert cash_magics.shell.user_ns["arr"][0] == 6.0
-    assert _kept(cash_instance, "arr = step(arr, 3.0)"), _entries(cash_instance, "arr = step(arr, 3.0)")
+    assert _kept(cash_instance, "arr = step(arr, 3.0)"), [
+        (e.get("code"), e.get("metadata_only"), e.get("skipped_reason")) for e in cash_instance.backend.list_entries()
+    ]
 
 
 def test_an_intermediate_is_still_weighed_by_its_own_time(cash_magics, cash_instance, slow_copy):
     """The control: the cell replaces ``arr = step(arr, 2.0)``, so a
     restart never restores it, and copying it back costs more than its
-    0.02 s."""
-    cell = "arr = load()\narr = step(arr, 2.0)\narr = step(arr, 3.0)"
+    0.05 s."""
+    cell = "arr = time.sleep(0.4) or np.full(200_000, 1.0)\narr = step(arr, 2.0)\narr = step(arr, 3.0)"
     cells = [SETUP, cell]
     cash_magics.cash_on("")
     cash_magics.badges.mode = "off"
