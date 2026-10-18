@@ -101,7 +101,7 @@ jobs:
             --ignore=tests/docs \
             -m "not perf" \
             -p tools.test_selection.shard --shard=${{ matrix.shard }} \
-            -n auto --tb=short -q -rs
+            -n auto --tb=short -q -rs -p tests._dqwatch
         # Windows defaults to pwsh, where `\` does not continue a line.
         shell: bash
 
@@ -131,7 +131,7 @@ jobs:
             --ignore=tests/test_wheel_gate \
             --ignore=tests/docs \
             -m "not perf" -k "polars or lazy_frame" \
-            -n auto --tb=short -q -rs
+            -n auto --tb=short -q -rs -p tests._dqwatch
         shell: bash
 
   # The Linux, Windows and macOS runs above get pandas 3 on every Python but
@@ -163,7 +163,7 @@ jobs:
             --ignore=tests/test_wheel_gate \
             --ignore=tests/docs \
             -m "not perf" -k "pandas or frame or sklearn or fit or series or column" \
-            -n auto --tb=short -q -rs
+            -n auto --tb=short -q -rs -p tests._dqwatch
         shell: bash
 
   # The integration core set: the tests picked (tools/test_selection/) to cover
