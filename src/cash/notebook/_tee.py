@@ -147,10 +147,12 @@ class StreamTaken:
                     delattr(self._stream, m)  # back to the class's method
 
     def __exit__(self, *exc: Any) -> None:
-        if self._swapped:
-            setattr(sys, self.name, self._stream)
-        else:
+        if not self._swapped:
             self._put_back()
+        elif getattr(sys, self.name) is self.sink:
+            setattr(sys, self.name, self._stream)
+        # else: the code rebound ``sys.<name>`` itself (``sys.stdout = buf``),
+        # and keeps it, as in plain.
 
     def getvalue(self) -> str:
         return self.sink.getvalue()

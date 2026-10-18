@@ -61,8 +61,8 @@ class TestContextManagerEdits:
         )
         nb_runner.start_kernel()
         nb_runner.run_all()
-        out3 = nb_runner.get_output(3)
-        assert "<div>hello</div>" in out3
+        # Exactly what plain prints: the tags went to ``buf``, not the notebook.
+        assert nb_runner.get_output(3).strip() == "'<div>hello</div>'"
 
         # Change tag name
         nb_runner.set_cell_source(
@@ -70,8 +70,7 @@ class TestContextManagerEdits:
             "import io, sys\nbuf = io.StringIO()\nold = sys.stdout\nsys.stdout = buf\nwith tag('span'):\n    print('world', end='')\nsys.stdout = old\nresult = buf.getvalue()\nprint(repr(result))",
         )
         nb_runner.run_all()
-        out3b = nb_runner.get_output(3)
-        assert "<span>world</span>" in out3b
+        assert nb_runner.get_output(3).strip() == "'<span>world</span>'"
 
     def test_edit_cm_class(self, nb_runner):
         """Edit a class-based context manager."""
