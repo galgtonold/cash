@@ -353,13 +353,12 @@ class KeyBuilder:
                 CashImpurityWarning,
                 spec.name,
                 "handed_callable",
-                f"@cash.cache on {spec.name}: an argument is a function of yours, "
-                f"or holds one, that changes a global or what it closes over when "
-                f"it is called (or whose source cannot be read), or an object of "
-                f"your class whose special methods or properties (``with cm:``, "
-                f"``b[k]``, ``b.value``) change a global. "
-                f"A cache hit would skip that change, so calls like this run "
-                f"uncached.",
+                f"@cash.cache on {spec.name}: an argument changes state when it is "
+                f"used, so calls like this run uncached, since a cache hit would skip "
+                f"that change. It is a function of yours, or holds one, that changes a "
+                f"global or what it closes over when it is called (or whose source "
+                f"cannot be read), or an object of your class whose special methods "
+                f"or properties (``with cm:``, ``b[k]``, ``b.value``) change a global.",
                 code="IMPURE-HANDED-CALLABLE",
                 fix="return the new value from the function you pass instead of "
                 "changing state in it, or call it outside the cached function. "
