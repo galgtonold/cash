@@ -1003,11 +1003,16 @@ def _patch_process_pool_submit() -> None:
     scikit-learn ``n_jobs=``) runs on an executor of the same shape and is
     wrapped the same way, as is ``multiprocessing.Pool``
     (`_patch_multiprocessing_pool`).
-    """
-    # Local: this loads multiprocessing, which `import cash` must not pay for.
-    import concurrent.futures.process as cf_process
 
-    _patch_attribute(cf_process.ProcessPoolExecutor, "submit", _make_relaying_submit)
+    Only once the pool's module is imported (`_POOL_MODULES`): one imported
+    later, while a tracker is open, is patched as its import finishes, and
+    one imported between trackers when the next opens. Importing it here
+    loaded multiprocessing and subprocess, 9-12 ms of every process that
+    caches a call, for a pool most of them never make.
+    """
+    cf_process = sys.modules.get("concurrent.futures.process")
+    if cf_process is not None:
+        _patch_attribute(cf_process.ProcessPoolExecutor, "submit", _make_relaying_submit)
     # joblib vendors loky; loky also ships on its own. Only once imported: a
     # program that never imported joblib has no loky workers to hear from.
     for name in ("joblib.externals.loky.process_executor", "loky.process_executor"):
@@ -1031,9 +1036,11 @@ def _patch_multiprocessing_pool() -> None:
     unwrapped. ``ThreadPool`` is a ``Pool`` and is covered alike.
     """
     # `multiprocessing.Pool()` imports the module only when called -- inside
-    # the cached call, after this ran. 0.4 ms, once: multiprocessing itself is
-    # loaded already, by `_patch_process_pool_submit`.
-    import multiprocessing.pool as module
+    # the cached call, after this ran: the import hook patches it then
+    # (`_POOL_MODULES`).
+    module = sys.modules.get("multiprocessing.pool")
+    if module is None:
+        return
 
     def wrap_task(original):
         @functools.wraps(original)
@@ -1570,7 +1577,7 @@ class PostImportHook(importlib.abc.MetaPathFinder):
         # Only a module a handler is registered for: patching looks up
         # handlers by the exact module name, so wrapping the loader of any
         # other module -- every submodule of pandas, say -- patches nothing.
-        if fullname not in file_registry().handlers:
+        if fullname not in file_registry().handlers and fullname not in _POOL_MODULES:
             return None
 
         # It's a target. We need to let the real import happen, then patch.
@@ -1620,7 +1627,19 @@ class _PatchingLoader:
         # tracker-agnostic, install-once-per-target, and only while a
         # tracker is still open.
         _install_module_patches(self.fullname, module)
+        patch_pool = _POOL_MODULES.get(self.fullname)
+        if patch_pool is not None:
+            with _install_lock:
+                if io_watch.holding():  # an import finishing after the last tracker closed
+                    patch_pool()
 
+
+# The pools whose tasks report their reads back, by the module that defines
+# them: patched when the module is imported (`_patch_process_pool_submit`).
+_POOL_MODULES: dict[str, Callable[[], None]] = {
+    "concurrent.futures.process": _patch_process_pool_submit,
+    "multiprocessing.pool": _patch_multiprocessing_pool,
+}
 
 # Shared meta_path hook, on ``sys.meta_path`` while a tracker is open.
 _shared_import_hook = PostImportHook()
