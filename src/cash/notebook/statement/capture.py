@@ -265,9 +265,17 @@ class _Captured:
 
 @contextmanager
 def _capture_in_place(cls: Any, stdout: bool, stderr: bool, display: bool) -> Generator[Any, None, None]:
-    """IPython's capture for the displays; the streams taken in place."""
+    """IPython's capture for the displays; the streams taken in place.
+
+    IPython's capture puts back the ``sys.stdout`` and ``sys.stderr`` it
+    found on exit, even when it took neither: a statement that rebinds one
+    (``sys.stdout = buf``) had it undone, and what the cell printed next went
+    to the notebook instead. What the statement left there is kept."""
     with contextlib.ExitStack() as stack:
+        left: dict[str, Any] = {}
+        stack.callback(lambda: [setattr(sys, name, stream) for name, stream in left.items()])
         shown = stack.enter_context(cls(stdout=False, stderr=False, display=display))
+        stack.callback(lambda: left.update(stdout=sys.stdout, stderr=sys.stderr))
         out = stack.enter_context(StreamTaken("stdout", lambda _real: StringIO())) if stdout else None
         err = stack.enter_context(StreamTaken("stderr", lambda _real: StringIO())) if stderr else None
         yield _Captured(shown, out, err)
