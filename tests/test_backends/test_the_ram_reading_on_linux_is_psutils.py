@@ -39,7 +39,7 @@ def _psutil_on(tmp_path, monkeypatch, text):
     """psutil's reading of a /proc whose meminfo is *text*, and cash's."""
     import psutil
 
-    (tmp_path / "meminfo").write_text(text)
+    (tmp_path / "meminfo").write_text(text, encoding="utf-8")
     monkeypatch.setattr(psutil, "PROCFS_PATH", str(tmp_path))
     real_read = memory_backend.read_code_file
     monkeypatch.setattr(
@@ -77,7 +77,7 @@ def test_a_file_without_mem_available_leaves_it_to_psutil(tmp_path, monkeypatch)
     ],
 )
 def test_a_reading_that_does_not_add_up_leaves_it_to_psutil(tmp_path, monkeypatch, text):
-    (tmp_path / "meminfo").write_text(text)
+    (tmp_path / "meminfo").write_text(text, encoding="utf-8")
     real_read = memory_backend.read_code_file
     monkeypatch.setattr(memory_backend, "read_code_file", lambda path: real_read(str(tmp_path / "meminfo")))
     assert memory_backend._meminfo_reading() is None
