@@ -1949,8 +1949,13 @@ class StatementProcessor:
         if run.skip_cache or not run.outputs:
             return contextlib.nullcontext()
         user_ns = self.shell.user_ns
+        # ``x = f(...)``: the entry refers to the call's, whose store has made
+        # its bytes already. Kept again, a 150 MB Bunch was copied for nothing.
+        referred = self._calls.referred_result(run.code)
 
         def stored(value: Any) -> bool:
+            if id(value) == referred:
+                return False
             return any(user_ns.get(name, _ABSENT) is value for name in run.outputs)
 
         def others(_value: Any) -> list[Any]:
