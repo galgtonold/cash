@@ -117,10 +117,16 @@ def test_a_holder_that_is_not_a_variable_still_links_the_variables(cash_magics, 
     cash_magics.badges.mode = "off"
     for cell in cells[:3]:
         run_cash_cell(cash_magics, cell, cells=cells)
-    lineage = cash_magics.tracking_state.variable_lineage
+    state = cash_magics.tracking_state
+    lineage = state.variable_lineage
     before, control = lineage[holder], lineage["unrelated"]
+    # Missed once in tens of thousands of runs (macOS, 3.14) and never
+    # reproduced: say which half failed if it happens again.
+    edges = {name: sorted(targets) for name, targets in state.derivation_edges.items()}
+    changed = lineage["features"]
     run_cash_cell(cash_magics, cells[3], cells=cells)
-    assert lineage[holder] != before
+    seen = f"edges before the change {edges}, features moved: {lineage['features'] != changed}"
+    assert lineage[holder] != before, seen
     assert lineage["unrelated"] == control
 
 
