@@ -1407,11 +1407,13 @@ class CallRunner:
         run.arg_carriers_moved = []
         with run.tracker, run.observer:
             threads_at_start = THREADS_IN_CALLS[0]
+            # What a call that picks code by name ran, for its trace. Begun
+            # and ended outside the body's time: setting the recorder up
+            # (installing it, on a process's first call) is cash's cost.
+            call.trace_unit = code_trace.begin() if call.traced else None
             body_t0 = _perf_counter()
             nested = [0.0]
             nested_token = NESTED_CASH_SECONDS.set(nested)
-            # What a call that picks code by name ran, for its trace.
-            call.trace_unit = code_trace.begin() if call.traced else None
             try:
                 self._files.track_declared_files(run.tracker, spec)
                 self._files.track_scanned_files(run.tracker, args, kwargs)
@@ -1420,12 +1422,13 @@ class CallRunner:
                 self._calls.log_raised(func_name, exc, call.call_start)
                 raise
             finally:
+                body_t1 = _perf_counter()
                 code_trace.end(call.trace_unit)
                 NESTED_CASH_SECONDS.reset(nested_token)
             # The user's own work, isolated. Everything cash does sits outside
             # this pair, which is the whole point: it is the only number that
             # can answer "did caching pay?".
-            run.body_seconds = max(0.0, _perf_counter() - body_t0 - run.tracker.read_hash_seconds - nested[0])
+            run.body_seconds = max(0.0, body_t1 - body_t0 - run.tracker.read_hash_seconds - nested[0])
             run.saves_seconds = run.body_seconds / max(threads_at_start, THREADS_IN_CALLS[0], 1)
             run.rng_drew = self._rng.drawn_streams(run.rng_pre)
             run.rng_new = self._rng.note_draw(func_name, run.rng_drew)
