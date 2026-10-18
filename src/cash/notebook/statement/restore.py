@@ -18,6 +18,8 @@ nothing. Both are pinned by ``tests/test_notebook/session/test_display_without_i
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
@@ -129,6 +131,9 @@ class StatementRestorer:
             moved = holders if metadata is not None and metadata.holders_moved else {}
             if metadata is not None and metadata.key:
                 tracking_state.held_with[metadata.key] = dict(moved)
+                tracking_state.restored_file_states[metadata.key] = restored_file_state_digest(
+                    metadata.file_dependencies
+                )
             # A holder stored by where it holds the outputs' objects: the
             # live one, given the restored objects there. Found before anything
             # is written, so a holder without those places any more fails the
@@ -220,3 +225,15 @@ class StatementRestorer:
         t_output = _perf_counter()
         replay_outputs(stdout, stderr, rich_outputs)
         return _perf_counter() - t_output
+
+
+def restored_file_state_digest(file_dependencies: Mapping[str, Any] | None) -> str:
+    """A digest of the file state an entry was stored with (its
+    ``file_dependencies``: each file, folder, probe and remote object with
+    the fingerprint it had), or "" when it has none. Equal for one state,
+    different for another: the entry was only restored because each file
+    still matches its fingerprint."""
+    if not file_dependencies:
+        return ""
+    text = json.dumps(file_dependencies, sort_keys=True, default=repr)
+    return hashlib.sha256(text.encode()).hexdigest()

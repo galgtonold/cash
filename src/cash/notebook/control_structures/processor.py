@@ -366,7 +366,8 @@ class ControlStructureProcessor:
         (:meth:`_persistable_callees`: no global RNG moved, no clock, no
         environment or module data read outside the key, no file written,
         no hidden global write), and it drew from no iterator. A restored
-        loop is named the same way, by the key it was found under.
+        loop is named the same way, by the key it was found under and the
+        file state its entry was stored with.
 
         The files it read, and the paths it only checked for, join the name
         as they join a statement's lineage (`compute_file_hash_component`):
@@ -393,7 +394,15 @@ class ControlStructureProcessor:
         if callees is None:
             return None
         parts = [str(key), *(f"{name}={lin}" for name, lin in sorted(callees.items()))]
-        if files is not None:
+        if metrics.get("status") == CacheStatus.RESTORED:
+            # Restored, the loop read nothing now: the files it read when
+            # stored are the entry's, which still matched them to be used.
+            stored = state.restored_file_states.get(str(key))
+            if stored is None:
+                return None
+            if stored:
+                parts.append(f"stored-files={stored}")
+        elif files is not None:
             try:
                 parts.append(f"files={compute_file_hash_component(*files)}")
             except Exception:  # never let bookkeeping break the user's loop; the values say it

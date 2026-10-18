@@ -213,6 +213,14 @@ class TrackingState:
     # W: StatementLineageBuilder. R: VirtualLineage, ControlStructureProcessor.
     statement_file_reads: dict[str, tuple[frozenset[str], frozenset[str]]] = field(default_factory=dict)
 
+    # Cache key -> the file state the entry a statement was last restored
+    # from was stored with: a digest of its ``file_dependencies`` snapshot
+    # (``restored_file_state_digest``), "" when it read none. A loop restored
+    # as one unit records no read, so its name takes this instead
+    # (``ControlStructureProcessor._unit_digest``).
+    # W: StatementRestorer. R: ControlStructureProcessor.
+    restored_file_states: dict[str, str] = field(default_factory=dict)
+
     # Cache key -> {path: answer} of the existence checks that statement made
     # on its last run without reading the path (``probe_answers``): they join
     # its file component as whether each path is there now.
