@@ -28,7 +28,7 @@ def _log(marked: bool = False) -> str:
 
 def test_the_rows_are_named_by_the_key_and_follow_the_file(nb_runner):
     log = nb_runner.work_dir / "log.txt"
-    log.write_text(_log())
+    log.write_text(_log(), encoding="utf-8")
     nb_runner.create_notebook([SETUP, LOOP, REPORT])
     nb_runner.start_kernel()
     nb_runner.run_cells([1])
@@ -38,11 +38,11 @@ def test_the_rows_are_named_by_the_key_and_follow_the_file(nb_runner):
         assert "ROWS 2000 0" in nb_runner.get_output(3)
         assert nb_runner.peek(f"len({READ_BACK})") == "0"
 
-        log.write_text(_log(marked=True))  # the same size
+        log.write_text(_log(marked=True), encoding="utf-8")  # the same size
         nb_runner.run_cells([2, 3])
         assert "ROWS 2000 1" in nb_runner.get_output(3)
 
-        log.write_text(_log())
+        log.write_text(_log(), encoding="utf-8")
         nb_runner.run_cells([2, 3])
         assert "ROWS 2000 0" in nb_runner.get_output(3)
     finally:
@@ -52,18 +52,18 @@ def test_the_rows_are_named_by_the_key_and_follow_the_file(nb_runner):
 @pytest.mark.fresh_kernel
 def test_after_a_restart_an_edited_file_is_read_again(nb_runner):
     log = nb_runner.work_dir / "log.txt"
-    log.write_text(_log())
+    log.write_text(_log(), encoding="utf-8")
     nb_runner.create_notebook([SETUP, LOOP, REPORT])
     nb_runner.start_kernel()
     nb_runner.run_cells([1, 2, 3])
     assert "ROWS 2000 0" in nb_runner.get_output(3)
 
-    log.write_text(_log(marked=True))
+    log.write_text(_log(marked=True), encoding="utf-8")
     nb_runner.restart()
     nb_runner.run_cells([1, 2, 3])
     assert "ROWS 2000 1" in nb_runner.get_output(3)
 
-    log.write_text(_log())
+    log.write_text(_log(), encoding="utf-8")
     nb_runner.restart()
     nb_runner.run_cells([1, 2, 3])
     assert "ROWS 2000 0" in nb_runner.get_output(3)
