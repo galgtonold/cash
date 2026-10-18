@@ -177,13 +177,15 @@ def _reduce_chunked_array(value: Any) -> Any:
     10.3 GB on Windows, 39 s of writing beside the next cell. Rebuilt from
     the same buffers, at the same offsets, the column is the one stored.
     Never more than pyarrow writes: it pickles a sliced chunk's buffers
-    whole too."""
+    whole too. A column of one chunk goes the same way: sorted, p08's
+    text column is one chunk over 6,151 small buffers, which pyarrow
+    pickled into the stream (`_packed`)."""
     import pyarrow as pa
 
     chunks = value.chunks
     kind = value.type
-    if len(chunks) < 2 or kind.num_fields or pa.types.is_dictionary(kind) or isinstance(kind, pa.ExtensionType):
-        # One chunk, or a type whose children or dictionary carry buffers
+    if not chunks or kind.num_fields or pa.types.is_dictionary(kind) or isinstance(kind, pa.ExtensionType):
+        # No chunk, or a type whose children or dictionary carry buffers
         # of their own that ``buffers()`` flattens: as pyarrow pickles it.
         return value.__reduce__()
     index: dict[tuple[int, int], int] = {}
