@@ -186,10 +186,12 @@ TraceUnit: Any = None
 
 
 def _recorder_class() -> type:
+    from ..install_paths import _USER_PATH as user_paths
     from ..install_paths import is_user_path
     from ..tracking import trace_recorder as rec
 
     DISABLE = sys.monitoring.DISABLE
+    _POOL_QUALNAMES = frozenset(qualname for _, qualname in rec.POOL_STARTS)
 
     class _Recorder(rec.Recorder):
         """The process's one recorder, for traced calls and for the
@@ -292,6 +294,20 @@ def _recorder_class() -> type:
         def _discover(self, code: types.CodeType, offset: int) -> Any:
             """First sight of *code*: arm local events on it when it is the
             user's (or starts a process pool), and record this run of it."""
+            filename = code.co_filename
+            if filename and filename[0] != "<" and code.co_qualname not in _POOL_QUALNAMES:
+                # A library's file or cash's own, judged by its file as
+                # `is_user_code_file` does, before reading the frame: a fresh
+                # process sees thousands of them once each (an import of
+                # pandas), and reading the frame is most of what each costs.
+                # A first verdict on a file may list its import folder, which
+                # is cash's own read, not the user's.
+                user = user_paths.get(filename)
+                if user is None:
+                    with untracked():
+                        user = is_user_path(filename)
+                if not user:
+                    return DISABLE
             frame = sys._getframe(1)
             g = frame.f_globals
             kind = self._kinds.get(id(g))
