@@ -485,6 +485,8 @@ class CallEntries:
         Returns the ``(digest, size)`` a statement may refer to this entry by,
         for the caller to hold the result under, or ``None``.
         """
+        # Not kept until the backend has it: whatever happens before then.
+        self.last_store_kept = False
         metadata: dict[str, Any] = {"execution_time": elapsed, "timestamp": _time.time()}
         if plain_value:
             # `referenced`: the statement this result is the plain value of
@@ -584,7 +586,6 @@ class CallEntries:
         if callee_globals:
             metadata["has_callee_globals"] = True
             value = (value, dict(callee_globals))
-        self.last_store_kept = False
         try:
             self._cash.backend.set(key, value, metadata)
             self.last_store_kept = "persist_skipped" not in metadata
