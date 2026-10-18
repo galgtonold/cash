@@ -139,16 +139,18 @@ static PyObject *py_view_values(PyObject *self, PyObject *const *args, Py_ssize_
     int has_validity;
     if (get_views(args[0], args[2], start, stop, &views, &validity, &has_validity) < 0) return NULL;
     Py_ssize_t ndatas = PyTuple_GET_SIZE(args[1]);
+    /* A data buffer is asked for the first time a row points into it, not
+     * all of them up front: every chunk of a polars text column lists all
+     * of the column's data buffers (thousands), and this is called once per
+     * block, so taking each one each call cost more than the copy. */
     Py_buffer *datas = PyMem_Calloc(ndatas ? (size_t)ndatas : 1, sizeof(Py_buffer));
-    Py_ssize_t got = 0;
+    char *have = PyMem_Calloc(ndatas ? (size_t)ndatas : 1, 1);
     PyObject *result = NULL;
     int has_out = 0;
-    if (!datas) {
+    if (!datas || !have) {
         PyErr_NoMemory();
         goto done;
     }
-    for (; got < ndatas; got++)
-        if (PyObject_GetBuffer(PyTuple_GET_ITEM(args[1], got), &datas[got], PyBUF_SIMPLE) < 0) goto done;
     if (PyObject_GetBuffer(args[6], &out, PyBUF_WRITABLE) < 0) goto done;
     has_out = 1;
     const char *v = (const char *)views.buf;
@@ -156,32 +158,40 @@ static PyObject *py_view_values(PyObject *self, PyObject *const *args, Py_ssize_
     char *o = (char *)out.buf;
     Py_ssize_t room = out.len, written = 0, row = start;
     int bad = 0;
-    Py_BEGIN_ALLOW_THREADS
-    for (; row < stop && written < room; row++, skip = 0) {
-        if (!is_valid(bits, row)) continue;
-        const char *view = v + row * VIEW_BYTES;
-        int32_t n = read_i32(view);
-        if (n < 0 || skip > n) { bad = 1; break; }
-        const char *src;
-        if (n <= INLINE_BYTES) {
-            src = view + 4;
-        } else {
-            int32_t index = read_i32(view + 8), at = read_i32(view + 12);
-            if (index < 0 || index >= ndatas || at < 0 || (Py_ssize_t)at + n > datas[index].len) { bad = 1; break; }
-            src = (const char *)datas[index].buf + at;
-        }
-        Py_ssize_t take = n - skip;
-        if (take > room - written) {
-            take = room - written;
+    for (;;) {
+        Py_ssize_t need = -1;
+        Py_BEGIN_ALLOW_THREADS
+        for (; row < stop && written < room; row++, skip = 0) {
+            if (!is_valid(bits, row)) continue;
+            const char *view = v + row * VIEW_BYTES;
+            int32_t n = read_i32(view);
+            if (n < 0 || skip > n) { bad = 1; break; }
+            const char *src;
+            if (n <= INLINE_BYTES) {
+                src = view + 4;
+            } else {
+                int32_t index = read_i32(view + 8), at = read_i32(view + 12);
+                if (index < 0 || index >= ndatas || at < 0) { bad = 1; break; }
+                if (!have[index]) { need = index; break; } /* taken with the GIL, then this row again */
+                if ((Py_ssize_t)at + n > datas[index].len) { bad = 1; break; }
+                src = (const char *)datas[index].buf + at;
+            }
+            Py_ssize_t take = n - skip;
+            if (take > room - written) {
+                take = room - written;
+                memcpy(o + written, src + skip, (size_t)take);
+                written += take;
+                skip += take;
+                break; /* row stays: the rest of it goes to the next call */
+            }
             memcpy(o + written, src + skip, (size_t)take);
             written += take;
-            skip += take;
-            break; /* row stays: the rest of it goes to the next call */
         }
-        memcpy(o + written, src + skip, (size_t)take);
-        written += take;
+        Py_END_ALLOW_THREADS
+        if (bad || need < 0) break;
+        if (PyObject_GetBuffer(PyTuple_GET_ITEM(args[1], need), &datas[need], PyBUF_SIMPLE) < 0) goto done;
+        have[need] = 1;
     }
-    Py_END_ALLOW_THREADS
     if (bad) {
         PyErr_SetString(PyExc_ValueError, "a view points outside its data buffers");
         goto done;
@@ -189,7 +199,10 @@ static PyObject *py_view_values(PyObject *self, PyObject *const *args, Py_ssize_
     result = Py_BuildValue("(nnn)", row, row < stop ? skip : (Py_ssize_t)0, written);
 done:
     if (has_out) PyBuffer_Release(&out);
-    for (Py_ssize_t i = 0; i < got; i++) PyBuffer_Release(&datas[i]);
+    if (have)
+        for (Py_ssize_t i = 0; i < ndatas; i++)
+            if (have[i]) PyBuffer_Release(&datas[i]);
+    PyMem_Free(have);
     PyMem_Free(datas);
     if (has_validity) PyBuffer_Release(&validity);
     PyBuffer_Release(&views);
