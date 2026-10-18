@@ -14,6 +14,7 @@ Functions only; nothing here hashes or stores a value.
 from __future__ import annotations
 
 import dataclasses
+import itertools
 import logging
 import pickle
 import random
@@ -353,6 +354,14 @@ def _instance_estimate(value: Any, seen: set[int]) -> int:
                     held = _attr_values(obj)
                 except Exception:  # noqa: BLE001 - an attribute that raises holds nothing we can see
                     held = []
+                # A dict or list of a class of its own holds its items too:
+                # scikit-learn's ``Bunch`` (``fetch_lfw_people``) keeps its
+                # arrays as items. Read as 0, its RAM copy took the array
+                # copies over the pickle its digest had made (2 x 150 MB).
+                if isinstance(obj, dict):
+                    held = [*itertools.islice(obj.values(), _INSTANCE_OBJECTS), *held]
+                elif isinstance(obj, (list, tuple)) and len(obj) <= _INSTANCE_OBJECTS:
+                    held = [*obj, *held]
             for item in held:
                 kind = type(item)
                 if kind in _FLAT_CELLS or id(item) in walked:
