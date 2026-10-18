@@ -226,7 +226,11 @@ side effects and still caches:
 One case is not cached: a body that picks code from a run-time value
 (`eval`, `exec`, `getattr(obj, name)()`, `importlib.import_module`) runs
 uncached with [`KEY-UNTRACKABLE-DEP`](../warnings.md#key-untrackable-dep),
-because cash cannot tell when that code changes. So does a call to a helper
+because cash cannot tell when that code changes. On Python 3.12+ a lookup by
+name (`getattr`, `import_module`, `__import__`) is the exception: the call is
+keyed as usual, its body runs under `sys.monitoring`, and the entry keeps a
+record of the functions that ran and what each lookup found, which is checked
+again before a hit is served. So does a call to a helper
 -- or a class -- that `exec` or `eval` built from a string into a namespace
 of no module (`ns = {}; exec(open("rules.txt").read(), ns)`): its text is
 data the program read, not a source file. One the cached function captures

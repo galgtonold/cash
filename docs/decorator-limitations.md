@@ -196,9 +196,11 @@ small pandas strategies, against about 2 ms for the table form).
 
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks._warn_untrackable @90bfa6af -->
 Looking the function up by a name at run time, with `getattr(module, name)()`
-or `importlib.import_module(name)`, is not keyed: the function runs uncached
-with a [`KEY-UNTRACKABLE-DEP`](warnings.md#key-untrackable-dep) warning. Put
-the functions in a table instead.
+or `importlib.import_module(name)`, is not keyed. On Python 3.12 and newer the
+call is cached anyway, on a record of the code it ran that is checked before
+each hit; before 3.12, or when that record cannot be checked, the function
+runs uncached with a [`KEY-UNTRACKABLE-DEP`](warnings.md#key-untrackable-dep)
+warning. A table is keyed on every version.
 
 ## Code in installed packages
 

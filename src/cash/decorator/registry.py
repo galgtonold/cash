@@ -23,7 +23,7 @@ from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
 from ..graph import DependencyGraph
 from ..source_norm import bytecode_identity
-from . import hit_memo
+from . import code_trace, hit_memo
 from .cached_function import CachedFunction, PurityMode
 from .call_state import KeyBuildFailed
 from .explain import MissKind, MissReason
@@ -538,6 +538,7 @@ class FunctionRegistry:
         """
         try:
             reason: MissReason | None = None
+            lookups: list = []
             stack: list[tuple[Callable[..., Any], str]] = [(func, func_name)]
             seen: set[str] = set()
             while stack:
@@ -565,16 +566,28 @@ class FunctionRegistry:
                     elif report.untrackable and self.purity_mode(name) != "silent":
                         # KEY-UNTRACKABLE-DEP: code picked by a run-time name
                         # (`getattr(mod, name)()`, `import_module`, `eval`) is
-                        # not in the key. assume_safe=True caches anyway.
-                        reason = MissReason(
-                            MissKind.UNTRACKABLE,
-                            f"{name} picks code by a run-time name ({describe_untrackable(report.untrackable)}), "
-                            "so the call ran uncached",
-                        )
+                        # not in the key. assume_safe=True caches anyway; a
+                        # lookup by name is cached on a trace on 3.12+.
+                        if code_trace.covers(report.untrackable):
+                            lookups.extend(report.untrackable)
+                        else:
+                            reason = MissReason(
+                                MissKind.UNTRACKABLE,
+                                f"{name} picks code by a run-time name ({describe_untrackable(report.untrackable)}), "
+                                "so the call ran uncached",
+                            )
                 for dep in self.graph.get_dependencies(name):
                     dep_func = self.functions.get(dep)
                     if dep_func is not None:
                         stack.append((dep_func, dep))
+            if reason is None and lookups:
+                # Keyed as any call, and served only while the trace of what
+                # it ran holds (`code_trace`).
+                return MissReason(
+                    MissKind.UNTRACKABLE,
+                    f"{func_name} picks code by a run-time name ({describe_untrackable(lookups)})",
+                    traced=True,
+                )
             return reason
         except Exception as e:
             # The bindings could not be checked, so the reports may describe

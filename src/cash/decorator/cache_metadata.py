@@ -118,6 +118,9 @@ class CacheMetadata:
     #: One of those sources does not pickle, so only this process can check
     #: the entry: it stays in RAM (`PersistencePolicy.decide`).
     process_local: bool | None = None
+    #: For a call that picks code by a run-time name: the trace of what it
+    #: ran, each item checked again before the entry is served (`code_trace`).
+    code_trace: list | None = None
 
     force_persist: bool | None = None
     metadata_only: bool | None = None

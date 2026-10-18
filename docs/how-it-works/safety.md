@@ -16,7 +16,9 @@ sending a request. The two engines handle this differently.
     [`KEY-NETWORK-READ`](../warnings.md#key-network-read) advisory that `ttl=`
     silences. A body that picks code from a run-time value (`eval`, `exec`,
     `getattr(obj, name)()`, `importlib.import_module`) runs uncached with
-    [`KEY-UNTRACKABLE-DEP`](../warnings.md#key-untrackable-dep). [How `@cash.cache`
+    [`KEY-UNTRACKABLE-DEP`](../warnings.md#key-untrackable-dep), except a
+    lookup by name on Python 3.12+, which is cached on a checked record of
+    the code it ran. [How `@cash.cache`
     decides](decorator-path.md#side-effects) has the details, and the
     [decorator guide](../decorator.md#side-effects) covers `assume_safe`.
 

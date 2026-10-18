@@ -21,6 +21,17 @@ ISSUE_DYNAMIC_PATTERN = "dynamic_pattern"
 # (KEY-UNTRACKABLE-DEP); strict=True raises, assume_safe=True caches anyway.
 # Distinct from ISSUE_DYNAMIC_PATTERN, which stays advisory.
 ISSUE_UNTRACKABLE_DEP = "untrackable_dep"
+#: How an ``untrackable_dep`` finding that is a lookup by a run-time name
+#: (``getattr(obj, name)``, ``importlib.import_module(name)``,
+#: ``__import__(name)``) begins: on Python 3.12+ such a call is cached on a
+#: trace of what it ran (`cash.decorator.code_trace`). eval/exec, namespace
+#: subscripts and the rest keep running uncached.
+NAME_LOOKUP_DESCRIPTIONS = (
+    "getattr(obj, name)(...) with non-constant name",
+    "importlib.import_module(...)",
+    "__import__(...)",
+    "a name lookup bound to a local:",
+)
 ISSUE_DISCARDED_CALL = "discarded_call"
 ISSUE_SCOPE_MUTATION = "scope_mutation"
 ISSUE_MUTABLE_GLOBAL = "mutable_global"
@@ -202,6 +213,12 @@ def _file_part(issues: list[PurityIssue]) -> str:
     """`` (path/to/file.py)`` for a group of issues, or nothing."""
     name = next((i.filename for i in issues if i.filename), "")
     return f" ({name})" if name else ""
+
+
+def is_name_lookup(issue: PurityIssue) -> bool:
+    """Is *issue* an ``untrackable_dep`` that looks code up by a run-time
+    name, which a trace of the call can follow (`NAME_LOOKUP_DESCRIPTIONS`)?"""
+    return issue.kind == ISSUE_UNTRACKABLE_DEP and issue.description.startswith(NAME_LOOKUP_DESCRIPTIONS)
 
 
 def describe_untrackable(issues: tuple[PurityIssue, ...] | list[PurityIssue]) -> str:
