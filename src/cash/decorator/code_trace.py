@@ -56,6 +56,7 @@ import os
 import sys
 import threading
 import types
+import weakref
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
@@ -234,12 +235,16 @@ def _recorder_class() -> type:
             mon.register_callback(self.tool, ev.PY_START, self._on_start)
             mon.register_callback(self.tool, ev.PY_RESUME, self._on_resume)
             mon.register_callback(self.tool, ev.CALL, self._on_call)
-            self.user_codes: dict[types.CodeType, int] = {}
+            # Held weakly: a notebook compiles each statement it runs into
+            # code of its own, and a long session kept every one of them.
+            # Code that is gone cannot run again, so nothing it would have
+            # recorded is lost; code still alive stays.
+            self.user_codes: weakref.WeakKeyDictionary[types.CodeType, int] = weakref.WeakKeyDictionary()
             self.rearm: set[types.CodeType] = set()
             #: The user's code that looks names up by a string in its own
             #: globals (`string_lookups`): what it calls is recorded for a
             #: notebook unit, the callable a string found among it.
-            self.by_string: set[types.CodeType] = set()
+            self.by_string: weakref.WeakSet[types.CodeType] = weakref.WeakSet()
             return True
 
         def _rearm_works(self) -> bool:
