@@ -56,6 +56,7 @@ __all__ = [
     "is_user_code_module",
     "is_user_module",
     "is_user_path",
+    "known_user_path",
     "top_package",
     "norm_dir",
     "normcase_path",
@@ -298,6 +299,13 @@ def is_user_path(path: str | os.PathLike[str] | None) -> bool:
         )
     _USER_PATH[path] = verdict
     return verdict
+
+
+def known_user_path(path: str) -> bool | None:
+    """`is_user_path`'s verdict on *path* when one is already kept, else None:
+    a check that must not run the first verdict where it is (it may list an
+    import folder) asks this first."""
+    return _USER_PATH.get(path)
 
 
 def is_cash_path(path: str | os.PathLike[str] | None) -> bool:

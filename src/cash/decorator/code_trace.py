@@ -186,8 +186,7 @@ TraceUnit: Any = None
 
 
 def _recorder_class() -> type:
-    from ..install_paths import _USER_PATH as user_paths
-    from ..install_paths import is_user_path
+    from ..install_paths import is_user_path, known_user_path
     from ..tracking import trace_recorder as rec
 
     DISABLE = sys.monitoring.DISABLE
@@ -302,7 +301,7 @@ def _recorder_class() -> type:
                 # pandas), and reading the frame is most of what each costs.
                 # A first verdict on a file may list its import folder, which
                 # is cash's own read, not the user's.
-                user = user_paths.get(filename)
+                user = known_user_path(filename)
                 if user is None:
                     with untracked():
                         user = is_user_path(filename)
