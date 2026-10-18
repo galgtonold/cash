@@ -78,7 +78,7 @@ from ..cache_status import CacheStatus
 from ..compiled_source import statement_place
 from ..control_structures import contains_top_level_await, is_control_structure
 from ..statement import ProcessResult
-from ..statement.capture import replay_outputs
+from ..statement.capture import replay_outputs, show_unshown_output
 from ..tracking_state import TrackingState
 from ._types import PipelineCompleted, PipelineSyntaxError, RunInstead
 from .autoreload_hook import in_place_reload, run_autoreload_now
@@ -955,6 +955,8 @@ class CellExecutor:
         all_metrics.append(metrics)
         replay_outputs(metrics.get("stdout", ""), metrics.get("stderr", ""))
         if metrics.get("status") == CacheStatus.ERROR and metrics.get("error"):
+            # What it displayed before it raised is shown too, as in plain.
+            replay_outputs(rich=metrics.get("rich_outputs") or [])
             raise metrics["error"]
 
         return self._flush_rich_outputs(
@@ -1270,6 +1272,8 @@ class CellExecutor:
             except (Exception, KeyboardInterrupt, SystemExit) as e:  # intentionally broad: the cell's own error
                 # An interrupt and a ``sys.exit()`` end the cell as an error
                 # does in IPython: shown, and the cell's reply says error.
+                # What it printed before the interrupt comes first, as in plain.
+                show_unshown_output(e)
                 self._finalize_error_badge(e, cell, node)
                 raise
         finally:
