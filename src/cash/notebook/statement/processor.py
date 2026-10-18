@@ -2247,7 +2247,11 @@ class StatementProcessor:
             return
         run = StatementRun(code=code, source_hash=statement_source_hash(code))
         run.outputs = set(captured)
-        self._record_shared_object_edges(run, captured, None, (), cost, fallback_floor=0.0, held=held)
+        # Its checks look into the values a level at a time, once for all of
+        # them, as a statement's do: a loop's list of 1.5 million parsed rows
+        # was read four times over, 2.7 s.
+        with _plain_data.one_look(captured):
+            self._record_shared_object_edges(run, captured, None, (), cost, fallback_floor=0.0, held=held)
         del captured
 
     def _holders_of(

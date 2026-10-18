@@ -938,7 +938,7 @@ def share_group(
         if found and anchorable is not None and anchor_rounds < _MAX_ANCHOR_ROUNDS:
             fresh = _anchor_candidates(found, user_ns, tried, anchorable)
             leaves.ids.update(fresh)
-            _take_back_holding(group, leaves, fresh, tried, user_ns)
+            _take_back_holding(group, leaves, fresh, tried, user_ns, memo)
             if fresh & leaves.ids:
                 # Counted again with the new anchors left out: a holder that
                 # held only their objects is no holder any more.
@@ -992,7 +992,12 @@ def _anchor_candidates(
 
 
 def _take_back_holding(
-    group: Mapping[str, Any], leaves: Leaves, fresh: set[int], tried: dict[int, str | None], user_ns: Mapping[str, Any]
+    group: Mapping[str, Any],
+    leaves: Leaves,
+    fresh: set[int],
+    tried: dict[int, str | None],
+    user_ns: Mapping[str, Any],
+    memo: dict[int, list | None] | None = None,
 ) -> None:
     """Take back from *leaves* the anchors among *fresh* whose object holds
     an object of *group* (`share_group`): bound again on a restore, the live
@@ -1000,18 +1005,61 @@ def _take_back_holding(
     if not fresh:
         return
     value_types = VALUE_TYPES + library_value_types()
-    nodes: dict[int, Any] = {}
-    _descend(list(group.values()), "", nodes, {}, {}, [], value_types, Leaves(set(leaves.ids)))
-    nodes.update((id(root), root) for root in group.values())
+    nodes = _group_nodes(group, value_types, leaves, memo)
+    whole: dict[int, Any] | None = None
     for key in fresh:
         anchor = user_ns.get(tried[key] or "")
         if id(anchor) != key:
             continue
         inner: dict[int, Any] = {}
         _descend([anchor], "", inner, {}, {}, [], value_types, Leaves(leaves.ids - {key}))
-        if not nodes.keys().isdisjoint(inner):
+        seen = nodes
+        if key in nodes:
+            # The anchor is itself a root or a break: what only it holds is
+            # left out of *nodes* but in *inner*. Asked of the whole walk.
+            if whole is None:
+                whole = _group_nodes(group, value_types, leaves, None)
+            seen = whole
+        if not seen.keys().isdisjoint(inner):
             leaves.ids.discard(key)
             tried[key] = None
+
+
+def _group_nodes(
+    group: Mapping[str, Any], value_types: tuple[type, ...], leaves: Leaves, memo: dict[int, list | None] | None
+) -> dict[int, Any]:
+    """The objects of *group* an anchor's walk is looked for in
+    (`_take_back_holding`): the roots and what they reach, stopping at
+    *leaves*. With *memo* (`_walk`'s, read and not added to; None for the
+    whole walk), a root of JSON-like data gives only the containers something besides their parent
+    holds and what they reach (`_plain_data.held_beyond_parents`).
+
+    The ones left out are held by their parent alone, once: a walk from an
+    anchor that is none of them reaches one only through its parent, so it
+    reaches the root or a break above it as well, which are kept. The two
+    meet the same anchors but for one that is itself a kept container,
+    which the caller asks of the whole walk. A break among *leaves* lies on
+    no path the whole walk takes: that root is walked whole.
+    """
+    nodes: dict[int, Any] = {}
+    stop = Leaves(set(leaves.ids))
+    whole: list[Any] = []
+    for root in group.values():
+        nodes[id(root)] = root
+        if memo is None or type(root) not in (list, dict):
+            whole.append(root)
+            continue
+        key = id(root)
+        breaks = memo[key] if key in memo else _plain_data.held_beyond_parents(root, TREE_LEAVES, _MAX_BREAKS)
+        kept = None if breaks is None else [obj for obj in breaks if _is_node(obj, value_types)]
+        if kept is None or any(id(obj) in stop.ids for obj in kept):
+            whole.append(root)
+            continue
+        fresh = [obj for obj in kept if id(obj) not in nodes]
+        nodes.update((id(obj), obj) for obj in fresh)
+        _descend(fresh, "", nodes, {}, {}, [], value_types, stop)
+    _descend(whole, "", nodes, {}, {}, [], value_types, stop)
+    return nodes
 
 
 def anchors_held(value: Any, anchors: Mapping[str, Any]) -> set[str]:
