@@ -182,8 +182,8 @@ def realpath_of_read_this_run(path: str) -> tuple[str, os.stat_result | None]:
     what cash added to the read. A regular file that is not
     itself a link or reparse point resolves to its directory's real path plus
     its name, so the directory is resolved once; the ``lstat`` that shows it is
-    such a file is also the stat the read needs. Anything else -- a link, a
-    missing file, a short ``~`` name -- is resolved in full.
+    such a file is also the stat the read needs. So does a missing one. Anything
+    else -- a link, a short ``~`` name -- is resolved in full.
     """
 
     if HASH_EPOCH is None:
@@ -198,6 +198,14 @@ def realpath_of_read_this_run(path: str) -> tuple[str, os.stat_result | None]:
     if name and name not in (".", "..") and "~" not in name and parent != absolute:
         try:
             st = os.lstat(absolute)
+        except FileNotFoundError:
+            # Not there yet, as at an open for writing: ``realpath`` answers
+            # its directory's real path plus the name too. Resolved in full,
+            # a folder of 13,000 images unpacked by ``tarfile`` paid a walk
+            # of every path component per file.
+            resolved = os.path.join(realpath_this_run(parent), name)
+            _remember_realpath(key, resolved)
+            return resolved, None
         except (OSError, ValueError):
             st = None
         if st is not None and _stat.S_ISREG(st.st_mode) and not getattr(st, "st_file_attributes", 0) & _REPARSE_POINT:
@@ -262,6 +270,10 @@ def file_content_hash(
     try:
         if st is None:
             st = os.stat(path)
+        if _stat.S_ISDIR(st.st_mode):
+            # ``io.FileIO`` refuses a folder: no digest, without the open
+            # (a statement that unpacked 3,400 folders had each one tried).
+            return None
         if size is None:
             size = st.st_size
         if (hashed_at - st.st_mtime) > _HASH_MEMO_MIN_AGE_SECONDS:
