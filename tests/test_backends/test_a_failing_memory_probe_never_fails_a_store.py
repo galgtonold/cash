@@ -23,7 +23,7 @@ def _broken(exc: BaseException):
     def virtual_memory():
         raise exc
 
-    return SimpleNamespace(virtual_memory=virtual_memory)
+    return virtual_memory
 
 
 @pytest.fixture(autouse=True)
@@ -33,7 +33,7 @@ def _not_yet_logged(monkeypatch):
 
 @pytest.mark.parametrize("exc", [NameError("name '_ty' is not defined"), RuntimeError("no /proc"), OSError("denied")])
 def test_every_write_stores_when_the_reading_raises(monkeypatch, caplog, exc):
-    monkeypatch.setattr(memory_backend, "psutil", _broken(exc))
+    monkeypatch.setattr(memory_backend, "_virtual_memory", _broken(exc))
     b = InMemoryBackend(check_interval=10)
 
     with caplog.at_level(logging.WARNING, logger=memory_backend.__name__):
@@ -47,7 +47,7 @@ def test_every_write_stores_when_the_reading_raises(monkeypatch, caplog, exc):
 
 
 def test_a_reading_without_a_percentage_skips_the_check(monkeypatch):
-    monkeypatch.setattr(memory_backend, "psutil", SimpleNamespace(virtual_memory=lambda: SimpleNamespace(percent=None)))
+    monkeypatch.setattr(memory_backend, "_virtual_memory", lambda: SimpleNamespace(percent=None))
     b = InMemoryBackend(check_interval=1)
 
     for i in range(5):
@@ -59,7 +59,7 @@ def test_a_reading_without_a_percentage_skips_the_check(monkeypatch):
 def test_a_working_reading_still_evicts(monkeypatch):
     """Control: the check itself still runs when the reading works."""
     reading = SimpleNamespace(percent=50.0, total=16_000_000_000)
-    monkeypatch.setattr(memory_backend, "psutil", SimpleNamespace(virtual_memory=lambda: reading))
+    monkeypatch.setattr(memory_backend, "_virtual_memory", lambda: reading)
     b = InMemoryBackend(max_memory_percent=0.9, check_interval=1)
     for i in range(100):
         b.set(f"k{i:03d}", bytes(1_000_000), {"execution_time": 1.0})
