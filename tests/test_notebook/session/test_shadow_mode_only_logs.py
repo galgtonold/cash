@@ -1,6 +1,7 @@
-"""Shadow mode (``CASH_SHADOW=1``) records what each stored statement and
-cached call ran, verifies that trace on the next lookup, and only logs where
-the verdict disagrees with the key's: nothing is served differently.
+"""Each stored statement and cached call has a trace of what it ran, checked
+before it is served: one whose trace says something changed runs again.
+``CASH_SHADOW=1`` (shadow mode) also logs where the verdict disagrees with the
+key's, and checks misses against earlier traces.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ def shadow_on(tmp_path, monkeypatch):
     """A fresh shadow for this test, logging to a file of its own."""
     log = tmp_path / "shadow-log.jsonl"
     monkeypatch.setenv("CASH_SHADOW_LOG", str(log))
+    monkeypatch.setenv("CASH_SHADOW", "1")
     before = shadow.SHADOW
     shadow.disable()
     on = shadow.enable()
@@ -70,7 +72,7 @@ def test_an_edit_the_key_follows_agrees_too(shadow_on, statement_processor, mock
     assert not on.summary()["disagreements"]
 
 
-def test_a_trace_saying_changed_on_a_hit_is_logged_and_the_hit_still_served(shadow_on, statement_processor, mock_shell):
+def test_a_trace_saying_changed_on_a_hit_runs_the_statement_again(shadow_on, statement_processor, mock_shell):
     """A stand-in for a key that misses a change: the trace's digest of
     ``rate`` is made to disagree with what ``rate`` holds."""
     on, log = shadow_on
@@ -83,11 +85,12 @@ def test_a_trace_saying_changed_on_a_hit_is_logged_and_the_hit_still_served(shad
         for item in trace["items"]
     )
 
-    assert _run(statement_processor, "t = total(3)")["status"] == CacheStatus.RESTORED
+    assert _run(statement_processor, "t = total(3)")["status"] == CacheStatus.COMPUTED
     assert mock_shell.user_ns["t"] == 6
-    stale = [e for e in _events(log) if e["event"] == "stale_suspect"]
-    assert len(stale) == 1
-    assert stale[0]["changed"][0][:3] == ["global", on.notebook_name, "rate"]
+    rerun = [e for e in _events(log) if e["event"] == "rerun"]
+    assert len(rerun) == 1
+    assert rerun[0]["changed"][0][:3] == ["global", on.notebook_name, "rate"]
+    assert on.counts["stmt:miss:rerun"] == 1
 
 
 def test_a_miss_an_unchanged_trace_could_have_served_is_logged(shadow_on, statement_processor):

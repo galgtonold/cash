@@ -223,6 +223,10 @@ class FunctionRegistry:
         #: caller actually calls, which `reached_callee` compares with the
         #: one registered under that name.
         self.cached_callees: dict[str, dict[str, Any]] = {}
+        #: func_name -> the calls it makes through a property or
+        #: ``__getattr__`` to code the key cannot name (`populate`): on 3.12+
+        #: served on a trace of what they reached, before that uncached.
+        self.unresolved_calls: dict[str, list[str]] = {}
         #: Functions already warned KEY-UNRESOLVED-CALL about (`populate`).
         self._unresolved_warned: set[str] = set()
 
@@ -539,6 +543,7 @@ class FunctionRegistry:
         try:
             reason: MissReason | None = None
             lookups: list = []
+            unresolved: list[str] = []
             stack: list[tuple[Callable[..., Any], str]] = [(func, func_name)]
             seen: set[str] = set()
             while stack:
@@ -576,16 +581,26 @@ class FunctionRegistry:
                                 f"{name} picks code by a run-time name ({describe_untrackable(report.untrackable)}), "
                                 "so the call ran uncached",
                             )
+                gaps = self.unresolved_gaps(name)
+                if gaps and reason is None:
+                    if code_trace.TRACEABLE:
+                        unresolved.extend(gaps)
+                    else:
+                        reason = MissReason(
+                            MissKind.UNTRACKABLE,
+                            f"{name} calls {gaps[0]}(...) through a property or __getattr__, so the call ran uncached",
+                        )
                 for dep in self.graph.get_dependencies(name):
                     dep_func = self.functions.get(dep)
                     if dep_func is not None:
                         stack.append((dep_func, dep))
-            if reason is None and lookups:
+            if reason is None and (lookups or unresolved):
                 # Keyed as any call, and served only while the trace of what
                 # it ran holds (`code_trace`).
+                what = describe_untrackable(lookups) if lookups else f"{unresolved[0]}(...) through a property"
                 return MissReason(
                     MissKind.UNTRACKABLE,
-                    f"{func_name} picks code by a run-time name ({describe_untrackable(lookups)})",
+                    f"{func_name} picks code by a run-time name ({what})",
                     traced=True,
                 )
             return reason
@@ -598,6 +613,16 @@ class FunctionRegistry:
                 MissKind.UNWALKABLE,
                 f"cash could not check the helpers {func_name} calls ({type(e).__name__}), so the call ran uncached",
             )
+
+    def unresolved_gaps(self, func_name: str) -> list[str]:
+        """*func_name*'s calls through a property or ``__getattr__`` that its
+        ``depends_on`` does not name (by the attribute called: ``api.inner``
+        is named by ``depends_on=[impl.inner]``)."""
+        gaps = self.unresolved_calls.get(func_name)
+        if not gaps:
+            return []
+        named = {dep.rsplit(".", 1)[-1] for dep in self.graph.get_dependencies(func_name)}
+        return [g for g in gaps if g.rsplit(".", 1)[-1] not in named]
 
     def populate(self, func: Callable[..., Any], func_name: str) -> None:
         """Record *func*'s cached-call graph edges and purity report (no
@@ -612,14 +637,18 @@ class FunctionRegistry:
             for called in called_names:
                 if called != func_name:
                     self.graph.add_dependency(func_name, called)
-            if gaps and func_name not in self._unresolved_warned:
+            self.unresolved_calls[func_name] = list(gaps)
+            gaps = self.unresolved_gaps(func_name)
+            if gaps and not code_trace.TRACEABLE and func_name not in self._unresolved_warned:
+                # On 3.12+ the call is served on a trace of what it reached
+                # (`refresh_helper_bindings`): nothing to warn about.
                 self._unresolved_warned.add(func_name)
                 warn_diagnostic(
                     CashImpurityWarning,
                     "KEY-UNRESOLVED-CALL",
                     f"{func_name} calls {gaps[0]}(...) through a property or __getattr__, which cash does "
                     "not run to find what it returns, so the function that call reaches is not in the key: "
-                    f"editing it will not invalidate {func_name}'s results.",
+                    f"calls of {func_name} run uncached.",
                     f"call the function by its own name (module.function), or name it with depends_on=[...] "
                     f"on {func_name}'s decorator.",
                 )

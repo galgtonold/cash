@@ -12,8 +12,7 @@ import types
 import pytest
 
 from cash.notebook import shadow
-from cash.notebook.shadow import items
-from cash.notebook.shadow.recorder import TOOL_NAME
+from cash.tracking import trace_items as items
 
 pytestmark = pytest.mark.skipif(sys.version_info < (3, 12), reason="sys.monitoring")
 
@@ -124,11 +123,14 @@ def test_a_lookup_by_string_marks_the_trace(on):
 def test_losing_the_tool_id_marks_the_unit(on):
     sh, _ = on
     unit = sh.begin("stmt")
-    tool = sh.recorder.tool
+    # The id that sees each code first: with its events off, nothing new is seen.
+    tool = sh.recorder.disc
     sys.monitoring.set_events(tool, 0)
     sh.end(unit)
     assert "tool_conflict" in unit.markers
-    assert sys.monitoring.get_tool(tool) == TOOL_NAME
+    assert sys.monitoring.get_tool(tool) == sh.recorder.tool_name
+    sh.end(sh.begin("stmt"))  # the next unit arms them again
+    assert sys.monitoring.get_events(tool) == sys.monitoring.events.PY_START | sys.monitoring.events.PY_RESUME
 
 
 def test_worker_processes_mark_the_unit(on):

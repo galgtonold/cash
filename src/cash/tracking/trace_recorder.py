@@ -30,6 +30,8 @@ import threading
 import types
 from typing import Any
 
+from ..tracking.tracker_context import untracked
+
 __all__ = ["TOOL_NAME", "Recorder", "Unit"]
 
 TOOL_NAME = "cash-shadow"
@@ -72,7 +74,7 @@ def _target_name(t: threading.Thread) -> str:
 class Unit:
     """What one unit saw run."""
 
-    __slots__ = ("codes", "extra", "kind", "markers", "notes", "receivers", "snap", "thread", "threads_before")
+    __slots__ = ("cells", "codes", "extra", "kind", "markers", "notes", "receivers", "snap", "thread", "threads_before")
 
     def __init__(self, kind: str) -> None:
         self.kind = kind
@@ -80,6 +82,8 @@ class Unit:
         self.codes: dict[types.CodeType, tuple[dict, str]] = {}
         #: code -> the class of ``self`` (or ``cls``) the method first ran on.
         self.receivers: dict[types.CodeType, type] = {}
+        #: code -> its closure cells' digests as it first started (`start_cells`).
+        self.cells: dict[types.CodeType, tuple] = {}
         self.markers: set[str] = set()
         self.notes: set[str] = set()
         #: Item lists of cached calls served inside the unit (they did not run).
@@ -94,6 +98,8 @@ class Unit:
             self.codes.setdefault(code, where)
         for code, cls in inner.receivers.items():
             self.receivers.setdefault(code, cls)
+        for code, cells in inner.cells.items():
+            self.cells.setdefault(code, cells)
         self.markers |= inner.markers
         self.notes |= inner.notes
         self.extra.extend(inner.extra)
@@ -196,8 +202,6 @@ class Recorder:
     def _runs_user_code(self, t: threading.Thread) -> bool:
         """Does thread *t* run code of the user's: its target, or its own
         ``run`` method?"""
-        from ...install_paths import is_user_code_module
-
         fn = getattr(t, "_target", None)
         if fn is None and type(t).run is not threading.Thread.run:
             fn = type(t).run
@@ -210,12 +214,10 @@ class Recorder:
         if not isinstance(name, str) or name == "cash" or name.startswith("cash."):
             return False
         mod = sys.modules.get(name)
-        return mod is not None and is_user_code_module(mod)
+        return mod is not None and is_user_code(mod)
 
     # -- callbacks --------------------------------------------------------
     def _classify(self, g: dict) -> tuple[dict, str | None, str]:
-        from ...install_paths import is_user_code_module
-
         name = g.get("__name__")
         name = name if isinstance(name, str) else "?"
         user: str | None = None
@@ -225,12 +227,17 @@ class Recorder:
             # By the module the globals claim: ``exec``'d code (a dataclass's
             # generated ``__init__``) runs on its module's own dict.
             mod = sys.modules.get(name)
-            if mod is not None and is_user_code_module(mod):
+            if mod is not None and is_user_code(mod):
                 user = name
-        if len(self._kinds) > 4096:
-            self._kinds.clear()
         entry = (g, user, name)
-        self._kinds[id(g)] = entry
+        # Kept for a module's or the notebook's namespace, which live as long
+        # as the process anyway; an ``exec``'d namespace is classified again
+        # rather than kept alive here, with every function defined in it.
+        mod = sys.modules.get(name)
+        if g is self.notebook_ns or (mod is not None and getattr(mod, "__dict__", None) is g):
+            if len(self._kinds) > 4096:
+                self._kinds.clear()
+            self._kinds[id(g)] = entry
         return entry
 
     def _on_start(self, code: types.CodeType, offset: int) -> Any:
@@ -274,3 +281,12 @@ class Recorder:
             unit.codes[code] = (g, kind[1])
             unit.markers.add("generator_resumed")
         return sys.monitoring.DISABLE
+
+
+def is_user_code(mod: types.ModuleType) -> bool:
+    """`is_user_code_module`, its own reads (a listing of site-packages to
+    place the file) kept out of the statement or call being recorded."""
+    from ..install_paths import is_user_code_module
+
+    with untracked():
+        return is_user_code_module(mod)

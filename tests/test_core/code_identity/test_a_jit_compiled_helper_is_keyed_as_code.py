@@ -55,7 +55,9 @@ from helpers import kern
 # what the first call reads: numba's own source files, and sources parsed
 NUMBA = os.path.dirname(numba.__file__)
 numba_files = set()
-parses = [0]
+# kept on the ast module: a global of this script the cached call reads, as
+# the patched parse below does, is checked before each hit
+ast.parses = 0
 _getlines, _parse = linecache.getlines, ast.parse
 
 def getlines(filename, *args, **kwargs):
@@ -64,7 +66,7 @@ def getlines(filename, *args, **kwargs):
     return _getlines(filename, *args, **kwargs)
 
 def parse(*args, **kwargs):
-    parses[0] += 1
+    ast.parses += 1
     return _parse(*args, **kwargs)
 
 linecache.getlines, ast.parse = getlines, parse
@@ -76,7 +78,7 @@ def backtest(n):
 
 t0 = time.perf_counter()
 print("RESULT", backtest(4), flush=True)
-print("FIRST_CALL_S", time.perf_counter() - t0, len(numba_files), parses[0], flush=True)
+print("FIRST_CALL_S", time.perf_counter() - t0, len(numba_files), ast.parses, flush=True)
 """
 
 BY_MODULE = """

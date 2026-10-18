@@ -69,6 +69,7 @@ from ..analysis.purity_report import (
     PurityIssue,
     is_name_lookup,
 )
+from ..tracking.tracker_context import untracked
 
 __all__ = [
     "TRACEABLE",
@@ -85,6 +86,15 @@ __all__ = [
 
 #: ``sys.monitoring`` is there: Python 3.12 or newer.
 TRACEABLE = sys.version_info >= (3, 12)
+_OFF = ("0", "off", "false", "no")
+
+
+def on() -> bool:
+    """Is every cached call recorded and served on its trace? On 3.12+
+    unless ``CASH_TRACE=0``; a call that picks code by name is recorded
+    either way."""
+    return TRACEABLE and os.environ.get("CASH_TRACE", "").strip().lower() not in _OFF
+
 
 #: Names a code object holds when it may look code up by name: CALL events
 #: are armed on it (`_Recorder._on_start`).
@@ -116,16 +126,18 @@ def covers(issues: Iterable[PurityIssue]) -> bool:
 
 # -- recording -------------------------------------------------------------
 def _unit_class() -> type:
-    from ..notebook.shadow.recorder import Unit
+    from ..tracking.trace_recorder import Unit
 
     class TraceUnit(Unit):
         """What one traced call saw: `Unit`'s fields, its lookups by name
         and the items of what was served inside it."""
 
-        __slots__ = ("lookups",)
+        __slots__ = ("cached_codes", "lookups")
 
         def __init__(self, kind: str) -> None:
             super().__init__(kind)
+            #: name -> code of the cached functions served inside (`note_cached_hit`).
+            self.cached_codes: dict[str, types.CodeType] = {}
             #: ``(kind, id(target), name)`` -> ``(kind, target, name)``.
             self.lookups: dict[tuple, tuple] = {}
 
@@ -137,14 +149,16 @@ TraceUnit: Any = None
 
 def _recorder_class() -> type:
     from ..install_paths import is_user_path
-    from ..notebook.shadow import recorder as rec
+    from ..tracking import trace_recorder as rec
 
     DISABLE = sys.monitoring.DISABLE
 
     class _Recorder(rec.Recorder):
-        """The shadow recorder for traced calls: its own tool id, CALL
-        events on code that may look a name up, and every traced call in
-        progress (on any thread) sees what runs."""
+        """The process's one recorder, for traced calls and for the
+        notebook's units (`cash.notebook.shadow`): CALL events on code that
+        may look a name up, every traced call in progress (on any thread)
+        sees what runs, and the innermost notebook unit what its thread
+        runs."""
 
         tool_name = "cash-trace"
         tool_ids = (3, 4)
@@ -152,28 +166,153 @@ def _recorder_class() -> type:
         def __init__(self) -> None:
             super().__init__()
             self.active: list[Any] = []
+            self._in_callback = False
             self._lock = threading.Lock()
             self._import_module = importlib.import_module
 
         def install(self) -> bool:
+            # Two ids: one sees each code once (global events, disabled at
+            # once), the other has local events on the user's code alone, so
+            # arming them again before a call touches only that code, not
+            # every function the process ran (`restart_events`).
             if not super().install():
                 return False
             mon = sys.monitoring
-            mon.register_callback(self.tool, mon.events.CALL, self._on_call)
+            self.disc = self.tool
+            mon.register_callback(self.disc, mon.events.PY_START, self._discover)
+            mon.register_callback(self.disc, mon.events.PY_RESUME, self._discover)
+            self.tool = None
+            for tool in self.tool_ids:
+                if mon.get_tool(tool) is None:
+                    mon.use_tool_id(tool, self.tool_name)
+                    self.tool = tool
+                    break
+            if self.tool is None:
+                self.tool = self.disc
+                self.uninstall()
+                return False
+            ev = mon.events
+            self.rearm_works = self._rearm_works()
+            mon.register_callback(self.tool, ev.PY_START, self._on_start)
+            mon.register_callback(self.tool, ev.PY_RESUME, self._on_resume)
+            mon.register_callback(self.tool, ev.CALL, self._on_call)
+            self.user_codes: dict[types.CodeType, int] = {}
+            self.rearm: set[types.CodeType] = set()
             return True
+
+        def _rearm_works(self) -> bool:
+            """Does setting a code's local events again arm the ones its
+            callback disabled? CPython does from 3.12 on; checked, not
+            assumed, and `restart_events` does it where it does not."""
+            mon = sys.monitoring
+            seen: list[int] = []
+
+            def probe() -> None:
+                pass
+
+            def on_start(code: types.CodeType, offset: int) -> Any:
+                seen.append(1)
+                return DISABLE
+
+            code = probe.__code__
+            mon.register_callback(self.tool, mon.events.PY_START, on_start)
+            try:
+                mon.set_local_events(self.tool, code, mon.events.PY_START)
+                probe()
+                probe()
+                mon.set_local_events(self.tool, code, 0)
+                mon.set_local_events(self.tool, code, mon.events.PY_START)
+                probe()
+            finally:
+                mon.set_local_events(self.tool, code, 0)
+                mon.register_callback(self.tool, mon.events.PY_START, None)
+            return len(seen) == 2
+
+        def uninstall(self) -> None:
+            mon = sys.monitoring
+            for tool in {getattr(self, "disc", None), self.tool} - {None}:
+                if mon.get_tool(tool) == self.tool_name:
+                    mon.set_events(tool, 0)
+                    for ev in (mon.events.PY_START, mon.events.PY_RESUME, mon.events.CALL):
+                        mon.register_callback(tool, ev, None)
+                    mon.free_tool_id(tool)
+            self.tool = None
+
+        def _intact(self) -> bool:
+            mon = sys.monitoring
+            return (
+                self.tool is not None
+                and mon.get_tool(self.tool) == self.tool_name
+                and mon.get_tool(self.disc) == self.tool_name
+                and mon.get_events(self.disc) == mon.events.PY_START | mon.events.PY_RESUME
+            )
+
+        def _discover(self, code: types.CodeType, offset: int) -> Any:
+            """First sight of *code*: arm local events on it when it is the
+            user's (or starts a process pool), and record this run of it."""
+            frame = sys._getframe(1)
+            g = frame.f_globals
+            kind = self._kinds.get(id(g))
+            if kind is None or kind[0] is not g:
+                kind = self._classify(g)
+            pool = (kind[2], code.co_qualname) in rec.POOL_STARTS
+            if kind[1] is None and not pool and not self._unregistered_user_code(kind[2], code):
+                return DISABLE
+            mon = sys.monitoring
+            events = mon.events.PY_START | mon.events.PY_RESUME
+            if not pool and _LOOKUP_NAMES.intersection(code.co_names):
+                events |= mon.events.CALL
+            self.user_codes[code] = events
+            mon.set_local_events(self.tool, code, events)
+            if self.active or self.stack:
+                if code.co_flags & rec.RESUMABLE and offset:
+                    self._seen_resume(code, g, kind)
+                else:
+                    self._seen_start(code, frame, g, kind)
+            return DISABLE
+
+        def reclassify(self) -> None:
+            """The notebook's namespace changed: what was not the user's
+            code may be now, so every code is seen once more."""
+            self._kinds.clear()
+            sys.monitoring.restart_events()
 
         def begin(self, kind: str) -> Any:
             unit = TraceUnit(kind)
             if not self._intact():
                 unit.markers.add("tool_conflict")
+                mon = sys.monitoring
+                if mon.get_tool(self.disc) == self.tool_name:
+                    # Still ours, its events turned off: arm them again.
+                    mon.set_events(self.disc, mon.events.PY_START | mon.events.PY_RESUME)
             unit.threads_before = frozenset(t.ident for t in threading.enumerate() if t.ident is not None)
+            self._rearm()
+            self.restarts += 1
+            if kind != "decorator":
+                # A notebook unit: the innermost one of its thread sees what
+                # runs, and hands it to the one around it when it ends.
+                self.stack.append(unit)
+                return unit
             with self._lock:
                 self.active = [*self.active, unit]
-            sys.monitoring.restart_events()
-            self.restarts += 1
             return unit
 
+        def _rearm(self) -> None:
+            rearm, self.rearm = self.rearm, set()
+            mon = sys.monitoring
+            if not self.rearm_works:
+                if rearm:
+                    mon.restart_events()
+            else:
+                for code in rearm:
+                    events = self.user_codes.get(code)
+                    if events is not None:
+                        mon.set_local_events(self.tool, code, 0)
+                        mon.set_local_events(self.tool, code, events)
+
         def end(self, unit: Any) -> Any:
+            if unit.kind != "decorator":
+                return super().end(unit)
             with self._lock:
                 self.active = [u for u in self.active if u is not unit]
             if not self._intact():
@@ -184,21 +323,32 @@ def _recorder_class() -> type:
             return unit
 
         def _on_start(self, code: types.CodeType, offset: int) -> Any:
+            self.rearm.add(code)
+            if self.active or self.stack:
+                frame = sys._getframe(1)
+                g = frame.f_globals
+                kind = self._kinds.get(id(g))
+                if kind is None or kind[0] is not g:
+                    kind = self._classify(g)
+                self._seen_start(code, frame, g, kind)
+            return DISABLE
+
+        def _seen_start(self, code: types.CodeType, frame: Any, g: dict, kind: tuple) -> None:
             units = self.active
-            if not units:
-                return DISABLE
-            frame = sys._getframe(1)
-            g = frame.f_globals
-            kind = self._kinds.get(id(g))
-            if kind is None or kind[0] is not g:
-                kind = self._classify(g)
+            stack = self.stack
+            if stack:
+                units = [*units, stack[-1]]
+                if threading.get_ident() != stack[-1].thread:
+                    stack[-1].notes.add("other_thread")
             module = kind[1]
             if module is None:
                 if (kind[2], code.co_qualname) in rec.POOL_STARTS:
                     for unit in units:
                         unit.markers.add("process_pool")
+                if stack and not self.active:
+                    return
                 if not self._unregistered_user_code(kind[2], code):
-                    return DISABLE
+                    return
                 # A file of the user's run as a module no name in sys.modules
                 # finds (a plugin loaded from its path): `build` refuses it.
                 module = kind[2]
@@ -208,14 +358,22 @@ def _recorder_class() -> type:
                     recv = frame.f_locals.get(code.co_varnames[0])
                 except Exception:  # noqa: BLE001 - a frame whose locals cannot be read has no receiver
                     recv = None
+            cells = None
+            if code.co_freevars and not self._in_callback:
+                self._in_callback = True
+                try:
+                    from ..tracking.trace_items import start_cells
+
+                    with untracked():
+                        cells = start_cells(frame, code)
+                finally:
+                    self._in_callback = False
             for unit in units:
                 unit.codes.setdefault(code, (g, module))
+                if cells is not None:
+                    unit.cells.setdefault(code, cells)
                 if recv is not None:
                     unit.receivers.setdefault(code, recv if isinstance(recv, type) else type(recv))
-            if _LOOKUP_NAMES.intersection(code.co_names):
-                mon = sys.monitoring
-                mon.set_local_events(self.tool, code, mon.get_local_events(self.tool, code) | mon.events.CALL)
-            return DISABLE
 
         @staticmethod
         def _unregistered_user_code(name: str, code: types.CodeType) -> bool:
@@ -225,23 +383,27 @@ def _recorder_class() -> type:
             return bool(filename) and not filename.startswith("<") and is_user_path(filename)
 
         def _on_resume(self, code: types.CodeType, offset: int) -> Any:
-            units = self.active
-            if not units or not code.co_flags & rec.RESUMABLE:
-                return DISABLE
-            g = sys._getframe(1).f_globals
-            kind = self._kinds.get(id(g))
-            if kind is None or kind[0] is not g:
-                kind = self._classify(g)
+            self.rearm.add(code)
+            if (self.active or self.stack) and code.co_flags & rec.RESUMABLE:
+                g = sys._getframe(1).f_globals
+                kind = self._kinds.get(id(g))
+                if kind is None or kind[0] is not g:
+                    kind = self._classify(g)
+                self._seen_resume(code, g, kind)
+            return DISABLE
+
+        def _seen_resume(self, code: types.CodeType, g: dict, kind: tuple) -> None:
             if kind[1] is not None:
+                units = [*self.active, self.stack[-1]] if self.stack else self.active
                 for unit in units:
                     if code not in unit.codes:
                         unit.codes[code] = (g, kind[1])
                         unit.markers.add("generator_resumed")
-            return DISABLE
 
         def _on_call(self, code: types.CodeType, offset: int, fn: Any, arg0: Any) -> Any:
             units = self.active
             if not units:
+                self.rearm.add(code)
                 return DISABLE
             try:
                 if fn is getattr:
@@ -266,7 +428,7 @@ def _recorder_class() -> type:
 
 
 _RECORDER: Any = None
-_RECORDER_LOCK = threading.Lock()
+_RECORDER_LOCK = threading.RLock()
 
 
 def _recorder() -> Any:
@@ -286,6 +448,13 @@ def _recorder() -> Any:
     return _RECORDER if _RECORDER.tool is not None else None
 
 
+def recorder_or_reason() -> Any:
+    """The process's recorder, installed or not: its ``reason`` says why
+    when its ``tool`` is None."""
+    _recorder()
+    return _RECORDER
+
+
 def begin() -> Any:
     """Start recording a traced call's body; None when it cannot be."""
     rec = _recorder() if TRACEABLE else None
@@ -302,9 +471,11 @@ def active() -> bool:
     return _RECORDER is not None and bool(_RECORDER.active)
 
 
-def note_cached_hit(func_name: str, state: str | None, trace: list | None) -> None:
+def note_cached_hit(func_name: str, code: types.CodeType | None, state: str | None, trace: list | None) -> None:
     """A cached function was served inside the traced calls in progress: its
-    body did not run, so what it stands for goes in their traces."""
+    body did not run, so what it stands for goes in their traces. *code* is
+    its code: a call whose key already covers it (`static_codes`) leaves the
+    state out (`build`)."""
     rec = _RECORDER
     if rec is None:
         return
@@ -313,6 +484,8 @@ def note_cached_hit(func_name: str, state: str | None, trace: list | None) -> No
             unit.markers.add("cached_hit_unkeyed")
             continue
         unit.extra.append(("cached", func_name, state))
+        if code is not None:
+            unit.cached_codes[func_name] = code
         unit.extra.extend(tuple(item) for item in trace or ())
 
 
@@ -375,7 +548,7 @@ def _digest(value: Any) -> str | None:
     """*value*'s digest, the same in another process for an equal value; None
     when it is too big or cannot be read."""
     from ..install_paths import is_cash_path
-    from ..notebook.shadow.items import value_digest
+    from ..tracking.trace_items import value_digest
 
     wrapped = getattr(value, "__wrapped__", None) if isinstance(value, types.FunctionType) else None
     if wrapped is not None and is_cash_path(value.__code__.co_filename):
@@ -387,7 +560,7 @@ def _digest(value: Any) -> str | None:
 
 
 def _code_digest(code: types.CodeType, fn: Any) -> str | None:
-    from ..notebook.shadow.items import code_digest
+    from ..tracking.trace_items import code_digest
 
     got = code_digest(code)
     if isinstance(fn, types.FunctionType) and fn.__code__ is code and (fn.__defaults__ or fn.__kwdefaults__):
@@ -406,7 +579,7 @@ def _namespace(module: str) -> Mapping[str, Any] | None:
 
 def _find(module: str, qualname: str) -> Any:
     """The object *qualname* names in *module* now, or None."""
-    from ..notebook.shadow.items import inspect_getattr
+    from ..tracking.trace_items import inspect_getattr
 
     ns = _namespace(module)
     if ns is None or "<locals>" in qualname:
@@ -422,9 +595,9 @@ def _find(module: str, qualname: str) -> Any:
 
 
 def _user_module(mod: Any) -> bool:
-    from ..install_paths import is_user_code_module
+    from ..tracking.trace_recorder import is_user_code
 
-    return isinstance(mod, types.ModuleType) and is_user_code_module(mod)
+    return isinstance(mod, types.ModuleType) and is_user_code(mod)
 
 
 def _user_class(cls: Any) -> bool:
@@ -433,7 +606,7 @@ def _user_class(cls: Any) -> bool:
 
 def _classes_digest(cls: type) -> str | None:
     """The user classes of *cls*'s MRO, each by what it holds."""
-    from ..notebook.shadow.items import class_digest
+    from ..tracking.trace_items import class_digest
 
     parts = []
     for klass in cls.__mro__:
@@ -464,7 +637,7 @@ def _namespace_digest(ns: Mapping[str, Any]) -> str | None:
 def _lookup_digest(module: str, qualname: str, name: str) -> str | None:
     """What a ``getattr(target, name)`` finds on the module or class the
     item names, now; None when that cannot be told."""
-    from ..notebook.shadow.items import inspect_getattr
+    from ..tracking.trace_items import inspect_getattr
 
     if qualname:
         target = _find(module, qualname)
@@ -544,7 +717,7 @@ class _Build:
         self.items.setdefault(item, digest)
 
     def run(self) -> list[tuple]:
-        from ..notebook.shadow.items import name_table
+        from ..tracking.trace_items import name_table
 
         unit = self.unit
         for marker in sorted(unit.markers):
@@ -590,11 +763,13 @@ class _Build:
         for kind, target, name in unit.lookups.values():
             self._lookup(kind, target, name)
         out = [(*k, v) for k, v in self.items.items()]
-        out.extend(tuple(x) for x in unit.extra)
+        out.extend(
+            tuple(x) for x in unit.extra if not (x[0] == "cached" and unit.cached_codes.get(x[1]) in self.static)
+        )
         return list(dict.fromkeys(out))
 
     def _code(self, code: types.CodeType, g: Mapping[str, Any], module: str, ran: set[str]) -> None:
-        from ..notebook.shadow.items import candidates, resolve
+        from ..tracking.trace_items import candidates, resolve
 
         qn = code.co_qualname
         rc, fn, _owner = resolve(module, qn, {}, "\x00")
@@ -621,7 +796,7 @@ class _Build:
         raise _Untraceable(f"it ran {module}.{qn}, which no name of {module} holds")
 
     def _class(self, cls: type, ran: set[str]) -> None:
-        from ..notebook.shadow.items import class_digest
+        from ..tracking.trace_items import class_digest
 
         qn = cls.__qualname__
         if "<locals>" in qn:
@@ -666,7 +841,7 @@ _MISSING = object()
 
 
 def _chain_digest(module: str, chain: str) -> str | None:
-    from ..notebook.shadow.items import inspect_getattr
+    from ..tracking.trace_items import inspect_getattr
 
     ns = _namespace(module)
     parts = chain.split(".")
@@ -706,14 +881,19 @@ def _refusal_in(functions: Iterable[Any]) -> str | None:
     return None
 
 
-def build(unit: Any, static_codes: set[types.CodeType]) -> tuple[list[tuple] | None, str]:
+def build(unit: Any, static_codes: set[types.CodeType], *, strict: bool = True) -> tuple[list[tuple] | None, str]:
     """The items of a traced call's finished *unit*, or None and why the
     call's result cannot be served from a trace. *static_codes* are the
-    code the key covers, left out."""
+    code the key covers, left out. *strict*: the call picks code by name,
+    so code with effects a hit would skip is refused too; a call the key
+    already accepted is not second-guessed for those."""
+    from ..tracking.trace_items import call_starts
+
     try:
-        b = _Build(unit, static_codes)
-        items = b.run()
-        why = _refusal_in(b.functions)
+        with call_starts(unit.cells):
+            b = _Build(unit, static_codes)
+            items = b.run()
+        why = _refusal_in(b.functions) if strict else None
         if why is not None:
             return None, why
         return items, ""
@@ -727,7 +907,7 @@ def static_codes(functions: Iterable[Any], reports: Iterable[Any]) -> set[types.
     """The code objects the key covers: those of *functions*, nested code
     included, and those of the helpers each report's walk read
     (``walked_code``, ``helper_bindings``)."""
-    from ..notebook.shadow.items import candidates
+    from ..tracking.trace_items import candidates
 
     out: set[types.CodeType] = set()
     stack: list[Any] = [getattr(getattr(f, "__func__", f), "__code__", None) for f in functions]
@@ -770,7 +950,7 @@ def verify(items: list, cached_state: Callable[[str], str | None]) -> str | None
             if kind == "import":
                 continue
             if kind == "code":
-                from ..notebook.shadow.items import resolve
+                from ..tracking.trace_items import resolve
 
                 rc, fn, _ = resolve(item[1], item[2], {}, "\x00")
                 now = None if rc is None else _code_digest(rc, fn)
@@ -780,7 +960,7 @@ def verify(items: list, cached_state: Callable[[str], str | None]) -> str | None
                 now = None if ns is None else (_digest(ns[item[2]]) if item[2] in ns else _ABSENT)
                 what = f"{item[1]}.{item[2]}"
             elif kind == "class":
-                from ..notebook.shadow.items import class_digest
+                from ..tracking.trace_items import class_digest
 
                 cls = _find(item[1], item[2])
                 now = class_digest(cls) if isinstance(cls, type) else None
