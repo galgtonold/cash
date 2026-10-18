@@ -83,7 +83,15 @@ def compute_file_hash_component(
     file_components = []
     # Relative to the notebook, per directory: a folder's files share one.
     rel_dirs: dict[str, str | None] = {}
+    # A relative read is recorded under both spellings
+    # (``FileAccessTracker.track_path``): the second is answered by the first.
+    answered: dict[str, str] = {}
     for f in sorted(accessed_files):
+        if not os.path.isabs(f):
+            same = answered.get(normalize_path(os.path.abspath(f)))
+            if same is not None:
+                file_components.append(same)
+                continue
         try:
             # Through the directory, with the lstat that shows the file is not
             # a link as its stat: a statement over a frame read from 5,000
@@ -122,7 +130,10 @@ def compute_file_hash_component(
         mtime_ns, size, ctime_ns = content_version(
             canonical_path, stat, lambda p=canonical_path, st=stat: file_content_hash(p, st.st_size, st)
         )
-        file_components.append(f"{display_path}:{mtime_ns}:{size}:{ctime_ns}")
+        component = f"{display_path}:{mtime_ns}:{size}:{ctime_ns}"
+        file_components.append(component)
+        if os.path.isabs(f):
+            answered[normalize_path(f)] = component
 
     for url in sorted(accessed_remote or ()):
         # The URL is the identity and the token is the state, exactly as
