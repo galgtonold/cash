@@ -574,7 +574,9 @@ class StatementStore:
         logger.debug("[TIMING] Store: %.1fms | OVERALL: %.1fms", store_time * 1000, total_time * 1000)
         logger.debug("[CACHE DEBUG] Stored in cache: %s", run.cache_key)
 
-        return StatementCacheMetadata.from_dict(wire)
+        stored = StatementCacheMetadata.from_dict(wire)
+        self.tracking_state.entry_file_states[run.cache_key] = (stored.file_dependencies,)
+        return stored
 
     @staticmethod
     def _reads_files(execution: StatementExecution, file_dependencies: set[str]) -> bool:
