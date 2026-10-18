@@ -180,8 +180,9 @@ It never caches under a partial key. The usual causes:
 - a `key=` function that raised
   ([`KEY-FUNCTION-RAISED`](../warnings.md#key-function-raised));
 - a registered hasher that read an iterator argument, leaving the body an
-  emptied one (a `key=` function reads a copy of it, and the body gets
-  every item)
+  emptied one (a `key=` function reads a copy of it, and a generator is
+  read once into a copy for the hasher and one for the body, so the body
+  gets every item)
   ([`KEY-ITERATOR-CONSUMED`](../warnings.md#key-iterator-consumed));
 - any other failure while building the key
   ([`KEY-BUILD-FAILED`](../warnings.md#key-build-failed)).

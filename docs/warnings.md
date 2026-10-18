@@ -1311,13 +1311,18 @@ cash.register_hasher(Config, lambda c: c.fingerprint)
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/decorator/runtime.py:KeyBuilder._check_iterators_unread @dd5b4fdd -->
-**What happened.** An argument is an iterator (a generator, `map(...)`,
-`iter(rows)`), and building the key read it: a hasher registered for its
-type, or some other part of the key. An iterator can be read once, so the
-body got what was left of it. The call ran uncached. When cash cannot tell
-how far an iterator was read and a registered hasher could have read it,
-it says so too. A `key=` function is not among them: it reads a copy of
-the iterator, and the body gets every item.
+**What happened.** An argument is an iterator (`map(...)`, `iter(rows)`,
+an iterator class of your own), and building the key read it: a hasher
+registered for its type, or some other part of the key. An iterator can be
+read once, so the body got what was left of it. The call ran uncached.
+When cash cannot tell how far an iterator was read and a registered hasher
+could have read it, it says so too.
+
+Two cases do not lose items. A `key=` function reads a copy of the
+iterator. A generator keyed by a hasher registered for generators is read
+once, and the hasher and the body each get a generator over its items; only
+one with more than 100,000 items runs uncached with this warning, and its
+body still gets every item.
 
 **Why it matters.** The body's result was computed from an emptied
 iterator. Stored, it would be served to every later call with the same

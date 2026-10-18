@@ -431,9 +431,38 @@ def test_a_key_function_that_reads_part_of_an_iterator_leaves_the_body_every_ite
     assert rest(iter([1, 5])) == [1, 2, 3]  # keyed by the first item, as declared
 
 
-def test_a_registered_hasher_that_consumes_an_iterator_does_not_store_the_result(cash_instance):
+def test_a_registered_hasher_that_reads_a_generator_leaves_the_body_every_item(cash_instance):
+    """A hasher registered for generators read the caller's generator to key
+    the call, and the body summed what was left: 0, with a warning. The
+    generator is read once, and the hasher and the body each get a generator
+    over its items: the hasher still matches, and the key is what it made of
+    the same items before."""
     import types
 
+    cash_instance.register_hasher(types.GeneratorType, lambda g: repr(tuple(g)))
+    seen = []
+
+    @cash_instance.cache
+    def total(rows):
+        seen.append(type(rows))
+        return sum(rows)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert total(r for r in [1, 2, 3]) == 6
+        assert total(r for r in [1, 2, 3]) == 6
+        assert total(r for r in [1, 2, 4]) == 7
+    assert "KEY-ITERATOR-CONSUMED" not in _codes(caught)
+    assert total.cache_info()["hits"] == 1
+    assert seen == [types.GeneratorType, types.GeneratorType]
+
+
+def test_a_generator_too_long_to_read_ahead_runs_uncached_with_every_item(cash_instance, monkeypatch):
+    import types
+
+    from cash.decorator import runtime
+
+    monkeypatch.setattr(runtime, "MATERIALISED_ITEMS", 2)
     cash_instance.register_hasher(types.GeneratorType, lambda g: repr(tuple(g)))
 
     @cash_instance.cache
@@ -442,8 +471,8 @@ def test_a_registered_hasher_that_consumes_an_iterator_does_not_store_the_result
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        total(r for r in [1, 2, 3])
-        assert total(r for r in [1, 2, 3]) == 0  # the body saw the emptied generator, as before
+        assert total(r for r in [1, 2, 3]) == 6
+        assert total(r for r in [1, 2, 3]) == 6
     assert "KEY-ITERATOR-CONSUMED" in _codes(caught)
     assert total.cache_info()["hits"] == 0
 
