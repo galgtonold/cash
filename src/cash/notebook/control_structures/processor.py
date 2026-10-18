@@ -32,6 +32,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import hashlib
+import json
 import logging
 import textwrap
 import types
@@ -203,8 +204,9 @@ class ControlStructureProcessor:
         entry = _entry_lineages(reads, lineage, state.simulated_lineage)
         before = dict(lineage)
         reads_before = dict(state.statement_file_reads)
+        entries_before = dict(state.entry_file_states)
         rng_before = capture_rng_state() if isinstance(node, ast.For) else None
-        self._unit_frame = (node, reads, before, rng_before, reads_before)
+        self._unit_frame = (node, reads, before, rng_before, reads_before, entries_before)
         # Where each generator it can draw from stands, so a draw in the body
         # moves the variable on (`carrier_advances`).
         positions = carrier_positions(
@@ -366,21 +368,23 @@ class ControlStructureProcessor:
         (:meth:`_persistable_callees`: no global RNG moved, no clock, no
         environment or module data read outside the key, no file written,
         no hidden global write), and it drew from no iterator. A restored
-        loop is named the same way, by the key it was found under and the
-        file state its entry was stored with.
+        loop is named the same way, by the key it was found under.
 
         The files it read, and the paths it only checked for, join the name
         as they join a statement's lineage (`compute_file_hash_component`):
         ``for line in open(path): rows.append(parse(line))`` filled a list
         of 1.5M dicts in 9.7 s, and reading it back for its lineage took
         7-9 s more. A changed file is a new name, so what was built on the
-        list misses.
+        list misses. When the loop has an entry, stored or restored in
+        this run, the files are named as the entry recorded them instead:
+        restored, the loop read nothing, and the computed and the restored
+        loop must share a name for what was built on it to hit.
         """
         frame = self._unit_frame
         key = metrics.get("cache_key")
         if frame is None or frame[0] is not node or not isinstance(node, ast.For) or not key:
             return None
-        _node, reads, before, rng_before, reads_before = frame
+        _node, reads, before, rng_before, reads_before, entries_before = frame
         state = self.statement_processor.tracking_state
         try:
             files = _files_read_since(state, reads_before)
@@ -394,14 +398,20 @@ class ControlStructureProcessor:
         if callees is None:
             return None
         parts = [str(key), *(f"{name}={lin}" for name, lin in sorted(callees.items()))]
-        if metrics.get("status") == CacheStatus.RESTORED:
-            # Restored, the loop read nothing now: the files it read when
-            # stored are the entry's, which still matched them to be used.
-            stored = state.restored_file_states.get(str(key))
+        # The entry this run stored or was restored from names the files as
+        # they were stored: one name for the loop computed and the loop
+        # restored, so what was built on it hits after a restore. Restored,
+        # the loop read nothing now, so without that record only the values
+        # can say.
+        entry = state.entry_file_states.get(str(key))
+        if entry is not None and entry is not entries_before.get(str(key)):
+            stored = _entry_file_state_digest(entry[0])
             if stored is None:
                 return None
             if stored:
                 parts.append(f"stored-files={stored}")
+        elif metrics.get("status") == CacheStatus.RESTORED:
+            return None
         elif files is not None:
             try:
                 parts.append(f"files={compute_file_hash_component(*files)}")
@@ -766,6 +776,29 @@ def _drawn_rng_vars_left(left: dict[str, str], code: str, namespace) -> list[str
         seeded = set()
     prefix = rng_virtual_var("")
     return [var for var in left if var.startswith(prefix) and var not in seeded]
+
+
+def _entry_file_state_digest(file_dependencies) -> str | None:
+    """A digest of an entry's ``file_dependencies`` snapshot, "" when it has
+    none, or None when a fingerprint is not plain data (its text could hold
+    a memory address, a new name in every kernel).
+
+    ``hashed_at`` is left out: it says when the file was last hashed, not
+    what it held, and a later check moves it on in place (`_note_settled`),
+    so the loop restored in the next kernel would get a new name.
+    """
+    if not file_dependencies:
+        return ""
+    state = {
+        path: {k: v for k, v in entry.items() if k != "hashed_at"} if isinstance(entry, dict) else entry
+        for path, entry in file_dependencies.items()
+    }
+    try:
+        text = json.dumps(state, sort_keys=True)
+    except (TypeError, ValueError):
+        logger.debug("[CONTROL] an entry's file fingerprints are not plain data", exc_info=True)
+        return None
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def _files_read_since(state, reads_before) -> tuple[set[str], set[str], dict[str, str]] | None:
