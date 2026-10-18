@@ -260,6 +260,9 @@ class StatementRun:
     #: Shadow mode (``cash.notebook.shadow``): the verdict of its traces,
     #: waiting for the lookup's outcome. Never read by anything else.
     shadow: Any = None
+    #: Seconds recording what it ran took (``Shadow.begin`` / ``end``), inside
+    #: its timed run but cash's cost, not the statement's.
+    record_time: float = 0.0
     #: It ran with a kept value standing in for part of it (``ExpressionMemo``).
     memo_used: bool = False
     #: It ran over a loop header cash evaluated before it (``loop_iterable``).

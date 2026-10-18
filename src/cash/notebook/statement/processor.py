@@ -741,12 +741,11 @@ class StatementProcessor:
                 return done
             with self._executing(run) as runner:
                 self._offer_digests(run, runner)
-                unit = shadow.begin("stmt") if shadow is not None and not run.skip_cache else None
+                unit = self._begin_recording(shadow, run)
                 try:
                     runner.run()
                 finally:
-                    if unit is not None:
-                        shadow.end(unit)
+                    self._end_recording(shadow, run, unit)
                     self._mutations.digests.withdraw_offer()
         try:
             result = self._finish(run, runner.execution)
@@ -755,6 +754,23 @@ class StatementProcessor:
             return result
         finally:
             self._advance_rng(run)
+
+    @staticmethod
+    def _begin_recording(shadow: Any, run: StatementRun) -> Any:
+        """Start recording which code *run*'s statement runs (shadow mode)."""
+        if shadow is None or run.skip_cache:
+            return None
+        spent = shadow.spent
+        unit = shadow.begin("stmt")
+        run.record_time = shadow.spent - spent
+        return unit
+
+    @staticmethod
+    def _end_recording(shadow: Any, run: StatementRun, unit: Any) -> None:
+        if unit is not None:
+            spent = shadow.spent
+            shadow.end(unit)
+            run.record_time += shadow.spent - spent
 
     def _offer_digests(self, run: StatementRun, runner: CodeRunner) -> None:
         """Offer the arguments' digests taken before the statement to the
@@ -807,12 +823,11 @@ class StatementProcessor:
                 self._advance_rng(run)
                 return done
             with self._executing(run) as runner:
-                unit = shadow.begin("stmt") if shadow is not None and not run.skip_cache else None
+                unit = self._begin_recording(shadow, run)
                 try:
                     await runner.run_async()
                 finally:
-                    if unit is not None:
-                        shadow.end(unit)
+                    self._end_recording(shadow, run, unit)
         try:
             result = self._finish(run, runner.execution)
             if shadow is not None:
@@ -1368,7 +1383,7 @@ class StatementProcessor:
                     try:
                         yield runner
                     finally:
-                        wall_time = _perf_counter() - start_time
+                        wall_time = max(0.0, _perf_counter() - start_time - run.record_time)
                         if memo is not None:
                             # Bound only while it ran; what the value cost
                             # to compute is what the statement is worth.
