@@ -86,13 +86,17 @@ def _run(proj, folder, which):
     return p.stdout.strip(), "[RUN]" in p.stderr
 
 
-@pytest.fixture
-def proj(tmp_path):
+def _make_proj(tmp_path):
     proj = tmp_path / "proj"
     proj.mkdir()
     (proj / "pyproject.toml").write_text('[project]\nname = "proj"\n', encoding="utf-8")
     (proj / "job.py").write_text(JOB, encoding="utf-8")
     return proj
+
+
+@pytest.fixture
+def proj(tmp_path):
+    return _make_proj(tmp_path)
 
 
 @pytest.mark.parametrize("which", ["by_module", "by_name", "through_a_helper"])
@@ -117,12 +121,18 @@ def test_a_library_installed_without_top_level_txt_recomputes_on_upgrade(proj, t
     assert _run(proj, lib, "by_module") == ("15", True), "the upgrade served the old version's result"
 
 
+def _versions_alone(found):
+    """The version numbers, without the digest of the files that goes with
+    them (`test_a_library_rebuilt_under_the_same_version_recomputes`)."""
+    return [(name, version.split(" files ")[0]) for name, version in found]
+
+
 def test_only_libraries_count():
     def f(x):
         return np.mean(x) + json.loads("1") + len([v for v in x if v])
 
     assert library_tops([f], "tests") == {"numpy"}
-    assert ("numpy", np.__version__) in library_versions([f], "tests")
+    assert ("numpy", np.__version__) in _versions_alone(library_versions([f], "tests"))
 
 
 def test_what_a_library_requires_counts_too():
@@ -130,7 +140,7 @@ def test_what_a_library_requires_counts_too():
         return pd.Series(x).sum()
 
     assert library_tops([f], "tests") == {"pandas"}
-    assert ("numpy", np.__version__) in library_versions([f], "tests")
+    assert ("numpy", np.__version__) in _versions_alone(library_versions([f], "tests"))
 
 
 def test_a_function_that_reaches_no_library_folds_nothing():
