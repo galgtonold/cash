@@ -25,8 +25,10 @@ What it does not see (``cfilehook.c`` has the details): direct system calls
 the C library (``/MT`` on Windows), opens inside the C library itself,
 ``stat``/``access`` probes, directory listings on Windows, calls through a
 function pointer the library looked up itself (``dlsym``, ``GetProcAddress``,
-ctypes), and a library loaded and used inside a single tracked block (it is
-hooked from the next block on). A
+ctypes), and a library a C library loads itself (a plugin it loads with ``dlopen``)
+and uses inside one tracked block (it is hooked from the next block on). A
+library an import or ``ctypes.CDLL`` loads inside a block is hooked as soon as
+it is loaded (`_hook_libraries_as_they_load`). A
 native open made by ANY thread while a tracker is open is credited to every
 tracker open at the time: a library's I/O threads carry no Python context,
 and an extra dependency can only cost a recompute, never a stale result.
@@ -35,11 +37,15 @@ The file is hashed when the tracker closes, not at the moment it was opened.
 
 from __future__ import annotations
 
+import ctypes
+import functools
+import importlib.machinery
 import os
 import threading
 from typing import Any
 
 from cash import _native
+from cash.tracking.tracker_context import active_tracker
 
 __all__ = ["ENV", "active", "close_window", "disable", "enable", "open_window", "stats", "status_line"]
 
@@ -83,8 +89,54 @@ def enable() -> bool:
     with _lock:
         if not _on:
             _fh.filehook_enable()
+            _hook_libraries_as_they_load()
             _on = True
     return True
+
+
+def _rescan_inside_a_block() -> None:
+    """Hook the libraries loaded since the last scan, when a tracker is open
+    here. Outside one the next window does it, once for all of them."""
+    if _on and active_tracker.get() is not None:
+        try:
+            _fh.filehook_hook_new()
+        except Exception:  # noqa: BLE001 - never fail the user's import over this
+            pass
+
+
+def _hook_libraries_as_they_load() -> None:
+    """Hook a library loaded inside a tracked block as soon as it is loaded.
+
+    Each window hooks what was loaded before it opened, so a C library first
+    loaded inside a cached call (``import pyarrow.fs`` in the body, then a
+    read through it) opened its file unseen: the entry kept no file, a hit
+    never runs the body again, and the edited file's old result was served
+    in every later process too. An extension module's import and a
+    ``ctypes.CDLL`` load now rescan before any of the library's code runs:
+    the extension's own init excepted, which opens no data file.
+    """
+    loader = importlib.machinery.ExtensionFileLoader
+    if not getattr(loader.create_module, "_cash_rescans", False):
+        create = loader.create_module
+
+        @functools.wraps(create)
+        def create_module(self, spec):
+            module = create(self, spec)
+            _rescan_inside_a_block()
+            return module
+
+        create_module._cash_rescans = True  # type: ignore[attr-defined]
+        loader.create_module = create_module
+    if not getattr(ctypes.CDLL.__init__, "_cash_rescans", False):
+        init = ctypes.CDLL.__init__
+
+        @functools.wraps(init)
+        def cdll_init(self, *args, **kwargs):
+            init(self, *args, **kwargs)
+            _rescan_inside_a_block()
+
+        cdll_init._cash_rescans = True  # type: ignore[attr-defined]
+        ctypes.CDLL.__init__ = cdll_init
 
 
 def disable() -> None:
