@@ -70,3 +70,17 @@ def test_a_folder_link_re_pointed_between_two_blocks_is_resolved_anew(tmp_path):
         seen.append(set(tracker.accessed_files))
     assert normalize_path(os.path.realpath(first / "data.txt")) in seen[0]
     assert normalize_path(os.path.realpath(second / "data.txt")) in seen[1]
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink") or os.name == "nt", reason="a POSIX open climbs from a link's target")
+def test_a_read_through_a_folder_link_and_dotdot_is_recorded_where_the_open_goes(tmp_path):
+    target = tmp_path / "real" / "inner"
+    target.mkdir(parents=True)
+    (tmp_path / "real" / "data.txt").write_text("real", encoding="utf-8")
+    (tmp_path / "data.txt").write_text("decoy", encoding="utf-8")
+    os.symlink(target, tmp_path / "link", target_is_directory=True)
+    tracker = FileAccessTracker()
+    with tracker:
+        with open(os.path.join(str(tmp_path), "link", "..", "data.txt"), encoding="utf-8") as fh:
+            assert fh.read() == "real"
+    assert normalize_path(os.path.realpath(tmp_path / "real" / "data.txt")) in tracker.accessed_files
