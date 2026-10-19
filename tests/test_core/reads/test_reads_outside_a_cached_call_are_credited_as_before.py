@@ -16,7 +16,7 @@ import os
 
 import pytest
 
-import cash  # noqa: F401  (its open handler, watching outside cached calls)
+import cash  # noqa: F401 - its open handler, watching outside cached calls
 import cash.tracking.read_credit as read_credit
 from cash._paths import normalize_path
 from cash.tracking.file_tracker import FileAccessTracker
