@@ -44,7 +44,7 @@ from cash import _native
 from cash._memo import PATCH_SITES, LruMemo
 from cash._paths import is_remote_url
 from cash.effect_observer import active_observer as _active_effect_observer
-from cash.install_paths import is_user_path
+from cash.install_paths import is_user_code_file, is_user_path
 from cash.remote_source import remember_read_options
 from cash.tracking import io_watch
 from cash.tracking.read_credit import frame_kind, note_untracked_read
@@ -528,8 +528,8 @@ def _patch_thread_pool_submit() -> None:
     inside a cached function would read files no tracker sees.
 
     With a tracker active, ``submit`` (which ``Executor.map`` calls) wraps the
-    call in ``copy_context().run``; with none, it is the original. Threads started directly with
-    ``threading.Thread`` still begin empty -- documented, not patched.
+    call in ``copy_context().run``; with none, it is the original. A thread
+    started directly with ``threading.Thread`` is `_patch_thread_start`'s.
     """
 
     def make(original):
@@ -542,6 +542,48 @@ def _patch_thread_pool_submit() -> None:
         return submit
 
     _patch_attribute(cf_thread.ThreadPoolExecutor, "submit", make)
+
+
+def _runs_user_code(thread: threading.Thread) -> bool:
+    """Does *thread* run code of the user's: its target, or its class's own
+    ``run``? A library's thread (a pool's worker, a writer) runs its own
+    loop, and any task handed to it later is the pool patches' to place."""
+    fn = getattr(thread, "_target", None)
+    if fn is None and type(thread).run is not threading.Thread.run:
+        fn = type(thread).run
+    for _ in range(4):  # a bound method's or a partial's function
+        inner = getattr(fn, "__func__", None) or getattr(fn, "func", None)
+        if inner is None:
+            break
+        fn = inner
+    code = getattr(fn, "__code__", None)
+    return code is not None and is_user_code_file(code.co_filename)
+
+
+def _patch_thread_start() -> None:
+    """Run a thread a tracked block starts, on code of the user's, under the
+    block's context.
+
+    A thread starts with an empty context, so the tracker the ContextVar
+    holds is not there: ``Thread(target=lambda: open(p).read())`` in a cached
+    function read a file no tracker saw. Only a module-level target was
+    rescued, by the reads its code is remembered for (`credited_reads`); a
+    nested function or a lambda was not, and the edited file's old result
+    was served with no warning. The thread now runs in a copy of the
+    starter's context, as ``ThreadPoolExecutor.submit`` gives each task.
+    """
+
+    def make(original):
+        @functools.wraps(original)
+        def start(self):
+            if active_tracker.get() is not None and _runs_user_code(self):
+                run, context = self.run, contextvars.copy_context()
+                self.run = functools.partial(context.run, run)
+            return original(self)
+
+        return start
+
+    _patch_attribute(threading.Thread, "start", make)
 
 
 def _probe_handler(original_func: Callable[..., Any], kind: str) -> Callable[..., Any]:
@@ -1670,6 +1712,7 @@ def install_patches() -> None:
             # Work handed to a thread pool runs under the submitter's tracker, and
             # work handed to a process pool reports what it read back to it.
             _patch_thread_pool_submit()
+            _patch_thread_start()
             _patch_process_pool_submit()
             _patch_multiprocessing_pool()
             _patch_user_module_aliases()
