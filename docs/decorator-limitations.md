@@ -252,12 +252,13 @@ watch:
 
 ## Reads cash cannot see
 
-<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @c3389dba, cash/tracking/reader_patches.py:_patch_process_pool_submit @1f70759c -->
-cash does not record a file opened by a subprocess or a `threading.Thread`
-you start, and on macOS one a C extension opens itself or `os.open` opens
-(on Linux and Windows the [native file
-hook](known-limitations.md#reads-through-a-loader-cash-cannot-see), on by
-default, records those). Name such a file with `file_depends_on=`.
+<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @c3389dba, cash/tracking/reader_patches.py:_patch_process_pool_submit @1f70759c, cash/tracking/reader_patches.py:_patch_thread_start @b3c45c6d -->
+cash does not record a file opened by a subprocess, and on macOS one a C
+extension opens itself or `os.open` opens (on Linux and Windows the [native
+file hook](known-limitations.md#reads-through-a-loader-cash-cannot-see), on by
+default, records those). Name such a file with `file_depends_on=`. A
+`threading.Thread` the function starts on code of yours, a lambda or a nested
+function included, reads as part of the call.
 
 Reads in work the function hands to a pool are recorded: a
 `ThreadPoolExecutor`, `ProcessPoolExecutor`, `multiprocessing.Pool` (or
