@@ -1141,21 +1141,28 @@ def _fold_polars_columns(h: Any, columns: list[tuple[str, Any]], rows_per_chunk:
     A column folds a short header and its parts' digests into *h*, so for a
     big frame each column is folded into a `_Recorded` on its own thread
     and the records are handed to *h* in column order: the same bytes in
-    the same order, with the columns read side by side. p08's 4M-row log
-    clean() result took 0.48 s one column after another, 0.25 s side by
-    side. Its 4M-row log frame in 1,280 chunks stays on one thread
+    the same order, with the columns read side by side. p08's clean()
+    result took 0.48 s one column after another, 0.25 s side by side. Its
+    4M-row log frame in 1,280 chunks stays on one thread
     (`PARALLEL_COLUMNS_MIN_ROWS`).
+
+    A list, struct or decimal column is folded as its IPC stream, not as
+    digests: a record of it would hold the whole column again, so it is
+    folded into *h* in its turn, on this thread, after the others.
     """
-    threads = min(hashing_threads(), len(columns)) if rows_per_chunk >= PARALLEL_COLUMNS_MIN_ROWS else 1
+    side_by_side = [i for i, (_name, column) in enumerate(columns) if column.folds_digests()]
+    threads = min(hashing_threads(), len(side_by_side)) if rows_per_chunk >= PARALLEL_COLUMNS_MIN_ROWS else 1
     if threads < 2:
         for name, column in columns:
             h.update(f"|{name!r}|".encode("utf-8"))
             column.fold(h)
         return
-    records = [_Recorded() for _ in columns]
+    records: list[_Recorded | None] = [None] * len(columns)
+    for i in side_by_side:
+        records[i] = _Recorded()
     errors: list[BaseException] = []
     lock = threading.Lock()
-    todo = iter(range(len(columns)))
+    todo = iter(side_by_side)
 
     def run() -> None:
         while True:
@@ -1166,7 +1173,7 @@ def _fold_polars_columns(h: Any, columns: list[tuple[str, Any]], rows_per_chunk:
             if i is None:
                 return
             try:
-                columns[i][1].fold(records[i])
+                columns[i][1].fold(records[i])  # type: ignore[arg-type]
             except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's thread
                 with lock:
                     errors.append(exc)
@@ -1185,8 +1192,11 @@ def _fold_polars_columns(h: Any, columns: list[tuple[str, Any]], rows_per_chunk:
         worker.join()
     if errors:
         raise errors[0]
-    for (name, _column), record in zip(columns, records):
+    for (name, column), record in zip(columns, records):
         h.update(f"|{name!r}|".encode("utf-8"))
+        if record is None:
+            column.fold(h)
+            continue
         for part in record.parts:
             h.update(part)
 
@@ -1202,6 +1212,16 @@ class _ArrowColumn:
     def fold(self, h: Any) -> None:
         fold_arrow_column(h, self.column)
 
+    def folds_digests(self) -> bool:
+        """Whether `fold` hands *h* digests, not the column's bytes: not a
+        list, struct or decimal, which go in as an IPC stream."""
+        import pyarrow as pa
+
+        kind = self.column.type
+        if pa.types.is_dictionary(kind):
+            kind = kind.value_type
+        return _arrow_layout(kind)[0] is not None
+
 
 class _ViewColumn:
     """A string or binary view column, folded as `fold_arrow_column` folds
@@ -1216,6 +1236,9 @@ class _ViewColumn:
 
     def fold(self, h: Any) -> None:
         fold_view_column(h, self.column, self.large)
+
+    def folds_digests(self) -> bool:
+        return True
 
 
 def _polars_arrow_columns(frame: Any, pl: Any) -> list[tuple[str, Any]]:
