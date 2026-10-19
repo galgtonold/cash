@@ -227,7 +227,14 @@ class Recorder:
             # By the module the globals claim: ``exec``'d code (a dataclass's
             # generated ``__init__``) runs on its module's own dict.
             mod = sys.modules.get(name)
-            if mod is not None and is_user_code(mod):
+            file = g.get("__file__")
+            if mod is not None and getattr(mod, "__dict__", None) is not g and isinstance(file, str):
+                # A module that put another object in its place in
+                # ``sys.modules`` (``torch._VF``): judged by its own file,
+                # not by the replacement, which has none.
+                if is_user_file(file):
+                    user = name
+            elif mod is not None and is_user_code(mod):
                 user = name
         entry = (g, user, name)
         # Kept for a module's or the notebook's namespace, which live as long
@@ -281,6 +288,14 @@ class Recorder:
             unit.codes[code] = (g, kind[1])
             unit.markers.add("generator_resumed")
         return sys.monitoring.DISABLE
+
+
+def is_user_file(path: str) -> bool:
+    """`is_user_path`, its first verdict's reads kept out as `is_user_code`'s."""
+    from ..install_paths import is_user_path
+
+    with untracked():
+        return is_user_path(path)
 
 
 def is_user_code(mod: types.ModuleType) -> bool:
