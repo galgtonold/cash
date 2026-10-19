@@ -133,6 +133,11 @@ class FileAccessTracker:
         # file, an output folder -- and what they were (``file``, ``dir`` or
         # ``any``). See ``track_present``.
         self.present_files: dict[str, str] = {}
+        # ``(frame, the user code at and above it)`` from the last read's walk
+        # up the stack (`credit_read_to_stack`): the next read from below the
+        # same frame stops there. Dropped when the block ends, so the frame
+        # is not kept alive past it.
+        self.credit_anchor: tuple[Any, tuple[Any, ...]] | None = None
         self._probes_seen: set[tuple[Any, str | None]] = set()
         # The stat of each regular file WHEN IT WAS FIRST READ. The entry's
         # fingerprint is taken when it is stored, after the body has finished,
@@ -230,6 +235,7 @@ class FileAccessTracker:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self.credit_anchor = None
         if self._native_windows:
             # Before the parent stack pops: the reads pass up like any other.
             native_reads.close_window(self._native_windows.pop(), self)
@@ -537,10 +543,12 @@ class FileAccessTracker:
 
         *lstat* is the stat taken while resolving the path, of a regular file
         that is not a link, so it is the stat the file would have given."""
+        st = stat_key(lstat) if lstat is not None else None
         for tracker in self._self_and_parents():
-            # The lstat was taken for this tracker's read; an enclosing one
-            # stats the file itself.
-            digest = tracker._add_tracked_here(abs_path, digest, lstat if tracker is self else None)
+            # One read, one stat: an enclosing tracker takes the stat this
+            # one took of the same read (the file is stat'ed once per
+            # tracker otherwise, at each nested loop level).
+            digest, st = tracker._add_tracked_here(abs_path, digest, st)
 
     @property
     def read_digests(self) -> dict[str, str]:
@@ -558,15 +566,17 @@ class FileAccessTracker:
         return digests
 
     def _add_tracked_here(
-        self, abs_path: str, digest: str | PendingDigest | None, lstat: Any
-    ) -> str | PendingDigest | None:
-        """`add_tracked` on this tracker alone; returns the digest to hand up."""
+        self, abs_path: str, digest: str | PendingDigest | None, st: tuple[int, int, int] | None
+    ) -> tuple[str | PendingDigest | None, tuple[int, int, int] | None]:
+        """`add_tracked` on this tracker alone, *st* the `stat_key` of this
+        read when one was taken; returns the digest and the stat to hand up."""
         self.accessed_files.add(abs_path)
         if abs_path not in self.read_stats and os.path.isabs(abs_path):
             # Absolute paths only: a relative twin is re-resolved against the
             # cwd at check time, and a chdir during the call would make its
             # stat look like a change that never happened.
-            st = regular_file_stat(abs_path) if lstat is None else stat_key(lstat)
+            if st is None:
+                st = regular_file_stat(abs_path)
             if st is None and abs_path not in self.listed_stats:
                 folder = folder_stat(abs_path)
                 if folder is not None:
@@ -581,7 +591,7 @@ class FileAccessTracker:
                         self._read_digests[abs_path] = digest
         elif digest is None:
             digest = self._read_digests.get(abs_path)
-        return digest
+        return digest, st
 
     def _digest_now(self, abs_path: str, size: int) -> str | PendingDigest | None:
         """The file's content hash as the body is about to read it.
