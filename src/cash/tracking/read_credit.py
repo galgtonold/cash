@@ -78,15 +78,48 @@ def credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:
     except ValueError:
         return
     stat = tracker.read_stats.get(abs_path)
+    anchor = tracker.credit_anchor
+    below = None  # the kind of the frame last walked
     while frame is not None:
+        if anchor is not None and frame is anchor[0]:
+            # Walked from here before: a frame's callers never change while
+            # it runs, so the user code above it is what the last walk found.
+            for code in anchor[1]:
+                tracker.note_reading_code(code)
+                _record_read(code, abs_path, stat)
+            return
         code = frame.f_code
         kind = frame_kind(code.co_filename)
         if kind == "wrapper":
             break  # the cached call's own wrapper: the walk ends
+        if kind == "cash" and below is not None and below != "cash":
+            # cash's own frame above the user's or a library's (a notebook
+            # statement's runner): every read the code below it makes walks
+            # the same frames above it, dozens in a notebook.
+            above = _user_codes_above(frame)
+            tracker.credit_anchor = (frame, above)
+            for code in above:
+                tracker.note_reading_code(code)
+                _record_read(code, abs_path, stat)
+            return
         if kind == "user":
             tracker.note_reading_code(code)
             _record_read(code, abs_path, stat)
+        below = kind
         frame = frame.f_back
+
+
+def _user_codes_above(frame: Any) -> tuple[Any, ...]:
+    """The user code at *frame* and above it, up to the cached call's wrapper."""
+    codes = []
+    while frame is not None:
+        kind = frame_kind(frame.f_code.co_filename)
+        if kind == "wrapper":
+            break
+        if kind == "user":
+            codes.append(frame.f_code)
+        frame = frame.f_back
+    return tuple(codes)
 
 
 #: code filename -> ``wrapper``/``cash``/``user``/``other``; `frame_kind`.
