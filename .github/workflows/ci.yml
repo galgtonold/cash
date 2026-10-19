@@ -2,8 +2,8 @@ name: CI
 
 # SCRATCH BRANCH ONLY (never merged): reproduce the Windows xdist worker crash in
 # test_a_thread_left_running_by_a_cell_is_named.py::test_it_is_named_once_per_cell
-# (CI 856, windows 3.14 shard 1/2). --capture=sys keeps fd 2 on the console so a
-# faulthandler or pytest-timeout dump from a dying worker reaches this log.
+# (CI 856, windows 3.14 shard 1/2). Run 2: CI's own fd capture; pytest's faulthandler
+# keeps a copy of fd 2, so a dump at 20 s reaches this log before the 30 s timeout kills a worker.
 
 on:
   push:
@@ -11,13 +11,14 @@ on:
 
 jobs:
   shard:
-    name: shard 1/2 (${{ matrix.python-version }}, rep ${{ matrix.rep }})
+    name: shard ${{ matrix.shard }}/2 (${{ matrix.python-version }}, rep ${{ matrix.rep }})
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.14", "3.10"]
-        rep: [1, 2, 3]
+        shard: [1, 2]
+        rep: [1, 2]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -27,7 +28,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
-      - name: Run shard 1/2 as CI does, with dumps visible
+      - name: Run the shard as CI does (fd capture), with a faulthandler dump at 20 s
         env:
           PYTHONFAULTHANDLER: "1"
         run: |
@@ -36,16 +37,11 @@ jobs:
             --ignore=tests/test_wheel_gate \
             --ignore=tests/docs \
             -m "not perf" \
-            -p tools.test_selection.shard --shard=1/2 \
-            -n auto --tb=short -q -rs --capture=sys -o faulthandler_timeout=25 --reruns 0
+            -p tools.test_selection.shard --shard=${{ matrix.shard }}/2 \
+            -n auto --tb=short -q -o faulthandler_timeout=20 --reruns 0 --durations=40 --junitxml=junit.xml
         shell: bash
-      - name: Loop the thread tests under load
+      - name: Times of the thread tests
         if: always()
-        env:
-          PYTHONFAULTHANDLER: "1"
         run: |
-          for i in $(seq 1 15); do
-            python -m pytest tests/test_notebook/session tests/test_core/reads/test_work_a_call_leaves_running_is_not_stored.py \
-              -n auto -q --capture=sys -o faulthandler_timeout=25 --reruns 0 -p no:cacheprovider 2>&1 | tail -25 || true
-          done
+          python -c "import xml.etree.ElementTree as E; [print(c.get('time'), c.get('classname'), c.get('name')) for c in E.parse('junit.xml').iter('testcase') if 'thread_left_running' in (c.get('classname') or '') or float(c.get('time') or 0) > 10]"
         shell: bash
