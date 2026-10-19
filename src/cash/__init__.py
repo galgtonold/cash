@@ -28,6 +28,10 @@ from ._dataclass_code import compiled_dataclass_methods
 # Every dataclass built while cash imports runs method code compiled by an
 # earlier process (`_dataclass_code`); closed at the end of this module.
 _compiled_methods = compiled_dataclass_methods()
+
+#: The threads alive when cash was imported: the kernel's own, before any
+#: cell could start one (`tracking.trace_recorder.other_thread_alive`).
+THREADS_AT_IMPORT = frozenset(t.ident for t in threading.enumerate() if t.ident is not None)
 _compiled_methods.__enter__()
 
 from . import (

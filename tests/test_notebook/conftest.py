@@ -26,6 +26,22 @@ def _time_limits_a_busy_machine_cannot_trip(request, monkeypatch):
     monkeypatch.setattr(analysis_budget, "ANALYSIS_BUDGET_FLOOR_S", 60.0)
 
 
+@pytest.fixture(autouse=True)
+def _threads_an_earlier_test_left_are_the_hosts(monkeypatch):
+    """A digest is handed on only while no other thread is alive
+    (`trace_recorder.other_thread_alive`). An earlier test can leave one
+    behind (tqdm's monitor lives as long as the process): taken as the
+    host's, as the kernel's are, so a test's read counts see only the
+    threads it starts itself.
+    """
+    import threading
+
+    from cash.tracking import trace_recorder
+
+    alive = {t.ident for t in threading.enumerate() if t.ident is not None}
+    monkeypatch.setattr(trace_recorder, "HOST_THREADS", trace_recorder.HOST_THREADS | alive)
+
+
 def _fresh_cash_instance():
     """A ``Cash`` instance with an isolated in-memory backend.
 

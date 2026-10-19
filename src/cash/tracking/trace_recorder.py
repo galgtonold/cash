@@ -32,7 +32,7 @@ from typing import Any
 
 from ..tracking.tracker_context import untracked
 
-__all__ = ["TOOL_NAME", "Recorder", "Unit"]
+__all__ = ["TOOL_NAME", "Recorder", "Unit", "other_thread_alive", "runs_user_code"]
 
 TOOL_NAME = "cash-shadow"
 #: Tried in this order; 0-2 belong to debuggers, coverage and profilers.
@@ -200,21 +200,7 @@ class Recorder:
         return unit
 
     def _runs_user_code(self, t: threading.Thread) -> bool:
-        """Does thread *t* run code of the user's: its target, or its own
-        ``run`` method?"""
-        fn = getattr(t, "_target", None)
-        if fn is None and type(t).run is not threading.Thread.run:
-            fn = type(t).run
-        if fn is None:
-            return False
-        g = getattr(inspect_unwrap(fn), "__globals__", None)
-        if g is self.notebook_ns:
-            return True
-        name = getattr(fn, "__module__", None) or (g or {}).get("__name__")
-        if not isinstance(name, str) or name == "cash" or name.startswith("cash."):
-            return False
-        mod = sys.modules.get(name)
-        return mod is not None and is_user_code(mod)
+        return runs_user_code(t, self.notebook_ns)
 
     # -- callbacks --------------------------------------------------------
     def _classify(self, g: dict) -> tuple[dict, str | None, str]:
@@ -305,3 +291,51 @@ def is_user_code(mod: types.ModuleType) -> bool:
 
     with untracked():
         return is_user_code_module(mod)
+
+
+def runs_user_code(t: threading.Thread, notebook_ns: Any) -> bool:
+    """Does thread *t* run code of the user's: its target, or its own
+    ``run`` method?"""
+    fn = getattr(t, "_target", None)
+    if fn is None and type(t).run is not threading.Thread.run:
+        fn = type(t).run
+    if fn is None:
+        return False
+    g = getattr(inspect_unwrap(fn), "__globals__", None)
+    if g is notebook_ns:
+        return True
+    name = getattr(fn, "__module__", None) or (g or {}).get("__name__")
+    if not isinstance(name, str) or name == "cash" or name.startswith("cash."):
+        return False
+    mod = sys.modules.get(name)
+    return mod is not None and is_user_code(mod)
+
+
+#: Threads of what hosts the notebook that change none of its values (a test
+#: runner's watchdog), left out by `other_thread_alive`.
+HOST_THREADS: set[int] = set()
+
+
+def other_thread_alive(notebook_ns: Any) -> bool:
+    """Might another thread change a value between two checks that read it,
+    so that a digest one took cannot stand for the other: any live thread
+    but this one, cash's own and the kernel's (alive when cash was imported,
+    running no code of the user's), daemon or not. A pool's worker runs the
+    user's code under a library's name, which `runs_user_code` cannot see,
+    and a wrong yes only costs a read again."""
+    import cash
+
+    me = threading.get_ident()
+    for t in threading.enumerate():
+        if t.ident == me or t.ident in HOST_THREADS or not t.is_alive():
+            continue
+        if runs_user_code(t, notebook_ns):
+            return True
+        if t.ident in cash.THREADS_AT_IMPORT:
+            continue
+        # A Timer runs its function (cash's own render and write timers).
+        fn = t.function if isinstance(t, threading.Timer) else getattr(t, "_target", None) or type(t).run
+        name = getattr(fn, "__module__", None)
+        if not (isinstance(name, str) and (name == "cash" or name.startswith("cash."))):
+            return True
+    return False

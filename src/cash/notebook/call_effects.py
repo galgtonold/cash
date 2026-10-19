@@ -41,6 +41,7 @@ from cash.notebook._tee import StreamTaken, TeeWriter
 from cash.sizing import pandas_nbytes
 from cash.source_reading import wrapper_layers
 from cash.tracking.file_dep_snapshot import dep_path_for_this_process
+from cash.tracking.trace_recorder import other_thread_alive
 from cash.tracking.tracker_context import active_tracker
 from cash.value_hash import compute_hash, is_identity_fallback_hash
 
@@ -631,6 +632,8 @@ class DigestHandoff:
         self._first_source: str | None = None
         self._watched = False
         self._after_ok = False
+        #: The namespace the statement runs in (`watch`), for `_alone`.
+        self._namespace: Mapping[str, Any] | None = None
         #: ``id(value) -> (value, digest)``: what the statement's fingerprint
         #: read before it ran, for its call's hash before the call; and what
         #: the call's hash read after it, for the statement's fingerprint.
@@ -671,7 +674,14 @@ class DigestHandoff:
         *namespace* is what it runs in."""
         self._before_ok, self._after_ok = _call_shape(tree, namespace)
         self._first_source = None if self._before_ok else _first_call_source(tree, namespace)
+        self._namespace = namespace
         self._watched = True
+
+    def _alone(self) -> bool:
+        """No other thread could have changed a value between the check that
+        took a digest and the one it is handed to
+        (`trace_recorder.other_thread_alive`)."""
+        return not other_thread_alive(self._namespace)
 
     def digest(self, value: Any) -> str:
         """`compute_hash` of *value*, kept for the call's hash before the
@@ -710,6 +720,8 @@ class DigestHandoff:
             return self.fingerprints.digest
         if not self._before_ok and (source is None or source != self._first_source):
             return self.fingerprints.digest
+        if not self._alone():
+            return self.fingerprints.digest
 
         def digest(value: Any) -> str:
             found = before.get(id(value))
@@ -741,7 +753,8 @@ class DigestHandoff:
         if self._before_ok and self._started == 0:
             # With no digests too: the call still says where its result went
             # (`handed_digests.stored_result`).
-            self._offer = handed_digests.offer(filename, self._before, binds_result=self._after_ok)
+            digests = self._before if self._alone() else {}
+            self._offer = handed_digests.offer(filename, digests, binds_result=self._after_ok)
 
     def withdraw_offer(self) -> None:
         handed_digests.withdraw()
@@ -790,6 +803,8 @@ class DigestHandoff:
         before it when the statement is a ``@cash.cache`` call that was
         served, whose body never ran."""
         offer = self._offer
+        if (offer is not None or self._after) and not self._alone():
+            return self.fingerprints.digest(value)
         if (
             offer is not None
             and offer.ran_body is False

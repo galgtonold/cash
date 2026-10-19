@@ -133,6 +133,7 @@ from ...tracking.randomness import (
     rng_carrier_kind,
     rng_virtual_var,
 )
+from ...tracking.trace_recorder import other_thread_alive
 from ..anchors import anchor_digests
 from ..borrowed_memory import borrowed_memory_names, lazy_frame_sources
 from ..callee_reach import (
@@ -1889,6 +1890,10 @@ class StatementProcessor:
             components=self._records.lineages_read(inputs) if inputs else {},
         )
 
+    def _other_thread_alive(self) -> bool:
+        """`trace_recorder.other_thread_alive` in the notebook's namespace."""
+        return other_thread_alive(self.shell.user_ns)
+
     def _binds_a_stream(self, run: StatementRun) -> bool:
         """Whether the statement bound an open file, or read from one: a
         handle is a new stream at its start on every run, and a read leaves it
@@ -1914,6 +1919,7 @@ class StatementProcessor:
         Updates ``run.outputs`` and ``run.skip_cache`` with what execution
         revealed (an observed mutation, an uncacheable value).
         """
+        alive = self._other_thread_alive()
         self._observe_process_state(run)
         self._mutation_routing.observe(run)
         self._mutation_routing.note_module_state(run)
@@ -1945,6 +1951,11 @@ class StatementProcessor:
         # of an output takes is kept for the store to take
         # (`stored_pickle.keeping`), instead of pickling the value again.
         returned = self._calls.returned_digest(run.code)
+        if alive:
+            # Another thread may have changed a value since a check read it:
+            # each output is read again for its lineage.
+            run.settled_digests = {}
+            returned = None
         if returned is not None:
             # ``x = f(...)``: the digest the call's store took of its result
             # is the one the statement would take of ``x`` now.
