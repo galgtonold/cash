@@ -54,8 +54,8 @@ def write_pack(fresh):
         os._exit(0)
     return made
 
-def repoint(path, old, new, planned):
-    done = real_repoint(path, old, new, planned)
+def repoint(*args):
+    done = real_repoint(*args)
     moved.append(done)
     if step == "between holders" and len(moved) == 1:
         os._exit(0)

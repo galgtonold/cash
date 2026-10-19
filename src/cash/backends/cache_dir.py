@@ -43,6 +43,7 @@ __all__ = [
     "KEYS_DIRNAME",
     "CHUNK_DIRNAME",
     "CHUNK_SUFFIX",
+    "CLAIM_SUFFIX",
     "PACK_SUFFIX",
     "chunk_files",
     "LOOP_SPLIT_FILENAME",
@@ -142,6 +143,8 @@ CHUNK_DIRNAME = "chunks"
 CHUNK_SUFFIX = ".chunk"
 #: A file of several chunks, written by one entry (`cash.backends.chunk_store`).
 PACK_SUFFIX = ".pack"
+#: A process rewriting a pack (`ChunkStore._compact_one`) holds ``<pack>.claim``.
+CLAIM_SUFFIX = ".claim"
 
 #: Files SQLite creates beside a database: the WAL, its shared-memory index,
 #: and the rollback journal of a database not in WAL mode.
@@ -250,7 +253,9 @@ def is_cash_file(relpath: str) -> bool:
         return name.endswith(".json") or _is_temp_of(name, lambda base: base.endswith(".json"))
     if len(parts) == 2 and parts[0] == CHUNK_DIRNAME:
         name = parts[1]
-        return name.endswith((CHUNK_SUFFIX, PACK_SUFFIX)) or (name.startswith(".tmp-") and name.endswith(".part"))
+        return name.endswith((CHUNK_SUFFIX, PACK_SUFFIX, CLAIM_SUFFIX)) or (
+            name.startswith(".tmp-") and name.endswith(".part")
+        )
     if len(parts) != 1:
         return False
     name = parts[0]

@@ -31,11 +31,18 @@ against. A pack is written to a temp file and renamed into place, so a reader
 finds all of it or nothing.
 
 A chunk already stored, in a pack or a chunk file of an older entry, is not
-written again: this process knows where every chunk of the folder is from
-the entries' metadata (`ensure_index`, before its first write) and from its
-own writes. A chunk another process stored since is written again, in this
-write's pack: room, never a wrong read. Entries written before packs name
-``<digest>.chunk`` files, read as before.
+written again: this process knows where every chunk in a pack is from the
+entries' metadata (`ensure_index`, before its first write) and from its own
+writes, and while an entry from before packs is left it looks for a
+``<digest>.chunk`` file too, which the new entry then names as those did. A
+chunk another process stored since is written again, in this write's pack:
+room, never a wrong read.
+
+A chunk of a pack that fails its check makes the entries holding it misses,
+and they are removed (`ChunkStore.damaged`); the pack stays, with every
+other entry's chunks in it. A pack whose holders have let go of more than a
+third of it is rewritten without those bytes (`ChunkStore._compact`), by one
+process at a time (``<pack>.claim``).
 
 Who holds a chunk
 -----------------
@@ -73,7 +80,15 @@ from typing import Any
 
 from .._paths import replace_with_retry
 from ..bulk_digest import LEAF_BYTES, PARALLEL_MIN_BYTES, bulk_digest, hashing_threads
-from .cache_dir import CHUNK_DIRNAME, CHUNK_SUFFIX, PACK_SUFFIX, create_temp_file, owned_temp_prefix, write_all
+from .cache_dir import (
+    CHUNK_DIRNAME,
+    CHUNK_SUFFIX,
+    CLAIM_SUFFIX,
+    PACK_SUFFIX,
+    create_temp_file,
+    owned_temp_prefix,
+    write_all,
+)
 from .entry_format import ENTRY_SUFFIX, identity_at, moved_head
 
 logger = logging.getLogger(__name__)
@@ -82,6 +97,7 @@ __all__ = [
     "CHUNK_MIN_BYTES",
     "ChunkError",
     "ChunkStore",
+    "DamagedChunk",
     "as_bytes",
     "digests",
     "read_chunk",
@@ -180,6 +196,15 @@ class ChunkError(OSError):
     """A chunk an entry names is missing, the wrong size, or damaged."""
 
 
+class DamagedChunk(ChunkError):
+    """The chunk at *offset* in the pack at *path* does not match its crc32."""
+
+    def __init__(self, path: str, offset: int) -> None:
+        super().__init__(f"chunk {path} at {offset}: checksum does not match its entry -- the value will be recomputed")
+        self.pack = os.path.basename(path)
+        self.offset = offset
+
+
 def read_chunk(cache_dir: str, digest: bytes, nbytes: int, crc: bytes) -> Any:
     """The *nbytes* bytes of chunk *digest*, checked against *crc*: a view
     of a private copy-on-write mapping of the file, or a new ``bytearray``.
@@ -264,12 +289,18 @@ class ChunkStore:
         #: entry stem -> where each of its chunks in a pack is, for the
         #: entries this process knows: what tells a pack's live bytes.
         self._placed_by: dict[str, dict[bytes, Place]] = {}
+        #: See `entry_lock`.
+        self._entry_locks = [threading.RLock() for _ in range(64)]
+        #: Does an entry this process knows hold a ``<digest>.chunk`` file,
+        #: from before packs? Then `put_all` looks for its buffers there too.
+        self._old_chunks = False
         self.indexed = False
         #: When the folder was read (ns); 0 before.
         self._indexed_at = 0
 
     def after_fork(self) -> None:
         self.lock = threading.Lock()
+        self._entry_locks = [threading.RLock() for _ in range(64)]
 
     def _path(self, name: str) -> str:
         return os.path.join(self.dir, name)
@@ -321,6 +352,7 @@ class ChunkStore:
         files: dict[str, int] = {}
         fresh: dict[bytes, memoryview] = {}
         waiting: list[tuple[int, bytes]] = []
+        old_crcs: dict[str, bytes] = {}
         try:
             for i, (view, digest) in enumerate(zip(views, known)):
                 if digest is None:
@@ -339,6 +371,17 @@ class ChunkStore:
                     if place is not None:
                         refs[i] = (digest, place[3])
                         places[digest.hex()] = [name, place[1], place[2], place[3].hex()]
+                        continue
+                if self._old_chunks:
+                    name = chunk_name(digest)
+                    crc = old_crcs.get(name)
+                    if crc is None:
+                        crc = self._hold_chunk(name, view.nbytes)
+                        if crc is not None:
+                            old_crcs[name] = crc
+                            files[name] = view.nbytes + TRAILER
+                    if crc is not None:
+                        refs[i] = (digest, crc)  # no place: read from its chunk file
                         continue
                 fresh.setdefault(digest, view)
                 waiting.append((i, digest))
@@ -371,6 +414,19 @@ class ChunkStore:
                 return None
         self._note_own(name, path)
         return size
+
+    def _hold_chunk(self, name: str, nbytes: int) -> bytes | None:
+        """Count the chunk file *name* of an entry from before packs as held
+        by this write, if it is there and *nbytes* long: its crc32, or None."""
+        with self.lock:
+            self._pending[name] = self._pending.get(name, 0) + 1
+        path = self._path(name)
+        crc = self._reuse(path, nbytes)
+        if crc is None:
+            self._unpend([name])
+            return None
+        self._note_own(name, path)
+        return crc
 
     def _forget(self, name: str) -> None:
         """The pack *name* is gone: its chunks are placed nowhere."""
@@ -599,6 +655,7 @@ class ChunkStore:
                 if stem not in self._held_by:
                     self._set_holder(stem, names, frozenset())
                     self._set_placed(stem, entry_places.get(stem))
+            self._old_chunks = self._old_chunks or any(name.endswith(CHUNK_SUFFIX) for name in sizes)
             self._indexed_at = started
             self.indexed = True
         return self._sweep_orphans()
@@ -608,7 +665,7 @@ class ChunkStore:
         freed = 0
         try:
             with self._untracked(), os.scandir(self.dir) as found:
-                listed = [(e.name, e.path) for e in found if e.name.endswith((CHUNK_SUFFIX, PACK_SUFFIX))]
+                listed = [(e.name, e.path) for e in found if e.name.endswith((CHUNK_SUFFIX, PACK_SUFFIX, CLAIM_SUFFIX))]
         except OSError:
             return 0
         for name, path in listed:
@@ -692,14 +749,52 @@ class ChunkStore:
         kept = sum(place[2] + TRAILER + PACK_ALIGN for place in live.values())
         if not live or 3 * kept > 2 * size:
             return 0  # a third or less of it dead: not worth copying the rest
-        paths = {stem: os.path.join(self.cache_dir, stem + ENTRY_SUFFIX) for stem in holders}
-        # Where each live chunk will be, to check every holder can be told.
-        planned: dict[str, list] = {}
-        offset = 0
         members = sorted(live, key=lambda d: live[d][1])
         new_name = pack_name(members)
         if new_name == name:
             return 0
+        claim = self._claim(name)
+        if claim is None:
+            return 0  # another process is rewriting it
+        try:
+            return self._rewrite(name, new_name, members, live, holders)
+        finally:
+            with self._untracked():
+                try:
+                    os.remove(claim)
+                except OSError:
+                    logger.debug("could not remove claim %s", claim, exc_info=True)
+
+    def _claim(self, name: str) -> str | None:
+        """Claim the pack *name* for rewriting, across processes: create
+        ``<name>.claim`` exclusively. None when another process holds it; a
+        claim older than `ORPHAN_CHUNK_AGE`, left by a crash, is removed, and
+        the pack is left for the next time."""
+        path = self._path(name + CLAIM_SUFFIX)
+        with self._untracked():
+            try:
+                os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+                return path
+            except FileExistsError:
+                try:
+                    if os.stat(path).st_mtime < time.time() - ORPHAN_CHUNK_AGE:
+                        os.remove(path)
+                except OSError:
+                    pass
+            except OSError:
+                pass
+        return None
+
+    def _rewrite(
+        self, name: str, new_name: str, members: list[bytes], live: dict[bytes, Place], holders: set[str]
+    ) -> int:
+        """`_compact_one` for the pack *name*, claimed: its *live* chunks
+        (*members*, in order) into the pack *new_name*, each of *holders*
+        told, then *name* removed."""
+        paths = {stem: os.path.join(self.cache_dir, stem + ENTRY_SUFFIX) for stem in holders}
+        # Where each live chunk will be, to check every holder can be told.
+        planned: dict[str, list] = {}
+        offset = 0
         for digest in members:
             offset += _aligned(offset)
             planned[digest.hex()] = [new_name, offset, live[digest][2], live[digest][3].hex()]
@@ -710,63 +805,114 @@ class ChunkStore:
             data = _read_pack(
                 self._path(name), [(i, live[d][1], live[d][2], live[d][3]) for i, d in enumerate(members)]
             )
+            # Another process may have written the same pack (the same
+            # members): entries of its may name it, so it is never removed here.
+            existed = os.path.exists(self._path(new_name))
         # 1. The new pack, beside the old one.
-        new_name, new_size, _added, placed = self._write_pack({d: as_bytes(data[i]) for i, d in enumerate(members)})
+        new_name, new_size, added, placed = self._write_pack({d: as_bytes(data[i]) for i, d in enumerate(members)})
         moved = 0
         try:
             # 2. Each holder, rewritten whole and renamed into place.
             for stem, path in paths.items():
-                if self._repoint(path, name, (new_name, new_size), planned):
+                if self._repoint(stem, path, name, (new_name, new_size), planned, placed):
                     moved += 1
-                    with self.lock:
-                        held = self._held_by.get(stem, frozenset())
-                        self._set_holder(stem, (held - {name}) | {new_name}, held)
-                        self._placed_by[stem] = {
-                            d: (placed[d] if p[0] == name else p) for d, p in self._placed_by[stem].items()
-                        }
         finally:
             with self.lock:
                 self._size[new_name] = new_size
             self._unpend([new_name])
         if not moved:
-            self._drop([new_name])
+            if not existed:
+                self._drop([new_name])
             return 0
         # 3. The old pack, once no holder this process knows points at it.
-        return self._drop([name]) - new_size
+        return self._drop([name]) - added
 
-    def _repoint(self, path: str, old: str, new: tuple[str, int], planned: dict[str, list]) -> bool:
-        """Rewrite the entry at *path* to read its chunks in *old* from
-        *new*: a temp file with the new metadata and the payload as it was,
-        renamed over the entry -- unless another write replaced the entry
-        meanwhile. A crash leaves the old entry or the new one, each whole."""
-        with self._untracked():
-            made = moved_head(path, old, new, planned)
-            if made is None:
-                return False
-            head, start, identity = made
-            directory = os.path.dirname(path)
-            fd, tmp = create_temp_file(directory, prefix=owned_temp_prefix())
-            try:
-                try:
-                    write_all(fd, memoryview(head))
-                    with open(path, "rb") as src:
-                        src.seek(start)
-                        while block := src.read(1 << 20):
-                            write_all(fd, memoryview(block))
-                finally:
-                    os.close(fd)
-                if identity_at(path) != identity:
-                    raise _Replaced(path)
-                replace_with_retry(tmp, path)
-            except BaseException as exc:
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
-                if isinstance(exc, _Replaced):
+    def entry_lock(self, stem: str) -> Any:
+        """The lock a write, a removal or an in-place update of the entry
+        *stem* holds in this process, and `_repoint` takes before rewriting
+        it: one of a fixed few, by the stem's hash."""
+        return self._entry_locks[hash(stem) % len(self._entry_locks)]
+
+    def _repoint(
+        self,
+        stem: str,
+        path: str,
+        old: str,
+        new: tuple[str, int],
+        planned: dict[str, list],
+        placed: dict[bytes, Place],
+    ) -> bool:
+        """Rewrite the entry *stem* at *path* to read its chunks in *old*
+        from *new*: a temp file with the new metadata and the payload as it
+        was, renamed over the entry. A crash leaves the old entry or the new
+        one, each whole.
+
+        Under the entry's lock (`entry_lock`), so no write, removal or access
+        update of it in this process lands between reading it and the rename;
+        skipped (False) when another thread holds it. Another process can
+        still replace the entry in that window, past the identity check just
+        before the rename: then its write is lost and the entry is this one,
+        a value that was stored under the same key, whose chunks the old pack
+        still holds -- the old pack is not removed while this process knows
+        an entry naming it, and another process's index learns it afresh.
+        """
+        lock = self.entry_lock(stem)
+        if not lock.acquire(blocking=False):
+            return False
+        try:
+            with self._untracked():
+                made = moved_head(path, old, new, planned)
+                if made is None:
                     return False
-                raise
-        return True
+                head, start, identity = made
+                directory = os.path.dirname(path)
+                fd, tmp = create_temp_file(directory, prefix=owned_temp_prefix())
+                try:
+                    try:
+                        write_all(fd, memoryview(head))
+                        with open(path, "rb") as src:
+                            src.seek(start)
+                            while block := src.read(1 << 20):
+                                write_all(fd, memoryview(block))
+                    finally:
+                        os.close(fd)
+                    if identity_at(path) != identity:
+                        raise _Replaced(path)
+                    replace_with_retry(tmp, path)
+                except BaseException as exc:
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
+                    if isinstance(exc, _Replaced):
+                        return False
+                    raise
+            with self.lock:
+                held = self._held_by.get(stem, frozenset())
+                self._set_holder(stem, (held - {old}) | {new[0]}, held)
+                self._placed_by[stem] = {
+                    d: (placed[d] if p[0] == old else p) for d, p in self._placed_by.get(stem, {}).items()
+                }
+            return True
+        finally:
+            lock.release()
+
+    def damaged(self, pack: str, offset: int) -> list[str]:
+        """The chunk at *offset* in *pack* failed its check: this process
+        places nothing there any more, so the next write of those bytes
+        stores them afresh. Returns the entries known to hold it, to remove:
+        the rest of the pack stays, and with it every other entry's chunks."""
+        self.ensure_index()
+        with self.lock:
+            for digest, place in list(self._places.items()):
+                if place[0] == pack and place[1] == offset:
+                    del self._places[digest]
+                    self._in_pack.get(pack, set()).discard(digest)
+            return [
+                stem
+                for stem, placed in self._placed_by.items()
+                if any(p[0] == pack and p[1] == offset for p in placed.values())
+            ]
 
     def knows(self, stem: str) -> bool:
         """Does this process know which chunks the entry *stem* holds?"""
@@ -799,7 +945,7 @@ class ChunkStore:
             self._indexed_at = time.time_ns()
         try:
             with self._untracked(), os.scandir(self.dir) as found:
-                paths = [e.path for e in found if e.name.endswith((CHUNK_SUFFIX, PACK_SUFFIX))]
+                paths = [e.path for e in found if e.name.endswith((CHUNK_SUFFIX, PACK_SUFFIX, CLAIM_SUFFIX))]
         except OSError:
             return
         for path in paths:
@@ -871,15 +1017,17 @@ def _read_pack(path: str, members: list[tuple[int, int, int, bytes]]) -> dict[in
                 mapped = memoryview(mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_COPY, trackfd=False))
             except (OSError, ValueError, TypeError):
                 mapped = None
-        handed: set[int] = set()
+        first: dict[int, tuple[int, int, bytes]] = {}
         for index, offset, nbytes, crc in members:
-            if offset in handed:
+            if offset in first:
+                at, size, want = first[offset]
+                if (size, want) != (nbytes, crc):
+                    raise ChunkError(f"chunk {path}: the entry places two different chunks at {offset}")
                 # The same bytes twice in one value: two buffers, as two reads
                 # of a chunk file made them, never one shared by both.
-                data: Any = bytearray(out[next(i for i, o, _n, _c in members if o == offset)])
-                out[index] = data
+                out[index] = bytearray(out[at])
                 continue
-            handed.add(offset)
+            first[offset] = (index, nbytes, crc)
             if mapped is not None:
                 data = mapped[offset : offset + nbytes]
             else:
@@ -893,7 +1041,8 @@ def _read_pack(path: str, members: list[tuple[int, int, int, bytes]]) -> dict[in
                         raise ChunkError(f"chunk {path}: truncated")
                     got += k
             if zlib.crc32(data).to_bytes(4, "big") != crc:
-                _discard(path)
-                raise ChunkError(f"chunk {path}: checksum does not match its entry -- the value will be recomputed")
+                # Only this chunk's holders go (`ChunkStore.damaged`): the
+                # rest of the pack is other entries' chunks, still good.
+                raise DamagedChunk(path, offset)
             out[index] = data
     return out
