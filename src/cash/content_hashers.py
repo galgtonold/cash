@@ -31,7 +31,7 @@ from typing import Any
 
 from . import _plain_data
 from ._memo import ARROW_VALUES, LruMemo
-from .bulk_digest import DIRECT_MAX_BYTES, LEAF_BYTES, BulkHasher, fold_buffer
+from .bulk_digest import DIRECT_MAX_BYTES, LEAF_BYTES, BulkHasher, fold_buffer, hashing_threads
 from .canonical_form import ContentHashing, canonical_bytes
 from .kept_state import packed_records
 from .sizing import SPARSE_PARTS, held_values
@@ -1001,9 +1001,7 @@ def hash_polars(value: Any) -> str | None:
             objects = [name for name, dtype in value.schema.items() if dtype == pl.Object]
             rest = value.drop(objects) if objects else value
             if rest.width:
-                for name, column in _polars_arrow_columns(rest, pl):
-                    h.update(f"|{name!r}|".encode("utf-8"))
-                    column.fold(h)
+                _fold_polars_columns(h, _polars_arrow_columns(rest, pl), _rows_per_chunk(rest))
             for name in objects:
                 h.update(f"|{name!r}|".encode("utf-8"))
                 h.update(_object_items_bytes(value.get_column(name).to_list()))
@@ -1086,6 +1084,90 @@ def _polars_to_arrow(value: Any, pl: Any) -> Any:
         except TypeError:
             pass
     return value.to_arrow()
+
+
+#: Below this many rows per chunk a frame's columns are folded on the
+#: calling thread: the readers then hand back the interpreter lock after a
+#: few thousand rows each, and threads queueing for it ran slower than one.
+PARALLEL_COLUMNS_MIN_ROWS = 200_000
+
+
+def _rows_per_chunk(frame: Any) -> int:
+    """The rows of the polars DataFrame *frame* over its most chunked column's chunks."""
+    try:
+        return frame.height // max(1, *frame.n_chunks("all"))
+    except Exception:  # noqa: BLE001 - polars raises its own types; fold on one thread
+        return 0
+
+
+class _Recorded:
+    """Stands in for a hash object: keeps what is folded into it, to be
+    handed to the real one later, in order (`_fold_polars_columns`)."""
+
+    __slots__ = ("parts",)
+
+    def __init__(self) -> None:
+        self.parts: list[bytes] = []
+
+    def update(self, data: Any) -> None:
+        self.parts.append(bytes(data))
+
+
+def _fold_polars_columns(h: Any, columns: list[tuple[str, Any]], rows_per_chunk: int) -> None:
+    """Fold each ``(name, column)`` into *h* in order, as
+    ``h.update(f"|{name!r}|")`` then ``column.fold(h)``.
+
+    A column folds a short header and its parts' digests into *h*, so for a
+    big frame each column is folded into a `_Recorded` on its own thread
+    and the records are handed to *h* in column order: the same bytes in
+    the same order, with the columns read side by side. p08's 4M-row log
+    clean() result took 0.48 s one column after another, 0.25 s side by
+    side. Its 4M-row log frame in 1,280 chunks stays on one thread
+    (`PARALLEL_COLUMNS_MIN_ROWS`).
+    """
+    threads = min(hashing_threads(), len(columns)) if rows_per_chunk >= PARALLEL_COLUMNS_MIN_ROWS else 1
+    if threads < 2:
+        for name, column in columns:
+            h.update(f"|{name!r}|".encode("utf-8"))
+            column.fold(h)
+        return
+    records = [_Recorded() for _ in columns]
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+    todo = iter(range(len(columns)))
+
+    def run() -> None:
+        while True:
+            with lock:
+                if errors:
+                    return
+                i = next(todo, None)
+            if i is None:
+                return
+            try:
+                columns[i][1].fold(records[i])
+            except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's thread
+                with lock:
+                    errors.append(exc)
+                return
+
+    workers = []
+    for _ in range(threads - 1):
+        worker = threading.Thread(target=run, name="cash-digest", daemon=True)
+        try:
+            worker.start()
+        except RuntimeError:  # no new threads (interpreter shutting down)
+            break
+        workers.append(worker)
+    run()
+    for worker in workers:
+        worker.join()
+    if errors:
+        raise errors[0]
+    for (name, _column), record in zip(columns, records):
+        h.update(f"|{name!r}|".encode("utf-8"))
+        for part in record.parts:
+            h.update(part)
 
 
 class _ArrowColumn:
