@@ -13,8 +13,11 @@ imported from scikit-learn, ``read_csv`` imported from pandas) and what that
 library requires to be installed, as its metadata lists it (a numpy upgrade
 under pandas recomputes a ``pd.read_csv`` result too). Optional extras are
 left out: they are installed only when asked for, and a library that uses one
-is named by the code that asks. A version number is all that is read, so code
-reinstalled under the same number keys as before.
+is named by the code that asks. With the version goes a digest of the files
+the distribution's ``RECORD`` lists, by the hash pip wrote for each: a team
+package rebuilt and reinstalled under the same number (``pip install .``
+without a version bump, a ``git+`` install of a moved branch) recomputes,
+and the same files reinstalled key as before (`_files_digest`).
 """
 
 from __future__ import annotations
@@ -33,7 +36,7 @@ from typing import Any
 
 from .._lazy_module import LazyModule
 from .._location import per_user_cache_root
-from ..backends.cache_dir import LIBRARY_MAP_FILENAME
+from ..backends.cache_dir import LIBRARY_MAP_FILENAME, LIBRARY_RECORDS_FILENAME
 from ..install_paths import in_own_package, is_cash_path, is_user_path, top_package
 from ..tracking.tracker_context import untracked
 
@@ -53,6 +56,10 @@ _DISTS_BY_TOP: dict[str, list[tuple[str, Any]]] | None = None
 _PROVIDERS: dict[str, list[str]] = {}
 #: distribution name -> its installed version, or None when it has none.
 _VERSIONS: dict[str, str | None] = {}
+#: distribution name -> its ``RECORD`` file, when it has one on disk.
+_RECORD_PATHS: dict[str, str] = {}
+#: distribution name -> the digest of its listed files, or None (`_files_digest`).
+_DIGESTS: dict[str, str | None] = {}
 #: distribution name -> the installed distributions it requires, transitively.
 _CLOSURES: dict[str, frozenset[str]] = {}
 #: The project name at the start of a requirement line: ``numpy>=1.26; ...``.
@@ -369,10 +376,88 @@ def _save_map(fingerprint: dict, by_top: dict[str, list]) -> None:
 def _version(dist: str) -> str | None:
     if dist not in _VERSIONS:
         try:
-            _VERSIONS[dist] = importlib_metadata.version(dist)
+            found = importlib_metadata.distribution(dist)
+            _VERSIONS[dist] = found.version
+            folder = _metadata_folder(found)
+            if folder is not None:
+                _RECORD_PATHS[dist] = os.path.join(folder, "RECORD")
         except Exception:  # noqa: BLE001 - no metadata: nothing to fold
             _VERSIONS[dist] = None
     return _VERSIONS[dist]
+
+
+def _record_digest(text: str) -> str | None:
+    """A digest of the files a ``RECORD`` lists by the hash pip wrote for
+    each, or None when it lists none. Rows without a hash (the ``RECORD``
+    itself, ``.pyc`` files) and the metadata folder's own files are left
+    out: ``INSTALLER`` or ``REQUESTED`` differ between installs of the same
+    code."""
+    rows = []
+    for row in csv.reader(text.splitlines()):
+        if len(row) < 2 or not row[1]:
+            continue
+        path = row[0]
+        if ".dist-info/" in path or "__pycache__" in path:
+            continue
+        rows.append(f"{path},{row[1]}")
+    if not rows:
+        return None
+    rows.sort()
+    return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()[:16]
+
+
+def _files_digest(dist: str, saved: dict) -> str | None:
+    """*dist*'s `_record_digest`, read from *saved* while its ``RECORD``'s
+    stat is the one saved with it, else read from the file (added to
+    *saved*). Only the version number went into a key before, so code
+    rebuilt under the same number was served the old version's results."""
+    if dist in _DIGESTS:
+        return _DIGESTS[dist]
+    digest = None
+    path = _RECORD_PATHS.get(dist)
+    if path is not None:
+        stat = _stat_of(path)
+        known = saved.get(path)
+        if stat and isinstance(known, list) and len(known) == 2 and known[0] == stat:
+            digest = known[1]
+        elif stat:
+            try:
+                with untracked(), open(path, encoding="utf-8") as fh:
+                    digest = _record_digest(fh.read())
+            except (OSError, ValueError):
+                digest = None
+            saved[path] = [stat, digest]
+            saved[""] = True  # changed: write it back
+    _DIGESTS[dist] = digest
+    return digest
+
+
+def _records_path() -> str:
+    return os.path.join(per_user_cache_root(), LIBRARY_RECORDS_FILENAME)
+
+
+def _read_records() -> dict:
+    try:
+        with untracked(), open(_records_path(), encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_records(saved: dict) -> None:
+    """Keep the digests *saved* holds for the next process. Best-effort."""
+    saved.pop("", None)
+    path = _records_path()
+    try:
+        with untracked():
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            temp = f"{path}.{os.getpid()}.tmp"
+            with open(temp, "w", encoding="utf-8") as fh:
+                json.dump(saved, fh)
+            os.replace(temp, path)
+    except (OSError, TypeError, ValueError):
+        pass
 
 
 def _requires(dist: str) -> list[str]:
@@ -475,12 +560,21 @@ def library_versions(functions: Iterable[Callable], own_pkg: str | None) -> list
     """``(distribution, version)`` for each installed library *functions*
     reach, sorted; empty when they reach none."""
     found: set[tuple[str, str]] = set()
+    saved: dict | None = None
     for top in library_tops(functions, own_pkg):
         for dist in _dists_for(top):
             for name in _closure(dist):
                 version = _version(name)
-                if version is not None:
-                    found.add((name, version))
+                if version is None:
+                    continue
+                if name not in _DIGESTS:
+                    if saved is None:
+                        saved = _read_records()
+                    _files_digest(name, saved)
+                digest = _DIGESTS[name]
+                found.add((name, version if digest is None else f"{version} files {digest}"))
+    if saved is not None and saved.get(""):
+        _save_records(saved)
     return sorted(found)
 
 
@@ -490,4 +584,6 @@ def forget() -> None:
     _DISTS_BY_TOP = None
     _PROVIDERS.clear()
     _VERSIONS.clear()
+    _RECORD_PATHS.clear()
+    _DIGESTS.clear()
     _CLOSURES.clear()
