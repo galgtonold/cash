@@ -51,13 +51,14 @@ def test_each_file_a_call_read_is_stated_once_after_the_body(disk_cash, tmp_path
 
     def counting(path, *a, **k):
         if body_done and isinstance(path, str) and os.path.normcase(path).startswith(root):
-            statted.append(path)
+            statted.append(os.path.normcase(path))
         return real(path, *a, **k)
 
     monkeypatch.setattr(os, "stat", counting)
     assert total(paths) == sum(range(40))
     monkeypatch.undo()
-    per_file = {p: statted.count(p) for p in paths}
+    # By normcase: cash records a read in forward slashes on Windows.
+    per_file = {p: statted.count(os.path.normcase(p)) for p in paths}
     # The snapshot's, and no second one for the check (it was two).
     assert set(per_file.values()) == {1}, per_file
 
