@@ -138,6 +138,10 @@ class FileAccessTracker:
         # same frame stops there. Dropped when the block ends, so the frame
         # is not kept alive past it.
         self.credit_anchor: tuple[Any, tuple[Any, ...]] | None = None
+        # Folder -> its real path, for reads outside a cell run, which has
+        # its own memo (`realpath_of_read_this_run`); dropped when the block
+        # ends, so a link re-pointed between two calls is resolved anew.
+        self._folders: dict[tuple[str, str], str] = {}
         self._probes_seen: set[tuple[Any, str | None]] = set()
         # The stat of each regular file WHEN IT WAS FIRST READ. The entry's
         # fingerprint is taken when it is stored, after the body has finished,
@@ -236,6 +240,7 @@ class FileAccessTracker:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.credit_anchor = None
+        self._folders = {}
         if self._native_windows:
             # Before the parent stack pops: the reads pass up like any other.
             native_reads.close_window(self._native_windows.pop(), self)
@@ -426,7 +431,7 @@ class FileAccessTracker:
             # This resolves symlinks and normalizes the path, making it
             # stable across os.chdir() calls. Resolved once per cell run
             # (``realpath_this_run``): a loop reads the same files again.
-            resolved, read_lstat = realpath_of_read_this_run(raw_path)
+            resolved, read_lstat = realpath_of_read_this_run(raw_path, self._folders)
             abs_path = normalize_path(resolved)
         except (TypeError, ValueError, OSError) as e:
             logger.debug("[TRACKER] Could not track file path %r: %s", path, e)
