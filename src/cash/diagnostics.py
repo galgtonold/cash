@@ -38,7 +38,7 @@ _DOCS_BASE = "https://cash-lib.readthedocs.io/en/latest/warnings/"
 #: reporting on itself; anything else is the caller's own code.
 #:
 #: Matched as a path prefix, never as the substring "cash". A notebook statement
-#: compiles under the pseudo-filename ``<cash-{digest}>``, and that IS the
+#: compiles under the pseudo-filename ``/<cash-{digest}>``, and that IS the
 #: user's code -- a substring test would classify exactly the
 #: frames we most want to blame as internal ones.
 _CASH_ROOT = os.path.dirname(os.path.abspath(__file__)) + os.sep
@@ -360,7 +360,7 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "STORE-LOCK-FAILED",  # lock acquisition failed; proceeding unlocked
         "STORE-STATE-CHANGED",  # a global the key read changed (another
         # thread) while the call ran, so the result was not stored
-        "STORE-WORK-RUNNING",  # work the call handed to a thread pool was
+        "STORE-WORK-RUNNING",  # work the call handed to a thread or pool was
         # still running when it returned, so the result was not stored
         "STORE-UNTRACKED-SOURCE",  # a cached callee depends on a dynamic source
         # that cannot be pickled, so the caller's result stays in RAM (or,

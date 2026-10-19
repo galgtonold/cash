@@ -107,6 +107,7 @@ import tempfile
 import threading
 
 from cash import Cash
+from cash._paths import CELL_ROOT
 from cash.backends.file_backend import FileBackend
 from cash.diagnostics import _is_cash_frame, _stacklevel_of_first_user_frame
 
@@ -128,6 +129,7 @@ class _FakeFrame:
         # skipping past the frames we most want to blame.
         ("<cash>", False),
         ("<cash-f83fdfd0c487>", False),
+        (CELL_ROOT + "<cash-f83fdfd0c487>", False),
         ("<stdin>", False),
         (os.path.join("some", "user", "script.py"), False),
     ],

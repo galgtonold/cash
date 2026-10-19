@@ -135,10 +135,13 @@ run. Edit the simulation and everything after it recomputes, as it should.
 ## Inputs and types
 
 - **Data files** read through numpy, pandas or `open()` are tracked by content:
-  editing `initial_conditions.csv` invalidates the calls that read it. HDF5
-  through `h5py`, NetCDF and other C-level readers are not seen; name those files
-  with `file_depends_on=`. See
-  [File dependencies](../feature-guides/custom-file-sources.md).
+  editing `initial_conditions.csv` invalidates the calls that read it, and so
+  do HDF5 files opened with `h5py.File` and NetCDF files through `xarray`. On
+  Linux and Windows cash also sees files a C library opens itself (netCDF4,
+  most other C-level readers); on macOS, and for a reader that makes the
+  system call itself, name those files with `file_depends_on=`. See
+  [Reads through a loader cash cannot see](../../known-limitations.md#reads-through-a-loader-cash-cannot-see)
+  and [File dependencies](../feature-guides/custom-file-sources.md).
 - **numpy arrays** are hashed by their full content. Types cash can't pickle
   (GPU tensors, some C extension types) need a hasher:
 

@@ -169,7 +169,11 @@ def _coupled_kind_in_container(value: Any) -> str | None:
     # which a level-at-a-time look at the types answers without visiting each
     # item in Python: a parsed log of two million pairs took 19 s to walk, once
     # for every statement that named it.
-    if not _coupled_classes_loaded() or _plain_data.is_tree(value):
+    if not _coupled_classes_loaded():
+        return None
+    from cash.notebook.shared_objects import object_free_leaves
+
+    if _plain_data.is_tree(value, object_free_leaves()):
         return None
     seen = {id(value)}
     # Types already found to be neither coupled nor a container: whether an

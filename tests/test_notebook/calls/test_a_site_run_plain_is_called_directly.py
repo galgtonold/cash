@@ -31,7 +31,13 @@ N = cu._GUARD_AFTER_CALLS + cu._PLAIN_SAMPLES + 200
 
 @pytest.fixture
 def call_cache(tmp_path):
-    cc = make_call_cache(cash.Cash(cache_dir=str(tmp_path / "cc")))
+    instance = cash.Cash(cache_dir=str(tmp_path / "cc"))
+    # No call is worth storing, so the guard's verdict is "nothing to serve"
+    # and not a race of timings: on a loaded machine a preempted call went
+    # over the default floor, was stored, and the cached-against-plain
+    # comparison it then rested on kept the site cached.
+    instance.config.call_cost_floor_seconds = 5.0
+    cc = make_call_cache(instance)
     cc.set_sites([SITE])
     return cc
 

@@ -70,7 +70,7 @@ class MutationRouting:
         """Add the receivers *run* mutates to its outputs, and skip-cache it
         where the mutation must really happen on every run."""
         mut_pre_route, draw_only, fit_only = self._classify(run)
-        self._route_receivers(run, effects, mut_pre_route)
+        self._route_receivers(run, effects, mut_pre_route, fit_only)
         # Deliberately the SAME treatment the inline spelling of the identical
         # mutation gets in `_route_receivers`: the statement re-executes so the
         # callee's write to a global really happens.
@@ -260,7 +260,9 @@ class MutationRouting:
                 f"In-place mutation on: {', '.join(sorted(run.in_place))} (statement re-executes)",
             )
 
-    def _route_receivers(self, run: StatementRun, effects: StatementEffects, mut_pre_route: set[str]) -> None:
+    def _route_receivers(
+        self, run: StatementRun, effects: StatementEffects, mut_pre_route: set[str], fit_only: set[str] = frozenset()
+    ) -> None:
         """Add the mutated receivers and arguments to *run*'s outputs, and
         skip-cache it for a receiver that must be mutated on every run.
 
@@ -282,8 +284,13 @@ class MutationRouting:
         fam = effects.arg_mutations - run.outputs
         if is_control_body(run.code):
             # The loop or branch owns what its body changes: the statement
-            # runs every time, and the names stay out of its outputs.
-            run.in_place = (mut_pre_route | fam) - run.outputs
+            # runs every time, and the names stay out of its outputs. An
+            # estimator it fits moves on as well, whether the fit was seen
+            # (the pass that learnt the verdict) or recalled (every pass
+            # after a restart): moved only when seen, the fitted models of
+            # `for est in estimators: est.fit(X, y)` left the loop with other
+            # lineages after a restart, and what was built on them missed.
+            run.in_place = (mut_pre_route | fam | fit_only) - run.outputs
             if run.in_place:
                 _skip(
                     run,

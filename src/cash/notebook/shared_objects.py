@@ -50,7 +50,9 @@ from time import perf_counter as _perf_counter
 from typing import Any
 
 from cash import _plain_data
+from cash._clock import CpuLimit
 from cash.tracking.function_tracker import is_local_module
+from cash.value_types import LEAF_TYPES
 
 __all__ = [
     "GaveUp",
@@ -145,6 +147,80 @@ def library_value_types() -> tuple[type, ...]:
     if pd is not None:
         found += [pd.Timestamp, pd.Timedelta, pd.Period, pd.Interval, type(pd.NA), type(pd.NaT)]
     return tuple(found)
+
+
+#: `exact_value_types` for each set of libraries loaded: ``(numpy, pandas)``.
+_EXACT_WITH_LIBRARIES: dict[tuple[bool, bool], frozenset[type]] = {}
+
+
+def exact_value_types() -> frozenset[type]:
+    """`EXACT_VALUE_TYPES` and the exact types of numpy's scalars and
+    pandas' ``Timestamp``, ``Timedelta``, ``NaT`` and ``NA``, when those
+    libraries are loaded: each a value (`library_value_types`), whose
+    instances `is_value` already answers for one by one.
+
+    ``pd.Timestamp`` subclasses ``datetime`` and ``np.float64`` ``float``,
+    so the exact type of neither is in `EXACT_VALUE_TYPES`: a list of
+    parsed rows ``{'user': 'u1', 'time': pd.Timestamp(...)}`` missed every
+    look at C speed and was walked item by item, by each scan of each
+    statement: a log-parsing loop of 2 million rows took 1.5x plain."""
+    np = sys.modules.get("numpy")
+    pd = sys.modules.get("pandas")
+    key = (np is not None, pd is not None)
+    known = _EXACT_WITH_LIBRARIES.get(key)
+    if known is not None:
+        return known
+    found = set(EXACT_VALUE_TYPES)
+    complete = True
+    try:
+        if np is not None:
+            # Not ``void`` (a structured array's row, a view of its memory)
+            # nor ``object_``: those go through `is_value` as before.
+            found.update(
+                kind
+                for kind in set(np.sctypeDict.values())
+                if issubclass(kind, np.generic) and kind not in (np.void, np.object_)
+            )
+        if pd is not None:
+            found.update((pd.Timestamp, pd.Timedelta, type(pd.NaT), type(pd.NA)))
+    except AttributeError:  # a library still importing: asked again next time
+        complete = False
+    result = frozenset(found)
+    if complete:
+        _EXACT_WITH_LIBRARIES[key] = result
+    return result
+
+
+#: `tree_leaves` and `object_free_leaves` for each `exact_value_types`.
+_LEAVES_WITH_LIBRARIES: dict[tuple[frozenset[type], tuple], tuple[tuple, tuple]] = {}
+
+
+def _leaves_with_libraries() -> tuple[tuple, tuple]:
+    exact = exact_value_types()
+    fakes = _plain_data.fake_clock()[0]
+    known = _LEAVES_WITH_LIBRARIES.get((exact, fakes))
+    if known is None:
+        extra = tuple(exact - EXACT_VALUE_TYPES)
+        known = (TREE_LEAVES + extra, LEAF_TYPES + fakes + extra)
+        if len(_LEAVES_WITH_LIBRARIES) > 8:
+            _LEAVES_WITH_LIBRARIES.clear()
+        _LEAVES_WITH_LIBRARIES[(exact, fakes)] = known
+    return known
+
+
+def tree_leaves() -> tuple[type, ...]:
+    """`TREE_LEAVES` and the library value types of `exact_value_types`:
+    the leaves of JSON-like data whose parts a share check counts."""
+    return _leaves_with_libraries()[0]
+
+
+def object_free_leaves() -> tuple[type, ...]:
+    """The leaves `_plain_data.is_tree` takes by default and the library
+    value types of `exact_value_types`: JSON-like data over these holds no
+    array, frame, function or other object a walk looks for, so it is
+    answered a level at a time. Parsed rows holding a ``pd.Timestamp``
+    were walked item by item, by every check of every statement."""
+    return _leaves_with_libraries()[1]
 
 
 def _bound_objects(value: Any) -> list[Any] | None:
@@ -412,7 +488,9 @@ def attrs_copied_apart(roots: Iterable[Any]) -> bool:
     frames: list[dict] = []
     seen: set[int] = set()
     roots = list(roots)
-    trees = [_plain_data.is_tree(root, TREE_LEAVES) for root in roots]
+    plain_leaves = tree_leaves()
+    exact = exact_value_types()
+    trees = [_plain_data.is_tree(root, plain_leaves) for root in roots]
     stack = [root for root, tree in zip(roots, trees) if not tree]
     while stack:
         obj = stack.pop()
@@ -425,7 +503,7 @@ def attrs_copied_apart(roots: Iterable[Any]) -> bool:
                 frames.append(attrs)
             continue
         children = children_of(obj)
-        if not children or EXACT_VALUE_TYPES.issuperset(map(type, children)):
+        if not children or exact.issuperset(map(type, children)):
             continue
         stack.extend(children)
     if not frames:
@@ -454,6 +532,15 @@ def _identities(value: Any, value_types: tuple[type, ...]) -> Iterable[int]:
         if not isinstance(obj, _IMMUTABLE_CONTAINERS):
             yield id(obj)
             yield from view_bases(obj)
+        kind = type(obj)
+        if (
+            (kind is dict or kind is list)
+            and len(obj) >= _TREE_BELOW_MIN
+            and _plain_data.held_beyond_parents(obj, TREE_LEAVES, 0) == []
+        ):
+            # JSON-like data no container of which anything but its parent
+            # holds: whatever else holds part of it holds *obj* itself.
+            continue
         stack.extend(children_of(obj) or ())
 
 
@@ -491,7 +578,8 @@ def view_base_names(
     bases: set[int] = set()
     views: list[Any] = []
     seen: set[int] = set()
-    stack = [value for value in values if not _plain_data.is_tree(value)]
+    plain_leaves = object_free_leaves()
+    stack = [value for value in values if not _plain_data.is_tree(value, plain_leaves)]
     pops = 0
     while stack:
         pops += 1
@@ -709,7 +797,7 @@ class WalkBudgetExceeded(Exception):
     """The share check ran past its time budget (:func:`walk_budget`)."""
 
 
-_DEADLINE: list[float | None] = [None]
+_DEADLINE: list[CpuLimit | None] = [None]
 
 
 @contextlib.contextmanager
@@ -722,9 +810,10 @@ def walk_budget(seconds: float) -> Iterator[None]:
     loop that ran 0.1 s, because its loop variable is an element of the list.
     A statement whose result is refused when the check gives up simply runs
     each time, so the budget costs the cache a store, never a wrong value.
+    The seconds are this thread's CPU time (`CpuLimit`).
     """
     before = _DEADLINE[0]
-    _DEADLINE[0] = _perf_counter() + seconds
+    _DEADLINE[0] = CpuLimit(seconds)
     try:
         yield
     finally:
@@ -734,8 +823,8 @@ def walk_budget(seconds: float) -> Iterator[None]:
 def check_walk_budget() -> None:
     """Raise :class:`WalkBudgetExceeded` when the budget of the walk in
     progress is spent; nothing outside :func:`walk_budget`."""
-    deadline = _DEADLINE[0]
-    if deadline is not None and _perf_counter() > deadline:
+    limit = _DEADLINE[0]
+    if limit is not None and _perf_counter() > limit.deadline and limit.passed():
         raise WalkBudgetExceeded
 
 
@@ -767,7 +856,7 @@ def referring_names(
     """
     import gc
 
-    deadline = _perf_counter() + seconds
+    limit = CpuLimit(seconds)
     value_types = VALUE_TYPES + library_value_types()
     roots = [root for root in roots if not is_value(root, value_types)]
     by_id: dict[int, list[str]] = {}
@@ -795,7 +884,7 @@ def referring_names(
     for _level in range(_REFERRER_DEPTH):
         if not frontier:
             return names, True
-        if _perf_counter() > deadline or taken > _REFERRER_OBJECTS:
+        if (_perf_counter() > limit.deadline and limit.passed()) or taken > _REFERRER_OBJECTS:
             return names, False
         # One tuple, passed on as the call's own arguments, so it is known.
         args = tuple(frontier)
@@ -1050,7 +1139,7 @@ def _group_nodes(
             whole.append(root)
             continue
         key = id(root)
-        breaks = memo[key] if key in memo else _plain_data.held_beyond_parents(root, TREE_LEAVES, _MAX_BREAKS)
+        breaks = memo[key] if key in memo else _plain_data.held_beyond_parents(root, tree_leaves(), _MAX_BREAKS)
         kept = None if breaks is None else [obj for obj in breaks if _is_node(obj, value_types)]
         if kept is None or any(id(obj) in stop.ids for obj in kept):
             whole.append(root)
@@ -1095,7 +1184,8 @@ def _copies_keep_old_objects(group: Mapping[str, Any], leaves: Leaves | None = N
     # JSON-like data holds no function at all: asked a level at a time, where
     # the walk below takes a Python step per object -- most of re-sorting a
     # list of 450,000 parsed pairs a loop variable still held part of.
-    stack = [root for root in group.values() if not _plain_data.is_tree(root, TREE_LEAVES)]
+    plain_leaves = tree_leaves()
+    stack = [root for root in group.values() if not _plain_data.is_tree(root, plain_leaves)]
     pops = 0
     while stack:
         pops += 1
@@ -1270,6 +1360,28 @@ def _held_within(nodes: dict[int, Any], inbound: dict[int, int], excess: list[in
 #: Most objects `_inside_library_objects` reads inside the library objects
 #: of a walk before it gives up, which refuses the statement.
 _INSIDE_MAX_OBJECTS = 50_000
+_STREAM_NAMES = ("stdin", "stdout", "stderr", "__stdin__", "__stdout__", "__stderr__")
+#: The standard streams as cash found them when it was imported.
+_STREAMS_AT_START = tuple(getattr(sys, name, None) for name in _STREAM_NAMES)
+
+
+def _standard_streams() -> set[int]:
+    """The ids of the process's standard streams: ``sys.stdin``, ``stdout``
+    and ``stderr`` as they are now, their ``__stdin__``-style originals, and
+    the ones current when cash was imported.
+
+    A ``threading.Thread`` keeps the ``sys.stderr`` it was made under, a
+    ``logging.StreamHandler`` and a ``tqdm`` bar the stream they write to.
+    What else holds such a stream is the kernel's or the test runner's own:
+    the climb from it went up eight levels of their objects, a full heap
+    scan each, and gave up. A file object of the user's is still climbed
+    from."""
+    found = {id(getattr(sys, name, None)) for name in _STREAM_NAMES}
+    found.update(id(stream) for stream in _STREAMS_AT_START)
+    found.discard(id(None))
+    return found
+
+
 #: Above how many objects one level of `_variables_holding`'s climb reads
 #: the heap once itself: `gc.get_referrers` takes time in proportion to the
 #: heap times the objects it is given (33 s for 18,000 on a test worker).
@@ -1393,7 +1505,9 @@ def _held_from_outside(
     A library object one of whose parts holds it back (each trace of a
     plotly figure, each node of a minidom document) is left out: those keep
     the library-object rule (`_held_within`), and their parts share the
-    library's own validators and the like with every other such object."""
+    library's own validators and the like with every other such object.
+    Nor is one of the process's standard streams (`_standard_streams`)
+    looked for."""
     roots = {key: owner[key] for key, node in nodes.items() if _reads_inside(node, value_types)}
     if not roots:
         return {}, set()
@@ -1439,8 +1553,11 @@ def _held_from_outside(
                 stack.append((child, root))
         child = None  # no reference of this frame's left in the counts
     parent = None
+    streams = _standard_streams()
     held = [
-        key for key in within if root_of[key] not in held_back and sys.getrefcount(within[key]) - refs[key] > _OVERHEAD
+        key
+        for key in within
+        if root_of[key] not in held_back and key not in streams and sys.getrefcount(within[key]) - refs[key] > _OVERHEAD
     ]
     return {key: within[key] for key in held}, {roots[root_of[key]] for key in held}
 
@@ -1883,8 +2000,8 @@ def _holders_from_referrers(
 
 def _past_deadline() -> bool:
     """Is the budget of the walk in progress spent (`walk_budget`)?"""
-    deadline = _DEADLINE[0]
-    return deadline is not None and _perf_counter() > deadline
+    limit = _DEADLINE[0]
+    return limit is not None and _perf_counter() > limit.deadline and limit.passed()
 
 
 def _is_module_namespace(holder: Any) -> bool:
@@ -1975,7 +2092,7 @@ def count_held(
         if met and (
             id(bound_in) in edges
             or not set(met) <= set(users)
-            or not all(_plain_data.is_tree(reach[key], TREE_LEAVES) for key in met)
+            or not all(_plain_data.is_tree(reach[key], tree_leaves()) for key in met)
         ):
             # The variables' own mapping is inside what cash holds, so a
             # binding is no proof, or one is no JSON-like data whose parts
@@ -2017,7 +2134,7 @@ def _parts_under(trees: list[Any]) -> set[int]:
     a time."""
     under: set[int] = set()
     for tree in trees:
-        for flat, kinds in _plain_data.tree_levels(tree, TREE_LEAVES):
+        for flat, kinds in _plain_data.tree_levels(tree, tree_leaves()):
             if not kinds.isdisjoint(_plain_data.TREE_NODES):
                 under.update(id(item) for item in flat if type(item) in _CONTAINER_KINDS)
     return under
@@ -2041,7 +2158,7 @@ def _walk_held(
     edges: dict[int, list[int]] = {}
     seen: set[int] = set()
     stack = list(held)
-    exact = EXACT_VALUE_TYPES
+    exact = exact_value_types()
     containers = EXACT_CONTAINER_TYPES
     while stack:
         obj = stack.pop()
@@ -2147,7 +2264,7 @@ def _walk(
     owner: dict[int, str] = {}
     order: list[int] = []
     identity = set(group) if keep_identity is None else set(keep_identity)
-    exact = EXACT_VALUE_TYPES
+    exact = exact_value_types()
     taken: set[int] = set()
     # The roots whose identity counts first: what they reach is checked.
     first = [name for name in group if name in identity]
@@ -2171,7 +2288,7 @@ def _walk(
             # check, which also sizes every item for the facts it keeps.
             continue
         if not fast:
-            if _plain_data.held_only_by_parents(root, TREE_LEAVES):
+            if _plain_data.held_only_by_parents(root, tree_leaves()):
                 # Records as a parser returns them: no container below the
                 # root has a holder besides its parent, read a level at a time
                 # at C speed. Only the root's own count is left to compare;
@@ -2182,14 +2299,14 @@ def _walk(
             if memo is not None and key in memo:
                 breaks = memo[key]
             else:
-                breaks = _plain_data.held_beyond_parents(root, TREE_LEAVES, _MAX_BREAKS)
+                breaks = _plain_data.held_beyond_parents(root, tree_leaves(), _MAX_BREAKS)
                 if memo is not None:
                     memo[key] = breaks
             if breaks is not None and _take_breaks(breaks, name, nodes, inbound, owner, order, value_types, leaves):
                 taken.update(map(id, breaks))
                 continue
             del breaks
-        _descend([root], name, nodes, inbound, owner, order, value_types, leaves)
+        _descend([root], name, nodes, inbound, owner, order, value_types, leaves, trees=taken if fast else None)
     if reached is None:
         reached = len(order)
     # Children before parents: a tuple counts only when something mutable
@@ -2212,7 +2329,7 @@ def _walk(
 def _is_node(child: Any, value_types: tuple[type, ...]) -> bool:
     """Whether `_walk` counts *child*, met inside a root: not a value, and
     not a tuple or frozenset holding values alone."""
-    exact = EXACT_VALUE_TYPES
+    exact = exact_value_types()
     containers = EXACT_CONTAINER_TYPES
     ctype = type(child)
     if ctype in exact or (ctype not in containers and is_value(child, value_types)):
@@ -2238,11 +2355,20 @@ def _descend(
     order: list[int],
     value_types: tuple[type, ...],
     leaves: Leaves | None = None,
+    *,
+    trees: set[int] | None = None,
 ) -> None:
     """`_walk` one container at a time below the objects on *stack*, which
     are nodes already: each reference to a node counted once in *inbound*,
-    each new node taken under *name*. One of *leaves* is not taken."""
-    exact = EXACT_VALUE_TYPES
+    each new node taken under *name*. One of *leaves* is not taken.
+
+    With *trees* (`_walk`'s *fast*), a list or dict of JSON-like data met
+    below is counted from what holds it beyond its parents, as `_walk` counts
+    such a root (`_take_breaks`), and the ids of those taken on their own go
+    in *trees*, as `_walk`'s *breaks*: a graph object's ``adj`` dict of
+    100,000 dicts was walked one dict at a time by every check of the
+    statement."""
+    exact = exact_value_types()
     containers = EXACT_CONTAINER_TYPES
     pops = 0
     while stack:
@@ -2270,7 +2396,41 @@ def _descend(
                 nodes[ckey] = child
                 owner[ckey] = name
                 order.append(ckey)
+                if (
+                    trees is not None
+                    and (ctype is dict or ctype is list)
+                    and len(child) >= _TREE_BELOW_MIN
+                    and _took_as_tree(child, name, nodes, inbound, owner, order, value_types, leaves, trees)
+                ):
+                    continue
                 stack.append(child)
+
+
+#: Fewest items of a list or dict below a root that `_descend` asks about as
+#: one tree: a smaller one is walked as quickly as it is asked about.
+_TREE_BELOW_MIN = 32
+
+
+def _took_as_tree(
+    value: Any,
+    name: str,
+    nodes: dict[int, Any],
+    inbound: dict[int, int],
+    owner: dict[int, str],
+    order: list[int],
+    value_types: tuple[type, ...],
+    leaves: Leaves | None,
+    taken: set[int],
+) -> bool:
+    """Count what is below *value*, a node `_descend` just took, as `_walk`
+    counts below a root of JSON-like data (`_take_breaks`), adding the
+    containers taken on their own to *taken*; False, with nothing counted,
+    when it is not such data or that cannot be done."""
+    breaks = _plain_data.held_beyond_parents(value, TREE_LEAVES, _MAX_BREAKS)
+    if breaks is None or not _take_breaks(breaks, name, nodes, inbound, owner, order, value_types, leaves):
+        return False
+    taken.update(map(id, breaks))
+    return True
 
 
 def _take_breaks(
@@ -2305,6 +2465,7 @@ def _take_breaks(
     if not breaks:
         return True
     ids = {id(obj) for obj in breaks}
+    exact = exact_value_types()
     for obj in breaks:
         own = id(obj)
         stack = [obj]
@@ -2313,11 +2474,11 @@ def _take_breaks(
             children = children_of(stack.pop())
             # Nothing but values, by exact type, asked at C speed: a dict of
             # four parsed columns of two million items each took 2.4 s here.
-            if not children or EXACT_VALUE_TYPES.issuperset(map(type, children)):
+            if not children or exact.issuperset(map(type, children)):
                 continue
             for child in children:
                 ckey = id(child)
-                if ckey in seen or type(child) in EXACT_VALUE_TYPES:
+                if ckey in seen or type(child) in exact:
                     continue
                 if ckey in ids:
                     return False

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import functools
 import hashlib
@@ -37,6 +38,7 @@ from ..content_hashers import (
     immutable_items,
     immutable_labels,
     is_native_panic,
+    polars_signature,
     set_piece_source,
 )
 from ..exceptions import CashCacheIneffectiveWarning
@@ -714,6 +716,81 @@ _HANDING_OUT: contextvars.ContextVar[bool] = contextvars.ContextVar("cash_pandas
 #: The digests the notebook took of the arguments of the call a statement is
 #: (`cash.handed_digests`), while that call's key is built.
 HANDED_DIGESTS: contextvars.ContextVar[Any] = contextvars.ContextVar("cash_handed_digests", default=None)
+
+#: The `CallPolarsDigests` of the call whose key is built, or whose
+#: arguments are checked after its body, on this context.
+CALL_POLARS: contextvars.ContextVar[Any] = contextvars.ContextVar("cash_call_polars", default=None)
+
+#: A polars argument at least this big (`estimated_size`) is remembered by
+#: `CallPolarsDigests`; a smaller one is read again.
+_CALL_POLARS_MIN_BYTES = 1 << 20
+
+
+class CallPolarsDigests:
+    """The digests a call's key took of its big polars arguments, for the
+    in-place-change check after its body while each one's
+    `polars_signature` holds.
+
+    The check read every argument again after the body: ``clean(raw)``
+    hashed the 4.2M-row ``raw`` twice per miss, 0.7 s each. A ``clone()``
+    of each is held from the moment it is hashed, so that any write through
+    polars gives the argument new buffers at new addresses, and its
+    signature is taken once the call is known to be a miss (`sign`): a hit
+    pays the clone alone. A write past polars, into a numpy array a frame
+    was built over without a copy, is not seen -- as within a notebook
+    statement, whose checks around a call reuse its digest the same way
+    (``ArgFingerprints``).
+    """
+
+    __slots__ = ("_entries", "_signed")
+
+    def __init__(self) -> None:
+        #: ``id -> [value, clone, digest, signature]``.
+        self._entries: dict[int, list] = {}
+        self._signed = False
+
+    def digest(self, value: Any) -> str | None:
+        """`builtin_hash` of the polars *value*, from the key's read of it
+        while nothing can have changed it."""
+        entry = self._entries.get(id(value))
+        if entry is not None and entry[0] is value:
+            if not self._signed:
+                return entry[2]
+            signature = entry[3]
+            if signature is not None and polars_signature(value) == signature:
+                return entry[2]
+        digest = builtin_hash(value)
+        if digest is not None and not self._signed and _big_polars(value):
+            try:
+                held = value.clone()
+            except Exception:  # noqa: BLE001 - polars refused: read again after the body
+                return digest
+            self._entries[id(value)] = [value, held, digest, None]
+        return digest
+
+    def sign(self) -> None:
+        """The call is a miss and its body is next: what each argument
+        remembered is vouched for from here on by its signature."""
+        self._signed = True
+        for entry in self._entries.values():
+            entry[3] = polars_signature(entry[0])
+
+
+@contextlib.contextmanager
+def call_polars(digests: CallPolarsDigests | None):
+    """*digests* in `CALL_POLARS` while it lasts."""
+    token = CALL_POLARS.set(digests)
+    try:
+        yield
+    finally:
+        CALL_POLARS.reset(token)
+
+
+def _big_polars(value: Any) -> bool:
+    try:
+        return value.estimated_size() >= _CALL_POLARS_MIN_BYTES
+    except Exception:  # noqa: BLE001 - a LazyFrame, or polars refused
+        return False
 
 
 def _watch_callback_handouts() -> None:
@@ -1697,11 +1774,17 @@ class ArgHasher:
                 return carried
 
         # pandas >= 3 copy-on-write: an exact "has this frame changed?"
-        # check instead of a trusted tag. See `_frame_memo_lookup`.
-        frame_memo = lineage is None and is_cow_pandas(arg)
-        if frame_memo:
+        # check instead of a trusted tag. See `_frame_memo_lookup`. Asked
+        # for a tagged frame too, which is not stored here: a statement's
+        # output was hashed for its lineage, and a loop handing it to a
+        # cached call read all of it again on the call's first use.
+        cow = is_cow_pandas(arg)
+        frame_memo = lineage is None and cow
+        if cow:
             content_hash = self._frame_memo_lookup(arg)
             if content_hash is not None:
+                if lineage is not None:
+                    self._memo_arg_hash(arg, lineage, content_hash)
                 return content_hash
 
         since = exposure_mark()
@@ -1713,7 +1796,11 @@ class ArgHasher:
             # `builtin_hash` a second read of every byte would give.
             content_digest = handed.digest(arg)
         if content_digest is None:
-            content_digest = builtin_hash(arg)
+            call_polars = CALL_POLARS.get()
+            if call_polars is not None and builtin_family_of(type(arg)) == "polars":
+                content_digest = call_polars.digest(arg)
+            else:
+                content_digest = builtin_hash(arg)
         if content_digest is not None:
             if lineage is not None:
                 self._memo_arg_hash(arg, lineage, content_digest)

@@ -35,12 +35,13 @@ from cash import _plain_data
 
 from .shared_objects import (
     EXACT_CONTAINER_TYPES,
-    EXACT_VALUE_TYPES,
     VALUE_TYPES,
     check_walk_budget,
     children_of,
+    exact_value_types,
     is_value,
     library_value_types,
+    object_free_leaves,
 )
 
 logger = logging.getLogger(__name__)
@@ -309,16 +310,22 @@ class _Spans:
         return below > 0 and self._reach[below - 1] > start
 
 
+#: Fewest items of a container below a value that `_borrowers_in` asks
+#: about as one tree of JSON-like data rather than walking it.
+_TREE_MIN = 32
+
+
 def _borrowers_in(values: Iterable[Any]) -> list[tuple[Any, str]]:
     """The objects among *values*, or held in them, that may share memory
     with another library's (`_PARTNERS`), with their family. A numpy array
     only when it is a view: one that owns its memory lends it, it borrows
     none."""
     value_types = VALUE_TYPES + library_value_types()
-    exact, containers = EXACT_VALUE_TYPES, EXACT_CONTAINER_TYPES
+    exact, containers = exact_value_types(), EXACT_CONTAINER_TYPES
     found: list[tuple[Any, str]] = []
     seen: set[int] = set()
-    stack = [value for value in values if not _plain_data.is_tree(value)]
+    plain_leaves = object_free_leaves()
+    stack = [value for value in values if not _plain_data.is_tree(value, plain_leaves)]
     pops = 0
     while stack:
         pops += 1
@@ -348,6 +355,8 @@ def _borrowers_in(values: Iterable[Any]) -> list[tuple[Any, str]]:
                 items = child.values() if kind is dict else child
                 if exact.issuperset(map(type, items)) and (kind is not dict or exact.issuperset(map(type, child))):
                     continue
+                if len(child) >= _TREE_MIN and kind is not tuple and _plain_data.is_tree(child):
+                    continue  # JSON-like data below: no frame, read at C speed
             stack.append(child)
     return found
 

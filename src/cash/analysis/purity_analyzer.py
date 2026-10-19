@@ -25,6 +25,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .._memo import PURITY_REPORTS, LruMemo
+from .._paths import is_pseudo_filename
 from ..diagnostics import warn_diagnostic
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..purity import is_stateful
@@ -215,7 +216,7 @@ def _code_memo_key(target: Any) -> tuple[str | None, Any]:
     except ValueError:  # a cycle of __wrapped__
         return None, None
     code = getattr(inner, "__code__", None)
-    if not isinstance(inner, types.FunctionType) or not code.co_filename.startswith("<"):
+    if not isinstance(inner, types.FunctionType) or not is_pseudo_filename(code.co_filename):
         return None, None
     if linecache.getlines(code.co_filename):
         return None, None  # a source that went away, not code without one

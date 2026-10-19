@@ -215,6 +215,23 @@ class _CappedWriter:
         return len(data)
 
 
+class _SetsInOrder(pickle.Pickler):
+    """Pickles a set inside another value in an order fixed by its items,
+    not by string hashes: those change with each process, and a set held in
+    an object (sklearn's ``StrOptions``, in the closure of every
+    ``@validate_params`` function) pickled in another order made
+    ``cross_val_score`` look changed after every restart."""
+
+    def persistent_id(self, obj: Any) -> Any:
+        # Not ``reducer_override``: the pickler may skip it for exact sets.
+        t = type(obj)
+        if t is set or t is frozenset:
+            if len(obj) > _NODES:
+                raise _Opaque
+            return t.__name__ + "|" + "|".join(sorted(map(value_digest, obj)))
+        return None
+
+
 _SCALARS = (int, float, complex, bool, type(None), type(Ellipsis))
 
 
@@ -345,7 +362,7 @@ class _Digester:
                 return
         h.update(b"p" + f"{t.__module__}.{t.__qualname__}".encode())
         try:
-            pickle.Pickler(_CappedWriter(h), protocol=4).dump(v)
+            _SetsInOrder(_CappedWriter(h), protocol=4).dump(v)
         except _Opaque:
             raise
         except Exception as exc:
@@ -363,6 +380,9 @@ class _Digester:
         cells = starts.get(fn.__code__) if starts else None
         if cells is None or len(cells) != len(fn.__closure__ or ()):
             cells = _cell_digests(fn.__closure__ or (), self)
+        elif _AS_IT_IS in cells:
+            now = _cell_digests(fn.__closure__ or (), self)
+            cells = tuple(n if c == _AS_IT_IS else c for c, n in zip(cells, now))
         # Each cell by its own digest, so the cells a function had as it
         # started (`start_cells`) stand in for what it left in them.
         for got in cells:
@@ -422,10 +442,15 @@ def start_cells(frame: Any, code: types.CodeType) -> tuple[str | None, ...] | No
         values = [local.get(name, _EMPTY) for name in code.co_freevars]
     except Exception:  # noqa: BLE001 - cells that cannot be read are digested afterwards
         return None
-    return tuple("empty" if v is _EMPTY else _sub_digest(v, None) for v in values)
+    return tuple("empty" if v is _EMPTY else _AS_IT_IS if isinstance(v, type) else _sub_digest(v, None) for v in values)
 
 
 _EMPTY = object()
+#: A start cell holding a class, digested where it is read instead: a
+#: method's ``__class__`` cell (``super()``) holds its own class, which,
+#: digested on its own as the call started, never matched the class's
+#: digest of that method, and every statement making an instance ran again.
+_AS_IT_IS = "as-it-is"
 
 
 @contextlib.contextmanager

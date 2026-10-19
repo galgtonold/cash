@@ -40,7 +40,7 @@ from .._memo import CODE_OBJECTS, LruMemo
 from ..install_paths import is_user_code_module
 from ..tracking.function_tracker import is_local_module
 from ..value_types import LEAF_TYPES
-from .compiled_source import CASH_FILENAME_PREFIX
+from .compiled_source import is_cash_filename
 
 __all__ = [
     "EXISTENCE_CHECK_AT",
@@ -395,7 +395,7 @@ def _running_statement(fn: types.FunctionType) -> bool:
     """Is *fn* the function ``exec`` made of a statement cash runs (its
     module code, compiled under cash's file name)?"""
     code = fn.__code__
-    return code.co_name == "<module>" and code.co_filename.startswith(CASH_FILENAME_PREFIX)
+    return code.co_name == "<module>" and is_cash_filename(code.co_filename)
 
 
 def _walk(

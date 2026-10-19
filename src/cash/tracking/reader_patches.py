@@ -42,7 +42,7 @@ from typing import Any
 
 from cash import _native
 from cash._memo import PATCH_SITES, LruMemo
-from cash._paths import is_remote_url
+from cash._paths import CELL_NAME_PREFIX, is_pseudo_filename, is_remote_url
 from cash.effect_observer import active_observer as _active_effect_observer
 from cash.install_paths import is_user_code_file, is_user_path
 from cash.remote_source import remember_read_options
@@ -592,15 +592,34 @@ def _patch_thread_start() -> None:
     nested function or a lambda was not, and the edited file's old result
     was served with no warning. The thread now runs in a copy of the
     starter's context, as ``ThreadPoolExecutor.submit`` gives each task.
+
+    The tracker also counts the thread until its ``run`` ends, as it counts
+    pool work (`work_submitted`): a thread the block does not join can read a
+    file after the entry's fingerprints were taken.
     """
 
     def make(original):
         @functools.wraps(original)
         def start(self):
-            if active_tracker.get() is not None and _runs_user_code(self):
-                run, context = self.run, contextvars.copy_context()
-                self.run = functools.partial(context.run, run)
-            return original(self)
+            tracker = active_tracker.get()
+            if tracker is None or not _runs_user_code(self):
+                return original(self)
+            run, context = self.run, contextvars.copy_context()
+            trackers = tracker.work_submitted()
+
+            def counted_run():
+                try:
+                    context.run(run)
+                finally:
+                    tracker.work_finished(trackers)
+
+            self.run = counted_run
+            try:
+                return original(self)
+            except BaseException:
+                self.run = run
+                tracker.work_finished(trackers)
+                raise
 
         return start
 
@@ -643,10 +662,10 @@ def _probe_handler(original_func: Callable[..., Any], kind: str) -> Callable[...
 _PATH_MACHINERY = frozenset({"os", "posixpath", "ntpath", "genericpath", "pathlib", "pathlib._local", "pathlib._abc"})
 
 
-#: The pseudo-filename prefix of a notebook statement cash compiled
-#: (``cash.notebook.compiled_source.CASH_FILENAME_PREFIX``): code the user
-#: wrote in a cell, though it has no file.
-_NOTEBOOK_STATEMENT_PREFIX = "<cash-"
+#: The name prefix of a notebook statement cash compiled
+#: (``cash.notebook.compiled_source.is_cash_filename``): code the user wrote in
+#: a cell, though it has no file.
+_NOTEBOOK_STATEMENT_PREFIX = CELL_NAME_PREFIX
 
 
 def _who_asked(frame: Any) -> str:
@@ -1584,7 +1603,7 @@ class FileDependencyRegistry:
           dependency of the functions defined in it.
         * Names that are not files at all. Compiled-from-memory code carries a
           pseudo-filename in angle brackets -- ``<string>``, ``<stdin>``,
-          ``<ipython-input-3>``, and cash's own ``<cash-0beec9249e1e>`` for
+          ``<ipython-input-3>``, and cash's own ``/<cash-0beec9249e1e>`` for
           every notebook statement it executes. Recording those gave each
           statement a dependency on a file that cannot exist, which told the
           planner that a statement in an edited cell was still satisfied: the
@@ -1599,7 +1618,7 @@ class FileDependencyRegistry:
         def tracked_source_reader(filename, *args, **kwargs):
             if isinstance(filename, (str, bytes, os.PathLike)):
                 text = os.fsdecode(filename) if isinstance(filename, bytes) else str(filename)
-                if not text.startswith("<") and not text.endswith(FileDependencyRegistry._SOURCE_SUFFIXES):
+                if not is_pseudo_filename(text) and not text.endswith(FileDependencyRegistry._SOURCE_SUFFIXES):
                     _tracker = active_tracker.get()
                     if _tracker is not None:
                         try:

@@ -34,6 +34,7 @@ import sysconfig
 import textwrap
 from types import ModuleType
 
+from ..._paths import is_pseudo_filename
 from .detect import get_value_seeding_rng_modules
 
 #: The modules whose global stream cash keys, and their import names.
@@ -85,7 +86,7 @@ def _user_frames():
     frame = sys._getframe(1)
     while frame is not None:
         filename = frame.f_code.co_filename
-        real = os.path.realpath(filename) if not filename.startswith("<") else filename
+        real = os.path.realpath(filename) if not is_pseudo_filename(filename) else filename
         if not (
             filename.startswith("<frozen")
             or real.startswith(_CASH_ROOT + os.sep)

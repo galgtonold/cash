@@ -52,6 +52,7 @@ from typing import Any, NamedTuple
 
 from .. import _plain_data
 from .._memo import CODE_OBJECTS, LruMemo
+from .._paths import is_pseudo_filename
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import own_source, wrapper_layers
 from ..tracking.function_tracker import is_local_module
@@ -2059,7 +2060,7 @@ def _generated_dataclass_init(cls: type, init: Any) -> bool:
     return (
         isinstance(init, types.FunctionType)
         and dataclasses.is_dataclass(cls)
-        and init.__code__.co_filename.startswith("<")
+        and is_pseudo_filename(init.__code__.co_filename)
         and _source_of(init) is None
     )
 
