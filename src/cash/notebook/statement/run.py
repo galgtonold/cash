@@ -100,6 +100,8 @@ class StatementRun:
     exec_source: str | None = None
     occurrence_index: int = 0
     stream_output: bool = False
+    #: Streaming, still capture the displays, which a hit shows again.
+    keep_displays: bool = False
     #: Extra outputs to capture and restore (the accumulator-loop fast path).
     force_outputs: set[str] | None = None
     is_last: bool = True

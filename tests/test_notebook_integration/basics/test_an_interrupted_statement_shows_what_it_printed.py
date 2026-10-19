@@ -32,15 +32,27 @@ HELPERS = (
 
 
 def _outputs(nb_runner, cell_num):
-    """The cell's outputs in order: stream text, 'html' for the helper's display, the error's name."""
-    seen = []
+    """The cell's outputs in order: stream lines, 'html' for the helper's display, the error's name.
+
+    Stream text is joined before it is split into lines, as the notebook shows
+    it: printed as it runs, a line can reach the notebook in two messages."""
+    seen, text = [], []
+
+    def lines():
+        seen.extend(line for line in "".join(text).splitlines() if line and not line.startswith("[Cash]"))
+        text.clear()
+
     for o in nb_runner.nb.cells[cell_num - 1].outputs:
-        if o.output_type == "stream" and o.name == "stdout":
-            seen.extend(line for line in o.text.splitlines() if line and not line.startswith("[Cash]"))
-        elif o.output_type == "display_data" and "<b>shown</b>" in o.data.get("text/html", ""):
+        if o.output_type == "stream":
+            if o.name == "stdout":
+                text.append(o.text)
+            continue
+        lines()
+        if o.output_type == "display_data" and "<b>shown</b>" in o.data.get("text/html", ""):
             seen.append("html")
         elif o.output_type == "error":
             seen.append(o.ename)
+    lines()
     return seen
 
 
