@@ -49,7 +49,7 @@ def _plain() -> tuple[float, float]:
 
 @pytest.fixture
 def tlib(tmp_path, monkeypatch):
-    (tmp_path / "tlib.py").write_text(TLIB)
+    (tmp_path / "tlib.py").write_text(TLIB, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     yield
     sys.modules.pop("tlib", None)
