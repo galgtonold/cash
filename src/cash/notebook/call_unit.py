@@ -1059,7 +1059,7 @@ class CallUnit:
             and pyplot_state() == figures_before
             and user_callee_using_pyplot(call.fn) is None
             and self._worth_storing(call, result, elapsed, result_held)
-            and not call_tracker.inputs_changed_since_read()
+            and not _inputs_moved(call_tracker)
         ):
             stored = self._store_result(call, result, elapsed, call_tracker, stdout_text, stderr_text)
         if unit is not None:
@@ -1512,6 +1512,17 @@ def _module_globals(fn) -> dict[str, Any] | None:
     except (TypeError, AttributeError):
         return None
     return dict(namespace) if local else None
+
+
+def _inputs_moved(tracker: Any) -> bool:
+    """Whether a file the call read changed before it returned; True when
+    that cannot be checked, since an unfinished check never says the files
+    held still."""
+    try:
+        return bool(tracker.inputs_changed_since_read())
+    except Exception:  # never let the check break a call
+        logger.debug("[CALL_UNIT] Could not check the files read for a change", exc_info=True)
+        return True
 
 
 def _rebound_unwatched(call: _Call, before: Mapping[str, Any] | None) -> bool:

@@ -586,7 +586,9 @@ class FileDeps:
         try:
             moved = moved_fn()
         except Exception:  # noqa: BLE001 - never let the check break a call
-            return False
+            # A check that could not finish never says the files held still:
+            # the result is returned, not cached.
+            return True
         if not moved:
             return False
         shown = ", ".join(moved[:3]) + (f" and {len(moved) - 3} more" if len(moved) > 3 else "")

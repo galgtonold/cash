@@ -310,11 +310,13 @@ class FileAccessTracker:
         and the listing it made is not the folder a snapshot would describe.
         """
         moved = []
-        for path, before in self.read_stats.items():
+        # Over copies: a pool thread the block started can still be reading
+        # after it ended, adding to these while they are walked.
+        for path, before in list(self.read_stats.items()):
             now = regular_file_stat(path)
             if now != before and not (path in self.ctime_unreliable and now is not None and now[:2] == before[:2]):
                 moved.append(path)
-        for path, before in self.listed_stats.items():
+        for path, before in list(self.listed_stats.items()):
             if path not in self.touched_dirs and folder_stat(path) != before:
                 moved.append(path)
         return moved
