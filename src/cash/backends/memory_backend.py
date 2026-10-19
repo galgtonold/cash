@@ -29,7 +29,7 @@ from ..cost_model import GENERIC_FAMILY
 from ..sizing import memory_footprint, pickled_size_estimate
 from ..source_reading import read_code_file
 from ..value_types import IMMUTABLE_PRIMS
-from . import frame_sharing, iterative_copy, set_order, shared_blocks
+from . import frame_sharing, heap_blocks, iterative_copy, set_order, shared_blocks
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, gdsf_value
 from .entry_format import SplitPayload
 from .serialization import Serializer
@@ -881,7 +881,13 @@ class InMemoryBackend(CacheBackend):
         if copied is None:
             arrow = not _stored_frame(frame, known_cells, record_cells)
             checked = getattr(_CHECKED, "frames", None) if record_cells is not None else None
-            if checked is not None and mutable is False and arrow and frame.ndim == 2:
+            if (
+                checked is not None
+                and mutable is False
+                and arrow
+                and frame.ndim == 2
+                and not any(heap_blocks.in_heap(array) for array in frame_sharing.block_arrays(frame))
+            ):
                 # Stored by `set`: a big table of numbers and dates is kept
                 # uncopied, with its digest, checked on every hit
                 # (`_still_as_stored`), and adopted once its caller lets go
@@ -1592,6 +1598,14 @@ class InMemoryBackend(CacheBackend):
         return copied
 
     def set(
+        self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None
+    ) -> bool | None:
+        """Store *value*; returns False if it was refused (see `_set`). Its
+        big arrays are kept out of glibc's heap (`heap_blocks`)."""
+        with heap_blocks.per_store():
+            return self._set(key, value, metadata, serializer)
+
+    def _set(
         self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None
     ) -> bool | None:
         """Store *value*; returns False if it was refused (see below)."""
@@ -2617,6 +2631,9 @@ def _copy_values(array: Any) -> Any:
     gaps between fields (seven bytes after a scikit-learn tree node's
     ``uint8`` field) held whatever that memory held: the same values, but
     a restored model's pickle differed from process to process."""
+    fresh = heap_blocks.fresh_copy(array)
+    if fresh is not None:
+        return fresh
     dtype = array.dtype
     if dtype.fields is None and dtype.subdtype is None:
         return array.copy(order="K")

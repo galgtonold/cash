@@ -58,6 +58,8 @@ import threading
 import weakref
 from typing import Any
 
+from . import heap_blocks
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -203,6 +205,15 @@ def _self_test(pd: Any) -> bool:
 
 
 # ---------------------------------------------------------------- freezing
+
+
+def block_arrays(frame: Any) -> list[Any]:
+    """The numpy arrays *frame*'s blocks keep their data in (`_ndarray_parts`)."""
+    try:
+        blocks = frame._mgr.blocks
+    except AttributeError:
+        return []
+    return [array for block in blocks for _name, array in (_ndarray_parts(block.values) or ())]
 
 
 def _ndarray_parts(values: Any) -> list[tuple[str, Any]] | None:
@@ -833,6 +844,9 @@ def _copy_values(values: Any, arrow: bool = True) -> Any:
     if isinstance(values, _categorical()):  # over a numpy array too: its codes
         return _owned_categories(values, arrow)
     if isinstance(values, np.ndarray) or isinstance(getattr(values, "_ndarray", None), np.ndarray):
+        fresh = heap_blocks.fresh_copy(values)  # a store's big block: out of glibc's heap
+        if fresh is not None:
+            return fresh
         try:
             return values.copy(order="K")
         except TypeError:  # an array type whose copy takes no order
