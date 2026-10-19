@@ -17,7 +17,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .._memo import CODE_OBJECTS, LruMemo
-from .._paths import MAIN_MODULE_NAMES, resolve_main_module
+from .._paths import MAIN_MODULE_NAMES, is_pseudo_filename, resolve_main_module
 from ..canonical_form import stable_key_repr
 from ..code_digest import callable_identity, compiled_identity, own_source_digest, source_digest, unwrap_partials
 from ..content_hashers import BUILTIN_CONTENT
@@ -67,7 +67,7 @@ def stat_code_file(fn: Any) -> tuple[Any, str, int, int] | None:
     """``(code, path, size, mtime_ns)`` for *fn*'s source file, or None."""
     code = getattr(fn, "__code__", None)
     path = getattr(code, "co_filename", "") or ""
-    if not path or path.startswith("<"):
+    if not path or is_pseudo_filename(path):
         return None
     # The file the text is read from: code `%autoreload` compiled alone
     # names another file, or another line of its own (`defining_file`).
