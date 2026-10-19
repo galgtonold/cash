@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ast
 import collections
+import contextlib
 import copy as _copy
 import functools
 import logging
@@ -92,8 +93,8 @@ def unwrap_callee_globals(value, metadata: Mapping[str, Any]):
     return UNWRAP_FAILED, None
 
 
-def call_capturing_output(fn, args: tuple, kwargs: dict) -> tuple[Any, str, str]:
-    """Run *fn*, returning ``(result, stdout_text, stderr_text)``.
+def call_capturing_output(fn, args: tuple, kwargs: dict) -> tuple[Any, str, str, bool]:
+    """Run *fn*, returning ``(result, stdout_text, stderr_text, displayed)``.
 
     Tees ``sys.stdout``/``sys.stderr`` through a recorder that still
     forwards every byte to the stream that was live going in -- which,
@@ -105,12 +106,19 @@ def call_capturing_output(fn, args: tuple, kwargs: dict) -> tuple[Any, str, str]
     The recording exists only so a LATER hit (:func:`replay_output`) has
     something to write back onto the live stream -- otherwise that
     output is simply gone, since the callee does not run at all on a hit.
+
+    *displayed*: the call published a display (``display(HTML(...))``), which
+    is not recorded, so a hit could not show it again.
     """
     __tracebackhide__ = True
     callers = _statement_globals(sys._getframe(1))
     if callers is not None and getattr(fn, "__globals__", None) is callers:
         callers = None  # a function of the cell's: nothing to name
-    with StreamTaken("stdout", TeeWriter) as tee_out, StreamTaken("stderr", TeeWriter) as tee_err:
+    with (
+        StreamTaken("stdout", TeeWriter) as tee_out,
+        StreamTaken("stderr", TeeWriter) as tee_err,
+        _displays_counted() as displays,
+    ):
         if callers is None:
             result = fn(*args, **kwargs)
         else:
@@ -122,7 +130,46 @@ def call_capturing_output(fn, args: tuple, kwargs: dict) -> tuple[Any, str, str]
                 callers,
                 {"__cash_fn__": fn, "__cash_args__": args, "__cash_kwargs__": kwargs, "__tracebackhide__": True},
             )
-    return result, tee_out.getvalue(), tee_err.getvalue()
+    return result, tee_out.getvalue(), tee_err.getvalue(), displays[0] > 0
+
+
+@contextlib.contextmanager
+def _displays_counted():
+    """Count what is published through the shell's display publisher meanwhile.
+
+    The count is a one-item list, read after the block. Without IPython, or
+    with a publisher that takes no attributes, nothing can display through it
+    and the count stays 0. Cash's own progress badge, published by cash code
+    while a long call runs, is not the call's and is not counted."""
+    displays = [0]
+    ipython = sys.modules.get("IPython")
+    shell = ipython.get_ipython() if ipython is not None else None
+    pub = getattr(shell, "display_pub", None)
+    own = getattr(pub, "__dict__", None)
+    if own is None:
+        yield displays
+        return
+    had = own.get("publish")
+    real = pub.publish
+
+    def publish(*args, **kwargs):
+        if not sys._getframe(1).f_globals.get("__name__", "").startswith("cash."):
+            displays[0] += 1
+        return real(*args, **kwargs)
+
+    try:
+        pub.publish = publish
+    except (AttributeError, TypeError):
+        yield displays
+        return
+    try:
+        yield displays
+    finally:
+        if had is not None:
+            pub.publish = had
+        else:
+            with contextlib.suppress(AttributeError):
+                del pub.publish
 
 
 #: The call `call_capturing_output` makes from a frame of the statement's
