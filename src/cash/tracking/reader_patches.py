@@ -530,14 +530,35 @@ def _patch_thread_pool_submit() -> None:
     With a tracker active, ``submit`` (which ``Executor.map`` calls) wraps the
     call in ``copy_context().run``; with none, it is the original. Threads started directly with
     ``threading.Thread`` still begin empty -- documented, not patched.
+
+    The tracker also counts the work until it is done (`work_submitted`):
+    work still running when the block ends can read a file after the entry's
+    fingerprints were taken, or change the result after it was stored.
     """
 
     def make(original):
         @functools.wraps(original)
         def submit(self, fn, /, *args, **kwargs):
-            if active_tracker.get() is None:
+            tracker = active_tracker.get()
+            if tracker is None:
                 return original(self, fn, *args, **kwargs)
-            return original(self, contextvars.copy_context().run, fn, *args, **kwargs)
+            context = contextvars.copy_context()
+            trackers = tracker.work_submitted()
+
+            def run(*args, **kwargs):
+                try:
+                    return context.run(fn, *args, **kwargs)
+                finally:
+                    tracker.work_finished(trackers)
+
+            try:
+                future = original(self, run, *args, **kwargs)
+            except BaseException:
+                tracker.work_finished(trackers)
+                raise
+            # Cancelled before it ran: `run` never will.
+            future.add_done_callback(lambda done: done.cancelled() and tracker.work_finished(trackers))
+            return future
 
         return submit
 

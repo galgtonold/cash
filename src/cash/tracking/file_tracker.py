@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextvars
 import logging
 import os
+import threading
 import time
 from collections.abc import Iterator
 from typing import Any, Optional
@@ -225,6 +226,12 @@ class FileAccessTracker:
         # the block removed is gone by then and stays out
         # (`get_accessed_files`).
         self.created_then_read: set[str] = set()
+        # Work the block handed to a thread pool (`work_submitted`) that has
+        # not finished yet, and whether any was still running when the block
+        # ended (`work_outlived_block`).
+        self._work_lock = threading.Lock()
+        self._work_running = 0
+        self.work_outlived_block = False
 
     def __enter__(self):
         # The first open tracker installs the wrappers (see
@@ -251,6 +258,8 @@ class FileAccessTracker:
         if self._token_stack:
             reset_in_any_context(active_tracker, self._token_stack.pop())
             io_watch.release()
+            if not self._token_stack and self._work_running:
+                self.work_outlived_block = True
         if self._parent_stack:
             self._parent_stack.pop()
 
@@ -268,6 +277,23 @@ class FileAccessTracker:
         while tracker is not None:
             yield tracker
             tracker = tracker._propagation_parent()
+
+    def work_submitted(self) -> list[FileAccessTracker]:
+        """Count one piece of work handed to a thread pool, here and on each
+        tracker a read is passed up to; returns them, for `work_finished`
+        (the chain is gone once the block has ended)."""
+        trackers = list(self._self_and_parents())
+        for tracker in trackers:
+            with tracker._work_lock:
+                tracker._work_running += 1
+        return trackers
+
+    @staticmethod
+    def work_finished(trackers: list[FileAccessTracker]) -> None:
+        """That work is done (or was cancelled before it ran)."""
+        for tracker in trackers:
+            with tracker._work_lock:
+                tracker._work_running -= 1
 
     def suspend(self):
         """Stop tracking until :meth:`resume`, restoring the enclosing tracker.

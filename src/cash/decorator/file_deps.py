@@ -566,6 +566,34 @@ class FileDeps:
         )
         return True
 
+    def work_outlived_call(self, func_name: str, tracker: Any) -> bool:
+        """Was work the call handed to a thread pool still running when it returned?
+
+        Such work runs on after the entry's file fingerprints were taken: a
+        file it reads from then on is in no fingerprint, and what it puts in
+        the result after the store is not in the entry. A ``pool.submit``
+        whose future the body never waited for filled the result from a
+        file, and the next call served that file's old content after it
+        changed.
+
+        The result is still returned: it is what the body computed. It is
+        only not cached.
+        """
+        if not getattr(tracker, "work_outlived_block", False):
+            return False
+        self._notices.warn_once(
+            CashCacheStoreFailedWarning,
+            func_name,
+            "work_running",
+            f"@cash.cache on {func_name}: work the call handed to a thread pool was still "
+            f"running when it returned. What that work reads or changes from then on is "
+            f"outside the cached result, so the result was returned but not cached.",
+            code="STORE-WORK-RUNNING",
+            fix="wait for the work before returning (future.result(), or "
+            "concurrent.futures.wait), or leave the pool out of the cached function.",
+        )
+        return True
+
     def inputs_moved_during_call(self, func_name: str, tracker: Any) -> bool:
         """Did a file this call read change before the call returned?
 
