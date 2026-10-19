@@ -29,7 +29,7 @@ from ..cost_model import GENERIC_FAMILY
 from ..sizing import memory_footprint, pickled_size_estimate
 from ..source_reading import read_code_file
 from ..value_types import IMMUTABLE_PRIMS
-from . import frame_sharing, iterative_copy, shared_blocks
+from . import frame_sharing, iterative_copy, set_order, shared_blocks
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, gdsf_value
 from .entry_format import SplitPayload
 from .serialization import Serializer
@@ -1348,6 +1348,12 @@ class InMemoryBackend(CacheBackend):
             return metadata
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
+        metadata, value = self._get_copy(key)
+        # The copy's sets iterate as the stored ones do (`set_order`).
+        set_order.restore(value, metadata)
+        return metadata, value
+
+    def _get_copy(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         with self._lock:
             entry = self._store.get(key)
             if entry is None:
@@ -1579,6 +1585,8 @@ class InMemoryBackend(CacheBackend):
         # Reads the fast hit path held back count in what eviction weighs.
         held_reads.flush()
         metadata = self._init_metadata(metadata, key)
+        if set_order.FIELD not in metadata:
+            set_order.record(value, metadata)
 
         # Plain data is sized, checked and copied from ONE look at it: three
         # separate walks were most of promoting two million parsed rows here.

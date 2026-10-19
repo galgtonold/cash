@@ -138,6 +138,13 @@ class FileAccessTracker:
         # same frame stops there. Dropped when the block ends, so the frame
         # is not kept alive past it.
         self.credit_anchor: tuple[Any, tuple[Any, ...]] | None = None
+        # The same for `incidental_read`'s walk: what it found below the last
+        # anchor frame. One slot, replaced as a whole, so pool threads share it.
+        self.incidental_anchor: list = [None]
+        # Folder -> its real path, for reads outside a cell run, which has
+        # its own memo (`realpath_of_read_this_run`); dropped when the block
+        # ends, so a link re-pointed between two calls is resolved anew.
+        self._folders: dict[tuple[str, str], str] = {}
         self._probes_seen: set[tuple[Any, str | None]] = set()
         # The stat of each regular file WHEN IT WAS FIRST READ. The entry's
         # fingerprint is taken when it is stored, after the body has finished,
@@ -239,6 +246,8 @@ class FileAccessTracker:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.credit_anchor = None
+        self._folders = {}
+        self.incidental_anchor = [None]
         if self._native_windows:
             # Before the parent stack pops: the reads pass up like any other.
             native_reads.close_window(self._native_windows.pop(), self)
@@ -309,11 +318,15 @@ class FileAccessTracker:
         # entry holds the stat from before the move, so it is never served
         # for the new content.
         taken, self.snapshot_stats = self.snapshot_stats, None
-        for path, before in self.read_stats.items():
-            now = taken[path] if taken is not None and path in taken else regular_file_stat(path)
+        if taken is None:
+            taken = {}
+        # Over copies: a pool thread the block started can still be reading
+        # after it ended, adding to these while they are walked.
+        for path, before in list(self.read_stats.items()):
+            now = taken[path] if path in taken else regular_file_stat(path)
             if now != before and not (path in self.ctime_unreliable and now is not None and now[:2] == before[:2]):
                 moved.append(path)
-        for path, before in self.listed_stats.items():
+        for path, before in list(self.listed_stats.items()):
             if path not in self.touched_dirs and folder_stat(path) != before:
                 moved.append(path)
         return moved
@@ -434,7 +447,7 @@ class FileAccessTracker:
             # This resolves symlinks and normalizes the path, making it
             # stable across os.chdir() calls. Resolved once per cell run
             # (``realpath_this_run``): a loop reads the same files again.
-            resolved, read_lstat = realpath_of_read_this_run(raw_path)
+            resolved, read_lstat = realpath_of_read_this_run(raw_path, self._folders)
             abs_path = normalize_path(resolved)
         except (TypeError, ValueError, OSError) as e:
             logger.debug("[TRACKER] Could not track file path %r: %s", path, e)
@@ -465,7 +478,7 @@ class FileAccessTracker:
             logger.debug("[TRACKER] A read of %r, which this block created: an input if it stays", abs_path)
             self._add_created_read(abs_path, self._unresolved_spelling(path, abs_path))
             return found
-        why = incidental_read(abs_path, self._own_package)
+        why = incidental_read(abs_path, self._own_package, self.incidental_anchor)
         if why is not None:
             logger.debug("[TRACKER] Ignoring %s read %r", why, abs_path)
             return found
@@ -730,7 +743,7 @@ class FileAccessTracker:
         # A library probing for an optional file while it is imported
         # (matplotlib looks for a `matplotlibrc` in the working directory) or
         # inside its own package is not the user's question either.
-        if incidental_read(os.path.abspath(raw), self._own_package) is not None:
+        if incidental_read(os.path.abspath(raw), self._own_package, self.incidental_anchor) is not None:
             return None
         if (self.created_files or self.created_dirs) and self.created_by_block(normalize_path(os.path.realpath(raw))):
             # The block's own output: whether it is there is its doing, while

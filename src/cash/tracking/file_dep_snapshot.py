@@ -173,7 +173,9 @@ def _remember_realpath(key: tuple[str, str], resolved: str) -> None:
         _REALPATH_MEMO[("", normalize_path(resolved))] = resolved
 
 
-def realpath_of_read_this_run(path: str) -> tuple[str, os.stat_result | None]:
+def realpath_of_read_this_run(
+    path: str, folders: dict[tuple[str, str], str] | None = None
+) -> tuple[str, os.stat_result | None]:
     """:func:`realpath_this_run` for a file about to be read, and its stat when
     that is what answered.
 
@@ -184,15 +186,31 @@ def realpath_of_read_this_run(path: str) -> tuple[str, os.stat_result | None]:
     its name, so the directory is resolved once; the ``lstat`` that shows it is
     such a file is also the stat the read needs. So does a missing one. Anything
     else -- a link, a short ``~`` name -- is resolved in full.
+
+    Outside a cell run (a cached function called from a script) there is no
+    run to remember answers for; *folders*, when given, is the calling
+    block's own memo of its folders' real paths, used the same way for as
+    long as the block runs. Without either, the path is resolved in full.
     """
 
-    if HASH_EPOCH is None:
-        return os.path.realpath(path), None
-    key = ("" if os.path.isabs(path) else os.getcwd(), path)
-    if _REALPATH_MEMO_EPOCH == HASH_EPOCH:
-        resolved = _REALPATH_MEMO.get(key)
-        if resolved is not None:
-            return resolved, None
+    epoch = HASH_EPOCH
+    if epoch is None:
+        if folders is None:
+            return os.path.realpath(path), None
+
+        def resolve_folder(folder: str) -> str:
+            key = ("" if os.path.isabs(folder) else os.getcwd(), folder)
+            resolved = folders.get(key)
+            if resolved is None:
+                resolved = folders[key] = os.path.realpath(folder)
+            return resolved
+    else:
+        resolve_folder = realpath_this_run
+        key = ("" if os.path.isabs(path) else os.getcwd(), path)
+        if _REALPATH_MEMO_EPOCH == epoch:
+            resolved = _REALPATH_MEMO.get(key)
+            if resolved is not None:
+                return resolved, None
     absolute = os.path.abspath(path)
     parent, name = os.path.split(absolute)
     # ``abspath`` drops a ``..`` by its spelling, but on POSIX the open goes
@@ -212,16 +230,18 @@ def realpath_of_read_this_run(path: str) -> tuple[str, os.stat_result | None]:
             # its directory's real path plus the name too. Resolved in full,
             # a folder of 13,000 images unpacked by ``tarfile`` paid a walk
             # of every path component per file.
-            resolved = os.path.join(realpath_this_run(parent), name)
-            _remember_realpath(key, resolved)
+            resolved = os.path.join(resolve_folder(parent), name)
+            if epoch is not None:
+                _remember_realpath(key, resolved)
             return resolved, None
         except (OSError, ValueError):
             st = None
         if st is not None and _stat.S_ISREG(st.st_mode) and not getattr(st, "st_file_attributes", 0) & _REPARSE_POINT:
-            resolved = os.path.join(realpath_this_run(parent), name)
-            _remember_realpath(key, resolved)
+            resolved = os.path.join(resolve_folder(parent), name)
+            if epoch is not None:
+                _remember_realpath(key, resolved)
             return resolved, st
-    return realpath_this_run(path), None
+    return (realpath_this_run(path) if epoch is not None else os.path.realpath(path)), None
 
 
 #: ``FILE_ATTRIBUTE_REPARSE_POINT``: a symlink or junction on Windows.

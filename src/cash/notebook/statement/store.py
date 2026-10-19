@@ -295,8 +295,10 @@ class StatementStore:
         try:
             moved = tracker.inputs_changed_since_read()
         except Exception:
+            # Not cached: a check that could not finish never says the files
+            # held still.
             logger.debug("[PROCESSOR] Could not check the files read for a change", exc_info=True)
-            return False
+            return True
         if not moved:
             return False
         if run.source_hash not in self._warned_input_changed:

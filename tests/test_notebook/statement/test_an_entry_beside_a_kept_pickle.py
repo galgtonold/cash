@@ -60,6 +60,29 @@ class SlowFit(Fit):
         return super().__reduce_ex__(protocol)
 
 
+#: The clock `stalled_clock` gives the digest and the store: still but for
+#: a `TickingFit`'s pickling.
+CLOCK = [0.0]
+
+
+class TickingFit(Fit):
+    """A `Fit` whose pickling takes a second of `stalled_clock`'s time."""
+
+    def __reduce_ex__(self, protocol):
+        CLOCK[0] += 1.0
+        return super().__reduce_ex__(protocol)
+
+
+@pytest.fixture
+def stalled_clock(monkeypatch):
+    """A clock only a `TickingFit`'s pickling moves. With the real one, a
+    busy machine spent a 0.01 s budget before the pickle began, and the
+    digest gave up there rather than while pickling."""
+    CLOCK[0] = 0.0
+    monkeypatch.setattr(value_hash, "perf_counter", lambda: CLOCK[0])
+    monkeypatch.setattr(stored_pickle, "perf_counter", lambda: CLOCK[0])
+
+
 class SlowFits:
     """Four `SlowFit`s."""
 
@@ -255,9 +278,9 @@ def test_an_other_too_big_to_check_is_not_apart(monkeypatch):
     assert _apart(fit, [[str(i) for i in range(1000)]]) == [False]
 
 
-def test_a_budgeted_digest_leaves_its_pickle_to_the_store_within_its_bytes():
+def test_a_budgeted_digest_leaves_its_pickle_to_the_store_within_its_bytes(stalled_clock):
     for past, made in ((None, None), (1000, False), (1 << 30, True)):
-        fit = SlowFit()
+        fit = TickingFit()
         with stored_pickle.keeping(lambda v, fit=fit: v is fit, None, past):
             assert budgeted_hash(fit, seconds=0.01) is None, "within its budget: proves nothing"
             assert stored_pickle.kept(fit) is None, "made on in the digest"
@@ -274,8 +297,8 @@ def test_a_budgeted_digest_leaves_its_pickle_to_the_store_within_its_bytes():
                 assert stored_pickle.kept(fit).digest is None
 
 
-def test_a_pickle_left_to_the_store_is_nested_only_apart_from_the_rest():
-    fit = SlowFit()
+def test_a_pickle_left_to_the_store_is_nested_only_apart_from_the_rest(stalled_clock):
+    fit = TickingFit()
     for others, nests in (([["x"]], True), ([fit.names], False)):
         with stored_pickle.keeping(lambda v, fit=fit: v is fit, None, 1 << 30):
             assert budgeted_hash(fit, seconds=0.01) is None, "within its budget: proves nothing"
