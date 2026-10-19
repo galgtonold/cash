@@ -561,6 +561,7 @@ class StatementStore:
             anchors=run.anchors or None,
             anchor_links=sorted(run.anchor_links) if run.anchors else None,
             anchor_holds=run.anchor_holds or None,
+            share_edges=sorted([src, dst] for src, dst in run.linked_edges) if run.linked_edges is not None else None,
             ttl=run.effective_ttl,
             version_slot=_version_slot(run.source_hash, run.outputs),
             replay=replay_record(execution.captured),

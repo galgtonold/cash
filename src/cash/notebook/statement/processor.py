@@ -56,6 +56,7 @@ from cash.notebook.statement.control_body import is_control_body
 from cash.notebook.statement.derivation_edges import (
     apply_share_record,
     logging_edges,
+    own_share_edges,
     record_shared_object_edges,
 )
 from cash.notebook.statement.directives import statement_directives, ttl_floor_from_called_functions
@@ -1268,7 +1269,9 @@ class StatementProcessor:
         # variables (the entry stores them together): link them as its run
         # did, as the simulation does for a hit.
         if not is_control_body(run.code):
-            recorded = self._records.recorded_share_edges(run.source_hash)
+            recorded = own_share_edges(metadata)
+            if recorded is None:
+                recorded = self._records.recorded_share_edges(run.source_hash)
             if recorded:
                 apply_share_record(self.tracking_state.derivation_edges, (), recorded, self.shell.user_ns)
         self.lineage_builder.replay_derivation_bumps(
@@ -1976,7 +1979,8 @@ class StatementProcessor:
                     self._record_shared_object_edges(run, captured_vars, holders, execution.echo, execution.cost)
                     self._link_inputs_kept_by(run, execution.echo, execution.cost)
                 if not is_control_body(run.code):
-                    self._records.note_share_edges(run.source_hash, linked | shared)
+                    run.linked_edges = frozenset((src, dst) for src, dst in linked | shared if src != dst)
+                    self._records.note_share_edges(run.source_hash, run.linked_edges)
                 with self._after_it_ran(run):
                     self._record_file_effects(run, execution)
                 self._note_per_item_rerun(run, execution)

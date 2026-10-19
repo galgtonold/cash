@@ -31,6 +31,7 @@ LOOP = "for part in parts:\n    part.fit(X, y)"
 SECOND = "vote = VotingRegressor([('a', parts[0]), ('b', parts[1])])"
 USE = f"total = (time.sleep({ABOVE_PERSISTENCE_FLOOR_S}), float(vote.predict(X[:3]).sum()))[1]"
 CELLS = [DATA, FIRST, FIT + "\nfirst = 1", PARTS, LOOP, SECOND, FIT + "\nsecond = 2", USE]
+UNSTORED = (4, 5, 6)  # LOOP, SECOND and the second fit
 NAMES = [
     "time",
     "np",
@@ -66,20 +67,25 @@ def _restart(magics) -> None:
         magics.shell.user_ns.pop(name, None)
 
 
-def _run(magics) -> list[str | None]:
+def _run(magics, config) -> list[str | None]:
+    """The loop, the second vote and its fit are never stored, as the
+    second fit (a few ms) is left to the floor: stored in one run and not
+    the other under load."""
+    floor = config.min_execution_time_to_cache_seconds
     out = []
-    for cell in CELLS:
+    for i, cell in enumerate(CELLS):
+        config.min_execution_time_to_cache_seconds = 3600.0 if i in UNSTORED else floor
         run_cash_cell(magics, cell, cells=CELLS)
         out.append(magics.cash_status("dict")["last_cell"]["statements"][-1].get("status"))
     return out
 
 
-def test_the_early_hit_links_nothing_the_later_fit_linked(cash_magics, clean_backend):
-    _run(cash_magics)
+def test_the_early_hit_links_nothing_the_later_fit_linked(cash_magics, cash_instance, clean_backend):
+    _run(cash_magics, cash_instance.config)
     lineage = cash_magics.tracking_state.variable_lineage
     before = {name: lineage.get(name) for name in ("vote", "parts", "part")}
     _restart(cash_magics)
 
-    statuses = _run(cash_magics)
+    statuses = _run(cash_magics, cash_instance.config)
     assert {name: lineage.get(name) for name in before} == before
     assert statuses[-1] == CacheStatus.RESTORED

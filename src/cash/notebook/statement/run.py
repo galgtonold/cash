@@ -275,6 +275,9 @@ class StatementRun:
     #: Seconds recording what it ran took (``Shadow.begin`` / ``end``), inside
     #: its timed run but cash's cost, not the statement's.
     record_time: float = 0.0
+    #: The edges its run linked (``StatementCacheMetadata.share_edges``),
+    #: or None when not recorded.
+    linked_edges: frozenset[tuple[str, str]] | None = None
     #: Cached only if pyplot's code does not run in it: why it runs every
     #: time when it does (``CacheabilityVerdict.unless_it_draws``).
     unless_it_draws: str | None = None
