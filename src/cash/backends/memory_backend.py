@@ -2530,13 +2530,32 @@ def _copy_array(array: Any) -> Any:
     """A copy of a numpy array of numbers, read-only if it was, as a
     pickle round trip makes it. A big one times the copy (`copy_seconds`)."""
     if array.nbytes < _TIMED_COPY_BYTES:
-        copied = array.copy(order="K")
+        copied = _copy_values(array)
     else:
         started = _copy_clock()
-        copied = array.copy(order="K")
+        copied = _copy_values(array)
         _note_copy_speed(array.nbytes, _copy_clock() - started)
     if not array.flags.writeable:
         copied.flags.writeable = False
+    return copied
+
+
+def _copy_values(array: Any) -> Any:
+    """``array.copy(order="K")``, a record array's padding zeroed.
+
+    numpy copies a record dtype field by field into fresh memory, so the
+    gaps between fields (seven bytes after a scikit-learn tree node's
+    ``uint8`` field) held whatever that memory held: the same values, but
+    a restored model's pickle differed from process to process."""
+    dtype = array.dtype
+    if dtype.fields is None and dtype.subdtype is None:
+        return array.copy(order="K")
+    import numpy as np
+
+    # ``np.zeros``, not ``zeros_like``: that one fills field by field too.
+    fortran = array.flags.f_contiguous and not array.flags.c_contiguous
+    copied = np.zeros(array.shape, dtype, order="F" if fortran else "C")
+    np.copyto(copied, array)
     return copied
 
 
