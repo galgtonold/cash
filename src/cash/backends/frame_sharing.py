@@ -315,6 +315,10 @@ def _read_only(array: Any) -> Any:
         if not isinstance(link.base, np.ndarray):
             break
         link = link.base
+    frozen = heap_blocks.sealed(array, link)
+    if frozen is not None:
+        _remember_frozen(_root(frozen))
+        return frozen
     _remember_frozen(link)
     if array.base is None:
         return array.view()

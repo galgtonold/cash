@@ -26,13 +26,19 @@ import threading
 from collections.abc import Iterator
 from typing import Any
 
-__all__ = ["MIN_BYTES", "fresh_copy", "in_heap", "per_store"]
+__all__ = ["MIN_BYTES", "fresh_copy", "in_heap", "per_store", "sealed"]
 
 #: Smallest array kept out of the heap: glibc's largest dynamic mmap
 #: threshold. A smaller block glibc may put in the heap itself anyway.
 MIN_BYTES = 32 << 20
 
 _GLIBC: list[bool] = []
+
+
+class _Mapping(mmap.mmap):
+    """Memory `fresh_copy` made: told apart from a caller's own mapping."""
+
+
 _STORE = threading.local()
 
 
@@ -133,9 +139,32 @@ def fresh_copy(array: Any) -> Any | None:
     else:
         return None
     try:
-        memory = mmap.mmap(-1, array.nbytes)
+        # Private: a forked child gets its own copy of the entry, as of heap memory.
+        memory = _Mapping(-1, array.nbytes, flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS)
     except (OSError, ValueError):
         return None
     copied = np.ndarray(array.shape, dtype=array.dtype, buffer=memory, order=order)
     np.copyto(copied, array, casting="no")
     return copied
+
+
+def sealed(array: Any, root: Any) -> Any | None:
+    """*array*, a view of the `fresh_copy` *root*, over the same memory seen
+    read-only; None for an array `fresh_copy` did not make.
+
+    A frozen array whose chain of views ends in a writable mapping can be
+    made writable again (``setflags(write=True)``), where one that ends in
+    an array owning its memory cannot: the first write through a hit would
+    change every later one. A read-only memoryview at the end of the chain
+    keeps it read-only for good."""
+    import numpy as np
+
+    memory = root.base
+    if type(memory) is not _Mapping:
+        return None
+    start = root.__array_interface__["data"][0]
+    offset = array.__array_interface__["data"][0] - start
+    # Through ``frombuffer``: given a memoryview, ``np.ndarray(buffer=...)``
+    # keeps the mapping behind it as its base, writable again.
+    whole = np.frombuffer(memoryview(memory).toreadonly(), dtype=np.uint8)
+    return np.ndarray(array.shape, dtype=array.dtype, buffer=whole, offset=offset, strides=array.strides)
