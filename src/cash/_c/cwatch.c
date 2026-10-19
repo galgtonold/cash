@@ -16,7 +16,13 @@
  *       when the value is checked (there are no list watchers);
  *     - every instance of a plain class (a class cash's Python side
  *       accepted, `set_type_verdict`): its type, its __dict__ object (itself
- *       a watched dict) and its slot values;
+ *       a watched dict) and its slot values. A class whose keyed pickle
+ *       leaves its cached views out (`views_of`) may gain one later: a
+ *       new str key in such an instance's __dict__ is held as "a view,
+ *       perhaps" rather than a change, and the next arm keeps the digest
+ *       when the walk finds every such key a view (networkx fills
+ *       G.edges, G.degree, ... on first use, and each first use of one
+ *       had the whole graph hashed again);
  *     - every class and function the pickle names: the type's version tag
  *       (with a type watcher), and the names pickle looks it up by
  *       (sys.modules[module], module.__dict__[name]) as watched dict keys;
@@ -64,7 +70,7 @@
 
 #include "cwalk.h"
 
-#define CWATCH_API_VERSION 1
+#define CWATCH_API_VERSION 2
 #define CWATCH_VERSION "0.1.0"
 
 #if PY_VERSION_HEX < 0x030C0000
@@ -91,7 +97,8 @@ enum { ST_FIRST = 0, ST_ARM = 1, ST_SKIP = 2, ST_BUSY = 3, ST_OFF = 4 };
 /* arm() answers */
 enum {
     A_ARMED = 0, A_ALREADY = 1, A_NEED_TYPE = 2, A_INELIGIBLE = 3, A_TOO_SMALL = 4,
-    A_NO_ANCHOR = 5, A_OVER_BUDGET = 6, A_BUSY = 7, A_ERROR = 8
+    A_NO_ANCHOR = 5, A_OVER_BUDGET = 6, A_BUSY = 7, A_ERROR = 8,
+    A_KEPT = 9    /* re-armed with the digests it had: only views were added since */
 };
 /* snapshot record kinds */
 enum { R_LIST = 1, R_SET = 2, R_INST = 3, R_FUNC = 4, R_TYPE = 5, R_VIEW = 6 };
@@ -109,6 +116,9 @@ typedef struct {
     PyObject *dg[NKINDS]; uint32_t dgver[NKINDS];
     uint32_t version;
     uint8_t used, dirty, gone, anchored;
+    uint8_t viewonly;            /* dirty only by str keys added to `vown` dicts, all in `pk_*` */
+    uintptr_t *vown; uint32_t nvown, capvown;   /* instance dicts of classes with views */
+    uintptr_t *pk_addr; PyObject **pk_key; uint32_t npk, cappk;   /* those keys: owned refs */
     uint32_t streak;             /* re-arms since the last reuse */
     uint64_t last_used;
     double hash_s;               /* seconds one hash of it took */
@@ -149,7 +159,7 @@ static PyObject *s_module, *s_getstate, *s_reduce, *s_reduce_ex, *s_dot;
 /* counters */
 static unsigned long long c_checks, c_hits, c_first, c_arms, c_commits, c_events, c_dirty_marks,
     c_evicted, c_dropped_streak, c_too_small, c_ineligible, c_no_anchor, c_over_budget, c_busy,
-    c_verify_fail, c_type_events, c_func_events, c_swept;
+    c_verify_fail, c_type_events, c_func_events, c_swept, c_view_adds, c_view_kept;
 
 /* ------------------------------------------------------------ hashing */
 static inline size_t hmix(uintptr_t p) {
@@ -313,7 +323,8 @@ static void rht_remove(uint32_t r) {
 
 static size_t root_bytes(Root *R) {
     return sizeof(Root) + (size_t)R->capnodes * 4 + R->capsnap * sizeof(uintptr_t) +
-           (size_t)R->caprefs * sizeof(PyObject *);
+           (size_t)R->caprefs * sizeof(PyObject *) + (size_t)R->capvown * sizeof(uintptr_t) +
+           (size_t)R->cappk * (sizeof(uintptr_t) + sizeof(PyObject *));
 }
 
 static size_t table_bytes_total = 0;   /* sum of roots' bytes */
@@ -349,13 +360,17 @@ static void root_clear(Root *R) {
     for (int k = 0; k < NKINDS; k++) { Py_CLEAR(R->dg[k]); R->dgver[k] = 0; }
     Py_CLEAR(R->wref);
     R->anchored = 0;
+    R->nvown = 0;
+    for (uint32_t j = 0; j < R->npk; j++) Py_DECREF(R->pk_key[j]);
+    R->npk = 0;
+    R->viewonly = 0;
 }
 
 static void root_free(uint32_t r) {
     Root *R = &roots[r];
     table_bytes_total -= R->bytes;
     root_clear(R);
-    free(R->snap); free(R->nodes); free(R->refs);
+    free(R->snap); free(R->nodes); free(R->refs); free(R->vown); free(R->pk_addr); free(R->pk_key);
     rht_remove(r);
     memset(R, 0, sizeof *R);
     R->addr = 0; R->used = 0;
@@ -387,7 +402,35 @@ static long root_new(uintptr_t addr) {
 }
 
 static inline void mark_dirty(uint32_t r) {
+    roots[r].viewonly = 0;
     if (!roots[r].dirty) { roots[r].dirty = 1; c_dirty_marks++; }
+}
+
+static int root_owns_views(Root *R, uintptr_t d) {
+    for (uint32_t j = 0; j < R->nvown; j++) if (R->vown[j] == d) return 1;
+    return 0;
+}
+
+/* a str key added to a `vown` dict of root r: held as a possible view (and
+   the root dirty) when nothing else has changed; 0 when it is a change */
+static int view_add(uint32_t r, uintptr_t d, PyObject *key) {
+    Root *R = &roots[r];
+    if (R->dirty && !R->viewonly) return 0;
+    if (R->npk == R->cappk) {
+        uint32_t nc = R->cappk ? R->cappk * 2 : 4;
+        if (nc > 64) return 0;
+        uintptr_t *pa = realloc(R->pk_addr, (size_t)nc * sizeof *pa);
+        if (!pa) return 0;
+        R->pk_addr = pa;
+        PyObject **pk = realloc(R->pk_key, (size_t)nc * sizeof *pk);
+        if (!pk) return 0;
+        R->pk_key = pk; R->cappk = nc;
+    }
+    R->pk_addr[R->npk] = d;
+    R->pk_key[R->npk++] = Py_NewRef(key);
+    if (!R->dirty) { R->dirty = 1; R->viewonly = 1; }
+    c_view_adds++;
+    return 1;
 }
 
 
@@ -537,6 +580,8 @@ static int on_dict(PyDict_WatchEvent ev, PyObject *d, PyObject *key, PyObject *n
     }
     long s = ht_slot((uintptr_t)d);
     if (s < 0) return 0;
+    /* a str key the dict does not hold yet (-1: not asked yet) */
+    int added = key && PyUnicode_CheckExact(key) && (ev == PyDict_EVENT_ADDED || ev == PyDict_EVENT_MODIFIED) ? -1 : 0;
     for (uint32_t i = ht[s]; i != NONE32; i = NODE(i)->next) {
         WNode *n = NODE(i);
         if (n->root & DEADBIT) continue;
@@ -544,6 +589,19 @@ static int on_dict(PyDict_WatchEvent ev, PyObject *d, PyObject *key, PyObject *n
         if ((i & KBIT) && key != NULL && ev != PyDict_EVENT_DEALLOCATED) {
             PyObject *k = kn[i & ~KBIT].key;
             if (!str_equal(k, key)) continue;
+        }
+        if (added && !(i & KBIT) && root_owns_views(&roots[r], (uintptr_t)d)) {
+            if (added < 0) {
+                /* 3.12 reports a key an instance dict's shared keys already
+                   name as MODIFIED, not ADDED */
+                added = ev == PyDict_EVENT_ADDED;
+                if (!added) {
+                    PyObject *was = PyDict_GetItemWithError(d, key);   /* str: hashed and compared in C */
+                    added = !was && !PyErr_Occurred();
+                    PyErr_Clear();
+                }
+            }
+            if (added && view_add(r, (uintptr_t)d, key)) continue;
         }
         mark_dirty(r);
         if (ev == PyDict_EVENT_DEALLOCATED) {
@@ -930,6 +988,10 @@ static int view_record(Walk *W, PyObject *v) {
     return 0;
 }
 
+/* the keys a re-arm must find to be views to keep the digests (`arm_value`) */
+static uintptr_t *kp_addr = NULL; static PyObject **kp_key = NULL; static uint8_t *kp_ok = NULL;
+static uint32_t nkp = 0;
+
 /* an instance's dict when its key leaves the views in *views* out: watched,
    its other values walked, each view only recorded (`view_record`) */
 static int dict_with_views(Walk *W, PyObject *d, PyObject *views) {
@@ -947,6 +1009,8 @@ static int dict_with_views(Walk *W, PyObject *d, PyObject *views) {
         int is_view = PyUnicode_CheckExact(k) ? PySet_Contains(views, k) : 0;
         if (is_view < 0) return -1;
         if (is_view) {
+            for (uint32_t j = 0; j < nkp; j++)
+                if (kp_addr[j] == (uintptr_t)d && str_equal(kp_key[j], k)) kp_ok[j] = 1;
             int r = view_record(W, v);
             if (r) return r;
             continue;
@@ -1081,6 +1145,13 @@ static int visit(Walk *W, PyObject *o) {
         }
     }
     if (d && ti->views && views_of) {
+        if (R->nvown == R->capvown) {
+            uint32_t nc = R->capvown ? R->capvown * 2 : 4;
+            uintptr_t *p = realloc(R->vown, (size_t)nc * sizeof *p);
+            if (!p) { Py_DECREF(d); PyErr_NoMemory(); return -1; }
+            R->vown = p; R->capvown = nc;
+        }
+        R->vown[R->nvown++] = (uintptr_t)d;
         /* runs Python: `ti` may move, nothing below reads it */
         PyObject *views = PyObject_CallOneArg(views_of, o);
         if (!views) { Py_DECREF(d); return -1; }
@@ -1363,6 +1434,8 @@ static PyObject *py_check(PyObject *self, PyObject *const *args, Py_ssize_t narg
                 } else {
                     res = PyLong_FromLong(ST_ARM);   /* armed, but not for this kind yet */
                 }
+            } else if (R->viewonly) {
+                res = PyLong_FromLong(ST_ARM);   /* views added, perhaps: the re-arm decides */
             } else if (R->streak >= 3) {
                 /* changed every time it was looked at: tracking costs more than it saves */
                 uint32_t st = R->streak;
@@ -1443,10 +1516,7 @@ static PyObject *arm_result(int st, PyObject *detail) {
 /* arm(value, anchors) -> (status, detail). anchors: a tuple of namespace
    dicts one of which may hold value (needed for a value with no other proof
    of identity: a list, a set, a tuple). */
-static PyObject *py_arm(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
-    if (nargs < 1 || nargs > 2) { PyErr_SetString(PyExc_TypeError, "arm(value, anchors=None)"); return NULL; }
-    PyObject *o = args[0];
-    PyObject *anchors = nargs > 1 ? args[1] : NULL;
+static PyObject *arm_value(PyObject *o, PyObject *anchors, PyObject **kept) {
     if (!enabled) return arm_result(A_INELIGIBLE, NULL);
     if (busy) { c_busy++; return arm_result(A_BUSY, NULL); }
     if (ensure_watchers() < 0) return NULL;
@@ -1464,6 +1534,22 @@ static PyObject *py_arm(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
             if (v < 0) { busy = 0; return NULL; }
             if (v == 1) { busy = 0; return arm_result(A_ALREADY, NULL); }
             mark_dirty((uint32_t)r);
+        } else if (R->viewonly) {
+            /* lists, sets and slots as they were: the keys added are all that may differ */
+            int v = verify(R);
+            if (v < 0) { busy = 0; return NULL; }
+            R = &roots[r];
+            if (v == 0) mark_dirty((uint32_t)r);
+            else if (R->npk) {
+                uintptr_t *pa = malloc((size_t)R->npk * sizeof *pa);
+                PyObject **pk = malloc((size_t)R->npk * sizeof *pk);
+                uint8_t *ok = calloc(R->npk, 1);
+                if (!pa || !pk || !ok) { free(pa); free(pk); free(ok); busy = 0; return PyErr_NoMemory(); }
+                for (uint32_t j = 0; j < R->npk; j++) { pa[j] = R->pk_addr[j]; pk[j] = Py_NewRef(R->pk_key[j]); }
+                kp_addr = pa; kp_key = pk; kp_ok = ok; nkp = R->npk;
+                for (int k = 0; k < NKINDS; k++)
+                    if (R->dg[k] && R->dgver[k] == R->version) kept[k] = Py_NewRef(R->dg[k]);
+            }
         }
     }
     /* identity: what proves later that the object at this address is this one */
@@ -1570,8 +1656,35 @@ static PyObject *py_arm(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
         }
     }
     c_arms++;
+    int keep_all = nkp > 0, any = 0;
+    for (uint32_t j = 0; j < nkp; j++) if (!kp_ok[j]) keep_all = 0;
+    for (int k = 0; k < NKINDS; k++) if (kept[k]) any = 1;
+    if (keep_all && any) {
+        /* every key added since was a view, which no digest reads: the digests stand */
+        for (int k = 0; k < NKINDS; k++) {
+            if (!kept[k]) continue;
+            Py_XSETREF(R->dg[k], kept[k]);
+            kept[k] = NULL;
+            R->dgver[k] = R->version;
+        }
+        if (R->streak) R->streak--;
+        c_view_kept++;
+        busy = 0;
+        return arm_result(A_KEPT, NULL);
+    }
     busy = 0;
     return arm_result(A_ARMED, NULL);
+}
+
+static PyObject *py_arm(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs < 1 || nargs > 2) { PyErr_SetString(PyExc_TypeError, "arm(value, anchors=None)"); return NULL; }
+    PyObject *kept[NKINDS] = {NULL};   /* the digests a re-arm after view adds may keep */
+    PyObject *res = arm_value(args[0], nargs > 1 ? args[1] : NULL, kept);
+    for (int k = 0; k < NKINDS; k++) Py_XDECREF(kept[k]);
+    for (uint32_t j = 0; j < nkp; j++) Py_DECREF(kp_key[j]);
+    free(kp_addr); free(kp_key); free(kp_ok);
+    kp_addr = NULL; kp_key = NULL; kp_ok = NULL; nkp = 0;
+    return res;
 }
 
 /* commit(value, kind, digest, seconds) -> bool: keep digest for value when
@@ -1739,7 +1852,7 @@ static PyObject *py_stats(PyObject *self, PyObject *noargs) {
     size_t snapw = 0, nodes = 0;
     for (uint32_t r = 0; r < nroots; r++) if (roots[r].used) { snapw += roots[r].nsnap; nodes += roots[r].nnodes; }
     return Py_BuildValue(
-        "{sIsnsnsnsnsnsnsnsKsKsKsKsKsKsKsKsKsKsKsKsKsKsKsKsKsK}",
+        "{sIsnsnsnsnsnsnsnsKsKsKsKsKsKsKsKsKsKsKsKsKsKsKsKsKsKsKsK}",
         "roots", rlive, "nodes", (Py_ssize_t)wlive, "keyed_nodes", (Py_ssize_t)klive,
         "snapshot_words", (Py_ssize_t)snapw, "table_bytes", (Py_ssize_t)total_bytes(),
         "budget", (Py_ssize_t)budget, "min_bytes", (Py_ssize_t)min_bytes,
@@ -1749,7 +1862,7 @@ static PyObject *py_stats(PyObject *self, PyObject *noargs) {
         "dropped_changing", c_dropped_streak, "too_small", c_too_small, "ineligible", c_ineligible,
         "no_anchor", c_no_anchor, "over_budget", c_over_budget, "busy", c_busy,
         "verify_changed", c_verify_fail, "type_events", c_type_events, "func_events", c_func_events,
-        "swept", c_swept);
+        "swept", c_swept, "view_adds", c_view_adds, "views_kept", c_view_kept);
 }
 
 /* info(value): a root's state, for tests */
@@ -2413,7 +2526,7 @@ static int exec_module(PyObject *m) {
         {"FIRST", ST_FIRST}, {"ARM", ST_ARM}, {"SKIP", ST_SKIP}, {"BUSY", ST_BUSY}, {"OFF", ST_OFF},
         {"ARMED", A_ARMED}, {"ALREADY", A_ALREADY}, {"NEED_TYPE", A_NEED_TYPE},
         {"INELIGIBLE", A_INELIGIBLE}, {"TOO_SMALL", A_TOO_SMALL}, {"NO_ANCHOR", A_NO_ANCHOR},
-        {"OVER_BUDGET", A_OVER_BUDGET}, {"ARM_BUSY", A_BUSY}, {"KINDS", NKINDS}};
+        {"OVER_BUDGET", A_OVER_BUDGET}, {"ARM_BUSY", A_BUSY}, {"KEPT", A_KEPT}, {"KINDS", NKINDS}};
     for (size_t i = 0; i < sizeof consts / sizeof consts[0]; i++)
         if (PyModule_AddIntConstant(m, consts[i].n, consts[i].v) < 0) return -1;
     if (PyType_Ready(&AccType) < 0 || PyType_Ready(&TouchType) < 0) return -1;

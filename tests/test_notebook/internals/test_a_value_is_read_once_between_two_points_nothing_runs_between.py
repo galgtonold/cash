@@ -271,8 +271,9 @@ def test_a_graph_read_by_a_call_inside_print_is_read_once_before_the_call(
     run_cash_cell(cash_magics, "total = round(degree_sum(G), 2)")
     assert mock_shell.user_ns["total"] == 1600
     # 3 reads in pure Python; with the C fast path on, the watchers prove G
-    # unchanged since an earlier read and one more read is skipped.
+    # unchanged since an earlier read, the call's filling G.degree too (a
+    # view its key leaves out), and two more reads are skipped.
     if value_watch.VERIFY:
         pytest.skip("counts reads; CASH_CWATCH_VERIFY=1 hashes behind every reuse")
-    expected = 2 if _native.AVAILABLE else 3
+    expected = 1 if _native.AVAILABLE else 3
     assert len(reads) == expected, f"G was read {len(reads)} times"
