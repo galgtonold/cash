@@ -14,6 +14,7 @@ gives.
 
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 
@@ -251,3 +252,106 @@ def test_another_interpreter_or_environment_never_reads_this_ones_map(site, tmp_
     scans = _scans(monkeypatch)
     _lookups()
     assert len(scans) == 1
+
+
+def _rewrite_saved(change):
+    import json
+
+    path = library_versions._map_path()
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    for record in data.values():
+        change(record)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh)
+
+
+def _emptied(record):
+    record["map"] = {}
+
+
+def _emptied_with_its_digest(record):
+    record["map"] = {}
+    record["digest"] = library_versions._map_digest({})
+
+
+def _bad_row(record):
+    record["map"]["realpkg"] = [[1, 2, 3]]
+    record["digest"] = library_versions._map_digest(record["map"])
+
+
+@pytest.mark.parametrize("change", [_emptied, _bad_row], ids=["emptied", "a row of the wrong shape"])
+def test_a_saved_map_that_is_valid_json_but_not_whole_is_built_again_and_saved_over(site, monkeypatch, change):
+    """Its fingerprint still matches, so nothing else would build it again before the next install."""
+    _fill(site)
+    first = _lookups()
+    _rewrite_saved(change)
+    _new_process()
+    scans = _scans(monkeypatch)
+    assert _lookups() == first
+    assert len(scans) == 1
+    _new_process()
+    assert _lookups() == first
+    assert len(scans) == 1, "the rebuilt map was not saved over the broken one"
+
+
+def test_an_emptied_map_with_a_matching_digest_is_read_as_saved(site, monkeypatch):
+    """The digest is what tells a whole map: one written whole is believed, as any saved state is."""
+    _fill(site)
+    _lookups()
+    _rewrite_saved(_emptied_with_its_digest)
+    _new_process()
+    scans = _scans(monkeypatch)
+    library_versions._dists_for("realpkg")
+    assert not scans
+
+
+def test_notebooks_in_two_folders_keep_a_map_each(site, tmp_path, monkeypatch):
+    """A kernel or ``python -c`` puts its working folder on ``sys.path``."""
+    _fill(site)
+    one, two = tmp_path / "one", tmp_path / "two"
+    one.mkdir()
+    two.mkdir()
+    scans = _scans(monkeypatch)
+    for folder in (one, two, one, two, one):
+        monkeypatch.setattr(sys, "path", [str(folder), *[p for p in sys.path if p not in (str(one), str(two))]])
+        _new_process()
+        assert _lookups()["realpkg"] == ["fake_real"]
+    assert len(scans) == 2
+
+
+def test_a_working_folder_is_listed_again_only_when_it_changed(site, tmp_path, monkeypatch):
+    work = tmp_path / "work"
+    work.mkdir()
+    for i in range(50):
+        (work / f"out{i}.csv").write_text("x\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(work))
+    _fill(site)
+    _lookups()
+    listed = []
+    real = os.scandir
+    monkeypatch.setattr(os, "scandir", lambda p=".": listed.append(os.fspath(p)) or real(p))
+    _new_process()
+    library_versions._dists_for("realpkg")
+    assert str(work) not in listed, "an unchanged working folder was listed again"
+    (work / "result.parquet").write_text("x\n", encoding="utf-8")  # the notebook wrote an output
+    scans = _scans(monkeypatch)
+    _new_process()
+    library_versions._dists_for("realpkg")
+    assert not scans, "a file written to the working folder rebuilt the map"
+    listed.clear()
+    _new_process()
+    library_versions._dists_for("realpkg")
+    assert str(work) not in listed, "the folder's new stat was not saved"
+
+
+def test_metadata_appearing_in_a_working_folder_builds_the_map_again(site, tmp_path, monkeypatch):
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.syspath_prepend(str(work))
+    _fill(site)
+    _lookups()
+    _package(work, "newpkg")
+    _dist(work, "fake_new", "1.0", ["newpkg/__init__.py"])
+    _new_process()
+    assert library_versions._dists_for("newpkg") == ["fake_new"]

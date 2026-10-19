@@ -20,6 +20,7 @@ reinstalled under the same number keys as before.
 from __future__ import annotations
 
 import csv
+import hashlib
 import importlib.machinery as importlib_machinery
 import inspect
 import json
@@ -167,8 +168,9 @@ def _dists_for(top: str) -> list[str]:
     return names
 
 
-#: How many environments' maps the saved file keeps.
-_SAVED_ENVIRONMENTS = 8
+#: How many maps the saved file keeps (`_slot`): environments, and the
+#: working folders a notebook or ``python -c`` puts on ``sys.path``.
+_SAVED_MAPS = 16
 
 
 def _distribution_map() -> dict[str, list[tuple[str, Any]]]:
@@ -182,11 +184,13 @@ def _distribution_map() -> dict[str, list[tuple[str, Any]]]:
     those are the same, so is the map, and so is every key.
     """
     try:
-        fingerprint = _install_fingerprint()  # before the build: an install during it rebuilds next time
-        if fingerprint is not None:
-            saved = _saved_map(fingerprint)
+        header = _fingerprint_header()
+        fingerprint = None
+        if header is not None:
+            saved = _saved_map(header)
             if saved is not None:
                 return saved
+            fingerprint = _install_fingerprint(header)  # before the build: an install during it rebuilds next time
         by_top, saveable = _packages_distributions()
     except Exception:  # noqa: BLE001 - broken metadata: no versions to fold
         return {}
@@ -195,45 +199,82 @@ def _distribution_map() -> dict[str, list[tuple[str, Any]]]:
     return by_top
 
 
-def _install_fingerprint() -> list | None:
-    """What the installed distributions are read from, the saved map's
-    identity (`_saved_map`): the interpreter and environment, each
-    ``sys.path`` entry, and in each folder the ``.pth`` files and the
-    metadata folders by name and stat, with the stat of each file in them the
-    map reads. ``pip install``, ``uninstall`` and ``-U`` create or remove a
-    metadata folder; ``--force-reinstall`` of the same version, or an edit,
-    rewrites a file in one; an editable install adds a ``.pth`` file and a
-    metadata folder (or a source folder on ``sys.path``). None when something
-    else may name distributions too (a finder of its own on ``sys.meta_path``).
-    """
+def _fingerprint_header() -> list | None:
+    """The interpreter and environment, and each ``sys.path`` entry: which
+    saved map (`_slot`) this process may read. None when something else may
+    name distributions too (a finder of its own on ``sys.meta_path``)."""
     for finder in sys.meta_path:
         if getattr(finder, "find_distributions", None) is not None and finder is not importlib_machinery.PathFinder:
             return None
-    found: list = [sys.version, sys.implementation.cache_tag, sys.prefix, sys.base_prefix, sys.executable]
-    for entry in sys.path:
-        path = os.path.abspath(entry or ".")
-        if not os.path.isdir(path):  # a zip, or not there: its own stat
-            found.append([path, *_stat_of(path)])
-            continue
-        listed = []
-        try:
-            with os.scandir(path) as children:
-                for child in children:
-                    low = child.name.lower()
-                    if low.endswith(("dist-info", "egg-info")):
-                        inside = (
-                            [[name, *_stat_of(os.path.join(child.path, name))] for name in _METADATA_FILES]
-                            if child.is_dir()
-                            else []
-                        )
-                        listed.append([child.name, *_stat_of(child.path), inside])
-                    elif low.endswith(".pth"):
-                        listed.append([child.name, *_stat_of(child.path)])
-        except OSError:
+    return [
+        sys.version,
+        sys.implementation.cache_tag,
+        sys.prefix,
+        sys.base_prefix,
+        sys.executable,
+        [os.path.abspath(entry or ".") for entry in sys.path],
+    ]
+
+
+def _install_fingerprint(header: list) -> dict | None:
+    """What the installed distributions are read from, the saved map's
+    identity (`_saved_map`): *header*, and for each ``sys.path`` folder the
+    ``.pth`` files and the metadata folders in it by name and stat, with the
+    stat of each file in them the map reads (`_folder_print`). ``pip
+    install``, ``uninstall`` and ``-U`` create or remove a metadata folder;
+    ``--force-reinstall`` of the same version, or an edit, rewrites a file in
+    one; an editable install adds a ``.pth`` file and a metadata folder (or a
+    source folder on ``sys.path``).
+    """
+    prints = []
+    for path in header[-1]:
+        found = _folder_print(path)
+        if found is None:
             return None
-        listed.sort()
-        found.append([path, listed])
-    return found
+        prints.append(found)
+    return {"header": header, "paths": prints}
+
+
+def _folder_print(path: str) -> list | None:
+    """``["other", stat]`` for a zip or a missing entry; ``["bare", stat]``
+    for a folder holding no metadata and no ``.pth`` (a working folder: its
+    stat moves when an entry is added, so it is listed again only then);
+    ``["listed", [...]]`` for one holding some. None when it cannot be listed."""
+    if not os.path.isdir(path):
+        return ["other", *_stat_of(path)]
+    before = _stat_of(path)
+    listed = []
+    try:
+        with os.scandir(path) as children:
+            for child in children:
+                low = child.name.lower()
+                if low.endswith(("dist-info", "egg-info")):
+                    inside = (
+                        [[name, *_stat_of(os.path.join(child.path, name))] for name in _METADATA_FILES]
+                        if child.is_dir()
+                        else []
+                    )
+                    listed.append([child.name, *_stat_of(child.path), inside])
+                elif low.endswith(".pth"):
+                    listed.append([child.name, *_stat_of(child.path)])
+    except OSError:
+        return None
+    if not listed:
+        return ["bare", *before]
+    listed.sort()
+    return ["listed", listed]
+
+
+def _still(saved: list, path: str) -> tuple[bool, list | None]:
+    """Whether *path* is as its saved print says, and its print now. A bare
+    folder whose stat moved is listed again: a file the user wrote there
+    leaves it bare, and the map stands."""
+    if saved[0] == "bare" and os.path.isdir(path) and _stat_of(path) == saved[1:]:
+        return True, saved
+    now = _folder_print(path)
+    if now is None:
+        return False, None
+    return now == saved or now[0] == saved[0] == "bare", now
 
 
 #: The files in a metadata folder the map is read from (`_packages_distributions`).
@@ -253,8 +294,14 @@ def _map_path() -> str:
     return os.path.join(per_user_cache_root(), LIBRARY_MAP_FILENAME)
 
 
-def _environment_id() -> str:
-    return f"{sys.prefix}|{sys.executable}|{sys.version}"
+def _slot(header: list) -> str:
+    """The saved map's name for *header*: one per environment and search
+    path, so notebooks in different folders keep a map each."""
+    return hashlib.sha256(json.dumps(header).encode("utf-8")).hexdigest()[:24]
+
+
+def _map_digest(by_top: Any) -> str:
+    return hashlib.sha256(json.dumps(by_top, sort_keys=True).encode("utf-8")).hexdigest()
 
 
 def _read_saved() -> dict:
@@ -266,27 +313,50 @@ def _read_saved() -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _saved_map(fingerprint: list) -> dict[str, list[tuple[str, Any]]] | None:
-    """The map an earlier process saved for these installs, or None."""
-    saved = _read_saved().get(_environment_id())
-    if not isinstance(saved, dict) or saved.get("fingerprint") != fingerprint:
+def _saved_map(header: list) -> dict[str, list[tuple[str, Any]]] | None:
+    """The map an earlier process saved for these installs, or None: none
+    saved, the installs changed, or the saved one is not whole (it is then
+    built again and saved over)."""
+    try:
+        saved = _read_saved().get(_slot(header))
+        fingerprint, by_top = saved["fingerprint"], saved["map"]
+        if fingerprint["header"] != header or saved["digest"] != _map_digest(by_top):
+            return None
+        prints = fingerprint["paths"]
+        if len(prints) != len(header[-1]):
+            return None
+        refreshed = []
+        for path, print_ in zip(header[-1], prints):
+            same, now = _still(print_, path)
+            if not same:
+                return None
+            refreshed.append(now)
+        result = {}
+        for top, entries in by_top.items():
+            rows = []
+            for name, folder in entries:
+                if not isinstance(name, str) or not (folder is None or isinstance(folder, str)):
+                    return None
+                rows.append((name, folder))
+            result[top] = rows
+    except Exception:  # noqa: BLE001 - anything off in the file: build it again
         return None
-    by_top = saved.get("map")
-    if not isinstance(by_top, dict):
-        return None
-    return {top: [(name, folder) for name, folder in entries] for top, entries in by_top.items()}
+    if refreshed != prints:  # a working folder that moved and is still bare
+        _save_map({"header": header, "paths": refreshed}, by_top)
+    return result
 
 
-def _save_map(fingerprint: list, by_top: dict[str, list]) -> None:
-    """Keep *by_top* for the next process of this environment. Best-effort."""
+def _save_map(fingerprint: dict, by_top: dict[str, list]) -> None:
+    """Keep *by_top* for the next process with these installs. Best-effort."""
     path = _map_path()
+    slot = _slot(fingerprint["header"])
     try:
         with untracked():
             data = _read_saved()
-            data.pop(_environment_id(), None)
-            data[_environment_id()] = {"fingerprint": fingerprint, "map": by_top}
-            for env in list(data)[:-_SAVED_ENVIRONMENTS]:
-                del data[env]
+            data.pop(slot, None)
+            data[slot] = {"fingerprint": fingerprint, "map": by_top, "digest": _map_digest(by_top)}
+            for old in list(data)[:-_SAVED_MAPS]:
+                del data[old]
             os.makedirs(os.path.dirname(path), exist_ok=True)
             temp = f"{path}.{os.getpid()}.tmp"
             with open(temp, "w", encoding="utf-8") as fh:
