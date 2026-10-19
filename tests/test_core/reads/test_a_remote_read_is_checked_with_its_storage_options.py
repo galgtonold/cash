@@ -19,6 +19,7 @@ import pytest
 
 from cash import Cash
 from cash.remote_source import REMOTE_LEDGER, addressing_options
+from tests._moto import moto_s3_endpoint
 
 pytestmark = [pytest.mark.filterwarnings("ignore::DeprecationWarning"), pytest.mark.timeout(120)]
 
@@ -45,14 +46,8 @@ def test_only_what_names_the_store_is_kept():
 
 @pytest.fixture(scope="module")
 def endpoint():
-    pytest.importorskip("s3fs")
-    moto_server = pytest.importorskip("moto.server")
-    server = moto_server.ThreadedMotoServer(ip_address="127.0.0.1", port=0, verbose=False)
-    server.start()
-    try:
-        yield f"http://127.0.0.1:{server.get_host_and_port()[1]}"
-    finally:
-        server.stop()
+    with moto_s3_endpoint() as url:
+        yield url
 
 
 @pytest.fixture
