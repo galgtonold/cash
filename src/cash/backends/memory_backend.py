@@ -634,10 +634,13 @@ class InMemoryBackend(CacheBackend):
         #: Keys whose stored value is cash's own by construction: nothing
         #: in it is an object the caller's value also holds (`private_copy`).
         self._own: builtins.set[str] = set()
-        #: Keys whose stored value holds polars frames kept as a clone with
-        #: their digest (`_store_polars`), ``key -> [(clone, digest)]``: a
-        #: hit, and a disk write of it, first checks they still hash so.
+        #: Keys whose stored value holds pandas tables kept uncopied with
+        #: their digest (`frame_sharing.share_checked`), ``key -> [(table,
+        #: digest)]``: a hit, and a disk write of it, first checks they still
+        #: hash so.
         self._checked: dict[str, list[tuple[Any, str]]] = {}
+        #: Keys STORE-RESULT-WRITTEN was said for (`_written_after_store`).
+        self._written: builtins.set[str] = set()
         #: Held while tables kept uncopied are taken over (`_adopt_tables`).
         self._adopt_lock = threading.Lock()
         #: GreedyDual-Size-Frequency state for the byte cap (see
@@ -1187,7 +1190,7 @@ class InMemoryBackend(CacheBackend):
         The value is the caller's alone: nothing else has seen it. Its pandas
         tables are frozen where they are (`frame_sharing`) and kept as they
         are, so a restore of a 400 MB table costs no second copy; a polars
-        frame is kept as a clone, which shares its memory. A value the
+        frame is kept as a clone, which shares its memory, polars' own. A value the
         store would have to copy -- an array, records, an object -- is not
         kept on its first read (`TieredBackend.get` keeps it on the second):
         a restored value is mostly read once per process, and copying it
@@ -1197,7 +1200,7 @@ class InMemoryBackend(CacheBackend):
             return False
         for frame in _frames_in(value):
             if _is_polars_frame(type(frame)):
-                _remember_own_polars(frame)  # read from disk: kept as a clone
+                _remember_own_polars(frame)  # read from disk: its store is a clone
             elif not frame_sharing.freeze(frame):
                 return False
         return self.set(key, value, metadata) is not False
@@ -1248,7 +1251,7 @@ class InMemoryBackend(CacheBackend):
         arrays, and frozen tables (`frame_sharing`). Not a table copied deep
         by pandas (a subclass, a nullable, categorical or object column: its
         Python objects stay the caller's), nor what ``deepcopy`` copied, nor
-        a value kept by reference, nor polars frames kept as a clone
+        a value kept by reference, nor tables kept uncopied
         (`checked_copy`). A background write of a value that is not would
         serialize what the caller did to it after the call.
         """
@@ -1316,10 +1319,11 @@ class InMemoryBackend(CacheBackend):
     def checked_copy(self, key: str, metadata: MetadataDict) -> tuple[Any, Any] | None:
         """``(stored value, check)`` for a background write of *key*'s
         entry, stored with that very *metadata*, when its value is the
-        tier's own but for polars frames kept as a clone (`_store_polars`);
-        else None. The writer calls ``check()`` once the bytes are written:
-        False when the frames no longer hash as they did when stored, and
-        what was written may hold what the caller wrote since."""
+        tier's own but for pandas tables kept uncopied
+        (`frame_sharing.share_checked`); else None. The writer calls
+        ``check()`` once the bytes are written: False when the tables no
+        longer hash as they did when stored, and what was written may hold
+        what the caller wrote since, said by STORE-RESULT-WRITTEN."""
         with self._lock:
             entry = self._store.get(key)
             checked = self._checked.get(key)
@@ -1328,7 +1332,14 @@ class InMemoryBackend(CacheBackend):
             return None
         if entry[0].get("by_reference") or entry[0].get(NO_PRIVATE_COPY):
             return None
-        return entry[1], lambda: _still_as_stored(checked)
+
+        def check() -> bool:
+            if _still_as_stored(checked):
+                return True
+            self._written_after_store(key, metadata)
+            return False
+
+        return entry[1], check
 
     def get_metadata(self, key: str) -> MetadataDict | None:
         """The metadata, counted as an access the way `get` counts one.
@@ -1373,8 +1384,10 @@ class InMemoryBackend(CacheBackend):
             checked = self._checked.get(key)
 
         if checked is not None and not _still_as_stored(checked):
-            # A clone shares its memory with the value stored, and that
-            # memory was written since (a frame over a numpy array): a miss.
+            # A table kept uncopied shares its memory with the caller's, and
+            # the caller wrote it past pandas since (``df["x"].array[0] =
+            # ...``): a miss, said once.
+            self._written_after_store(key, metadata)
             with self._lock:
                 entry = self._store.get(key)
                 if entry is not None and entry[1] is value:
@@ -1750,10 +1763,6 @@ class InMemoryBackend(CacheBackend):
             by_deepcopy: list[bool] = []
             _UNPICKLED.seconds = 0.0
             _CHECKED.frames = checked = []
-            # A frozen function's frame was hashed for its entry a moment
-            # ago (`content_digest`): its clone is not hashed again.
-            known = (metadata or {}).get("content_digest")
-            _CHECKED.known = (value, known) if known and _is_polars_frame(type(value)) else None
             try:
                 stored = self._safe_deep_copy(
                     value,
@@ -1767,7 +1776,7 @@ class InMemoryBackend(CacheBackend):
                     by_deepcopy=by_deepcopy,
                 )
             finally:
-                _CHECKED.frames = _CHECKED.known = None
+                _CHECKED.frames = None
             if not (fell_back or by_deepcopy) and size >= _ROUND_TRIP_MIN_BYTES:
                 # The unpickling alone: what a disk hit does again, after
                 # reading the bytes (the pickling and the array copies here
@@ -1808,8 +1817,8 @@ class InMemoryBackend(CacheBackend):
             # attributes), and ``deepcopy`` trusts a class's
             # ``__deepcopy__``: such a value may still share a part with the
             # caller's.
-            # Polars frames kept as a clone (`_store_polars`) aside: those
-            # may share memory the caller can still write (`_checked`).
+            # Tables kept uncopied (`frame_sharing.share_checked`) aside:
+            # those share memory the caller can still write (`_checked`).
             own = not fell_back and not by_deepcopy and _frames_own(frame_cells, stored)
             if by_spine and type(stored) is dict:
                 # Nothing in it is reached twice: its parts can be copied
@@ -1894,6 +1903,34 @@ class InMemoryBackend(CacheBackend):
             # Evicted by its own store: kept for the disk write that follows.
             evicted_at_once = key not in self._store and own and not checked and not metadata.get("by_reference")
             self._handoff = (key, metadata, stored) if evicted_at_once and not holds_bytes else None
+
+    def _written_after_store(self, key: str, metadata: MetadataDict) -> None:
+        """Say that a table *key*'s entry kept uncopied was written since its
+        store, once per entry: the entry is dropped, and the call runs again.
+        It was dropped with only a debug log, so a caller writing its result
+        past pandas never had it cached and never heard why."""
+        with self._lock:
+            if key in self._written:
+                return
+            self._written.add(key)
+        name = next((metadata.get(f) for f in ("func_name", "function") if metadata.get(f)), None)
+        what = f"the result of {name}" if name else f"the cached value {key!r}"
+        from ..diagnostics import warn_diagnostic
+        from ..exceptions import CashCacheStoreFailedWarning
+
+        warn_diagnostic(
+            CashCacheStoreFailedWarning,
+            "STORE-RESULT-WRITTEN",
+            f"{what} holds a pandas table cash kept without copying it, and "
+            f"its data was written after it was stored, past pandas "
+            f"(``.array[i] = ...``, ``.to_numpy()`` written, or a numpy array "
+            f"the table was made over). The entry was dropped, so the next "
+            f"call computes it again.",
+            "write a copy of the result rather than the result itself, or "
+            "write it through pandas (``df.loc[i, 'x'] = ...``), which "
+            "copies before it writes.",
+            location=("<cash>", 1),
+        )
 
     def _drop(self, key: str) -> None:
         """Remove *key*, keeping the byte-cap running total in sync. Called
@@ -2293,8 +2330,9 @@ def _cheap_to_keep(value: Any, depth: int = 0) -> bool:
     if _is_pandas_frame(kind):
         return frame_sharing.enabled() and frame_sharing.freezable(value)
     if _is_polars_frame(kind):
-        # Its store is a clone, which shares the immutable buffers: no copy.
-        # Not with an Object column, whose Python objects are copied.
+        # Its store is a clone (`_own_polars`), which shares the immutable
+        # buffers: no copy. Not with an Object column, whose Python objects
+        # are copied.
         return not _has_object_column(value)
     if kind.__name__ == "ndarray" and kind is getattr(sys.modules.get("numpy"), "ndarray", None):
         return not value.dtype.hasobject and value.nbytes <= _CHEAP_ARRAY_BYTES
@@ -2536,7 +2574,10 @@ def _round_trip(value: Any) -> Any:
 
 def _copy_array(array: Any) -> Any:
     """A copy of a numpy array of numbers, read-only if it was, as a
-    pickle round trip makes it. A big one times the copy (`copy_seconds`)."""
+    pickle round trip makes it. A big one times the copy (`copy_seconds`).
+    An array no one can write (`_unwritable`) is not copied."""
+    if _unwritable(array):
+        return array
     if array.nbytes < _TIMED_COPY_BYTES:
         copied = _copy_values(array)
     else:
@@ -2546,6 +2587,27 @@ def _copy_array(array: Any) -> Any:
     if not array.flags.writeable:
         copied.flags.writeable = False
     return copied
+
+
+def _unwritable(array: Any) -> bool:
+    """Can no one write *array*'s data, ever?
+
+    Read-only is not enough: an array that owns its data and was made
+    read-only is made writeable again by ``setflags(write=True)``, and a
+    read-only view changes with a base that is writeable, or that is made
+    so. Only an array whose chain of bases ends in ``bytes`` (``np.frombuffer``
+    of bytes), directly or through a memoryview of them, is held by memory
+    Python never writes."""
+    base = array
+    while type(base) is type(array):
+        if base.flags.writeable:
+            return False
+        base = base.base
+    if type(base) is memoryview:
+        if not base.readonly:
+            return False
+        base = base.obj
+    return type(base) is bytes
 
 
 def _copy_values(array: Any) -> Any:
@@ -3043,74 +3105,34 @@ def _owned_polars(frame: Any) -> Any:
     return pickle.loads(pickle.dumps(frame, protocol=pickle.HIGHEST_PROTOCOL))
 
 
-#: A polars frame at least this big (`estimated_size`) is stored as a clone
-#: and its digest (`_store_polars`); a smaller one is copied.
-_CHECKED_POLARS_MIN_BYTES = 1 << 20
-
-#: The polars frames the store in progress on this thread kept as a clone
-#: (`_store_polars`), ``[(clone, digest)]``; None outside `InMemoryBackend.set`.
-#: ``known``: ``(frame, digest)`` of the value stored, when its entry
-#: carries the `hash_polars` digest of it already.
+#: The pandas tables the store in progress on this thread kept uncopied
+#: (`frame_sharing.share_checked`), ``[(table, digest)]``; None outside
+#: `InMemoryBackend.set`.
 _CHECKED = threading.local()
 
 
 def _store_polars(frame: Any) -> Any:
-    """The RAM tier's stored copy of a polars frame, series or lazy frame.
+    """The RAM tier's stored copy of a polars frame, series or lazy frame:
+    a copy (`_copy_polars`), or a clone of one the tier holds already
+    (`_own_polars`).
 
-    A big DataFrame or Series is kept as a clone, which shares *frame*'s
-    buffers, with the content digest of what it holds (`hash_polars`): a
-    hit hashes it again and serves it only when that digest still matches
-    (`_still_as_stored`), else it is a miss. Polars writes no buffer it
-    shares, but a frame made over a numpy array (``pl.Series(a)``) holds
-    the array's memory, and ``a[0] = 1`` changes the clone too. Copying
-    the buffers instead (`_copy_polars`) took 7-9 s for two results of
-    1.2 GB on a machine slow to hand out new memory, and doubled the RAM
-    they took. The digest takes about a second per GB, at the store and
-    again at each hit.
-
-    A small one, one with an ``Object`` column, a lazy frame, or one the
-    tier holds already (`_own_polars`) is copied as before."""
-    checked = getattr(_CHECKED, "frames", None)
-    if checked is not None and _checkable_polars(frame):
-        clone = frame.clone()
-        known = getattr(_CHECKED, "known", None)
-        digest = known[1] if known is not None and known[0] is frame else _polars_digest(clone)
-        if digest is not None:
-            checked.append((clone, digest))
-            _remember_own_polars(clone)
-            return clone
+    It was kept as a clone with its digest, and a hit checked the digest:
+    a frame made over a numpy array (``pl.Series(a)``) holds the array's
+    memory, and a caller writing ``a`` right after the call made every hit
+    a miss, so the function ran on every call. Polars does not say which
+    memory it allocated itself, so a frame is copied unless the tier made
+    it: 0.2-0.3 s per GB, or several seconds per GB on a machine slow to
+    hand out new memory, where the clone's digest cost about a second per
+    GB at the store and again at each hit."""
     copied = _copy_polars(frame)
     _remember_own_polars(copied)
     return copied
 
 
-def _checkable_polars(frame: Any) -> bool:
-    import polars as pl
-
-    if type(frame) not in (pl.DataFrame, pl.Series) or _own_polars(frame) or _has_object_column(frame):
-        return False
-    try:
-        return frame.estimated_size() >= _CHECKED_POLARS_MIN_BYTES
-    except Exception:  # noqa: BLE001 - copied, as before
-        return False
-
-
-def _polars_digest(frame: Any) -> str | None:
-    from ..content_hashers import hash_polars
-
-    return hash_polars(frame)
-
-
 def _still_as_stored(checked: list[tuple[Any, Any]]) -> bool:
-    """Do the clones `_store_polars` kept, and the pandas tables kept
-    uncopied (`frame_sharing.share_checked`), still hash to their digests?"""
-    return all(_checked_digest(kept) == digest for kept, digest in checked)
-
-
-def _checked_digest(kept: Any) -> Any:
-    if _is_pandas_frame(type(kept)):
-        return frame_sharing.checked_digest(kept)
-    return _polars_digest(kept)
+    """Do the pandas tables kept uncopied (`frame_sharing.share_checked`)
+    still hash to their digests?"""
+    return all(frame_sharing.checked_digest(kept) == digest for kept, digest in checked)
 
 
 def _is_polars_frame(value_type: type) -> bool:
@@ -3178,7 +3200,7 @@ DISK_ALONE_MIN_BYTES = 64 * 1024**2
 def bytes_a_store_copies(value: Any, _depth: int = 0) -> int:
     """About how many bytes `InMemoryBackend.set` would copy to keep *value*:
     its size (`pickled_size_estimate`), less the tables and polars frames it
-    keeps uncopied (`frame_sharing.keeps_uncopied`, `_checkable_polars`).
+    keeps uncopied (`frame_sharing.keeps_uncopied`).
     Looks into the dicts, lists and tuples around them (a notebook entry is
     a dict of the statement's variables). Copies nothing."""
     value_type = type(value)
@@ -3189,12 +3211,6 @@ def bytes_a_store_copies(value: Any, _depth: int = 0) -> int:
             return sum(bytes_a_store_copies(item, _depth + 1) for item in value)
     if _is_pandas_frame(value_type) and frame_sharing.keeps_uncopied(value):
         return 0
-    if _is_polars_frame(value_type):
-        try:
-            if _checkable_polars(value):
-                return 0
-        except Exception:  # noqa: BLE001 - counted as copied
-            pass
     return pickled_size_estimate(value)
 
 
