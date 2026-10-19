@@ -878,6 +878,27 @@ def array_layout(value: Any) -> str:
     return "K" + ",".join(map(str, perm))
 
 
+#: ``str(dtype)`` of each plain numpy dtype met (`_dtype_text`).
+_DTYPE_TEXTS: dict[Any, str] = {}
+
+
+def _dtype_text(dtype: Any) -> str:
+    """``str(dtype)``, remembered for numpy's own scalar dtypes.
+
+    numpy writes a dtype's name in Python, ~5 us, about half of what a
+    300-value array's key took: p25 keys a list of 24,000 such arrays, twice
+    a call. Only a built-in dtype (``isbuiltin == 1``: no fields, no size of
+    its own, native byte order) with no metadata is remembered: two of
+    those that compare equal print the same.
+    """
+    text = _DTYPE_TEXTS.get(dtype)
+    if text is None:
+        text = str(dtype)
+        if getattr(dtype, "isbuiltin", 0) == 1 and not getattr(dtype, "metadata", None) and len(_DTYPE_TEXTS) < 256:
+            _DTYPE_TEXTS[dtype] = text
+    return text
+
+
 def hash_numpy(value: Any) -> str | None:
     """Hash a numpy ndarray over its FULL contents.
 
@@ -899,7 +920,7 @@ def hash_numpy(value: Any) -> str | None:
     Normalising to C-order is right for value EQUALITY and wrong for a KEY.
     """
     try:
-        h = hashlib.sha256(f"{value.shape}:{value.dtype}:{array_layout(value)}:".encode())
+        h = hashlib.sha256(f"{value.shape}:{_dtype_text(value.dtype)}:{array_layout(value)}:".encode())
         if getattr(value.dtype, "hasobject", False):
             if value.dtype == object:
                 _fold_object_array(h, value)
