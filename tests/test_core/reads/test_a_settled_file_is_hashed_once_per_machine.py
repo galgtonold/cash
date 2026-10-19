@@ -12,10 +12,8 @@ is read again.
 
 from __future__ import annotations
 
-import io
 import os
 import textwrap
-import types
 
 import pytest
 
@@ -91,10 +89,8 @@ def test_a_digest_is_reused_after_five_seconds(tmp_path, monkeypatch):
     file_dep_snapshot._HASH_MEMO.clear()
     _no_table(monkeypatch)
     reads: list[str] = []
-    real = io.FileIO
-    monkeypatch.setattr(
-        file_dep_snapshot, "io", types.SimpleNamespace(FileIO=lambda p, m: (reads.append(p), real(p, m))[1])
-    )
+    real = file_dep_snapshot._read_digest
+    monkeypatch.setattr(file_dep_snapshot, "_read_digest", lambda p, size: (reads.append(p), real(p, size))[1])
     clock = [1000.0]
     monkeypatch.setattr(file_dep_snapshot.time, "monotonic", lambda: clock[0])
     first = file_dep_snapshot.file_content_hash(data)

@@ -71,6 +71,18 @@ def stat_key(st: os.stat_result) -> tuple[int, int, int]:
     return (st.st_size, st.st_mtime_ns, getattr(st, "st_ctime_ns", 0))
 
 
+def regular_file_stat_result(path: str) -> os.stat_result | None:
+    """The stat of *path* when it is a regular file, None otherwise."""
+
+    try:
+        st = os.stat(path)
+    except (OSError, ValueError):
+        return None
+    if not stat.S_ISREG(st.st_mode):
+        return None
+    return st
+
+
 def regular_file_stat(path: str) -> tuple[int, int, int] | None:
     """`stat_key` of *path* when it is a regular file, None otherwise."""
 

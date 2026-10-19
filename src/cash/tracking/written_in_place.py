@@ -26,6 +26,7 @@ import threading
 
 from ..backends.cache_dir import WRITTEN_IN_PLACE_FILENAME
 from . import io_watch
+from .pending_digest import settle_deferred
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,10 @@ def _on_mmap(args: tuple) -> None:
         st = os.fstat(fileno)
     except OSError:
         return
+    # The digests put off to the end of the block first, while the file is
+    # still what the block read: what it writes through the map moves no
+    # timestamp (`pending_digest.DeferredDigest`).
+    settle_deferred()
     if st.st_ino:
         _mark((st.st_dev, st.st_ino))
 
