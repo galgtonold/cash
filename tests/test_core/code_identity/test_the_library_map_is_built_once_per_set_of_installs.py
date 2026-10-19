@@ -175,3 +175,79 @@ def test_the_versions_folded_into_a_key_are_the_same_from_a_saved_map(site):
     assert any(name == "numpy" for name, _ in fresh)
     _new_process()
     assert library_versions.library_versions([_reaches_numpy], None) == fresh
+
+
+def test_a_metadata_file_rewritten_in_place_builds_the_map_again(site, monkeypatch):
+    """``pip install --force-reinstall`` of the same version, or an edit: the folder stays, a file in it changes."""
+    _fill(site)
+    _lookups()
+    _package(site, "otherpkg")
+    top_level = site / "fake_top-1.0.dist-info" / "top_level.txt"
+    top_level.write_text("otherpkg\n", encoding="utf-8")
+    _new_process()
+    assert library_versions._dists_for("otherpkg") == ["fake_top"]
+    assert library_versions._dists_for("toppkg") == []
+
+
+def test_a_same_version_reinstall_builds_the_map_again(site, monkeypatch):
+    _fill(site)
+    _lookups()
+    shutil.rmtree(site / "fake_top-1.0.dist-info")
+    _package(site, "otherpkg")
+    _dist(site, "fake_top", "1.0", [], top_level="otherpkg\n")
+    _new_process()
+    assert library_versions._dists_for("otherpkg") == ["fake_top"]
+    assert library_versions._dists_for("toppkg") == []
+
+
+def test_an_editable_install_is_found_by_the_next_process(site, tmp_path, monkeypatch):
+    """A ``pip install -e``: a metadata folder and a ``.pth`` putting the source folder on the path."""
+    _fill(site)
+    _lookups()
+    source = tmp_path / "checkout"
+    source.mkdir()
+    _package(source, "edpkg")
+    _dist(site, "fake_editable", "0.1", ["__editable__.fake_editable-0.1.pth"], top_level="edpkg\n")
+    (site / "__editable__.fake_editable-0.1.pth").write_text(f"{source}\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(source))  # what site.py does with the .pth in a new process
+    _new_process()
+    assert library_versions._dists_for("edpkg") == ["fake_editable"]
+
+
+def test_an_old_style_editable_install_is_found_by_the_next_process(site, tmp_path, monkeypatch):
+    """``setup.py develop``: the source folder, its ``.egg-info`` inside, on the path by a ``.pth``."""
+    _fill(site)
+    _lookups()
+    source = tmp_path / "checkout"
+    source.mkdir()
+    _package(source, "devpkg")
+    info = source / "fake_dev.egg-info"
+    info.mkdir()
+    (info / "PKG-INFO").write_text("Metadata-Version: 1.0\nName: fake_dev\nVersion: 0.1\n", encoding="utf-8")
+    (info / "top_level.txt").write_text("devpkg\n", encoding="utf-8")
+    (site / "easy-install.pth").write_text(f"{source}\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(source))
+    _new_process()
+    assert library_versions._dists_for("devpkg") == ["fake_dev"]
+
+
+def test_a_pth_file_changed_alone_builds_the_map_again(site, monkeypatch):
+    _fill(site)
+    _lookups()
+    (site / "extra.pth").write_text("# nothing\n", encoding="utf-8")
+    _new_process()
+    scans = _scans(monkeypatch)
+    _lookups()
+    assert len(scans) == 1
+
+
+@pytest.mark.parametrize("attribute", ["prefix", "executable", "base_prefix"])
+def test_another_interpreter_or_environment_never_reads_this_ones_map(site, tmp_path, monkeypatch, attribute):
+    """Two venvs (or interpreters) sharing one per-user cache root keep their own maps."""
+    _fill(site)
+    _lookups()
+    monkeypatch.setattr(sys, attribute, str(tmp_path / "other-env"))
+    _new_process()
+    scans = _scans(monkeypatch)
+    _lookups()
+    assert len(scans) == 1

@@ -196,37 +196,57 @@ def _distribution_map() -> dict[str, list[tuple[str, Any]]]:
 
 
 def _install_fingerprint() -> list | None:
-    """What the installed distributions are read from: each ``sys.path``
-    entry and the metadata folders in it, by name and stat (``pip install``,
-    ``uninstall`` and ``-U`` each create or remove one). None when something
+    """What the installed distributions are read from, the saved map's
+    identity (`_saved_map`): the interpreter and environment, each
+    ``sys.path`` entry, and in each folder the ``.pth`` files and the
+    metadata folders by name and stat, with the stat of each file in them the
+    map reads. ``pip install``, ``uninstall`` and ``-U`` create or remove a
+    metadata folder; ``--force-reinstall`` of the same version, or an edit,
+    rewrites a file in one; an editable install adds a ``.pth`` file and a
+    metadata folder (or a source folder on ``sys.path``). None when something
     else may name distributions too (a finder of its own on ``sys.meta_path``).
     """
     for finder in sys.meta_path:
         if getattr(finder, "find_distributions", None) is not None and finder is not importlib_machinery.PathFinder:
             return None
-    found: list = [sys.version, sys.prefix, sys.executable]
+    found: list = [sys.version, sys.implementation.cache_tag, sys.prefix, sys.base_prefix, sys.executable]
     for entry in sys.path:
         path = os.path.abspath(entry or ".")
-        try:
-            st = os.stat(path)
-        except (OSError, ValueError):
-            found.append([path])
+        if not os.path.isdir(path):  # a zip, or not there: its own stat
+            found.append([path, *_stat_of(path)])
             continue
-        if not os.path.isdir(path):  # a zip: its own stat
-            found.append([path, st.st_mtime_ns, st.st_size, st.st_ino])
-            continue
-        folders = []
+        listed = []
         try:
             with os.scandir(path) as children:
                 for child in children:
-                    if child.name.lower().endswith(("dist-info", "egg-info")):
-                        cst = child.stat()
-                        folders.append([child.name, cst.st_mtime_ns, cst.st_size, cst.st_ino])
+                    low = child.name.lower()
+                    if low.endswith(("dist-info", "egg-info")):
+                        inside = (
+                            [[name, *_stat_of(os.path.join(child.path, name))] for name in _METADATA_FILES]
+                            if child.is_dir()
+                            else []
+                        )
+                        listed.append([child.name, *_stat_of(child.path), inside])
+                    elif low.endswith(".pth"):
+                        listed.append([child.name, *_stat_of(child.path)])
         except OSError:
             return None
-        folders.sort()
-        found.append([path, folders])
+        listed.sort()
+        found.append([path, listed])
     return found
+
+
+#: The files in a metadata folder the map is read from (`_packages_distributions`).
+_METADATA_FILES = ("METADATA", "PKG-INFO", "RECORD", "top_level.txt", "installed-files.txt", "SOURCES.txt")
+
+
+def _stat_of(path: str) -> list:
+    """*path*'s stat as the fingerprint compares it; empty when it is not there."""
+    try:
+        st = os.stat(path)
+    except (OSError, ValueError):
+        return []
+    return [st.st_mtime_ns, st.st_ctime_ns, st.st_size, st.st_ino]
 
 
 def _map_path() -> str:
@@ -234,7 +254,7 @@ def _map_path() -> str:
 
 
 def _environment_id() -> str:
-    return f"{sys.prefix}|{sys.executable}"
+    return f"{sys.prefix}|{sys.executable}|{sys.version}"
 
 
 def _read_saved() -> dict:
