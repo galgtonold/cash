@@ -1378,6 +1378,11 @@ def _is_cash_own(obj: Any) -> bool:
     return isinstance(module, str) and (module == "cash" or module.startswith("cash."))
 
 
+#: Built-in scalar types: an instance is a value whenever its type is among
+#: the walk's value types, since it can have no ``__class__`` of its own.
+_PLAIN_SCALARS = (str, int, float, bool, bytes, complex, type(None))
+
+
 def _held_from_outside(
     nodes: dict[int, Any], owner: dict[int, str], value_types: tuple[type, ...]
 ) -> tuple[dict[int, Any] | None, set[str]]:
@@ -1397,6 +1402,11 @@ def _held_from_outside(
     refs: dict[int, int] = {}
     root_of: dict[int, int] = {}
     held_back: set[int] = set()
+    # Most of what a library object holds is numbers, strings and the
+    # classes of its parts (a TarFile's 20,000 members: 380,000 of the
+    # 400,000 objects read): never looked for, by their type alone, as
+    # `_read_down` would answer, without a call each.
+    skipped = frozenset({type, *(kind for kind in _PLAIN_SCALARS if issubclass(kind, value_types))})
     pops = 0
     while stack:
         parent, root = stack.pop()
@@ -1406,6 +1416,8 @@ def _held_from_outside(
         if not pops & 255:
             check_walk_budget()
         for child in gc.get_referents(parent):
+            if type(child) in skipped:
+                continue
             read_down = _read_down(child, value_types)
             if read_down is None:
                 continue
