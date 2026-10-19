@@ -39,7 +39,7 @@ def test_a_trivial_cell_does_the_same_small_work_in_a_long_notebook(cash_magics)
 
     # Its own statement only: nothing above it is re-run.
     assert short_statements.calls == long_statements.calls == 1
-    # ~2 KB hashed today: the cell's key and its inputs' lineage.
+    # ~1 KB hashed today: the cell's key and its inputs' lineage.
     assert 0 < short_hashed.bytes <= 16 * KB
     assert long_hashed.bytes <= short_hashed.bytes + 4 * KB, (short_hashed.bytes, long_hashed.bytes)
 

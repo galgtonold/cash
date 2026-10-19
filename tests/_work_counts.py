@@ -25,20 +25,30 @@ class Count:
     bytes: int = 0
     seen: list = field(default_factory=list)
 
-    def add(self, data=None) -> None:
-        self.calls += 1
-        if data is not None:
-            self.bytes += memoryview(data).nbytes
+    # add(data=None): one call, and *data*'s bytes -- defined below, untraced.
 
 
+# The counters' own code runs inside the cell being measured, and cash
+# records what a statement ran (`cash.tracking.trace_recorder`) and digests
+# it: code, closure cells and all. How much of that a digest memo already
+# held depended on what earlier tests in the same process had left in it
+# (2.4 KB in one xdist worker, 7.4 KB in another), so a count could grow by
+# 5 KB with no change in cash: a memo cleared between the two measured cells
+# failed the long-notebook bound. Their code is defined in a namespace that names no
+# module: the recorder takes that for library code, not the user's, and
+# leaves it out, as it would a real hashlib.
+_UNTRACED = {"__name__": "tests._work_counts.untraced", "__builtins__": __builtins__}
+exec(
+    compile(
+        """
 class _CountingHash:
-    """A hashlib object that counts what it is fed; digests are unchanged."""
+    \"\"\"A hashlib object that counts what it is fed; digests are unchanged.\"\"\"
 
-    def __init__(self, real, count: Count):
+    def __init__(self, real, count):
         self._real = real
         self._count = count
 
-    def update(self, data) -> None:
+    def update(self, data):
         self._count.add(data)
         self._real.update(data)
 
@@ -47,6 +57,38 @@ class _CountingHash:
 
     def __getattr__(self, name):
         return getattr(self._real, name)
+
+
+def counting(real_ctor, count):
+    def make(data=b"", *args, **kwargs):
+        h = _CountingHash(real_ctor(*args, **kwargs), count)
+        if data:
+            h.update(data)
+        return h
+
+    return make
+
+
+def add(self, data=None):
+    self.calls += 1
+    if data is not None:
+        self.bytes += memoryview(data).nbytes
+
+
+def spying(real, count):
+    def spy(*args, **kwargs):
+        count.add()
+        return real(*args, **kwargs)
+
+    return spy
+""",
+        __file__,
+        "exec",
+    ),
+    _UNTRACED,
+)
+_CountingHash = _UNTRACED["_CountingHash"]
+Count.add = _UNTRACED["add"]
 
 
 @contextlib.contextmanager
@@ -58,20 +100,12 @@ def hashed_bytes() -> Iterator[Count]:
     from cash import bulk_digest, row_blocks
 
     count = Count()
-
-    def counting(real_ctor):
-        def make(data=b"", *args, **kwargs):
-            h = _CountingHash(real_ctor(*args, **kwargs), count)
-            if data:
-                h.update(data)
-            return h
-
-        return make
+    counting = _UNTRACED["counting"]
 
     with pytest.MonkeyPatch.context() as mp:
         for name in ("sha256", "blake2b", "md5", "sha1"):
-            mp.setattr(hashlib, name, counting(getattr(hashlib, name)))
-        leaf = counting(bulk_digest.leaf_hasher)
+            mp.setattr(hashlib, name, counting(getattr(hashlib, name), count))
+        leaf = counting(bulk_digest.leaf_hasher, count)
         mp.setattr(bulk_digest, "leaf_hasher", leaf)
         mp.setattr(row_blocks, "leaf_hasher", leaf)
         yield count
@@ -162,11 +196,7 @@ def ram_copied_bytes() -> Iterator[Count]:
 def method_calls(owner, name: str) -> Iterator[Count]:
     """Calls of ``owner.name`` (a function or method) inside the block."""
     count = Count()
-    real = getattr(owner, name)
-
-    def spy(*args, **kwargs):
-        count.add()
-        return real(*args, **kwargs)
+    spy = _UNTRACED["spying"](getattr(owner, name), count)
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(owner, name, spy)
