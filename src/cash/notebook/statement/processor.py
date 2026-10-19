@@ -42,6 +42,7 @@ from cash.notebook.compiled_source import register_cell_source
 from cash.notebook.consumables import drawn_stream_inputs
 from cash.notebook.per_item_reruns import MIN_COST_S as PER_ITEM_MIN_COST_S
 from cash.notebook.read_handles import reaches_read_handle
+from cash.notebook.statement import sparse_order
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.amplification import AmplificationGuard
 from cash.notebook.statement.call_routing import CallRouting
@@ -1221,6 +1222,8 @@ class StatementProcessor:
         hit_result = self._hits.serve(run, cached_data, metadata, self._randomness.seed_epochs)
         if hit_result is None:
             return None
+        if metadata is not None:
+            sparse_order.put_in_order(metadata.sparse_ordered, self.shell.user_ns)
         # What changed through an alias moves on as a run moves it, past the
         # variables the entry restored with its outputs (moved on already).
         moved = set((metadata.holders or {}) if metadata is not None and metadata.holders_moved else ())
@@ -1371,6 +1374,7 @@ class StatementProcessor:
         figures_before = None if run.skip_cache else pyplot_state()
         lineage = self.tracking_state.variable_lineage
         run.entry_lineages = {name: lineage[name] for name in run.inputs if name in lineage}
+        unordered = sparse_order.unordered_sparse(run.inputs, self.shell.user_ns)
         try:
             with (
                 self.watching_reads(run.code),
@@ -1448,6 +1452,8 @@ class StatementProcessor:
                 run.metrics["uncacheable_reasons"].append(workers)
         if positions:
             run.carriers_advanced = moved_carrier_names(positions, self.shell.user_ns)
+        if unordered:
+            run.sparse_ordered = sparse_order.were_put_in_order(unordered, self.shell.user_ns) or None
         if held:
             run.rebound_modules = rebound_modules(held)
             del held
