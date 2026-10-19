@@ -139,12 +139,13 @@ def _on_open(args: tuple) -> None:
             # ~2 us miss, 3 ms of the first 50 calls in `[f(i) for i in xs]`.
             # The tracker drops these paths anyway, after resolving them.
             return
-        tracker.track_path(path)
-        if "a" not in mode:
+        found = tracker.track_path(path)
+        if "a" not in mode and not found:
             # A file that was not there is an input too, and the docs say so --
             # but only the `os.path.exists` spelling recorded it.
             # `try: open(p) except FileNotFoundError:` kept serving its default
-            # after the file appeared. The event comes before the open, so ask the disk.
+            # after the file appeared. The event comes before the open, so ask
+            # the disk -- unless resolving the path just found the file there.
             try:
                 os.stat(path)
             except FileNotFoundError:

@@ -138,6 +138,8 @@ class FileAccessTracker:
         # same frame stops there. Dropped when the block ends, so the frame
         # is not kept alive past it.
         self.credit_anchor: tuple[Any, tuple[Any, ...]] | None = None
+        # Whether the path `track_path` last resolved was a regular file then.
+        self._found_file = False
         self._probes_seen: set[tuple[Any, str | None]] = set()
         # The stat of each regular file WHEN IT WAS FIRST READ. The entry's
         # fingerprint is taken when it is stored, after the body has finished,
@@ -350,10 +352,13 @@ class FileAccessTracker:
     # The three methods below are what the feeders (`read_events`,
     # `reader_patches`, `read_credit`) call when they see a read.
 
-    def track_path(self, path):
-        """Record a read of *path*, unless it is not a user dependency."""
+    def track_path(self, path) -> bool:
+        """Record a read of *path*, unless it is not a user dependency.
+        True when resolving it just found a regular file there (its
+        ``lstat``), so the caller need not stat it to know it is there."""
         global _tracking_seconds
         started = _perf_counter()
+        self._found_file = False
         try:
             # Untracked: deciding whether this read counts probes paths too
             # (the time zone directories, looked up on the first read in a
@@ -362,6 +367,7 @@ class FileAccessTracker:
                 self._track_path_untimed(path)
         finally:
             _tracking_seconds += _perf_counter() - started
+        return self._found_file
 
     def note_created(self, path, directory: bool = False) -> None:
         """Record *path* as created by this block (and, when propagating, by
@@ -426,6 +432,7 @@ class FileAccessTracker:
             # (``realpath_this_run``): a loop reads the same files again.
             resolved, read_lstat = realpath_of_read_this_run(raw_path)
             abs_path = normalize_path(resolved)
+            self._found_file = read_lstat is not None
         except (TypeError, ValueError, OSError) as e:
             logger.debug("[TRACKER] Could not track file path %r: %s", path, e)
             return
@@ -548,7 +555,7 @@ class FileAccessTracker:
             # One read, one stat: an enclosing tracker takes the stat this
             # one took of the same read (the file is stat'ed once per
             # tracker otherwise, at each nested loop level).
-            digest, st = tracker._add_tracked_here(abs_path, digest, st)
+            digest, st = tracker._add_tracked_here(abs_path, digest, st, lstat)
 
     @property
     def read_digests(self) -> dict[str, str]:
@@ -566,10 +573,15 @@ class FileAccessTracker:
         return digests
 
     def _add_tracked_here(
-        self, abs_path: str, digest: str | PendingDigest | None, st: tuple[int, int, int] | None
+        self,
+        abs_path: str,
+        digest: str | PendingDigest | None,
+        st: tuple[int, int, int] | None,
+        lstat: Any = None,
     ) -> tuple[str | PendingDigest | None, tuple[int, int, int] | None]:
         """`add_tracked` on this tracker alone, *st* the `stat_key` of this
-        read when one was taken; returns the digest and the stat to hand up."""
+        read when one was taken (of *lstat*, when given); returns the digest
+        and the stat to hand up."""
         self.accessed_files.add(abs_path)
         if abs_path not in self.read_stats and os.path.isabs(abs_path):
             # Absolute paths only: a relative twin is re-resolved against the
@@ -586,15 +598,16 @@ class FileAccessTracker:
                 if self._hash_on_read:
                     if digest is None:
                         self.read_hashed_at[abs_path] = time.time()
-                        digest = self._digest_now(abs_path, st[0])
+                        digest = self._digest_now(abs_path, st[0], lstat)
                     if digest is not None:
                         self._read_digests[abs_path] = digest
         elif digest is None:
             digest = self._read_digests.get(abs_path)
         return digest, st
 
-    def _digest_now(self, abs_path: str, size: int) -> str | PendingDigest | None:
-        """The file's content hash as the body is about to read it.
+    def _digest_now(self, abs_path: str, size: int, st: Any = None) -> str | PendingDigest | None:
+        """The file's content hash as the body is about to read it; *st* the
+        stat this read took of it, when there is one (`file_content_hash`).
 
         A big file the process does not know yet is hashed on a thread of its
         own (`PendingDigest`) while the body reads and computes; the digest
@@ -606,7 +619,7 @@ class FileAccessTracker:
             if size >= BACKGROUND_DIGEST_MIN_BYTES:
                 known = remembered_file_digest(abs_path)
                 return known if known is not None else PendingDigest(abs_path, size, file_content_hash)
-            return file_content_hash(abs_path, size)
+            return file_content_hash(abs_path, size, st)
         finally:
             self.read_hash_seconds += _perf_counter() - t0
 
