@@ -34,7 +34,7 @@ slow_square(1_000_000)   # cache hit: returns the stored result
 
 That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @cf16cee7, cash/decorator/store.py:ResultStore.store @e289b59d, cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @8eedb33b, cash/decorator/store.py:ResultStore.store @e289b59d, cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
 - **Exceptions are never cached.** If the body raises, nothing is stored and the
   exception reaches you as usual. The next call runs the body again.
 - **A hit does not replay output.** Anything the body printed or logged appears
@@ -625,7 +625,7 @@ def lookup(key):
     return cache_backend.get_or_none(key)
 ```
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @cf16cee7 -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @8eedb33b -->
 The predicate runs after the body returns. It decides what is **written**, not
 what is served: a `None` stored before you added the predicate is still
 returned. Clear the function after adding or tightening one.

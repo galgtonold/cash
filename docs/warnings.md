@@ -824,7 +824,7 @@ first). A hit that skips one only leaves the runtime to compile again.
 once and will not happen again. If the next step relies on them, later runs
 behave differently from the first.
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @cf16cee7, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @a43210ad -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @8eedb33b, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @a43210ad -->
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.argument_identities @dda2b327, cash/_plain_data.py:identity_changed @c64ac6c0 -->
 A call that changes an argument is **not stored**, so it runs every time. The
 arguments are checked on every miss, whatever their size, except those
@@ -2552,7 +2552,7 @@ time, pass the value in as an argument.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.work_outlived_call @093e3810, cash/tracking/reader_patches.py:_patch_thread_pool_submit @e6f5cb08, cash/tracking/reader_patches.py:_patch_thread_start @a16e8968, cash/tracking/file_tracker.py:FileAccessTracker.__exit__ @9c811089 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.work_outlived_call @093e3810, cash/tracking/reader_patches.py:_patch_thread_pool_submit @44766526, cash/tracking/reader_patches.py:_patch_thread_start @a16e8968, cash/tracking/file_tracker.py:FileAccessTracker.__exit__ @9c811089 -->
 **What happened.** The function handed work to a `ThreadPoolExecutor`
 (`submit`, `map`) or started a `threading.Thread`, and returned while some of
 it was still running: it never waited for the future or joined the thread,
