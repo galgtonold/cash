@@ -1328,6 +1328,12 @@ class InMemoryBackend(CacheBackend):
             return None
         if entry[0].get("by_reference") or entry[0].get(NO_PRIVATE_COPY):
             return None
+        if entry[0].get("content_digest") and entry[0].get("copy_required") is False:
+            # A ``frozen=True`` result: nothing changes it once returned,
+            # so its memory is not read a second time once written (0.7 s
+            # for a 760 MB frame). A change made all the same is caught
+            # where frozen results are (KEY-FROZEN-MUTATED).
+            return entry[1], _written_as_is
         return entry[1], lambda: _still_as_stored(checked)
 
     def get_metadata(self, key: str) -> MetadataDict | None:
@@ -3099,6 +3105,10 @@ def _polars_digest(frame: Any) -> str | None:
     from ..content_hashers import hash_polars
 
     return hash_polars(frame)
+
+
+def _written_as_is() -> bool:
+    return True
 
 
 def _still_as_stored(checked: list[tuple[Any, Any]]) -> bool:

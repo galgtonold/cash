@@ -29,7 +29,7 @@ from ..lineage_tag import own_tag, set_tags
 from ..sizing import estimate_object_size
 from ..tracking.randomness import CashRandomnessWarning
 from ..value_types import IMMUTABLE_PRIMS
-from .arg_hashing import LINEAGE_SRC_DECORATOR, LINEAGE_SRC_FROZEN
+from .arg_hashing import LINEAGE_SRC_DECORATOR, LINEAGE_SRC_FROZEN, call_polars
 from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
 from .call_state import NO_WATCH, BodyRun, Call
@@ -868,9 +868,10 @@ class ResultStore:
         last chunk and the manifest that names the stream's chunks."""
         func_name = spec.name
         tracker, observer = run.tracker, run.observer
-        self._purity.check_argument_mutation(
-            func_name, *(call.checked or (call.args, call.kwargs)), call.call_args_hash, observer
-        )
+        with call_polars(call.polars_args):
+            self._purity.check_argument_mutation(
+                func_name, *(call.checked or (call.args, call.kwargs)), call.call_args_hash, observer
+            )
         self._purity.report_observed_effects(func_name, observer)
         self._files.credit_remembered_reads(func_name, tracker, call.args, call.kwargs)
         auto_file_deps = snapshot_tracked_deps(tracker, spec.func.__module__)

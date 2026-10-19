@@ -534,13 +534,16 @@ def one_look(named: Mapping[str, Any]):
 def _looked_at(value: Any, leaves: tuple | None) -> Any:
     """`tree_facts` of *value* when a `one_look` is about it (None when it
     is not JSON-like data), else `_UNKNOWN`. Also `_UNKNOWN` for *leaves*
-    the walk did not count as leaves: "not a tree" says nothing about them."""
+    the walk did not count as leaves when it found no tree: "not a tree"
+    says nothing about them. A tree it found is one over wider *leaves*
+    too, with the same containers."""
     look = _LOOKED.get()
     if look is None or _name_in(look[0], value) is None:
         return _UNKNOWN
-    if leaves is not None and not frozenset(leaves) <= _facts_leaves():
+    facts = tree_facts(value)
+    if facts is None and leaves is not None and not frozenset(leaves) <= _facts_leaves():
         return _UNKNOWN
-    return tree_facts(value)
+    return facts
 
 
 def _name_in(named: Mapping[str, Any], value: Any) -> str | None:

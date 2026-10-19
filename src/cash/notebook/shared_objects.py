@@ -52,6 +52,7 @@ from typing import Any
 from cash import _plain_data
 from cash._clock import CpuLimit
 from cash.tracking.function_tracker import is_local_module
+from cash.value_types import LEAF_TYPES
 
 __all__ = [
     "GaveUp",
@@ -146,6 +147,80 @@ def library_value_types() -> tuple[type, ...]:
     if pd is not None:
         found += [pd.Timestamp, pd.Timedelta, pd.Period, pd.Interval, type(pd.NA), type(pd.NaT)]
     return tuple(found)
+
+
+#: `exact_value_types` for each set of libraries loaded: ``(numpy, pandas)``.
+_EXACT_WITH_LIBRARIES: dict[tuple[bool, bool], frozenset[type]] = {}
+
+
+def exact_value_types() -> frozenset[type]:
+    """`EXACT_VALUE_TYPES` and the exact types of numpy's scalars and
+    pandas' ``Timestamp``, ``Timedelta``, ``NaT`` and ``NA``, when those
+    libraries are loaded: each a value (`library_value_types`), whose
+    instances `is_value` already answers for one by one.
+
+    ``pd.Timestamp`` subclasses ``datetime`` and ``np.float64`` ``float``,
+    so the exact type of neither is in `EXACT_VALUE_TYPES`: a list of
+    parsed rows ``{'user': 'u1', 'time': pd.Timestamp(...)}`` missed every
+    look at C speed and was walked item by item, by each scan of each
+    statement: a log-parsing loop of 2 million rows took 1.5x plain."""
+    np = sys.modules.get("numpy")
+    pd = sys.modules.get("pandas")
+    key = (np is not None, pd is not None)
+    known = _EXACT_WITH_LIBRARIES.get(key)
+    if known is not None:
+        return known
+    found = set(EXACT_VALUE_TYPES)
+    complete = True
+    try:
+        if np is not None:
+            # Not ``void`` (a structured array's row, a view of its memory)
+            # nor ``object_``: those go through `is_value` as before.
+            found.update(
+                kind
+                for kind in set(np.sctypeDict.values())
+                if issubclass(kind, np.generic) and kind not in (np.void, np.object_)
+            )
+        if pd is not None:
+            found.update((pd.Timestamp, pd.Timedelta, type(pd.NaT), type(pd.NA)))
+    except AttributeError:  # a library still importing: asked again next time
+        complete = False
+    result = frozenset(found)
+    if complete:
+        _EXACT_WITH_LIBRARIES[key] = result
+    return result
+
+
+#: `tree_leaves` and `object_free_leaves` for each `exact_value_types`.
+_LEAVES_WITH_LIBRARIES: dict[tuple[frozenset[type], tuple], tuple[tuple, tuple]] = {}
+
+
+def _leaves_with_libraries() -> tuple[tuple, tuple]:
+    exact = exact_value_types()
+    fakes = _plain_data.fake_clock()[0]
+    known = _LEAVES_WITH_LIBRARIES.get((exact, fakes))
+    if known is None:
+        extra = tuple(exact - EXACT_VALUE_TYPES)
+        known = (TREE_LEAVES + extra, LEAF_TYPES + fakes + extra)
+        if len(_LEAVES_WITH_LIBRARIES) > 8:
+            _LEAVES_WITH_LIBRARIES.clear()
+        _LEAVES_WITH_LIBRARIES[(exact, fakes)] = known
+    return known
+
+
+def tree_leaves() -> tuple[type, ...]:
+    """`TREE_LEAVES` and the library value types of `exact_value_types`:
+    the leaves of JSON-like data whose parts a share check counts."""
+    return _leaves_with_libraries()[0]
+
+
+def object_free_leaves() -> tuple[type, ...]:
+    """The leaves `_plain_data.is_tree` takes by default and the library
+    value types of `exact_value_types`: JSON-like data over these holds no
+    array, frame, function or other object a walk looks for, so it is
+    answered a level at a time. Parsed rows holding a ``pd.Timestamp``
+    were walked item by item, by every check of every statement."""
+    return _leaves_with_libraries()[1]
 
 
 def _bound_objects(value: Any) -> list[Any] | None:
@@ -413,7 +488,9 @@ def attrs_copied_apart(roots: Iterable[Any]) -> bool:
     frames: list[dict] = []
     seen: set[int] = set()
     roots = list(roots)
-    trees = [_plain_data.is_tree(root, TREE_LEAVES) for root in roots]
+    plain_leaves = tree_leaves()
+    exact = exact_value_types()
+    trees = [_plain_data.is_tree(root, plain_leaves) for root in roots]
     stack = [root for root, tree in zip(roots, trees) if not tree]
     while stack:
         obj = stack.pop()
@@ -426,7 +503,7 @@ def attrs_copied_apart(roots: Iterable[Any]) -> bool:
                 frames.append(attrs)
             continue
         children = children_of(obj)
-        if not children or EXACT_VALUE_TYPES.issuperset(map(type, children)):
+        if not children or exact.issuperset(map(type, children)):
             continue
         stack.extend(children)
     if not frames:
@@ -501,7 +578,8 @@ def view_base_names(
     bases: set[int] = set()
     views: list[Any] = []
     seen: set[int] = set()
-    stack = [value for value in values if not _plain_data.is_tree(value)]
+    plain_leaves = object_free_leaves()
+    stack = [value for value in values if not _plain_data.is_tree(value, plain_leaves)]
     pops = 0
     while stack:
         pops += 1
@@ -1061,7 +1139,7 @@ def _group_nodes(
             whole.append(root)
             continue
         key = id(root)
-        breaks = memo[key] if key in memo else _plain_data.held_beyond_parents(root, TREE_LEAVES, _MAX_BREAKS)
+        breaks = memo[key] if key in memo else _plain_data.held_beyond_parents(root, tree_leaves(), _MAX_BREAKS)
         kept = None if breaks is None else [obj for obj in breaks if _is_node(obj, value_types)]
         if kept is None or any(id(obj) in stop.ids for obj in kept):
             whole.append(root)
@@ -1106,7 +1184,8 @@ def _copies_keep_old_objects(group: Mapping[str, Any], leaves: Leaves | None = N
     # JSON-like data holds no function at all: asked a level at a time, where
     # the walk below takes a Python step per object -- most of re-sorting a
     # list of 450,000 parsed pairs a loop variable still held part of.
-    stack = [root for root in group.values() if not _plain_data.is_tree(root, TREE_LEAVES)]
+    plain_leaves = tree_leaves()
+    stack = [root for root in group.values() if not _plain_data.is_tree(root, plain_leaves)]
     pops = 0
     while stack:
         pops += 1
@@ -1986,7 +2065,7 @@ def count_held(
         if met and (
             id(bound_in) in edges
             or not set(met) <= set(users)
-            or not all(_plain_data.is_tree(reach[key], TREE_LEAVES) for key in met)
+            or not all(_plain_data.is_tree(reach[key], tree_leaves()) for key in met)
         ):
             # The variables' own mapping is inside what cash holds, so a
             # binding is no proof, or one is no JSON-like data whose parts
@@ -2028,7 +2107,7 @@ def _parts_under(trees: list[Any]) -> set[int]:
     a time."""
     under: set[int] = set()
     for tree in trees:
-        for flat, kinds in _plain_data.tree_levels(tree, TREE_LEAVES):
+        for flat, kinds in _plain_data.tree_levels(tree, tree_leaves()):
             if not kinds.isdisjoint(_plain_data.TREE_NODES):
                 under.update(id(item) for item in flat if type(item) in _CONTAINER_KINDS)
     return under
@@ -2052,7 +2131,7 @@ def _walk_held(
     edges: dict[int, list[int]] = {}
     seen: set[int] = set()
     stack = list(held)
-    exact = EXACT_VALUE_TYPES
+    exact = exact_value_types()
     containers = EXACT_CONTAINER_TYPES
     while stack:
         obj = stack.pop()
@@ -2158,7 +2237,7 @@ def _walk(
     owner: dict[int, str] = {}
     order: list[int] = []
     identity = set(group) if keep_identity is None else set(keep_identity)
-    exact = EXACT_VALUE_TYPES
+    exact = exact_value_types()
     taken: set[int] = set()
     # The roots whose identity counts first: what they reach is checked.
     first = [name for name in group if name in identity]
@@ -2182,7 +2261,7 @@ def _walk(
             # check, which also sizes every item for the facts it keeps.
             continue
         if not fast:
-            if _plain_data.held_only_by_parents(root, TREE_LEAVES):
+            if _plain_data.held_only_by_parents(root, tree_leaves()):
                 # Records as a parser returns them: no container below the
                 # root has a holder besides its parent, read a level at a time
                 # at C speed. Only the root's own count is left to compare;
@@ -2193,7 +2272,7 @@ def _walk(
             if memo is not None and key in memo:
                 breaks = memo[key]
             else:
-                breaks = _plain_data.held_beyond_parents(root, TREE_LEAVES, _MAX_BREAKS)
+                breaks = _plain_data.held_beyond_parents(root, tree_leaves(), _MAX_BREAKS)
                 if memo is not None:
                     memo[key] = breaks
             if breaks is not None and _take_breaks(breaks, name, nodes, inbound, owner, order, value_types, leaves):
@@ -2223,7 +2302,7 @@ def _walk(
 def _is_node(child: Any, value_types: tuple[type, ...]) -> bool:
     """Whether `_walk` counts *child*, met inside a root: not a value, and
     not a tuple or frozenset holding values alone."""
-    exact = EXACT_VALUE_TYPES
+    exact = exact_value_types()
     containers = EXACT_CONTAINER_TYPES
     ctype = type(child)
     if ctype in exact or (ctype not in containers and is_value(child, value_types)):
@@ -2262,7 +2341,7 @@ def _descend(
     in *trees*, as `_walk`'s *breaks*: a graph object's ``adj`` dict of
     100,000 dicts was walked one dict at a time by every check of the
     statement."""
-    exact = EXACT_VALUE_TYPES
+    exact = exact_value_types()
     containers = EXACT_CONTAINER_TYPES
     pops = 0
     while stack:
@@ -2359,6 +2438,7 @@ def _take_breaks(
     if not breaks:
         return True
     ids = {id(obj) for obj in breaks}
+    exact = exact_value_types()
     for obj in breaks:
         own = id(obj)
         stack = [obj]
@@ -2367,11 +2447,11 @@ def _take_breaks(
             children = children_of(stack.pop())
             # Nothing but values, by exact type, asked at C speed: a dict of
             # four parsed columns of two million items each took 2.4 s here.
-            if not children or EXACT_VALUE_TYPES.issuperset(map(type, children)):
+            if not children or exact.issuperset(map(type, children)):
                 continue
             for child in children:
                 ckey = id(child)
-                if ckey in seen or type(child) in EXACT_VALUE_TYPES:
+                if ckey in seen or type(child) in exact:
                     continue
                 if ckey in ids:
                     return False

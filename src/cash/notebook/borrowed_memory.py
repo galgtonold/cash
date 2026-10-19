@@ -35,12 +35,13 @@ from cash import _plain_data
 
 from .shared_objects import (
     EXACT_CONTAINER_TYPES,
-    EXACT_VALUE_TYPES,
     VALUE_TYPES,
     check_walk_budget,
     children_of,
+    exact_value_types,
     is_value,
     library_value_types,
+    object_free_leaves,
 )
 
 logger = logging.getLogger(__name__)
@@ -320,10 +321,11 @@ def _borrowers_in(values: Iterable[Any]) -> list[tuple[Any, str]]:
     only when it is a view: one that owns its memory lends it, it borrows
     none."""
     value_types = VALUE_TYPES + library_value_types()
-    exact, containers = EXACT_VALUE_TYPES, EXACT_CONTAINER_TYPES
+    exact, containers = exact_value_types(), EXACT_CONTAINER_TYPES
     found: list[tuple[Any, str]] = []
     seen: set[int] = set()
-    stack = [value for value in values if not _plain_data.is_tree(value)]
+    plain_leaves = object_free_leaves()
+    stack = [value for value in values if not _plain_data.is_tree(value, plain_leaves)]
     pops = 0
     while stack:
         pops += 1

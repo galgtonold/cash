@@ -50,13 +50,14 @@ from ...analysis.ast_util import parse_cached
 from ..borrowed_memory import borrowed_memory_names
 from ..shared_objects import (
     EXACT_CONTAINER_TYPES,
-    EXACT_VALUE_TYPES,
     VALUE_TYPES,
     children_of,
     count_held,
+    exact_value_types,
     excess_refs,
     is_value,
     library_value_types,
+    object_free_leaves,
     view_bases,
 )
 
@@ -197,7 +198,7 @@ def is_uncacheable_alias(value: Any, user_ns: dict, cash_held: Iterable[Any] = (
     refholder_types = _pandas_refholder_types()
     if np is None and not refholder_types:
         return False
-    if _plain_data.is_tree(value):
+    if _plain_data.is_tree(value, object_free_leaves()):
         # JSON-like data holds no array and no pandas object: answered a
         # level at a time (and, for a statement's output, from the walk its
         # other checks share), where the walk below takes a Python step per
@@ -227,7 +228,7 @@ def _aliases_in(value: Any, np: Any, refholder_types: tuple[type, ...]) -> tuple
     refholders: list[Any] = []
     seen: set[int] = set()
     stack = [value]
-    exact = EXACT_VALUE_TYPES
+    exact = exact_value_types()
     containers = EXACT_CONTAINER_TYPES
     while stack:
         obj = stack.pop()

@@ -97,3 +97,22 @@ def test_the_disk_tier_gets_the_clone_with_its_check(tmp_path):
     _meta, read = tiers.get("k")  # written before the change
     tiers.shutdown()
     assert read is None or read[0] == 0.0
+
+
+def test_a_frozen_result_is_not_read_again_once_written(tmp_path, monkeypatch):
+    # ``frozen=True`` says nothing changes the result once returned: its
+    # 760 MB frame was hashed a second time after every disk write.
+    from cash.backends import memory_backend
+
+    tiers = TieredBackend([InMemoryBackend(), FileBackend(str(tmp_path / "c"), flush_interval=0)])
+    df = _frame()
+    digest = memory_backend._polars_digest(df)
+    metadata = {"execution_time": 5.0, "copy_required": False, "content_digest": digest}
+    tiers.set("k", df, metadata)
+    assert "DISK" in metadata["storage"]
+    reread = []
+    monkeypatch.setattr(memory_backend, "_still_as_stored", lambda checked: reread.append(1) or True)
+    found = tiers.backends[0].checked_copy("k", tiers.backends[0]._store["k"][0])
+    assert found is not None and found[1]()
+    assert reread == []
+    tiers.shutdown()

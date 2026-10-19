@@ -38,7 +38,7 @@ from ..tracking.randomness import (
     replayable,
 )
 from . import code_trace, hit_memo
-from .arg_hashing import HANDED_DIGESTS, PLAIN_CENSUS
+from .arg_hashing import CALL_POLARS, HANDED_DIGESTS, PLAIN_CENSUS, CallPolarsDigests, call_polars
 from .arg_key import keyed_arguments
 from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
@@ -1217,6 +1217,8 @@ class CallRunner:
         # outlive a change made while the key was built (`hit_memo`).
         epochs_before = hit_memo.epochs(spec)
         token = HANDED_DIGESTS.set(handed) if handed is not None else None
+        call.polars_args = CallPolarsDigests()
+        polars_token = CALL_POLARS.set(call.polars_args)
         copies = self._keys.split_for_key(spec, args, kwargs)
         try:
             if copies is None:
@@ -1227,6 +1229,7 @@ class CallRunner:
                     spec, copies.args, copies.kwargs, split, refused=copies.refused
                 )
         finally:
+            CALL_POLARS.reset(polars_token)
             if token is not None:
                 HANDED_DIGESTS.reset(token)
             if copies is not None:
@@ -1291,11 +1294,13 @@ class CallRunner:
                 self._hand_back_entry(call, hit, call.metadata, getattr(call.metadata, "storage", None))
         else:
             # Before the body runs: the mutation check compares against it.
-            if copies is None:
-                call.call_args_hash = self._keys.call_args_hash(spec, args, kwargs, built)
-            else:
-                call.checked = copies.checked_arguments(args, kwargs)
-                call.call_args_hash = self._keys.checked_arguments_hash(spec, *call.checked)
+            with call_polars(call.polars_args):
+                if copies is None:
+                    call.call_args_hash = self._keys.call_args_hash(spec, args, kwargs, built)
+                else:
+                    call.checked = copies.checked_arguments(args, kwargs)
+                    call.call_args_hash = self._keys.checked_arguments_hash(spec, *call.checked)
+            call.polars_args.sign()
         return call
 
     def _hand_back_entry(self, call: Call, value: Any, metadata: Any, storage: list[str] | None) -> None:
@@ -1496,7 +1501,7 @@ class CallRunner:
         # A generator argument the body drew from is moved on again by a hit
         # (`replay_argument_carriers`), so that draw is not a mutation the
         # caller would lose: the check sees it where the call found it.
-        with carriers_put_back(run.arg_carriers_pre if run.arg_carriers_moved else []):
+        with carriers_put_back(run.arg_carriers_pre if run.arg_carriers_moved else []), call_polars(call.polars_args):
             self._purity.check_argument_mutation(
                 func_name, *(call.checked or (args, kwargs)), call.call_args_hash, run.observer
             )
