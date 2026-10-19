@@ -19,6 +19,7 @@ reinstalled under the same number keys as before.
 
 from __future__ import annotations
 
+import csv
 import inspect
 import re
 import sys
@@ -35,8 +36,12 @@ importlib_metadata = LazyModule("importlib.metadata")
 
 __all__ = ["library_versions"]
 
-#: top-level module name -> the distributions that provide it; filled once.
-_DISTS_BY_TOP: dict[str, list[str]] | None = None
+#: top-level module name -> ``(distribution, (its metadata, the files it
+#: lists under that name))`` for each distribution that may provide it, the
+#: files None when its ``top_level.txt`` names the module; filled once.
+_DISTS_BY_TOP: dict[str, list[tuple[str, Any]]] | None = None
+#: top-level module name -> the distributions that provide it (`_dists_for`).
+_PROVIDERS: dict[str, list[str]] = {}
 #: distribution name -> its installed version, or None when it has none.
 _VERSIONS: dict[str, str | None] = {}
 #: distribution name -> the installed distributions it requires, transitively.
@@ -47,32 +52,78 @@ _REQ_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
 _CODE_NAMES: dict[int, tuple[Any, tuple[str, ...]]] = {}
 
 
-def _packages_distributions() -> dict[str, list[str]]:
-    """Top-level module name -> the distributions that provide it.
+def _listed_files(dist: Any) -> list[str] | None:
+    """The files *dist*'s ``RECORD`` lists, as ``dist.files`` reads them but
+    before it drops the ones not on disk, which it finds by a stat of every
+    file (20,000 in an ordinary environment, half a second, and each process
+    a parallel call starts paid it). None without a ``RECORD``."""
+    text = dist.read_text("RECORD")
+    if text is None:
+        return None
+    return [row[0] for row in csv.reader(text.splitlines()) if row]
+
+
+def _packages_distributions() -> dict[str, list[tuple[str, Any]]]:
+    """Top-level module name -> the distributions that may provide it, each
+    with the files to check it by (`_DISTS_BY_TOP`).
 
     ``importlib.metadata.packages_distributions`` on Python 3.10 reads only
     ``top_level.txt``, which wheels built by anything but setuptools (numpy,
     pandas, scikit-learn, ...) do not ship, so it named no distribution for
     them and their upgrades went unseen. Python 3.11+ falls back to the
-    distribution's file list; this does the same on every version.
+    distribution's file list; this does the same on every version. A listed
+    file counts only if it is on disk, as in ``dist.files``; that is checked
+    for the names a cached function reaches, when it does (`_dists_for`).
     """
-    by_top: dict[str, list[str]] = {}
+    by_top: dict[str, list[tuple[str, Any]]] = {}
     for dist in importlib_metadata.distributions():
         name = dist.metadata["Name"]
         if not name:
             continue
         tops = (dist.read_text("top_level.txt") or "").split()
-        if not tops:
-            seen: dict[str, None] = {}
-            for f in dist.files or ():
-                parts = f.parts
-                top = parts[0] if len(parts) > 1 else (inspect.getmodulename(str(f)) or str(f))
-                if "." not in top:
-                    seen[top] = None
-            tops = list(seen)
-        for top in tops:
-            by_top.setdefault(top, []).append(name)
+        if tops:
+            for top in tops:
+                by_top.setdefault(top, []).append((name, None))
+            continue
+        listed = _listed_files(dist)
+        if listed is None:  # an egg-info install: its own file list, checked now
+            listed, checked = [str(f) for f in dist.files or ()], True
+        else:
+            checked = False
+        seen: dict[str, list[str]] = {}
+        for f in listed:
+            top = _top_of(f)
+            if "." not in top:
+                seen.setdefault(top, []).append(f)
+        for top, files in seen.items():
+            by_top.setdefault(top, []).append((name, None if checked else (dist, files)))
     return by_top
+
+
+def _top_of(f: str) -> str:
+    """The top-level name a listed file *f* is under, as ``PackagePath(f)``
+    gives it; without building one when splitting on ``/`` gives the same
+    parts (no root, no empty or ``.`` part): 20,000 of them cost 0.2 s."""
+    if "//" in f or "/." in f or f.startswith(("/", "./")) or f.endswith("/") or f in ("", "."):
+        path = importlib_metadata.PackagePath(f)
+        parts, f = path.parts, str(path)
+    else:
+        parts = f.split("/")
+    return parts[0] if len(parts) > 1 else (inspect.getmodulename(f) or f)
+
+
+def _on_disk(listed: Any) -> bool:
+    """Whether any of a distribution's files listed under one name is there."""
+    if listed is None:
+        return True
+    dist, files = listed
+    for f in files:
+        try:
+            if dist.locate_file(importlib_metadata.PackagePath(f)).exists():
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
 
 
 def _dists_for(top: str) -> list[str]:
@@ -82,7 +133,10 @@ def _dists_for(top: str) -> list[str]:
             _DISTS_BY_TOP = _packages_distributions()
         except Exception:  # noqa: BLE001 - broken metadata: no versions to fold
             _DISTS_BY_TOP = {}
-    return _DISTS_BY_TOP.get(top, [])
+    names = _PROVIDERS.get(top)
+    if names is None:
+        names = _PROVIDERS[top] = [name for name, listed in _DISTS_BY_TOP.get(top, ()) if _on_disk(listed)]
+    return names
 
 
 def _version(dist: str) -> str | None:
@@ -207,5 +261,6 @@ def forget() -> None:
     """Read the installed distributions again (tests that install one)."""
     global _DISTS_BY_TOP
     _DISTS_BY_TOP = None
+    _PROVIDERS.clear()
     _VERSIONS.clear()
     _CLOSURES.clear()
