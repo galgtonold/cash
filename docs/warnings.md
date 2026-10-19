@@ -2107,7 +2107,7 @@ or applying it twice does not change the result (`s.add(x)` on a set).
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/background_threads.py:BackgroundThreads.cell_ends @b6d8c938, cash/notebook/background_threads.py:user_code_of @310cd8c4 -->
+<!-- claim: cash/notebook/background_threads.py:BackgroundThreads.cell_ends @35f8017f, cash/notebook/background_threads.py:user_code_of @310cd8c4, cash/notebook/statement/processor.py:StatementProcessor._left_work_running @b91776a0 -->
 **What happened.** A cell started a thread and finished while the thread
 was still running. The message names the cell, the thread and the function
 it runs. Only a thread that runs your own code counts: a pool's idle
@@ -2115,9 +2115,11 @@ workers or a library's helper thread run the library's code and are left
 out. It is shown once per cell.
 
 **Why it matters.** What the thread changes after the cell finished (a list
-it fills, a file it writes) is outside cash's view. The statements that read
-those values were keyed and stored on what they held when the cell ended,
-and a cell above that is re-run can see the changed values.
+it fills, a file it writes) is outside cash's view. cash does not store the
+statement that left the thread running, nor a statement that reads a
+variable the thread's function can reach (a global it names, an object its
+closure holds) until a statement binds that variable again: those run every
+time. A cell above that is re-run can still see the changed values.
 
 **What to do.** Join the thread before the cell ends (`t.join()`), or have
 it hand back its result (`future.result()` with `concurrent.futures`) in the

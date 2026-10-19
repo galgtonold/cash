@@ -504,9 +504,11 @@ a name bound through the namespace, `eval`, `exec` of a computed string and
 ### Background threads
 
 A thread that changes data after its cell has finished is outside cash's view.
-An earlier cell re-run can see the changed data.
+cash does not store the statement that left it running, nor one that reads a
+variable the thread's function can reach, so those run every time. An earlier
+cell re-run can still see the changed data.
 
-<!-- claim: cash/notebook/background_threads.py:BackgroundThreads.cell_ends @b6d8c938 -->
+<!-- claim: cash/notebook/background_threads.py:BackgroundThreads.cell_ends @35f8017f -->
 cash names a cell that ends while a thread it started, running your code, is
 still alive: [NOTEBOOK-THREAD-ALIVE](warnings.md#notebook-thread-alive).
 **Fix:** join the thread before the cell ends (`t.join()`).
