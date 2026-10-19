@@ -1360,6 +1360,28 @@ def _held_within(nodes: dict[int, Any], inbound: dict[int, int], excess: list[in
 #: Most objects `_inside_library_objects` reads inside the library objects
 #: of a walk before it gives up, which refuses the statement.
 _INSIDE_MAX_OBJECTS = 50_000
+_STREAM_NAMES = ("stdin", "stdout", "stderr", "__stdin__", "__stdout__", "__stderr__")
+#: The standard streams as cash found them when it was imported.
+_STREAMS_AT_START = tuple(getattr(sys, name, None) for name in _STREAM_NAMES)
+
+
+def _standard_streams() -> set[int]:
+    """The ids of the process's standard streams: ``sys.stdin``, ``stdout``
+    and ``stderr`` as they are now, their ``__stdin__``-style originals, and
+    the ones current when cash was imported.
+
+    A ``threading.Thread`` keeps the ``sys.stderr`` it was made under, a
+    ``logging.StreamHandler`` and a ``tqdm`` bar the stream they write to.
+    What else holds such a stream is the kernel's or the test runner's own:
+    the climb from it went up eight levels of their objects, a full heap
+    scan each, and gave up. A file object of the user's is still climbed
+    from."""
+    found = {id(getattr(sys, name, None)) for name in _STREAM_NAMES}
+    found.update(id(stream) for stream in _STREAMS_AT_START)
+    found.discard(id(None))
+    return found
+
+
 #: Above how many objects one level of `_variables_holding`'s climb reads
 #: the heap once itself: `gc.get_referrers` takes time in proportion to the
 #: heap times the objects it is given (33 s for 18,000 on a test worker).
@@ -1483,7 +1505,9 @@ def _held_from_outside(
     A library object one of whose parts holds it back (each trace of a
     plotly figure, each node of a minidom document) is left out: those keep
     the library-object rule (`_held_within`), and their parts share the
-    library's own validators and the like with every other such object."""
+    library's own validators and the like with every other such object.
+    Nor is one of the process's standard streams (`_standard_streams`)
+    looked for."""
     roots = {key: owner[key] for key, node in nodes.items() if _reads_inside(node, value_types)}
     if not roots:
         return {}, set()
@@ -1529,8 +1553,11 @@ def _held_from_outside(
                 stack.append((child, root))
         child = None  # no reference of this frame's left in the counts
     parent = None
+    streams = _standard_streams()
     held = [
-        key for key in within if root_of[key] not in held_back and sys.getrefcount(within[key]) - refs[key] > _OVERHEAD
+        key
+        for key in within
+        if root_of[key] not in held_back and key not in streams and sys.getrefcount(within[key]) - refs[key] > _OVERHEAD
     ]
     return {key: within[key] for key in held}, {roots[root_of[key]] for key in held}
 
