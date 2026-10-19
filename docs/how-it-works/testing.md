@@ -16,7 +16,7 @@ yourself. Figures on this page are derived from the repository by
 ## The suites
 
 **<!-- docnum:tests_total -->~20,500<!-- /docnum --> tests** in
-<!-- docnum:test_files -->~2,040<!-- /docnum --> files:
+<!-- docnum:test_files -->~2,050<!-- /docnum --> files:
 
 | Suite | Size | What it covers |
 |---|---|---|
