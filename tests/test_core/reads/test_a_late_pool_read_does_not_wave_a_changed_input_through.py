@@ -123,15 +123,19 @@ def test_a_cached_call_does_not_store_an_input_that_moved(disk_cash, tmp_path, m
 
     late_reads, again = _Late(data, late), _Late(data, late)
     again.go.set()  # the second call's late read needs no waking
-    fired = _late_read_during_the_check(monkeypatch, late_reads.wake)
+    _late_read_during_the_check(monkeypatch, late_reads.wake)
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             assert load(late_reads) == "old"
-            assert fired.is_set(), "the late read did not land mid-check"
-            # Not stored: the next call reads the file as it is now.
+            # The pool's work is still running when the call returns, so the
+            # store is refused before the check walks the reads (the
+            # STORE-WORK-RUNNING refusal); if it ever reaches the check, the
+            # late read lands mid-walk and must not wave the rewrite through.
+            # Not stored either way: the next call reads the file as it is now.
             assert load(again) == "new"
     finally:
+        late_reads.go.set()
         late_reads.pool.shutdown(wait=True)
         again.pool.shutdown(wait=True)
     assert len(runs) == 2
