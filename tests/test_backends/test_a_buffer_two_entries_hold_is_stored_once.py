@@ -5,9 +5,11 @@ iteration of a loop returning its input's columns: each entry wrote every
 column again, gigabytes over a session of which most were already on disk.
 The file tier now keeps every buffer of a megabyte or more in the folder's
 chunk store, named by its content digest, and an entry names the chunks it
-holds. These tests pin that a value comes back byte for byte, that removing
-one holder keeps what another still needs, that a missing or damaged chunk
-is a miss (never other data), and that another process reads the chunks.
+holds. The chunks one write adds share one file (a pack), which goes when no
+entry holds a chunk in it. These tests pin that a value comes back byte for
+byte, that removing one holder keeps what another still needs, that a
+missing or damaged chunk is a miss (never other data), and that another
+process reads the chunks.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ ROWS = 400_000  # 3.2 MB per float64 column: well above CHUNK_MIN_BYTES
 #: Where the chunks are, and the metadata field listing an entry's.
 CHUNK_DIRNAME = "chunks"
 CHUNKS_FIELD = "chunks"
+PLACES_FIELD = "chunk_places"
 
 
 def _chunk_store():
@@ -50,7 +53,16 @@ def _store(backend, key, value, seconds=1.0):
 
 def _chunks(tmp_path):
     folder = tmp_path / "cache" / CHUNK_DIRNAME
-    return sorted(p for p in folder.iterdir() if p.suffix == ".chunk") if folder.exists() else []
+    return sorted(p for p in folder.iterdir() if p.suffix in (".chunk", ".pack")) if folder.exists() else []
+
+
+def _placed(tmp_path):
+    """The chunks the entries in the folder hold, by digest."""
+    folder = tmp_path / "cache"
+    found = set()
+    for path in folder.glob("*.entry"):
+        found.update(read_entry(str(path), with_payload=False)[0].get(PLACES_FIELD) or {})
+    return found
 
 
 def _chunk_bytes(tmp_path):
@@ -105,6 +117,7 @@ def test_one_value_holding_equal_arrays_writes_them_once(tmp_path):
     backend = _backend(tmp_path)
     _store(backend, "k", value)
     assert len(_chunks(tmp_path)) == 1
+    assert _chunk_bytes(tmp_path) == arr.nbytes + _chunk_store().TRAILER
     got = _backend(tmp_path).get("k")[1]
     assert got["x"].tobytes() == arr.tobytes() and got["y"].tobytes() == arr.tobytes()
     got["x"][0] = -1.0  # two arrays, not one shared by both
@@ -118,9 +131,11 @@ def test_removing_one_holder_keeps_what_the_other_needs(tmp_path):
     backend = _backend(tmp_path)
     _store(backend, "first", first)
     _store(backend, "second", second)
-    assert len(_chunks(tmp_path)) == 5
+    assert len(_placed(tmp_path)) == 5
+    assert len(_chunks(tmp_path)) == 2  # first's pack, and second's of the one it added
     backend.delete("first")
-    assert len(_chunks(tmp_path)) == 4, "the chunk only the removed entry held stays"
+    assert len(_placed(tmp_path)) == 4
+    assert len(_chunks(tmp_path)) == 2, "second still holds chunks in first's pack"
     _same(_backend(tmp_path).get("second")[1], second)
     backend.delete("second")
     assert _chunks(tmp_path) == []
@@ -136,7 +151,8 @@ def test_another_process_removing_a_holder_keeps_what_the_other_needs(tmp_path):
     writer.shutdown()
     remover = _backend(tmp_path)
     remover.delete("first")
-    assert len(_chunks(tmp_path)) == 4
+    assert len(_placed(tmp_path)) == 4
+    assert len(_chunks(tmp_path)) == 2
     _same(_backend(tmp_path).get("second")[1], [*shared, np.ones(ROWS)])
 
 
@@ -144,10 +160,10 @@ def test_rewriting_an_entry_frees_the_chunks_it_no_longer_holds(tmp_path):
     backend = _backend(tmp_path)
     _store(backend, "k", _arrays(5))
     _store(backend, "k", _arrays(6))
-    assert len(_chunks(tmp_path)) == 3
+    assert len(_chunks(tmp_path)) == 1 and len(_placed(tmp_path)) == 3
     other = _backend(tmp_path)
     _store(other, "k", _arrays(7))  # replaces an entry this process never saw
-    assert len(_chunks(tmp_path)) == 3
+    assert len(_chunks(tmp_path)) == 1 and len(_placed(tmp_path)) == 3
     _same(_backend(tmp_path).get("k")[1], _arrays(7))
 
 
@@ -217,7 +233,7 @@ def test_a_chunk_is_named_by_the_digest_scheme(tmp_path, monkeypatch):
     arr = np.random.default_rng(12).random(ROWS)
     _store(_backend(tmp_path), "k", [arr])
     (first,) = _chunks(tmp_path)
-    assert first.name == bulk_digest_module.bulk_digest(arr).hex() + ".chunk"
+    assert first.name == _chunk_store().pack_name([bulk_digest_module.bulk_digest(arr)])
     monkeypatch.setattr(bulk_digest_module, "TAG", b"cash-bulk-other-tree-1\x00")
     _store(_backend(tmp_path), "k2", [arr])
     assert len(_chunks(tmp_path)) == 2

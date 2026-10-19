@@ -38,10 +38,11 @@ from .cache_dir import (
     warn_unusable,
     write_all,
 )
-from .chunk_store import CHUNK_MIN_BYTES, TRAILER, ChunkStore, as_bytes, chunk_name, digests
+from .chunk_store import CHUNK_MIN_BYTES, ChunkStore, DamagedChunk, as_bytes, digests
 from .entry_format import (
     CHUNKS_FIELD,
     ENTRY_SUFFIX,
+    PLACES_FIELD,
     CorruptEntry,
     PackedEntry,
     SplitPayload,
@@ -424,7 +425,11 @@ class FileBackend(CacheBackend):
             try:
                 meta = self._touched.metadata(key)
                 path = self._get_path(key)
-                if meta and not update_metadata_in_place(path, meta, self._touched.identity(key)):
+                flushed = True
+                if meta:
+                    with self.chunks.entry_lock(self._stem(key)):
+                        flushed = update_metadata_in_place(path, meta, self._touched.identity(key))
+                if meta and not flushed:
                     # Replaced by another process since it was read, or grown
                     # past its reserved region. Either way what is held here
                     # is not what the file holds: read it afresh next time.
@@ -464,7 +469,7 @@ class FileBackend(CacheBackend):
                 continue
             held = metadata.get(CHUNKS_FIELD)
             if held:
-                yield os.path.basename(path)[: -len(ENTRY_SUFFIX)], held
+                yield os.path.basename(path)[: -len(ENTRY_SUFFIX)], held, metadata.get(PLACES_FIELD)
 
     @property
     def local_dir(self) -> str:
@@ -572,6 +577,8 @@ class FileBackend(CacheBackend):
             return None, None
         except (OSError, CorruptEntry) as exc:
             logger.debug("Cache get failed for key %r: %s", key, exc)
+            if isinstance(exc.__cause__, DamagedChunk):  # raised as a CorruptEntry by `read_entry`
+                self._remove_damaged(exc.__cause__, path)
             return None, None
 
         try:
@@ -766,35 +773,30 @@ class FileBackend(CacheBackend):
         Raises:
             OSError, pickle.PickleError, ValueError: on write failure (caller handles cleanup).
         """
-        # The chunks this entry holds, as ``(name, file bytes)``, and the
+        # The chunk files this entry holds, as ``(name, file bytes)``, and the
         # bytes the ones written new add to the folder.
         held: list[tuple[str, int]] = []
         added = 0
         if isinstance(serialized_value, SplitPayload):
-            apart: dict[int, tuple[bytes, bytes]] = {}
             big = [(i, as_bytes(buf)) for i, buf in enumerate(serialized_value.buffers)]
             big = [(i, view) for i, view in big if view.nbytes >= CHUNK_MIN_BYTES]
-            try:
-                for (i, view), known in zip(big, digests([view for _i, view in big])):
-                    digest, crc, grew = self.chunks.put(view, known)
-                    apart[i] = (digest, crc)
-                    held.append((chunk_name(digest), view.nbytes + TRAILER))
-                    added += grew
-            except BaseException:
-                self.chunks.abandon(held)
-                raise
+            views = [view for _i, view in big]
+            refs, places, held, added = self.chunks.put_all(views, digests(views)) if big else ([], {}, [], 0)
+            apart = {i: ref for (i, _view), ref in zip(big, refs)}
             chunks = split_chunks(serialized_value.stream, serialized_value.buffers, apart)
             split = True
             metadata["compressed"] = False
             metadata[CHUNKS_FIELD] = held
+            metadata[PLACES_FIELD] = places
             # What the value weighs, wherever its bytes are.
-            metadata["size"] = sum(memoryview(c).nbytes for c in chunks) + sum(n - TRAILER for _name, n in held)
+            metadata["size"] = sum(memoryview(c).nbytes for c in chunks) + sum(view.nbytes for view in views)
         else:
             codec = None
             if self.compress:
                 codec, serialized_value = compression.compress(serialized_value)
             metadata["compressed"] = codec or False
             metadata.pop(CHUNKS_FIELD, None)
+            metadata.pop(PLACES_FIELD, None)
             chunks = [serialized_value]
             split = False
             # The bytes the value occupies on disk, after compression.
@@ -806,9 +808,38 @@ class FileBackend(CacheBackend):
                 logger.debug("cash: %r changed while it was written; not stored", key)
                 self.chunks.abandon(held)
                 return
+        # A pack rewrite (`ChunkStore._repoint`) leaves this entry alone
+        # from here until its chunks are counted as its own.
+        with self.chunks.entry_lock(self._stem(key)):
+            entry, old_entry_bytes, freed = self._write_entry(key, path, metadata, chunks, split, held)
+        checksum = entry.checksum
+
+        with self._touched.lock:
+            self._remember(key, metadata, checksum)
+            self.evictor.note_write(key, old_entry_bytes + freed, entry.size + added)
+
+        # Only a capped tier ranks, so only a capped tier keeps the rank index:
+        # uncapped, it would be a file that only grows.
+        if self.evictor.capped:
+            self.evictor.record_rank(key, path, metadata, entry.size + self.chunks.share(self._stem(key)))
+
+    def _remove_damaged(self, damage: DamagedChunk, path: str) -> None:
+        """A chunk of a pack failed its check reading the entry at *path*:
+        remove that entry and every other this process knows to hold the
+        chunk, so none is read again and the next write stores it afresh."""
+        stems = self.chunks.damaged(damage.pack, damage.offset)
+        paths = {path, *(os.path.join(self.cache_dir, stem + ENTRY_SUFFIX) for stem in stems)}
+        for holder in sorted(paths):
+            self.evictor.remove_path(holder)
+
+    def _write_entry(
+        self, key: str, path: str, metadata: dict, chunks: list, split: bool, held: list[tuple[str, int]]
+    ) -> tuple[Any, int, int]:
+        """`_write_cache_files`' entry write and its chunks' commit: the
+        packed entry, the bytes the entry it replaced took, and the chunk
+        bytes freed."""
         try:
             entry = pack_entry_parts(metadata, chunks, split=split)
-            checksum = entry.checksum
 
             # What this entry occupies now, so a rewrite subtracts what was
             # there, and the chunks it held, unless this process knows them.
@@ -841,16 +872,8 @@ class FileBackend(CacheBackend):
         except BaseException:
             self.chunks.abandon(held)
             raise
-        freed = self.chunks.commit(self._stem(key), held, replaced)
-
-        with self._touched.lock:
-            self._remember(key, metadata, checksum)
-            self.evictor.note_write(key, old_entry_bytes + freed, entry.size + added)
-
-        # Only a capped tier ranks, so only a capped tier keeps the rank index:
-        # uncapped, it would be a file that only grows.
-        if self.evictor.capped:
-            self.evictor.record_rank(key, path, metadata, entry.size + self.chunks.share(self._stem(key)))
+        freed = self.chunks.commit(self._stem(key), held, replaced, metadata.get(PLACES_FIELD))
+        return entry, old_entry_bytes, freed
 
     def set(
         self,
@@ -1099,6 +1122,7 @@ class FileBackend(CacheBackend):
 
         metadata = dict(metadata)  # Don't mutate caller's dict
         metadata.pop(CHUNKS_FIELD, None)  # it holds no payload
+        metadata.pop(PLACES_FIELD, None)
         metadata["key"] = key
         metadata["metadata_only"] = True
         metadata.setdefault("created_at", time.time())

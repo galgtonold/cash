@@ -443,7 +443,12 @@ class FileEvictor:
             freed = 0
 
         try:
-            _remove_with_retry(path)
+            if self.chunks is not None:
+                # Not between a pack rewrite's read of it and its rename.
+                with self.chunks.entry_lock(stem):
+                    _remove_with_retry(path)
+            else:
+                _remove_with_retry(path)
         except FileNotFoundError:
             pass
         except OSError as exc:

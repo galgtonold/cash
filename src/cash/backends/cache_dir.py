@@ -43,6 +43,8 @@ __all__ = [
     "KEYS_DIRNAME",
     "CHUNK_DIRNAME",
     "CHUNK_SUFFIX",
+    "CLAIM_SUFFIX",
+    "PACK_SUFFIX",
     "chunk_files",
     "LOOP_SPLIT_FILENAME",
     "MISS_GUARD_FILENAME",
@@ -139,6 +141,10 @@ KEYS_DIRNAME = ".keys"
 #: The file tier's big buffers, one file per distinct content (`chunk_store`).
 CHUNK_DIRNAME = "chunks"
 CHUNK_SUFFIX = ".chunk"
+#: A file of several chunks, written by one entry (`cash.backends.chunk_store`).
+PACK_SUFFIX = ".pack"
+#: A process rewriting a pack (`ChunkStore._compact_one`) holds ``<pack>.claim``.
+CLAIM_SUFFIX = ".claim"
 
 #: Files SQLite creates beside a database: the WAL, its shared-memory index,
 #: and the rollback journal of a database not in WAL mode.
@@ -206,7 +212,7 @@ def chunk_files(cache_dir: str) -> list[str]:
     """Every chunk file in *cache_dir*'s chunk store; none when it has none."""
     try:
         with os.scandir(os.path.join(cache_dir, CHUNK_DIRNAME)) as found:
-            return [e.path for e in found if e.name.endswith(CHUNK_SUFFIX)]
+            return [e.path for e in found if e.name.endswith((CHUNK_SUFFIX, PACK_SUFFIX))]
     except OSError:
         return []
 
@@ -247,7 +253,9 @@ def is_cash_file(relpath: str) -> bool:
         return name.endswith(".json") or _is_temp_of(name, lambda base: base.endswith(".json"))
     if len(parts) == 2 and parts[0] == CHUNK_DIRNAME:
         name = parts[1]
-        return name.endswith(CHUNK_SUFFIX) or (name.startswith(".tmp-") and name.endswith(".part"))
+        return name.endswith((CHUNK_SUFFIX, PACK_SUFFIX, CLAIM_SUFFIX)) or (
+            name.startswith(".tmp-") and name.endswith(".part")
+        )
     if len(parts) != 1:
         return False
     name = parts[0]

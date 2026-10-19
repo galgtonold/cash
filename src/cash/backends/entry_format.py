@@ -86,7 +86,9 @@ folder's chunk store (`cash.backends.chunk_store`), once for every entry
 holding the same bytes: ``apart`` names it by its digest, with the crc32 of
 its bytes, and ``buffers`` skips it. The entry's checksum covers those names
 and checksums; each chunk's bytes are checked against its crc32 as it is
-read, and a chunk missing or damaged makes the whole entry unreadable.
+read, and a chunk missing or damaged makes the whole entry unreadable. Where
+a chunk is -- in the pack of the chunks one write added -- the metadata says
+(`PLACES_FIELD`); a wrong place reads bytes the crc32 rejects.
 
 A large payload is not read at all but mapped (`_map_split`): a private,
 copy-on-write mapping of the file, whose pages are the page cache's own
@@ -124,6 +126,7 @@ __all__ = [
     "ENTRY_SUFFIX",
     "CHECKSUM_FIELD",
     "CHUNKS_FIELD",
+    "PLACES_FIELD",
     "CorruptEntry",
     "PackedEntry",
     "SplitPayload",
@@ -137,6 +140,8 @@ __all__ = [
     "payload_checksum",
     "unpack_entry",
     "metadata_span",
+    "identity_at",
+    "moved_head",
     "update_metadata_in_place",
 ]
 
@@ -176,6 +181,11 @@ CHECKSUM_FIELD = "_payload_crc32"
 #: ``(chunk file name, file bytes)`` (`cash.backends.chunk_store`): what
 #: tells which entries hold a chunk without reading their payloads.
 CHUNKS_FIELD = "chunks"
+#: Metadata key saying where in the chunk store's packs each chunk of a split
+#: payload is: ``{digest hex: [file name, offset, bytes, crc32 hex]}``
+#: (`cash.backends.chunk_store`). A chunk it does not place is the file
+#: named by its digest, as an entry written before packs has it.
+PLACES_FIELD = "chunk_places"
 
 
 def _checksum(payload: bytes) -> bytes:
@@ -405,14 +415,15 @@ def read_entry_and_checksum(path: str, *, with_payload: bool) -> tuple[dict[str,
         if not with_payload:
             return metadata, None, expected
         if magic == MAGIC_SPLIT:
-            return metadata, _read_split(fh, HEADER_SIZE + meta_cap, expected, path), expected
+            places = metadata.get(PLACES_FIELD)
+            return metadata, _read_split(fh, HEADER_SIZE + meta_cap, expected, path, places), expected
         fh.seek(HEADER_SIZE + meta_cap)
         payload = fh.read()
     _verify(payload, expected, path)
     return metadata, payload, expected
 
 
-def _read_split(fh: Any, start: int, expected: bytes | None, path: str) -> SplitPayload:
+def _read_split(fh: Any, start: int, expected: bytes | None, path: str, places: Any = None) -> SplitPayload:
     """Read a ``CSH3`` payload into one new ``bytearray`` per part, checked,
     and the buffers its table names from the chunk store."""
     if expected is None:
@@ -445,7 +456,7 @@ def _read_split(fh: Any, start: int, expected: bytes | None, path: str) -> Split
     if start + offset != end:
         raise CorruptEntry(f"{path}: split payload is {end - start} bytes, its table says {offset}")
     if _CAN_MAP and end - start >= MAP_MIN_BYTES and start % SPLIT_ALIGN == 0:
-        mapped = _map_split(fh, start, table, stream_len, lengths, apart, expected, path)
+        mapped = _map_split(fh, start, table, stream_len, lengths, apart, expected, path, places)
         if mapped is not None:
             return mapped
     crc = zlib.crc32(lengths_raw, zlib.crc32(head))
@@ -472,25 +483,27 @@ def _read_split(fh: Any, start: int, expected: bytes | None, path: str) -> Split
             f"{path}: payload checksum {found.hex()} != stored {expected.hex()} "
             f"({offset} bytes) -- the value will be recomputed"
         )
-    _read_apart(buffers, lengths, apart, path)
+    _read_apart(buffers, lengths, apart, path, places)
     return SplitPayload(stream, buffers)
 
 
-def _read_apart(buffers: list, lengths: Sequence[int], apart: dict[int, tuple[bytes, bytes]], path: str) -> None:
+def _read_apart(
+    buffers: list, lengths: Sequence[int], apart: dict[int, tuple[bytes, bytes]], path: str, places: Any = None
+) -> None:
     """Fill in the buffers kept in the chunk store. Only after the entry's
     own checksum matched: the digests and checksums named are the ones
     written. A chunk missing or damaged makes the entry unreadable."""
     if not apart:
         return
     # Imported here: chunk_store imports cache_dir, which imports this module.
-    from .chunk_store import ChunkError, read_chunk
+    from .chunk_store import ChunkError, read_chunks
 
-    cache_dir = os.path.dirname(path)
-    for index, (digest, crc) in apart.items():
-        try:
-            buffers[index] = read_chunk(cache_dir, digest, lengths[index], crc)
-        except ChunkError as exc:
-            raise CorruptEntry(f"{path}: {exc}") from exc
+    try:
+        found = read_chunks(os.path.dirname(path), apart, lengths, places if isinstance(places, dict) else None)
+    except ChunkError as exc:
+        raise CorruptEntry(f"{path}: {exc}") from exc
+    for index, data in found.items():
+        buffers[index] = data
 
 
 def _map_split(
@@ -502,6 +515,7 @@ def _map_split(
     apart: dict[int, tuple[bytes, bytes]],
     expected: bytes,
     path: str,
+    places: Any = None,
 ) -> SplitPayload | None:
     """`_read_split` through a private copy-on-write mapping of the file:
     the stream and each buffer are views of it, checked like a read.
@@ -531,7 +545,7 @@ def _map_split(
         offset += _pad(offset)
         buffers.append(payload[offset : offset + length])
         offset += length
-    _read_apart(buffers, lengths, apart, path)
+    _read_apart(buffers, lengths, apart, path, places)
     return SplitPayload(stream, buffers)
 
 
@@ -609,12 +623,68 @@ def update_metadata_in_place(path: str, metadata: dict[str, Any], expected: tupl
         stamped = {**metadata, CHECKSUM_FIELD: checksum}
         # Which chunks the payload holds is the payload's, like its checksum:
         # never what the caller's dict says.
-        stamped.pop(CHUNKS_FIELD, None)
-        if CHUNKS_FIELD in previous:
-            stamped[CHUNKS_FIELD] = previous[CHUNKS_FIELD]
+        for field in (CHUNKS_FIELD, PLACES_FIELD):
+            stamped.pop(field, None)
+            if field in previous:
+                stamped[field] = previous[field]
         meta_bytes = pickle.dumps(stamped)
         if len(meta_bytes) > cap:
             return False
         fh.seek(0)
         fh.write(HEADER.pack(magic, len(meta_bytes), cap) + meta_bytes)
     return True
+
+
+def moved_head(path: str, old: str, new: tuple[str, int], moved: dict[str, list]) -> tuple[bytes, int, tuple] | None:
+    """The header and metadata region of the entry at *path*, saying its
+    chunks in the pack *old* are in the pack *new* (``(name, file bytes)``)
+    now, at the places *moved* (``digest hex -> [name, offset, bytes, crc32
+    hex]``); with where its payload starts, which stays as it is, and the
+    entry's `entry_identity`. None when the entry no longer names *old*, a
+    chunk of it there is not in *moved*, or the metadata no longer fits its
+    region. The payload, its checksum and every other field are unchanged.
+    """
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(HEADER_SIZE)
+            if len(head) < HEADER_SIZE:
+                return None
+            magic, meta_len, cap = HEADER.unpack(head)
+            if magic != MAGIC_SPLIT:
+                return None
+            metadata = _load_metadata(fh.read(meta_len), path)
+    except (OSError, CorruptEntry):
+        return None
+    held = metadata.get(CHUNKS_FIELD) or []
+    places = dict(metadata.get(PLACES_FIELD) or {})
+    if not any(name == old for name, _size in held):
+        return None
+    for digest, place in list(places.items()):
+        if place[0] == old:
+            if digest not in moved:
+                return None
+            places[digest] = moved[digest]
+    if any(name == new[0] for name, _size in held):
+        held = [(name, size) for name, size in held if name != old]
+    else:
+        held = [new if name == old else (name, size) for name, size in held]
+    identity = entry_identity(metadata, metadata.get(CHECKSUM_FIELD))
+    metadata[CHUNKS_FIELD] = held
+    metadata[PLACES_FIELD] = places
+    meta_bytes = pickle.dumps(metadata)
+    if len(meta_bytes) > cap:
+        return None
+    return (
+        HEADER.pack(magic, len(meta_bytes), cap) + meta_bytes + bytes(cap - len(meta_bytes)),
+        HEADER_SIZE + cap,
+        identity,
+    )
+
+
+def identity_at(path: str) -> tuple | None:
+    """The `entry_identity` of the entry at *path*, or None."""
+    try:
+        metadata, _payload, checksum = read_entry_and_checksum(path, with_payload=False)
+    except (OSError, CorruptEntry):
+        return None
+    return entry_identity(metadata, checksum)
