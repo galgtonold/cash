@@ -213,7 +213,16 @@ def realpath_of_read_this_run(
                 return resolved, None
     absolute = os.path.abspath(path)
     parent, name = os.path.split(absolute)
-    if name and name not in (".", "..") and "~" not in name and parent != absolute:
+    # ``abspath`` drops a ``..`` by its spelling, but on POSIX the open goes
+    # up from where a linked folder POINTS: ``/w/link/../data.csv`` is the
+    # target's sibling, not ``/w/data.csv``, which a hit would have checked.
+    if (
+        name
+        and name not in (".", "..")
+        and "~" not in name
+        and parent != absolute
+        and ".." not in path.replace("\\", "/").split("/")
+    ):
         try:
             st = os.lstat(absolute)
         except FileNotFoundError:

@@ -130,3 +130,24 @@ def test_a_missing_file_resolves_in_full(tmp_path, resolutions):
     finally:
         file_dep_snapshot.end_file_state_epoch()
     assert st is None and resolutions
+
+
+@pytest.mark.parametrize("name", ["data.csv", "absent.csv"])
+def test_a_parent_step_after_a_linked_folder_goes_where_the_open_goes(tmp_path, name):
+    # ``/w/link/../data.csv`` opens the link target's sibling; read by its
+    # spelling it named ``/w/data.csv``, and an edit to the real file was missed.
+    (tmp_path / "real" / "sub").mkdir(parents=True)
+    (tmp_path / "real" / "data.csv").write_text("real", encoding="utf-8")
+    (tmp_path / "w").mkdir()
+    (tmp_path / "w" / "data.csv").write_text("decoy", encoding="utf-8")
+    try:
+        os.symlink(tmp_path / "real" / "sub", tmp_path / "w" / "link", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("cannot create a symlink here")
+    path = os.path.join(str(tmp_path / "w" / "link"), "..", name)
+    file_dep_snapshot.begin_file_state_epoch()
+    try:
+        resolved, _ = realpath_of_read_this_run(path)
+    finally:
+        file_dep_snapshot.end_file_state_epoch()
+    assert os.path.normcase(resolved) == os.path.normcase(os.path.realpath(path))
