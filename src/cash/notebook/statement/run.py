@@ -133,6 +133,10 @@ class StatementRun:
     #: for a statement that turns out to write a file
     #: (``TrackingState.executed_write_input_lineages``).
     entry_lineages: dict[str, str] = field(default_factory=dict)
+    #: The entry each input that is also an output came from as the
+    #: statement started to run (``TrackingState.variable_sources``): by the
+    #: store it names this statement's own entry, not yet written.
+    entry_sources: dict[str, str] = field(default_factory=dict)
     source_hash: str = ""
     cache_key: str = ""
     #: The key the RNG streams it drew from move on from, when not

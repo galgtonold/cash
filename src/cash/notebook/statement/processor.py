@@ -1893,6 +1893,11 @@ class StatementProcessor:
             # is the one the statement would take of ``x`` now.
             run.settled_digests = {**run.settled_digests, id(returned[0]): returned}
         del returned
+        # Before the outputs are recorded as this statement's: an input it
+        # also binds (``n += len(f.read())``) inherits its files as the entry
+        # it came from recorded them (`StatementStore._producer_file_snapshots`).
+        sources = self.tracking_state.variable_sources
+        run.entry_sources = {name: sources[name] for name in run.inputs & run.outputs if name in sources}
         with self._keeping_outputs(run, execution.echo, execution.cost or 0.0):
             # What it links, from its outputs' edges dropped to those found
             # now, is kept for the simulation (`note_share_edges`).

@@ -262,7 +262,7 @@ class StatementStore:
             if not inherited:
                 continue
             all_file_deps.update(inherited)
-            recorded = self._producer_file_snapshots(input_var)
+            recorded = self._producer_file_snapshots(input_var, run.entry_sources.get(input_var))
             for path in inherited:
                 if path in recorded and path not in direct:
                     inherited_snapshots.setdefault(path, recorded[path])
@@ -319,9 +319,10 @@ class StatementStore:
             warn_diagnostic(CashCacheStoreFailedWarning, "STORE-INPUT-CHANGED", what, fix)
         return True
 
-    def _producer_file_snapshots(self, var_name: str) -> dict[str, dict]:
-        """The file snapshots *var_name*'s producing statement stored, or {}."""
-        key = self.tracking_state.variable_sources.get(var_name)
+    def _producer_file_snapshots(self, var_name: str, key: str | None = None) -> dict[str, dict]:
+        """The file snapshots *var_name*'s producing statement stored, or {}:
+        the entry *key* when given (`StatementRun.entry_sources`)."""
+        key = key or self.tracking_state.variable_sources.get(var_name)
         backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
         if not key or backend is None:
             return {}
