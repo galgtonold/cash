@@ -83,3 +83,35 @@ def test_a_column_that_fails_raises_on_the_caller(monkeypatch):
         content_hashers._fold_polars_columns(
             content_hashers.hashlib.sha256(), content_hashers._polars_arrow_columns(frame, pl), 5_000
         )
+
+
+def test_the_hashing_threads_are_cash_s_own_and_gone_when_the_hash_returns(monkeypatch):
+    """A statement after a big frame's digest must see no thread of the
+    user's alive: the threads run cash's code and are joined before the
+    hash returns."""
+    import threading
+
+    from cash.notebook.background_threads import user_code_of
+
+    frame = _frame(5_000)
+    monkeypatch.setattr(content_hashers, "PARALLEL_COLUMNS_MIN_ROWS", 1_000)
+    monkeypatch.setattr(content_hashers, "hashing_threads", lambda: 4)
+    seen = []
+    real = content_hashers._ArrowColumn.fold
+
+    def recording(self, h):
+        t = threading.current_thread()
+        # Asked while it runs: a finished thread drops its target.
+        seen.append((t, user_code_of(t), getattr(getattr(t, "_target", None), "__module__", None)))
+        return real(self, h)
+
+    monkeypatch.setattr(content_hashers._ArrowColumn, "fold", recording)
+    before = set(threading.enumerate())
+    content_hashers.hash_polars(frame)
+    workers = [w for w in seen if w[0] is not threading.current_thread()]
+    assert workers
+    for t, user_code, module in workers:
+        assert user_code is None
+        assert module == "cash.content_hashers"
+        assert not t.is_alive()
+    assert {t for t in threading.enumerate() if t.is_alive()} <= before
