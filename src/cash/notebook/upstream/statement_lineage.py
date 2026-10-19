@@ -211,14 +211,15 @@ class StatementLineage:
             return recorded
         return static_share_edges(tree, self._function_source, self.shell.user_ns)
 
-    def relink(self, stmt_code: str, tree: ast.AST | None, rebound: set[str]) -> None:
+    def relink(self, stmt_code: str, tree: ast.AST | None, rebound: set[str], bound: Container[str]) -> None:
         """Leave the walk's edges as running *stmt_code* left the runtime's:
         drop those of the names it binds afresh (*rebound*), then add the
-        ones its run linked (`share_record`). Outside a walk, nothing."""
+        ones its run linked (`share_record`) between names *bound* when it
+        runs, as a hit does. Outside a walk, nothing."""
         edges = self.walk_edges
         if edges is None or is_control_body(stmt_code):
             return
-        apply_share_record(edges, rebound, self.share_record(stmt_code, tree))
+        apply_share_record(edges, rebound, self.share_record(stmt_code, tree), bound)
 
     # -- What a statement reads and writes ------------------------------------
 
@@ -1038,8 +1039,10 @@ class StatementLineage:
                 return StatementOutcome(advanced, 0.0, False, {})
 
             # The edges as its run left them, before what it changed in
-            # place moves the names that share an object with it.
-            self.relink(stmt_code, tree, (outputs - inputs) | (assigned_names(tree) & outputs))
+            # place moves the names that share an object with it; its
+            # outputs are bound by then, as after a hit's restore.
+            bound = ChainMap(dict.fromkeys(outputs), virtual_lineage, self.shell.user_ns)
+            self.relink(stmt_code, tree, (outputs - inputs) | (assigned_names(tree) & outputs), bound)
 
             outcome = self._apply_writes(
                 stmt_code,
