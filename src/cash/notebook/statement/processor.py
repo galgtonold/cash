@@ -1241,7 +1241,7 @@ class StatementProcessor:
         if not is_control_body(run.code):
             recorded = self._records.recorded_share_edges(run.source_hash)
             if recorded:
-                apply_share_record(self.tracking_state.derivation_edges, (), recorded)
+                apply_share_record(self.tracking_state.derivation_edges, (), recorded, self.shell.user_ns)
         self.lineage_builder.replay_derivation_bumps(
             self.tracking_state, run.outputs, run.inputs, skip=moved, code=run.code
         )

@@ -41,7 +41,7 @@ import inspect
 import logging
 import sys
 import types
-from collections.abc import Iterable, Iterator
+from collections.abc import Container, Iterable, Iterator
 from contextlib import contextmanager
 from typing import Any, Callable
 
@@ -142,14 +142,21 @@ def apply_share_record(
     derivation_edges: dict[str, set[str]],
     rebound: Iterable[str],
     record: Iterable[tuple[str, str]],
+    bound: Container[str] | None = None,
 ) -> None:
     """Replay one statement's edges onto *derivation_edges*: drop the edges
     of the names it binds afresh (*rebound*), then add the ones it linked
-    when it ran (*record*), as its run did."""
+    when it ran (*record*), as its run did.
+
+    With *bound*, an edge to a name not in it is left out: the record is the
+    last run of the same text, which may be a later place in the notebook
+    where that name shares the object; here the name holds nothing yet, so
+    a run here linked nothing to it, and a hit linking it would move the
+    name on where a run does not."""
     for name in rebound:
         clear_edges_for(derivation_edges, name)
     for src, dst in record:
-        if src != dst:
+        if src != dst and (bound is None or (src in bound and dst in bound)):
             link(derivation_edges, src, dst)
 
 
