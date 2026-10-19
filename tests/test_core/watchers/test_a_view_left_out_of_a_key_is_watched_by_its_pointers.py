@@ -132,6 +132,19 @@ def test_filling_a_view_keeps_the_digest_without_reading_again(watching, counted
     assert value_watch._cw.stats()["views_kept"] >= 1
 
 
+def test_a_view_another_instance_filled_first_keeps_the_digest(watching, counted):
+    """Once another instance's dict holds the key, CPython 3.12 reports the
+    add to a dict sharing its keys as a change of a key, not an add."""
+    other = Net(30)
+    _ = other.nodes, other.degree
+    net = Net(30)
+    before = watched(net, counted)
+    _ = net.nodes
+    _ = net.degree
+    assert not reread(net, counted)
+    assert value_watch.digest(net, counted) == before
+
+
 FILLS = {
     "a snapshot, not a view": lambda n: n.sizes,
     "a plain attribute": lambda n: setattr(n, "extra", [1]),

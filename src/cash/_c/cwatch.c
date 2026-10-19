@@ -726,6 +726,13 @@ static int aset_add(AddrSet *S, uintptr_t p) {   /* 1 added, 0 present, -1 error
     return 1;
 }
 
+static int aset_has(const AddrSet *S, uintptr_t p) {
+    if (!S->cap) return 0;
+    size_t m = S->cap - 1, i = hmix(p) & m;
+    while (S->a[i]) { if (S->a[i] == p) return 1; i = (i + 1) & m; }
+    return 0;
+}
+
 static void aset_clear(AddrSet *S) {
     if (S->cap > (1u << 16)) { free(S->a); S->a = NULL; S->cap = 0; }
     else if (S->a) memset(S->a, 0, S->cap * sizeof *S->a);
@@ -745,6 +752,7 @@ static int ovec_push(ObjVec *V, PyObject *o) {   /* steals nothing: increfs */
 }
 
 static AddrSet visited, typeseen, insttypes;
+static AddrSet viewdicts;   /* the instance dicts this walk walked with their views left out */
 static ObjVec stack_, keep;
 
 typedef struct {
@@ -754,6 +762,7 @@ typedef struct {
     PyObject *detail;      /* new ref: the type to classify or the reason */
     int saw_instances;
     int saw_globals;
+    int plain_viewdict;    /* an instance dict walked with its views left out is also reached as a plain dict */
 } Walk;
 
 static int root_push_node(Walk *W, uintptr_t addr, PyObject *key) {
@@ -997,7 +1006,8 @@ static uint32_t nkp = 0;
 static int dict_with_views(Walk *W, PyObject *d, PyObject *views) {
     int added = aset_add(&visited, (uintptr_t)d);
     if (added < 0) return -1;
-    if (added == 0) return 0;       /* walked already, all of it as content */
+    if (added == 0) { W->plain_viewdict = 1; return 0; }   /* walked already, all of it as content */
+    if (aset_add(&viewdicts, (uintptr_t)d) < 0) return -1;
     if (ovec_push(&keep, d) < 0) return -1;
     W->content += 64 + (size_t)PyDict_GET_SIZE(d) * 24;
     if (root_push_node(W, (uintptr_t)d, NULL) < 0) return -1;
@@ -1589,7 +1599,7 @@ static PyObject *arm_value(PyObject *o, PyObject *anchors, PyObject **kept) {
     R->last_used = ++tick;
     R->wref = wref;
 
-    Walk W = {R, (uint32_t)r, 0, A_ARMED, NULL, 0, 0};
+    Walk W = {R, (uint32_t)r, 0, A_ARMED, NULL, 0, 0, 0};
     int rc = 0;
     if (ans) {
         /* the namespace slot holding it: rebinding or deleting drops the root */
@@ -1599,12 +1609,14 @@ static PyObject *arm_value(PyObject *o, PyObject *anchors, PyObject **kept) {
         R = &roots[r];
         R->anchored = 1;
     }
-    aset_clear(&visited); aset_clear(&typeseen); aset_clear(&insttypes);
+    aset_clear(&visited); aset_clear(&typeseen); aset_clear(&insttypes); aset_clear(&viewdicts);
     stack_.n = 0;
     if (!rc) rc = push(o);
     while (!rc && stack_.n) {
         PyObject *x = stack_.v[--stack_.n];   /* owned: moved to keep */
         int added = aset_add(&visited, (uintptr_t)x);
+        /* held as a plain dict too: pickled whole there, its views included */
+        if (added == 0 && PyDict_CheckExact(x) && aset_has(&viewdicts, (uintptr_t)x)) W.plain_viewdict = 1;
         if (added <= 0) { Py_DECREF(x); if (added < 0) rc = -1; continue; }
         if (ovec_push(&keep, x) < 0) { Py_DECREF(x); rc = -1; break; }
         Py_DECREF(x);
@@ -1656,7 +1668,8 @@ static PyObject *arm_value(PyObject *o, PyObject *anchors, PyObject **kept) {
         }
     }
     c_arms++;
-    int keep_all = nkp > 0, any = 0;
+    /* a view's own dict also held plainly is keyed with its views: no keep */
+    int keep_all = nkp > 0 && !W.plain_viewdict, any = 0;
     for (uint32_t j = 0; j < nkp; j++) if (!kp_ok[j]) keep_all = 0;
     for (int k = 0; k < NKINDS; k++) if (kept[k]) any = 1;
     if (keep_all && any) {
