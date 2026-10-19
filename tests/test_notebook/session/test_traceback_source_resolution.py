@@ -6,8 +6,8 @@ cell-defined function printed ``File "<cash>", line N`` with NO source line, and
 ``inspect.getsource`` raised "could not get source code" — losing the failing
 line in every debug loop.
 
-Each statement now compiles under a stable, per-statement ``<cash-{digest}>``
-name whose source is registered in linecache.
+Each statement now compiles under a stable, per-statement ``/<cash-{digest}>``
+name (at the drive root) whose source is registered in linecache.
 """
 
 import inspect
@@ -16,6 +16,7 @@ import traceback
 
 import pytest
 
+from cash._paths import CELL_ROOT
 from cash.notebook.compiled_source import (
     is_cash_filename,
     register_cell_source,
@@ -58,7 +59,8 @@ def test_register_cell_source_distinguishes_statements():
 @pytest.mark.parametrize(
     "name,expected",
     [
-        ("<cash-6f20c37e324f>", True),
+        (CELL_ROOT + "<cash-6f20c37e324f>", True),
+        ("<cash-6f20c37e324f>", False),  # the name before it stood at the drive root
         ("<cash>", False),  # a warning label, never a compiled statement
         ("/home/u/real_module.py", False),
         ("<string>", False),

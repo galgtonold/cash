@@ -18,7 +18,7 @@ import types
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from .._paths import MAIN_MODULE_NAMES, resolve_main_module
+from .._paths import MAIN_MODULE_NAMES, is_pseudo_filename, resolve_main_module
 from ..install_paths import in_own_package, top_package
 from ..jit_functions import jit_python_function
 from ..tracking.function_tracker import is_local_module
@@ -91,7 +91,7 @@ def _function_is_exec_built(obj: Any) -> bool:
     if not isinstance(fn, types.FunctionType) or "__name__" in fn.__globals__:
         return False
     filename = fn.__code__.co_filename
-    if not (filename.startswith("<") and filename.endswith(">")) or linecache.getlines(filename):
+    if not (is_pseudo_filename(filename) and filename.endswith(">")) or linecache.getlines(filename):
         return False
     return _defining_module(fn) is None
 

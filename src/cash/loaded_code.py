@@ -26,6 +26,7 @@ import os
 import types
 
 from ._memo import COMPILED_MODULES, LruMemo
+from ._paths import is_pseudo_filename
 from .process_start import process_start_time
 from .source_norm import bytecode_identity
 from .source_reading import (
@@ -275,7 +276,7 @@ def loaded_code_matches_disk(fn: object) -> bool:
     if not isinstance(code, types.CodeType):
         return True
     path = code.co_filename
-    if not path or path.startswith("<"):
+    if not path or is_pseudo_filename(path):
         return True
     if not path.endswith((".py", ".pyw")):
         # Code compiled from something that is not a Python file -- a doc
