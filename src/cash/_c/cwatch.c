@@ -2388,6 +2388,8 @@ static int find_set_dummy(void) {
     return 0;
 }
 
+PyObject *cwatch_set_dummy(void) { return set_dummy; }
+
 #else  /* !CWATCH_USABLE */
 static PyMethodDef methods[] = {{NULL, NULL, 0, NULL}};
 #endif
@@ -2418,7 +2420,7 @@ static int exec_module(PyObject *m) {
     if (PyModule_AddObjectRef(m, "Acc", (PyObject *)&AccType) < 0) return -1;
     if (PyModule_AddObjectRef(m, "Touch", (PyObject *)&TouchType) < 0) return -1;
     if (cwalk_add_functions(m) < 0 || caudit_add_functions(m) < 0 || cfilehook_add_functions(m) < 0 ||
-        cviews_add_functions(m) < 0)
+        cviews_add_functions(m) < 0 || csets_add_functions(m) < 0)
         return -1;
 #else
     if (PyModule_AddObjectRef(m, "USABLE", Py_False) < 0) return -1;

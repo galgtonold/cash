@@ -9,7 +9,7 @@ from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from ..sizing import memory_footprint, pickled_size_estimate
-from . import memory_backend
+from . import memory_backend, set_order
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, entry_expired, store_seconds
 from .clear_watch import ClearWatcher
 from .entry_format import SplitPayload
@@ -392,6 +392,9 @@ class TieredBackend(CacheBackend):
 
                 # Inject source information
                 metadata["source"] = backend.source_label
+                if i > 0:
+                    # The RAM tier lays out its own copies.
+                    set_order.restore(value, metadata)
 
                 return metadata, value
         return None, None
@@ -688,6 +691,9 @@ class TieredBackend(CacheBackend):
         #: What a tier refused to write this call, for the caller to report.
         store_errors: list[str] = []
         metadata = dict(metadata) if metadata is not None else {}
+        # Where its sets keep their elements, so a hit iterates them in this
+        # order (`set_order`). In the metadata only: the key is not touched.
+        set_order.record(value, metadata)
         stored_destinations = []
         # A tier's `default_ttl` belongs to the entry, not to that tier: stamped
         # once, here, so every tier's copy carries it. `get` is what expires
