@@ -1918,8 +1918,20 @@ class StatementProcessor:
 
         Updates ``run.outputs`` and ``run.skip_cache`` with what execution
         revealed (an observed mutation, an uncacheable value).
+
+        From its start to its outputs' lineage, only cash's code runs on this
+        thread: each value is read once there (`value_hash.one_read`), unless
+        another thread is alive and could change it in between.
         """
         alive = self._other_thread_alive()
+        with contextlib.ExitStack() as reads:
+            if not alive:
+                reads.enter_context(value_hash.one_read())
+            self._post_execute_reading_once(run, execution, reads, alive)
+
+    def _post_execute_reading_once(
+        self, run: StatementRun, execution: StatementExecution, reads: contextlib.ExitStack, alive: bool
+    ) -> None:
         self._observe_process_state(run)
         self._mutation_routing.observe(run)
         self._mutation_routing.note_module_state(run)
@@ -1993,6 +2005,7 @@ class StatementProcessor:
                 )
             # Let go of the values they hold: the checks below count references.
             run.settled_digests = {}
+            reads.close()
             # The share check, the closure check and the RAM tier each look into
             # the outputs; JSON-like ones are walked once for all of them.
             with _plain_data.one_look(captured_vars):
