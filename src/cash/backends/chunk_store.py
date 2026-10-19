@@ -192,6 +192,51 @@ class _Replaced(Exception):
     """Another write replaced an entry while it was being repointed."""
 
 
+def _swap_if_same(path: str, new: str, identity: tuple, directory: str) -> None:
+    """Put the file *new* at *path* if the entry there is still the one
+    *identity* names; raise `_Replaced` when another write replaced it.
+
+    A rename cannot compare first, so the entry is taken away (renamed
+    aside, which is atomic), checked, and the new one linked in only where
+    nothing is: a write landing in between keeps its file, and the rewrite
+    is dropped. An entry taken away by mistake is linked back unless a
+    newer one is there. A crash leaves the entry, the new one, or no entry
+    (a miss), and temp files the folder's sweep removes."""
+    fd, aside = create_temp_file(directory, prefix=owned_temp_prefix())
+    os.close(fd)
+    try:
+        try:
+            # A folder without hard links (some network shares) is left as
+            # it is: found out before the entry is taken away.
+            os.remove(aside)
+            os.link(new, aside)
+            os.remove(aside)
+            os.replace(path, aside)
+        except OSError:
+            # Gone, held open by a reader on Windows, or no hard links.
+            raise _Replaced(path) from None
+        if identity_at(aside) != identity:
+            _link_if_absent(aside, path)
+            raise _Replaced(path)
+        if not _link_if_absent(new, path):
+            raise _Replaced(path)
+    finally:
+        for left in (aside, new):
+            try:
+                os.remove(left)
+            except OSError:
+                pass
+
+
+def _link_if_absent(src: str, dst: str) -> bool:
+    """Hard-link *src* at *dst* unless something is there; False if it was."""
+    try:
+        os.link(src, dst)
+    except FileExistsError:
+        return False
+    return True
+
+
 class ChunkError(OSError):
     """A chunk an entry names is missing, the wrong size, or damaged."""
 
@@ -848,13 +893,13 @@ class ChunkStore:
         one, each whole.
 
         Under the entry's lock (`entry_lock`), so no write, removal or access
-        update of it in this process lands between reading it and the rename;
-        skipped (False) when another thread holds it. Another process can
-        still replace the entry in that window, past the identity check just
-        before the rename: then its write is lost and the entry is this one,
-        a value that was stored under the same key, whose chunks the old pack
-        still holds -- the old pack is not removed while this process knows
-        an entry naming it, and another process's index learns it afresh.
+        update of it in this process lands between reading it and putting
+        the new one in place; skipped (False) when another thread holds it.
+        Another process's write is never undone either (`_swap_if_same`):
+        the rewrite goes in only if the file it takes away is the entry it
+        read, else that write stays. Its worst case is a miss -- the entry
+        briefly absent, or this rewrite dropped -- and an access-time update
+        another process made in that moment lost.
         """
         lock = self.entry_lock(stem)
         if not lock.acquire(blocking=False):
@@ -876,9 +921,7 @@ class ChunkStore:
                                 write_all(fd, memoryview(block))
                     finally:
                         os.close(fd)
-                    if identity_at(path) != identity:
-                        raise _Replaced(path)
-                    replace_with_retry(tmp, path)
+                    _swap_if_same(path, tmp, identity, directory)
                 except BaseException as exc:
                     try:
                         os.remove(tmp)

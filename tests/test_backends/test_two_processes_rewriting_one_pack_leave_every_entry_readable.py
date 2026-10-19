@@ -159,3 +159,47 @@ def test_an_entry_another_thread_holds_is_not_rewritten(tmp_path):
         got = reader.get(key)
         assert [a.tobytes() for a in got[1]] == [a.tobytes() for a in values[key]], key
     assert set(old) <= set(_packs(cache)), "the old pack went while second still names it"
+
+
+@pytest.mark.parametrize("when", ["before the old entry is taken away", "after it is taken away"])
+def test_a_newer_write_landing_during_a_rewrite_is_kept(tmp_path, monkeypatch, when):
+    """Another process stores the entry again while the rewrite swaps it in:
+    the newer entry stays, never the older value put back over it."""
+    from cash.backends import chunk_store
+
+    cache = tmp_path / "cache"
+    backend = _store_all(cache)
+    other = FileBackend(str(cache), flush_interval=0)  # its own locks: another process's
+    newer = [np.full(ROWS, 7.0)]
+    landed = []
+    swapping = []
+
+    def write_newer():
+        if not landed:
+            other.set("second", newer, {"execution_time": 1.0})
+            other._writes.wait_all()
+            landed.append(when)
+
+    real_swap, real_identity = chunk_store._swap_if_same, chunk_store.identity_at
+
+    def swap(path, new, identity, directory):
+        second = path.endswith(backend._stem("second") + ".entry")
+        if when.startswith("before") and second:
+            write_newer()
+        swapping[:] = [second]
+        return real_swap(path, new, identity, directory)
+
+    def identity_at(path):
+        # In the swap, on the entry taken aside, before the new one goes in.
+        if when.startswith("after") and swapping == [True]:
+            write_newer()
+        return real_identity(path)
+
+    monkeypatch.setattr(chunk_store, "_swap_if_same", swap)
+    monkeypatch.setattr(chunk_store, "identity_at", identity_at)
+    backend.delete("first")
+    assert landed, "the rewrite never reached second"
+    got = FileBackend(str(cache), flush_interval=0).get("second")
+    assert [a.tobytes() for a in got[1]] == [a.tobytes() for a in newer]
+    third = FileBackend(str(cache), flush_interval=0).get("third")
+    assert [a.tobytes() for a in third[1]] == [a.tobytes() for a in _values()["third"]]
