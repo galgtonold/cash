@@ -20,6 +20,7 @@ import pytest
 
 from cash import Cash, InMemoryBackend, RemoteFileDataSource
 from cash.remote_source import REMOTE_LEDGER
+from tests._moto import moto_s3_endpoint
 
 pytestmark = [pytest.mark.filterwarnings("ignore::DeprecationWarning"), pytest.mark.timeout(120)]
 
@@ -61,15 +62,8 @@ def test_an_object_outside_a_glob_does_not_move_it():
 
 @pytest.fixture(scope="module")
 def _moto_server():
-    pytest.importorskip("s3fs")
-    moto_server = pytest.importorskip("moto.server")
-
-    server = moto_server.ThreadedMotoServer(ip_address="127.0.0.1", port=0, verbose=False)
-    server.start()
-    try:
-        yield f"http://127.0.0.1:{server.get_host_and_port()[1]}"
-    finally:
-        server.stop()
+    with moto_s3_endpoint() as url:
+        yield url
 
 
 @pytest.fixture

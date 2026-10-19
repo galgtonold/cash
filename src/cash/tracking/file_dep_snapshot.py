@@ -43,6 +43,7 @@ from cash.tracking.digest_table import current_table
 from cash.tracking.file_versions import note_same_content
 from cash.tracking.read_classification import stat_key
 from cash.tracking.tracker_context import untracked
+from cash.tracking.written_in_place import is_written_in_place
 
 logger = logging.getLogger(__name__)
 
@@ -307,7 +308,7 @@ def file_content_hash(
             return None
         if size is None:
             size = st.st_size
-        if (hashed_at - st.st_mtime) > _HASH_MEMO_MIN_AGE_SECONDS:
+        if (hashed_at - st.st_mtime) > _HASH_MEMO_MIN_AGE_SECONDS and not is_written_in_place(st, path):
             memo_key = _stat_memo_key(path, st, size)
             remembered = _remembered_digest(memo_key)
             if remembered is not None:
@@ -349,7 +350,7 @@ def remembered_file_digest(path: str) -> str | None:
         st = os.stat(path)
     except OSError:
         return None
-    if (time.time() - st.st_mtime) <= _HASH_MEMO_MIN_AGE_SECONDS:
+    if (time.time() - st.st_mtime) <= _HASH_MEMO_MIN_AGE_SECONDS or is_written_in_place(st, path):
         return None
     return _remembered_digest(_stat_memo_key(path, st, st.st_size))
 
@@ -850,7 +851,9 @@ def _unchanged_since_hashed(st: os.stat_result, stored: dict[str, Any]) -> bool:
     the same timestamp tick, so it is read, as before. One that had settled
     cannot be changed afterwards without its timestamp moving -- unless
     something puts the timestamp back, or writes without moving it (a Windows
-    ``np.memmap`` write). Those are not seen: see known-limitations.
+    ``np.memmap`` write). A file mapped to write in a process with cash is
+    read instead (`written_in_place`); other such writes are not seen: see
+    known-limitations.
 
     Re-reading every input at every check is what this saves -- 1,312 exports
     re-hashed before each cell, about 5 s a cell, and
@@ -959,7 +962,7 @@ def file_dep_is_fresh(
     if stored_size is not None and st.st_size != stored_size:
         return False, "size"
     if stored_hash is not None:
-        if _unchanged_since_hashed(st, stored):
+        if _unchanged_since_hashed(st, stored) and not is_written_in_place(st, resolved_path):
             return True, None
         checked_at = time.time()  # after the stat, before the read
         cur_hash = file_content_hash(resolved_path, st.st_size, st)

@@ -10,8 +10,8 @@ pay: every run, hit or miss, pays the analysis.
 
 So the analysis has a budget, ``max(ANALYSIS_BUDGET_FLOOR_S,
 ANALYSIS_BUDGET_FACTOR * expected run time)``, where the expected run time is
-what the statement last took (`CashSession.expected_compute`). The walks
-check the clock as they go (`check_analysis_budget`) and raise
+what the statement last took (`CashSession.expected_compute`), counted in
+this thread's CPU time (`CpuLimit`). The walks check it as they go (`check_analysis_budget`) and raise
 `AnalysisBudgetExceeded` once it is spent. Nothing is skipped in silence:
 each place that asks has an answer for "could not tell in time" that is what
 it answers for a callee it cannot read -- the statement runs uncached, a
@@ -34,6 +34,8 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Iterator
 from time import perf_counter as _perf_counter
+
+from cash._clock import CpuLimit
 
 __all__ = [
     "ANALYSIS_BUDGET_FACTOR",
@@ -65,25 +67,20 @@ class AnalysisBudgetExceeded(Exception):
     """The analysis of the statement in progress spent its budget."""
 
 
-class AnalysisBudget:
-    """One statement's analysis budget: when it started, when it ends, and
-    whether a walk ran past it."""
+class AnalysisBudget(CpuLimit):
+    """One statement's analysis budget, in this thread's CPU time
+    (`CpuLimit`): when it started, when it ends, and whether a walk ran
+    past it."""
 
-    __slots__ = ("deadline", "seconds", "started", "tripped")
+    __slots__ = ("tripped",)
 
     def __init__(self, seconds: float) -> None:
-        self.seconds = seconds
-        self.started = _perf_counter()
-        self.deadline = self.started + seconds
+        super().__init__(seconds)
         self.tripped = False
 
-    def spent(self) -> float:
-        """Seconds since the budget started."""
-        return _perf_counter() - self.started
-
     def left(self) -> float:
-        """Seconds left, never below zero."""
-        return max(0.0, self.deadline - _perf_counter())
+        """CPU seconds left, never below zero."""
+        return max(0.0, self.seconds - self.spent())
 
 
 _CURRENT: list[AnalysisBudget | None] = [None]
@@ -128,6 +125,6 @@ def check_analysis_budget() -> None:
     budget = _CURRENT[0]
     if budget is None:
         return
-    if budget.tripped or _perf_counter() > budget.deadline:
+    if budget.tripped or (_perf_counter() > budget.deadline and budget.passed()):
         budget.tripped = True
         raise AnalysisBudgetExceeded

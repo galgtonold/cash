@@ -555,7 +555,7 @@ read_parquet`).
 **Fix:** read the file through a watched reader, or put `# @cash:no-cache` above
 the statement if the read is cheap.
 
-<!-- claim: cash/tracking/native_reads.py:close_window @0e2917f4 -->
+<!-- claim: cash/tracking/native_reads.py:close_window @0e2917f4, cash/tracking/native_reads.py:_hook_libraries_as_they_load @d228cce2 -->
 On Linux (glibc, x86-64 or aarch64) and on Windows (x64) the native file hook
 is on by default (`%cash_status` shows it as `native_file_hook`;
 `CASH_NATIVE_FILE_HOOK=0` turns it off). cash then also sees the files a
@@ -565,9 +565,11 @@ C, C++ or Rust library opens itself through the C library's `open`, `fopen` or
 database `ATTACH`-ed in SQLite, `os.open`, a compiled extension of your own.
 It still misses a library that makes the system call itself, one linked
 statically against the C library, a call through a function pointer the
-library looked up itself (`dlsym`, `GetProcAddress`, ctypes), and a library
-first loaded inside the cached call. A file such a library opens while several
-cached calls run at once, in different threads, counts for all of them. On
+library looked up itself (`dlsym`, `GetProcAddress`, ctypes), and a plugin a
+C library loads by itself and uses within the same cached call. A library your
+code imports or loads with `ctypes` inside the call (`import pyarrow.fs` in
+the function body) is seen from the moment it is loaded. A file such a
+library opens while several cached calls run at once, in different threads, counts for all of them. On
 macOS the hook is not available yet; there the readers listed above are still
 recorded by their entry points.
 
@@ -594,12 +596,20 @@ as an argument (`load_cfg("config.yaml")` inside the cached function).
 
 ### An edit that keeps the size and timestamps
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:_unchanged_since_hashed @809a68f2, cash/tracking/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0, cash/notebook/upstream/virtual_lineage.py:VirtualLineage._check_cell_file_deps @eeff0da9 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:_unchanged_since_hashed @59019b2b, cash/tracking/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0, cash/notebook/upstream/virtual_lineage.py:VirtualLineage._check_cell_file_deps @eeff0da9 -->
 cash checks a file's size and timestamps first and reads its content only when
 one of them moved. On Linux and macOS every write moves the inode change time,
 so this never misses. On **Windows**, two kinds of edit move nothing: a write
 whose modification time is put back afterwards (`os.utime`, `shutil.copystat`,
-`robocopy /COPY:T`), and a write through `np.memmap(path, mode="r+")`.
+`robocopy /COPY:T`), and a write through a memory map
+(`np.memmap(path, mode="r+")`).
+
+<!-- claim: cash/tracking/written_in_place.py:_on_mmap @fa5b57bf, cash/tracking/written_in_place.py:is_written_in_place @90fefb25, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @1e9f74d4 -->
+A file mapped to write (`np.memmap` in `r+` or `w+` mode,
+`np.load(mmap_mode="r+")`, `mmap.mmap` with write access) in a process that
+had imported cash is read at every check from then on, in that process and
+in later ones that use the same cache folder, so its writes are seen. A
+mapping made in a process without cash, or before `import cash`, is not.
 
 <!-- claim: cash/tracking/file_dep_snapshot.py:_remembered_digest @7327a95f, cash/tracking/file_dep_snapshot.py:_HASH_MEMO_TTL_SECONDS == None -->
 Such an edit stays unseen for as long as the kernel runs, not only for a

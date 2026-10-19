@@ -824,7 +824,7 @@ first). A hit that skips one only leaves the runtime to compile again.
 once and will not happen again. If the next step relies on them, later runs
 behave differently from the first.
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @cf16cee7, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @a43210ad -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @8eedb33b, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @a43210ad -->
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.argument_identities @dda2b327, cash/_plain_data.py:identity_changed @c64ac6c0 -->
 A call that changes an argument is **not stored**, so it runs every time. The
 arguments are checked on every miss, whatever their size, except those
@@ -2379,6 +2379,7 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 | [STORE-LOCK-FAILED](#store-lock-failed) | decorator | the per-key lock failed; ran without it |
 | [STORE-METADATA-INVALID](#store-metadata-invalid) | decorator | a stored entry's metadata is unreadable |
 | [STORE-STATE-CHANGED](#store-state-changed) | decorator | a global the key read changed during the call; not stored |
+| [STORE-WORK-RUNNING](#store-work-running) | both | work it handed to a thread or thread pool still ran when it returned; not stored |
 | [STORE-UNTRACKED-SOURCE](#store-untracked-source) | decorator | a cached function it calls has a dynamic source that cannot be pickled; kept in RAM only |
 
 ### STORE-CHUNK-FAILED {#store-chunk-failed}
@@ -2546,6 +2547,33 @@ keys on the new value and caches normally. If calls overlap a writer all the
 time, pass the value in as an argument.
 
 **When it is safe to ignore.** Once, after a reload.
+
+### STORE-WORK-RUNNING {#store-work-running}
+
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
+
+<!-- claim: cash/decorator/file_deps.py:FileDeps.work_outlived_call @093e3810, cash/tracking/reader_patches.py:_patch_thread_pool_submit @44766526, cash/tracking/reader_patches.py:_patch_thread_start @a16e8968, cash/tracking/file_tracker.py:FileAccessTracker.__exit__ @9c811089 -->
+**What happened.** The function handed work to a `ThreadPoolExecutor`
+(`submit`, `map`) or started a `threading.Thread`, and returned while some of
+it was still running: it never waited for the future or joined the thread,
+and did not close the pool with `with`. The result was
+returned but not stored. A cached call inside a notebook cell is not stored
+either; the warning is the decorator's.
+
+**Why it matters.** That work runs on after the call, past the moment cash
+records which files the call read: a file it reads from then on is in no
+fingerprint, and what it puts in the result after the store is not in the
+entry. A result filled from a file this way was served with the file's old
+content after the file changed.
+
+**What to do.** Wait for the work before returning: `future.result()`,
+`concurrent.futures.wait(futures)`, `with ThreadPoolExecutor() as pool:`, or
+`thread.join()`.
+Work that is cancelled before it starts does not count.
+
+**When it is safe to ignore.** When the work changes nothing the result holds
+and reads nothing the result depends on, such as a log upload; the call then
+runs each time.
 
 ### STORE-UNTRACKED-SOURCE {#store-untracked-source}
 
