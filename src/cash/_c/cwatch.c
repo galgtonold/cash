@@ -1215,11 +1215,12 @@ static int same_object(Root *R, PyObject *o) {
    holds what proves it is still about the same object, as a root does: a
    dict stays watched, and its DEALLOCATED event ends the skip (`watched`);
    another object is held by a weak reference (`wref`). A list, a tuple or a
-   set has neither and is skipped by address alone. Without the proof, a
+   set has neither and is skipped by its address and its type: a dict made
+   where a skipped list was freed is not that list. Without the proof, a
    dict skipped as too small, or for changing on every check, passed its skip
    on to whatever dict was made at its address next: never armed for up to a
    million checks, however big or still. */
-typedef struct { uintptr_t addr; uint64_t until; float secs; uint8_t state; uint8_t watched; PyObject *wref; } Sight;
+typedef struct { uintptr_t addr; uint64_t until; float secs; uint8_t state; uint8_t watched; PyObject *wref; PyTypeObject *type; } Sight;
 #define SIGHT_BITS 13
 static Sight sights[1 << SIGHT_BITS];
 enum { SG_NONE = 0, SG_SEEN = 1, SG_SKIP = 2 };
@@ -1235,7 +1236,7 @@ static void sight_clear(Sight *g) {
         if (ht_slot(g->addr) < 0 && !world_unwatchable_dict(d) && PyDict_Unwatch(dict_wid, d) < 0) PyErr_Clear();
     }
     Py_CLEAR(g->wref);
-    g->addr = 0; g->state = SG_NONE; g->until = 0; g->secs = 0;
+    g->addr = 0; g->state = SG_NONE; g->until = 0; g->secs = 0; g->type = NULL;
 }
 
 static int sight_watches(uintptr_t a) {
@@ -1263,7 +1264,7 @@ static int sight_holds_live_skip(Sight *g) {
 static int sight_is(Sight *g, PyObject *o) {
     if (g->addr != (uintptr_t)o) return 0;
     if (g->wref) return weak_target(g->wref) == o;
-    return 1;
+    return g->watched || g->type == Py_TYPE(o);   /* borrowed: compared, never read */
 }
 
 static void skip_for(PyObject *o, uint64_t ticks) {
@@ -1277,7 +1278,7 @@ static void skip_for(PyObject *o, uint64_t ticks) {
         g->wref = PyWeakref_NewRef(o, NULL);
         if (!g->wref) PyErr_Clear();   /* a list, a tuple, a set: its address alone */
     }
-    g->addr = a; g->state = SG_SKIP; g->until = tick + ticks;
+    g->addr = a; g->state = SG_SKIP; g->until = tick + ticks; g->type = Py_TYPE(o);
 }
 
 /* ------------------------------------------------------------ housekeeping */

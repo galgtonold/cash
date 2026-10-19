@@ -66,6 +66,45 @@ def test_a_dict_made_where_a_too_small_one_was_freed_is_watched(watching, counte
     assert _watched_after_two_hashes(fresh, counted)
 
 
+def _a_dict_where_a_list_was_freed(make_list):
+    """A dict made where a list made by *make_list* was freed, and that list's
+    address. Lists kept on the list free list are not given back, so it is
+    filled first; the dict free list is drained by the dicts held here."""
+    for _ in range(5):
+        others = [[i] for i in range(300)]
+        listed = make_list()
+        address = id(listed)
+        del others, listed
+        held = []
+        for _ in range(20000):
+            value = {"a": 1, "b": 2}  # no list of its own, to land where one was
+            if id(value) == address:
+                return value
+            held.append(value)
+    raise AssertionError("no dict landed where the list was freed")
+
+
+def test_a_dict_made_where_a_skipped_list_was_freed_is_watched(watching, counted):
+    """A list has no weak reference to prove a skip is still about it, and
+    was skipped by address alone: the notebook variable a dict was "never
+    vouched for" when it was made where a list some earlier test left
+    skipped had lived."""
+    value_watch._cw.configure(min_bytes=1 << 20)
+
+    def skipped_list():
+        small = [1, 2, 3]
+        watching["small"] = small  # a list is watched while a namespace holds it
+        for _ in range(3):
+            value_watch.digest(small, counted)
+        assert value_watch._cw.check(small, value_watch.KIND_VALUE) == SKIP, "the small list was not skipped"
+        del watching["small"]
+        return small
+
+    fresh = _a_dict_where_a_list_was_freed(skipped_list)
+    value_watch._cw.configure(min_bytes=0)
+    assert _watched_after_two_hashes(fresh, counted), "the dict inherited the freed list's skip"
+
+
 def test_a_skipped_value_still_alive_stays_skipped(watching, counted):
     """The control: the skip itself still holds while its value lives."""
     value = _skipped_for_changing(counted, _rows)
