@@ -215,6 +215,23 @@ class _CappedWriter:
         return len(data)
 
 
+class _SetsInOrder(pickle.Pickler):
+    """Pickles a set inside another value in an order fixed by its items,
+    not by string hashes: those change with each process, and a set held in
+    an object (sklearn's ``StrOptions``, in the closure of every
+    ``@validate_params`` function) pickled in another order made
+    ``cross_val_score`` look changed after every restart."""
+
+    def persistent_id(self, obj: Any) -> Any:
+        # Not ``reducer_override``: the pickler may skip it for exact sets.
+        t = type(obj)
+        if t is set or t is frozenset:
+            if len(obj) > _NODES:
+                raise _Opaque
+            return t.__name__ + "|" + "|".join(sorted(map(value_digest, obj)))
+        return None
+
+
 _SCALARS = (int, float, complex, bool, type(None), type(Ellipsis))
 
 
@@ -345,7 +362,7 @@ class _Digester:
                 return
         h.update(b"p" + f"{t.__module__}.{t.__qualname__}".encode())
         try:
-            pickle.Pickler(_CappedWriter(h), protocol=4).dump(v)
+            _SetsInOrder(_CappedWriter(h), protocol=4).dump(v)
         except _Opaque:
             raise
         except Exception as exc:
