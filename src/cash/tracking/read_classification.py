@@ -17,6 +17,7 @@ import sys
 import threading
 import zoneinfo
 from collections.abc import Callable
+from typing import Any
 
 from cash._memo import SOURCE_FILES, LruMemo
 from cash.install_paths import (
@@ -293,7 +294,12 @@ def _module_package_dir(module_name: str) -> str | None:
 _module_kinds: LruMemo[str, tuple[bool, bool, bool, str]] = LruMemo(SOURCE_FILES)
 
 
-def incidental_read(path: str, own_package: str | None = None) -> str | None:
+#: ``co_flags`` of a frame that can be suspended and resumed from elsewhere:
+#: while it is suspended its callers are not fixed.
+_RESUMABLE = 0x20 | 0x80 | 0x200  # CO_GENERATOR | CO_COROUTINE | CO_ASYNC_GENERATOR
+
+
+def incidental_read(path: str, own_package: str | None = None, anchor: list | None = None) -> str | None:
     """Why the read of *path* happening now is not the user's data, or None.
 
     Four cases, each seen in practice: a file of the interpreter itself;
@@ -301,6 +307,12 @@ def incidental_read(path: str, own_package: str | None = None) -> str | None:
     being imported; and a library reading a file inside its own installed
     package directory. *own_package* is the top-level package of the code
     being cached -- its own files are its data, even when it is installed.
+
+    *anchor*, a tracker's one-slot list, keeps what the walk found below
+    cash's frame above the reading code (a notebook statement's runner): a
+    running frame's callers do not change, so the next read from under the
+    same frame replays that part, a handful of steps, instead of walking
+    the ~50 frames again (60 us a read in a 20,000-file loop).
     """
     path_nc = normcase_path(path)
     if _under(path_nc, interpreter_roots()) and not _under(path_nc, site_roots()):
@@ -309,53 +321,137 @@ def incidental_read(path: str, own_package: str | None = None) -> str | None:
         return "installed package data"
     installed = installed_roots()
     frame = sys._getframe(1)
-    reader_seen = False
-    user_resource: bool | None = None
+    state = _WalkState()
+    below_top = None  # the top-level name of the frame walked last
     while frame is not None:
-        module = frame.f_globals.get("__name__") or ""
-        kind = _module_kinds.get(module)
-        if kind is None:
-            kind = (
-                _in_modules(module, _METADATA_MODULES),
-                _in_modules(module, _RESOURCE_MODULES),
-                _in_modules(module, _READ_PLUMBING),
-                module.split(".")[0],
-            )
-            _module_kinds[module] = kind
-        is_metadata, is_resource, is_plumbing, top = kind
-        if is_metadata:
-            if not is_resource:
-                return "package metadata"
-            if user_resource is None:
-                user_resource = _resource_is_user_data(path_nc)
-            if not user_resource:
-                return "package metadata"
-            # The resource API is only plumbing between the caller and the file.
-            frame = frame.f_back
-            continue
-        code = frame.f_code
-        # `__main__` is the user's notebook or script -- in a kernel its module
-        # object is the ipykernel launcher in site-packages, which must not make
-        # a notebook statement look like a library.
-        if top not in (own_package, "cash", "__main__", ""):
-            if code.co_name == "<module>":
-                # Only a module the import system is executing RIGHT NOW: a
-                # host that runs its main loop from module level (an execnet
-                # worker, a launcher) must not turn every read into one.
-                spec = frame.f_globals.get("__spec__")
-                origin = getattr(spec, "origin", None)
-                if (
-                    getattr(spec, "_initializing", False)
-                    and isinstance(origin, str)
-                    and _under(normcase_path(origin), installed)
-                ):
-                    return "library import"
-            if not reader_seen and not is_plumbing:
-                reader_seen = True
-                package_dir = _module_package_dir(module) if module else None
-                if package_dir and _under(package_dir, installed) and path_nc.startswith(package_dir):
-                    return "library resource"
+        kind = _module_kind(frame)
+        top = kind[3]
+        if anchor is not None and top == "cash" and below_top not in (None, "cash"):
+            mark = anchor[0]
+            if mark is not None and mark[0] is frame and mark[1] == own_package and mark[2] == installed:
+                return _replay(mark[3], path_nc, state)
+            if not frame.f_code.co_flags & _RESUMABLE:
+                steps = _steps_below(frame, own_package, installed)
+                anchor[0] = (frame, own_package, installed, steps)
+                return _replay(steps, path_nc, state)
+        below_top = top
+        why = _frame_says(frame, kind, own_package, installed, path_nc, state)
+        if why is not None:
+            return why
         frame = frame.f_back
+    return None
+
+
+class _WalkState:
+    """What a walk up the stack has seen so far: whether the code reading
+    the file was found, and whether the file is the user's own resource."""
+
+    __slots__ = ("reader_seen", "user_resource")
+
+    def __init__(self) -> None:
+        self.reader_seen = False
+        self.user_resource: bool | None = None
+
+
+def _module_kind(frame: Any) -> tuple[bool, bool, bool, str]:
+    """(metadata module?, resource module?, read plumbing?, top-level name)
+    of the module *frame* runs in, remembered per module."""
+    module = frame.f_globals.get("__name__") or ""
+    kind = _module_kinds.get(module)
+    if kind is None:
+        kind = (
+            _in_modules(module, _METADATA_MODULES),
+            _in_modules(module, _RESOURCE_MODULES),
+            _in_modules(module, _READ_PLUMBING),
+            module.split(".")[0],
+        )
+        _module_kinds[module] = kind
+    return kind
+
+
+def _frame_says(
+    frame: Any, kind: tuple, own_package: str | None, installed: Any, path_nc: str, state: _WalkState
+) -> str | None:
+    """What one frame of the walk makes of the read, if anything."""
+    is_metadata, is_resource, is_plumbing, top = kind
+    if is_metadata:
+        if not is_resource:
+            return "package metadata"
+        if state.user_resource is None:
+            state.user_resource = _resource_is_user_data(path_nc)
+        if not state.user_resource:
+            return "package metadata"
+        # The resource API is only plumbing between the caller and the file.
+        return None
+    # `__main__` is the user's notebook or script -- in a kernel its module
+    # object is the ipykernel launcher in site-packages, which must not make
+    # a notebook statement look like a library.
+    if top not in (own_package, "cash", "__main__", ""):
+        if _initializing_installed(frame, installed):
+            return "library import"
+        if not state.reader_seen and not is_plumbing:
+            state.reader_seen = True
+            package_dir = _library_dir(frame, installed)
+            if package_dir and path_nc.startswith(package_dir):
+                return "library resource"
+    return None
+
+
+def _initializing_installed(frame: Any, installed: Any) -> bool:
+    """Is *frame* the body of an installed module the import system is
+    executing RIGHT NOW? A host that runs its main loop from module level
+    (an execnet worker, a launcher) must not turn every read into one."""
+    if frame.f_code.co_name != "<module>":
+        return False
+    spec = frame.f_globals.get("__spec__")
+    origin = getattr(spec, "origin", None)
+    return bool(
+        getattr(spec, "_initializing", False) and isinstance(origin, str) and _under(normcase_path(origin), installed)
+    )
+
+
+def _library_dir(frame: Any, installed: Any) -> str | None:
+    """The installed package directory of the module *frame* runs in, or None."""
+    module = frame.f_globals.get("__name__") or ""
+    package_dir = _module_package_dir(module) if module else None
+    return package_dir if package_dir and _under(package_dir, installed) else None
+
+
+def _steps_below(frame: Any, own_package: str | None, installed: Any) -> tuple:
+    """The walk from *frame* down, as the steps `_replay` takes for any path:
+    only the frames that can say something about a read."""
+    steps = []
+    while frame is not None:
+        is_metadata, is_resource, is_plumbing, top = _module_kind(frame)
+        if is_metadata:
+            steps.append(("resource",) if is_resource else ("metadata",))
+        elif top not in (own_package, "cash", "__main__", ""):
+            if _initializing_installed(frame, installed):
+                steps.append(("import",))
+                break  # the walk would end here
+            if not is_plumbing:
+                steps.append(("reader", _library_dir(frame, installed)))
+        frame = frame.f_back
+    return tuple(steps)
+
+
+def _replay(steps: tuple, path_nc: str, state: _WalkState) -> str | None:
+    """`incidental_read`'s walk over the frames `_steps_below` summed up."""
+    for step in steps:
+        what = step[0]
+        if what == "metadata":
+            return "package metadata"
+        if what == "resource":
+            if state.user_resource is None:
+                state.user_resource = _resource_is_user_data(path_nc)
+            if not state.user_resource:
+                return "package metadata"
+        elif what == "import":
+            return "library import"
+        elif not state.reader_seen:
+            state.reader_seen = True
+            if step[1] and path_nc.startswith(step[1]):
+                return "library resource"
     return None
 
 
