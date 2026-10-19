@@ -1051,7 +1051,8 @@ class CallUnit:
             self._entries.refuse(call.key)
         # Not stored when it made, picked or drew on a pyplot figure, which a
         # hit would not: the next drawing would land on another figure. Nor
-        # when it reads pyplot's current figure, which no key holds.
+        # when it reads pyplot's current figure, which no key holds: seen as
+        # it ran where that is recorded, else by its code.
         # Nor when a file it read changed before it returned: the snapshot,
         # taken now, would describe the new file next to a result computed
         # from the old one. The statement around it warns
@@ -1064,7 +1065,7 @@ class CallUnit:
         elif (
             not displayed
             and pyplot_state() == figures_before
-            and user_callee_using_pyplot(call.fn) is None
+            and _left_pyplot_alone(call.fn, unit)
             and self._worth_storing(call, result, elapsed, result_held)
             and not call_tracker.work_outlived_block
             and not _inputs_moved(call_tracker)
@@ -1561,3 +1562,13 @@ def _rebound_unwatched(call: _Call, before: Mapping[str, Any] | None) -> bool:
 
 
 _ABSENT = object()
+
+
+def _left_pyplot_alone(fn: Any, unit: Any) -> bool:
+    """Did the call of *fn* leave pyplot alone? Where what ran is recorded
+    (*unit*), whether pyplot's code ran: ``run(tsp, cities, plot=False)``
+    never reaches the ``plot_tour`` its code can. Else, whether no function
+    of the user's it can reach uses pyplot."""
+    if unit is not None:
+        return not unit.pyplot_ran
+    return user_callee_using_pyplot(fn) is None

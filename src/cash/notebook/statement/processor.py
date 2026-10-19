@@ -56,6 +56,7 @@ from cash.notebook.statement.control_body import is_control_body
 from cash.notebook.statement.derivation_edges import (
     apply_share_record,
     logging_edges,
+    own_share_edges,
     record_shared_object_edges,
 )
 from cash.notebook.statement.directives import statement_directives, ttl_floor_from_called_functions
@@ -80,7 +81,7 @@ from cash.notebook.statement.output_refusals import is_history_name, live_shared
 from cash.notebook.statement.randomness import StatementRandomness
 from cash.notebook.statement.rebuild_cost import RebuildCostLedger
 from cash.notebook.statement.records import StatementRecords
-from cash.notebook.statement.restore import StatementRestorer
+from cash.notebook.statement.restore import StatementRestorer, rng_replay_is_current
 from cash.notebook.statement.results import COST_MODEL_KEYS, ProcessResult
 from cash.notebook.statement.run import (
     ECHO_FIELD,
@@ -775,6 +776,7 @@ class StatementProcessor:
         spent = shadow.spent
         unit = shadow.begin("stmt")
         run.record_time = shadow.spent - spent
+        run.trace_unit = unit
         if unit is not None and run.needs_trace:
             unit.lookups_followed = True
         return unit
@@ -1000,6 +1002,21 @@ class StatementProcessor:
             run.analysis_spent += left.spent()
 
     @staticmethod
+    def _refuse_if_it_drew(run: StatementRun, execution: StatementExecution) -> None:
+        """Refuse *run*, cached on the condition that it does not touch
+        pyplot (``unless_it_draws``), when pyplot's code ran in it, as the
+        helper's text alone refused it before: it runs every time, its
+        outputs keyed by value. Not recorded, it is taken to have drawn."""
+        if run.unless_it_draws is None or run.skip_cache or not execution.result.success:
+            return
+        unit = run.trace_unit
+        if unit is not None and not unit.pyplot_ran:
+            return
+        run.skip_cache = True
+        run.value_varies = True
+        run.metrics["uncacheable_reasons"].append(run.unless_it_draws)
+
+    @staticmethod
     def _observe_process_state(run: StatementRun) -> None:
         """What of the process a statement past its budget changed, seen:
         what it hands over was not read for it (`callee_reach.handed`)."""
@@ -1125,7 +1142,7 @@ class StatementProcessor:
         """Skip-cache *run* when the static cacheability decision refuses it."""
         if run.skip_cache:
             return
-        cacheable, reasons, varies = cacheability_verdict(
+        cacheable, reasons, varies, unless_it_draws = cacheability_verdict(
             code=run.code,
             tree=run.tree,
             inputs=run.inputs,
@@ -1136,12 +1153,16 @@ class StatementProcessor:
             variable_lineage=self.tracking_state.variable_lineage,
             is_stateful_call=self._check_callable_stateful,
             scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
+            # What it runs is recorded (``Unit.pyplot_ran``): a helper that
+            # can draw refuses it only when it did (`_refuse_if_it_drew`).
+            pyplot_seen_as_it_runs=_shadow.SHADOW is not None,
         )
         if not cacheable:
             run.metrics["uncacheable_reasons"].extend(reasons)
             run.skip_cache = True
             run.value_varies = varies
             return
+        run.unless_it_draws = unless_it_draws
         unfollowed, by_string, unkeyed_modules, followed = unkeyed_reach(
             run.code, run.inputs, self.shell.user_ns, self.tracking_state.variable_lineage
         )
@@ -1232,9 +1253,18 @@ class StatementProcessor:
         restore failed and the statement must run after all."""
         # Read before the restore moves the generators.
         advanced = None if is_control_body(run.code) else carriers_an_entry_advanced(cached_data, self.shell.user_ns)
+        reseeded = (
+            cached_data.get("rng_reseeded")
+            if isinstance(cached_data, dict)
+            and cached_data.get("rng_state")
+            and rng_replay_is_current(cached_data, self._randomness.seed_epochs)
+            else None
+        )
         hit_result = self._hits.serve(run, cached_data, metadata, self._randomness.seed_epochs)
         if hit_result is None:
             return None
+        # The streams its run seeded, put back where that run left them.
+        self._randomness.adopt_seeds_of_a_hit(reseeded, run.code)
         if metadata is not None:
             sparse_order.put_in_order(metadata.sparse_ordered, self.shell.user_ns)
         # What changed through an alias moves on as a run moves it, past the
@@ -1245,7 +1275,9 @@ class StatementProcessor:
         # variables (the entry stores them together): link them as its run
         # did, as the simulation does for a hit.
         if not is_control_body(run.code):
-            recorded = self._records.recorded_share_edges(run.source_hash)
+            recorded = own_share_edges(metadata)
+            if recorded is None:
+                recorded = self._records.recorded_share_edges(run.source_hash)
             if recorded:
                 apply_share_record(self.tracking_state.derivation_edges, (), recorded, self.shell.user_ns)
         self.lineage_builder.replay_derivation_bumps(
@@ -1455,6 +1487,7 @@ class StatementProcessor:
                 # own text.
                 self._randomness.observe_statement(pre_rng, run.code)
                 execution.rng_moved = self._randomness.moved_streams
+                execution.rng_reseeded = self._randomness.reseeded_streams
                 execution.result = ExecutionResult(success=True)
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code
             execution.result = error_result(e)
@@ -1464,7 +1497,13 @@ class StatementProcessor:
             # KeyboardInterrupt's traceback comes.
             unshown_output(e, execution.captured, run.silent, run.stream_output)
             raise
-        if figures_before is not None and execution.result.success and pyplot_state() != figures_before:
+        self._refuse_if_it_drew(run, execution)
+        if (
+            figures_before is not None
+            and not run.skip_cache
+            and execution.result.success
+            and pyplot_state() != figures_before
+        ):
             run.skip_cache = True
             run.metrics["uncacheable_reasons"].append(CHANGED_PYPLOT_REASON)
         if env_reads:
@@ -2002,7 +2041,8 @@ class StatementProcessor:
                     self._record_shared_object_edges(run, captured_vars, holders, execution.echo, execution.cost)
                     self._link_inputs_kept_by(run, execution.echo, execution.cost)
                 if not is_control_body(run.code):
-                    self._records.note_share_edges(run.source_hash, linked | shared)
+                    run.linked_edges = frozenset((src, dst) for src, dst in linked | shared if src != dst)
+                    self._records.note_share_edges(run.source_hash, run.linked_edges)
                 with self._after_it_ran(run):
                     self._record_file_effects(run, execution)
                 self._note_per_item_rerun(run, execution)

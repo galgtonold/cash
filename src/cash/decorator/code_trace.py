@@ -193,6 +193,7 @@ def _recorder_class() -> type:
 
     DISABLE = sys.monitoring.DISABLE
     _POOL_QUALNAMES = frozenset(qualname for _, qualname in rec.POOL_STARTS)
+    _PYPLOT_FILES = ("matplotlib/pyplot.py", "matplotlib\\pyplot.py")
 
     class _Recorder(rec.Recorder):
         """The process's one recorder, for traced calls and for the
@@ -300,6 +301,11 @@ def _recorder_class() -> type:
             """First sight of *code*: arm local events on it when it is the
             user's (or starts a process pool), and record this run of it."""
             filename = code.co_filename
+            if filename.endswith(_PYPLOT_FILES):
+                # pyplot's own code: seen as it runs, once per unit, to tell
+                # whether a unit read or changed pyplot's current figure
+                # (`Unit.pyplot_ran`).
+                return self._arm_pyplot(code)
             if filename and not is_pseudo_filename(filename) and code.co_qualname not in _POOL_QUALNAMES:
                 # A library's file or cash's own, judged by its file as
                 # `is_user_code_file` does, before reading the frame: a fresh
@@ -336,6 +342,19 @@ def _recorder_class() -> type:
                 else:
                     self._seen_start(code, frame, g, kind)
             return DISABLE
+
+        def _arm_pyplot(self, code: types.CodeType) -> Any:
+            mon = sys.monitoring
+            self.user_codes[code] = mon.events.PY_START
+            mon.set_local_events(self.tool, code, mon.events.PY_START)
+            self._seen_pyplot()
+            return DISABLE
+
+        def _seen_pyplot(self) -> None:
+            for unit in self.active:
+                unit.pyplot_ran = True
+            if self.stack:
+                self.stack[-1].pyplot_ran = True
 
         def reclassify(self) -> None:
             """The notebook's namespace changed: what was not the user's
@@ -408,6 +427,9 @@ def _recorder_class() -> type:
                     stack[-1].notes.add("other_thread")
             module = kind[1]
             if module is None:
+                if kind[2] == "matplotlib.pyplot":
+                    self._seen_pyplot()
+                    return
                 if (kind[2], code.co_qualname) in rec.POOL_STARTS:
                     for unit in units:
                         unit.markers.add("process_pool")
