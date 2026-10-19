@@ -267,6 +267,13 @@ def test_a_graph_read_by_a_call_inside_print_is_read_once_before_the_call(
         f"def degree_sum(g):\n    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n    return sum(d for _, d in g.degree())",
     )
     run_cash_cell(cash_magics, "G = nx.gnm_random_graph(200, 800, seed=1)")
+    # Sighted exactly once before the statement. Making G sights it only when
+    # its session hash was read from G, which a busy machine's store of the
+    # cell (past the persistence floor) takes instead; so start over here.
+    from cash.value_hash import compute_hash
+
+    value_watch.reset()
+    compute_hash(mock_shell.user_ns["G"])
     reads = _pickles_of(monkeypatch, mock_shell, "G")
     run_cash_cell(cash_magics, "total = round(degree_sum(G), 2)")
     assert mock_shell.user_ns["total"] == 1600
