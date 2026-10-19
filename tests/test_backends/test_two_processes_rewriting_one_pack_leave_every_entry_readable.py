@@ -136,6 +136,8 @@ def test_an_entry_another_thread_holds_is_not_rewritten(tmp_path):
     pack stays for it, and it still reads."""
     cache = tmp_path / "cache"
     backend = _store_all(cache)
+    # Sharing a lock, the delete of "first" would wait on the holder here.
+    assert backend.chunks.entry_lock(backend._stem("first")) is not backend.chunks.entry_lock(backend._stem("second"))
     old = _packs(cache)
     held = threading.Event()
     done = threading.Event()
@@ -159,6 +161,32 @@ def test_an_entry_another_thread_holds_is_not_rewritten(tmp_path):
         got = reader.get(key)
         assert [a.tobytes() for a in got[1]] == [a.tobytes() for a in values[key]], key
     assert set(old) <= set(_packs(cache)), "the old pack went while second still names it"
+
+
+def test_an_entrys_lock_is_the_same_under_every_hash_seed(tmp_path):
+    """The lock is picked by the stem, not by ``hash()``, which moves with
+    ``PYTHONHASHSEED``: under one seed in 64 "first" and "second" shared a
+    lock, and the test above waited on itself until it timed out."""
+    script = textwrap.dedent(
+        """
+        from cash.backends.file_backend import FileBackend
+        b = FileBackend(%r, flush_interval=0)
+        locks = b.chunks._entry_locks
+        print([locks.index(b.chunks.entry_lock(b._stem(k))) for k in ("first", "second", "third")])
+        """
+        % str(tmp_path / "cache")
+    )
+    seen = set()
+    for seed in ("0", "42", "1234"):
+        out = subprocess.run(
+            [sys.executable, "-c", script],
+            env={**child_env(), "PYTHONHASHSEED": seed},
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        seen.add(out.strip())
+    assert len(seen) == 1, seen
 
 
 @pytest.mark.parametrize("when", ["before the old entry is taken away", "after it is taken away"])

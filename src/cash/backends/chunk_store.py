@@ -875,8 +875,10 @@ class ChunkStore:
     def entry_lock(self, stem: str) -> Any:
         """The lock a write, a removal or an in-place update of the entry
         *stem* holds in this process, and `_repoint` takes before rewriting
-        it: one of a fixed few, by the stem's hash."""
-        return self._entry_locks[hash(stem) % len(self._entry_locks)]
+        it: one of a fixed few, by the stem's CRC-32. Not ``hash()``, which
+        moves with ``PYTHONHASHSEED``: two stems sharing a lock under one seed
+        and not another made a wait on one entry depend on the run."""
+        return self._entry_locks[zlib.crc32(stem.encode("utf-8")) % len(self._entry_locks)]
 
     def _repoint(
         self,
