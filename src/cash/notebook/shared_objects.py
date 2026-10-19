@@ -1336,9 +1336,27 @@ def _read_down(obj: Any, value_types: tuple[type, ...]) -> bool | None:
     what it holds in turn (a library's own object, not pandas or numpy data)."""
     if _is_cash_own(obj) or is_value(obj, value_types) or issubclass(type(obj), _NOT_WITHIN):
         return None
-    if _holds_only_values(obj, value_types):
+    if _holds_only_values(obj, value_types) or _is_extension_dtype(obj):
         return None
     return (_LIBRARY_KINDS.get(type(obj)) or _library_kind(type(obj))) is _LEAF
+
+
+def _is_extension_dtype(obj: Any) -> bool:
+    """Whether *obj* is a pandas extension dtype (``str``, ``category``,
+    ``Int64``): a description of a column's data that pandas requires to be
+    hashable and treats as immutable, as numpy's own dtypes are values here.
+
+    ``df["card_scheme"].unique()`` holds the column's ``StringDtype``, which
+    every string column and pandas' dtype cache hold too: looked for up its
+    referrers, the climb read the heap past its budget and the statement ran
+    uncached every time."""
+    pd = sys.modules.get("pandas")
+    if pd is None:
+        return False
+    try:
+        return isinstance(obj, pd.api.extensions.ExtensionDtype)
+    except AttributeError:
+        return False
 
 
 def _holds_only_values(obj: Any, value_types: tuple[type, ...], depth: int = 3) -> bool:
