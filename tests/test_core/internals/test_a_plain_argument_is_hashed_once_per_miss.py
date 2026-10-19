@@ -23,16 +23,17 @@ class Tagged(int):
 
 
 @pytest.mark.parametrize(
-    "rows",
+    "build",
     [
-        list(range(200_000)),
-        tuple(range(200_000)),
-        [(i, str(i), float(i)) for i in range(50_000)],
-        [[i, i + 1] for i in range(50_000)],
+        lambda: list(range(200_000)),
+        lambda: tuple(range(200_000)),
+        lambda: [(i, str(i), float(i)) for i in range(50_000)],
+        lambda: [[i, i + 1] for i in range(50_000)],
     ],
     ids=["list of ints", "tuple of ints", "list of tuples", "list of lists"],
 )
-def test_a_miss_on_plain_data_does_not_hash_it_again_after_the_body(disk_cash, rows):
+def test_a_miss_on_plain_data_does_not_hash_it_again_after_the_body(disk_cash, build):
+    rows = build()  # built here: a parameter's value is held for the whole run
     f = disk_cash.cache(lambda rows, scale=1: len(rows) * scale)
     with method_calls(PurityChecks, "checked_arguments_hash") as rehash:
         f(rows, scale=2)

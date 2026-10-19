@@ -51,6 +51,8 @@ _CASH_PACKAGE_DIR = os.path.normcase(os.path.dirname(os.path.dirname(os.path.abs
 
 def _record_read(code: Any, abs_path: str, stat: Any) -> None:
     """Remember that *code* read *abs_path*, as it was (*stat*)."""
+    if _unresolved_by_code:
+        _resolve_untracked(code)  # older than this read: in first
     memo = _reads_by_code
     reads = memo.get(code)
     if reads is None:
@@ -146,8 +148,43 @@ def frame_kind(filename: str) -> str:
 
 #: absolute path -> resolved path, for reads outside a tracker; `note_untracked_read`.
 _untracked_realpaths: LruMemo[str, str] = LruMemo(READ_PATHS)
-#: resolved path -> (monotonic time, stat); `note_untracked_read`.
+#: absolute path -> (monotonic time, stat); `note_untracked_read`.
 _untracked_stats: LruMemo[str, tuple[float, Any]] = LruMemo(READ_PATHS)
+#: ``code -> {absolute path: stat when read}``: reads outside a cached call
+#: whose paths are not resolved yet, the latest last. `realpath` is ~60 us
+#: on Windows and was most of what every ``open`` in a process that imported
+#: cash cost; a path is resolved once something asks what the code read
+#: (`credited_reads`), or before the code's next read inside a cached call
+#: is recorded, so the latest read of a file still wins.
+_unresolved_by_code: weakref.WeakKeyDictionary[Any, dict[str, Any]] = weakref.WeakKeyDictionary()
+
+
+def _resolve(absolute: str) -> str:
+    resolved = _untracked_realpaths.get(absolute)
+    if resolved is None:
+        resolved = normalize_path(os.path.realpath(absolute))
+        _untracked_realpaths[absolute] = resolved
+    return resolved
+
+
+def _resolve_untracked(code: Any) -> None:
+    """Move *code*'s unresolved reads into `_reads_by_code`, in the order they were made."""
+    pending = _unresolved_by_code.pop(code, None)
+    if not pending:
+        return
+    memo = _reads_by_code
+    reads = memo.get(code)
+    if reads is None:
+        reads = {}
+        memo[code] = reads
+    for absolute, stat in list(pending.items()):
+        try:
+            abs_path = _resolve(absolute)
+        except (OSError, ValueError):
+            continue
+        if is_pseudo_fs(abs_path) or is_cash_internal(abs_path):
+            continue
+        reads[abs_path] = stat
 
 
 def note_untracked_read(path: Any, frame: Any) -> None:
@@ -174,34 +211,36 @@ def note_untracked_read(path: Any, frame: Any) -> None:
         raw = os.fsdecode(path) if isinstance(path, bytes) else os.fspath(path)
         if not isinstance(raw, str) or is_pseudo_fs(raw) or is_remote_url(raw):
             return
-        # `realpath` is 60us on Windows, most of what this costs; resolved once
-        # per absolute path (so a chdir still resolves anew).
+        # By absolute path (so a chdir still resolves anew), resolved later
+        # (`_unresolved_by_code`).
         absolute = os.path.abspath(raw)
-        abs_path = _untracked_realpaths.get(absolute)
-        if abs_path is None:
-            abs_path = normalize_path(os.path.realpath(absolute))
-            _untracked_realpaths[absolute] = abs_path
-        if is_pseudo_fs(abs_path) or is_cash_internal(abs_path):
-            return
         # A stat is 15us, and a loop re-reading one file pays it every time.
         # Reusing one taken in the last second can only be too OLD, and an old
         # stat that differs from the file makes a store refused, never a stale
         # answer served (`FileDeps.credit_remembered_reads`).
         now = time.monotonic()
-        seen = _untracked_stats.get(abs_path)
+        seen = _untracked_stats.get(absolute)
         if seen is not None and now - seen[0] < 1.0:
             stat = seen[1]
         else:
-            stat = regular_file_stat(abs_path)
-            _untracked_stats[abs_path] = (now, stat)
+            stat = regular_file_stat(absolute)
+            _untracked_stats[absolute] = (now, stat)
         if stat is None:
             return
+        unresolved = _unresolved_by_code
         for code in codes:
-            _record_read(code, abs_path, stat)
+            pending = unresolved.get(code)
+            if pending is None:
+                unresolved[code] = {absolute: stat}
+            else:
+                pending.pop(absolute, None)  # the latest read last
+                pending[absolute] = stat
     except Exception:  # attribution is an aid, never a failure
         logger.debug("[TRACKER] could not note an untracked read of %r", path, exc_info=True)
 
 
 def credited_reads(code: Any) -> dict[str, Any]:
     """``{file: stat when read}`` for files read while *code* was on the stack."""
+    if _unresolved_by_code:
+        _resolve_untracked(code)
     return dict(_reads_by_code.get(code) or {})

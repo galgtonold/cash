@@ -25,8 +25,13 @@ from cash._clock import perf_counter as _perf_counter
 from cash._paths import is_remote_url, normalize_path
 from cash.effect_observer import reset_in_any_context
 from cash.tracking import io_watch, native_reads
-from cash.tracking.file_dep_snapshot import file_content_hash, realpath_of_read_this_run, remembered_file_digest
-from cash.tracking.pending_digest import PendingDigest
+from cash.tracking.file_dep_snapshot import (
+    digest_later,
+    file_content_hash,
+    realpath_of_read_this_run,
+    remembered_file_digest,
+)
+from cash.tracking.pending_digest import MOVED, DeferredDigest, PendingDigest
 from cash.tracking.read_classification import (
     SCRATCH_MEMMAP,
     folder_stat,
@@ -35,6 +40,7 @@ from cash.tracking.read_classification import (
     is_pseudo_fs,
     is_runtime_cache_path,
     regular_file_stat,
+    regular_file_stat_result,
     stat_key,
 )
 from cash.tracking.read_credit import credit_read_to_stack
@@ -156,6 +162,14 @@ class FileAccessTracker:
         #: path -> its `regular_file_stat` as the call's snapshot took it, for
         #: `inputs_changed_since_read`; None when no snapshot is pending.
         self.snapshot_stats: dict[str, tuple[int, int, int] | None] | None = None
+        #: path -> the stat `inputs_changed_since_read` took of it, when it
+        #: found the file as read: a snapshot taken right after takes it
+        #: rather than a stat of its own (`snapshot_file_deps`).
+        self.checked_stats: dict[str, os.stat_result] = {}
+        #: path -> the stat its deferred digest was taken under as this block
+        #: ended (`_settle_deferred`): the first check that no input moved
+        #: takes it rather than a stat of its own (``reuse_end_stats``).
+        self.end_stats: dict[str, os.stat_result] = {}
         # The same for each folder the block listed (`stat_key` of the
         # folder): an entry landing in it while the block runs leaves a
         # listing without the entry, which a snapshot taken at store time
@@ -229,7 +243,7 @@ class FileAccessTracker:
         # the block removed is gone by then and stays out
         # (`get_accessed_files`).
         self.created_then_read: set[str] = set()
-        # Work the block handed to a thread pool (`work_submitted`) that has
+        # Work the block handed to a thread pool or thread (`work_submitted`) that has
         # not finished yet, and whether any was still running when the block
         # ended (`work_outlived_block`).
         self._work_lock = threading.Lock()
@@ -258,6 +272,10 @@ class FileAccessTracker:
         if self._native_windows:
             # Before the parent stack pops: the reads pass up like any other.
             native_reads.close_window(self._native_windows.pop(), self)
+        # The deferred digests, while the block's reads are what it read
+        # (the native ones included): a file that moved is never fresh from
+        # here on, before anything is snapshotted.
+        self._settle_deferred()
         if self._token_stack:
             reset_in_any_context(active_tracker, self._token_stack.pop())
             io_watch.release()
@@ -282,7 +300,7 @@ class FileAccessTracker:
             tracker = tracker._propagation_parent()
 
     def work_submitted(self) -> list[FileAccessTracker]:
-        """Count one piece of work handed to a thread pool, here and on each
+        """Count one piece of work handed to a thread pool or thread, here and on each
         tracker a read is passed up to; returns them, for `work_finished`
         (the chain is gone once the block has ended)."""
         trackers = list(self._self_and_parents())
@@ -327,9 +345,15 @@ class FileAccessTracker:
                 pass
         return self.accessed_files | kept if kept else self.accessed_files
 
-    def inputs_changed_since_read(self) -> list[str]:
+    def inputs_changed_since_read(self, reuse_end_stats: bool = False) -> list[str]:
         """Regular files whose stat moved between their first read and now,
         and folders listed whose stat moved since the listing.
+
+        With *reuse_end_stats*, a file whose deferred digest was taken as the
+        block ended is compared by the stat that digest was taken under
+        (`end_stats`), not a stat of its own: for the first of a statement's
+        two checks, with only cash's code run since. The last check before
+        an entry is written always stats again.
 
         A folder the block changed an entry of itself (`touched_dirs`) is
         left out: a function that lists a folder and writes its output into
@@ -346,16 +370,32 @@ class FileAccessTracker:
         taken, self.snapshot_stats = self.snapshot_stats, None
         if taken is None:
             taken = {}
+        checked: dict[str, os.stat_result] = {}
+        self.checked_stats = checked
+        ended, self.end_stats = self.end_stats, {}
+        if not reuse_end_stats:
+            ended = {}
         # Over copies: a pool thread the block started can still be reading
         # after it ended, adding to these while they are walked.
         for path, before in list(self.read_stats.items()):
-            now = taken[path] if path in taken else regular_file_stat(path)
+            if path in taken:
+                now = taken[path]
+            else:
+                st = ended.get(path) or regular_file_stat_result(path)
+                now = stat_key(st) if st is not None else None
+                if now == before:
+                    checked[path] = st
             if now != before and not (path in self.ctime_unreliable and now is not None and now[:2] == before[:2]):
                 moved.append(path)
         for path, before in list(self.listed_stats.items()):
             if path not in self.touched_dirs and folder_stat(path) != before:
                 moved.append(path)
         return moved
+
+    def take_checked_stats(self) -> dict[str, os.stat_result]:
+        """`checked_stats`, once: a later snapshot takes stats of its own."""
+        checked, self.checked_stats = self.checked_stats, {}
+        return checked
 
     def known_reads(self) -> dict[str, tuple[Any, ...]]:
         """``{path: (stat when read, digest when read, when it was hashed)}``
@@ -607,6 +647,7 @@ class FileAccessTracker:
     def read_digests(self) -> dict[str, str]:
         """Each file's content hash as the body first read it (see
         ``__init__``), waiting for any still being taken (`PendingDigest`)."""
+        self._settle_deferred()
         digests: dict[str, str] = {}
         for path, digest in list(self._read_digests.items()):
             if isinstance(digest, PendingDigest):
@@ -617,6 +658,24 @@ class FileAccessTracker:
                 self._read_digests[path] = digest
             digests[path] = digest
         return digests
+
+    def _settle_deferred(self) -> None:
+        """Take this block's deferred digests (`DeferredDigest`). A file that
+        moved since it was read is recorded as never fresh: what the block
+        read of it is gone, and the digest of what is there now would vouch
+        for a value computed from something else."""
+        for path, digest in list(self._read_digests.items()):
+            if isinstance(digest, DeferredDigest):
+                digest, st = digest.taken()
+                if st is not None:
+                    self.end_stats[path] = st
+                if digest is MOVED:
+                    self.add_tracked_unresolved(path)
+                    digest = None
+                if digest is None:
+                    del self._read_digests[path]
+                else:
+                    self._read_digests[path] = digest
 
     def _add_tracked_here(
         self,
@@ -651,7 +710,7 @@ class FileAccessTracker:
             digest = self._read_digests.get(abs_path)
         return digest, st
 
-    def _digest_now(self, abs_path: str, size: int, st: Any = None) -> str | PendingDigest | None:
+    def _digest_now(self, abs_path: str, size: int, st: Any = None) -> str | PendingDigest | DeferredDigest | None:
         """The file's content hash as the body is about to read it; *st* the
         stat this read took of it, when there is one (`file_content_hash`).
 
@@ -665,6 +724,10 @@ class FileAccessTracker:
             if size >= BACKGROUND_DIGEST_MIN_BYTES:
                 known = remembered_file_digest(abs_path)
                 return known if known is not None else PendingDigest(abs_path, size, file_content_hash)
+            if st is not None:
+                later = digest_later(abs_path, size, st)
+                if later is not None:
+                    return later
             return file_content_hash(abs_path, size, st)
         finally:
             self.read_hash_seconds += _perf_counter() - t0

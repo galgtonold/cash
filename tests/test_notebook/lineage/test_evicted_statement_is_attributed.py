@@ -91,7 +91,10 @@ def test_the_processor_puts_the_eviction_on_the_badge(cash_magics, cash_instance
     real = disk.eviction_note
     monkeypatch.setattr(disk, "eviction_note", lambda key: asked.append(key) or real(key))
 
-    run_cash_cell(cash_magics, "x = 21")  # too fast to store: it misses every time
+    # Never stored, so it misses every time: a slow runner took `x = 21` past
+    # the default 10 ms floor, stored it, and the second run was a hit.
+    cash_instance.config.min_execution_time_to_cache_seconds = 3600.0
+    run_cash_cell(cash_magics, "x = 21")
     assert asked, "a miss did not ask about evictions"
     _note(disk, asked[-1])
 

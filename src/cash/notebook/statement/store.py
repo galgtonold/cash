@@ -66,20 +66,23 @@ def _snapshot_with_inherited(
     inherited_snapshots: dict[str, dict] | None,
     known: dict[str, tuple[Any, ...]] | None = None,
     probes: dict[str, str] | None = None,
+    checked: Mapping[str, Any] | None = None,
 ) -> dict[str, dict]:
     """Snapshot the files a statement read itself; take the ones it only
     inherited from its inputs' producers as they recorded them. *known* are
     the digests taken as the statement read its files
     (`FileAccessTracker.known_reads`), reused while a file's stat is unchanged.
     *probes* are the paths it only checked for (``probe_answers``): the entry
-    is fresh while each is still missing, or still there."""
+    is fresh while each is still missing, or still there. *checked* are the
+    stats the check that no input moved took just before
+    (``FileAccessTracker.checked_stats``)."""
     inherited_snapshots = inherited_snapshots or {}
     own = set(file_dependencies) - inherited_snapshots.keys()
     absent = present = None
     if probes:
         absent = [path for path, asked in probes.items() if asked == "absent"]
         present = {path: asked for path, asked in probes.items() if asked != "absent"}
-    snapshot = snapshot_dependencies(own, accessed_remote, absent, known=known, present=present)
+    snapshot = snapshot_dependencies(own, accessed_remote, absent, known=known, present=present, checked=checked)
     for path, recorded in inherited_snapshots.items():
         snapshot.setdefault(path, recorded)
     return snapshot
@@ -277,7 +280,7 @@ class StatementStore:
             seed_epochs=seed_epochs,
         )
 
-    def inputs_moved(self, run: StatementRun, execution: StatementExecution) -> bool:
+    def inputs_moved(self, run: StatementRun, execution: StatementExecution, reuse_end_stats: bool = False) -> bool:
         """Did a file the statement read change after it read it, or a
         folder it listed gain or lose an entry from outside?
 
@@ -287,13 +290,15 @@ class StatementStore:
         and every later run would find the entry fresh. The value is kept for
         this run, not stored, and the statement warns once
         (``STORE-INPUT-CHANGED``). Asked when the statement has run and again
-        before its entry is written.
+        before its entry is written; the first ask may take the stats its
+        deferred digests were taken under as it ended (*reuse_end_stats*),
+        the second stats every file again.
         """
         tracker = execution.file_tracker
         if tracker is None or not (tracker.read_stats or tracker.listed_stats):
             return False
         try:
-            moved = tracker.inputs_changed_since_read()
+            moved = tracker.inputs_changed_since_read(reuse_end_stats=reuse_end_stats)
         except Exception:
             # Not cached: a check that could not finish never says the files
             # held still.
@@ -547,6 +552,7 @@ class StatementStore:
                 inherited_snapshots,
                 execution.file_tracker.known_reads() if execution.file_tracker is not None else None,
                 execution.probes,
+                getattr(execution.file_tracker, "take_checked_stats", dict)(),
             ),
             force_persist=run.force_persist,
             output_lineages=self._lineage_builder.build_output_lineages(self.tracking_state, run.outputs),

@@ -20,7 +20,7 @@ from typing import Any
 # module, so this cannot cycle.
 from cash.effect_observer import active_observer as _active_effect_observer
 from cash.tracking import io_watch
-from cash.tracking.pending_digest import PENDING, settle_before_write
+from cash.tracking.pending_digest import DEFERRED, PENDING, settle_before_write, settle_deferred
 from cash.tracking.read_classification import is_cash_internal
 from cash.tracking.read_credit import note_untracked_read
 from cash.tracking.tracker_context import active_tracker
@@ -103,8 +103,13 @@ def _on_open(args: tuple) -> None:
         tracker = active_tracker.get()
         if tracker is not None:
             tracker.note_entry_changed(path)
-    if PENDING and _opens_to_write(mode, flags):
-        settle_before_write(path)
+    if (PENDING or DEFERRED) and _opens_to_write(mode, flags):
+        if DEFERRED and active_tracker.get() is not None and not is_cash_internal(path):
+            # A block's write: not cash's own (the digest table a deferred
+            # digest writes its line to, holding that table's lock).
+            settle_deferred()
+        if PENDING:
+            settle_before_write(path)
     if not isinstance(mode, str):
         # ``os.open``: not watched as a read, but a file it creates
         # (``tempfile.mkstemp``) is the block's own output.

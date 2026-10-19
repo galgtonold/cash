@@ -22,8 +22,10 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
-# Every cash-compiled unit's filename starts with this; frame filters match the
-# prefix because each name carries a per-statement digest.
+from cash._paths import CELL_NAME_PREFIX
+
+# Every cash-compiled unit's name starts with this after ``cash._paths.CELL_ROOT``; frame
+# filters match the prefix because each name carries a per-statement digest.
 CASH_FILENAME_PREFIX = "<cash-"
 
 
@@ -87,7 +89,7 @@ def register_cell_source(code: str) -> str:
     place = _PLACE[0]
     keyed = code if place is None else f"{code}\0{place[2]}\0{place[3]}"
     digest = hashlib.sha1(keyed.encode("utf-8", "replace")).hexdigest()[:12]
-    name = f"{CASH_FILENAME_PREFIX}{digest}>"
+    name = f"{CELL_NAME_PREFIX}{digest}>"
     # linecache entry: (size, mtime, lines, fullname). ``mtime=None`` marks it a
     # synthetic in-memory file so ``linecache.checkcache()`` never evicts it by
     # comparing against a real stat() — there is no file on disk to compare to.
@@ -118,6 +120,6 @@ def register_cell_source(code: str) -> str:
 def is_cash_filename(filename: str | None) -> bool:
     """True for any filename cash compiled a user statement under.
 
-    Prefix-based so it covers every per-statement ``<cash-abc123…>`` name.
+    Prefix-based so it covers every per-statement ``/<cash-abc123…>`` name.
     """
-    return bool(filename) and filename.startswith(CASH_FILENAME_PREFIX)
+    return bool(filename) and filename.startswith(CELL_NAME_PREFIX)

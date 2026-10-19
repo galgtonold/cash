@@ -237,11 +237,17 @@ calls name in their code (`np` in `np.mean(x)`, `Ridge` imported from
 scikit-learn, `read_csv` imported from pandas), and every package that library
 requires, as its install metadata lists them: a numpy upgrade under pandas
 recomputes a `pd.read_csv(...)` result too. A library's optional extras are
-left out. Only the version number is read, so changed code reinstalled under
-the same number (a team package rebuilt without a version bump) keeps the old
-results. Then clear the affected entries (`f.cache_clear()` or
-[`cash clear --function`](cli.md#cash-clear-path-all)), or tell cash what to
-watch:
+left out.
+
+<!-- claim: cash/decorator/library_versions.py:_files_digest @87224897 -->
+With the version goes a digest of the files the install lists, from the hash
+pip or uv writes for each in the `RECORD` file. So a team package rebuilt and
+reinstalled under the same number (`pip install .` without a version bump, a
+`git+` install of a branch that moved) recomputes, and the same files
+reinstalled hit as before. An installer that writes no hashes leaves the
+version alone in the key: then clear the affected entries (`f.cache_clear()`
+or [`cash clear --function`](cli.md#cash-clear-path-all)), or tell cash what
+to watch:
 
 - **While you work on the package**, install it with `pip install -e`. Its
   code is then tracked like your project's.
@@ -252,13 +258,15 @@ watch:
 
 ## Reads cash cannot see
 
-<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @c3389dba, cash/tracking/reader_patches.py:_patch_process_pool_submit @1f70759c, cash/tracking/reader_patches.py:_patch_thread_start @b3c45c6d -->
+<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @c3389dba, cash/tracking/reader_patches.py:_patch_process_pool_submit @1f70759c, cash/tracking/reader_patches.py:_patch_thread_start @a16e8968 -->
 cash does not record a file opened by a subprocess, and on macOS one a C
 extension opens itself or `os.open` opens (on Linux and Windows the [native
 file hook](known-limitations.md#reads-through-a-loader-cash-cannot-see), on by
 default, records those). Name such a file with `file_depends_on=`. A
 `threading.Thread` the function starts on code of yours, a lambda or a nested
-function included, reads as part of the call.
+function included, reads as part of the call; one still running when the call
+returns keeps the result from being stored
+([STORE-WORK-RUNNING](warnings.md#store-work-running)).
 
 Reads in work the function hands to a pool are recorded: a
 `ThreadPoolExecutor`, `ProcessPoolExecutor`, `multiprocessing.Pool` (or
@@ -276,12 +284,15 @@ only; collect such a frame first.
 
 ## An edit that keeps the size and timestamps
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:_unchanged_since_hashed @809a68f2 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:_unchanged_since_hashed @59019b2b, cash/tracking/written_in_place.py:is_written_in_place @90fefb25 -->
 cash checks a file's size and timestamps first and reads its content only when
 one of them moved. On Linux and macOS every write moves the inode change time,
 so this never misses. On **Windows**, two kinds of edit move nothing: a write
 whose modification time is put back afterwards (`os.utime`, `shutil.copystat`,
-`robocopy /COPY:T`), and a write through `np.memmap(path, mode="r+")`.
+`robocopy /COPY:T`), and a write through a memory map
+(`np.memmap(path, mode="r+")`) made in a process without cash. A file mapped
+to write in a process that had imported cash is read at every check from
+then on, so those writes are seen.
 
 After such a write, touch the file (`Path(path).touch()`). cash then reads its
 content, and if it changed, the calls that read it recompute.

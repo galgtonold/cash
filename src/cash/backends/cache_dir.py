@@ -39,7 +39,9 @@ __all__ = [
     "EVICTIONS_FILENAME",
     "FILE_DIGESTS_FILENAME",
     "LIBRARY_MAP_FILENAME",
+    "LIBRARY_RECORDS_FILENAME",
     "FILE_VERSIONS_FILENAME",
+    "WRITTEN_IN_PLACE_FILENAME",
     "HEAVY_LOOPS_FILENAME",
     "KEYS_DIRNAME",
     "CHUNK_DIRNAME",
@@ -135,11 +137,16 @@ CASH_KEYS_FILENAME = "_cash_keys.json"
 FILE_DIGESTS_FILENAME = "_file_digests.log"
 #: Versions of input files found to hold an earlier version's bytes (`file_versions`).
 FILE_VERSIONS_FILENAME = "_file_versions.log"
+#: Files a process mapped to write in place, by identity (`written_in_place`).
+WRITTEN_IN_PLACE_FILENAME = "_written_in_place.log"
 #: The analytics database, in the per-user cache root.
 ANALYTICS_DB_FILENAME = "analytics.db"
 #: Which installed distribution provides each top-level module, in the
 #: per-user cache root (`library_versions`).
 LIBRARY_MAP_FILENAME = "_library_map.json"
+#: A digest of each installed distribution's file list, by its ``RECORD``'s
+#: stat, in the per-user cache root (`library_versions`).
+LIBRARY_RECORDS_FILENAME = "_library_records.json"
 #: The decorator's stored-key records: one ``<function>.json`` each.
 KEYS_DIRNAME = ".keys"
 #: The file tier's big buffers, one file per distinct content (`chunk_store`).
@@ -167,6 +174,7 @@ _CASH_FILE_NAMES = frozenset(
         CASH_KEYS_FILENAME,
         FILE_DIGESTS_FILENAME,
         FILE_VERSIONS_FILENAME,
+        WRITTEN_IN_PLACE_FILENAME,
         LIBRARY_MAP_FILENAME,
         *(db + companion for db in (DB_FILENAME, ANALYTICS_DB_FILENAME) for companion in ("", *_SQLITE_COMPANIONS)),
     }

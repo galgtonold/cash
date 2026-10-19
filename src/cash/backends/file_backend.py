@@ -90,6 +90,63 @@ _WRITERS_LOCK = threading.Lock()
 _LIVE_BACKENDS: weakref.WeakSet = weakref.WeakSet()
 
 
+class _Flusher:
+    """The one thread that writes every `FileBackend`'s access stamps back.
+
+    A thread per backend was never ended: a `Cash` keeps its backend for the
+    exit drain, so each one built in a process (a test suite builds hundreds)
+    left a thread waking every few seconds, and the threads competed with the
+    caller's for the interpreter. Backends are held weakly; each is flushed
+    when its own interval is up, under its ``_flush_lock`` so `shutdown` can
+    wait for a flush in flight as it once waited for its thread.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._due: weakref.WeakKeyDictionary[FileBackend, float] = weakref.WeakKeyDictionary()
+        self._thread: threading.Thread | None = None
+        self._wake = threading.Event()
+
+    def add(self, backend: FileBackend) -> None:
+        with self._lock:
+            self._due[backend] = time.monotonic() + backend._flush_interval
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(target=self._run, name="cash-flusher", daemon=True)
+                self._thread.start()
+            else:
+                self._wake.set()  # its interval may end before the next due one
+
+    def discard(self, backend: FileBackend) -> None:
+        with self._lock:
+            self._due.pop(backend, None)
+
+    def _run(self) -> None:
+        while True:
+            now = time.monotonic()
+            with self._lock:
+                due = [b for b, at in self._due.items() if at <= now]
+                for backend in due:
+                    self._due[backend] = now + backend._flush_interval
+                wait = min(self._due.values(), default=now + 60.0) - now
+            for backend in due:
+                backend._flush_periodically()
+            del due
+            backend = None  # hold no backend while waiting
+            self._wake.wait(max(wait, 0.0))
+            self._wake.clear()
+
+    def after_fork_in_child(self) -> None:
+        """No thread survives a fork; the parent's backends got no flusher
+        in a child before either, so they are dropped."""
+        self._lock = threading.Lock()
+        self._due = weakref.WeakKeyDictionary()
+        self._thread = None
+        self._wake = threading.Event()
+
+
+_FLUSHER = _Flusher()
+
+
 def _reset_after_fork_in_child() -> None:
     """New locks for this module and every live `FileBackend` in a forked child.
 
@@ -100,6 +157,7 @@ def _reset_after_fork_in_child() -> None:
     """
     global _WRITERS_LOCK
     _WRITERS_LOCK = threading.Lock()
+    _FLUSHER.after_fork_in_child()
     for backend in list(_LIVE_BACKENDS):
         backend._after_fork_in_child()
 
@@ -280,6 +338,8 @@ class FileBackend(CacheBackend):
         self._orphans_swept = False
         self._flush_interval = flush_interval
         self._stop_event = threading.Event()
+        #: Held while the shared flusher writes this backend's stamps (`_Flusher`).
+        self._flush_lock = threading.Lock()
 
         # The disk I/O runs here; values are serialized on the caller's
         # thread, unless they are `set` ``private``.
@@ -361,11 +421,7 @@ class FileBackend(CacheBackend):
             self.stamp.check()
             warn_if_unwritable(self.cache_dir)
             if self._flush_interval > 0:
-                self._flusher_thread = threading.Thread(
-                    target=self._flush_periodically,
-                    daemon=True,
-                )
-                self._flusher_thread.start()
+                _FLUSHER.add(self)
             self._initialized = True
 
     def _disable(self, exc: BaseException) -> None:
@@ -380,13 +436,17 @@ class FileBackend(CacheBackend):
         return self.stamp.token()
 
     def _flush_periodically(self) -> None:
-        while not self._stop_event.is_set():
-            if self._stop_event.wait(self._flush_interval):
-                break
-            self._flush_metadata(periodic=True)
-            # Buffered rank records reach the file within one interval, so
-            # another process ranking this directory sees them.
-            self.evictor.rank_index.flush()
+        """One periodic flush, from the shared flusher (`_Flusher`)."""
+        with self._flush_lock:
+            if self._stop_event.is_set():
+                return
+            try:
+                self._flush_metadata(periodic=True)
+                # Buffered rank records reach the file within one interval, so
+                # another process ranking this directory sees them.
+                self.evictor.rank_index.flush()
+            except Exception:
+                logger.debug("periodic flush of %s failed", self.cache_dir, exc_info=True)
 
     #: Seconds between persisted access stamps for one entry, while the
     #: process runs; everything outstanding is flushed at shutdown.
@@ -1201,8 +1261,11 @@ class FileBackend(CacheBackend):
         # otherwise we could lose the metadata for a not-yet-written entry.
         self._writes.shutdown(wait=True)
         self._stop_event.set()
-        if hasattr(self, "_flusher_thread"):
-            self._flusher_thread.join(timeout=1.0)
+        _FLUSHER.discard(self)
+        # A periodic flush in flight finishes first, as the join on this
+        # backend's own thread once waited for it.
+        if self._flush_lock.acquire(timeout=1.0):
+            self._flush_lock.release()
         if self._initialized:
             self._flush_metadata()
             self.evictor.rank_index.flush()

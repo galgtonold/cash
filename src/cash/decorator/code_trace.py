@@ -60,6 +60,7 @@ import weakref
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
+from .._paths import is_pseudo_filename
 from ..analysis.purity_report import (
     ISSUE_AMBIENT_READ,
     ISSUE_DISCARDED_CALL,
@@ -299,7 +300,7 @@ def _recorder_class() -> type:
             """First sight of *code*: arm local events on it when it is the
             user's (or starts a process pool), and record this run of it."""
             filename = code.co_filename
-            if filename and filename[0] != "<" and code.co_qualname not in _POOL_QUALNAMES:
+            if filename and not is_pseudo_filename(filename) and code.co_qualname not in _POOL_QUALNAMES:
                 # A library's file or cash's own, judged by its file as
                 # `is_user_code_file` does, before reading the frame: a fresh
                 # process sees thousands of them once each (an import of
@@ -445,7 +446,7 @@ def _recorder_class() -> type:
             if name == "cash" or name.startswith("cash.") or sys.modules.get(name) is not None:
                 return False
             filename = code.co_filename
-            return bool(filename) and not filename.startswith("<") and is_user_path(filename)
+            return bool(filename) and not is_pseudo_filename(filename) and is_user_path(filename)
 
         def _on_resume(self, code: types.CodeType, offset: int) -> Any:
             self.rearm.add(code)

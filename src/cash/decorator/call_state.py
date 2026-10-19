@@ -92,6 +92,7 @@ class Call:
         "cash_overhead",
         "outcome",
         "handed",
+        "polars_args",
         "stored_in",
         "traced",
         "needs_trace",
@@ -113,6 +114,9 @@ class Call:
         self.outcome: Any = CACHE_MISS
         #: The notebook statement's hand-off this call claimed (`cash.handed_digests`).
         self.handed: Any = None
+        #: The key's digests of the big polars arguments (`CallPolarsDigests`),
+        #: for the in-place-change check after the body.
+        self.polars_args: Any = None
         #: The tiers the store put the result in (``storage``), once stored.
         self.stored_in: list[str] | None = None
         #: The key's `BuiltKey.traced` and ``needs_trace``, and what recorded

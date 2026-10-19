@@ -1243,7 +1243,7 @@ class StatementProcessor:
         if not is_control_body(run.code):
             recorded = self._records.recorded_share_edges(run.source_hash)
             if recorded:
-                apply_share_record(self.tracking_state.derivation_edges, (), recorded)
+                apply_share_record(self.tracking_state.derivation_edges, (), recorded, self.shell.user_ns)
         self.lineage_builder.replay_derivation_bumps(
             self.tracking_state, run.outputs, run.inputs, skip=moved, code=run.code
         )
@@ -1896,7 +1896,7 @@ class StatementProcessor:
         # present stat, would say they are. Run uncached, and keyed by value
         # as a no-cache statement's are, so nothing below is stored under a
         # lineage a settled run gives again.
-        inputs_moved = not run.skip_cache and self._store.inputs_moved(run, execution)
+        inputs_moved = not run.skip_cache and self._store.inputs_moved(run, execution, reuse_end_stats=True)
         if inputs_moved:
             run.skip_cache = True
             run.metrics["uncacheable_reasons"].append(INPUT_CHANGED_REASON)
@@ -1937,6 +1937,7 @@ class StatementProcessor:
                     replay_bumps=False,
                     lineage_reads=run.pyplot_drawn,
                     settled=run.settled_digests,
+                    file_stats=getattr(execution.file_tracker, "checked_stats", None),
                 )
             # Let go of the values they hold: the checks below count references.
             run.settled_digests = {}

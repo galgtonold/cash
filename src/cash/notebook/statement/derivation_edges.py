@@ -41,7 +41,7 @@ import inspect
 import logging
 import sys
 import types
-from collections.abc import Iterable, Iterator
+from collections.abc import Container, Iterable, Iterator
 from contextlib import contextmanager
 from typing import Any, Callable
 
@@ -50,13 +50,14 @@ from ...analysis.ast_util import parse_cached
 from ..borrowed_memory import borrowed_memory_names
 from ..shared_objects import (
     EXACT_CONTAINER_TYPES,
-    EXACT_VALUE_TYPES,
     VALUE_TYPES,
     children_of,
     count_held,
+    exact_value_types,
     excess_refs,
     is_value,
     library_value_types,
+    object_free_leaves,
     view_bases,
 )
 
@@ -141,14 +142,21 @@ def apply_share_record(
     derivation_edges: dict[str, set[str]],
     rebound: Iterable[str],
     record: Iterable[tuple[str, str]],
+    bound: Container[str] | None = None,
 ) -> None:
     """Replay one statement's edges onto *derivation_edges*: drop the edges
     of the names it binds afresh (*rebound*), then add the ones it linked
-    when it ran (*record*), as its run did."""
+    when it ran (*record*), as its run did.
+
+    With *bound*, an edge to a name not in it is left out: the record is the
+    last run of the same text, which may be a later place in the notebook
+    where that name shares the object; here the name holds nothing yet, so
+    a run here linked nothing to it, and a hit linking it would move the
+    name on where a run does not."""
     for name in rebound:
         clear_edges_for(derivation_edges, name)
     for src, dst in record:
-        if src != dst:
+        if src != dst and (bound is None or (src in bound and dst in bound)):
             link(derivation_edges, src, dst)
 
 
@@ -197,7 +205,7 @@ def is_uncacheable_alias(value: Any, user_ns: dict, cash_held: Iterable[Any] = (
     refholder_types = _pandas_refholder_types()
     if np is None and not refholder_types:
         return False
-    if _plain_data.is_tree(value):
+    if _plain_data.is_tree(value, object_free_leaves()):
         # JSON-like data holds no array and no pandas object: answered a
         # level at a time (and, for a statement's output, from the walk its
         # other checks share), where the walk below takes a Python step per
@@ -227,7 +235,7 @@ def _aliases_in(value: Any, np: Any, refholder_types: tuple[type, ...]) -> tuple
     refholders: list[Any] = []
     seen: set[int] = set()
     stack = [value]
-    exact = EXACT_VALUE_TYPES
+    exact = exact_value_types()
     containers = EXACT_CONTAINER_TYPES
     while stack:
         obj = stack.pop()
@@ -625,8 +633,13 @@ def bump_derived_lineages(
     # drops such a name's edges before it records its new ones -- so the
     # edges it had are no reason to bump anything. A bump can cascade
     # (mutating ``a`` bumps view ``v``, which may itself be a base for ``w``).
-    frontier: list[str] = [o for o in outputs if o in derivation_edges and o in inputs]
-    unread = [o for o in outputs if o in derivation_edges and o not in inputs]
+    # In name order, not the set's: a name reached from several partners is
+    # moved on by each in turn, and the set's order follows the process's
+    # string hashes -- after a restart the loop variable left over from
+    # `for est in estimators: est.fit(X, y)` came out with another lineage,
+    # and every entry storing it with its outputs missed.
+    frontier: list[str] = sorted(o for o in outputs if o in derivation_edges and o in inputs)
+    unread = sorted(o for o in outputs if o in derivation_edges and o not in inputs)
     if unread and code is not None:
         bound = text_bound_names(code)
         if bound is not None:

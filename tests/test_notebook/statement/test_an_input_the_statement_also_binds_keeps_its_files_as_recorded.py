@@ -28,7 +28,7 @@ def test_files_an_input_was_built_from_are_not_snapshotted_again(
     monkeypatch.setattr(
         file_dep_snapshot,
         "snapshot_file_deps",
-        lambda paths, known=None: snapshotted.append(set(paths)) or real(paths, known),
+        lambda paths, known=None, **kw: snapshotted.append(set(paths)) or real(paths, known, **kw),
     )
     p = statement_processor
     p.process_statement("n = 0")
