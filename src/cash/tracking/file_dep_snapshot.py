@@ -652,7 +652,12 @@ def snapshot_dependencies(
     shape; keeping the *capture* side unified too means the discriminator is
     written in exactly one place.
     """
-    snapshot = snapshot_file_deps(set(paths), known, stats) if paths else {}
+    if not paths:
+        snapshot = {}
+    elif stats is None:
+        snapshot = snapshot_file_deps(set(paths), known)
+    else:
+        snapshot = snapshot_file_deps(set(paths), known, stats)
     if urls:
         snapshot.update(snapshot_remote_deps(urls))
     if absent:
