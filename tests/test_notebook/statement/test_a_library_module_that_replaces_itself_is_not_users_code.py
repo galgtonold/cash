@@ -8,7 +8,7 @@ found no file, and took it for the user's (as a notebook's ``__main__`` is):
 the trace kept the replacement's class, which a lookup by its name never
 finds again, so every hit read as stale and ``optimizer =
 torch.optim.SGD(...)`` ran every time with the trace on. The code is judged
-by its own file first (`code_trace._discover`, `TraceRecorder._classify`).
+by its own file first (`code_trace._discover`, `Recorder._classify`).
 """
 
 from __future__ import annotations
