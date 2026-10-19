@@ -1054,7 +1054,7 @@ class CallUnit:
         # (``STORE-INPUT-CHANGED``): its tracker saw the same reads. Nor
         # when it displayed something: a hit shows its prints again, not
         # its displays, and a statement re-run around a hit showed no table.
-        # Nor when work it handed to a thread pool still ran as it returned:
+        # Nor when work it handed to a thread or pool still ran as it returned:
         # what that work reads or changes next is in neither the snapshot
         # nor the stored result.
         elif (
