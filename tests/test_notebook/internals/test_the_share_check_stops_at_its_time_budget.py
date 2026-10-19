@@ -12,6 +12,9 @@ import pytest
 
 from cash.notebook.shared_objects import WalkBudgetExceeded, share_group, walk_budget
 
+#: The limits as shipped, not as tests/test_notebook pins them.
+pytestmark = pytest.mark.real_time_limits
+
 
 def _namespace(n: int = 1500) -> dict:
     sessions = [{"actions": [{"name": "a"}, {"name": "b"}]} for _ in range(n)]

@@ -7,6 +7,25 @@ from __future__ import annotations
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _time_limits_a_busy_machine_cannot_trip(request, monkeypatch):
+    """The share check (``SHARE_CHECK_FLOOR_S``, 0.1 s) and a statement's
+    analysis (``ANALYSIS_BUDGET_FLOOR_S``, 0.5 s) are timed by the wall
+    clock. A loaded worker (a full run on four cores) overran them now and
+    then: cash rightly ran the statement uncached, and a test asserting a
+    hit saw it computed. With both at zero, 94 tests here fail that way.
+    Pinned far above that, unless a test is about the limits themselves
+    (``@pytest.mark.real_time_limits``) or sets them, which wins over this.
+    """
+    if request.node.get_closest_marker("real_time_limits"):
+        return
+    from cash.analysis import analysis_budget
+    from cash.notebook.statement import processor
+
+    monkeypatch.setattr(processor, "SHARE_CHECK_FLOOR_S", 30.0)
+    monkeypatch.setattr(analysis_budget, "ANALYSIS_BUDGET_FLOOR_S", 60.0)
+
+
 def _fresh_cash_instance():
     """A ``Cash`` instance with an isolated in-memory backend.
 
