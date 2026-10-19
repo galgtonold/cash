@@ -48,8 +48,14 @@ def compute_file_hash_component(
     accessed_files: set[str],
     accessed_remote: set[str] | None = None,
     probes: Mapping[str, str] | None = None,
+    stats: Mapping[str, os.stat_result] | None = None,
 ) -> str:
     """Compute a hash component from accessed file paths and their stats.
+
+    *stats* maps a resolved path to a stat taken of it since the statement
+    ran (the check that no input moved, `FileAccessTracker.checked_stats`):
+    taken in place of a stat of its own. The same fields, so the same
+    component, as a stat taken here.
 
     *probes* are the existence checks the statement made without reading
     (``{path: answer}``, :func:`probe_answers`): each adds whether the path is
@@ -98,6 +104,8 @@ def compute_file_hash_component(
             # files resolved every path again per lineage.
             resolved, stat = realpath_of_read_this_run(f)
             canonical_path = normalize_path(resolved)
+            if stat is None and stats:
+                stat = stats.get(canonical_path)
             if stat is None:
                 stat = os.stat(canonical_path)
         except (OSError, ValueError):

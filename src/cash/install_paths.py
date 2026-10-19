@@ -43,7 +43,7 @@ import sys
 import sysconfig
 
 from ._memo import SOURCE_FILES, LruMemo
-from ._paths import normalize_path
+from ._paths import is_pseudo_filename, normalize_path
 
 __all__ = [
     "in_own_package",
@@ -288,7 +288,7 @@ def is_user_path(path: str | os.PathLike[str] | None) -> bool:
     verdict = _USER_PATH.get(path)
     if verdict is not None:
         return verdict
-    if path.startswith("<"):
+    if is_pseudo_filename(path):
         verdict = False
     else:
         path_nc = normcase_path(os.path.abspath(path))
@@ -313,17 +313,17 @@ def is_cash_path(path: str | os.PathLike[str] | None) -> bool:
     if not path:
         return False
     path = os.fspath(path)
-    return not path.startswith("<") and normcase_path(os.path.abspath(path)).startswith(_CASH_DIR)
+    return not is_pseudo_filename(path) and normcase_path(os.path.abspath(path)).startswith(_CASH_DIR)
 
 
 def is_user_code_file(filename: str | None) -> bool:
     """Is *filename*, a code object's ``co_filename``, the user's code? A
     real path by `is_user_path`; a pseudo-filename (``<ipython-input-3>``,
-    ``<string>``) is a notebook cell or ``exec``'d source, which the user
+    ``<string>``, a cell statement's ``/<cash-...>``) is a notebook cell or ``exec``'d source, which the user
     writes. ``<frozen importlib._bootstrap>`` is the interpreter's own."""
     if not filename:
         return False
-    if filename.startswith("<"):
+    if is_pseudo_filename(filename):
         return not filename.startswith("<frozen ")
     return is_user_path(filename)
 

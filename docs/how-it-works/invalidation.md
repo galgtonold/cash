@@ -179,7 +179,9 @@ those are unchanged.
 
 Every file is hashed in full, whatever its size. The one edit the checks
 miss is on Windows: a same-size write that puts the old modification time
-back, or a write through `np.memmap`, which moves no timestamp. See
+back, or a write through `np.memmap` made in a process without cash, which
+moves no timestamp (a file mapped to write where cash runs is read at every
+check). See
 [an edit that keeps the size and timestamps](../known-limitations.md#an-edit-that-keeps-the-size-and-timestamps).
 
 In a notebook, a statement is checked against the files it read itself and

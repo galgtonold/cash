@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from cash import _plain_data
 from cash._memo import CODE_OBJECTS, LruMemo
+from cash._paths import is_pseudo_filename
 from cash.analysis.bytecode import NAME_LOADS, argvals
 from cash.analysis.callee_effects import source_global_mutations
 from cash.analysis.namespace_effects import capturable_globals
@@ -461,7 +462,7 @@ def _plain_or_code(value, seen: set[int], budget: list[int]) -> bool:
 
         filename = getattr(value.__code__, "co_filename", "") or ""
         # A cell's code has a `<cash-...>` / `<ipython-...>` name: the user's.
-        if filename and not filename.startswith("<") and not is_user_path(filename):
+        if filename and not is_pseudo_filename(filename) and not is_user_path(filename):
             # A library's function is code, as its classes are. Its module
             # state is no more in a lineage key than in a content key, and
             # walking it refused: sklearn's `normalize` is a validating
@@ -561,7 +562,7 @@ def _user_global_names_reached(fn) -> set[str]:
             continue
         seen.add(id(current))
         filename = code.co_filename or ""
-        if filename and not filename.startswith("<") and not is_user_path(filename):
+        if filename and not is_pseudo_filename(filename) and not is_user_path(filename):
             continue
         own = _code_names(code)
         names |= own

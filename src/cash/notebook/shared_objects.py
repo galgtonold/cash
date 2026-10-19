@@ -532,6 +532,15 @@ def _identities(value: Any, value_types: tuple[type, ...]) -> Iterable[int]:
         if not isinstance(obj, _IMMUTABLE_CONTAINERS):
             yield id(obj)
             yield from view_bases(obj)
+        kind = type(obj)
+        if (
+            (kind is dict or kind is list)
+            and len(obj) >= _TREE_BELOW_MIN
+            and _plain_data.held_beyond_parents(obj, TREE_LEAVES, 0) == []
+        ):
+            # JSON-like data no container of which anything but its parent
+            # holds: whatever else holds part of it holds *obj* itself.
+            continue
         stack.extend(children_of(obj) or ())
 
 
@@ -1351,6 +1360,28 @@ def _held_within(nodes: dict[int, Any], inbound: dict[int, int], excess: list[in
 #: Most objects `_inside_library_objects` reads inside the library objects
 #: of a walk before it gives up, which refuses the statement.
 _INSIDE_MAX_OBJECTS = 50_000
+_STREAM_NAMES = ("stdin", "stdout", "stderr", "__stdin__", "__stdout__", "__stderr__")
+#: The standard streams as cash found them when it was imported.
+_STREAMS_AT_START = tuple(getattr(sys, name, None) for name in _STREAM_NAMES)
+
+
+def _standard_streams() -> set[int]:
+    """The ids of the process's standard streams: ``sys.stdin``, ``stdout``
+    and ``stderr`` as they are now, their ``__stdin__``-style originals, and
+    the ones current when cash was imported.
+
+    A ``threading.Thread`` keeps the ``sys.stderr`` it was made under, a
+    ``logging.StreamHandler`` and a ``tqdm`` bar the stream they write to.
+    What else holds such a stream is the kernel's or the test runner's own:
+    the climb from it went up eight levels of their objects, a full heap
+    scan each, and gave up. A file object of the user's is still climbed
+    from."""
+    found = {id(getattr(sys, name, None)) for name in _STREAM_NAMES}
+    found.update(id(stream) for stream in _STREAMS_AT_START)
+    found.discard(id(None))
+    return found
+
+
 #: Above how many objects one level of `_variables_holding`'s climb reads
 #: the heap once itself: `gc.get_referrers` takes time in proportion to the
 #: heap times the objects it is given (33 s for 18,000 on a test worker).
@@ -1474,7 +1505,9 @@ def _held_from_outside(
     A library object one of whose parts holds it back (each trace of a
     plotly figure, each node of a minidom document) is left out: those keep
     the library-object rule (`_held_within`), and their parts share the
-    library's own validators and the like with every other such object."""
+    library's own validators and the like with every other such object.
+    Nor is one of the process's standard streams (`_standard_streams`)
+    looked for."""
     roots = {key: owner[key] for key, node in nodes.items() if _reads_inside(node, value_types)}
     if not roots:
         return {}, set()
@@ -1520,8 +1553,11 @@ def _held_from_outside(
                 stack.append((child, root))
         child = None  # no reference of this frame's left in the counts
     parent = None
+    streams = _standard_streams()
     held = [
-        key for key in within if root_of[key] not in held_back and sys.getrefcount(within[key]) - refs[key] > _OVERHEAD
+        key
+        for key in within
+        if root_of[key] not in held_back and key not in streams and sys.getrefcount(within[key]) - refs[key] > _OVERHEAD
     ]
     return {key: within[key] for key in held}, {roots[root_of[key]] for key in held}
 
@@ -2270,7 +2306,7 @@ def _walk(
                 taken.update(map(id, breaks))
                 continue
             del breaks
-        _descend([root], name, nodes, inbound, owner, order, value_types, leaves)
+        _descend([root], name, nodes, inbound, owner, order, value_types, leaves, trees=taken if fast else None)
     if reached is None:
         reached = len(order)
     # Children before parents: a tuple counts only when something mutable
@@ -2319,10 +2355,19 @@ def _descend(
     order: list[int],
     value_types: tuple[type, ...],
     leaves: Leaves | None = None,
+    *,
+    trees: set[int] | None = None,
 ) -> None:
     """`_walk` one container at a time below the objects on *stack*, which
     are nodes already: each reference to a node counted once in *inbound*,
-    each new node taken under *name*. One of *leaves* is not taken."""
+    each new node taken under *name*. One of *leaves* is not taken.
+
+    With *trees* (`_walk`'s *fast*), a list or dict of JSON-like data met
+    below is counted from what holds it beyond its parents, as `_walk` counts
+    such a root (`_take_breaks`), and the ids of those taken on their own go
+    in *trees*, as `_walk`'s *breaks*: a graph object's ``adj`` dict of
+    100,000 dicts was walked one dict at a time by every check of the
+    statement."""
     exact = exact_value_types()
     containers = EXACT_CONTAINER_TYPES
     pops = 0
@@ -2351,7 +2396,41 @@ def _descend(
                 nodes[ckey] = child
                 owner[ckey] = name
                 order.append(ckey)
+                if (
+                    trees is not None
+                    and (ctype is dict or ctype is list)
+                    and len(child) >= _TREE_BELOW_MIN
+                    and _took_as_tree(child, name, nodes, inbound, owner, order, value_types, leaves, trees)
+                ):
+                    continue
                 stack.append(child)
+
+
+#: Fewest items of a list or dict below a root that `_descend` asks about as
+#: one tree: a smaller one is walked as quickly as it is asked about.
+_TREE_BELOW_MIN = 32
+
+
+def _took_as_tree(
+    value: Any,
+    name: str,
+    nodes: dict[int, Any],
+    inbound: dict[int, int],
+    owner: dict[int, str],
+    order: list[int],
+    value_types: tuple[type, ...],
+    leaves: Leaves | None,
+    taken: set[int],
+) -> bool:
+    """Count what is below *value*, a node `_descend` just took, as `_walk`
+    counts below a root of JSON-like data (`_take_breaks`), adding the
+    containers taken on their own to *taken*; False, with nothing counted,
+    when it is not such data or that cannot be done."""
+    breaks = _plain_data.held_beyond_parents(value, TREE_LEAVES, _MAX_BREAKS)
+    if breaks is None or not _take_breaks(breaks, name, nodes, inbound, owner, order, value_types, leaves):
+        return False
+    taken.update(map(id, breaks))
+    return True
 
 
 def _take_breaks(

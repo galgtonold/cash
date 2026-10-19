@@ -12,17 +12,49 @@ from __future__ import annotations
 import functools
 import os
 import re
+import sys
 import time
 from typing import Any
 
 __all__ = [
+    "CELL_NAME_PREFIX",
+    "CELL_ROOT",
     "MAIN_MODULE_NAMES",
+    "cell_root",
+    "is_pseudo_filename",
     "is_remote_url",
     "normalize_path",
     "replace_with_retry",
     "resolve_file_dep_path",
     "resolve_main_module",
 ]
+
+
+def cell_root(base_prefix: str, path: Any = os.path) -> str:
+    """The root of the drive Python is installed on (*base_prefix*), in the
+    spelling of *path* (``os.path``, or ``ntpath`` to ask as Windows would)."""
+    return path.splitdrive(path.abspath(base_prefix))[0] + path.sep
+
+
+#: Where a notebook statement's name stands (`cash.notebook.compiled_source`):
+#: the root of the drive Python is installed on, ``/`` or ``C:\``, whatever the
+#: working folder. The name must be absolute: a library that makes a code's
+#: file absolute (joblib's ``Memory`` names its cache folder after it) joined a
+#: bare ``<cash-...>`` to the working directory, and in a deep folder on
+#: Windows the path passed 260 characters and every store failed. ``<`` cannot
+#: be in a Windows file name and a user cannot write to ``/``, so the name is
+#: never a file.
+CELL_ROOT = cell_root(sys.base_prefix)
+
+#: What every statement's name starts with.
+CELL_NAME_PREFIX = CELL_ROOT + "<cash-"
+
+
+def is_pseudo_filename(filename: str) -> bool:
+    """Does *filename*, a ``co_filename``, name no file: ``<string>``,
+    ``<ipython-input-3>``, or a statement cash compiled (``/<cash-...>``)?"""
+    return filename.startswith(("<", CELL_NAME_PREFIX))
+
 
 # ``file://`` is excluded: it names a local path that can genuinely be stat'ed.
 # A scheme of two characters or more: a single letter is a Windows drive, and

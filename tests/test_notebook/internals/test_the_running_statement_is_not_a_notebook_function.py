@@ -19,15 +19,15 @@ import types
 
 import pytest
 
+from cash._paths import CELL_NAME_PREFIX
 from cash.notebook import held_functions
-from cash.notebook.compiled_source import CASH_FILENAME_PREFIX
 
 nx = pytest.importorskip("networkx")
 
 
 def test_the_running_statement_is_not_a_notebook_function():
     namespace: dict = {"__name__": "__main__", "nfe": held_functions.notebook_functions_exist}
-    code = compile("answer = nfe(globals())", CASH_FILENAME_PREFIX + "test>", "exec")
+    code = compile("answer = nfe(globals())", CELL_NAME_PREFIX + "test>", "exec")
     exec(code, namespace)
     assert namespace["answer"] is False
     code = compile("answer = nfe(globals())", "<other>", "exec")
@@ -42,9 +42,7 @@ def test_a_lambda_made_by_the_running_statement_is_seen():
     """A no is not taken while code with the notebook's globals runs: it
     can make a function after the question without a new ``exec``."""
     namespace: dict = {"__name__": "__main__", "nfe": held_functions.notebook_functions_exist}
-    code = compile(
-        "first = nfe(globals()); h = [lambda: 1]; second = nfe(globals())", CASH_FILENAME_PREFIX + "t>", "exec"
-    )
+    code = compile("first = nfe(globals()); h = [lambda: 1]; second = nfe(globals())", CELL_NAME_PREFIX + "t>", "exec")
     exec(code, namespace)
     assert namespace["first"] is False
     assert namespace["second"] is True
@@ -81,7 +79,7 @@ def test_a_call_keyed_inside_a_statement_does_not_walk_a_whole_graph(monkeypatch
 
     monkeypatch.setattr(held_functions, "_visit_group", counting)
     namespace: dict = {"__name__": "__main__", "held": held_functions.held_notebook_code, "G": graph}
-    code = compile("found = held(G, globals(), 'a lineage of G')", CASH_FILENAME_PREFIX + "t>", "exec")
+    code = compile("found = held(G, globals(), 'a lineage of G')", CELL_NAME_PREFIX + "t>", "exec")
     exec(code, namespace)
     assert namespace["found"].codes == ()
     assert visited[0] < 2 * held_functions.EXISTENCE_CHECK_AT, visited[0]

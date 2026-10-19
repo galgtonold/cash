@@ -41,14 +41,18 @@ def _nested(n: int) -> list:
 
 
 DEPTH = 100_000
-DEEP = [pytest.param(_chain(DEPTH), id="linked list"), pytest.param(_nested(DEPTH), id="nested list")]
+# Built in the test, not at import: a value made here lives as long as the
+# worker does, and 200,000 objects held from collection on made every heap
+# search of every later test in the worker slower.
+DEEP = [pytest.param(_chain, id="linked list"), pytest.param(_nested, id="nested list")]
 
 
-@pytest.mark.parametrize("value", DEEP)
-def test_compute_hash_falls_back_to_identity(value):
+@pytest.mark.parametrize("build", DEEP)
+def test_compute_hash_falls_back_to_identity(build):
+    value = build(DEPTH)
     assert is_identity_fallback_hash(value, compute_hash(value))
 
 
-@pytest.mark.parametrize("value", DEEP)
-def test_mutation_fingerprint_reports_it_unobservable(value):
-    assert mutation_fingerprint(value) is None
+@pytest.mark.parametrize("build", DEEP)
+def test_mutation_fingerprint_reports_it_unobservable(build):
+    assert mutation_fingerprint(build(DEPTH)) is None

@@ -19,6 +19,7 @@ import re
 import sys
 from pathlib import Path
 
+from ._paths import is_pseudo_filename
 from .install_paths import is_installed_path
 
 logger = logging.getLogger(__name__)
@@ -382,7 +383,7 @@ def _calling_code_project_root() -> Path | None:
     while frame is not None:
         name = frame.f_code.co_filename
         frame = frame.f_back
-        if not name or name.startswith("<"):
+        if not name or is_pseudo_filename(name):
             continue
         try:
             path = Path(name).resolve()

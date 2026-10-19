@@ -275,7 +275,7 @@ def _inspect_source_lines(obj: object) -> tuple[list[str], int]:
             return held
     version = settled_source_version(obj) if target is not None else None
     if version is None:
-        return inspect.getsourcelines(obj)  # type: ignore[arg-type]
+        return _getsourcelines(obj)
     key = (*version, target)
     hit = _SOURCE_LINES.get(key)
     if hit is not None:
@@ -283,10 +283,54 @@ def _inspect_source_lines(obj: object) -> tuple[list[str], int]:
     if target[0] == "class" and _CLASS_SOURCE_PARSES_FILE:
         lines, first = _class_source_lines(obj, version)
     else:
-        lines, first = inspect.getsourcelines(obj)  # type: ignore[arg-type]
+        lines, first = _getsourcelines(obj)
     if source_version_unchanged(version):
         _SOURCE_LINES[key] = (tuple(lines), first)
     return lines, first
+
+
+def _getsourcelines(obj: object) -> tuple[list[str], int]:
+    """``inspect.getsourcelines``; for a code object compiled from a source
+    file on disk, read without ``inspect.getmodule``.
+
+    A code object names no module, so ``getmodule`` resolves the file of
+    every module loaded since it last looked (``realpath`` each, ~640 in an
+    IPython kernel): 105 ms of the first cell using ``open``, IPython's
+    ``_modified_open``. The module only gives ``linecache`` a loader to ask
+    when the file cannot be read, and a file on disk is read from disk: the
+    same lines, and the same block cut from them as ``inspect`` cuts it.
+    Anything else asks ``inspect``.
+    """
+    if inspect.iscode(obj):
+        found = _code_source_lines_on_disk(obj)
+        if found is not None:
+            return found
+    return inspect.getsourcelines(obj)  # type: ignore[arg-type]
+
+
+#: The line ``inspect.findsource`` walks a code object's first line back to
+#: before 3.13 (from Python 3.10-3.12's ``inspect``).
+_FINDSOURCE_DEF_LINE = re.compile(r"^(\s*def\s)|(\s*async\s+def\s)|(.*(?<!\w)lambda(:|\s))|^(\s*@)")
+_WALKS_BACK_TO_DEF = sys.version_info < (3, 13)
+
+
+def _code_source_lines_on_disk(code: types.CodeType) -> tuple[list[str], int] | None:
+    """`_getsourcelines` of *code* from its ``.py`` file on disk, as
+    ``inspect.getsourcelines`` answers it; None where that is not plainly so."""
+    filename = code.co_filename
+    if not filename.endswith(".py") or not os.path.isabs(filename):
+        return None
+    if not os.path.exists(filename):
+        return None
+    linecache.checkcache(filename)
+    lines = linecache.getlines(filename)
+    lnum = code.co_firstlineno - 1
+    if not lines or lnum < 0 or lnum >= len(lines):
+        return None
+    if _WALKS_BACK_TO_DEF:
+        while lnum > 0 and not _FINDSOURCE_DEF_LINE.match(lines[lnum]):
+            lnum -= 1
+    return inspect.getblock(lines[lnum:]), lnum + 1
 
 
 def _held_source_lines(obj: object, target: tuple) -> tuple[list[str], int] | None:

@@ -52,7 +52,7 @@ def frozen_shape(obj: Any) -> tuple | None:
         shape = getattr(obj, "shape", None)
         if shape is not None:
             dtypes = getattr(obj, "dtypes", None)
-            dtype = tuple(str(d) for d in dtypes) if dtypes is not None else str(getattr(obj, "dtype", ""))
+            dtype = _dtype_names(dtypes) if dtypes is not None else str(getattr(obj, "dtype", ""))
             return ("shaped", tuple(shape), dtype)
         if isinstance(obj, (str, bytes)):
             return None
@@ -63,6 +63,24 @@ def frozen_shape(obj: Any) -> tuple | None:
         return ("sized", len(obj), inner) if isinstance(obj, Sized) else None
     except Exception:  # noqa: BLE001 - no cheap signal is not a failure
         return None
+
+
+def _dtype_names(dtypes: Any) -> tuple[str, ...]:
+    """``str`` of each column's dtype, each distinct dtype object named once.
+
+    A 3,000-column frame holds one or two dtype objects, and ``str`` of a
+    numpy dtype is slow: naming every column took ~10 ms on each use of the
+    frame as an argument, a second of a grid of 32 backtests over three such
+    frames.
+    """
+    names: dict[int, str] = {}
+    out = []
+    for d in dtypes:
+        name = names.get(id(d))
+        if name is None:
+            name = names[id(d)] = str(d)
+        out.append(name)
+    return tuple(out)
 
 
 class FrozenResults:

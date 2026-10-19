@@ -49,7 +49,14 @@ def _last_cell(magics, n: int, tag: str, monkeypatch):
     return hashed.bytes, len(scopes)
 
 
-def test_the_last_cell_hashes_no_more_in_a_long_notebook(cash_magics, monkeypatch):
+def test_the_last_cell_hashes_no_more_in_a_long_notebook(cash_magics, cash_instance, monkeypatch):
+    # No statement here is worth an entry, and none may get one. A stall on a
+    # busy machine can let a statement above clear the store floor; the check
+    # then takes its outputs' lineages from its entry instead of working them
+    # out, as it should, and hashes fewer bytes (452 fewer at 10 cells on a
+    # Windows CI run). The count is of the text work, so it is taken where
+    # every statement is a clean miss.
+    cash_instance.config.min_execution_time_to_cache_seconds = 3600.0
     short, _ = _last_cell(cash_magics, 10, "short", monkeypatch)
     long, _ = _last_cell(cash_magics, 60, "long", monkeypatch)
 

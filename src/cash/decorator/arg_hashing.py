@@ -1774,11 +1774,17 @@ class ArgHasher:
                 return carried
 
         # pandas >= 3 copy-on-write: an exact "has this frame changed?"
-        # check instead of a trusted tag. See `_frame_memo_lookup`.
-        frame_memo = lineage is None and is_cow_pandas(arg)
-        if frame_memo:
+        # check instead of a trusted tag. See `_frame_memo_lookup`. Asked
+        # for a tagged frame too, which is not stored here: a statement's
+        # output was hashed for its lineage, and a loop handing it to a
+        # cached call read all of it again on the call's first use.
+        cow = is_cow_pandas(arg)
+        frame_memo = lineage is None and cow
+        if cow:
             content_hash = self._frame_memo_lookup(arg)
             if content_hash is not None:
+                if lineage is not None:
+                    self._memo_arg_hash(arg, lineage, content_hash)
                 return content_hash
 
         since = exposure_mark()

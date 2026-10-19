@@ -59,7 +59,11 @@ that can change the result without changing an argument:
 Two limits. A global that cannot be hashed (a lock, a live connection) is left
 out with a [`KEY-UNHASHABLE-GLOBAL`](../warnings.md#key-unhashable-global)
 warning. And reachability is static: code picked at run time, from a dict or
-through `getattr`, is not seen. Name it with `depends_on=[...]`.
+through `getattr`, is not in the key. On Python 3.12 and newer the call is
+cached on a record of the code it ran, checked before each hit; before 3.12
+it runs uncached with a
+[`KEY-UNTRACKABLE-DEP`](../warnings.md#key-untrackable-dep) warning. Name such
+code with `depends_on=[...]` to key it directly.
 
 <!-- claim: cash/decorator/rng.py:RngWatch.fold_rng_epoch @8346a209 -->
 An unseeded draw is not a change. The first value is stored and returned on
