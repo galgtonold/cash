@@ -41,6 +41,7 @@ from cash.bulk_digest import BulkHasher
 from cash.remote_source import RemoteFileDataSource, addressing_options, read_options
 from cash.tracking.digest_table import current_table
 from cash.tracking.file_versions import note_same_content
+from cash.tracking.pending_digest import MOVED, DeferredDigest
 from cash.tracking.read_classification import stat_key
 from cash.tracking.tracker_context import untracked
 from cash.tracking.written_in_place import is_written_in_place
@@ -93,6 +94,8 @@ _PRESENT_MARKER = "present"
 _UNRESOLVED_MARKER = "unresolved"
 
 _HASH_READ_CHUNK = 1024 * 1024  # 1 MiB streaming chunk
+#: Bytes, not text, on Windows (no newline translation); 0 elsewhere.
+_O_BINARY = getattr(os, "O_BINARY", 0)
 
 
 #: Digests already computed this process, keyed by the file's identity AND its
@@ -341,6 +344,42 @@ def _reuse_seconds(memo_key: tuple[str, int, int, int, int, int]) -> float | Non
     return ttl
 
 
+def digest_later(path: str, size: int, st: os.stat_result) -> str | DeferredDigest | None:
+    """The digest of a small file being read, or a `DeferredDigest` that
+    takes it when the entry is stored; None when it must be taken now.
+
+    Put off only for a file the digest memo itself would trust (``_HASH_MEMO``):
+    settled (last written over ``_HASH_MEMO_MIN_AGE_SECONDS`` ago), with a
+    file identity, never mapped to write (`written_in_place`), the memo on
+    its stat in use, *st* the stat the read just took. The deferred digest is
+    taken only while the file's stat is still *st* -- the memo's whole key,
+    change time and identity included -- and is `MOVED` otherwise.
+    Remembered already, it is given at once.
+    """
+    if _HASH_MEMO_TTL_SECONDS is not None or not st.st_ino or not _stat.S_ISREG(st.st_mode):
+        return None
+    if (time.time() - st.st_mtime) <= _HASH_MEMO_MIN_AGE_SECONDS or is_written_in_place(st, path):
+        return None
+    key = _stat_memo_key(path, st, size)
+    remembered = _remembered_digest(key)
+    if remembered is not None:
+        return remembered
+
+    def at_store() -> str | None:
+        # Untracked: cash's own read and its digest table's write, not the
+        # block's (whose write would take the deferred digests again).
+        with untracked():
+            try:
+                now = os.stat(path)
+            except OSError:
+                return MOVED
+            if _stat_memo_key(path, now, now.st_size) != key or is_written_in_place(now, path):
+                return MOVED
+            return file_content_hash(path, size, now)
+
+    return DeferredDigest(at_store)
+
+
 def remembered_file_digest(path: str) -> str | None:
     """The digest `file_content_hash` would return for *path* without reading
     it -- remembered in this process or the cache directory -- else None."""
@@ -401,25 +440,34 @@ _HASH_READ_BLOCK = 32 * 1024 * 1024
 def _read_digest(path: str, size: int) -> str:
     """`bulk_digest` of the file's bytes as they are now (`file_content_hash`)."""
     hasher = BulkHasher()
+    if size < _HASH_READ_CHUNK:
+        # A descriptor, not a file object: ``io.FileIO`` raises the ``open``
+        # audit event as a read, which went through cash's own read handlers
+        # to be dropped there, ~15us of a 2 KB file's digest in a statement
+        # reading 6,000. ``os.open`` reports flags, which name no read.
+        # ``read(n)`` allocates n bytes before it reads, so a 2 KB file read
+        # in 1 MiB chunks cost two 1 MiB allocations: ~400us a file against
+        # ~60us reading size + 1 (the +1 finds EOF in the first read; a file
+        # that grew is still read to its end).
+        with untracked():
+            fd = os.open(path, os.O_RDONLY | _O_BINARY)
+            try:
+                while chunk := os.read(fd, size + 1):
+                    hasher.update(chunk)
+            finally:
+                os.close(fd)
+        return hasher.hexdigest()
     # Untracked: cash's own read of a file must not be tracked as a read
     # by the cached call it is checking on behalf of (which then hashed
     # the file a second time to fingerprint that "read").
     with untracked(), io.FileIO(path, "rb") as f:
-        if size < _HASH_READ_CHUNK:
-            # ``FileIO.read(n)`` allocates n bytes before it reads, so a
-            # 2 KB file read in 1 MiB chunks cost two 1 MiB allocations:
-            # ~400us a file against ~60us reading size + 1 (the +1 finds EOF
-            # in the first read; a file that grew is still read to its end).
-            for chunk in iter(lambda: f.read(size + 1), b""):
-                hasher.update(chunk)
-        else:
-            block = bytearray(min(size + 1, _HASH_READ_BLOCK))
-            view = memoryview(block)
-            while True:
-                n = f.readinto(block)
-                if not n:
-                    break
-                hasher.update(view[:n])
+        block = bytearray(min(size + 1, _HASH_READ_BLOCK))
+        view = memoryview(block)
+        while True:
+            n = f.readinto(block)
+            if not n:
+                break
+            hasher.update(view[:n])
     return hasher.hexdigest()
 
 
@@ -471,6 +519,7 @@ def snapshot_file_deps(
     paths: set[str],
     known: dict[str, tuple[Any, str]] | None = None,
     stats: dict[str, tuple[int, int, int] | None] | None = None,
+    checked: Mapping[str, os.stat_result] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Return ``{path: {'mtime', 'size', 'hash'}}`` for paths that exist.
 
@@ -487,11 +536,33 @@ def snapshot_file_deps(
     snapshot found it: the check that no input moved during the call
     (`FileAccessTracker.inputs_changed_since_read`) compares with it rather
     than taking a second stat of every file.
+
+    *checked* maps a path to the stat that check took just before, when it
+    found the file as read (``FileAccessTracker.checked_stats``): taken in
+    place of a stat of its own when the digest from the read is still the
+    file's (*known*). The entry then describes the file as read, stat and
+    digest alike. A file the snapshot must hash itself gets a stat of its
+    own, taken right before the hash.
     """
     snapshot: dict[str, dict[str, Any]] = {}
-    for f in paths:
+    # A relative read is recorded under both spellings
+    # (``FileAccessTracker.track_path``). The relative one, when it names the
+    # same path from the cwd as an absolute one, takes that one's entry: a
+    # cell reading 5,000 files by relative path stat'ed and hashed each again.
+    relative = [f for f in paths if not os.path.isabs(f)]
+    todo = [f for f in paths if os.path.isabs(f)] + relative if relative else paths
+    for f in todo:
+        if relative and not os.path.isabs(f):
+            same = snapshot.get(_spelled_absolute(f))
+            if same is not None and "size" in same:
+                snapshot[f] = dict(same)
+                continue
+        st = checked.get(f) if checked else None
+        if st is not None and not (known and f in known and known[f][0] == stat_key(st)):
+            st = None
         try:
-            st = os.stat(f)
+            if st is None:
+                st = os.stat(f)
         except (FileNotFoundError, NotADirectoryError):
             # Not there: a file the call deleted, or a read that failed (the
             # absence is recorded on its own channel).
@@ -542,7 +613,18 @@ def snapshot_file_deps(
         # other under the same path.
         entry["dev"], entry["ino"] = st.st_dev, st.st_ino
         snapshot[f] = entry
+    if relative:
+        snapshot = {f: snapshot[f] for f in paths if f in snapshot}  # in the order of *paths*, as before
     return snapshot
+
+
+def _spelled_absolute(path: str) -> str | None:
+    """*path* made absolute from the cwd by its spelling, as a read records
+    it, or None when its spelling does not say which file it is: through a
+    ``..``, the open goes up from where a linked folder points."""
+    if ".." in path.replace("\\", "/").split("/"):
+        return None
+    return normalize_path(os.path.abspath(path))
 
 
 def snapshot_absent_deps(paths: Iterable[str]) -> dict[str, dict[str, Any]]:
@@ -657,13 +739,14 @@ def snapshot_dependencies(
     unresolved: Iterable[str] | None = None,
     present: Mapping[str, str] | None = None,
     stats: dict[str, tuple[int, int, int] | None] | None = None,
+    checked: Mapping[str, os.stat_result] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Snapshot everything a call read — local files and remote objects — as one dict.
 
     *unresolved* are paths the call read that cannot be stat'ed as recorded
     (``FileAccessTracker.get_unresolved_files``): each is recorded as never
     fresh. *present* are paths it probed and found without reading
-    (``FileAccessTracker.get_present_files``). *stats* is
+    (``FileAccessTracker.get_present_files``). *stats* and *checked* are
     `snapshot_file_deps`'s.
 
     The single entry point both caching subsystems use, so neither has to
@@ -675,10 +758,13 @@ def snapshot_dependencies(
     """
     if not paths:
         snapshot = {}
-    elif stats is None:
-        snapshot = snapshot_file_deps(set(paths), known)
     else:
-        snapshot = snapshot_file_deps(set(paths), known, stats)
+        extra: dict[str, Any] = {}
+        if stats is not None:
+            extra["stats"] = stats
+        if checked:
+            extra["checked"] = checked
+        snapshot = snapshot_file_deps(set(paths), known, **extra)
     if urls:
         snapshot.update(snapshot_remote_deps(urls))
     if absent:
