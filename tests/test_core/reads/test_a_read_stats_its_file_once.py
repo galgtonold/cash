@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 
+from cash._paths import normalize_path
 from cash.tracking import file_dep_snapshot
 from cash.tracking.file_tracker import FileAccessTracker
 
@@ -32,5 +33,6 @@ def test_a_read_is_stat_ed_once(tmp_path, monkeypatch):
     monkeypatch.undo()
     resolved = os.path.realpath(path)
     assert [kind for kind, p in asked if os.path.realpath(p) == resolved] == ["lstat"]
-    # The read is recorded, with the digest of what it read.
-    assert tracker.read_digests[resolved] == file_dep_snapshot.file_content_hash(resolved)
+    # The read is recorded (by its resolved path, in forward slashes on
+    # Windows too), with the digest of what it read.
+    assert tracker.read_digests[normalize_path(resolved)] == file_dep_snapshot.file_content_hash(resolved)
