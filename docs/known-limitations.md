@@ -66,13 +66,14 @@ cash finds a draw by following the generator from where it was created. It also
 warns about `df.sample(100)` and other library calls without `random_state`, an
 anonymous generator (`z = np.random.default_rng().normal(size=3)`), and a call to
 one of your functions that builds its own unseeded generator (`rng = make_rng()`).
-These are **not** flagged and are cached silently:
-
-- a draw from a generator cash never saw created, held in an attribute:
-  `self.rng.normal()`;
-- a draw inside a helper function (`arr = make_data()`) from a generator the
-  helper holds rather than makes. One from the global `random`, `np.random` or
-  torch stream is flagged once the statement has run, by comparing the streams.
+<!-- claim: cash/notebook/statement/hidden_generators.py:positions @fc34e5a9 -->
+A statement that draws from a generator held where no variable's lineage
+follows it is not stored, without a warning: it runs every time, so the draws
+below it match plain Python. That is a generator held by an object built in a
+module of yours (`tlib.MODEL.rng`), an item of a list, or one a helper keeps in
+its closure (`arr = make_data()`). A draw from the global `random`,
+`np.random` or torch stream inside a helper is flagged once the statement has
+run, by comparing the streams.
 
 <!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @4ebbcaa0, cash/tracking/randomness/lineage.py:advanced_carrier_lineage @eaa66fca, cash/notebook/upstream/statement_lineage.py:StatementLineage._recorded_draws @3b7507d9, cash/notebook/upstream/statement_lineage.py:StatementLineage._reachable_generators @bb6221ba -->
 A statement that draws from a generator held in a variable, or calls a function
