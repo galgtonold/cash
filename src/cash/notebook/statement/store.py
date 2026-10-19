@@ -66,20 +66,23 @@ def _snapshot_with_inherited(
     inherited_snapshots: dict[str, dict] | None,
     known: dict[str, tuple[Any, ...]] | None = None,
     probes: dict[str, str] | None = None,
+    checked: Mapping[str, Any] | None = None,
 ) -> dict[str, dict]:
     """Snapshot the files a statement read itself; take the ones it only
     inherited from its inputs' producers as they recorded them. *known* are
     the digests taken as the statement read its files
     (`FileAccessTracker.known_reads`), reused while a file's stat is unchanged.
     *probes* are the paths it only checked for (``probe_answers``): the entry
-    is fresh while each is still missing, or still there."""
+    is fresh while each is still missing, or still there. *checked* are the
+    stats the check that no input moved took just before
+    (``FileAccessTracker.checked_stats``)."""
     inherited_snapshots = inherited_snapshots or {}
     own = set(file_dependencies) - inherited_snapshots.keys()
     absent = present = None
     if probes:
         absent = [path for path, asked in probes.items() if asked == "absent"]
         present = {path: asked for path, asked in probes.items() if asked != "absent"}
-    snapshot = snapshot_dependencies(own, accessed_remote, absent, known=known, present=present)
+    snapshot = snapshot_dependencies(own, accessed_remote, absent, known=known, present=present, checked=checked)
     for path, recorded in inherited_snapshots.items():
         snapshot.setdefault(path, recorded)
     return snapshot
@@ -547,6 +550,7 @@ class StatementStore:
                 inherited_snapshots,
                 execution.file_tracker.known_reads() if execution.file_tracker is not None else None,
                 execution.probes,
+                getattr(execution.file_tracker, "take_checked_stats", dict)(),
             ),
             force_persist=run.force_persist,
             output_lineages=self._lineage_builder.build_output_lineages(self.tracking_state, run.outputs),

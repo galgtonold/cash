@@ -34,6 +34,7 @@ from cash.tracking.read_classification import (
     is_pseudo_fs,
     is_runtime_cache_path,
     regular_file_stat,
+    regular_file_stat_result,
     stat_key,
 )
 from cash.tracking.read_credit import credit_read_to_stack
@@ -155,6 +156,10 @@ class FileAccessTracker:
         #: path -> its `regular_file_stat` as the call's snapshot took it, for
         #: `inputs_changed_since_read`; None when no snapshot is pending.
         self.snapshot_stats: dict[str, tuple[int, int, int] | None] | None = None
+        #: path -> the stat `inputs_changed_since_read` took of it, when it
+        #: found the file as read: a snapshot taken right after takes it
+        #: rather than a stat of its own (`snapshot_file_deps`).
+        self.checked_stats: dict[str, os.stat_result] = {}
         # The same for each folder the block listed (`stat_key` of the
         # folder): an entry landing in it while the block runs leaves a
         # listing without the entry, which a snapshot taken at store time
@@ -320,16 +325,29 @@ class FileAccessTracker:
         taken, self.snapshot_stats = self.snapshot_stats, None
         if taken is None:
             taken = {}
+        checked: dict[str, os.stat_result] = {}
+        self.checked_stats = checked
         # Over copies: a pool thread the block started can still be reading
         # after it ended, adding to these while they are walked.
         for path, before in list(self.read_stats.items()):
-            now = taken[path] if path in taken else regular_file_stat(path)
+            if path in taken:
+                now = taken[path]
+            else:
+                st = regular_file_stat_result(path)
+                now = stat_key(st) if st is not None else None
+                if now == before:
+                    checked[path] = st
             if now != before and not (path in self.ctime_unreliable and now is not None and now[:2] == before[:2]):
                 moved.append(path)
         for path, before in list(self.listed_stats.items()):
             if path not in self.touched_dirs and folder_stat(path) != before:
                 moved.append(path)
         return moved
+
+    def take_checked_stats(self) -> dict[str, os.stat_result]:
+        """`checked_stats`, once: a later snapshot takes stats of its own."""
+        checked, self.checked_stats = self.checked_stats, {}
+        return checked
 
     def known_reads(self) -> dict[str, tuple[Any, ...]]:
         """``{path: (stat when read, digest when read, when it was hashed)}``

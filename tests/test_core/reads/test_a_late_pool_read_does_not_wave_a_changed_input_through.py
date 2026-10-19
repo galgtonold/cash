@@ -34,7 +34,7 @@ pytestmark = pytest.mark.core
 def _late_read_during_the_check(monkeypatch, read_late):
     """Make the moved-input check's first stat wait for *read_late*, run on
     another thread: a read landing in the middle of the walk."""
-    real = file_tracker.regular_file_stat
+    real = file_tracker.regular_file_stat_result
     fired = threading.Event()
 
     def stat(path):
@@ -43,7 +43,7 @@ def _late_read_during_the_check(monkeypatch, read_late):
             read_late()
         return real(path)
 
-    monkeypatch.setattr(file_tracker, "regular_file_stat", stat)
+    monkeypatch.setattr(file_tracker, "regular_file_stat_result", stat)
     return fired
 
 
