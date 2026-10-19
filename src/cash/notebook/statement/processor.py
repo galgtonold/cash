@@ -42,6 +42,7 @@ from cash.notebook.compiled_source import register_cell_source
 from cash.notebook.consumables import drawn_stream_inputs
 from cash.notebook.per_item_reruns import MIN_COST_S as PER_ITEM_MIN_COST_S
 from cash.notebook.read_handles import reaches_read_handle
+from cash.notebook.statement import sparse_order
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.amplification import AmplificationGuard
 from cash.notebook.statement.call_routing import CallRouting
@@ -657,6 +658,7 @@ class StatementProcessor:
         exec_source: str | None = None,
         occurrence_index: int = 0,
         stream_output: bool = False,
+        keep_displays: bool = False,
         force_outputs: set[str] | None = None,
         is_last: bool = True,
         loop_iterable: Any = NO_LOOP_ITERABLE,
@@ -682,6 +684,9 @@ class StatementProcessor:
                 statements (e.g. single-unit for loops) where the user needs
                 to see progress.  When True, ``metrics['_output_flushed']``
                 is set so callers don't replay the output a second time.
+            keep_displays: With *stream_output*, the displays are still
+                captured and held, so a hit shows them again (a top-level
+                statement: its prints stream as in plain).
             force_outputs: Extra output variable names to capture/restore on top
                 of those AST analysis discovers, and to treat as expected writes
                 so an in-place mutation on them does NOT block caching. Used by
@@ -723,6 +728,7 @@ class StatementProcessor:
             exec_source=exec_source,
             occurrence_index=occurrence_index,
             stream_output=stream_output,
+            keep_displays=keep_displays,
             force_outputs=force_outputs,
             is_last=is_last,
             loop_iterable=loop_iterable,
@@ -794,6 +800,7 @@ class StatementProcessor:
         exec_source: str | None = None,
         occurrence_index: int = 0,
         stream_output: bool = False,
+        keep_displays: bool = False,
         force_outputs: set[str] | None = None,
         is_last: bool = True,
     ) -> ProcessResult:
@@ -813,6 +820,7 @@ class StatementProcessor:
             exec_source=exec_source,
             occurrence_index=occurrence_index,
             stream_output=stream_output,
+            keep_displays=keep_displays,
             force_outputs=force_outputs,
             is_last=is_last,
         )
@@ -1221,6 +1229,8 @@ class StatementProcessor:
         hit_result = self._hits.serve(run, cached_data, metadata, self._randomness.seed_epochs)
         if hit_result is None:
             return None
+        if metadata is not None:
+            sparse_order.put_in_order(metadata.sparse_ordered, self.shell.user_ns)
         # What changed through an alias moves on as a run moves it, past the
         # variables the entry restored with its outputs (moved on already).
         moved = set((metadata.holders or {}) if metadata is not None and metadata.holders_moved else ())
@@ -1371,10 +1381,13 @@ class StatementProcessor:
         figures_before = None if run.skip_cache else pyplot_state()
         lineage = self.tracking_state.variable_lineage
         run.entry_lineages = {name: lineage[name] for name in run.inputs if name in lineage}
+        unordered = sparse_order.unordered_sparse(run.inputs, self.shell.user_ns)
         try:
             with (
                 self.watching_reads(run.code),
-                make_capture_ctx(run.stream_output, run.skip_cache and run.stream_output) as captured,
+                make_capture_ctx(
+                    run.stream_output, run.skip_cache and run.stream_output, run.keep_displays
+                ) as captured,
             ):
                 execution.captured = captured
                 # Hashed as read, as the decorator does: a file replaced while
@@ -1448,6 +1461,8 @@ class StatementProcessor:
                 run.metrics["uncacheable_reasons"].append(workers)
         if positions:
             run.carriers_advanced = moved_carrier_names(positions, self.shell.user_ns)
+        if unordered:
+            run.sparse_ordered = sparse_order.were_put_in_order(unordered, self.shell.user_ns) or None
         if held:
             run.rebound_modules = rebound_modules(held)
             del held

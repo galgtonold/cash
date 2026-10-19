@@ -75,6 +75,9 @@ class StatementCacheMetadata:
     #: (``advanced_carrier_lineage``); empty when it read one and did not
     #: draw, absent when it read none. Read by the simulation after a restart.
     carriers_advanced: list[str] | None = None
+    #: The input variables holding a scipy sparse matrix the statement put
+    #: in canonical form by reading it (`sparse_order`): a hit does too.
+    sparse_ordered: list[str] | None = None
     #: ``{variable: its lineage before this statement}`` for each variable
     #: stored with the outputs because it holds one of their objects too
     #: (``b = a`` before ``a['x'] = ...``). The entry restores only while each

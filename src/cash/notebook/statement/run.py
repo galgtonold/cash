@@ -100,6 +100,8 @@ class StatementRun:
     exec_source: str | None = None
     occurrence_index: int = 0
     stream_output: bool = False
+    #: Streaming, still capture the displays, which a hit shows again.
+    keep_displays: bool = False
     #: Extra outputs to capture and restore (the accumulator-loop fast path).
     force_outputs: set[str] | None = None
     is_last: bool = True
@@ -184,6 +186,9 @@ class StatementRun:
     #: The input variables holding a random generator that the statement drew
     #: from (``carrier_advances``); None when it read no generator.
     carriers_advanced: set[str] | None = None
+    #: The inputs holding a sparse matrix the run put in canonical form
+    #: (`sparse_order`); None when it put none.
+    sparse_ordered: list[str] | None = None
     #: For a statement that runs a magic or a shell command: the identity of
     #: every binding in the namespace before it ran (``calls_ipython``).
     ipython_bindings: dict[str, int] | None = None

@@ -953,7 +953,8 @@ class CellExecutor:
             return buffered_result_outputs
 
         all_metrics.append(metrics)
-        replay_outputs(metrics.get("stdout", ""), metrics.get("stderr", ""))
+        if not metrics.get("_output_flushed"):
+            replay_outputs(metrics.get("stdout", ""), metrics.get("stderr", ""))
         if metrics.get("status") == CacheStatus.ERROR and metrics.get("error"):
             # What it displayed before it raised is shown too, as in plain.
             replay_outputs(rich=metrics.get("rich_outputs") or [])
@@ -1317,6 +1318,10 @@ class CellExecutor:
                         "code": stmt_code,
                         "ttl": cell.ttl,
                         "silent": True,
+                        # What it prints shows as it runs, as in plain: a
+                        # statement stopped part way has shown its prints.
+                        "stream_output": True,
+                        "keep_displays": True,
                         "annotation": annotation,
                         "display_code": display_code,
                         "exec_source": exec_source,

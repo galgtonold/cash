@@ -300,9 +300,17 @@ class Shadow:
             return "absent"
         return value_digest(ns[name])
 
-    def _holder(self, code: types.CodeType, spaces: Iterable[tuple[str, Mapping[str, Any]]]):
+    def _holder(self, code: types.CodeType, spaces: Iterable[tuple[str, Mapping[str, Any]]], ran: Iterable[Any] = ()):
+        """The global holding a function whose code is *code*. One decorator's
+        wrappers share their code (``compute_a`` and ``compute_b``, both made
+        by ``@passes_through``): the holder taken is the one whose functions
+        include the most of what else *ran*, the function the wrapper called,
+        and the first one found otherwise. Taking the first, ``compute_b``'s
+        call was checked against ``compute_a`` and ran again every time."""
         from ...tracking.trace_items import candidates
 
+        ran = set(ran)
+        best, best_score = None, -1
         for module, ns in spaces:
             try:
                 pairs = list(ns.items())
@@ -310,10 +318,12 @@ class Shadow:
                 continue
             for name, value in pairs:
                 if isinstance(name, str) and not name.startswith("__") and callable(value):
-                    for c in candidates(value):
-                        if c.__code__ is code:
-                            return module, name
-        return None
+                    codes = {c.__code__ for c in candidates(value)}
+                    if code in codes:
+                        score = len(codes & ran)
+                        if score > best_score:
+                            best, best_score = (module, name), score
+        return best
 
     def build(self, unit, inputs: Iterable[str] = ()) -> tuple[tuple, set[str], set[str]]:
         """The verify items of a finished *unit*, its markers and notes."""
@@ -379,7 +389,7 @@ class Shadow:
                 if not (module == nbn and g is nb):
                     add(("gap", module, qn), "module body")
             elif optimized and not own(module, qn):
-                self._code_items(code, g, module, add, add_class, user_class)
+                self._code_items(code, g, module, add, add_class, user_class, unit.codes)
             recv = unit.receivers.get(code)
             if recv is not None and user_class(recv):
                 add_class(recv)
@@ -440,7 +450,7 @@ class Shadow:
             return g is nb and getattr(unit, "lookups_followed", False)
         return code_lookups_traceable(code, g)
 
-    def _code_items(self, code, g, module, add, add_class, user_class) -> None:
+    def _code_items(self, code, g, module, add, add_class, user_class, ran=()) -> None:
         """The items naming *code*, a function or method that ran: by its
         qualified name, or through the global holding it; and the class it
         was found on, with that class's subclasses."""
@@ -452,7 +462,7 @@ class Shadow:
         found = rc is not None
         held = None
         if not found or code.co_freevars:
-            held = self._holder(code, [(module, g), (nbn, nb)])
+            held = self._holder(code, [(module, g), (nbn, nb)], ran)
         if held is not None:
             hmod, hname = held
             hns = namespace_of(hmod, nb, nbn)
