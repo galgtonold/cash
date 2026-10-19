@@ -245,6 +245,9 @@ class FileAccessTracker:
         self._work_lock = threading.Lock()
         self._work_running = 0
         self.work_outlived_block = False
+        #: The functions of that work, for a caller that wants to know what
+        #: running work can reach (`thread_reach`).
+        self.work_functions: list[Any] = []
 
     def __enter__(self):
         # The first open tracker installs the wrappers (see
@@ -295,14 +298,16 @@ class FileAccessTracker:
             yield tracker
             tracker = tracker._propagation_parent()
 
-    def work_submitted(self) -> list[FileAccessTracker]:
-        """Count one piece of work handed to a thread pool or thread, here and on each
-        tracker a read is passed up to; returns them, for `work_finished`
-        (the chain is gone once the block has ended)."""
+    def work_submitted(self, fn: Any = None) -> list[FileAccessTracker]:
+        """Count one piece of work (running *fn*) handed to a thread pool or
+        thread, here and on each tracker a read is passed up to; returns them,
+        for `work_finished` (the chain is gone once the block has ended)."""
         trackers = list(self._self_and_parents())
         for tracker in trackers:
             with tracker._work_lock:
                 tracker._work_running += 1
+                if fn is not None:
+                    tracker.work_functions.append(fn)
         return trackers
 
     @staticmethod

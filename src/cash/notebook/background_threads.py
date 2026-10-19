@@ -108,8 +108,8 @@ class BackgroundThreads:
             names += f" and {len(alive) - _NAMED} more"
         what = (
             f"{cell} started thread {names}, which still runs after the cell finished, so what it "
-            "changes from now on is outside cash's view. The statements that read those values "
-            "were keyed and stored on what they held when the cell ended."
+            "changes from now on is outside cash's view. The statement that started it, and those "
+            "that read what it can change, run every time."
         )
         fix = (
             "join the thread before the cell ends (t.join()), or have it return its result "

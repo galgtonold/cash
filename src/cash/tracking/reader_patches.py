@@ -543,7 +543,7 @@ def _patch_thread_pool_submit() -> None:
             if tracker is None:
                 return original(self, fn, *args, **kwargs)
             context = contextvars.copy_context()
-            trackers = tracker.work_submitted()
+            trackers = tracker.work_submitted(fn)
 
             def run(*args, **kwargs):
                 try:
@@ -565,13 +565,23 @@ def _patch_thread_pool_submit() -> None:
     _patch_attribute(cf_thread.ThreadPoolExecutor, "submit", make)
 
 
-def _runs_user_code(thread: threading.Thread) -> bool:
-    """Does *thread* run code of the user's: its target, or its class's own
-    ``run``? A library's thread (a pool's worker, a writer) runs its own
-    loop, and any task handed to it later is the pool patches' to place."""
+def _thread_function(thread: threading.Thread) -> Any:
+    """What *thread* runs: its target, a ``Timer``'s function, or its class's
+    own ``run``; None for a plain ``Thread`` with no target."""
     fn = getattr(thread, "_target", None)
+    if fn is None and isinstance(thread, threading.Timer):
+        fn = thread.function
     if fn is None and type(thread).run is not threading.Thread.run:
         fn = type(thread).run
+    return fn
+
+
+def _runs_user_code(thread: threading.Thread) -> bool:
+    """Does *thread* run code of the user's: its target (a ``Timer``'s
+    function), or its class's own ``run``? A library's thread (a pool's
+    worker, a writer) runs its own loop, and any task handed to it later is
+    the pool patches' to place."""
+    fn = _thread_function(thread)
     for _ in range(4):  # a bound method's or a partial's function
         inner = getattr(fn, "__func__", None) or getattr(fn, "func", None)
         if inner is None:
@@ -605,7 +615,7 @@ def _patch_thread_start() -> None:
             if tracker is None or not _runs_user_code(self):
                 return original(self)
             run, context = self.run, contextvars.copy_context()
-            trackers = tracker.work_submitted()
+            trackers = tracker.work_submitted(_thread_function(self))
 
             def counted_run():
                 try:

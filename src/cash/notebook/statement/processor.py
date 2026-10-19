@@ -182,6 +182,7 @@ from ..value_cutoff import LineageAliasStore
 from ..write_observer import kept_writes, observe_writes
 from .lineage import note_own_writes
 from .observed_draws import ObservedDrawStore
+from .thread_reach import ThreadReach
 
 __all__ = ["StatementProcessor", "is_control_body"]
 
@@ -289,6 +290,8 @@ class StatementProcessor:
             _shadow.enable()
 
         self._amplification = AmplificationGuard()
+        #: The variables work a statement left running can change (`thread_reach`).
+        self._thread_reach = ThreadReach()
         #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
         self._share_unchecked_warned: set[str] = set()
         #: Statements already told about NOTEBOOK-ANALYSIS-BUDGET.
@@ -1459,6 +1462,8 @@ class StatementProcessor:
             if workers:
                 run.skip_cache = True
                 run.metrics["uncacheable_reasons"].append(workers)
+        if execution.result.success:
+            self._left_work_running(run, execution)
         if positions:
             run.carriers_advanced = moved_carrier_names(positions, self.shell.user_ns)
         if unordered:
@@ -1479,6 +1484,36 @@ class StatementProcessor:
         execution.wall_time = wall_time
         execution.cost, execution.store_cost, execution.tax = self._calls.price(execution.wall_time, marks)
         execution.cached_call_reads = self._calls.files_read_in_cached_calls(marks)
+
+    def _left_work_running(self, run: StatementRun, execution: StatementExecution) -> None:
+        """Not stored when *run* left work running in a thread, or read a
+        variable such work can change (`thread_reach`), as the decorator
+        refuses a call that does (STORE-WORK-RUNNING)."""
+        tracker = execution.file_tracker
+        user_ns = self.shell.user_ns
+        if tracker is not None and tracker.work_outlived_block:
+            self._thread_reach.note(tracker.work_functions, user_ns)
+            if not run.skip_cache:
+                run.skip_cache = True
+                run.metrics["uncacheable_reasons"].append(
+                    "it left work running in a thread when it returned: what that work reads or changes "
+                    "from then on is in no key, so the statement runs every time"
+                )
+            return
+        if not run.skip_cache:
+            try:
+                names = carrier_candidates(run.inputs or (), user_ns, self.tracking_state.variable_lineage)
+            except Exception:  # noqa: BLE001 - the inputs alone, then
+                names = set(run.inputs or ())
+            reached = self._thread_reach.reached(names)
+            if reached:
+                run.skip_cache = True
+                shown = ", ".join(f"'{name}' (by {fn})" for name, fn in reached[:3])
+                run.metrics["uncacheable_reasons"].append(
+                    f"it reads {shown}, which work left running in a thread can change outside cash's view, "
+                    "so the statement runs every time"
+                )
+        self._thread_reach.rebound(run.outputs or ())
 
     def _workers_reason(self, run: StatementRun) -> str | None:
         """Why *run* may not be stored when it starts worker processes or
