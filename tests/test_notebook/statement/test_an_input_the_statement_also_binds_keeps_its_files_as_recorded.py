@@ -19,7 +19,7 @@ def test_files_an_input_was_built_from_are_not_snapshotted_again(
     for folder in (first, second):
         folder.mkdir()
         for i in range(3):
-            (folder / f"part{i}.txt").write_text(f"{folder.name} {i}")
+            (folder / f"part{i}.txt").write_text(f"{folder.name} {i}", encoding="utf-8")
     snapshotted = []
     real = file_dep_snapshot.snapshot_file_deps
     monkeypatch.setattr(
