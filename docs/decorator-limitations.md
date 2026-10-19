@@ -276,12 +276,15 @@ only; collect such a frame first.
 
 ## An edit that keeps the size and timestamps
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:_unchanged_since_hashed @809a68f2 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:_unchanged_since_hashed @59019b2b, cash/tracking/written_in_place.py:is_written_in_place @90fefb25 -->
 cash checks a file's size and timestamps first and reads its content only when
 one of them moved. On Linux and macOS every write moves the inode change time,
 so this never misses. On **Windows**, two kinds of edit move nothing: a write
 whose modification time is put back afterwards (`os.utime`, `shutil.copystat`,
-`robocopy /COPY:T`), and a write through `np.memmap(path, mode="r+")`.
+`robocopy /COPY:T`), and a write through a memory map
+(`np.memmap(path, mode="r+")`) made in a process without cash. A file mapped
+to write in a process that had imported cash is read at every check from
+then on, so those writes are seen.
 
 After such a write, touch the file (`Path(path).touch()`). cash then reads its
 content, and if it changed, the calls that read it recompute.

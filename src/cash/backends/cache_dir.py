@@ -40,6 +40,7 @@ __all__ = [
     "FILE_DIGESTS_FILENAME",
     "LIBRARY_MAP_FILENAME",
     "FILE_VERSIONS_FILENAME",
+    "WRITTEN_IN_PLACE_FILENAME",
     "HEAVY_LOOPS_FILENAME",
     "KEYS_DIRNAME",
     "CHUNK_DIRNAME",
@@ -135,6 +136,8 @@ CASH_KEYS_FILENAME = "_cash_keys.json"
 FILE_DIGESTS_FILENAME = "_file_digests.log"
 #: Versions of input files found to hold an earlier version's bytes (`file_versions`).
 FILE_VERSIONS_FILENAME = "_file_versions.log"
+#: Files a process mapped to write in place, by identity (`written_in_place`).
+WRITTEN_IN_PLACE_FILENAME = "_written_in_place.log"
 #: The analytics database, in the per-user cache root.
 ANALYTICS_DB_FILENAME = "analytics.db"
 #: Which installed distribution provides each top-level module, in the
@@ -167,6 +170,7 @@ _CASH_FILE_NAMES = frozenset(
         CASH_KEYS_FILENAME,
         FILE_DIGESTS_FILENAME,
         FILE_VERSIONS_FILENAME,
+        WRITTEN_IN_PLACE_FILENAME,
         LIBRARY_MAP_FILENAME,
         *(db + companion for db in (DB_FILENAME, ANALYTICS_DB_FILENAME) for companion in ("", *_SQLITE_COMPANIONS)),
     }
