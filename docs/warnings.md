@@ -2379,6 +2379,7 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 | [STORE-LOCK-FAILED](#store-lock-failed) | decorator | the per-key lock failed; ran without it |
 | [STORE-METADATA-INVALID](#store-metadata-invalid) | decorator | a stored entry's metadata is unreadable |
 | [STORE-STATE-CHANGED](#store-state-changed) | decorator | a global the key read changed during the call; not stored |
+| [STORE-WORK-RUNNING](#store-work-running) | both | work it handed to a thread pool still ran when it returned; not stored |
 | [STORE-UNTRACKED-SOURCE](#store-untracked-source) | decorator | a cached function it calls has a dynamic source that cannot be pickled; kept in RAM only |
 
 ### STORE-CHUNK-FAILED {#store-chunk-failed}
@@ -2546,6 +2547,31 @@ keys on the new value and caches normally. If calls overlap a writer all the
 time, pass the value in as an argument.
 
 **When it is safe to ignore.** Once, after a reload.
+
+### STORE-WORK-RUNNING {#store-work-running}
+
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
+
+<!-- claim: cash/decorator/file_deps.py:FileDeps.work_outlived_call @2da76778, cash/tracking/reader_patches.py:_patch_thread_pool_submit @e6f5cb08, cash/tracking/file_tracker.py:FileAccessTracker.__exit__ @9c811089 -->
+**What happened.** The function handed work to a `ThreadPoolExecutor`
+(`submit`, `map`) and returned while some of it was still running: it never
+waited for the future, and did not close the pool with `with`. The result was
+returned but not stored. A cached call inside a notebook cell is not stored
+either; the warning is the decorator's.
+
+**Why it matters.** That work runs on after the call, past the moment cash
+records which files the call read: a file it reads from then on is in no
+fingerprint, and what it puts in the result after the store is not in the
+entry. A result filled from a file this way was served with the file's old
+content after the file changed.
+
+**What to do.** Wait for the work before returning: `future.result()`,
+`concurrent.futures.wait(futures)`, or `with ThreadPoolExecutor() as pool:`.
+Work that is cancelled before it starts does not count.
+
+**When it is safe to ignore.** When the work changes nothing the result holds
+and reads nothing the result depends on, such as a log upload; the call then
+runs each time.
 
 ### STORE-UNTRACKED-SOURCE {#store-untracked-source}
 
