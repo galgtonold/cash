@@ -19,9 +19,14 @@ import textwrap
 import pytest
 
 from cash.decorator.library_versions import _record_digest
-from tests.test_core.code_identity.test_an_upgraded_library_recomputes import _run, proj  # noqa: F401
+from tests.test_core.code_identity.test_an_upgraded_library_recomputes import _make_proj, _run
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
+
+
+@pytest.fixture
+def proj(tmp_path):
+    return _make_proj(tmp_path)
 
 
 def _hash(data: bytes) -> str:
@@ -61,7 +66,7 @@ def _install(folder, factor, installer="pip", hashed=True):
     (info / "RECORD").write_text("\n".join(rows) + "\n", encoding="utf-8")
 
 
-def test_code_rebuilt_under_the_same_version_recomputes(proj, tmp_path):  # noqa: F811
+def test_code_rebuilt_under_the_same_version_recomputes(proj, tmp_path):
     lib = tmp_path / "site"
     _install(lib, 2)
     assert _run(proj, lib, "by_module") == ("6", True)
@@ -71,7 +76,7 @@ def test_code_rebuilt_under_the_same_version_recomputes(proj, tmp_path):  # noqa
     assert _run(proj, lib, "by_module") == ("15", False)
 
 
-def test_the_same_files_reinstalled_still_hit(proj, tmp_path):  # noqa: F811
+def test_the_same_files_reinstalled_still_hit(proj, tmp_path):
     lib = tmp_path / "site"
     _install(lib, 2)
     assert _run(proj, lib, "by_name") == ("6", True)
@@ -79,7 +84,7 @@ def test_the_same_files_reinstalled_still_hit(proj, tmp_path):  # noqa: F811
     assert _run(proj, lib, "by_name") == ("6", False), "the same code reinstalled recomputed"
 
 
-def test_a_record_without_hashes_keys_by_the_version_alone(proj, tmp_path):  # noqa: F811
+def test_a_record_without_hashes_keys_by_the_version_alone(proj, tmp_path):
     """An installer that writes no hashes leaves nothing to compare: the
     version alone, as before."""
     lib = tmp_path / "site"

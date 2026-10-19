@@ -86,13 +86,17 @@ def _run(proj, folder, which):
     return p.stdout.strip(), "[RUN]" in p.stderr
 
 
-@pytest.fixture
-def proj(tmp_path):
+def _make_proj(tmp_path):
     proj = tmp_path / "proj"
     proj.mkdir()
     (proj / "pyproject.toml").write_text('[project]\nname = "proj"\n', encoding="utf-8")
     (proj / "job.py").write_text(JOB, encoding="utf-8")
     return proj
+
+
+@pytest.fixture
+def proj(tmp_path):
+    return _make_proj(tmp_path)
 
 
 @pytest.mark.parametrize("which", ["by_module", "by_name", "through_a_helper"])
