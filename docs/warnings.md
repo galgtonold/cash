@@ -2378,7 +2378,7 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 | [STORE-INPUT-CHANGED](#store-input-changed) | decorator | an input file changed during the call; not stored |
 | [STORE-LOCK-FAILED](#store-lock-failed) | decorator | the per-key lock failed; ran without it |
 | [STORE-METADATA-INVALID](#store-metadata-invalid) | decorator | a stored entry's metadata is unreadable |
-| [STORE-PARTS-SHARED](#store-parts-shared) | decorator | a frame in the result holds the memory of an array beside it; not stored |
+| [STORE-PARTS-SHARED](#store-parts-shared) | decorator | two parts of the result share memory a hit would split; not stored |
 | [STORE-RESULT-WRITTEN](#store-result-written) | both | a table kept uncopied was written past pandas after its store; entry dropped |
 | [STORE-STATE-CHANGED](#store-state-changed) | decorator | a global the key read changed during the call; not stored |
 | [STORE-WORK-RUNNING](#store-work-running) | both | work it handed to a thread or thread pool still ran when it returned; not stored |
@@ -2534,18 +2534,22 @@ interrupted write.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/result_parts.py:split_by_a_hit @126c1528 -->
-**What happened.** The result holds a numpy array and a polars or pandas
-frame made over that array's memory, such as `return a, pl.Series(a)`. The
-message names both parts. The result was returned but not stored.
+<!-- claim: cash/decorator/result_parts.py:split_by_a_hit @f6b30862 -->
+**What happened.** The result holds two parts over the same memory: two
+numpy arrays whose data overlap, such as `return a, a[2:5]`, or a numpy
+array and a polars or pandas frame made over it, such as
+`return a, pl.Series(a)`. The message names both parts. The result was
+returned but not stored. Arrays that share a base but no element, such as
+`X, y = data[:, :-1], data[:, -1]`, are stored, and so is one array
+returned twice.
 
-**Why it matters.** On the first run a write to the array, `a[0] = -1`,
-shows in the frame too. A cache hit hands the two back as separate copies,
+**Why it matters.** On the first run a write to one part, `a[2] = -1`,
+shows in the other too. A cache hit hands the two back as separate copies,
 so from then on it would not, and code that relies on it would silently
 change behaviour.
 
-**What to do.** Return the frame alone, or build it from a copy of the array
-(`pl.Series(a.copy())`), if the two need not share. If they must share, the
+**What to do.** Return a copy of one of them (`a[2:5].copy()`,
+`pl.Series(a.copy())`) if the two need not share. If they must share, the
 function cannot be served from the cache.
 
 **When it is safe to ignore.** When the function is cheap: it runs every

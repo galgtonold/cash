@@ -1,19 +1,21 @@
 """Parts of a result that share memory a hit hands back as separate copies.
 
-``a = np.arange(n); return a, pl.Series(a)``: polars made the series over
-the array's memory, so on the computing run ``a[0] = -1`` changes the series
-too. A hit copies each part on its own, the RAM tier as a disk hit does, and
-from then on the two are separate: the same caller code sees the series
-change on the first run and not on later ones. The same holds for a pandas
-frame made over an array without a copy (pandas 2 without copy-on-write:
-``pd.Series(a)``).
+``a = np.arange(n); return a, a[2:5]``, or ``return a, pl.Series(a)``: the
+view, or the series polars made over the array's memory, changes with
+``a[2] = -1`` on the computing run. A hit copies each part on its own, the
+RAM tier as a disk hit does, and from then on the two are separate: the
+same caller code sees the write in both parts on the first run and in one
+on later ones. The same holds for a pandas frame made over an array without
+a copy (pandas 2 without copy-on-write: ``pd.Series(a)``).
 
 Such a result is not stored (STORE-PARTS-SHARED): the call runs every time,
-which is what the code means. Only a numpy array beside a frame is looked
-for, in the containers around them (a tuple, list or dict, a few levels
-down, and the attributes of an object): an array is what a caller writes in place, and a frame over it is
-what a hit would split off. Two frames sharing memory need no check, as
-neither polars nor pandas under copy-on-write writes memory a frame shares.
+which is what the code means. Looked for in the containers around the parts
+(a tuple, list or dict, a few levels down, and the attributes of an object):
+two numpy arrays whose data overlap (``X, y = data[:, :-1], data[:, -1]``
+share a base but no element, and are stored), and a numpy array beside a
+frame over it. One object reached twice is not a split: a copy keeps it one
+object. Two frames sharing memory need no check, as neither polars nor
+pandas under copy-on-write writes memory a frame shares.
 """
 
 from __future__ import annotations
@@ -34,22 +36,40 @@ _MAX_WORK = 100_000
 
 
 def split_by_a_hit(result: Any) -> tuple[str, str] | None:
-    """``(array, frame)``, where each is the path of a part of *result*
-    (``"result[0]"``), when the frame holds the array's memory; else None."""
+    """``(array, other)``, the paths of two parts of *result*
+    (``"result[0]"``), when *other*, an array or a frame, holds memory of
+    the array *array*; else None."""
     np = sys.modules.get("numpy")
-    if np is None or ("polars" not in sys.modules and "pandas" not in sys.modules):
+    if np is None:
         return None
     arrays: list[tuple[str, Any]] = []
     frames: list[tuple[str, Any]] = []
     _collect(result, "result", 0, [_ITEMS], np.ndarray, arrays, frames)
-    if not arrays or not frames:
+    if not arrays:
         return None
+    by_owner: dict[int, list[tuple[str, Any]]] = {}
+    for path, array in arrays:
+        by_owner.setdefault(id(_owner(array, np.ndarray)), []).append((path, array))
+    for group in by_owner.values():
+        # Views of one owner, each object once: only those can overlap.
+        group = list({id(array): (path, array) for path, array in reversed(group)}.values())[::-1]
+        for index, (path, array) in enumerate(group):
+            for other_path, other in group[index + 1 :]:
+                if _shares(np, array, other):
+                    return path, other_path
     for frame_path, frame in frames:
         for column in _column_arrays(frame, np.ndarray):
             for array_path, array in arrays:
                 if _shares(np, array, column):
                     return array_path, frame_path
     return None
+
+
+def _owner(array: Any, ndarray: type) -> Any:
+    """What holds *array*'s memory: the end of its chain of numpy bases."""
+    while type(array.base) is ndarray:
+        array = array.base
+    return array.base if array.base is not None else array
 
 
 def _collect(value: Any, path: str, depth: int, budget: list[int], ndarray: type, arrays: list, frames: list) -> None:

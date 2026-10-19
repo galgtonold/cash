@@ -3121,9 +3121,12 @@ def _store_polars(frame: Any) -> Any:
     memory, and a caller writing ``a`` right after the call made every hit
     a miss, so the function ran on every call. Polars does not say which
     memory it allocated itself, so a frame is copied unless the tier made
-    it: 0.2-0.3 s per GB, or several seconds per GB on a machine slow to
-    hand out new memory, where the clone's digest cost about a second per
-    GB at the store and again at each hit."""
+    it. Measured on 0.5-2 GB frames: the copy took 0.14 s per GB once
+    memory is warm (Windows; 0.2 s on Linux), against 0.1-0.2 s for the
+    clone and its digest, plus a 0.06 s per GB digest at each hit and disk
+    write. On memory the process never touched before, the first copy took
+    3-5 s per GB on a Linux machine slow to hand out pages, where a plain
+    numpy copy took 8 s. The copy doubles the RAM the frame takes."""
     copied = _copy_polars(frame)
     _remember_own_polars(copied)
     return copied

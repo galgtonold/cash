@@ -9,9 +9,9 @@ log. Now a result is copied at its store unless nothing outside cash can
 write its memory: pandas under copy-on-write keeps the table uncopied, and a
 write past pandas, which still drops the entry, says so once
 (STORE-RESULT-WRITTEN). A numpy array is copied unless no one can ever write
-it (`memory_backend._unwritable`). A result whose frame holds the memory of
-an array beside it, which a hit would hand back apart, is not stored
-(STORE-PARTS-SHARED).
+it (`memory_backend._unwritable`). A result with two parts over the same
+memory (an array and a view of it, or a frame made over it), which a hit
+would hand back apart, is not stored (STORE-PARTS-SHARED).
 """
 
 from __future__ import annotations
@@ -134,9 +134,35 @@ def test_parts_that_share_nothing_are_stored():
     a = np.arange(10.0)
     assert split_by_a_hit((a, pl.Series(a.copy()))) is None
     assert split_by_a_hit((a, pl.Series(a * 2))) is None
-    assert split_by_a_hit((a, a[2:5])) is None  # two arrays: not looked for
+    assert split_by_a_hit((a, a)) is None  # one object: a copy keeps it one
+    grid = np.arange(20.0).reshape(4, 5)
+    assert split_by_a_hit((grid[:, :-1], grid[:, -1])) is None  # one base, no element in common
+    assert split_by_a_hit((grid[::2], grid[1::2])) is None
     assert split_by_a_hit((pl.Series(a), pl.Series(a))) is None  # two frames: polars writes neither
     assert split_by_a_hit(a) is None
+
+
+def test_two_arrays_whose_data_overlap_are_found():
+    a = np.arange(20.0).reshape(4, 5)
+    assert split_by_a_hit((a, a[1:3])) == ("result[0]", "result[1]")
+    assert split_by_a_hit({"t": a.T, "x": a[0]}) == ("result['t']", "result['x']")
+    assert split_by_a_hit([a[1:3], a[2:4]]) == ("result[0]", "result[1]")
+
+
+def test_an_array_and_a_view_of_it_are_not_stored(cash_instance):
+    def build():
+        a = np.arange(10.0)
+        return a, a[2:5]
+
+    load, runs = _counted(cash_instance, build)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for _ in range(2):
+            a, v = load()
+            a[2] = -1.0
+            assert v[0] == -1.0
+    assert len(runs) == 2
+    assert _codes(caught).count("STORE-PARTS-SHARED") == 1
 
 
 def test_a_pandas_frame_over_an_array_beside_it_is_found():
