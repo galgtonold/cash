@@ -550,10 +550,15 @@ def snapshot_file_deps(
     # (``FileAccessTracker.track_path``). The relative one, when it names the
     # same path from the cwd as an absolute one, takes that one's entry: a
     # cell reading 5,000 files by relative path stat'ed and hashed each again.
-    relative = [f for f in paths if not os.path.isabs(f)]
-    todo = [f for f in paths if os.path.isabs(f)] + relative if relative else paths
-    for f in todo:
-        if relative and not os.path.isabs(f):
+    absolute: list[str] = []
+    relative: list[str] = []
+    isabs = os.path.isabs
+    for f in paths:  # each path's spelling looked at once
+        (absolute if isabs(f) else relative).append(f)
+    todo = absolute + relative if relative else paths
+    first_relative = len(absolute)
+    for i, f in enumerate(todo):
+        if relative and i >= first_relative:
             same = snapshot.get(_spelled_absolute(f))
             if same is not None and "size" in same:
                 snapshot[f] = dict(same)
