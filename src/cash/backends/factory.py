@@ -26,7 +26,6 @@ from .cache_dir import DB_FILENAME
 from .file_backend import FileBackend
 from .memory_backend import InMemoryBackend
 from .persistence_policy import PersistencePolicy
-from .sqlite_backend import SQLiteBackend
 from .tiered_backend import TieredBackend
 
 if TYPE_CHECKING:
@@ -199,6 +198,8 @@ def _build(kind: str, s: dict[str, Any]) -> CacheBackend:
             default_ttl=s["default_ttl"],
         )
     if kind == "sqlite":
+        from .sqlite_backend import SQLiteBackend  # imports sqlite3: only when configured
+
         return SQLiteBackend(
             db_path=s["db_path"] or _sqlite_db_path(s["cache_dir"]),
             max_size_bytes=cap,

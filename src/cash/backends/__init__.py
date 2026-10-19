@@ -8,7 +8,6 @@ from ._base import CacheBackend, EntryMetadata, MetadataDict
 from .file_backend import FileBackend
 from .memory_backend import InMemoryBackend
 from .serialization import PickleSerializer, Serializer
-from .sqlite_backend import SQLiteBackend
 from .tiered_backend import TieredBackend
 
 # The remote backends are resolved on FIRST ATTRIBUTE ACCESS (PEP 562), not at
@@ -20,6 +19,8 @@ from .tiered_backend import TieredBackend
 _OPTIONAL_BACKENDS = {
     "RedisBackend": ".redis_backend",
     "S3Backend": ".s3_backend",
+    # Local, but rarely configured: it imports ``sqlite3``.
+    "SQLiteBackend": ".sqlite_backend",
 }
 
 
@@ -43,7 +44,7 @@ __all__ = [
     "MetadataDict",
     "InMemoryBackend",
     "FileBackend",
-    "SQLiteBackend",
+    "SQLiteBackend",  # noqa: F822 - served by the module __getattr__
     "TieredBackend",
     "RedisBackend",  # noqa: F822 - served by the module __getattr__
     "S3Backend",  # noqa: F822 - served by the module __getattr__

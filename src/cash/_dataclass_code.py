@@ -28,7 +28,6 @@ import importlib.util
 import marshal
 import os
 import sys
-import tempfile
 import types
 from pathlib import Path
 
@@ -90,6 +89,8 @@ class _KeptCode:
             kept = {key: code for key, code in kept.items() if key in self.used}
         with contextlib.suppress(Exception):  # read-only or full: the next process compiles again
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            import tempfile  # only to write the file: not on every import
+
             fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=".dataclass-code-")
             try:
                 with os.fdopen(fd, "wb") as f:

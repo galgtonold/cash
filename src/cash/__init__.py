@@ -36,10 +36,8 @@ from . import (
     _streams_at_import,
 )
 from .backends import FileBackend, InMemoryBackend, TieredBackend
-from .backends.sqlite_backend import SQLiteBackend
 from .config.resolve import get_config
 from .config.schema import CashConfig
-from .config.template import create_default_config
 from .core import CacheExplanation, Cash
 from .data_source import DataSource
 from .decorator.arg_key import Ignore
@@ -308,19 +306,33 @@ def cleanup(max_age: int | None = None) -> int:
     return _get_global_cash().cleanup(max_age)
 
 
-# The coding-agent guide entry point: ``cash.help()`` prints/returns the compact
-# reference (see ``_agent_guide.py``). Deliberately shadows the builtin at the
-# ``cash.help`` path only, and is kept out of ``__all__`` so that a star import
-# leaves the user's bare ``help()`` alone.
-from ._agent_guide import help as help
+# Imported on first access (`__getattr__`): a session that never uses them
+# does not load their modules (the sqlite backend imports ``sqlite3``).
+# ``help`` is the coding-agent guide entry point: ``cash.help()`` prints/returns
+# the compact reference (see ``_agent_guide.py``). It deliberately shadows the
+# builtin at the ``cash.help`` path only, and is kept out of ``__all__`` so that
+# a star import leaves the user's bare ``help()`` alone.
+_ON_FIRST_USE = {
+    "SQLiteBackend": ".backends.sqlite_backend",
+    "create_default_config": ".config.template",
+    "help": "._agent_guide",
+}
 
 
 def __getattr__(name):
     """Proxy module-level attribute access to the global ``Cash`` singleton.
 
     Supported attributes: ``cache``, ``show_stats``, ``register_hasher``.
-    These are created lazily on first access via `_get_global_cash`.
+    These are created lazily on first access via `_get_global_cash`. The
+    names in `_ON_FIRST_USE` are imported on their first access.
     """
+    module_name = _ON_FIRST_USE.get(name)
+    if module_name is not None:
+        from importlib import import_module
+
+        value = getattr(import_module(module_name, __name__), name)
+        globals()[name] = value  # resolve once; later reads skip this hook
+        return value
     if name == "cache":
         return _get_global_cash().cache
     if name == "show_stats":
@@ -335,7 +347,7 @@ _LAZY_NAMES = ("cache", "show_stats", "register_hasher")
 
 
 def __dir__() -> list[str]:
-    return sorted(set(globals()) | set(_LAZY_NAMES))
+    return sorted(set(globals()) | set(_LAZY_NAMES) | set(_ON_FIRST_USE))
 
 
 # Left out of ``__all__``: ``help``, so ``from cash import *`` does not replace
@@ -360,11 +372,11 @@ __all__ = [
     # Configuration (stable)
     "get_config",
     "CashConfig",
-    "create_default_config",
+    "create_default_config",  # noqa: F822 - served by the module __getattr__
     # Backends (stable)
     "InMemoryBackend",
     "FileBackend",
-    "SQLiteBackend",
+    "SQLiteBackend",  # noqa: F822 - served by the module __getattr__
     "TieredBackend",
     # Data sources (stable)
     "DataSource",

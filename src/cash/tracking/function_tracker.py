@@ -12,7 +12,6 @@ import logging
 import os
 import shutil
 import sys
-import tempfile
 import types
 from collections.abc import Callable
 from typing import Any
@@ -128,6 +127,8 @@ def _reload_from_source(module, reload_with: ReloadWith | None = None) -> None:
     *reload_with*, when given, may do the reload itself around
     ``importlib.reload`` (`ReloadWith`).
     """
+
+    import tempfile  # only for a reload: not on every import
 
     previous = sys.pycache_prefix
     empty = tempfile.mkdtemp(prefix="cash-reload-")

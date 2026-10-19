@@ -36,7 +36,6 @@ import contextvars
 import json
 import os
 import sys
-import tempfile
 import threading
 import time
 import types
@@ -168,6 +167,8 @@ class Shadow:
             except Exception:  # noqa: BLE001 - no local folder: shadow keeps its log elsewhere
                 base = None
             if not base:
+                import tempfile  # no local cache folder: rare, so not on every import
+
                 base = os.environ.get("CASH_CACHE_DIR") or tempfile.gettempdir()
             self.dir = os.path.join(base, "shadow")
 
