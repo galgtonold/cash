@@ -153,6 +153,9 @@ class FileAccessTracker:
         # what the body read -- and served, stale, forever after.
         # Comparing against this is what lets the store step refuse instead.
         self.read_stats: dict[str, tuple[int, int, int]] = {}
+        #: path -> its `regular_file_stat` as the call's snapshot took it, for
+        #: `inputs_changed_since_read`; None when no snapshot is pending.
+        self.snapshot_stats: dict[str, tuple[int, int, int] | None] | None = None
         # The same for each folder the block listed (`stat_key` of the
         # folder): an entry landing in it while the block runs leaves a
         # listing without the entry, which a snapshot taken at store time
@@ -336,10 +339,17 @@ class FileAccessTracker:
         and the listing it made is not the folder a snapshot would describe.
         """
         moved = []
+        # The stats the snapshot just took, once (`snapshot_tracked_deps`). A
+        # file that moves after the snapshot is not caught here, but the
+        # entry holds the stat from before the move, so it is never served
+        # for the new content.
+        taken, self.snapshot_stats = self.snapshot_stats, None
+        if taken is None:
+            taken = {}
         # Over copies: a pool thread the block started can still be reading
         # after it ended, adding to these while they are walked.
         for path, before in list(self.read_stats.items()):
-            now = regular_file_stat(path)
+            now = taken[path] if path in taken else regular_file_stat(path)
             if now != before and not (path in self.ctime_unreliable and now is not None and now[:2] == before[:2]):
                 moved.append(path)
         for path, before in list(self.listed_stats.items()):

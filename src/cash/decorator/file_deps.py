@@ -63,6 +63,7 @@ def snapshot_tracked_deps(tracker: Any, code_module: str | None = None) -> dict[
         for path, digest in getattr(tracker, "read_digests", {}).items()
         if path in read_stats
     }
+    stats: dict[str, Any] = {}
     deps = snapshot_dependencies(
         tracker.get_accessed_files(),
         tracker.get_accessed_remote_urls(),
@@ -70,7 +71,12 @@ def snapshot_tracked_deps(tracker: Any, code_module: str | None = None) -> dict[
         known=known,
         unresolved=getattr(tracker, "unresolved_files", None),
         present=getattr(tracker, "present_files", None),
+        stats=stats,
     )
+    # The stat each file had as it was snapshotted: the check that no input
+    # moved during the call reads it instead of a second stat per file.
+    if hasattr(tracker, "snapshot_stats"):
+        tracker.snapshot_stats = stats
     # A file beside the function's own code is part of this INSTALL, not a
     # fixed location: record where it sits relative to the code, so another
     # install or release checks its own copy.

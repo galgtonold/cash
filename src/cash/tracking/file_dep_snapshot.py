@@ -469,6 +469,7 @@ def _folder_identity(path: str) -> Any:
 def snapshot_file_deps(
     paths: set[str],
     known: dict[str, tuple[Any, str]] | None = None,
+    stats: dict[str, tuple[int, int, int] | None] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Return ``{path: {'mtime', 'size', 'hash'}}`` for paths that exist.
 
@@ -480,6 +481,11 @@ def snapshot_file_deps(
     it was hashed])``: that
     hash is used while the stat is still the same, so the entry describes the
     file as the body read it (see ``FileAccessTracker.read_digests``).
+
+    *stats*, when given, gets each path's ``regular_file_stat`` as this
+    snapshot found it: the check that no input moved during the call
+    (`FileAccessTracker.inputs_changed_since_read`) compares with it rather
+    than taking a second stat of every file.
     """
     snapshot: dict[str, dict[str, Any]] = {}
     for f in paths:
@@ -488,13 +494,19 @@ def snapshot_file_deps(
         except (FileNotFoundError, NotADirectoryError):
             # Not there: a file the call deleted, or a read that failed (the
             # absence is recorded on its own channel).
+            if stats is not None:
+                stats[f] = None
             continue
         except OSError:
             # There, but it cannot be stat'ed (permissions, a path too long):
             # a dependency nobody can check is never fresh. Dropping it would
             # leave the entry with no dependency on the file at all.
             snapshot[f] = {_UNRESOLVED_MARKER: True}
+            if stats is not None:
+                stats[f] = None
             continue
+        if stats is not None:
+            stats[f] = stat_key(st) if _stat.S_ISREG(st.st_mode) else None
         entry: dict[str, Any] = {"mtime": st.st_mtime, "size": st.st_size}
         read = known.get(f) if known else None
         hashed_at = None
@@ -505,6 +517,10 @@ def snapshot_file_deps(
         else:
             hashed_at = time.time()  # before the read: an edit after it is not in the digest
             content_hash = file_content_hash(f, st.st_size, st)
+            if stats is not None:
+                # Hashed now, after the stat: an edit landing between the two
+                # is in the digest but not in this stat. The check stats it again.
+                stats.pop(f, None)
         if content_hash is not None:
             entry["hash"] = content_hash
             if hashed_at is not None:
@@ -639,13 +655,15 @@ def snapshot_dependencies(
     known: dict[str, tuple[Any, str]] | None = None,
     unresolved: Iterable[str] | None = None,
     present: Mapping[str, str] | None = None,
+    stats: dict[str, tuple[int, int, int] | None] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Snapshot everything a call read — local files and remote objects — as one dict.
 
     *unresolved* are paths the call read that cannot be stat'ed as recorded
     (``FileAccessTracker.get_unresolved_files``): each is recorded as never
     fresh. *present* are paths it probed and found without reading
-    (``FileAccessTracker.get_present_files``).
+    (``FileAccessTracker.get_present_files``). *stats* is
+    `snapshot_file_deps`'s.
 
     The single entry point both caching subsystems use, so neither has to
     remember to merge two helpers. Local and remote entries answer the same
@@ -654,7 +672,12 @@ def snapshot_dependencies(
     shape; keeping the *capture* side unified too means the discriminator is
     written in exactly one place.
     """
-    snapshot = snapshot_file_deps(set(paths), known) if paths else {}
+    if not paths:
+        snapshot = {}
+    elif stats is None:
+        snapshot = snapshot_file_deps(set(paths), known)
+    else:
+        snapshot = snapshot_file_deps(set(paths), known, stats)
     if urls:
         snapshot.update(snapshot_remote_deps(urls))
     if absent:
