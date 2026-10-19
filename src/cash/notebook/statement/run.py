@@ -329,6 +329,8 @@ class StatementExecution:
     #: Where it left the global RNG streams it moved or seeded, and only
     #: those (`StatementRandomness.moved_streams`): what a hit replays.
     rng_moved: dict[str, Any] = field(default_factory=dict)
+    #: The global streams it seeded as it ran (`reseeded_streams`).
+    rng_reseeded: frozenset[str] = frozenset()
 
 
 def echoes(code: str, tree: ast.Module | None, is_last: bool) -> bool:

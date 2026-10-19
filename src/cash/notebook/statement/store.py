@@ -841,6 +841,9 @@ class StatementStore:
             # Only the streams the statement moved or seeded: a hit leaves
             # every other stream where it stands, as a run would.
             "rng_state": dict(execution.rng_moved),
+            # The streams it seeded as it ran: a hit adopts their seed as
+            # the run did (`adopt_seeds_of_a_hit`).
+            "rng_reseeded": sorted(execution.rng_reseeded),
             # The seeding regime this state was captured under, so a later
             # restore can tell whether replaying it would clobber a re-seed
             # rather than continue the stream.

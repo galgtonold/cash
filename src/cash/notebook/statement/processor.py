@@ -80,7 +80,7 @@ from cash.notebook.statement.output_refusals import is_history_name, live_shared
 from cash.notebook.statement.randomness import StatementRandomness
 from cash.notebook.statement.rebuild_cost import RebuildCostLedger
 from cash.notebook.statement.records import StatementRecords
-from cash.notebook.statement.restore import StatementRestorer
+from cash.notebook.statement.restore import StatementRestorer, rng_replay_is_current
 from cash.notebook.statement.results import COST_MODEL_KEYS, ProcessResult
 from cash.notebook.statement.run import (
     ECHO_FIELD,
@@ -1246,9 +1246,18 @@ class StatementProcessor:
         restore failed and the statement must run after all."""
         # Read before the restore moves the generators.
         advanced = None if is_control_body(run.code) else carriers_an_entry_advanced(cached_data, self.shell.user_ns)
+        reseeded = (
+            cached_data.get("rng_reseeded")
+            if isinstance(cached_data, dict)
+            and cached_data.get("rng_state")
+            and rng_replay_is_current(cached_data, self._randomness.seed_epochs)
+            else None
+        )
         hit_result = self._hits.serve(run, cached_data, metadata, self._randomness.seed_epochs)
         if hit_result is None:
             return None
+        # The streams its run seeded, put back where that run left them.
+        self._randomness.adopt_seeds_of_a_hit(reseeded, run.code)
         if metadata is not None:
             sparse_order.put_in_order(metadata.sparse_ordered, self.shell.user_ns)
         # What changed through an alias moves on as a run moves it, past the
@@ -1457,6 +1466,7 @@ class StatementProcessor:
                 # own text.
                 self._randomness.observe_statement(pre_rng, run.code)
                 execution.rng_moved = self._randomness.moved_streams
+                execution.rng_reseeded = self._randomness.reseeded_streams
                 execution.result = ExecutionResult(success=True)
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code
             execution.result = error_result(e)
