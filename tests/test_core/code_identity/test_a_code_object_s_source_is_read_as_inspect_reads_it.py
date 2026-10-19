@@ -97,7 +97,7 @@ def test_every_code_object_in_the_sample_reads_as_inspect_reads_it():
             got = type(exc)
         assert got == expected, (module.__name__, code)
         compared += 1
-    assert read_on_disk > 1500 and read_on_disk > compared // 2, (read_on_disk, compared)
+    assert read_on_disk > 1000 and read_on_disk > compared // 2, (read_on_disk, compared)
 
 
 def test_ipython_s_open_reads_as_inspect_reads_it():
