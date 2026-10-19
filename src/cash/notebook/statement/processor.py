@@ -180,6 +180,7 @@ from ..shared_objects import (
 )
 from ..value_cutoff import LineageAliasStore
 from ..write_observer import kept_writes, observe_writes
+from . import hidden_generators
 from .lineage import note_own_writes
 from .observed_draws import ObservedDrawStore
 
@@ -1360,12 +1361,20 @@ class StatementProcessor:
         # statement draws from (`carrier_advances`). Not for a loop or branch
         # body: the structure is one statement to the simulation, as for
         # in-place mutations (`MutationRouting._classify`).
-        positions = (
-            {}
+        candidates = (
+            set()
             if is_control_body(run.code)
-            else carrier_positions(
-                carrier_candidates(run.inputs, self.shell.user_ns, self.tracking_state.variable_lineage),
-                self.shell.user_ns,
+            else carrier_candidates(run.inputs, self.shell.user_ns, self.tracking_state.variable_lineage)
+        )
+        positions = carrier_positions(candidates, self.shell.user_ns) if candidates else {}
+        # And those it reaches deeper, which no variable's lineage follows
+        # (`hidden_generators`): a run that moves one is not stored.
+        hidden = (
+            {}
+            if run.skip_cache or not candidates
+            else hidden_generators.positions(
+                {name: self.shell.user_ns[name] for name in candidates if name in self.shell.user_ns},
+                (obj for obj, _ in positions.values()),
             )
         )
         # What the globals of the local modules it reaches hold, to see one
@@ -1461,6 +1470,14 @@ class StatementProcessor:
                 run.metrics["uncacheable_reasons"].append(workers)
         if positions:
             run.carriers_advanced = moved_carrier_names(positions, self.shell.user_ns)
+        if hidden and not run.skip_cache and execution.result is not None and execution.result.success:
+            drawn = hidden_generators.moved(hidden)
+            if drawn:
+                run.skip_cache = True
+                run.metrics["uncacheable_reasons"].append(
+                    f"it drew from a generator its key does not hold ({drawn[0]})"
+                )
+                hidden_generators.warn(run.code, drawn)
         if unordered:
             run.sparse_ordered = sparse_order.were_put_in_order(unordered, self.shell.user_ns) or None
         if held:
