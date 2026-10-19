@@ -41,8 +41,11 @@ def test_persist_all_config_caches_trivial_statement(persist_all_processor):
     assert m2["status"] in (CacheStatus.RESTORED, CacheStatus.SKIPPED)
 
 
-def test_cash_persist_magic_toggles_at_runtime(cash_magics, statement_processor):
+def test_cash_persist_magic_toggles_at_runtime(cash_magics, cash_instance, statement_processor):
     magics, p = cash_magics, statement_processor
+    # Far above any scheduling stall, so "too cheap to cache" is certain: a
+    # loaded machine once took `w = 6 + 7` past the ~10 ms floor and stored it.
+    cash_instance.config.min_execution_time_to_cache_seconds = 3600.0
 
     magics.cash_persist("on")
     assert magics._cash_instance.config.persist_all is True
