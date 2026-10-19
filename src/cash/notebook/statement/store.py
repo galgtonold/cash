@@ -556,6 +556,7 @@ class StatementStore:
             frozen_tags=_frozen_tags(captured_vars, run.outputs),
             carriers_advanced=_carriers_advanced(run),
             sparse_ordered=run.sparse_ordered or None,
+            env_reads=run.env_reads,
             holders=run.holders or None,
             holders_moved=True if run.holders and run.moves_holders else None,
             anchors=run.anchors or None,

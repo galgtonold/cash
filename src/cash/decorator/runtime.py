@@ -28,6 +28,8 @@ from ..dependency_state import STATE_LEDGER, ledger_note
 from ..exceptions import CashCacheIneffectiveWarning, CashImpureFunctionError, CashImpurityWarning
 from ..handed_digests import Stored
 from ..handed_digests import claim as claim_handed_digests
+from ..tracking.env_reads import environment_digests, environment_unchanged, note_reads
+from ..tracking.env_reads import recording as recording_env_reads
 from ..tracking.file_tracker import FileAccessTracker
 from ..tracking.randomness import (
     capture_argument_carrier_states,
@@ -1066,6 +1068,8 @@ class CallRunner:
                 MissKind.DYNAMIC,
                 "a dynamic_depends_on= source of a cached function it calls changed, or could not be asked",
             )
+        if metadata.env_reads and not environment_unchanged(metadata.env_reads):
+            return MissReason(MissKind.ENVIRONMENT, "an environment variable an installed package read changed")
         if not self._chunks_are_intact(cache_key, metadata):
             return MissReason(MissKind.INCOMPLETE, "a chunk of the stored result is missing")
         if metadata.code_trace is not None:
@@ -1074,6 +1078,9 @@ class CallRunner:
                 return MissReason(MissKind.TRACE, f"{changed} since the entry was stored")
         elif needs_trace:
             return MissReason(MissKind.TRACE, "the entry has no trace of the code the call picked by name")
+        if metadata.env_reads:
+            # Served inside another body being recorded: what it read counts there.
+            note_reads(metadata.env_reads)
         return None
 
     def _cached_state(self, func_name: str) -> str | None:
@@ -1417,7 +1424,8 @@ class CallRunner:
             try:
                 self._files.track_declared_files(run.tracker, spec)
                 self._files.track_scanned_files(run.tracker, args, kwargs)
-                yield run
+                with recording_env_reads() as run.env_reads:
+                    yield run
             except Exception as exc:  # the user's body can raise anything; logged, then re-raised
                 self._calls.log_raised(func_name, exc, call.call_start)
                 raise
@@ -1553,6 +1561,9 @@ class CallRunner:
                     # An empty trace stands for nothing unless the call picks
                     # code by name, whose entry is served only on a trace.
                     code_trace=trace if trace or call.needs_trace else None,
+                    # What the environment variables an installed package
+                    # read held: a lookup checks them again (`env_reads`).
+                    env_reads=environment_digests(run.env_reads) if run.env_reads else None,
                 ),
                 res,
             )

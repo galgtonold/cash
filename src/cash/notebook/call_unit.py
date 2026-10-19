@@ -79,6 +79,8 @@ from cash.notebook.pyplot_state import pyplot_state
 from cash.notebook.read_handles import reaches_read_handle
 from cash.notebook.write_observer import WrittenPaths, kept_writes, observe_writes
 from cash.sizing import estimate_object_size
+from cash.tracking.env_reads import environment_digests, note_reads
+from cash.tracking.env_reads import recording as recording_env_reads
 from cash.tracking.file_dep_snapshot import probe_answers
 from cash.tracking.file_tracker import FileAccessTracker, tracking_seconds
 from cash.tracking.function_tracker import is_local_module
@@ -925,6 +927,8 @@ class CallUnit:
                 # False when what it ran changed since it was stored.
                 hit = _shadow.SHADOW.call_lookup(key, site, hit, self._entries.peek_metadata)
             if hit:
+                # What it read when it ran, for the statement around it.
+                note_reads(metadata.get("env_reads") or ())
                 return self._serve_hit(call, value, recorded_cost, metadata, hit_started)
             return self._run_miss(call)
 
@@ -1029,7 +1033,7 @@ class CallUnit:
         shadow = _shadow.SHADOW
         unit = shadow.begin("call") if shadow is not None else None
         try:
-            with call_tracker, observe_writes() as written:
+            with call_tracker, observe_writes() as written, recording_env_reads() as env_reads:
                 result, stdout_text, stderr_text, displayed = call_capturing_output(call.fn, call.args, call.kwargs)
         finally:
             if unit is not None:
@@ -1065,7 +1069,9 @@ class CallUnit:
             and not call_tracker.work_outlived_block
             and not _inputs_moved(call_tracker)
         ):
-            stored = self._store_result(call, result, elapsed, call_tracker, stdout_text, stderr_text)
+            stored = self._store_result(
+                call, result, elapsed, call_tracker, stdout_text, stderr_text, environment_digests(env_reads)
+            )
         if unit is not None:
             shadow.call_finished(call.key, call.site, unit, stored, disk=True)
         if stored:
@@ -1138,7 +1144,14 @@ class CallUnit:
         )
 
     def _store_result(
-        self, call: _Call, result, elapsed: float, call_tracker: FileAccessTracker, stdout_text: str, stderr_text: str
+        self,
+        call: _Call,
+        result,
+        elapsed: float,
+        call_tracker: FileAccessTracker,
+        stdout_text: str,
+        stderr_text: str,
+        env_reads: dict[str, str] | None = None,
     ) -> bool:
         """Write the result with what the call read, printed and wrote to its
         globals; ``False`` when those globals cannot be captured."""
@@ -1171,6 +1184,7 @@ class CallUnit:
             plain_value=call.site.source == self.plain_value_source,
             code_module=getattr(call.fn, "__module__", None),
             held_refs=find_for_call(call.fn, result),
+            env_reads=env_reads or None,
         )
         if held:
             self._hold(call.key, result, *held)
