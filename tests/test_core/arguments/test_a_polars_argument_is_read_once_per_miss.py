@@ -9,6 +9,7 @@ still seen.
 
 from __future__ import annotations
 
+import functools
 import warnings
 
 import numpy as np
@@ -65,7 +66,7 @@ def test_a_write_through_polars_in_the_body_is_still_seen(tmp_path, monkeypatch)
     def grow(df):
         ran.append(1)
         # Out of the static pass's sight: only the check after the body sees it.
-        getattr(df, "ext" + "end")(df.head(1))
+        functools.reduce(pl.DataFrame.extend, [df.head(1)], df)
         return df.height
 
     df = _frame()
