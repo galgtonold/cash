@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 from ... import _plain_data
 from ..._clock import perf_counter as _perf_counter
 from ...backends._base import ttl_expired
+from ...tracking.env_reads import environment_unchanged
 from ...tracking.file_dep_snapshot import FreshnessMemo, snapshot_is_fresh
 from ...value_types import IMMUTABLE_LEAF_TYPES
 from ..call_refs import resolve_call_refs
@@ -187,6 +188,9 @@ class CacheFreshnessChecker:
                 cached_data = self._invalidate_if_ttl_expired(metadata, cached_data, ttl)
             if cached_data and raw_metadata.get("by_reference"):
                 cached_data = self._invalidate_if_held_by_reference(cached_data)
+            if cached_data and metadata.env_reads and not environment_unchanged(metadata.env_reads):
+                self.last_miss_reason = "an environment variable installed code read changed"
+                cached_data = None
             if cached_data:
                 cached_data = self._invalidate_if_direct_file_changed(metadata, cached_data)
             if cached_data and metadata.holders:

@@ -193,6 +193,9 @@ class StatementRun:
     #: The inputs holding a sparse matrix the run put in canonical form
     #: (`sparse_order`); None when it put none.
     sparse_ordered: list[str] | None = None
+    #: name -> digest of the environment variables installed code read while
+    #: it ran (`env_reads.environment_digests`).
+    env_reads: dict[str, str] | None = None
     #: For a statement that runs a magic or a shell command: the identity of
     #: every binding in the namespace before it ran (``calls_ipython``).
     ipython_bindings: dict[str, int] | None = None

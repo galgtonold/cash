@@ -809,6 +809,7 @@ class HitMemo:
             or metadata.held_refs
             or metadata.rng_replay
             or metadata.read_only
+            or metadata.env_reads
         ):
             return None
         ledger = call.ledger or {}

@@ -121,6 +121,8 @@ from ...analysis.mutation_effects import (
 )
 from ...analysis.namespace_effects import statement_calls_user_writer, statement_starting_workers
 from ...analytics import AnalyticsManager
+from ...tracking.env_reads import environment_digests
+from ...tracking.env_reads import recording as recording_env_reads
 from ...tracking.file_dep_snapshot import file_state_epoch, probe_answers
 from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
@@ -1394,6 +1396,7 @@ class StatementProcessor:
         lineage = self.tracking_state.variable_lineage
         run.entry_lineages = {name: lineage[name] for name in run.inputs if name in lineage}
         unordered = sparse_order.unordered_sparse(run.inputs, self.shell.user_ns)
+        env_reads: set[str] = set()
         try:
             with (
                 self.watching_reads(run.code),
@@ -1417,9 +1420,12 @@ class StatementProcessor:
                         user_ns.update(memo[1])
                     stop_sharing_answers()
                     start_time = _perf_counter()
+                    env_scope = recording_env_reads()
+                    env_reads = env_scope.__enter__()
                     try:
                         yield runner
                     finally:
+                        env_scope.__exit__(None, None, None)
                         wall_time = max(0.0, _perf_counter() - start_time - run.record_time)
                         if memo is not None:
                             # Bound only while it ran; what the value cost
@@ -1461,6 +1467,10 @@ class StatementProcessor:
         if figures_before is not None and execution.result.success and pyplot_state() != figures_before:
             run.skip_cache = True
             run.metrics["uncacheable_reasons"].append(CHANGED_PYPLOT_REASON)
+        if env_reads:
+            # What the environment variables installed code read held: a
+            # lookup checks them again (`env_reads`).
+            run.env_reads = environment_digests(env_reads)
         if not run.skip_cache and execution.written_paths and execution.result.success:
             wrote = self._kept_writes_reason(run, execution)
             if wrote:

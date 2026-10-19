@@ -23,9 +23,12 @@ def persist_all_processor(mock_shell, clean_backend):
     return magics._statement_processor
 
 
-def test_trivial_statement_not_cached_by_default(statement_processor):
+def test_trivial_statement_not_cached_by_default(cash_instance, statement_processor):
     p = statement_processor
     assert p.persist_all is False
+    # Far above any scheduling stall, as in the toggle test below: a macOS
+    # runner once took `x = 1 + 1` past the ~10 ms floor and stored it.
+    cash_instance.config.min_execution_time_to_cache_seconds = 3600.0
     p.process_statement("x = 1 + 1")
     m2 = p.process_statement("x = 1 + 1")
     # Too cheap to cache -> recomputed, not restored.
