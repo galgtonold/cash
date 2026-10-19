@@ -350,8 +350,10 @@ class FileAccessTracker:
     # The three methods below are what the feeders (`read_events`,
     # `reader_patches`, `read_credit`) call when they see a read.
 
-    def track_path(self, path):
-        """Record a read of *path*, unless it is not a user dependency."""
+    def track_path(self, path) -> bool:
+        """Record a read of *path*, unless it is not a user dependency.
+        True when resolving it just found a regular file there (its
+        ``lstat``), so the caller need not stat it to know it is there."""
         global _tracking_seconds
         started = _perf_counter()
         try:
@@ -359,7 +361,7 @@ class FileAccessTracker:
             # (the time zone directories, looked up on the first read in a
             # process), and through the same wrapped functions.
             with untracked():
-                self._track_path_untimed(path)
+                return self._track_path_untimed(path)
         finally:
             _tracking_seconds += _perf_counter() - started
 
@@ -399,26 +401,26 @@ class FileAccessTracker:
             return True
         return any(abs_path.startswith(d) or abs_path + "/" == d for d in self.created_dirs)
 
-    def _track_path_untimed(self, path):
+    def _track_path_untimed(self, path) -> bool:
         if not isinstance(path, (str, bytes, os.PathLike)):
             # ``open(3)`` opens a file DESCRIPTOR: joblib and loky do, and
             # ``str(3)`` was recorded as a read of ``<cwd>/3`` -- a directory
             # every file under the cwd sits in, so every write there read as
             # an input.
-            return
+            return False
         raw_path = os.fsdecode(path) if isinstance(path, bytes) else str(path)
         if is_pseudo_fs(raw_path):
             # See `is_pseudo_fs`. Checked BEFORE realpath, which on
             # Windows rewrites /proc/... to C:/proc/... and would slip past.
             logger.debug("[TRACKER] Ignoring pseudo-fs read %r", raw_path)
-            return
+            return False
         if is_remote_url(raw_path):
             # A remote URL is a real dependency, just not a stat-able one:
             # ``realpath`` would mangle it into a nonexistent local path and the
             # dependency would vanish. Record it on the remote channel, where it
             # is tracked by the store's own validator.
             self.add_tracked_remote(raw_path)
-            return
+            return False
         try:
             # Normalize path using realpath to get canonical path
             # This resolves symlinks and normalizes the path, making it
@@ -428,34 +430,37 @@ class FileAccessTracker:
             abs_path = normalize_path(resolved)
         except (TypeError, ValueError, OSError) as e:
             logger.debug("[TRACKER] Could not track file path %r: %s", path, e)
-            return
+            return False
+        # Returned, not kept on the tracker: a thread pool's workers share it,
+        # and a flag one of them set would answer another's missing file.
+        found = read_lstat is not None
         if is_pseudo_fs(abs_path):
             # See `is_pseudo_fs`: recording one of these makes the entry
             # permanently unfreshenable. Return before the relative-path arm
             # too — these paths are always absolute.
             logger.debug("[TRACKER] Ignoring pseudo-fs read %r", abs_path)
-            return
+            return found
         if SCRATCH_MEMMAP in abs_path:
             # joblib's memmaps of a parallel call's arrays: deleted when the
             # call returns, so an entry depending on one could never be fresh.
             logger.debug("[TRACKER] Ignoring joblib scratch read %r", abs_path)
-            return
+            return found
         if is_runtime_cache_path(abs_path):
             logger.debug("[TRACKER] Ignoring runtime-cache read %r", abs_path)
-            return
+            return found
         if is_cash_internal(abs_path):
             # See `is_cash_internal`. Checked after realpath so a relative
             # or symlinked cache path is caught too.
             logger.debug("[TRACKER] Ignoring cash-internal read %r", abs_path)
-            return
+            return found
         if (self.created_files or self.created_dirs) and self.created_by_block(abs_path):
             logger.debug("[TRACKER] A read of %r, which this block created: an input if it stays", abs_path)
             self._add_created_read(abs_path, self._unresolved_spelling(path, abs_path))
-            return
+            return found
         why = incidental_read(abs_path, self._own_package)
         if why is not None:
             logger.debug("[TRACKER] Ignoring %s read %r", why, abs_path)
-            return
+            return found
         self.add_tracked(abs_path, lstat=read_lstat)
         if abs_path not in self.read_stats and os.path.isabs(abs_path):
             self._note_if_unstatable(raw_path, abs_path)
@@ -466,6 +471,7 @@ class FileAccessTracker:
         twin = self._unresolved_spelling(path, abs_path)
         if twin is not None:
             self.add_tracked(twin)
+        return found
 
     @staticmethod
     def _unresolved_spelling(path, abs_path: str) -> str | None:
@@ -548,7 +554,7 @@ class FileAccessTracker:
             # One read, one stat: an enclosing tracker takes the stat this
             # one took of the same read (the file is stat'ed once per
             # tracker otherwise, at each nested loop level).
-            digest, st = tracker._add_tracked_here(abs_path, digest, st)
+            digest, st = tracker._add_tracked_here(abs_path, digest, st, lstat)
 
     @property
     def read_digests(self) -> dict[str, str]:
@@ -566,10 +572,15 @@ class FileAccessTracker:
         return digests
 
     def _add_tracked_here(
-        self, abs_path: str, digest: str | PendingDigest | None, st: tuple[int, int, int] | None
+        self,
+        abs_path: str,
+        digest: str | PendingDigest | None,
+        st: tuple[int, int, int] | None,
+        lstat: Any = None,
     ) -> tuple[str | PendingDigest | None, tuple[int, int, int] | None]:
         """`add_tracked` on this tracker alone, *st* the `stat_key` of this
-        read when one was taken; returns the digest and the stat to hand up."""
+        read when one was taken (of *lstat*, when given); returns the digest
+        and the stat to hand up."""
         self.accessed_files.add(abs_path)
         if abs_path not in self.read_stats and os.path.isabs(abs_path):
             # Absolute paths only: a relative twin is re-resolved against the
@@ -586,15 +597,16 @@ class FileAccessTracker:
                 if self._hash_on_read:
                     if digest is None:
                         self.read_hashed_at[abs_path] = time.time()
-                        digest = self._digest_now(abs_path, st[0])
+                        digest = self._digest_now(abs_path, st[0], lstat)
                     if digest is not None:
                         self._read_digests[abs_path] = digest
         elif digest is None:
             digest = self._read_digests.get(abs_path)
         return digest, st
 
-    def _digest_now(self, abs_path: str, size: int) -> str | PendingDigest | None:
-        """The file's content hash as the body is about to read it.
+    def _digest_now(self, abs_path: str, size: int, st: Any = None) -> str | PendingDigest | None:
+        """The file's content hash as the body is about to read it; *st* the
+        stat this read took of it, when there is one (`file_content_hash`).
 
         A big file the process does not know yet is hashed on a thread of its
         own (`PendingDigest`) while the body reads and computes; the digest
@@ -606,7 +618,7 @@ class FileAccessTracker:
             if size >= BACKGROUND_DIGEST_MIN_BYTES:
                 known = remembered_file_digest(abs_path)
                 return known if known is not None else PendingDigest(abs_path, size, file_content_hash)
-            return file_content_hash(abs_path, size)
+            return file_content_hash(abs_path, size, st)
         finally:
             self.read_hash_seconds += _perf_counter() - t0
 
