@@ -38,6 +38,7 @@ from .explain import MissKind, not_persisted_reason
 from .file_deps import snapshot_tracked_deps
 from .iterators import chunk_prefix
 from .purity_checks import held_sentinels, sentinel_ref
+from .result_parts import split_by_a_hit
 
 if TYPE_CHECKING:
     from .backend_slot import BackendSlot
@@ -298,6 +299,23 @@ class ResultStore:
             refusal = (
                 f"it changed its argument{'s' if len(mutated) > 1 else ''} {names} in place, which a hit would not do"
             )
+        split = split_by_a_hit(res) if refusal is None else None
+        if split is not None:
+            # ``return a, a[2:5]`` or ``return a, pl.Series(a)``: a hit copies
+            # each part on its own, so a write to one stops reaching the other.
+            part, other = split
+            self._notices.warn_once(
+                CashCacheStoreFailedWarning,
+                func_name,
+                "parts_shared",
+                f"@cash.cache on {func_name}: {part} and {other} share memory, so a write to one "
+                f"shows in the other. A cache hit would hand them back as separate "
+                f"copies, where the write no longer shows, so the result was returned but not cached.",
+                code="STORE-PARTS-SHARED",
+                fix=f"return a copy of one of them (`{part}.copy()`, `pl.Series(a.copy())`) if the "
+                "two need not share; if they must, do not cache the function.",
+            )
+            refusal = f"{part} and {other} share memory, which a hit would hand back apart"
         return refusal
 
     def _unpicklable_source_refusal(self, func_name: str, sources: DynamicSources | None) -> str | None:

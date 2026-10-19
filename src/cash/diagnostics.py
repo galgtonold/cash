@@ -366,6 +366,10 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # that cannot be pickled, so the caller's result stays in RAM (or,
         # with no RAM tier, is not stored)
         "STORE-METADATA-INVALID",  # a stored entry's metadata did not validate
+        "STORE-PARTS-SHARED",  # parts of the result share memory a hit
+        # hands back as separate copies, so the result was not stored
+        "STORE-RESULT-WRITTEN",  # a table kept uncopied was written past
+        # pandas after its store, so the entry was dropped
     }
 )
 

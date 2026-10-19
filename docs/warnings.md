@@ -2378,6 +2378,8 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 | [STORE-INPUT-CHANGED](#store-input-changed) | decorator | an input file changed during the call; not stored |
 | [STORE-LOCK-FAILED](#store-lock-failed) | decorator | the per-key lock failed; ran without it |
 | [STORE-METADATA-INVALID](#store-metadata-invalid) | decorator | a stored entry's metadata is unreadable |
+| [STORE-PARTS-SHARED](#store-parts-shared) | decorator | two parts of the result share memory a hit would split; not stored |
+| [STORE-RESULT-WRITTEN](#store-result-written) | both | a table kept uncopied was written past pandas after its store; entry dropped |
 | [STORE-STATE-CHANGED](#store-state-changed) | decorator | a global the key read changed during the call; not stored |
 | [STORE-WORK-RUNNING](#store-work-running) | both | work it handed to a thread or thread pool still ran when it returned; not stored |
 | [STORE-UNTRACKED-SOURCE](#store-untracked-source) | decorator | a cached function it calls has a dynamic source that cannot be pickled; kept in RAM only |
@@ -2527,6 +2529,57 @@ interrupted write.
 
 **When it is safe to ignore.** Usually. Look into it if it persists after
 `cache_clear()`.
+
+### STORE-PARTS-SHARED {#store-parts-shared}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
+
+<!-- claim: cash/decorator/result_parts.py:split_by_a_hit @0ed503f3 -->
+**What happened.** The result holds two parts over the same memory: two
+numpy arrays whose data overlap, such as `return a, a[2:5]`, a numpy
+array and a polars or pandas frame made over it, such as
+`return a, pl.Series(a)`, or, on pandas 2 without copy-on-write, a table
+and one of its columns, `return df, df["x"]`. The parts are looked for in
+tuples, lists, dicts, named tuples and object attributes, slots included.
+The message names both parts. The result was returned but not stored.
+Arrays that share a base but no element, such as
+`X, y = data[:, :-1], data[:, -1]`, are stored, and so is one array
+returned twice. So is a pair no one can write through: two read-only
+arrays, or a read-only array from a frame that never writes it, such as
+`return df, df["y"].to_numpy()` under polars or pandas copy-on-write.
+
+**Why it matters.** On the first run a write to one part, `a[2] = -1`,
+shows in the other too. A cache hit hands the two back as separate copies,
+so from then on it would not, and code that relies on it would silently
+change behaviour.
+
+**What to do.** Return a copy of one of them (`a[2:5].copy()`,
+`pl.Series(a.copy())`) if the two need not share. If they must share, the
+function cannot be served from the cache.
+
+**When it is safe to ignore.** When the function is cheap: it runs every
+time, which is what the code means.
+
+### STORE-RESULT-WRITTEN {#store-result-written}
+
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
+
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._written_after_store @076b263c -->
+**What happened.** Under pandas copy-on-write, cash keeps a big pandas table
+of numbers and dates without copying it, with a digest of its data. The
+data was written after the store past pandas: through `df["x"].array[i] =
+...`, a writeable `to_numpy()`, or a numpy array the table was made over.
+The entry was dropped, and the next call computes the value again. The
+warning comes once per entry.
+
+**Why it matters.** Nothing wrong is served: the changed data is never
+handed out. But if the write happens after every call, the value is never
+served from the cache.
+
+**What to do.** Write through pandas (`df.loc[i, "x"] = ...`), which copies
+before it writes, or write a copy of the result.
+
+**When it is safe to ignore.** When it happens once.
 
 ### STORE-STATE-CHANGED {#store-state-changed}
 

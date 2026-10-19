@@ -193,18 +193,16 @@ def test_a_call_on_the_frame_in_many_chunks_hits_the_entry_of_one_chunk(tmp_path
     assert calls == [1]
 
 
-def test_the_restored_frame_passes_the_ram_tiers_check():
-    """The RAM tier keeps a value only while it still hashes to the digest
-    taken when it was stored (`memory_backend._still_as_stored`)."""
-    from cash.backends import memory_backend
+def test_the_restored_frame_hashes_as_the_stored_one():
+    """What keys on the frame (`hash_polars`) sees the same content."""
+    from cash.content_hashers import hash_polars
 
     frame = _frame()
-    digest = memory_backend._polars_digest(frame)
+    digest = hash_polars(frame)
     stream, buffers = PickleSerializer().serialize_split(frame, copy=False)
     back = PickleSerializer().deserialize_split(stream, buffers)
 
-    assert memory_backend._polars_digest(back) == digest
-    assert memory_backend._still_as_stored([(back, digest)])
+    assert hash_polars(back) == digest
 
 
 def test_a_frame_read_from_disk_is_served_from_ram_again(tmp_path):

@@ -24,7 +24,11 @@ from cash.backends.file_backend import FileBackend
 from cash.backends.memory_backend import InMemoryBackend
 from cash.backends.tiered_backend import TieredBackend
 
-pytestmark = pytest.mark.skipif(not frame_sharing._checked_works(), reason="needs pandas copy-on-write")
+pytestmark = [
+    pytest.mark.skipif(not frame_sharing._checked_works(), reason="needs pandas copy-on-write"),
+    # A write past pandas drops the entry and says so (STORE-RESULT-WRITTEN).
+    pytest.mark.filterwarnings("ignore::cash.exceptions.CashCacheStoreFailedWarning"),
+]
 
 #: Rows enough for 16 MiB of numbers and dates: kept uncopied.
 ROWS = frame_sharing.CHECKED_MIN_BYTES // 24 * 11 // 10
