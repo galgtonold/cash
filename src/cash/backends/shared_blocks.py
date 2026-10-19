@@ -305,7 +305,10 @@ def _plan(frame: Any) -> list[tuple[tuple, tuple, list[tuple]]]:
             if layout is None:
                 continue
             positions = tuple(int(pos) for pos in block.mgr_locs.as_array)
-            memory = [column_memory_key(frame, pos, pandas_value_route(dtypes.iloc[pos], pd)) for pos in positions]
+            memory = [
+                column_memory_key(frame, pos, pandas_value_route(dtypes.iloc[pos], pd), dtypes.iloc[pos])
+                for pos in positions
+            ]
             if all(key is not None for key in memory):
                 plan.append((positions, layout, memory))
     except Exception:  # pandas internals changed: copy it all

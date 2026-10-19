@@ -197,7 +197,7 @@ def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
                 continue
             h.update(f"|{pos}|".encode())
             pieces = _COLUMN_PIECES.current
-            key = column_memory_key(value, pos, route) if pieces is not None else None
+            key = column_memory_key(value, pos, route, dtype) if pieces is not None else None
             if key is not None:
                 piece = pieces.find(key)
                 if piece is not None:
@@ -455,12 +455,16 @@ class _PieceRecorder:
         return b"".join(self._parts) if self._parts is not None else None
 
 
-def column_memory_key(frame: Any, pos: int, route: str | None) -> tuple | None:
+def column_memory_key(frame: Any, pos: int, route: str | None, dtype: Any = None) -> tuple | None:
     """What identifies the memory column *pos* of *frame* reads from, for
     `ColumnPieces`: the address, shape, strides and type of its numpy data
     (a numpy block's row, the array under dates or strings held as Python
     objects), or the Arrow array it holds, with its dtype and route. None
     for any other column, which is read every time.
+
+    A caller walking the columns passes each one's *dtype*: ``frame.dtypes``
+    builds a Series of every column's, so looking it up per column made a
+    2000-column frame's digest 0.27 s instead of 0.03 s.
 
     Only a key: the memo that answers it vouches that the memory has not
     changed since, and holds what keeps it alive."""
@@ -469,7 +473,7 @@ def column_memory_key(frame: Any, pos: int, route: str | None) -> tuple | None:
     try:
         mgr = frame._mgr
         values = mgr.blocks[mgr.blknos[pos]].values
-        dtype = str(frame.dtypes.iloc[pos])
+        dtype = str(frame.dtypes.iloc[pos] if dtype is None else dtype)
         if type(values) is np.ndarray:
             if values.ndim != 2:
                 return None
