@@ -58,6 +58,8 @@ import threading
 import weakref
 from typing import Any
 
+from . import heap_blocks
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -205,6 +207,15 @@ def _self_test(pd: Any) -> bool:
 # ---------------------------------------------------------------- freezing
 
 
+def block_arrays(frame: Any) -> list[Any]:
+    """The numpy arrays *frame*'s blocks keep their data in (`_ndarray_parts`)."""
+    try:
+        blocks = frame._mgr.blocks
+    except AttributeError:
+        return []
+    return [array for block in blocks for _name, array in (_ndarray_parts(block.values) or ())]
+
+
 def _ndarray_parts(values: Any) -> list[tuple[str, Any]] | None:
     """``(attribute, array)`` for each numpy array a block's *values* keep
     their data in (``""``: *values* is one); None for values this module
@@ -304,6 +315,10 @@ def _read_only(array: Any) -> Any:
         if not isinstance(link.base, np.ndarray):
             break
         link = link.base
+    frozen = heap_blocks.sealed(array, link)
+    if frozen is not None:
+        _remember_frozen(_root(frozen))
+        return frozen
     _remember_frozen(link)
     if array.base is None:
         return array.view()
@@ -833,6 +848,9 @@ def _copy_values(values: Any, arrow: bool = True) -> Any:
     if isinstance(values, _categorical()):  # over a numpy array too: its codes
         return _owned_categories(values, arrow)
     if isinstance(values, np.ndarray) or isinstance(getattr(values, "_ndarray", None), np.ndarray):
+        fresh = heap_blocks.fresh_copy(values)  # a store's big block: out of glibc's heap
+        if fresh is not None:
+            return fresh
         try:
             return values.copy(order="K")
         except TypeError:  # an array type whose copy takes no order
