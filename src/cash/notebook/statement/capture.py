@@ -266,24 +266,32 @@ class _Captured:
 
 
 @contextmanager
-def _capture_in_place(cls: Any, stdout: bool, stderr: bool, display: bool) -> Generator[Any, None, None]:
+def _capture_in_place(
+    cls: Any, stdout: bool, stderr: bool, display: bool, tee: bool = False
+) -> Generator[Any, None, None]:
     """IPython's capture for the displays; the streams taken in place.
 
     IPython's capture puts back the ``sys.stdout`` and ``sys.stderr`` it
     found on exit, even when it took neither: a statement that rebinds one
     (``sys.stdout = buf``) had it undone, and what the cell printed next went
-    to the notebook instead. What the statement left there is kept."""
+    to the notebook instead. What the statement left there is kept.
+
+    *tee*: what is printed also goes on to the stream as it is written
+    (`TeeWriter`), as in plain; the displays are still held."""
+    sink = (lambda real: TeeWriter(real)) if tee else (lambda _real: StringIO())
     with contextlib.ExitStack() as stack:
         left: dict[str, Any] = {}
         stack.callback(lambda: [setattr(sys, name, stream) for name, stream in left.items()])
         shown = stack.enter_context(cls(stdout=False, stderr=False, display=display))
         stack.callback(lambda: left.update(stdout=sys.stdout, stderr=sys.stderr))
-        out = stack.enter_context(StreamTaken("stdout", lambda _real: StringIO())) if stdout else None
-        err = stack.enter_context(StreamTaken("stderr", lambda _real: StringIO())) if stderr else None
+        out = stack.enter_context(StreamTaken("stdout", sink)) if stdout else None
+        err = stack.enter_context(StreamTaken("stderr", sink)) if stderr else None
+        if tee:
+            stack.callback(lambda: [taken.sink.flush() for taken in (out, err) if taken is not None])
         yield _Captured(shown, out, err)
 
 
-def capture_output(stdout: bool = True, stderr: bool = True, display: bool = True):
+def capture_output(stdout: bool = True, stderr: bool = True, display: bool = True, tee: bool = False):
     """Resolve IPython's ``capture_output`` on FIRST USE, not at import.
 
     Importing this one name pulls in the whole of IPython, which measured at
@@ -308,18 +316,23 @@ def capture_output(stdout: bool = True, stderr: bool = True, display: bool = Tru
             # The fallback never touches `display_pub`, so it has nothing to fix.
             _CAPTURE_OUTPUT = _fallback_capture_output
     if _CAPTURE_OUTPUT is _fallback_capture_output:
+        if tee:
+            return tee_output()
         return _CAPTURE_OUTPUT(stdout=stdout, stderr=stderr, display=display)
-    return _capture_in_place(_CAPTURE_OUTPUT, stdout, stderr, display)
+    return _capture_in_place(_CAPTURE_OUTPUT, stdout, stderr, display, tee)
 
 
-def make_capture_ctx(stream_output: bool, skip_capture: bool) -> Any:
+def make_capture_ctx(stream_output: bool, skip_capture: bool, keep_displays: bool = False) -> Any:
     """Return the output-capture context manager for an execution.
 
     Streaming output that will not be cached skips capture entirely, so
-    it reaches the real streams with no interception.
+    it reaches the real streams with no interception. *keep_displays*: what
+    is printed streams, and the displays are captured as without streaming.
     """
     if stream_output and skip_capture:
         return contextlib.nullcontext(NoCapture())
+    if stream_output and keep_displays:
+        return capture_output(stdout=True, stderr=True, display=True, tee=True)
     if stream_output:
         return tee_output()
     return capture_output(stdout=True, stderr=True, display=True)

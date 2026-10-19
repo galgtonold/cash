@@ -657,6 +657,7 @@ class StatementProcessor:
         exec_source: str | None = None,
         occurrence_index: int = 0,
         stream_output: bool = False,
+        keep_displays: bool = False,
         force_outputs: set[str] | None = None,
         is_last: bool = True,
         loop_iterable: Any = NO_LOOP_ITERABLE,
@@ -682,6 +683,9 @@ class StatementProcessor:
                 statements (e.g. single-unit for loops) where the user needs
                 to see progress.  When True, ``metrics['_output_flushed']``
                 is set so callers don't replay the output a second time.
+            keep_displays: With *stream_output*, the displays are still
+                captured and held, so a hit shows them again (a top-level
+                statement: its prints stream as in plain).
             force_outputs: Extra output variable names to capture/restore on top
                 of those AST analysis discovers, and to treat as expected writes
                 so an in-place mutation on them does NOT block caching. Used by
@@ -723,6 +727,7 @@ class StatementProcessor:
             exec_source=exec_source,
             occurrence_index=occurrence_index,
             stream_output=stream_output,
+            keep_displays=keep_displays,
             force_outputs=force_outputs,
             is_last=is_last,
             loop_iterable=loop_iterable,
@@ -794,6 +799,7 @@ class StatementProcessor:
         exec_source: str | None = None,
         occurrence_index: int = 0,
         stream_output: bool = False,
+        keep_displays: bool = False,
         force_outputs: set[str] | None = None,
         is_last: bool = True,
     ) -> ProcessResult:
@@ -813,6 +819,7 @@ class StatementProcessor:
             exec_source=exec_source,
             occurrence_index=occurrence_index,
             stream_output=stream_output,
+            keep_displays=keep_displays,
             force_outputs=force_outputs,
             is_last=is_last,
         )
@@ -1374,7 +1381,9 @@ class StatementProcessor:
         try:
             with (
                 self.watching_reads(run.code),
-                make_capture_ctx(run.stream_output, run.skip_cache and run.stream_output) as captured,
+                make_capture_ctx(
+                    run.stream_output, run.skip_cache and run.stream_output, run.keep_displays
+                ) as captured,
             ):
                 execution.captured = captured
                 # Hashed as read, as the decorator does: a file replaced while
