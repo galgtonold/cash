@@ -2132,7 +2132,6 @@ A cached value that randomness makes non-reproducible. Every code here starts `R
 
 | Code | Applies to | Meaning |
 |---|---|---|
-| [RANDOM-HIDDEN-GENERATOR](#random-hidden-generator) | notebook | a statement drew from a generator held where its key does not follow it, so it runs every time |
 | [RANDOM-HELD-GENERATOR](#random-held-generator) | notebook | a cell re-run on its own draws from a generator held by an object, from where it stands |
 | [RANDOM-REPLAYED](#random-replayed) | notebook | a restored value is an earlier random draw |
 | [RANDOM-SEED-NONE](#random-seed-none) | notebook | `seed(None)` cannot refresh cached values |
@@ -2162,30 +2161,6 @@ gives, run the notebook from the top.
 
 **When it is safe to ignore.** When the draw only needs to be random, not the
 same as a run from the top.
-
-### RANDOM-HIDDEN-GENERATOR {#random-hidden-generator}
-
-<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashRandomnessWarning</span>
-
-<!-- claim: cash/notebook/statement/hidden_generators.py:positions @fc34e5a9 -->
-**What happened.** A statement drew from a random generator held where cash
-does not follow it: an attribute of an object built in a module of yours
-(`tlib.MODEL.rng`), an item of a list, or a generator a helper keeps in its
-closure. cash follows a generator held in a variable, and one held by an
-object a cell of the notebook builds. The message names the statement and
-where the generator is held.
-
-**Why it matters.** A stored result would leave the generator where it was,
-so a draw below it would give a different number than a run without cash.
-cash does not store the statement, so it runs every time and the draws below
-match plain Python. The cost is the statement's own run time.
-
-**What to do.** Hold the generator in a variable and pass it in
-(`model.fit(X, rng=rng)`), or build the object in a cell of the notebook.
-cash then follows the draw and can store the statement.
-
-**When it is safe to ignore.** When the statement is cheap, or when it has to
-run every time anyway.
 
 ### RANDOM-REPLAYED {#random-replayed}
 

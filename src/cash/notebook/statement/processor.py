@@ -1477,7 +1477,6 @@ class StatementProcessor:
                 run.metrics["uncacheable_reasons"].append(
                     f"it drew from a generator its key does not hold ({drawn[0]})"
                 )
-                hidden_generators.warn(run.code, drawn)
         if unordered:
             run.sparse_ordered = sparse_order.were_put_in_order(unordered, self.shell.user_ns) or None
         if held:

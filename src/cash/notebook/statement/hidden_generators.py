@@ -19,12 +19,10 @@ import types
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from cash.diagnostics import warn_diagnostic
-from cash.tracking.randomness import CashRandomnessWarning
 from cash.tracking.randomness.state import object_carrier_state, rng_carrier_kind, same_carrier_state
 from cash.tracking.trace_recorder import is_user_code
 
-__all__ = ["moved", "positions", "warn"]
+__all__ = ["moved", "positions"]
 
 #: How deep below an input the walk goes, how many items of one container
 #: or attributes of one object it looks at, and how many objects in all.
@@ -115,20 +113,3 @@ def positions(roots: Mapping[str, Any], followed: Iterable[Any] = ()) -> dict[in
 def moved(found: Mapping[int, tuple[str, Any, Any]]) -> list[str]:
     """The paths of the generators in *found* whose state moved since."""
     return [path for path, obj, before in found.values() if not same_carrier_state(before, object_carrier_state(obj))]
-
-
-def warn(code: str, drawn: list[str]) -> None:
-    """RANDOM-HIDDEN-GENERATOR for the statement *code*, which drew from the
-    generators at *drawn*."""
-    first = code.strip().splitlines()[0] if code.strip() else code
-    if len(first) > 60:
-        first = first[:57] + "..."
-    shown = ", ".join(f"`{p}`" for p in drawn[:3])
-    warn_diagnostic(
-        CashRandomnessWarning,
-        "RANDOM-HIDDEN-GENERATOR",
-        f"`{first}` drew from {shown}, a generator held where its key does not follow it, "
-        "so it runs every time: a stored result would leave the generator where it was.",
-        "hold the generator in a variable and pass it in (`model.fit(X, rng=rng)`), or seed it "
-        "in the cell that draws from it.",
-    )

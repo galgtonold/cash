@@ -6,8 +6,8 @@ object built elsewhere -- ``tlib.MODEL.rng`` in a module of the user's, a
 helper holding one in its closure -- was not: the drawing statement was
 stored, so after a restart a hit served the draw and left the generator
 where it was, and the next draw below gave the number the hit stood for
-instead of the one plain Python gives. Such a run is now not stored, with
-RANDOM-HIDDEN-GENERATOR, so the draws below match a run without cash.
+instead of the one plain Python gives. Such a run is now not stored, silently,
+so the draws below match a run without cash.
 """
 
 from __future__ import annotations
@@ -58,27 +58,33 @@ def tlib(tmp_path, monkeypatch):
 def _restart(magics) -> None:
     magics.tracking_state.reset_session_state()
     magics._upstream_checker.simulator.cache.reset()
-    for name in ("tlib", "h", "peek", "x", "y"):
+    for name in ("tlib", "h", "peek", "x", "y", "time", "np", "draw", "rng"):
         magics.shell.user_ns.pop(name, None)
     sys.modules.pop("tlib", None)
 
 
 def _run_all(magics, cells) -> list[str]:
+    """Each cell's last statement's status; no warning is said for a
+    generator the key does not hold."""
+    statuses = []
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         for cell in cells:
             run_cash_cell(magics, cell, cells=cells)
-    return [str(w.message) for w in caught if getattr(w.message, "code", None) == "RANDOM-HIDDEN-GENERATOR"]
+            statuses.append(str(magics.cash_status("dict")["last_cell"]["statements"][-1].get("status")))
+    assert not [w for w in caught if str(getattr(w.message, "code", "")).startswith("RANDOM-HIDDEN")]
+    return statuses
 
 
 @pytest.mark.parametrize("case", sorted(CASES))
 def test_the_draw_below_matches_plain_after_a_restart(cash_magics, tlib, case):
     cells = CASES[case]
-    assert _run_all(cash_magics, cells), "the first run names the hidden generator"
+    _run_all(cash_magics, cells)
     ns = cash_magics.shell.user_ns
     assert (ns["x"], ns["y"]) == _plain(), "control: the first run"
     _restart(cash_magics)
-    _run_all(cash_magics, cells)
+    statuses = _run_all(cash_magics, cells)
+    assert "RESTORED" not in statuses[1], "the draw was stored"
     assert (ns["x"], ns["y"]) == _plain()
 
 
@@ -88,4 +94,6 @@ def test_a_generator_in_a_variable_is_still_followed(cash_magics):
         "rng = np.random.default_rng(0)",
         "x = draw(rng)",
     ]
-    assert not _run_all(cash_magics, cells)
+    _run_all(cash_magics, cells)
+    _restart(cash_magics)
+    assert "RESTORED" in _run_all(cash_magics, cells)[2], "the draw is stored"
