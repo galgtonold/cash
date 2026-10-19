@@ -35,11 +35,13 @@ def _threads_an_earlier_test_left_are_the_hosts(monkeypatch):
     threads it starts itself.
     """
     import threading
+    import weakref
 
     from cash.tracking import trace_recorder
 
-    alive = {t.ident for t in threading.enumerate() if t.ident is not None}
-    monkeypatch.setattr(trace_recorder, "HOST_THREADS", trace_recorder.HOST_THREADS | alive)
+    hosts = weakref.WeakSet(trace_recorder.HOST_THREADS)
+    hosts.update(threading.enumerate())
+    monkeypatch.setattr(trace_recorder, "HOST_THREADS", hosts)
 
 
 def _fresh_cash_instance():

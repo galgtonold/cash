@@ -165,7 +165,7 @@ class _StallWatchdog:
         # (`trace_recorder.other_thread_alive`).
         from cash.tracking import trace_recorder
 
-        trace_recorder.HOST_THREADS.add(thread.ident)
+        trace_recorder.HOST_THREADS.add(thread)
 
     @property
     def poll_interval(self) -> float:

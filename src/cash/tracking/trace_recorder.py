@@ -28,6 +28,7 @@ from __future__ import annotations
 import sys
 import threading
 import types
+import weakref
 from typing import Any
 
 from ..tracking.tracker_context import untracked
@@ -312,30 +313,53 @@ def runs_user_code(t: threading.Thread, notebook_ns: Any) -> bool:
 
 
 #: Threads of what hosts the notebook that change none of its values (a test
-#: runner's watchdog), left out by `other_thread_alive`.
-HOST_THREADS: set[int] = set()
+#: runner's watchdog), left out by `other_thread_alive`. Held weakly.
+HOST_THREADS: weakref.WeakSet[threading.Thread] = weakref.WeakSet()
+
+#: The packages a kernel's own threads run (its message loops, heartbeat,
+#: output pipes and history writer): a thread alive when cash was imported
+#: that runs one of them is the kernel's.
+_KERNEL_PACKAGES = frozenset({"IPython", "ipykernel", "jupyter_client", "tornado", "zmq"})
+
+
+def _code_of(t: threading.Thread) -> Any:
+    """What *t* runs: a Timer's function, its target, or its own ``run``."""
+    if isinstance(t, threading.Timer):
+        return t.function
+    return getattr(t, "_target", None) or type(t).run
+
+
+def _the_kernels(t: threading.Thread) -> bool:
+    """Is *t*, alive when cash was imported, one of the kernel's own: a
+    thread running its own ``run`` (no target handed to it) or code of the
+    kernel's packages. A pool's worker started before cash runs the pool's
+    target, and counts."""
+    fn = _code_of(t)
+    if getattr(t, "_target", None) is None and not isinstance(t, threading.Timer):
+        return type(t).run is not threading.Thread.run
+    name = getattr(fn, "__module__", None)
+    return isinstance(name, str) and name.partition(".")[0] in _KERNEL_PACKAGES
 
 
 def other_thread_alive(notebook_ns: Any) -> bool:
     """Might another thread change a value between two checks that read it,
     so that a digest one took cannot stand for the other: any live thread
-    but this one, cash's own and the kernel's (alive when cash was imported,
-    running no code of the user's), daemon or not. A pool's worker runs the
-    user's code under a library's name, which `runs_user_code` cannot see,
-    and a wrong yes only costs a read again."""
+    but this one, cash's own (by the code it runs; a Timer by its function)
+    and the kernel's (`_the_kernels`, alive when cash was imported), daemon
+    or not. A pool's worker runs the user's code under a library's name,
+    which `runs_user_code` cannot see, and a wrong yes only costs a read
+    again."""
     import cash
 
-    me = threading.get_ident()
+    me = threading.current_thread()
     for t in threading.enumerate():
-        if t.ident == me or t.ident in HOST_THREADS or not t.is_alive():
+        if t is me or t in HOST_THREADS or not t.is_alive():
             continue
         if runs_user_code(t, notebook_ns):
             return True
-        if t.ident in cash.THREADS_AT_IMPORT:
+        if t in cash.THREADS_AT_IMPORT and _the_kernels(t):
             continue
-        # A Timer runs its function (cash's own render and write timers).
-        fn = t.function if isinstance(t, threading.Timer) else getattr(t, "_target", None) or type(t).run
-        name = getattr(fn, "__module__", None)
+        name = getattr(_code_of(t), "__module__", None)
         if not (isinstance(name, str) and (name == "cash" or name.startswith("cash."))):
             return True
     return False

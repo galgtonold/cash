@@ -20,6 +20,7 @@ from __future__ import annotations
 import contextlib
 import os
 import threading
+import weakref
 from collections.abc import Iterator
 from typing import Any
 
@@ -29,9 +30,10 @@ from ._dataclass_code import compiled_dataclass_methods
 # earlier process (`_dataclass_code`); closed at the end of this module.
 _compiled_methods = compiled_dataclass_methods()
 
-#: The threads alive when cash was imported: the kernel's own, before any
-#: cell could start one (`tracking.trace_recorder.other_thread_alive`).
-THREADS_AT_IMPORT = frozenset(t.ident for t in threading.enumerate() if t.ident is not None)
+#: The threads alive when cash was imported, held weakly: the kernel's own
+#: among them (`tracking.trace_recorder.other_thread_alive`). Not by ident:
+#: a thread started later can be given the ident of one that ended.
+THREADS_AT_IMPORT: weakref.WeakSet[threading.Thread] = weakref.WeakSet(threading.enumerate())
 _compiled_methods.__enter__()
 
 from . import (

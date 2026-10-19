@@ -632,8 +632,10 @@ class DigestHandoff:
         self._first_source: str | None = None
         self._watched = False
         self._after_ok = False
-        #: The namespace the statement runs in (`watch`), for `_alone`.
+        #: The namespace the statement runs in (`watch`), for `alone`.
         self._namespace: Mapping[str, Any] | None = None
+        #: Another thread was alive at some point of this statement (`alone`).
+        self._crowded = False
         #: ``id(value) -> (value, digest)``: what the statement's fingerprint
         #: read before it ran, for its call's hash before the call; and what
         #: the call's hash read after it, for the statement's fingerprint.
@@ -667,6 +669,7 @@ class DigestHandoff:
         self._offer = None
         self._watched = False
         self._settled = None
+        self._crowded = False
         handed_digests.forget()
 
     def watch(self, tree: ast.Module | None, namespace: Mapping[str, Any] | None = None) -> None:
@@ -677,11 +680,16 @@ class DigestHandoff:
         self._namespace = namespace
         self._watched = True
 
-    def _alone(self) -> bool:
+    def alone(self) -> bool:
         """No other thread could have changed a value between the check that
-        took a digest and the one it is handed to
-        (`trace_recorder.other_thread_alive`)."""
-        return not other_thread_alive(self._namespace)
+        took a digest and the one it is handed to: none was alive
+        (`trace_recorder.other_thread_alive`) when this statement took a
+        digest to hand on, or now. Asked at both ends: a thread alive when
+        a digest is taken can change the value and end before it is handed
+        on. Once crowded, the statement hands nothing on."""
+        if not self._crowded and other_thread_alive(self._namespace):
+            self._crowded = True
+        return not self._crowded
 
     def digest(self, value: Any) -> str:
         """`compute_hash` of *value*, kept for the call's hash before the
@@ -691,6 +699,7 @@ class DigestHandoff:
             (self._before_ok or self._first_source is not None)
             and self._started == 0
             and not is_identity_fallback_hash(value, digest)
+            and self.alone()
         ):
             self._before[id(value)] = (value, digest)
         return digest
@@ -720,7 +729,7 @@ class DigestHandoff:
             return self.fingerprints.digest
         if not self._before_ok and (source is None or source != self._first_source):
             return self.fingerprints.digest
-        if not self._alone():
+        if not self.alone():
             return self.fingerprints.digest
 
         def digest(value: Any) -> str:
@@ -735,7 +744,7 @@ class DigestHandoff:
         """The call holding *ticket* returned and hashed *values* to
         *digests*: kept for the statement's fingerprint after it, when the
         call is the whole statement and only its result's binding follows."""
-        if ticket[0] != self._generation or ticket[1] != 1 or not self._after_ok:
+        if ticket[0] != self._generation or ticket[1] != 1 or not self._after_ok or not self.alone():
             return
         self._after = {id(v): (v, d) for v, d in zip(values, digests) if isinstance(d, str)}
         self._after_at = self._started
@@ -753,7 +762,7 @@ class DigestHandoff:
         if self._before_ok and self._started == 0:
             # With no digests too: the call still says where its result went
             # (`handed_digests.stored_result`).
-            digests = self._before if self._alone() else {}
+            digests = self._before if self.alone() else {}
             self._offer = handed_digests.offer(filename, digests, binds_result=self._after_ok)
 
     def withdraw_offer(self) -> None:
@@ -803,7 +812,7 @@ class DigestHandoff:
         before it when the statement is a ``@cash.cache`` call that was
         served, whose body never ran."""
         offer = self._offer
-        if (offer is not None or self._after) and not self._alone():
+        if (offer is not None or self._after) and not self.alone():
             return self.fingerprints.digest(value)
         if (
             offer is not None
