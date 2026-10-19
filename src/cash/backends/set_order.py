@@ -44,7 +44,9 @@ _KERNELS = (
 
 
 def record(value: Any, metadata: dict) -> None:
-    """Note in *metadata* where *value*'s sets keep their elements."""
+    """Note in *metadata* where *value*'s sets keep their elements: empty
+    bytes when it holds none to lay out (or is too big to walk), so a later
+    tier storing the same value does not walk it again."""
     if _KERNELS is None:
         return
     try:
@@ -52,16 +54,19 @@ def record(value: Any, metadata: dict) -> None:
     except Exception:  # an aid: the value is stored either way
         logger.debug("could not record set layouts", exc_info=True)
         return
-    if layouts is not None:
-        metadata[FIELD] = layouts
+    metadata[FIELD] = layouts if layouts is not None else b""
 
 
-def restore(value: Any, metadata: dict | None) -> None:
-    """Put *value*'s sets' elements where *metadata* says the stored ones had them."""
+def restore(value: Any, metadata: dict | None) -> tuple[int, int, int] | None:
+    """Put *value*'s sets' elements where *metadata* says the stored ones had
+    them: ``(laid out, in order already, left as the rebuild gave them)``, or
+    None when there was nothing to do. Only the paths to the recorded sets
+    are followed, not the whole value."""
     layouts = metadata.get(FIELD) if metadata else None
-    if _KERNELS is None or not isinstance(layouts, bytes):
-        return
+    if _KERNELS is None or not isinstance(layouts, bytes) or not layouts:
+        return None
     try:
-        _KERNELS.apply_set_layouts(value, layouts, MAX_NODES)
-    except Exception:  # the order the rebuild gave stands
+        return _KERNELS.apply_set_layouts(value, layouts, MAX_NODES)
+    except Exception:  # damaged layouts, no memory: the order the rebuild gave stands
         logger.debug("could not lay out restored sets", exc_info=True)
+        return None
