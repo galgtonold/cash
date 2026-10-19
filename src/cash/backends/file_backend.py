@@ -38,10 +38,11 @@ from .cache_dir import (
     warn_unusable,
     write_all,
 )
-from .chunk_store import CHUNK_MIN_BYTES, TRAILER, ChunkStore, as_bytes, chunk_name, digests
+from .chunk_store import CHUNK_MIN_BYTES, ChunkStore, as_bytes, digests
 from .entry_format import (
     CHUNKS_FIELD,
     ENTRY_SUFFIX,
+    PLACES_FIELD,
     CorruptEntry,
     PackedEntry,
     SplitPayload,
@@ -464,7 +465,7 @@ class FileBackend(CacheBackend):
                 continue
             held = metadata.get(CHUNKS_FIELD)
             if held:
-                yield os.path.basename(path)[: -len(ENTRY_SUFFIX)], held
+                yield os.path.basename(path)[: -len(ENTRY_SUFFIX)], held, metadata.get(PLACES_FIELD)
 
     @property
     def local_dir(self) -> str:
@@ -766,35 +767,30 @@ class FileBackend(CacheBackend):
         Raises:
             OSError, pickle.PickleError, ValueError: on write failure (caller handles cleanup).
         """
-        # The chunks this entry holds, as ``(name, file bytes)``, and the
+        # The chunk files this entry holds, as ``(name, file bytes)``, and the
         # bytes the ones written new add to the folder.
         held: list[tuple[str, int]] = []
         added = 0
         if isinstance(serialized_value, SplitPayload):
-            apart: dict[int, tuple[bytes, bytes]] = {}
             big = [(i, as_bytes(buf)) for i, buf in enumerate(serialized_value.buffers)]
             big = [(i, view) for i, view in big if view.nbytes >= CHUNK_MIN_BYTES]
-            try:
-                for (i, view), known in zip(big, digests([view for _i, view in big])):
-                    digest, crc, grew = self.chunks.put(view, known)
-                    apart[i] = (digest, crc)
-                    held.append((chunk_name(digest), view.nbytes + TRAILER))
-                    added += grew
-            except BaseException:
-                self.chunks.abandon(held)
-                raise
+            views = [view for _i, view in big]
+            refs, places, held, added = self.chunks.put_all(views, digests(views)) if big else ([], {}, [], 0)
+            apart = {i: ref for (i, _view), ref in zip(big, refs)}
             chunks = split_chunks(serialized_value.stream, serialized_value.buffers, apart)
             split = True
             metadata["compressed"] = False
             metadata[CHUNKS_FIELD] = held
+            metadata[PLACES_FIELD] = places
             # What the value weighs, wherever its bytes are.
-            metadata["size"] = sum(memoryview(c).nbytes for c in chunks) + sum(n - TRAILER for _name, n in held)
+            metadata["size"] = sum(memoryview(c).nbytes for c in chunks) + sum(view.nbytes for view in views)
         else:
             codec = None
             if self.compress:
                 codec, serialized_value = compression.compress(serialized_value)
             metadata["compressed"] = codec or False
             metadata.pop(CHUNKS_FIELD, None)
+            metadata.pop(PLACES_FIELD, None)
             chunks = [serialized_value]
             split = False
             # The bytes the value occupies on disk, after compression.
@@ -841,7 +837,7 @@ class FileBackend(CacheBackend):
         except BaseException:
             self.chunks.abandon(held)
             raise
-        freed = self.chunks.commit(self._stem(key), held, replaced)
+        freed = self.chunks.commit(self._stem(key), held, replaced, metadata.get(PLACES_FIELD))
 
         with self._touched.lock:
             self._remember(key, metadata, checksum)
@@ -1099,6 +1095,7 @@ class FileBackend(CacheBackend):
 
         metadata = dict(metadata)  # Don't mutate caller's dict
         metadata.pop(CHUNKS_FIELD, None)  # it holds no payload
+        metadata.pop(PLACES_FIELD, None)
         metadata["key"] = key
         metadata["metadata_only"] = True
         metadata.setdefault("created_at", time.time())

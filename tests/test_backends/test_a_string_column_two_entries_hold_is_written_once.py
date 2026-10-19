@@ -35,7 +35,7 @@ def _frame() -> pd.DataFrame:
 
 def _chunks(tmp_path) -> list:
     folder = tmp_path / "cache" / "chunks"
-    return sorted(p for p in folder.iterdir() if p.suffix == ".chunk") if folder.exists() else []
+    return sorted(p for p in folder.iterdir() if p.suffix in (".chunk", ".pack")) if folder.exists() else []
 
 
 def test_a_string_column_comes_back_as_it_was_stored():
@@ -54,12 +54,13 @@ def test_a_derived_tables_string_column_adds_no_chunk(tmp_path):
     backend.set("a", df, {"execution_time": 1.0})
     backend._writes.wait_all()
     before = _chunks(tmp_path)
-    assert len(before) == 2  # name's strings and x
+    before_bytes = sum(p.stat().st_size for p in before)
     derived = df.assign(y=np.ones(ROWS))
     backend.set("b", derived, {"execution_time": 1.0})
     backend._writes.wait_all()
     added = set(_chunks(tmp_path)) - set(before)
-    assert len(added) == 1  # y alone; name and x are on disk already
+    assert len(added) == 1  # one pack, of y alone: name and x are on disk already
+    assert sum(p.stat().st_size for p in _chunks(tmp_path)) - before_bytes == ROWS * 8 + 4
     pd.testing.assert_frame_equal(backend.get("b")[1], derived)
 
 
