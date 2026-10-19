@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from cash._paths import normalize_path
 from cash.tracking import file_tracker
 from cash.tracking.file_tracker import FileAccessTracker
 from tests._cell_driver import run_cash_cell
@@ -78,8 +79,9 @@ def test_the_check_finds_the_changed_file_while_a_pool_thread_reads(tmp_path, mo
     fired = _late_read_during_the_check(monkeypatch, wake_the_worker)
     moved = tracker.inputs_changed_since_read()
     worker.join(10)
-    assert fired.is_set() and str(late) in tracker.read_stats, "the late read did not land mid-walk"
-    assert moved == [str(tmp_path / "f2.txt")]
+    # Paths are recorded in forward slashes on Windows too.
+    assert fired.is_set() and normalize_path(str(late)) in tracker.read_stats, "the late read did not land mid-walk"
+    assert moved == [normalize_path(str(tmp_path / "f2.txt"))]
 
 
 class _Late:
