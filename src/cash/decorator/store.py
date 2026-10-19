@@ -240,7 +240,7 @@ class ResultStore:
         if refusal is None and self._purity.refuses_identity_coupled(func_name, res):
             refusal = "the result is tied to the identity of an object in memory"
         if refusal is None and self._files.work_outlived_call(func_name, tracker):
-            refusal = "work it handed to a thread pool was still running when it returned"
+            refusal = "work it handed to a thread or thread pool was still running when it returned"
         if refusal is None and self._files.inputs_moved_during_call(func_name, tracker):
             refusal = "a file it read changed while it ran"
         # A watched value that moved is the drift guard's: it stops keying

@@ -592,15 +592,34 @@ def _patch_thread_start() -> None:
     nested function or a lambda was not, and the edited file's old result
     was served with no warning. The thread now runs in a copy of the
     starter's context, as ``ThreadPoolExecutor.submit`` gives each task.
+
+    The tracker also counts the thread until its ``run`` ends, as it counts
+    pool work (`work_submitted`): a thread the block does not join can read a
+    file after the entry's fingerprints were taken.
     """
 
     def make(original):
         @functools.wraps(original)
         def start(self):
-            if active_tracker.get() is not None and _runs_user_code(self):
-                run, context = self.run, contextvars.copy_context()
-                self.run = functools.partial(context.run, run)
-            return original(self)
+            tracker = active_tracker.get()
+            if tracker is None or not _runs_user_code(self):
+                return original(self)
+            run, context = self.run, contextvars.copy_context()
+            trackers = tracker.work_submitted()
+
+            def counted_run():
+                try:
+                    context.run(run)
+                finally:
+                    tracker.work_finished(trackers)
+
+            self.run = counted_run
+            try:
+                return original(self)
+            except BaseException:
+                self.run = run
+                tracker.work_finished(trackers)
+                raise
 
         return start
 

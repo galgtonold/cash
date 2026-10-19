@@ -226,7 +226,7 @@ class FileAccessTracker:
         # the block removed is gone by then and stays out
         # (`get_accessed_files`).
         self.created_then_read: set[str] = set()
-        # Work the block handed to a thread pool (`work_submitted`) that has
+        # Work the block handed to a thread pool or thread (`work_submitted`) that has
         # not finished yet, and whether any was still running when the block
         # ended (`work_outlived_block`).
         self._work_lock = threading.Lock()
@@ -279,7 +279,7 @@ class FileAccessTracker:
             tracker = tracker._propagation_parent()
 
     def work_submitted(self) -> list[FileAccessTracker]:
-        """Count one piece of work handed to a thread pool, here and on each
+        """Count one piece of work handed to a thread pool or thread, here and on each
         tracker a read is passed up to; returns them, for `work_finished`
         (the chain is gone once the block has ended)."""
         trackers = list(self._self_and_parents())

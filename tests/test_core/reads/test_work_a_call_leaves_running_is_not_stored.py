@@ -1,4 +1,4 @@
-"""A call that returns while work it handed to a thread pool still runs is not stored.
+"""A call that returns while work it handed to a thread or pool still runs is not stored.
 
 The entry's file fingerprints are taken after the body returns. Work the body
 submitted and did not wait for runs on: a file it reads from then on is in
@@ -131,6 +131,91 @@ def test_work_cancelled_before_it_ran_does_not_hold_the_store(disk_cash, tmp_pat
         release.set()
         first.result()
         pool.shutdown(wait=False)
+        return _read(pa)
+
+    assert load(str(a)) == "A1"
+    assert load(str(a)) == "A1"
+    assert len(runs) == 1
+
+
+def test_a_thread_the_call_does_not_join_holds_the_store(disk_cash, tmp_path):
+    a, b = _files(tmp_path)
+    go, done = str(tmp_path / "go"), str(tmp_path / "done")
+    runs = []
+
+    @disk_cash.cache(assume_safe=True)
+    def load(pa, pb, go, done):
+        runs.append(1)
+        out = {"a": _read(pa)}
+        threading.Thread(target=lambda: _fill_when_told(out, pb, go, done)).start()  # never joined
+        return out
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        load(str(a), str(b), go, done)
+    open(go, "w", encoding="utf-8").close()
+    _wait_for(done)
+
+    b.write_text("B2", encoding="utf-8")
+    os.remove(go)
+    os.remove(done)
+    result = load(str(a), str(b), go, done)
+    open(go, "w", encoding="utf-8").close()
+    _wait_for(done)
+    assert len(runs) == 2, "the entry stored while its thread still ran was served"
+    assert result == {"a": "A1", "b": "B2"}
+    assert any("STORE-WORK-RUNNING" in str(w.message) for w in caught), [str(w.message) for w in caught]
+
+
+def test_a_thread_the_call_joins_is_stored(disk_cash, tmp_path):
+    a, b = _files(tmp_path)
+    runs = []
+
+    @disk_cash.cache(assume_safe=True)
+    def load(pa, pb):
+        runs.append(1)
+        out = []
+        t = threading.Thread(target=lambda: out.append(_read(pb)))
+        t.start()
+        t.join()
+        return _read(pa) + out[0]
+
+    assert load(str(a), str(b)) == "A1B1"
+    assert load(str(a), str(b)) == "A1B1"
+    assert len(runs) == 1
+    b.write_text("B2", encoding="utf-8")
+    assert load(str(a), str(b)) == "A1B2", "a file read on the thread is an input"
+
+
+def _start_a_thread_that_cannot_start():
+    """Start a thread while the OS refuses new threads."""
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError("can't start new thread")
+
+    names = [n for n in ("_start_joinable_thread", "_start_new_thread") if hasattr(threading, n)]
+    saved = {n: getattr(threading, n) for n in names}
+    for name in names:
+        setattr(threading, name, refuse)
+    try:
+        threading.Thread(target=lambda: None).start()
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("the thread started")
+    finally:
+        for name, value in saved.items():
+            setattr(threading, name, value)
+
+
+def test_a_thread_that_fails_to_start_is_not_counted(disk_cash, tmp_path):
+    a, _b = _files(tmp_path)
+    runs = []
+
+    @disk_cash.cache(assume_safe=True)
+    def load(pa):
+        runs.append(1)
+        _start_a_thread_that_cannot_start()
         return _read(pa)
 
     assert load(str(a)) == "A1"
