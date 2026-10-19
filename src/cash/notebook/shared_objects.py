@@ -455,6 +455,15 @@ def _identities(value: Any, value_types: tuple[type, ...]) -> Iterable[int]:
         if not isinstance(obj, _IMMUTABLE_CONTAINERS):
             yield id(obj)
             yield from view_bases(obj)
+        kind = type(obj)
+        if (
+            (kind is dict or kind is list)
+            and len(obj) >= _TREE_BELOW_MIN
+            and _plain_data.held_beyond_parents(obj, TREE_LEAVES, 0) == []
+        ):
+            # JSON-like data no container of which anything but its parent
+            # holds: whatever else holds part of it holds *obj* itself.
+            continue
         stack.extend(children_of(obj) or ())
 
 
@@ -2191,7 +2200,7 @@ def _walk(
                 taken.update(map(id, breaks))
                 continue
             del breaks
-        _descend([root], name, nodes, inbound, owner, order, value_types, leaves)
+        _descend([root], name, nodes, inbound, owner, order, value_types, leaves, trees=taken if fast else None)
     if reached is None:
         reached = len(order)
     # Children before parents: a tuple counts only when something mutable
@@ -2240,10 +2249,19 @@ def _descend(
     order: list[int],
     value_types: tuple[type, ...],
     leaves: Leaves | None = None,
+    *,
+    trees: set[int] | None = None,
 ) -> None:
     """`_walk` one container at a time below the objects on *stack*, which
     are nodes already: each reference to a node counted once in *inbound*,
-    each new node taken under *name*. One of *leaves* is not taken."""
+    each new node taken under *name*. One of *leaves* is not taken.
+
+    With *trees* (`_walk`'s *fast*), a list or dict of JSON-like data met
+    below is counted from what holds it beyond its parents, as `_walk` counts
+    such a root (`_take_breaks`), and the ids of those taken on their own go
+    in *trees*, as `_walk`'s *breaks*: a graph object's ``adj`` dict of
+    100,000 dicts was walked one dict at a time by every check of the
+    statement."""
     exact = EXACT_VALUE_TYPES
     containers = EXACT_CONTAINER_TYPES
     pops = 0
@@ -2272,7 +2290,41 @@ def _descend(
                 nodes[ckey] = child
                 owner[ckey] = name
                 order.append(ckey)
+                if (
+                    trees is not None
+                    and (ctype is dict or ctype is list)
+                    and len(child) >= _TREE_BELOW_MIN
+                    and _took_as_tree(child, name, nodes, inbound, owner, order, value_types, leaves, trees)
+                ):
+                    continue
                 stack.append(child)
+
+
+#: Fewest items of a list or dict below a root that `_descend` asks about as
+#: one tree: a smaller one is walked as quickly as it is asked about.
+_TREE_BELOW_MIN = 32
+
+
+def _took_as_tree(
+    value: Any,
+    name: str,
+    nodes: dict[int, Any],
+    inbound: dict[int, int],
+    owner: dict[int, str],
+    order: list[int],
+    value_types: tuple[type, ...],
+    leaves: Leaves | None,
+    taken: set[int],
+) -> bool:
+    """Count what is below *value*, a node `_descend` just took, as `_walk`
+    counts below a root of JSON-like data (`_take_breaks`), adding the
+    containers taken on their own to *taken*; False, with nothing counted,
+    when it is not such data or that cannot be done."""
+    breaks = _plain_data.held_beyond_parents(value, TREE_LEAVES, _MAX_BREAKS)
+    if breaks is None or not _take_breaks(breaks, name, nodes, inbound, owner, order, value_types, leaves):
+        return False
+    taken.update(map(id, breaks))
+    return True
 
 
 def _take_breaks(
