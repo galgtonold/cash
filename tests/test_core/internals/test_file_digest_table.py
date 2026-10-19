@@ -94,18 +94,18 @@ def test_a_compaction_keeps_every_digest_this_process_used(tmp_path, monkeypatch
 
 def test_a_compaction_keeps_the_newest_unused_up_to_the_limit(tmp_path, monkeypatch):
     monkeypatch.setattr(digest_table, "_COMPACT_AT", 30)
-    monkeypatch.setattr(digest_table, "_KEEP", 20)
+    monkeypatch.setattr(digest_table, "_KEEP", 40)
     table = digest_table.DigestTable(str(tmp_path))
     for i in range(25):
         table.put(("a", 1, i, 3, 4, 5), "a" * 64, float(i))
     table.flush()
-    table = digest_table.DigestTable(str(tmp_path))
-    for i in range(10):
+    table = digest_table.DigestTable(str(tmp_path))  # 25 lines loaded: compacts past 50
+    for i in range(30):
         table.put(("b", 1, i, 3, 4, 5), "b" * 64, 100.0 + i)
     table.flush()
     kept = digest_table.DigestTable(str(tmp_path))
-    assert all(kept.get(("b", 1, i, 3, 4, 5)) is not None for i in range(10))
-    # Compacted at the 6th put (31 lines): the 6 used, and the newest 14 of the rest.
+    assert all(kept.get(("b", 1, i, 3, 4, 5)) is not None for i in range(30))
+    # Compacted at the 26th put (51 lines): the 26 used, and the newest 14 of the rest.
     assert [i for i in range(25) if kept.get(("a", 1, i, 3, 4, 5)) is not None] == list(range(11, 25))
 
 

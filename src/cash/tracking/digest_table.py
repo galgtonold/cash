@@ -22,7 +22,7 @@ the digest scheme's algorithm and version (`cash.bulk_digest.SCHEME`): a
 line from another scheme (an older cash, or an install with or without
 ``blake3``), a torn or corrupt line is skipped, and an empty table means
 only that the file is read. When it grows past `_COMPACT_AT` lines (or
-twice what it kept the last time) it is rewritten with every entry this
+twice what it kept, or loaded, the last time) it is rewritten with every entry this
 process put or found, and the newest others up to `_KEEP`: a statement that
 read 50,000 files kept only the newest 20,000, so each restart read the
 other 30,000 again.
@@ -50,8 +50,10 @@ __all__ = ["DigestTable", "current_table", "use_digest_table"]
 _SCHEME = SCHEME
 _COMPACT_AT = 50_000
 _KEEP = 20_000
-#: Entries this process put or found are kept past `_KEEP`, up to this many.
-_KEEP_USED = 500_000
+#: Entries this process put or found are kept past `_KEEP`, up to this many:
+#: a statement reading 50,000 files keeps them all, and a table every process
+#: loads stays near 22 MB.
+_KEEP_USED = 100_000
 
 StatKey = tuple[str, int, int, int, int, int]
 
@@ -109,6 +111,9 @@ class DigestTable:
                             self._items[parsed[0]] = parsed[1]
             except OSError:
                 pass
+            # What the last process kept is not compacted away before this
+            # one had a chance to use it.
+            self._compact_at = max(self._compact_at, 2 * self._lines)
             self._loaded = True
 
     def _compact(self) -> None:
