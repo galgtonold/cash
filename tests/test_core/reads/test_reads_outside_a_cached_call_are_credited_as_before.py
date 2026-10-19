@@ -139,3 +139,28 @@ def test_the_latest_read_wins_inside_a_cached_call_or_outside(user_reader, spell
     _rewrite(target, "new text")
     then()
     assert read_credit.credited_reads(user_reader.__code__) == {_resolved(target): regular_file_stat(str(target))}
+
+
+def test_a_link_retargeted_before_the_lookup_credits_the_new_target_with_the_old_stat(user_reader, tmp_path):
+    """Pinned: the path is resolved at the lookup, so a link retargeted
+    between the read and the lookup names the file it points to then. Before
+    reads were resolved late, the file it pointed to at the read was named
+    -- as it still is when the path was resolved before (`_untracked_realpaths`
+    keeps the first answer). Either way the stat is the one the read took:
+    it is not the new target's, so the entry using it is refused, not served
+    (`FileDeps.credit_remembered_reads`)."""
+    for name, text in (("a", "first target"), ("b", "the other target, longer")):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "table.txt").write_text(text, encoding="utf-8")
+    link = tmp_path / "current"
+    try:
+        os.symlink(tmp_path / "a", link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("no symlinks here")
+    read_stat = regular_file_stat(str(tmp_path / "a" / "table.txt"))
+    user_reader([str(link / "table.txt")])
+    os.remove(link) if os.name != "nt" else os.rmdir(link)
+    os.symlink(tmp_path / "b", link, target_is_directory=True)
+    credited = read_credit.credited_reads(user_reader.__code__)
+    assert credited == {_resolved(tmp_path / "b" / "table.txt"): read_stat}
+    assert read_stat != regular_file_stat(str(tmp_path / "b" / "table.txt"))
