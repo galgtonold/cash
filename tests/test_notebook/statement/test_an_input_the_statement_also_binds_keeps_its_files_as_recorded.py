@@ -8,7 +8,10 @@ file read before was snapshotted afresh, once per later folder.
 
 from __future__ import annotations
 
+import os
+
 import cash.tracking.file_dep_snapshot as file_dep_snapshot
+from cash._paths import normalize_path
 
 
 def test_files_an_input_was_built_from_are_not_snapshotted_again(
@@ -33,13 +36,15 @@ def test_files_an_input_was_built_from_are_not_snapshotted_again(
     p.process_statement("import os")
     p.process_statement(read.format(str(first), str(first)))
     first_entry = cash_instance.backend.peek_metadata(p.tracking_state.variable_sources["n"])
-    recorded_first = [paths for paths in snapshotted if any(str(first) in path for path in paths)]
+    # As recorded: resolved, with forward slashes on Windows too.
+    mark = normalize_path(os.path.realpath(first))
+    recorded_first = [paths for paths in snapshotted if any(mark in normalize_path(path) for path in paths)]
     assert recorded_first, snapshotted
     snapshotted.clear()
 
     meta = p.process_statement(read.format(str(second), str(second)))
     assert meta["status"].name == "COMPUTED"
-    again = {path for paths in snapshotted for path in paths if str(first) in path}
+    again = {path for paths in snapshotted for path in paths if mark in normalize_path(path)}
     assert again == set(), again
     # Still recorded, as the first entry recorded them.
     deps = cash_instance.backend.peek_metadata(p.tracking_state.variable_sources["n"])["file_dependencies"]
