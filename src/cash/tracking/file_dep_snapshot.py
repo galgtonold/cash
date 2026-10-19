@@ -365,7 +365,7 @@ def digest_later(path: str, size: int, st: os.stat_result) -> str | DeferredDige
     if remembered is not None:
         return remembered
 
-    def at_store() -> str | None:
+    def at_store(deferred: DeferredDigest) -> str | None:
         # Untracked: cash's own read and its digest table's write, not the
         # block's (whose write would take the deferred digests again).
         with untracked():
@@ -375,6 +375,7 @@ def digest_later(path: str, size: int, st: os.stat_result) -> str | DeferredDige
                 return MOVED
             if _stat_memo_key(path, now, now.st_size) != key or is_written_in_place(now, path):
                 return MOVED
+            deferred.end_stat = now
             return file_content_hash(path, size, now)
 
     return DeferredDigest(at_store)

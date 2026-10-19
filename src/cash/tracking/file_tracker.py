@@ -166,6 +166,10 @@ class FileAccessTracker:
         #: found the file as read: a snapshot taken right after takes it
         #: rather than a stat of its own (`snapshot_file_deps`).
         self.checked_stats: dict[str, os.stat_result] = {}
+        #: path -> the stat its deferred digest was taken under as this block
+        #: ended (`_settle_deferred`): the first check that no input moved
+        #: takes it rather than a stat of its own (``reuse_end_stats``).
+        self.end_stats: dict[str, os.stat_result] = {}
         # The same for each folder the block listed (`stat_key` of the
         # folder): an entry landing in it while the block runs leaves a
         # listing without the entry, which a snapshot taken at store time
@@ -341,9 +345,15 @@ class FileAccessTracker:
                 pass
         return self.accessed_files | kept if kept else self.accessed_files
 
-    def inputs_changed_since_read(self) -> list[str]:
+    def inputs_changed_since_read(self, reuse_end_stats: bool = False) -> list[str]:
         """Regular files whose stat moved between their first read and now,
         and folders listed whose stat moved since the listing.
+
+        With *reuse_end_stats*, a file whose deferred digest was taken as the
+        block ended is compared by the stat that digest was taken under
+        (`end_stats`), not a stat of its own: for the first of a statement's
+        two checks, with only cash's code run since. The last check before
+        an entry is written always stats again.
 
         A folder the block changed an entry of itself (`touched_dirs`) is
         left out: a function that lists a folder and writes its output into
@@ -362,13 +372,16 @@ class FileAccessTracker:
             taken = {}
         checked: dict[str, os.stat_result] = {}
         self.checked_stats = checked
+        ended, self.end_stats = self.end_stats, {}
+        if not reuse_end_stats:
+            ended = {}
         # Over copies: a pool thread the block started can still be reading
         # after it ended, adding to these while they are walked.
         for path, before in list(self.read_stats.items()):
             if path in taken:
                 now = taken[path]
             else:
-                st = regular_file_stat_result(path)
+                st = ended.get(path) or regular_file_stat_result(path)
                 now = stat_key(st) if st is not None else None
                 if now == before:
                     checked[path] = st
@@ -653,7 +666,9 @@ class FileAccessTracker:
         for a value computed from something else."""
         for path, digest in list(self._read_digests.items()):
             if isinstance(digest, DeferredDigest):
-                digest = digest.result()
+                digest, st = digest.taken()
+                if st is not None:
+                    self.end_stats[path] = st
                 if digest is MOVED:
                     self.add_tracked_unresolved(path)
                     digest = None
