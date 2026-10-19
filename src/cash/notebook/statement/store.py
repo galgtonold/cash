@@ -280,7 +280,7 @@ class StatementStore:
             seed_epochs=seed_epochs,
         )
 
-    def inputs_moved(self, run: StatementRun, execution: StatementExecution) -> bool:
+    def inputs_moved(self, run: StatementRun, execution: StatementExecution, reuse_end_stats: bool = False) -> bool:
         """Did a file the statement read change after it read it, or a
         folder it listed gain or lose an entry from outside?
 
@@ -290,13 +290,15 @@ class StatementStore:
         and every later run would find the entry fresh. The value is kept for
         this run, not stored, and the statement warns once
         (``STORE-INPUT-CHANGED``). Asked when the statement has run and again
-        before its entry is written.
+        before its entry is written; the first ask may take the stats its
+        deferred digests were taken under as it ended (*reuse_end_stats*),
+        the second stats every file again.
         """
         tracker = execution.file_tracker
         if tracker is None or not (tracker.read_stats or tracker.listed_stats):
             return False
         try:
-            moved = tracker.inputs_changed_since_read()
+            moved = tracker.inputs_changed_since_read(reuse_end_stats=reuse_end_stats)
         except Exception:
             # Not cached: a check that could not finish never says the files
             # held still.

@@ -92,28 +92,38 @@ class DeferredDigest:
     `PendingDigest` is waited for.
     """
 
-    __slots__ = ("_compute", "_digest", "_done")
+    __slots__ = ("_compute", "_digest", "_done", "end_stat")
 
-    def __init__(self, compute: Callable[[], str | None]) -> None:
+    def __init__(self, compute: Callable[["DeferredDigest"], str | None]) -> None:
         self._compute = compute
         self._digest: str | None = None
         self._done = False
+        #: The stat the digest was taken under, set by *compute*.
+        self.end_stat: os.stat_result | None = None
         DEFERRED[id(self)] = self
 
     def result(self) -> str | None:
         """The digest; `MOVED` when the file moved since the read, None when
         it could not be read."""
+        return self.taken()[0]
+
+    def taken(self) -> tuple[str | None, os.stat_result | None]:
+        """`result`, and the stat it was taken under when this call took it;
+        None for the stat when it was taken before, or the file moved."""
+        took = False
         if not self._done:
             with _deferred_lock:  # one thread takes it; another waits for it
                 compute, self._compute = self._compute, None  # None: being taken
                 if compute is not None:
+                    took = True
                     try:
-                        self._digest = compute()
+                        self._digest = compute(self)
                     except Exception:
                         logger.debug("[TRACKER] Could not take a deferred digest", exc_info=True)
                     self._done = True
                     DEFERRED.pop(id(self), None)
-        return self._digest
+        digest = self._digest
+        return digest, (self.end_stat if took and digest is not None and digest is not MOVED else None)
 
 
 #: Set while `settle_deferred` runs: the digests it takes write their
