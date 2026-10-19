@@ -276,6 +276,8 @@ typedef struct {
 
 static fh_mutex hook_mutex = FH_MUTEX_INIT;
 static int enabled;
+/* Set by fh_hook_new for one scan: objects hooked before are skipped. */
+static int scan_only_new;
 static fh_patch *patches;
 static size_t n_patches, cap_patches;
 static uintptr_t own_base;
@@ -666,6 +668,8 @@ static int scan_cb(struct dl_phdr_info *info, size_t size, void *data) {
         if (grow((void **)&objects, &cap_objects, n_objects + 1, sizeof *objects) < 0) return 1;
         obj = &objects[n_objects++];
         *obj = (fh_object){info->dlpi_addr, info->dlpi_phdr, strdup(info->dlpi_name), 0};
+    } else if (scan_only_new) {
+        return 0;
     }
     hook_object(info, obj); /* also re-binds a slot something reset */
     return 0;
@@ -1550,11 +1554,12 @@ static long rescan_locked(int force) {
         if (len > 0 && len < 32768 && nt && !skipped_module(base, path)) {
             DWORD size = nt->OptionalHeader.SizeOfImage, stamp = nt->FileHeader.TimeDateStamp;
             fh_object *obj = find_object(base, size, stamp);
+            int known = obj != NULL;
             if (!obj && grow((void **)&objects, &cap_objects, n_objects + 1, sizeof *objects) == 0) {
                 obj = &objects[n_objects++];
                 *obj = (fh_object){base, size, stamp, wtf8(path), 0};
             }
-            if (obj) hook_module(base, obj); /* also re-binds a slot something reset */
+            if (obj && !(known && scan_only_new)) hook_module(base, obj); /* also re-binds a slot something reset */
         }
         FreeLibrary(pin);
     }
@@ -1672,6 +1677,25 @@ static PyObject *fh_rescan(PyObject *self, PyObject *unused) {
     Py_BEGIN_ALLOW_THREADS
     fh_lock(&hook_mutex);
     if (enabled) added = rescan_locked(0);
+    fh_unlock(&hook_mutex);
+    Py_END_ALLOW_THREADS
+    return PyLong_FromLong(added);
+}
+
+/* Hook only the objects loaded since the last scan, leaving the slots of the
+   ones already hooked unread: called after each extension module an import
+   inside a tracked block loads, where a full pass per module (pandas loads
+   dozens) cost a tenth of a second and more. */
+static PyObject *fh_hook_new(PyObject *self, PyObject *unused) {
+    (void)self; (void)unused;
+    long added = 0;
+    Py_BEGIN_ALLOW_THREADS
+    fh_lock(&hook_mutex);
+    if (enabled) {
+        scan_only_new = 1;
+        added = rescan_locked(0);
+        scan_only_new = 0;
+    }
     fh_unlock(&hook_mutex);
     Py_END_ALLOW_THREADS
     return PyLong_FromLong(added);
@@ -1809,6 +1833,7 @@ static PyMethodDef fh_methods[] = {
     {"filehook_enable", fh_enable, METH_NOARGS, "Rebind the open family in loaded objects; slots rebound."},
     {"filehook_disable", fh_disable, METH_NOARGS, "Put every rebound slot back and forget all events."},
     {"filehook_rescan", fh_rescan, METH_NOARGS, "Hook objects loaded since the last scan; slots rebound."},
+    {"filehook_hook_new", fh_hook_new, METH_NOARGS, "Hook only objects not seen before; slots rebound."},
     {"filehook_window_open", fh_window_open, METH_NOARGS, "Start recording native opens; the window's id."},
     {"filehook_window_close", fh_window_close, METH_O, "(events, lost) of the window; closes it."},
     {"filehook_stats", fh_stats, METH_NOARGS, "Counters and the hooked objects."},

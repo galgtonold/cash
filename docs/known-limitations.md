@@ -555,7 +555,7 @@ read_parquet`).
 **Fix:** read the file through a watched reader, or put `# @cash:no-cache` above
 the statement if the read is cheap.
 
-<!-- claim: cash/tracking/native_reads.py:close_window @0e2917f4 -->
+<!-- claim: cash/tracking/native_reads.py:close_window @0e2917f4, cash/tracking/native_reads.py:_hook_libraries_as_they_load @d228cce2 -->
 On Linux (glibc, x86-64 or aarch64) and on Windows (x64) the native file hook
 is on by default (`%cash_status` shows it as `native_file_hook`;
 `CASH_NATIVE_FILE_HOOK=0` turns it off). cash then also sees the files a
@@ -565,9 +565,11 @@ C, C++ or Rust library opens itself through the C library's `open`, `fopen` or
 database `ATTACH`-ed in SQLite, `os.open`, a compiled extension of your own.
 It still misses a library that makes the system call itself, one linked
 statically against the C library, a call through a function pointer the
-library looked up itself (`dlsym`, `GetProcAddress`, ctypes), and a library
-first loaded inside the cached call. A file such a library opens while several
-cached calls run at once, in different threads, counts for all of them. On
+library looked up itself (`dlsym`, `GetProcAddress`, ctypes), and a plugin a
+C library loads by itself and uses within the same cached call. A library your
+code imports or loads with `ctypes` inside the call (`import pyarrow.fs` in
+the function body) is seen from the moment it is loaded. A file such a
+library opens while several cached calls run at once, in different threads, counts for all of them. On
 macOS the hook is not available yet; there the readers listed above are still
 recorded by their entry points.
 
