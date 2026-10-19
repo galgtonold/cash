@@ -124,9 +124,11 @@ The loads and the aggregation, the slow part, cost nothing on this run.
    `df.sample(100, random_state=42)`. cash does not see every random draw, and an
    unseeded one is replayed, not redrawn. See
    [Randomness](../../known-limitations.md#randomness).
-4. **Pass the date in.** `datetime.now()` in a statement runs every time, but
-   inside a helper function it is not seen, and the call is cached with the
-   first value. Compute the timestamp in its own statement and pass it in.
+4. **Pass the date in.** `datetime.now()` runs every time, in a statement or
+   inside a function of yours the statement calls, so that statement is never
+   cached ([KEY-AMBIENT-READ](../../known-limitations.md#a-helper-that-reads-the-clock-runs-every-time)).
+   Compute the timestamp in its own statement and pass it in, and the slow
+   work around it caches again.
 
 ## Related
 
