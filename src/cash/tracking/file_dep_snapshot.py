@@ -497,6 +497,10 @@ def snapshot_file_deps(
         else:
             hashed_at = time.time()  # before the read: an edit after it is not in the digest
             content_hash = file_content_hash(f, st.st_size, st)
+            if stats is not None:
+                # Hashed now, after the stat: an edit landing between the two
+                # is in the digest but not in this stat. The check stats it again.
+                stats.pop(f, None)
         if content_hash is not None:
             entry["hash"] = content_hash
             if hashed_at is not None:
