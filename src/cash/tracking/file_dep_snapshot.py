@@ -41,6 +41,7 @@ from cash.bulk_digest import BulkHasher
 from cash.remote_source import RemoteFileDataSource, addressing_options, read_options
 from cash.tracking.digest_table import current_table
 from cash.tracking.file_versions import note_same_content
+from cash.tracking.pending_digest import MOVED, DeferredDigest
 from cash.tracking.read_classification import stat_key
 from cash.tracking.tracker_context import untracked
 from cash.tracking.written_in_place import is_written_in_place
@@ -341,6 +342,42 @@ def _reuse_seconds(memo_key: tuple[str, int, int, int, int, int]) -> float | Non
     if not memo_key[2]:
         return _LISTED_STAT_TTL_SECONDS if ttl is None else min(ttl, _LISTED_STAT_TTL_SECONDS)
     return ttl
+
+
+def digest_later(path: str, size: int, st: os.stat_result) -> str | DeferredDigest | None:
+    """The digest of a small file being read, or a `DeferredDigest` that
+    takes it when the entry is stored; None when it must be taken now.
+
+    Put off only for a file the digest memo itself would trust (``_HASH_MEMO``):
+    settled (last written over ``_HASH_MEMO_MIN_AGE_SECONDS`` ago), with a
+    file identity, never mapped to write (`written_in_place`), the memo on
+    its stat in use, *st* the stat the read just took. The deferred digest is
+    taken only while the file's stat is still *st* -- the memo's whole key,
+    change time and identity included -- and is `MOVED` otherwise.
+    Remembered already, it is given at once.
+    """
+    if _HASH_MEMO_TTL_SECONDS is not None or not st.st_ino or not _stat.S_ISREG(st.st_mode):
+        return None
+    if (time.time() - st.st_mtime) <= _HASH_MEMO_MIN_AGE_SECONDS or is_written_in_place(st, path):
+        return None
+    key = _stat_memo_key(path, st, size)
+    remembered = _remembered_digest(key)
+    if remembered is not None:
+        return remembered
+
+    def at_store() -> str | None:
+        # Untracked: cash's own read and its digest table's write, not the
+        # block's (whose write would take the deferred digests again).
+        with untracked():
+            try:
+                now = os.stat(path)
+            except OSError:
+                return MOVED
+            if _stat_memo_key(path, now, now.st_size) != key or is_written_in_place(now, path):
+                return MOVED
+            return file_content_hash(path, size, now)
+
+    return DeferredDigest(at_store)
 
 
 def remembered_file_digest(path: str) -> str | None:

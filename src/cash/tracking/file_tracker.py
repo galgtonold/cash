@@ -25,8 +25,13 @@ from cash._clock import perf_counter as _perf_counter
 from cash._paths import is_remote_url, normalize_path
 from cash.effect_observer import reset_in_any_context
 from cash.tracking import io_watch, native_reads
-from cash.tracking.file_dep_snapshot import file_content_hash, realpath_of_read_this_run, remembered_file_digest
-from cash.tracking.pending_digest import PendingDigest
+from cash.tracking.file_dep_snapshot import (
+    digest_later,
+    file_content_hash,
+    realpath_of_read_this_run,
+    remembered_file_digest,
+)
+from cash.tracking.pending_digest import MOVED, DeferredDigest, PendingDigest
 from cash.tracking.read_classification import (
     SCRATCH_MEMMAP,
     folder_stat,
@@ -263,6 +268,10 @@ class FileAccessTracker:
         if self._native_windows:
             # Before the parent stack pops: the reads pass up like any other.
             native_reads.close_window(self._native_windows.pop(), self)
+        # The deferred digests, while the block's reads are what it read
+        # (the native ones included): a file that moved is never fresh from
+        # here on, before anything is snapshotted.
+        self._settle_deferred()
         if self._token_stack:
             reset_in_any_context(active_tracker, self._token_stack.pop())
             io_watch.release()
@@ -625,6 +634,7 @@ class FileAccessTracker:
     def read_digests(self) -> dict[str, str]:
         """Each file's content hash as the body first read it (see
         ``__init__``), waiting for any still being taken (`PendingDigest`)."""
+        self._settle_deferred()
         digests: dict[str, str] = {}
         for path, digest in list(self._read_digests.items()):
             if isinstance(digest, PendingDigest):
@@ -635,6 +645,22 @@ class FileAccessTracker:
                 self._read_digests[path] = digest
             digests[path] = digest
         return digests
+
+    def _settle_deferred(self) -> None:
+        """Take this block's deferred digests (`DeferredDigest`). A file that
+        moved since it was read is recorded as never fresh: what the block
+        read of it is gone, and the digest of what is there now would vouch
+        for a value computed from something else."""
+        for path, digest in list(self._read_digests.items()):
+            if isinstance(digest, DeferredDigest):
+                digest = digest.result()
+                if digest is MOVED:
+                    self.add_tracked_unresolved(path)
+                    digest = None
+                if digest is None:
+                    del self._read_digests[path]
+                else:
+                    self._read_digests[path] = digest
 
     def _add_tracked_here(
         self,
@@ -669,7 +695,7 @@ class FileAccessTracker:
             digest = self._read_digests.get(abs_path)
         return digest, st
 
-    def _digest_now(self, abs_path: str, size: int, st: Any = None) -> str | PendingDigest | None:
+    def _digest_now(self, abs_path: str, size: int, st: Any = None) -> str | PendingDigest | DeferredDigest | None:
         """The file's content hash as the body is about to read it; *st* the
         stat this read took of it, when there is one (`file_content_hash`).
 
@@ -683,6 +709,10 @@ class FileAccessTracker:
             if size >= BACKGROUND_DIGEST_MIN_BYTES:
                 known = remembered_file_digest(abs_path)
                 return known if known is not None else PendingDigest(abs_path, size, file_content_hash)
+            if st is not None:
+                later = digest_later(abs_path, size, st)
+                if later is not None:
+                    return later
             return file_content_hash(abs_path, size, st)
         finally:
             self.read_hash_seconds += _perf_counter() - t0
