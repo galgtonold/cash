@@ -42,6 +42,8 @@ def _threads_an_earlier_test_left_are_the_hosts(monkeypatch):
     hosts = weakref.WeakSet(trace_recorder.HOST_THREADS)
     hosts.update(threading.enumerate())
     monkeypatch.setattr(trace_recorder, "HOST_THREADS", hosts)
+    # pytest-xdist's channel threads, which `threading` does not list.
+    monkeypatch.setattr(trace_recorder, "HOST_PACKAGES", trace_recorder.HOST_PACKAGES | {"execnet"})
 
 
 def _fresh_cash_instance():

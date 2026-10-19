@@ -322,6 +322,37 @@ HOST_THREADS: weakref.WeakSet[threading.Thread] = weakref.WeakSet()
 _KERNEL_PACKAGES = frozenset({"IPython", "ipykernel", "jupyter_client", "tornado", "zmq"})
 
 
+#: The packages of what hosts the notebook whose threads `threading` does
+#: not list (a test runner's channel threads), left out by
+#: `other_thread_alive`.
+HOST_PACKAGES: set[str] = set()
+
+
+def _unlisted_python_thread(listed: set[int | None]) -> bool:
+    """Is a thread running Python that `threading` does not list, other
+    than cash's own and the host's (`_hosts_unlisted`)? No frame is held
+    past the look: this thread's own, kept in a local, is a cycle that keeps
+    every caller's locals alive until a collection, and the checks that
+    count a value's holders would count them."""
+    frames = sys._current_frames()
+    try:
+        return any(ident not in listed and not _hosts_unlisted(frame) for ident, frame in frames.items())
+    finally:
+        frames.clear()
+
+
+def _hosts_unlisted(frame: Any) -> bool:
+    """Is the unlisted thread running *frame* cash's own or the host's, by
+    the module of its outermost frame?"""
+    while frame.f_back is not None:
+        frame = frame.f_back
+    name = frame.f_globals.get("__name__")
+    if not isinstance(name, str):
+        return False
+    root = name.partition(".")[0]
+    return root == "cash" or root in HOST_PACKAGES
+
+
 def _code_of(t: threading.Thread) -> Any:
     """What *t* runs: a Timer's function, its target, or its own ``run``."""
     if isinstance(t, threading.Timer):
@@ -348,11 +379,17 @@ def other_thread_alive(notebook_ns: Any) -> bool:
     and the kernel's (`_the_kernels`, alive when cash was imported), daemon
     or not. A pool's worker runs the user's code under a library's name,
     which `runs_user_code` cannot see, and a wrong yes only costs a read
-    again."""
+    again. A thread a C library started (an audio or device callback) runs
+    Python unlisted by `threading`: any thread running Python that it does
+    not list counts too."""
     import cash
 
     me = threading.current_thread()
-    for t in threading.enumerate():
+    threads = threading.enumerate()
+    listed = {t.ident for t in threads}
+    if _unlisted_python_thread(listed):
+        return True
+    for t in threads:
         if t is me or t in HOST_THREADS or not t.is_alive():
             continue
         if runs_user_code(t, notebook_ns):
