@@ -92,6 +92,8 @@ _PRESENT_MARKER = "present"
 _UNRESOLVED_MARKER = "unresolved"
 
 _HASH_READ_CHUNK = 1024 * 1024  # 1 MiB streaming chunk
+#: Bytes, not text, on Windows (no newline translation); 0 elsewhere.
+_O_BINARY = getattr(os, "O_BINARY", 0)
 
 
 #: Digests already computed this process, keyed by the file's identity AND its
@@ -400,25 +402,34 @@ _HASH_READ_BLOCK = 32 * 1024 * 1024
 def _read_digest(path: str, size: int) -> str:
     """`bulk_digest` of the file's bytes as they are now (`file_content_hash`)."""
     hasher = BulkHasher()
+    if size < _HASH_READ_CHUNK:
+        # A descriptor, not a file object: ``io.FileIO`` raises the ``open``
+        # audit event as a read, which went through cash's own read handlers
+        # to be dropped there, ~15us of a 2 KB file's digest in a statement
+        # reading 6,000. ``os.open`` reports flags, which name no read.
+        # ``read(n)`` allocates n bytes before it reads, so a 2 KB file read
+        # in 1 MiB chunks cost two 1 MiB allocations: ~400us a file against
+        # ~60us reading size + 1 (the +1 finds EOF in the first read; a file
+        # that grew is still read to its end).
+        with untracked():
+            fd = os.open(path, os.O_RDONLY | _O_BINARY)
+            try:
+                while chunk := os.read(fd, size + 1):
+                    hasher.update(chunk)
+            finally:
+                os.close(fd)
+        return hasher.hexdigest()
     # Untracked: cash's own read of a file must not be tracked as a read
     # by the cached call it is checking on behalf of (which then hashed
     # the file a second time to fingerprint that "read").
     with untracked(), io.FileIO(path, "rb") as f:
-        if size < _HASH_READ_CHUNK:
-            # ``FileIO.read(n)`` allocates n bytes before it reads, so a
-            # 2 KB file read in 1 MiB chunks cost two 1 MiB allocations:
-            # ~400us a file against ~60us reading size + 1 (the +1 finds EOF
-            # in the first read; a file that grew is still read to its end).
-            for chunk in iter(lambda: f.read(size + 1), b""):
-                hasher.update(chunk)
-        else:
-            block = bytearray(min(size + 1, _HASH_READ_BLOCK))
-            view = memoryview(block)
-            while True:
-                n = f.readinto(block)
-                if not n:
-                    break
-                hasher.update(view[:n])
+        block = bytearray(min(size + 1, _HASH_READ_BLOCK))
+        view = memoryview(block)
+        while True:
+            n = f.readinto(block)
+            if not n:
+                break
+            hasher.update(view[:n])
     return hasher.hexdigest()
 
 
