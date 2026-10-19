@@ -867,9 +867,13 @@ class StatementStore:
         # Capture those too, scoped to this statement's inputs so the cost
         # stays proportional to what the statement actually reads.  Omitted
         # entirely when there are none, keeping the payload shape unchanged for
-        # the overwhelming majority of statements.
+        # the overwhelming majority of statements. A generator a called
+        # function draws from through a global (``def model(x): return
+        # x + rng.randn(len(x))``) is no input, yet the run moved it: a hit
+        # that left it behind would hand the next draw numbers already drawn.
         try:
-            object_rng_states = capture_object_rng_states(run.inputs, self.shell.user_ns)
+            read = set(run.inputs) | (run.carriers_advanced or set())
+            object_rng_states = capture_object_rng_states(read, self.shell.user_ns)
             if object_rng_states:
                 payload["rng_object_states"] = object_rng_states
         except (TypeError, AttributeError) as e:
