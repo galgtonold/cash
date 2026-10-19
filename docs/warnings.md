@@ -2534,14 +2534,19 @@ interrupted write.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/result_parts.py:split_by_a_hit @f6b30862 -->
+<!-- claim: cash/decorator/result_parts.py:split_by_a_hit @0ed503f3 -->
 **What happened.** The result holds two parts over the same memory: two
-numpy arrays whose data overlap, such as `return a, a[2:5]`, or a numpy
+numpy arrays whose data overlap, such as `return a, a[2:5]`, a numpy
 array and a polars or pandas frame made over it, such as
-`return a, pl.Series(a)`. The message names both parts. The result was
-returned but not stored. Arrays that share a base but no element, such as
+`return a, pl.Series(a)`, or, on pandas 2 without copy-on-write, a table
+and one of its columns, `return df, df["x"]`. The parts are looked for in
+tuples, lists, dicts, named tuples and object attributes, slots included.
+The message names both parts. The result was returned but not stored.
+Arrays that share a base but no element, such as
 `X, y = data[:, :-1], data[:, -1]`, are stored, and so is one array
-returned twice.
+returned twice. So is a pair no one can write through: two read-only
+arrays, or a read-only array from a frame that never writes it, such as
+`return df, df["y"].to_numpy()` under polars or pandas copy-on-write.
 
 **Why it matters.** On the first run a write to one part, `a[2] = -1`,
 shows in the other too. A cache hit hands the two back as separate copies,

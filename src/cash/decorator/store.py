@@ -302,20 +302,20 @@ class ResultStore:
         split = split_by_a_hit(res) if refusal is None else None
         if split is not None:
             # ``return a, a[2:5]`` or ``return a, pl.Series(a)``: a hit copies
-            # each part on its own, so a write to the array stops reaching the other.
-            array, other = split
+            # each part on its own, so a write to one stops reaching the other.
+            part, other = split
             self._notices.warn_once(
                 CashCacheStoreFailedWarning,
                 func_name,
                 "parts_shared",
-                f"@cash.cache on {func_name}: {other} shares memory with the array {array}, so a "
-                f"write to one shows in the other. A cache hit would hand them back as separate "
+                f"@cash.cache on {func_name}: {part} and {other} share memory, so a write to one "
+                f"shows in the other. A cache hit would hand them back as separate "
                 f"copies, where the write no longer shows, so the result was returned but not cached.",
                 code="STORE-PARTS-SHARED",
-                fix=f"return a copy of one of them (`{array}.copy()`, `pl.Series(a.copy())`) if the "
+                fix=f"return a copy of one of them (`{part}.copy()`, `pl.Series(a.copy())`) if the "
                 "two need not share; if they must, do not cache the function.",
             )
-            refusal = f"{other} shares memory with the array {array}, which a hit would hand back apart"
+            refusal = f"{part} and {other} share memory, which a hit would hand back apart"
         return refusal
 
     def _unpicklable_source_refusal(self, func_name: str, sources: DynamicSources | None) -> str | None:
