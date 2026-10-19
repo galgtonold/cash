@@ -24,6 +24,7 @@ import pytest
 
 import cash.analysis.analysis_budget as ab
 import cash.analysis.handed_callables as hc
+from cash import _clock
 from cash.analysis.analysis_budget import (
     ANALYSIS_BUDGET_REASON,
     AnalysisBudget,
@@ -204,8 +205,13 @@ def test_the_walk_stops_at_the_budget_not_after_it(monkeypatch):
     full = opened[0]
     assert full > 10000
 
+    # The budget is CPU time read once the wall clock passes it (`CpuLimit`):
+    # every clock it reads ticks a second a read.
     clock = itertools.count()
-    monkeypatch.setattr(ab, "_perf_counter", lambda: float(next(clock)))
+    tick = lambda: float(next(clock))
+    monkeypatch.setattr(ab, "_perf_counter", tick)
+    monkeypatch.setattr(_clock, "perf_counter", tick)
+    monkeypatch.setattr(_clock, "_thread_time", tick)
     opened[0] = 0
     new_analysis_round()
     with pytest.raises(AnalysisBudgetExceeded), analysis_budget(AnalysisBudget(2.5)):

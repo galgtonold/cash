@@ -50,6 +50,7 @@ from time import perf_counter as _perf_counter
 from typing import Any
 
 from cash import _plain_data
+from cash._clock import CpuLimit
 from cash.tracking.function_tracker import is_local_module
 
 __all__ = [
@@ -709,7 +710,7 @@ class WalkBudgetExceeded(Exception):
     """The share check ran past its time budget (:func:`walk_budget`)."""
 
 
-_DEADLINE: list[float | None] = [None]
+_DEADLINE: list[CpuLimit | None] = [None]
 
 
 @contextlib.contextmanager
@@ -722,9 +723,10 @@ def walk_budget(seconds: float) -> Iterator[None]:
     loop that ran 0.1 s, because its loop variable is an element of the list.
     A statement whose result is refused when the check gives up simply runs
     each time, so the budget costs the cache a store, never a wrong value.
+    The seconds are this thread's CPU time (`CpuLimit`).
     """
     before = _DEADLINE[0]
-    _DEADLINE[0] = _perf_counter() + seconds
+    _DEADLINE[0] = CpuLimit(seconds)
     try:
         yield
     finally:
@@ -734,8 +736,8 @@ def walk_budget(seconds: float) -> Iterator[None]:
 def check_walk_budget() -> None:
     """Raise :class:`WalkBudgetExceeded` when the budget of the walk in
     progress is spent; nothing outside :func:`walk_budget`."""
-    deadline = _DEADLINE[0]
-    if deadline is not None and _perf_counter() > deadline:
+    limit = _DEADLINE[0]
+    if limit is not None and _perf_counter() > limit.deadline and limit.passed():
         raise WalkBudgetExceeded
 
 
@@ -767,7 +769,7 @@ def referring_names(
     """
     import gc
 
-    deadline = _perf_counter() + seconds
+    limit = CpuLimit(seconds)
     value_types = VALUE_TYPES + library_value_types()
     roots = [root for root in roots if not is_value(root, value_types)]
     by_id: dict[int, list[str]] = {}
@@ -795,7 +797,7 @@ def referring_names(
     for _level in range(_REFERRER_DEPTH):
         if not frontier:
             return names, True
-        if _perf_counter() > deadline or taken > _REFERRER_OBJECTS:
+        if (_perf_counter() > limit.deadline and limit.passed()) or taken > _REFERRER_OBJECTS:
             return names, False
         # One tuple, passed on as the call's own arguments, so it is known.
         args = tuple(frontier)
@@ -1883,8 +1885,8 @@ def _holders_from_referrers(
 
 def _past_deadline() -> bool:
     """Is the budget of the walk in progress spent (`walk_budget`)?"""
-    deadline = _DEADLINE[0]
-    return deadline is not None and _perf_counter() > deadline
+    limit = _DEADLINE[0]
+    return limit is not None and _perf_counter() > limit.deadline and limit.passed()
 
 
 def _is_module_namespace(holder: Any) -> bool:
