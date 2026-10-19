@@ -626,8 +626,13 @@ def bump_derived_lineages(
     # drops such a name's edges before it records its new ones -- so the
     # edges it had are no reason to bump anything. A bump can cascade
     # (mutating ``a`` bumps view ``v``, which may itself be a base for ``w``).
-    frontier: list[str] = [o for o in outputs if o in derivation_edges and o in inputs]
-    unread = [o for o in outputs if o in derivation_edges and o not in inputs]
+    # In name order, not the set's: a name reached from several partners is
+    # moved on by each in turn, and the set's order follows the process's
+    # string hashes -- after a restart the loop variable left over from
+    # `for est in estimators: est.fit(X, y)` came out with another lineage,
+    # and every entry storing it with its outputs missed.
+    frontier: list[str] = sorted(o for o in outputs if o in derivation_edges and o in inputs)
+    unread = sorted(o for o in outputs if o in derivation_edges and o not in inputs)
     if unread and code is not None:
         bound = text_bound_names(code)
         if bound is not None:
