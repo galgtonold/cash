@@ -284,6 +284,11 @@ class CacheabilityVerdict(NamedTuple):
     #: lineage, as a ``# @cash:no-cache`` statement's do, so what is cached
     #: below is keyed on the value this run gave.
     varies: bool = False
+    #: Cacheable only if it does not touch pyplot when it runs: it calls a
+    #: helper of the user's that can (``plot_tour`` behind ``run(...,
+    #: plot=False)``), and the caller asked for that to be seen as it runs
+    #: (*pyplot_seen_as_it_runs*). The reason to give when it does.
+    unless_it_draws: str | None = None
 
 
 def decide_cacheability(**kwargs: Any) -> tuple[bool, list[str]]:
@@ -305,12 +310,19 @@ def cacheability_verdict(
     variable_lineage: Mapping[str, str],
     is_stateful_call: Callable[[str], bool],
     scan_forbidden: Callable[[str, Mapping[str, Any], ast.Module | None], list[str]],
+    pyplot_seen_as_it_runs: bool = False,
 ) -> CacheabilityVerdict:
     """Return the verdict ``(cacheable, reasons, varies)`` for a statement.
 
     ``cacheable`` is ``True`` only when *all* reason-sources are silent.
     ``reasons`` is the list of human-readable strings that populate
     ``metrics['uncacheable_reasons']``.  An empty list means "cacheable."
+
+    With *pyplot_seen_as_it_runs* (the caller records which code runs), a
+    helper that can reach pyplot does not refuse the statement on its own:
+    the verdict is cacheable with ``unless_it_draws`` set, and the caller
+    refuses it after the run when pyplot's code ran. Refused for another
+    reason, it is refused as before, for the helper.
     """
     if annotation is not None and annotation.no_cache:
         return CacheabilityVerdict(False, ["@cash:no-cache annotation"])
@@ -358,24 +370,26 @@ def cacheability_verdict(
         # is display, as ``plt.gca()`` in the statement is: no key holds the
         # figure it reads.
         drawn = None if waived else statement_user_pyplot_call(code, user_ns, tree)
+        drawn_reason = None
         if drawn:
             name, user = drawn
-            return CacheabilityVerdict(
-                False,
-                [f"Calls {name}(), which reads or changes pyplot's current figure through {user}: it runs every time"],
-                varies=True,
+            drawn_reason = (
+                f"Calls {name}(), which reads or changes pyplot's current figure through {user}: it runs every time"
             )
+            if not pyplot_seen_as_it_runs:
+                return CacheabilityVerdict(False, [drawn_reason], varies=True)
     except Exception as exc:  # noqa: BLE001 - an unjudged statement is not a pure one
         return CacheabilityVerdict(False, [analysis_failed("check the functions the statement calls", exc)])
 
     ast_reasons = analysis.skip_reasons(outputs, side_effects=not waived)
-    if ast_reasons:
-        return CacheabilityVerdict(False, ast_reasons)
-
-    if _has_missing_lineage(inputs, user_ns, variable_lineage):
+    if ast_reasons or _has_missing_lineage(inputs, user_ns, variable_lineage):
+        if drawn_reason is not None:
+            return CacheabilityVerdict(False, [drawn_reason], varies=True)
+        if ast_reasons:
+            return CacheabilityVerdict(False, ast_reasons)
         return CacheabilityVerdict(False, ["Input variable missing lineage"])
 
-    return CacheabilityVerdict(True, [])
+    return CacheabilityVerdict(True, [], unless_it_draws=drawn_reason)
 
 
 #: (function's code, read) pairs already warned about this session.

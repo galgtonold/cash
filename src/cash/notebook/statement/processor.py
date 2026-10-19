@@ -769,6 +769,7 @@ class StatementProcessor:
         spent = shadow.spent
         unit = shadow.begin("stmt")
         run.record_time = shadow.spent - spent
+        run.trace_unit = unit
         if unit is not None and run.needs_trace:
             unit.lookups_followed = True
         return unit
@@ -994,6 +995,21 @@ class StatementProcessor:
             run.analysis_spent += left.spent()
 
     @staticmethod
+    def _refuse_if_it_drew(run: StatementRun, execution: StatementExecution) -> None:
+        """Refuse *run*, cached on the condition that it does not touch
+        pyplot (``unless_it_draws``), when pyplot's code ran in it, as the
+        helper's text alone refused it before: it runs every time, its
+        outputs keyed by value. Not recorded, it is taken to have drawn."""
+        if run.unless_it_draws is None or run.skip_cache or not execution.result.success:
+            return
+        unit = run.trace_unit
+        if unit is not None and not unit.pyplot_ran:
+            return
+        run.skip_cache = True
+        run.value_varies = True
+        run.metrics["uncacheable_reasons"].append(run.unless_it_draws)
+
+    @staticmethod
     def _observe_process_state(run: StatementRun) -> None:
         """What of the process a statement past its budget changed, seen:
         what it hands over was not read for it (`callee_reach.handed`)."""
@@ -1119,7 +1135,7 @@ class StatementProcessor:
         """Skip-cache *run* when the static cacheability decision refuses it."""
         if run.skip_cache:
             return
-        cacheable, reasons, varies = cacheability_verdict(
+        cacheable, reasons, varies, unless_it_draws = cacheability_verdict(
             code=run.code,
             tree=run.tree,
             inputs=run.inputs,
@@ -1130,12 +1146,16 @@ class StatementProcessor:
             variable_lineage=self.tracking_state.variable_lineage,
             is_stateful_call=self._check_callable_stateful,
             scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
+            # What it runs is recorded (``Unit.pyplot_ran``): a helper that
+            # can draw refuses it only when it did (`_refuse_if_it_drew`).
+            pyplot_seen_as_it_runs=_shadow.SHADOW is not None,
         )
         if not cacheable:
             run.metrics["uncacheable_reasons"].extend(reasons)
             run.skip_cache = True
             run.value_varies = varies
             return
+        run.unless_it_draws = unless_it_draws
         unfollowed, by_string, unkeyed_modules, followed = unkeyed_reach(
             run.code, run.inputs, self.shell.user_ns, self.tracking_state.variable_lineage
         )
@@ -1446,7 +1466,13 @@ class StatementProcessor:
             # KeyboardInterrupt's traceback comes.
             unshown_output(e, execution.captured, run.silent, run.stream_output)
             raise
-        if figures_before is not None and execution.result.success and pyplot_state() != figures_before:
+        self._refuse_if_it_drew(run, execution)
+        if (
+            figures_before is not None
+            and not run.skip_cache
+            and execution.result.success
+            and pyplot_state() != figures_before
+        ):
             run.skip_cache = True
             run.metrics["uncacheable_reasons"].append(CHANGED_PYPLOT_REASON)
         if not run.skip_cache and execution.written_paths and execution.result.success:

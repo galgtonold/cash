@@ -275,6 +275,11 @@ class StatementRun:
     #: Seconds recording what it ran took (``Shadow.begin`` / ``end``), inside
     #: its timed run but cash's cost, not the statement's.
     record_time: float = 0.0
+    #: Cached only if pyplot's code does not run in it: why it runs every
+    #: time when it does (``CacheabilityVerdict.unless_it_draws``).
+    unless_it_draws: str | None = None
+    #: What shadow mode recorded of its run (``Shadow.begin``), or None.
+    trace_unit: Any = None
     #: It ran with a kept value standing in for part of it (``ExpressionMemo``).
     memo_used: bool = False
     #: It ran over a loop header cash evaluated before it (``loop_iterable``).

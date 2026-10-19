@@ -74,7 +74,19 @@ def _target_name(t: threading.Thread) -> str:
 class Unit:
     """What one unit saw run."""
 
-    __slots__ = ("cells", "codes", "extra", "kind", "markers", "notes", "receivers", "snap", "thread", "threads_before")
+    __slots__ = (
+        "cells",
+        "codes",
+        "extra",
+        "kind",
+        "markers",
+        "notes",
+        "pyplot_ran",
+        "receivers",
+        "snap",
+        "thread",
+        "threads_before",
+    )
 
     def __init__(self, kind: str) -> None:
         self.kind = kind
@@ -88,6 +100,9 @@ class Unit:
         self.notes: set[str] = set()
         #: Item lists of cached calls served inside the unit (they did not run).
         self.extra: list[tuple] = []
+        #: Code of ``matplotlib.pyplot`` ran in it: it read or changed
+        #: pyplot's current figure.
+        self.pyplot_ran = False
         #: What the caller noted before the unit ran (the lineages it read).
         self.snap: Any = None
         self.thread = threading.get_ident()
@@ -102,6 +117,7 @@ class Unit:
             self.cells.setdefault(code, cells)
         self.markers |= inner.markers
         self.notes |= inner.notes
+        self.pyplot_ran = self.pyplot_ran or inner.pyplot_ran
         self.extra.extend(inner.extra)
 
 
@@ -258,7 +274,9 @@ class Recorder:
             kind = self._classify(g)
         unit = stack[-1]
         if kind[1] is None:
-            if (kind[2], code.co_qualname) in POOL_STARTS:
+            if kind[2] == "matplotlib.pyplot":
+                unit.pyplot_ran = True
+            elif (kind[2], code.co_qualname) in POOL_STARTS:
                 unit.markers.add("process_pool")
             return sys.monitoring.DISABLE
         unit.codes[code] = (g, kind[1])
