@@ -123,6 +123,13 @@ class TrackingState:
     # W: UpstreamChecker. R: StatementRandomness.
     running_cell_rerun: bool = False
 
+    # name -> (the id of the object it held, its lineage, the statement) for
+    # each broken input that statement's own cache hit is to restore (the
+    # forward probe): keyed as the restored value, it holds the old one until
+    # the hit binds it. A miss must not run on it (``NOTEBOOK-INPUT-NOT-REBUILT``).
+    # W: CacheRestorer, UpstreamChecker. R: StatementProcessor.
+    probe_held: dict[str, tuple[int, str | None, str]] = field(default_factory=dict)
+
     # sha256(cell source) -> the global RNG state after that cell ran, so a
     # downstream draw can be restored to its position-correct state.
     # W: CellExecutor. R: UpstreamChecker.

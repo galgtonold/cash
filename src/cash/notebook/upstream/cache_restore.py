@@ -469,6 +469,13 @@ class CacheRestorer:
             # simulation did: record them, so the restore finds the entry, and
             # hold each name's place until the restore fills it.
             for var in produced:
+                # By id: held here, the object would count as held by
+                # another container, and the hit be refused for it.
+                self.tracking_state.probe_held[var] = (
+                    id(self.shell.user_ns.get(var, FORWARD_PROBE_PLACEHOLDER)),
+                    self.tracking_state.variable_lineage.get(var),
+                    stmt_code,
+                )
                 if var in virtual_lineage:
                     # Recorded now, so later statements probing the cache key
                     # with it.
