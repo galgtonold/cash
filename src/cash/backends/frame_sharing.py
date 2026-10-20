@@ -931,6 +931,19 @@ def _owned_chunk(chunk: Any) -> Any:
         if owned.type == chunk.type:
             return owned
     elif pa.types.is_string_view(chunk.type) or pa.types.is_binary_view(chunk.type):
+        buffers = chunk.buffers()
+        if not any(b is not None and b.size for b in buffers[2:]):
+            # Every value is inline in its view (12 bytes or fewer): the
+            # validity bitmap and the views are all it holds, copied as
+            # they are. Writing the rows out and back was 3.3 s of p21's
+            # 10M-row events frame, whose text columns are all short.
+            return pa.Array.from_buffers(
+                chunk.type,
+                len(chunk),
+                [None if b is None else _copied_buffer(b) for b in buffers[:2]],
+                null_count=chunk.null_count,
+                offset=chunk.offset,
+            )
         # Its rows written out and back: a polars text chunk lists every data
         # buffer of its column, and ``concat_arrays`` keeps them while the IPC
         # stream writes them all, so a 23-chunk frame of 5,760 rows sliced
@@ -950,6 +963,15 @@ def _owned_chunk(chunk: Any) -> Any:
         if not _overlapping(owned.buffers(), chunk.buffers()):
             return owned
     return _ipc_copy(chunk)
+
+
+def _copied_buffer(buffer: Any) -> Any:
+    """A copy of the Arrow *buffer* in memory Arrow's pool allocated."""
+    import pyarrow as pa
+
+    copy = pa.allocate_buffer(buffer.size)
+    memoryview(copy)[:] = memoryview(buffer)
+    return copy
 
 
 def _holds_dictionary(arrow_type: Any) -> bool:

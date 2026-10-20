@@ -88,6 +88,34 @@ def writable_types() -> tuple[type, ...]:
     return _writable_types(sys.modules.get("numpy"), sys.modules.get("pandas"))
 
 
+@functools.lru_cache(maxsize=4)
+def _library_scalar_types(numpy: Any, pandas: Any) -> tuple[type, ...]:
+    found: dict[type, None] = {}
+    try:
+        if numpy is not None:
+            # Not ``void`` (a structured array's row, a view of its memory)
+            # nor ``object_``.
+            found.update(
+                dict.fromkeys(
+                    kind
+                    for kind in set(numpy.sctypeDict.values())
+                    if issubclass(kind, numpy.generic) and kind not in (numpy.void, numpy.object_)
+                )
+            )
+        if pandas is not None:
+            found.update(dict.fromkeys((pandas.Timestamp, pandas.Timedelta, type(pandas.NaT), type(pandas.NA))))
+    except AttributeError:  # a library still importing: none of its types
+        return ()
+    return tuple(found)
+
+
+def library_scalar_types() -> tuple[type, ...]:
+    """The exact types of numpy's scalars and of pandas' ``Timestamp``,
+    ``Timedelta``, ``NaT`` and ``NA``, of the modules loaded (never imported
+    here): small values a parsed record holds, ``{'time': pd.Timestamp(...)}``."""
+    return _library_scalar_types(sys.modules.get("numpy"), sys.modules.get("pandas"))
+
+
 #: Every name a statement can use without binding it: the builtins, and the
 #: two IPython puts in every namespace. One set for the runtime, the
 #: simulation and the decorator's analyzer, which disagreed while each kept

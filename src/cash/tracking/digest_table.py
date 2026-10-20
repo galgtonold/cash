@@ -21,8 +21,11 @@ batch at a time (`cash.tracking.log_lines`), each carrying
 the digest scheme's algorithm and version (`cash.bulk_digest.SCHEME`): a
 line from another scheme (an older cash, or an install with or without
 ``blake3``), a torn or corrupt line is skipped, and an empty table means
-only that the file is read. When it grows past `_COMPACT_AT` lines it is
-rewritten with the newest `_KEEP` entries.
+only that the file is read. When it grows past `_COMPACT_AT` lines (or
+twice what it kept, or loaded, the last time) it is rewritten with every entry this
+process put or found, and the newest others up to `_KEEP`: a statement that
+read 50,000 files kept only the newest 20,000, so each restart read the
+other 30,000 again.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
 import os
 import threading
 
@@ -46,6 +50,10 @@ __all__ = ["DigestTable", "current_table", "use_digest_table"]
 _SCHEME = SCHEME
 _COMPACT_AT = 50_000
 _KEEP = 20_000
+#: Entries this process put or found are kept past `_KEEP`, up to this many:
+#: a statement reading 50,000 files keeps them all, and a table every process
+#: loads stays near 22 MB.
+_KEEP_USED = 100_000
 
 StatKey = tuple[str, int, int, int, int, int]
 
@@ -57,24 +65,30 @@ class DigestTable:
         self.path = os.path.join(cache_dir, FILE_DIGESTS_FILENAME)
         self._items: dict[StatKey, tuple[str, float]] = {}
         self._lines = 0
+        self._compact_at = _COMPACT_AT
+        self._used: set[StatKey] = set()  # put or found by this process: kept by `_compact`
         self._loaded = False
         self._lock = threading.Lock()
         self._log = LogLines(self.path, self._lock, "FILE_DEP")
 
     def get(self, key: StatKey) -> tuple[str, float] | None:
         self._ensure_loaded()
-        return self._items.get(key)
+        found = self._items.get(key)
+        if found is not None:
+            self._used.add(key)
+        return found
 
     def put(self, key: StatKey, digest: str, hashed_at: float) -> None:
         self._ensure_loaded()
+        self._used.add(key)
         if self._items.get(key, (None,))[0] == digest:
             return
-        line = json.dumps([_SCHEME, *key, digest, hashed_at], separators=(",", ":")) + "\n"
+        line = _line(key, digest, hashed_at)
         with self._lock:
             self._items[key] = (digest, hashed_at)
             self._log.add(line)
             self._lines += 1
-            if self._lines > _COMPACT_AT:
+            if self._lines > self._compact_at:
                 self._compact()
 
     def flush(self) -> None:
@@ -97,24 +111,56 @@ class DigestTable:
                             self._items[parsed[0]] = parsed[1]
             except OSError:
                 pass
+            # What the last process kept is not compacted away before this
+            # one had a chance to use it.
+            self._compact_at = max(self._compact_at, 2 * self._lines)
             self._loaded = True
 
     def _compact(self) -> None:
-        """Rewrite the log with the newest `_KEEP` entries (lock held)."""
-        newest = sorted(self._items.items(), key=lambda kv: kv[1][1])[-_KEEP:]
+        """Rewrite the log with the entries this process put or found and
+        the newest others up to `_KEEP` (lock held)."""
+        by_age = sorted(self._items.items(), key=lambda kv: kv[1][1])
+        used = [kv for kv in by_age if kv[0] in self._used][-_KEEP_USED:]
+        room = _KEEP - len(used)
+        others = [kv for kv in by_age if kv[0] not in self._used][-room:] if room > 0 else []
+        newest = sorted(others + used, key=lambda kv: kv[1][1])
         self._items = dict(newest)
+        self._used &= self._items.keys()
+        self._compact_at = max(_COMPACT_AT, 2 * len(newest))
         self._log.drop()  # in the rewrite, if among the newest
         tmp = f"{self.path}.{os.getpid()}.tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as fh:
                 for key, (digest, hashed_at) in newest:
-                    fh.write(json.dumps([_SCHEME, *key, digest, hashed_at], separators=(",", ":")) + "\n")
+                    fh.write(_line(key, digest, hashed_at))
             replace_with_retry(tmp, self.path)
             self._lines = len(newest)
         except OSError:
             logger.debug("[FILE_DEP] could not compact %s", self.path, exc_info=True)
             with contextlib.suppress(OSError):
                 os.unlink(tmp)
+
+
+_text = json.encoder.encode_basestring_ascii  # what ``json.dumps`` writes a str as
+
+
+def _line(key: StatKey, digest: str, hashed_at: float) -> str:
+    """``json.dumps([_SCHEME, *key, digest, hashed_at], separators=(",", ":"))``
+    and a newline, byte for byte, without the encoder's set-up per line
+    (~10 us of each of 30,000 puts)."""
+    path, dev, ino, size, mtime_ns, ctime_ns = key
+    if (
+        type(path) is not str
+        or type(digest) is not str
+        or not all(type(v) is int for v in (dev, ino, size, mtime_ns, ctime_ns))
+        or not (type(hashed_at) is int or (type(hashed_at) is float and math.isfinite(hashed_at)))
+    ):
+        return json.dumps([_SCHEME, *key, digest, hashed_at], separators=(",", ":")) + "\n"
+    when = int.__repr__(hashed_at) if type(hashed_at) is int else float.__repr__(hashed_at)
+    return (
+        f"[{_text(_SCHEME)},{_text(path)},{int.__repr__(dev)},{int.__repr__(ino)},{int.__repr__(size)},"
+        f"{int.__repr__(mtime_ns)},{int.__repr__(ctime_ns)},{_text(digest)},{when}]\n"
+    )
 
 
 def _parse(raw: str) -> tuple[StatKey, tuple[str, float]] | None:

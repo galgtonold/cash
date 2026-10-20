@@ -219,8 +219,35 @@ def pickle_value(
     written to a sink that checks them, and is then not pickled flat: a
     value too deep for the pickler raises RecursionError.
 
+    A value holding a function whose cell ran again since is pickled with
+    it by its name, when the one its name holds now is the same definition
+    (`kept_state.defined_again`).
+
     Raises what pickling *value* raises.
     """
+    args = (keep, digest, deadline, as_keyed, kept_buffers, after, limit)
+    try:
+        return _pickle_value(value, *args, reducer_override, None)
+    except pickle.PicklingError as exc:
+        if not kept_state.stopped_at_defined_again(exc):
+            raise
+    return _pickle_value(value, *args, kept_state.defined_again(reducer_override), kept_state.defined_again())
+
+
+def _pickle_value(
+    value: Any,
+    keep: bool,
+    digest: bool,
+    deadline: float | None,
+    as_keyed: bool,
+    kept_buffers: Any,
+    after: Any,
+    limit: int | None,
+    reducer_override: Any,
+    keyed_override: Any,
+) -> Part:
+    """`pickle_value`, with *reducer_override* as the pickler's hook, and
+    *keyed_override* as that of the keyed pickle it may take."""
     sink = _Sink(deadline, keep, digest, limit)
     # A digest's pickle is hashed as it is written; a store's alone is
     # written whole, and may be pickled flat, unless it is checked as it
@@ -271,7 +298,7 @@ def pickle_value(
         if also_keyed:
             found = _final(_HEAD, sink.sha.digest(), folded.digest())
         elif as_keyed:
-            found = _keyed_digest(value, deadline)[0]
+            found = _keyed_digest(value, deadline, keyed_override)[0]
     if sunk:
         if keep:
             stream = sink.stream()
@@ -285,9 +312,21 @@ def _final(head: bytes, stream_digest: bytes, buffers_digest: bytes) -> str:
     return hashlib.sha256(head + stream_digest + buffers_digest).hexdigest()
 
 
-def _keyed_digest(value: Any, deadline: float | None) -> tuple[str, int]:
+def _keyed_digest(value: Any, deadline: float | None, reducer_override: Any = None) -> tuple[str, int]:
     """The digest and size of *value*'s keyed pickle: what a value whose
-    store bytes leave something out is digested over."""
+    store bytes leave something out is digested over. A function whose
+    cell ran again is pickled as `pickle_value` pickles it."""
+    if reducer_override is not None:
+        return _keyed_digest_once(value, deadline, reducer_override)
+    try:
+        return _keyed_digest_once(value, deadline, None)
+    except pickle.PicklingError as exc:
+        if not kept_state.stopped_at_defined_again(exc):
+            raise
+    return _keyed_digest_once(value, deadline, kept_state.defined_again())
+
+
+def _keyed_digest_once(value: Any, deadline: float | None, reducer_override: Any) -> tuple[str, int]:
     sink = _Sink(deadline, False, True)
     folded = hashlib.sha256()
     size = 0
@@ -304,7 +343,15 @@ def _keyed_digest(value: Any, deadline: float | None) -> tuple[str, int]:
         sink.check()
         return False
 
-    kept_state.dumps(value, protocol=5, buffer_callback=take, keyed=True, extra=_stored_reducers(), sink=sink)
+    kept_state.dumps(
+        value,
+        protocol=5,
+        buffer_callback=take,
+        keyed=True,
+        extra=_stored_reducers(),
+        sink=sink,
+        reducer_override=reducer_override,
+    )
     return _final(_HEAD, sink.sha.digest(), folded.digest()), size + sink.size
 
 

@@ -21,7 +21,7 @@ from typing import Any
 from cash.effect_observer import active_observer as _active_effect_observer
 from cash.tracking import io_watch
 from cash.tracking.pending_digest import DEFERRED, PENDING, settle_before_write, settle_deferred
-from cash.tracking.read_classification import is_cash_internal
+from cash.tracking.read_classification import is_cash_internal, own_stat
 from cash.tracking.read_credit import note_untracked_read
 from cash.tracking.tracker_context import active_tracker
 
@@ -152,7 +152,7 @@ def _on_open(args: tuple) -> None:
             # after the file appeared. The event comes before the open, so ask
             # the disk -- unless resolving the path just found the file there.
             try:
-                os.stat(path)
+                own_stat(path)
             except FileNotFoundError:
                 tracker.track_absent(path)
             except (OSError, ValueError):
@@ -280,7 +280,7 @@ def _on_listing(args: tuple) -> None:
     # `try: os.listdir(d) except FileNotFoundError:` answers for a directory
     # that is not there yet. The event comes before the listing: ask the disk.
     try:
-        os.stat(path)
+        own_stat(path)
     except (FileNotFoundError, NotADirectoryError):
         tracker.track_absent(path)
     except (OSError, ValueError, TypeError):

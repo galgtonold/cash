@@ -222,16 +222,40 @@ class Patches:
     open.
     """
 
-    __slots__ = ("_installed", "_last", "_note", "version")
+    __slots__ = ("_clear", "_expect", "_installed", "_last", "version")
 
-    def __init__(self, note: Callable[[Any, Any], Any] | None = None) -> None:
-        #: Told ``(replacement, original)`` of each replacement made.
-        self._note = note
+    def __init__(self, expect: Callable[..., Any] | None = None, clear: Callable[[], Any] | None = None) -> None:
+        #: Told ``(owner, name, value)`` right before each set this makes, and
+        #: ``(owner, name)`` before each delete; *clear* right after. Exactly
+        #: that write is no change for a remembered hit
+        #: (`cash.decorator.hit_memo`), as keys look through cash's wrappers.
+        self._expect = expect
+        self._clear = clear
         #: Moves whenever what is installed changes.
         self.version = 0
         self._installed: list[tuple[Any, str, Any, Any]] = []
         #: What the last `restore` put back, in install order (see `reinstall`).
         self._last: list[tuple[Any, str, Any, Any]] = []
+
+    def _set(self, owner: Any, name: str, value: Any) -> None:
+        if self._expect is None:
+            setattr(owner, name, value)
+            return
+        self._expect(owner, name, value)
+        try:
+            setattr(owner, name, value)
+        finally:
+            self._clear()
+
+    def _delete(self, owner: Any, name: str) -> None:
+        if self._expect is None:
+            delattr(owner, name)
+            return
+        self._expect(owner, name)
+        try:
+            delattr(owner, name)
+        finally:
+            self._clear()
 
     def replace(self, owner: Any, name: str, new: Any) -> bool:
         """Set ``owner.name`` to *new*, remembering what was there."""
@@ -242,11 +266,9 @@ class Patches:
                 old = owner.__dict__.get(name, _ABSENT)
             else:
                 old = getattr(owner, name)
-            setattr(owner, name, new)
+            self._set(owner, name, new)
         except (AttributeError, TypeError):
             return False
-        if self._note is not None and old is not _ABSENT:
-            self._note(new, old)
         self._installed.append((owner, name, new, old))
         self.version += 1
         return True
@@ -266,9 +288,9 @@ class Patches:
                 if _current(owner, name) is not new:
                     continue
                 if old is _ABSENT:
-                    delattr(owner, name)
+                    self._delete(owner, name)
                 else:
-                    setattr(owner, name, old)
+                    self._set(owner, name, old)
             except (AttributeError, TypeError):
                 continue
             restored.append(entry)
@@ -287,7 +309,7 @@ class Patches:
             return False
         try:
             for owner, name, new, _old in last:
-                setattr(owner, name, new)
+                self._set(owner, name, new)
         except (AttributeError, TypeError):
             return False
         self._installed = list(last)

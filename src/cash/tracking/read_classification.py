@@ -35,6 +35,8 @@ __all__ = [
     "is_cash_internal",
     "is_pseudo_fs",
     "is_runtime_cache_path",
+    "own_lstat",
+    "own_stat",
     "register_cache_dir",
     "regular_file_stat",
     "stat_key",
@@ -71,11 +73,32 @@ def stat_key(st: os.stat_result) -> tuple[int, int, int]:
     return (st.st_size, st.st_mtime_ns, getattr(st, "st_ctime_ns", 0))
 
 
+def own_stat(path: Any) -> os.stat_result:
+    """``os.stat(path)`` for cash itself: past cash's own wrapper of it
+    (`reader_patches`), which records what the user's code asks and nothing
+    cash asks, at ~7 us a call. Cash stats every file a block read several
+    times over: 0.3 s of a notebook statement reading 11,500 photos went to
+    that wrapper. A stand-in for ``os.stat`` that is not cash's (a fake
+    filesystem) is called as before."""
+    fn = os.stat
+    if getattr(fn, "_is_file_tracker_patch", False):
+        fn = fn._original_func
+    return fn(path)
+
+
+def own_lstat(path: Any) -> os.stat_result:
+    """``os.lstat(path)`` for cash itself, as `own_stat` is ``os.stat``."""
+    fn = os.lstat
+    if getattr(fn, "_is_file_tracker_patch", False):
+        fn = fn._original_func
+    return fn(path)
+
+
 def regular_file_stat_result(path: str) -> os.stat_result | None:
     """The stat of *path* when it is a regular file, None otherwise."""
 
     try:
-        st = os.stat(path)
+        st = own_stat(path)
     except (OSError, ValueError):
         return None
     if not stat.S_ISREG(st.st_mode):
@@ -87,7 +110,7 @@ def regular_file_stat(path: str) -> tuple[int, int, int] | None:
     """`stat_key` of *path* when it is a regular file, None otherwise."""
 
     try:
-        st = os.stat(path)
+        st = own_stat(path)
     except (OSError, ValueError):
         return None
     if not stat.S_ISREG(st.st_mode):
@@ -99,7 +122,7 @@ def folder_stat(path: str) -> tuple[int, int, int] | None:
     """`stat_key` of *path* when it is a directory, None otherwise."""
 
     try:
-        st = os.stat(path)
+        st = own_stat(path)
     except (OSError, ValueError):
         return None
     if not stat.S_ISDIR(st.st_mode):

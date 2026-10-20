@@ -2513,29 +2513,16 @@ _BY_NAME = (type, types.FunctionType)
 
 
 def _named_now(obj: Any) -> Any:
-    """The class or function *obj*'s module now names where *obj* was
-    defined, when that is another object of the same kind; else None.
+    """What a copy holds in place of *obj*, a class or function its module
+    has since named another of (`kept_state.named_now`), or None.
 
-    What a pickle round trip from disk resolves the name to. A notebook cell
-    re-run defines a new class under the old name, and pickle refuses an
-    instance of the old one ("not the same object as __main__.Fit").
-    """
-    module = sys.modules.get(getattr(obj, "__module__", None) or "")
-    qualname = getattr(obj, "__qualname__", None)
-    if module is None or not isinstance(qualname, str) or "<locals>" in qualname:
-        return None
-    current: Any = module
-    for part in qualname.split("."):
-        current = getattr(current, part, None)
-        if current is None:
-            return None
-    if current is obj:
-        return None
-    if isinstance(obj, type) and isinstance(current, type):
+    A class is the one named now, which a disk hit also resolves the name
+    to. A function is itself: a copy holds what the value held, as plain
+    Python does, and the function named now may do something else."""
+    current = kept_state.named_now(obj)
+    if current is None or isinstance(obj, type):
         return current
-    if isinstance(obj, types.FunctionType) and isinstance(current, types.FunctionType):
-        return current
-    return None
+    return obj
 
 
 def _metadata_held(frame: Any) -> list[str]:
@@ -2579,8 +2566,8 @@ def _stored_frame(frame: Any, known_cells: dict[int, Any] | None, record_cells: 
 
 
 def _round_trip(value: Any) -> Any:
-    """*value* through pickle and back, a class its module has since
-    redefined replaced by the one it names now (`_named_now`)."""
+    """*value* through pickle and back, a class or function its module has
+    since named another of replaced as `_named_now` says."""
     try:
         return pickle.loads(kept_state.dumps(value, protocol=pickle.HIGHEST_PROTOCOL))
     except pickle.PicklingError:
