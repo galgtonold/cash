@@ -112,6 +112,50 @@ def test_a_table_in_the_heap_is_stored_in_a_mapping_of_its_own_and_served_as_ret
     assert pickle.dumps(served, protocol=5) == pickle.dumps(expected, protocol=5)
 
 
+_WRITE_COPY_CHILD = textwrap.dedent(
+    """
+    import ctypes, json, pickle
+    ctypes.CDLL("libc.so.6").mallopt(-3, 64 << 20)  # M_MMAP_THRESHOLD: a table this size is heap
+    import numpy as np
+    import pandas as pd
+    from cash.backends import frame_sharing, heap_blocks
+    from cash.backends.memory_backend import InMemoryBackend
+    ROWS, COLS = SHAPE
+    frame = pd.DataFrame(np.full((ROWS, COLS), 1.5), columns=[f"c{i}" for i in range(COLS)])
+    copied = InMemoryBackend().write_copy("k", frame, {"execution_time": 1.0})
+    with heap_blocks.per_store():
+        in_heap = [heap_blocks.in_heap(a) for a in frame_sharing.block_arrays(copied)]
+        usual = heap_blocks.in_heap(frame_sharing.block_arrays(frame.copy())[0])
+    same = pickle.dumps(copied, protocol=5) == pickle.dumps(frame, protocol=5)
+    print(json.dumps({"in_heap": in_heap, "usual_copy_in_heap": usual, "same": same}))
+    """
+).replace("SHAPE", f"{ROWS}, {COLS}")
+
+
+@glibc_only
+def test_the_copy_a_disk_write_waits_on_is_in_a_mapping_of_its_own():
+    """With a disk tier, a store also copies the value for the background
+    write (`InMemoryBackend.write_copy`), alive until the writer has it on
+    disk. Made in the heap, it took the hole the caller's freed table had
+    left: p04's notebook, whose 47 MB signal is written late each time,
+    faulted about 1.8 GB of fresh huge pages more than plain (2,465 against
+    1,541 huge-page faults), and its backtests ran 1.16x slower."""
+    env = dict(os.environ)
+    env.pop("CASH_DISABLE", None)
+    out = subprocess.run(
+        [sys.executable, "-W", "ignore", "-c", _WRITE_COPY_CHILD],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=300,
+        check=True,
+    )
+    found = json.loads(out.stdout.strip().splitlines()[-1])
+    assert found["usual_copy_in_heap"], "the setup puts a copy of this size in the heap"
+    assert found["in_heap"] == [False], found
+    assert found["same"]
+
+
 def _in_heap_now(array) -> bool:
     with heap_blocks.per_store():
         return heap_blocks.in_heap(array)

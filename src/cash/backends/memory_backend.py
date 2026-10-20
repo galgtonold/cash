@@ -1339,14 +1339,18 @@ class InMemoryBackend(CacheBackend):
         about a copy of its memory and keeps nothing of the caller's
         (`_write_copy`): tables of numbers, dates, text and nullable
         columns (labels copied too), arrays, atoms, in a few dicts, lists
-        and tuples. *key* and *metadata* name the entry, for the log.
+        and tuples. *key* and *metadata* name the entry, for the log. Its
+        big arrays are kept out of glibc's heap, as a store's are
+        (`heap_blocks`): alive until the writer is done, one in the heap
+        took the hole the caller's next temporaries would have used.
         """
         if metadata.get(NO_PRIVATE_COPY):
             return default  # its copy does not store as the value does
         try:
             if not _write_copyable(value):
                 return default
-            return _write_copy(value, {})
+            with heap_blocks.per_store():
+                return _write_copy(value, {})
         except Exception:  # serialized by the caller instead, as before
             logger.debug("no copy of %r to write", key, exc_info=True)
             return default
