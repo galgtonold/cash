@@ -1569,6 +1569,11 @@ is a closure that reads a captured variable whose value could not be hashed
 function is a callable object whose state could not be hashed. The call was
 not cached. The message names the variable or the object's type.
 
+<!-- claim: cash/decorator/class_data.py:_unhashable_annotation @d7f833f0 -->
+It is also shown when the function reads a class's annotations
+(`typing.get_type_hints(Cfg)`, `Cfg.__annotations__`) and a value in them,
+such as an `Annotated[float, Positive()]` marker, could not be hashed.
+
 **Why it matters.** The function is not cached while it captures that value.
 Keyed without it, a change to what the value carries (a setting on a config
 object) would have served the old result.

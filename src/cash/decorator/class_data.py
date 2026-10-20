@@ -18,7 +18,7 @@ from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.helper_code import is_mock
 from ..exceptions import CashImpurityWarning
 from .arg_hashing import is_opaque
-from .call_state import CAPTURE_WATCH
+from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .closure_fold import iter_code_scopes
 from .global_reads import DOCSTRING_READS, MACHINERY_DUNDERS, bytecode_written_attrs
 from .global_values import UNHASHABLE_GLOBAL_FIX
@@ -281,19 +281,56 @@ def class_names(cls: type) -> tuple[tuple[str, tuple[str, ...]], ...]:
 ANNOTATION_READS = frozenset({"__annotations__", "__annotate__", "get_type_hints", "get_annotations"})
 
 
-def class_annotations(cls: type) -> str:
+def class_annotations(cls: type, digest: Callable[[Any], str]) -> str:
     """A digest of the annotations each user class of *cls*'s MRO holds,
-    by value: reassigned or changed in place, the digest moves."""
+    by value: reassigned or changed in place, the digest moves.
+
+    Not by ``repr``: a marker of the user's own class in
+    ``Annotated[float, Positive()]`` has the default one, which carries its
+    address, so the key moved in every new process and the call never hit
+    after a restart. A type is keyed by its qualified name, a string as it
+    is, anything else by *digest* (the key's own value digest), so a
+    marker's class and state count. What *digest* cannot hash raises.
+    """
     found = []
     for base in _user_bases(cls):
         own = _own_annotations(base)
+        if isinstance(own, list):
+            own = [(name, _annotation_print(value, digest)) for name, value in own]
         if own is not None:
             found.append((base.__qualname__, own))
     return hashlib.sha256(repr(found).encode("utf-8")).hexdigest()
 
 
-def _own_annotations(base: type) -> list[tuple[str, str]] | str | None:
-    """*base*'s own annotations as ``(name, repr)`` pairs; None for none.
+#: What the value digest raises for a value it cannot hash.
+_UNHASHABLE_ANNOTATION = (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError)
+
+
+def _unhashable_annotation(cls: type, func_name: str, error: Exception) -> KeyBuildFailed:
+    """KEY-UNHASHABLE-CAPTURE for an annotation of *cls* the key needs and
+    cannot hash: left out, a change to it would not reach the key, so the
+    call runs uncached."""
+    name = cls.__qualname__
+    return KeyBuildFailed(
+        "KEY-UNHASHABLE-CAPTURE",
+        f"@cash.cache: {func_name} reads the annotations of {name}, and one of them could not be "
+        f"hashed ({type(error).__name__}: {error}), so the call ran uncached rather than risk "
+        f"serving a result computed under annotations that changed.",
+        f"annotate {name} with plain types and values, or register a hasher for the marker's type "
+        f"with cash.register_hasher(...).",
+    )
+
+
+def _annotation_print(value: Any, digest: Callable[[Any], str]) -> str:
+    if isinstance(value, type):
+        return f"type:{value.__module__}.{value.__qualname__}"
+    if isinstance(value, str):
+        return f"str:{value}"
+    return f"value:{digest(value)}"
+
+
+def _own_annotations(base: type) -> list[tuple[str, Any]] | str | None:
+    """*base*'s own annotations as ``(name, value)`` pairs; None for none.
 
     Before 3.14 they are the ``__annotations__`` its namespace holds. On
     3.14 a class keeps a function that makes them (``__annotate__``) and,
@@ -315,7 +352,7 @@ def _own_annotations(base: type) -> list[tuple[str, str]] | str | None:
             return "unevaluated"
     if not isinstance(value, dict):
         return None
-    return sorted((str(k), repr(v)) for k, v in value.items())
+    return sorted(((str(k), v) for k, v in value.items()), key=lambda item: item[0])
 
 
 def _code_names(func: Any) -> frozenset[str]:
@@ -587,12 +624,18 @@ class ClassDataFold:
         if ANNOTATION_READS & read_names or ANNOTATION_READS & _code_names(reader):
             # `typing.get_type_hints(Cfg)`, `Cfg.__annotations__`: a config or
             # schema class read for its fields.
-            parts.append((f"{label}:__annotations__", class_annotations(cls)))
+            try:
+                parts.append((f"{label}:__annotations__", class_annotations(cls, self._annotation_digest)))
+            except _UNHASHABLE_ANNOTATION as e:
+                raise _unhashable_annotation(cls, func_name, e) from e
         if unhashable:
             self._warn_unhashable_class_data(func_name, unhashable, read_names, reader)
         parts.extend(self._function_read_parts(functions, excluded, label, func_name, owner_code, seen))
         parts.extend(self._held_code_parts(cls, label, func_name, owner_code, learned))
         return parts
+
+    def _annotation_digest(self, value: Any) -> str:
+        return self._args.hash_payload((stabilize_for_global_hash(value, self._values.data_callable_identity),), {})
 
     def _held_code_parts(
         self, cls: type, label: str, func_name: str, owner_code: Any, learned: frozenset
