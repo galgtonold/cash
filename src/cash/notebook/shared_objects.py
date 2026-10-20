@@ -707,6 +707,24 @@ def holds_a_held_object(value: Any) -> bool:
     return any(view_bases(obj) for obj in nodes.values())
 
 
+def library_parts_held(value: Any) -> dict[int, Any] | None:
+    """The objects inside the library objects *value* is or holds that
+    something besides them holds (`_held_from_outside`), by id; None when
+    there were too many to read. Neither `holds_a_held_object` nor
+    `holds_part_of` reads a library object: ``argparse.Namespace(rows=ROWS)``
+    holds ``ROWS`` where neither looks."""
+    value_types = VALUE_TYPES + library_value_types()
+    nodes, _inbound, _checked, owner, _breaks = _walk({"": value}, [], value_types)
+    inside, _owners = _held_from_outside(nodes, owner, value_types)
+    return inside
+
+
+def is_part_of_any(ids: Mapping[int, Any], sources: Iterable[Any]) -> bool:
+    """Whether one of *ids* is an object one of *sources* is or holds."""
+    value_types = VALUE_TYPES + library_value_types()
+    return any(key in ids for source in sources for key in _identities(source, value_types))
+
+
 def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
     """Whether *value* is or holds an object one of *sources* is or holds.
 

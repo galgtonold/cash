@@ -35,7 +35,9 @@ from cash.notebook.shared_objects import (
     VALUE_TYPES,
     holds_a_held_object,
     holds_part_of,
+    is_part_of_any,
     is_value,
+    library_parts_held,
     library_value_types,
 )
 from cash.sizing import estimate_object_size, pickled_size_estimate
@@ -316,9 +318,16 @@ class CallEntries:
         """
         try:
             sources = (*args, *kwargs.values())
-            reached = self._reached(result, fn, root_held)
+            # What the library objects in it hold, which the walks below do
+            # not read: ``Namespace(fig=fig)`` with the notebook's ``rect``
+            # on ``fig``'s axes.
+            parts = library_parts_held(result)
+            if parts is None:
+                return False
+            reached = self._reached(result, fn, root_held or bool(parts))
             return (
                 not holds_part_of(result, (*sources, *reached))
+                and not (parts and is_part_of_any(parts, (*sources, *reached)))
                 and not self._borrows(result, sources, reached, fn)
                 # Held by something else (*root_held*), and that holder is
                 # none of the arguments or of what the function reaches: a
