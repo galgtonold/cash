@@ -935,12 +935,16 @@ class _KeepDict(dict):
         #: This pickle's one object for each attribute name (`_names_apart`).
         self._names: dict[str, str] = {}
         #: This pickle's one object for each numpy dtype (`_dtypes_apart`).
-        self._dtypes: dict[bytes, Any] = {}
+        self._dtypes: dict[Any, Any] = {}
 
     def __missing__(self, t: type) -> Any:
-        reducer = _names_apart(self._reducer(t), self._names)
-        if _holds_dtype(t):
-            reducer = _dtypes_apart(reducer, self._dtypes)
+        if _numpy_scalar_type(t):
+            # A scalar reduces to its dtype and bytes, no state: no names.
+            reducer = _scalar_dtype_apart(self._reducer(t), self._dtypes)
+        else:
+            reducer = _names_apart(self._reducer(t), self._names)
+            if _holds_dtype(t):
+                reducer = _dtypes_apart(reducer, self._dtypes)
         self[t] = reducer
         return reducer
 
@@ -1036,7 +1040,37 @@ def _holds_dtype(t: type) -> bool:
         return False
 
 
-def _dtypes_apart(reducer: Any, dtypes: dict[bytes, Any]) -> Callable[[Any], Any]:
+def _numpy_scalar_type(t: type) -> bool:
+    """Is *t* one of numpy's own scalar types (``numpy.float64``), not a
+    subclass of one?"""
+    numpy = sys.modules.get("numpy")
+    return numpy is not None and t.__module__ == "numpy" and isinstance(t, type) and issubclass(t, numpy.generic)
+
+
+def _scalar_dtype_apart(reducer: Any, dtypes: dict[Any, Any]) -> Callable[[Any], Any]:
+    """`_dtypes_apart` for a numpy scalar's reduce, ``(scalar, (dtype,
+    bytes))``: the last dtype met and the pickle's own for it are kept, so
+    a run of scalars of one dtype (a model's thousands of ``float64``) asks
+    the table once."""
+    last: list[Any] = [None, None]
+
+    def reduce(obj: Any) -> Any:
+        reduced = reducer(obj)
+        if type(reduced) is not tuple or len(reduced) != 2 or type(reduced[1]) is not tuple or not reduced[1]:
+            return reduced
+        args = reduced[1]
+        dt = args[0]
+        if dt is not last[0]:
+            numpy = sys.modules["numpy"]
+            if not isinstance(dt, numpy.dtype):
+                return reduced
+            last[0], last[1] = dt, _dtype_apart(dt, dtypes)
+        return (reduced[0], (last[1], *args[1:]))
+
+    return reduce
+
+
+def _dtypes_apart(reducer: Any, dtypes: dict[Any, Any]) -> Callable[[Any], Any]:
     """*reducer*, giving the dtype an array or numpy scalar reduces to this
     pickle's own object for it, one per equal dtype, never one the value
     holds.
@@ -1069,23 +1103,33 @@ def _dtypes_apart(reducer: Any, dtypes: dict[bytes, Any]) -> Callable[[Any], Any
     return reduce
 
 
-def _parts_apart(parts: Any, dtypes: dict[bytes, Any]) -> tuple | None:
+def _parts_apart(parts: Any, dtypes: dict[Any, Any]) -> tuple | None:
     """*parts*, a tuple, with each numpy dtype in it the pickle's own;
     None when it holds none."""
     if type(parts) is not tuple:
         return None
     numpy = sys.modules.get("numpy")
     dtype = getattr(numpy, "dtype", None)
-    if dtype is None or not any(isinstance(part, dtype) for part in parts):
+    if dtype is None:
         return None
-    return tuple(_dtype_apart(part, dtypes) if isinstance(part, dtype) else part for part in parts)
+    apart = None
+    for i, part in enumerate(parts):
+        if isinstance(part, dtype):
+            if apart is None:
+                apart = list(parts)
+            apart[i] = _dtype_apart(part, dtypes)
+    return None if apart is None else tuple(apart)
 
 
-def _dtype_apart(dt: Any, dtypes: dict[bytes, Any]) -> Any:
+def _dtype_apart(dt: Any, dtypes: dict[Any, Any]) -> Any:
     """The pickle's own dtype that pickles as *dt* does. Keyed by that
     pickle, not by equality: an aligned struct and the same layout packed,
     or a record dtype and the plain structured one, are equal dtypes that
-    load apart."""
+    load apart. A dtype met before is found by its identity (*dtypes*
+    holds it, so the id stays its own) without pickling it again."""
+    seen = dtypes.get(id(dt))
+    if seen is not None and seen[0] is dt:
+        return seen[1]
     try:
         key = pickle.dumps(dt, protocol=pickle.HIGHEST_PROTOCOL)
         own = dtypes.get(key)
@@ -1093,6 +1137,7 @@ def _dtype_apart(dt: Any, dtypes: dict[bytes, Any]) -> Any:
             own = dtypes[key] = copy.copy(dt)
     except Exception:  # noqa: BLE001 - a dtype that will not hash or copy: as it is
         return dt
+    dtypes[id(dt)] = (dt, own)
     return own
 
 
