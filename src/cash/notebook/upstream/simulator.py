@@ -22,6 +22,7 @@ import types
 from collections.abc import Callable
 from typing import Any
 
+from cash._user_attrs import attribute_or
 from cash.control_markers import strip_markers
 
 from ...analysis.ast_util import parse_cached, resolve_callee
@@ -178,7 +179,7 @@ class NotebookSimulator:
             if isinstance(value, types.ModuleType):
                 names.add(value.__name__)
             else:
-                owner = getattr(value, "__module__", None)
+                owner = attribute_or(value, "__module__", None)
                 if isinstance(owner, str) and owner != "__main__":
                     names.add(owner)
         for mod_name in names:
@@ -941,7 +942,7 @@ def _binds_without_reading(code: str, user_ns: dict) -> bool:
         tree = ast.parse(code)
     except (SyntaxError, ValueError):
         return False
-    stdlib = getattr(sys, "stdlib_module_names", frozenset())
+    stdlib = attribute_or(sys, "stdlib_module_names", frozenset())
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -949,14 +950,14 @@ def _binds_without_reading(code: str, user_ns: dict) -> bool:
         if callee is None:
             return False
         if isinstance(callee, type):
-            root = (getattr(callee, "__module__", "") or "").split(".")[0]
+            root = (attribute_or(callee, "__module__", "") or "").split(".")[0]
             if root == "builtins" or root in stdlib:
                 continue
             return False
-        name = getattr(callee, "__name__", None)
-        if name in _PURE_BUILTINS and getattr(builtins, name, None) is callee:
+        name = attribute_or(callee, "__name__", None)
+        if name in _PURE_BUILTINS and attribute_or(builtins, name, None) is callee:
             continue
-        if name in _PURE_PATH_FUNCS and getattr(os.path, name, None) is callee:
+        if name in _PURE_PATH_FUNCS and attribute_or(os.path, name, None) is callee:
             continue
         return False
     return True

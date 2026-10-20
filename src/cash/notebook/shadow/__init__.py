@@ -43,6 +43,8 @@ import types
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 __all__ = ["SHADOW", "Shadow", "disable", "enable", "requested", "status"]
 
 _ENV = "CASH_SHADOW"
@@ -419,7 +421,7 @@ class Shadow:
                             add(("attr", module, chain), self._attr_digest(module, chain))
         # What code looking names up by a string called: by the names that
         # hold it, where the string could have found it (`_followed`).
-        for fn, g in getattr(unit, "callees", {}).values():
+        for fn, g in attribute_or(unit, "callees", {}).values():
             for module, ns in ((nbn, nb), (g.get("__name__"), g)):
                 if not isinstance(module, str) or (ns is not nb and module == nbn):
                     continue
@@ -444,10 +446,10 @@ class Shadow:
         (``cache_key.lookups_followed``): the unit says so."""
         from ..string_lookups import code_lookups_traceable
 
-        if code not in getattr(self.recorder, "by_string", ()):
+        if code not in attribute_or(self.recorder, "by_string", ()):
             return False
         if code.co_name == "<module>":
-            return g is nb and getattr(unit, "lookups_followed", False)
+            return g is nb and attribute_or(unit, "lookups_followed", False)
         return code_lookups_traceable(code, g)
 
     def _code_items(self, code, g, module, add, add_class, user_class, ran=()) -> None:
@@ -712,7 +714,7 @@ class Shadow:
             return
         backend = proc.cash_instance.backend
         run.shadow = self.check(
-            "stmt", run.cache_key, _stmt_group(run), found, run.code, getattr(backend, "peek_metadata", None)
+            "stmt", run.cache_key, _stmt_group(run), found, run.code, attribute_or(backend, "peek_metadata", None)
         )
 
     @staticmethod
@@ -769,7 +771,7 @@ class Shadow:
         import hashlib
 
         h = hashlib.blake2b(digest_size=12)
-        h.update(repr((site.source, site.occurrence_index, getattr(site, "stmt_identity", None))).encode())
+        h.update(repr((site.source, site.occurrence_index, attribute_or(site, "stmt_identity", None))).encode())
         for p in parts:
             h.update(b"|" + repr(sorted(p.items()) if isinstance(p, Mapping) else p).encode())
         self._call_groups[key] = ("call:" + h.hexdigest(), frozenset(by_content))

@@ -13,6 +13,8 @@ import time
 from collections.abc import Callable, Iterable
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 __all__ = ["StreamTaken", "TeeWriter"]
 
 
@@ -118,8 +120,8 @@ class StreamTaken:
 
     def __enter__(self) -> StreamTaken:
         stream = self._stream = getattr(sys, self.name)
-        own = getattr(stream, "__dict__", None)
-        write = getattr(stream, "write", None)
+        own = attribute_or(stream, "__dict__", None)
+        write = attribute_or(stream, "write", None)
         if own is None or not callable(write):
             return self._swap()
         self._own = {m: own[m] for m in self._METHODS if m in own}
@@ -143,7 +145,7 @@ class StreamTaken:
             with contextlib.suppress(AttributeError, TypeError):
                 if m in self._own:
                     setattr(self._stream, m, self._own[m])
-                elif m in getattr(self._stream, "__dict__", {}):
+                elif m in attribute_or(self._stream, "__dict__", {}):
                     delattr(self._stream, m)  # back to the class's method
 
     def __exit__(self, *exc: Any) -> None:

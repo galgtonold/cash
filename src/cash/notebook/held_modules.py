@@ -39,6 +39,8 @@ import types
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 from .._memo import CODE_OBJECTS, LruMemo
 from ..code_digest import module_identity
 from ..loaded_code import class_functions
@@ -61,9 +63,9 @@ def held_module_parts(classes: Iterable[type]) -> tuple[list[str], set[str]]:
     code cannot be named (see the module docstring)."""
     by_module: dict[str, set[str]] = {}
     for cls in classes:
-        name = getattr(cls, "__module__", None)
+        name = attribute_or(cls, "__module__", None)
         if isinstance(name, str):
-            by_module.setdefault(name, set()).add(getattr(cls, "__qualname__", "") or "")
+            by_module.setdefault(name, set()).add(attribute_or(cls, "__qualname__", "") or "")
     parts: list[str] = []
     unkeyed: set[str] = set()
     for name in sorted(by_module):
@@ -88,7 +90,7 @@ def held_data_part(classes: Iterable[type], namespace: Mapping[str, Any]) -> str
 
 def _module_digest(name: str, qualnames: set[str]) -> str | None:
     module = sys.modules.get(name)
-    path = getattr(module, "__file__", None)
+    path = attribute_or(module, "__file__", None)
     if module is None or not path or not os.path.isfile(path):
         return None
     roots = {qualname.split(".", 1)[0] for qualname in qualnames}
@@ -139,7 +141,7 @@ def _loaded_identity(module: types.ModuleType) -> str:
     name = module.__name__
     parts: list[str] = []
     for attr, value in list(vars(module).items()):
-        if isinstance(value, type) and getattr(value, "__module__", None) == name:
+        if isinstance(value, type) and attribute_or(value, "__module__", None) == name:
             functions = class_functions(value)
         elif isinstance(value, types.FunctionType) and value.__module__ == name:
             functions = [value]

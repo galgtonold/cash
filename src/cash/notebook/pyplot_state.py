@@ -26,6 +26,8 @@ import logging
 import sys
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["CHANGED_PYPLOT_REASON", "pyplot_state"]
@@ -41,12 +43,12 @@ _NO_FIGURES: tuple[Any, ...] = (None, ())
 
 
 def _axes_state(ax: Any) -> tuple[Any, ...]:
-    children = getattr(ax, "_children", None)
+    children = attribute_or(ax, "_children", None)
     count = len(children) if children is not None else len(ax.get_children())
     return (
         id(ax),
         count,
-        id(getattr(ax, "legend_", None)),
+        id(attribute_or(ax, "legend_", None)),
         ax.title.get_text(),
         ax.xaxis.label.get_text(),
         ax.yaxis.label.get_text(),
@@ -54,9 +56,9 @@ def _axes_state(ax: Any) -> tuple[Any, ...]:
 
 
 def _figure_state(fig: Any) -> tuple[Any, ...]:
-    stack = getattr(fig, "_axstack", None)
+    stack = attribute_or(fig, "_axstack", None)
     current = stack.current() if stack is not None else None
-    suptitle = getattr(fig, "_suptitle", None)
+    suptitle = attribute_or(fig, "_suptitle", None)
     return (
         id(fig),
         id(current),
@@ -85,7 +87,7 @@ def pyplot_state() -> tuple[Any, ...] | object:
     if "matplotlib.pyplot" not in sys.modules:
         return _NO_FIGURES
     helpers = sys.modules.get("matplotlib._pylab_helpers")
-    gcf = getattr(helpers, "Gcf", None)
+    gcf = attribute_or(helpers, "Gcf", None)
     if gcf is None:
         return _NO_FIGURES
     try:

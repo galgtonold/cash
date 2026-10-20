@@ -16,6 +16,8 @@ import sys
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from cash._user_attrs import has_attribute
+
 __all__ = ["put_in_order", "unordered_sparse", "were_put_in_order"]
 
 
@@ -24,7 +26,7 @@ def _unordered(value: Any) -> bool:
     if "scipy.sparse" not in sys.modules or not type(value).__module__.startswith("scipy.sparse"):
         return False
     try:
-        return hasattr(value, "sum_duplicates") and not value.has_canonical_format
+        return has_attribute(value, "sum_duplicates") and not value.has_canonical_format
     except Exception:  # noqa: BLE001 - a format that cannot say: left as it is
         return False
 

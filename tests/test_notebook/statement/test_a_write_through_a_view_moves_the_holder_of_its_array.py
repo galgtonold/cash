@@ -91,16 +91,34 @@ def test_a_column_series_held_in_a_dict_reads_what_was_written(cash_magics, monk
         assert (ns["r"], ns["t"]) == (_plain(cells), 10.0 * value)
 
 
-def test_only_the_variables_the_statement_reads_are_walked(monkeypatch):
-    """A big structure the view statement does not read is not walked for
-    the array: it cannot have given the statement the array, and walking it
-    on every view statement ran the check out of budget."""
+def test_a_holder_the_statement_does_not_read_moves_too(cash_magics, monkeypatch):
+    """``cache`` got the array from a function, as a side effect: no link
+    shows it holds ``a``, and ``v = a[2:5]`` does not read it. Walking only
+    what the statement read missed it, and ``r`` was served 21 for 27."""
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    cells = [
+        "import numpy as np\ncache = {}\ndef f(x):\n    cache['k'] = x\n    return x",
+        "a = f(np.zeros(10))",
+        "v = a[2:5]",
+        "v[:] = 7",
+        "r = float(cache['k'].sum())",
+    ]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    cells[3] = "v[:] = 9"
+    for cell in cells[3:]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert cash_magics.shell.user_ns["r"] == _plain(cells) == 27.0
+
+
+def test_an_object_two_variables_hold_is_walked_once(monkeypatch):
+    """Every variable is walked for the array, in one walk: what two of
+    them hold is read once."""
     from cash.notebook import shared_objects
 
     a = np.arange(10.0)
-    data = {"x": a}
-    big = [[i] for i in range(1_000)]
-    view = data["x"][2:5]
+    shared = [[i] for i in range(100)] + [a]
+    view = a[2:5]
     walked = []
     real = shared_objects.children_of
 
@@ -109,9 +127,9 @@ def test_only_the_variables_the_statement_reads_are_walked(monkeypatch):
         return real(value)
 
     monkeypatch.setattr(shared_objects, "children_of", counting)
-    ns = {"a": a, "data": data, "big": big, "view": view}
-    assert shared_objects.view_base_names([view], ns, holders={"data"}) == {"a", "data", "view"}
-    assert id(big) not in walked and id(big[0]) not in walked
+    ns = {"a": a, "one": {"s": shared}, "two": {"s": shared}, "view": view}
+    assert shared_objects.view_base_names([view], ns) == {"a", "one", "two", "view"}
+    assert walked.count(id(shared)) == 1
 
 
 def test_a_list_nested_deeper_than_python_recurses_is_no_error(cash_magics):

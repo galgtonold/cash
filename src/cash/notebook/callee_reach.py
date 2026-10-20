@@ -25,6 +25,8 @@ from contextlib import contextmanager
 from itertools import repeat
 from typing import Any, NamedTuple
 
+from cash._user_attrs import attribute_or, has_attribute
+
 from .._memo import NOTEBOOK_STATEMENTS
 from ..analysis.analysis_budget import AnalysisBudgetExceeded
 from ..analysis.ast_util import parse_cached
@@ -252,9 +254,9 @@ _ENVIRON_SETTING_METHODS = frozenset({"update", "pop", "popitem", "setdefault", 
 #: how they are spelled where the namespace cannot say (after a restart).
 _PROCESS_SETTERS: tuple[tuple[Any, str], ...] = (
     (os.chdir, CWD),
-    (getattr(os, "fchdir", None), CWD),
+    (attribute_or(os, "fchdir", None), CWD),
     (os.putenv, ENVIRON),
-    (getattr(os, "unsetenv", None), ENVIRON),
+    (attribute_or(os, "unsetenv", None), ENVIRON),
 )
 _PROCESS_SPELLINGS = {"os.chdir": CWD, "os.fchdir": CWD, "os.putenv": ENVIRON, "os.unsetenv": ENVIRON}
 
@@ -286,7 +288,7 @@ def _is_environ(expr: ast.expr, namespace: Mapping[str, Any]) -> bool:
     of it, or (with nothing in the namespace to say) one spelled so."""
     value, _ = _static_value(expr, namespace)
     if value is not None:
-        return value is os.environ or value is getattr(os, "environb", None)
+        return value is os.environ or value is attribute_or(os, "environb", None)
     return dotted_name(expr) in ENVIRON_NAMES
 
 
@@ -414,7 +416,7 @@ def _state_writes(
                     called(decorator, None)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
             # What runs at definition: the decorators and the defaults.
-            pending.extend(getattr(node, "decorator_list", ()))
+            pending.extend(attribute_or(node, "decorator_list", ()))
             pending.extend(d for d in (*node.args.defaults, *node.args.kw_defaults) if d is not None)
             continue
         pending.extend(ast.iter_child_nodes(node))
@@ -422,7 +424,7 @@ def _state_writes(
             targets = node.targets if isinstance(node, (ast.Assign, ast.Delete)) else [node.target]
             for target in targets:
                 for part in ast.walk(target):
-                    if isinstance(part, ast.expr) and isinstance(getattr(part, "ctx", None), (ast.Store, ast.Del)):
+                    if isinstance(part, ast.expr) and isinstance(attribute_or(part, "ctx", None), (ast.Store, ast.Del)):
                         rooted(part)
                         if (
                             process is not None
@@ -519,7 +521,7 @@ def _state_home(value: Any, namespace: Mapping[str, Any]) -> str | None:
     if inspect.isroutine(value):
         return None
     if isinstance(value, type):
-        home = _loaded(getattr(value, "__module__", None))
+        home = _loaded(attribute_or(value, "__module__", None))
         return home.__name__ if home is not None and vars(home) is not namespace and _is_local(home) else None
     # Every local module loaded but the one whose globals *namespace* is:
     # ``from mylib import CONFIG`` alone leaves no other trace of ``mylib``.
@@ -644,13 +646,13 @@ def _static_value(expr: ast.expr, namespace: Mapping[str, Any]) -> tuple[Any, ty
 def _of_a_local_class(value: Any) -> bool:
     """An instance whose class a local module defines: its attributes are
     followed (``mylib.CFG.sub.setk``)."""
-    home = _loaded(getattr(type(value), "__module__", None))
+    home = _loaded(attribute_or(type(value), "__module__", None))
     return home is not None and _is_local(home)
 
 
 def _plain_attribute(value: Any) -> bool:
     """A value held in a ``__dict__``, not a descriptor that computes one."""
-    return not hasattr(type(value), "__get__") or isinstance(value, (types.FunctionType, type))
+    return not has_attribute(type(value), "__get__") or isinstance(value, (types.FunctionType, type))
 
 
 def _class_state_written(fn: types.FunctionType, kind: str, receiver: Any, namespace: Mapping[str, Any]) -> set[str]:
@@ -829,7 +831,7 @@ def _function_body(fn: types.FunctionType) -> list[ast.stmt]:
         target = inspect.unwrap(fn)
     except ValueError:  # a __wrapped__ cycle
         target = fn
-    code = getattr(target, "__code__", None)
+    code = attribute_or(target, "__code__", None)
     if not isinstance(code, types.CodeType):
         return []
     return list(_code_body(code))
@@ -936,7 +938,7 @@ def module_holders(module: types.ModuleType, namespace: Mapping[str, Any]) -> fr
             if held.__globals__ is own:
                 names.add(name)
         elif isinstance(held, type):
-            if getattr(held, "__module__", None) == module.__name__:
+            if attribute_or(held, "__module__", None) == module.__name__:
                 names.add(name)
         elif id(held) in data_ids:
             names.add(name)
@@ -1153,7 +1155,7 @@ class _Found:
         if id(cls) in self._function_ids:
             return
         self._function_ids.add(id(cls))
-        home = _loaded(getattr(cls, "__module__", None))
+        home = _loaded(attribute_or(cls, "__module__", None))
         if home is not None and _is_local(home):
             self.modules.add(home.__name__)
             for attr, attr_value in list(vars(cls).items()):
@@ -1179,7 +1181,7 @@ class _Found:
         return known
 
     def _decide_users_class(self, cls: type) -> bool:
-        home = _loaded(getattr(cls, "__module__", None))
+        home = _loaded(attribute_or(cls, "__module__", None))
         if home is not None and _is_local(home):
             return True
         if _is_c_type(cls):
@@ -1290,7 +1292,7 @@ def _is_c_type(cls: type) -> bool:
     """Was *cls* made by C code rather than a ``class`` statement? A static
     type, or a heap type an extension created immutable; Python cannot make
     either, nor give one a method."""
-    flags = getattr(cls, "__flags__", 0)
+    flags = attribute_or(cls, "__flags__", 0)
     return not flags & _HEAPTYPE or bool(flags & _IMMUTABLETYPE)
 
 
@@ -1317,7 +1319,7 @@ def _is_data(value: Any) -> bool:
         or isinstance(value, (types.ModuleType, type, sqlite3.Connection, sqlite3.Cursor))
         or inspect.isroutine(value)
         or is_runtime_machinery(value)
-        or getattr(value, "_is_file_tracker_patch", False) is True
+        or attribute_or(value, "_is_file_tracker_patch", False) is True
     )
 
 

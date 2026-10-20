@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 from cash import _plain_data
 from cash._memo import CODE_OBJECTS, LruMemo
 from cash._paths import is_pseudo_filename
+from cash._user_attrs import attribute_or, has_attribute
 from cash.analysis.bytecode import NAME_LOADS, argvals
 from cash.analysis.callee_effects import source_global_mutations
 from cash.analysis.namespace_effects import capturable_globals
@@ -113,7 +114,7 @@ def callee_mutated_globals(fn) -> tuple[str, ...]:
     ``()``, so its writes are not captured -- as for any call cash cannot see
     into.
     """
-    globals_dict = getattr(fn, "__globals__", None)
+    globals_dict = attribute_or(fn, "__globals__", None)
     if not isinstance(globals_dict, dict):
         return ()
     # A name the callee reads from its closure is one too: `seen.append(x)`
@@ -124,7 +125,7 @@ def callee_mutated_globals(fn) -> tuple[str, ...]:
     # Every layer of a ``functools.wraps`` wrapper runs: a ``counted``
     # decorator's ``calls[name] += 1`` as much as the wrapped body.
     for layer in wrapper_layers(fn):
-        layer_globals = getattr(layer, "__globals__", None)
+        layer_globals = attribute_or(layer, "__globals__", None)
         if not isinstance(layer_globals, dict):
             continue
         # The functions the layer reaches in the same namespace write those
@@ -166,7 +167,7 @@ def _functions_reached_in(globals_dict: dict, fn) -> list:
     seen = {id(fn)}
     pending = [fn]
     while pending:
-        code = getattr(pending.pop(), "__code__", None)
+        code = attribute_or(pending.pop(), "__code__", None)
         if code is None:
             continue
         names = _CODE_NAMES.get(code)
@@ -185,7 +186,7 @@ def _source_mutations(fn) -> tuple[str, ...]:
     """The free names *fn*'s own source mutates in place, sorted, memoised
     on its code: a ``functools.wraps`` wrapper's own body, not the wrapped
     function's (`own_source`)."""
-    memo_key = getattr(fn, "__code__", None)
+    memo_key = attribute_or(fn, "__code__", None)
     cached = _GLOBAL_MUTATION_CACHE.get(memo_key) if memo_key is not None else None
     if cached is None:
         try:
@@ -339,7 +340,7 @@ def call_cache_key(
         # already asserts across statements.
         if code_names:
             occurrence = 0
-        elif getattr(site, "content_source", ""):
+        elif attribute_or(site, "content_source", ""):
             source, occurrence = site.content_source, 0
     keyed = compute_cache_key(
         source,
@@ -457,10 +458,10 @@ def _code_names(code: _types.CodeType) -> frozenset[str]:
 
 def _plain_or_code(value, seen: set[int], budget: list[int]) -> bool:
     if isinstance(value, _types.FunctionType):
-        if getattr(value, "_is_file_tracker_patch", False) or getattr(value, "_cash_cached", False):
+        if attribute_or(value, "_is_file_tracker_patch", False) or attribute_or(value, "_cash_cached", False):
             return True  # cash's own: keyed or tracked by cash itself
 
-        filename = getattr(value.__code__, "co_filename", "") or ""
+        filename = attribute_or(value.__code__, "co_filename", "") or ""
         # A cell's code has a `<cash-...>` / `<ipython-...>` name: the user's.
         if filename and not is_pseudo_filename(filename) and not is_user_path(filename):
             # A library's function is code, as its classes are. Its module
@@ -484,7 +485,7 @@ def _callee_state_is_plain(fn, seen: set[int], budget: list[int]) -> bool:
     if id(fn) in seen:
         return True
     seen.add(id(fn))
-    namespace = getattr(fn, "__globals__", None) or {}
+    namespace = attribute_or(fn, "__globals__", None) or {}
     for name in _code_names(fn.__code__):
         if name in namespace and not _plain_or_code(namespace[name], seen, budget):
             return False
@@ -510,7 +511,7 @@ def _nbytes(value) -> int:
         if sized is not None:
             return int(sized)
         usage = value.memory_usage(index=True, deep=False)
-        return int(usage.sum() if hasattr(usage, "sum") else usage)
+        return int(usage.sum() if has_attribute(usage, "sum") else usage)
     if isinstance(value, (str, bytes)):
         return len(value)
     return 0
@@ -526,13 +527,13 @@ def global_names_reached(fn, seen: set[int] | None = None) -> set[str]:
     pending = [fn]
     while pending:
         current = pending.pop()
-        code = getattr(current, "__code__", None)
+        code = attribute_or(current, "__code__", None)
         if code is None or id(current) in seen:
             continue
         seen.add(id(current))
         own = _code_names(code)
         names |= own
-        namespace = getattr(current, "__globals__", None) or {}
+        namespace = attribute_or(current, "__globals__", None) or {}
         for name in own:
             value = namespace.get(name)
             if isinstance(value, _types.FunctionType):
@@ -541,7 +542,7 @@ def global_names_reached(fn, seen: set[int] | None = None) -> set[str]:
                 # A class the callee builds or calls into: its methods read globals too.
                 seen.add(id(value))
                 for member in vars(value).values():
-                    member = getattr(member, "__func__", member)
+                    member = attribute_or(member, "__func__", member)
                     if isinstance(member, _types.FunctionType):
                         pending.append(member)
     return names
@@ -557,7 +558,7 @@ def _user_global_names_reached(fn) -> set[str]:
     pending = [fn]
     while pending:
         current = pending.pop()
-        code = getattr(current, "__code__", None)
+        code = attribute_or(current, "__code__", None)
         if code is None or id(current) in seen:
             continue
         seen.add(id(current))
@@ -566,7 +567,7 @@ def _user_global_names_reached(fn) -> set[str]:
             continue
         own = _code_names(code)
         names |= own
-        namespace = getattr(current, "__globals__", None) or {}
+        namespace = attribute_or(current, "__globals__", None) or {}
         for name in own:
             value = namespace.get(name)
             if isinstance(value, _types.FunctionType):
@@ -577,7 +578,7 @@ def _user_global_names_reached(fn) -> set[str]:
                 seen.add(id(value))
                 pending.extend(
                     member
-                    for member in (getattr(m, "__func__", m) for m in vars(value).values())
+                    for member in (attribute_or(m, "__func__", m) for m in vars(value).values())
                     if isinstance(member, _types.FunctionType)
                 )
     return names
@@ -651,7 +652,7 @@ def code_arg_positions(site: CallSite, args: tuple, kwargs: dict) -> tuple[int, 
     )
     if not positions:
         return ()
-    names = getattr(site, "arg_names", ())
+    names = attribute_or(site, "arg_names", ())
     if len(names) != len(combined) or any(names[pos] is None for pos in positions):
         return None
     return positions
@@ -707,7 +708,7 @@ def global_digests(fn, names: tuple[str, ...]) -> dict[str, str]:
     refuses to store any entry whose capture is not sound, and the pair of
     them fails closed.
     """
-    globals_dict = getattr(fn, "__globals__", None) or {}
+    globals_dict = attribute_or(fn, "__globals__", None) or {}
     cells = closure_cells(fn)
     digests: dict[str, str] = {}
     for name in names:
@@ -790,7 +791,7 @@ class CallKeys:
                 and _keys_by_content(fn, site, args, kwargs, loop_vars, code_positions)
             )
             code_positions = code_positions or ()
-            if getattr(site, "in_loop_unit", False) and not by_content:
+            if attribute_or(site, "in_loop_unit", False) and not by_content:
                 return None
             arg_digests = self._arg_digests(site, args, kwargs)
             code_names: frozenset[str] = frozenset()
@@ -915,7 +916,7 @@ class CallKeys:
         function (one of *code_names*) is keyed by its name's code."""
         combined = (*args, *kwargs.values())
         digests = {}
-        for name, pos in getattr(site, "name_arg_positions", ()):
+        for name, pos in attribute_or(site, "name_arg_positions", ()):
             if name in code_names:
                 continue
             if pos < len(combined) and _nbytes(combined[pos]) <= _NAME_CONTENT_MAX_BYTES:
@@ -951,7 +952,7 @@ class CallKeys:
             if site_id in self._keyed_this_run:
                 return
             self._keyed_this_run.add(site_id)
-            lineages = getattr(ctx, "variable_lineage", None) or {}
+            lineages = attribute_or(ctx, "variable_lineage", None) or {}
             parts = {name: lineages.get(name) for name in site.free_names}
             for i, digest in enumerate(arg_digests or ()):
                 parts[f"argument {i + 1}"] = digest
@@ -987,7 +988,7 @@ class CallKeys:
         loop_vars = {name: value for name, value in self._current_loop_vars().items() if not _is_dunder_loop_var(name)}
         digests = self._current_loop_var_digests()
         values = tuple(sorted((name, _loop_var_digest(name, value, digests)) for name, value in loop_vars.items()))
-        return (site.source, site.occurrence_index, getattr(site, "stmt_identity", ""), values)
+        return (site.source, site.occurrence_index, attribute_or(site, "stmt_identity", ""), values)
 
     def why_missed(self, site: CallSite) -> str | None:
         """Which named part of this call's key moved since it was last keyed.

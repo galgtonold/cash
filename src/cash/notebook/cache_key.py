@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 from cash._memo import CODE_OBJECTS, NOTEBOOK_STATEMENTS, LruMemo
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, has_attribute
 from cash.analysis.bytecode import argvals
 from cash.notebook.lineage_store import resolve_lineage
 from cash.source_norm import exact_source_digest, unparse_without_docstrings
@@ -515,7 +515,7 @@ def called_function_dependencies(
                     continue
                 # Builtins are constant. Modules carry their own key component,
                 # which is decided below: an attribute name is kept whatever it names.
-                if not hasattr(builtins, ref):
+                if not has_attribute(builtins, ref):
                     referenced.add(ref)
                 if ref in attrs:
                     attribute_only.add(ref)
@@ -598,7 +598,7 @@ def _users_own_globals(fn: Any, user_ns: Mapping[str, Any]) -> Mapping[str, Any]
     library's function imported by name: it is walked for the notebook
     globals it names, but what it looks up by a string is its own
     library's business (``namedtuple`` reads its caller's ``f_globals``)."""
-    namespace = getattr(fn, "__globals__", None)
+    namespace = attribute_or(fn, "__globals__", None)
     if namespace is user_ns:
         return namespace
     if not isinstance(namespace, dict):
@@ -644,7 +644,7 @@ def called_function_globals(
                 continue
             code_objs.extend(c for c in code_obj.co_consts if isinstance(c, types.CodeType))
             for ref in _global_names(code_obj):
-                if ref in ("get_ipython", "__builtins__") or hasattr(builtins, ref):
+                if ref in ("get_ipython", "__builtins__") or has_attribute(builtins, ref):
                     continue
                 if isinstance(user_ns.get(ref), types.ModuleType) or (
                     virtual is not None and ref not in user_ns and virtual.is_module(ref)
@@ -905,7 +905,7 @@ def _collect_output_module_hashes(
             hashes.append(f"out:{out_var}:{variable_lineage[out_var]}")
             logger.debug("[CACHE_KEY] Output module lineage for %r: %.12s...", out_var, variable_lineage[out_var])
         elif callable(val):
-            obj_module = getattr(val, "__module__", None)
+            obj_module = attribute_or(val, "__module__", None)
             if obj_module and obj_module in variable_lineage:
                 hashes.append(f"from_out:{out_var}:{obj_module}:{variable_lineage[obj_module]}")
                 logger.debug(

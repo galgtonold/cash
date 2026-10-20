@@ -35,6 +35,8 @@ import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any, NamedTuple
 
+from cash._user_attrs import attribute_or
+
 from .. import _native
 from .._memo import CODE_OBJECTS, LruMemo
 from ..install_paths import is_user_code_module
@@ -178,7 +180,7 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
     functions, classes, complete = found
     codes: dict[int, types.CodeType] = {}
     for fn in functions:
-        code = getattr(fn, "__code__", None)
+        code = attribute_or(fn, "__code__", None)
         if isinstance(code, types.CodeType):
             codes.setdefault(id(code), code)
     module_classes: dict[int, type] = {}
@@ -200,14 +202,14 @@ def _plain_function(fn: types.FunctionType) -> bool:
 def _globals_ids(namespace: Mapping[str, Any]) -> frozenset[int]:
     """The ids of the dicts a notebook function's ``__globals__`` can be:
     *namespace*, or each map of a ``ChainMap`` over it."""
-    maps = getattr(namespace, "maps", None)
+    maps = attribute_or(namespace, "maps", None)
     if isinstance(maps, list):
         return frozenset(id(m) for m in maps)
     return frozenset((id(namespace),))
 
 
 def _is_notebook(fn: Any, namespace: Mapping[str, Any]) -> bool:
-    return id(getattr(fn, "__globals__", None)) in _globals_ids(namespace)
+    return id(attribute_or(fn, "__globals__", None)) in _globals_ids(namespace)
 
 
 def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
@@ -246,7 +248,7 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
     """
     if _objects_frozen_since_import():
         return True
-    maps = getattr(namespace, "maps", None)
+    maps = attribute_or(namespace, "maps", None)
     dicts = list(maps) if isinstance(maps, list) else [namespace]
     globals_ids = _globals_ids(namespace)
     running = _code_running_in(globals_ids)
@@ -333,7 +335,7 @@ def _users_module(module: Any) -> bool:
     notebook's ``__main__``?"""
     if not isinstance(module, types.ModuleType):
         return False
-    name = getattr(module, "__name__", None)
+    name = attribute_or(module, "__name__", None)
     if not isinstance(name, str) or name in _MAIN_NAMES:
         return False
     held = _USERS_MODULE.get(name)
@@ -360,8 +362,8 @@ def _of_a_users_module(cls: type) -> bool:
         return False
     if known is not None:
         return known
-    verdict = bool(getattr(cls, "__flags__", 0) & _HEAP_TYPE) and _users_module(
-        sys.modules.get(getattr(cls, "__module__", None) or "")
+    verdict = bool(attribute_or(cls, "__flags__", 0) & _HEAP_TYPE) and _users_module(
+        sys.modules.get(attribute_or(cls, "__module__", None) or "")
     )
     try:
         _USERS_CLASS[cls] = verdict
@@ -737,7 +739,7 @@ def _may_have_dict(kind: type) -> bool:
     object of *kind*: it has an instance dict, or a class along its MRO
     defines ``__dict__``. An openpyxl cell has slots only, and asking each of
     400,000 for its ``__dict__`` raised as many AttributeErrors."""
-    if getattr(kind, "__dictoffset__", 1):
+    if attribute_or(kind, "__dictoffset__", 1):
         return True
     try:
         return any("__dict__" in vars(klass) for klass in kind.__mro__)
@@ -819,8 +821,8 @@ def _defined_in(klass: type, globals_ids: frozenset[int]) -> bool:
         return False
     if any(id(fn.__globals__) in globals_ids for member in members for fn in _member_functions(member)):
         return True
-    module = sys.modules.get(getattr(klass, "__module__", None) or "")
-    return module is not None and id(getattr(module, "__dict__", None)) in globals_ids
+    module = sys.modules.get(attribute_or(klass, "__module__", None) or "")
+    return module is not None and id(attribute_or(module, "__dict__", None)) in globals_ids
 
 
 def _own_mro(cls: type, globals_ids: frozenset[int]) -> list[type]:
@@ -833,11 +835,11 @@ def _notebook_class(cls: type, globals_ids: frozenset[int]) -> bool:
     library is told at once by its module: its 500 members are not read."""
     if not cls.__flags__ & _HEAP_TYPE:
         return False  # a type built into the interpreter or an extension
-    name = getattr(cls, "__module__", None) or ""
+    name = attribute_or(cls, "__module__", None) or ""
     module = sys.modules.get(name)
     # ``builtins`` too: a class a cell ``exec``s with no ``__name__`` in
     # its namespace says it is from there.
-    if name not in _MAIN_NAMES and module is not None and id(getattr(module, "__dict__", None)) not in globals_ids:
+    if name not in _MAIN_NAMES and module is not None and id(attribute_or(module, "__dict__", None)) not in globals_ids:
         if not is_user_code_module(module):
             return False
     return bool(_own_mro(cls, globals_ids))

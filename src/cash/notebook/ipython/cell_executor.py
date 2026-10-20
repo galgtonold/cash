@@ -49,6 +49,8 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from IPython.core.inputtransformer2 import leading_indent
 
+from cash._user_attrs import attribute_or, has_attribute
+
 from ..._clock import perf_counter as _perf_counter
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.ast_util import resolve_callee
@@ -438,8 +440,8 @@ def _builtin_trap(shell: Any):
     Anything else that detects a notebook that way was fooled too. The
     trap nests, so IPython's own run inside it is unaffected.
     """
-    trap = getattr(shell, "builtin_trap", None)
-    if trap is None or not hasattr(trap, "__enter__"):
+    trap = attribute_or(shell, "builtin_trap", None)
+    if trap is None or not has_attribute(trap, "__enter__"):
         return contextlib.nullcontext()
     return trap
 
@@ -468,7 +470,7 @@ class _BodyNotRun(Exception):
 
 def _set_written_later(executor: Any, names: frozenset[str]) -> None:
     """Tell the statement processor which names the rest of the cell writes."""
-    processor = getattr(executor, "_statement_processor", None)
+    processor = attribute_or(executor, "_statement_processor", None)
     if processor is not None:
         processor.set_written_later_in_cell(names)
 
@@ -1309,8 +1311,10 @@ class CellExecutor:
         (``exec_source_for_node``).
         """
         _set_written_later(self, written_later)
-        shell = getattr(self, "shell", None)
-        place = statement_place(getattr(shell, "compile", None), running_cell_count(shell), first_line, cell.raw_cell)
+        shell = attribute_or(self, "shell", None)
+        place = statement_place(
+            attribute_or(shell, "compile", None), running_cell_count(shell), first_line, cell.raw_cell
+        )
         try:
             with place:
                 metrics = yield _Step(

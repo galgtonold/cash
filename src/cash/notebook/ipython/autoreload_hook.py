@@ -30,6 +30,8 @@ import types
 from collections.abc import Callable, Iterable, Iterator
 from typing import Any
 
+from cash._user_attrs import attribute_or, has_attribute
+
 from ...tracking.function_tracker import is_local_module
 
 __all__ = ["in_place_reload", "run_autoreload_now"]
@@ -39,9 +41,9 @@ logger = logging.getLogger(__name__)
 
 def _reloader_of(shell: Any) -> Any:
     """The ``%autoreload`` extension's reloader, when it is loaded."""
-    registry = getattr(getattr(shell, "magics_manager", None), "registry", None)
+    registry = attribute_or(attribute_or(shell, "magics_manager", None), "registry", None)
     magics = registry.get("AutoreloadMagics") if isinstance(registry, dict) else None
-    return getattr(magics, "_reloader", None)
+    return attribute_or(magics, "_reloader", None)
 
 
 def in_place_reload(shell: Any) -> Callable[[types.ModuleType, Callable[[types.ModuleType], Any]], bool] | None:
@@ -57,8 +59,8 @@ def in_place_reload(shell: Any) -> Callable[[types.ModuleType, Callable[[types.M
     function's code, and the class of each object of an old class.
     """
     reloader = _reloader_of(shell)
-    old_objects = getattr(reloader, "old_objects", None)
-    if not getattr(reloader, "enabled", False) or not isinstance(old_objects, dict):
+    old_objects = attribute_or(reloader, "old_objects", None)
+    if not attribute_or(reloader, "enabled", False) or not isinstance(old_objects, dict):
         return None
     try:
         from IPython.extensions.autoreload import superreload
@@ -70,16 +72,16 @@ def in_place_reload(shell: Any) -> Callable[[types.ModuleType, Callable[[types.M
         return None
 
     def reload(module: types.ModuleType, plain_reload: Callable[[types.ModuleType], Any]) -> bool:
-        name = getattr(module, "__name__", None)
+        name = attribute_or(module, "__name__", None)
         if not isinstance(name, str) or not _covers(reloader, name):
             return False
         kwargs: dict[str, Any] = {}
-        if getattr(reloader, "autoload_obj", False):
+        if attribute_or(reloader, "autoload_obj", False):
             # ``%autoreload 3`` also binds what the reload added.
             if "shell" in accepted:
                 kwargs["shell"] = shell
-            tracker = getattr(reloader, "import_from_tracker", None)
-            if "import_from_tracker" in accepted and getattr(tracker, "imports_froms", None):
+            tracker = attribute_or(reloader, "import_from_tracker", None)
+            if "import_from_tracker" in accepted and attribute_or(tracker, "imports_froms", None):
                 kwargs["import_from_tracker"] = tracker
         superreload(module, plain_reload, old_objects, **kwargs)
         return True
@@ -89,12 +91,12 @@ def in_place_reload(shell: Any) -> Callable[[types.ModuleType, Callable[[types.M
 
 def _covers(reloader: Any, name: str) -> bool:
     """Whether the extension reloads module *name* when its file changes."""
-    skipped = getattr(reloader, "skip_modules", None)
+    skipped = attribute_or(reloader, "skip_modules", None)
     if isinstance(skipped, dict) and name in skipped:
         return False
-    if getattr(reloader, "check_all", False):
+    if attribute_or(reloader, "check_all", False):
         return True
-    marked = getattr(reloader, "modules", None)
+    marked = attribute_or(reloader, "modules", None)
     return isinstance(marked, dict) and name in marked
 
 
@@ -116,8 +118,8 @@ def run_autoreload_now(shell: Any, reloaded: Iterable[str] = ()) -> set[str]:
     call took its arguments for changed (the helper's source read as none).
     """
     reloader = _reloader_of(shell)
-    mtimes = getattr(reloader, "modules_mtimes", None)
-    if not getattr(reloader, "enabled", False) or not isinstance(mtimes, dict):
+    mtimes = attribute_or(reloader, "modules_mtimes", None)
+    if not attribute_or(reloader, "enabled", False) or not isinstance(mtimes, dict):
         return set()
     current = set(reloaded)
     for name in current:
@@ -145,7 +147,7 @@ def _take_as_current(reloader: Any, name: str) -> None:
     if filename is None:
         return
     reloader.modules_mtimes[name] = mtime
-    failed = getattr(reloader, "failed", None)
+    failed = attribute_or(reloader, "failed", None)
     if isinstance(failed, dict):
         failed.pop(filename, None)
 
@@ -155,8 +157,8 @@ def _whole_module_reloads(reloader: Any) -> Iterator[None]:
     """Turn the deduplicating reload off for the check (see
     `run_autoreload_now`), so the extension falls back to its whole-module
     reload. An extension without one is left as it is."""
-    deduper = getattr(reloader, "deduper_reloader", None)
-    if deduper is None or not hasattr(type(deduper), "enabled"):
+    deduper = attribute_or(reloader, "deduper_reloader", None)
+    if deduper is None or not has_attribute(type(deduper), "enabled"):
         yield
         return
     was = deduper.enabled
@@ -175,11 +177,11 @@ def _whole_module_reloads(reloader: Any) -> Iterator[None]:
 def _note_sources(reloader: Any, names: set[str]) -> None:
     """Give the deduplicating reload the source each of *names* was reloaded
     from, so a later edit is compared with that one, not the one before."""
-    sources = getattr(getattr(reloader, "deduper_reloader", None), "source_by_modname", None)
+    sources = attribute_or(attribute_or(reloader, "deduper_reloader", None), "source_by_modname", None)
     if not isinstance(sources, dict):
         return
     for name in names:
-        filename = getattr(sys.modules.get(name), "__file__", None)
+        filename = attribute_or(sys.modules.get(name), "__file__", None)
         if name not in sources or not filename or not filename.endswith(".py"):
             continue
         try:
@@ -195,8 +197,8 @@ def _only_local_modules(reloader: Any) -> Iterator[None]:
     stats every loaded module, 5-15 ms with a data stack loaded, and its own
     ``pre_run_cell`` check still runs after the cell for the rest. A
     reloader without the attributes this narrows checks everything."""
-    check_all = getattr(reloader, "check_all", None)
-    marked = getattr(reloader, "modules", None)
+    check_all = attribute_or(reloader, "check_all", None)
+    marked = attribute_or(reloader, "modules", None)
     if not isinstance(check_all, bool) or not isinstance(marked, dict):
         yield
         return
@@ -216,7 +218,7 @@ _LOCAL: dict[str, tuple[types.ModuleType, bool]] = {}
 def _is_local(module: Any) -> bool:
     if not isinstance(module, types.ModuleType):
         return False
-    name = getattr(module, "__name__", None)
+    name = attribute_or(module, "__name__", None)
     held = _LOCAL.get(name) if isinstance(name, str) else None
     if held is not None and held[0] is module:
         return held[1]

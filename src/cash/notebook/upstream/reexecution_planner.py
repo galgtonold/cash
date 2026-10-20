@@ -7,6 +7,7 @@ import sys
 import textwrap
 from typing import TYPE_CHECKING
 
+from cash._user_attrs import has_attribute
 from cash.control_markers import iteration_digest
 
 from ...analysis.cacheability import statement_writes_files
@@ -574,7 +575,7 @@ class ReexecutionPlanner:
             if virtual_lineage is not None:
                 inputs |= self.callables.absent_callee_globals(inputs, virtual_lineage, virtual_modules or set())
             for v in sorted(inputs):
-                if v not in user_ns and hasattr(builtins, v):
+                if v not in user_ns and has_attribute(builtins, v):
                     continue
                 if v in user_ns and not self._live_is_behind_producer(simulation_trace, v, i, live_lineage):
                     continue

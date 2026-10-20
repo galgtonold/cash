@@ -15,6 +15,7 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from cash._user_attrs import attribute_or
 from cash.analysis.code_analyzer import CodeAnalyzer
 from cash.control_markers import strip_markers
 from cash.notebook.cache_key import CacheKeyContext
@@ -460,7 +461,7 @@ class CallRouting:
         # wins, exactly as it already wins over ``persist``). Absent an
         # annotation at all, neither opt-out is set, so interception proceeds.
         if annotation is not None and (
-            getattr(annotation, "no_cache_calls", False) or getattr(annotation, "no_cache", False)
+            attribute_or(annotation, "no_cache_calls", False) or attribute_or(annotation, "no_cache", False)
         ):
             return code, tree
         # Which statement's calls the call cache's "returned last" is about
@@ -601,7 +602,7 @@ class CallRouting:
     def _fold_plain_counts(self) -> None:
         """Bring the plain-run calls the rewritten lines counted into the
         unit's clocks before they are read."""
-        fold = getattr(self._call_cache, "fold_plain_counts", None)
+        fold = attribute_or(self._call_cache, "fold_plain_counts", None)
         if callable(fold):
             try:
                 fold()
@@ -616,13 +617,13 @@ class CallRouting:
         return CashMarks(
             tracking_seconds(),
             unit,
-            getattr(unit, "overhead_s", 0.0),
-            getattr(unit, "hits_saved_s", 0.0),
-            getattr(unit, "cached_compute_s", 0.0),
-            getattr(unit, "cached_restore_s", 0.0),
-            getattr(unit, "reads_seq", 0),
-            getattr(unit, "computed_s", 0.0),
-            getattr(unit, "tracking_in_calls_s", 0.0),
+            attribute_or(unit, "overhead_s", 0.0),
+            attribute_or(unit, "hits_saved_s", 0.0),
+            attribute_or(unit, "cached_compute_s", 0.0),
+            attribute_or(unit, "cached_restore_s", 0.0),
+            attribute_or(unit, "reads_seq", 0),
+            attribute_or(unit, "computed_s", 0.0),
+            attribute_or(unit, "tracking_in_calls_s", 0.0),
         )
 
     def _since(self, marks: CashMarks) -> CashMarks:
@@ -645,7 +646,7 @@ class CallRouting:
         same = unit is not None and unit is marks.unit
 
         def advanced(name: str, base: float) -> float:
-            return max(0.0, getattr(unit, name, 0.0) - (base if same else 0.0)) if unit is not None else 0.0
+            return max(0.0, attribute_or(unit, name, 0.0) - (base if same else 0.0)) if unit is not None else 0.0
 
         return CashMarks(
             max(0.0, tracking_seconds() - marks.tracking),
@@ -719,7 +720,7 @@ class CallRouting:
         without digesting it again. ``(None, None)`` otherwise."""
         if self._calls_wrapped_for != code:
             return None, None
-        outermost = getattr(self._call_cache, "outermost_result", None)
+        outermost = attribute_or(self._call_cache, "outermost_result", None)
         found = outermost() if callable(outermost) else None
         if not found:
             return None, None

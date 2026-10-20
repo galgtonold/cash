@@ -10,6 +10,8 @@ rows one step further in.
 
 from __future__ import annotations
 
+from cash._user_attrs import attribute_or
+
 from .. import theme
 from .._headline import mixed_headline
 from .._reasons import guard_summary_line, is_guard_reason, shorten_skipped_reason, stale_export_text
@@ -203,7 +205,7 @@ def _sub_unit_lines(row: StatementRow, pad: str) -> list[str]:
     return [
         f"{pad}    sub-call {g.call_source}: "
         f"{sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)}/{g.n_calls} hit"
-        + (f", {g.ran_plain} run plain (too cheap to cache)" if getattr(g, "ran_plain", 0) else "")
+        + (f", {g.ran_plain} run plain (too cheap to cache)" if attribute_or(g, "ran_plain", 0) else "")
         # Why it was not served, when the runtime worked it out. The HTML badge
         # shows this too; a bare "0/6 hit" reads a correct re-run as a bug
         # for want of the word after it.

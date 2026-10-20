@@ -18,6 +18,7 @@ import types
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
+from cash._user_attrs import attribute_or
 from cash.analysis.code_analyzer import CodeAnalyzer
 from cash.analysis.mutation_effects import live_function_source
 from cash.analysis.namespace_effects import statement_written_paths
@@ -170,7 +171,7 @@ class StatementRecords:
                     except Exception:  # noqa: BLE001 - no digest is a smaller record, not an error
                         entry["digest"] = None
                     entry["is_class"] = isinstance(value, type)
-                    func_code = getattr(value, "__code__", None)
+                    func_code = attribute_or(value, "__code__", None)
                     if isinstance(func_code, types.CodeType) and not entry["is_class"]:
                         try:
                             entry["code"] = base64.b64encode(marshal.dumps(func_code)).decode("ascii")

@@ -39,6 +39,8 @@ import types
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+from cash._user_attrs import attribute_or
+
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.callee_effects import callee_global_mutations
 from ...analysis.code_analyzer import CodeAnalyzer
@@ -86,7 +88,7 @@ logger = logging.getLogger(__name__)
 
 
 def _status(metric: Any) -> Any:
-    status = metric.get("status") if isinstance(metric, dict) else getattr(metric, "status", None)
+    status = metric.get("status") if isinstance(metric, dict) else attribute_or(metric, "status", None)
     return CacheStatus(status) if isinstance(status, str) and status in CacheStatus.__members__ else status
 
 
@@ -753,7 +755,7 @@ class ControlStructureProcessor:
             if cash_lineno is not None:
                 # ast.unparse produces code starting at line 1;
                 # the node in the cell starts at node.lineno.
-                cell_lineno = getattr(node, "lineno", 1) + cash_lineno - 1
+                cell_lineno = attribute_or(node, "lineno", 1) + cash_lineno - 1
                 with contextlib.suppress(AttributeError, TypeError):
                     error._cash_error_lineno = cell_lineno
 

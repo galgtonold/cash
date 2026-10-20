@@ -17,6 +17,7 @@ from typing import Any
 from cash import _plain_data, stored_pickle, value_hash
 from cash._active import default_cash
 from cash._clock import perf_counter as _perf_counter
+from cash._user_attrs import attribute_or
 from cash.backends import memory_backend
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, PersistencePolicy
 from cash.control_markers import has_marker
@@ -307,12 +308,12 @@ class StatementProcessor:
         self.expected_run_time: Callable[[str], float | None] = lambda code: None
 
         # The Cash instance's own, which the dashboard reads (`Cash.show_stats`).
-        analytics = getattr(cash_instance, "analytics", None)
+        analytics = attribute_or(cash_instance, "analytics", None)
         self.analytics_manager = (
             analytics
             if isinstance(analytics, AnalyticsManager)
             else AnalyticsManager(
-                enabled=getattr(getattr(cash_instance, "config", None), "analytics", True) is not False
+                enabled=attribute_or(attribute_or(cash_instance, "config", None), "analytics", True) is not False
             )
         )
 
@@ -1567,7 +1568,7 @@ class StatementProcessor:
             if wrote:
                 run.skip_cache = True
                 run.metrics["uncacheable_reasons"].append(wrote)
-        if not run.skip_cache and execution.result.success and not getattr(run.annotation, "assume_safe", False):
+        if not run.skip_cache and execution.result.success and not attribute_or(run.annotation, "assume_safe", False):
             workers = self._workers_reason(run)
             if workers:
                 run.skip_cache = True
@@ -1672,13 +1673,13 @@ class StatementProcessor:
         backend = self.cash_instance.backend if self.cash_instance else None
         written = kept_writes(
             execution.written_paths,
-            getattr(backend, "local_dir", None),
+            attribute_or(backend, "local_dir", None),
             execution.appended_paths,
             execution.waived_paths,
         )
         if not written:
             return None
-        if getattr(run.annotation, "assume_safe", False):
+        if attribute_or(run.annotation, "assume_safe", False):
             return None
         more = f" and {len(written) - 1} more" if len(written) > 1 else ""
         return (
@@ -1927,7 +1928,7 @@ class StatementProcessor:
         on the next one. ``is True``, because tests pass a MagicMock
         cash_instance whose attributes are all truthy.
         """
-        return getattr(getattr(self.cash_instance, "config", None), "persist_all", False) is True
+        return attribute_or(attribute_or(self.cash_instance, "config", None), "persist_all", False) is True
 
     def begin_cell_statement_log(self) -> None:
         """Start this cell's statement log, before its statements run."""
@@ -2079,7 +2080,7 @@ class StatementProcessor:
                     replay_bumps=False,
                     lineage_reads=run.pyplot_drawn,
                     settled=run.settled_digests,
-                    file_stats=getattr(execution.file_tracker, "checked_stats", None),
+                    file_stats=attribute_or(execution.file_tracker, "checked_stats", None),
                 )
             # Let go of the values they hold: the checks below count references.
             run.settled_digests = {}
@@ -2175,7 +2176,7 @@ class StatementProcessor:
 
         past = None
         if cost > value_hash.CHANGE_CHECK_BUDGET_S:
-            past = memory_backend.room_past_budget(getattr(self.cash_instance, "backend", None))
+            past = memory_backend.room_past_budget(attribute_or(self.cash_instance, "backend", None))
         return stored_pickle.keeping(stored, others, past, cost * PAST_BUDGET_SHARE)
 
     def _refuse_unrestorable_outputs(
@@ -2375,7 +2376,7 @@ class StatementProcessor:
         harmless line; no cell's data is changed in place through it."""
         if value is self.shell:
             return True
-        module = getattr(type(value), "__module__", None) or ""
+        module = attribute_or(type(value), "__module__", None) or ""
         return module.partition(".")[0] in _KERNEL_PACKAGES
 
     def _link_inputs_kept_by(self, run: StatementRun, echo: tuple[Any, ...] = (), cost: float = 0.0) -> None:
@@ -2415,7 +2416,7 @@ class StatementProcessor:
         if not handed:
             return
         history, named = output_history(user_ns, self.shell)
-        hidden = getattr(self.shell, "user_ns_hidden", None) or {}
+        hidden = attribute_or(self.shell, "user_ns_hidden", None) or {}
         cash_held = [*self._calls.held_call_results(), echo, run.metrics, *history]
         gave_up = GaveUp()
         try:
@@ -2510,7 +2511,7 @@ class StatementProcessor:
             return [], True
         user_ns = self.shell.user_ns
         history, named = output_history(user_ns, self.shell)
-        hidden = getattr(self.shell, "user_ns_hidden", None) or {}
+        hidden = attribute_or(self.shell, "user_ns_hidden", None) or {}
         # *held* are containers cash holds itself (a loop's iterable), each
         # one counted as such whatever else refers to it.
         cash_held = [
@@ -2580,7 +2581,7 @@ class StatementProcessor:
         if "numpy" not in sys.modules:
             return [], True
         user_ns = self.shell.user_ns
-        hidden = getattr(self.shell, "user_ns_hidden", None) or {}
+        hidden = attribute_or(self.shell, "user_ns_hidden", None) or {}
         links: list[tuple[Iterable[str], set[str]]] = []
 
         def skip_name(other: str) -> bool:
@@ -2591,7 +2592,7 @@ class StatementProcessor:
             with walk_budget(share_check_budget(cost)):
                 for name in outputs:
                     try:
-                        found = view_base_names([captured_vars[name]], user_ns, skip_name=skip_name, holders=inputs)
+                        found = view_base_names([captured_vars[name]], user_ns, skip_name=skip_name)
                     except ViewBasesCutShort as cut:
                         # What it found before the budget ran out stays linked.
                         if cut.names - {name}:
@@ -3066,7 +3067,7 @@ class StatementProcessor:
         (``ax.annotate`` per topic, reading a frame built from 10,000
         documents) re-checked all of them 52 times in one cell.
         """
-        wrote = bool(execution.written_paths) or not getattr(execution.result, "success", False)
+        wrote = bool(execution.written_paths) or not attribute_or(execution.result, "success", False)
         if not wrote:
             try:
                 wrote = (
@@ -3240,6 +3241,6 @@ def _open_stream(value: Any) -> bool:
 
 def _is_loop(tree: ast.AST | None) -> bool:
     """Whether *tree*, a statement's parse, is a ``for`` or ``while`` loop."""
-    body = getattr(tree, "body", None)
+    body = attribute_or(tree, "body", None)
     node = body[0] if isinstance(body, list) and len(body) == 1 else tree
     return isinstance(node, (ast.For, ast.AsyncFor, ast.While))

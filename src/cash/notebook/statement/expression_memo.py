@@ -36,6 +36,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from cash._user_attrs import attribute_or, has_attribute
 from cash.analysis.ast_util import copy_tree
 
 from ..shared_objects import output_history
@@ -86,12 +87,12 @@ _IMMUTABLE_ITEMS = frozenset(
 def _object_parts(value: Any) -> list[Any] | None:
     """The object-dtype parts of a frame, series or array, or None when
     they cannot be listed."""
-    dtype = getattr(value, "dtype", None)
+    dtype = attribute_or(value, "dtype", None)
     if dtype is not None:  # a series or an array
-        return [value] if getattr(dtype, "kind", "") == "O" else []
+        return [value] if attribute_or(dtype, "kind", "") == "O" else []
     try:
         dtypes = value.dtypes
-        return [value.iloc[:, i] for i, d in enumerate(dtypes) if getattr(d, "kind", "") == "O"]
+        return [value.iloc[:, i] for i, d in enumerate(dtypes) if attribute_or(d, "kind", "") == "O"]
     except Exception:  # noqa: BLE001 - not listed: not kept
         return None
 
@@ -111,7 +112,8 @@ def _holds_only_immutables(value: Any) -> bool:
     try:
         infer = pandas.api.types.infer_dtype
         return all(
-            infer(part.ravel() if hasattr(part, "ravel") and part.ndim > 1 else part, skipna=True) in _IMMUTABLE_ITEMS
+            infer(part.ravel() if has_attribute(part, "ravel") and part.ndim > 1 else part, skipna=True)
+            in _IMMUTABLE_ITEMS
             for part in parts
         )
     except Exception:  # noqa: BLE001 - not told: not kept
@@ -137,7 +139,7 @@ def _arrays(value: Any) -> list[Any] | None:
             continue
         # An extension array: its numpy parts, where it has them.
         for attr in ("_ndarray", "_data", "_mask", "_codes"):
-            part = getattr(array, attr, None)
+            part = attribute_or(array, attr, None)
             if isinstance(part, numpy.ndarray):
                 arrays.append(part)
     return arrays
@@ -244,7 +246,7 @@ class ExpressionMemo:
         if reads_a_stream is not None and reads_a_stream():
             return
         try:
-            kept = copy.deepcopy(value) if not hasattr(value, "copy") else value.copy()
+            kept = copy.deepcopy(value) if not has_attribute(value, "copy") else value.copy()
         except Exception:  # noqa: BLE001 - a value that cannot be copied is not kept
             return
         self._kept[key] = (kept, seconds, statement_key)
@@ -286,7 +288,7 @@ class ExpressionMemo:
                 if isinstance(node, (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
                     return node
                 if isinstance(node, (ast.Call, ast.Attribute, ast.Subscript, ast.BinOp)) and isinstance(
-                    getattr(node, "ctx", ast.Load()), ast.Load
+                    attribute_or(node, "ctx", ast.Load()), ast.Load
                 ):
                     key = memo._key(node, lineages, namespace)
                     hit = memo._kept.get(key) if key is not None else None

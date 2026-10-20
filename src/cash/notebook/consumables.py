@@ -47,6 +47,8 @@ import types
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from cash._user_attrs import attribute_or, has_attribute
+
 from ..analysis.mutation_effects import captured_call_receivers
 from ..analysis.mutations import consumed_input_names
 
@@ -66,7 +68,7 @@ __all__ = [
 _ITERTOOLS_TYPES: tuple[type, ...] = tuple(
     t
     for t in (
-        getattr(itertools, name, None)
+        attribute_or(itertools, name, None)
         for name in (
             "count",
             "cycle",
@@ -99,7 +101,7 @@ _GENERATOR_TYPES: tuple[type, ...] = (
 )
 
 _QUEUE_TYPES: tuple[type, ...] = tuple(
-    t for t in (getattr(queue, n, None) for n in ("Queue", "SimpleQueue")) if isinstance(t, type)
+    t for t in (attribute_or(queue, n, None) for n in ("Queue", "SimpleQueue")) if isinstance(t, type)
 )
 
 
@@ -110,7 +112,7 @@ def _is_self_iterator(obj: Any) -> bool:
     whose ``__iter__`` hands back a fresh cursor each time.
     """
     cls = type(obj)
-    if not hasattr(cls, "__iter__") or not hasattr(cls, "__next__"):
+    if not has_attribute(cls, "__iter__") or not has_attribute(cls, "__next__"):
         return False
     try:
         return iter(obj) is obj
@@ -134,7 +136,7 @@ def _hits_byref_fallback(obj: Any) -> bool:
     succeeds while ``deepcopy`` chokes on its internal ``threading.Lock`` — so
     queues are classified by an explicit ``isinstance`` branch instead.)
     """
-    if hasattr(type(obj), "__deepcopy__") or hasattr(type(obj), "__copy__"):
+    if has_attribute(type(obj), "__deepcopy__") or has_attribute(type(obj), "__copy__"):
         return False
     try:
         obj.__reduce_ex__(4)
@@ -208,15 +210,15 @@ def consumable_state(obj: Any) -> Any | None:
             return None
     # Open file handles: byte offset is exact and cheap. Closed/unseekable
     # streams raise -> no probe.
-    if hasattr(obj, "tell") and hasattr(obj, "read"):
+    if has_attribute(obj, "tell") and has_attribute(obj, "read"):
         try:
-            return ("tell", obj.tell(), bool(getattr(obj, "closed", False)))
+            return ("tell", obj.tell(), bool(attribute_or(obj, "closed", False)))
         except (OSError, ValueError, AttributeError):
             return None
     # ``itertools.count`` renders its next value (``count(5)``); the other
     # itertools iterators keep their cursor entirely in C with no observable
     # handle, so they fall through to ``None``.
-    if isinstance(obj, getattr(itertools, "count", ())):
+    if isinstance(obj, attribute_or(itertools, "count", ())):
         try:
             return ("count", repr(obj))
         except Exception:  # noqa: BLE001 - repr of a foreign object
@@ -262,14 +264,14 @@ def is_write_stream(obj: Any) -> bool:
     """
     if isinstance(obj, (io.StringIO, io.BytesIO)):
         return False
-    writable = getattr(obj, "writable", None)
-    if not callable(writable) or not hasattr(obj, "write"):
+    writable = attribute_or(obj, "writable", None)
+    if not callable(writable) or not has_attribute(obj, "write"):
         return False
     try:
         return writable() is True
     except ValueError:
         # Closed: ``writable()`` refuses, the mode it was opened in remains.
-        mode = getattr(obj, "mode", None)
+        mode = attribute_or(obj, "mode", None)
         return isinstance(mode, str) and any(c in mode for c in "wax+")
     except (OSError, AttributeError):
         return False

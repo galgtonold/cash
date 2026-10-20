@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from cash._user_attrs import attribute_or
+
 if TYPE_CHECKING:
     from ..tracking_state import TrackingState
 
@@ -78,7 +80,7 @@ def _budget_cut(state: TrackingState, stale: list[str], current) -> str:
     """Why the first of *stale* that counts as changed because its change
     check ran out of its budget (`value_hash.budgeted_hash`) changed, or
     "": not read through, it may well be what it was."""
-    cuts = getattr(state, "budget_cut_lineages", None) or {}
+    cuts = attribute_or(state, "budget_cut_lineages", None) or {}
     for name in stale:
         found = cuts.get(name)
         if found is not None and found[0] == current.get(name):

@@ -19,6 +19,8 @@ import sys
 from collections.abc import Mapping
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 __all__ = ["current_figure_names", "draws_through_pyplot", "holds_artists", "pyplot_draw_names"]
 
 #: The pyplot functions that do not draw on the current axes or figure:
@@ -79,7 +81,7 @@ def _is_pyplot(node: ast.AST, namespace: Mapping[str, Any]) -> bool:
     if isinstance(node, ast.Name):
         value = namespace.get(node.id)
         if value is not None:
-            return getattr(value, "__name__", None) == "matplotlib.pyplot"
+            return attribute_or(value, "__name__", None) == "matplotlib.pyplot"
         return node.id in ("plt", "pyplot")
     return False
 
@@ -160,7 +162,7 @@ def holds_artists(value: Any) -> bool:
     """Whether *value* is a matplotlib artist (a figure, an axes) or a list,
     tuple or numpy object array of them (``plt.subplots(1, 3)``'s axes)."""
     module = sys.modules.get("matplotlib.artist")
-    artist = getattr(module, "Artist", None)
+    artist = attribute_or(module, "Artist", None)
     if artist is None:
         return False
     if isinstance(value, artist):

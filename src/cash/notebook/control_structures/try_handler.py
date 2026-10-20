@@ -23,6 +23,7 @@ import hashlib
 import logging
 from typing import TYPE_CHECKING
 
+from cash._user_attrs import attribute_or
 from cash.control_markers import mark_control
 
 from ..cache_status import CacheStatus
@@ -316,7 +317,7 @@ class TryHandler:
                 statements.append(f"  {ast.unparse(stmt)}")
 
         # Always show finally
-        if getattr(node, "finalbody", None):
+        if attribute_or(node, "finalbody", None):
             statements.append("finally:")
             for stmt in node.finalbody:
                 statements.append(f"  {ast.unparse(stmt)}")

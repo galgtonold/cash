@@ -13,6 +13,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from cash._user_attrs import attribute_or
+
 from .. import compute_baselines
 from ..cache_status import CacheStatus
 from ..provenance import ProvenanceTracker
@@ -141,7 +143,7 @@ class CashSession:
         saving.
         """
         if not self._baselines.persistent:
-            resolved = compute_baselines.store_for_backend(getattr(self._cash_instance, "backend", None))
+            resolved = compute_baselines.store_for_backend(attribute_or(self._cash_instance, "backend", None))
             if resolved is not None and resolved.persistent:
                 self._baselines = resolved
         return self._baselines

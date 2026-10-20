@@ -19,6 +19,8 @@ import sys
 import types
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 from ..code_digest import callable_identity
 from ..install_paths import is_user_code_file, is_user_code_module
 from ..value_types import LEAF_TYPES
@@ -108,7 +110,7 @@ def _visit_group(
         return
     parts.append(f"obj:{code}")
     for obj in group:
-        attrs = getattr(obj, "__dict__", None)
+        attrs = attribute_or(obj, "__dict__", None)
         if isinstance(attrs, dict):
             children.extend(attrs.values())
 
@@ -139,14 +141,14 @@ def _visit(obj: Any, parts: list[str], classes: dict[type, str | None], children
 
 
 def _user_function(fn: types.FunctionType) -> bool:
-    return is_user_code_file(getattr(fn.__code__, "co_filename", None))
+    return is_user_code_file(attribute_or(fn.__code__, "co_filename", None))
 
 
 def _user_class(cls: type) -> bool:
     """Is *cls* the user's: from a module of theirs (a notebook's
     ``__main__`` included), or, with its module not loaded, with methods
     written in their code?"""
-    module = sys.modules.get(getattr(cls, "__module__", None) or "")
+    module = sys.modules.get(attribute_or(cls, "__module__", None) or "")
     if module is not None:
         return is_user_code_module(module)
     return any(_user_function(fn) for member in vars(cls).values() for fn in _member_functions(member))

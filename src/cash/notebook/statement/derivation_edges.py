@@ -45,6 +45,8 @@ from collections.abc import Container, Iterable, Iterator
 from contextlib import contextmanager
 from typing import Any, Callable
 
+from cash._user_attrs import attribute_or
+
 from ... import _plain_data
 from ...analysis.ast_util import parse_cached
 from ..borrowed_memory import borrowed_memory_names
@@ -119,7 +121,7 @@ def assigned_names(tree: ast.AST | None) -> set[str]:
     (``x = x + [5]`` too, which reads ``x`` first): not the ones changed in
     place (``x += [5]``, ``x[0] = 1``)."""
     names: set[str] = set()
-    for node in getattr(tree, "body", ()):
+    for node in attribute_or(tree, "body", ()):
         if isinstance(node, ast.Assign):
             targets = node.targets
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
@@ -165,7 +167,7 @@ def own_share_edges(metadata: Any) -> frozenset[tuple[str, str]] | None:
     """The edges the run stored in an entry linked, from its metadata (a
     ``StatementCacheMetadata`` or its dict), or None when the entry does
     not say (an older one): the caller takes the record by text."""
-    edges = metadata.get("share_edges") if isinstance(metadata, dict) else getattr(metadata, "share_edges", None)
+    edges = metadata.get("share_edges") if isinstance(metadata, dict) else attribute_or(metadata, "share_edges", None)
     if edges is None:
         return None
     try:
@@ -231,7 +233,7 @@ def is_uncacheable_alias(value: Any, user_ns: dict, cash_held: Iterable[Any] = (
         return True
     views, refholders = _aliases_in(value, np, refholder_types)
     for holder in refholders:
-        src = getattr(holder, "obj", None)
+        src = attribute_or(holder, "obj", None)
         if src is not None and _find_name_by_identity(user_ns, src) is not None:
             return True
     del refholders
@@ -302,7 +304,7 @@ def _bases_are_live(views: list[Any], user_ns: dict, cash_held: list[Any]) -> bo
             nodes[key] = base
             if _find_name_by_identity(user_ns, base) is not None:
                 return True
-            base = getattr(base, "base", None)
+            base = attribute_or(base, "base", None)
     # No local reference to a base may be left while the counts are read.
     view = base = None
     if not excess_refs(nodes, inbound, list(nodes)):
@@ -382,7 +384,7 @@ def _detect_matplotlib_figure_edge(
         probe = np.ndarray.item(value, 0)
     if not isinstance(probe, artist_mod.Artist):
         return
-    fig = getattr(probe, "figure", None)
+    fig = attribute_or(probe, "figure", None)
     if fig is None:
         return
     nm = _find_name_by_identity(user_ns, fig)
@@ -433,7 +435,7 @@ def _detect_numpy_view_edge(
         nm = _find_name_by_identity(user_ns, base)
         if nm is not None and nm != out:
             targets.add(nm)
-        base = getattr(base, "base", None)
+        base = attribute_or(base, "base", None)
     # ``root`` is the ultimate base; ensure it is captured even if intermediate
     # links were unnamed.
     if root is not None:
@@ -507,7 +509,7 @@ def _detect_pandas_refholder_edge(
     refholder_types = _pandas_refholder_types()
     if not refholder_types or not isinstance(value, refholder_types):
         return
-    src = getattr(value, "obj", None)
+    src = attribute_or(value, "obj", None)
     if src is None:
         return
     nm = _find_name_by_identity(user_ns, src)
@@ -623,8 +625,9 @@ def bump_derived_lineages(
         the simulator, which has no live namespace).
     skip:
         Variables this statement already moved on another way -- those stored
-        with its entry (``held_lineage``): neither bumped nor bumped through,
-        on every path alike, so the runtime and the simulation agree.
+        with its entry (``held_lineage``): bumped, by what the statement
+        changed, but not bumped through, on every path alike, so the runtime
+        and the simulation agree.
     code:
         The statement's text. An output it changed without naming it -- a
         global a function it calls changes (``bump()`` doing
@@ -667,7 +670,7 @@ def bump_derived_lineages(
         if src_lineage is None:
             continue
         for target in sorted(derivation_edges.get(src, ())):
-            if target in inputs or target in skip or target in outputs:
+            if target in inputs or target in outputs:
                 # Creation edge (``v = a[...]``): do NOT bump the base. Nor
                 # an output: the statement gave it its lineage just now.
                 continue
@@ -679,6 +682,15 @@ def bump_derived_lineages(
                 continue
             record(target, new_hash)
             bumped.add(target)
+            if target in skip:
+                # Moved on by the entry already (`held_lineage`), from its
+                # key alone: the key of ``w -= float(open(p).read())`` is the
+                # same whatever the file holds, so ``L = [w]`` moved to the
+                # same lineage after the file changed and ``s =
+                # float(L[0].sum())`` was served the old sum. Bumped by the
+                # changed output's lineage too, which the file is in; not
+                # bumped through.
+                continue
             # Cascade: the freshly-bumped target may itself be a bump source.
             if target not in visited and target in derivation_edges:
                 frontier.append(target)
@@ -701,7 +713,7 @@ def static_share_edges(
     edges: set[tuple[str, str]] = set()
     if tree is None:
         return frozenset()
-    for node in getattr(tree, "body", ()):
+    for node in attribute_or(tree, "body", ()):
         if isinstance(node, ast.Assign):
             targets, value = node.targets, node.value
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
@@ -777,7 +789,7 @@ def _callee_source(func: ast.expr, function_source, namespace) -> str | None:
         if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
             module = namespace.get(func.value.id)
             if isinstance(module, types.ModuleType):
-                fn = getattr(module, func.attr, None)
+                fn = attribute_or(module, func.attr, None)
                 if isinstance(fn, types.FunctionType):
                     return inspect.getsource(fn)
     except Exception:  # noqa: BLE001 - no source: a new object, as for a library call

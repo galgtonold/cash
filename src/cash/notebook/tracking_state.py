@@ -6,6 +6,7 @@ from collections.abc import Mapping, Set
 from dataclasses import MISSING, dataclass, field, fields
 from typing import TYPE_CHECKING, Any
 
+from cash._user_attrs import has_attribute
 from cash.notebook.file_round_trips import FileRoundTrips
 from cash.notebook.lineage_store import InputLineages, LineageStore
 from cash.notebook.per_item_reruns import PerItemReruns
@@ -460,7 +461,7 @@ class TrackingState:
         """
         for f in fields(self):
             current = getattr(self, f.name)
-            if hasattr(current, "clear"):
+            if has_attribute(current, "clear"):
                 current.clear()
             elif f.default_factory is not MISSING:
                 setattr(self, f.name, f.default_factory())

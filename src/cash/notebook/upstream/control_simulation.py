@@ -14,6 +14,8 @@ import logging
 from collections import ChainMap
 from collections.abc import Callable, Mapping
 
+from cash._user_attrs import has_attribute
+
 from ...analysis.ast_util import called_names
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer
@@ -366,4 +368,4 @@ class ControlSimulation:
 
         if statement_writes_files(stmt_code):
             return True
-        return any(not hasattr(builtins, name) for name in called_names(node))
+        return any(not has_attribute(builtins, name) for name in called_names(node))

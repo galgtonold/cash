@@ -29,6 +29,8 @@ import os
 import types
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 __all__ = ["is_read_handle", "reaches_read_handle", "read_handle_digest"]
 
 _FILE_TYPES = (io.TextIOWrapper, io.BufferedReader, io.FileIO)
@@ -43,7 +45,7 @@ def is_read_handle(value: Any) -> bool:
             return False
     except (ValueError, OSError):
         return False
-    name = getattr(value, "name", None)
+    name = attribute_or(value, "name", None)
     return isinstance(name, str) and os.path.isfile(name)
 
 
@@ -64,10 +66,10 @@ def read_handle_digest(value: Any) -> str | None:
         str(stat.st_size),
         str(stat.st_mtime_ns),
         str(stat.st_ino),
-        str(getattr(value, "mode", "")),
+        str(attribute_or(value, "mode", "")),
         str(value.encoding if text else ""),
         str(value.errors if text else ""),
-        repr(getattr(value, "_CHUNK_SIZE", "")),
+        repr(attribute_or(value, "_CHUNK_SIZE", "")),
         str(position),
     )
     return "read-handle:" + hashlib.sha256("\0".join(parts).encode("utf-8", "surrogateescape")).hexdigest()
@@ -87,7 +89,7 @@ def reaches_read_handle(value: Any) -> bool:
     if is_read_handle(value):
         return True
     near: list[Any] = []
-    owner = getattr(value, "__self__", None) if callable(value) else None
+    owner = attribute_or(value, "__self__", None) if callable(value) else None
     if owner is not None:
         near.append(owner)
     if isinstance(value, types.FunctionType):

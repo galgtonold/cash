@@ -18,6 +18,7 @@ import types
 from collections import ChainMap
 from typing import TYPE_CHECKING
 
+from cash._user_attrs import attribute_or
 from cash.control_markers import strip_markers
 
 from ..._paths import resolve_file_dep_path
@@ -933,12 +934,12 @@ class VirtualLineage:
     def _iter_body_nodes(node: ast.AST):
         """Yield all body statements of a control structure (recursively)."""
         for attr in ("body", "orelse", "finalbody"):
-            for child in getattr(node, attr, []) or []:
+            for child in attribute_or(node, attr, []) or []:
                 yield child
                 if is_control_structure(child):
                     yield from VirtualLineage._iter_body_nodes(child)
         # ast.Try handlers
-        for handler in getattr(node, "handlers", []) or []:
+        for handler in attribute_or(node, "handlers", []) or []:
             for child in handler.body:
                 yield child
                 if is_control_structure(child):

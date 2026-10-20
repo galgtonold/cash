@@ -23,7 +23,7 @@ import types
 from collections.abc import Mapping
 from typing import Any, Callable, Iterable
 
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, has_attribute
 
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.ast_util import parse_cached
@@ -59,7 +59,7 @@ def is_cash_instrumentation(val: object) -> bool:
     if attribute_or(val, "_is_file_tracker_patch", False) is True:
         return True
     shell = sys.modules.get("IPython.core.interactiveshell")
-    return shell is not None and val is getattr(shell, "_modified_open", _NO_SHELL_OPEN)
+    return shell is not None and val is attribute_or(shell, "_modified_open", _NO_SHELL_OPEN)
 
 
 _NO_SHELL_OPEN = object()
@@ -83,7 +83,7 @@ def is_module_like(var_name: str, val: object, virtual_modules: Iterable[str]) -
         if isinstance(val, types.ModuleType):
             return True
         # IPython internals and bound methods behave like modules -- skip them
-        if callable(val) and (var_name.startswith("_") or hasattr(val, "__self__")):
+        if callable(val) and (var_name.startswith("_") or has_attribute(val, "__self__")):
             return True
     except (AttributeError, TypeError) as exc:
         logger.debug("[CACHE_KEY] Failed to check module/callable type for '%s': %s", var_name, exc)
@@ -182,8 +182,8 @@ def module_read_lineage(
     """
     if function_tracker is None or not code or not isinstance(value, types.ModuleType):
         return None
-    mod_file = getattr(value, "__file__", None)
-    real = getattr(value, "__name__", var_name)
+    mod_file = attribute_or(value, "__file__", None)
+    real = attribute_or(value, "__name__", var_name)
     names = {real, var_name}
     if not (mod_file and os.path.isfile(mod_file) and names & _tracked(function_tracker)):
         return None
@@ -754,14 +754,14 @@ def recorded_reads_lineage_component(
     *as_last_run*: the callee globals are then the ones the statement's last
     run was keyed with, when it ran in this kernel.
     """
-    reads = getattr(tracking_state, "reads", None)
-    by_key = getattr(reads, "by_key", None)
+    reads = attribute_or(tracking_state, "reads", None)
+    by_key = attribute_or(reads, "by_key", None)
     if by_key and cache_key and cache_key in by_key:
         environment = by_key[cache_key]
     else:
         environment = statement_environment_component(code, user_ns)
-    callees = getattr(reads, "callees", None)
-    by_code = getattr(reads, "callees_by_code", None)
+    callees = attribute_or(reads, "callees", None)
+    by_code = attribute_or(reads, "callees_by_code", None)
     deps = None
     if as_last_run and by_code and code in by_code:
         deps = by_code[code]
@@ -790,7 +790,7 @@ def callable_source_component(function_tracker: Any, inputs: set[str], user_ns: 
 
 
 def _tracked(function_tracker: Any) -> set[str]:
-    return getattr(function_tracker, "tracked_modules", None) or set()
+    return attribute_or(function_tracker, "tracked_modules", None) or set()
 
 
 def _closure_with_deps(
@@ -811,7 +811,7 @@ def _closure_with_deps(
     digest = closure_digest(mod_file, attrs)
     if digest is None:
         return None
-    parents = getattr(function_tracker, "dep_file_to_parents", None) or {}
+    parents = attribute_or(function_tracker, "dep_file_to_parents", None) or {}
     dep_files = sorted(dep for dep, o in parents.items() if owners & set(o))
     h = hashlib.sha256(("%s:%s" % (tag, digest)).encode("utf-8"))
     for dep in dep_files:
@@ -832,7 +832,7 @@ def _from_module_hash(module_name: str, function_tracker: Any, name: str | None 
     if module_name not in _tracked(function_tracker):
         return ""
     mod_obj = sys.modules.get(module_name)
-    mod_file = getattr(mod_obj, "__file__", None) if mod_obj else None
+    mod_file = attribute_or(mod_obj, "__file__", None) if mod_obj else None
     if not (mod_file and os.path.isfile(mod_file)):
         return ""
     if name is not None:
@@ -884,7 +884,7 @@ def module_source_component(
     if function_tracker is None:
         return ""
     if isinstance(value, types.ModuleType):
-        mod_file = getattr(value, "__file__", None)
+        mod_file = attribute_or(value, "__file__", None)
         # By the module's OWN name, not the name the cell bound it to.
         # `tracked_modules` holds real module names, so `import tickets_lib
         # as tl` failed this test and returned "" -- the module's source
@@ -897,16 +897,16 @@ def module_source_component(
         # `var_name` is still accepted so a tracker that registered the bound
         # name keeps working; for an unaliased import the two are equal, so
         # no existing lineage moves.
-        names = {getattr(value, "__name__", var_name), var_name}
+        names = {attribute_or(value, "__name__", var_name), var_name}
         if not (mod_file and os.path.isfile(mod_file) and names & _tracked(function_tracker)):
             return ""
-        parents = getattr(function_tracker, "dep_file_to_parents", None) or {}
+        parents = attribute_or(function_tracker, "dep_file_to_parents", None) or {}
         dep_files = {dep for dep, owners in parents.items() if names & set(owners)}
         digest = read_module_source_hash(mod_file, dep_files)
         return f":mod_src:{digest}" if digest else ""
 
     if callable(value):
-        obj_module = getattr(value, "__module__", None)
+        obj_module = attribute_or(value, "__module__", None)
         if not (obj_module and obj_module in _tracked(function_tracker)):
             return ""
         if note_from_import is not None:

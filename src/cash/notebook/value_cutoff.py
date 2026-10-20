@@ -28,6 +28,8 @@ import sys
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 from .._plain_data import is_plain
 from ..analysis.namespace_effects import is_estimator
 from ..value_hash import digest_via_pickle, is_identity_fallback_hash
@@ -77,7 +79,7 @@ def _compared(value: Any) -> bool:
         return True
     # An array of objects (``axes`` from ``plt.subplots``) is hashed by
     # pickling what it holds -- a whole figure.
-    return getattr(getattr(value, "dtype", None), "kind", "") != "O"
+    return attribute_or(attribute_or(value, "dtype", None), "kind", "") != "O"
 
 
 def _refitted(value: Any) -> bool:

@@ -24,6 +24,8 @@ import types
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 __all__ = ["ThreadReach"]
 
 #: Values that are code or a namespace, not state a thread changes.
@@ -40,7 +42,7 @@ def _codes(code: types.CodeType) -> Iterable[types.CodeType]:
 
 def _function(fn: Any) -> Any:
     for _ in range(8):
-        inner = getattr(fn, "__func__", None) or getattr(fn, "func", None)
+        inner = attribute_or(fn, "__func__", None) or attribute_or(fn, "func", None)
         if inner is None:
             break
         fn = inner
@@ -61,16 +63,16 @@ class ThreadReach:
         by_id: dict[int, list[str]] | None = None
         for fn in functions:
             fn = _function(fn)
-            code = getattr(fn, "__code__", None)
+            code = attribute_or(fn, "__code__", None)
             if code is None:
                 continue
-            label = getattr(fn, "__qualname__", None) or repr(fn)
-            if getattr(fn, "__globals__", None) is user_ns:
+            label = attribute_or(fn, "__qualname__", None) or repr(fn)
+            if attribute_or(fn, "__globals__", None) is user_ns:
                 for c in _codes(code):
                     for name in c.co_names:
                         if name in user_ns and not isinstance(user_ns[name], _NOT_STATE):
                             self.names.setdefault(name, label)
-            cells = getattr(fn, "__closure__", None) or ()
+            cells = attribute_or(fn, "__closure__", None) or ()
             if not cells:
                 continue
             if by_id is None:

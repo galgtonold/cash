@@ -45,12 +45,13 @@ import re
 import sys
 import types
 import uuid
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from time import perf_counter as _perf_counter
 from typing import Any
 
 from cash import _plain_data
 from cash._clock import CpuLimit
+from cash._user_attrs import attribute_or, has_attribute
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
 
@@ -242,7 +243,7 @@ def _bound_objects(value: Any) -> list[Any] | None:
     """
     if isinstance(value, types.FunctionType):
         return list(value.__closure__) if value.__closure__ and not _found_by_name(value) else None
-    owner = getattr(value, "__self__", None)
+    owner = attribute_or(value, "__self__", None)
     if owner is None or isinstance(owner, (types.ModuleType, type)):
         return None
     return [owner]
@@ -252,11 +253,11 @@ def _found_by_name(fn: types.FunctionType) -> bool:
     """*fn* is found again by its module and qualified name, as pickle looks
     it up, in a module other than the notebook's own (``__main__``, whose
     functions a store keeps by value)."""
-    module = getattr(fn, "__module__", None) or ""
+    module = attribute_or(fn, "__module__", None) or ""
     if module == "__main__":
         return False
     target: Any = sys.modules.get(module)
-    for part in (getattr(fn, "__qualname__", "") or "").split("."):
+    for part in (attribute_or(fn, "__qualname__", "") or "").split("."):
         if target is None or part.startswith("<"):
             return False
         try:
@@ -291,7 +292,7 @@ def _is_estimator_class(cls: type) -> bool:
     known = _ESTIMATOR_CLASSES.get(cls)
     if known is None:
         try:
-            known = callable(getattr(cls, "get_params", None)) and callable(getattr(cls, "fit", None))
+            known = callable(attribute_or(cls, "get_params", None)) and callable(attribute_or(cls, "fit", None))
         except Exception:  # noqa: BLE001 - a class that cannot be asked is a leaf
             known = False
         _ESTIMATOR_CLASSES[cls] = known
@@ -555,7 +556,7 @@ def view_bases(value: Any) -> list[int]:
     base = value.base
     while base is not None and id(base) not in found:
         found.append(id(base))
-        base = getattr(base, "base", None)
+        base = attribute_or(base, "base", None)
     return found
 
 
@@ -563,12 +564,12 @@ def view_base_names(
     values: Iterable[Any],
     user_ns: Mapping[str, Any],
     skip_name: Callable[[str], bool] = lambda name: False,
-    holders: Collection[str] | None = None,
 ) -> set[str]:
     """The variables of *user_ns* bound to an array that a numpy view among
-    *values*, or held in them, sits on (`view_bases`), and those of
-    *holders* (every variable when None) that hold one in a container or an
-    attribute, at any depth (`_holding_bases`).
+    *values*, or held in them, sits on (`view_bases`), and those that hold
+    one in a container or an attribute, at any depth (`_holding_bases`).
+    Every variable, not only those the statement read: a dict a function
+    filled as a side effect holds the array with no link to show it.
 
     The share check counts references, and an array is a leaf to it: ``head
     = big[:5]`` holds ``big`` through ``head.base``, which no count of
@@ -610,7 +611,7 @@ def view_base_names(
             continue
         if on_bases(value, bases, views, np):
             names.add(name)
-        elif (holders is None or name in holders) and _may_hold_bases(value, np, plain_leaves):
+        elif _may_hold_bases(value, np, plain_leaves):
             containers.setdefault(id(value), []).append(name)
     if containers:
         try:
@@ -661,11 +662,7 @@ def _holding_bases(
         expanded.add(key)
         children = children_of(obj)
         if children is None:
-            # A library's object, which the share check reads as one closed
-            # value: what it holds is still written through a view of it
-            # (``v = model.coef_[2:5]``), so it is read down as the garbage
-            # collector sees it.
-            children = gc.get_referents(obj)
+            children = _held_below(obj)
         for child in children:
             if is_value(child, value_types):
                 continue
@@ -692,6 +689,33 @@ def _holding_bases(
         found.update(containers.get(key, ()))
         climb.extend(parents.get(key, ()))
     return found
+
+
+def _held_below(obj: Any) -> list[Any]:
+    """What *obj*, an object the share check reads as one closed value,
+    holds that a view of it can write: a function's closure cells and
+    defaults (``getter = lambda: arr``), never its globals, which hold the
+    whole namespace; a bound method's object; and for a library's object
+    (``v = model.coef_[2:5]``), what the garbage collector sees it hold.
+    Nothing of cash's own (``__cash_call__``, bound to its call cache, which
+    holds every call's result)."""
+    if _is_cash_own(obj) or _is_cash_own(attribute_or(obj, "__self__", None)):
+        return []
+    if isinstance(obj, types.FunctionType):
+        held: list[Any] = []
+        for cell in obj.__closure__ or ():
+            try:
+                held.append(cell.cell_contents)
+            except ValueError:  # an empty cell
+                continue
+        held.extend(obj.__defaults__ or ())
+        held.extend((obj.__kwdefaults__ or {}).values())
+        return held
+    if isinstance(obj, types.MethodType):
+        return [obj.__self__]
+    if isinstance(obj, _NOT_PARTS):
+        return []
+    return gc.get_referents(obj)
 
 
 def on_bases(value: Any, bases: set[int], views: list[Any], np: Any) -> bool:
@@ -838,13 +862,13 @@ def output_history(
     named = [n for n in ("_", "__", "___") if user_ns.get(n) is not None and id(user_ns.get(n)) in shown]
     named += [f"_{k}" for k, v in out.items() if v is not None and user_ns.get(f"_{k}") is v]
     held = [(user_ns, n) for n in named]
-    hidden = getattr(shell, "user_ns_hidden", None)
+    hidden = attribute_or(shell, "user_ns_hidden", None)
     if isinstance(hidden, dict):
         held += [(hidden, n) for n in named if hidden.get(n) is user_ns.get(n)]
-    hook_attrs = getattr(getattr(shell, "displayhook", None), "__dict__", None)
+    hook_attrs = attribute_or(attribute_or(shell, "displayhook", None), "__dict__", None)
     if hook_attrs is not None:
         held += [(hook_attrs, n) for n in ("_", "__", "___") if id(hook_attrs.get(n)) in shown]
-    last = getattr(getattr(shell, "last_execution_result", None), "__dict__", None)
+    last = attribute_or(attribute_or(shell, "last_execution_result", None), "__dict__", None)
     if last is not None and id(last.get("result")) in shown:
         held.append((last, "result"))
     return [out], held
@@ -1465,7 +1489,7 @@ def _held_within(nodes: dict[int, Any], inbound: dict[int, int], excess: list[in
 _INSIDE_MAX_OBJECTS = 50_000
 _STREAM_NAMES = ("stdin", "stdout", "stderr", "__stdin__", "__stdout__", "__stderr__")
 #: The standard streams as cash found them when it was imported.
-_STREAMS_AT_START = tuple(getattr(sys, name, None) for name in _STREAM_NAMES)
+_STREAMS_AT_START = tuple(attribute_or(sys, name, None) for name in _STREAM_NAMES)
 
 
 def _standard_streams() -> set[int]:
@@ -1479,7 +1503,7 @@ def _standard_streams() -> set[int]:
     the climb from it went up eight levels of their objects, a full heap
     scan each, and gave up. A file object of the user's is still climbed
     from."""
-    found = {id(getattr(sys, name, None)) for name in _STREAM_NAMES}
+    found = {id(attribute_or(sys, name, None)) for name in _STREAM_NAMES}
     found.update(id(stream) for stream in _STREAMS_AT_START)
     found.discard(id(None))
     return found
@@ -1756,7 +1780,7 @@ def _is_library_class(cls: type) -> bool:
     loss holds too (``interval_y_pred``): climbing past the class, through
     its subclasses, methods and module, read the heap seven times and never
     ended, so the fit was refused as shared."""
-    module = getattr(cls, "__module__", None)
+    module = attribute_or(cls, "__module__", None)
     return isinstance(module, str) and module != "__main__" and not _is_local_module_class(cls)
 
 
@@ -1860,7 +1884,7 @@ def _count_index_data(nodes: dict[int, Any], inbound: dict[int, int], user_ns: M
                 seen.add(id(axis))
                 slots = vars(axis)
                 engine = slots.get("_cache", {}).get("_engine")
-                for item in (slots.get("_data"), getattr(engine, "values", None)):
+                for item in (slots.get("_data"), attribute_or(engine, "values", None)):
                     if item is not None and id(item) in inbound:
                         inbound[id(item)] += 1
     except Exception:  # noqa: BLE001 - another layout: counted as held elsewhere
@@ -2125,7 +2149,7 @@ def _is_module_namespace(holder: Any) -> bool:
     if type(name) is not str:
         return False
     module = sys.modules.get(name)
-    return module is not None and getattr(module, "__dict__", None) is holder
+    return module is not None and attribute_or(module, "__dict__", None) is holder
 
 
 def _gave_up(
@@ -2323,7 +2347,7 @@ def _iterator_parts(value: Any) -> list[Any] | None:
     search of the whole heap for it cost 0.2-0.5 s a run on E11.
     """
     kind = type(value)
-    if getattr(kind, "__next__", None) is None or hasattr(value, "__dict__"):
+    if attribute_or(kind, "__next__", None) is None or has_attribute(value, "__dict__"):
         return None
     return gc.get_referents(value)
 

@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlsplit
 
+from cash._user_attrs import has_attribute
+
 from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashWarning
 from . import live_cells
@@ -297,7 +299,7 @@ def _try_vscode_path() -> str | None:
         from IPython import get_ipython
 
         ip = get_ipython()
-        if ip and hasattr(ip, "user_ns") and "__vsc_ipynb_file__" in ip.user_ns:
+        if ip and has_attribute(ip, "user_ns") and "__vsc_ipynb_file__" in ip.user_ns:
             return ip.user_ns["__vsc_ipynb_file__"]
     except (ImportError, AttributeError, KeyError):
         logger.debug("[UTILS] Failed to get notebook path from IPython user_ns")

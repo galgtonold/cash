@@ -11,6 +11,8 @@ import re
 from collections.abc import Callable, Iterable
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 from ...analysis.cacheability_decision import identity_coupled_reason
 from ..consumables import is_consumable_unrestorable
 from ..shared_objects import GaveUp, attrs_copied_apart, output_history, refers_back, share_group, shared_names
@@ -176,7 +178,7 @@ def shared_output_reason(
         shared = shared_names(roots, (captured_vars, user_ns), [*cash_held, *history], named)
         del roots
     else:
-        hidden = getattr(shell, "user_ns_hidden", None) or {}
+        hidden = attribute_or(shell, "user_ns_hidden", None) or {}
         partial = GaveUp()
         found, shared = share_group(
             names,

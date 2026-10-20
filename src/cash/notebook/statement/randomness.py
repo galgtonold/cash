@@ -10,6 +10,7 @@ import types
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING
 
+from cash._user_attrs import attribute_or
 from cash.control_markers import strip_markers
 from cash.diagnostics import warn_diagnostic
 from cash.tracking.randomness import (
@@ -71,7 +72,7 @@ def _draws_from_its_own_generator(call: str, namespace: dict) -> bool:
     of its own rather than numpy's global stream when given no seed? polars
     does; pandas and scikit-learn take ``np.random`` for ``random_state=None``."""
     value = namespace.get(call.partition(".")[0])
-    module = getattr(value, "__name__", None) if isinstance(value, types.ModuleType) else type(value).__module__
+    module = attribute_or(value, "__name__", None) if isinstance(value, types.ModuleType) else type(value).__module__
     return isinstance(module, str) and module.partition(".")[0] == "polars"
 
 
@@ -80,7 +81,7 @@ def _function_mints_unseeded_generator(fn: Callable) -> bool:
     (`mints_unseeded_generator`)? Memoised per code object."""
     import textwrap
 
-    code = getattr(fn, "__code__", None)
+    code = attribute_or(fn, "__code__", None)
     known = _MINTS.get(id(code))
     if known is not None and known[0] is code:
         return known[1]
@@ -380,7 +381,7 @@ class StatementRandomness:
         check, which judges the fitted object; a call whose draw depends on
         settings cash cannot read is left to the runtime stream check.
         """
-        namespace = getattr(self.shell, "user_ns", None)
+        namespace = attribute_or(self.shell, "user_ns", None)
         if not isinstance(namespace, dict):
             return []
         tree = ast.parse(code)
@@ -406,7 +407,7 @@ class StatementRandomness:
         for fn in reached_user_code(code, namespace).functions:
             if not _function_mints_unseeded_generator(fn):
                 continue
-            name = getattr(fn, "__qualname__", getattr(fn, "__name__", "a function"))
+            name = attribute_or(fn, "__qualname__", attribute_or(fn, "__name__", "a function"))
             info = RandomnessCallInfo(module="helper", function=name, lineno=1, col_offset=0, label=f"{name}()")
             found.append(
                 (
@@ -644,7 +645,7 @@ class StatementRandomness:
                 est = self.shell.user_ns.get(var)
                 if est is None:
                     continue
-                if not (callable(getattr(est, "fit", None)) and callable(getattr(est, "get_params", None))):
+                if not (callable(attribute_or(est, "fit", None)) and callable(attribute_or(est, "get_params", None))):
                     continue
                 params = est.get_params()
                 if "random_state" in params and params["random_state"] is None and estimator_draws(est) is not False:

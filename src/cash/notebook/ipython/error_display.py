@@ -14,6 +14,8 @@ import sys
 import traceback as tb_mod
 from typing import TYPE_CHECKING
 
+from cash._user_attrs import attribute_or, has_attribute
+
 from ..compiled_source import is_cash_filename
 from .cell_count import running_cell_count
 
@@ -52,7 +54,7 @@ def show_clean_error(
         optionally ``showtraceback``).
     """
     exc_type = type(exc)
-    if isinstance(exc, SystemExit) and hasattr(shell, "showtraceback"):
+    if isinstance(exc, SystemExit) and has_attribute(shell, "showtraceback"):
         # As IPython shows a cell's ``sys.exit()``: the exception line only.
         shell.showtraceback(exc_tuple=(exc_type, exc, None), exception_only=True)
         return
@@ -71,7 +73,7 @@ def show_clean_error(
     )
     # IPython labels a frame "Cell In[N], line L" only for a filename its
     # compiler knows; any other reads "File Cell In[N]:L".
-    named = getattr(getattr(shell, "compile", None), "_filename_map", None)
+    named = attribute_or(attribute_or(shell, "compile", None), "_filename_map", None)
     if isinstance(named, dict):
         named[cell_name] = exec_count
 
@@ -80,7 +82,7 @@ def show_clean_error(
     # the error may come from a body statement deep inside.  In that
     # case, _cash_error_lineno is set by ControlStructureProcessor to
     # the exact body statement line.
-    stmt_lineno: int = getattr(exc, "_cash_error_lineno", None) or getattr(node, "lineno", 1)
+    stmt_lineno: int = attribute_or(exc, "_cash_error_lineno", None) or attribute_or(node, "lineno", 1)
 
     # Build a synthetic cell-level traceback by compiling + exec'ing
     # a ``raise`` at the right line inside a code object whose
@@ -113,7 +115,7 @@ def show_clean_error(
 
         # Use IPython's showtraceback if available (real notebook),
         # otherwise fall back to Python's traceback module (tests).
-        if hasattr(shell, "showtraceback"):
+        if has_attribute(shell, "showtraceback"):
             try:
                 shell.showtraceback(
                     exc_tuple=(exc_type, exc, cell_tb),
@@ -138,7 +140,7 @@ def show_module_load_error(module_name: str, exc: BaseException, shell: ShellPro
     did not run.
     """
     module = sys.modules.get(module_name)
-    path = getattr(module, "__file__", None) or module_name
+    path = attribute_or(module, "__file__", None) or module_name
     print(
         f"cash: {path} changed and no longer loads, so the kernel still holds its old code. "
         f"This cell did not run; fix the file and run it again.",
@@ -154,7 +156,7 @@ def show_module_load_error(module_name: str, exc: BaseException, shell: ShellPro
         # from ``exc_tuple``; raising it makes it that exception.
         raise exc.with_traceback(tb)
     except BaseException:  # noqa: BLE001 - only to make *exc* the handled exception
-        if hasattr(shell, "showtraceback"):
+        if has_attribute(shell, "showtraceback"):
             try:
                 shell.showtraceback(exc_tuple=(type(exc), exc, tb), tb_offset=0)
                 return

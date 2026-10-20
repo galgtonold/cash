@@ -28,6 +28,7 @@ import types
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from cash._user_attrs import attribute_or
 from cash.analysis.namespace_effects import code_waived_lines
 from cash.install_paths import is_user_code_file
 from cash.purity import is_pure
@@ -160,7 +161,7 @@ def _write_waived() -> bool:
             if whole or frame.f_lineno in lines:
                 return True
             func = frame.f_globals.get(code.co_name)
-            if func is not None and is_pure(func) and getattr(inspect.unwrap(func), "__code__", None) is code:
+            if func is not None and is_pure(func) and attribute_or(inspect.unwrap(func), "__code__", None) is code:
                 return True
         frame = frame.f_back
     return False

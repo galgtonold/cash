@@ -63,7 +63,7 @@ def ttl_floor_from_called_functions(inputs: set[str], effective_ttl: int | None,
         fn = user_ns.get(name)
         if fn is None or attribute_or(fn, "_cash_cached", False) is not True:
             continue
-        declared = getattr(fn, "_cash_declared_ttl", None)
+        declared = attribute_or(fn, "_cash_declared_ttl", None)
         if declared is None:
             continue
         floor = declared if floor is None else min(floor, declared)

@@ -19,3 +19,12 @@ def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
         return getattr(obj, name, default)
     except Exception:  # noqa: BLE001 - the object's own error, not one of cash's
         return default
+
+
+_MISSING = object()
+
+
+def has_attribute(obj: Any, name: str) -> bool:
+    """``hasattr(obj, name)``, with any error the lookup raises taken as the
+    attribute missing (`attribute_or`)."""
+    return attribute_or(obj, name, _MISSING) is not _MISSING

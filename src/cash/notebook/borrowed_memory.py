@@ -35,6 +35,7 @@ from itertools import chain
 from typing import Any
 
 from cash import _plain_data
+from cash._user_attrs import attribute_or, has_attribute
 
 from .shared_objects import (
     EXACT_CONTAINER_TYPES,
@@ -86,7 +87,7 @@ def _family_of_type(kind: type) -> str | None:
         pass
     except TypeError:  # an unhashable metaclass
         return None
-    module = str(getattr(kind, "__module__", "")).partition(".")[0]
+    module = str(attribute_or(kind, "__module__", "")).partition(".")[0]
     family = _library_family(kind) if module in ("numpy", "pandas", "polars", "pyarrow") else None
     _FAMILIES[kind] = family
     return family
@@ -149,7 +150,7 @@ def _ndarray_spans(array: Any) -> list[_Span]:
     if not array.size:
         return []
     np = sys.modules["numpy"]
-    byte_bounds = getattr(getattr(np.lib, "array_utils", None), "byte_bounds", None) or np.byte_bounds
+    byte_bounds = attribute_or(attribute_or(np.lib, "array_utils", None), "byte_bounds", None) or np.byte_bounds
     low, high = byte_bounds(array)
     return [(low, high)]
 
@@ -217,10 +218,10 @@ def _pandas_array_spans(array: Any) -> list[_Span]:
     # The numpy arrays an extension array is made of (dates, masked numbers,
     # categoricals, Python strings), or the Arrow array it wraps.
     for name in ("_ndarray", "_data", "_mask", "_codes"):
-        part = getattr(array, name, None)
+        part = attribute_or(array, name, None)
         if isinstance(part, np.ndarray):
             spans.extend(_ndarray_spans(part))
-    pa_array = getattr(array, "_pa_array", None)
+    pa_array = attribute_or(array, "_pa_array", None)
     if pa_array is not None:
         spans.extend(_arrow_spans(pa_array))
     return spans
@@ -267,7 +268,7 @@ def _polars_chunk_span(chunk: Any, width: int) -> _Span | None:
     the physical type: a date's integers), and a chunk with nulls, which has
     no such view, through the Arrow array it exports without a copy. Raises
     when none of these works (`memory_spans`)."""
-    buffer_info = getattr(chunk, "_get_buffer_info", None)
+    buffer_info = attribute_or(chunk, "_get_buffer_info", None)
     if buffer_info is not None:
         address, offset, length = buffer_info()
         return (address, address + (offset + length) * width) if length else None
@@ -288,7 +289,7 @@ def _polars_chunk_span(chunk: Any, width: int) -> _Span | None:
 def _polars_width(dtype: Any, pl: Any) -> int | None:
     """Bytes per value of a fixed-width polars type (temporal ones by their
     physical integer), or None for any other."""
-    physical = dtype.to_physical() if hasattr(dtype, "to_physical") else dtype
+    physical = dtype.to_physical() if has_attribute(dtype, "to_physical") else dtype
     for types, width in (
         ((pl.Int8, pl.UInt8), 1),
         ((pl.Int16, pl.UInt16), 2),
@@ -298,7 +299,7 @@ def _polars_width(dtype: Any, pl: Any) -> int | None:
         if any(physical == kind for kind in types):
             return width
     for name, width in (("Int128", 16), ("UInt128", 16), ("Float16", 2)):
-        kind = getattr(pl, name, None)
+        kind = attribute_or(pl, name, None)
         if kind is not None and physical == kind:
             return width
     return None

@@ -14,6 +14,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
+from cash._user_attrs import attribute_or, has_attribute
 from cash.control_markers import strip_markers
 
 from ...analysis.ast_util import parse_cached
@@ -861,10 +862,10 @@ class StaleValueGuard:
             node = pending.pop()
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 continue
-            if hasattr(node, "body"):  # for / while / if / with / try / match
+            if has_attribute(node, "body"):  # for / while / if / with / try / match
                 for field in ("body", "orelse", "finalbody"):
-                    pending.extend(getattr(node, field, ()) or ())
-                for part in [*getattr(node, "handlers", ()), *getattr(node, "cases", ())]:
+                    pending.extend(attribute_or(node, field, ()) or ())
+                for part in [*attribute_or(node, "handlers", ()), *attribute_or(node, "cases", ())]:
                     pending.extend(part.body)
                 continue
             try:

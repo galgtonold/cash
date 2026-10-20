@@ -17,6 +17,8 @@ from collections import ChainMap
 from collections.abc import Callable, Container, Mapping
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from cash._user_attrs import attribute_or
+
 from ..._clock import perf_counter as _perf_counter
 from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
@@ -567,7 +569,7 @@ class StatementLineage:
     def _as_run(self, cell: str) -> str:
         """*cell*'s statements as the runtime writes them, or "" when it does
         not parse."""
-        transform = getattr(self.shell, "transform_cell", None)
+        transform = attribute_or(self.shell, "transform_cell", None)
         try:
             text = transform(cell) if callable(transform) else clean_cell_source(cell)
             return ast.unparse(ast.parse(text))

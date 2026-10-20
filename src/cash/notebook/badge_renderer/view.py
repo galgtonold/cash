@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Union
 
+from cash._user_attrs import attribute_or
+
 # ---------------------------------------------------------------------------
 # Status enum — display-layer concept (broader than ``CacheStatus``).
 # ---------------------------------------------------------------------------
@@ -104,7 +106,7 @@ class Rollup:
         time_s = saved_s = 0.0
         leaves = cached = computed = 0
         for item in items:
-            r = getattr(item, "rollup", None)
+            r = attribute_or(item, "rollup", None)
             if r is None:
                 continue
             time_s += r.time_s
@@ -492,7 +494,7 @@ def iter_leaves(item: Any) -> Iterator[StatementRow | IterationRow]:
 
 def rollup_of(item: Any) -> Rollup:
     """*item*'s rollup; a node with no leaf rows under it has an empty one."""
-    return getattr(item, "rollup", None) or Rollup()
+    return attribute_or(item, "rollup", None) or Rollup()
 
 
 @dataclass(frozen=True)

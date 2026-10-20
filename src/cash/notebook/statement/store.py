@@ -14,6 +14,7 @@ import ast
 import hashlib
 import inspect
 import logging
+import pickle
 import time
 import types
 from collections.abc import Mapping
@@ -22,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 from cash import cost_model, handed_digests, kept_state, stored_pickle
 from cash._clock import perf_counter as _perf_counter
 from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
+from cash._user_attrs import attribute_or
 from cash.backends import memory_backend
 from cash.backends.persistence_policy import PersistencePolicy, restore_kind
 from cash.backends.store_notices import DECORATED_CALLS_FIELD
@@ -137,6 +139,49 @@ def _cost_fields(prediction: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+#: How many objects `_closures_sharing_outputs` looks through.
+_CLOSURE_SCAN_OBJECTS = 10_000
+
+
+def _closures_sharing_outputs(captured_vars: Mapping[str, Any]) -> list[str]:
+    """The outputs among *captured_vars* that are, or hold in a tuple, list,
+    set or dict, a function whose closure holds an object found elsewhere in
+    the outputs. Kept by reference, such a function would not share it with
+    the restored copies. Looks at `_CLOSURE_SCAN_OBJECTS` objects at most."""
+    places: dict[int, set[tuple[str, int]]] = {}
+    functions: list[tuple[str, int, types.FunctionType]] = []
+    looked = 0
+    for name, value in captured_vars.items():
+        stack = [value]
+        seen: set[int] = set()
+        while stack and looked < _CLOSURE_SCAN_OBJECTS:
+            item = stack.pop()
+            if type(item) in IMMUTABLE_LEAF_TYPES or id(item) in seen:
+                continue
+            seen.add(id(item))
+            looked += 1
+            places.setdefault(id(item), set()).add((name, id(value)))
+            if isinstance(item, types.FunctionType):
+                functions.append((name, id(item), item))
+            elif type(item) in (tuple, list, set, frozenset):
+                stack.extend(item)
+            elif type(item) is dict:
+                stack.extend(item.values())
+    found: set[str] = set()
+    for name, fn_id, fn in functions:
+        for cell in fn.__closure__ or ():
+            try:
+                held = cell.cell_contents
+            except ValueError:  # an empty cell
+                continue
+            if type(held) in IMMUTABLE_LEAF_TYPES or isinstance(held, types.FunctionType):
+                continue
+            if id(held) in places:
+                found.add(name)
+                break
+    return sorted(found)
+
+
 def _is_only_definitions(code: str) -> bool:
     """Whether *code* is nothing but ``def``/``class`` statements."""
     try:
@@ -152,17 +197,22 @@ class _AnchorsUnstorable(Exception):
 
 
 def _warn_not_stored(exc: BaseException) -> None:
-    """Say that a statement's result was not stored, and why: STORE-FAILED
-    when running cells again would let it store, else only in the log. A
+    """Say that a statement's result was not stored, and why: STORE-FAILED,
+    unless no pickle takes the value, which goes to the log only. A
     statement binding a logging handler or a tqdm bar holds a lock or a
-    stream no pickle takes, and a warning on each would have no fix."""
-    if not isinstance(exc, kept_state.DefinedAgain):
+    stream no pickle takes, and a warning on each would have no fix. Any
+    other failure -- the backend refusing the write (a full disk, a store
+    that raised) -- is warned: the statement runs again every time."""
+    if isinstance(exc, kept_state.DefinedAgain):
+        fix = (
+            "run the cells that build the value again after the cell that defines the function, "
+            "so it holds the function defined now."
+        )
+    elif _unpicklable(exc):
         logger.warning("[CACHE] Failed to write to cache backend: %s", exc)
         return
-    fix = (
-        "run the cells that build the value again after the cell that defines the function, "
-        "so it holds the function defined now."
-    )
+    else:
+        fix = "read the exception: a full disk, a cache_dir you cannot write to, or a value whose own copy or pickle code raised."
     warn_diagnostic(
         CashCacheStoreFailedWarning,
         "STORE-FAILED",
@@ -170,6 +220,21 @@ def _warn_not_stored(exc: BaseException) -> None:
         "it ran, and runs again next time.",
         fix,
     )
+
+
+def _unpicklable(exc: BaseException) -> bool:
+    """Whether *exc*, or an exception it was raised from, says a value takes
+    no pickle (``cannot pickle '_thread.RLock' object``)."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, pickle.PicklingError):
+            return True
+        if isinstance(current, (TypeError, AttributeError)) and "pickle" in str(current).lower():
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 class StatementStore:
@@ -261,7 +326,7 @@ class StatementStore:
         *seed_epochs* is the seeding regime each RNG was last seeded under
         (``StatementRandomness.seed_epochs``), stored with the RNG state.
         """
-        if getattr(execution.result, "skipped", False):
+        if attribute_or(execution.result, "skipped", False):
             return None
         if self.inputs_moved(run, execution):
             return None
@@ -350,7 +415,7 @@ class StatementStore:
         """The file snapshots *var_name*'s producing statement stored, or {}:
         the entry *key* when given (`StatementRun.entry_sources`)."""
         key = key or self.tracking_state.variable_sources.get(var_name)
-        backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
+        backend = attribute_or(self.cash_instance, "backend", None) if self.cash_instance else None
         if not key or backend is None:
             return {}
 
@@ -372,7 +437,7 @@ class StatementStore:
     def policy(self) -> PersistencePolicy:
         """The persistence policy under the current config, read per statement
         so ``cash.configure`` takes effect on the next one."""
-        config = getattr(self.cash_instance, "config", None)
+        config = attribute_or(self.cash_instance, "config", None)
         return PersistencePolicy.from_config(config) if config is not None else PersistencePolicy()
 
     def should_skip_large_object_caching(
@@ -403,7 +468,7 @@ class StatementStore:
             sees the same family attribution whichever gate decided.
         """
         policy = self.policy()
-        backend_kind = restore_kind(getattr(self.cash_instance, "backend", None))
+        backend_kind = restore_kind(attribute_or(self.cash_instance, "backend", None))
 
         largest_prediction: dict[str, Any] | None = None
         # Only the FIRST refused var decides; every var is predicted.
@@ -573,7 +638,7 @@ class StatementStore:
                 inherited_snapshots,
                 execution.file_tracker.known_reads() if execution.file_tracker is not None else None,
                 execution.probes,
-                getattr(execution.file_tracker, "take_checked_stats", dict)(),
+                attribute_or(execution.file_tracker, "take_checked_stats", dict)(),
             ),
             force_persist=run.force_persist,
             output_lineages=self._lineage_builder.build_output_lineages(self.tracking_state, run.outputs),
@@ -685,7 +750,7 @@ class StatementStore:
         later = self.written_later_in_cell
         if run.force_persist or self._calls.in_loop or not run.outputs or not later or not set(run.outputs) <= later:
             return None
-        if restore_kind(getattr(self.cash_instance, "backend", None)) != "ram":
+        if restore_kind(attribute_or(self.cash_instance, "backend", None)) != "ram":
             return None
         copy = 0.0
         for value in variables.values():
@@ -754,7 +819,8 @@ class StatementStore:
             _unrestorable = sorted(
                 _name
                 for _name, _v in captured_vars.items()
-                if (inspect.isfunction(_v) or inspect.isclass(_v)) and getattr(_v, "__module__", None) == "__main__"
+                if (inspect.isfunction(_v) or inspect.isclass(_v))
+                and attribute_or(_v, "__module__", None) == "__main__"
             )
             if _unrestorable:
                 should_skip = True
@@ -781,6 +847,19 @@ class StatementStore:
                 skip_reason = (
                     f"output(s) {', '.join(_stateful)} hold a function that changes its closure; "
                     f"statement re-executes (lineage persists)"
+                )
+        # A function kept by reference whose closure holds an object the
+        # other outputs hold: ``a, getter = mk()`` with ``mk`` imported. The
+        # restore gives ``a`` back as a copy and ``getter`` as the live
+        # function, so they no longer share the array, and a write through
+        # ``a`` did not reach ``getter()`` (21 for 27).
+        if not should_skip:
+            _sharing = _closures_sharing_outputs(captured_vars)
+            if _sharing:
+                should_skip = True
+                skip_reason = (
+                    f"output(s) {', '.join(_sharing)} hold a function whose closure shares an object "
+                    f"with the other outputs; statement re-executes (lineage persists)"
                 )
         # Perpetual-miss guard. After the gates above so it can override their
         # exemptions: ``has_file_dependencies`` waives the whole size-aware

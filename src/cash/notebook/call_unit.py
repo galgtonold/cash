@@ -38,6 +38,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from cash._clock import perf_counter as _perf_counter
+from cash._user_attrs import attribute_or
 from cash.analysis.analysis_budget import (
     AnalysisBudget,
     AnalysisBudgetExceeded,
@@ -193,7 +194,7 @@ def call_cost_floor_s(cash: Any) -> float:
     exception form would silently install a 1-SECOND floor there and cache
     nothing. ``_COST_FLOOR_S`` stays the default and the fallback.
     """
-    value = getattr(getattr(cash, "config", None), "call_cost_floor_seconds", None)
+    value = attribute_or(attribute_or(cash, "config", None), "call_cost_floor_seconds", None)
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
     return _COST_FLOOR_S
@@ -849,7 +850,7 @@ class CallUnit:
         """Seconds the cost model predicts restoring *value* takes, from the
         tier a statement's value is restored from."""
         try:
-            kind = restore_kind(getattr(self._cash, "backend", None))
+            kind = restore_kind(attribute_or(self._cash, "backend", None))
             return estimated_restore_time(type(value).__name__, estimate_object_size(value), kind)
         except Exception:  # noqa: BLE001 - an estimate is never worth an error
             return 0.0
@@ -1026,7 +1027,7 @@ class CallUnit:
         module_before = _module_globals(call.fn)
         started = _perf_counter()
         call_tracker = FileAccessTracker(
-            getattr(call.fn, "__globals__", None),
+            attribute_or(call.fn, "__globals__", None),
             propagate_to_parent=True,
         )
         self._running += 1
@@ -1095,7 +1096,7 @@ class CallUnit:
         reads. A write the user waived where it was made (``# @cash:assume-safe``
         on a line on its way, ``with cash.assume_safe():``, ``@pure`` on a
         function it ran in) keeps it storable; a waiver elsewhere does not."""
-        root = getattr(getattr(self._cash, "backend", None), "local_dir", None)
+        root = attribute_or(attribute_or(self._cash, "backend", None), "local_dir", None)
         if kept_writes(written, root, written.appended, written.waived):
             return True
         try:
@@ -1183,7 +1184,7 @@ class CallUnit:
             callee_globals=captured,
             function=call.func_name,
             plain_value=call.site.source == self.plain_value_source,
-            code_module=getattr(call.fn, "__module__", None),
+            code_module=attribute_or(call.fn, "__module__", None),
             held_refs=find_for_call(call.fn, result),
             env_reads=env_reads or None,
         )
@@ -1201,7 +1202,7 @@ class CallUnit:
         try:
             return self._cash.get_func_key(fn)
         except Exception:  # noqa: BLE001 - a display name must never break the call
-            return f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__qualname__', '?')}"
+            return f"{attribute_or(fn, '__module__', '?')}.{attribute_or(fn, '__qualname__', '?')}"
 
     def _record(
         self, func_name, site: CallSite, key, *, cache_hit, elapsed, time_saved=0.0, ran_plain=False, stored=True
@@ -1522,7 +1523,7 @@ def _module_globals(fn) -> dict[str, Any] | None:
     """What the globals of the local module *fn* is defined in hold before
     it runs, for `_rebound_unwatched`; None for a function of the notebook
     or of a library."""
-    namespace = getattr(fn, "__globals__", None)
+    namespace = attribute_or(fn, "__globals__", None)
     module = sys.modules.get(namespace.get("__name__")) if isinstance(namespace, dict) else None
     if not isinstance(module, types.ModuleType) or vars(module) is not namespace:
         return None

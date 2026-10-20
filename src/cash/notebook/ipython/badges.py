@@ -20,6 +20,8 @@ from typing import Any
 
 from IPython.display import HTML, display
 
+from cash._user_attrs import attribute_or, has_attribute
+
 from ... import __version__
 from .. import badge_renderer as _badge
 from ..server_discovery import get_notebook_cells
@@ -34,7 +36,7 @@ logger = logging.getLogger(__name__)
 def _streams_idle() -> bool:
     """Whether ipykernel's stdout and stderr hold no write still to be sent."""
     for stream in (sys.stdout, sys.stderr):
-        if getattr(stream, "_flush_pending", True) or getattr(stream, "_subprocess_flush_pending", False):
+        if attribute_or(stream, "_flush_pending", True) or attribute_or(stream, "_subprocess_flush_pending", False):
             return False
     return True
 
@@ -54,8 +56,8 @@ def _no_flush_when_streams_idle(pub: Any):
     busy kernel) -- a third of what drawing a trivial cell's badge cost.
     With a write pending, it flushes as ever.
     """
-    own = getattr(pub, "__dict__", None)
-    if own is None or "_flush_streams" in own or not hasattr(pub, "_flush_streams") or not _streams_idle():
+    own = attribute_or(pub, "__dict__", None)
+    if own is None or "_flush_streams" in own or not has_attribute(pub, "_flush_streams") or not _streams_idle():
         yield
         return
     pub._flush_streams = _no_flush
@@ -259,7 +261,7 @@ class BadgePresenter:
         ``None`` until one has been.
         """
         try:
-            pub = getattr(self.shell, "display_pub", None) if self.shell is not None else None
+            pub = attribute_or(self.shell, "display_pub", None) if self.shell is not None else None
             if pub is not None and not self._is_capturing_display_pub(pub):
                 self._display_pub = pub
         except Exception as e:  # noqa: BLE001 - a badge must never break a cell
@@ -363,7 +365,7 @@ class BadgePresenter:
                         transient={"display_id": display_id},
                         update=True,
                     )
-            elif self._is_capturing_display_pub(getattr(self.shell, "display_pub", None)):
+            elif self._is_capturing_display_pub(attribute_or(self.shell, "display_pub", None)):
                 # Inside the user's ``%%capture``, whose body runs through
                 # cash: the badge belongs to the cell, not to what it captures
                 # (``cap.outputs[0]`` must be the user's own first output).
@@ -376,7 +378,7 @@ class BadgePresenter:
                         update=bool(display_id) and update_existing,
                     )
             else:
-                with _no_flush_when_streams_idle(getattr(self.shell, "display_pub", None)):
+                with _no_flush_when_streams_idle(attribute_or(self.shell, "display_pub", None)):
                     if display_id:
                         display(HTML(html), display_id=display_id, update=update_existing)
                     else:
@@ -421,7 +423,7 @@ class BadgePresenter:
         Collected once per cell (per execution count): it reads the whole
         notebook, and every render asks for it.
         """
-        count = getattr(self.shell, "execution_count", None)
+        count = attribute_or(self.shell, "execution_count", None)
         cached = self._bug_report_context_cache
         if cached is not None and cached[0] == count:
             return cached[1]
@@ -430,7 +432,7 @@ class BadgePresenter:
         return context
 
     def _collect_bug_report_context(self) -> dict:
-        backend = getattr(self._cash, "backend", None)
+        backend = attribute_or(self._cash, "backend", None)
         backend_name = type(backend).__name__ if backend else "unknown"
         python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
 
@@ -438,10 +440,10 @@ class BadgePresenter:
         # Prefer input_hist_raw (untransformed magics like %cash_on) over
         # input_hist_parsed / In (which transforms magics to get_ipython() calls).
         # input_hist_raw lives on history_manager, not directly on the shell.
-        hm = getattr(self.shell, "history_manager", None)
-        in_history = getattr(hm, "input_hist_raw", None) if hm else None
+        hm = attribute_or(self.shell, "history_manager", None)
+        in_history = attribute_or(hm, "input_hist_raw", None) if hm else None
         if in_history is None:
-            in_history = getattr(self.shell, "user_ns", {}).get("In", [])
+            in_history = attribute_or(self.shell, "user_ns", {}).get("In", [])
         # Filter empty strings and bare 'pass' cells, then deduplicate consecutive identical cells (from re-running).
         filtered: list[str] = []
         for c in in_history:
@@ -474,7 +476,7 @@ class BadgePresenter:
         mid-session (e.g. swapping in a Redis tier) sees the new layout
         on the next cell run.
         """
-        backend = getattr(self._cash, "backend", None)
+        backend = attribute_or(self._cash, "backend", None)
         if backend is None:
             return ()
         try:

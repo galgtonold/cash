@@ -18,6 +18,7 @@ import weakref
 from collections.abc import Callable, Container, Mapping
 from typing import TYPE_CHECKING, Any
 
+from cash._user_attrs import attribute_or
 from cash.content_hashers import builtin_hash_family
 from cash.notebook.lineage_store import restore_frozen_tag
 from cash.value_hash import budgeted_hash, is_costly, note_size
@@ -116,7 +117,7 @@ def _wraps_a_frame(t: type) -> bool:
     or a resampler: an object over a frame, whose content hash pickles the
     frame whole. ``t = df.groupby('user_id')`` took 2.5 s after 0.006 s over
     a million rows."""
-    return (getattr(t, "__module__", "") or "").startswith(("pandas.core.", "pandas.api.typing"))
+    return (attribute_or(t, "__module__", "") or "").startswith(("pandas.core.", "pandas.api.typing"))
 
 
 def identity_digest(value: Any) -> str | None:
@@ -145,7 +146,7 @@ def _artist_class() -> type | None:
     a check that would compare its content reads it as changed.
     """
     module = sys.modules.get("matplotlib.artist")
-    artist = getattr(module, "Artist", None)
+    artist = attribute_or(module, "Artist", None)
     return artist if isinstance(artist, type) else None
 
 

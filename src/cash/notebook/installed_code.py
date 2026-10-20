@@ -24,6 +24,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from cash._memo import CODE_OBJECTS, NOTEBOOK_STATEMENTS, LruMemo
+from cash._user_attrs import attribute_or, has_attribute
 from cash.code_digest import callable_identity
 from cash.decorator.closure_fold import iter_code_scopes
 from cash.decorator.code_args import installed_user_code, loaded_accessor_classes
@@ -119,7 +120,7 @@ def installed_code_parts(
                 for carrier in _user_code(attr):
                     functions = _functions(carrier)
                     identity = ",".join(sorted(callable_identity(fn) for fn in functions)) or callable_identity(carrier)
-                    parts.add(f"installed:{name}:{getattr(carrier, '__qualname__', '?')}:{identity}")
+                    parts.add(f"installed:{name}:{attribute_or(carrier, '__qualname__', '?')}:{identity}")
                     for fn in functions:
                         for scope in iter_code_scopes(fn.__code__):
                             reads.update(scope.co_names)
@@ -129,7 +130,7 @@ def installed_code_parts(
     refs = sorted(
         ref
         for ref in reads
-        if not hasattr(builtins, ref) and ref in user_ns and not isinstance(user_ns.get(ref), types.ModuleType)
+        if not has_attribute(builtins, ref) and ref in user_ns and not isinstance(user_ns.get(ref), types.ModuleType)
     )
     parts.update(f"installed-reads:{ref}:{variable_lineage.get(ref, 'ABSENT')}" for ref in refs)
     parts.update(f"installed-reads:{dep}" for dep in called_function_dependencies(refs, user_ns, variable_lineage))

@@ -11,6 +11,8 @@ import ast
 import collections
 import logging
 
+from cash._user_attrs import has_attribute
+
 from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
 from ...analysis.namespace_effects import (
@@ -214,7 +216,7 @@ class ReadScope:
                 continue
             # Recorded file deps are usually {path: snapshot} but some code paths
             # store a plain set/list of paths -- accept either shape.
-            paths.update(dep.keys() if hasattr(dep, "keys") else dep)
+            paths.update(dep.keys() if has_attribute(dep, "keys") else dep)
 
         def _collect(src: str, outputs=(), namespace=None, own: bool = False) -> None:
             nonlocal fully_known
@@ -238,7 +240,7 @@ class ReadScope:
                 r = set()
                 for o in outputs:
                     dep = efd[o]
-                    r.update(dep.keys() if hasattr(dep, "keys") else dep)
+                    r.update(dep.keys() if has_attribute(dep, "keys") else dep)
             if r is None:
                 # After a restart the session record is empty; what the
                 # statement read when it last ran was persisted for this.
@@ -271,7 +273,7 @@ class ReadScope:
             for o in entry.outputs:
                 dep = efd.get(o)
                 if dep:
-                    paths.update(dep.keys() if hasattr(dep, "keys") else dep)
+                    paths.update(dep.keys() if has_attribute(dep, "keys") else dep)
 
         if notebook_cells and current_cell_idx is not None and 0 <= current_cell_idx < len(notebook_cells):
             # One statement at a time, keyed as the runtime keys them, so a

@@ -24,6 +24,8 @@ import types
 import weakref
 from typing import Any
 
+from cash._user_attrs import has_attribute
+
 from ...sizing import estimate_object_size
 
 #: Most bytes a cell's saved class state may take (estimated): above it the
@@ -41,7 +43,7 @@ def _is_state(name: str, value: Any) -> bool:
         return False
     if isinstance(value, (types.FunctionType, staticmethod, classmethod, property, type)):
         return False
-    return not hasattr(type(value), "__get__")
+    return not has_attribute(type(value), "__get__")
 
 
 def _state_of(cls: type) -> dict[str, Any]:

@@ -16,6 +16,8 @@ from typing import Any
 
 from IPython.core.magic import Magics, line_magic, magics_class
 
+from cash._user_attrs import attribute_or, has_attribute
+
 from ... import _log, value_watch
 from ..._clock import perf_counter as _perf_counter
 from ..._console import safe_text
@@ -279,7 +281,7 @@ class CashMagics(Magics):
         # cash's pipeline entirely (no upstream reconstruction, no self-mod
         # reset). Guarded because older IPython lacks run_cell_async.
         self._original_run_cell_async = None
-        if hasattr(shell, "run_cell_async"):
+        if has_attribute(shell, "run_cell_async"):
             self._original_run_cell_async = shell.run_cell_async
             shell.run_cell_async = signature_preserving_proxy(
                 self,
@@ -318,7 +320,7 @@ class CashMagics(Magics):
         # executes notebooks with it set means "run everything, cache nothing".
         # An autoload hook calls this in every kernel, so it must say why it
         # did nothing rather than fail quietly.
-        if getattr(getattr(self._cash_instance, "config", None), "disable", False):
+        if attribute_or(attribute_or(self._cash_instance, "config", None), "disable", False):
             print(
                 "[cash] caching is disabled (disable=True / CASH_DISABLE), so %cash_on did nothing: cells run uncached."
             )
@@ -647,7 +649,7 @@ class CashMagics(Magics):
 
         Checks the two locations VS Code and other frontends use.
         """
-        if not hasattr(shell, "get_parent"):
+        if not has_attribute(shell, "get_parent"):
             return None
         parent = shell.get_parent()
         if not parent:
@@ -743,7 +745,7 @@ class CashMagics(Magics):
             self.current_cell_id = None
 
             # 1. Try standard info.cell_id (JupyterLab / IPython 8.3+)
-            if hasattr(info, "cell_id") and info.cell_id:
+            if has_attribute(info, "cell_id") and info.cell_id:
                 self.current_cell_id = info.cell_id
 
             # 2. Try to get it from parent header metadata (VS Code / others)
@@ -1033,7 +1035,7 @@ class CashMagics(Magics):
         :meth:`_history_records` drops the stand-in's entry.
         Returns whether it stored one."""
         store = _stores_history(args, kwargs)
-        history = getattr(self.shell, "history_manager", None)
+        history = attribute_or(self.shell, "history_manager", None)
         if not store or history is None or not raw_cell or raw_cell.isspace():
             return False
         try:
@@ -1056,8 +1058,8 @@ class CashMagics(Magics):
         IPython stores for the delegated cell (the first ``store_inputs``
         call, made before any of it runs), so the history keeps one entry
         per cell, the user's own."""
-        history = getattr(self.shell, "history_manager", None)
-        original = getattr(history, "store_inputs", None) if history is not None else None
+        history = attribute_or(self.shell, "history_manager", None)
+        original = attribute_or(history, "store_inputs", None) if history is not None else None
         if not self._cell_history_stored or original is None:
             yield
             return
@@ -1070,7 +1072,7 @@ class CashMagics(Magics):
                 return None
             return original(line_num, source, source_raw)
 
-        had_own = "store_inputs" in getattr(history, "__dict__", {})
+        had_own = "store_inputs" in attribute_or(history, "__dict__", {})
         try:
             history.store_inputs = store_inputs
         except (AttributeError, TypeError):
@@ -1093,11 +1095,11 @@ class CashMagics(Magics):
         An interrupt or ``SystemExit`` that came before any statement ran (in
         the upstream check) has not been shown yet: IPython shows that one."""
         self.shell.user_ns["__cash_exception__"] = e
-        if isinstance(e, (KeyboardInterrupt, SystemExit)) and not getattr(e, "_cash_shown", False):
+        if isinstance(e, (KeyboardInterrupt, SystemExit)) and not attribute_or(e, "_cash_shown", False):
             e.with_traceback(None)  # cash's own frames, not the user's
             yield
             return
-        orig_showtb = getattr(self.shell, "showtraceback", None)
+        orig_showtb = attribute_or(self.shell, "showtraceback", None)
         try:
             self.shell.showtraceback = lambda *a, **kw: None
         except (AttributeError, TypeError):
@@ -1255,7 +1257,7 @@ class CashMagics(Magics):
         echoed = [(m.pop(ECHO_FIELD, None), m.get("is_upstream")) for m in done.all_metrics]
         cell_echoes = [value for value, upstream in echoed if not upstream]
         value = cell_echoes[-1] if cell_echoes else None
-        user_ns = getattr(self.shell, "user_ns", None)
+        user_ns = attribute_or(self.shell, "user_ns", None)
         if value is None or not isinstance(user_ns, dict):
             yield "pass"
             return

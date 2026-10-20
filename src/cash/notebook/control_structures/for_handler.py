@@ -26,6 +26,7 @@ import time as _time
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from cash._user_attrs import attribute_or
 from cash.control_markers import iteration_digest, mark_iteration
 
 from ...analysis.mutations import accumulator_loop_body_shape, seeded_accumulator_loop
@@ -232,7 +233,7 @@ class ForLoopHandler:
             if header is None and self._whole_before_evaluating(node):
                 # The unit evaluates the header, once (`runs_whole_unevaluated`).
                 logger.debug("[CONTROL] Fast-loop: executing as single unit, header unevaluated")
-                user_ns = getattr(self.shell, "user_ns", None) or {}
+                user_ns = attribute_or(self.shell, "user_ns", None) or {}
                 return self._run_unit(
                     node,
                     single_unit_policy.estimated_iterations(node.iter, single_unit_policy.UNEVALUATED, user_ns),
@@ -306,7 +307,7 @@ class ForLoopHandler:
         split verdict is evaluated first: `_run_whole` splits it."""
         if self._prefers_iterations(node):
             return False
-        user_ns = getattr(self.shell, "user_ns", None) or {}
+        user_ns = attribute_or(self.shell, "user_ns", None) or {}
         if not single_unit_policy.runs_whole_unevaluated(node, user_ns):
             return False
         store = self._split_policy.store()
@@ -387,7 +388,7 @@ class ForLoopHandler:
         # leaves the planner re-running the whole loop against entries
         # written for halves (a stale value), simulator-only leaves a plain
         # re-run paying full decomposition.
-        user_ns = getattr(self.shell, "user_ns", None) or {}
+        user_ns = attribute_or(self.shell, "user_ns", None) or {}
         iterable = header.value
         verdict_k = self._split_policy.recorded_k(node, iterable, user_ns)
         if verdict_k is not None:
@@ -568,7 +569,7 @@ class ForLoopHandler:
 
         # Measure the first few iterations so this loop can be judged for
         # splitting on a LATER run. Nothing is split here.
-        user_ns = getattr(self.shell, "user_ns", None) or {}
+        user_ns = attribute_or(self.shell, "user_ns", None) or {}
         probe_n = self._split_policy.eligible(node, iterable, user_ns)
         probe_elapsed = 0.0
 
@@ -599,7 +600,7 @@ class ForLoopHandler:
         total_iterations = 0
         cached_iterations = 0
         loop_pass = _helpers.LoopPass()
-        passes = getattr(self.dispatcher, "loop_passes", None)
+        passes = attribute_or(self.dispatcher, "loop_passes", None)
         if isinstance(passes, list):
             passes.append(loop_pass)
         # What the body changes through a library call is watched around

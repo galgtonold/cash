@@ -15,6 +15,8 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 __all__ = ["register_event", "remove_previous_hooks", "signature_preserving_proxy", "stash_hooks"]
 
 logger = logging.getLogger(__name__)
@@ -22,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 def remove_previous_hooks(shell: Any) -> None:
     """Undo what an earlier instance installed on *shell*, as it stashed it."""
-    prior = getattr(shell, "_cash_hooks", None)
+    prior = attribute_or(shell, "_cash_hooks", None)
     if not isinstance(prior, dict):
         return
     try:

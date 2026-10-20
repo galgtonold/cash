@@ -20,6 +20,8 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 from ..analysis.mutation_effects import loop_watch_candidates, statement_watch_candidates
 from ..mutation_fingerprint import mutation_fingerprint
 from .cache_key import statement_source_hash
@@ -82,10 +84,10 @@ def branch_changes(
 
 
 def _branches_of(node: ast.AST) -> list[ast.stmt]:
-    body: list[ast.stmt] = [*getattr(node, "body", ()), *getattr(node, "orelse", ())]
-    for handler in getattr(node, "handlers", ()):
+    body: list[ast.stmt] = [*attribute_or(node, "body", ()), *attribute_or(node, "orelse", ())]
+    for handler in attribute_or(node, "handlers", ()):
         body.extend(handler.body)
-    body.extend(getattr(node, "finalbody", ()))
+    body.extend(attribute_or(node, "finalbody", ()))
     return body
 
 

@@ -18,6 +18,8 @@ import textwrap
 import types
 from typing import TYPE_CHECKING
 
+from cash._user_attrs import has_attribute
+
 from ..._memo import NOTEBOOK_STATEMENTS, STATEMENTS
 from ..._paths import resolve_file_dep_path
 from ...analysis.ast_util import called_names, parse_cached
@@ -357,7 +359,7 @@ class FileWriterScheduler:
             for v in outputs:
                 dep = executed_file_deps.get(v)
                 if dep:
-                    deps.update(dep.keys() if hasattr(dep, "keys") else dep)
+                    deps.update(dep.keys() if has_attribute(dep, "keys") else dep)
             if not deps:
                 return False
             if written_forms is None:

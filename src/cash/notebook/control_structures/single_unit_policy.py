@@ -29,6 +29,8 @@ import types
 from collections.abc import Sequence
 from typing import Any
 
+from cash._user_attrs import attribute_or, has_attribute
+
 from ...analysis.cacheability import statement_writes_files
 
 logger = logging.getLogger(__name__)
@@ -161,7 +163,8 @@ def _is_the_builtin_open(func: Any) -> bool:
     module and name.
     """
     return func is _builtins.open or (
-        getattr(func, "__name__", None) == "open" and getattr(func, "__module__", None) in ("_io", "io", "builtins")
+        attribute_or(func, "__name__", None) == "open"
+        and attribute_or(func, "__module__", None) in ("_io", "io", "builtins")
     )
 
 
@@ -174,7 +177,7 @@ def _is_progress_bar(name: str, user_ns: dict[str, Any]) -> bool:
     comes from, so a notebook's own ``tqdm`` gets no benefit of the doubt.
     """
     func = user_ns.get(name)
-    return callable(func) and str(getattr(func, "__module__", "")).partition(".")[0] == "tqdm"
+    return callable(func) and str(attribute_or(func, "__module__", "")).partition(".")[0] == "tqdm"
 
 
 def file_in_progress_bar(iterable: Any) -> io.IOBase | None:
@@ -185,7 +188,7 @@ def file_in_progress_bar(iterable: Any) -> io.IOBase | None:
     """
     if str(type(iterable).__module__).partition(".")[0] != "tqdm":
         return None
-    inner = getattr(iterable, "iterable", None)
+    inner = attribute_or(iterable, "iterable", None)
     return inner if isinstance(inner, io.IOBase) else None
 
 
@@ -221,7 +224,7 @@ def _lines_in_file(handle: Any) -> int | None:
     file that fits the sample, a good guess for a log or a csv, and only ever
     used to decide how the loop is run, never what it computes.
     """
-    name = getattr(handle, "name", None)
+    name = attribute_or(handle, "name", None)
     if not isinstance(name, (str, bytes, os.PathLike)):
         return None
     try:
@@ -352,7 +355,7 @@ def header_names_the_iterator(iter_node: ast.AST, iterable: Any, user_ns: dict[s
     """
     if not isinstance(iter_node, ast.Name) or user_ns.get(iter_node.id) is not iterable:
         return False
-    if not hasattr(type(iterable), "__next__"):
+    if not has_attribute(type(iterable), "__next__"):
         return False  # not an iterator; asked without running its __iter__
     try:
         return iter(iterable) is iterable
@@ -381,7 +384,7 @@ def _numpy_array_of_a_sequence(call: ast.Call, user_ns: dict[str, Any]) -> bool:
     ):
         return False
     module = user_ns.get(func.value.id)
-    if getattr(module, "__name__", None) != "numpy" or not isinstance(module, type(_builtins)):
+    if attribute_or(module, "__name__", None) != "numpy" or not isinstance(module, type(_builtins)):
         return False
     value = user_ns.get(call.args[0].id)
     return isinstance(value, (list, tuple, range, module.ndarray)) and (
@@ -402,7 +405,7 @@ def _is_own_iterator(value: Any) -> bool:
     """``iter(value) is value``, asked without running a user ``__iter__``
     when it cannot be so: ``iter`` refuses a result with no ``__next__``,
     so a value whose type has none is never its own iterator."""
-    return hasattr(type(value), "__next__") and iter(value) is value
+    return has_attribute(type(value), "__next__") and iter(value) is value
 
 
 #: Stands for the loop's iterable when the header has not been evaluated:
@@ -429,7 +432,7 @@ def runs_whole_unevaluated(node: ast.For, user_ns: dict[str, Any]) -> bool:
     if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
         return False
     name = call.func.id
-    builtin = getattr(_builtins, name, None)
+    builtin = attribute_or(_builtins, name, None)
     pure = name in PURE_ITER_PRODUCERS and user_ns.get(name, builtin) is builtin
     if not (pure or _is_progress_bar(name, user_ns)):
         return False
@@ -440,7 +443,7 @@ def _is_builtin_callable(value: Any) -> bool:
     """A builtin function or type (``str``, ``len``, ``int``): calling it runs
     no notebook code."""
     if isinstance(value, types.BuiltinFunctionType):
-        return getattr(value, "__module__", None) == "builtins"
+        return attribute_or(value, "__module__", None) == "builtins"
     return isinstance(value, type) and value.__module__ == "builtins"
 
 
@@ -482,7 +485,7 @@ def header_may_be_left_to_the_unit(iter_node: ast.AST, user_ns: dict[str, Any]) 
         # ...and only while the name still IS that builtin. A notebook
         # that defines its own `len` or `sorted` gets no benefit of the
         # doubt from sharing the name.
-        if name in user_ns and user_ns[name] is not getattr(_builtins, name, None):
+        if name in user_ns and user_ns[name] is not attribute_or(_builtins, name, None):
             return False
     for sub in ast.walk(iter_node):
         if id(sub) in called or not isinstance(sub, (ast.Name, ast.Attribute, ast.Subscript)):
@@ -530,7 +533,7 @@ def _plain_attribute(base: Any, attr: str) -> Any:
         own = None
     if isinstance(own, dict) and attr in own and own[attr] is value:
         return value  # the instance's own data, which Python returns as it is
-    if hasattr(type(value), "__get__"):
+    if has_attribute(type(value), "__get__"):
         return _UNKNOWN  # a property, a method, any descriptor: reading it runs code
     return value
 
@@ -714,7 +717,7 @@ def estimated_iterations(
             if base is None:
                 return None
             owner = user_ns.get(func.value.id) if isinstance(func.value, ast.Name) else None
-            if func.attr in ("items", "iteritems") and hasattr(owner, "columns"):
+            if func.attr in ("items", "iteritems") and has_attribute(owner, "columns"):
                 return len(owner.columns)
             return base
         if _numpy_array_of_a_sequence(node, user_ns):

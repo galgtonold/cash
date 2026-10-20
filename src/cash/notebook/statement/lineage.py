@@ -30,6 +30,8 @@ import types
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
+from cash._user_attrs import attribute_or
+
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutations import assigned_method_call_receivers, standalone_method_call_receivers
 from ...analysis.namespace_effects import fits_its_receiver
@@ -612,7 +614,7 @@ class StatementLineageBuilder:
             # which is what the invalidator looks it up by.
             if not (
                 isinstance(input_val, types.ModuleType)
-                and getattr(input_val, "__name__", input_name) in self.function_tracker.tracked_modules
+                and attribute_or(input_val, "__name__", input_name) in self.function_tracker.tracked_modules
             ):
                 continue
             attrs = static_attribute_reads(code, input_name)
