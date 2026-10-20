@@ -39,7 +39,7 @@ from .. import _native
 from .._memo import CODE_OBJECTS, LruMemo
 from ..install_paths import is_user_code_module
 from ..tracking.function_tracker import is_local_module
-from ..value_types import LEAF_TYPES
+from ..value_types import LEAF_TYPES, library_scalar_types
 from .compiled_source import is_cash_filename
 
 __all__ = [
@@ -65,6 +65,20 @@ WALK_LIMIT = 2_000_000
 EXISTENCE_CHECK_AT = 20_000
 
 _LEAVES = frozenset(LEAF_TYPES)
+
+
+@functools.lru_cache(maxsize=4)
+def _leaves_with(scalars: tuple[type, ...]) -> frozenset[type]:
+    return _LEAVES.union(scalars)
+
+
+def _leaves() -> frozenset[type]:
+    """`LEAF_TYPES` and numpy's and pandas' scalars (`library_scalar_types`):
+    values that hold no function. Parsed rows holding a ``pd.Timestamp``
+    were walked a timestamp at a time, for every statement reading them."""
+    return _leaves_with(library_scalar_types())
+
+
 _SEQUENCES = (list, tuple, set, frozenset)
 _PLAIN = frozenset((dict, list, tuple))
 _MAIN_NAMES = frozenset(("__main__", "builtins"))
@@ -142,7 +156,7 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
     *lineage* is the value's lineage, when it has one: the walk is then
     remembered for it.
     """
-    if value is None or type(value) in _LEAVES or isinstance(value, types.ModuleType):
+    if value is None or type(value) in _leaves() or isinstance(value, types.ModuleType):
         return _NOTHING
     if type(value) is types.FunctionType and _plain_function(value):
         return Held((value.__code__,)) if _is_notebook(value, namespace) else _NOTHING
@@ -448,7 +462,7 @@ def _next_level(children: list[Any], seen: set[Any]) -> list[tuple[type, list[An
     # An object that leads only to its class (`_inert`: an openpyxl cell's
     # style array, 400,000 of them) is not visited: its class is.
     inert = {kind for kind in child_kinds if _inert(kind)}
-    skipped = _LEAVES | inert if inert else _LEAVES
+    skipped = _leaves() | inert if inert else _leaves()
     groups = kernels.split_level(children, skipped, inert) if kernels is not None else NotImplemented
     if groups is NotImplemented:
         kinds_of = list(map(type, children))
@@ -482,7 +496,7 @@ def _plain_records(kind: type, group: list[Any]) -> bool:
     dropped in one pass at C speed, before the walk dedups them (most of
     what a walk over them cost)."""
     if _K is not None and type(group) is list:
-        found = _K.leaf_items(group, 2 if kind is dict else 0, _LEAVES)
+        found = _K.leaf_items(group, 2 if kind is dict else 0, _leaves())
         if found is not NotImplemented:
             return found
     if kind is dict:
@@ -491,7 +505,7 @@ def _plain_records(kind: type, group: list[Any]) -> bool:
         )
     else:
         items = itertools.chain.from_iterable(group)
-    return set(map(type, items)) <= _LEAVES
+    return set(map(type, items)) <= _leaves()
 
 
 def _visit_group(
@@ -509,28 +523,28 @@ def _visit_group(
     if _K is not None and type(group) is list:
         # The two branches below for exact dicts and sequences, in C.
         if kind is dict:
-            if _K.dict_children(group, _LEAVES, children) is not NotImplemented:
+            if _K.dict_children(group, _leaves(), children) is not NotImplemented:
                 return
-        elif kind in _SEQUENCES and _K.seq_children(group, _LEAVES, children) is not NotImplemented:
+        elif kind in _SEQUENCES and _K.seq_children(group, _leaves(), children) is not NotImplemented:
             return
     if issubclass(kind, dict):
         keys = list(itertools.chain.from_iterable(group))
         key_kinds = set(map(type, keys))
         # Keys that are tuples of plain values (an openpyxl sheet's cells by
         # ``(row, column)``) lead nowhere: one pass says so, as for a list.
-        if not key_kinds <= _LEAVES and not (
-            key_kinds <= _LEAVES | {tuple}
-            and set(map(type, itertools.chain.from_iterable(_of_type(keys, tuple)))) <= _LEAVES
+        if not key_kinds <= _leaves() and not (
+            key_kinds <= _leaves() | {tuple}
+            and set(map(type, itertools.chain.from_iterable(_of_type(keys, tuple)))) <= _leaves()
         ):
             children.extend(keys)
-        if not set(map(type, itertools.chain.from_iterable(map(dict.values, group)))) <= _LEAVES:
+        if not set(map(type, itertools.chain.from_iterable(map(dict.values, group)))) <= _leaves():
             children.extend(itertools.chain.from_iterable(map(dict.values, group)))
         if kind is dict:
             return
     elif issubclass(kind, _SEQUENCES):
         # A list of numbers or strings leads nowhere: one pass at C speed
         # says so, and adds none of its items.
-        if not set(map(type, itertools.chain.from_iterable(group))) <= _LEAVES:
+        if not set(map(type, itertools.chain.from_iterable(group))) <= _leaves():
             children.extend(itertools.chain.from_iterable(group))
         if kind in _SEQUENCES:
             return
@@ -608,14 +622,14 @@ def _add_column(column: list[Any], children: list[Any]) -> None:
     class alone for a column of `_inert` objects (each cell's style array),
     each object once (the sheet that 400,000 cells name as their parent)."""
     kinds = set(map(type, column))
-    if kinds <= _LEAVES:
+    if kinds <= _leaves():
         return
-    if all(map(_inert, kinds - _LEAVES)):
-        children.extend(kinds - _LEAVES)
+    if all(map(_inert, kinds - _leaves())):
+        children.extend(kinds - _leaves())
         return
-    if kinds & _LEAVES:
-        column = list(itertools.compress(column, map(operator.not_, map(_LEAVES.__contains__, map(type, column)))))
-        kinds -= _LEAVES
+    if kinds & _leaves():
+        column = list(itertools.compress(column, map(operator.not_, map(_leaves().__contains__, map(type, column)))))
+        kinds -= _leaves()
     children.extend(dict(zip(_identity_keys(column, kinds), column)).values())
 
 
@@ -712,7 +726,7 @@ _WALKED_KINDS = (
 def _inert(kind: type) -> bool:
     """An object of *kind* leads `_visit_group` to its class alone: no
     instance dict, no slots, and not a kind it walks into otherwise."""
-    if kind in _LEAVES or issubclass(kind, _WALKED_KINDS):
+    if kind in _leaves() or issubclass(kind, _WALKED_KINDS):
         return False
     return not _may_have_dict(kind) and not _slot_names(kind)
 
