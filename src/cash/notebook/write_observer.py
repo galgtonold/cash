@@ -204,7 +204,7 @@ def _on_move(args: tuple) -> None:
 
 
 #: Audit events of work whose writes no ``open`` event reports: another
-#: process, SQLite (its own file I/O in C). h5py and the like open through
+#: process (a fork's child included), SQLite (its own file I/O in C). h5py and the like open through
 #: the C library, which the native file hook sees where it runs. A call
 #: through ctypes raises no event; the statement processor reads the
 #: statement for one (``statement_calls_through_ctypes``).
@@ -212,6 +212,8 @@ _UNSEEN_WRITERS = frozenset(
     {
         "subprocess.Popen",
         "os.system",
+        "os.fork",
+        "os.forkpty",
         "os.posix_spawn",
         "os.spawn",
         "os.exec",
