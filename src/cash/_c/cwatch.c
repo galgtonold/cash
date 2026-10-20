@@ -70,7 +70,7 @@
 
 #include "cwalk.h"
 
-#define CWATCH_API_VERSION 2
+#define CWATCH_API_VERSION 3
 #define CWATCH_VERSION "0.1.0"
 
 #if PY_VERSION_HEX < 0x030C0000
@@ -455,7 +455,20 @@ static uint64_t world_epoch = 1, cash_epoch = 1;
 static unsigned long long c_world_bumps, c_world_ignored, c_fast_hits, c_fast_misses;
 #define WD_KEYED 1u
 #define WD_UNKEYED 2u
-typedef struct { uintptr_t addr; unsigned flags; } WEnt;
+/* A world type's `live` tag stands for its `canon` one: the tag it had
+ * before cash's own writes to it (see `expect`), which a memo holds. */
+/* A world type's `name`, `qualname`, `bases`, `mro` and `meta` are the ones
+ * it had when watched (strong). With its dict watched (`world_watch_type`)
+ * they are what a lookup on it reads, so a memo checks them, not the type's
+ * version tag: every write to a class takes a new tag, CPython gives a class
+ * at most 1,000, and cash writes its reader wrappers to `threading.Thread`
+ * twice per miss -- after ~500 misses the class had no tag left and no memo
+ * reading it ever served again. Setting ``__name__`` or ``__qualname__``
+ * writes no dict and CPython tells no type watcher of it either. */
+typedef struct {
+    uintptr_t addr; unsigned flags;
+    PyObject *name, *qualname, *bases, *mro, *meta;
+} WEnt;
 static WEnt *wds = NULL; static size_t wds_cap = 0, wds_used = 0, wds_tomb = 0;  /* world dicts */
 static WEnt *wts = NULL; static size_t wts_cap = 0, wts_used = 0, wts_tomb = 0;  /* world types */
 static PyObject *world_names = NULL;   /* set of str */
@@ -492,7 +505,8 @@ static int went_add(WEnt **tabp, size_t *capp, size_t *usedp, size_t *tombp, uin
     size_t m = *capp - 1, i = hmix(a) & m;
     while ((*tabp)[i].addr && (*tabp)[i].addr != WTOMB) i = (i + 1) & m;
     if ((*tabp)[i].addr == WTOMB) (*tombp)--;
-    (*tabp)[i].addr = a; (*tabp)[i].flags = flags; (*usedp)++;
+    (*tabp)[i].addr = a; (*tabp)[i].flags = flags;
+    (*tabp)[i].name = (*tabp)[i].qualname = (*tabp)[i].bases = (*tabp)[i].mro = (*tabp)[i].meta = NULL; (*usedp)++;
     return 0;
 }
 
@@ -500,24 +514,81 @@ static inline void world_bump(void) { world_epoch++; c_world_bumps++; }
 
 static inline int codeish(PyObject *o) { return o != NULL && (PyCallable_Check(o) || PyModule_Check(o)); }
 
-/* id(wrapper) -> (wrapper, original): cash's own reader wrappers, which a
- * scope installs and takes down around every miss (`io_watch.Patches`). A
- * swap between the two is no change for a key (keys look through them). */
-static PyObject *world_swaps;
+/* The one attribute cash is setting right now (`io_watch.Patches`, which
+ * installs its reader wrappers and puts the originals back around every
+ * miss): the owner, the dict the set writes, the name, the value being set
+ * (NULL: the name is being deleted) and the thread setting it. That one
+ * write, on that thread, is no change for a key (keys look through cash's
+ * wrappers); any other write meanwhile, by this thread or another, still
+ * moves the epoch. Armed by `expect_set` right before the write and cleared
+ * by `expect_clear` right after.
+ *
+ * A type event carries no attribute, so one on the armed thread for the
+ * owner or a subclass is passed over; the classes it reached are noted, and
+ * once the write is made the owner must hold the value expected and each
+ * class the bases and MRO it was watched with (a change to those writes no
+ * dict), or the epoch moves. A memo checks a class by what it was watched
+ * with (WEnt), not by its version tag, so cash's own writes spend none. */
+#define EXPECT_SEEN 16
+static struct {
+    PyThreadState *ts;   /* NULL: nothing armed */
+    PyObject *owner, *dict, *name, *value;   /* strong; value NULL for a delete */
+    int nseen;
+    PyTypeObject *seen[EXPECT_SEEN];   /* the world types its type events reached */
+} expect;
 
-static PyObject *swap_original(PyObject *w) {   /* borrowed or NULL, no error */
-    if (!world_swaps || !w) return NULL;
-    PyObject *id = PyLong_FromVoidPtr(w);
-    if (!id) { PyErr_Clear(); return NULL; }
-    PyObject *pair = PyDict_GetItemWithError(world_swaps, id);
-    Py_DECREF(id);
-    if (!pair) { PyErr_Clear(); return NULL; }
-    return PyTuple_GET_ITEM(pair, 0) == w ? PyTuple_GET_ITEM(pair, 1) : NULL;
+static void expect_settle(void) {
+    if (!expect.nseen) return;
+    PyObject *now = PyDict_GetItemWithError(expect.dict, expect.name);   /* borrowed */
+    if (!now && PyErr_Occurred()) PyErr_Clear();
+    if (now != expect.value) { world_bump(); return; }   /* not what cash set: a change */
+    for (int i = 0; i < expect.nseen; i++) {
+        PyTypeObject *t = expect.seen[i];
+        /* bases or MRO moved (no dict write shows it): not cash's write */
+        WEnt *e = went_find(wts, wts_cap, (uintptr_t)t);
+        if (!e || t->tp_bases != e->bases || t->tp_mro != e->mro) { world_bump(); return; }
+    }
 }
 
-static int is_swap(PyObject *old, PyObject *nv) {
-    if (!old || !nv) return 0;
-    return swap_original(nv) == old || swap_original(old) == nv;
+static void expect_reset(void) {
+    if (expect.ts) expect_settle();
+    PyObject *o = expect.owner, *d = expect.dict, *n = expect.name, *v = expect.value;
+    expect.ts = NULL; expect.nseen = 0;
+    expect.owner = expect.dict = expect.name = expect.value = NULL;
+    Py_XDECREF(o); Py_XDECREF(d); Py_XDECREF(n); Py_XDECREF(v);
+}
+
+static int epoch_is(PyObject *o, uint64_t want);
+
+/* `stored` (a memo's) is t's tag now, or the one t's tag stands for */
+static int type_tag_is(PyObject *stored, PyTypeObject *t) {
+    (void)stored;   /* the tag the memo was made at: see WEnt */
+    if (!wts_used) return 0;
+    WEnt *e = went_find(wts, wts_cap, (uintptr_t)t);
+    if (!e || !e->bases || !(t->tp_flags & Py_TPFLAGS_HEAPTYPE)) return 0;
+    PyHeapTypeObject *h = (PyHeapTypeObject *)t;
+    if (e->name != h->ht_name || e->qualname != h->ht_qualname || e->bases != t->tp_bases || e->mro != t->tp_mro ||
+        e->meta != (PyObject *)Py_TYPE(t)) {
+        world_bump();   /* renamed, rebased or given another metaclass */
+        return 0;
+    }
+    return 1;
+}
+
+static int str_equal(PyObject *a, PyObject *b);
+
+static int expected_write(PyDict_WatchEvent ev, PyObject *d, PyObject *key, PyObject *nv) {
+    if (!expect.ts || expect.ts != PyThreadState_Get() || d != expect.dict || !key) return 0;
+    if (!str_equal(key, expect.name)) return 0;
+    if (expect.value == NULL) return ev == PyDict_EVENT_DELETED;
+    return (ev == PyDict_EVENT_ADDED || ev == PyDict_EVENT_MODIFIED) && nv == expect.value;
+}
+
+static int expected_type(PyTypeObject *t) {
+    /* the class whose attribute is being set, or one inheriting it (a
+     * type's change is reported down to its subclasses) */
+    return expect.ts && expect.ts == PyThreadState_Get() && PyType_Check(expect.owner) &&
+           PyType_IsSubtype(t, (PyTypeObject *)expect.owner);
 }
 
 static void world_dict_event(WEnt *e, PyDict_WatchEvent ev, PyObject *d, PyObject *key, PyObject *nv) {
@@ -539,26 +610,35 @@ static void world_dict_event(WEnt *e, PyDict_WatchEvent ev, PyObject *d, PyObjec
             if (!codeish(old) && !codeish(nv)) { c_world_ignored++; return; }
         }
     }
-    if (ev == PyDict_EVENT_MODIFIED && world_swaps && key != NULL && PyUnicode_CheckExact(key) &&
-        is_swap(PyDict_GetItem(d, key), nv)) {
-        c_world_ignored++; return;
-    }
+    if (expected_write(ev, d, key, nv)) { c_world_ignored++; return; }
     world_bump();
 }
-/* world_swap(wrapper, original): see world_swaps */
-static PyObject *py_world_swap(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
-    if (nargs != 2) { PyErr_SetString(PyExc_TypeError, "world_swap(wrapper, original)"); return NULL; }
-    if (!world_swaps && !(world_swaps = PyDict_New())) return NULL;
-    PyObject *id = PyLong_FromVoidPtr(args[0]);
-    if (!id) return NULL;
-    PyObject *pair = PyTuple_Pack(2, args[0], args[1]);
-    int rc = pair ? PyDict_SetItem(world_swaps, id, pair) : -1;
-    Py_DECREF(id); Py_XDECREF(pair);
-    if (rc < 0) return NULL;
+
+/* expect_set(owner, name[, value]): see `expect`; no value: a delete */
+static PyObject *py_expect_set(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 2 && nargs != 3) { PyErr_SetString(PyExc_TypeError, "expect_set(owner, name[, value])"); return NULL; }
+    if (!PyUnicode_CheckExact(args[1])) { PyErr_SetString(PyExc_TypeError, "expect_set: name must be a str"); return NULL; }
+    PyObject *dict;
+    if (PyType_Check(args[0])) {
+        dict = PyType_GetDict((PyTypeObject *)args[0]);   /* new */
+        if (!dict) return NULL;
+    } else {
+        dict = PyObject_GenericGetDict(args[0], NULL);
+        if (!dict) { PyErr_Clear(); Py_RETURN_NONE; }   /* no dict: no event to expect */
+    }
+    expect_reset();
+    expect.owner = Py_NewRef(args[0]);
+    expect.dict = dict;
+    expect.name = Py_NewRef(args[1]);
+    expect.value = nargs == 3 ? Py_NewRef(args[2]) : NULL;
+    expect.ts = PyThreadState_Get();
     Py_RETURN_NONE;
 }
 
-
+static PyObject *py_expect_clear(PyObject *self, PyObject *noargs) {
+    expect_reset();
+    Py_RETURN_NONE;
+}
 
 static int world_unwatchable_dict(PyObject *o) { return went_find(wds, wds_cap, (uintptr_t)o) != NULL; }
 
@@ -617,7 +697,14 @@ static int on_dict(PyDict_WatchEvent ev, PyObject *d, PyObject *key, PyObject *n
 
 static int on_type(PyTypeObject *t) {
     c_type_events++;
-    if (wts_used && went_find(wts, wts_cap, (uintptr_t)t)) world_bump();
+    if (wts_used && went_find(wts, wts_cap, (uintptr_t)t)) {
+        if (expected_type(t) && expect.nseen < EXPECT_SEEN) {
+            expect.seen[expect.nseen++] = t;
+            c_world_ignored++;
+        } else {
+            world_bump();
+        }
+    }
     long s = ht_slot((uintptr_t)t);
     if (s < 0) return 0;
     for (uint32_t i = ht[s]; i != NONE32; i = NODE(i)->next) {
@@ -1918,14 +2005,36 @@ static PyObject *py_world_watch_dict(PyObject *self, PyObject *const *args, Py_s
     Py_RETURN_NONE;
 }
 
-/* world_watch_type(t) -> its version tag (assigned now), or None when it has none */
+/* world_watch_type(t) -> its version tag now (not checked: see WEnt), or None for a static type */
 static PyObject *py_world_watch_type(PyObject *self, PyObject *t) {
     if (!PyType_Check(t)) { PyErr_SetString(PyExc_TypeError, "world_watch_type(type)"); return NULL; }
     PyTypeObject *tp = (PyTypeObject *)t;
     if (ensure_watchers() < 0) return NULL;
-    if (tp->tp_version_tag == 0 && !PyUnstable_Type_AssignVersionTag(tp)) Py_RETURN_NONE;
+    if (!(tp->tp_flags & Py_TPFLAGS_HEAPTYPE)) Py_RETURN_NONE;
     if (went_add(&wts, &wts_cap, &wts_used, &wts_tomb, (uintptr_t)t, 1) < 0) return NULL;
     if (PyType_Watch(type_wid, t) < 0) return NULL;
+    /* its dict too: a write while it has no tag reaches no type watcher */
+    PyObject *d = PyType_GetDict(tp);
+    if (!d) return NULL;
+    int rc = went_add(&wds, &wds_cap, &wds_used, &wds_tomb, (uintptr_t)d, WD_UNKEYED);
+    if (rc == 0) rc = PyDict_Watch(dict_wid, d);
+    Py_DECREF(d);
+    if (rc < 0) return NULL;
+    WEnt *e = went_find(wts, wts_cap, (uintptr_t)t);
+    if (e && (tp->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
+        PyHeapTypeObject *h = (PyHeapTypeObject *)tp;
+        /* renamed or rebased since it was last watched: memos made before
+         * may name it */
+        if (e->name && (e->name != h->ht_name || e->qualname != h->ht_qualname || e->bases != tp->tp_bases ||
+                        e->mro != tp->tp_mro || e->meta != (PyObject *)Py_TYPE(tp)))
+            world_bump();
+        Py_XINCREF(h->ht_name); Py_XSETREF(e->name, h->ht_name);
+        Py_XINCREF(h->ht_qualname); Py_XSETREF(e->qualname, h->ht_qualname);
+        Py_XINCREF(tp->tp_bases); Py_XSETREF(e->bases, tp->tp_bases);
+        Py_XINCREF(tp->tp_mro); Py_XSETREF(e->mro, tp->tp_mro);
+        Py_INCREF(Py_TYPE(tp)); Py_XSETREF(e->meta, (PyObject *)Py_TYPE(tp));
+    }
+    /* not checked (see WEnt): no tag to spend */
     return PyLong_FromUnsignedLong(tp->tp_version_tag);
 }
 
@@ -2116,22 +2225,6 @@ static int epoch_is(PyObject *o, uint64_t want) {
     return (uint64_t)v == want;
 }
 
-/* A class a fast hit compares: its version tag, and for a heap type also
- * the name and qualname objects it had (`hit_memo` hands
- * ``(tag, __name__, __qualname__)``). Setting ``__name__`` or
- * ``__qualname__`` goes through the type's own setter, which neither moves
- * the tag nor tells a type watcher, and a key names a renamed class by its
- * new name. A bare tag is compared as before. */
-static int type_unchanged(PyObject *t, PyObject *want) {
-    if (!PyType_Check(t)) return 0;
-    PyTypeObject *tp = (PyTypeObject *)t;
-    if (!PyTuple_CheckExact(want)) return epoch_is(want, tp->tp_version_tag);
-    if (PyTuple_GET_SIZE(want) != 3 || !(tp->tp_flags & Py_TPFLAGS_HEAPTYPE)) return 0;
-    PyHeapTypeObject *ht = (PyHeapTypeObject *)tp;
-    return epoch_is(PyTuple_GET_ITEM(want, 0), tp->tp_version_tag) && ht->ht_name == PyTuple_GET_ITEM(want, 1) &&
-           ht->ht_qualname == PyTuple_GET_ITEM(want, 2);
-}
-
 /* fast_lookup(memo, args, kwargs) -> entry | None
  *   memo  = [world epoch, entries {key: entry}, (cell, held, ...), (type, tag, ...), ...]
  *   entry = (cash epoch, store dict, cache key, store entry, ...)
@@ -2150,7 +2243,9 @@ static PyObject *py_fast_lookup(PyObject *self, PyObject *const *args, Py_ssize_
         if (!PyCell_Check(c) || PyCell_GET(c) != PyTuple_GET_ITEM(cells, i + 1)) goto declined;
     }
     for (Py_ssize_t i = 0; i + 1 < PyTuple_GET_SIZE(types); i += 2) {
-        if (!type_unchanged(PyTuple_GET_ITEM(types, i), PyTuple_GET_ITEM(types, i + 1))) goto declined;
+        PyObject *t = PyTuple_GET_ITEM(types, i);
+        if (!PyType_Check(t) || !type_tag_is(PyTuple_GET_ITEM(types, i + 1), (PyTypeObject *)t))
+            goto declined;
     }
     PyObject *entries = PyList_GET_ITEM(memo, 1);
     if (!PyDict_CheckExact(entries) || PyDict_GET_SIZE(entries) == 0) goto declined;
@@ -2175,7 +2270,7 @@ declined:
 
 /* -- serving a fast hit in C ------------------------------------------- */
 /* memo state list slots (hit_memo keeps the same numbers) */
-enum { S_WORLD = 0, S_ENTRIES, S_CELLS, S_TYPES, S_SERVE, S_ACC, S_SPEC, S_LOG, S_SPARE, S_CLEAR_AT, S_FLAGS,
+enum { S_WORLD = 0, S_ENTRIES, S_CELLS, S_TYPES, S_SERVE, S_ACC, S_SPEC, S_LOG, S_GUARD, S_CLEAR_AT, S_FLAGS,
        S_NSLOTS };
 /* entry tuple slots */
 enum { E_CASH = 0, E_STORE, E_KEY, E_HELD, E_HIT, E_VALUE, E_TOUCH, E_SAVED, E_LOG, E_BODY, E_NSLOTS };
@@ -2401,7 +2496,10 @@ static PyObject *any_key(PyObject *args, PyObject *kwargs) {
 /* fast_call(state, args, kwargs) -> the result, or the miss sentinel
  * A hit whose entry needs more than C does here (a ttl, files to check, a
  * copy to make, verify mode, the clear check due, accounting to hand
- * over) goes to state[S_SERVE](entry, args, kwargs, t0). */
+ * over, a guard that moved) goes to state[S_SERVE](entry, args, kwargs, t0).
+ * state[S_GUARD] is None or (fn, value): fn() == value while what the key
+ * read and no watcher sees is unchanged (abc.get_cache_token for the ABC
+ * registrations of the classes met); when it differs, Python looks. */
 static PyObject *py_fast_call(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     if (nargs != 3 || hit_miss == NULL || !PyTuple_CheckExact(args[1])) {
         PyErr_SetString(PyExc_TypeError, "fast_call(state, args, kwargs)"); return NULL;
@@ -2420,7 +2518,20 @@ static PyObject *py_fast_call(PyObject *self, PyObject *const *args, Py_ssize_t 
         if (!PyCell_Check(c) || PyCell_GET(c) != PyTuple_GET_ITEM(cells, i + 1)) goto miss;
     }
     for (Py_ssize_t i = 0; i + 1 < PyTuple_GET_SIZE(types); i += 2) {
-        if (!type_unchanged(PyTuple_GET_ITEM(types, i), PyTuple_GET_ITEM(types, i + 1))) goto miss;
+        PyObject *t = PyTuple_GET_ITEM(types, i);
+        if (!PyType_Check(t) || !type_tag_is(PyTuple_GET_ITEM(types, i + 1), (PyTypeObject *)t))
+            goto miss;
+    }
+    int guard_moved = 0;
+    PyObject *guard = PyList_GET_ITEM(st, S_GUARD);
+    if (guard != Py_None) {
+        if (!PyTuple_CheckExact(guard) || PyTuple_GET_SIZE(guard) != 2) goto miss;
+        PyObject *now = PyObject_CallNoArgs(PyTuple_GET_ITEM(guard, 0));
+        if (now == NULL) return NULL;
+        int same = PyObject_RichCompareBool(now, PyTuple_GET_ITEM(guard, 1), Py_EQ);
+        Py_DECREF(now);
+        if (same < 0) return NULL;
+        guard_moved = !same;
     }
     PyObject *key = any_key(args[1], args[2]);
     if (key == NULL) { if (PyErr_Occurred()) return NULL; goto miss; }
@@ -2437,7 +2548,7 @@ static PyObject *py_fast_call(PyObject *self, PyObject *const *args, Py_ssize_t 
     PyObject *value = PyTuple_GET_ITEM(entry, E_VALUE), *accobj = PyList_GET_ITEM(st, S_ACC);
     PyObject *clear_at = PyList_GET_ITEM(st, S_CLEAR_AT), *touchobj = PyTuple_GET_ITEM(entry, E_TOUCH);
     PyObject *saved = PyTuple_GET_ITEM(entry, E_SAVED), *body = PyTuple_GET_ITEM(entry, E_BODY);
-    if (value == hit_miss || PyList_GET_ITEM(st, S_FLAGS) != Py_False || Py_TYPE(accobj) != &AccType ||
+    if (guard_moved || value == hit_miss || PyList_GET_ITEM(st, S_FLAGS) != Py_False || Py_TYPE(accobj) != &AccType ||
         Py_TYPE(touchobj) != &TouchType || !PyFloat_CheckExact(clear_at) || !PyFloat_CheckExact(saved) ||
         ((Acc *)accobj)->pn >= PENDING_MAX || clock_mono() >= PyFloat_AS_DOUBLE(clear_at)) {
         PyObject *t = PyFloat_FromDouble(t0);
@@ -2501,7 +2612,8 @@ static PyMethodDef methods[] = {
     {"world_add_names", py_world_add_names, METH_O, ""},
     {"world_info", py_world_info, METH_NOARGS, ""},
     {"memo_key", (PyCFunction)(void (*)(void))py_memo_key, METH_FASTCALL, ""},
-    {"world_swap", (PyCFunction)(void (*)(void))py_world_swap, METH_FASTCALL, ""},
+    {"expect_set", (PyCFunction)(void (*)(void))py_expect_set, METH_FASTCALL, ""},
+    {"expect_clear", py_expect_clear, METH_NOARGS, ""},
     {"fast_lookup", (PyCFunction)(void (*)(void))py_fast_lookup, METH_FASTCALL, ""},
     {"fast_call", (PyCFunction)(void (*)(void))py_fast_call, METH_FASTCALL, ""},
     {"hit_configure", py_hit_configure, METH_VARARGS, ""},

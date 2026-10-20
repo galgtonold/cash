@@ -42,7 +42,7 @@ from cash.remote_source import RemoteFileDataSource, addressing_options, read_op
 from cash.tracking.digest_table import current_table
 from cash.tracking.file_versions import note_same_content
 from cash.tracking.pending_digest import MOVED, DeferredDigest
-from cash.tracking.read_classification import stat_key
+from cash.tracking.read_classification import own_lstat, own_stat, stat_key
 from cash.tracking.tracker_context import untracked
 from cash.tracking.written_in_place import is_written_in_place
 
@@ -188,8 +188,10 @@ def realpath_of_read_this_run(
     what cash added to the read. A regular file that is not
     itself a link or reparse point resolves to its directory's real path plus
     its name, so the directory is resolved once; the ``lstat`` that shows it is
-    such a file is also the stat the read needs. So does a missing one. Anything
-    else -- a link, a short ``~`` name -- is resolved in full.
+    such a file is also the stat the read needs. So does a missing one, and a
+    folder that is not a link: a statement listing 5,750 folders, one per
+    person, resolved each in full, ~30 us a listing. Anything else -- a link,
+    a short ``~`` name -- is resolved in full.
 
     Outside a cell run (a cached function called from a script) there is no
     run to remember answers for; *folders*, when given, is the calling
@@ -228,7 +230,7 @@ def realpath_of_read_this_run(
         and ".." not in path.replace("\\", "/").split("/")
     ):
         try:
-            st = os.lstat(absolute)
+            st = own_lstat(absolute)
         except FileNotFoundError:
             # Not there yet, as at an open for writing: ``realpath`` answers
             # its directory's real path plus the name too. Resolved in full,
@@ -240,11 +242,15 @@ def realpath_of_read_this_run(
             return resolved, None
         except (OSError, ValueError):
             st = None
-        if st is not None and _stat.S_ISREG(st.st_mode) and not getattr(st, "st_file_attributes", 0) & _REPARSE_POINT:
+        if (
+            st is not None
+            and (_stat.S_ISREG(st.st_mode) or _stat.S_ISDIR(st.st_mode))
+            and not getattr(st, "st_file_attributes", 0) & _REPARSE_POINT
+        ):
             resolved = os.path.join(resolve_folder(parent), name)
             if epoch is not None:
                 _remember_realpath(key, resolved)
-            return resolved, st
+            return resolved, (st if _stat.S_ISREG(st.st_mode) else None)
     return (realpath_this_run(path) if epoch is not None else os.path.realpath(path)), None
 
 
@@ -302,7 +308,7 @@ def file_content_hash(
     hashed_at = time.time()
     try:
         if st is None:
-            st = os.stat(path)
+            st = own_stat(path)
         if _stat.S_ISDIR(st.st_mode):
             # ``io.FileIO`` refuses a folder: no digest, without the open
             # (a statement that unpacked 3,400 folders had each one tried).
@@ -370,7 +376,7 @@ def digest_later(path: str, size: int, st: os.stat_result) -> str | DeferredDige
         # block's (whose write would take the deferred digests again).
         with untracked():
             try:
-                now = os.stat(path)
+                now = own_stat(path)
             except OSError:
                 return MOVED
             if _stat_memo_key(path, now, now.st_size) != key or is_written_in_place(now, path):
@@ -385,7 +391,7 @@ def remembered_file_digest(path: str) -> str | None:
     """The digest `file_content_hash` would return for *path* without reading
     it -- remembered in this process or the cache directory -- else None."""
     try:
-        st = os.stat(path)
+        st = own_stat(path)
     except OSError:
         return None
     if (time.time() - st.st_mtime) <= _HASH_MEMO_MIN_AGE_SECONDS or is_written_in_place(st, path):
@@ -505,7 +511,7 @@ def _folder_identity(path: str) -> Any:
     stat'ed. A file system that reports no inode number is told apart by the
     resolved path."""
     try:
-        st = os.stat(path)
+        st = own_stat(path)
     except (OSError, ValueError):
         return None
     if st.st_ino:
@@ -550,10 +556,15 @@ def snapshot_file_deps(
     # (``FileAccessTracker.track_path``). The relative one, when it names the
     # same path from the cwd as an absolute one, takes that one's entry: a
     # cell reading 5,000 files by relative path stat'ed and hashed each again.
-    relative = [f for f in paths if not os.path.isabs(f)]
-    todo = [f for f in paths if os.path.isabs(f)] + relative if relative else paths
-    for f in todo:
-        if relative and not os.path.isabs(f):
+    absolute: list[str] = []
+    relative: list[str] = []
+    isabs = os.path.isabs
+    for f in paths:  # each path's spelling looked at once
+        (absolute if isabs(f) else relative).append(f)
+    todo = absolute + relative if relative else paths
+    first_relative = len(absolute)
+    for i, f in enumerate(todo):
+        if relative and i >= first_relative:
             same = snapshot.get(_spelled_absolute(f))
             if same is not None and "size" in same:
                 snapshot[f] = dict(same)
@@ -563,7 +574,7 @@ def snapshot_file_deps(
             st = None
         try:
             if st is None:
-                st = os.stat(f)
+                st = own_stat(f)
         except (FileNotFoundError, NotADirectoryError):
             # Not there: a file the call deleted, or a read that failed (the
             # absence is recorded on its own channel).
@@ -993,7 +1004,7 @@ def file_dep_is_fresh(
         st = listed
     else:
         try:
-            st = os.stat(resolved_path)
+            st = own_stat(resolved_path)
         except OSError:
             return False, "unreadable"
     # Cheap size check first — never hash when the size already proves staleness.

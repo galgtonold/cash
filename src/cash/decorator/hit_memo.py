@@ -19,7 +19,7 @@ How a call gets here (`HitMemo.offer`, after an ordinary hit):
   them, code (a function, a class, a module), or a plain dict, which is
   watched. Anything else -- a list, an instance, an array, a generator --
   and the function keeps the ordinary path. The dicts are watched, the
-  classes' version tags (and names) taken, the cells' contents remembered.
+  classes' version tags taken, the cells' contents remembered.
 * The call itself must be an ordinary one: not nested in another cached
   call, no file tracker, no notebook statement handing digests, no
   ``key=``/``ignore=``, no ``dynamic_depends_on=``, no declared files, no
@@ -68,7 +68,7 @@ from ..analysis.helper_code import own_code_is_user
 from ..source_reading import own_source
 from ..tracking.tracker_context import active_tracker
 from .call_state import NESTED_CASH_SECONDS
-from .user_code import is_cash_wrapper
+from .user_code import is_cash_wrapper, is_user_code_object
 
 if TYPE_CHECKING:
     from .cached_function import CachedFunction
@@ -275,6 +275,9 @@ class _Scan:
         self.types: dict[int, tuple[type, int]] = {}
         self.names: set[str] = set()
         self.dicts: list[tuple[dict, bool]] = []
+        #: The user classes met: what an ABC registers and the classes
+        #: defined below them move no watched dict (`family`).
+        self.classes: list[type] = []
         self.count = 0
 
     def _first(self, key: Any, obj: Any) -> bool:
@@ -427,9 +430,9 @@ class _Scan:
             tag = _cw.world_watch_type(k)
             if tag is None:
                 raise Ineligible("a class without a version tag")
-            # With its name and qualname: setting either moves no tag and
-            # tells no watcher, and a key names a renamed class anew.
-            self.types[id(k)] = (k, (tag, k.__name__, k.__qualname__))
+            self.types[id(k)] = (k, tag)
+            if is_user_code_object(k):
+                self.classes.append(k)
             for name, attr in list(vars(k).items()):
                 if _is_dunder(name) or name.startswith("_abc_"):
                     # Machinery, never data the key reads; but code it runs.
@@ -438,8 +441,28 @@ class _Scan:
                     continue
                 self.value(attr, frozenset())
 
+    def family(self) -> _Family | None:
+        """What a fast hit checks of the user classes met that no watcher
+        sees (`_Family`); None for none."""
+        from .class_data import SUBCLASSES
+
+        if not self.classes:
+            return None
+        return _Family(tuple(self.classes), SUBCLASSES in self.names)
+
     def commit(self) -> None:
         """Watch what was found (after the whole scan passed)."""
+        from .class_data import ANNOTATION_READS
+
+        if ANNOTATION_READS & self.names:
+            # The key folds the annotations of the classes met
+            # (`class_data.class_annotations`); changed in place they move
+            # no class tag.
+            for k, _ in self.types.values():
+                ns = vars(k)
+                held = ns.get("__annotations__", ns.get("__annotations_cache__"))
+                if type(held) is dict:
+                    self.dicts.append((held, True))
         for d, unkeyed in self.dicts:
             _cw.world_watch_dict(d, unkeyed)
         _cw.world_add_names(self.names)
@@ -473,10 +496,11 @@ def _resolve(mod_name: str, chain: tuple) -> Any:
     return obj
 
 
-def scan(spec: CachedFunction, registry: Any) -> tuple[tuple, tuple, list]:
+def scan(spec: CachedFunction, registry: Any) -> tuple[tuple, tuple, list, _Family | None]:
     """Watch the world of *spec*'s key. Returns the cells and the class
-    tags a fast hit compares, and the states of the cached functions it
-    reaches; raises `Ineligible`."""
+    tags a fast hit compares, the states of the cached functions it
+    reaches, and the classes whose family it checks (`_Scan.family`);
+    raises `Ineligible`."""
     func, name = spec.func, spec.name
     s = _Scan(getattr(func, "__module__", None))
     s.value(func, frozenset())
@@ -512,10 +536,10 @@ def scan(spec: CachedFunction, registry: Any) -> tuple[tuple, tuple, list]:
     s.commit()
     cells = tuple(x for pair in s.cells for x in pair)
     tags = tuple(x for pair in s.types.values() for x in pair)
-    return cells, tags, s.callees
+    return cells, tags, s.callees, s.family()
 
 
-def scan_trace(spec: CachedFunction, registry: Any, items: list) -> tuple[tuple, tuple, list]:
+def scan_trace(spec: CachedFunction, registry: Any, items: list) -> tuple[tuple, tuple, list, _Family | None]:
     """Watch what a stored trace (`code_trace`) names, as `scan` watches the
     key's world: while none of it moves, the trace still holds, and a fast
     hit needs no check of its own. Raises `Ineligible`."""
@@ -545,7 +569,84 @@ def scan_trace(spec: CachedFunction, registry: Any, items: list) -> tuple[tuple,
     s.commit()
     cells = tuple(x for pair in s.cells for x in pair)
     tags = tuple(x for pair in s.types.values() for x in pair)
-    return cells, tags, s.callees
+    return cells, tags, s.callees, s.family()
+
+
+class _Family:
+    """What the key reads of the user classes met that moves no watcher
+    (`class_data.class_family`): the ABCs that registered them, what the
+    ABCs among them registered, and, when the world's code reads
+    ``__subclasses__``, the classes below them.
+
+    A registration anywhere moves ``abc.get_cache_token()``, which
+    `_cwatch.fast_call` compares on every hit (``state[S_GUARD]``); only
+    then are the registrations read again here, and a fast hit goes on
+    when they are what they were. A class defined below one moves nothing
+    at all: those are held by weakref (a collected class's address may be
+    a new one's) and compared on every hit, in Python. A class below
+    edited in place is watched like any class met.
+    """
+
+    __slots__ = ("below", "classes", "guard", "registrations")
+
+    def __init__(self, classes: tuple[type, ...], subclasses: bool) -> None:
+        from .class_data import classes_below
+
+        self.classes = classes
+        self.guard = (abc.get_cache_token, abc.get_cache_token())
+        self.registrations = self._registrations()
+        self.below: tuple[tuple[weakref.ref, ...], ...] | None = None
+        if subclasses:
+            below = [classes_below(k) for k in classes]
+            for k in (k for ks in below for k in ks):
+                if k.__flags__ & _HEAPTYPE and _cw.world_watch_type(k) is None:
+                    raise Ineligible("a class without a version tag")
+            self.below = tuple(tuple(map(weakref.ref, ks)) for ks in below)
+
+    def _registrations(self) -> tuple:
+        from .class_data import abc_registries, registered_with
+
+        return tuple((registered_with(k), tuple(abc_registries(k))) for k in self.classes)
+
+    def joined(self, older: _Family | None) -> _Family | None:
+        """*older*'s classes and this family's new ones, as one: each as
+        it was when first met, under *older*'s guard, so a registration
+        between the two is still seen. None when one watches the classes
+        below and the other does not: the older entries' keys did not."""
+        if older is None:
+            return self
+        if (self.below is None) != (older.below is None):
+            return None
+        known = {id(k) for k in older.classes}
+        fresh = [i for i, k in enumerate(self.classes) if id(k) not in known]
+        if not fresh:
+            return older
+        joined = _Family.__new__(_Family)
+        joined.classes = (*older.classes, *(self.classes[i] for i in fresh))
+        joined.guard = older.guard
+        joined.registrations = (*older.registrations, *(self.registrations[i] for i in fresh))
+        joined.below = None
+        if self.below is not None and older.below is not None:
+            joined.below = (*older.below, *(self.below[i] for i in fresh))
+        return joined
+
+    def holds(self, state: list) -> bool:
+        """Is what the key read of the classes still so? Moves the guard
+        on when a registration elsewhere left theirs as they were."""
+        token = abc.get_cache_token()
+        if token != self.guard[1]:
+            if self._registrations() != self.registrations:
+                return False
+            self.guard = (abc.get_cache_token, token)
+            state[S_GUARD] = self.guard
+        if self.below is not None:
+            from .class_data import classes_below
+
+            for k, refs in zip(self.classes, self.below):
+                now = classes_below(k)
+                if len(now) != len(refs) or any(r() is not c for r, c in zip(refs, now)):
+                    return False
+        return True
 
 
 # -- the memo --------------------------------------------------------------
@@ -554,7 +655,7 @@ def scan_trace(spec: CachedFunction, registry: Any, items: list) -> tuple[tuple,
 MISS = object()
 
 # The slots of a memo's state list, as `_cwatch.fast_call` reads them.
-S_WORLD, S_ENTRIES, S_CELLS, S_TYPES, S_SERVE, S_ACC, S_SPEC, S_LOG, S_SPARE, S_CLEAR_AT, S_FLAGS = range(11)
+S_WORLD, S_ENTRIES, S_CELLS, S_TYPES, S_SERVE, S_ACC, S_SPEC, S_LOG, S_GUARD, S_CLEAR_AT, S_FLAGS = range(11)
 # The slots of an entry tuple.
 E_CASH, E_STORE, E_KEY, E_HELD, E_HIT, E_VALUE, E_TOUCH, E_SAVED, E_LOG, E_BODY = range(10)
 
@@ -620,6 +721,8 @@ class HitMemo:
         self.slow_since_scan = 0
         self.backoff = 1
         self.served_since_scan = 0
+        #: What the key read of the classes met that no watcher sees.
+        self.family: _Family | None = None
         _MEMOS.add(self)
 
     # -- served ----------------------------------------------------------
@@ -630,6 +733,12 @@ class HitMemo:
         accounting to hand over. Returns the result, or `MISS`."""
         state = self.state
         self.flush()
+        family = self.family
+        if family is not None and not family.holds(state):
+            # An ABC registered a class, or a class was defined below one:
+            # the key may differ; scanned again at the next ordinary hit.
+            state[S_WORLD] = -1
+            return MISS
         hit: _Hit = entry[E_HIT]
         runner = self.runner
         now = time.time()
@@ -740,10 +849,12 @@ class HitMemo:
             state[S_WORLD] = -1
             state[S_ENTRIES] = {}
             try:
-                cells, tags, callees = scan(spec, runner._registry)
+                cells, tags, callees, family = scan(spec, runner._registry)
             except Exception:  # noqa: BLE001 - Ineligible, or a scan that broke: the ordinary path
                 self.failed_epoch = world_now
                 return
+            self.family = family
+            state[S_GUARD] = family.guard if family is not None else None
             for callee in callees:
                 if callee is not state:
                     _DEPENDENTS.setdefault(callee, weakref.WeakSet()).add(self)
@@ -783,10 +894,17 @@ class HitMemo:
             return False  # watched before, and something moved since: Ineligible then
         state = self.state
         try:
-            cells, tags, callees = scan_trace(self.spec, self.runner._registry, trace)
+            cells, tags, callees, family = scan_trace(self.spec, self.runner._registry, trace)
         except Exception:  # noqa: BLE001 - Ineligible, or a scan that broke: the ordinary path
             self.traces[key] = -1
             return False
+        if family is not None:
+            joined = family.joined(self.family)
+            if joined is None:
+                self.traces[key] = -1
+                return False
+            self.family = joined
+            state[S_GUARD] = joined.guard
         for callee in callees:
             if callee is not state:
                 _DEPENDENTS.setdefault(callee, weakref.WeakSet()).add(self)
@@ -865,7 +983,7 @@ class HitMemo:
         h.value = stored
         h.md = md
         # fast_call serves in C only what needs nothing more than it does.
-        in_c = direct and h.deadline is None and not h.files
+        in_c = direct and h.deadline is None and not h.files and (self.family is None or self.family.below is None)
         saved = (metadata.saves_seconds if metadata.saves_seconds is not None else metadata.execution_time) or 0.0
         body = metadata.body_seconds
         return (
