@@ -9,7 +9,7 @@ import threading
 import types
 from typing import Any
 
-from ..analysis.helper_code import is_mock
+from ..analysis.helper_code import is_mock, renamed
 from ..jit_functions import jit_python_function
 from ..value_types import IMMUTABLE_LEAF_TYPES
 from .user_code import is_user_class, is_user_code_object, own_package
@@ -99,7 +99,7 @@ def code_ref(value: Any) -> str | None:
     except Exception:  # noqa: BLE001 - an object answering any name
         return None
     if isinstance(module, str) and isinstance(qualname, str):
-        return f"{module}:{qualname}"
+        return f"{module}:{qualname}{renamed(value)}"
     return None
 
 

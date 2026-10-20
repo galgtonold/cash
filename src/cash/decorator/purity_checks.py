@@ -503,6 +503,13 @@ class PurityChecks:
                     after = self._values.carried_global_hash(value, getattr(func, "__module__", None))
                 elif scope == "binding":
                     after = self._values.carried_state_digest(resolve_binding(*owner))
+                elif scope == "library":
+                    # A library's list or dict read through its module
+                    # (`ModuleAttrFold`): keyed by value, as data.
+                    mapping, key = owner
+                    if key not in mapping:
+                        continue
+                    after = self._values.data_digest(mapping[key])
                 elif scope == "classdata":
                     after = self._classes.class_data_digest(*owner)[0]
                 else:
@@ -525,11 +532,12 @@ class PurityChecks:
             # Plain data the call read moved: by the call itself, or -- with
             # other threads running -- maybe by another thread.
             moved = moved or scope in ("global", "closure", "helper", "classdata")
-            if scope in ("carrier", "binding", "instance", "classdata"):
+            if scope in ("carrier", "binding", "instance", "classdata", "library"):
                 # What a callable carries, moved by calling it: a library's
-                # own state (a generator advanced, a cache filled) or a memo
-                # a callable instance keeps in `self`. Not a result input the
-                # user rebinds: stop folding it.
+                # own state (a generator advanced, a cache filled, a list of
+                # a library's the call appends to) or a memo a callable
+                # instance keeps in `self`. Not a result input the user
+                # rebinds: stop folding it.
                 self._mutations.learn(code, "global", name)
                 logger.debug("[CORE] %s: stopped keying what %s carries; calling it changes it", func_name, name)
                 continue

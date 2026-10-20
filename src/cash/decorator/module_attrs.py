@@ -13,7 +13,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from .._memo import CODE_OBJECTS, LruMemo
+from ..analysis.bytecode import instructions
 from ..analysis.helper_bindings import resolve_local_import
+from ..analysis.helper_code import renamed
+from ..analysis.mutations import MUTATING_METHODS
 from ..install_paths import is_user_module
 from ..jit_functions import jit_python_function
 from ..value_types import CODELESS_PRIMS
@@ -38,6 +42,146 @@ def _resolve_dotted(g: dict, path: str) -> Any:
             return None
         value = vars(value).get(attr)
     return value
+
+
+#: Ops that load an attribute (``lib.X``, ``lib.X.append``).
+_ATTR_LOADS = frozenset({"LOAD_ATTR", "LOAD_METHOD"})
+#: Ops that push one value: the key of ``lib.X[k] = v``, between the
+#: container and the store. ``d[k] = lib.X`` on 3.13+ pushes ``d`` and ``k``
+#: in one op (``LOAD_FAST_LOAD_FAST``): there ``lib.X`` is the value stored.
+_ONE_PUSH = frozenset(
+    {
+        "LOAD_FAST",
+        "LOAD_FAST_CHECK",
+        "LOAD_FAST_BORROW",
+        "LOAD_CONST",
+        "LOAD_SMALL_INT",
+        "LOAD_NAME",
+        "LOAD_GLOBAL",
+        "LOAD_DEREF",
+        "LOAD_CLOSURE",
+    }
+)
+_written_memo: LruMemo[Any, frozenset] = LruMemo(CODE_OBJECTS)
+
+
+def written_module_attrs(code: types.CodeType) -> frozenset[tuple[str, str]]:
+    """``(path, attr)`` of the ``path.attr`` the code writes: rebinds
+    (``lib.X = v``, ``lib.X += v``), changes with a list, dict or set method
+    (``lib.X.append(v)``) or through a subscript (``lib.X[k] = v``). Nested
+    scopes count. What a call writes is its output: keyed as an input, a
+    list the call fills would move the key on every call."""
+    cached = _written_memo.get(code)
+    if cached is not None:
+        return cached
+    found: set[tuple[str, str]] = set()
+    for scope in iter_code_scopes(code):
+        instrs = [ins for ins in instructions(scope) if ins[0] not in ("EXTENDED_ARG", "CACHE")]
+        for i, (opname, argval) in enumerate(instrs):
+            if opname != "LOAD_GLOBAL" or not isinstance(argval, str):
+                continue
+            path, j = argval, i + 1
+            while j < len(instrs):
+                op, attr = instrs[j]
+                if op == "STORE_ATTR" or op == "DELETE_ATTR":
+                    found.add((path, attr))
+                    break
+                if op in ("COPY", "DUP_TOP") and j + 1 < len(instrs) and instrs[j + 1][0] in _ATTR_LOADS:
+                    # `lib.X += v`: X loaded from a copy of lib, then stored.
+                    x = instrs[j + 1][1]
+                    if any(ins == ("STORE_ATTR", x) for ins in instrs[j + 2 : j + 8]):
+                        found.add((path, x))
+                    break
+                if op not in _ATTR_LOADS or not isinstance(attr, str):
+                    break
+                after = instrs[j + 1] if j + 1 < len(instrs) else ("", None)
+                if after[0] in _ATTR_LOADS and after[1] in MUTATING_METHODS:
+                    found.add((path, attr))
+                    break
+                follow = instrs[j + 2][0] if j + 2 < len(instrs) else ""
+                if after[0] in _ONE_PUSH and follow in ("STORE_SUBSCR", "DELETE_SUBSCR"):
+                    found.add((path, attr))
+                    break
+                path = f"{path}.{attr}"
+                j += 1
+    result = frozenset(found)
+    _written_memo[code] = result
+    return result
+
+
+def _library_attr_parts(
+    values: GlobalValues, reader: _AttrReader, mod: types.ModuleType, mod_name: str, attr: str
+) -> list[tuple[str, str]]:
+    """Key parts for ``lib.ATTR`` read through a library module: its value
+    when it is plain data (``math.pi``, ``sys.argv``, ``logging.INFO``), and
+    the name of a class or function renamed through ``__name__``
+    (``threading.Thread.__name__ = ...``). A library's code is keyed by its
+    name, so its functions, classes and modules add nothing else here: no
+    key of a function reading none of these moved.
+
+    A library constant set to another value (``math.pi = 3.0``), changed in
+    place (``sys.argv.append(x)``) or different in another run (a script
+    run with other arguments) served the result computed from the old one.
+    A list or dict the call itself fills (``builtins.LOG.append(...)``) is
+    its output, not its input: the drift guard sees it move (*reader.watch*)
+    and it is keyed no more (*reader.learned*), or every call would miss.
+    """
+    # From its namespace only: a module's own ``__getattr__`` can import a
+    # submodule, and what it makes on demand is code, not data.
+    namespace = getattr(mod, "__dict__", None)
+    if not isinstance(namespace, dict) or attr not in namespace:
+        return []
+    value = namespace[attr]
+    label = f"{mod_name}.{attr}"
+    if isinstance(value, types.ModuleType) or label in reader.learned:
+        return []
+    code = getattr(reader.func, "__code__", None)
+    if isinstance(code, types.CodeType) and (mod_name, attr) in written_module_attrs(code):
+        return []
+    if isinstance(value, type) or callable(value):
+        name = renamed(value)
+        return [(f"{label}#name", name)] if name else []
+    if plain_data_kind(value) is None:
+        # An object of the library's (`sys.stdout`, `pd.options`): what of
+        # it a result depends on is the library's behaviour, not data.
+        return []
+    h = values.safe_global_hash(value, reader.func_name, label)
+    if h is None:
+        return []
+    if reader.watch is not None and plain_data_kind(value) == "plain":
+        reader.watch[label] = (h, "library", (namespace, attr), None)
+    return [(label, h)]
+
+
+def _library_class_attr_parts(
+    values: GlobalValues, reader: _AttrReader, cls: type, path: str, attr: str
+) -> list[tuple[str, str]]:
+    """Key parts for ``lib.Class.ATTR``: its value when it is plain data
+    (``json.JSONEncoder.item_separator``), as `_library_attr_parts` keys
+    ``lib.ATTR``. Read statically, from the class that holds it: a
+    descriptor of the library's is its code, not data, and runs nothing
+    here. ``json.JSONEncoder.item_separator = ";"`` served the result
+    computed with ``","``.
+    """
+    label = f"{path}.{attr}"
+    if label in reader.learned:
+        return []
+    owner = next((k for k in getattr(cls, "__mro__", ()) if attr in vars(k)), None)
+    if owner is None:
+        return []
+    value = vars(owner)[attr]
+    kind = plain_data_kind(value)
+    if kind is None:
+        return []
+    code = getattr(reader.func, "__code__", None)
+    if isinstance(code, types.CodeType) and (path, attr) in written_module_attrs(code):
+        return []
+    h = values.safe_global_hash(value, reader.func_name, label)
+    if h is None:
+        return []
+    if reader.watch is not None and kind == "plain":
+        reader.watch[label] = (h, "library", (vars(owner), attr), None)
+    return [(label, h)]
 
 
 @dataclass(frozen=True)
@@ -241,6 +385,10 @@ class ModuleAttrFold:
             # its source does not show.
             if isinstance(obj, types.FunctionType):
                 return self._function_attr_parts(obj, attr, mod_name, func_name)
+            if isinstance(obj, types.ModuleType):
+                return _library_attr_parts(self._values, reader, obj, mod_name, attr)
+            if isinstance(obj, type):
+                return _library_class_attr_parts(self._values, reader, obj, mod_name, attr)
             return []
         try:
             value = inspect.getattr_static(obj, attr) if is_cls else getattr(obj, attr)
