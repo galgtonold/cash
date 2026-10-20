@@ -36,3 +36,20 @@ def test_a_refused_store_warns(cash_magics, cash_instance, monkeypatch, exc):
             run_cash_cell(cash_magics, cell, cells=cells)
     assert "STORE-FAILED" in [getattr(w.message, "code", None) for w in caught]
     assert cash_magics.shell.user_ns["y"] == 20.0
+
+
+def test_a_value_cash_cannot_keep_by_reference_says_so(cash_magics, monkeypatch):
+    """``hooks = {'add': results.append}`` holds ``results``, which cash keeps
+    as a reference to the variable; the copy that puts it in place rebuilds
+    ``results.append`` as ``getattr(reference, 'append')`` and fails. That
+    is cash's own step, not the backend: it has its own code and fix."""
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    cells = ["results = []", "hooks = {'add': results.append, 'n': sum(range(10))}"]
+    run_cash_cell(cash_magics, cells[0], cells=cells)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        run_cash_cell(cash_magics, cells[1], cells=cells)
+    codes = [getattr(w.message, "code", None) for w in caught]
+    assert "STORE-REF-UNSUPPORTED" in codes and "STORE-FAILED" not in codes, codes
+    cash_magics.shell.user_ns["hooks"]["add"](5)
+    assert cash_magics.shell.user_ns["results"] == [5]

@@ -17,7 +17,7 @@ import logging
 import pickle
 import time
 import types
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from cash import cost_model, handed_digests, kept_state, stored_pickle
@@ -27,6 +27,7 @@ from cash._user_attrs import attribute_or
 from cash.backends import memory_backend
 from cash.backends.persistence_policy import PersistencePolicy, restore_kind
 from cash.backends.store_notices import DECORATED_CALLS_FIELD
+from cash.closure_sharing import closures_sharing
 from cash.diagnostics import log_diagnostic, warn_diagnostic
 from cash.exceptions import CashCacheStoreFailedWarning
 from cash.notebook.anchors import with_anchor_refs
@@ -139,49 +140,6 @@ def _cost_fields(prediction: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-#: How many objects `_closures_sharing_outputs` looks through.
-_CLOSURE_SCAN_OBJECTS = 10_000
-
-
-def _closures_sharing_outputs(captured_vars: Mapping[str, Any]) -> list[str]:
-    """The outputs among *captured_vars* that are, or hold in a tuple, list,
-    set or dict, a function whose closure holds an object found elsewhere in
-    the outputs. Kept by reference, such a function would not share it with
-    the restored copies. Looks at `_CLOSURE_SCAN_OBJECTS` objects at most."""
-    places: dict[int, set[tuple[str, int]]] = {}
-    functions: list[tuple[str, int, types.FunctionType]] = []
-    looked = 0
-    for name, value in captured_vars.items():
-        stack = [value]
-        seen: set[int] = set()
-        while stack and looked < _CLOSURE_SCAN_OBJECTS:
-            item = stack.pop()
-            if type(item) in IMMUTABLE_LEAF_TYPES or id(item) in seen:
-                continue
-            seen.add(id(item))
-            looked += 1
-            places.setdefault(id(item), set()).add((name, id(value)))
-            if isinstance(item, types.FunctionType):
-                functions.append((name, id(item), item))
-            elif type(item) in (tuple, list, set, frozenset):
-                stack.extend(item)
-            elif type(item) is dict:
-                stack.extend(item.values())
-    found: set[str] = set()
-    for name, fn_id, fn in functions:
-        for cell in fn.__closure__ or ():
-            try:
-                held = cell.cell_contents
-            except ValueError:  # an empty cell
-                continue
-            if type(held) in IMMUTABLE_LEAF_TYPES or isinstance(held, types.FunctionType):
-                continue
-            if id(held) in places:
-                found.add(name)
-                break
-    return sorted(found)
-
-
 def _is_only_definitions(code: str) -> bool:
     """Whether *code* is nothing but ``def``/``class`` statements."""
     try:
@@ -193,7 +151,11 @@ def _is_only_definitions(code: str) -> bool:
 
 class _AnchorsUnstorable(Exception):
     """The value of a statement with anchors could not be pickled with them
-    (`with_anchor_refs`): it is not stored."""
+    (`with_anchor_refs`): it is not stored. *names* are the anchors."""
+
+    def __init__(self, message: str, names: Iterable[str]) -> None:
+        super().__init__(message)
+        self.names = sorted(names)
 
 
 def _warn_not_stored(exc: BaseException) -> None:
@@ -203,6 +165,21 @@ def _warn_not_stored(exc: BaseException) -> None:
     stream no pickle takes, and a warning on each would have no fix. Any
     other failure -- the backend refusing the write (a full disk, a store
     that raised) -- is warned: the statement runs again every time."""
+    if isinstance(exc, _AnchorsUnstorable) and not _unpicklable(exc):
+        # Cash's own step, not the backend: the copy that puts a reference to
+        # each held variable in its place cannot rebuild the value around
+        # one (``results.append`` is rebuilt as ``getattr(results,
+        # 'append')``, and a reference has no ``append``).
+        names = ", ".join(f"'{name}'" for name in exc.names)
+        warn_diagnostic(
+            CashCacheStoreFailedWarning,
+            "STORE-REF-UNSUPPORTED",
+            f"cash did not store this statement's result: it holds the object of {names} in a form cash "
+            f"cannot keep as a reference to that variable ({exc}); it ran, and runs again next time.",
+            "nothing, for a correct result. To have it cached, hold the variable itself "
+            "(hooks = {'target': results}) rather than its method (hooks = {'add': results.append}).",
+        )
+        return
     if isinstance(exc, kept_state.DefinedAgain):
         fix = (
             "run the cells that build the value again after the cell that defines the function, "
@@ -231,7 +208,10 @@ def _unpicklable(exc: BaseException) -> bool:
         seen.add(id(current))
         if isinstance(current, pickle.PicklingError):
             return True
-        if isinstance(current, (TypeError, AttributeError)) and "pickle" in str(current).lower():
+        text = str(current).lower()
+        if isinstance(current, (TypeError, AttributeError)) and ("pickle" in text or "local object" in text):
+            # ``Can't get local object 'make.<locals>.<lambda>'``: a function
+            # defined inside another, which pickle finds by name only.
             return True
         current = current.__cause__ or current.__context__
     return False
@@ -602,7 +582,7 @@ class StatementStore:
             payload, referenced = self._payload(run, execution, captured_vars, seed_epochs)
         except _AnchorsUnstorable as exc:
             reason = f"its value holds variables' objects by reference, and it cannot be stored so ({exc})"
-            _warn_not_stored(exc.__cause__ or exc)
+            _warn_not_stored(exc)
             return self._store_metadata_only(run, execution, reason, {})
         if not referenced and self._too_cheap_to_store(run, execution, file_dependencies, execution.store_cost):
             # Its own work is not worth an entry: the calls inside it are what
@@ -854,7 +834,7 @@ class StatementStore:
         # function, so they no longer share the array, and a write through
         # ``a`` did not reach ``getter()`` (21 for 27).
         if not should_skip:
-            _sharing = _closures_sharing_outputs(captured_vars)
+            _sharing = closures_sharing(captured_vars)
             if _sharing:
                 should_skip = True
                 skip_reason = (
@@ -976,7 +956,7 @@ class StatementStore:
             try:
                 held = with_anchor_refs(held, {name: user_ns[name] for name in run.anchors})
             except Exception as exc:
-                raise _AnchorsUnstorable(str(exc)) from exc
+                raise _AnchorsUnstorable(f"{type(exc).__name__}: {exc}", run.anchors) from exc
             payload["variables"] = held["variables"]
             if ECHO_FIELD in payload:
                 payload[ECHO_FIELD] = held[ECHO_FIELD]

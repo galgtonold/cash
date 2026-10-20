@@ -111,6 +111,25 @@ def test_a_holder_the_statement_does_not_read_moves_too(cash_magics, monkeypatch
     assert cash_magics.shell.user_ns["r"] == _plain(cells) == 27.0
 
 
+def test_a_weak_value_dictionary_holding_the_array_moves_too(cash_magics, monkeypatch):
+    """The collector sees a weak reference hold nothing, yet ``reg['k']``
+    reads the array: ``r`` was served 21 for 27."""
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    cells = [
+        "import numpy as np, weakref\nreg = weakref.WeakValueDictionary()\ndef f(x):\n    reg['k'] = x\n    return x",
+        "a = f(np.zeros(10))",
+        "v = a[2:5]",
+        "v[:] = 7",
+        "r = float(reg['k'].sum())",
+    ]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    cells[3] = "v[:] = 9"
+    for cell in cells[3:]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert cash_magics.shell.user_ns["r"] == 27.0
+
+
 def test_an_object_two_variables_hold_is_walked_once(monkeypatch):
     """Every variable is walked for the array, in one walk: what two of
     them hold is read once."""

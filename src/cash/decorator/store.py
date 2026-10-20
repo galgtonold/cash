@@ -22,6 +22,7 @@ from .._memo import RESULT_TYPES, LruMemo
 from ..backends.memory_backend import InMemoryBackend
 from ..backends.serialization import PickleSerializer
 from ..backends.tiered_backend import TieredBackend
+from ..closure_sharing import closures_sharing
 from ..content_hashers import builtin_family_of, builtin_hash
 from ..effect_observer import EffectObserver
 from ..exceptions import CacheBackendError, CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
@@ -319,6 +320,22 @@ class ResultStore:
                 "two need not share; if they must, do not cache the function.",
             )
             refusal = f"{part} and {other} share memory, which a hit would hand back apart"
+        if refusal is None and closures_sharing({"result": res}):
+            # ``return arr, lambda: arr``: a hit copies ``arr`` and keeps the
+            # function, which cannot be pickled, by reference, so the
+            # function no longer returns the array the caller holds.
+            self._notices.warn_once(
+                CashCacheStoreFailedWarning,
+                func_name,
+                "closure_shared",
+                f"@cash.cache on {func_name}: the result holds a function whose closure holds another part "
+                "of the result. A cache hit would copy that part and keep the function as it is, so the "
+                "two would no longer share it; the result was returned but not cached.",
+                code="STORE-PARTS-SHARED",
+                fix="return the data the function reads, not the function, if they need not share; "
+                "if they must, do not cache the function.",
+            )
+            refusal = "a function in the result closes over another part of it, which a hit would hand back apart"
         return refusal
 
     def _unpicklable_source_refusal(self, func_name: str, sources: DynamicSources | None) -> str | None:

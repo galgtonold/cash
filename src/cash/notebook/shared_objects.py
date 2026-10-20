@@ -45,6 +45,7 @@ import re
 import sys
 import types
 import uuid
+import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from time import perf_counter as _perf_counter
 from typing import Any
@@ -645,7 +646,8 @@ def _holding_bases(
     One walk down from all of them at once, each object read once however
     many of them hold it, remembering who reached whom; then up from the
     objects found to the variables. An array is not looked into; a
-    library's object is, by what the garbage collector sees it hold."""
+    library's object is, by what the garbage collector sees it hold; and what a weak reference
+    points at."""
     view_ids = {id(view) for view in views}
     parents: dict[int, list[int]] = {key: [] for key in containers}
     stack = [(user_ns[names[0]], key) for key, names in containers.items()]
@@ -696,7 +698,8 @@ def _held_below(obj: Any) -> list[Any]:
     holds that a view of it can write: a function's closure cells and
     defaults (``getter = lambda: arr``), never its globals, which hold the
     whole namespace; a bound method's object; and for a library's object
-    (``v = model.coef_[2:5]``), what the garbage collector sees it hold.
+    (``v = model.coef_[2:5]``), what the garbage collector sees it hold; and what a weak reference
+    points at.
     Nothing of cash's own (``__cash_call__``, bound to its call cache, which
     holds every call's result)."""
     if _is_cash_own(obj) or _is_cash_own(attribute_or(obj, "__self__", None)):
@@ -713,6 +716,11 @@ def _held_below(obj: Any) -> list[Any]:
         return held
     if isinstance(obj, types.MethodType):
         return [obj.__self__]
+    if isinstance(obj, weakref.ref):
+        # A WeakValueDictionary's values: the collector sees a weak
+        # reference hold nothing, yet ``reg['k']`` reads the array.
+        target = obj()
+        return [] if target is None else [target]
     if isinstance(obj, _NOT_PARTS):
         return []
     return gc.get_referents(obj)
