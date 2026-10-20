@@ -25,8 +25,8 @@ import typing
 import pytest
 
 from cash import Cash
-from cash.exceptions import CashCacheIneffectiveWarning
 from cash.decorator import hit_memo
+from cash.exceptions import CashCacheIneffectiveWarning
 
 pytestmark = [pytest.mark.filterwarnings("ignore::cash.exceptions.CashImpurityWarning")]
 
