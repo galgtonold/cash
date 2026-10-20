@@ -929,6 +929,7 @@ class StatementProcessor:
             if hit_result is not None:
                 return hit_result
 
+        self._not_rebuilt(run)
         if not run.mut_record and not is_control_body(run.code):
             run.rewatching = self._mutations.start_rewatch(run.source_hash, run.cache_key, run.tree)
         user_ns = self.shell.user_ns
@@ -1329,6 +1330,56 @@ class StatementProcessor:
             return False
         self._freshness.last_miss_reason = reason
         return True
+
+    def _not_rebuilt(self, run: StatementRun) -> None:
+        """*run* is to run, and an input of it the upstream check left for its
+        own cache hit to restore (`CacheRestorer` forward probe,
+        ``probe_held``) still holds the value it had: the hit was refused
+        after all. Run on it, its result is not what a run from the top
+        gives, and stored, it would be served under the key of the restored
+        value (``w -= 1`` run again alone reached -2). The input keeps the
+        lineage of what it holds, nothing is stored, and the cell warns
+        (``NOTEBOOK-INPUT-UNBUILT``); a name held only in place of the
+        restore is unbound, and the statement raises NameError."""
+        held = self.tracking_state.probe_held
+        if not held:
+            return
+        user_ns = self.shell.user_ns
+        stale = sorted(
+            name
+            for name, (held_id, _lineage, code) in held.items()
+            if code == run.code and name in run.inputs and id(user_ns.get(name, FORWARD_PROBE_PLACEHOLDER)) == held_id
+        )
+        if not stale:
+            return
+        lineage = self.tracking_state.lineage
+        for name in stale:
+            _held_id, before, _code = held.pop(name)
+            if before is None:
+                lineage.discard(name)
+            else:
+                lineage.reset_to(name, before)
+            if user_ns.get(name) is FORWARD_PROBE_PLACEHOLDER:
+                user_ns.pop(name, None)
+        run.skip_cache = True
+        listed = ", ".join(f"'{name}'" for name in stale)
+        reason = (
+            f"Reads {listed}, which cash left for this statement's own cache entry to restore, "
+            f"and the entry could not be used: it runs on the value in memory and is not stored"
+        )
+        run.metrics["uncacheable_reasons"].append(reason)
+        what = (
+            f"cash left {listed} for this statement's own cache entry to rebuild, and then could not use "
+            f"the entry, so it ran on the value {listed} holds now, which is not the one a run from the top "
+            f"gives it. Its result is not stored."
+        )
+        fix = "run the cells above that build " + listed + " again, then this cell."
+        log_diagnostic(logger, "NOTEBOOK-INPUT-UNBUILT", what, fix)
+        from cash.notebook.ipython.cell_count import running_cell_count  # the ipython package imports this one
+
+        warn_diagnostic(
+            CashWarning, "NOTEBOOK-INPUT-UNBUILT", what, fix, location=("<cash>", running_cell_count(self.shell))
+        )
 
     def _route_calls(self, run: StatementRun) -> None:
         """Settle what executes: *run*'s code with eligible calls routed
