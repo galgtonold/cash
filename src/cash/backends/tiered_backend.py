@@ -633,6 +633,13 @@ class TieredBackend(CacheBackend):
         }
         metadata["rebuild_time"] = rebuild_seconds
         serialized = self._stored_payload(key, stored_metadata)
+        may_share = getattr(self.backends[0], "may_share_with_caller", None)
+        if serialized is None and may_share is not None and may_share(key):
+            # Written now, it would be what the caller has done to the shared
+            # parts since: `h, peek = make_helper()` stored with the
+            # generator its helpers draw from two draws on, so after a
+            # restart the next draw was not the one plain Python gives.
+            return False
         # Kept as pickle bytes: written as they are, never read out first --
         # unless a tier would serialize the value itself.
         read_out = serialized is None or not all(_writes_bytes_as_they_are(b) for b in self.backends[1:])

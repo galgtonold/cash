@@ -143,3 +143,25 @@ def test_an_edit_made_while_the_write_waits_stays_out_of_the_disk_entry(tmp_path
         gate.set()
     _metadata, restored = disk.get("k")
     assert restored["t"].iloc[0].note == "fresh"
+
+
+def _make_helper():
+    g = np.random.default_rng(0)
+
+    def helper():
+        return float(g.normal())
+
+    return helper
+
+
+@pytest.mark.parametrize("value", [_make_helper, TrustsItself], ids=["a helper's closure", "copied by deepcopy"])
+def test_a_later_persist_of_a_value_deepcopy_shared_is_not_written(value):
+    """``h, peek = make_helper()``: deepcopy hands back the helpers
+    themselves, closure and generator with them. Written once a later cell
+    made it worth its disk, the entry held the generator as the draws below
+    had left it, and after a restart the next draw was not plain Python's."""
+    tiers, _disk = _tiers()
+    made = value()
+    tiers.set("k", {"variables": {"h": made}}, dict(_NOTEBOOK))
+    assert not tiers.persist_from_memory("k", rebuild_seconds=5.0)
+    assert _disk.calls == []
