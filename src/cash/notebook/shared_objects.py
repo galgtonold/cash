@@ -563,7 +563,8 @@ def view_base_names(
     values: Iterable[Any], user_ns: Mapping[str, Any], skip_name: Callable[[str], bool] = lambda name: False
 ) -> set[str]:
     """The variables of *user_ns* bound to an array that a numpy view among
-    *values*, or held in them, sits on (`view_bases`).
+    *values*, or held in them, sits on (`view_bases`), or holding one in a
+    container or an attribute (`_holds_bases`).
 
     The share check counts references, and an array is a leaf to it: ``head
     = big[:5]`` holds ``big`` through ``head.base``, which no count of
@@ -597,7 +598,43 @@ def view_base_names(
     del stack, seen
     if not bases:
         return set()
-    return {name for name, value in list(user_ns.items()) if on_bases(value, bases, views, np) and not skip_name(name)}
+    return {
+        name
+        for name, value in list(user_ns.items())
+        if not skip_name(name) and _holds_bases(value, bases, views, np, value_types, plain_leaves)
+    }
+
+
+def _holds_bases(
+    value: Any, bases: set[int], views: list[Any], np: Any, value_types: tuple[type, ...], plain_leaves: Any
+) -> bool:
+    """Whether *value* is an array on *bases* (`on_bases`), or holds one at
+    any depth: ``data = {'x': arr}`` holds the array ``data['x'][2:5]`` sits
+    on, and a write through that view changes ``data``. An array is not
+    looked into, nor a module or a class (shared, never part of a value),
+    nor JSON-like data; under the walk budget in progress."""
+    if on_bases(value, bases, views, np):
+        return True
+    if isinstance(value, (np.ndarray, type, types.ModuleType)) or _plain_data.is_tree(value, plain_leaves):
+        return False
+    view_ids = {id(view) for view in views}
+    seen: set[int] = set()
+    stack = list(children_of(value) or ())
+    pops = 0
+    while stack:
+        pops += 1
+        if not pops & 1023:
+            check_walk_budget()
+        obj = stack.pop()
+        if is_value(obj, value_types) or id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        # Holding the views themselves is not holding what they sit on.
+        if id(obj) not in view_ids and on_bases(obj, bases, views, np):
+            return True
+        if not isinstance(obj, (np.ndarray, type, types.ModuleType)):
+            stack.extend(children_of(obj) or ())
+    return False
 
 
 def on_bases(value: Any, bases: set[int], views: list[Any], np: Any) -> bool:

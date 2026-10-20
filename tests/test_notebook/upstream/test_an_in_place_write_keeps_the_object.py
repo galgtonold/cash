@@ -60,3 +60,19 @@ def test_rerunning_the_writing_cell_alone_still_starts_from_its_base(cash_magics
     assert np.array_equal(ns["w"], [-1.0, -1.0, -1.0])
     run_cash_cell(cash_magics, "w -= 1", cells=CELLS)
     assert np.array_equal(ns["w"], [-1.0, -1.0, -1.0])
+
+
+def test_rerunning_the_writing_cell_alone_starts_from_its_base_when_every_step_is_stored(cash_magics, monkeypatch):
+    """A loaded machine stores the cheap steps too (each over the floor).
+    The forward probe then saw ``w -= 1``'s entry and kept ``w`` as it was;
+    the lookup refused the entry (``layers``, stored with it, had changed),
+    and the cell ran on the -1 it had already written: -2."""
+    from cash.backends.persistence_policy import PersistencePolicy
+
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    ns = cash_magics.shell.user_ns
+    _run_all(cash_magics)
+    run_cash_cell(cash_magics, "w -= 1", cells=CELLS)
+    assert np.array_equal(ns["w"], [-1.0, -1.0, -1.0])
+    run_cash_cell(cash_magics, "w -= 1", cells=CELLS)
+    assert np.array_equal(ns["w"], [-1.0, -1.0, -1.0])

@@ -1722,6 +1722,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
 | [NOTEBOOK-FILE-ROUNDTRIP](#notebook-file-roundtrip) | notebook | a file written in this session is read back, so the read reruns after every write |
 | [NOTEBOOK-FORWARD-READ](#notebook-forward-read) | notebook | the cell reads a name only a cell below binds, so it runs uncached |
+| [NOTEBOOK-INPUT-UNBUILT](#notebook-input-unbuilt) | notebook | an input the cell's own cache entry was to rebuild was not, so the statement ran on the old value, unstored |
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
 | [NOTEBOOK-NO-LIVE-READER](#notebook-no-live-reader) | notebook | cells above are read from the saved file, so an unsaved edit there is not seen |
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook's cells cannot be read; cells above the one you run are not re-checked |
@@ -1945,6 +1946,26 @@ cached result would stand for an order of cells the notebook does not have.
 
 **When it is safe to ignore.** Never for long: the notebook does not run from
 the top.
+
+### NOTEBOOK-INPUT-UNBUILT {#notebook-input-unbuilt}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._not_rebuilt @aa8b56c6 -->
+**What happened.** A cell run again on its own reads a variable it also
+changes (`w -= 1`), and that variable no longer holds what the cells above
+give it. cash found this statement's own cache entry, which puts that
+variable back as it should be, and left the variable for it; then the entry
+could not be used after all. The statement ran on the value the variable
+holds now. The message names the variable.
+
+**Why it matters.** The result is not what a run from the top gives (`w -= 1`
+applied twice). cash does not store it, so nothing wrong is served later.
+
+**What to do.** Run the cells above that build the variable, then this cell.
+
+**When it is safe to ignore.** Never for the value it computed; the cache is
+not affected.
 
 ### NOTEBOOK-MAGIC-STALE {#notebook-magic-stale}
 

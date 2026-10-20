@@ -514,7 +514,9 @@ class StatementLineageBuilder:
                 found[var] = digest
         return found
 
-    def build_input_lineages(self, tracking_state: "TrackingState", inputs: set[str]) -> dict[str, str]:
+    def build_input_lineages(
+        self, tracking_state: "TrackingState", inputs: set[str], entry: Mapping[str, str] | None = None
+    ) -> dict[str, str]:
         """Collect ``{var: lineage_hash}`` for the inputs this statement read.
 
         Stored on the entry so a RESTORED value can answer "has one of my
@@ -524,11 +526,16 @@ class StatementLineageBuilder:
         guard against building on an older input passed vacuously for every
         restored value, which after a restart is most of them.
 
-        Read from ``variable_lineage`` at save time, which is what the
-        comparison reads at check time: an input's lineage is not changed by the
-        statement that consumes it, so this is what the value was built on.
+        Read from *entry*, the lineages the statement was keyed with
+        (``statement_entry_lineages``), and else from ``variable_lineage`` at
+        save time. An input the statement also writes (``w -= 1``) has the
+        output's lineage by then: stored so, a hit recorded the -1 it gave as
+        what it was built on, the next run alone of the cell did not start
+        from w's base again, and gave -2.
         """
-        return {v: tracking_state.variable_lineage[v] for v in inputs if v in tracking_state.variable_lineage}
+        lineage = tracking_state.variable_lineage
+        entry = entry or {}
+        return {v: entry[v] if v in entry else lineage[v] for v in inputs if v in entry or v in lineage}
 
     # ------------------------------------------------------------------
     # Private helpers

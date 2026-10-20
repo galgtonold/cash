@@ -174,14 +174,16 @@ def test_a_later_persist_hands_the_ram_copy_as_private():
     assert private and written is not value and written == value
 
 
-def test_a_later_persist_of_a_value_kept_by_reference_is_not_private():
+def test_a_later_persist_of_a_value_kept_by_reference_is_not_written():
+    """The RAM tier holds the caller's own object: written later, it would be
+    what the caller has made of it since, not what was stored."""
     tiers, disk = _tiers()
     lock_holder = {"lock": threading.Lock(), "n": 1}  # cannot be copied: the caller still holds it
     tiers.set("k", lock_holder, dict(_NOTEBOOK))
     assert disk.calls == []
-    assert tiers.persist_from_memory("k", rebuild_seconds=5.0)
-    ((_key, written, private),) = disk.calls
-    assert written is lock_holder and not private
+    lock_holder["n"] = 2
+    assert not tiers.persist_from_memory("k", rebuild_seconds=5.0)
+    assert disk.calls == []
 
 
 def test_a_value_marked_no_private_copy_goes_to_disk_as_the_caller_gave_it():
