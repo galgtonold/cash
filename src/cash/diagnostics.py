@@ -373,6 +373,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # builtin method), so the result was not stored
         "STORE-PARTS-SHARED",  # parts of the result share memory a hit
         # hands back as separate copies, so the result was not stored
+        "STORE-PARTS-UNCHECKED",  # the result was too big to look through
+        # in time for a function sharing a part of it, so it was not stored
         "STORE-RESULT-WRITTEN",  # a table kept uncopied was written past
         # pandas after its store, so the entry was dropped
     }

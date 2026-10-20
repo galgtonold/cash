@@ -22,7 +22,7 @@ from .._memo import RESULT_TYPES, LruMemo
 from ..backends.memory_backend import InMemoryBackend
 from ..backends.serialization import PickleSerializer
 from ..backends.tiered_backend import TieredBackend
-from ..closure_sharing import closures_sharing
+from ..closure_sharing import closure_check_budget, closures_sharing
 from ..content_hashers import builtin_family_of, builtin_hash
 from ..effect_observer import EffectObserver
 from ..exceptions import CacheBackendError, CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
@@ -210,8 +210,12 @@ class ResultStore:
         capture_watch: Any = NO_WATCH,
         observer: EffectObserver | None = None,
         inputs_moved: Callable[[], bool] | None = None,
+        cost: float = 0.0,
     ) -> str | None:
         """Why *res* must not be stored, or ``None`` to store it.
+
+        *cost* is what the body took: the closure check may take twice it
+        (`closure_check_budget`).
 
         *inputs_moved*, when given, says whether the program state the key
         read (its globals, class data, environment...) changed while the
@@ -320,7 +324,24 @@ class ResultStore:
                 "two need not share; if they must, do not cache the function.",
             )
             refusal = f"{part} and {other} share memory, which a hit would hand back apart"
-        if refusal is None and closures_sharing({"result": res}):
+        closures = closures_sharing({"result": res}, closure_check_budget(cost)) if refusal is None else None
+        if closures is not None and not closures.finished:
+            # A result too big to look through in the time: a function in it
+            # past where the walk stopped could share a part with the rest.
+            seconds = closure_check_budget(cost)
+            self._notices.warn_once(
+                CashCacheStoreFailedWarning,
+                func_name,
+                "closure_unchecked",
+                f"@cash.cache on {func_name}: cash could not look through the whole result within "
+                f"{seconds:.1f}s for a function whose closure holds another part of it, which a cache hit "
+                "would hand back apart. The result was returned but not cached.",
+                code="STORE-PARTS-UNCHECKED",
+                fix="nothing, if the function is cheap: it runs every time. To cache it, return a smaller "
+                "result, or its data without the objects that hold functions.",
+            )
+            refusal = "cash could not look through the whole result for a function sharing a part of it in time"
+        elif closures is not None and closures.names:
             # ``return arr, lambda: arr``: a hit copies ``arr`` and keeps the
             # function, which cannot be pickled, by reference, so the
             # function no longer returns the array the caller holds.
@@ -920,7 +941,14 @@ class ResultStore:
             # whole result -- it gates STORAGE, never what the caller
             # already received.
             refusal = self.refusal(
-                None, func_name, chunks.buffer, run.rng_new, spec.cache_if, tracker, observer=observer
+                None,
+                func_name,
+                chunks.buffer,
+                run.rng_new,
+                spec.cache_if,
+                tracker,
+                observer=observer,
+                cost=chunks.produced_seconds,
             )
             if refusal is not None:
                 self._misses.note_not_stored(call.cache_key, refusal)
