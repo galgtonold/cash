@@ -68,7 +68,7 @@ from ..analysis.helper_code import own_code_is_user
 from ..source_reading import own_source
 from ..tracking.tracker_context import active_tracker
 from .call_state import NESTED_CASH_SECONDS
-from .user_code import is_cash_wrapper
+from .user_code import is_cash_wrapper, is_user_code_object
 
 if TYPE_CHECKING:
     from .cached_function import CachedFunction
@@ -275,6 +275,9 @@ class _Scan:
         self.types: dict[int, tuple[type, int]] = {}
         self.names: set[str] = set()
         self.dicts: list[tuple[dict, bool]] = []
+        #: The user classes met: what an ABC registers and the classes
+        #: defined below them move no watched dict (`family`).
+        self.classes: list[type] = []
         self.count = 0
 
     def _first(self, key: Any, obj: Any) -> bool:
@@ -428,6 +431,8 @@ class _Scan:
             if tag is None:
                 raise Ineligible("a class without a version tag")
             self.types[id(k)] = (k, tag)
+            if is_user_code_object(k):
+                self.classes.append(k)
             for name, attr in list(vars(k).items()):
                 if _is_dunder(name) or name.startswith("_abc_"):
                     # Machinery, never data the key reads; but code it runs.
@@ -435,6 +440,17 @@ class _Scan:
                         self.value(attr, frozenset())
                     continue
                 self.value(attr, frozenset())
+
+    def family(self) -> tuple[type, ...]:
+        """The user classes a fast hit checks `family_print` of: all of
+        them when one is an ABC (``isinstance`` asks its registry and its
+        subclasses) or the world's code reads ``__subclasses__``, as the
+        key then folds them (`class_data.class_family`); else none."""
+        from .class_data import SUBCLASSES
+
+        if SUBCLASSES in self.names or any(isinstance(k, abc.ABCMeta) for k in self.classes):
+            return tuple(self.classes)
+        return ()
 
     def commit(self) -> None:
         """Watch what was found (after the whole scan passed)."""
@@ -471,10 +487,11 @@ def _resolve(mod_name: str, chain: tuple) -> Any:
     return obj
 
 
-def scan(spec: CachedFunction, registry: Any) -> tuple[tuple, tuple, list]:
+def scan(spec: CachedFunction, registry: Any) -> tuple[tuple, tuple, list, tuple]:
     """Watch the world of *spec*'s key. Returns the cells and the class
-    tags a fast hit compares, and the states of the cached functions it
-    reaches; raises `Ineligible`."""
+    tags a fast hit compares, the states of the cached functions it
+    reaches, and the classes whose family it checks (`_Scan.family`);
+    raises `Ineligible`."""
     func, name = spec.func, spec.name
     s = _Scan(getattr(func, "__module__", None))
     s.value(func, frozenset())
@@ -510,10 +527,10 @@ def scan(spec: CachedFunction, registry: Any) -> tuple[tuple, tuple, list]:
     s.commit()
     cells = tuple(x for pair in s.cells for x in pair)
     tags = tuple(x for pair in s.types.values() for x in pair)
-    return cells, tags, s.callees
+    return cells, tags, s.callees, s.family()
 
 
-def scan_trace(spec: CachedFunction, registry: Any, items: list) -> tuple[tuple, tuple, list]:
+def scan_trace(spec: CachedFunction, registry: Any, items: list) -> tuple[tuple, tuple, list, tuple]:
     """Watch what a stored trace (`code_trace`) names, as `scan` watches the
     key's world: while none of it moves, the trace still holds, and a fast
     hit needs no check of its own. Raises `Ineligible`."""
@@ -543,7 +560,18 @@ def scan_trace(spec: CachedFunction, registry: Any, items: list) -> tuple[tuple,
     s.commit()
     cells = tuple(x for pair in s.cells for x in pair)
     tags = tuple(x for pair in s.types.values() for x in pair)
-    return cells, tags, s.callees
+    return cells, tags, s.callees, s.family()
+
+
+def family_print(classes: tuple[type, ...]) -> tuple | None:
+    """What `class_data.class_family` reads of *classes*, cheaply: ABC
+    registrations anywhere (``abc.get_cache_token``) and the classes below
+    each, by identity. None for no classes."""
+    if not classes:
+        return None
+    from .class_data import classes_below
+
+    return (abc.get_cache_token(), tuple(tuple(map(id, classes_below(k))) for k in classes))
 
 
 # -- the memo --------------------------------------------------------------
@@ -618,6 +646,10 @@ class HitMemo:
         self.slow_since_scan = 0
         self.backoff = 1
         self.served_since_scan = 0
+        #: The classes a fast hit checks, and what they were at the scan
+        #: (`family_print`): moves no watcher, so served through `serve`.
+        self.family: tuple[type, ...] = ()
+        self.family_print: tuple | None = None
         _MEMOS.add(self)
 
     # -- served ----------------------------------------------------------
@@ -628,6 +660,11 @@ class HitMemo:
         accounting to hand over. Returns the result, or `MISS`."""
         state = self.state
         self.flush()
+        if self.family and family_print(self.family) != self.family_print:
+            # An ABC registered a class, or a class was defined below one:
+            # the key may differ; scanned again at the next ordinary hit.
+            state[S_WORLD] = -1
+            return MISS
         hit: _Hit = entry[E_HIT]
         runner = self.runner
         now = time.time()
@@ -738,10 +775,12 @@ class HitMemo:
             state[S_WORLD] = -1
             state[S_ENTRIES] = {}
             try:
-                cells, tags, callees = scan(spec, runner._registry)
+                cells, tags, callees, family = scan(spec, runner._registry)
             except Exception:  # noqa: BLE001 - Ineligible, or a scan that broke: the ordinary path
                 self.failed_epoch = world_now
                 return
+            self.family = family
+            self.family_print = family_print(family)
             for callee in callees:
                 if callee is not state:
                     _DEPENDENTS.setdefault(callee, weakref.WeakSet()).add(self)
@@ -781,10 +820,13 @@ class HitMemo:
             return False  # watched before, and something moved since: Ineligible then
         state = self.state
         try:
-            cells, tags, callees = scan_trace(self.spec, self.runner._registry, trace)
+            cells, tags, callees, family = scan_trace(self.spec, self.runner._registry, trace)
         except Exception:  # noqa: BLE001 - Ineligible, or a scan that broke: the ordinary path
             self.traces[key] = -1
             return False
+        if family:
+            self.family = (*self.family, *family)
+            self.family_print = family_print(self.family)
         for callee in callees:
             if callee is not state:
                 _DEPENDENTS.setdefault(callee, weakref.WeakSet()).add(self)
@@ -863,7 +905,7 @@ class HitMemo:
         h.value = stored
         h.md = md
         # fast_call serves in C only what needs nothing more than it does.
-        in_c = direct and h.deadline is None and not h.files
+        in_c = direct and h.deadline is None and not h.files and not self.family
         saved = (metadata.saves_seconds if metadata.saves_seconds is not None else metadata.execution_time) or 0.0
         body = metadata.body_seconds
         return (

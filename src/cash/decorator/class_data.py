@@ -3,6 +3,7 @@ what the functions an instance can run read from their modules."""
 
 from __future__ import annotations
 
+import abc
 import contextvars
 import enum
 import hashlib
@@ -198,6 +199,77 @@ def class_data_items(
     return items
 
 
+#: The name a class's code reads to list its subclasses.
+SUBCLASSES = "__subclasses__"
+
+
+def class_family(cls: type, subclasses: bool) -> list[tuple[str, tuple[str, ...]]]:
+    """``(label, names)`` for what ``isinstance`` and ``issubclass`` against
+    *cls*, or ``cls.__subclasses__()``, answer that no namespace holds:
+    the classes an ABC registered (``Shape.register(Circle)``) and the
+    classes defined below *cls* since. Neither writes a dict a watcher or
+    a key reads.
+
+    For an ABC: its registry, and its subclasses with theirs (an ABC asks
+    each subclass too). For any class when *subclasses*, its code or the
+    code reaching it reading ``__subclasses__``: every class below it.
+    Named by module and qualified name, so a key stays the same across
+    processes.
+    """
+    below = classes_below(cls) if subclasses or isinstance(cls, abc.ABCMeta) else []
+    family: list[tuple[str, tuple[str, ...]]] = []
+    if below:
+        family.append((f"{cls.__qualname__}.{SUBCLASSES}", tuple(sorted(_class_name(k) for k in below))))
+    for k in (cls, *below):
+        if isinstance(k, abc.ABCMeta):
+            registered = _abc_registered(k)
+            if registered:
+                family.append((f"{k.__qualname__}.register", registered))
+    return family
+
+
+def classes_below(cls: type) -> list[type]:
+    """Every class below *cls*, each once."""
+    found: list[type] = []
+    seen = {id(cls)}
+    stack = [cls]
+    while stack:
+        for sub in type.__subclasses__(stack.pop()):
+            if id(sub) not in seen:
+                seen.add(id(sub))
+                found.append(sub)
+                stack.append(sub)
+    return found
+
+
+def _class_name(k: type) -> str:
+    return f"{getattr(k, '__module__', '?')}.{getattr(k, '__qualname__', k.__name__)}"
+
+
+def _abc_registered(k: type) -> tuple[str, ...]:
+    """The classes *k* registered, by name (C ``_abc`` or ``_py_abc``)."""
+    try:
+        from _abc import _get_dump  # noqa: PLC2701 - the one way to read an ABC's registry
+
+        registry = _get_dump(k)[0]
+        classes = [ref() for ref in registry]
+    except ImportError:
+        classes = list(getattr(k, "_abc_registry", ()))
+    except TypeError:
+        return ()
+    return tuple(sorted(_class_name(c) for c in classes if c is not None))
+
+
+def reads_subclasses(code: Any) -> bool:
+    """Does *code*, or a scope inside it, read ``__subclasses__``?"""
+    if not isinstance(code, types.CodeType):
+        return False
+    for scope in iter_code_scopes(code):
+        if SUBCLASSES in (scope.co_names or ()) or SUBCLASSES in (scope.co_consts or ()):
+            return True
+    return False
+
+
 def _library_code(value: Any) -> Any:
     """The class or function a class attribute names when it is code that is
     not the user's (`class_data_items`): *value* itself, or what a
@@ -344,6 +416,9 @@ class ClassDataFold:
         label = f"class:{cls.__module__}.{cls.__qualname__}"
         parts, unhashable = self._held_data_parts(cls, label, learned)
         functions, excluded, read_names, _ = self._class_code(cls)
+        subclasses = SUBCLASSES in read_names or reads_subclasses(getattr(reader, "__code__", None))
+        for member, names in class_family(cls, subclasses):
+            parts.append((f"{label}:{member}", hashlib.sha256(repr(names).encode("utf-8")).hexdigest()))
         if DOCSTRING_READS & read_names:
             # `self.__doc__` / `inspect.getdoc(type(self))` in its own code.
             parts.extend(self._docstring_parts(cls, label))
