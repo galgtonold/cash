@@ -1664,12 +1664,21 @@ def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
     heap = gc.get_objects()
     stop.add(id(heap))
     found = []
-    for i, obj in enumerate(heap):
-        if not i & 4095:
+    referents, misses = gc.get_referents, ids.isdisjoint
+    # A block of the heap is read in one call, and only a block holding one
+    # of *objs* object by object: most hold none, and the heap's order stays.
+    for start in range(0, len(heap), _REFERRERS_BLOCK):
+        if not start & 4095:
             check_walk_budget()
-        if any(id(child) in ids for child in gc.get_referents(obj)):
-            found.append(obj)
+        block = heap[start : start + _REFERRERS_BLOCK]
+        if misses(map(id, referents(*block))):
+            continue
+        found.extend(obj for obj in block if not misses(map(id, referents(obj))))
     return found
+
+
+#: Heap objects `_referrers_of` reads in one `gc.get_referents` call.
+_REFERRERS_BLOCK = 256
 
 
 def _count_leaf_attributes(nodes: dict[int, Any], inbound: dict[int, int]) -> bool:
