@@ -15,8 +15,12 @@ from cash.notebook.lineage_formula import binding_source_hash
 pytestmark = [pytest.mark.integration, pytest.mark.modules, pytest.mark.timeout(300)]
 
 #: An installed module's names: a module of the user's own is keyed by its
-#: file, so its import line never mattered.
-READ = "\nx = len(ml.dumps(list(range(1_500_000))))\nprint('X', x)"
+#: file, so its import line never mattered. The statement's own work, not
+#: the ``dumps`` call, is what keeps it on disk: with a big ``dumps`` the call
+#: cache kept the call, the statement's own cost was ~0.1 s, and under load
+#: it fell below the disk floor about one run in five and was gone after
+#: the restart.
+READ = "\nx = len(ml.dumps([i * i for i in range(4_000_000)][-10:]))\nprint('X', x)"
 
 
 def _run(nb_runner, import_line: str) -> str:
