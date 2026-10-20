@@ -3,7 +3,7 @@
 A write to a base's dict, a middle class rebased or given an attribute move
 a watched dict or type. An ABC registering a class (``isinstance``
 changes) or a class defined below one (``__subclasses__`` changes) moves
-neither: the memo checks those classes on every hit (`hit_memo.family_print`).
+neither: the memo checks those on every hit (`hit_memo._Family`).
 """
 
 import abc

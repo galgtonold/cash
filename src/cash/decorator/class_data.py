@@ -8,7 +8,9 @@ import contextvars
 import enum
 import hashlib
 import pickle
+import threading
 import types
+import weakref
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -202,30 +204,77 @@ def class_data_items(
 #: The name a class's code reads to list its subclasses.
 SUBCLASSES = "__subclasses__"
 
+#: Names a class gains without anyone changing what it is: copyreg's cache,
+#: set the first time an instance is pickled, the annotations dict reading
+#: ``__annotations__`` makes, and what ``abc`` and ``typing`` keep.
+_LAZY_NAMES = frozenset(
+    {
+        "__slotnames__",
+        "__annotations__",
+        "__annotations_cache__",
+        "__annotate__",
+        "__annotate_func__",
+        "__abstractmethods__",
+        "__protocol_attrs__",
+        "__non_callable_proto_members__",
+        "__callable_proto_members_only__",
+        "_abc_impl",
+    }
+)
 
-def class_family(cls: type, subclasses: bool) -> list[tuple[str, tuple[str, ...]]]:
-    """``(label, names)`` for what ``isinstance`` and ``issubclass`` against
-    *cls*, or ``cls.__subclasses__()``, answer that no namespace holds:
-    the classes an ABC registered (``Shape.register(Circle)``) and the
-    classes defined below *cls* since. Neither writes a dict a watcher or
-    a key reads.
 
-    For an ABC: its registry, and its subclasses with theirs (an ABC asks
-    each subclass too). For any class when *subclasses*, its code or the
-    code reaching it reading ``__subclasses__``: every class below it.
+def class_family(cls: type, subclasses: bool) -> list[tuple[str, Any]]:
+    """``(label, value)`` for what ``isinstance`` and ``issubclass`` against
+    *cls*, or ``cls.__subclasses__()``, answer that no namespace of the
+    call's holds:
+
+    * ``registered_with``: the ABCs that registered *cls* or a class it
+      derives from (``collections.abc.Mapping.register(Box)``), library
+      ABCs included: the registration is the user's;
+    * ``register``: for an ABC, the classes it and the classes below it
+      registered (``Shape.register(Circle)``; an ABC asks each subclass);
+    * ``__subclasses__``, when *subclasses* (its code or the code reaching
+      it reads that name): every class below it, a user class by what it
+      holds (`class_digest`), so a subclass defined again under the same
+      name, edited, is a new key.
+
     Named by module and qualified name, so a key stays the same across
-    processes.
+    processes. None of these writes a dict a watcher or a key reads.
     """
-    below = classes_below(cls) if subclasses or isinstance(cls, abc.ABCMeta) else []
-    family: list[tuple[str, tuple[str, ...]]] = []
-    if below:
-        family.append((f"{cls.__qualname__}.{SUBCLASSES}", tuple(sorted(_class_name(k) for k in below))))
-    for k in (cls, *below):
-        if isinstance(k, abc.ABCMeta):
-            registered = _abc_registered(k)
-            if registered:
-                family.append((f"{k.__qualname__}.register", registered))
+    family: list[tuple[str, Any]] = []
+    registered = registered_with(cls)
+    if registered:
+        family.append(("registered_with", registered))
+    family.extend(abc_registries(cls))
+    if subclasses:
+        family.append((SUBCLASSES, tuple(sorted(_class_print(k) for k in classes_below(cls)))))
     return family
+
+
+def abc_registries(cls: type) -> list[tuple[str, tuple[str, ...]]]:
+    """``(label, registered names)`` for *cls* and the classes below it
+    when *cls* is an ABC: what ``isinstance(x, cls)`` asks besides the
+    MRO."""
+    if not isinstance(cls, abc.ABCMeta):
+        return []
+    found: list[tuple[str, tuple[str, ...]]] = []
+    for k in (cls, *classes_below(cls)):
+        if isinstance(k, abc.ABCMeta):
+            names = tuple(sorted(_class_name(c) for c in _abc_registered(k)))
+            if names:
+                found.append((f"{k.__qualname__}.register", names))
+    return found
+
+
+def class_names(cls: type) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """The names each user class of *cls*'s MRO binds: a method set on the
+    class after it was made (``Bag.size = ...``) changes what a
+    ``runtime_checkable`` protocol, ``hasattr`` or ``dir`` answers, and no
+    source or data digest sees it."""
+    return tuple(
+        (base.__qualname__, tuple(sorted(n for n in vars(base) if n not in _LAZY_NAMES and isinstance(n, str))))
+        for base in _user_bases(cls)
+    )
 
 
 def classes_below(cls: type) -> list[type]:
@@ -246,18 +295,82 @@ def _class_name(k: type) -> str:
     return f"{getattr(k, '__module__', '?')}.{getattr(k, '__qualname__', k.__name__)}"
 
 
-def _abc_registered(k: type) -> tuple[str, ...]:
-    """The classes *k* registered, by name (C ``_abc`` or ``_py_abc``)."""
-    try:
-        from _abc import _get_dump  # noqa: PLC2701 - the one way to read an ABC's registry
+def _class_print(k: type) -> str:
+    """*k* by name, and a user class also by what it holds."""
+    name = _class_name(k)
+    if not is_user_code_object(k):
+        return name
+    from ..tracking.trace_items import class_digest
 
+    return f"{name}={class_digest(k)}"
+
+
+try:
+    from _abc import _get_dump  # the one way to read an ABC's registry
+except ImportError:  # pragma: no cover - _py_abc
+    _get_dump = None
+
+
+def _abc_registered(k: type) -> list[type]:
+    """The live classes the ABC *k* registered (C ``_abc`` or ``_py_abc``)."""
+    if _get_dump is None:  # pragma: no cover - _py_abc
+        return list(getattr(k, "_abc_registry", ()))
+    try:
         registry = _get_dump(k)[0]
-        classes = [ref() for ref in registry]
-    except ImportError:
-        classes = list(getattr(k, "_abc_registry", ()))
     except TypeError:
+        return []
+    return [c for c in (ref() for ref in registry) if c is not None]
+
+
+#: ``(abc.get_cache_token(), {id(registered class): (weakref to it, ABC names)})``:
+#: every ABC's registry read once per token, which moves on every
+#: ``register()`` anywhere (`registered_with`).
+_REGISTRATIONS: list = [None, {}]
+_REGISTRATIONS_LOCK = threading.Lock()
+
+
+def _registrations() -> dict[int, tuple[Any, list[str]]]:
+    token = abc.get_cache_token()
+    if _REGISTRATIONS[0] == token:
+        return _REGISTRATIONS[1]
+    with _REGISTRATIONS_LOCK:
+        index: dict[int, tuple[Any, list[str]]] = {}
+        for k in classes_below(object):
+            if isinstance(k, abc.ABCMeta):
+                for c in _abc_registered(k):
+                    entry = index.get(id(c))
+                    if entry is None:
+                        entry = index[id(c)] = (weakref.ref(c), [])
+                    entry[1].append(_class_name(k))
+        _REGISTRATIONS[:] = [token, index]
+    return index
+
+
+def _in_an_abc_set(k: type) -> bool:
+    """Does an ABC's registry or cache hold *k*? Each holds it by a
+    weakref whose callback is ``_abc``'s; a class none holds is
+    registered nowhere, and costs no registry walk."""
+    try:
+        refs = weakref.getweakrefs(k)
+    except TypeError:
+        return False
+    if _get_dump is None:  # pragma: no cover - _py_abc: no way to tell
+        return bool(refs)
+    return any(getattr(getattr(r, "__callback__", None), "__name__", None) == "_destroy" for r in refs)
+
+
+def registered_with(cls: type) -> tuple[str, ...]:
+    """The ABCs that registered *cls* or a class of its MRO, by name."""
+    mro = [k for k in cls.__mro__ if k is not object]
+    if not any(_in_an_abc_set(k) for k in mro):
         return ()
-    return tuple(sorted(_class_name(c) for c in classes if c is not None))
+    index = _registrations()
+    names: set[str] = set()
+    for k in mro:
+        entry = index.get(id(k))
+        if entry is not None and entry[0]() is k:
+            names.update(entry[1])
+    return tuple(sorted(names))
 
 
 def reads_subclasses(code: Any) -> bool:
@@ -417,8 +530,8 @@ class ClassDataFold:
         parts, unhashable = self._held_data_parts(cls, label, learned)
         functions, excluded, read_names, _ = self._class_code(cls)
         subclasses = SUBCLASSES in read_names or reads_subclasses(getattr(reader, "__code__", None))
-        for member, names in class_family(cls, subclasses):
-            parts.append((f"{label}:{member}", hashlib.sha256(repr(names).encode("utf-8")).hexdigest()))
+        for member, value in (*class_family(cls, subclasses), ("names", class_names(cls))):
+            parts.append((f"{label}:{member}", hashlib.sha256(repr(value).encode("utf-8")).hexdigest()))
         if DOCSTRING_READS & read_names:
             # `self.__doc__` / `inspect.getdoc(type(self))` in its own code.
             parts.extend(self._docstring_parts(cls, label))
