@@ -21,6 +21,9 @@ ISSUE_DYNAMIC_PATTERN = "dynamic_pattern"
 # (KEY-UNTRACKABLE-DEP); strict=True raises, assume_safe=True caches anyway.
 # Distinct from ISSUE_DYNAMIC_PATTERN, which stays advisory.
 ISSUE_UNTRACKABLE_DEP = "untrackable_dep"
+#: How an untrackable check its class's own metaclass answers is described
+#: (`HelperWalk._note_decided_at_run_time`).
+ANSWERED_AT_RUN_TIME = "answered at run time by"
 #: How an ``untrackable_dep`` finding that is a lookup by a run-time name
 #: (``getattr(obj, name)``, ``importlib.import_module(name)``,
 #: ``__import__(name)``) begins: on Python 3.12+ such a call is cached on a

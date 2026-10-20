@@ -29,7 +29,7 @@ from .arg_hashing import CODE_VALUE_TYPES, is_opaque
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .function_identity import code_fingerprint, hash_callable_source
 from .key_values import SYNC_TYPES, code_ref, is_immutable_capture, plain_data_kind, stabilize_for_global_hash
-from .user_code import is_cash_wrapper, is_user_code_object
+from .user_code import is_cash_wrapper, is_user_class, is_user_code_object, own_package
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
@@ -971,7 +971,17 @@ class ClosureFold:
             # names, for the code that walk does not follow
             # (`make(np.float32)`, `make(np.add)`).
             ref = code_ref(v)
-            return None if ref is None else (name, f"ref:{ref}")
+            if ref is None:
+                return None
+            if isinstance(v, type) and is_user_class(v, own_package(func)):
+                # What a class of the user's holds, as for one read as a
+                # module global (`ClassDataFold.class_parts`): its data,
+                # what its code reads, its annotations when they are read.
+                parts = self._classes.class_parts(v, func_name, owner_code=getattr(func, "__code__", None), reader=func)
+                if parts:
+                    payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
+                    return (name, f"ref:{ref}:" + hashlib.sha256(payload.encode("utf-8")).hexdigest())
+            return (name, f"ref:{ref}")
         if read_only:
             # Read-only mutable capture: fold its content hash. One that
             # cannot be hashed runs the call uncached rather than being

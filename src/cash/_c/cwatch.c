@@ -2270,7 +2270,7 @@ declined:
 
 /* -- serving a fast hit in C ------------------------------------------- */
 /* memo state list slots (hit_memo keeps the same numbers) */
-enum { S_WORLD = 0, S_ENTRIES, S_CELLS, S_TYPES, S_SERVE, S_ACC, S_SPEC, S_LOG, S_SPARE, S_CLEAR_AT, S_FLAGS,
+enum { S_WORLD = 0, S_ENTRIES, S_CELLS, S_TYPES, S_SERVE, S_ACC, S_SPEC, S_LOG, S_GUARD, S_CLEAR_AT, S_FLAGS,
        S_NSLOTS };
 /* entry tuple slots */
 enum { E_CASH = 0, E_STORE, E_KEY, E_HELD, E_HIT, E_VALUE, E_TOUCH, E_SAVED, E_LOG, E_BODY, E_NSLOTS };
@@ -2496,7 +2496,10 @@ static PyObject *any_key(PyObject *args, PyObject *kwargs) {
 /* fast_call(state, args, kwargs) -> the result, or the miss sentinel
  * A hit whose entry needs more than C does here (a ttl, files to check, a
  * copy to make, verify mode, the clear check due, accounting to hand
- * over) goes to state[S_SERVE](entry, args, kwargs, t0). */
+ * over, a guard that moved) goes to state[S_SERVE](entry, args, kwargs, t0).
+ * state[S_GUARD] is None or (fn, value): fn() == value while what the key
+ * read and no watcher sees is unchanged (abc.get_cache_token for the ABC
+ * registrations of the classes met); when it differs, Python looks. */
 static PyObject *py_fast_call(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     if (nargs != 3 || hit_miss == NULL || !PyTuple_CheckExact(args[1])) {
         PyErr_SetString(PyExc_TypeError, "fast_call(state, args, kwargs)"); return NULL;
@@ -2519,6 +2522,17 @@ static PyObject *py_fast_call(PyObject *self, PyObject *const *args, Py_ssize_t 
         if (!PyType_Check(t) || !type_tag_is(PyTuple_GET_ITEM(types, i + 1), (PyTypeObject *)t))
             goto miss;
     }
+    int guard_moved = 0;
+    PyObject *guard = PyList_GET_ITEM(st, S_GUARD);
+    if (guard != Py_None) {
+        if (!PyTuple_CheckExact(guard) || PyTuple_GET_SIZE(guard) != 2) goto miss;
+        PyObject *now = PyObject_CallNoArgs(PyTuple_GET_ITEM(guard, 0));
+        if (now == NULL) return NULL;
+        int same = PyObject_RichCompareBool(now, PyTuple_GET_ITEM(guard, 1), Py_EQ);
+        Py_DECREF(now);
+        if (same < 0) return NULL;
+        guard_moved = !same;
+    }
     PyObject *key = any_key(args[1], args[2]);
     if (key == NULL) { if (PyErr_Occurred()) return NULL; goto miss; }
     PyObject *entry = PyDict_GetItemWithError(entries, key);   /* borrowed */
@@ -2534,7 +2548,7 @@ static PyObject *py_fast_call(PyObject *self, PyObject *const *args, Py_ssize_t 
     PyObject *value = PyTuple_GET_ITEM(entry, E_VALUE), *accobj = PyList_GET_ITEM(st, S_ACC);
     PyObject *clear_at = PyList_GET_ITEM(st, S_CLEAR_AT), *touchobj = PyTuple_GET_ITEM(entry, E_TOUCH);
     PyObject *saved = PyTuple_GET_ITEM(entry, E_SAVED), *body = PyTuple_GET_ITEM(entry, E_BODY);
-    if (value == hit_miss || PyList_GET_ITEM(st, S_FLAGS) != Py_False || Py_TYPE(accobj) != &AccType ||
+    if (guard_moved || value == hit_miss || PyList_GET_ITEM(st, S_FLAGS) != Py_False || Py_TYPE(accobj) != &AccType ||
         Py_TYPE(touchobj) != &TouchType || !PyFloat_CheckExact(clear_at) || !PyFloat_CheckExact(saved) ||
         ((Acc *)accobj)->pn >= PENDING_MAX || clock_mono() >= PyFloat_AS_DOUBLE(clear_at)) {
         PyObject *t = PyFloat_FromDouble(t0);
