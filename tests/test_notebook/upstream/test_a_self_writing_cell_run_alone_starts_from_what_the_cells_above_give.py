@@ -35,11 +35,11 @@ def test_a_changed_file_is_read_onto_the_base(cash_magics, tmp_path, monkeypatch
         # A loaded machine stores the cheap steps too.
         monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
     path = tmp_path / "n.txt"
-    path.write_text("1")
+    path.write_text("1", encoding="utf-8")
     cells = ["import numpy as np", "w = np.zeros(3)", f"w -= float(open({str(path)!r}).read())"]
     for cell in cells:
         run_cash_cell(cash_magics, cell, cells=cells)
-    path.write_text("3")
+    path.write_text("3", encoding="utf-8")
     run_cash_cell(cash_magics, cells[2], cells=cells)
     assert cash_magics.shell.user_ns["w"].tolist() == _plain(cells)["w"].tolist() == [-3.0] * 3
     # Stored under the base's key, the -3 is what a second run alone gets too.
