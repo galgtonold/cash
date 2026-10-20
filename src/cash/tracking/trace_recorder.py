@@ -372,11 +372,20 @@ def _the_kernels(t: threading.Thread) -> bool:
     return isinstance(name, str) and name.partition(".")[0] in _KERNEL_PACKAGES
 
 
+def _kernel_code(t: threading.Thread) -> bool:
+    """Does *t* run code of the kernel's packages (a Timer's function, its
+    target, or its own ``run``)? pyzmq starts its garbage thread only when a
+    message is first sent without a copy, after cash was imported."""
+    name = getattr(_code_of(t), "__module__", None)
+    return isinstance(name, str) and name.partition(".")[0] in _KERNEL_PACKAGES
+
+
 def other_thread_alive(notebook_ns: Any) -> bool:
     """Might another thread change a value between two checks that read it,
     so that a digest one took cannot stand for the other: any live thread
     but this one, cash's own (by the code it runs; a Timer by its function)
-    and the kernel's (`_the_kernels`, alive when cash was imported), daemon
+    and the kernel's (`_the_kernels`, alive when cash was imported, or
+    running code of the kernel's packages, `_kernel_code`), daemon
     or not. A pool's worker runs the user's code under a library's name,
     which `runs_user_code` cannot see, and a wrong yes only costs a read
     again. A thread a C library started (an audio or device callback) runs
@@ -395,6 +404,8 @@ def other_thread_alive(notebook_ns: Any) -> bool:
         if runs_user_code(t, notebook_ns):
             return True
         if t in cash.THREADS_AT_IMPORT and _the_kernels(t):
+            continue
+        if _kernel_code(t):
             continue
         name = getattr(_code_of(t), "__module__", None)
         if not (isinstance(name, str) and (name == "cash" or name.startswith("cash."))):

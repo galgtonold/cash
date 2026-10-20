@@ -108,3 +108,26 @@ def test_a_call_takes_the_statements_digest_only_when_alone(monkeypatch):
     ticket = handoff.call_started()
     handoff.digest_before(ticket, "f(x)")(x)
     assert len(reads) == 1, "another thread is alive: read again"
+
+
+def _in_module(fn, module):
+    fn.__module__ = module
+    return fn
+
+
+@pytest.mark.parametrize(
+    ("module", "counts"),
+    [("zmq.utils.garbage", False), ("ipykernel.iostream", False), ("__main__", True), ("tqdm._monitor", True)],
+)
+def test_a_thread_started_later_counts_unless_it_runs_the_kernels_code(module, counts):
+    """pyzmq starts its garbage thread after cash was imported (when a
+    message is first sent without a copy); it runs only the kernel's code.
+    A thread of the user's or of another library still counts."""
+    stop = threading.Event()
+    t = threading.Thread(target=_in_module(lambda: stop.wait(30), module), daemon=True)
+    t.start()
+    try:
+        assert trace_recorder.other_thread_alive({}) is counts
+    finally:
+        stop.set()
+        t.join(30)
