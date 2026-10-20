@@ -26,10 +26,10 @@ from cash._user_attrs import attribute_or, instance_of
 from cash.backends import memory_backend
 from cash.backends.persistence_policy import PersistencePolicy, restore_kind
 from cash.backends.store_notices import DECORATED_CALLS_FIELD
-from cash.closure_sharing import closures_sharing
+from cash.closure_sharing import closure_check_budget, closures_sharing
 from cash.diagnostics import log_diagnostic, warn_diagnostic
 from cash.exceptions import CashCacheStoreFailedWarning
-from cash.notebook.anchors import with_anchor_refs
+from cash.notebook.anchors import AnchorUnrebuilt, with_anchor_refs
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.capture import replay_record
 from cash.notebook.statement.carrier_advances import PAYLOAD_FIELD as CARRIERS_FIELD
@@ -150,11 +150,29 @@ def _is_only_definitions(code: str) -> bool:
 
 class _AnchorsUnstorable(Exception):
     """The value of a statement with anchors could not be pickled with them
-    (`with_anchor_refs`): it is not stored. *names* are the anchors."""
+    (`with_anchor_refs`): it is not stored. *names*: the anchor the copy
+    could not be rebuilt around (`AnchorUnrebuilt`); none when the value's
+    own pickling raised, as it would without anchors."""
 
     def __init__(self, message: str, names: Iterable[str]) -> None:
         super().__init__(message)
         self.names = sorted(names)
+
+
+def _warn_closures_unchecked(outputs: Iterable[str], seconds: float) -> None:
+    """Say that a statement's outputs were too big to look through for a
+    function whose closure holds another of their parts in *seconds*, so
+    they were not stored (STORE-PARTS-UNCHECKED)."""
+    listed = ", ".join(f"'{name}'" for name in sorted(outputs))
+    warn_diagnostic(
+        CashCacheStoreFailedWarning,
+        "STORE-PARTS-UNCHECKED",
+        f"cash did not store this statement's result: it could not look through {listed} within "
+        f"{seconds:.1f}s for a function whose closure holds another part of them, which a restore would "
+        "hand back apart. It ran, and runs again next time.",
+        "nothing, if the statement is cheap. To have it cached, bind the large data and the objects "
+        "holding functions in separate statements.",
+    )
 
 
 def _warn_not_stored(exc: BaseException) -> None:
@@ -164,21 +182,24 @@ def _warn_not_stored(exc: BaseException) -> None:
     stream no pickle takes, and a warning on each would have no fix. Any
     other failure -- the backend refusing the write (a full disk, a store
     that raised) -- is warned: the statement runs again every time."""
-    if isinstance(exc, _AnchorsUnstorable) and not _unpicklable(exc):
+    if isinstance(exc, _AnchorsUnstorable) and exc.names and not _unpicklable(exc):
         # Cash's own step, not the backend: the copy that puts a reference to
         # each held variable in its place cannot rebuild the value around
         # one (``results.append`` is rebuilt as ``getattr(results,
         # 'append')``, and a reference has no ``append``).
-        names = ", ".join(f"'{name}'" for name in exc.names)
+        name = exc.names[0]
         warn_diagnostic(
             CashCacheStoreFailedWarning,
             "STORE-REF-UNSUPPORTED",
-            f"cash did not store this statement's result: it holds the object of {names} in a form cash "
-            f"cannot keep as a reference to that variable ({exc}); it ran, and runs again next time.",
-            "nothing, for a correct result. To have it cached, hold the variable itself "
-            "(hooks = {'target': results}) rather than its method (hooks = {'add': results.append}).",
+            f"cash did not store this statement's result: it holds the object of '{name}' in a form cash "
+            f"cannot keep as a reference to that variable, such as a method bound to it ({exc}); "
+            "it ran, and runs again next time.",
+            f"nothing, for a correct result. To have it cached, hold '{name}' itself in the value "
+            "rather than a method bound to it.",
         )
         return
+    if isinstance(exc, _AnchorsUnstorable) and exc.__cause__ is not None:
+        exc = exc.__cause__  # the value's own pickling raised, as it would without anchors
     if isinstance(exc, kept_state.DefinedAgain):
         fix = (
             "run the cells that build the value again after the cell that defines the function, "
@@ -832,8 +853,16 @@ class StatementStore:
         # function, so they no longer share the array, and a write through
         # ``a`` did not reach ``getter()`` (21 for 27).
         if not should_skip:
-            _sharing = closures_sharing(captured_vars)
-            if _sharing:
+            _budget = closure_check_budget(execution.cost)
+            _closures = closures_sharing(captured_vars, _budget)
+            _sharing = _closures.names
+            if not _closures.finished:
+                should_skip = True
+                skip_reason = (
+                    "cash could not look through the outputs in time; statement re-executes (lineage persists)"
+                )
+                _warn_closures_unchecked(run.outputs, _budget)
+            elif _sharing:
                 should_skip = True
                 skip_reason = (
                     f"output(s) {', '.join(_sharing)} hold a function whose closure shares an object "
@@ -953,8 +982,11 @@ class StatementStore:
             held = {"variables": variables, ECHO_FIELD: payload.get(ECHO_FIELD)}
             try:
                 held = with_anchor_refs(held, {name: user_ns[name] for name in run.anchors})
-            except Exception as exc:
-                raise _AnchorsUnstorable(f"{type(exc).__name__}: {exc}", run.anchors) from exc
+            except AnchorUnrebuilt as exc:
+                cause = exc.__cause__ or exc
+                raise _AnchorsUnstorable(f"{type(cause).__name__}: {cause}", [exc.name] if exc.name else ()) from cause
+            except Exception as exc:  # the value's own pickling: STORE-FAILED, as without anchors
+                raise _AnchorsUnstorable(f"{type(exc).__name__}: {exc}", ()) from exc
             payload["variables"] = held["variables"]
             if ECHO_FIELD in payload:
                 payload[ECHO_FIELD] = held[ECHO_FIELD]

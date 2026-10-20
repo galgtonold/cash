@@ -24,7 +24,7 @@ import weakref
 from typing import Any
 
 from . import _native, _plain_data
-from ._user_attrs import attribute_or, instance_of
+from ._user_attrs import instance_of, own_dict
 from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS, library_scalar_types
 
 logger = logging.getLogger(__name__)
@@ -327,7 +327,7 @@ def _is_instance(value: Any) -> bool:
         kind in CODELESS_PRIMS
         or kind in BUILTIN_CONTAINERS
         or instance_of(value, _HELD_BY_NAME)
-        or (attribute_or(value, "__dict__") is None and not _slot_names(kind))
+        or (own_dict(value) is None and not _slot_names(kind))
     )
 
 
@@ -653,8 +653,8 @@ def _sampled_instances(items: Any, seen: set[int]) -> int | None:
 
 def _attr_values(obj: Any) -> list:
     """The values in *obj*'s ``__dict__`` and ``__slots__``."""
-    attrs = getattr(obj, "__dict__", None)
-    values = list(attrs.values()) if type(attrs) is dict else []
+    attrs = own_dict(obj)
+    values = list(attrs.values()) if attrs is not None else []
     for name in _slot_names(type(obj)):
         value = getattr(obj, name, None)
         if value is not None:
@@ -674,8 +674,8 @@ def _attrs_footprint(obj: Any, seen: set[int], held: list) -> int:
     instances.
     """
     size = 0
-    attrs = getattr(obj, "__dict__", None)
-    if type(attrs) is dict and id(attrs) not in seen:
+    attrs = own_dict(obj)
+    if attrs is not None and id(attrs) not in seen:
         seen.add(id(attrs))
         size += sys.getsizeof(attrs)
         for value in attrs.values():

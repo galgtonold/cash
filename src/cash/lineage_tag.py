@@ -20,7 +20,7 @@ import types
 import weakref
 from typing import Any
 
-from cash._user_attrs import instance_of, is_routine
+from cash._user_attrs import instance_of, is_routine, own_dict
 
 __all__ = ["clear_tags", "own_tag", "set_tags", "taggable"]
 
@@ -57,9 +57,7 @@ def set_tags(value: Any, **tags: Any) -> bool:
     """
     if not taggable(value):
         return False
-    try:
-        object.__getattribute__(value, "__dict__")
-    except (AttributeError, TypeError):
+    if own_dict(value) is None:
         return False
     key = id(value)
     with _SIDE_LOCK:
@@ -94,11 +92,5 @@ def own_tag(value: Any, name: str = "_cash_lineage_hash") -> Any:
         entry = _SIDE.get(id(value))
         if entry is not None and entry[0]() is value and name in entry[1]:
             return entry[1][name]
-    try:
-        own = object.__getattribute__(value, "__dict__")
-    except (AttributeError, TypeError):
-        return None
-    try:
-        return own.get(name)
-    except (AttributeError, TypeError):
-        return None
+    own = own_dict(value)
+    return None if own is None else own.get(name)

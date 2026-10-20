@@ -51,8 +51,10 @@ from cash.analysis.cacheability_decision import decide_cacheability
 from cash.analysis.handed_callables import hands_a_state_changing_callable
 from cash.analysis.namespace_effects import user_callee_starting_workers, user_callee_using_pyplot
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, restore_kind
-from cash.closure_sharing import closures_sharing
+from cash.closure_sharing import closure_check_budget, closures_sharing
 from cash.cost_model import estimated_restore_time
+from cash.diagnostics import warn_diagnostic
+from cash.exceptions import CashCacheStoreFailedWarning
 from cash.notebook import shadow as _shadow
 from cash.notebook._trace import trace_event
 from cash.notebook.cache_key import CacheKeyContext
@@ -1170,7 +1172,18 @@ class CallUnit:
         # wrong, matching the RNG and argument-mutation refusals:
         # an uncached call is merely slow.
         captured = capture_globals(call.fn, call.mutated_globals)
-        if captured is None or closures_sharing({"result": result}):
+        closures = closures_sharing({"result": result}, closure_check_budget(elapsed)) if captured is not None else None
+        if closures is not None and not closures.finished:
+            warn_diagnostic(
+                CashCacheStoreFailedWarning,
+                "STORE-PARTS-UNCHECKED",
+                f"cash did not store the result of {call.func_name}(): it could not look through it within "
+                f"{closure_check_budget(elapsed):.1f}s for a function whose closure holds another part of it, "
+                "which a cache hit would hand back apart. The call ran, and runs again next time.",
+                "nothing, if the call is cheap. To have it cached, return a smaller result, or its data "
+                "without the objects that hold functions.",
+            )
+        if captured is None or not closures.finished or closures.names:
             # Or ``return arr, lambda: arr``: a hit copies ``arr`` and keeps
             # the function by reference, which then returns another array
             # than the one the caller holds (`closures_sharing`).
