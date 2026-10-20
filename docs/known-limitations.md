@@ -514,6 +514,13 @@ cash names a cell that ends while a thread it started, running your code, is
 still alive: [NOTEBOOK-THREAD-ALIVE](warnings.md#notebook-thread-alive).
 **Fix:** join the thread before the cell ends (`t.join()`).
 
+While another thread is alive during a statement, cash reads each value it
+checks afresh, so a change the thread makes in between is seen. A thread a C
+library starts that writes memory without running Python code (an audio or
+device driver filling a buffer) cannot be seen at all: cash reads that buffer
+as it finds it. **Fix:** copy such a buffer (`data = buf.copy()`) in the cell
+that stops the stream, and use the copy.
+
 ### A loop variable changed before it is read
 
 <!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @5304abe8 -->
