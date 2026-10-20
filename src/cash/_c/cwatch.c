@@ -457,13 +457,17 @@ static unsigned long long c_world_bumps, c_world_ignored, c_fast_hits, c_fast_mi
 #define WD_UNKEYED 2u
 /* A world type's `live` tag stands for its `canon` one: the tag it had
  * before cash's own writes to it (see `expect`), which a memo holds. */
-/* A world type's `name`, `qualname`, `bases` and `mro` are the ones it had
- * when watched (strong): setting ``__name__`` or ``__qualname__`` writes no
- * dict and CPython tells no type watcher of it, and a change of bases in
- * cash's window must not pass for cash's write (`expect_settle`). */
+/* A world type's `name`, `qualname`, `bases`, `mro` and `meta` are the ones
+ * it had when watched (strong). With its dict watched (`world_watch_type`)
+ * they are what a lookup on it reads, so a memo checks them, not the type's
+ * version tag: every write to a class takes a new tag, CPython gives a class
+ * at most 1,000, and cash writes its reader wrappers to `threading.Thread`
+ * twice per miss -- after ~500 misses the class had no tag left and no memo
+ * reading it ever served again. Setting ``__name__`` or ``__qualname__``
+ * writes no dict and CPython tells no type watcher of it either. */
 typedef struct {
-    uintptr_t addr; unsigned flags; unsigned int live, canon;
-    PyObject *name, *qualname, *bases, *mro;
+    uintptr_t addr; unsigned flags;
+    PyObject *name, *qualname, *bases, *mro, *meta;
 } WEnt;
 static WEnt *wds = NULL; static size_t wds_cap = 0, wds_used = 0, wds_tomb = 0;  /* world dicts */
 static WEnt *wts = NULL; static size_t wts_cap = 0, wts_used = 0, wts_tomb = 0;  /* world types */
@@ -501,8 +505,8 @@ static int went_add(WEnt **tabp, size_t *capp, size_t *usedp, size_t *tombp, uin
     size_t m = *capp - 1, i = hmix(a) & m;
     while ((*tabp)[i].addr && (*tabp)[i].addr != WTOMB) i = (i + 1) & m;
     if ((*tabp)[i].addr == WTOMB) (*tombp)--;
-    (*tabp)[i].addr = a; (*tabp)[i].flags = flags; (*tabp)[i].live = (*tabp)[i].canon = 0;
-    (*tabp)[i].name = (*tabp)[i].qualname = (*tabp)[i].bases = (*tabp)[i].mro = NULL; (*usedp)++;
+    (*tabp)[i].addr = a; (*tabp)[i].flags = flags;
+    (*tabp)[i].name = (*tabp)[i].qualname = (*tabp)[i].bases = (*tabp)[i].mro = (*tabp)[i].meta = NULL; (*usedp)++;
     return 0;
 }
 
@@ -519,20 +523,18 @@ static inline int codeish(PyObject *o) { return o != NULL && (PyCallable_Check(o
  * moves the epoch. Armed by `expect_set` right before the write and cleared
  * by `expect_clear` right after.
  *
- * A class's tag is reset by any write to it, the one passed over too, and
- * a memo checks its classes' tags. So the classes that write reached are
- * noted, and once it is made (and the class holds the value expected) each
- * is given a new tag that stands for the one it had: the tag cash's own
- * swaps leave a memo serving under. While a class has no tag CPython tells
- * no watcher of a second change; a class's dict is watched too
- * (`world_watch_type`), so a write to it in the window still moves the
- * epoch. */
+ * A type event carries no attribute, so one on the armed thread for the
+ * owner or a subclass is passed over; the classes it reached are noted, and
+ * once the write is made the owner must hold the value expected and each
+ * class the bases and MRO it was watched with (a change to those writes no
+ * dict), or the epoch moves. A memo checks a class by what it was watched
+ * with (WEnt), not by its version tag, so cash's own writes spend none. */
 #define EXPECT_SEEN 16
 static struct {
     PyThreadState *ts;   /* NULL: nothing armed */
     PyObject *owner, *dict, *name, *value;   /* strong; value NULL for a delete */
     int nseen;
-    struct { PyTypeObject *t; unsigned int tag; } seen[EXPECT_SEEN];   /* the tag before the write */
+    PyTypeObject *seen[EXPECT_SEEN];   /* the world types its type events reached */
 } expect;
 
 static void expect_settle(void) {
@@ -541,18 +543,10 @@ static void expect_settle(void) {
     if (!now && PyErr_Occurred()) PyErr_Clear();
     if (now != expect.value) { world_bump(); return; }   /* not what cash set: a change */
     for (int i = 0; i < expect.nseen; i++) {
-        PyTypeObject *t = expect.seen[i].t;
+        PyTypeObject *t = expect.seen[i];
         /* bases or MRO moved (no dict write shows it): not cash's write */
         WEnt *e = went_find(wts, wts_cap, (uintptr_t)t);
         if (!e || t->tp_bases != e->bases || t->tp_mro != e->mro) { world_bump(); return; }
-    }
-    for (int i = 0; i < expect.nseen; i++) {
-        PyTypeObject *t = expect.seen[i].t;
-        unsigned int was = expect.seen[i].tag;
-        WEnt *e = went_find(wts, wts_cap, (uintptr_t)t);
-        if (!e || !PyUnstable_Type_AssignVersionTag(t)) continue;   /* no tag: a memo declines */
-        unsigned int canon = e->live && e->live == was ? e->canon : was;
-        e->live = t->tp_version_tag; e->canon = canon;
     }
 }
 
@@ -568,15 +562,17 @@ static int epoch_is(PyObject *o, uint64_t want);
 
 /* `stored` (a memo's) is t's tag now, or the one t's tag stands for */
 static int type_tag_is(PyObject *stored, PyTypeObject *t) {
-    unsigned int now = t->tp_version_tag;
-    if (!now || !wts_used) return 0;
+    (void)stored;   /* the tag the memo was made at: see WEnt */
+    if (!wts_used) return 0;
     WEnt *e = went_find(wts, wts_cap, (uintptr_t)t);
-    if (!e) return 0;
-    if (t->tp_flags & Py_TPFLAGS_HEAPTYPE) {
-        PyHeapTypeObject *h = (PyHeapTypeObject *)t;
-        if (e->name != h->ht_name || e->qualname != h->ht_qualname) { world_bump(); return 0; }   /* renamed */
+    if (!e || !e->bases || !(t->tp_flags & Py_TPFLAGS_HEAPTYPE)) return 0;
+    PyHeapTypeObject *h = (PyHeapTypeObject *)t;
+    if (e->name != h->ht_name || e->qualname != h->ht_qualname || e->bases != t->tp_bases || e->mro != t->tp_mro ||
+        e->meta != (PyObject *)Py_TYPE(t)) {
+        world_bump();   /* renamed, rebased or given another metaclass */
+        return 0;
     }
-    return epoch_is(stored, now) || (e->live == now && epoch_is(stored, e->canon));
+    return 1;
 }
 
 static int str_equal(PyObject *a, PyObject *b);
@@ -702,10 +698,8 @@ static int on_dict(PyDict_WatchEvent ev, PyObject *d, PyObject *key, PyObject *n
 static int on_type(PyTypeObject *t) {
     c_type_events++;
     if (wts_used && went_find(wts, wts_cap, (uintptr_t)t)) {
-        if (expected_type(t) && t->tp_version_tag && expect.nseen < EXPECT_SEEN) {
-            expect.seen[expect.nseen].t = t;
-            expect.seen[expect.nseen].tag = t->tp_version_tag;
-            expect.nseen++;
+        if (expected_type(t) && expect.nseen < EXPECT_SEEN) {
+            expect.seen[expect.nseen++] = t;
             c_world_ignored++;
         } else {
             world_bump();
@@ -2011,12 +2005,12 @@ static PyObject *py_world_watch_dict(PyObject *self, PyObject *const *args, Py_s
     Py_RETURN_NONE;
 }
 
-/* world_watch_type(t) -> its version tag (assigned now), or None when it has none */
+/* world_watch_type(t) -> its version tag now (not checked: see WEnt), or None for a static type */
 static PyObject *py_world_watch_type(PyObject *self, PyObject *t) {
     if (!PyType_Check(t)) { PyErr_SetString(PyExc_TypeError, "world_watch_type(type)"); return NULL; }
     PyTypeObject *tp = (PyTypeObject *)t;
     if (ensure_watchers() < 0) return NULL;
-    if (tp->tp_version_tag == 0 && !PyUnstable_Type_AssignVersionTag(tp)) Py_RETURN_NONE;
+    if (!(tp->tp_flags & Py_TPFLAGS_HEAPTYPE)) Py_RETURN_NONE;
     if (went_add(&wts, &wts_cap, &wts_used, &wts_tomb, (uintptr_t)t, 1) < 0) return NULL;
     if (PyType_Watch(type_wid, t) < 0) return NULL;
     /* its dict too: a write while it has no tag reaches no type watcher */
@@ -2032,14 +2026,15 @@ static PyObject *py_world_watch_type(PyObject *self, PyObject *t) {
         /* renamed or rebased since it was last watched: memos made before
          * may name it */
         if (e->name && (e->name != h->ht_name || e->qualname != h->ht_qualname || e->bases != tp->tp_bases ||
-                        e->mro != tp->tp_mro))
+                        e->mro != tp->tp_mro || e->meta != (PyObject *)Py_TYPE(tp)))
             world_bump();
         Py_XINCREF(h->ht_name); Py_XSETREF(e->name, h->ht_name);
         Py_XINCREF(h->ht_qualname); Py_XSETREF(e->qualname, h->ht_qualname);
         Py_XINCREF(tp->tp_bases); Py_XSETREF(e->bases, tp->tp_bases);
         Py_XINCREF(tp->tp_mro); Py_XSETREF(e->mro, tp->tp_mro);
+        Py_INCREF(Py_TYPE(tp)); Py_XSETREF(e->meta, (PyObject *)Py_TYPE(tp));
     }
-    if (e && e->live && e->live == tp->tp_version_tag) return PyLong_FromUnsignedLong(e->canon);
+    /* not checked (see WEnt): no tag to spend */
     return PyLong_FromUnsignedLong(tp->tp_version_tag);
 }
 

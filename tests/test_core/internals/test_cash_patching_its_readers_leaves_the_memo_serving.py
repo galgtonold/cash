@@ -221,3 +221,16 @@ def test_the_armed_write_itself_is_passed_over(c, monkeypatch):
             finally:
                 _cw.expect_clear()
     assert served_fast(f, 1)[1] is True
+
+
+def test_the_memo_still_serves_after_more_misses_than_a_class_has_tags(c):
+    # CPython gives a class at most 1,000 version tags and cash writes to
+    # threading.Thread twice per miss: a memo checking tags stopped serving
+    # for good after ~500 misses of anything.
+    f, g = c.cache(names_the_thread_class), c.cache(plus_one)
+    warm(f, 1)
+    for x in range(700):
+        g(x)
+    # A rare lazy import meanwhile (``encodings.ascii``) is a change: warm
+    # again, which never succeeded once the class had no tag left.
+    assert warm(f, 1) == (1, "Thread", "stat")
