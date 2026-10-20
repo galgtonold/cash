@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextvars
 import logging
 import os
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -24,6 +25,7 @@ from typing import Any, Optional
 from cash._clock import perf_counter as _perf_counter
 from cash._paths import is_remote_url, normalize_path
 from cash.effect_observer import reset_in_any_context
+from cash.install_paths import normcase_path
 from cash.tracking import io_watch, native_reads
 from cash.tracking.file_dep_snapshot import (
     digest_later,
@@ -35,16 +37,18 @@ from cash.tracking.pending_digest import MOVED, DeferredDigest, PendingDigest
 from cash.tracking.read_classification import (
     SCRATCH_MEMMAP,
     folder_stat,
+    import_folders,
     incidental_read,
     is_cash_internal,
     is_pseudo_fs,
     is_runtime_cache_path,
+    module_kind,
     own_stat,
     regular_file_stat,
     regular_file_stat_result,
     stat_key,
 )
-from cash.tracking.read_credit import credit_read_to_stack
+from cash.tracking.read_credit import credit_read_again, credit_read_to_stack
 from cash.tracking.read_events import subscribe_read_events
 from cash.tracking.reader_patches import install_patches, patch_reader_aliases, remove_patches
 from cash.tracking.tracker_context import active_tracker, untracked
@@ -52,6 +56,9 @@ from cash.tracking.tracker_context import active_tracker, untracked
 __all__ = ["FileAccessTracker", "install_read_watch", "tracking_seconds"]
 
 logger = logging.getLogger(__name__)
+
+#: How many frames above a read `FileAccessTracker._reader_of` looks for the anchor.
+_READER_FRAMES = 64
 
 
 def install_read_watch() -> None:
@@ -149,6 +156,10 @@ class FileAccessTracker:
         # The same for `incidental_read`'s walk: what it found below the last
         # anchor frame. One slot, replaced as a whole, so pool threads share it.
         self.incidental_anchor: list = [None]
+        # (`_reader_of` the last read, ``sys.path`` then, why it was not the
+        # user's or None, the codes it was credited to): the next read from
+        # the same folder by the same frames is answered from it.
+        self._last_reader: tuple | None = None
         # Folder -> its real path, for reads outside a cell run, which has
         # its own memo (`realpath_of_read_this_run`); dropped when the block
         # ends, so a link re-pointed between two calls is resolved anew.
@@ -273,6 +284,7 @@ class FileAccessTracker:
         self.credit_anchor = None
         self._folders = {}
         self.incidental_anchor = [None]
+        self._last_reader = None
         if self._native_windows:
             # Before the parent stack pops: the reads pass up like any other.
             native_reads.close_window(self._native_windows.pop(), self)
@@ -550,21 +562,68 @@ class FileAccessTracker:
             logger.debug("[TRACKER] A read of %r, which this block created: an input if it stays", abs_path)
             self._add_created_read(abs_path, self._unresolved_spelling(path, abs_path))
             return found
-        why = incidental_read(abs_path, self._own_package, self.incidental_anchor)
+        reader = self._reader_of(abs_path)
+        last = self._last_reader
+        if reader is not None and last is not None and last[0] == reader and last[1] == sys.path:
+            # A read from the same folder, by the same code, as the last one
+            # (a loop over a folder's files): classified and credited as it was.
+            why, credited = last[2], last[3]
+        else:
+            why, credited = incidental_read(abs_path, self._own_package, self.incidental_anchor), None
         if why is not None:
             logger.debug("[TRACKER] Ignoring %s read %r", why, abs_path)
+            if reader is not None:
+                self._last_reader = (reader, list(sys.path), why, ())
             return found
         self.add_tracked(abs_path, lstat=read_lstat)
         if abs_path not in self.read_stats and os.path.isabs(abs_path):
             self._note_if_unstatable(raw_path, abs_path)
         try:
-            credit_read_to_stack(abs_path, self)
+            if credited is not None:
+                credit_read_again(abs_path, self, credited)
+            else:
+                credited = credit_read_to_stack(abs_path, self)
+                if reader is not None:
+                    self._last_reader = (reader, list(sys.path), None, credited)
         except Exception:  # attribution is an aid; the read counts regardless
+            self._last_reader = None
             logger.debug("[TRACKER] Could not credit %r to the stack", abs_path, exc_info=True)
         twin = self._unresolved_spelling(path, abs_path)
         if twin is not None:
             self.add_tracked(twin)
         return found
+
+    def _reader_of(self, abs_path: str) -> tuple | None:
+        """What `incidental_read` and `credit_read_to_stack` make of a read of
+        *abs_path* depends on its folder and the frames above the read, up
+        to the anchor frame `incidental_read` keeps: this read's folder, the
+        code of each of those frames, and the anchor frame itself. A frame's
+        callers do not change while it runs, so a read with the same answer
+        here, ``sys.path`` unchanged, is classified and credited as the last
+        one was. None when that cannot be told: no anchor yet, or one not
+        reached, a frame of a package metadata or resource API (whose verdict
+        asks whether the file itself exists), or a folder that is an import
+        folder on ``sys.path`` (a module file there is a package of its own).
+        """
+        mark = self.incidental_anchor[0]
+        if mark is None or mark[1] != self._own_package:
+            return None
+        end = mark[0]
+        if any(step[0] == "resource" for step in mark[3]):
+            return None
+        codes = []
+        frame = sys._getframe(2)
+        while frame is not end:
+            if frame is None or len(codes) == _READER_FRAMES:
+                return None
+            if module_kind(frame)[0]:
+                return None
+            codes.append(frame.f_code)
+            frame = frame.f_back
+        folder = abs_path[: abs_path.rfind("/") + 1]
+        if not folder or normcase_path(folder) in import_folders():
+            return None
+        return (folder, tuple(codes), end, mark)
 
     @staticmethod
     def _unresolved_spelling(path, abs_path: str) -> str | None:

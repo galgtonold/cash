@@ -24,7 +24,7 @@ from cash.tracking.read_classification import is_cash_internal, is_pseudo_fs, re
 if TYPE_CHECKING:
     from cash.tracking.file_tracker import FileAccessTracker
 
-__all__ = ["credit_read_to_stack", "credited_reads", "note_untracked_read"]
+__all__ = ["credit_read_to_stack", "credit_read_again", "credited_reads", "note_untracked_read"]
 
 logger = logging.getLogger(__name__)
 
@@ -73,15 +73,17 @@ def _is_cash_wrapper(filename: str) -> bool:
     return norm == _DECORATOR_FILES[0] or norm.startswith(_DECORATOR_FILES[1])
 
 
-def credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:
-    """Credit a read to the user code on the stack, up to the cached call."""
+def credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> tuple[Any, ...]:
+    """Credit a read to the user code on the stack, up to the cached call;
+    the codes credited."""
     try:
         frame = sys._getframe(1)
     except ValueError:
-        return
+        return ()
     stat = tracker.read_stats.get(abs_path)
     anchor = tracker.credit_anchor
     below = None  # the kind of the frame last walked
+    credited: list[Any] = []
     while frame is not None:
         if anchor is not None and frame is anchor[0]:
             # Walked from here before: a frame's callers never change while
@@ -89,7 +91,7 @@ def credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:
             for code in anchor[1]:
                 tracker.note_reading_code(code)
                 _record_read(code, abs_path, stat)
-            return
+            return (*credited, *anchor[1])
         code = frame.f_code
         kind = frame_kind(code.co_filename)
         if kind == "wrapper":
@@ -103,12 +105,22 @@ def credit_read_to_stack(abs_path: str, tracker: "FileAccessTracker") -> None:
             for code in above:
                 tracker.note_reading_code(code)
                 _record_read(code, abs_path, stat)
-            return
+            return (*credited, *above)
         if kind == "user":
             tracker.note_reading_code(code)
             _record_read(code, abs_path, stat)
+            credited.append(code)
         below = kind
         frame = frame.f_back
+    return tuple(credited)
+
+
+def credit_read_again(abs_path: str, tracker: "FileAccessTracker", codes: tuple[Any, ...]) -> None:
+    """Credit a read to *codes*, the ones `credit_read_to_stack` credited the
+    last read from the same frames (`FileAccessTracker` checks that)."""
+    stat = tracker.read_stats.get(abs_path)
+    for code in codes:
+        _record_read(code, abs_path, stat)
 
 
 def _user_codes_above(frame: Any) -> tuple[Any, ...]:
