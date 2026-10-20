@@ -347,6 +347,11 @@ class _Scan:
                 self.value(item, names)
         elif t in _FIXED_C or (t.__name__ == "ufunc" and t.__module__ == "numpy"):
             return
+        elif t.__name__ == "_ArrayFunctionDispatcher" and t.__module__ == "numpy":
+            # `np.sum`, `np.mean`: a C wrapper whose implementation is fixed
+            # when it is made (`_implementation` cannot be set); what it
+            # runs is that function.
+            self.value(v._implementation, names)
         else:
             raise Ineligible(f"a {t.__module__}.{t.__qualname__}")
 
@@ -934,8 +939,10 @@ class HitMemo:
             return None
         ledger = call.ledger or {}
         chain = ledger.get("@chain") or []
-        # The stages after the globals: rng epoch, environment.
-        if len(chain) < 7 or chain[5] != chain[4] or chain[6] != chain[5]:
+        # The stages after the globals: rng epoch, then the environment,
+        # whose parts the labels below name: an environment read refuses it,
+        # a library's installed version (read once per process) does not.
+        if len(chain) < 7 or chain[5] != chain[4]:
             return None
         for label in ledger:
             if label in ("@chain", "source"):
@@ -1003,8 +1010,12 @@ class HitMemo:
 VERIFIED = [0]
 
 #: The ledger parts the scan covers: code, helpers, cached callees, globals
-#: and their captures and defaults.
-_LEDGER_KINDS = frozenset({"calls", "helper", "globals", "captures and defaults of cached function"})
+#: and their captures and defaults; and the installed version of a library
+#: the call reaches, which `library_versions` reads once per process (the
+#: library itself is reached by a global name the scan watches).
+_LEDGER_KINDS = frozenset(
+    {"calls", "helper", "globals", "captures and defaults of cached function", "installed library"}
+)
 
 #: Results a hit hands back as the very object the RAM tier holds.
 _DIRECT = frozenset({str, int, float, bool, type(None), bytes, complex})
