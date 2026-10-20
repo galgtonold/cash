@@ -24,7 +24,7 @@ import weakref
 from typing import Any
 
 from . import _native, _plain_data
-from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS
+from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS, library_scalar_types
 
 logger = logging.getLogger(__name__)
 
@@ -580,7 +580,10 @@ def _own_footprint(obj: Any, seen: set[int], stack: list) -> int:
             return plain
     if type(obj) in _plain_data.TREE_NODES:
         # JSON-like data: summed a level at a time too, keys and all.
-        tree = _plain_data.tree_size(obj)
+        # Parsed records hold pandas timestamps and numpy scalars as their
+        # leaves: walked object by object, two million of them took 0.7 s
+        # per store of a log-parsing loop's rows.
+        tree = _plain_data.tree_size(obj, leaves=library_scalar_types())
         if tree is not None:
             return tree
     try:

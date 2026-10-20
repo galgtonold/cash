@@ -26,6 +26,7 @@ from __future__ import annotations
 import ast
 import dataclasses
 import inspect
+import os
 import sys
 import textwrap
 import types
@@ -68,7 +69,14 @@ from .helper_code import (
 )
 from .mutable_globals import mutable_global_reads
 from .purity_flow import fresh_name_nodes
-from .purity_report import ISSUE_AMBIENT_READ, ISSUE_IMPURE_CALL, ISSUE_UNTRACKABLE_DEP, PurityIssue, PurityReport
+from .purity_report import (
+    ANSWERED_AT_RUN_TIME,
+    ISSUE_AMBIENT_READ,
+    ISSUE_IMPURE_CALL,
+    ISSUE_UNTRACKABLE_DEP,
+    PurityIssue,
+    PurityReport,
+)
 from .purity_visitor import PurityVisitor
 from .static_dispatch import MODULE_NAME_PREFIX, spell_static_dispatch
 
@@ -507,9 +515,51 @@ class HelperWalk:
                 # `A.model_validate(d)` (a library method) or `build(A, d)`.
                 # Its code shapes the result all the same; followed for the
                 # key, not audited.
+                self._note_decided_at_run_time(body, name, value)
                 self._queue_hash_only(value, body.func, body.depth, body.reported)
             elif value is not None:
                 self._queue_special_functions(body, value)
+
+    def _note_decided_at_run_time(self, body: _Body, name: str, cls: type) -> None:
+        """``isinstance(x, Kind)`` where Kind's metaclass is the user's and
+        answers it itself (``__instancecheck__``, ``__subclasscheck__``):
+        what that reads -- a set its ``register()`` fills -- is state the
+        class keeps, which no key holds. On 3.12+ the trace of what the call
+        ran checks it (`cash.decorator.code_trace`); before, the call runs
+        uncached, with the warning that says why."""
+        if not body.reported or not _untraced():
+            return
+        decider = next(
+            (
+                f"{meta.__qualname__}.{d}"
+                for meta in type(cls).__mro__
+                if meta not in (type, object) and is_user_code(meta, self._root_module)
+                for d in _DECIDERS
+                if d in vars(meta)
+            ),
+            None,
+        )
+        if decider is None:
+            return
+        for node in ast.walk(body.func_def):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in _CHECKS
+                and len(node.args) == 2
+                and any(isinstance(n, ast.Name) and n.id == name for n in ast.walk(node.args[1]))
+            ):
+                continue
+            if node.lineno in body.audited:
+                continue
+            issue = PurityIssue(
+                kind=ISSUE_UNTRACKABLE_DEP,
+                description=f"{node.func.id}(..., {name}) - {ANSWERED_AT_RUN_TIME} {decider}",
+                where=body.qualname,
+                line=node.lineno,
+            )
+            self._issues += _anchor_issue_lines([issue], body.func)
+            return
 
     def _queue_special_functions(self, body: _Body, value: Any) -> None:
         """An object of the user's class read by name: ``BAG['k']``,
@@ -858,6 +908,17 @@ def _drop_audited(issues: list[PurityIssue], audited: frozenset[int], function_s
         for issue in issues
         if not ((issue.line in audited or issue.waiver_line in audited) if issue.line else function_scope)
     ]
+
+
+#: The checks a metaclass of the user's may answer itself (`HelperWalk._note_decided_at_run_time`).
+_CHECKS = ("isinstance", "issubclass")
+_DECIDERS = ("__instancecheck__", "__subclasscheck__")
+
+
+def _untraced() -> bool:
+    """Does nothing record what a cached call ran? Before Python 3.12, or
+    with ``CASH_TRACE=0`` (`cash.decorator.code_trace.on`)."""
+    return sys.version_info < (3, 12) or os.environ.get("CASH_TRACE", "").strip().lower() in ("0", "off", "false", "no")
 
 
 def _anchor_issue_lines(issues: list[PurityIssue], func: Any) -> list[PurityIssue]:

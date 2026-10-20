@@ -1569,6 +1569,11 @@ is a closure that reads a captured variable whose value could not be hashed
 function is a callable object whose state could not be hashed. The call was
 not cached. The message names the variable or the object's type.
 
+<!-- claim: cash/decorator/class_data.py:_unhashable_annotation @d7f833f0 -->
+It is also shown when the function reads a class's annotations
+(`typing.get_type_hints(Cfg)`, `Cfg.__annotations__`) and a value in them,
+such as an `Annotated[float, Positive()]` marker, could not be hashed.
+
 **Why it matters.** The function is not cached while it captures that value.
 Keyed without it, a change to what the value carries (a setting on a config
 object) would have served the old result.
@@ -1675,6 +1680,13 @@ call only while all of it is unchanged. This warning then comes only when that
 record cannot be checked again, and says why: the call ran a function that has
 side effects or reads the clock, a function no name finds, a value too big to
 digest, or it left a thread running.
+
+<!-- claim: cash/analysis/helper_walk.py:HelperWalk._note_decided_at_run_time @1454635c -->
+Before Python 3.12 (or with `CASH_TRACE=0`) the same warning names an
+`isinstance(x, Kind)` or `issubclass(c, Kind)` that Kind's own metaclass
+answers with an `__instancecheck__` or `__subclasscheck__` of yours: what it
+reads, such as a set its `register()` fills, is state the class keeps, and no
+key holds it. On 3.12 and newer the record of what the call ran covers it.
 
 **Why it matters.** cash cannot tell from the source which code that name
 lands on, so an edit to it, or to a global it reads, would not change the key.

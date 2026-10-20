@@ -22,6 +22,7 @@ from ..analysis.bytecode import GLOBAL_WRITES, argvals
 from ..analysis.cacheability_decision import identity_coupled_reason
 from ..analysis.helper_bindings import resolve_binding
 from ..analysis.purity_report import (
+    ANSWERED_AT_RUN_TIME,
     ISSUE_AMBIENT_READ,
     ISSUE_IMPURE_CALL,
     ISSUE_MUTABLE_GLOBAL,
@@ -1110,15 +1111,24 @@ class PurityChecks:
                 # Lookups by name only: cached on a trace of what the call
                 # ran, which says itself when it cannot be (`code_trace`).
                 return issues
+            if all(ANSWERED_AT_RUN_TIME in i.description for i in untrackable):
+                # `isinstance(x, Kind)` answered by Kind's own metaclass
+                # (`HelperWalk._note_decided_at_run_time`).
+                what = f"it runs a check the class's own metaclass answers ({describe_untrackable(untrackable)})"
+                fix = (
+                    "on Python 3.12 and newer cash checks what the call ran instead; "
+                    "`# @cash:assume-safe` on that line caches anyway."
+                )
+            else:
+                what = f"it picks code by a run-time name ({describe_untrackable(untrackable)})"
+                fix = "call the function by name, or pass it in as an argument; `# @cash:assume-safe` on that line caches anyway."
             self._notices.warn_once(
                 CashCacheIneffectiveWarning,
                 func_name,
                 _warning_slot("untrackable", format_issues_summary(untrackable), per_report),
-                f"{func_name} runs uncached: it picks code by a run-time name "
-                f"({describe_untrackable(untrackable)}), which the cache key cannot capture.",
+                f"{func_name} runs uncached: {what}, which the cache key cannot capture.",
                 code="KEY-UNTRACKABLE-DEP",
-                fix="call the function by name, or pass it in as an argument; "
-                "`# @cash:assume-safe` on that line caches anyway.",
+                fix=fix,
             )
         return issues
 
