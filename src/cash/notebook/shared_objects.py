@@ -1506,21 +1506,15 @@ def _held_from_outside(
     plotly figure, each node of a minidom document) is left out: those keep
     the library-object rule (`_held_within`), and their parts share the
     library's own validators and the like with every other such object.
-    So is what such an object holds when it is itself inside another (the
-    matplotlib figure of a seaborn ``PairGrid``, whose axes hold it back):
-    E22's pair grid read ~1,900 of the figure's parts and climbed their
-    referrers, 4-6 s a run, as a figure of its own is not.
     Nor is one of the process's standard streams (`_standard_streams`)
     looked for."""
     roots = {key: owner[key] for key, node in nodes.items() if _reads_inside(node, value_types)}
     if not roots:
         return {}, set()
-    # Each object read comes with the library objects it was found inside,
-    # outermost (its root) first: the ones a part holds back.
-    stack = [(nodes[key], (key,)) for key in roots]
+    stack = [(nodes[key], key) for key in roots]
     within: dict[int, Any] = {}
     refs: dict[int, int] = {}
-    inside_of: dict[int, tuple[int, ...]] = {}
+    root_of: dict[int, int] = {}
     held_back: set[int] = set()
     # Most of what a library object holds is numbers, strings and the
     # classes of its parts (a TarFile's 20,000 members: 380,000 of the
@@ -1529,8 +1523,8 @@ def _held_from_outside(
     skipped = frozenset({type, *(kind for kind in _PLAIN_SCALARS if issubclass(kind, value_types))})
     pops = 0
     while stack:
-        parent, chain = stack.pop()
-        if not held_back.isdisjoint(chain):
+        parent, root = stack.pop()
+        if root in held_back:
             continue
         pops += 1
         if not pops & 255:
@@ -1542,8 +1536,8 @@ def _held_from_outside(
             if read_down is None:
                 continue
             key = id(child)
-            if key in chain:
-                held_back.add(key)
+            if key == root:
+                held_back.add(root)
                 break
             if key in nodes:
                 continue
@@ -1551,24 +1545,21 @@ def _held_from_outside(
             if key in within:
                 continue
             if len(within) >= _INSIDE_MAX_OBJECTS:
-                return None, {roots[chain[0]]}
+                return None, {roots[root]}
             within[key] = child
-            inside_of[key] = chain
+            root_of[key] = root
             if read_down:
                 # pandas and numpy data are read by their own rules, not down.
-                stack.append((child, (*chain, key)))
+                stack.append((child, root))
         child = None  # no reference of this frame's left in the counts
     parent = None
     streams = _standard_streams()
     held = [
         key
         for key in within
-        if held_back.isdisjoint(inside_of[key])
-        and key not in held_back
-        and key not in streams
-        and sys.getrefcount(within[key]) - refs[key] > _OVERHEAD
+        if root_of[key] not in held_back and key not in streams and sys.getrefcount(within[key]) - refs[key] > _OVERHEAD
     ]
-    return {key: within[key] for key in held}, {roots[inside_of[key][0]] for key in held}
+    return {key: within[key] for key in held}, {roots[root_of[key]] for key in held}
 
 
 def _variables_holding(
