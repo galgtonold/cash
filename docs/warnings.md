@@ -2393,7 +2393,7 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 | [STORE-LOCK-FAILED](#store-lock-failed) | decorator | the per-key lock failed; ran without it |
 | [STORE-METADATA-INVALID](#store-metadata-invalid) | decorator | a stored entry's metadata is unreadable |
 | [STORE-PARTS-SHARED](#store-parts-shared) | decorator | two parts of the result share memory a hit would split; not stored |
-| [STORE-RESULT-WRITTEN](#store-result-written) | both | a table kept uncopied was written past pandas after its store; entry dropped |
+| [STORE-RESULT-WRITTEN](#store-result-written) | both | a value kept or written uncopied changed after its store; entry dropped |
 | [STORE-STATE-CHANGED](#store-state-changed) | decorator | a global the key read changed during the call; not stored |
 | [STORE-WORK-RUNNING](#store-work-running) | both | work it handed to a thread or thread pool still ran when it returned; not stored |
 | [STORE-UNTRACKED-SOURCE](#store-untracked-source) | decorator | a cached function it calls has a dynamic source that cannot be pickled; kept in RAM only |
@@ -2585,7 +2585,7 @@ time, which is what the code means.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._written_after_store @076b263c -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._written_after_store @076b263c, cash/backends/tiered_backend.py:_changed_after_store @3b81d71f -->
 **What happened.** Under pandas copy-on-write, cash keeps a big pandas table
 of numbers and dates without copying it, with a digest of its data. The
 data was written after the store past pandas: through `df["x"].array[i] =
@@ -2593,12 +2593,17 @@ data was written after the store past pandas: through `df["x"].array[i] =
 The entry was dropped, and the next call computes the value again. The
 warning comes once per entry.
 
+Or a big result of a `frozen=True` function, written to disk from its own
+memory rather than a copy, was changed after the call returned, before the
+write was done. The entry was dropped, and the next call computes it again.
+
 **Why it matters.** Nothing wrong is served: the changed data is never
 handed out. But if the write happens after every call, the value is never
 served from the cache.
 
 **What to do.** Write through pandas (`df.loc[i, "x"] = ...`), which copies
-before it writes, or write a copy of the result.
+before it writes, or write a copy of the result. For a `frozen=True`
+function, change a copy of its result, or drop `frozen=True`.
 
 **When it is safe to ignore.** When it happens once.
 

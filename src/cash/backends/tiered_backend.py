@@ -407,6 +407,40 @@ class TieredBackend(CacheBackend):
             logger.debug("could not size a value for the disk tier alone", exc_info=True)
             return False
 
+    def _digest_checked_payload(
+        self, key: str, value: Any, metadata: MetadataDict, serializer: Serializer | None
+    ) -> tuple[Any, Callable[[], bool] | None]:
+        """``(bytes, check)`` for writing *value* to disk alone from views of
+        its own memory, not a copy of it: when its content digest is in hand
+        (a ``frozen=True`` result, ``content_digest``) and every persistent
+        tier writes such bytes as they are; else ``(None, None)``.
+
+        Pickled here, on the calling thread, but its big buffers not copied:
+        p08's cleaned 4M-row frame spent 0.49 s of its store copying them.
+        The writer calls ``check`` once the bytes are on disk, and the entry
+        is kept only when the value still hashes to that digest, so what was
+        written is what the digest was taken over; else it is dropped, and
+        STORE-RESULT-WRITTEN says so."""
+        digest = metadata.get("content_digest")
+        if not digest or not all(_writes_bytes_as_they_are(b) for b in self.backends[1:]):
+            return None, None
+        serialized = self._split_payload(value, serializer, copy=False)
+        if not isinstance(serialized, SplitPayload):
+            return None, None
+
+        def check() -> bool:
+            from ..content_hashers import builtin_hash
+
+            try:
+                if builtin_hash(value) == digest:
+                    return True
+            except Exception:  # cannot tell: not kept
+                logger.debug("could not hash %r again after its write", key, exc_info=True)
+            _changed_after_store(metadata)
+            return False
+
+        return serialized, check
+
     def _drop_from_first_tier(self, key: str) -> None:
         """An older RAM copy of *key* is not served over the one on disk."""
         try:
@@ -769,7 +803,13 @@ class TieredBackend(CacheBackend):
                 if decision.persist and disk_alone:
                     metadata[DISK_ALONE] = True
                     self._drop_from_first_tier(key)
-                    writes = self._write_persistent_tiers(key, value, metadata, serializer, cap_size)
+                    serialized, check = self._digest_checked_payload(key, value, metadata, serializer)
+                    if check is None:
+                        writes = self._write_persistent_tiers(key, value, metadata, serializer, cap_size)
+                    else:
+                        writes = self._write_persistent_tiers(
+                            key, value, metadata, serializer, cap_size, private=True, serialized=serialized, check=check
+                        )
                     if not self._persisted(writes.stored):
                         metadata.pop(DISK_ALONE, None)
                         disk_alone = False
@@ -846,6 +886,27 @@ class TieredBackend(CacheBackend):
         # Log visibility
         if stored_destinations:
             logger.debug("[STORAGE] Stored in: %s", ", ".join(stored_destinations))
+
+
+def _changed_after_store(metadata: MetadataDict) -> None:
+    """STORE-RESULT-WRITTEN for a ``frozen=True`` result written to disk
+    from its own memory (`TieredBackend._digest_checked_payload`) that
+    changed before the write was done: the entry was dropped."""
+    from ..diagnostics import warn_diagnostic
+    from ..exceptions import CashCacheStoreFailedWarning
+
+    name = next((metadata.get(f) for f in ("func_name", "function") if metadata.get(f)), None)
+    what = f"the result of {name}" if name else "a cached result"
+    warn_diagnostic(
+        CashCacheStoreFailedWarning,
+        "STORE-RESULT-WRITTEN",
+        f"{what} is declared frozen=True, so cash wrote it to disk from its "
+        f"own memory, and it was changed after it was returned, before the "
+        f"write was done. The entry was dropped, so the next call computes "
+        f"it again.",
+        "change a copy of the result, or drop frozen=True from the function.",
+        location=("<cash>", 1),
+    )
 
 
 def _writes_bytes_as_they_are(backend: CacheBackend) -> bool:
