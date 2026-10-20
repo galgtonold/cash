@@ -71,10 +71,10 @@ class WatchMismatch(AssertionError):
 
 VERIFY = os.environ.get("CASH_CWATCH_VERIFY", "") not in ("", "0")
 
-_FIRST = _ARM = _ALREADY = _ARMED = _NEED_TYPE = -1
+_FIRST = _ARM = _ALREADY = _ARMED = _NEED_TYPE = _KEPT = -1
 if _cw is not None:
     _FIRST, _ARM = _cw.FIRST, _cw.ARM
-    _ARMED, _ALREADY, _NEED_TYPE = _cw.ARMED, _cw.ALREADY, _cw.NEED_TYPE
+    _ARMED, _ALREADY, _NEED_TYPE, _KEPT = _cw.ARMED, _cw.ALREADY, _cw.NEED_TYPE, _cw.KEPT
 
 
 def _default_budget() -> int:
@@ -344,6 +344,15 @@ def digest(
     if found != _ARM:
         return compute(value)
     status = _arm(value)
+    if status == _KEPT:
+        # Re-armed after keys were added that the walk found all views, which
+        # no digest reads (`kept_state.derived_views`): the digests stand.
+        found = cw.check(value, kind)
+        if type(found) is not int:
+            if VERIFY:
+                _verify(value, compute, found)
+            return found
+        status = _ARMED
     if status != _ARMED and status != _ALREADY:
         return compute(value)
     t0 = perf_counter()

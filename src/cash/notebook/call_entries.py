@@ -39,6 +39,7 @@ from cash.notebook.shared_objects import (
     library_value_types,
 )
 from cash.sizing import estimate_object_size, pickled_size_estimate
+from cash.tracking.env_reads import environment_unchanged
 from cash.tracking.file_dep_snapshot import attach_code_relative, snapshot_dependencies, snapshot_is_fresh
 
 from ..backends.memory_backend import release_premade
@@ -404,6 +405,9 @@ class CallEntries:
             return False, None, 0.0, {}
         if not self._auto_file_deps_fresh(metadata):
             return False, None, 0.0, {}
+        env_reads = metadata.get("env_reads")
+        if env_reads and not environment_unchanged(env_reads):
+            return False, None, 0.0, {}
         if not self._ttl_fresh(metadata):
             return False, None, 0.0, {}
         try:
@@ -462,6 +466,7 @@ class CallEntries:
         plain_value: bool = False,
         code_module: str | None = None,
         held_refs: list | None = None,
+        env_reads: dict[str, str] | None = None,
     ) -> tuple[str, Any] | None:
         """Write through ``backend.set(key, value, metadata)`` -- the same
         two-positional-argument shape the statement path uses
@@ -511,6 +516,10 @@ class CallEntries:
         # belongs in it (see the `callee_globals` note below).
         if self._persist_provider():
             metadata["force_persist"] = True
+        if env_reads:
+            # What the environment variables installed code read held:
+            # `lookup` checks them again.
+            metadata["env_reads"] = env_reads
         if file_deps or remote_deps or probes:
             # The paths it only checked for (``probe_answers``) are checked as
             # the decorator checks them: still missing, or still there.

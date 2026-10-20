@@ -48,6 +48,11 @@ atexit.register(shutil.rmtree, _IPYTHON_DIR, ignore_errors=True)
 # own `.cash/`, so a test could be served another test's results.
 os.environ.pop("CASH_CACHE_DIR", None)
 
+# One OpenMP thread per test kernel, as the replay harness runs: libgomp's
+# threads wait on each other, and with the cores busy (xdist, CI) a
+# 0.3 s HistGradientBoosting fit took 20-60 s and its cell timed out.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 
 def kernelspec_mismatch(argv, executable) -> str | None:
     """The kernelspec comparison, split out so it is directly testable.

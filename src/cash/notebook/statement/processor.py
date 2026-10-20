@@ -122,6 +122,8 @@ from ...analysis.mutation_effects import (
 )
 from ...analysis.namespace_effects import statement_calls_user_writer, statement_starting_workers
 from ...analytics import AnalyticsManager
+from ...tracking.env_reads import environment_digests
+from ...tracking.env_reads import recording as recording_env_reads
 from ...tracking.file_dep_snapshot import file_state_epoch, probe_answers
 from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
@@ -181,8 +183,10 @@ from ..shared_objects import (
 )
 from ..value_cutoff import LineageAliasStore
 from ..write_observer import kept_writes, observe_writes
+from . import hidden_generators
 from .lineage import note_own_writes
 from .observed_draws import ObservedDrawStore
+from .thread_reach import ThreadReach
 
 __all__ = ["StatementProcessor", "is_control_body"]
 
@@ -290,6 +294,8 @@ class StatementProcessor:
             _shadow.enable()
 
         self._amplification = AmplificationGuard()
+        #: The variables work a statement left running can change (`thread_reach`).
+        self._thread_reach = ThreadReach()
         #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
         self._share_unchecked_warned: set[str] = set()
         #: Statements already told about NOTEBOOK-ANALYSIS-BUDGET.
@@ -1392,12 +1398,20 @@ class StatementProcessor:
         # statement draws from (`carrier_advances`). Not for a loop or branch
         # body: the structure is one statement to the simulation, as for
         # in-place mutations (`MutationRouting._classify`).
-        positions = (
-            {}
+        candidates = (
+            set()
             if is_control_body(run.code)
-            else carrier_positions(
-                carrier_candidates(run.inputs, self.shell.user_ns, self.tracking_state.variable_lineage),
-                self.shell.user_ns,
+            else carrier_candidates(run.inputs, self.shell.user_ns, self.tracking_state.variable_lineage)
+        )
+        positions = carrier_positions(candidates, self.shell.user_ns) if candidates else {}
+        # And those it reaches deeper, which no variable's lineage follows
+        # (`hidden_generators`): a run that moves one is not stored.
+        hidden = (
+            {}
+            if run.skip_cache or not candidates
+            else hidden_generators.positions(
+                {name: self.shell.user_ns[name] for name in candidates if name in self.shell.user_ns},
+                (obj for obj, _ in positions.values()),
             )
         )
         # What the globals of the local modules it reaches hold, to see one
@@ -1414,6 +1428,7 @@ class StatementProcessor:
         lineage = self.tracking_state.variable_lineage
         run.entry_lineages = {name: lineage[name] for name in run.inputs if name in lineage}
         unordered = sparse_order.unordered_sparse(run.inputs, self.shell.user_ns)
+        env_reads: set[str] = set()
         try:
             with (
                 self.watching_reads(run.code),
@@ -1437,9 +1452,12 @@ class StatementProcessor:
                         user_ns.update(memo[1])
                     stop_sharing_answers()
                     start_time = _perf_counter()
+                    env_scope = recording_env_reads()
+                    env_reads = env_scope.__enter__()
                     try:
                         yield runner
                     finally:
+                        env_scope.__exit__(None, None, None)
                         wall_time = max(0.0, _perf_counter() - start_time - run.record_time)
                         if memo is not None:
                             # Bound only while it ran; what the value cost
@@ -1488,6 +1506,10 @@ class StatementProcessor:
         ):
             run.skip_cache = True
             run.metrics["uncacheable_reasons"].append(CHANGED_PYPLOT_REASON)
+        if env_reads:
+            # What the environment variables installed code read held: a
+            # lookup checks them again (`env_reads`).
+            run.env_reads = environment_digests(env_reads)
         if not run.skip_cache and execution.written_paths and execution.result.success:
             wrote = self._kept_writes_reason(run, execution)
             if wrote:
@@ -1498,8 +1520,17 @@ class StatementProcessor:
             if workers:
                 run.skip_cache = True
                 run.metrics["uncacheable_reasons"].append(workers)
+        if execution.result.success:
+            self._left_work_running(run, execution)
         if positions:
             run.carriers_advanced = moved_carrier_names(positions, self.shell.user_ns)
+        if hidden and not run.skip_cache and execution.result is not None and execution.result.success:
+            drawn = hidden_generators.moved(hidden)
+            if drawn:
+                run.skip_cache = True
+                run.metrics["uncacheable_reasons"].append(
+                    f"it drew from a generator its key does not hold ({drawn[0]})"
+                )
         if unordered:
             run.sparse_ordered = sparse_order.were_put_in_order(unordered, self.shell.user_ns) or None
         if held:
@@ -1518,6 +1549,36 @@ class StatementProcessor:
         execution.wall_time = wall_time
         execution.cost, execution.store_cost, execution.tax = self._calls.price(execution.wall_time, marks)
         execution.cached_call_reads = self._calls.files_read_in_cached_calls(marks)
+
+    def _left_work_running(self, run: StatementRun, execution: StatementExecution) -> None:
+        """Not stored when *run* left work running in a thread, or read a
+        variable such work can change (`thread_reach`), as the decorator
+        refuses a call that does (STORE-WORK-RUNNING)."""
+        tracker = execution.file_tracker
+        user_ns = self.shell.user_ns
+        if tracker is not None and tracker.work_outlived_block:
+            self._thread_reach.note(tracker.work_functions, user_ns)
+            if not run.skip_cache:
+                run.skip_cache = True
+                run.metrics["uncacheable_reasons"].append(
+                    "it left work running in a thread when it returned: what that work reads or changes "
+                    "from then on is in no key, so the statement runs every time"
+                )
+            return
+        if not run.skip_cache:
+            try:
+                names = carrier_candidates(run.inputs or (), user_ns, self.tracking_state.variable_lineage)
+            except Exception:  # noqa: BLE001 - the inputs alone, then
+                names = set(run.inputs or ())
+            reached = self._thread_reach.reached(names)
+            if reached:
+                run.skip_cache = True
+                shown = ", ".join(f"'{name}' (by {fn})" for name, fn in reached[:3])
+                run.metrics["uncacheable_reasons"].append(
+                    f"it reads {shown}, which work left running in a thread can change outside cash's view, "
+                    "so the statement runs every time"
+                )
+        self._thread_reach.rebound(run.outputs or ())
 
     def _workers_reason(self, run: StatementRun) -> str | None:
         """Why *run* may not be stored when it starts worker processes or

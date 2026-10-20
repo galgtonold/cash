@@ -26,6 +26,7 @@ the test that started it is alive.
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -77,15 +78,35 @@ def run_python(
     the test and shows the end of the child's output.
     """
     kwargs = {"text": True, "encoding": "utf-8", "errors": "replace"} if text else {}
-    done = subprocess.run(
+    child = child_env(cwd, cache_dir, env)
+    # A child that outlives *timeout* is asked for every thread's stack
+    # (SIGABRT, which faulthandler answers) before it is killed: a hang
+    # then says where it waited.
+    child.setdefault("PYTHONFAULTHANDLER", "1")
+    with subprocess.Popen(
         [sys.executable, *map(str, argv)],
         cwd=str(cwd),
-        env=child_env(cwd, cache_dir, env),
-        capture_output=True,
-        input=input,
-        timeout=timeout,
+        env=child,
+        stdin=subprocess.PIPE if input is not None else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         **kwargs,
-    )
+    ) as proc:
+        try:
+            stdout, stderr = proc.communicate(input, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if hasattr(signal, "SIGABRT") and os.name != "nt":
+                proc.send_signal(signal.SIGABRT)
+            try:
+                stdout, stderr = proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                stdout, stderr = proc.communicate()
+            raise AssertionError(
+                f"{' '.join(map(str, argv))} still ran after {timeout} s; its threads were at:\n"
+                f"{_tail(stdout)}\n{_tail(stderr, 20_000)}"
+            ) from None
+        done = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
     if check:
         assert done.returncode == 0, f"exit {done.returncode}\n{_tail(done.stdout)}\n{_tail(done.stderr)}"
     return done

@@ -20,7 +20,7 @@ import types
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from cash import cost_model, handed_digests, stored_pickle
+from cash import cost_model, handed_digests, kept_state, stored_pickle
 from cash._clock import perf_counter as _perf_counter
 from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
 from cash.backends import memory_backend
@@ -150,6 +150,27 @@ def _is_only_definitions(code: str) -> bool:
 class _AnchorsUnstorable(Exception):
     """The value of a statement with anchors could not be pickled with them
     (`with_anchor_refs`): it is not stored."""
+
+
+def _warn_not_stored(exc: BaseException) -> None:
+    """Say that a statement's result was not stored, and why (STORE-FAILED)."""
+    if isinstance(exc, kept_state.DefinedAgain):
+        fix = (
+            "run the cells that build the value again after the cell that defines the function, "
+            "so it holds the function defined now."
+        )
+    else:
+        fix = (
+            "read the exception: a full disk, a cache_dir you cannot write to, or a value "
+            "that cannot be pickled (a socket, a file handle)."
+        )
+    warn_diagnostic(
+        CashCacheStoreFailedWarning,
+        "STORE-FAILED",
+        f"cash could not store this statement's result ({type(exc).__name__}: {exc}); "
+        "it ran, and runs again next time.",
+        fix,
+    )
 
 
 class StatementStore:
@@ -517,6 +538,7 @@ class StatementStore:
             payload, referenced = self._payload(run, execution, captured_vars, seed_epochs)
         except _AnchorsUnstorable as exc:
             reason = f"its value holds variables' objects by reference, and it cannot be stored so ({exc})"
+            _warn_not_stored(exc.__cause__ or exc)
             return self._store_metadata_only(run, execution, reason, {})
         if not referenced and self._too_cheap_to_store(run, execution, file_dependencies, execution.store_cost):
             # Its own work is not worth an entry: the calls inside it are what
@@ -562,6 +584,7 @@ class StatementStore:
             frozen_tags=_frozen_tags(captured_vars, run.outputs),
             carriers_advanced=_carriers_advanced(run),
             sparse_ordered=run.sparse_ordered or None,
+            env_reads=run.env_reads,
             holders=run.holders or None,
             holders_moved=True if run.holders and run.moves_holders else None,
             anchors=run.anchors or None,
@@ -957,7 +980,7 @@ class StatementStore:
         try:
             self.cash_instance.backend.set(cache_key, payload, wire)
         except (OSError, TypeError, ValueError, pickle.PicklingError, RuntimeError) as e:
-            logger.warning("[CACHE] Failed to write to cache backend: %s", e)
+            _warn_not_stored(e)
         else:
             # Charge this write to its statement's amplification budget, now
             # that the backend has reported which tiers actually took it.

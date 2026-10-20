@@ -15,6 +15,7 @@ does. It is used wherever cash pickles a value it keys or stores.
 from __future__ import annotations
 
 import contextlib
+import copy
 import copyreg
 import functools
 import io
@@ -29,27 +30,62 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 __all__ = [
+    "DefinedAgain",
     "FlatValue",
+    "by_name",
     "chooses_its_state",
+    "defined_again",
     "dumps",
     "flatten",
     "left_out_attrs",
     "load_flat",
+    "named_now",
     "one_keying",
     "reducers",
     "restore_with_dict",
     "restores_alike_apart",
+    "same_definition",
+    "stopped_at_defined_again",
     "store_memo",
     "too_deep",
 ]
 
 
-def dumps(*args: Any, **kwargs: Any) -> bytes:
-    """`_dumps_value` inside `one_keying`; see there."""
+def dumps(value: Any, *args: Any, **kwargs: Any) -> bytes:
+    """`_dumps_value` inside `one_keying`; see there. A value holding a
+    function whose cell ran again since is pickled again with it by its
+    name, when that name holds the same definition now (`defined_again`):
+    not with a *sink*, whose bytes are written already, nor when buffers
+    handed out could not be taken back (*buffer_callback* without
+    *on_retry*)."""
+    try:
+        return _dumps_once(value, *args, **kwargs)
+    except pickle.PicklingError as exc:
+        again = (
+            stopped_at_defined_again(exc)
+            and kwargs.get("sink") is None
+            and (kwargs.get("buffer_callback") is None or kwargs.get("on_retry") is not None)
+        )
+        if not again:
+            raise
+    if kwargs.get("on_retry") is not None:
+        kwargs["on_retry"]()
+    kwargs["reducer_override"] = defined_again(kwargs.get("reducer_override"))
+    return _dumps_once(value, *args, **kwargs)
+
+
+def _dumps_once(*args: Any, **kwargs: Any) -> bytes:
     if _keying() is not None:
         return _dumps_value(*args, **kwargs)
     with one_keying():
         return _dumps_value(*args, **kwargs)
+
+
+def stopped_at_defined_again(exc: pickle.PicklingError) -> bool:
+    """Did pickling stop at a function or class its module names another
+    of now (`defined_again`)? CPython's wording for it (3.10 to 3.14); were
+    it to change, such a value is not stored, as before."""
+    return "not the same object as" in str(exc)
 
 
 def _dumps_value(
@@ -64,6 +100,7 @@ def _dumps_value(
     on_retry: Any = None,
     aliases: bool = False,
     sink: Any = None,
+    reducer_override: Any = None,
 ) -> bytes:
     """``pickle.dumps(value, protocol)``, keeping the instance attributes a C
     base's reduce drops. *fast* is the pickler's memo-less mode; *extra*
@@ -86,13 +123,28 @@ def _dumps_value(
     the same order, and the result is empty: a digest is taken as they
     come, and whoever reads them can stop the pickle by raising from
     ``write`` (`value_hash.budgeted_hash`). Only for *keyed* bytes, which
-    are never pickled flat."""
+    are never pickled flat. *reducer_override* is the pickler's hook of
+    that name; a value pickled flat is pickled without it."""
     if sink is not None and not keyed:
         raise ValueError("dumps: a sink takes keyed bytes only")
     if FLAT_FIRST and not _surely_shallow(value):
-        return _dumps_walked_first(value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink)
+        return _dumps_walked_first(
+            value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink, reducer_override
+        )
     try:
-        return _dumps(value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink)
+        return _dumps(
+            value,
+            protocol,
+            fast,
+            buffer_callback,
+            extra,
+            persistent_id,
+            keyed,
+            aliases,
+            sink,
+            None,
+            reducer_override,
+        )
     except (RecursionError, MemoryError) as exc:
         if keyed or not too_deep(exc):
             # A key is never taken over a value pickle cannot follow: the
@@ -187,6 +239,7 @@ def _dumps_walked_first(
     keyed: bool,
     aliases: bool = False,
     sink: Any = None,
+    reducer_override: Any = None,
 ) -> bytes:
     """`dumps` where the pickler would run out of C stack before its
     recursion limit (`FLAT_FIRST`): the value is walked on the heap first,
@@ -195,9 +248,9 @@ def _dumps_walked_first(
     pickle follows elsewhere, and past that it raises RecursionError as the
     pickler raises on other Pythons."""
     reducers, leaf = _KeepDict(protocol, extra, keyed), _flat_leaf(persistent_id)
-    walk = _Walk(getattr(sink, "walked", None))
+    walk = _Walk(getattr(sink, "walked", None), reducer_override)
     if _at_most_deep(value, _SAFE_DEPTH, reducers, leaf, walk):
-        override = walk.override() if walk.reduced else None
+        override = walk.override() if walk.reduced else reducer_override
         return _dumps(
             value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink, reducers, override
         )
@@ -933,9 +986,17 @@ class _KeepDict(dict):
         self._watch = watch
         #: This pickle's one object for each attribute name (`_names_apart`).
         self._names: dict[str, str] = {}
+        #: This pickle's one object for each numpy dtype (`_dtypes_apart`).
+        self._dtypes: dict[Any, Any] = {}
 
     def __missing__(self, t: type) -> Any:
-        reducer = _names_apart(self._reducer(t), self._names)
+        if _numpy_scalar_type(t):
+            # A scalar reduces to its dtype and bytes, no state: no names.
+            reducer = _scalar_dtype_apart(self._reducer(t), self._dtypes)
+        else:
+            reducer = _names_apart(self._reducer(t), self._names)
+            if _holds_dtype(t):
+                reducer = _dtypes_apart(reducer, self._dtypes)
         self[t] = reducer
         return reducer
 
@@ -1017,6 +1078,119 @@ def _names_apart(reducer: Any, names: dict[str, str]) -> Callable[[Any], Any]:
         return (reduced[0], reduced[1], apart, *reduced[3:])
 
     return reduce
+
+
+def _holds_dtype(t: type) -> bool:
+    """Does a *t* instance reduce to its numpy dtype (an array, a numpy
+    scalar)?"""
+    numpy = sys.modules.get("numpy")
+    if numpy is None:
+        return False
+    try:
+        return issubclass(t, (numpy.ndarray, numpy.generic))
+    except TypeError:
+        return False
+
+
+def _numpy_scalar_type(t: type) -> bool:
+    """Is *t* one of numpy's own scalar types (``numpy.float64``), not a
+    subclass of one?"""
+    numpy = sys.modules.get("numpy")
+    return numpy is not None and t.__module__ == "numpy" and isinstance(t, type) and issubclass(t, numpy.generic)
+
+
+def _scalar_dtype_apart(reducer: Any, dtypes: dict[Any, Any]) -> Callable[[Any], Any]:
+    """`_dtypes_apart` for a numpy scalar's reduce, ``(scalar, (dtype,
+    bytes))``: the last dtype met and the pickle's own for it are kept, so
+    a run of scalars of one dtype (a model's thousands of ``float64``) asks
+    the table once."""
+    last: list[Any] = [None, None]
+
+    def reduce(obj: Any) -> Any:
+        reduced = reducer(obj)
+        if type(reduced) is not tuple or len(reduced) != 2 or type(reduced[1]) is not tuple or not reduced[1]:
+            return reduced
+        args = reduced[1]
+        dt = args[0]
+        if dt is not last[0]:
+            numpy = sys.modules["numpy"]
+            if not isinstance(dt, numpy.dtype):
+                return reduced
+            last[0], last[1] = dt, _dtype_apart(dt, dtypes)
+        return (reduced[0], (last[1], *args[1:]))
+
+    return reduce
+
+
+def _dtypes_apart(reducer: Any, dtypes: dict[Any, Any]) -> Callable[[Any], Any]:
+    """*reducer*, giving the dtype an array or numpy scalar reduces to this
+    pickle's own object for it, one per equal dtype, never one the value
+    holds.
+
+    As for attribute names (`_names_apart`): the pickle's memo writes a
+    dtype met twice as a back-reference, by identity. ``np.int64(3)`` holds
+    numpy's one ``int64`` dtype, which loading does not give back: it makes
+    a dtype of its own (``np.dtype('i8', False, True)`` copies). A fitted
+    forest's or SVC's pickle then wrote its scalars' dtype once and
+    referred back to it, and the restored model's wrote it again: the
+    restored model digested apart from the one it was stored from, and
+    every statement reading it after a restart missed. Dtypes that pickle
+    apart (other metadata, alignment, record type) stay apart."""
+
+    def reduce(obj: Any) -> Any:
+        reduced = reducer(obj)
+        if type(reduced) is not tuple or len(reduced) < 2:
+            return reduced
+        args = _parts_apart(reduced[1], dtypes)
+        state = _parts_apart(reduced[2], dtypes) if len(reduced) > 2 else None
+        if args is None and state is None:
+            return reduced
+        return (
+            reduced[0],
+            reduced[1] if args is None else args,
+            *((reduced[2] if state is None else state,) if len(reduced) > 2 else ()),
+            *reduced[3:],
+        )
+
+    return reduce
+
+
+def _parts_apart(parts: Any, dtypes: dict[Any, Any]) -> tuple | None:
+    """*parts*, a tuple, with each numpy dtype in it the pickle's own;
+    None when it holds none."""
+    if type(parts) is not tuple:
+        return None
+    numpy = sys.modules.get("numpy")
+    dtype = getattr(numpy, "dtype", None)
+    if dtype is None:
+        return None
+    apart = None
+    for i, part in enumerate(parts):
+        if isinstance(part, dtype):
+            if apart is None:
+                apart = list(parts)
+            apart[i] = _dtype_apart(part, dtypes)
+    return None if apart is None else tuple(apart)
+
+
+def _dtype_apart(dt: Any, dtypes: dict[Any, Any]) -> Any:
+    """The pickle's own dtype that pickles as *dt* does. Keyed by that
+    pickle, not by equality: an aligned struct and the same layout packed,
+    or a record dtype and the plain structured one, are equal dtypes that
+    load apart. A dtype met before is found by its identity (*dtypes*
+    holds it, so the id stays its own) without pickling it again."""
+    seen = dtypes.get(id(dt))
+    if seen is not None and seen[0] is dt:
+        return seen[1]
+    try:
+        key = pickle.dumps(dt, protocol=pickle.HIGHEST_PROTOCOL)
+        own = dtypes.get(key)
+        if own is None:
+            own = dtypes[key] = copy.copy(dt)
+    except Exception:  # noqa: BLE001 - a dtype that will not hash or copy: as it is
+        return dt
+    dtypes[id(dt)] = (dt, own)
+    return own
 
 
 def _state_apart(state: dict, names: dict[str, str]) -> dict:
@@ -1271,14 +1445,17 @@ def _reduce_array_for_key(array: Any, protocol: int) -> Any:
         packed = array
     if packed is array:
         return array.__reduce_ex__(protocol)
-    return _packed_array, (array.dtype.descr, packed)
+    # The dtype itself, not its ``descr``: an aligned struct and the same
+    # layout packed have one ``descr``, and arrays of the same values in
+    # each keyed alike.
+    return _packed_array, (array.dtype, packed)
 
 
-def _packed_array(descr: Any, packed: Any) -> Any:
+def _packed_array(dtype: Any, packed: Any) -> Any:
     """What `_reduce_array_for_key` names (key bytes are never loaded)."""
     import numpy as np
 
-    return packed.astype(np.dtype(descr))
+    return packed.astype(np.dtype(dtype))
 
 
 def _drops_dict(t: type) -> bool:
@@ -1608,3 +1785,135 @@ def restore_with_dict(obj: Any, packed: tuple) -> None:
             for name, value in (slots or {}).items():
                 setattr(obj, name, value)
     obj.__dict__.update(attrs)
+
+
+# -- functions defined again --------------------------------------------------
+
+
+def named_now(obj: Any) -> Any:
+    """The class or function *obj*'s module now names where *obj* was
+    defined, when that is another object of the same kind; else None.
+
+    What a pickle round trip from disk resolves the name to. A notebook cell
+    re-run defines a new class under the old name, and pickle refuses an
+    instance of the old one ("not the same object as __main__.Fit").
+    """
+    module = sys.modules.get(getattr(obj, "__module__", None) or "")
+    qualname = getattr(obj, "__qualname__", None)
+    if module is None or not isinstance(qualname, str) or "<locals>" in qualname:
+        return None
+    current: Any = module
+    for part in qualname.split("."):
+        current = getattr(current, part, None)
+        if current is None:
+            return None
+    if current is obj:
+        return None
+    if isinstance(obj, type) and isinstance(current, type):
+        return current
+    if isinstance(obj, types.FunctionType) and isinstance(current, types.FunctionType):
+        return current
+    return None
+
+
+def defined_again(then: Any = None) -> Callable[[Any], Any]:
+    """A pickler's ``reducer_override`` for a value that holds a function
+    whose cell ran again: its module names another function now, and pickle
+    refuses the one held ("not the same object as __main__.column_ratio").
+
+    When the one named now is the same definition (`same_definition`), the
+    function is pickled by its name, and loads as the one that name holds
+    then, as any function pickled by name does. When it is not, pickling
+    raises PicklingError saying so: the value is not stored. *then* is the
+    override to ask about everything else.
+
+    A notebook that repeats a cell defining ``column_ratio`` after building
+    a pipeline on it held the first function: E6's fitted grid search was
+    never stored, and ran again after every restart (~48 s).
+    """
+
+    def override(obj: Any) -> Any:
+        if type(obj) is types.FunctionType:
+            current = named_now(obj)
+            if current is not None:
+                if not same_definition(obj, current):
+                    name = obj.__qualname__
+                    raise DefinedAgain(
+                        f"it holds {name} as defined before its cell ran again with different code, "
+                        f"and a stored copy could only load the {name} defined now"
+                    )
+                return by_name, (obj.__module__, obj.__qualname__)
+        return NotImplemented if then is None else then(obj)
+
+    return override
+
+
+class DefinedAgain(pickle.PicklingError):
+    """A value holds a function whose cell ran again with other code since
+    (`defined_again`): pickled by its name, it would load as the new one."""
+
+
+def by_name(module: str, qualname: str) -> Any:
+    """What *module* names *qualname* now, as pickle finds a function it
+    pickled by name (`defined_again`). Named in stored entries: keep its
+    name."""
+    import importlib
+
+    found: Any = importlib.import_module(module)
+    for part in qualname.split("."):
+        found = getattr(found, part)
+    return found
+
+
+def same_definition(old: types.FunctionType, new: types.FunctionType) -> bool:
+    """Do *old* and *new* do the same, so that a value holding *old* can
+    hold *new* instead: the same code (lines aside), the same globals, no
+    closure, and alike defaults, attributes, docstring and annotations."""
+    from cash.decorator.function_identity import code_fingerprint
+
+    if old.__globals__ is not new.__globals__ or old.__closure__ is not None or new.__closure__ is not None:
+        return False
+    a, b = old.__code__, new.__code__
+    if (a.co_argcount, a.co_posonlyargcount, a.co_kwonlyargcount, a.co_flags) != (
+        b.co_argcount,
+        b.co_posonlyargcount,
+        b.co_kwonlyargcount,
+        b.co_flags,
+    ):
+        return False
+    pairs = [
+        (old.__defaults__, new.__defaults__),
+        (old.__kwdefaults__, new.__kwdefaults__),
+        (old.__dict__, new.__dict__),
+        (old.__doc__, new.__doc__),
+        (getattr(old, "__type_params__", ()), getattr(new, "__type_params__", ())),
+    ]
+    annotate = getattr(old, "__annotate__", None), getattr(new, "__annotate__", None)
+    if sys.version_info >= (3, 14):
+        # Annotations are made when asked for: compare what makes them.
+        if (annotate[0] is None) != (annotate[1] is None):
+            return False
+        if annotate[0] is not None and not same_definition(*annotate):
+            return False
+    else:
+        pairs.append((old.__annotations__, new.__annotations__))
+    return all(_alike(x, y) for x, y in pairs) and code_fingerprint(a) == code_fingerprint(b)
+
+
+_ALIKE_ATOMS = (str, bytes, int, float, complex, bool, type(None))
+
+
+def _alike(a: Any, b: Any) -> bool:
+    """*a* is *b*, or both are equal plain data (`same_definition`)."""
+    if a is b:
+        return True
+    t = type(a)
+    if t is not type(b):
+        return False
+    if t in _ALIKE_ATOMS:
+        return a == b
+    if t in (tuple, list):
+        return len(a) == len(b) and all(_alike(x, y) for x, y in zip(a, b))
+    if t is dict:
+        return a.keys() == b.keys() and all(_alike(v, b[k]) for k, v in a.items())
+    return False

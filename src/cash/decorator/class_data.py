@@ -3,11 +3,14 @@ what the functions an instance can run read from their modules."""
 
 from __future__ import annotations
 
+import abc
 import contextvars
 import enum
 import hashlib
 import pickle
+import threading
 import types
+import weakref
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -15,7 +18,7 @@ from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.helper_code import is_mock
 from ..exceptions import CashImpurityWarning
 from .arg_hashing import is_opaque
-from .call_state import CAPTURE_WATCH
+from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .closure_fold import iter_code_scopes
 from .global_reads import DOCSTRING_READS, MACHINERY_DUNDERS, bytecode_written_attrs
 from .global_values import UNHASHABLE_GLOBAL_FIX
@@ -198,6 +201,274 @@ def class_data_items(
     return items
 
 
+#: The name a class's code reads to list its subclasses.
+SUBCLASSES = "__subclasses__"
+
+#: Names a class gains without anyone changing what it is: copyreg's cache,
+#: set the first time an instance is pickled, the annotations dict reading
+#: ``__annotations__`` makes, and what ``abc`` and ``typing`` keep.
+_LAZY_NAMES = frozenset(
+    {
+        "__slotnames__",
+        "__annotations__",
+        "__annotations_cache__",
+        "__annotate__",
+        "__annotate_func__",
+        "__abstractmethods__",
+        "__protocol_attrs__",
+        "__non_callable_proto_members__",
+        "__callable_proto_members_only__",
+        "_abc_impl",
+    }
+)
+
+
+def class_family(cls: type, subclasses: bool) -> list[tuple[str, Any]]:
+    """``(label, value)`` for what ``isinstance`` and ``issubclass`` against
+    *cls*, or ``cls.__subclasses__()``, answer that no namespace of the
+    call's holds:
+
+    * ``registered_with``: the ABCs that registered *cls* or a class it
+      derives from (``collections.abc.Mapping.register(Box)``), library
+      ABCs included: the registration is the user's;
+    * ``register``: for an ABC, the classes it and the classes below it
+      registered (``Shape.register(Circle)``; an ABC asks each subclass);
+    * ``__subclasses__``, when *subclasses* (its code or the code reaching
+      it reads that name): every class below it, a user class by what it
+      holds (`class_digest`), so a subclass defined again under the same
+      name, edited, is a new key.
+
+    Named by module and qualified name, so a key stays the same across
+    processes. None of these writes a dict a watcher or a key reads.
+    """
+    family: list[tuple[str, Any]] = []
+    registered = registered_with(cls)
+    if registered:
+        family.append(("registered_with", registered))
+    family.extend(abc_registries(cls))
+    if subclasses:
+        family.append((SUBCLASSES, tuple(sorted(_class_print(k) for k in classes_below(cls)))))
+    return family
+
+
+def abc_registries(cls: type) -> list[tuple[str, tuple[str, ...]]]:
+    """``(label, registered names)`` for *cls* and the classes below it
+    when *cls* is an ABC: what ``isinstance(x, cls)`` asks besides the
+    MRO."""
+    if not isinstance(cls, abc.ABCMeta):
+        return []
+    found: list[tuple[str, tuple[str, ...]]] = []
+    for k in (cls, *classes_below(cls)):
+        if isinstance(k, abc.ABCMeta):
+            names = tuple(sorted(_class_name(c) for c in _abc_registered(k)))
+            if names:
+                found.append((f"{k.__qualname__}.register", names))
+    return found
+
+
+def class_names(cls: type) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """The names each user class of *cls*'s MRO binds: a method set on the
+    class after it was made (``Bag.size = ...``) changes what a
+    ``runtime_checkable`` protocol, ``hasattr`` or ``dir`` answers, and no
+    source or data digest sees it."""
+    return tuple(
+        (base.__qualname__, tuple(sorted(n for n in vars(base) if n not in _LAZY_NAMES and isinstance(n, str))))
+        for base in _user_bases(cls)
+    )
+
+
+#: Names code reads a class's annotations through.
+ANNOTATION_READS = frozenset({"__annotations__", "__annotate__", "get_type_hints", "get_annotations"})
+
+
+def class_annotations(cls: type, digest: Callable[[Any], str]) -> str:
+    """A digest of the annotations each user class of *cls*'s MRO holds,
+    by value: reassigned or changed in place, the digest moves.
+
+    Not by ``repr``: a marker of the user's own class in
+    ``Annotated[float, Positive()]`` has the default one, which carries its
+    address, so the key moved in every new process and the call never hit
+    after a restart. A type is keyed by its qualified name, a string as it
+    is, anything else by *digest* (the key's own value digest), so a
+    marker's class and state count. What *digest* cannot hash raises.
+    """
+    found = []
+    for base in _user_bases(cls):
+        own = _own_annotations(base)
+        if isinstance(own, list):
+            own = [(name, _annotation_print(value, digest)) for name, value in own]
+        if own is not None:
+            found.append((base.__qualname__, own))
+    return hashlib.sha256(repr(found).encode("utf-8")).hexdigest()
+
+
+#: What the value digest raises for a value it cannot hash.
+_UNHASHABLE_ANNOTATION = (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError)
+
+
+def _unhashable_annotation(cls: type, func_name: str, error: Exception) -> KeyBuildFailed:
+    """KEY-UNHASHABLE-CAPTURE for an annotation of *cls* the key needs and
+    cannot hash: left out, a change to it would not reach the key, so the
+    call runs uncached."""
+    name = cls.__qualname__
+    return KeyBuildFailed(
+        "KEY-UNHASHABLE-CAPTURE",
+        f"@cash.cache: {func_name} reads the annotations of {name}, and one of them could not be "
+        f"hashed ({type(error).__name__}: {error}), so the call ran uncached rather than risk "
+        f"serving a result computed under annotations that changed.",
+        f"annotate {name} with plain types and values, or register a hasher for the marker's type "
+        f"with cash.register_hasher(...).",
+    )
+
+
+def _annotation_print(value: Any, digest: Callable[[Any], str]) -> str:
+    if isinstance(value, type):
+        return f"type:{value.__module__}.{value.__qualname__}"
+    if isinstance(value, str):
+        return f"str:{value}"
+    return f"value:{digest(value)}"
+
+
+def _own_annotations(base: type) -> list[tuple[str, Any]] | str | None:
+    """*base*'s own annotations as ``(name, value)`` pairs; None for none.
+
+    Before 3.14 they are the ``__annotations__`` its namespace holds. On
+    3.14 a class keeps a function that makes them (``__annotate__``) and,
+    once they were read or assigned, the dict made
+    (``__annotations_cache__``); a class not read yet is asked for them
+    without evaluating a name it does not define (``FORWARDREF``), and
+    without keeping the result, which reading ``__annotations__`` would.
+    """
+    ns = vars(base)
+    value = ns.get("__annotations__", ns.get("__annotations_cache__"))
+    if value is None and ("__annotate_func__" in ns or "__annotate__" in ns):
+        try:
+            import annotationlib
+
+            value = annotationlib.call_annotate_function(
+                annotationlib.get_annotate_from_class_namespace(ns), annotationlib.Format.FORWARDREF
+            )
+        except Exception:  # noqa: BLE001 - an annotation that cannot be evaluated: keyed by its code alone
+            return "unevaluated"
+    if not isinstance(value, dict):
+        return None
+    return sorted(((str(k), v) for k, v in value.items()), key=lambda item: item[0])
+
+
+def _code_names(func: Any) -> frozenset[str]:
+    """The names *func*'s code, and the scopes inside it, look up."""
+    code = getattr(func, "__code__", None)
+    if not isinstance(code, types.CodeType):
+        return frozenset()
+    return frozenset(n for scope in iter_code_scopes(code) for n in scope.co_names or ())
+
+
+def classes_below(cls: type) -> list[type]:
+    """Every class below *cls*, each once."""
+    found: list[type] = []
+    seen = {id(cls)}
+    stack = [cls]
+    while stack:
+        for sub in type.__subclasses__(stack.pop()):
+            if id(sub) not in seen:
+                seen.add(id(sub))
+                found.append(sub)
+                stack.append(sub)
+    return found
+
+
+def _class_name(k: type) -> str:
+    return f"{getattr(k, '__module__', '?')}.{getattr(k, '__qualname__', k.__name__)}"
+
+
+def _class_print(k: type) -> str:
+    """*k* by name, and a user class also by what it holds."""
+    name = _class_name(k)
+    if not is_user_code_object(k):
+        return name
+    from ..tracking.trace_items import class_digest
+
+    return f"{name}={class_digest(k)}"
+
+
+try:
+    from _abc import _get_dump  # the one way to read an ABC's registry
+except ImportError:  # pragma: no cover - _py_abc
+    _get_dump = None
+
+
+def _abc_registered(k: type) -> list[type]:
+    """The live classes the ABC *k* registered (C ``_abc`` or ``_py_abc``)."""
+    if _get_dump is None:  # pragma: no cover - _py_abc
+        return list(getattr(k, "_abc_registry", ()))
+    try:
+        registry = _get_dump(k)[0]
+    except TypeError:
+        return []
+    return [c for c in (ref() for ref in registry) if c is not None]
+
+
+#: ``(abc.get_cache_token(), {id(registered class): (weakref to it, ABC names)})``:
+#: every ABC's registry read once per token, which moves on every
+#: ``register()`` anywhere (`registered_with`).
+_REGISTRATIONS: list = [None, {}]
+_REGISTRATIONS_LOCK = threading.Lock()
+
+
+def _registrations() -> dict[int, tuple[Any, list[str]]]:
+    token = abc.get_cache_token()
+    if _REGISTRATIONS[0] == token:
+        return _REGISTRATIONS[1]
+    with _REGISTRATIONS_LOCK:
+        index: dict[int, tuple[Any, list[str]]] = {}
+        for k in classes_below(object):
+            if isinstance(k, abc.ABCMeta):
+                for c in _abc_registered(k):
+                    entry = index.get(id(c))
+                    if entry is None:
+                        entry = index[id(c)] = (weakref.ref(c), [])
+                    entry[1].append(_class_name(k))
+        _REGISTRATIONS[:] = [token, index]
+    return index
+
+
+def _in_an_abc_set(k: type) -> bool:
+    """Does an ABC's registry or cache hold *k*? Each holds it by a
+    weakref whose callback is ``_abc``'s; a class none holds is
+    registered nowhere, and costs no registry walk."""
+    try:
+        refs = weakref.getweakrefs(k)
+    except TypeError:
+        return False
+    if _get_dump is None:  # pragma: no cover - _py_abc: no way to tell
+        return bool(refs)
+    return any(getattr(getattr(r, "__callback__", None), "__name__", None) == "_destroy" for r in refs)
+
+
+def registered_with(cls: type) -> tuple[str, ...]:
+    """The ABCs that registered *cls* or a class of its MRO, by name."""
+    mro = [k for k in cls.__mro__ if k is not object]
+    if not any(_in_an_abc_set(k) for k in mro):
+        return ()
+    index = _registrations()
+    names: set[str] = set()
+    for k in mro:
+        entry = index.get(id(k))
+        if entry is not None and entry[0]() is k:
+            names.update(entry[1])
+    return tuple(sorted(names))
+
+
+def reads_subclasses(code: Any) -> bool:
+    """Does *code*, or a scope inside it, read ``__subclasses__``?"""
+    if not isinstance(code, types.CodeType):
+        return False
+    for scope in iter_code_scopes(code):
+        if SUBCLASSES in (scope.co_names or ()) or SUBCLASSES in (scope.co_consts or ()):
+            return True
+    return False
+
+
 def _library_code(value: Any) -> Any:
     """The class or function a class attribute names when it is code that is
     not the user's (`class_data_items`): *value* itself, or what a
@@ -344,14 +615,27 @@ class ClassDataFold:
         label = f"class:{cls.__module__}.{cls.__qualname__}"
         parts, unhashable = self._held_data_parts(cls, label, learned)
         functions, excluded, read_names, _ = self._class_code(cls)
+        subclasses = SUBCLASSES in read_names or reads_subclasses(getattr(reader, "__code__", None))
+        for member, value in (*class_family(cls, subclasses), ("names", class_names(cls))):
+            parts.append((f"{label}:{member}", hashlib.sha256(repr(value).encode("utf-8")).hexdigest()))
         if DOCSTRING_READS & read_names:
             # `self.__doc__` / `inspect.getdoc(type(self))` in its own code.
             parts.extend(self._docstring_parts(cls, label))
+        if ANNOTATION_READS & read_names or ANNOTATION_READS & _code_names(reader):
+            # `typing.get_type_hints(Cfg)`, `Cfg.__annotations__`: a config or
+            # schema class read for its fields.
+            try:
+                parts.append((f"{label}:__annotations__", class_annotations(cls, self._annotation_digest)))
+            except _UNHASHABLE_ANNOTATION as e:
+                raise _unhashable_annotation(cls, func_name, e) from e
         if unhashable:
             self._warn_unhashable_class_data(func_name, unhashable, read_names, reader)
         parts.extend(self._function_read_parts(functions, excluded, label, func_name, owner_code, seen))
         parts.extend(self._held_code_parts(cls, label, func_name, owner_code, learned))
         return parts
+
+    def _annotation_digest(self, value: Any) -> str:
+        return self._args.hash_payload((stabilize_for_global_hash(value, self._values.data_callable_identity),), {})
 
     def _held_code_parts(
         self, cls: type, label: str, func_name: str, owner_code: Any, learned: frozenset

@@ -121,6 +121,11 @@ class CacheMetadata:
     #: For a call that picks code by a run-time name: the trace of what it
     #: ran, each item checked again before the entry is served (`code_trace`).
     code_trace: list | None = None
+    #: The environment variables an installed package read while the body
+    #: ran, each with a digest of its value (`env_reads.environment_digests`):
+    #: a lookup reads them again, and serves the entry only when all match.
+    #: No key holds them: the analyzer does not read installed code.
+    env_reads: dict[str, str] | None = None
 
     force_persist: bool | None = None
     metadata_only: bool | None = None

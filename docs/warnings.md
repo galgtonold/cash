@@ -1569,6 +1569,11 @@ is a closure that reads a captured variable whose value could not be hashed
 function is a callable object whose state could not be hashed. The call was
 not cached. The message names the variable or the object's type.
 
+<!-- claim: cash/decorator/class_data.py:_unhashable_annotation @d7f833f0 -->
+It is also shown when the function reads a class's annotations
+(`typing.get_type_hints(Cfg)`, `Cfg.__annotations__`) and a value in them,
+such as an `Annotated[float, Positive()]` marker, could not be hashed.
+
 **Why it matters.** The function is not cached while it captures that value.
 Keyed without it, a change to what the value carries (a setting on a config
 object) would have served the old result.
@@ -1675,6 +1680,13 @@ call only while all of it is unchanged. This warning then comes only when that
 record cannot be checked again, and says why: the call ran a function that has
 side effects or reads the clock, a function no name finds, a value too big to
 digest, or it left a thread running.
+
+<!-- claim: cash/analysis/helper_walk.py:HelperWalk._note_decided_at_run_time @1454635c -->
+Before Python 3.12 (or with `CASH_TRACE=0`) the same warning names an
+`isinstance(x, Kind)` or `issubclass(c, Kind)` that Kind's own metaclass
+answers with an `__instancecheck__` or `__subclasscheck__` of yours: what it
+reads, such as a set its `register()` fills, is state the class keeps, and no
+key holds it. On 3.12 and newer the record of what the call ran covers it.
 
 **Why it matters.** cash cannot tell from the source which code that name
 lands on, so an edit to it, or to a global it reads, would not change the key.
@@ -2107,7 +2119,7 @@ or applying it twice does not change the result (`s.add(x)` on a set).
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/background_threads.py:BackgroundThreads.cell_ends @b6d8c938, cash/notebook/background_threads.py:user_code_of @310cd8c4 -->
+<!-- claim: cash/notebook/background_threads.py:BackgroundThreads.cell_ends @35f8017f, cash/notebook/background_threads.py:user_code_of @310cd8c4, cash/notebook/statement/processor.py:StatementProcessor._left_work_running @b91776a0 -->
 **What happened.** A cell started a thread and finished while the thread
 was still running. The message names the cell, the thread and the function
 it runs. Only a thread that runs your own code counts: a pool's idle
@@ -2115,9 +2127,11 @@ workers or a library's helper thread run the library's code and are left
 out. It is shown once per cell.
 
 **Why it matters.** What the thread changes after the cell finished (a list
-it fills, a file it writes) is outside cash's view. The statements that read
-those values were keyed and stored on what they held when the cell ended,
-and a cell above that is re-run can see the changed values.
+it fills, a file it writes) is outside cash's view. cash does not store the
+statement that left the thread running, nor a statement that reads a
+variable the thread's function can reach (a global it names, an object its
+closure holds) until a statement binds that variable again: those run every
+time. A cell above that is re-run can still see the changed values.
 
 **What to do.** Join the thread before the cell ends (`t.join()`), or have
 it hand back its result (`future.result()` with `concurrent.futures`) in the
@@ -2434,6 +2448,13 @@ does nothing.
 **What to do.** Read the exception. Common causes: a full disk, no write
 permission on `cache_dir`, a value that cannot be pickled (a socket, a file
 handle), or on Windows a file held open by another process.
+
+In a notebook, a value can also hold a function from before its cell ran
+again with different code: a pipeline built on `column_ratio`, and the cell
+defining `column_ratio` edited and run since. A stored copy could only load
+the `column_ratio` defined now, so the value is not stored. Run the cells
+that build it again. When the cell ran again with the same code, the value is
+stored, and a hit holds the function the name holds when it is read.
 
 **When it is safe to ignore.** A one-off on a cheap function.
 
