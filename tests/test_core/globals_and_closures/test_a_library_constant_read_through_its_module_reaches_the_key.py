@@ -208,3 +208,55 @@ def test_what_the_code_writes_is_its_output_not_an_input():
     rebinds or changes is left out, and what it only reads is kept."""
     written = written_module_attrs(writes_them.__code__)
     assert written == {("sys", "argv"), ("math", "tau"), ("threading", "TIMEOUT_MAX")}
+
+
+def stores_pi(d, k):
+    d[k] = math.pi
+
+
+def stores_argv(out, i):
+    out[i] = sys.argv
+
+
+def stores_separator(d, k):
+    d[k] = json.JSONEncoder.item_separator
+
+
+def stores_into_argv(k, v):
+    sys.argv[k] = v
+
+
+def deletes_from_argv(k):
+    del sys.argv[k]
+
+
+@pytest.mark.parametrize("code", [stores_pi, stores_argv, stores_separator])
+def test_a_library_value_stored_into_a_container_is_read_not_written(code):
+    """``d[k] = math.pi``: on 3.13+ ``d`` and ``k`` are pushed by one op
+    (``LOAD_FAST_LOAD_FAST``) between ``math.pi`` and the store, which was
+    taken for ``math.pi[k] = ...``: math.pi left the key, and the result
+    was served after ``math.pi = 3.0``."""
+    assert written_module_attrs(code.__code__) == frozenset()
+
+
+@pytest.mark.parametrize("code", [stores_into_argv, deletes_from_argv])
+def test_a_library_container_stored_into_is_written(code):
+    assert written_module_attrs(code.__code__) == {("sys", "argv")}
+
+
+def pi_in_a_dict(k):
+    RUNS["n"] += 1
+    d = {}
+    d[k] = math.pi
+    return d
+
+
+def test_a_library_constant_stored_into_a_dict_set_to_another_value(c):
+    f = c.cache(pi_in_a_dict)
+    assert _call_until_served(f, "a") == {"a": math.pi}
+    old = math.pi
+    math.pi = 3.0
+    try:
+        assert f("a") == {"a": 3.0}
+    finally:
+        math.pi = old

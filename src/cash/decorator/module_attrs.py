@@ -46,6 +46,22 @@ def _resolve_dotted(g: dict, path: str) -> Any:
 
 #: Ops that load an attribute (``lib.X``, ``lib.X.append``).
 _ATTR_LOADS = frozenset({"LOAD_ATTR", "LOAD_METHOD"})
+#: Ops that push one value: the key of ``lib.X[k] = v``, between the
+#: container and the store. ``d[k] = lib.X`` on 3.13+ pushes ``d`` and ``k``
+#: in one op (``LOAD_FAST_LOAD_FAST``): there ``lib.X`` is the value stored.
+_ONE_PUSH = frozenset(
+    {
+        "LOAD_FAST",
+        "LOAD_FAST_CHECK",
+        "LOAD_FAST_BORROW",
+        "LOAD_CONST",
+        "LOAD_SMALL_INT",
+        "LOAD_NAME",
+        "LOAD_GLOBAL",
+        "LOAD_DEREF",
+        "LOAD_CLOSURE",
+    }
+)
 _written_memo: LruMemo[Any, frozenset] = LruMemo(CODE_OBJECTS)
 
 
@@ -83,7 +99,7 @@ def written_module_attrs(code: types.CodeType) -> frozenset[tuple[str, str]]:
                     found.add((path, attr))
                     break
                 follow = instrs[j + 2][0] if j + 2 < len(instrs) else ""
-                if after[0].startswith("LOAD_") and follow in ("STORE_SUBSCR", "DELETE_SUBSCR"):
+                if after[0] in _ONE_PUSH and follow in ("STORE_SUBSCR", "DELETE_SUBSCR"):
                     found.add((path, attr))
                     break
                 path = f"{path}.{attr}"

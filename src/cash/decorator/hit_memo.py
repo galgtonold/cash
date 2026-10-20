@@ -373,6 +373,9 @@ class _Scan:
         if not own_code_is_user(f, self.root_module):
             # Library code: keyed by its name, which the module watch covers.
             return
+        # Its names: setting ``__name__`` moves the key (`renamed`) but no
+        # function watcher, so a fast hit checks them as it does the cells.
+        self.cells.append((f, (f.__name__, f.__qualname__)))
         code = f.__code__
         own: set[str] = set()
         _code_names(code, own)

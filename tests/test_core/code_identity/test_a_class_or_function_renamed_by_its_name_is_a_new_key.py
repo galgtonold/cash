@@ -26,6 +26,11 @@ def helper():
     return 1
 
 
+#: Runs of the cached function: a dict the fast hit path watches (a list
+#: in a closure keeps a call off it).
+RUNS = {"n": 0}
+
+
 def test_a_user_class_renamed(cash_instance):
     @cash_instance.cache
     def name_of(x):
@@ -53,12 +58,19 @@ def test_a_library_class_imported_by_name_renamed(cash_instance):
         Thread.__name__ = "Thread"
 
 
-def test_a_helper_function_renamed(cash_instance):
-    @cash_instance.cache
+def test_a_helper_function_renamed(disk_cash):
+    """Renamed once the call is served, from the fast hit path too where
+    there is one: no function watcher sees ``__name__`` set."""
+    RUNS["n"] = 0
+
+    @disk_cash.cache
     def name_of(x):
+        RUNS["n"] += 1
         return (x, helper.__name__, helper())
 
-    assert name_of(1) == (1, "helper", 1)
+    for _ in range(6):
+        assert name_of(1) == (1, "helper", 1)
+    assert RUNS["n"] == 1
     helper.__name__ = "renamed"
     try:
         assert name_of(1) == (1, "renamed", 1)
