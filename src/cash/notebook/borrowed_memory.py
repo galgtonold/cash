@@ -11,15 +11,18 @@ library borrows from another without a copy:
   ``s.iloc[0] = 1`` changes ``arr`` too;
 * ``s = pl.from_pandas(df)``: a write to ``df`` in place changes ``s``;
 * ``x = df['a'].to_numpy()``: a read-only view of the block, which the next
-  ``df.loc[0, 'a'] = 1`` writes past.
+  ``df.loc[0, 'a'] = 1`` writes past;
+* ``s = df['c']`` before pandas 3 (without copy-on-write): the Series is a
+  view of ``df``'s block, and ``s[:] = 7`` writes into ``df``.
 
 No reference count shows these (polars and Arrow hold the owner from native
 code, or not at all), so they are found by address: two objects alive at the
 same time whose buffers overlap share memory. Only pairs that one side can
 write in place are linked: numpy with pandas, polars or Arrow, and pandas
-with polars or Arrow. polars and Arrow never write into a buffer they share,
-and pandas copies before it writes into a block another pandas object
-shares.
+with polars or Arrow. polars and Arrow never write into a buffer they share;
+pandas copies before it writes into a block another pandas object shares
+under copy-on-write only (pandas 3, or opted into), so before that two
+pandas objects whose blocks overlap are linked too (`_pandas_block_spans`).
 """
 
 from __future__ import annotations
@@ -165,6 +168,35 @@ def _pandas_spans(value: Any) -> list[_Span]:
     for array in arrays:
         spans.extend(_pandas_array_spans(array))
     return spans
+
+
+def _pandas_writes_shared_blocks() -> bool:
+    """Does pandas write in place into a block two of its objects share:
+    before pandas 3, unless copy-on-write was opted into. Asked each time,
+    since a notebook can turn the option on part way."""
+    pd = sys.modules.get("pandas")
+    if pd is None:
+        return False
+    try:
+        return int(pd.__version__.split(".", 1)[0]) < 3 and pd.options.mode.copy_on_write is not True
+    except Exception:  # noqa: BLE001 - unknown pandas: taken as writing in place
+        return True
+
+
+def _pandas_block_spans(value: Any) -> list[_Span]:
+    """Where a pandas Series' or frame's blocks sit, not its axes: an index
+    is never written in place, and every frame derived from ``df`` may hold
+    ``df``'s. `_EVERYWHERE` when pandas will not say."""
+    pd = sys.modules["pandas"]
+    if isinstance(value, pd.Index):
+        return []
+    try:
+        spans: list[_Span] = []
+        for block in value._mgr.blocks:
+            spans.extend(_pandas_array_spans(block.values))
+        return spans
+    except Exception:  # noqa: BLE001 - internals changed: may share any memory
+        return [_EVERYWHERE]
 
 
 def _index_data(index: Any, pd: Any) -> Any:
@@ -437,10 +469,15 @@ def borrowed_memory_names(
     if not borrowers:
         return set()
     families = {partner for _obj, family in borrowers for partner in _PARTNERS[family]}
+    # Before copy-on-write, ``s = df['c']`` writes into ``df``'s block.
+    in_place = [obj for obj, family in borrowers if family == _PANDAS] if _pandas_writes_shared_blocks() else []
+    if in_place:
+        families.add(_PANDAS)
     own = {id(obj) for obj, _family in borrowers}
     candidates = _candidates(user_ns, families, skip_name, own, containers)
     if not candidates:
         return set()
+    blocks = _Spans([span for obj in in_place for span in _pandas_block_spans(obj)]) if in_place else None
     lent: dict[str, list[_Span]] = {}
     for obj, family in borrowers:
         check_walk_budget()
@@ -453,11 +490,15 @@ def borrowed_memory_names(
         if name in names:
             continue
         spans_of = index.get(family)
-        if not spans_of:
-            continue
-        check_walk_budget()
-        if any(spans_of.overlaps(span) for span in memory_spans(obj)):
-            names.add(name)
+        if spans_of:
+            check_walk_budget()
+            if any(spans_of.overlaps(span) for span in memory_spans(obj)):
+                names.add(name)
+                continue
+        if family == _PANDAS and blocks:
+            check_walk_budget()
+            if any(blocks.overlaps(span) for span in _pandas_block_spans(obj)):
+                names.add(name)
     return names
 
 
