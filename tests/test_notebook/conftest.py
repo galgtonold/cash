@@ -4,7 +4,15 @@ repo-root ``tests/conftest.py``, which pytest already applies here too).
 
 from __future__ import annotations
 
+import os
+
 import pytest
+
+if os.environ.get("CASH_TEST_WHY_ALIVE"):
+    # Why a read-count test saw another thread alive (see there).
+    from tests.test_notebook import _why_alive
+
+    _why_alive.install(os.environ["CASH_TEST_WHY_ALIVE"])
 
 
 @pytest.fixture(autouse=True)
