@@ -80,6 +80,8 @@ def _lookup(t: type) -> Callable[[Any], Any] | None:
 #: is a new class and a new entry.
 _METHODS: dict[type, Callable[[Any], Any] | None] = {}
 _METHODS_MAX = 4096
+#: Seconds the check thread waits for more work before it ends.
+_IDLE_S = 5.0
 
 
 def type_name(value: Any) -> str:
@@ -212,18 +214,29 @@ class KeyCheck:
             except TypeError:
                 return  # no weak references: it cannot be checked without keeping it alive
             self._queued[id(value)] = ref
+            # Put under the lock: the thread decides to end under it too.
+            self._queue.put((ref, key_id, method))
             if self._thread is None or not self._thread.is_alive():
                 self._thread = threading.Thread(target=self._run, name="cash-key-check", daemon=True)
                 self._thread.start()
-        self._queue.put((ref, key_id, method))
 
     def wait(self) -> None:
         """Block until every queued check has run (for tests)."""
         self._queue.join()
 
     def _run(self) -> None:
+        # The thread ends once idle, as a cache writer does: it holds this
+        # check, so one that never ended kept a thread, and the check, for
+        # every `Cash` that ever met a ``__cash_key__``.
         while True:
-            ref, key_id, method = self._queue.get()
+            try:
+                ref, key_id, method = self._queue.get(timeout=_IDLE_S)
+            except queue.Empty:
+                with self._lock:
+                    if self._queue.empty():
+                        self._thread = None
+                        return
+                continue
             try:
                 value = ref()
                 if value is not None:
