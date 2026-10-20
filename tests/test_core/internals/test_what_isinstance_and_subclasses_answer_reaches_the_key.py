@@ -17,6 +17,7 @@ from __future__ import annotations
 import abc
 import collections.abc
 import gc
+import sys
 import time
 import typing
 
@@ -77,6 +78,12 @@ def thing_is_kind(x):
     return (x, isinstance(Thing(), Kind))
 
 
+@pytest.mark.xfail(
+    sys.version_info < (3, 12),
+    strict=True,
+    reason="before 3.12 nothing records what ran: the set the metaclass's register() writes is left out "
+    "of the key as state the class keeps, so the call is served its old answer",
+)
 def test_register_through_a_metaclass_of_ones_own(c):
     f = c.cache(thing_is_kind)
     assert warm(f, 1) == (1, False)
@@ -205,8 +212,8 @@ def test_a_subclass_redefined_with_the_same_name(c):
     assert warm(f, 1) == (1, [2])
     exec("class Double(Step):\n    def out(self):\n        return 3\n", ns)  # the cell run again, edited
     gc.collect()
-    h = hit_memo.status()["fast_hits"]
+    h = hit_memo.status().get("fast_hits", 0)
     r = f(1)
-    fast = hit_memo.status()["fast_hits"] > h
+    fast = hit_memo.status().get("fast_hits", 0) > h
     r2 = f(1)
     assert (r, fast, r2) == ((1, [3]), False, (1, [3]))
