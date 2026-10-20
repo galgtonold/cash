@@ -15,6 +15,7 @@ does. It is used wherever cash pickles a value it keys or stores.
 from __future__ import annotations
 
 import contextlib
+import copy
 import copyreg
 import functools
 import io
@@ -933,9 +934,17 @@ class _KeepDict(dict):
         self._watch = watch
         #: This pickle's one object for each attribute name (`_names_apart`).
         self._names: dict[str, str] = {}
+        #: This pickle's one object for each numpy dtype (`_dtypes_apart`).
+        self._dtypes: dict[Any, Any] = {}
 
     def __missing__(self, t: type) -> Any:
-        reducer = _names_apart(self._reducer(t), self._names)
+        if _numpy_scalar_type(t):
+            # A scalar reduces to its dtype and bytes, no state: no names.
+            reducer = _scalar_dtype_apart(self._reducer(t), self._dtypes)
+        else:
+            reducer = _names_apart(self._reducer(t), self._names)
+            if _holds_dtype(t):
+                reducer = _dtypes_apart(reducer, self._dtypes)
         self[t] = reducer
         return reducer
 
@@ -1017,6 +1026,119 @@ def _names_apart(reducer: Any, names: dict[str, str]) -> Callable[[Any], Any]:
         return (reduced[0], reduced[1], apart, *reduced[3:])
 
     return reduce
+
+
+def _holds_dtype(t: type) -> bool:
+    """Does a *t* instance reduce to its numpy dtype (an array, a numpy
+    scalar)?"""
+    numpy = sys.modules.get("numpy")
+    if numpy is None:
+        return False
+    try:
+        return issubclass(t, (numpy.ndarray, numpy.generic))
+    except TypeError:
+        return False
+
+
+def _numpy_scalar_type(t: type) -> bool:
+    """Is *t* one of numpy's own scalar types (``numpy.float64``), not a
+    subclass of one?"""
+    numpy = sys.modules.get("numpy")
+    return numpy is not None and t.__module__ == "numpy" and isinstance(t, type) and issubclass(t, numpy.generic)
+
+
+def _scalar_dtype_apart(reducer: Any, dtypes: dict[Any, Any]) -> Callable[[Any], Any]:
+    """`_dtypes_apart` for a numpy scalar's reduce, ``(scalar, (dtype,
+    bytes))``: the last dtype met and the pickle's own for it are kept, so
+    a run of scalars of one dtype (a model's thousands of ``float64``) asks
+    the table once."""
+    last: list[Any] = [None, None]
+
+    def reduce(obj: Any) -> Any:
+        reduced = reducer(obj)
+        if type(reduced) is not tuple or len(reduced) != 2 or type(reduced[1]) is not tuple or not reduced[1]:
+            return reduced
+        args = reduced[1]
+        dt = args[0]
+        if dt is not last[0]:
+            numpy = sys.modules["numpy"]
+            if not isinstance(dt, numpy.dtype):
+                return reduced
+            last[0], last[1] = dt, _dtype_apart(dt, dtypes)
+        return (reduced[0], (last[1], *args[1:]))
+
+    return reduce
+
+
+def _dtypes_apart(reducer: Any, dtypes: dict[Any, Any]) -> Callable[[Any], Any]:
+    """*reducer*, giving the dtype an array or numpy scalar reduces to this
+    pickle's own object for it, one per equal dtype, never one the value
+    holds.
+
+    As for attribute names (`_names_apart`): the pickle's memo writes a
+    dtype met twice as a back-reference, by identity. ``np.int64(3)`` holds
+    numpy's one ``int64`` dtype, which loading does not give back: it makes
+    a dtype of its own (``np.dtype('i8', False, True)`` copies). A fitted
+    forest's or SVC's pickle then wrote its scalars' dtype once and
+    referred back to it, and the restored model's wrote it again: the
+    restored model digested apart from the one it was stored from, and
+    every statement reading it after a restart missed. Dtypes that pickle
+    apart (other metadata, alignment, record type) stay apart."""
+
+    def reduce(obj: Any) -> Any:
+        reduced = reducer(obj)
+        if type(reduced) is not tuple or len(reduced) < 2:
+            return reduced
+        args = _parts_apart(reduced[1], dtypes)
+        state = _parts_apart(reduced[2], dtypes) if len(reduced) > 2 else None
+        if args is None and state is None:
+            return reduced
+        return (
+            reduced[0],
+            reduced[1] if args is None else args,
+            *((reduced[2] if state is None else state,) if len(reduced) > 2 else ()),
+            *reduced[3:],
+        )
+
+    return reduce
+
+
+def _parts_apart(parts: Any, dtypes: dict[Any, Any]) -> tuple | None:
+    """*parts*, a tuple, with each numpy dtype in it the pickle's own;
+    None when it holds none."""
+    if type(parts) is not tuple:
+        return None
+    numpy = sys.modules.get("numpy")
+    dtype = getattr(numpy, "dtype", None)
+    if dtype is None:
+        return None
+    apart = None
+    for i, part in enumerate(parts):
+        if isinstance(part, dtype):
+            if apart is None:
+                apart = list(parts)
+            apart[i] = _dtype_apart(part, dtypes)
+    return None if apart is None else tuple(apart)
+
+
+def _dtype_apart(dt: Any, dtypes: dict[Any, Any]) -> Any:
+    """The pickle's own dtype that pickles as *dt* does. Keyed by that
+    pickle, not by equality: an aligned struct and the same layout packed,
+    or a record dtype and the plain structured one, are equal dtypes that
+    load apart. A dtype met before is found by its identity (*dtypes*
+    holds it, so the id stays its own) without pickling it again."""
+    seen = dtypes.get(id(dt))
+    if seen is not None and seen[0] is dt:
+        return seen[1]
+    try:
+        key = pickle.dumps(dt, protocol=pickle.HIGHEST_PROTOCOL)
+        own = dtypes.get(key)
+        if own is None:
+            own = dtypes[key] = copy.copy(dt)
+    except Exception:  # noqa: BLE001 - a dtype that will not hash or copy: as it is
+        return dt
+    dtypes[id(dt)] = (dt, own)
+    return own
 
 
 def _state_apart(state: dict, names: dict[str, str]) -> dict:
@@ -1271,14 +1393,17 @@ def _reduce_array_for_key(array: Any, protocol: int) -> Any:
         packed = array
     if packed is array:
         return array.__reduce_ex__(protocol)
-    return _packed_array, (array.dtype.descr, packed)
+    # The dtype itself, not its ``descr``: an aligned struct and the same
+    # layout packed have one ``descr``, and arrays of the same values in
+    # each keyed alike.
+    return _packed_array, (array.dtype, packed)
 
 
-def _packed_array(descr: Any, packed: Any) -> Any:
+def _packed_array(dtype: Any, packed: Any) -> Any:
     """What `_reduce_array_for_key` names (key bytes are never loaded)."""
     import numpy as np
 
-    return packed.astype(np.dtype(descr))
+    return packed.astype(np.dtype(dtype))
 
 
 def _drops_dict(t: type) -> bool:
