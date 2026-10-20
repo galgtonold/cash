@@ -83,18 +83,6 @@ def test_a_table_written_past_pandas_after_its_store_is_dropped_and_said_once(ca
     assert _codes(caught).count("STORE-RESULT-WRITTEN") == 1
 
 
-@pytest.mark.skipif(not frame_sharing._checked_works(), reason="needs pandas copy-on-write")
-def test_a_failed_disk_write_check_says_so(clean_backend):
-    df = _table()
-    clean_backend.set("k", df, {"execution_time": 1.0, "func_name": "m.load"})
-    _value, check = clean_backend.checked_copy("k", clean_backend._store["k"][0])
-    df["fare"].array[0] = 123.0  # while the writer serializes the entry
-    with pytest.warns(Warning) as caught:
-        assert check() is False
-    assert _codes(caught) == ["STORE-RESULT-WRITTEN"]
-    assert "m.load" in str(caught[0].message)
-
-
 def test_an_array_and_a_polars_series_over_it_are_not_stored(cash_instance):
     pl = pytest.importorskip("polars")
 

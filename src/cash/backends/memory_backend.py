@@ -1258,7 +1258,7 @@ class InMemoryBackend(CacheBackend):
         by pandas (a subclass, a nullable, categorical or object column: its
         Python objects stay the caller's), nor what ``deepcopy`` copied, nor
         a value kept by reference, nor tables kept uncopied
-        (`checked_copy`). A background write of a value that is not would
+        (`frame_sharing.share_checked`). A background write of a value that is not would
         serialize what the caller did to it after the call.
         """
         with self._lock:
@@ -1321,31 +1321,6 @@ class InMemoryBackend(CacheBackend):
         except Exception:  # serialized by the caller instead, as before
             logger.debug("no copy of %r to write", key, exc_info=True)
             return default
-
-    def checked_copy(self, key: str, metadata: MetadataDict) -> tuple[Any, Any] | None:
-        """``(stored value, check)`` for a background write of *key*'s
-        entry, stored with that very *metadata*, when its value is the
-        tier's own but for pandas tables kept uncopied
-        (`frame_sharing.share_checked`); else None. The writer calls
-        ``check()`` once the bytes are written: False when the tables no
-        longer hash as they did when stored, and what was written may hold
-        what the caller wrote since, said by STORE-RESULT-WRITTEN."""
-        with self._lock:
-            entry = self._store.get(key)
-            checked = self._checked.get(key)
-            own = key in self._own and key not in self._holds_bytes
-        if entry is None or checked is None or not own or entry[0] is not metadata:
-            return None
-        if entry[0].get("by_reference") or entry[0].get(NO_PRIVATE_COPY):
-            return None
-
-        def check() -> bool:
-            if _still_as_stored(checked):
-                return True
-            self._written_after_store(key, metadata)
-            return False
-
-        return entry[1], check
 
     def get_metadata(self, key: str) -> MetadataDict | None:
         """The metadata, counted as an access the way `get` counts one.

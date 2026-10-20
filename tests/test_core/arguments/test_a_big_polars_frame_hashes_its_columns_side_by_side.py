@@ -48,9 +48,9 @@ def test_side_by_side_gives_the_digest_of_one_after_another(n, monkeypatch):
     threads = []
     real = content_hashers._fold_polars_columns
 
-    def counting(h, columns, rows_per_chunk):
-        threads.append(rows_per_chunk >= content_hashers.PARALLEL_COLUMNS_MIN_ROWS)
-        return real(h, columns, rows_per_chunk)
+    def counting(h, columns, rows_at_once):
+        threads.append(rows_at_once >= content_hashers.PARALLEL_COLUMNS_MIN_ROWS)
+        return real(h, columns, rows_at_once)
 
     monkeypatch.setattr(content_hashers, "_fold_polars_columns", counting)
     assert content_hashers.hash_polars(frame) == expected
@@ -60,14 +60,24 @@ def test_side_by_side_gives_the_digest_of_one_after_another(n, monkeypatch):
     assert threads[0] is True
 
 
-def test_a_frame_of_small_chunks_is_hashed_on_one_thread(monkeypatch):
+def test_a_small_frame_is_hashed_on_one_thread(monkeypatch):
     frame = pl.concat([_frame(3_000)] * 4, rechunk=False)
-    monkeypatch.setattr(content_hashers, "PARALLEL_COLUMNS_MIN_ROWS", 5_000)
-    assert content_hashers._rows_per_chunk(frame) == 3_000
+    monkeypatch.setattr(content_hashers, "PARALLEL_COLUMNS_MIN_ROWS", 20_000)
     started = []
     monkeypatch.setattr(content_hashers.threading, "Thread", lambda *a, **k: started.append(1))
     assert content_hashers.hash_polars(frame) == _one_after_another(frame, monkeypatch)
     assert not started
+
+
+def test_a_frame_of_small_chunks_is_read_a_block_at_a_time(monkeypatch):
+    """p08's log frame comes in 1,280 chunks of ~2,900 rows. The C readers
+    read all of a column's chunks a block at a time, so its rows count, not
+    its chunks'; without them a chunk at a time, so the chunks' rows."""
+    from cash._native import kernels
+
+    frame = pl.concat([_frame(3_000)] * 4, rechunk=False)
+    readers = kernels is not None and hasattr(kernels, "copy_pieces")
+    assert content_hashers._rows_read_at_once(frame) == (12_000 if readers else 3_000)
 
 
 def test_a_column_that_fails_raises_on_the_caller(monkeypatch):
