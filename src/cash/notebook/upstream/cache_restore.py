@@ -19,6 +19,7 @@ from ..._clock import perf_counter as _perf_counter
 from ..._paths import resolve_file_dep_path
 from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
+from ...tracking.env_reads import environment_unchanged
 from ...tracking.file_dep_snapshot import snapshot_is_fresh
 from ..anchors import resolve_anchors
 from ..cache_key import compute_cache_key
@@ -32,6 +33,7 @@ from ..lineage_formula import (
 )
 from ..lineage_store import restore_frozen_tag, tag_value
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var, present_holders
+from ..statement._metadata import StatementCacheMetadata
 from ..statement.derivation_edges import record_shared_object_edges
 from ._types import key_inputs, key_lineages
 from .cache_probe import CacheProbe
@@ -452,6 +454,7 @@ class CacheRestorer:
                 not metadata
                 or metadata.get("metadata_only")
                 or not CacheProbe.files_fresh(metadata.get("file_dependencies", {}), memo_key=cache_key)
+                or self._lookup_refuses(metadata)
             ):
                 needed_first |= unresolved
                 continue
@@ -487,6 +490,22 @@ class CacheRestorer:
                 resolved_by_cache,
                 broken_vars,
             )
+
+    def _lookup_refuses(self, metadata: dict) -> bool:
+        """Would the statement's lookup refuse the entry the probe found, as
+        `StatementFreshness.check_cache` does: a variable stored with its
+        outputs (``holders``) that is bound now with another lineage, or an
+        environment variable it read changed? The probe keys a broken var it
+        resolves by the lineage the hit gives it, and leaves its value as it
+        is: refused after all, the statement ran on that value (``w -= 1``
+        run again alone, its result stored with ``layers``, reached -2)."""
+        lineage = self.tracking_state.variable_lineage
+        user_ns = self.shell.user_ns
+        for name, before in (metadata.get("holders") or {}).items():
+            if name in user_ns and lineage.get(name) != before:
+                return True
+        env_reads = StatementCacheMetadata.from_dict(metadata).env_reads
+        return bool(env_reads) and not environment_unchanged(env_reads)
 
     def drop_probe_placeholders(self) -> None:
         """Unbind the names the forward probe held that no restore filled.
