@@ -209,11 +209,274 @@ done:
     return result;
 }
 
+/* A piece of a column: one chunk's views, data buffers and validity, and
+ * the rows [start, stop) of it to read, as a tuple
+ * (views, datas, validity, start, stop). */
+typedef struct {
+    Py_buffer views, validity;
+    int has_validity;
+    PyObject *datas; /* borrowed tuple */
+    Py_ssize_t start, stop;
+} piece_t;
+
+static int get_piece(PyObject *pieces, Py_ssize_t index, piece_t *p) {
+    PyObject *item = PyList_GET_ITEM(pieces, index);
+    if (!PyTuple_Check(item) || PyTuple_GET_SIZE(item) != 5 || !PyTuple_Check(PyTuple_GET_ITEM(item, 1))) {
+        PyErr_SetString(PyExc_TypeError, "a piece is (views, datas, validity, start, stop)");
+        return -1;
+    }
+    p->datas = PyTuple_GET_ITEM(item, 1);
+    p->start = PyLong_AsSsize_t(PyTuple_GET_ITEM(item, 3));
+    p->stop = PyLong_AsSsize_t(PyTuple_GET_ITEM(item, 4));
+    if ((p->start == -1 || p->stop == -1) && PyErr_Occurred()) return -1;
+    return get_views(PyTuple_GET_ITEM(item, 0), PyTuple_GET_ITEM(item, 2), p->start, p->stop, &p->views, &p->validity,
+                     &p->has_validity);
+}
+
+static void release_piece(piece_t *p) {
+    if (p->has_validity) PyBuffer_Release(&p->validity);
+    PyBuffer_Release(&p->views);
+}
+
+static int parse_many(PyObject *const *args, Py_ssize_t nargs, Py_ssize_t want, const char *name, Py_ssize_t *index,
+                      Py_ssize_t *row) {
+    if (nargs != want) {
+        PyErr_Format(PyExc_TypeError, "%s takes %zd arguments", name, want);
+        return -1;
+    }
+    if (!PyList_Check(args[0])) {
+        PyErr_SetString(PyExc_TypeError, "pieces must be a list");
+        return -1;
+    }
+    *index = PyLong_AsSsize_t(args[1]);
+    *row = PyLong_AsSsize_t(args[2]);
+    if ((*index == -1 || *row == -1) && PyErr_Occurred()) return -1;
+    if (*index < 0 || *index > PyList_GET_SIZE(args[0])) {
+        PyErr_SetString(PyExc_ValueError, "bad piece index");
+        return -1;
+    }
+    return 0;
+}
+
+/* view_lengths_many(pieces, index, row, out) -> (index, row, written)
+ *
+ * view_lengths over a column's pieces, one after the other: from row `row`
+ * of pieces[index] on, into out until it has no room for another length or
+ * the last piece is read. Returns where the next call starts and the bytes
+ * written; index is len(pieces) once all are read. A row before a piece's
+ * start is read as its start. One call fills a whole block where a call
+ * per chunk handed back after a few thousand rows: p08's log frame comes in
+ * 1,280 chunks. */
+static PyObject *py_view_lengths_many(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    (void)self;
+    Py_ssize_t index, row;
+    if (parse_many(args, nargs, 4, "view_lengths_many", &index, &row) < 0) return NULL;
+    PyObject *pieces = args[0];
+    Py_buffer out;
+    if (PyObject_GetBuffer(args[3], &out, PyBUF_WRITABLE) < 0) return NULL;
+    char *o = (char *)out.buf;
+    Py_ssize_t room = out.len / 8, written = 0;
+    int bad = 0;
+    while (index < PyList_GET_SIZE(pieces) && written < room) {
+        piece_t p;
+        if (get_piece(pieces, index, &p) < 0) {
+            PyBuffer_Release(&out);
+            return NULL;
+        }
+        if (row < p.start) row = p.start;
+        const char *v = (const char *)p.views.buf;
+        const unsigned char *bits = p.has_validity ? (const unsigned char *)p.validity.buf : NULL;
+        Py_BEGIN_ALLOW_THREADS
+        for (; row < p.stop && written < room; row++, written++) {
+            int64_t length = 0;
+            if (is_valid(bits, row)) {
+                int32_t n = read_i32(v + row * VIEW_BYTES);
+                if (n < 0) { bad = 1; break; }
+                length = n;
+            }
+            memcpy(o + written * 8, &length, 8);
+        }
+        Py_END_ALLOW_THREADS
+        release_piece(&p);
+        if (bad) break;
+        if (row >= p.stop) {
+            index++;
+            row = 0;
+        }
+    }
+    PyBuffer_Release(&out);
+    if (bad) {
+        PyErr_SetString(PyExc_ValueError, "negative view length");
+        return NULL;
+    }
+    return Py_BuildValue("(nnn)", index, row, written * 8);
+}
+
+/* view_values_many(pieces, index, row, skip, out) -> (index, row, skip, written)
+ *
+ * view_values over a column's pieces, one after the other, as
+ * view_lengths_many reads their lengths: from row `row` of pieces[index],
+ * its first `skip` bytes left out, into out until it is full or the last
+ * piece is read. */
+static PyObject *py_view_values_many(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    (void)self;
+    Py_ssize_t index, row;
+    if (parse_many(args, nargs, 5, "view_values_many", &index, &row) < 0) return NULL;
+    Py_ssize_t skip = PyLong_AsSsize_t(args[3]);
+    if (skip == -1 && PyErr_Occurred()) return NULL;
+    if (skip < 0) {
+        PyErr_SetString(PyExc_ValueError, "negative skip");
+        return NULL;
+    }
+    PyObject *pieces = args[0];
+    Py_buffer out;
+    if (PyObject_GetBuffer(args[4], &out, PyBUF_WRITABLE) < 0) return NULL;
+    char *o = (char *)out.buf;
+    Py_ssize_t room = out.len, written = 0;
+    int bad = 0, failed = 0;
+    while (index < PyList_GET_SIZE(pieces) && written < room) {
+        piece_t p;
+        if (get_piece(pieces, index, &p) < 0) {
+            failed = 1;
+            break;
+        }
+        if (row < p.start) {
+            row = p.start;
+            skip = 0;
+        }
+        Py_ssize_t ndatas = PyTuple_GET_SIZE(p.datas);
+        /* Taken the first time a row points into it, as view_values does. */
+        Py_buffer *datas = PyMem_Calloc(ndatas ? (size_t)ndatas : 1, sizeof(Py_buffer));
+        char *have = PyMem_Calloc(ndatas ? (size_t)ndatas : 1, 1);
+        if (!datas || !have) {
+            PyErr_NoMemory();
+            failed = 1;
+        }
+        const char *v = (const char *)p.views.buf;
+        const unsigned char *bits = p.has_validity ? (const unsigned char *)p.validity.buf : NULL;
+        while (!failed) {
+            Py_ssize_t need = -1;
+            Py_BEGIN_ALLOW_THREADS
+            for (; row < p.stop && written < room; row++, skip = 0) {
+                if (!is_valid(bits, row)) continue;
+                const char *view = v + row * VIEW_BYTES;
+                int32_t n = read_i32(view);
+                if (n < 0 || skip > n) { bad = 1; break; }
+                const char *src;
+                if (n <= INLINE_BYTES) {
+                    src = view + 4;
+                } else {
+                    int32_t at_index = read_i32(view + 8), at = read_i32(view + 12);
+                    if (at_index < 0 || at_index >= ndatas || at < 0) { bad = 1; break; }
+                    if (!have[at_index]) { need = at_index; break; }
+                    if ((Py_ssize_t)at + n > datas[at_index].len) { bad = 1; break; }
+                    src = (const char *)datas[at_index].buf + at;
+                }
+                Py_ssize_t take = n - skip;
+                if (take > room - written) {
+                    take = room - written;
+                    memcpy(o + written, src + skip, (size_t)take);
+                    written += take;
+                    skip += take;
+                    break; /* row stays: the rest of it goes to the next call */
+                }
+                memcpy(o + written, src + skip, (size_t)take);
+                written += take;
+            }
+            Py_END_ALLOW_THREADS
+            if (bad || need < 0) break;
+            if (PyObject_GetBuffer(PyTuple_GET_ITEM(p.datas, need), &datas[need], PyBUF_SIMPLE) < 0) {
+                failed = 1;
+                break;
+            }
+            have[need] = 1;
+        }
+        if (have)
+            for (Py_ssize_t i = 0; i < ndatas; i++)
+                if (have[i]) PyBuffer_Release(&datas[i]);
+        PyMem_Free(have);
+        PyMem_Free(datas);
+        Py_ssize_t stop = p.stop;
+        release_piece(&p);
+        if (bad || failed) break;
+        if (row >= stop) {
+            index++;
+            row = 0;
+            skip = 0;
+        }
+    }
+    PyBuffer_Release(&out);
+    if (failed) return NULL;
+    if (bad) {
+        PyErr_SetString(PyExc_ValueError, "a view points outside its data buffers");
+        return NULL;
+    }
+    return Py_BuildValue("(nnnn)", index, row, skip, written);
+}
+
+/* copy_pieces(pieces, index, skip, out) -> (index, skip, written)
+ *
+ * The bytes of the buffers in the list pieces one after the other, from
+ * byte `skip` of pieces[index] on, into out until it is full or the last
+ * piece is copied: a fixed-width column's chunks' values gathered into the
+ * block `fold_arrow_column` hashes, in one call where hashing each chunk's
+ * slice was a call per chunk. index is len(pieces) once all are copied. */
+static PyObject *py_copy_pieces(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    (void)self;
+    Py_ssize_t index, skip;
+    if (parse_many(args, nargs, 4, "copy_pieces", &index, &skip) < 0) return NULL;
+    if (skip < 0) {
+        PyErr_SetString(PyExc_ValueError, "negative skip");
+        return NULL;
+    }
+    PyObject *pieces = args[0];
+    Py_buffer out;
+    if (PyObject_GetBuffer(args[3], &out, PyBUF_WRITABLE) < 0) return NULL;
+    Py_ssize_t room = out.len, written = 0;
+    while (index < PyList_GET_SIZE(pieces) && written < room) {
+        Py_buffer piece;
+        if (PyObject_GetBuffer(PyList_GET_ITEM(pieces, index), &piece, PyBUF_SIMPLE) < 0) {
+            PyBuffer_Release(&out);
+            return NULL;
+        }
+        if (skip > piece.len) {
+            PyBuffer_Release(&piece);
+            PyBuffer_Release(&out);
+            PyErr_SetString(PyExc_ValueError, "skip past the piece");
+            return NULL;
+        }
+        Py_ssize_t take = piece.len - skip;
+        if (take > room - written) take = room - written;
+        if (take >= (1 << 16)) { /* a small copy is quicker than handing the lock over */
+            Py_BEGIN_ALLOW_THREADS
+            memcpy((char *)out.buf + written, (const char *)piece.buf + skip, (size_t)take);
+            Py_END_ALLOW_THREADS
+        } else {
+            memcpy((char *)out.buf + written, (const char *)piece.buf + skip, (size_t)take);
+        }
+        written += take;
+        skip += take;
+        if (skip >= piece.len) {
+            index++;
+            skip = 0;
+        }
+        PyBuffer_Release(&piece);
+    }
+    PyBuffer_Release(&out);
+    return Py_BuildValue("(nnn)", index, skip, written);
+}
+
 static PyMethodDef cviews_methods[] = {
     {"view_lengths", (PyCFunction)(void (*)(void))py_view_lengths, METH_FASTCALL,
      "view_lengths(views, validity, start, stop, out) -> rows written"},
     {"view_values", (PyCFunction)(void (*)(void))py_view_values, METH_FASTCALL,
      "view_values(views, datas, validity, start, skip, stop, out) -> (row, skip, written)"},
+    {"copy_pieces", (PyCFunction)(void (*)(void))py_copy_pieces, METH_FASTCALL,
+     "copy_pieces(pieces, index, skip, out) -> (index, skip, written)"},
+    {"view_lengths_many", (PyCFunction)(void (*)(void))py_view_lengths_many, METH_FASTCALL,
+     "view_lengths_many(pieces, index, row, out) -> (index, row, written)"},
+    {"view_values_many", (PyCFunction)(void (*)(void))py_view_values_many, METH_FASTCALL,
+     "view_values_many(pieces, index, row, skip, out) -> (index, row, skip, written)"},
     {NULL, NULL, 0, NULL}};
 
 int cviews_add_functions(PyObject *m) { return PyModule_AddFunctions(m, cviews_methods); }
