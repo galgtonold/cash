@@ -2232,6 +2232,18 @@ static int epoch_is(PyObject *o, uint64_t want) {
     return (uint64_t)v == want;
 }
 
+/* A pair of a memo's cells: a closure cell and what it held, or a user
+ * function and its ``(__name__, __qualname__)``, which no function watcher
+ * reports set (a name not ending the qualname is keyed: `renamed`). */
+static inline int still_held(PyObject *c, PyObject *held) {
+    if (PyCell_Check(c)) return PyCell_GET(c) == held;
+    if (PyFunction_Check(c) && PyTuple_CheckExact(held) && PyTuple_GET_SIZE(held) == 2) {
+        PyFunctionObject *f = (PyFunctionObject *)c;
+        return f->func_name == PyTuple_GET_ITEM(held, 0) && f->func_qualname == PyTuple_GET_ITEM(held, 1);
+    }
+    return 0;
+}
+
 /* fast_lookup(memo, args, kwargs) -> entry | None
  *   memo  = [world epoch, entries {key: entry}, (cell, held, ...), (type, tag, ...), ...]
  *   entry = (cash epoch, store dict, cache key, store entry, ...)
@@ -2245,10 +2257,8 @@ static PyObject *py_fast_lookup(PyObject *self, PyObject *const *args, Py_ssize_
     if (!epoch_is(PyList_GET_ITEM(memo, 0), world_epoch)) goto declined;
     PyObject *cells = PyList_GET_ITEM(memo, 2), *types = PyList_GET_ITEM(memo, 3);
     if (!PyTuple_CheckExact(cells) || !PyTuple_CheckExact(types)) goto declined;
-    for (Py_ssize_t i = 0; i + 1 < PyTuple_GET_SIZE(cells); i += 2) {
-        PyObject *c = PyTuple_GET_ITEM(cells, i);
-        if (!PyCell_Check(c) || PyCell_GET(c) != PyTuple_GET_ITEM(cells, i + 1)) goto declined;
-    }
+    for (Py_ssize_t i = 0; i + 1 < PyTuple_GET_SIZE(cells); i += 2)
+        if (!still_held(PyTuple_GET_ITEM(cells, i), PyTuple_GET_ITEM(cells, i + 1))) goto declined;
     for (Py_ssize_t i = 0; i + 1 < PyTuple_GET_SIZE(types); i += 2) {
         PyObject *t = PyTuple_GET_ITEM(types, i);
         if (!PyType_Check(t) || !type_tag_is(PyTuple_GET_ITEM(types, i + 1), (PyTypeObject *)t))
@@ -2520,10 +2530,8 @@ static PyObject *py_fast_call(PyObject *self, PyObject *const *args, Py_ssize_t 
     double t0 = clock_perf();
     PyObject *cells = PyList_GET_ITEM(st, S_CELLS), *types = PyList_GET_ITEM(st, S_TYPES);
     if (!PyTuple_CheckExact(cells) || !PyTuple_CheckExact(types)) goto miss;
-    for (Py_ssize_t i = 0; i + 1 < PyTuple_GET_SIZE(cells); i += 2) {
-        PyObject *c = PyTuple_GET_ITEM(cells, i);
-        if (!PyCell_Check(c) || PyCell_GET(c) != PyTuple_GET_ITEM(cells, i + 1)) goto miss;
-    }
+    for (Py_ssize_t i = 0; i + 1 < PyTuple_GET_SIZE(cells); i += 2)
+        if (!still_held(PyTuple_GET_ITEM(cells, i), PyTuple_GET_ITEM(cells, i + 1))) goto miss;
     for (Py_ssize_t i = 0; i + 1 < PyTuple_GET_SIZE(types); i += 2) {
         PyObject *t = PyTuple_GET_ITEM(types, i);
         if (!PyType_Check(t) || !type_tag_is(PyTuple_GET_ITEM(types, i + 1), (PyTypeObject *)t))
