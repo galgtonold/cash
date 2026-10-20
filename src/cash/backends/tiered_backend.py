@@ -76,6 +76,9 @@ class TieredBackend(CacheBackend):
         self.promotion_policy = promotion_policy
         self.policy = policy if policy is not None else PersistencePolicy()
         self.notices = StoreNotices()
+        #: Entries `persist_from_memory` did not write: their RAM copy may
+        #: share a part with the caller's value (`may_share_with_caller`).
+        self.late_writes_refused = 0
         self._clear_watch = ClearWatcher()
         #: Keys read from a slower tier once and not kept by a faster one
         #: (`InMemoryBackend.promote`), oldest first: the next read keeps them.
@@ -639,6 +642,8 @@ class TieredBackend(CacheBackend):
             # parts since: `h, peek = make_helper()` stored with the
             # generator its helpers draw from two draws on, so after a
             # restart the next draw was not the one plain Python gives.
+            stored_metadata["persist_skipped"] = "shared"
+            self.late_writes_refused += 1
             return False
         # Kept as pickle bytes: written as they are, never read out first --
         # unless a tier would serialize the value itself.

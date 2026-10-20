@@ -118,16 +118,6 @@ def test_a_value_that_is_cash_s_own_still_goes_to_disk_as_the_ram_copy(name):
     assert private and written is not value
 
 
-def test_a_later_persist_of_a_value_that_may_share_a_part_is_not_private():
-    tiers, disk = _tiers()
-    value = {"t": _tagged_table()}
-    tiers.set("k", value, dict(_NOTEBOOK))
-    assert disk.calls == []
-    assert tiers.persist_from_memory("k", rebuild_seconds=5.0)
-    ((_key, _written, private),) = disk.calls
-    assert not private
-
-
 def test_an_edit_made_while_the_write_waits_stays_out_of_the_disk_entry(tmp_path):
     disk = FileBackend(str(tmp_path / "cache"))
     tiers = TieredBackend([InMemoryBackend(), disk])
@@ -154,14 +144,30 @@ def _make_helper():
     return helper
 
 
-@pytest.mark.parametrize("value", [_make_helper, TrustsItself], ids=["a helper's closure", "copied by deepcopy"])
-def test_a_later_persist_of_a_value_deepcopy_shared_is_not_written(value):
+def _edit_a_cell(table: pd.DataFrame) -> None:
+    table["t"].iloc[0].note = "EDITED"
+
+
+LATER = {
+    "a helper's closure": (_make_helper, lambda h: h()),
+    "copied by deepcopy": (TrustsItself, lambda v: v.steps.append(1)),
+    "table copied deep, with shared cells": (_tagged_table, _edit_a_cell),
+}
+
+
+@pytest.mark.parametrize("name", LATER)
+def test_a_later_persist_of_a_value_that_may_share_a_part_is_not_written(name):
     """``h, peek = make_helper()``: deepcopy hands back the helpers
     themselves, closure and generator with them. Written once a later cell
     made it worth its disk, the entry held the generator as the draws below
-    had left it, and after a restart the next draw was not plain Python's."""
-    tiers, _disk = _tiers()
-    made = value()
-    tiers.set("k", {"variables": {"h": made}}, dict(_NOTEBOOK))
+    had left it, and after a restart the next draw was not plain Python's.
+    A table pandas copied deep shares its object cells the same way."""
+    make, edit = LATER[name]
+    tiers, disk = _tiers()
+    made = make()
+    tiers.set("k", {"variables": {"v": made}}, dict(_NOTEBOOK))
+    edit(made)
     assert not tiers.persist_from_memory("k", rebuild_seconds=5.0)
-    assert _disk.calls == []
+    assert disk.calls == []
+    assert tiers.backends[0].peek_entry("k", value=False)[0]["persist_skipped"] == "shared"
+    assert tiers.late_writes_refused == 1

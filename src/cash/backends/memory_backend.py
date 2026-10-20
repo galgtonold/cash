@@ -634,9 +634,6 @@ class InMemoryBackend(CacheBackend):
         #: Keys whose stored value is cash's own by construction: nothing
         #: in it is an object the caller's value also holds (`private_copy`).
         self._own: builtins.set[str] = set()
-        #: Keys whose copy fell back to ``deepcopy`` (`_deep_copy`): it may
-        #: still share a part with the caller's value (`may_share_with_caller`).
-        self._deepcopied: builtins.set[str] = set()
         #: Keys whose stored value holds pandas tables kept uncopied with
         #: their digest (`frame_sharing.share_checked`), ``key -> [(table,
         #: digest)]``: a hit, and a disk write of it, first checks they still
@@ -1270,15 +1267,21 @@ class InMemoryBackend(CacheBackend):
     def may_share_with_caller(self, key: str) -> bool:
         """May the value stored for *key* share a part with the caller's?
 
-        A value kept by reference is the caller's, and one ``deepcopy``
-        copied shares what it does not copy: a function's closure (a local
-        helper and the generator it draws from), whatever a class's
-        ``__deepcopy__`` returns as itself. A copy of it made later holds
-        what the caller has done to those parts since, not what was stored.
+        Any value not cash's own (`holds_own_copy`): one kept by reference is
+        the caller's, one ``deepcopy`` copied shares what it does not copy
+        (a function's closure: a local helper and the generator it draws
+        from; whatever a class's ``__deepcopy__`` returns as itself), and a
+        table pandas copied deep keeps the Python objects of its object
+        cells. A copy of it made later holds what the caller has done to
+        those parts since, not what was stored. Tables kept uncopied
+        (`checked_copy`) are not counted: their check finds a change, and
+        the write is dropped.
         """
         with self._lock:
             entry = self._store.get(key)
-            return entry is not None and (key in self._deepcopied or bool(entry[0].get("by_reference")))
+            if entry is None:
+                return False
+            return bool(entry[0].get("by_reference")) or (key not in self._own and key not in self._checked)
 
     def private_copy(self, key: str, default: Any = None, metadata: MetadataDict | None = None) -> Any:
         """The stored value for *key* to write to another tier, when it is a
@@ -1750,8 +1753,6 @@ class InMemoryBackend(CacheBackend):
         checked: list[tuple[Any, str]] = []
         #: Is the stored value cash's own by construction (`private_copy`)?
         own = True
-        #: Did its copy fall back to ``deepcopy`` (`may_share_with_caller`)?
-        by_deepcopy: list[bool] = []
         if dict_rows_size is not None:
             # csv.DictReader / JSON records with immutable values: a new dict
             # per row is a complete copy, built in C, instead of a deepcopy.
@@ -1792,6 +1793,7 @@ class InMemoryBackend(CacheBackend):
             required = bool((metadata or {}).get("copy_required"))
             fell_back: list[bool] = []
             by_spine: list[bool] = []
+            by_deepcopy: list[bool] = []
             _UNPICKLED.seconds = 0.0
             _CHECKED.frames = checked = []
             try:
@@ -1912,10 +1914,6 @@ class InMemoryBackend(CacheBackend):
                 self._own.add(key)
             else:
                 self._own.discard(key)
-            if by_deepcopy:
-                self._deepcopied.add(key)
-            else:
-                self._deepcopied.discard(key)
             if checked:
                 self._checked[key] = checked
             else:
@@ -1977,7 +1975,6 @@ class InMemoryBackend(CacheBackend):
         self._holds_bytes.discard(key)
         self._shared.pop(key, None)
         self._own.discard(key)
-        self._deepcopied.discard(key)
         self._checked.pop(key, None)
         self._gdsf_base.pop(key, None)
         self._seq_by_key.pop(key, None)
@@ -1999,7 +1996,6 @@ class InMemoryBackend(CacheBackend):
             self._holds_bytes.clear()
             self._shared.clear()
             self._own.clear()
-            self._deepcopied.clear()
             self._checked.clear()
             self._gdsf_base.clear()
             self._seq_by_key.clear()
