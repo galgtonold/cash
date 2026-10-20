@@ -153,7 +153,10 @@ class _AnchorsUnstorable(Exception):
 
 
 def _warn_not_stored(exc: BaseException) -> None:
-    """Say that a statement's result was not stored, and why (STORE-FAILED)."""
+    """Say that a statement's result was not stored, and why: STORE-FAILED
+    when running cells again would let it store, else only in the log. A
+    statement binding a logging handler or a tqdm bar holds a lock or a
+    stream no pickle takes, and a warning on each would have no fix."""
     if isinstance(exc, kept_state.DefinedAgain):
         fix = (
             "run the cells that build the value again after the cell that defines the function "
@@ -162,10 +165,8 @@ def _warn_not_stored(exc: BaseException) -> None:
     elif isinstance(exc, kept_state.LoadsOtherwise):
         fix = "run the cells that build the value again, so its objects are made by the code there is now."
     else:
-        fix = (
-            "read the exception: a full disk, a cache_dir you cannot write to, or a value "
-            "that cannot be pickled (a socket, a file handle)."
-        )
+        logger.warning("[CACHE] Failed to write to cache backend: %s", exc)
+        return
     warn_diagnostic(
         CashCacheStoreFailedWarning,
         "STORE-FAILED",
