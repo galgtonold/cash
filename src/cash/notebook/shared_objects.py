@@ -719,10 +719,38 @@ def library_parts_held(value: Any) -> dict[int, Any] | None:
     return inside
 
 
-def is_part_of_any(ids: Mapping[int, Any], sources: Iterable[Any]) -> bool:
-    """Whether one of *ids* is an object one of *sources* is or holds."""
+def ids_through_libraries(values: Iterable[Any]) -> set[int]:
+    """The ids of the objects *values* are and hold, read as `_identities`
+    reads them and, inside a library object, as `_held_from_outside` reads
+    it down: ``argparse.Namespace(rows=rect)`` holds ``rect``, which
+    `_identities` does not read. A type, a function or cash's own record is
+    not one (`_read_down`)."""
     value_types = VALUE_TYPES + library_value_types()
-    return any(key in ids for source in sources for key in _identities(source, value_types))
+    found: set[int] = set()
+    seen: set[int] = set()
+    stack = list(values)
+    while stack:
+        obj = stack.pop()
+        if id(obj) in seen or is_value(obj, value_types):
+            continue
+        seen.add(id(obj))
+        if not len(seen) & 1023:
+            check_walk_budget()
+        children = children_of(obj)
+        if children is not None:
+            if not isinstance(obj, _IMMUTABLE_CONTAINERS):
+                found.add(id(obj))
+                found.update(view_bases(obj))
+            stack.extend(children)
+            continue
+        read_down = _read_down(obj, value_types)
+        if read_down is None:
+            continue
+        found.add(id(obj))
+        found.update(view_bases(obj))
+        if read_down:
+            stack.extend(gc.get_referents(obj))
+    return found
 
 
 def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
