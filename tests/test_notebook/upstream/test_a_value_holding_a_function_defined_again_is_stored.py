@@ -135,3 +135,34 @@ def test_an_instance_of_a_changed_class_is_not_stored_and_says_why(cash_magics, 
         statuses = _run(cash_magics, cells)
     assert statuses[3] != CacheStatus.RESTORED
     assert cash_magics.shell.user_ns["fit"][1] == 8
+
+
+SKLEARN_CLASS = (
+    "from sklearn.base import BaseEstimator, TransformerMixin, MetaEstimatorMixin\n"
+    "class FromRegressor(MetaEstimatorMixin, TransformerMixin, BaseEstimator):\n"
+    "    def __init__(self, k=2):\n"
+    "        self.k = k\n"
+    "    def fit(self, X, y=None):\n"
+    "        self.n_features_in_ = len(X[0])\n"
+    "        return self\n"
+    "    def transform(self, X):\n"
+    "        return [[v * self.k for v in row] for row in X]"
+)
+SKLEARN_BUILD = "import time\nsteps = [FromRegressor(3).fit([[1, 2]])]"
+SKLEARN_FIT = f"fitted = [steps[0], steps[0].transform([[1, 2]]), {SLOW}]"
+
+
+def test_a_scikit_learn_transformer_whose_class_cell_ran_again_is_served_after_a_restart(cash_magics, clean_backend):
+    pytest.importorskip("sklearn")
+    cells = [SKLEARN_CLASS, SKLEARN_BUILD, SKLEARN_CLASS, SKLEARN_FIT]
+    _run(cash_magics, cells)
+    for name in ("FromRegressor", "steps", "fitted", "BaseEstimator", "TransformerMixin", "MetaEstimatorMixin"):
+        if name not in NAMES:
+            NAMES.append(name)
+    _restart(cash_magics)
+
+    statuses = _run(cash_magics, cells)
+    assert statuses[3] == CacheStatus.RESTORED
+    ns = cash_magics.shell.user_ns
+    assert type(ns["fitted"][0]) is ns["FromRegressor"]
+    assert ns["fitted"][1] == [[3, 6]]

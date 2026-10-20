@@ -94,9 +94,16 @@ def test_its_digest_is_its_content_and_the_same_in_every_process(module):
     digest = compute_hash(held)
     assert not is_identity_fallback_hash(held, digest)
     # The next process runs the same cells: a new class, held, defined again.
-    again, _ = _held_then_run_again(module, FIRST)
+    again, mod = _held_then_run_again(module, FIRST)
     assert held[1] is not again[1]
     assert stored_pickle.object_digest(again) == stored_pickle.object_digest(held)
+    # What it loads as after a restart, the class defined now, digests the same.
+    fresh = [mod.Fit(5), mod.Fit]
+    assert stored_pickle.object_digest(fresh) == stored_pickle.object_digest(held)
+    assert compute_hash(fresh) == compute_hash(held)
+    assert kept_state.dumps(fresh, protocol=5) == kept_state.dumps(held, protocol=5)
+    # The module names the class defined now again.
+    assert mod.Fit is fresh[1]
 
 
 def test_a_base_defined_again_with_it_counts_when_it_is_the_same(module):
@@ -172,3 +179,98 @@ def test_an_object_its_own_reduce_would_load_otherwise_is_named(module):
     assert kept_state.loads_otherwise(held, mod.__name__) == "Obj"
     # A class of another module is not this one's to judge.
     assert kept_state.loads_otherwise(held, "elsewhere") is None
+
+
+WRAPPING = """
+import functools
+
+def wrap(f, label):
+    @functools.wraps(f)
+    def wrapped(*args, **kwargs):
+        return (label, f(*args, **kwargs))
+    return wrapped
+
+class Fit:
+    keys = {"transform", "fit"}
+
+    def transform(self, x):
+        return x * 2
+
+    transform = wrap(transform, "out")
+
+    @functools.cached_property
+    def size(self):
+        return 3
+"""
+
+
+def test_a_wrapped_method_sets_and_a_cached_property_are_compared_through(module):
+    mod = module(WRAPPING)
+    held = [mod.Fit()]
+    module(WRAPPING)
+    assert kept_state.same_class(type(held[0]), mod.Fit)
+    loaded = pickle.loads(kept_state.dumps(held, protocol=5))
+    assert type(loaded[0]) is mod.Fit
+    assert loaded[0].transform(2) == ("out", 4)
+
+
+@pytest.mark.parametrize(
+    "again",
+    [
+        WRAPPING.replace("return x * 2", "return x * 3"),
+        WRAPPING.replace('wrap(transform, "out")', 'wrap(transform, "other")'),
+        WRAPPING.replace('{"transform", "fit"}', '{"transform"}'),
+        WRAPPING.replace("return 3", "return 4"),
+    ],
+    ids=["wrapped", "wrapper_closure", "set", "cached_property"],
+)
+def test_a_change_inside_them_is_refused(module, again):
+    mod = module(WRAPPING)
+    held = [mod.Fit()]
+    module(again)
+    assert not kept_state.same_class(type(held[0]), mod.Fit)
+
+
+def test_a_scikit_learn_transformer_defined_again_is_stored():
+    pytest.importorskip("sklearn")
+    source = (
+        "from sklearn.base import BaseEstimator, TransformerMixin\n"
+        "class Similarity(BaseEstimator, TransformerMixin):\n"
+        "    def __init__(self, n=2):\n"
+        "        self.n = n\n"
+        "    def fit(self, X, y=None, sample_weight=None):\n"
+        "        return self\n"
+        "    def transform(self, X):\n"
+        "        return X\n"
+    )
+    mod = types.ModuleType("cash_test_class_defined_again_sklearn")
+    sys.modules[mod.__name__] = mod
+    try:
+        exec(source, mod.__dict__)
+        held = [mod.Similarity(4)]
+        exec(source, mod.__dict__)
+        loaded = pickle.loads(kept_state.dumps(held, protocol=5))
+        assert type(loaded[0]) is mod.Similarity
+        assert loaded[0].n == 4
+    finally:
+        del sys.modules[mod.__name__]
+
+
+ANNOTATED = """
+class Fit:
+    k: int = 2
+
+    def go(self, x: "Later") -> int:
+        return x
+"""
+
+
+def test_annotations_are_compared_as_names_where_not_defined_yet(module):
+    mod = module(ANNOTATED)
+    old = mod.Fit
+    module(ANNOTATED)
+    assert kept_state.same_class(old, mod.Fit)
+    module(ANNOTATED.replace("-> int", "-> str"))
+    assert not kept_state.same_class(old, mod.Fit)
+    module(ANNOTATED.replace("k: int", "k: float"))
+    assert not kept_state.same_class(old, mod.Fit)

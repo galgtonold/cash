@@ -219,9 +219,9 @@ def pickle_value(
     written to a sink that checks them, and is then not pickled flat: a
     value too deep for the pickler raises RecursionError.
 
-    A value holding a function whose cell ran again since is pickled with
-    it by its name, when the one its name holds now is the same definition
-    (`kept_state.defined_again`).
+    A value holding a function or class whose cell ran again since is
+    pickled with it by its name, when the one its name holds now is the
+    same definition (`kept_state.defined_again`, `kept_state.by_name_as_then`).
 
     Raises what pickling *value* raises.
     """
@@ -231,7 +231,9 @@ def pickle_value(
     except pickle.PicklingError as exc:
         if not kept_state.stopped_at_defined_again(exc):
             raise
-    return _pickle_value(value, *args, kept_state.defined_again(reducer_override), kept_state.defined_again())
+    return kept_state.by_name_as_then(
+        lambda override: _pickle_value(value, *args, override, kept_state.defined_again()), reducer_override
+    )
 
 
 def _pickle_value(
@@ -323,7 +325,7 @@ def _keyed_digest(value: Any, deadline: float | None, reducer_override: Any = No
     except pickle.PicklingError as exc:
         if not kept_state.stopped_at_defined_again(exc):
             raise
-    return _keyed_digest_once(value, deadline, kept_state.defined_again())
+    return kept_state.by_name_as_then(lambda override: _keyed_digest_once(value, deadline, override))
 
 
 def _keyed_digest_once(value: Any, deadline: float | None, reducer_override: Any) -> tuple[str, int]:

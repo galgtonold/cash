@@ -34,6 +34,7 @@ __all__ = [
     "FlatValue",
     "LoadsOtherwise",
     "by_name",
+    "by_name_as_then",
     "chooses_its_state",
     "defined_again",
     "dumps",
@@ -72,10 +73,15 @@ def dumps(value: Any, *args: Any, **kwargs: Any) -> bytes:
         )
         if not again:
             raise
-    if kwargs.get("on_retry") is not None:
-        kwargs["on_retry"]()
-    kwargs["reducer_override"] = defined_again(kwargs.get("reducer_override"))
-    return _dumps_once(value, *args, **kwargs)
+    then = kwargs.get("reducer_override")
+
+    def dump(override: Callable[[Any], Any]) -> bytes:
+        if kwargs.get("on_retry") is not None:
+            kwargs["on_retry"]()
+        kwargs["reducer_override"] = override
+        return _dumps_once(value, *args, **kwargs)
+
+    return by_name_as_then(dump, then)
 
 
 def _dumps_once(*args: Any, **kwargs: Any) -> bytes:
@@ -1820,7 +1826,7 @@ def named_now(obj: Any) -> Any:
     return None
 
 
-def defined_again(then: Any = None) -> Callable[[Any], Any]:
+def defined_again(then: Any = None, classes: list[tuple[type, type]] | None = None) -> Callable[[Any], Any]:
     """A pickler's ``reducer_override`` for a value that holds a function
     whose cell ran again: its module names another function now, and pickle
     refuses the one held ("not the same object as __main__.column_ratio").
@@ -1833,7 +1839,8 @@ def defined_again(then: Any = None) -> Callable[[Any], Any]:
 
     A class is pickled by its name the same way when the one named now is
     the same definition (`same_class`): an instance of it then loads as an
-    instance of the class defined now.
+    instance of the class defined now. Each such class is added to
+    *classes*, with the one named now, for `by_name_as_then`.
 
     A notebook that repeats a cell defining ``column_ratio`` after building
     a pipeline on it held the first function: E6's fitted grid search was
@@ -1851,10 +1858,57 @@ def defined_again(then: Any = None) -> Callable[[Any], Any]:
                         f"it holds {name} as defined before its cell ran again with different code, "
                         f"and a stored copy could only load the {name} defined now"
                     )
+                if classes is not None and isinstance(obj, type):
+                    classes.append((obj, current))
                 return by_name, (obj.__module__, obj.__qualname__)
         return NotImplemented if then is None else then(obj)
 
     return override
+
+
+def by_name_as_then(dump: Callable[[Callable[[Any], Any]], Any], then: Any = None) -> Any:
+    """``dump(override)``, *override* a `defined_again` asking *then* about
+    everything else, with the classes
+    whose cell ran again pickled under their names as any class is.
+
+    A class `defined_again` pickles by its name is written as a call that
+    finds it (`by_name`), not as a plain name: a value holding it digested
+    apart from the same value loaded after a restart, which holds the class
+    defined now. So when the value holds one, *dump* runs again with each
+    of them named by its module for the while (`_named_as_then`), and pickle
+    writes its name, as for the class defined now."""
+    classes: list[tuple[type, type]] = []
+    first = dump(defined_again(then, classes))
+    if not classes:
+        return first
+    with _named_as_then(classes):
+        return dump(defined_again(then))
+
+
+#: One `_named_as_then` at a time: they put back what they find.
+_NAMING = threading.Lock()
+
+
+@contextlib.contextmanager
+def _named_as_then(classes: list[tuple[type, type]]) -> Any:
+    """Each class of *classes* (old, named now) named by its module in place
+    of the one named now, until the block ends."""
+    swapped: list[tuple[Any, str, type, type]] = []
+    with _NAMING:
+        try:
+            for old, current in classes:
+                *path, name = old.__qualname__.split(".")
+                owner: Any = sys.modules.get(old.__module__)
+                for part in path:
+                    owner = getattr(owner, part, None)
+                if owner is not None and getattr(owner, name, None) is current:
+                    setattr(owner, name, old)
+                    swapped.append((owner, name, old, current))
+            yield
+        finally:
+            for owner, name, old, current in reversed(swapped):
+                if getattr(owner, name, None) is old:
+                    setattr(owner, name, current)
 
 
 class DefinedAgain(pickle.PicklingError):
@@ -1879,15 +1933,26 @@ def same_definition(old: types.FunctionType, new: types.FunctionType, classes: t
     hold *new* instead: the same code (lines aside), the same globals, no
     closure, and alike defaults, attributes, docstring and annotations.
 
-    Methods of the classes *classes* (old, new) may close over their own
-    class only (``super()`` and ``__class__`` do)."""
+    Some closures are the same too (`_alike_cells`): methods of the classes
+    *classes* (old, new) closing over their own class (``super()`` and
+    ``__class__`` do), and a wrapper (``functools.wraps``: sklearn wraps a
+    transformer's ``transform``) closing over the function it wraps, the
+    same definition, and plain data."""
     from cash.decorator.function_identity import code_fingerprint
 
     if old.__globals__ is not new.__globals__:
         return False
-    if old.__closure__ is not None or new.__closure__ is not None:
-        if not _own_class_cells(old, new, classes):
-            return False
+    wrapped = old.__dict__.get("__wrapped__"), new.__dict__.get("__wrapped__")
+    if (wrapped[0] is None) != (wrapped[1] is None):
+        return False
+    if wrapped[0] is not None and not (
+        type(wrapped[0]) is types.FunctionType
+        and type(wrapped[1]) is types.FunctionType
+        and same_definition(wrapped[0], wrapped[1], classes)
+    ):
+        return False
+    if (old.__closure__ is not None or new.__closure__ is not None) and not _alike_cells(old, new, classes, wrapped):
+        return False
     a, b = old.__code__, new.__code__
     if (a.co_argcount, a.co_posonlyargcount, a.co_kwonlyargcount, a.co_flags) != (
         b.co_argcount,
@@ -1899,50 +1964,98 @@ def same_definition(old: types.FunctionType, new: types.FunctionType, classes: t
     pairs = [
         (old.__defaults__, new.__defaults__),
         (old.__kwdefaults__, new.__kwdefaults__),
-        (old.__dict__, new.__dict__),
+        (
+            {k: v for k, v in old.__dict__.items() if k != "__wrapped__"},
+            {k: v for k, v in new.__dict__.items() if k != "__wrapped__"},
+        ),
         (old.__doc__, new.__doc__),
         (getattr(old, "__type_params__", ()), getattr(new, "__type_params__", ())),
     ]
-    annotate = getattr(old, "__annotate__", None), getattr(new, "__annotate__", None)
-    if sys.version_info >= (3, 14):
-        # Annotations are made when asked for: compare what makes them.
-        if (annotate[0] is None) != (annotate[1] is None):
-            return False
-        if annotate[0] is not None and not same_definition(*annotate):
-            return False
-    else:
-        pairs.append((old.__annotations__, new.__annotations__))
+    if not _alike_annotations(old, new):
+        return False
     return all(_alike(x, y) for x, y in pairs) and code_fingerprint(a) == code_fingerprint(b)
 
 
-def _own_class_cells(old: types.FunctionType, new: types.FunctionType, classes: tuple[type, type] | None) -> bool:
-    """Do methods *old* and *new* close over nothing but their own class,
-    *classes* (old, new) (`same_definition`)?"""
-    if classes is None or old.__closure__ is None or new.__closure__ is None:
-        return False
-    if old.__code__.co_freevars != ("__class__",) or new.__code__.co_freevars != ("__class__",):
-        return False
+def _alike_annotations(old: Any, new: Any) -> bool:
+    """Do functions or classes *old* and *new* have alike annotations?
+    From 3.14 they are made when asked for (closing over the class body of
+    a method), and are read as names where a name is not defined yet
+    (``annotationlib``'s FORWARDREF)."""
     try:
-        return old.__closure__[0].cell_contents is classes[0] and new.__closure__[0].cell_contents is classes[1]
-    except ValueError:  # an empty cell
+        return _alike(_annotations(old), _annotations(new))
+    except Exception:  # noqa: BLE001 - an annotation that cannot be read: not alike
         return False
+
+
+def _annotations(obj: Any) -> Any:
+    """*obj*'s annotations, read without leaving them on it: asking a class
+    for them stores them in its ``__dict__``, which what-ran traces digest."""
+    own = vars(obj) if isinstance(obj, type) else None
+    if sys.version_info < (3, 14):
+        return own.get("__annotations__") if own is not None else obj.__annotations__
+    import annotationlib
+
+    annotate = (own.get("__annotate_func__") or own.get("__annotate__")) if own is not None else obj.__annotate__
+    if annotate is None:
+        return own.get("__annotations__") if own is not None else None
+    return annotationlib.call_annotate_function(annotate, annotationlib.Format.FORWARDREF)
+
+
+def _alike_cells(
+    old: types.FunctionType, new: types.FunctionType, classes: tuple[type, type] | None, wrapped: tuple[Any, Any]
+) -> bool:
+    """Do *old* and *new* close over the same names, each holding their own
+    class *classes* (old, new) as ``__class__``, or, for a wrapper, the
+    function each wraps (*wrapped*, old and new) or alike plain data
+    (`same_definition`)?"""
+    if old.__closure__ is None or new.__closure__ is None or old.__code__.co_freevars != new.__code__.co_freevars:
+        return False
+    for name, x, y in zip(old.__code__.co_freevars, old.__closure__, new.__closure__):
+        try:
+            a, b = x.cell_contents, y.cell_contents
+        except ValueError:  # an empty cell
+            return False
+        if name == "__class__" and classes is not None and a is classes[0] and b is classes[1]:
+            continue
+        if wrapped[0] is not None and a is wrapped[0] and b is wrapped[1]:
+            continue
+        if wrapped[0] is None or type(a) not in _ALIKE_ATOMS or not _alike(a, b):
+            return False
+    return True
 
 
 #: What a class's ``__dict__`` holds that differs between two runs of one
-#: cell: where it was defined, its own descriptors, and the slot names
-#: copyreg keeps once an instance was pickled.
-_CLASS_PLACE = frozenset({"__module__", "__qualname__", "__firstlineno__", "__dict__", "__weakref__", "__slotnames__"})
+#: cell: where it was defined, its own descriptors, the slot names copyreg
+#: keeps once an instance was pickled, an ABC's registry, and from 3.14 what
+#: makes its annotations (compared made, `_alike_annotations`).
+_CLASS_PLACE = frozenset(
+    {
+        "__module__",
+        "__qualname__",
+        "__firstlineno__",
+        "__dict__",
+        "__weakref__",
+        "__slotnames__",
+        "_abc_impl",
+        "__annotate_func__",
+        "__annotate__",
+        "__annotations_cache__",
+        "__annotations__",
+    }
+)
 
 
 def same_class(old: type, new: type) -> bool:
     """Do classes *old* and *new* do the same, so that a value holding *old*
     or an instance of it can hold *new* instead (`defined_again`): the same
     metaclass and bases (a base defined again counts when it is the same
-    class), and in their bodies the same names, each bound to the same
-    definition (`same_definition`, through ``staticmethod``,
-    ``classmethod`` and ``property``), slot or plain data. Anything else in
-    a body (a dataclass's fields, a descriptor of a library's) is not
-    compared, and the class counts as another one."""
+    class), alike annotations, and in their bodies the same names, each
+    bound to the same definition (`same_definition`, through
+    ``staticmethod``, ``classmethod``, ``property`` and
+    ``functools.cached_property``), slot, plain data, or an object of a
+    library's Python class holding plain data. Anything else in a body (a
+    dataclass's fields) is not compared, and the class counts as another
+    one."""
     if type(old) is not type(new) or len(old.__bases__) != len(new.__bases__):
         return False
     for a, b in zip(old.__bases__, new.__bases__):
@@ -1951,28 +2064,54 @@ def same_class(old: type, new: type) -> bool:
     ours, theirs = vars(old), vars(new)
     if ours.keys() - _CLASS_PLACE != theirs.keys() - _CLASS_PLACE:
         return False
+    if not _alike_annotations(old, new):
+        return False
     return all(_same_member(ours[k], theirs[k], (old, new)) for k in ours.keys() - _CLASS_PLACE)
 
 
 def _same_member(a: Any, b: Any, classes: tuple[type, type]) -> bool:
     """Are *a* and *b*, bound to one name in the bodies of *classes* (old,
     new), the same definition (`same_class`)?"""
-    if type(a) is not type(b):
+    t = type(a)
+    if t is not type(b):
         return False
-    if type(a) is types.FunctionType:
+    if t is types.FunctionType:
         return same_definition(a, b, classes)
-    if type(a) in (staticmethod, classmethod):
+    if t in (staticmethod, classmethod):
         return _same_member(a.__func__, b.__func__, classes)
-    if type(a) is property:
+    if t is property:
         return all(
             (x is None and y is None) or (x is not None and y is not None and _same_member(x, y, classes))
             for x, y in ((a.fget, b.fget), (a.fset, b.fset), (a.fdel, b.fdel))
         ) and _alike(a.__doc__, b.__doc__)
-    if type(a) is types.MemberDescriptorType:  # a slot
+    if t is functools.cached_property:
+        return a.attrname == b.attrname and _same_member(a.func, b.func, classes) and _alike(a.__doc__, b.__doc__)
+    if t is types.MemberDescriptorType:  # a slot
         return a.__name__ == b.__name__ and a.__objclass__ is classes[0] and b.__objclass__ is classes[1]
     if isinstance(a, type):
         return a is b or (named_now(a) is b and same_class(a, b))
+    if _plain_library_object(a, classes[0].__module__):
+        # sklearn's ``set_fit_request``: its class's code, and what it holds.
+        return _alike(vars(a), vars(b))
     return _alike(a, b)
+
+
+def _plain_library_object(obj: Any, module: str) -> bool:
+    """Is *obj* an object of a Python class of a module other than
+    *module*, kept wholly in its ``__dict__`` (no slots), so that its class's
+    code and that dict say what it does (`_same_member`)?"""
+    t = type(obj)
+    return (
+        bool(t.__flags__ & _HEAP_TYPE)
+        and t.__module__ != module
+        and "__slots__" not in vars(t)
+        and type(getattr(obj, "__dict__", None)) is dict
+        and all("__slots__" not in vars(base) for base in t.__mro__[1:-1])
+    )
+
+
+#: ``Py_TPFLAGS_HEAPTYPE``: a class made by a class statement, not in C.
+_HEAP_TYPE = 1 << 9
 
 
 def reduces_its_own(cls: type, module: str) -> bool:
@@ -2053,4 +2192,8 @@ def _alike(a: Any, b: Any) -> bool:
         return len(a) == len(b) and all(_alike(x, y) for x, y in zip(a, b))
     if t is dict:
         return a.keys() == b.keys() and all(_alike(v, b[k]) for k, v in a.items())
+    if t in (set, frozenset):
+        return all(type(x) in _ALIKE_ATOMS for x in a) and a == b
+    if t.__name__ == "ForwardRef" and t.__module__ in ("annotationlib", "typing"):
+        return bool(a == b)
     return False
