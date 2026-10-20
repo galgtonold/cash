@@ -148,11 +148,21 @@ def served_fast(f, *args, **kwargs):
 
 
 def warm(f, *args, **kwargs):
-    """Call *f* until the memo serves it (miss, remembered, served)."""
-    for _ in range(6):
+    """Call *f* until the memo serves it (miss, remembered, served).
+
+    Not a fixed number of calls: a dict the memo watches that another
+    thread changes (a background write's first import adds to
+    ``sys.modules``) sends it back to scan, at a doubling backoff. A traced
+    caller needs five calls with nothing moving, and two such changes in a
+    loaded run made six too few. Whatever the memo serves is still
+    checked by the test."""
+    deadline = time.monotonic() + 5.0
+    while True:
         result, fast = served_fast(f, *args, **kwargs)
         if fast:
             return result
+        if time.monotonic() > deadline:
+            break
     raise AssertionError(f"{f.__name__}{args} was never served from the memo")
 
 

@@ -12,6 +12,7 @@ that function is a miss.
 from __future__ import annotations
 
 import sys
+import time
 
 import pytest
 
@@ -64,10 +65,16 @@ def served_fast(f, *args):
 
 
 def warm(f, *args):
-    for _ in range(8):
+    """Call *f* until the memo serves it: for as long as another thread's
+    change to a watched dict sends it back to scan (as the warm of
+    `test_a_remembered_hit_is_served_only_while_nothing_moved` says)."""
+    deadline = time.monotonic() + 5.0
+    while True:
         result, fast = served_fast(f, *args)
         if fast:
             return result
+        if time.monotonic() > deadline:
+            break
     raise AssertionError(f"{f.__name__}{args} was never served from the memo")
 
 
