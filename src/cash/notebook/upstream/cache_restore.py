@@ -17,8 +17,10 @@ from typing import TYPE_CHECKING, Any
 
 from ..._clock import perf_counter as _perf_counter
 from ..._paths import resolve_file_dep_path
+from ...analysis.annotations import get_statement_annotations
 from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
+from ...backends._base import ttl_expired
 from ...tracking.env_reads import environment_unchanged
 from ...tracking.file_dep_snapshot import snapshot_is_fresh
 from ..anchors import resolve_anchors
@@ -32,9 +34,10 @@ from ..lineage_formula import (
     key_hidden_reads,
 )
 from ..lineage_store import restore_frozen_tag, tag_value
-from ..restored_var import FORWARD_PROBE_PLACEHOLDER, apply_held_var, present_holders
+from ..restored_var import FORWARD_PROBE_PLACEHOLDER, HeldObject, apply_held_var, present_holders
 from ..statement._metadata import StatementCacheMetadata
 from ..statement.derivation_edges import record_shared_object_edges
+from ..statement.directives import statement_directives, ttl_floor_from_called_functions
 from ._types import key_inputs, key_lineages
 from .cache_probe import CacheProbe
 
@@ -99,6 +102,9 @@ class CacheRestorer:
         #: Called with the names a restore is about to bind, before it binds
         #: them; raises to stop it (the checker's unsaved-run refusal).
         self.guard: Callable[[set[str]], None] | None = None
+        #: The cell's TTL (``ttl=`` of the run), which the statement's lookup
+        #: applies to the entry the forward probe finds (`_lookup_refuses`).
+        self.lookup_ttl: int | None = None
         #: What the entry the last successful `try_virtual_restore` restored
         #: showed when it ran: ``{"stdout", "stderr", "rich_outputs"}``.
         self.last_outputs: dict[str, Any] = {}
@@ -454,7 +460,7 @@ class CacheRestorer:
                 not metadata
                 or metadata.get("metadata_only")
                 or not CacheProbe.files_fresh(metadata.get("file_dependencies", {}), memo_key=cache_key)
-                or self._lookup_refuses(metadata)
+                or self._lookup_refuses(metadata, self._statement_ttl(raw_cell, node, inputs))
             ):
                 needed_first |= unresolved
                 continue
@@ -469,10 +475,8 @@ class CacheRestorer:
             # simulation did: record them, so the restore finds the entry, and
             # hold each name's place until the restore fills it.
             for var in produced:
-                # By id: held here, the object would count as held by
-                # another container, and the hit be refused for it.
                 self.tracking_state.probe_held[var] = (
-                    id(self.shell.user_ns.get(var, FORWARD_PROBE_PLACEHOLDER)),
+                    HeldObject(self.shell.user_ns.get(var, FORWARD_PROBE_PLACEHOLDER)),
                     self.tracking_state.variable_lineage.get(var),
                     stmt_code,
                 )
@@ -498,14 +502,27 @@ class CacheRestorer:
                 broken_vars,
             )
 
-    def _lookup_refuses(self, metadata: dict) -> bool:
+    def _statement_ttl(self, raw_cell: str, node: ast.stmt, inputs: set[str]) -> int | None:
+        """The TTL the statement's lookup applies: the cell's, or its own
+        ``# @cash:ttl``, lowered to that of a ``@cash.cache`` function it
+        calls (`statement_directives`, `ttl_floor_from_called_functions`)."""
+        try:
+            annotation = get_statement_annotations(raw_cell, node)
+        except (SyntaxError, ValueError, TypeError):
+            annotation = None
+        ttl = statement_directives(annotation, self.lookup_ttl, False)[0]
+        return ttl_floor_from_called_functions(inputs, ttl, self.shell.user_ns)
+
+    def _lookup_refuses(self, metadata: dict, ttl: int | None = None) -> bool:
         """Would the statement's lookup refuse the entry the probe found, as
-        `StatementFreshness.check_cache` does: a variable stored with its
-        outputs (``holders``) that is bound now with another lineage, or an
-        environment variable it read changed? The probe keys a broken var it
+        `StatementFreshness.check_cache` does: past its *ttl*, a variable
+        stored with its outputs (``holders``) that is bound now with another
+        lineage, or an environment variable it read changed? The probe keys a broken var it
         resolves by the lineage the hit gives it, and leaves its value as it
         is: refused after all, the statement ran on that value (``w -= 1``
         run again alone, its result stored with ``layers``, reached -2)."""
+        if ttl is not None and ttl_expired(metadata.get("timestamp"), ttl):
+            return True
         lineage = self.tracking_state.variable_lineage
         user_ns = self.shell.user_ns
         for name, before in (metadata.get("holders") or {}).items():

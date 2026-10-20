@@ -171,6 +171,7 @@ from ..run_memo import forget_file_state_this_run
 from ..shared_objects import (
     VALUE_TYPES,
     GaveUp,
+    ViewBasesCutShort,
     WalkBudgetExceeded,
     anchors_held,
     is_value,
@@ -1346,14 +1347,14 @@ class StatementProcessor:
         user_ns = self.shell.user_ns
         stale = sorted(
             name
-            for name, (held_id, _lineage, code) in held.items()
-            if code == run.code and name in run.inputs and id(user_ns.get(name, FORWARD_PROBE_PLACEHOLDER)) == held_id
+            for name, (was, _lineage, code) in held.items()
+            if code == run.code and name in run.inputs and was.is_(user_ns.get(name, FORWARD_PROBE_PLACEHOLDER))
         )
         if not stale:
             return
         lineage = self.tracking_state.lineage
         for name in stale:
-            _held_id, before, _code = held.pop(name)
+            _was, before, _code = held.pop(name)
             if before is None:
                 lineage.discard(name)
             else:
@@ -2589,7 +2590,13 @@ class StatementProcessor:
         try:
             with walk_budget(share_check_budget(cost)):
                 for name in outputs:
-                    found = view_base_names([captured_vars[name]], user_ns, skip_name=skip_name)
+                    try:
+                        found = view_base_names([captured_vars[name]], user_ns, skip_name=skip_name, holders=inputs)
+                    except ViewBasesCutShort as cut:
+                        # What it found before the budget ran out stays linked.
+                        if cut.names - {name}:
+                            links.append(([name], cut.names - {name}))
+                        raise
                     found |= borrowed_memory_names(
                         [captured_vars[name]], user_ns, skip_name=skip_name, containers=inputs
                     )

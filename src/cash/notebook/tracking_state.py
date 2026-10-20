@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Set
 from dataclasses import MISSING, dataclass, field, fields
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cash.notebook.file_round_trips import FileRoundTrips
 from cash.notebook.lineage_store import InputLineages, LineageStore
 from cash.notebook.per_item_reruns import PerItemReruns
 from cash.notebook.recorded_reads import ReadRecord
 from cash.notebook.value_cutoff import ValueCutoff
+
+if TYPE_CHECKING:
+    from cash.notebook.restored_var import HeldObject
 
 __all__ = ["TrackingState"]
 
@@ -123,12 +126,12 @@ class TrackingState:
     # W: UpstreamChecker. R: StatementRandomness.
     running_cell_rerun: bool = False
 
-    # name -> (the id of the object it held, its lineage, the statement) for
+    # name -> (the object it held, by `HeldObject`, its lineage, the statement) for
     # each broken input that statement's own cache hit is to restore (the
     # forward probe): keyed as the restored value, it holds the old one until
     # the hit binds it. A miss must not run on it (``NOTEBOOK-INPUT-NOT-REBUILT``).
     # W: CacheRestorer, UpstreamChecker. R: StatementProcessor.
-    probe_held: dict[str, tuple[int, str | None, str]] = field(default_factory=dict)
+    probe_held: dict[str, tuple[HeldObject, str | None, str]] = field(default_factory=dict)
 
     # sha256(cell source) -> the global RNG state after that cell ran, so a
     # downstream draw can be restored to its position-correct state.

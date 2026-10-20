@@ -45,7 +45,7 @@ import re
 import sys
 import types
 import uuid
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from time import perf_counter as _perf_counter
 from typing import Any
 
@@ -560,17 +560,22 @@ def view_bases(value: Any) -> list[int]:
 
 
 def view_base_names(
-    values: Iterable[Any], user_ns: Mapping[str, Any], skip_name: Callable[[str], bool] = lambda name: False
+    values: Iterable[Any],
+    user_ns: Mapping[str, Any],
+    skip_name: Callable[[str], bool] = lambda name: False,
+    holders: Collection[str] | None = None,
 ) -> set[str]:
     """The variables of *user_ns* bound to an array that a numpy view among
-    *values*, or held in them, sits on (`view_bases`), or holding one in a
-    container or an attribute (`_holds_bases`).
+    *values*, or held in them, sits on (`view_bases`), and those of
+    *holders* (every variable when None) that hold one in a container or an
+    attribute, at any depth (`_holding_bases`).
 
     The share check counts references, and an array is a leaf to it: ``head
     = big[:5]`` holds ``big`` through ``head.base``, which no count of
     ``head`` shows, while a later ``big *= 3`` changes what ``head`` reads.
     Walked as `_identities` walks, under the walk budget in progress
     (`check_walk_budget`); JSON-like data holds no array and is not walked.
+    Out of budget, `ViewBasesCutShort` carries the variables found so far.
     """
     np = sys.modules.get("numpy")
     if np is None:
@@ -598,43 +603,95 @@ def view_base_names(
     del stack, seen
     if not bases:
         return set()
-    return {
-        name
-        for name, value in list(user_ns.items())
-        if not skip_name(name) and _holds_bases(value, bases, views, np, value_types, plain_leaves)
-    }
+    names: set[str] = set()
+    containers: dict[int, list[str]] = {}
+    for name, value in list(user_ns.items()):
+        if skip_name(name):
+            continue
+        if on_bases(value, bases, views, np):
+            names.add(name)
+        elif (holders is None or name in holders) and _may_hold_bases(value, np, plain_leaves):
+            containers.setdefault(id(value), []).append(name)
+    if containers:
+        try:
+            names |= _holding_bases(containers, user_ns, bases, views, np, value_types)
+        except WalkBudgetExceeded:
+            raise ViewBasesCutShort(names) from None
+    return names
 
 
-def _holds_bases(
-    value: Any, bases: set[int], views: list[Any], np: Any, value_types: tuple[type, ...], plain_leaves: Any
-) -> bool:
-    """Whether *value* is an array on *bases* (`on_bases`), or holds one at
-    any depth: ``data = {'x': arr}`` holds the array ``data['x'][2:5]`` sits
-    on, and a write through that view changes ``data``. An array is not
-    looked into, nor a module or a class (shared, never part of a value),
-    nor JSON-like data; under the walk budget in progress."""
-    if on_bases(value, bases, views, np):
-        return True
-    if isinstance(value, (np.ndarray, type, types.ModuleType)) or _plain_data.is_tree(value, plain_leaves):
-        return False
+def _may_hold_bases(value: Any, np: Any, plain_leaves: Any) -> bool:
+    """Whether *value* is worth walking for an array: not an array (looked
+    at by `on_bases`), a module or a class (shared, never part of a value),
+    nor JSON-like data."""
+    return not isinstance(value, (np.ndarray, type, types.ModuleType)) and not _plain_data.is_tree(value, plain_leaves)
+
+
+def _holding_bases(
+    containers: dict[int, list[str]],
+    user_ns: Mapping[str, Any],
+    bases: set[int],
+    views: list[Any],
+    np: Any,
+    value_types: tuple[type, ...],
+) -> set[str]:
+    """The names of *containers* (by the id of the value they are bound to)
+    whose value holds an array on *bases* at any depth: ``data = {'x':
+    arr}`` holds the array ``data['x'][2:5]`` sits on, and a write through
+    that view changes ``data``. Holding the views themselves is not holding
+    what they sit on.
+
+    One walk down from all of them at once, each object read once however
+    many of them hold it, remembering who reached whom; then up from the
+    objects found to the variables. An array is not looked into; a
+    library's object is, by what the garbage collector sees it hold."""
     view_ids = {id(view) for view in views}
-    seen: set[int] = set()
-    stack = list(children_of(value) or ())
+    parents: dict[int, list[int]] = {key: [] for key in containers}
+    stack = [(user_ns[names[0]], key) for key, names in containers.items()]
+    expanded: set[int] = set()
+    hits: set[int] = set()
     pops = 0
     while stack:
         pops += 1
         if not pops & 1023:
             check_walk_budget()
-        obj = stack.pop()
-        if is_value(obj, value_types) or id(obj) in seen:
+        obj, key = stack.pop()
+        if key in expanded:
             continue
-        seen.add(id(obj))
-        # Holding the views themselves is not holding what they sit on.
-        if id(obj) not in view_ids and on_bases(obj, bases, views, np):
-            return True
-        if not isinstance(obj, (np.ndarray, type, types.ModuleType)):
-            stack.extend(children_of(obj) or ())
-    return False
+        expanded.add(key)
+        children = children_of(obj)
+        if children is None:
+            # A library's object, which the share check reads as one closed
+            # value: what it holds is still written through a view of it
+            # (``v = model.coef_[2:5]``), so it is read down as the garbage
+            # collector sees it.
+            children = gc.get_referents(obj)
+        for child in children:
+            if is_value(child, value_types):
+                continue
+            ckey = id(child)
+            if ckey not in view_ids and on_bases(child, bases, views, np):
+                hits.add(key)
+                continue
+            if isinstance(child, (np.ndarray, type, types.ModuleType)):
+                continue
+            seen_from = parents.get(ckey)
+            if seen_from is not None:
+                seen_from.append(key)
+                continue
+            parents[ckey] = [key]
+            stack.append((child, ckey))
+    found: set[str] = set()
+    climb = list(hits)
+    reached: set[int] = set()
+    while climb:
+        key = climb.pop()
+        if key in reached:
+            continue
+        reached.add(key)
+        found.update(containers.get(key, ()))
+        climb.extend(parents.get(key, ()))
+    return found
 
 
 def on_bases(value: Any, bases: set[int], views: list[Any], np: Any) -> bool:
@@ -832,6 +889,15 @@ def shared_names(
 
 class WalkBudgetExceeded(Exception):
     """The share check ran past its time budget (:func:`walk_budget`)."""
+
+
+class ViewBasesCutShort(WalkBudgetExceeded):
+    """`view_base_names` ran out of budget; *names* are the variables it
+    found bound to a base array before it did."""
+
+    def __init__(self, names: set[str]) -> None:
+        super().__init__()
+        self.names = names
 
 
 _DEADLINE: list[CpuLimit | None] = [None]

@@ -723,6 +723,7 @@ class UpstreamChecker:
 
             unsaved = self._unsaved_bindings(notebook_cells, notebook_path)
             self.simulator.restorer.guard = (lambda names: self._refuse_to_undo(unsaved, names)) if unsaved else None
+            self.simulator.restorer.lookup_ttl = global_ttl
             records_before = self.simulator.lineage_records()
             # The cell's own source goes along: the classifier re-simulates it to
             # tell its own earlier run apart from an upstream edit.

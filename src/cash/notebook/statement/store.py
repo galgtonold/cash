@@ -14,7 +14,6 @@ import ast
 import hashlib
 import inspect
 import logging
-import pickle
 import time
 import types
 from collections.abc import Mapping
@@ -983,7 +982,7 @@ class StatementStore:
             stored_pickle.nest(payload, *nestable)
         try:
             self.cash_instance.backend.set(cache_key, payload, wire)
-        except (OSError, TypeError, ValueError, pickle.PicklingError, RuntimeError) as e:
+        except Exception as e:  # noqa: BLE001 - copying runs the value's own code (``__deepcopy__``, ``__reduce__``)
             _warn_not_stored(e)
         else:
             # Charge this write to its statement's amplification budget, now

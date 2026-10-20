@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 from cash._memo import CODE_OBJECTS, NOTEBOOK_STATEMENTS, LruMemo
+from cash._user_attrs import attribute_or
 from cash.analysis.bytecode import argvals
 from cash.notebook.lineage_store import resolve_lineage
 from cash.source_norm import exact_source_digest, unparse_without_docstrings
@@ -473,7 +474,7 @@ def called_function_dependencies(
         if name in codes:
             return codes[name]
         found = _held_codes(name, user_ns, variable_lineage, unfollowed, module_classes)
-        own = getattr(user_ns.get(name), "__code__", None)
+        own = attribute_or(user_ns.get(name), "__code__")
         held_only.update(id(code) for code in _nested_codes_of(c for c in found if c is not own))
         if not found and virtual is not None and name not in user_ns:
             code_obj = virtual.code_for(name)
@@ -720,7 +721,7 @@ def _held_codes(
         return []
     value = user_ns.get(name)
     found: list[types.CodeType] = []
-    code_obj = getattr(value, "__code__", None)
+    code_obj = attribute_or(value, "__code__")
     if code_obj is not None:
         found.append(code_obj)
     lineage = variable_lineage.get(name) if variable_lineage is not None else None

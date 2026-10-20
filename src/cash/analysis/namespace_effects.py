@@ -22,6 +22,8 @@ import types
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 from .._memo import STATEMENTS, USER_CALLEES, LruMemo
 from ..diagnostics import warn_diagnostic
 from ..effects import is_open_write_mode
@@ -2215,7 +2217,7 @@ def is_estimator(value: object) -> bool:
     """
     if isinstance(value, types.ModuleType):
         return False
-    return callable(getattr(value, "fit", None)) and callable(getattr(value, "get_params", None))
+    return callable(attribute_or(value, "fit")) and callable(attribute_or(value, "get_params"))
 
 
 #: Methods that fit their receiver in place, whatever they return.

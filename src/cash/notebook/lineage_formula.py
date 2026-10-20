@@ -23,6 +23,8 @@ import types
 from collections.abc import Mapping
 from typing import Any, Callable, Iterable
 
+from cash._user_attrs import attribute_or
+
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.ast_util import parse_cached
 from ..analysis.mutations import repeatable_setting_receiver
@@ -54,7 +56,7 @@ def is_cash_instrumentation(val: object) -> bool:
     ``__getattr__`` (``MagicMock``, RPC proxies) has a truthy attribute for
     any name, and treating it as instrumentation would drop a real input.
     """
-    if getattr(val, "_is_file_tracker_patch", False) is True:
+    if attribute_or(val, "_is_file_tracker_patch", False) is True:
         return True
     shell = sys.modules.get("IPython.core.interactiveshell")
     return shell is not None and val is getattr(shell, "_modified_open", _NO_SHELL_OPEN)

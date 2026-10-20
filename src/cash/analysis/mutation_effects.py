@@ -25,6 +25,8 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 from ..content_hashers import builtin_hash_family
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..tracking.randomness.state import rng_carrier_kind
@@ -125,7 +127,7 @@ def live_function_source(name: str, namespace: Mapping[str, Any]) -> str | None:
         return None
     seen: set[int] = set()
     for value in namespace.values():
-        module_globals = getattr(value, "__globals__", None)
+        module_globals = attribute_or(value, "__globals__")
         if not isinstance(module_globals, dict) or id(module_globals) in seen:
             continue
         seen.add(id(module_globals))

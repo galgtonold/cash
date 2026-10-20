@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from cash._user_attrs import attribute_or
+
 if TYPE_CHECKING:
     from ...analysis.annotations import CacheAnnotation
 
@@ -59,7 +61,7 @@ def ttl_floor_from_called_functions(inputs: set[str], effective_ttl: int | None,
     floor = effective_ttl
     for name in inputs:
         fn = user_ns.get(name)
-        if fn is None or not getattr(fn, "_cash_cached", False):
+        if fn is None or attribute_or(fn, "_cash_cached", False) is not True:
             continue
         declared = getattr(fn, "_cash_declared_ttl", None)
         if declared is None:
