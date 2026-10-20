@@ -9,7 +9,8 @@ stored, and ran again after every restart (~48 s). The function its module
 names now is the same definition, so the value is stored with that one.
 
 One whose definition did change cannot be stored so: it is not stored,
-and a warning says why.
+and a warning says why. The same goes for an instance of a class whose
+cell ran again (E6's ``FeatureFromRegressor``).
 """
 
 from __future__ import annotations
@@ -31,7 +32,12 @@ BUILD = "import time\npre = [column_ratio]"
 SEARCH = f"search = {{'pre': pre, 'score': pre[0](5) + {SLOW}}}"
 # Holds the function itself, no variable's object.
 PLAIN = f"plain = [pre[0], pre[0](4) + {SLOW}]"
-NAMES = ["time", "column_ratio", "pre", "search", "plain"]
+NAMES = ["time", "column_ratio", "pre", "search", "plain", "Ratio", "fit"]
+
+CLASS = "class Ratio:\n    def __init__(self, k):\n        self.k = k\n    def go(self, x):\n        return x * self.k"
+CLASS_CHANGED = CLASS.replace("x * self.k", "x * self.k + 1")
+BUILD_FIT = "import time\npre = [Ratio(2)]"
+FIT = f"fit = [pre[0], pre[0].go(4) + {SLOW}]"
 
 
 @pytest.fixture
@@ -101,3 +107,31 @@ def test_a_changed_definition_is_not_stored_and_says_why(cash_magics, clean_back
     assert statuses[3] != CacheStatus.RESTORED
     # The value still holds the function it was built on.
     assert cash_magics.shell.user_ns["plain"][1] == 8
+
+
+def test_an_instance_of_a_class_run_again_with_the_same_code_is_stored_and_served_after_a_restart(
+    cash_magics, clean_backend
+):
+    cells = [CLASS, BUILD_FIT, CLASS, FIT]
+    _run(cash_magics, cells)
+    _restart(cash_magics)
+
+    statuses = _run(cash_magics, cells)
+    assert statuses[3] == CacheStatus.RESTORED
+    ns = cash_magics.shell.user_ns
+    assert type(ns["fit"][0]) is ns["Ratio"]
+    assert ns["fit"][0].go(5) == 10
+
+
+def test_an_instance_of_a_changed_class_is_not_stored_and_says_why(cash_magics, clean_backend):
+    from cash.exceptions import CashCacheStoreFailedWarning
+
+    cells = [CLASS, BUILD_FIT, CLASS_CHANGED, FIT]
+    with pytest.warns(CashCacheStoreFailedWarning, match="Ratio"):
+        _run(cash_magics, cells)
+    _restart(cash_magics)
+
+    with pytest.warns(CashCacheStoreFailedWarning, match="Ratio"):
+        statuses = _run(cash_magics, cells)
+    assert statuses[3] != CacheStatus.RESTORED
+    assert cash_magics.shell.user_ns["fit"][1] == 8

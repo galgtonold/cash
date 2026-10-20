@@ -156,8 +156,8 @@ def _warn_not_stored(exc: BaseException) -> None:
     """Say that a statement's result was not stored, and why (STORE-FAILED)."""
     if isinstance(exc, kept_state.DefinedAgain):
         fix = (
-            "run the cells that build the value again after the cell that defines the function, "
-            "so it holds the function defined now."
+            "run the cells that build the value again after the cell that defines the function "
+            "or class, so it holds the one defined now."
         )
     else:
         fix = (
