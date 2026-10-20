@@ -1338,7 +1338,7 @@ class StatementProcessor:
         gives, and stored, it would be served under the key of the restored
         value (``w -= 1`` run again alone reached -2). The input keeps the
         lineage of what it holds, nothing is stored, and the cell warns
-        (``NOTEBOOK-INPUT-NOT-REBUILT``); a name held only in place of the
+        (``NOTEBOOK-INPUT-UNBUILT``); a name held only in place of the
         restore is unbound, and the statement raises NameError."""
         held = self.tracking_state.probe_held
         if not held:
@@ -1373,11 +1373,11 @@ class StatementProcessor:
             f"gives it. Its result is not stored."
         )
         fix = "run the cells above that build " + listed + " again, then this cell."
-        log_diagnostic(logger, "NOTEBOOK-INPUT-NOT-REBUILT", what, fix)
+        log_diagnostic(logger, "NOTEBOOK-INPUT-UNBUILT", what, fix)
         from cash.notebook.ipython.cell_count import running_cell_count  # the ipython package imports this one
 
         warn_diagnostic(
-            CashWarning, "NOTEBOOK-INPUT-NOT-REBUILT", what, fix, location=("<cash>", running_cell_count(self.shell))
+            CashWarning, "NOTEBOOK-INPUT-UNBUILT", what, fix, location=("<cash>", running_cell_count(self.shell))
         )
 
     def _route_calls(self, run: StatementRun) -> None:

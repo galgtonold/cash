@@ -59,8 +59,10 @@ def test_an_edited_write_through_the_view_is_read_back(cash_magics, monkeypatch,
 
 
 def test_a_column_series_held_in_a_dict_reads_what_was_written(cash_magics, monkeypatch):
-    """pandas copies on write: a write to the Series leaves the frame as it
-    was, and the read gives the frame's own sum each time."""
+    """Under copy-on-write (pandas 3) a write to the Series leaves the frame
+    as it was; before it, the Series is a view of the frame's block and the
+    write lands in ``data``. Either way the read gives what plain Python
+    gives: on pandas 2 it was served the first run's 50 for 70."""
     pytest.importorskip("pandas")
     monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
     ns = cash_magics.shell.user_ns

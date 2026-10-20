@@ -320,7 +320,7 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # as it is for a re-run, as another cell changes it too
         "NOTEBOOK-FORWARD-READ",  # the cell reads a name only a cell
         # below binds; it runs uncached on the value in memory
-        "NOTEBOOK-INPUT-NOT-REBUILT",  # an input the cell's own cache hit was
+        "NOTEBOOK-INPUT-UNBUILT",  # an input the cell's own cache hit was
         # to restore was not: the statement ran on the old value, unstored
         "NOTEBOOK-MAGIC-STALE",  # a name a magic bound is kept as it is,
         # though what the magic read changed since it ran, or is gone
