@@ -15,6 +15,7 @@ does. It is used wherever cash pickles a value it keys or stores.
 from __future__ import annotations
 
 import contextlib
+import copy
 import copyreg
 import functools
 import io
@@ -933,9 +934,13 @@ class _KeepDict(dict):
         self._watch = watch
         #: This pickle's one object for each attribute name (`_names_apart`).
         self._names: dict[str, str] = {}
+        #: This pickle's one object for each numpy dtype (`_dtypes_apart`).
+        self._dtypes: dict[tuple, Any] = {}
 
     def __missing__(self, t: type) -> Any:
         reducer = _names_apart(self._reducer(t), self._names)
+        if _holds_dtype(t):
+            reducer = _dtypes_apart(reducer, self._dtypes)
         self[t] = reducer
         return reducer
 
@@ -1017,6 +1022,75 @@ def _names_apart(reducer: Any, names: dict[str, str]) -> Callable[[Any], Any]:
         return (reduced[0], reduced[1], apart, *reduced[3:])
 
     return reduce
+
+
+def _holds_dtype(t: type) -> bool:
+    """Does a *t* instance reduce to its numpy dtype (an array, a numpy
+    scalar)?"""
+    numpy = sys.modules.get("numpy")
+    if numpy is None:
+        return False
+    try:
+        return issubclass(t, (numpy.ndarray, numpy.generic))
+    except TypeError:
+        return False
+
+
+def _dtypes_apart(reducer: Any, dtypes: dict[tuple, Any]) -> Callable[[Any], Any]:
+    """*reducer*, giving the dtype an array or numpy scalar reduces to this
+    pickle's own object for it, one per equal dtype, never one the value
+    holds.
+
+    As for attribute names (`_names_apart`): the pickle's memo writes a
+    dtype met twice as a back-reference, by identity. ``np.int64(3)`` holds
+    numpy's one ``int64`` dtype, which loading does not give back: it makes
+    a dtype of its own (``np.dtype('i8', False, True)`` copies). A fitted
+    forest's or SVC's pickle then wrote its scalars' dtype once and
+    referred back to it, and the restored model's wrote it again: the
+    restored model digested apart from the one it was stored from, and
+    every statement reading it after a restart missed. Equal dtypes with
+    different metadata stay apart."""
+
+    def reduce(obj: Any) -> Any:
+        reduced = reducer(obj)
+        if type(reduced) is not tuple or len(reduced) < 2:
+            return reduced
+        args = _parts_apart(reduced[1], dtypes)
+        state = _parts_apart(reduced[2], dtypes) if len(reduced) > 2 else None
+        if args is None and state is None:
+            return reduced
+        return (
+            reduced[0],
+            reduced[1] if args is None else args,
+            *((reduced[2] if state is None else state,) if len(reduced) > 2 else ()),
+            *reduced[3:],
+        )
+
+    return reduce
+
+
+def _parts_apart(parts: Any, dtypes: dict[tuple, Any]) -> tuple | None:
+    """*parts*, a tuple, with each numpy dtype in it the pickle's own;
+    None when it holds none."""
+    if type(parts) is not tuple:
+        return None
+    numpy = sys.modules.get("numpy")
+    dtype = getattr(numpy, "dtype", None)
+    if dtype is None or not any(isinstance(part, dtype) for part in parts):
+        return None
+    return tuple(_dtype_apart(part, dtypes) if isinstance(part, dtype) else part for part in parts)
+
+
+def _dtype_apart(dt: Any, dtypes: dict[tuple, Any]) -> Any:
+    """The pickle's own dtype equal to *dt*, metadata included."""
+    try:
+        key = (dt, dt.str, repr(dt.metadata))
+        own = dtypes.get(key)
+        if own is None:
+            own = dtypes[key] = copy.copy(dt)
+    except Exception:  # noqa: BLE001 - a dtype that will not hash or copy: as it is
+        return dt
+    return own
 
 
 def _state_apart(state: dict, names: dict[str, str]) -> dict:
