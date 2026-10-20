@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import functools
 import io
 import logging
 import os
@@ -187,7 +188,7 @@ from ..shared_objects import (
     walk_budget,
 )
 from ..value_cutoff import LineageAliasStore
-from ..write_observer import kept_writes, observe_writes
+from ..write_observer import children_left_running, kept_writes, observe_writes, process_runs
 from . import hidden_generators
 from .lineage import note_own_writes
 from .observed_draws import ObservedDrawStore
@@ -301,6 +302,8 @@ class StatementProcessor:
         self._amplification = AmplificationGuard()
         #: The variables work a statement left running can change (`thread_reach`).
         self._thread_reach = ThreadReach()
+        #: The work NOTEBOOK-WORK-RUNNING was given for.
+        self._work_running_warned: set[str] = set()
         #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
         self._share_unchecked_warned: set[str] = set()
         #: Statements already told about NOTEBOOK-ANALYSIS-BUDGET.
@@ -914,15 +917,16 @@ class StatementProcessor:
         if run.must_run:
             # It learns what it changes as it runs: a restore would not.
             metadata, cached_data = None, None
-        elif cached_data is not None and self._thread_reach.still_running():
+        elif cached_data is not None and (running := self._thread_reach.still_running()) is not None:
             # Work a statement left running may still write what this one
             # reads, or this one may be what waits for it (``time.sleep``):
             # served, it took none of the time the work had while it ran.
             metadata, cached_data = None, None
             run.metrics["uncacheable_reasons"].append(
-                "work an earlier statement left running in a thread has not finished, "
+                f"{running}, which an earlier statement left running, has not finished, "
                 "so the statement runs rather than be served"
             )
+            self._warn_work_running(running)
         run.entry_holders = bool(metadata is not None and metadata.holders)
         if _shadow.SHADOW is not None:
             _shadow.SHADOW.statement_lookup(self, run, bool(cached_data))
@@ -1543,6 +1547,7 @@ class StatementProcessor:
                 execution.written_paths = frozenset(written_paths)
                 execution.appended_paths = frozenset(written_paths.appended)
                 execution.unseen_writer = written_paths.unseen
+                execution.children_running = children_left_running(written_paths)
                 execution.waived_paths = written_paths.waived
                 execution.file_tracker = file_tracker
                 execution.accessed_remote = file_tracker.get_accessed_remote_urls() | run.header_remote
@@ -1622,9 +1627,23 @@ class StatementProcessor:
         refuses a call that does (STORE-WORK-RUNNING)."""
         tracker = execution.file_tracker
         user_ns = self.shell.user_ns
+        # ``# @cash:assume-safe`` on the statement: the user's word that the
+        # work writes nothing the cells after it read, so they are served.
+        waived = getattr(run.annotation, "assume_safe", False)
+        if execution.children_running:
+            if not waived:
+                for child in execution.children_running:
+                    self._thread_reach.left_running(functools.partial(process_runs, child), _process_label(child))
+            if not run.skip_cache:
+                run.skip_cache = True
+                run.metrics["uncacheable_reasons"].append(
+                    "it left a process it started running when it returned: what that process writes "
+                    "from then on is in no key, so the statement runs every time"
+                )
         if tracker is not None and tracker.work_outlived_block:
             self._thread_reach.note(tracker.work_functions, user_ns)
-            self._thread_reach.left_running(tracker)
+            if not waived:
+                self._thread_reach.left_running(lambda: tracker.work_running, _work_label(tracker.work_functions))
             if not run.skip_cache:
                 run.skip_cache = True
                 run.metrics["uncacheable_reasons"].append(
@@ -1646,6 +1665,26 @@ class StatementProcessor:
                     "so the statement runs every time"
                 )
         self._thread_reach.rebound(run.outputs or ())
+
+    def _warn_work_running(self, running: str) -> None:
+        """NOTEBOOK-WORK-RUNNING, once for each piece of work: cells run
+        rather than be served while it runs."""
+        if running in self._work_running_warned:
+            return
+        self._work_running_warned.add(running)
+        what = (
+            f"{running}, which a statement started and left running, has not finished, so cash runs "
+            "every statement rather than serve it from the cache until it ends: what it writes could "
+            "land while they run (a time.sleep waiting for it would not wait). Cells run as they would "
+            "without cash."
+        )
+        fix = (
+            "join it (t.join(), p.wait()) in the cell that needs what it does; if it writes nothing a "
+            "cell reads (a server, a monitor), put '# @cash:assume-safe' on the line that starts it, "
+            "and cash serves cells while it runs."
+        )
+        log_diagnostic(logger, "NOTEBOOK-WORK-RUNNING", what, fix)
+        warn_diagnostic(CashWarning, "NOTEBOOK-WORK-RUNNING", what, fix)
 
     def _workers_reason(self, run: StatementRun) -> str | None:
         """Why *run* may not be stored when it starts worker processes or
@@ -3285,3 +3324,21 @@ def _is_loop(tree: ast.AST | None) -> bool:
     body = getattr(tree, "body", None)
     node = body[0] if isinstance(body, list) and len(body) == 1 else tree
     return isinstance(node, (ast.For, ast.AsyncFor, ast.While))
+
+
+def _work_label(functions: list[Any]) -> str:
+    """What a statement left running in a thread, for a message."""
+    fn = functions[0] if functions else None
+    while isinstance(fn, functools.partial):
+        fn = fn.func
+    name = getattr(fn, "__qualname__", None) or getattr(fn, "__name__", None)
+    return f"the thread running {name}()" if name else "a thread"
+
+
+def _process_label(process: Any) -> str:
+    """A child process a statement left running, for a message."""
+    try:
+        command = " ".join(process.cmdline())[:80]
+    except Exception:  # noqa: BLE001 - gone, or not readable
+        command = ""
+    return f"the process '{command}'" if command else "a process"

@@ -1731,6 +1731,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-SHARE-UNCHECKED](#notebook-share-unchecked) | notebook | not every variable sharing an object with a statement's outputs was found in time |
 | [NOTEBOOK-SHARED-KEPT](#notebook-shared-kept) | notebook | a value a variable below shares is kept as it is for a cell re-run on its own |
 | [NOTEBOOK-THREAD-ALIVE](#notebook-thread-alive) | notebook | a thread the cell started still runs after the cell ended |
+| [NOTEBOOK-WORK-RUNNING](#notebook-work-running) | notebook | a thread or process a statement left running has not finished, so cells run rather than be served |
 
 ### NOTEBOOK-ANALYSIS-BUDGET {#notebook-analysis-budget}
 
@@ -2160,6 +2161,30 @@ cell that uses it.
 
 **When it is safe to ignore.** When the thread changes nothing a cell reads,
 such as a progress display or a server you query from outside the notebook.
+
+### NOTEBOOK-WORK-RUNNING {#notebook-work-running}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_work_running, cash/notebook/statement/processor.py:StatementProcessor._left_work_running, cash/notebook/statement/thread_reach.py:ThreadReach.still_running -->
+**What happened.** A statement started a thread (`threading.Timer(0.5,
+write).start()`) or a process (`subprocess.Popen(...)` it did not wait for)
+and returned while it still ran. Until it ends, cash runs every statement
+rather than serve it from the cache. The message names the thread's function
+or the process's command. It is shown once for each.
+
+**Why it matters.** What the work writes can land while the cells after it
+run. Served from the cache, `time.sleep(1.0)` waiting for a timer's write
+took no time, and the read below it ran before the write. Run instead, the
+cells do what they do without cash; they are served again once the work has
+ended.
+
+**What to do.** Wait for the work where its result is needed (`t.join()`,
+`p.wait()`).
+
+**When it is safe to ignore.** When the work writes nothing a cell reads, such
+as a server or a monitor: put `# @cash:assume-safe` on the line that starts
+it, and cash serves cells while it runs.
 
 ## Randomness {#random-codes}
 

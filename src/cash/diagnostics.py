@@ -332,6 +332,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # kernel restarted, and cash cannot rebuild the state a cell set on it
         "NOTEBOOK-THREAD-ALIVE",  # a thread the cell started still runs after
         # it ended; what it changes from then on is outside cash's view
+        "NOTEBOOK-WORK-RUNNING",  # a thread or process a statement left
+        # running has not finished; statements run rather than be served
         "NOTEBOOK-SAVEFIG-SKIP",  # refused to re-run plt.savefig() during
         # reconstruction; it would overwrite your chart
         "NOTEBOOK-SHARE-UNCHECKED",  # cash could not find every variable

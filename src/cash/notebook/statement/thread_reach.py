@@ -14,9 +14,10 @@ thread from a file since edited). The decorator refuses the same case
 * the variables of the notebook the work's function can reach (the globals
   its code names, the objects its closure holds) are noted, and a statement
   reading one is not stored either, until a statement binds the name again;
-* while the work runs, no statement is served from the cache: a
-  ``time.sleep(1.0)`` left to wait for a timer's write was skipped after its
-  first run, and the read below it ran before the write (`still_running`).
+* while the work runs (a thread, or a process the statement started and did
+  not wait for), no statement is served from the cache: a ``time.sleep(1.0)``
+  left to wait for a timer's write was skipped after its first run, and the
+  read below it ran before the write (`still_running`).
 
 The cell still warns NOTEBOOK-THREAD-ALIVE (`background_threads`).
 """
@@ -24,7 +25,7 @@ The cell still warns NOTEBOOK-THREAD-ALIVE (`background_threads`).
 from __future__ import annotations
 
 import types
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 __all__ = ["ThreadReach"]
@@ -56,19 +57,20 @@ class ThreadReach:
     def __init__(self) -> None:
         #: name -> what reaches it, for the message.
         self.names: dict[str, str] = {}
-        #: The file trackers of statements whose work outlived them, while
-        #: some of it still runs.
-        self._running: list[Any] = []
+        #: Work statements left running, while it runs: whether it still
+        #: does, and what it is, for the message.
+        self._running: list[tuple[Callable[[], bool], str]] = []
 
-    def left_running(self, tracker: Any) -> None:
-        """*tracker*'s statement returned with work still running."""
-        self._running.append(tracker)
+    def left_running(self, runs: Callable[[], bool], label: str) -> None:
+        """A statement returned with work still running: *runs* says whether
+        it still does, *label* names it."""
+        self._running.append((runs, label))
 
-    def still_running(self) -> bool:
-        """Whether work a statement left running has not finished yet."""
+    def still_running(self) -> str | None:
+        """What work a statement left running has not finished yet, or None."""
         if self._running:
-            self._running = [tracker for tracker in self._running if tracker.work_running]
-        return bool(self._running)
+            self._running = [(runs, label) for runs, label in self._running if runs()]
+        return self._running[0][1] if self._running else None
 
     def note(self, functions: Iterable[Any], user_ns: Mapping[str, Any]) -> None:
         """Note what each of *functions* can reach in *user_ns*: the
