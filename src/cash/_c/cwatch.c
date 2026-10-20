@@ -458,8 +458,15 @@ static unsigned long long c_world_bumps, c_world_ignored, c_fast_hits, c_fast_mi
 /* A world type's `live` tag stands for its `canon` one: the tag it had
  * before cash's own writes to it (see `expect`), which a memo holds. */
 /* A world type's `name`, `qualname`, `bases`, `mro` and `meta` are the ones
- * it had when watched (strong). With its dict watched (`world_watch_type`)
- * they are what a lookup on it reads, so a memo checks them, not the type's
+ * it had when watched: the names held (strong), the rest by address only.
+ * Its MRO holds the type itself, and its bases and metaclass may be classes
+ * a cell defined: held, they kept a class redefined since alive, listed in
+ * its base's ``__subclasses__()`` as plain Python no longer lists it. The
+ * addresses are only compared, never read: while a memo checks a type it
+ * holds the type, which holds these; a new tuple or metaclass is made
+ * before the old one goes, and the change is a type event.
+ * With its dict watched (`world_watch_type`) they are what a lookup on it
+ * reads, so a memo checks them, not the type's
  * version tag: every write to a class takes a new tag, CPython gives a class
  * at most 1,000, and cash writes its reader wrappers to `threading.Thread`
  * twice per miss -- after ~500 misses the class had no tag left and no memo
@@ -2030,9 +2037,9 @@ static PyObject *py_world_watch_type(PyObject *self, PyObject *t) {
             world_bump();
         Py_XINCREF(h->ht_name); Py_XSETREF(e->name, h->ht_name);
         Py_XINCREF(h->ht_qualname); Py_XSETREF(e->qualname, h->ht_qualname);
-        Py_XINCREF(tp->tp_bases); Py_XSETREF(e->bases, tp->tp_bases);
-        Py_XINCREF(tp->tp_mro); Py_XSETREF(e->mro, tp->tp_mro);
-        Py_INCREF(Py_TYPE(tp)); Py_XSETREF(e->meta, (PyObject *)Py_TYPE(tp));
+        e->bases = tp->tp_bases;   /* by address: see WEnt */
+        e->mro = tp->tp_mro;
+        e->meta = (PyObject *)Py_TYPE(tp);
     }
     /* not checked (see WEnt): no tag to spend */
     return PyLong_FromUnsignedLong(tp->tp_version_tag);
