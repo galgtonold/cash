@@ -4,7 +4,15 @@ repo-root ``tests/conftest.py``, which pytest already applies here too).
 
 from __future__ import annotations
 
+import os
+
 import pytest
+
+if os.environ.get("CASH_TEST_WHY_ALIVE"):
+    # Why a read-count test saw another thread alive (see there).
+    from tests.test_notebook import _why_alive
+
+    _why_alive.install(os.environ["CASH_TEST_WHY_ALIVE"])
 
 
 @pytest.fixture(autouse=True)
@@ -24,6 +32,26 @@ def _time_limits_a_busy_machine_cannot_trip(request, monkeypatch):
 
     monkeypatch.setattr(processor, "SHARE_CHECK_FLOOR_S", 30.0)
     monkeypatch.setattr(analysis_budget, "ANALYSIS_BUDGET_FLOOR_S", 60.0)
+
+
+@pytest.fixture(autouse=True)
+def _threads_an_earlier_test_left_are_the_hosts(monkeypatch):
+    """A digest is handed on only while no other thread is alive
+    (`trace_recorder.other_thread_alive`). An earlier test can leave one
+    behind (tqdm's monitor lives as long as the process): taken as the
+    host's, as the kernel's are, so a test's read counts see only the
+    threads it starts itself.
+    """
+    import threading
+    import weakref
+
+    from cash.tracking import trace_recorder
+
+    hosts = weakref.WeakSet(trace_recorder.HOST_THREADS)
+    hosts.update(threading.enumerate())
+    monkeypatch.setattr(trace_recorder, "HOST_THREADS", hosts)
+    # pytest-xdist's channel threads, which `threading` does not list.
+    monkeypatch.setattr(trace_recorder, "HOST_PACKAGES", trace_recorder.HOST_PACKAGES | {"execnet"})
 
 
 def _fresh_cash_instance():

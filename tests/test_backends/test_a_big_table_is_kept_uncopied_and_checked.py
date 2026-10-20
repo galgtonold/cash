@@ -20,6 +20,7 @@ import pandas as pd
 import pytest
 
 from cash.backends import frame_sharing
+from cash.backends.chunk_store import ChunkStore
 from cash.backends.file_backend import FileBackend
 from cash.backends.memory_backend import InMemoryBackend
 from cash.backends.tiered_backend import TieredBackend
@@ -159,20 +160,52 @@ def test_a_small_table_is_copied():
     assert "k" not in backend._checked
 
 
-def test_the_disk_tier_gets_the_table_with_its_check(tmp_path):
-    tiers = TieredBackend([InMemoryBackend(), FileBackend(str(tmp_path / "c"), flush_interval=0)])
+def _tiers(folder):
+    return TieredBackend([InMemoryBackend(), FileBackend(str(folder), flush_interval=0)])
+
+
+def test_the_disk_tier_gets_a_copy_of_the_table(tmp_path):
+    tiers = _tiers(tmp_path / "c")
     df = _table()
     expected = df.copy()
     metadata = {"execution_time": 50.0}
     tiers.set("k", df, metadata)
     assert "DISK" in metadata["storage"]
-    ram = tiers.backends[0]
-    assert ram.private_copy("k", None) is None  # not the tier's own: written with a check
-    stored, check = ram.checked_copy("k", ram._store["k"][0])
-    assert check()
     df["fare"].array[0] = -1.0
-    assert not check()
-    ram.delete("k")
-    _meta, read = tiers.get("k")  # written before the change, or not at all
+    tiers.backends[0].delete("k")
+    _meta, read = tiers.get("k")
     tiers.shutdown()
-    assert read is None or read.equals(expected)
+    pd.testing.assert_frame_equal(read, expected)
+
+
+def test_a_write_past_pandas_undone_during_the_disk_write_reaches_neither_entry(tmp_path, monkeypatch):
+    # Written from the table's own memory and checked after, a change made
+    # and undone during the pack write passed the check: the entry read
+    # back the changed bytes, and a later entry with the true content
+    # reused them under its digest.
+    df = _table()
+    expected = df.copy()
+    real_pack = ChunkStore._write_pack
+
+    def racing_pack(self, fresh):
+        old = df["fare"].array[7]
+        df["fare"].array[7] = 12345.0
+        try:
+            return real_pack(self, fresh)
+        finally:
+            df["fare"].array[7] = old
+
+    monkeypatch.setattr(ChunkStore, "_write_pack", racing_pack)
+    tiers = _tiers(tmp_path / "c")
+    tiers.set("k", df, {"execution_time": 50.0})
+    tiers.shutdown()
+    monkeypatch.setattr(ChunkStore, "_write_pack", real_pack)
+    again = _tiers(tmp_path / "c")
+    _meta, read = again.get("k")
+    pd.testing.assert_frame_equal(read, expected)
+    again.set("other", expected.copy(), {"execution_time": 50.0})
+    again.shutdown()
+    last = _tiers(tmp_path / "c")
+    _meta, other = last.get("other")
+    last.shutdown()
+    pd.testing.assert_frame_equal(other, expected)

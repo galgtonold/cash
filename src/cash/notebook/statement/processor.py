@@ -137,6 +137,7 @@ from ...tracking.randomness import (
     rng_carrier_kind,
     rng_virtual_var,
 )
+from ...tracking.trace_recorder import other_thread_alive
 from ..anchors import anchor_digests
 from ..borrowed_memory import borrowed_memory_names, lazy_frame_sources
 from ..callee_reach import (
@@ -1991,6 +1992,10 @@ class StatementProcessor:
             components=self._records.lineages_read(inputs) if inputs else {},
         )
 
+    def _other_thread_alive(self) -> bool:
+        """`trace_recorder.other_thread_alive` in the notebook's namespace."""
+        return other_thread_alive(self.shell.user_ns)
+
     def _binds_a_stream(self, run: StatementRun) -> bool:
         """Whether the statement bound an open file, or read from one: a
         handle is a new stream at its start on every run, and a read leaves it
@@ -2015,7 +2020,20 @@ class StatementProcessor:
 
         Updates ``run.outputs`` and ``run.skip_cache`` with what execution
         revealed (an observed mutation, an uncacheable value).
+
+        From its start to its outputs' lineage, only cash's code runs on this
+        thread: each value is read once there (`value_hash.one_read`), unless
+        another thread is alive and could change it in between.
         """
+        alive = self._other_thread_alive()
+        with contextlib.ExitStack() as reads:
+            if not alive:
+                reads.enter_context(value_hash.one_read())
+            self._post_execute_reading_once(run, execution, reads, alive)
+
+    def _post_execute_reading_once(
+        self, run: StatementRun, execution: StatementExecution, reads: contextlib.ExitStack, alive: bool
+    ) -> None:
         self._observe_process_state(run)
         self._mutation_routing.observe(run)
         self._mutation_routing.note_module_state(run)
@@ -2047,6 +2065,11 @@ class StatementProcessor:
         # of an output takes is kept for the store to take
         # (`stored_pickle.keeping`), instead of pickling the value again.
         returned = self._calls.returned_digest(run.code)
+        if alive:
+            # Another thread may have changed a value since a check read it:
+            # each output is read again for its lineage.
+            run.settled_digests = {}
+            returned = None
         if returned is not None:
             # ``x = f(...)``: the digest the call's store took of its result
             # is the one the statement would take of ``x`` now.
@@ -2084,6 +2107,7 @@ class StatementProcessor:
                 )
             # Let go of the values they hold: the checks below count references.
             run.settled_digests = {}
+            reads.close()
             # The share check, the closure check and the RAM tier each look into
             # the outputs; JSON-like ones are walked once for all of them.
             with _plain_data.one_look(captured_vars):

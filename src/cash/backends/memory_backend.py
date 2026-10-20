@@ -867,11 +867,16 @@ class InMemoryBackend(CacheBackend):
             if kept is not None:
                 record_cells[id(kept)] = _BYTES
                 return kept
+        full = False
         if mutable:
             copied = InMemoryBackend._copy_cells(frame, memo)
+            # Cell by cell: the list and dict cells are new, the rest are
+            # immutable or copied with their blocks; `attrs` only deepcopied.
+            full = copied is not None and not frame.attrs
             if copied is None:
                 try:
                     copied = _round_trip(frame)
+                    full = True
                 except Exception:  # noqa: BLE001 - cells that cannot be copied are shared
                     logger.debug("could not copy the cells of a %s", type(frame).__name__)
                     # Recorded as None: a store that must isolate its value
@@ -910,13 +915,18 @@ class InMemoryBackend(CacheBackend):
             # as a disk hit would.
             try:
                 copied = _round_trip(frame)
+                full = True
             except Exception:  # noqa: BLE001 - shared: recorded so, as uncopiable cells are
                 logger.debug("could not copy the attributes of a %s", type(frame).__name__)
                 mutable = None
+                full = False
         if record_cells is not None:
             if mutable is False and frame_sharing.freeze(copied, cells_known=True):
                 mutable = _SHARED  # private, now frozen: hits share it
             record_cells[id(copied)] = mutable
+            own_copies = getattr(_OWN_COPIES, "frames", None)
+            if full and mutable and own_copies is not None:
+                own_copies.add(id(copied))
             if reuse is not None and mutable in (False, _SHARED):
                 reuse.keep(copied)
         return copied
@@ -1258,11 +1268,30 @@ class InMemoryBackend(CacheBackend):
         by pandas (a subclass, a nullable, categorical or object column: its
         Python objects stay the caller's), nor what ``deepcopy`` copied, nor
         a value kept by reference, nor tables kept uncopied
-        (`checked_copy`). A background write of a value that is not would
+        (`frame_sharing.share_checked`). A background write of a value that is not would
         serialize what the caller did to it after the call.
         """
         with self._lock:
             return key in self._own and key not in self._checked
+
+    def may_share_with_caller(self, key: str) -> bool:
+        """May the value stored for *key* share a part with the caller's?
+
+        Any value not cash's own (`holds_own_copy`): one kept by reference is
+        the caller's, one ``deepcopy`` copied shares what it does not copy
+        (a function's closure: a local helper and the generator it draws
+        from; whatever a class's ``__deepcopy__`` returns as itself), and a
+        table pandas copied deep keeps the Python objects of its object
+        cells. A copy of it made later holds what the caller has done to
+        those parts since, not what was stored. Tables kept uncopied
+        (`checked_copy`) are not counted: their check finds a change, and
+        the write is dropped.
+        """
+        with self._lock:
+            entry = self._store.get(key)
+            if entry is None:
+                return False
+            return bool(entry[0].get("by_reference")) or (key not in self._own and key not in self._checked)
 
     def private_copy(self, key: str, default: Any = None, metadata: MetadataDict | None = None) -> Any:
         """The stored value for *key* to write to another tier, when it is a
@@ -1321,31 +1350,6 @@ class InMemoryBackend(CacheBackend):
         except Exception:  # serialized by the caller instead, as before
             logger.debug("no copy of %r to write", key, exc_info=True)
             return default
-
-    def checked_copy(self, key: str, metadata: MetadataDict) -> tuple[Any, Any] | None:
-        """``(stored value, check)`` for a background write of *key*'s
-        entry, stored with that very *metadata*, when its value is the
-        tier's own but for pandas tables kept uncopied
-        (`frame_sharing.share_checked`); else None. The writer calls
-        ``check()`` once the bytes are written: False when the tables no
-        longer hash as they did when stored, and what was written may hold
-        what the caller wrote since, said by STORE-RESULT-WRITTEN."""
-        with self._lock:
-            entry = self._store.get(key)
-            checked = self._checked.get(key)
-            own = key in self._own and key not in self._holds_bytes
-        if entry is None or checked is None or not own or entry[0] is not metadata:
-            return None
-        if entry[0].get("by_reference") or entry[0].get(NO_PRIVATE_COPY):
-            return None
-
-        def check() -> bool:
-            if _still_as_stored(checked):
-                return True
-            self._written_after_store(key, metadata)
-            return False
-
-        return entry[1], check
 
     def get_metadata(self, key: str) -> MetadataDict | None:
         """The metadata, counted as an access the way `get` counts one.
@@ -1777,6 +1781,7 @@ class InMemoryBackend(CacheBackend):
             by_deepcopy: list[bool] = []
             _UNPICKLED.seconds = 0.0
             _CHECKED.frames = checked = []
+            _OWN_COPIES.frames = own_copies = builtins.set()
             try:
                 stored = self._safe_deep_copy(
                     value,
@@ -1791,6 +1796,7 @@ class InMemoryBackend(CacheBackend):
                 )
             finally:
                 _CHECKED.frames = None
+                _OWN_COPIES.frames = None
             if not (fell_back or by_deepcopy) and size >= _ROUND_TRIP_MIN_BYTES:
                 # The unpickling alone: what a disk hit does again, after
                 # reading the bytes (the pickling and the array copies here
@@ -1833,7 +1839,7 @@ class InMemoryBackend(CacheBackend):
             # caller's.
             # Tables kept uncopied (`frame_sharing.share_checked`) aside:
             # those share memory the caller can still write (`_checked`).
-            own = not fell_back and not by_deepcopy and _frames_own(frame_cells, stored)
+            own = not fell_back and not by_deepcopy and _frames_own(frame_cells, stored, own_copies)
             if by_spine and type(stored) is dict:
                 # Nothing in it is reached twice: its parts can be copied
                 # each on its own, each the fastest way it allows. Planned
@@ -2294,6 +2300,11 @@ def immutable_cells(array: Any) -> bool:
     from pandas.api.types import infer_dtype
 
     kind = infer_dtype(array, skipna=True)
+    if kind in ("string", "bytes"):
+        # `infer_dtype` goes by `isinstance`: a subclass of str with a
+        # ``__dict__`` (a tag carrying a note) is "string" too, and a deep
+        # copy shares it. Exact types only.
+        return _immutable_cell_types().issuperset(map(type, array))
     if kind in IMMUTABLE_CELLS:
         return True
     if kind not in ("mixed", "mixed-integer", "mixed-integer-float"):
@@ -2321,7 +2332,7 @@ def _immutable_cell_types() -> frozenset[type]:
 
     return (
         _IMMUTABLE_CELL_TYPES
-        | {pd.Timestamp, pd.Timedelta, type(pd.NaT), np.datetime64, np.timedelta64}
+        | {pd.Timestamp, pd.Timedelta, type(pd.NaT), np.datetime64, np.timedelta64, np.str_, np.bytes_}
         | {t for t in np.sctypeDict.values() if issubclass(t, np.number) or t is np.bool_}
     )
 
@@ -2425,6 +2436,9 @@ def _full_copy_values(values: Any) -> bool:
         return not values.dtype.hasobject or immutable_cells(values.ravel())
     if type(values) in (pd.arrays.DatetimeArray, pd.arrays.TimedeltaArray, pd.arrays.StringArray):
         return True  # one array; a StringArray holds only str and missing values
+    if type(values) is pd.Categorical:
+        # Its codes and its categories are copied (`frame_sharing._owned_categories`).
+        return _full_copy_values(values.categories._data)
     return isinstance(values, (BaseMaskedArray, ArrowExtensionArray)) and type(values).__module__.startswith("pandas.")
 
 
@@ -2452,18 +2466,21 @@ def _write_copy(value: Any, memo: dict[int, Any], depth: int = 0) -> Any:
     return copied
 
 
-def _frames_own(frame_cells: dict[int, Any], stored: Any) -> bool:
+def _frames_own(frame_cells: dict[int, Any], stored: Any, copied: builtins.set[int] = frozenset()) -> bool:
     """Is each table the RAM tier copied into *stored* (*frame_cells*: its
     verdict by ``id``) a copy holding nothing of the caller's? A frozen one
-    or one kept with its cells as bytes is; so is one copied block by block
-    whose columns and labels are all of kinds that copy leaves nothing
+    or one kept with its cells as bytes is, and so is one in *copied*, whose
+    mutable cells were copied too (`_OWN_COPIES`); so is one copied block by
+    block whose columns and labels are all of kinds that copy leaves nothing
     shared of (`_copies_in_full`): a hit copies it again, so it is never
     handed out either."""
-    if all(cells in (_SHARED, _BYTES) for cells in frame_cells.values()):
+    if all(cells in (_SHARED, _BYTES) or key in copied for key, cells in frame_cells.items()):
         return True
-    found = {id(frame): frame for frame in _frames_in(stored)}
+    # The rest of a table kept with its list and dict cells as bytes too.
+    frames = [getattr(found, "table", found) for found in _frames_in(stored) + _tables_with_bytes_in(stored)]
+    found = {id(frame): frame for frame in frames}
     return all(
-        cells in (_SHARED, _BYTES) or (cells is False and key in found and _copies_in_full(found[key]))
+        cells in (_SHARED, _BYTES) or key in copied or (cells is False and key in found and _copies_in_full(found[key]))
         for key, cells in frame_cells.items()
     )
 
@@ -2472,6 +2489,17 @@ def _full_frame_copy(frame: Any) -> Any:
     """*frame* copied block by block, its labels and Arrow data with it
     (`frame_sharing.copy_keeping_blocks`)."""
     return frame_sharing.copy_keeping_blocks(frame)
+
+
+def _tables_with_bytes_in(value: Any, depth: int = 0) -> list:
+    """The `_TableWithBytes` in *value*, where `_frames_in` looks."""
+    kind = type(value)
+    if kind is _TableWithBytes:
+        return [value]
+    if kind in (dict, list, tuple) and depth < _CHEAP_DEPTH:
+        items = value.values() if kind is dict else value
+        return [table for item in items for table in _tables_with_bytes_in(item, depth + 1)]
+    return []
 
 
 def _frames_in(value: Any, depth: int = 0) -> list:
@@ -3113,6 +3141,11 @@ def _owned_polars(frame: Any) -> Any:
 #: (`frame_sharing.share_checked`), ``[(table, digest)]``; None outside
 #: `InMemoryBackend.set`.
 _CHECKED = threading.local()
+
+#: The ``id`` of each pandas table the store in progress on this thread
+#: copied with its mutable cells (`InMemoryBackend._copy_frame`: a pickle
+#: round trip, or a copy cell by cell); None outside `InMemoryBackend.set`.
+_OWN_COPIES = threading.local()
 
 
 def _store_polars(frame: Any) -> Any:

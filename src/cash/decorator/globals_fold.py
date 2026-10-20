@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from .._memo import TABLES, LruMemo
 from ..analysis.helper_bindings import resolve_binding
-from ..analysis.helper_code import own_code_is_user, qualname_of
+from ..analysis.helper_code import own_code_is_user, qualname_of, renamed
 from ..analysis.purity_analyzer import get_analyzer
 from ..analysis.purity_report import PurityReport
 from ..dependency_state import STATE_LEDGER, ledger_note
@@ -563,7 +563,7 @@ class GlobalsFold:
                 # followed.
                 surface = self._code.code_surface_hash(item)
                 if surface is not None:
-                    parts.append((f"{label}#cls:{item.__qualname__}", surface))
+                    parts.append((f"{label}#cls:{item.__qualname__}{renamed(item)}", surface))
         # Code deeper in: an instance held in a tuple in a list, a
         # function an instance holds (`Runner(scale)`), a user transformer
         # inside a library pipeline. The pickle has them by name

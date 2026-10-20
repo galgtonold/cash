@@ -312,6 +312,20 @@ def is_mock(obj: Any) -> bool:
     return isinstance(obj, types.FunctionType) and isinstance(obj.__dict__.get("mock"), module.NonCallableMock)
 
 
+def renamed(obj: Any) -> str:
+    """``|name=...`` when *obj*'s ``__name__`` is not the last part of its
+    ``__qualname__``, else ``""``. Setting ``__name__`` alone leaves the
+    qualname as it was, and the code, the source and the dict are unchanged
+    too, so a key naming a class or function by its qualname kept serving
+    what it computed under the old name. Empty for every class and function
+    not renamed so: their keys are unchanged."""
+    name = getattr(obj, "__name__", None)
+    qualname = getattr(obj, "__qualname__", None)
+    if not isinstance(name, str) or not isinstance(qualname, str) or qualname.rpartition(".")[2] == name:
+        return ""
+    return f"|name={name}"
+
+
 def qualname_of(func: Callable[..., Any]) -> str:
     """Name a callable for ``helper_source_hashes``.
 
@@ -336,4 +350,4 @@ def qualname_of(func: Callable[..., Any]) -> str:
         qualname = getattr(code, "co_qualname", None) or f"{code.co_name}@wrapper"
     if module in MAIN_MODULE_NAMES:
         module = resolve_main_module(func)
-    return f"{module}.{qualname}"
+    return f"{module}.{qualname}{renamed(func)}"

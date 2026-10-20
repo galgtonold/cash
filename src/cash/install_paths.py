@@ -60,6 +60,7 @@ __all__ = [
     "top_package",
     "norm_dir",
     "normcase_path",
+    "sys_path_dir",
     "site_roots",
     "clear_caches",
 ]
@@ -232,15 +233,23 @@ def _installed_tops(entry_dir: str) -> frozenset[str]:
     return tops
 
 
+def sys_path_dir(entry: str) -> str:
+    """The `norm_dir` prefix of the ``sys.path`` entry *entry*, resolved once
+    per process (a relative entry against the folder it was first looked at
+    from); "" for an empty entry or a zip."""
+    entry_dir = _ENTRY_DIRS.get(entry)
+    if entry_dir is None:
+        entry_dir = _ENTRY_DIRS[entry] = "" if not entry or entry.lower().endswith(".zip") else norm_dir(entry)
+    return entry_dir
+
+
 def _installed_import_top(path_nc: str) -> str | None:
     """The top-level name of the package *path_nc* is in, when that package is
     installed into a ``sys.path`` folder that is not site-packages -- a
     ``pip install --target`` folder on ``PYTHONPATH`` or added by a ``.pth``
     file. None otherwise."""
     for entry in sys.path:
-        entry_dir = _ENTRY_DIRS.get(entry)
-        if entry_dir is None:
-            entry_dir = _ENTRY_DIRS[entry] = "" if not entry or entry.lower().endswith(".zip") else norm_dir(entry)
+        entry_dir = sys_path_dir(entry)
         if entry_dir and path_nc.startswith(entry_dir) and _installed_tops(entry_dir):
             # The package folder (``lightgbm/sklearn.py``) or the module file
             # (``six.py``, ``_ext.cpython-313-x86_64-linux-gnu.so``).

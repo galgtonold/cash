@@ -159,7 +159,13 @@ class _StallWatchdog:
         if self._started or self.timeout <= 0:
             return
         self._started = True
-        threading.Thread(target=self._run, name="cash-stall-watchdog", daemon=True).start()
+        thread = threading.Thread(target=self._run, name="cash-stall-watchdog", daemon=True)
+        thread.start()
+        # The test run's own: no value of a test's it changes
+        # (`trace_recorder.other_thread_alive`).
+        from cash.tracking import trace_recorder
+
+        trace_recorder.HOST_THREADS.add(thread)
 
     @property
     def poll_interval(self) -> float:
