@@ -123,6 +123,31 @@ def sentinel_ref(func, result) -> list | None:
 _MISSING_GLOBAL = object()
 
 
+def _by_reference(value) -> bool:
+    """A class, function or module: pickled by reference, so a hit's is itself."""
+    return isinstance(value, (type, types.ModuleType)) or inspect.isroutine(value)
+
+
+def _named_variables(func):
+    """``(kind, name, value)`` for each closure variable of *func* and each
+    module global its body names."""
+    try:
+        code = func.__code__
+        for name, cell in zip(code.co_freevars, func.__closure__ or ()):
+            try:
+                yield "closure variable", name, cell.cell_contents
+            except ValueError:  # an empty cell
+                continue
+        globals_ = func.__globals__
+        named = {name for scope in iter_code_scopes(code) for name in scope.co_names}
+    except (AttributeError, ValueError, RuntimeError):
+        return
+    for name in sorted(named):
+        value = globals_.get(name, _MISSING_GLOBAL)
+        if value is not _MISSING_GLOBAL:
+            yield "module global", name, value
+
+
 def held_sentinels(func) -> dict[int, list]:
     """``id(object) -> ["global" | "closure", name]`` for each sentinel-like
     object *func*'s body names: a bare ``object()``, or an instance of the
@@ -438,6 +463,16 @@ class PurityChecks:
             for name, value in list(globals_.items()):
                 if value is result and is_mutable(value):
                     return "is the module global", name
+        # A global or closure variable the body names, held INSIDE the result
+        # (``{'rows': ROWS}``): plain Python hands back the caller's object, a
+        # hit a copy. Not one a hit puts back as itself (`held_sentinels`).
+        for what, name, value in _named_variables(func):
+            if _by_reference(value) or _sentinel_like(value) or not is_mutable(value):
+                continue
+            if value is result:
+                return f"is the {what}", name
+            if contains(result, value, SHARED_RESULT_DEPTH):
+                return f"holds the {what}", name
         return None
 
     def learn_mutating_captures(self, func: Callable, func_name: str, watched: dict[str, tuple[str, str]]) -> bool:

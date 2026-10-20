@@ -589,8 +589,8 @@ large frame of text columns hashes at about 0.2 s per million rows.
 
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @8c38fe43, cash/decorator/purity_checks.py:PurityChecks._shared_with @edceb490 -->
 **What happened.** The result shares state with an object the caller still
-holds: it is an argument, holds one, is a view of an array argument, or is a
-module global. On the first run, a write through one shows in the other. A
+holds: it is an argument, holds one, is a view of an array argument, or is or
+holds a module global or closure variable the function names. On the first run, a write through one shows in the other. A
 cache hit returns a separate copy, so from then on it does not. A module
 global the function names and whose type compares by identity (a plain class
 without `__eq__`, such as a sentinel) is not reported: a hit hands back that

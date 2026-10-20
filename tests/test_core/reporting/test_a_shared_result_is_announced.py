@@ -81,3 +81,56 @@ def test_an_independent_result_says_nothing(cash_instance):
     assert not _warnings_of(copied, np.arange(5), 1, 4)
     assert not _warnings_of(rebuilt, [1, 2, 3], "t")
     assert not _warnings_of(snapshot, 1)
+
+
+ROWS: list = [1, 2]
+
+
+def test_a_result_holding_a_module_global_is_announced(cash_instance):
+    # `{'rows': ROWS}`: plain Python hands back the caller's own list, and an
+    # edit to ROWS shows through the result; a hit's copy does not.
+    @cash_instance.cache
+    def wrap(n):
+        return {"rows": ROWS}
+
+    said = _warnings_of(wrap, 1)
+    assert said, "no warning for a result holding a module global"
+    assert "ROWS" in said[0], said[0]
+
+
+def test_a_result_holding_a_module_global_in_an_attribute_is_announced(cash_instance):
+    import argparse
+
+    @cash_instance.cache
+    def wrap(n):
+        return argparse.Namespace(rows=ROWS)
+
+    assert _warnings_of(wrap, 1)
+
+
+def test_a_closure_variable_returned_or_held_is_announced(cash_instance):
+    box = [1]
+
+    @cash_instance.cache
+    def held(n):
+        return {"rows": box}
+
+    @cash_instance.cache
+    def returned(n):
+        return box
+
+    said = _warnings_of(held, 1)
+    assert said and "box" in said[0], said
+    assert _warnings_of(returned, 1)
+
+
+def test_a_held_sentinel_global_says_nothing(cash_instance):
+    # Handed back as itself on a hit (`identity_refs`): nothing differs.
+    @cash_instance.cache
+    def lookup(n):
+        return {"rows": _MARK}
+
+    assert not _warnings_of(lookup, 1)
+
+
+_MARK = object()
