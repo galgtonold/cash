@@ -58,9 +58,9 @@ logger = logging.getLogger(__name__)
 # and the lock that serialises installing and removing them with the post-
 # import hook patching a module that was imported meanwhile.
 _cw = _native.cwatch
-# Told each wrapper and its original: a swap between them is no change for a
-# remembered hit (`cash.decorator.hit_memo`), as keys look through it.
-_patches = io_watch.Patches(note=getattr(_cw, "world_swap", None))
+# Told each set and delete it makes, so that exactly that write is no change
+# for a remembered hit (`cash.decorator.hit_memo`), as keys look through it.
+_patches = io_watch.Patches(expect=getattr(_cw, "expect_set", None), clear=getattr(_cw, "expect_clear", None))
 _install_lock = threading.RLock()
 
 #: Keyword names a reader may take its path under, first match wins. Covers
