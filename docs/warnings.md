@@ -2449,6 +2449,13 @@ does nothing.
 permission on `cache_dir`, a value that cannot be pickled (a socket, a file
 handle), or on Windows a file held open by another process.
 
+In a notebook, a value can also hold a function from before its cell ran
+again with different code: a pipeline built on `column_ratio`, and the cell
+defining `column_ratio` edited and run since. A stored copy could only load
+the `column_ratio` defined now, so the value is not stored. Run the cells
+that build it again. When the cell ran again with the same code, the value is
+stored, and a hit holds the function the name holds when it is read.
+
 **When it is safe to ignore.** A one-off on a cheap function.
 
 ### STORE-INPUT-CHANGED {#store-input-changed}

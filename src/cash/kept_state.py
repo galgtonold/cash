@@ -30,27 +30,62 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 __all__ = [
+    "DefinedAgain",
     "FlatValue",
+    "by_name",
     "chooses_its_state",
+    "defined_again",
     "dumps",
     "flatten",
     "left_out_attrs",
     "load_flat",
+    "named_now",
     "one_keying",
     "reducers",
     "restore_with_dict",
     "restores_alike_apart",
+    "same_definition",
+    "stopped_at_defined_again",
     "store_memo",
     "too_deep",
 ]
 
 
-def dumps(*args: Any, **kwargs: Any) -> bytes:
-    """`_dumps_value` inside `one_keying`; see there."""
+def dumps(value: Any, *args: Any, **kwargs: Any) -> bytes:
+    """`_dumps_value` inside `one_keying`; see there. A value holding a
+    function whose cell ran again since is pickled again with it by its
+    name, when that name holds the same definition now (`defined_again`):
+    not with a *sink*, whose bytes are written already, nor when buffers
+    handed out could not be taken back (*buffer_callback* without
+    *on_retry*)."""
+    try:
+        return _dumps_once(value, *args, **kwargs)
+    except pickle.PicklingError as exc:
+        again = (
+            stopped_at_defined_again(exc)
+            and kwargs.get("sink") is None
+            and (kwargs.get("buffer_callback") is None or kwargs.get("on_retry") is not None)
+        )
+        if not again:
+            raise
+    if kwargs.get("on_retry") is not None:
+        kwargs["on_retry"]()
+    kwargs["reducer_override"] = defined_again(kwargs.get("reducer_override"))
+    return _dumps_once(value, *args, **kwargs)
+
+
+def _dumps_once(*args: Any, **kwargs: Any) -> bytes:
     if _keying() is not None:
         return _dumps_value(*args, **kwargs)
     with one_keying():
         return _dumps_value(*args, **kwargs)
+
+
+def stopped_at_defined_again(exc: pickle.PicklingError) -> bool:
+    """Did pickling stop at a function or class its module names another
+    of now (`defined_again`)? CPython's wording for it (3.10 to 3.14); were
+    it to change, such a value is not stored, as before."""
+    return "not the same object as" in str(exc)
 
 
 def _dumps_value(
@@ -65,6 +100,7 @@ def _dumps_value(
     on_retry: Any = None,
     aliases: bool = False,
     sink: Any = None,
+    reducer_override: Any = None,
 ) -> bytes:
     """``pickle.dumps(value, protocol)``, keeping the instance attributes a C
     base's reduce drops. *fast* is the pickler's memo-less mode; *extra*
@@ -87,13 +123,28 @@ def _dumps_value(
     the same order, and the result is empty: a digest is taken as they
     come, and whoever reads them can stop the pickle by raising from
     ``write`` (`value_hash.budgeted_hash`). Only for *keyed* bytes, which
-    are never pickled flat."""
+    are never pickled flat. *reducer_override* is the pickler's hook of
+    that name; a value pickled flat is pickled without it."""
     if sink is not None and not keyed:
         raise ValueError("dumps: a sink takes keyed bytes only")
     if FLAT_FIRST and not _surely_shallow(value):
-        return _dumps_walked_first(value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink)
+        return _dumps_walked_first(
+            value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink, reducer_override
+        )
     try:
-        return _dumps(value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink)
+        return _dumps(
+            value,
+            protocol,
+            fast,
+            buffer_callback,
+            extra,
+            persistent_id,
+            keyed,
+            aliases,
+            sink,
+            None,
+            reducer_override,
+        )
     except (RecursionError, MemoryError) as exc:
         if keyed or not too_deep(exc):
             # A key is never taken over a value pickle cannot follow: the
@@ -188,6 +239,7 @@ def _dumps_walked_first(
     keyed: bool,
     aliases: bool = False,
     sink: Any = None,
+    reducer_override: Any = None,
 ) -> bytes:
     """`dumps` where the pickler would run out of C stack before its
     recursion limit (`FLAT_FIRST`): the value is walked on the heap first,
@@ -196,9 +248,9 @@ def _dumps_walked_first(
     pickle follows elsewhere, and past that it raises RecursionError as the
     pickler raises on other Pythons."""
     reducers, leaf = _KeepDict(protocol, extra, keyed), _flat_leaf(persistent_id)
-    walk = _Walk(getattr(sink, "walked", None))
+    walk = _Walk(getattr(sink, "walked", None), reducer_override)
     if _at_most_deep(value, _SAFE_DEPTH, reducers, leaf, walk):
-        override = walk.override() if walk.reduced else None
+        override = walk.override() if walk.reduced else reducer_override
         return _dumps(
             value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink, reducers, override
         )
@@ -1733,3 +1785,135 @@ def restore_with_dict(obj: Any, packed: tuple) -> None:
             for name, value in (slots or {}).items():
                 setattr(obj, name, value)
     obj.__dict__.update(attrs)
+
+
+# -- functions defined again --------------------------------------------------
+
+
+def named_now(obj: Any) -> Any:
+    """The class or function *obj*'s module now names where *obj* was
+    defined, when that is another object of the same kind; else None.
+
+    What a pickle round trip from disk resolves the name to. A notebook cell
+    re-run defines a new class under the old name, and pickle refuses an
+    instance of the old one ("not the same object as __main__.Fit").
+    """
+    module = sys.modules.get(getattr(obj, "__module__", None) or "")
+    qualname = getattr(obj, "__qualname__", None)
+    if module is None or not isinstance(qualname, str) or "<locals>" in qualname:
+        return None
+    current: Any = module
+    for part in qualname.split("."):
+        current = getattr(current, part, None)
+        if current is None:
+            return None
+    if current is obj:
+        return None
+    if isinstance(obj, type) and isinstance(current, type):
+        return current
+    if isinstance(obj, types.FunctionType) and isinstance(current, types.FunctionType):
+        return current
+    return None
+
+
+def defined_again(then: Any = None) -> Callable[[Any], Any]:
+    """A pickler's ``reducer_override`` for a value that holds a function
+    whose cell ran again: its module names another function now, and pickle
+    refuses the one held ("not the same object as __main__.column_ratio").
+
+    When the one named now is the same definition (`same_definition`), the
+    function is pickled by its name, and loads as the one that name holds
+    then, as any function pickled by name does. When it is not, pickling
+    raises PicklingError saying so: the value is not stored. *then* is the
+    override to ask about everything else.
+
+    A notebook that repeats a cell defining ``column_ratio`` after building
+    a pipeline on it held the first function: E6's fitted grid search was
+    never stored, and ran again after every restart (~48 s).
+    """
+
+    def override(obj: Any) -> Any:
+        if type(obj) is types.FunctionType:
+            current = named_now(obj)
+            if current is not None:
+                if not same_definition(obj, current):
+                    name = obj.__qualname__
+                    raise DefinedAgain(
+                        f"it holds {name} as defined before its cell ran again with different code, "
+                        f"and a stored copy could only load the {name} defined now"
+                    )
+                return by_name, (obj.__module__, obj.__qualname__)
+        return NotImplemented if then is None else then(obj)
+
+    return override
+
+
+class DefinedAgain(pickle.PicklingError):
+    """A value holds a function whose cell ran again with other code since
+    (`defined_again`): pickled by its name, it would load as the new one."""
+
+
+def by_name(module: str, qualname: str) -> Any:
+    """What *module* names *qualname* now, as pickle finds a function it
+    pickled by name (`defined_again`). Named in stored entries: keep its
+    name."""
+    import importlib
+
+    found: Any = importlib.import_module(module)
+    for part in qualname.split("."):
+        found = getattr(found, part)
+    return found
+
+
+def same_definition(old: types.FunctionType, new: types.FunctionType) -> bool:
+    """Do *old* and *new* do the same, so that a value holding *old* can
+    hold *new* instead: the same code (lines aside), the same globals, no
+    closure, and alike defaults, attributes, docstring and annotations."""
+    from cash.decorator.function_identity import code_fingerprint
+
+    if old.__globals__ is not new.__globals__ or old.__closure__ is not None or new.__closure__ is not None:
+        return False
+    a, b = old.__code__, new.__code__
+    if (a.co_argcount, a.co_posonlyargcount, a.co_kwonlyargcount, a.co_flags) != (
+        b.co_argcount,
+        b.co_posonlyargcount,
+        b.co_kwonlyargcount,
+        b.co_flags,
+    ):
+        return False
+    pairs = [
+        (old.__defaults__, new.__defaults__),
+        (old.__kwdefaults__, new.__kwdefaults__),
+        (old.__dict__, new.__dict__),
+        (old.__doc__, new.__doc__),
+        (getattr(old, "__type_params__", ()), getattr(new, "__type_params__", ())),
+    ]
+    annotate = getattr(old, "__annotate__", None), getattr(new, "__annotate__", None)
+    if sys.version_info >= (3, 14):
+        # Annotations are made when asked for: compare what makes them.
+        if (annotate[0] is None) != (annotate[1] is None):
+            return False
+        if annotate[0] is not None and not same_definition(*annotate):
+            return False
+    else:
+        pairs.append((old.__annotations__, new.__annotations__))
+    return all(_alike(x, y) for x, y in pairs) and code_fingerprint(a) == code_fingerprint(b)
+
+
+_ALIKE_ATOMS = (str, bytes, int, float, complex, bool, type(None))
+
+
+def _alike(a: Any, b: Any) -> bool:
+    """*a* is *b*, or both are equal plain data (`same_definition`)."""
+    if a is b:
+        return True
+    t = type(a)
+    if t is not type(b):
+        return False
+    if t in _ALIKE_ATOMS:
+        return a == b
+    if t in (tuple, list):
+        return len(a) == len(b) and all(_alike(x, y) for x, y in zip(a, b))
+    if t is dict:
+        return a.keys() == b.keys() and all(_alike(v, b[k]) for k, v in a.items())
+    return False

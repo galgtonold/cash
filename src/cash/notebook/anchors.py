@@ -20,11 +20,12 @@ from __future__ import annotations
 
 import io
 import pickle
+import types
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from cash import value_hash
+from cash import kept_state, value_hash
 
 __all__ = ["AnchorRef", "anchor_digests", "resolve_anchors", "with_anchor_refs"]
 
@@ -36,13 +37,24 @@ class AnchorRef:
     name: str
 
 
+#: Marks a persistent id kept as the object itself (`_RefPickler`).
+_KEPT = "kept"
+
+
 class _RefPickler(pickle.Pickler):
     def __init__(self, file: io.BytesIO, name_of: Callable[[Any], str | None], buffers: list) -> None:
         super().__init__(file, pickle.HIGHEST_PROTOCOL, buffer_callback=buffers.append)
         self._name_of = name_of
+        self.kept: dict[int, Any] = {}
 
-    def persistent_id(self, obj: Any) -> str | None:
-        return self._name_of(obj)
+    def persistent_id(self, obj: Any) -> Any:
+        name = self._name_of(obj)
+        if name is None and type(obj) is types.FunctionType and kept_state.named_now(obj) is not None:
+            # A function whose cell ran again since: pickle refuses it by
+            # name. The copy holds it as the value did.
+            self.kept[id(obj)] = obj
+            return (_KEPT, id(obj))
+        return name
 
 
 def _round_trip(value: Any, name_of: Callable[[Any], str | None], load: Callable[[str], Any]) -> Any:
@@ -50,12 +62,20 @@ def _round_trip(value: Any, name_of: Callable[[Any], str | None], load: Callable
     that name: one pickle round trip, so what the parts share stays shared."""
     stream = io.BytesIO()
     buffers: list[pickle.PickleBuffer] = []
-    _RefPickler(stream, name_of, buffers).dump(value)
+    pickler = _RefPickler(stream, name_of, buffers)
+    pickler.dump(value)
     unpickler = pickle.Unpickler(
         io.BytesIO(stream.getvalue()),
         buffers=[bytes(b) if memoryview(b).readonly else bytearray(b) for b in buffers],
     )
-    unpickler.persistent_load = load  # type: ignore[assignment]
+    kept = pickler.kept
+
+    def persistent_load(pid: Any) -> Any:
+        if type(pid) is tuple and pid[0] == _KEPT:
+            return kept[pid[1]]
+        return load(pid)
+
+    unpickler.persistent_load = persistent_load if kept else load  # type: ignore[assignment]
     return unpickler.load()
 
 
