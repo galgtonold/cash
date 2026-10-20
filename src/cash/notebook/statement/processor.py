@@ -120,7 +120,11 @@ from ...analysis.mutation_effects import (
     live_function_source,
     statement_effects,
 )
-from ...analysis.namespace_effects import statement_calls_user_writer, statement_starting_workers
+from ...analysis.namespace_effects import (
+    statement_calls_through_ctypes,
+    statement_calls_user_writer,
+    statement_starting_workers,
+)
 from ...analytics import AnalyticsManager
 from ...tracking.env_reads import environment_digests
 from ...tracking.env_reads import recording as recording_env_reads
@@ -1478,6 +1482,7 @@ class StatementProcessor:
                 execution.accessed_files = file_tracker.get_accessed_files() | run.header_files
                 execution.written_paths = frozenset(written_paths)
                 execution.appended_paths = frozenset(written_paths.appended)
+                execution.unseen_writer = written_paths.unseen
                 execution.waived_paths = written_paths.waived
                 execution.file_tracker = file_tracker
                 execution.accessed_remote = file_tracker.get_accessed_remote_urls() | run.header_remote
@@ -3022,21 +3027,31 @@ class StatementProcessor:
         """Drop the cell's kept file answers, the freshness checker's
         (``CacheFreshnessChecker.forget_file_answers``) and the upstream
         check's (``forget_file_state_this_run``), when the statement that just
-        ran may have changed a file: it was seen writing one, cash's static
-        writer check says it writes (its own text, or a user function it
-        calls -- which covers writes made in C, like pyarrow's), or it failed
-        part-way. Answers taken before the write are not answers for what is
-        checked after it.
+        ran may have changed a file: it was seen writing one (through Python,
+        or in C by the native file hook), it ran something whose writes no
+        event reports (another process, SQLite: `unseen_writer`), it calls
+        C code through ctypes, cash's static writer check says it writes (its
+        own text, or a user function it calls -- which covers writes made in
+        C, like pyarrow's), or it failed part-way. Answers taken before the write are not answers
+        for what is checked after it.
 
         Every executed statement dropped them at first, and a label loop
         (``ax.annotate`` per topic, reading a frame built from 10,000
         documents) re-checked all of them 52 times in one cell.
         """
-        wrote = bool(execution.written_paths) or not getattr(execution.result, "success", False)
+        tracker = execution.file_tracker
+        wrote = (
+            bool(execution.written_paths)
+            or execution.unseen_writer is not None
+            or (tracker is not None and bool(tracker.touched_dirs or tracker.created_files))
+            or not getattr(execution.result, "success", False)
+        )
         if not wrote:
             try:
                 wrote = (
-                    statement_writes_files(code) or statement_calls_user_writer(code, self.shell.user_ns) is not None
+                    statement_writes_files(code)
+                    or statement_calls_user_writer(code, self.shell.user_ns) is not None
+                    or statement_calls_through_ctypes(code, self.shell.user_ns) is not None
                 )
             except Exception:  # noqa: BLE001 - when unsure, check files again
                 wrote = True

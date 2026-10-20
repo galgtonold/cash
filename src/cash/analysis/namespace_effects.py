@@ -19,7 +19,7 @@ import pathlib
 import sys
 import textwrap
 import types
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from .._memo import STATEMENTS, USER_CALLEES, LruMemo
@@ -59,6 +59,7 @@ from .read_only_callees import NOT_A_LITERAL, reads_its_arguments_only, turns_on
 
 __all__ = [
     "statement_calls_user_writer",
+    "statement_calls_through_ctypes",
     "statement_user_writer_call",
     "code_waived_lines",
     "statement_starting_workers",
@@ -491,6 +492,56 @@ def _hands_pyplot(call: ast.Call, namespace: "Mapping[str, Any]") -> bool:
         if isinstance(arg, (ast.Name, ast.Attribute)) and _is_pyplot_object(resolve_callee(arg, namespace)):
             return True
     return False
+
+
+def statement_calls_through_ctypes(
+    code: str,
+    namespace: "Mapping[str, Any] | None",
+    tree: "ast.Module | None" = None,
+) -> str | None:
+    """The callee, as spelled, of the first call in *code* that reaches C code
+    through ctypes -- itself (``libc.fwrite(...)``) or through a user function
+    it calls -- or None.
+
+    A foreign function call raises no audit event (only the first lookup of
+    a name in a library does), and what C stdio writes no ``open`` event
+    reports. A call made through a ctypes library, one of its functions, a
+    ctypes library class or the ctypes module itself is taken for a write.
+    """
+    ctypes = sys.modules.get("ctypes")
+    if ctypes is None or not namespace or "(" not in code:
+        return None
+    calls = _calls(code) if tree is None else tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+
+    def reaches(exprs: "Iterable[ast.expr]", names: "Mapping[str, Any]") -> bool:
+        for expr in exprs:
+            while isinstance(expr, ast.Attribute):
+                expr = expr.value
+            if isinstance(expr, ast.Name) and _is_ctypes_object(names.get(expr.id), ctypes):
+                return True
+        return False
+
+    for node in calls:
+        if reaches((node.func,), namespace):
+            return ast.unparse(node.func)
+        found = _first_user_callee(
+            resolve_callee(node.func, namespace),
+            lambda current, replaces, appends_itself, waives, callees: reaches(callees, current.__globals__),
+            "calls C code through ctypes",
+        )
+        if found:
+            return ast.unparse(node.func)
+    return None
+
+
+def _is_ctypes_object(value: Any, ctypes: types.ModuleType) -> bool:
+    """Whether *value* is the ctypes module, a library loaded through it, a
+    foreign function, or a library class (``CDLL``, ``WinDLL``)."""
+    if value is ctypes:
+        return True
+    if isinstance(value, type):
+        return issubclass(value, ctypes.CDLL)
+    return isinstance(value, (ctypes.CDLL, ctypes._CFuncPtr))
 
 
 #: Calls that start worker processes, or threads that do not run in the

@@ -319,6 +319,8 @@ class StatementExecution:
     written_paths: frozenset[str] = frozenset()
     #: Those of ``written_paths`` it only appended to.
     appended_paths: frozenset[str] = frozenset()
+    #: What it ran that may write files unseen (`WrittenPaths.unseen`), or None.
+    unseen_writer: str | None = None
     #: Those of ``written_paths`` written only from a line the user waived.
     waived_paths: frozenset[str] = frozenset()
     #: The `FileAccessTracker` of the run, for the store: which files moved
