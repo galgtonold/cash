@@ -6,7 +6,7 @@ entry after all, for a reason the check could not foresee, the statement ran
 on the -1 it had written already, gave -2, and stored it under the key of
 the restored w: every later hit served -2.
 
-Now it warns (NOTEBOOK-INPUT-NOT-REBUILT), and stores nothing.
+Now it warns (NOTEBOOK-INPUT-UNBUILT), and stores nothing.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ def test_a_refused_hit_warns_and_stores_nothing(cash_magics, monkeypatch):
 
     monkeypatch.setattr(processor.StatementProcessor, "_live_objects_shared", refuse)
     codes = _codes(cash_magics, "w -= 1")
-    assert "NOTEBOOK-INPUT-NOT-REBUILT" in codes
+    assert "NOTEBOOK-INPUT-UNBUILT" in codes
     assert np.array_equal(ns["w"], [-2.0, -2.0, -2.0]), "control: it ran on the value in memory"
 
     # Nothing was stored under the key of the restored w: served now, it is -1.

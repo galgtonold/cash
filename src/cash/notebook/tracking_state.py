@@ -129,7 +129,7 @@ class TrackingState:
     # name -> (the object it held, by `HeldObject`, its lineage, the statement) for
     # each broken input that statement's own cache hit is to restore (the
     # forward probe): keyed as the restored value, it holds the old one until
-    # the hit binds it. A miss must not run on it (``NOTEBOOK-INPUT-NOT-REBUILT``).
+    # the hit binds it. A miss must not run on it (``NOTEBOOK-INPUT-UNBUILT``).
     # W: CacheRestorer, UpstreamChecker. R: StatementProcessor.
     probe_held: dict[str, tuple[HeldObject, str | None, str]] = field(default_factory=dict)
 
