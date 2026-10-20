@@ -13,7 +13,10 @@ thread from a file since edited). The decorator refuses the same case
   counts the work, `FileAccessTracker.work_outlived_block`);
 * the variables of the notebook the work's function can reach (the globals
   its code names, the objects its closure holds) are noted, and a statement
-  reading one is not stored either, until a statement binds the name again.
+  reading one is not stored either, until a statement binds the name again;
+* while the work runs, no statement is served from the cache: a
+  ``time.sleep(1.0)`` left to wait for a timer's write was skipped after its
+  first run, and the read below it ran before the write (`still_running`).
 
 The cell still warns NOTEBOOK-THREAD-ALIVE (`background_threads`).
 """
@@ -53,6 +56,19 @@ class ThreadReach:
     def __init__(self) -> None:
         #: name -> what reaches it, for the message.
         self.names: dict[str, str] = {}
+        #: The file trackers of statements whose work outlived them, while
+        #: some of it still runs.
+        self._running: list[Any] = []
+
+    def left_running(self, tracker: Any) -> None:
+        """*tracker*'s statement returned with work still running."""
+        self._running.append(tracker)
+
+    def still_running(self) -> bool:
+        """Whether work a statement left running has not finished yet."""
+        if self._running:
+            self._running = [tracker for tracker in self._running if tracker.work_running]
+        return bool(self._running)
 
     def note(self, functions: Iterable[Any], user_ns: Mapping[str, Any]) -> None:
         """Note what each of *functions* can reach in *user_ns*: the

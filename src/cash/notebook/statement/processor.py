@@ -914,6 +914,15 @@ class StatementProcessor:
         if run.must_run:
             # It learns what it changes as it runs: a restore would not.
             metadata, cached_data = None, None
+        elif cached_data is not None and self._thread_reach.still_running():
+            # Work a statement left running may still write what this one
+            # reads, or this one may be what waits for it (``time.sleep``):
+            # served, it took none of the time the work had while it ran.
+            metadata, cached_data = None, None
+            run.metrics["uncacheable_reasons"].append(
+                "work an earlier statement left running in a thread has not finished, "
+                "so the statement runs rather than be served"
+            )
         run.entry_holders = bool(metadata is not None and metadata.holders)
         if _shadow.SHADOW is not None:
             _shadow.SHADOW.statement_lookup(self, run, bool(cached_data))
@@ -1615,6 +1624,7 @@ class StatementProcessor:
         user_ns = self.shell.user_ns
         if tracker is not None and tracker.work_outlived_block:
             self._thread_reach.note(tracker.work_functions, user_ns)
+            self._thread_reach.left_running(tracker)
             if not run.skip_cache:
                 run.skip_cache = True
                 run.metrics["uncacheable_reasons"].append(
