@@ -2454,7 +2454,11 @@ again with different code: a pipeline built on `column_ratio`, and the cell
 defining `column_ratio` edited and run since. A stored copy could only load
 the `column_ratio` defined now, so the value is not stored. Run the cells
 that build it again. When the cell ran again with the same code, the value is
-stored, and a hit holds the function the name holds when it is read.
+stored, and a hit holds the function the name holds when it is read. An
+object of a class whose cell ran again is treated the same way: stored when
+the class has the same methods, bases and attributes, and loaded as an
+object of the class defined now. A class cash cannot compare (a dataclass,
+an enum) counts as changed.
 
 **When it is safe to ignore.** A one-off on a cheap function.
 

@@ -44,6 +44,7 @@ __all__ = [
     "reducers",
     "restore_with_dict",
     "restores_alike_apart",
+    "same_class",
     "same_definition",
     "stopped_at_defined_again",
     "store_memo",
@@ -1827,16 +1828,21 @@ def defined_again(then: Any = None) -> Callable[[Any], Any]:
     raises PicklingError saying so: the value is not stored. *then* is the
     override to ask about everything else.
 
+    A class is pickled by its name the same way when the one named now is
+    the same definition (`same_class`): an instance of it then loads as an
+    instance of the class defined now.
+
     A notebook that repeats a cell defining ``column_ratio`` after building
     a pipeline on it held the first function: E6's fitted grid search was
     never stored, and ran again after every restart (~48 s).
     """
 
     def override(obj: Any) -> Any:
-        if type(obj) is types.FunctionType:
+        if type(obj) is types.FunctionType or isinstance(obj, type):
             current = named_now(obj)
             if current is not None:
-                if not same_definition(obj, current):
+                same = same_class(obj, current) if isinstance(obj, type) else same_definition(obj, current)
+                if not same:
                     name = obj.__qualname__
                     raise DefinedAgain(
                         f"it holds {name} as defined before its cell ran again with different code, "
@@ -1865,14 +1871,20 @@ def by_name(module: str, qualname: str) -> Any:
     return found
 
 
-def same_definition(old: types.FunctionType, new: types.FunctionType) -> bool:
+def same_definition(old: types.FunctionType, new: types.FunctionType, classes: tuple[type, type] | None = None) -> bool:
     """Do *old* and *new* do the same, so that a value holding *old* can
     hold *new* instead: the same code (lines aside), the same globals, no
-    closure, and alike defaults, attributes, docstring and annotations."""
+    closure, and alike defaults, attributes, docstring and annotations.
+
+    Methods of the classes *classes* (old, new) may close over their own
+    class only (``super()`` and ``__class__`` do)."""
     from cash.decorator.function_identity import code_fingerprint
 
-    if old.__globals__ is not new.__globals__ or old.__closure__ is not None or new.__closure__ is not None:
+    if old.__globals__ is not new.__globals__:
         return False
+    if old.__closure__ is not None or new.__closure__ is not None:
+        if not _own_class_cells(old, new, classes):
+            return False
     a, b = old.__code__, new.__code__
     if (a.co_argcount, a.co_posonlyargcount, a.co_kwonlyargcount, a.co_flags) != (
         b.co_argcount,
@@ -1898,6 +1910,66 @@ def same_definition(old: types.FunctionType, new: types.FunctionType) -> bool:
     else:
         pairs.append((old.__annotations__, new.__annotations__))
     return all(_alike(x, y) for x, y in pairs) and code_fingerprint(a) == code_fingerprint(b)
+
+
+def _own_class_cells(old: types.FunctionType, new: types.FunctionType, classes: tuple[type, type] | None) -> bool:
+    """Do methods *old* and *new* close over nothing but their own class,
+    *classes* (old, new) (`same_definition`)?"""
+    if classes is None or old.__closure__ is None or new.__closure__ is None:
+        return False
+    if old.__code__.co_freevars != ("__class__",) or new.__code__.co_freevars != ("__class__",):
+        return False
+    try:
+        return old.__closure__[0].cell_contents is classes[0] and new.__closure__[0].cell_contents is classes[1]
+    except ValueError:  # an empty cell
+        return False
+
+
+#: What a class's ``__dict__`` holds that differs between two runs of one
+#: cell: where it was defined, its own descriptors, and the slot names
+#: copyreg keeps once an instance was pickled.
+_CLASS_PLACE = frozenset({"__module__", "__qualname__", "__firstlineno__", "__dict__", "__weakref__", "__slotnames__"})
+
+
+def same_class(old: type, new: type) -> bool:
+    """Do classes *old* and *new* do the same, so that a value holding *old*
+    or an instance of it can hold *new* instead (`defined_again`): the same
+    metaclass and bases (a base defined again counts when it is the same
+    class), and in their bodies the same names, each bound to the same
+    definition (`same_definition`, through ``staticmethod``,
+    ``classmethod`` and ``property``), slot or plain data. Anything else in
+    a body (a dataclass's fields, a descriptor of a library's) is not
+    compared, and the class counts as another one."""
+    if type(old) is not type(new) or len(old.__bases__) != len(new.__bases__):
+        return False
+    for a, b in zip(old.__bases__, new.__bases__):
+        if a is not b and not (named_now(a) is b and same_class(a, b)):
+            return False
+    ours, theirs = vars(old), vars(new)
+    if ours.keys() - _CLASS_PLACE != theirs.keys() - _CLASS_PLACE:
+        return False
+    return all(_same_member(ours[k], theirs[k], (old, new)) for k in ours.keys() - _CLASS_PLACE)
+
+
+def _same_member(a: Any, b: Any, classes: tuple[type, type]) -> bool:
+    """Are *a* and *b*, bound to one name in the bodies of *classes* (old,
+    new), the same definition (`same_class`)?"""
+    if type(a) is not type(b):
+        return False
+    if type(a) is types.FunctionType:
+        return same_definition(a, b, classes)
+    if type(a) in (staticmethod, classmethod):
+        return _same_member(a.__func__, b.__func__, classes)
+    if type(a) is property:
+        return all(
+            (x is None and y is None) or (x is not None and y is not None and _same_member(x, y, classes))
+            for x, y in ((a.fget, b.fget), (a.fset, b.fset), (a.fdel, b.fdel))
+        ) and _alike(a.__doc__, b.__doc__)
+    if type(a) is types.MemberDescriptorType:  # a slot
+        return a.__name__ == b.__name__ and a.__objclass__ is classes[0] and b.__objclass__ is classes[1]
+    if isinstance(a, type):
+        return a is b or (named_now(a) is b and same_class(a, b))
+    return _alike(a, b)
 
 
 _ALIKE_ATOMS = (str, bytes, int, float, complex, bool, type(None))
