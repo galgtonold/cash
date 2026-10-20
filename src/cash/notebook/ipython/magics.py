@@ -607,7 +607,7 @@ class CashMagics(Magics):
         try:
             backend = self._cash_instance.backend
             status["cache_stats"] = {"keys": backend.entry_count()}
-            refused = getattr(backend, "late_writes_refused", None)
+            refused = attribute_or(backend, "late_writes_refused", None)
             if refused is not None:
                 # Written later only if the RAM copy is cash's own
                 # (`TieredBackend.persist_from_memory`).
