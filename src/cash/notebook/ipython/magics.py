@@ -566,7 +566,9 @@ class CashMagics(Magics):
             - status: Overall status as an enum name: COMPUTED (the badge's
               EXECUTED), RESTORED (CACHED), SKIPPED or MIXED
             - lineage: Current variable lineage state
-            - cache_stats: {"keys": number of entries in the backend}
+            - cache_stats: {"keys": number of entries in the backend, and for a
+              tiered one "late_writes_refused": entries not written to disk
+              later because their RAM copy may share a part with the caller's}
             - fast_path: "on (...)" when the C extension skips re-hashing
               values that provably did not change, with the size of its
               watch table, else "off: <why>"
@@ -601,7 +603,13 @@ class CashMagics(Magics):
         # Counted, not listed: listing reads every entry's metadata, which on a
         # file cache of a few thousand entries takes seconds (see entry_count).
         try:
-            status["cache_stats"] = {"keys": self._cash_instance.backend.entry_count()}
+            backend = self._cash_instance.backend
+            status["cache_stats"] = {"keys": backend.entry_count()}
+            refused = getattr(backend, "late_writes_refused", None)
+            if refused is not None:
+                # Written later only if the RAM copy is cash's own
+                # (`TieredBackend.persist_from_memory`).
+                status["cache_stats"]["late_writes_refused"] = refused
         except (AttributeError, TypeError, OSError) as exc:
             logger.debug("Failed to retrieve cache stats: %s", exc)
             status["cache_stats"] = {}

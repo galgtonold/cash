@@ -165,7 +165,8 @@ class EntryMetadata(TypedDict, total=False):
     serialized_bytes_estimate: int
     #: What rebuilding the value would cost, when it was persisted for that.
     rebuild_time: float
-    #: Why the value stayed in RAM: compute, bytes, size, replaced_in_cell or process_local.
+    #: Why the value stayed in RAM: compute, bytes, size, replaced_in_cell, process_local, or
+    #: shared (its RAM copy may share a part with the caller's, so no later write takes it).
     persist_skipped: str
     #: The tiers whose write raised, and what they raised.
     store_errors: list[str]
