@@ -935,7 +935,7 @@ class _KeepDict(dict):
         #: This pickle's one object for each attribute name (`_names_apart`).
         self._names: dict[str, str] = {}
         #: This pickle's one object for each numpy dtype (`_dtypes_apart`).
-        self._dtypes: dict[tuple, Any] = {}
+        self._dtypes: dict[bytes, Any] = {}
 
     def __missing__(self, t: type) -> Any:
         reducer = _names_apart(self._reducer(t), self._names)
@@ -1036,7 +1036,7 @@ def _holds_dtype(t: type) -> bool:
         return False
 
 
-def _dtypes_apart(reducer: Any, dtypes: dict[tuple, Any]) -> Callable[[Any], Any]:
+def _dtypes_apart(reducer: Any, dtypes: dict[bytes, Any]) -> Callable[[Any], Any]:
     """*reducer*, giving the dtype an array or numpy scalar reduces to this
     pickle's own object for it, one per equal dtype, never one the value
     holds.
@@ -1048,8 +1048,8 @@ def _dtypes_apart(reducer: Any, dtypes: dict[tuple, Any]) -> Callable[[Any], Any
     forest's or SVC's pickle then wrote its scalars' dtype once and
     referred back to it, and the restored model's wrote it again: the
     restored model digested apart from the one it was stored from, and
-    every statement reading it after a restart missed. Equal dtypes with
-    different metadata stay apart."""
+    every statement reading it after a restart missed. Dtypes that pickle
+    apart (other metadata, alignment, record type) stay apart."""
 
     def reduce(obj: Any) -> Any:
         reduced = reducer(obj)
@@ -1069,7 +1069,7 @@ def _dtypes_apart(reducer: Any, dtypes: dict[tuple, Any]) -> Callable[[Any], Any
     return reduce
 
 
-def _parts_apart(parts: Any, dtypes: dict[tuple, Any]) -> tuple | None:
+def _parts_apart(parts: Any, dtypes: dict[bytes, Any]) -> tuple | None:
     """*parts*, a tuple, with each numpy dtype in it the pickle's own;
     None when it holds none."""
     if type(parts) is not tuple:
@@ -1081,10 +1081,13 @@ def _parts_apart(parts: Any, dtypes: dict[tuple, Any]) -> tuple | None:
     return tuple(_dtype_apart(part, dtypes) if isinstance(part, dtype) else part for part in parts)
 
 
-def _dtype_apart(dt: Any, dtypes: dict[tuple, Any]) -> Any:
-    """The pickle's own dtype equal to *dt*, metadata included."""
+def _dtype_apart(dt: Any, dtypes: dict[bytes, Any]) -> Any:
+    """The pickle's own dtype that pickles as *dt* does. Keyed by that
+    pickle, not by equality: an aligned struct and the same layout packed,
+    or a record dtype and the plain structured one, are equal dtypes that
+    load apart."""
     try:
-        key = (dt, dt.str, repr(dt.metadata))
+        key = pickle.dumps(dt, protocol=pickle.HIGHEST_PROTOCOL)
         own = dtypes.get(key)
         if own is None:
             own = dtypes[key] = copy.copy(dt)
@@ -1345,14 +1348,17 @@ def _reduce_array_for_key(array: Any, protocol: int) -> Any:
         packed = array
     if packed is array:
         return array.__reduce_ex__(protocol)
-    return _packed_array, (array.dtype.descr, packed)
+    # The dtype itself, not its ``descr``: an aligned struct and the same
+    # layout packed have one ``descr``, and arrays of the same values in
+    # each keyed alike.
+    return _packed_array, (array.dtype, packed)
 
 
-def _packed_array(descr: Any, packed: Any) -> Any:
+def _packed_array(dtype: Any, packed: Any) -> Any:
     """What `_reduce_array_for_key` names (key bytes are never loaded)."""
     import numpy as np
 
-    return packed.astype(np.dtype(descr))
+    return packed.astype(np.dtype(dtype))
 
 
 def _drops_dict(t: type) -> bool:

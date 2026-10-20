@@ -58,6 +58,32 @@ def test_dtype_metadata_still_keys():
     assert compute_hash(Holder(plain, plain.copy())) != compute_hash(Holder(plain, tagged))
 
 
+ALIGNED = np.dtype([("a", "i1"), ("b", "i8")], align=True)
+# The same layout, packed by hand: equal to ALIGNED, and not aligned.
+LAID_OUT = np.dtype({"names": ["a", "b"], "formats": ["i1", "i8"], "offsets": [0, 8], "itemsize": 16})
+RECORD = np.dtype((np.record, [("a", "i8")]))
+PLAIN = np.dtype([("a", "i8")])
+
+
+@pytest.mark.parametrize("first, second", [(ALIGNED, LAID_OUT), (RECORD, PLAIN)], ids=["aligned", "record"])
+def test_equal_dtypes_that_load_apart_stay_apart_in_one_value(first, second):
+    assert first == second
+    from cash import kept_state
+
+    value = Holder(np.zeros(2, dtype=first), np.zeros(2, dtype=second))
+    back = pickle.loads(kept_state.dumps(value, protocol=5))
+    assert pickle.dumps(back.parts[0].dtype) == pickle.dumps(first)
+    assert pickle.dumps(back.parts[1].dtype) == pickle.dumps(second)
+    assert compute_hash(value) != compute_hash(Holder(np.zeros(2, dtype=first), np.zeros(2, dtype=first)))
+
+
+def test_an_aligned_and_a_packed_array_of_the_same_bytes_key_apart():
+    from cash import stored_pickle
+
+    assert stored_pickle.object_digest(np.zeros(3, ALIGNED)) != stored_pickle.object_digest(np.zeros(3, LAID_OUT))
+    assert compute_hash(Holder(np.zeros(3, ALIGNED))) != compute_hash(Holder(np.zeros(3, LAID_OUT)))
+
+
 def test_a_value_pickled_with_its_dtypes_apart_loads_equal():
     value = Holder(np.int64(3), np.arange(3), np.zeros(2, dtype=np.dtype("f8", metadata={"unit": "m"})))
     from cash import kept_state
