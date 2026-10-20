@@ -1399,6 +1399,8 @@ typedef struct { uintptr_t addr; uint64_t until; float secs; uint8_t state; uint
 #define SIGHT_BITS 13
 static Sight sights[1 << SIGHT_BITS];
 enum { SG_NONE = 0, SG_SEEN = 1, SG_SKIP = 2 };
+/* checks a sighting keeps its slot from another value's (`py_seen`) */
+#define SEEN_HOLD 1024
 
 static Sight *sight_of(uintptr_t a) { return &sights[hmix(a) & ((1u << SIGHT_BITS) - 1)]; }
 
@@ -1594,8 +1596,13 @@ static PyObject *py_seen(PyObject *self, PyObject *const *args, Py_ssize_t nargs
     uintptr_t a = (uintptr_t)args[0];
     Sight *g = sight_of(a);
     if (g->addr != a && sight_holds_live_skip(g)) Py_RETURN_NONE;  /* keep a live skip */
+    /* Another value's sighting holds the slot: it keeps it until its second
+       check arms it (which empties the slot) or SEEN_HOLD checks pass.
+       Written over, two values sharing the slot and checked in turn each
+       wiped the other's sighting: neither was ever armed. */
+    if (g->addr != a && g->state == SG_SEEN && tick < g->until) Py_RETURN_NONE;
     sight_clear(g);
-    g->addr = a; g->state = SG_SEEN; g->secs = (float)secs; g->until = 0;
+    g->addr = a; g->state = SG_SEEN; g->secs = (float)secs; g->until = tick + SEEN_HOLD;
     Py_RETURN_NONE;
 }
 
@@ -2679,7 +2686,8 @@ static int exec_module(PyObject *m) {
         {"FIRST", ST_FIRST}, {"ARM", ST_ARM}, {"SKIP", ST_SKIP}, {"BUSY", ST_BUSY}, {"OFF", ST_OFF},
         {"ARMED", A_ARMED}, {"ALREADY", A_ALREADY}, {"NEED_TYPE", A_NEED_TYPE},
         {"INELIGIBLE", A_INELIGIBLE}, {"TOO_SMALL", A_TOO_SMALL}, {"NO_ANCHOR", A_NO_ANCHOR},
-        {"OVER_BUDGET", A_OVER_BUDGET}, {"ARM_BUSY", A_BUSY}, {"KEPT", A_KEPT}, {"KINDS", NKINDS}};
+        {"OVER_BUDGET", A_OVER_BUDGET}, {"ARM_BUSY", A_BUSY}, {"KEPT", A_KEPT}, {"KINDS", NKINDS},
+        {"SIGHT_BITS", SIGHT_BITS}};
     for (size_t i = 0; i < sizeof consts / sizeof consts[0]; i++)
         if (PyModule_AddIntConstant(m, consts[i].n, consts[i].v) < 0) return -1;
     if (PyType_Ready(&AccType) < 0 || PyType_Ready(&TouchType) < 0) return -1;
