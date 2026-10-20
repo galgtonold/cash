@@ -19,7 +19,7 @@ How a call gets here (`HitMemo.offer`, after an ordinary hit):
   them, code (a function, a class, a module), or a plain dict, which is
   watched. Anything else -- a list, an instance, an array, a generator --
   and the function keeps the ordinary path. The dicts are watched, the
-  classes' version tags taken, the cells' contents remembered.
+  classes' version tags (and names) taken, the cells' contents remembered.
 * The call itself must be an ordinary one: not nested in another cached
   call, no file tracker, no notebook statement handing digests, no
   ``key=``/``ignore=``, no ``dynamic_depends_on=``, no declared files, no
@@ -427,7 +427,9 @@ class _Scan:
             tag = _cw.world_watch_type(k)
             if tag is None:
                 raise Ineligible("a class without a version tag")
-            self.types[id(k)] = (k, tag)
+            # With its name and qualname: setting either moves no tag and
+            # tells no watcher, and a key names a renamed class anew.
+            self.types[id(k)] = (k, (tag, k.__name__, k.__qualname__))
             for name, attr in list(vars(k).items()):
                 if _is_dunder(name) or name.startswith("_abc_"):
                     # Machinery, never data the key reads; but code it runs.

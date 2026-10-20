@@ -2116,6 +2116,22 @@ static int epoch_is(PyObject *o, uint64_t want) {
     return (uint64_t)v == want;
 }
 
+/* A class a fast hit compares: its version tag, and for a heap type also
+ * the name and qualname objects it had (`hit_memo` hands
+ * ``(tag, __name__, __qualname__)``). Setting ``__name__`` or
+ * ``__qualname__`` goes through the type's own setter, which neither moves
+ * the tag nor tells a type watcher, and a key names a renamed class by its
+ * new name. A bare tag is compared as before. */
+static int type_unchanged(PyObject *t, PyObject *want) {
+    if (!PyType_Check(t)) return 0;
+    PyTypeObject *tp = (PyTypeObject *)t;
+    if (!PyTuple_CheckExact(want)) return epoch_is(want, tp->tp_version_tag);
+    if (PyTuple_GET_SIZE(want) != 3 || !(tp->tp_flags & Py_TPFLAGS_HEAPTYPE)) return 0;
+    PyHeapTypeObject *ht = (PyHeapTypeObject *)tp;
+    return epoch_is(PyTuple_GET_ITEM(want, 0), tp->tp_version_tag) && ht->ht_name == PyTuple_GET_ITEM(want, 1) &&
+           ht->ht_qualname == PyTuple_GET_ITEM(want, 2);
+}
+
 /* fast_lookup(memo, args, kwargs) -> entry | None
  *   memo  = [world epoch, entries {key: entry}, (cell, held, ...), (type, tag, ...), ...]
  *   entry = (cash epoch, store dict, cache key, store entry, ...)
@@ -2134,9 +2150,7 @@ static PyObject *py_fast_lookup(PyObject *self, PyObject *const *args, Py_ssize_
         if (!PyCell_Check(c) || PyCell_GET(c) != PyTuple_GET_ITEM(cells, i + 1)) goto declined;
     }
     for (Py_ssize_t i = 0; i + 1 < PyTuple_GET_SIZE(types); i += 2) {
-        PyObject *t = PyTuple_GET_ITEM(types, i);
-        if (!PyType_Check(t) || !epoch_is(PyTuple_GET_ITEM(types, i + 1), ((PyTypeObject *)t)->tp_version_tag))
-            goto declined;
+        if (!type_unchanged(PyTuple_GET_ITEM(types, i), PyTuple_GET_ITEM(types, i + 1))) goto declined;
     }
     PyObject *entries = PyList_GET_ITEM(memo, 1);
     if (!PyDict_CheckExact(entries) || PyDict_GET_SIZE(entries) == 0) goto declined;
@@ -2406,9 +2420,7 @@ static PyObject *py_fast_call(PyObject *self, PyObject *const *args, Py_ssize_t 
         if (!PyCell_Check(c) || PyCell_GET(c) != PyTuple_GET_ITEM(cells, i + 1)) goto miss;
     }
     for (Py_ssize_t i = 0; i + 1 < PyTuple_GET_SIZE(types); i += 2) {
-        PyObject *t = PyTuple_GET_ITEM(types, i);
-        if (!PyType_Check(t) || !epoch_is(PyTuple_GET_ITEM(types, i + 1), ((PyTypeObject *)t)->tp_version_tag))
-            goto miss;
+        if (!type_unchanged(PyTuple_GET_ITEM(types, i), PyTuple_GET_ITEM(types, i + 1))) goto miss;
     }
     PyObject *key = any_key(args[1], args[2]);
     if (key == NULL) { if (PyErr_Occurred()) return NULL; goto miss; }
