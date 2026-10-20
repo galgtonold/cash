@@ -1676,6 +1676,13 @@ record cannot be checked again, and says why: the call ran a function that has
 side effects or reads the clock, a function no name finds, a value too big to
 digest, or it left a thread running.
 
+<!-- claim: cash/analysis/helper_walk.py:HelperWalk._note_decided_at_run_time @1454635c -->
+Before Python 3.12 (or with `CASH_TRACE=0`) the same warning names an
+`isinstance(x, Kind)` or `issubclass(c, Kind)` that Kind's own metaclass
+answers with an `__instancecheck__` or `__subclasscheck__` of yours: what it
+reads, such as a set its `register()` fills, is state the class keeps, and no
+key holds it. On 3.12 and newer the record of what the call ran covers it.
+
 **Why it matters.** cash cannot tell from the source which code that name
 lands on, so an edit to it, or to a global it reads, would not change the key.
 Nothing stale is served: the call is not cached.

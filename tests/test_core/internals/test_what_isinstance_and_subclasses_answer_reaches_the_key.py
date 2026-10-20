@@ -17,6 +17,7 @@ from __future__ import annotations
 import abc
 import collections.abc
 import gc
+import os
 import sys
 import time
 import typing
@@ -24,9 +25,14 @@ import typing
 import pytest
 
 from cash import Cash
+from cash.exceptions import CashCacheIneffectiveWarning
 from cash.decorator import hit_memo
 
 pytestmark = [pytest.mark.filterwarnings("ignore::cash.exceptions.CashImpurityWarning")]
+
+
+#: Nothing records what a call ran: before 3.12, or with ``CASH_TRACE=0``.
+UNTRACED = sys.version_info < (3, 12) or os.environ.get("CASH_TRACE", "").strip().lower() in ("0", "off", "false", "no")
 
 
 @pytest.fixture
@@ -78,18 +84,20 @@ def thing_is_kind(x):
     return (x, isinstance(Thing(), Kind))
 
 
-@pytest.mark.xfail(
-    sys.version_info < (3, 12),
-    strict=True,
-    reason="before 3.12 nothing records what ran: the set the metaclass's register() writes is left out "
-    "of the key as state the class keeps, so the call is served its old answer",
-)
 def test_register_through_a_metaclass_of_ones_own(c):
+    """On 3.12+ the trace of what ran sees the set ``register()`` filled.
+    Before, nothing does: the call runs uncached, and says so."""
     f = c.cache(thing_is_kind)
-    assert warm(f, 1) == (1, False)
+    if UNTRACED:
+        with pytest.warns(CashCacheIneffectiveWarning, match="KEY-UNTRACKABLE-DEP"):
+            assert warm(f, 1) == (1, False)
+    else:
+        assert warm(f, 1) == (1, False)
     Kind.register(Thing)
     try:
         assert f(1) == (1, True)
+        if UNTRACED:
+            assert f.cache_info()["hits"] == 0
     finally:
         Kind._members.clear()
 
