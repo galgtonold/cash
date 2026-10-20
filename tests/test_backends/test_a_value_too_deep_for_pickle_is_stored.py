@@ -206,7 +206,9 @@ def test_a_deep_chain_pickle_refuses_is_copied_by_the_ram_tier():
     its timeout."""
     head = _chain(2 * sys.getrecursionlimit())
     head.fn = lambda: 1
-    with pytest.raises(pickle.PicklingError):
+    # Refused as the RAM tier sees it: a lambda (PicklingError, or
+    # AttributeError from 3.13), or the depth itself (RecursionError on 3.10).
+    with pytest.raises((pickle.PicklingError, AttributeError, RecursionError)):
         pickle.dumps(head)
     with pytest.raises(RecursionError):
         copy.deepcopy(head)
