@@ -372,12 +372,40 @@ def _the_kernels(t: threading.Thread) -> bool:
     return isinstance(name, str) and name.partition(".")[0] in _KERNEL_PACKAGES
 
 
+#: The kernel's own threads that may start after cash was imported, named
+#: exactly (``module:qualname`` of the thread's class, or of its target):
+#: pyzmq's garbage thread, started when a message is first sent without a
+#: copy, and ipykernel's iopub and pipe watchers, started again when the
+#: kernel restarts its streams. Not their packages: IPython runs a user's
+#: background job (``jobs.new(f)``) on its own Thread subclass, and a tornado
+#: loop a user starts on a thread runs the user's callbacks.
+_KERNEL_THREADS = frozenset(
+    {
+        "zmq.utils.garbage:GarbageCollectorThread",
+        "ipykernel.iostream:IOPubThread._thread_main",
+        "ipykernel.iostream:OutStream._watch_pipe_fd",
+        "ipykernel.control:ControlThread",
+        "ipykernel.heartbeat:Heartbeat",
+        "ipykernel.shellchannel:ShellChannelThread",
+        "ipykernel.parentpoller:ParentPollerUnix",
+        "ipykernel.parentpoller:ParentPollerWindows",
+        "IPython.core.history:HistorySavingThread",
+    }
+)
+
+
+def _named(obj: Any) -> str | None:
+    module, qualname = getattr(obj, "__module__", None), getattr(obj, "__qualname__", None)
+    return f"{module}:{qualname}" if isinstance(module, str) and isinstance(qualname, str) else None
+
+
 def _kernel_code(t: threading.Thread) -> bool:
-    """Does *t* run code of the kernel's packages (a Timer's function, its
-    target, or its own ``run``)? pyzmq starts its garbage thread only when a
-    message is first sent without a copy, after cash was imported."""
-    name = getattr(_code_of(t), "__module__", None)
-    return isinstance(name, str) and name.partition(".")[0] in _KERNEL_PACKAGES
+    """Is *t* one of the kernel's own threads (`_KERNEL_THREADS`), by its
+    exact class or its target, whenever it started?"""
+    target = getattr(t, "_target", None)
+    if target is None:
+        return not isinstance(t, threading.Timer) and _named(type(t)) in _KERNEL_THREADS
+    return _named(getattr(target, "__func__", target)) in _KERNEL_THREADS
 
 
 def other_thread_alive(notebook_ns: Any) -> bool:
@@ -385,7 +413,7 @@ def other_thread_alive(notebook_ns: Any) -> bool:
     so that a digest one took cannot stand for the other: any live thread
     but this one, cash's own (by the code it runs; a Timer by its function)
     and the kernel's (`_the_kernels`, alive when cash was imported, or
-    running code of the kernel's packages, `_kernel_code`), daemon
+    or one of its own named exactly, `_kernel_code`), daemon
     or not. A pool's worker runs the user's code under a library's name,
     which `runs_user_code` cannot see, and a wrong yes only costs a read
     again. A thread a C library started (an audio or device callback) runs

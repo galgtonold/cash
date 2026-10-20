@@ -110,21 +110,30 @@ def test_a_call_takes_the_statements_digest_only_when_alone(monkeypatch):
     assert len(reads) == 1, "another thread is alive: read again"
 
 
-def _in_module(fn, module):
-    fn.__module__ = module
-    return fn
-
-
 @pytest.mark.parametrize(
-    ("module", "counts"),
-    [("zmq.utils.garbage", False), ("ipykernel.iostream", False), ("__main__", True), ("tqdm._monitor", True)],
+    ("named", "counts"),
+    [
+        ("zmq.utils.garbage:GarbageCollectorThread", False),
+        ("ipykernel.heartbeat:Heartbeat", False),
+        ("zmq.utils.garbage:Other", True),
+        ("IPython.lib.backgroundjobs:BackgroundJobFunc", True),
+        ("tqdm._monitor:TMonitor", True),
+    ],
 )
-def test_a_thread_started_later_counts_unless_it_runs_the_kernels_code(module, counts):
+def test_a_thread_started_later_counts_unless_it_is_one_of_the_kernels_own(named, counts):
     """pyzmq starts its garbage thread after cash was imported (when a
-    message is first sent without a copy); it runs only the kernel's code.
-    A thread of the user's or of another library still counts."""
+    message is first sent without a copy). Only the kernel's own threads,
+    by exact class, are passed over: another class of those packages can run
+    the user's code (IPython's background jobs)."""
+    module, _, qualname = named.partition(":")
     stop = threading.Event()
-    t = threading.Thread(target=_in_module(lambda: stop.wait(30), module), daemon=True)
+    def run(self):
+        stop.wait(30)
+
+    run.__module__ = module  # the package's code, as the real class's is
+    cls = type(qualname.rpartition(".")[2], (threading.Thread,), {"run": run})
+    cls.__module__, cls.__qualname__ = module, qualname
+    t = cls(daemon=True)
     t.start()
     try:
         assert trace_recorder.other_thread_alive({}) is counts
