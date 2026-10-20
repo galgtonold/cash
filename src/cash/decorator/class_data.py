@@ -277,6 +277,55 @@ def class_names(cls: type) -> tuple[tuple[str, tuple[str, ...]], ...]:
     )
 
 
+#: Names code reads a class's annotations through.
+ANNOTATION_READS = frozenset({"__annotations__", "__annotate__", "get_type_hints", "get_annotations"})
+
+
+def class_annotations(cls: type) -> str:
+    """A digest of the annotations each user class of *cls*'s MRO holds,
+    by value: reassigned or changed in place, the digest moves."""
+    found = []
+    for base in _user_bases(cls):
+        own = _own_annotations(base)
+        if own is not None:
+            found.append((base.__qualname__, own))
+    return hashlib.sha256(repr(found).encode("utf-8")).hexdigest()
+
+
+def _own_annotations(base: type) -> list[tuple[str, str]] | str | None:
+    """*base*'s own annotations as ``(name, repr)`` pairs; None for none.
+
+    Before 3.14 they are the ``__annotations__`` its namespace holds. On
+    3.14 a class keeps a function that makes them (``__annotate__``) and,
+    once they were read or assigned, the dict made
+    (``__annotations_cache__``); a class not read yet is asked for them
+    without evaluating a name it does not define (``FORWARDREF``), and
+    without keeping the result, which reading ``__annotations__`` would.
+    """
+    ns = vars(base)
+    value = ns.get("__annotations__", ns.get("__annotations_cache__"))
+    if value is None and ("__annotate_func__" in ns or "__annotate__" in ns):
+        try:
+            import annotationlib
+
+            value = annotationlib.call_annotate_function(
+                annotationlib.get_annotate_from_class_namespace(ns), annotationlib.Format.FORWARDREF
+            )
+        except Exception:  # noqa: BLE001 - an annotation that cannot be evaluated: keyed by its code alone
+            return "unevaluated"
+    if not isinstance(value, dict):
+        return None
+    return sorted((str(k), repr(v)) for k, v in value.items())
+
+
+def _code_names(func: Any) -> frozenset[str]:
+    """The names *func*'s code, and the scopes inside it, look up."""
+    code = getattr(func, "__code__", None)
+    if not isinstance(code, types.CodeType):
+        return frozenset()
+    return frozenset(n for scope in iter_code_scopes(code) for n in scope.co_names or ())
+
+
 def classes_below(cls: type) -> list[type]:
     """Every class below *cls*, each once."""
     found: list[type] = []
@@ -535,6 +584,10 @@ class ClassDataFold:
         if DOCSTRING_READS & read_names:
             # `self.__doc__` / `inspect.getdoc(type(self))` in its own code.
             parts.extend(self._docstring_parts(cls, label))
+        if ANNOTATION_READS & read_names or ANNOTATION_READS & _code_names(reader):
+            # `typing.get_type_hints(Cfg)`, `Cfg.__annotations__`: a config or
+            # schema class read for its fields.
+            parts.append((f"{label}:__annotations__", class_annotations(cls)))
         if unhashable:
             self._warn_unhashable_class_data(func_name, unhashable, read_names, reader)
         parts.extend(self._function_read_parts(functions, excluded, label, func_name, owner_code, seen))

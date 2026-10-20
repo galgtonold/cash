@@ -452,6 +452,17 @@ class _Scan:
 
     def commit(self) -> None:
         """Watch what was found (after the whole scan passed)."""
+        from .class_data import ANNOTATION_READS
+
+        if ANNOTATION_READS & self.names:
+            # The key folds the annotations of the classes met
+            # (`class_data.class_annotations`); changed in place they move
+            # no class tag.
+            for k, _ in self.types.values():
+                ns = vars(k)
+                held = ns.get("__annotations__", ns.get("__annotations_cache__"))
+                if type(held) is dict:
+                    self.dicts.append((held, True))
         for d, unkeyed in self.dicts:
             _cw.world_watch_dict(d, unkeyed)
         _cw.world_add_names(self.names)
