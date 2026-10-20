@@ -127,6 +127,7 @@ def test_a_thread_started_later_counts_unless_it_is_one_of_the_kernels_own(named
     the user's code (IPython's background jobs)."""
     module, _, qualname = named.partition(":")
     stop = threading.Event()
+
     def run(self):
         stop.wait(30)
 
