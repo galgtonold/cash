@@ -159,6 +159,8 @@ def _warn_not_stored(exc: BaseException) -> None:
             "run the cells that build the value again after the cell that defines the function "
             "or class, so it holds the one defined now."
         )
+    elif isinstance(exc, kept_state.LoadsOtherwise):
+        fix = "run the cells that build the value again, so its objects are made by the code there is now."
     else:
         fix = (
             "read the exception: a full disk, a cache_dir you cannot write to, or a value "
@@ -555,6 +557,14 @@ class StatementStore:
         kept_out = self._copy_dearer_than_compute(run, execution, payload["variables"])
         if kept_out is not None:
             return self._store_metadata_only(run, execution, kept_out, cost_fields)
+        rebuilt = self._loads_otherwise(run, captured_vars)
+        if rebuilt is not None:
+            otherwise = kept_state.LoadsOtherwise(
+                f"it holds an object of class {rebuilt}, whose own __reduce__ rebuilds it through code "
+                "changed since the object was made, so a stored copy would load as another object"
+            )
+            _warn_not_stored(otherwise)
+            return self._store_metadata_only(run, execution, str(otherwise), cost_fields)
 
         metadata = StatementCacheMetadata(
             timestamp=time.time(),
@@ -611,6 +621,18 @@ class StatementStore:
         stored = StatementCacheMetadata.from_dict(wire)
         self.tracking_state.entry_file_states[run.cache_key] = (stored.file_dependencies,)
         return stored
+
+    def _loads_otherwise(self, run: StatementRun, captured_vars: dict[str, Any]) -> str | None:
+        """The notebook class of which an output holds an object that its
+        stored copy would not load back as (`kept_state.loads_otherwise`).
+        Asked only while the notebook defines a class with a ``__reduce__``
+        of its own: pickling with a hook on every object costs."""
+        user_ns = self.shell.user_ns
+        module = user_ns.get("__name__") or "__main__"
+        if not any(isinstance(v, type) and kept_state.reduces_its_own(v, module) for v in list(user_ns.values())):
+            return None
+        outputs = {name: captured_vars[name] for name in run.outputs if name in captured_vars}
+        return kept_state.loads_otherwise(outputs, module) if outputs else None
 
     @staticmethod
     def _reads_files(execution: StatementExecution, file_dependencies: set[str]) -> bool:

@@ -32,6 +32,7 @@ from typing import Any
 __all__ = [
     "DefinedAgain",
     "FlatValue",
+    "LoadsOtherwise",
     "by_name",
     "chooses_its_state",
     "defined_again",
@@ -39,9 +40,11 @@ __all__ = [
     "flatten",
     "left_out_attrs",
     "load_flat",
+    "loads_otherwise",
     "named_now",
     "one_keying",
     "reducers",
+    "reduces_its_own",
     "restore_with_dict",
     "restores_alike_apart",
     "same_class",
@@ -1970,6 +1973,68 @@ def _same_member(a: Any, b: Any, classes: tuple[type, type]) -> bool:
     if isinstance(a, type):
         return a is b or (named_now(a) is b and same_class(a, b))
     return _alike(a, b)
+
+
+def reduces_its_own(cls: type, module: str) -> bool:
+    """Does a class of *module* in *cls*'s MRO define ``__reduce__`` or
+    ``__reduce_ex__`` (`loads_otherwise`)?"""
+    return any(
+        getattr(base, "__module__", None) == module and ("__reduce__" in vars(base) or "__reduce_ex__" in vars(base))
+        for base in cls.__mro__[:-1]
+    )
+
+
+class LoadsOtherwise(pickle.PicklingError):
+    """A value holds an object whose class rebuilds it on load through code
+    that has changed since it was made (`loads_otherwise`)."""
+
+
+def loads_otherwise(value: Any, module: str) -> str | None:
+    """The name of a class of *module*, with its own ``__reduce__``, of which
+    *value* holds an object that loads back from its pickle with another
+    state than it has; None when each loads back as it is, or when *value*
+    does not pickle as plain pickle does.
+
+    Such a class rebuilds its objects through code of its own when they
+    load (``return (rebuild, (self.k,))``). Run again with other code since
+    the object was made, ``rebuild`` makes another object: a stored copy
+    loaded as ``k=4`` where the value held ``k=3``. The objects are compared
+    by their ``__getstate__``, in the order pickle meets them."""
+
+    def found(root: Any) -> list[Any]:
+        met: list[Any] = []
+        own: dict[type, bool] = {}
+
+        class _Meeting(pickle.Pickler):
+            def reducer_override(self, obj: Any) -> Any:
+                t = type(obj)
+                mine = own.get(t)
+                if mine is None:
+                    mine = own[t] = not isinstance(obj, type) and reduces_its_own(t, module)
+                if mine:
+                    met.append(obj)
+                return NotImplemented
+
+        stream = io.BytesIO()
+        _Meeting(stream, protocol=pickle.HIGHEST_PROTOCOL).dump(root)
+        met.append(stream.getvalue())
+        return met
+
+    try:
+        before = found(value)
+        if len(before) == 1:
+            return None  # no such object
+        after = found(pickle.loads(before[-1]))
+        for old, new in zip(before[:-1], after[:-1]):
+            if type(old).__qualname__ != type(new).__qualname__ or pickle.dumps(
+                old.__getstate__(), pickle.HIGHEST_PROTOCOL
+            ) != pickle.dumps(new.__getstate__(), pickle.HIGHEST_PROTOCOL):
+                return type(old).__qualname__
+    except Exception:  # noqa: BLE001 - not plain pickle's to judge: as before
+        return None
+    if len(before) != len(after):
+        return type(before[0]).__qualname__
+    return None
 
 
 _ALIKE_ATOMS = (str, bytes, int, float, complex, bool, type(None))

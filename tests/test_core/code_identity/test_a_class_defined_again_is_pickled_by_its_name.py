@@ -149,3 +149,26 @@ def test_a_class_body_it_cannot_compare_is_refused(module):
     module(source)
     with pytest.raises(kept_state.DefinedAgain):
         kept_state.dumps(held, protocol=5)
+
+
+REDUCING = """
+def rebuild(k):
+    return Obj(k)
+
+class Obj:
+    def __init__(self, k):
+        self.k = k
+
+    def __reduce__(self):
+        return (rebuild, (self.k,))
+"""
+
+
+def test_an_object_its_own_reduce_would_load_otherwise_is_named(module):
+    mod = module(REDUCING)
+    held = {"a": [mod.Obj(3)], "b": 1}
+    assert kept_state.loads_otherwise(held, mod.__name__) is None
+    module("def rebuild(k):\n    return Obj(k + 1)\n")
+    assert kept_state.loads_otherwise(held, mod.__name__) == "Obj"
+    # A class of another module is not this one's to judge.
+    assert kept_state.loads_otherwise(held, "elsewhere") is None

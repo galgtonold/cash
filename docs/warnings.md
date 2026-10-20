@@ -2460,6 +2460,12 @@ the class has the same methods, bases and attributes, and loaded as an
 object of the class defined now. A class cash cannot compare (a dataclass,
 an enum) counts as changed.
 
+A class with a `__reduce__` of its own (`return (rebuild, (self.k,))`)
+rebuilds its objects on load through code of the notebook. When that code
+ran again with other code after the object was made, a stored copy would
+load as another object, so the value is not stored. Run the cells that build
+it again.
+
 **When it is safe to ignore.** A one-off on a cheap function.
 
 ### STORE-INPUT-CHANGED {#store-input-changed}
