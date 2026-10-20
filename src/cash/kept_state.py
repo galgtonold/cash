@@ -533,6 +533,24 @@ def _dumps(
     after: Any = None,
 ) -> bytes:
     buf = io.BytesIO() if sink is None else sink
+    plain = getattr(_PLAIN, "ids", None)
+    if plain:
+        return _dumps_plain(
+            value,
+            protocol,
+            fast,
+            buffer_callback,
+            extra,
+            persistent_id,
+            keyed,
+            aliases,
+            buf,
+            sink,
+            table,
+            override,
+            after,
+            plain,
+        )
     if override is None:
         pickler = pickle.Pickler(buf, protocol=protocol, buffer_callback=buffer_callback)
     else:
@@ -547,6 +565,39 @@ def _dumps(
         pickler.fast = True
         pickler.persistent_id = key_aliases()
     pickler.dispatch_table = _KeepDict(protocol, extra, keyed) if table is None else table
+    pickler.dump(value)
+    if after is not None:
+        after(pickler)
+    return b"" if sink is not None else buf.getvalue()
+
+
+def _dumps_plain(
+    value: Any,
+    protocol: int,
+    fast: bool,
+    buffer_callback: Any,
+    extra: dict | None,
+    persistent_id: Any,
+    keyed: bool,
+    aliases: bool,
+    buf: Any,
+    sink: Any,
+    table: _KeepDict | None,
+    override: Any,
+    after: Any,
+    plain: dict[int, type],
+) -> bytes:
+    """`_dumps` with `_PlainNaming`, for `by_name_as_then`."""
+    pickler = _PlainNaming(buf, protocol=protocol, buffer_callback=buffer_callback)
+    pickler.override = override
+    pickler.plain = plain
+    pickler.fast = fast
+    if persistent_id is not None:
+        pickler.persistent_id = persistent_id
+    elif aliases:
+        pickler.fast = True
+        pickler.persistent_id = key_aliases()
+    pickler.dispatch_table = _TableGet(_KeepDict(protocol, extra, keyed) if table is None else table)
     pickler.dump(value)
     if after is not None:
         after(pickler)
@@ -1826,7 +1877,7 @@ def named_now(obj: Any) -> Any:
     return None
 
 
-def defined_again(then: Any = None, classes: list[tuple[type, type]] | None = None) -> Callable[[Any], Any]:
+def defined_again(then: Any = None, classes: list[type] | None = None) -> Callable[[Any], Any]:
     """A pickler's ``reducer_override`` for a value that holds a function
     whose cell ran again: its module names another function now, and pickle
     refuses the one held ("not the same object as __main__.column_ratio").
@@ -1840,15 +1891,19 @@ def defined_again(then: Any = None, classes: list[tuple[type, type]] | None = No
     A class is pickled by its name the same way when the one named now is
     the same definition (`same_class`): an instance of it then loads as an
     instance of the class defined now. Each such class is added to
-    *classes*, with the one named now, for `by_name_as_then`.
+    *classes*, for `by_name_as_then`; one being pickled under its plain
+    name (`_PLAIN`) is left to the pickler.
 
     A notebook that repeats a cell defining ``column_ratio`` after building
     a pipeline on it held the first function: E6's fitted grid search was
     never stored, and ran again after every restart (~48 s).
     """
+    plain = getattr(_PLAIN, "ids", None) or {}
 
     def override(obj: Any) -> Any:
         if type(obj) is types.FunctionType or isinstance(obj, type):
+            if id(obj) in plain:
+                return NotImplemented
             current = named_now(obj)
             if current is not None:
                 same = same_class(obj, current) if isinstance(obj, type) else same_definition(obj, current)
@@ -1859,7 +1914,7 @@ def defined_again(then: Any = None, classes: list[tuple[type, type]] | None = No
                         f"and a stored copy could only load the {name} defined now"
                     )
                 if classes is not None and isinstance(obj, type):
-                    classes.append((obj, current))
+                    classes.append(obj)
                 return by_name, (obj.__module__, obj.__qualname__)
         return NotImplemented if then is None else then(obj)
 
@@ -1868,47 +1923,81 @@ def defined_again(then: Any = None, classes: list[tuple[type, type]] | None = No
 
 def by_name_as_then(dump: Callable[[Callable[[Any], Any]], Any], then: Any = None) -> Any:
     """``dump(override)``, *override* a `defined_again` asking *then* about
-    everything else, with the classes
-    whose cell ran again pickled under their names as any class is.
+    everything else, with the classes whose cell ran again written under
+    their plain names, as any class is.
 
     A class `defined_again` pickles by its name is written as a call that
     finds it (`by_name`), not as a plain name: a value holding it digested
     apart from the same value loaded after a restart, which holds the class
-    defined now. So when the value holds one, *dump* runs again with each
-    of them named by its module for the while (`_named_as_then`), and pickle
-    writes its name, as for the class defined now."""
-    classes: list[tuple[type, type]] = []
+    defined now. So when the value holds one, *dump* runs again with pickle's
+    Python pickler, which writes each of them as the plain name of the class
+    defined now (`_PlainNaming`): the bytes of the value as it loads. The
+    module's names are not touched."""
+    classes: list[type] = []
     first = dump(defined_again(then, classes))
     if not classes:
         return first
-    with _named_as_then(classes):
+    before = getattr(_PLAIN, "ids", None)
+    _PLAIN.ids = {**(before or {}), **{id(cls): cls for cls in classes}}
+    try:
         return dump(defined_again(then))
+    finally:
+        _PLAIN.ids = before
 
 
-#: One `_named_as_then` at a time: they put back what they find.
-_NAMING = threading.Lock()
+#: The classes a pickle on this thread writes under their plain names
+#: although their module names another class now (`by_name_as_then`):
+#: ``id -> class``.
+_PLAIN = threading.local()
+
+#: What the C pickler writes before it asks ``reducer_override``.
+_SAVED_FIRST = frozenset(
+    {type(None), bool, int, float, bytes, str, dict, set, frozenset, list, tuple, bytearray, pickle.PickleBuffer}
+)
 
 
-@contextlib.contextmanager
-def _named_as_then(classes: list[tuple[type, type]]) -> Any:
-    """Each class of *classes* (old, named now) named by its module in place
-    of the one named now, until the block ends."""
-    swapped: list[tuple[Any, str, type, type]] = []
-    with _NAMING:
+class _TableGet:
+    """A dispatch table as the Python pickler reads it (``.get``), for one
+    the C pickler reads by key (`_KeepDict`'s ``__missing__``)."""
+
+    def __init__(self, table: Any) -> None:
+        self.table = table
+
+    def get(self, t: type, default: Any = None) -> Any:
         try:
-            for old, current in classes:
-                *path, name = old.__qualname__.split(".")
-                owner: Any = sys.modules.get(old.__module__)
-                for part in path:
-                    owner = getattr(owner, part, None)
-                if owner is not None and getattr(owner, name, None) is current:
-                    setattr(owner, name, old)
-                    swapped.append((owner, name, old, current))
-            yield
-        finally:
-            for owner, name, old, current in reversed(swapped):
-                if getattr(owner, name, None) is old:
-                    setattr(owner, name, current)
+            return self.table[t]
+        except KeyError:
+            return default
+
+
+#: pickle's pure-Python pickler, which the stubs leave out.
+_PyPickler: Any = getattr(pickle, "_Pickler")
+
+
+class _PlainNaming(_PyPickler):
+    """pickle's Python pickler, which writes the classes of `_PLAIN` under
+    their plain names, where the C one refuses a class its module names
+    another of now. Asks *override* about what the C pickler asks it
+    (`_SAVED_FIRST`), so the bytes are the C pickler's."""
+
+    override: Any = None
+    plain: dict[int, type]
+
+    def reducer_override(self, obj: Any) -> Any:
+        if type(obj) in _SAVED_FIRST or self.override is None:
+            return NotImplemented
+        return self.override(obj)
+
+    def save_global(self, obj: Any, name: Any = None) -> None:
+        if id(obj) not in self.plain or self.proto < 4:
+            super().save_global(obj, name)
+            return
+        module_name = obj.__module__
+        qualname = obj.__qualname__ if name is None else name
+        self.save(module_name)
+        self.save(qualname)
+        self.write(pickle.STACK_GLOBAL)
+        self.memoize(obj)
 
 
 class DefinedAgain(pickle.PicklingError):

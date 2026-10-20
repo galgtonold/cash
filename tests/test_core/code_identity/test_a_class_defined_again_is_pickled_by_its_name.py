@@ -102,7 +102,17 @@ def test_its_digest_is_its_content_and_the_same_in_every_process(module):
     assert stored_pickle.object_digest(fresh) == stored_pickle.object_digest(held)
     assert compute_hash(fresh) == compute_hash(held)
     assert kept_state.dumps(fresh, protocol=5) == kept_state.dumps(held, protocol=5)
-    # The module names the class defined now again.
+    # The module names the class defined now all along: an object pickled
+    # in the same dump finds it there.
+    seen = []
+
+    class Looks:
+        def __reduce__(self):
+            seen.append(mod.Fit)
+            return (int, (1,))
+
+    kept_state.dumps([*held, Looks()], protocol=5)
+    assert seen and all(cls is fresh[1] for cls in seen)
     assert mod.Fit is fresh[1]
 
 
