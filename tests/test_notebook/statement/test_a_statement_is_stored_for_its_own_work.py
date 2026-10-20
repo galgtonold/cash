@@ -72,10 +72,16 @@ def _call_seconds(backend, name):
 def _loop_count_for(seconds):
     """How many empty loop turns take about *seconds* here, timed on the same
     function body the cell defines; the fastest of three runs, so a busy
-    moment while measuring does not shrink the count."""
+    moment while measuring does not shrink the count. The core is kept busy
+    for a fifth of a second first: on a macOS runner the cell's call took
+    0.008 s, 2.5 times quicker than the count was measured for, as a core
+    measured before it clocks up gives."""
     ns: dict = {}
     exec("def spin(n):\n    for _ in range(n):\n        pass\n", ns)
     n = 1_000_000
+    warm_until = time.perf_counter() + 0.2
+    while time.perf_counter() < warm_until:
+        ns["spin"](10_000)
     took = min(_timed(ns["spin"], n) for _ in range(3))
     return max(1, int(n * seconds / took))
 

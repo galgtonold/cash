@@ -217,27 +217,18 @@ def _recorder_class() -> type:
             # once), the other has local events on the user's code alone, so
             # arming them again before a call touches only that code, not
             # every function the process ran (`restart_events`).
-            if not super().install():
+            #
+            # Everything a callback reads is set up before an event is on:
+            # from then on every thread's code calls them. The base class's
+            # install turned the events on with `_on_start` as the callback
+            # before this one had made `rearm`, so a pool's other workers ran
+            # it and raised AttributeError into whatever code they were
+            # starting; a worker that died so left its task's future unset,
+            # and the caller waited on it forever.
+            mon = getattr(sys, "monitoring", None)
+            if mon is None:
+                self.reason = "sys.monitoring needs Python 3.12 or newer"
                 return False
-            mon = sys.monitoring
-            self.disc = self.tool
-            mon.register_callback(self.disc, mon.events.PY_START, self._discover)
-            mon.register_callback(self.disc, mon.events.PY_RESUME, self._discover)
-            self.tool = None
-            for tool in self.tool_ids:
-                if mon.get_tool(tool) is None:
-                    mon.use_tool_id(tool, self.tool_name)
-                    self.tool = tool
-                    break
-            if self.tool is None:
-                self.tool = self.disc
-                self.uninstall()
-                return False
-            ev = mon.events
-            self.rearm_works = self._rearm_works()
-            mon.register_callback(self.tool, ev.PY_START, self._on_start)
-            mon.register_callback(self.tool, ev.PY_RESUME, self._on_resume)
-            mon.register_callback(self.tool, ev.CALL, self._on_call)
             # Held weakly: a notebook compiles each statement it runs into
             # code of its own, and a long session kept every one of them.
             # Code that is gone cannot run again, so nothing it would have
@@ -248,6 +239,22 @@ def _recorder_class() -> type:
             #: globals (`string_lookups`): what it calls is recorded for a
             #: notebook unit, the callable a string found among it.
             self.by_string: weakref.WeakSet[types.CodeType] = weakref.WeakSet()
+            free = [tool for tool in self.tool_ids if mon.get_tool(tool) is None]
+            if len(free) < 2:
+                held = {t: mon.get_tool(t) for t in self.tool_ids}
+                self.reason = f"monitoring tool ids {' and '.join(map(str, self.tool_ids))} are taken ({held})"
+                return False
+            self.disc, self.tool = free[:2]
+            mon.use_tool_id(self.disc, self.tool_name)
+            mon.use_tool_id(self.tool, self.tool_name)
+            ev = mon.events
+            self.rearm_works = self._rearm_works()
+            mon.register_callback(self.tool, ev.PY_START, self._on_start)
+            mon.register_callback(self.tool, ev.PY_RESUME, self._on_resume)
+            mon.register_callback(self.tool, ev.CALL, self._on_call)
+            mon.register_callback(self.disc, ev.PY_START, self._discover)
+            mon.register_callback(self.disc, ev.PY_RESUME, self._discover)
+            mon.set_events(self.disc, ev.PY_START | ev.PY_RESUME)
             return True
 
         def _rearm_works(self) -> bool:

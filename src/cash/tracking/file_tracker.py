@@ -39,6 +39,7 @@ from cash.tracking.read_classification import (
     is_cash_internal,
     is_pseudo_fs,
     is_runtime_cache_path,
+    own_stat,
     regular_file_stat,
     regular_file_stat_result,
     stat_key,
@@ -615,12 +616,12 @@ class FileAccessTracker:
         the entry would be stored with no dependency on the file.
         """
         try:
-            os.stat(abs_path)
+            own_stat(abs_path)
             return
         except (OSError, ValueError):
             pass
         try:
-            os.stat(raw_path)
+            own_stat(raw_path)
         except (OSError, ValueError):
             return  # not there under either spelling: nothing was read
         logger.debug("[TRACKER] %r was read but %r cannot be stat'ed; never fresh", raw_path, abs_path)

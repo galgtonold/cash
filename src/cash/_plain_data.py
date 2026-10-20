@@ -1302,14 +1302,23 @@ def tree_walk(value: Any) -> list | None:
         return None
 
 
-def tree_size(value: Any, walk: list | None = None) -> int | None:
+def tree_size(value: Any, walk: list | None = None, leaves: tuple = ()) -> int | None:
     """`profile`'s size for JSON-like data (`_tree_walk`): every container,
     key and leaf ``sys.getsizeof``-summed a level at a time; None for
-    anything else. *walk* is `tree_walk` of *value*, when the caller has it."""
+    anything else. *walk* is `tree_walk` of *value*, when the caller has it.
+    *leaves*: more leaf types, sized by ``sys.getsizeof`` like the rest."""
     if walk is None and _K is not None:
-        got = _K.tree_facts(value, _facts_leaves(), False, 0, _picks, 1)
+        got = _K.tree_facts(value, _facts_leaves().union(leaves) if leaves else _facts_leaves(), False, 0, _picks, 1)
         if got is not NotImplemented:
             return None if got is None else got[2]
+    if walk is None and leaves:
+        if type(value) not in TREE_NODES:
+            return None
+        try:
+            with _gc_paused():
+                walk = list(_tree_walk(value, _facts_leaves().union(leaves)))
+        except (_NotPlain, TypeError):
+            return None
     levels = tree_walk(value) if walk is None else walk
     if levels is None:
         return None
