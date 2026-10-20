@@ -1718,6 +1718,9 @@ def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
         # The same read in C, without an id() per referent.
         found = _REFERRERS_IN(heap, ids)
         if found is not NotImplemented:
+            # Neither the budget nor Ctrl-C stops the kernel: a 2-million
+            # object heap is ~0.3 s, checked once it is read.
+            check_walk_budget()
             return found
     found = []
     referents, misses = gc.get_referents, ids.isdisjoint
