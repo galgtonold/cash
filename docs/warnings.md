@@ -2183,8 +2183,9 @@ ended.
 `p.wait()`).
 
 **When it is safe to ignore.** When the work writes nothing a cell reads, such
-as a server or a monitor: put `# @cash:assume-safe` on the line that starts
-it, and cash serves cells while it runs.
+as a server or a monitor: put `# @cash:assume-safe` on the line in the cell
+that starts it (the call, if it starts in a function, as in `go()  #
+@cash:assume-safe`), and cash serves cells while it runs.
 
 ## Randomness {#random-codes}
 

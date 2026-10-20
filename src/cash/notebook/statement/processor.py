@@ -1680,8 +1680,8 @@ class StatementProcessor:
         )
         fix = (
             "join it (t.join(), p.wait()) in the cell that needs what it does; if it writes nothing a "
-            "cell reads (a server, a monitor), put '# @cash:assume-safe' on the line that starts it, "
-            "and cash serves cells while it runs."
+            "cell reads (a server, a monitor), put '# @cash:assume-safe' on the line in the cell that "
+            "starts it (the call, if it starts in a function), and cash serves cells while it runs."
         )
         log_diagnostic(logger, "NOTEBOOK-WORK-RUNNING", what, fix)
         warn_diagnostic(CashWarning, "NOTEBOOK-WORK-RUNNING", what, fix)
