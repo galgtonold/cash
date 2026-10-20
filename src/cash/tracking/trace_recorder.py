@@ -17,7 +17,9 @@ What makes a trace unusable is recorded as a *marker* on the unit:
 * ``generator_resumed``: it resumed a generator or coroutine of the user's
   started before it, whose state is no input the trace names;
 * ``tool_conflict``: another tool took the monitoring tool id or turned its
-  events off while the unit ran.
+  events off while the unit ran;
+* ``trace_failed``: a callback raised (it raises nothing into the user's
+  code), so what the unit saw is incomplete.
 
 Seen but not unusable (*notes*): ``other_thread`` (user code ran on another
 thread during the unit and was recorded).
@@ -25,6 +27,7 @@ thread during the unit and was recorded).
 
 from __future__ import annotations
 
+import functools
 import sys
 import threading
 import types
@@ -38,6 +41,10 @@ __all__ = ["TOOL_NAME", "Recorder", "Unit", "other_thread_alive", "runs_user_cod
 TOOL_NAME = "cash-shadow"
 #: Tried in this order; 0-2 belong to debuggers, coverage and profilers.
 _TOOL_IDS = (4, 3)
+
+#: How far up from a callback the frame it watches is: the callback is
+#: called from `Recorder._guarded`'s wrapper, which the event calls.
+WATCHED_FRAME = 2
 
 RESUMABLE = 0x20 | 0x80 | 0x200  # CO_GENERATOR | CO_COROUTINE | CO_ASYNC_GENERATOR
 
@@ -154,10 +161,29 @@ class Recorder:
             self.reason = f"monitoring tool ids {' and '.join(map(str, self.tool_ids))} are taken ({held})"
             return False
         ev = mon.events
-        mon.register_callback(self.tool, ev.PY_START, self._on_start)
-        mon.register_callback(self.tool, ev.PY_RESUME, self._on_resume)
+        mon.register_callback(self.tool, ev.PY_START, self._guarded(self._on_start))
+        mon.register_callback(self.tool, ev.PY_RESUME, self._guarded(self._on_resume))
         mon.set_events(self.tool, ev.PY_START | ev.PY_RESUME)
         return True
+
+    def _guarded(self, callback: Any) -> Any:
+        """*callback*, raising nothing into the code it watches: an
+        exception there is raised in the user's own frame, as if the line
+        had raised it. A class whose ``__getattribute__`` raises for
+        ``__class__`` failed ``c = Cls(5)`` from ``isinstance`` on its
+        ``self``. What the units in progress saw is then incomplete
+        (``trace_failed``), so none of them is checked against it."""
+
+        @functools.wraps(callback)
+        def guarded(*args: Any) -> Any:
+            try:
+                return callback(*args)
+            except Exception:  # noqa: BLE001 - see above
+                for unit in (*getattr(self, "active", ()), *self.stack):
+                    unit.markers.add("trace_failed")
+                return None
+
+        return guarded
 
     def uninstall(self) -> None:
         mon = sys.monitoring
@@ -254,7 +280,7 @@ class Recorder:
         stack = self.stack
         if not stack:
             return sys.monitoring.DISABLE
-        frame = sys._getframe(1)
+        frame = sys._getframe(WATCHED_FRAME)
         g = frame.f_globals
         kind = self._kinds.get(id(g))
         if kind is None or kind[0] is not g:
@@ -285,7 +311,7 @@ class Recorder:
         unit = stack[-1]
         if code in unit.codes:
             return sys.monitoring.DISABLE
-        g = sys._getframe(1).f_globals
+        g = sys._getframe(WATCHED_FRAME).f_globals
         kind = self._kinds.get(id(g))
         if kind is None or kind[0] is not g:
             kind = self._classify(g)

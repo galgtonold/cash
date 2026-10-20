@@ -133,6 +133,7 @@ _UNUSABLE = {
     "process_pool": "it ran work in other processes",
     "generator_resumed": "it resumed a generator started before it",
     "tool_conflict": "another tool took the monitoring tool id",
+    "trace_failed": "cash could not read code it saw run",
 }
 #: Findings in a function the call ran that a hit would skip or miss.
 _REFUSED_KINDS = frozenset(
@@ -249,11 +250,11 @@ def _recorder_class() -> type:
             mon.use_tool_id(self.tool, self.tool_name)
             ev = mon.events
             self.rearm_works = self._rearm_works()
-            mon.register_callback(self.tool, ev.PY_START, self._on_start)
-            mon.register_callback(self.tool, ev.PY_RESUME, self._on_resume)
-            mon.register_callback(self.tool, ev.CALL, self._on_call)
-            mon.register_callback(self.disc, ev.PY_START, self._discover)
-            mon.register_callback(self.disc, ev.PY_RESUME, self._discover)
+            mon.register_callback(self.tool, ev.PY_START, self._guarded(self._on_start))
+            mon.register_callback(self.tool, ev.PY_RESUME, self._guarded(self._on_resume))
+            mon.register_callback(self.tool, ev.CALL, self._guarded(self._on_call))
+            mon.register_callback(self.disc, ev.PY_START, self._guarded(self._discover))
+            mon.register_callback(self.disc, ev.PY_RESUME, self._guarded(self._discover))
             mon.set_events(self.disc, ev.PY_START | ev.PY_RESUME)
             return True
 
@@ -326,7 +327,7 @@ def _recorder_class() -> type:
                         user = is_user_path(filename)
                 if not user:
                     return DISABLE
-            frame = sys._getframe(1)
+            frame = sys._getframe(rec.WATCHED_FRAME)
             g = frame.f_globals
             kind = self._kinds.get(id(g))
             if kind is None or kind[0] is not g:
@@ -417,7 +418,7 @@ def _recorder_class() -> type:
         def _on_start(self, code: types.CodeType, offset: int) -> Any:
             self.rearm.add(code)
             if self.active or self.stack:
-                frame = sys._getframe(1)
+                frame = sys._getframe(rec.WATCHED_FRAME)
                 g = frame.f_globals
                 kind = self._kinds.get(id(g))
                 if kind is None or kind[0] is not g:
@@ -468,7 +469,7 @@ def _recorder_class() -> type:
                 if cells is not None:
                     unit.cells.setdefault(code, cells)
                 if recv is not None:
-                    unit.receivers.setdefault(code, recv if isinstance(recv, type) else type(recv))
+                    unit.receivers.setdefault(code, recv if issubclass(type(recv), type) else type(recv))
 
         @staticmethod
         def _unregistered_user_code(name: str, code: types.CodeType) -> bool:
@@ -480,7 +481,7 @@ def _recorder_class() -> type:
         def _on_resume(self, code: types.CodeType, offset: int) -> Any:
             self.rearm.add(code)
             if (self.active or self.stack) and code.co_flags & rec.RESUMABLE:
-                g = sys._getframe(1).f_globals
+                g = sys._getframe(rec.WATCHED_FRAME).f_globals
                 kind = self._kinds.get(id(g))
                 if kind is None or kind[0] is not g:
                     kind = self._classify(g)
@@ -517,7 +518,7 @@ def _recorder_class() -> type:
             if stack and code in self.by_string:
                 callees = stack[-1].callees
                 if id(fn) not in callees:
-                    callees[id(fn)] = (fn, sys._getframe(1).f_globals)
+                    callees[id(fn)] = (fn, sys._getframe(rec.WATCHED_FRAME).f_globals)
             if not units:
                 if stack and code in self.by_string:
                     return None
@@ -527,7 +528,7 @@ def _recorder_class() -> type:
                 if fn is getattr:
                     if arg0 is sys.monitoring.MISSING:
                         return None
-                    name = _last_argument(code, offset, sys._getframe(1))
+                    name = _last_argument(code, offset, sys._getframe(rec.WATCHED_FRAME))
                     entry = ("getattr", arg0, name)
                     slot = ("getattr", id(arg0), name)
                 elif fn is self._import_module or fn is builtins.__import__:

@@ -61,6 +61,7 @@ UNUSABLE = frozenset(
         "process_pool",
         "generator_resumed",
         "tool_conflict",
+        "trace_failed",
         "string_lookup",
         "jit",
         "memo",

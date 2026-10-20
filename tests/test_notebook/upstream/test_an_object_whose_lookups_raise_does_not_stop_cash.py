@@ -87,3 +87,31 @@ def test_a_cell_run_alone_over_such_an_object_starts_from_the_cells_above(cash_m
         run_cash_cell(cash_magics, cell, cells=cells)
     run_cash_cell(cash_magics, cells[2], cells=cells)
     assert cash_magics.shell.user_ns["s"] == _plain(cells[:3])["s"] == 1
+
+
+#: Where such an object reaches code outside the notebook check: hashing an
+#: output that holds it, an argument, a loop, a function default.
+FLOWS = {
+    "in an output": ["rs = [Rec(a=i) for i in range(3)]", "t = sum(r.a for r in rs)"],
+    "an argument": ["def g(r):\n    return r.a + 1", "x = g(Rec(a=4))", "y = x * 2"],
+    "a dict's value": ["d = {'k': Rec(a=2)}", "z = d['k'].a"],
+    "a loop": ["out = []\nfor r in [Rec(a=1), Rec(a=2)]:\n    out.append(r.a)", "n = len(out)"],
+    "a default": ["def h(r=Rec(a=3)):\n    return r.a", "q = h()"],
+}
+
+
+@pytest.mark.parametrize("flow", list(FLOWS))
+def test_such_an_object_anywhere_in_a_notebook_runs_as_plain_python(cash_magics, monkeypatch, flow):
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    cells = [RECORDS, *FLOWS[flow]]
+    plain = _plain(cells)
+    for _ in range(2):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+    ns = cash_magics.shell.user_ns
+    names = {
+        name for name, value in plain.items() if isinstance(value, (int, float, list)) and not name.startswith("_")
+    }
+    assert {name: ns[name] for name in names if not isinstance(plain[name], list)} == {
+        name: plain[name] for name in names if not isinstance(plain[name], list)
+    }
