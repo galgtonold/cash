@@ -1582,8 +1582,9 @@ def _variables_holding(
         if name not in skip and not _SHELL_NAME.fullmatch(name) and not is_value(value, value_types):
             by_id.setdefault(id(value), []).append(name)
     stop = {id(user_ns), id(inside), id(by_id), *ignore}
-    module_dicts = {id(vars(module)) for module in list(sys.modules.values()) if module is not None}
-    module_dicts.discard(id(user_ns))
+    namespaces = [vars(module) for module in list(sys.modules.values()) if module is not None]
+    namespaces = [namespace for namespace in namespaces if namespace is not user_ns]
+    module_dicts = {id(namespace) for namespace in namespaces}
     stop.update(module_dicts)
     # Held in a container a library keeps, a library's own object is still
     # the library's (a module-level loss holding sklearn's ``Interval``); the
@@ -1603,6 +1604,10 @@ def _variables_holding(
             return None
         args = tuple(frontier)
         stop.add(id(args))
+        if _level and notebook_own and len(args) > _REFERRERS_BY_CALL and _held_by_a_module(args, namespaces):
+            # The answer the read of the heap below would give, when a module
+            # holds one of them: E18's seaborn grid read it twice (1.9 s).
+            return None
         referrers = gc.get_referrers(*args) if len(args) <= _REFERRERS_BY_CALL else _referrers_of(args, stop)
         stop.add(id(referrers))
         following: list[Any] = []
@@ -1633,6 +1638,15 @@ def _variables_holding(
         del referrers, args
         frontier[:] = following
     return names if not frontier else None
+
+
+def _held_by_a_module(objs: tuple[Any, ...], namespaces: list[dict]) -> bool:
+    """Whether one of *namespaces* (modules' globals) holds one of *objs*
+    itself: what `_variables_holding` gives up on past its first level,
+    found without reading the whole heap for their referrers."""
+    ids = {id(obj) for obj in objs}
+    referents = gc.get_referents
+    return any(not ids.isdisjoint(map(id, referents(namespace))) for namespace in namespaces)
 
 
 def _is_library_own(obj: Any) -> bool:
