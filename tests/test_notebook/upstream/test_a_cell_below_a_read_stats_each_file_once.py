@@ -43,16 +43,21 @@ def _inputs(tmp_path) -> set[str]:
 
 @pytest.fixture
 def stats_of(monkeypatch, tmp_path):
-    """The ``os.stat`` calls on the inputs (``lstat`` aside: the link check)."""
+    """The ``os.stat`` and ``os.lstat`` calls on the inputs and their folder."""
     calls: list[str] = []
-    real = os.stat
+    # Either spelling: a recorded path may use forward slashes on Windows.
+    root = os.path.normcase(os.path.normpath(str(tmp_path)))
 
-    def counting(path, *a, **k):
-        if str(path).startswith(str(tmp_path)):
-            calls.append(str(path))
-        return real(path, *a, **k)
+    def counting(real):
+        def call(path, *a, **k):
+            if os.path.normcase(os.path.normpath(os.fspath(path))).startswith(root):
+                calls.append(str(path))
+            return real(path, *a, **k)
 
-    monkeypatch.setattr(os, "stat", counting)
+        return call
+
+    monkeypatch.setattr(os, "stat", counting(os.stat))
+    monkeypatch.setattr(os, "lstat", counting(os.lstat))
     return calls
 
 
@@ -65,13 +70,16 @@ def test_the_component_is_the_one_built_from_scratch(tmp_path):
     assert file_component_this_run(paths) == expected  # kept for the run
 
 
-def test_each_file_is_stat_ed_once_in_a_run(tmp_path, stats_of):
+def test_the_component_looks_at_each_file_once_in_a_run(tmp_path, stats_of):
+    """Three lookups of the same statement's files: a look at each file and
+    its folder, not one per lookup (3N + 1 before)."""
     paths = _inputs(tmp_path)
     stats_this_run(paths)  # the check that no input moved
-    file_component_this_run(paths)
-    file_component_this_run(paths)
+    taken = len(stats_of)
+    for _ in range(3):
+        file_component_this_run(paths)
 
-    assert len(stats_of) == N
+    assert len(stats_of) - taken <= N + 1
 
 
 def test_a_write_in_the_run_gives_a_new_component(tmp_path):
