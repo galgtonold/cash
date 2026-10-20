@@ -49,7 +49,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from time import perf_counter as _perf_counter
 from typing import Any
 
-from cash import _plain_data
+from cash import _native, _plain_data
 from cash._clock import CpuLimit
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
@@ -1714,6 +1714,11 @@ def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
     ids = {id(obj) for obj in objs}
     heap = gc.get_objects()
     stop.add(id(heap))
+    if _REFERRERS_IN is not None:
+        # The same read in C, without an id() per referent.
+        found = _REFERRERS_IN(heap, ids)
+        if found is not NotImplemented:
+            return found
     found = []
     referents, misses = gc.get_referents, ids.isdisjoint
     # A block of the heap is read in one call, and only a block holding one
@@ -1730,6 +1735,11 @@ def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
 
 #: Heap objects `_referrers_of` reads in one `gc.get_referents` call.
 _REFERRERS_BLOCK = 256
+
+#: The C kernel `_referrers_of` reads the heap with (``cwalk.c``), answering
+#: as its Python loop does; None without the kernels, or in a build from
+#: before it.
+_REFERRERS_IN = getattr(_native.kernels, "referrers_in", None)
 
 
 def _count_leaf_attributes(nodes: dict[int, Any], inbound: dict[int, int]) -> bool:
