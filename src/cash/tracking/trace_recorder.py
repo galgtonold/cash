@@ -316,12 +316,6 @@ def runs_user_code(t: threading.Thread, notebook_ns: Any) -> bool:
 #: runner's watchdog), left out by `other_thread_alive`. Held weakly.
 HOST_THREADS: weakref.WeakSet[threading.Thread] = weakref.WeakSet()
 
-#: The packages a kernel's own threads run (its message loops, heartbeat,
-#: output pipes and history writer): a thread alive when cash was imported
-#: that runs one of them is the kernel's.
-_KERNEL_PACKAGES = frozenset({"IPython", "ipykernel", "jupyter_client", "tornado", "zmq"})
-
-
 #: The packages of what hosts the notebook whose threads `threading` does
 #: not list (a test runner's channel threads), left out by
 #: `other_thread_alive`.
@@ -360,25 +354,15 @@ def _code_of(t: threading.Thread) -> Any:
     return getattr(t, "_target", None) or type(t).run
 
 
-def _the_kernels(t: threading.Thread) -> bool:
-    """Is *t*, alive when cash was imported, one of the kernel's own: a
-    thread running its own ``run`` (no target handed to it) or code of the
-    kernel's packages. A pool's worker started before cash runs the pool's
-    target, and counts."""
-    fn = _code_of(t)
-    if getattr(t, "_target", None) is None and not isinstance(t, threading.Timer):
-        return type(t).run is not threading.Thread.run
-    name = getattr(fn, "__module__", None)
-    return isinstance(name, str) and name.partition(".")[0] in _KERNEL_PACKAGES
-
-
-#: The kernel's own threads that may start after cash was imported, named
-#: exactly (``module:qualname`` of the thread's class, or of its target):
-#: pyzmq's garbage thread, started when a message is first sent without a
-#: copy, and ipykernel's iopub and pipe watchers, started again when the
-#: kernel restarts its streams. Not their packages: IPython runs a user's
-#: background job (``jobs.new(f)``) on its own Thread subclass, and a tornado
-#: loop a user starts on a thread runs the user's callbacks.
+#: The kernel's own threads, named exactly (``module:qualname`` of the
+#: thread's class, or of its target), whenever they started: pyzmq's garbage
+#: thread, started when a message is first sent without a copy, ipykernel's
+#: iopub and pipe watchers, started again when the kernel restarts its
+#: streams, and the rest of ipykernel's and IPython's. Not their packages,
+#: and not "alive when cash was imported": IPython runs a user's background
+#: job (``jobs.new(f)``) on its own Thread subclass, and a tornado loop a
+#: user starts on a thread runs the user's callbacks, in a cell before
+#: ``import cash`` as well as after.
 _KERNEL_THREADS = frozenset(
     {
         "zmq.utils.garbage:GarbageCollectorThread",
@@ -412,15 +396,12 @@ def other_thread_alive(notebook_ns: Any) -> bool:
     """Might another thread change a value between two checks that read it,
     so that a digest one took cannot stand for the other: any live thread
     but this one, cash's own (by the code it runs; a Timer by its function)
-    and the kernel's (`_the_kernels`, alive when cash was imported, or
-    or one of its own named exactly, `_kernel_code`), daemon
+    and the kernel's (its own threads named exactly, `_kernel_code`), daemon
     or not. A pool's worker runs the user's code under a library's name,
     which `runs_user_code` cannot see, and a wrong yes only costs a read
     again. A thread a C library started (an audio or device callback) runs
     Python unlisted by `threading`: any thread running Python that it does
     not list counts too."""
-    import cash
-
     me = threading.current_thread()
     threads = threading.enumerate()
     listed = {t.ident for t in threads}
@@ -431,8 +412,6 @@ def other_thread_alive(notebook_ns: Any) -> bool:
             continue
         if runs_user_code(t, notebook_ns):
             return True
-        if t in cash.THREADS_AT_IMPORT and _the_kernels(t):
-            continue
         if _kernel_code(t):
             continue
         name = getattr(_code_of(t), "__module__", None)

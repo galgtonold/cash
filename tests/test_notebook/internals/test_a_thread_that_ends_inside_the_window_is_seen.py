@@ -120,19 +120,15 @@ def test_a_pool_worker_alive_at_import_changing_the_model_between_two_checks_is_
 ):
     """The branch's own scenario (`test_a_thread_changing_the_model_between_
     two_checks_is_seen`) with the change made by a ThreadPoolExecutor worker
-    whose ident is in `THREADS_AT_IMPORT`: the pool was started before
-    `import cash`, or the worker got the ident of a thread that was alive
-    then (tests 3 and 4 below show both happen). The session hash names the
-    model as it was before the change."""
-    import cash
-
+    as if the pool was started before `import cash`, or the worker got the
+    ident of a thread that was alive then (tests 3 and 4 below show both
+    happen; no thread counts as the kernel's for being alive at import any
+    more). The session hash names the model as it was before the change."""
     value_watch.reset()
     monkeypatch.setattr(value_watch, "WATCHING", False)
     mock_shell.user_ns["__name__"] = "__main__"
     run_cash_cell(cash_magics, MODEL_SETUP)
     run_cash_cell(cash_magics, "pool = ThreadPoolExecutor(1)\njob = pool.submit(change_it)")
-    (worker,) = mock_shell.user_ns["pool"]._threads
-    monkeypatch.setattr(cash, "THREADS_AT_IMPORT", cash.THREADS_AT_IMPORT | {worker})
     routing = cash_magics._statement_processor._mutation_routing
     real_observe = routing.observe
 
