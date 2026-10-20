@@ -44,6 +44,7 @@ from collections.abc import Callable, Mapping
 from typing import Any, NamedTuple
 
 from cash import _plain_data
+from cash._user_attrs import instance_of
 from cash.analysis.analysis_budget import ANALYSIS_BUDGET_REASON, AnalysisBudgetExceeded
 from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.ast_util import called_dotted_names, parse_cached
@@ -142,9 +143,9 @@ _EXHAUSTED = object()
 
 def _container_items(value: Any) -> Any:
     """The items a container can hold a coupled object in, or None for a leaf."""
-    if isinstance(value, dict):
+    if instance_of(value, dict):
         return (*value.keys(), *value.values())
-    if isinstance(value, _SCAN_CONTAINERS):
+    if instance_of(value, _SCAN_CONTAINERS):
         return value
     if type(value).__module__ == "numpy" and getattr(getattr(value, "dtype", None), "kind", "") == "O":
         return value.flat

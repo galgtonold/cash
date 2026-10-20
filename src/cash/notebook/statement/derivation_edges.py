@@ -45,7 +45,7 @@ from collections.abc import Container, Iterable, Iterator
 from contextlib import contextmanager
 from typing import Any, Callable
 
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, instance_of
 
 from ... import _plain_data
 from ...analysis.ast_util import parse_cached
@@ -259,11 +259,11 @@ def _aliases_in(value: Any, np: Any, refholder_types: tuple[type, ...]) -> tuple
             continue
         seen.add(id(obj))
         if type(obj) not in containers:
-            if isinstance(obj, ndarray):
+            if instance_of(obj, ndarray):
                 if obj.base is not None:
                     views.append(obj)
                 continue
-            if refholder_types and isinstance(obj, refholder_types):
+            if refholder_types and instance_of(obj, refholder_types):
                 refholders.append(obj)
                 continue
         children = children_of(obj)
@@ -377,12 +377,12 @@ def _detect_matplotlib_figure_edge(
         return
     probe = value
     np = _imported("numpy")
-    if np is not None and isinstance(value, np.ndarray) and value.dtype == object and value.size:
+    if np is not None and instance_of(value, np.ndarray) and value.dtype == object and value.size:
         # plt.subplots(1, 2) -> array of Axes. The base-class item(), not
         # ``value.flat[0]``: a subclass's own indexing runs its code, and a
         # masked object array's raises AttributeError ('int' has no 'view').
         probe = np.ndarray.item(value, 0)
-    if not isinstance(probe, artist_mod.Artist):
+    if not instance_of(probe, artist_mod.Artist):
         return
     fig = attribute_or(probe, "figure", None)
     if fig is None:
@@ -421,7 +421,7 @@ def _detect_numpy_view_edge(
     np = _imported("numpy")
     if np is None:
         return
-    if not isinstance(value, np.ndarray) or value.base is None:
+    if not instance_of(value, np.ndarray) or value.base is None:
         return
     # Walk the .base chain to the root; collect any intermediate array object
     # that is itself a named view (view-of-view).
@@ -446,7 +446,7 @@ def _detect_numpy_view_edge(
     # 2)`` under ``row = big[0]``): ``row.base`` is the buffer, not ``big``.
     chain = view_bases(value)
     for name, other in list(user_ns.items()):
-        if name != out and not name.startswith("_") and other is not value and isinstance(other, np.ndarray):
+        if name != out and not name.startswith("_") and other is not value and instance_of(other, np.ndarray):
             if (
                 other.base is not None
                 and any(found in chain for found in view_bases(other))
@@ -507,7 +507,7 @@ def _detect_pandas_refholder_edge(
     """``out`` is a groupby/rolling/... that holds a live reference to
     a source frame; a future mutation of that FRAME must bump ``out``."""
     refholder_types = _pandas_refholder_types()
-    if not refholder_types or not isinstance(value, refholder_types):
+    if not refholder_types or not instance_of(value, refholder_types):
         return
     src = attribute_or(value, "obj", None)
     if src is None:

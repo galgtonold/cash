@@ -28,3 +28,30 @@ def has_attribute(obj: Any, name: str) -> bool:
     """``hasattr(obj, name)``, with any error the lookup raises taken as the
     attribute missing (`attribute_or`)."""
     return attribute_or(obj, name, _MISSING) is not _MISSING
+
+
+def instance_of(obj: Any, kinds: type | tuple[type, ...]) -> bool:
+    """``isinstance(obj, kinds)``, with any error the object's own lookups
+    raise answered by its real type.
+
+    When the type does not match, ``isinstance`` asks the object for its
+    ``__class__`` (a proxy's way to pass for what it wraps), and so does an
+    ABC's check. An object whose ``__getattribute__`` raises for it failed
+    cash's own question and the cell with it, where plain Python never asks.
+    """
+    try:
+        return isinstance(obj, kinds)
+    except Exception:  # noqa: BLE001 - the object's own error, not one of cash's
+        return issubclass(type(obj), kinds)
+
+
+def is_routine(obj: Any) -> bool:
+    """``inspect.isroutine(obj)``, with any error the object's own lookups
+    raise (`instance_of`) taken as not a routine: a function, method or
+    builtin is not an object whose lookups raise."""
+    import inspect
+
+    try:
+        return inspect.isroutine(obj)
+    except Exception:  # noqa: BLE001 - the object's own error, not one of cash's
+        return False

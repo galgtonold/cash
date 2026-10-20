@@ -15,6 +15,8 @@ import sys
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
+from cash._user_attrs import instance_of
+
 from .detect import KIND_NP_GENERATOR, KIND_NP_RANDOMSTATE, KIND_PY_RANDOM
 
 if TYPE_CHECKING:
@@ -166,9 +168,9 @@ def rng_carrier_kind(obj: object) -> str | None:
         try:
             import numpy as np
 
-            if isinstance(obj, np.random.Generator):
+            if instance_of(obj, np.random.Generator):
                 return KIND_NP_GENERATOR
-            if isinstance(obj, np.random.RandomState):
+            if instance_of(obj, np.random.RandomState):
                 # ``np.random.*`` module functions delegate to this singleton;
                 # the global channel owns it.
                 if obj is not np.random.mtrand._rand:
@@ -177,7 +179,7 @@ def rng_carrier_kind(obj: object) -> str | None:
         except (ImportError, AttributeError):
             pass
 
-    if isinstance(obj, random.Random):
+    if instance_of(obj, random.Random):
         # ``random.*`` module functions delegate to this singleton.
         if obj is not getattr(random, "_inst", None):
             return KIND_PY_RANDOM

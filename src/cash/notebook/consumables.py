@@ -47,7 +47,7 @@ import types
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from cash._user_attrs import attribute_or, has_attribute
+from cash._user_attrs import attribute_or, has_attribute, instance_of
 
 from ..analysis.mutation_effects import captured_call_receivers
 from ..analysis.mutations import consumed_input_names
@@ -91,7 +91,7 @@ _ITERTOOLS_TYPES: tuple[type, ...] = tuple(
             "batched",
         )
     )
-    if isinstance(t, type)
+    if instance_of(t, type)
 )
 
 _GENERATOR_TYPES: tuple[type, ...] = (
@@ -101,7 +101,7 @@ _GENERATOR_TYPES: tuple[type, ...] = (
 )
 
 _QUEUE_TYPES: tuple[type, ...] = tuple(
-    t for t in (attribute_or(queue, n, None) for n in ("Queue", "SimpleQueue")) if isinstance(t, type)
+    t for t in (attribute_or(queue, n, None) for n in ("Queue", "SimpleQueue")) if instance_of(t, type)
 )
 
 
@@ -150,15 +150,15 @@ def is_consumable_unrestorable(obj: Any) -> bool:
 
     See the module docstring for why both halves are required.
     """
-    if isinstance(obj, _QUEUE_TYPES):
+    if instance_of(obj, _QUEUE_TYPES):
         return True
-    if isinstance(obj, _GENERATOR_TYPES):
+    if instance_of(obj, _GENERATOR_TYPES):
         return True
     if not _is_self_iterator(obj):
         # Not a self-iterator: re-reading does not advance it (list, dict view,
         # ndarray), so there is nothing to diverge.
         return False
-    if isinstance(obj, _ITERTOOLS_TYPES):
+    if instance_of(obj, _ITERTOOLS_TYPES):
         return True
     return _hits_byref_fallback(obj)
 
@@ -185,17 +185,17 @@ def consumable_state(obj: Any) -> Any | None:
     """
     # Generators/coroutines expose their exact position as a state enum, and
     # reading it neither advances nor closes them.
-    if isinstance(obj, types.GeneratorType):
+    if instance_of(obj, types.GeneratorType):
         try:
             return ("gen", inspect.getgeneratorstate(obj))
         except (TypeError, AttributeError):
             return None
-    if isinstance(obj, types.CoroutineType):
+    if instance_of(obj, types.CoroutineType):
         try:
             return ("coro", inspect.getcoroutinestate(obj))
         except (TypeError, AttributeError):
             return None
-    if isinstance(obj, types.AsyncGeneratorType):
+    if instance_of(obj, types.AsyncGeneratorType):
         try:
             return ("agen", inspect.getasyncgenstate(obj))
         except (TypeError, AttributeError):
@@ -203,7 +203,7 @@ def consumable_state(obj: Any) -> Any | None:
     # Queues report their depth directly. ``qsize`` is documented as
     # approximate under concurrency, but a notebook cell draining a queue is
     # the single reader, so it is exact here.
-    if isinstance(obj, _QUEUE_TYPES):
+    if instance_of(obj, _QUEUE_TYPES):
         try:
             return ("qsize", obj.qsize())
         except (NotImplementedError, AttributeError, ValueError):
@@ -218,7 +218,7 @@ def consumable_state(obj: Any) -> Any | None:
     # ``itertools.count`` renders its next value (``count(5)``); the other
     # itertools iterators keep their cursor entirely in C with no observable
     # handle, so they fall through to ``None``.
-    if isinstance(obj, attribute_or(itertools, "count", ())):
+    if instance_of(obj, attribute_or(itertools, "count", ())):
         try:
             return ("count", repr(obj))
         except Exception:  # noqa: BLE001 - repr of a foreign object
@@ -262,7 +262,7 @@ def is_write_stream(obj: Any) -> bool:
     An in-memory buffer (``io.StringIO``, ``io.BytesIO``) writes nowhere else,
     so rebuilding it is safe and it does not count.
     """
-    if isinstance(obj, (io.StringIO, io.BytesIO)):
+    if instance_of(obj, (io.StringIO, io.BytesIO)):
         return False
     writable = attribute_or(obj, "writable", None)
     if not callable(writable) or not has_attribute(obj, "write"):

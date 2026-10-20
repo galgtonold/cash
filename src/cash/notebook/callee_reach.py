@@ -25,7 +25,7 @@ from contextlib import contextmanager
 from itertools import repeat
 from typing import Any, NamedTuple
 
-from cash._user_attrs import attribute_or, has_attribute
+from cash._user_attrs import attribute_or, has_attribute, instance_of, is_routine
 
 from .._memo import NOTEBOOK_STATEMENTS
 from ..analysis.analysis_budget import AnalysisBudgetExceeded
@@ -162,7 +162,7 @@ def _leads_nowhere(namespace: Mapping[str, Any], root: str, attrs: tuple[str, ..
     if not attrs:
         return _inert(obj)
     for attr in reversed(attrs):
-        if not isinstance(obj, types.ModuleType):
+        if not instance_of(obj, types.ModuleType):
             return True  # `_Found.chain` stops here
         if _is_local(obj):
             return False
@@ -174,14 +174,14 @@ def _leads_nowhere(namespace: Mapping[str, Any], root: str, attrs: tuple[str, ..
 
 def _inert(value: Any) -> bool:
     """`_Found.value` of *value*, found with no label, adds nothing."""
-    if isinstance(value, types.ModuleType):
+    if instance_of(value, types.ModuleType):
         return not _is_local(value)
-    if isinstance(value, (types.MethodType, types.FunctionType)):
+    if instance_of(value, (types.MethodType, types.FunctionType)):
         return False
-    if isinstance(value, type):
+    if instance_of(value, type):
         # A C type of no local module: its ``__init__`` is a slot, if any.
         return value in _FOREIGN_C_TYPES
-    return value is None or type(value) in _FOREIGN_C_TYPES or inspect.isroutine(value)
+    return value is None or type(value) in _FOREIGN_C_TYPES or is_routine(value)
 
 
 @functools.lru_cache(maxsize=NOTEBOOK_STATEMENTS)
@@ -514,13 +514,13 @@ def _state_home(value: Any, namespace: Mapping[str, Any]) -> str | None:
     holds (by identity: ``from mylib import CONFIG``, ``cfg =
     mylib.CONFIG``). None for anything else -- a value of the notebook's own,
     an instance it made of the module's class."""
-    if value is None or isinstance(value, (*IMMUTABLE_PRIMS, tuple, frozenset)):
+    if value is None or instance_of(value, (*IMMUTABLE_PRIMS, tuple, frozenset)):
         return None
-    if isinstance(value, types.ModuleType):
+    if instance_of(value, types.ModuleType):
         return value.__name__ if _is_local(value) else None
-    if inspect.isroutine(value):
+    if is_routine(value):
         return None
-    if isinstance(value, type):
+    if instance_of(value, type):
         home = _loaded(attribute_or(value, "__module__", None))
         return home.__name__ if home is not None and vars(home) is not namespace and _is_local(home) else None
     # Every local module loaded but the one whose globals *namespace* is:
@@ -890,7 +890,7 @@ def module_state_names(code: str, namespace: Mapping[str, Any] | None, *, struct
 
 
 def _may_lead_to_module_state(value: Any, namespace: Mapping[str, Any]) -> bool:
-    if isinstance(value, (types.ModuleType, types.FunctionType, types.MethodType, type)):
+    if instance_of(value, (types.ModuleType, types.FunctionType, types.MethodType, type)):
         return True
     return _state_home(value, namespace) is not None or _of_a_local_class(value)
 
@@ -1072,14 +1072,14 @@ class _Found:
     def value(self, value: Any, label: str | None = None) -> None:
         """Take in *value*, found at *label* (``module.name``) when it is a
         name of a local module."""
-        if isinstance(value, types.ModuleType):
+        if instance_of(value, types.ModuleType):
             if _is_local(value):
                 self.modules.add(value.__name__)
-        elif isinstance(value, types.MethodType):
+        elif instance_of(value, types.MethodType):
             self.value(value.__func__)
-        elif isinstance(value, type):
+        elif instance_of(value, type):
             self._class(value)
-        elif isinstance(value, types.FunctionType) and self._is_user(value):
+        elif instance_of(value, types.FunctionType) and self._is_user(value):
             if id(value) in self._function_ids:
                 return
             self._function_ids.add(id(value))
@@ -1097,7 +1097,7 @@ class _Found:
                 except ValueError:  # an empty cell
                     pass
             self._wrapped(value)
-        elif isinstance(value, types.FunctionType):
+        elif instance_of(value, types.FunctionType):
             # A wrapper that is not the user's code (``@cash.cache``'s): what
             # calling it runs is the function it wraps.
             self._wrapped(value)
@@ -1107,7 +1107,7 @@ class _Found:
             cls = type(value)
             if value is None or cls in _FOREIGN_C_TYPES or self._known_to_lead_nowhere(cls):
                 return
-            if not inspect.isroutine(value):
+            if not is_routine(value):
                 # An instance: its methods run when the statement calls them.
                 self._class(cls)
 
@@ -1212,7 +1212,7 @@ class _Found:
         local module on the way, and what it ends at."""
         obj = self.namespace.get(root)
         for attr in reversed(attrs):
-            if not isinstance(obj, types.ModuleType):
+            if not instance_of(obj, types.ModuleType):
                 return
             label = f"{obj.__name__}.{attr}" if _is_local(obj) else None
             obj = vars(obj).get(attr)

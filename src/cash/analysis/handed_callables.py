@@ -53,6 +53,7 @@ from typing import Any, NamedTuple
 from .. import _plain_data
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import is_pseudo_filename
+from .._user_attrs import instance_of
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import own_source, wrapper_layers
 from ..tracking.function_tracker import is_local_module
@@ -289,7 +290,7 @@ def handed_callable_values(
                 if not any_of:
                     any_of = calling.opens(position, keyword)
                 items = _callables_reached(value)[0] if any_of else []
-                if callable(value) and not isinstance(value, type):
+                if callable(value) and not instance_of(value, type):
                     items.append(value)
                 methods = calling.calls_methods(position, keyword)
                 if methods:
@@ -338,13 +339,15 @@ def _held_group(fn: Any, owners: list[Any], seen: set[tuple[int, Any]]) -> list[
     a holder is reachable from these owners, and a holder found is not only
     a notebook function (a builtin's bound method, a class, an object with a
     ``__call__``). The walk reads each object's items once, at C speed."""
-    if not isinstance(fn, types.FunctionType) or not _is_users(fn):
+    if not instance_of(fn, types.FunctionType) or not _is_users(fn):
         return []
     check_analysis_budget()
     code = fn.__code__
     keys = list(zip(map(id, owners), repeat(code)))
     fresh = [
-        owner for owner, key in zip(owners, keys) if key not in seen and not isinstance(owner, (type, types.ModuleType))
+        owner
+        for owner, key in zip(owners, keys)
+        if key not in seen and not instance_of(owner, (type, types.ModuleType))
     ]
     seen.update(keys)
     facts = _call_facts(fn)
@@ -409,7 +412,7 @@ def _plain_own(kind: type, name: str, value: Any) -> bool:
     already asked of an object of *kind* holding the name) -- and is not a
     ``classmethod``, which `_attribute` binds. Such a value that is not
     callable needs no reading."""
-    return not isinstance(value, classmethod) and _CLASS_ATTRIBUTES.get((kind, name, True)) is _OWN
+    return not instance_of(value, classmethod) and _CLASS_ATTRIBUTES.get((kind, name, True)) is _OWN
 
 
 def _members_by_class(objects: list[Any], names: frozenset[str]) -> list[Any]:
@@ -486,7 +489,7 @@ def _same_for_every_object(method: types.MethodType) -> bool:
     owner = method.__self__
     cls = type(owner)
     for fn in wrapper_layers(method.__func__):
-        if not isinstance(fn, types.FunctionType):
+        if not instance_of(fn, types.FunctionType):
             return False
         source = _source_of(fn)
         if source is None or _reaches_through_its_object(fn):
@@ -503,11 +506,11 @@ def _same_for_every_object(method: types.MethodType) -> bool:
 def _add_callable(out: dict[int, Any], item: Any) -> None:
     """Add *item* to *out* when calling it may run code of the user's; a
     partial as its function and the callables it is given."""
-    if isinstance(item, functools.partial):
+    if instance_of(item, functools.partial):
         for part in _partial_parts(item):
             _add_callable(out, part)
         return
-    if callable(item) and not isinstance(item, types.BuiltinFunctionType):
+    if callable(item) and not instance_of(item, types.BuiltinFunctionType):
         out.setdefault(id(item), item)
 
 
@@ -543,9 +546,9 @@ def _bound_root(func: ast.expr, bound: Mapping[str, tuple[ast.expr, ...]]) -> bo
     by iterating (`iteration_bindings`)."""
     if not bound:
         return False
-    while isinstance(func, (ast.Attribute, ast.Subscript)):
+    while instance_of(func, (ast.Attribute, ast.Subscript)):
         func = func.value
-    return isinstance(func, ast.Name) and func.id in bound
+    return instance_of(func, ast.Name) and func.id in bound
 
 
 def _cannot_tell_called(node: ast.expr) -> str:
@@ -573,7 +576,7 @@ def _arguments(call: ast.Call) -> Iterable[tuple[int | None, str | None, ast.exp
 
 
 def _callee_of(func: ast.expr, namespace: Mapping[str, Any]) -> Any:
-    if isinstance(func, (ast.Name, ast.Attribute, ast.Subscript)):
+    if instance_of(func, (ast.Name, ast.Attribute, ast.Subscript)):
         found = _static_value(func, namespace)
         if found is not None:
             return found[0]
@@ -738,18 +741,18 @@ def _lambda_reach(node: ast.Lambda, namespace: Mapping[str, Any], out: _Resolved
         if not isinstance(sub, ast.Call):
             continue
         func = sub.func
-        if isinstance(func, (ast.Attribute, ast.Subscript)):
+        if instance_of(func, (ast.Attribute, ast.Subscript)):
             root: ast.expr = func
-            while isinstance(root, (ast.Attribute, ast.Subscript)):
+            while instance_of(root, (ast.Attribute, ast.Subscript)):
                 root = root.value
-            if not isinstance(root, ast.Name) or root.id in params:
+            if not instance_of(root, ast.Name) or root.id in params:
                 continue  # a method of a value the lambda computes or is given
             found = _static_value(func, namespace)
             if found is not None:
                 out.values.append(found)
             else:
                 _unresolved_reference(func, namespace, out, [])
-        elif isinstance(func, ast.Call) and _is_users_callable(_callee_of(func.func, namespace)):
+        elif instance_of(func, ast.Call) and _is_users_callable(_callee_of(func.func, namespace)):
             out.unknown.append(func)
 
 
@@ -769,7 +772,7 @@ def _unresolved_reference(
         # ``make()[0]``, ``df.set_index('k')['v']``: what the call hands over.
         pending.append(root_node)
         for step in steps:
-            if isinstance(step, ast.Subscript):
+            if instance_of(step, ast.Subscript):
                 pending.append(step.slice)
         return
     value = namespace.get(root_node.id, _MISSING)
@@ -777,7 +780,7 @@ def _unresolved_reference(
         return  # not bound yet: a builtin, or a name the statement binds
     root = root_node.id
     for step in reversed(steps):
-        if isinstance(step, ast.Subscript):
+        if instance_of(step, ast.Subscript):
             following = _item(value, step.slice)
             if following is _MISSING:
                 if type(value) in _OPENED:
@@ -788,8 +791,8 @@ def _unresolved_reference(
         else:
             following = _attribute(value, step.attr)
             if following is _MISSING:
-                if not isinstance(value, types.ModuleType) and (
-                    _is_users_object(value) or (isinstance(value, type) and _is_users_class(value))
+                if not instance_of(value, types.ModuleType) and (
+                    _is_users_object(value) or (instance_of(value, type) and _is_users_class(value))
                 ):
                     out.unknown.append(step)
                 return
@@ -860,12 +863,12 @@ def _of_the_users(found: tuple[Any, str] | None, node: ast.expr, bound) -> bool:
     if found is None:
         return not (isinstance(node, ast.Name) and not (bound and node.id in bound))
     value = found[0]
-    if isinstance(value, types.ModuleType):
+    if instance_of(value, types.ModuleType):
         try:
             return is_local_module(value)
         except (TypeError, AttributeError):
             return True
-    return _is_users_object(value) or (isinstance(value, type) and _is_users_class(value))
+    return _is_users_object(value) or (instance_of(value, type) and _is_users_class(value))
 
 
 def _iterated_reference(
@@ -921,7 +924,7 @@ def _follow_steps(values: list[Any], steps: list[ast.expr]) -> tuple[list[Any], 
         #: ``class -> the function its objects' attribute binds``.
         methods: dict[type, Any] = {}
         for value in values:
-            if isinstance(step, ast.Subscript):
+            if instance_of(step, ast.Subscript):
                 # ``row[0](x) for row in rows``: any item it holds.
                 if _openable(value):
                     items, complete = _reached_this_round(value)
@@ -941,7 +944,7 @@ def _follow_steps(values: list[Any], steps: list[ast.expr]) -> tuple[list[Any], 
                 methods[kind] = member.__func__
             if member is not _MISSING:
                 following_values.append(member)
-            elif _is_users_object(value) or (isinstance(value, type) and _is_users_class(value)):
+            elif _is_users_object(value) or (instance_of(value, type) and _is_users_class(value)):
                 unknown.append(index)  # a property or ``__getattr__`` of the user's
         values = following_values
     return _one_per_class(values), unknown
@@ -981,7 +984,7 @@ def _steps_followed(items: list[Any], steps: list[ast.expr]) -> tuple[list[Any],
             _STEPS_THIS_ROUND.clear()
         kept = (items, {})
         _STEPS_THIS_ROUND[id(items)] = kept
-    key = "|".join(ast.dump(step) if isinstance(step, ast.Subscript) else step.attr for step in steps)  # type: ignore[attr-defined]
+    key = "|".join(ast.dump(step) if instance_of(step, ast.Subscript) else step.attr for step in steps)  # type: ignore[attr-defined]
     answer = kept[1].get(key)
     if answer is None:
         answer = _follow_steps(items, steps)
@@ -992,22 +995,22 @@ def _steps_followed(items: list[Any], steps: list[ast.expr]) -> tuple[list[Any],
 def _unbound(func: ast.expr, namespace: Mapping[str, Any]) -> bool:
     """Whether the call target *func* starts at a name *namespace* does not
     hold: a builtin, or a name bound by the statement itself."""
-    while isinstance(func, (ast.Attribute, ast.Subscript)):
+    while instance_of(func, (ast.Attribute, ast.Subscript)):
         func = func.value
-    return isinstance(func, ast.Name) and func.id not in namespace
+    return instance_of(func, ast.Name) and func.id not in namespace
 
 
 def _is_users_callable(value: Any) -> bool:
     """A function, method, class or callable object of the user's: calling
     it runs their code."""
-    if isinstance(value, functools.partial):
+    if instance_of(value, functools.partial):
         return _is_users_callable(value.func)
-    if isinstance(value, types.FunctionType):
+    if instance_of(value, types.FunctionType):
         return _is_users(value)
-    if isinstance(value, types.MethodType):
+    if instance_of(value, types.MethodType):
         fn = value.__func__
-        return isinstance(fn, types.FunctionType) and _is_users(fn)
-    if isinstance(value, type):
+        return instance_of(fn, types.FunctionType) and _is_users(fn)
+    if instance_of(value, type):
         return _is_users_class(value)
     return _is_users_object(value) and callable(value)
 
@@ -1027,7 +1030,7 @@ def _is_users_class(cls: type) -> bool:
             known = name == "__main__" or (module is not None and is_local_module(module))
             if not known and (module is None or name == "builtins"):
                 own = vars(cls).values()
-                known = any(isinstance(v, types.FunctionType) and _is_users(v) for v in own)
+                known = any(instance_of(v, types.FunctionType) and _is_users(v) for v in own)
         except (TypeError, AttributeError):
             known = False
         _USERS_CLASSES[cls] = known
@@ -1036,7 +1039,7 @@ def _is_users_class(cls: type) -> bool:
 
 def _is_users_object(value: Any) -> bool:
     """An instance of a class of the user's (not a class, function or module)."""
-    if isinstance(value, (type, types.ModuleType, types.FunctionType, types.MethodType)):
+    if instance_of(value, (type, types.ModuleType, types.FunctionType, types.MethodType)):
         return False
     return _is_users_class(type(value))
 
@@ -1058,7 +1061,7 @@ def _openable(value: Any) -> bool:
 
 def _wraps_another(value: Any) -> bool:
     """A function of the user's that wraps another (``functools.wraps``)."""
-    return isinstance(value, types.FunctionType) and "__wrapped__" in vars(value) and _is_users(value)
+    return instance_of(value, types.FunctionType) and "__wrapped__" in vars(value) and _is_users(value)
 
 
 def _wrapper_called(func: ast.Name | ast.Attribute, namespace: Mapping[str, Any]) -> tuple[Any, str] | None:
@@ -1068,7 +1071,7 @@ def _wrapper_called(func: ast.Name | ast.Attribute, namespace: Mapping[str, Any]
     if found is None:
         return None
     value = found[0]
-    fn = value.__func__ if isinstance(value, types.MethodType) else value
+    fn = value.__func__ if instance_of(value, types.MethodType) else value
     return found if _wraps_another(fn) else None
 
 
@@ -1085,9 +1088,9 @@ def _users_target(func: ast.Name | ast.Attribute, namespace: Mapping[str, Any]) 
         return None
     value = namespace.get(node.id, _MISSING)
     for attr in reversed(attrs):
-        if isinstance(value, types.ModuleType):
+        if instance_of(value, types.ModuleType):
             value = vars(value).get(attr, _MISSING)
-        elif (isinstance(value, type) and _is_users_class(value)) or _is_users_object(value):
+        elif (instance_of(value, type) and _is_users_class(value)) or _is_users_object(value):
             value = _attribute(value, attr)
         else:
             return None
@@ -1115,7 +1118,7 @@ def _static_value(node: ast.expr, namespace: Mapping[str, Any]) -> tuple[Any, st
     if value is _MISSING:
         return None
     for step in reversed(steps):
-        if isinstance(step, ast.Subscript):
+        if instance_of(step, ast.Subscript):
             value = _item(value, step.slice)
         else:
             value = _attribute(value, step.attr)
@@ -1127,13 +1130,13 @@ def _static_value(node: ast.expr, namespace: Mapping[str, Any]) -> tuple[Any, st
 def _item(container: Any, index: ast.expr) -> Any:
     if not isinstance(index, ast.Constant) or type(container) not in _OPENED:
         return _MISSING
-    if isinstance(container, _HELD_IN_DATA):
+    if instance_of(container, _HELD_IN_DATA):
         container = container.data
     try:
-        if isinstance(container, dict):
+        if instance_of(container, dict):
             # ``dict.get``: a defaultdict's factory does not run.
             return dict.get(container, index.value, _MISSING)
-        if isinstance(container, (list, tuple, collections.deque)):
+        if instance_of(container, (list, tuple, collections.deque)):
             return container[index.value]
     except (IndexError, TypeError):
         pass
@@ -1155,7 +1158,7 @@ _OWN = object()
 
 
 def _static_attribute(owner: Any, attr: str) -> Any:
-    if isinstance(owner, type):
+    if instance_of(owner, type):
         return inspect.getattr_static(owner, attr)
     own = _instance_dict(owner)
     in_own = attr in own
@@ -1179,27 +1182,27 @@ def _static_attribute(owner: Any, attr: str) -> Any:
 
 
 def _attribute(owner: Any, attr: str) -> Any:
-    if isinstance(owner, types.ModuleType):
+    if instance_of(owner, types.ModuleType):
         return vars(owner).get(attr, _MISSING)
     try:
         member = _static_attribute(owner, attr)
     except Exception:  # noqa: BLE001 - an object's attribute lookup
         return _MISSING
-    if isinstance(member, staticmethod):
+    if instance_of(member, staticmethod):
         return member.__func__
-    if isinstance(member, classmethod):
-        return types.MethodType(member.__func__, owner if isinstance(owner, type) else type(owner))
-    if isinstance(member, types.FunctionType):
-        in_instance = not isinstance(owner, type) and attr in _instance_dict(owner)
-        return member if isinstance(owner, type) or in_instance else types.MethodType(member, owner)
-    if isinstance(member, (types.MethodDescriptorType, types.WrapperDescriptorType)) and not isinstance(owner, type):
+    if instance_of(member, classmethod):
+        return types.MethodType(member.__func__, owner if instance_of(owner, type) else type(owner))
+    if instance_of(member, types.FunctionType):
+        in_instance = not instance_of(owner, type) and attr in _instance_dict(owner)
+        return member if instance_of(owner, type) or in_instance else types.MethodType(member, owner)
+    if instance_of(member, (types.MethodDescriptorType, types.WrapperDescriptorType)) and not instance_of(owner, type):
         # ``results.append`` handed over: the builtin method, bound.
         try:
             return getattr(owner, attr)
         except Exception:  # noqa: BLE001 - an object's attribute lookup
             return _MISSING
-    if hasattr(type(member), "__get__") and not isinstance(member, type):
-        if not isinstance(owner, type) and _instance_dict(owner).get(attr, _MISSING) is member:
+    if hasattr(type(member), "__get__") and not instance_of(member, type):
+        if not instance_of(owner, type) and _instance_dict(owner).get(attr, _MISSING) is member:
             # The object's own value (a bound method or a partial it holds):
             # Python binds no descriptor held there, so it is what is called.
             return member
@@ -1213,7 +1216,7 @@ def _instance_dict(owner: Any) -> dict:
         own = object.__getattribute__(owner, "__dict__")
     except (AttributeError, TypeError):
         return {}
-    return own if isinstance(own, dict) else {}
+    return own if instance_of(own, dict) else {}
 
 
 #: Special methods a statement naming an object does not run through it:
@@ -1281,14 +1284,14 @@ def special_functions(cls: type) -> list[Any]:
         if klass is object or not _is_users_class(klass):
             continue
         for name, member in list(vars(klass).items()):
-            if isinstance(member, property):
+            if instance_of(member, property):
                 out.extend(fn for fn in (member.fget, member.fset, member.fdel) if fn is not None)
                 continue
             if not (name.startswith("__") and name.endswith("__")) or name in _NOT_RUN_BY_A_STATEMENT:
                 continue
-            if isinstance(member, (staticmethod, classmethod)):
+            if instance_of(member, (staticmethod, classmethod)):
                 member = member.__func__
-            if isinstance(member, types.FunctionType):
+            if instance_of(member, types.FunctionType):
                 out.append(member)
     return out
 
@@ -1377,7 +1380,7 @@ class _Found:
             return
         # A bound method is made anew on each attribute read, and its id
         # reused once it is dropped: it is known by its object and function.
-        key = (id(value.__self__), id(value.__func__)) if isinstance(value, types.MethodType) else id(value)
+        key = (id(value.__self__), id(value.__func__)) if type(value) is types.MethodType else id(value)
         if (key, root) in self._seen:
             return
         self._seen.add((key, root))
@@ -1388,7 +1391,7 @@ class _Found:
         when it is an object of the user's class, that a callee handed it
         calls (``model.predict(v)``); with *held*, of the objects of the
         user's it holds as well (``s.fn(v)`` for ``s`` in ``steps``)."""
-        objects = [value] if _is_users_object(value) or (isinstance(value, type) and _is_users_class(value)) else []
+        objects = [value] if _is_users_object(value) or (instance_of(value, type) and _is_users_class(value)) else []
         covered: set[int] | None = None
         opened: list[Any] = []
         complete = False
@@ -1509,7 +1512,7 @@ class _Found:
                 owner = scope.get(name, _MISSING)
                 if owner is _MISSING:
                     continue
-                if _is_users_object(owner) or (isinstance(owner, type) and _is_users_class(owner)):
+                if _is_users_object(owner) or (instance_of(owner, type) and _is_users_class(owner)):
                     member = _attribute(owner, attr)
                     if member is not _MISSING and callable(member):
                         self.add(member, root_of(name), False)
@@ -1531,7 +1534,7 @@ class _Found:
                 value = cell.cell_contents
             except ValueError:
                 continue  # not bound yet
-            if _is_users_callable(value) or (isinstance(value, types.FunctionType) and self._users(value)):
+            if _is_users_callable(value) or (instance_of(value, types.FunctionType) and self._users(value)):
                 self.add(value, None, False)
 
     def held_by_its_object(self, func: ast.Attribute, namespace: Mapping[str, Any]) -> None:
@@ -1542,7 +1545,7 @@ class _Found:
         if found is None or not isinstance(found[0], types.MethodType):
             return
         owner, fn = found[0].__self__, found[0].__func__
-        if isinstance(owner, (type, types.ModuleType)) or not isinstance(fn, types.FunctionType):
+        if instance_of(owner, (type, types.ModuleType)) or not instance_of(fn, types.FunctionType):
             return
         if self._users(fn):
             self._held_by(owner, fn, found[1])
@@ -1611,22 +1614,22 @@ class _Found:
         is asked of all of them at once (`_held_by_many`)."""
         owner = owners[0]
         label = repr(root) if root else "a function"
-        cls = owner if isinstance(owner, type) else type(owner)
-        inert = not isinstance(owner, types.ModuleType)
+        cls = owner if instance_of(owner, type) else type(owner)
+        inert = not instance_of(owner, types.ModuleType)
         for fn in wrapper_layers(func):
-            if not isinstance(fn, types.FunctionType) or not self._users(fn):
+            if not instance_of(fn, types.FunctionType) or not self._users(fn):
                 continue
             source = self._source(fn, label)
-            if source is not None and not isinstance(owner, types.ModuleType):
+            if source is not None and not instance_of(owner, types.ModuleType):
                 changes, reaches_class = self._method_effects_of(fn, cls, source)
                 if changes:
                     inert = False
-                    if self.objects or isinstance(owner, type):
+                    if self.objects or instance_of(owner, type):
                         for each in owners:
                             self._changed(each, root)
-                    if not isinstance(owner, type) and reaches_class:
+                    if not instance_of(owner, type) and reaches_class:
                         self._changed(cls, None)
-                if not isinstance(owner, type) and _reaches_through_its_object(fn):
+                if not instance_of(owner, type) and _reaches_through_its_object(fn):
                     inert = False
                     self._held_by_many(owners, fn, root)
         if inert:
@@ -1693,12 +1696,12 @@ class _Found:
         target = _users_target(func, namespace)
         if target is not None:
             value = target[0]
-            if isinstance(func, ast.Attribute):
+            if instance_of(func, ast.Attribute):
                 self.method_called(value)
-            if isinstance(value, types.FunctionType) and self._users(value):
+            if instance_of(value, types.FunctionType) and self._users(value):
                 self.through_globals(value)
             return
-        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        if instance_of(func, ast.Attribute) and isinstance(func.value, ast.Name):
             owner = namespace.get(func.value.id, _MISSING)
             if owner is not _MISSING:
                 for callback in _logging_callbacks(owner, func.attr):
@@ -1716,11 +1719,11 @@ class _Found:
         if target is None:
             return
         value, root = target
-        if isinstance(value, functools.partial):
+        if instance_of(value, functools.partial):
             self.add(value, root, False)
-        elif isinstance(value, operator.methodcaller):
+        elif instance_of(value, operator.methodcaller):
             self._methods_named(value.__reduce__()[1][0], call, namespace, bound)
-        elif isinstance(value, types.FunctionType) and isinstance(getattr(value, "registry", None), Mapping):
+        elif instance_of(value, types.FunctionType) and isinstance(getattr(value, "registry", None), Mapping):
             # ``functools.singledispatch``: any implementation registered.
             for impl in list(value.registry.values()):
                 if _is_users_callable(impl):
@@ -1753,7 +1756,7 @@ class _Found:
     ) -> None:
         for arg in call.args[:1]:
             for obj, obj_root in _resolve_argument(arg, namespace, bound).values:
-                if _is_users_object(obj) or (isinstance(obj, type) and _is_users_class(obj)):
+                if _is_users_object(obj) or (instance_of(obj, type) and _is_users_class(obj)):
                     member = _attribute(obj, name)
                     if member is not _MISSING and callable(member):
                         self.add(member, obj_root, False)
@@ -1788,7 +1791,7 @@ class _Found:
                     member = inspect.getattr_static(cls, node.attr)
                 except AttributeError:
                     member = _MISSING
-                if isinstance(member, property):
+                if instance_of(member, property):
                     for fn in (member.fget, member.fset, member.fdel):
                         self.method_called(fn)
                 elif member is not _MISSING and _is_users_object(member):
@@ -1814,14 +1817,14 @@ class _Found:
         does, so its source is a callee's (what it changes of the globals,
         and what it calls by name). A method whose source cannot be read is
         left as before: what Python runs for it is not the user's text."""
-        if isinstance(value, types.MethodType):
+        if instance_of(value, types.MethodType):
             fn = value.__func__
-        elif isinstance(value, types.FunctionType):
+        elif instance_of(value, types.FunctionType):
             fn = value
         else:
             return
         for layer in wrapper_layers(fn):
-            if not isinstance(layer, types.FunctionType) or not self._users(layer):
+            if not instance_of(layer, types.FunctionType) or not self._users(layer):
                 continue
             source = _source_of(layer)
             if source is None:
@@ -1841,10 +1844,10 @@ class _Found:
         if found is None or not isinstance(found[0], types.MethodType):
             return
         owner, fn = found[0].__self__, found[0].__func__
-        if isinstance(owner, type) or not isinstance(fn, types.FunctionType) or not self._users(fn):
+        if instance_of(owner, type) or not instance_of(fn, types.FunctionType) or not self._users(fn):
             return
         for layer in wrapper_layers(fn):
-            source = _source_of(layer) if isinstance(layer, types.FunctionType) else None
+            source = _source_of(layer) if instance_of(layer, types.FunctionType) else None
             if source is not None and _changes_its_class(source):
                 self._changed(type(owner), None)
                 return
@@ -1854,7 +1857,7 @@ class _Found:
         self.changes = True
         if root is not None and not isinstance(self.namespace.get(root), types.ModuleType):
             self.receivers.add(root)
-        if obj is not None and not isinstance(obj, types.ModuleType):
+        if obj is not None and not instance_of(obj, types.ModuleType):
             # The other names of the notebook bound to that very object.
             if self._names_of is None:
                 self._names_of = {}
@@ -1887,7 +1890,7 @@ class _Found:
 
     def _callable(self, value: Any, root: str | None) -> None:
         label = repr(root) if root else "a function"
-        if isinstance(value, functools.partial):
+        if instance_of(value, functools.partial):
             # ``partial(apply_, record)``: ``apply_`` runs ``record``.
             opened = _opened_by(value.func, None)
             self.add(value.func, root, False)
@@ -1899,11 +1902,11 @@ class _Found:
                 if type(arg) not in _ATOMS:
                     self.add(arg, root, opened.opens(None, keyword))
             return
-        if isinstance(value, types.FunctionType):
+        if instance_of(value, types.FunctionType):
             # A ``functools.wraps`` wrapper and each function under it: the
             # call runs the wrapper's body as well as the wrapped one's.
             for layer in wrapper_layers(value):
-                if not isinstance(layer, types.FunctionType) or not self._users(layer):
+                if not instance_of(layer, types.FunctionType) or not self._users(layer):
                     continue
                 source = self._source(layer, label)
                 if source is not None and layer.__closure__:
@@ -1913,19 +1916,19 @@ class _Found:
                 if source is not None:
                     self.through_globals(layer)
             return
-        if isinstance(value, types.MethodType):
+        if instance_of(value, types.MethodType):
             self._bound_effects(value.__func__, [value.__self__], root)
             return
-        if isinstance(value, (types.BuiltinMethodType, types.MethodWrapperType)):
+        if instance_of(value, (types.BuiltinMethodType, types.MethodWrapperType)):
             owner = getattr(value, "__self__", None)
-            if owner is None or isinstance(owner, (types.ModuleType, type)):
+            if owner is None or instance_of(owner, (types.ModuleType, type)):
                 return
             if getattr(value, "__name__", "") in MUTATING_METHODS:
                 self._changed(owner, root)
-            elif isinstance(value, types.BuiltinMethodType):
+            elif instance_of(value, types.BuiltinMethodType):
                 self._inert_methods.add(_method_key(value, root))
             return
-        if isinstance(value, type):
+        if instance_of(value, type):
             init = _class_member(value, "__init__")
             if _generated_dataclass_init(value, init):
                 # ``extract(doc, InvoiceFields)``: the ``__init__`` that
@@ -1936,10 +1939,10 @@ class _Found:
                     if spec.default_factory is not dataclasses.MISSING:
                         self.add(spec.default_factory, root, False)
                 init = _class_member(value, "__post_init__")
-            if isinstance(init, types.FunctionType) and self._users(init):
+            if instance_of(init, types.FunctionType) and self._users(init):
                 self._source(init, label)
             return
-        if not callable(value) or isinstance(value, types.ModuleType):
+        if not callable(value) or instance_of(value, types.ModuleType):
             return
         call = _class_member(type(value), "__call__")
         if isinstance(call, types.FunctionType) and self._users(call):
@@ -1959,10 +1962,10 @@ class _Found:
             return
         func, args, keywords = value.func, value.args, dict(value.keywords)
         seen = {id(value)}
-        while isinstance(func, functools.partial) and id(func) not in seen:
+        while instance_of(func, functools.partial) and id(func) not in seen:
             seen.add(id(func))
             func, args, keywords = func.func, func.args + args, {**func.keywords, **keywords}
-        if isinstance(func, types.FunctionType):
+        if instance_of(func, types.FunctionType):
             source = _source_of(func) if self._users(func) else None
             node = parse_function_source(source) if source is not None else None
             if node is None:
@@ -1971,7 +1974,7 @@ class _Found:
             params = [a.arg for a in (*node.args.posonlyargs, *node.args.args)]
             changed = [arg for param, arg in zip(params, args) if param in mutated]
             changed += [arg for param, arg in keywords.items() if param in mutated]
-        elif isinstance(func, types.MethodDescriptorType) and func.__name__ in MUTATING_METHODS:
+        elif instance_of(func, types.MethodDescriptorType) and func.__name__ in MUTATING_METHODS:
             changed = list(args[:1])  # ``partial(list.append, bucket)``
         else:
             return
@@ -1988,7 +1991,7 @@ def _method_key(method: Any, root: str | None) -> tuple[Any, type, str | None]:
     function, a builtin method's
     name, with the class of the object it is bound to."""
     owner = method.__self__
-    cls = owner if isinstance(owner, type) else type(owner)
+    cls = owner if instance_of(owner, type) else type(owner)
     if type(method) is types.MethodType:
         return (method.__func__, cls, root)
     return (method.__name__, cls, root)
@@ -2044,11 +2047,11 @@ def _super_members(owner: Any, fn: types.FunctionType, names: frozenset[str]) ->
             member = vars(k).get(name, _MISSING)
             if member is _MISSING:
                 continue
-            if isinstance(member, staticmethod):
+            if instance_of(member, staticmethod):
                 out.append(member.__func__)
-            elif isinstance(member, classmethod):
+            elif instance_of(member, classmethod):
                 out.append(types.MethodType(member.__func__, type(owner)))
-            elif isinstance(member, types.FunctionType):
+            elif instance_of(member, types.FunctionType):
                 out.append(types.MethodType(member, owner))
             break
     return out
@@ -2058,7 +2061,7 @@ def _generated_dataclass_init(cls: type, init: Any) -> bool:
     """Whether *init* is the ``__init__`` that ``@dataclass`` wrote for
     *cls*: compiled from a string, so it has no source to read."""
     return (
-        isinstance(init, types.FunctionType)
+        instance_of(init, types.FunctionType)
         and dataclasses.is_dataclass(cls)
         and is_pseudo_filename(init.__code__.co_filename)
         and _source_of(init) is None
@@ -2155,8 +2158,8 @@ def hands_a_state_changing_callable(
         if methods:
             found.with_methods(value, None, opened.attributes, methods == 2)  # type: ignore[union-attr]
         found.add(value, None, opens)
-    registry = getattr(fn, "registry", None) if isinstance(fn, types.FunctionType) else None
-    if isinstance(registry, Mapping):
+    registry = getattr(fn, "registry", None) if instance_of(fn, types.FunctionType) else None
+    if instance_of(registry, Mapping):
         # ``functools.singledispatch``: any implementation registered runs.
         for impl in list(registry.values()):
             if _is_users_callable(impl):
@@ -2216,7 +2219,7 @@ def _reaches_through_globals(fn: types.FunctionType) -> bool:
         scope = current.__globals__
         for name, attr in facts.global_methods:
             owner = scope.get(name)
-            if _is_users_object(owner) or (isinstance(owner, type) and _is_users_class(owner)):
+            if _is_users_object(owner) or (instance_of(owner, type) and _is_users_class(owner)):
                 return True
             if attr in _LOGGING_CALLS and _logging_callbacks(owner, attr):
                 return True
@@ -2229,13 +2232,13 @@ def _reaches_through_globals(fn: types.FunctionType) -> bool:
 
 def _global_source(namespace: Mapping[str, Any], name: str) -> str | None:
     value = namespace.get(name)
-    if not isinstance(value, types.FunctionType):
+    if not instance_of(value, types.FunctionType):
         return None
     if _is_cashs(value):
         # A ``@cash.cache`` function: its body, not cash's wrapper around it,
         # whose bookkeeping is no state of the user's.
         wrapped = getattr(value, "__wrapped__", None)
-        return _source_of(wrapped) if isinstance(wrapped, types.FunctionType) else None
+        return _source_of(wrapped) if instance_of(wrapped, types.FunctionType) else None
     return _source_of(value)
 
 
@@ -2320,7 +2323,7 @@ def _opened_by(callee: Any, func: ast.expr | None) -> _Opened:
     fn, offset = _user_function_of(callee)
     if fn is not None:
         return _opened_by_function(fn, offset)
-    attr = func.attr if isinstance(func, ast.Attribute) else getattr(callee, "__name__", None)
+    attr = func.attr if instance_of(func, ast.Attribute) else getattr(callee, "__name__", None)
     if attr in _TAKES_FUNCTIONS:
         return _Opened(frozenset({0}), frozenset({"func"}))
     return _OPENS_NOTHING
@@ -2363,17 +2366,17 @@ def _opened_by_function(fn: types.FunctionType, offset: int) -> _Opened:
 def _user_function_of(callee: Any) -> tuple[types.FunctionType | None, int]:
     """``(function, offset)``: the user function calling *callee* runs and
     how many of its leading parameters the call does not fill (``self``)."""
-    if isinstance(callee, types.MethodType):
+    if instance_of(callee, types.MethodType):
         fn, offset = callee.__func__, 1
-    elif isinstance(callee, types.FunctionType):
+    elif instance_of(callee, types.FunctionType):
         fn, offset = callee, 0
-    elif isinstance(callee, type):
+    elif instance_of(callee, type):
         fn, offset = _class_member(callee, "__init__"), 1
-    elif callee is not None and callable(callee) and not isinstance(callee, types.ModuleType):
+    elif callee is not None and callable(callee) and not instance_of(callee, types.ModuleType):
         fn, offset = _class_member(type(callee), "__call__"), 1
     else:
         return None, 0
-    if not isinstance(fn, types.FunctionType) or not _is_users(fn):
+    if not instance_of(fn, types.FunctionType) or not _is_users(fn):
         return None, 0
     return fn, offset
 
@@ -2464,15 +2467,15 @@ def _read_call_facts(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda) 
                 named_calls.add(call.func.id)
         else:
             owner = call.func.value
-            if isinstance(owner, ast.Name) and owner.id in params:
+            if instance_of(owner, ast.Name) and owner.id in params:
                 attribute_called.add(owner.id)
                 attributes.add(call.func.attr)
             elif reached := roots(owner):
                 held_attribute_called.update(reached)
                 attributes.add(call.func.attr)
-            elif isinstance(owner, ast.Name) and owner.id not in local:
+            elif instance_of(owner, ast.Name) and owner.id not in local:
                 global_methods.add((owner.id, call.func.attr))
-            elif isinstance(owner, ast.Call) and isinstance(owner.func, ast.Name) and owner.func.id == "super":
+            elif instance_of(owner, ast.Call) and isinstance(owner.func, ast.Name) and owner.func.id == "super":
                 super_methods.add(call.func.attr)
         name = call.func.id if isinstance(call.func, ast.Name) else getattr(call.func, "attr", None)
         where = _FUNCTION_ARGUMENT.get(name) if name else None
@@ -2546,7 +2549,7 @@ def _logging_callbacks(owner: Any, attr: str) -> list[Any]:
         return []
     if owner is logging_module:
         logger: Any = logging_module.getLogger()
-    elif isinstance(owner, logging_module.Logger):
+    elif instance_of(owner, logging_module.Logger):
         logger = owner
     else:
         return []
@@ -2776,19 +2779,19 @@ def _items(container: Any) -> Iterable[Any]:
     """What `_callables_reached` looks at in *container*: a builtin
     container's items (a dict's keys and values), an object's attributes."""
     if type(container) in _OPENED:
-        if isinstance(container, _HELD_IN_DATA):
+        if instance_of(container, _HELD_IN_DATA):
             container = container.data
-        if isinstance(container, dict):
+        if instance_of(container, dict):
             return chain(dict.keys(container), dict.values(container))
         return container
-    if isinstance(container, _CONTAINERS):
+    if instance_of(container, _CONTAINERS):
         # A namedtuple, a subclass of the user's of a list or dict: its
         # items, read through the builtin's own slots so no ``__iter__`` of
         # theirs runs, and its attributes.
-        if isinstance(container, dict):
+        if instance_of(container, dict):
             items: Iterable[Any] = chain(dict.keys(container), dict.values(container))
         else:
-            base = next(kind for kind in _CONTAINERS if isinstance(container, kind))
+            base = next(kind for kind in _CONTAINERS if instance_of(container, kind))
             items = base.__iter__(container)  # type: ignore[attr-defined]
         return chain(items, _attributes_of(container))
     # `_attributes_of`, inlined: this runs once for each object a walk opens.
@@ -2796,7 +2799,7 @@ def _items(container: Any) -> Iterable[Any]:
         own = object.__getattribute__(container, "__dict__")
     except (AttributeError, TypeError):
         own = None
-    values = list(own.values()) if isinstance(own, dict) else []
+    values = list(own.values()) if instance_of(own, dict) else []
     for member, cls in _slot_members(type(container)):
         try:
             values.append(member.__get__(container, cls))
@@ -2836,7 +2839,7 @@ def _slot_members(kind: type) -> tuple[tuple[Any, type], ...]:
             slots = cls.__dict__.get("__slots__")
             if slots is None:
                 continue
-            for name in (slots,) if isinstance(slots, str) else slots:
+            for name in (slots,) if instance_of(slots, str) else slots:
                 member = cls.__dict__.get(name)
                 if type(member) is types.MemberDescriptorType:
                     found.append((member, cls))
@@ -2956,10 +2959,10 @@ def _changes_its_first_argument(
             continue
         chain_root = call.func.value
         depth = 1
-        while isinstance(chain_root, (ast.Attribute, ast.Subscript)):
+        while instance_of(chain_root, (ast.Attribute, ast.Subscript)):
             chain_root = chain_root.value
             depth += 1
-        if not (isinstance(chain_root, ast.Name) and chain_root.id == first):
+        if not (instance_of(chain_root, ast.Name) and chain_root.id == first):
             continue
         method = call.func.attr
         if depth > 1:
@@ -2967,9 +2970,9 @@ def _changes_its_first_argument(
                 return True
             continue
         member = _class_member(cls, method)
-        if isinstance(member, (staticmethod, classmethod)):
+        if instance_of(member, (staticmethod, classmethod)):
             member = member.__func__
-        if isinstance(member, types.FunctionType):
+        if instance_of(member, types.FunctionType):
             if id(member) in seen:
                 continue
             inner = _source_of(member)

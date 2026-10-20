@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import ast
 import hashlib
-import inspect
 import logging
 import pickle
 import time
@@ -23,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 from cash import cost_model, handed_digests, kept_state, stored_pickle
 from cash._clock import perf_counter as _perf_counter
 from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, instance_of
 from cash.backends import memory_backend
 from cash.backends.persistence_policy import PersistencePolicy, restore_kind
 from cash.backends.store_notices import DECORATED_CALLS_FIELD
@@ -551,7 +550,7 @@ class StatementStore:
         """Every captured variable but a module, a closed file as its name and
         mode (`closed_stream`). Whether a value pickles is the backend's to
         find out when it stores it."""
-        return {k: stored_form(v) for k, v in captured_vars.items() if not isinstance(v, types.ModuleType)}
+        return {k: stored_form(v) for k, v in captured_vars.items() if not instance_of(v, types.ModuleType)}
 
     def _store(
         self,
@@ -589,7 +588,7 @@ class StatementStore:
             # was, and the cache holds them. The metadata still records its
             # output lineages, which a restart needs.
             return self._store_metadata_only(run, execution, None, {})
-        by_reference = {name for name, value in payload["variables"].items() if isinstance(value, CallRef)}
+        by_reference = {name for name, value in payload["variables"].items() if instance_of(value, CallRef)}
         should_skip, skip_reason, prediction = self._refusal(
             run, execution, captured_vars, miss_guarded, by_reference=by_reference
         )
@@ -799,8 +798,7 @@ class StatementStore:
             _unrestorable = sorted(
                 _name
                 for _name, _v in captured_vars.items()
-                if (inspect.isfunction(_v) or inspect.isclass(_v))
-                and attribute_or(_v, "__module__", None) == "__main__"
+                if instance_of(_v, (types.FunctionType, type)) and attribute_or(_v, "__module__", None) == "__main__"
             )
             if _unrestorable:
                 should_skip = True

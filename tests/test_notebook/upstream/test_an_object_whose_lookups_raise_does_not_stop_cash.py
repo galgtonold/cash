@@ -14,6 +14,11 @@ Every such question in the notebook check goes through ``attribute_or``
 (`test_attribute_probes_cannot_raise`): one asked with plain ``getattr``
 (``writable``, asked of each variable a cell run alone starts from) failed
 the cell again with UpstreamStateError.
+
+An object that raises for ``__class__`` itself (``Cls``) failed cash's
+``isinstance`` checks the same way: ``isinstance`` asks for it when the type
+does not match. Those checks go through ``instance_of``, which answers by
+the object's real type.
 """
 
 from __future__ import annotations
@@ -73,6 +78,15 @@ class Loud(Rec):
         if k in self._d:
             return self._d[k]
         raise RuntimeError(k)
+class Cls:
+    # Raises for __class__ itself: isinstance asks for it when the type
+    # does not match, and so does an ABC's check.
+    def __init__(self, a):
+        object.__setattr__(self, 'a', a)
+    def __getattribute__(self, k):
+        if k == '__class__':
+            raise KeyError(k)
+        return object.__getattribute__(self, k)
 """
 
 
@@ -97,6 +111,8 @@ FLOWS = {
     "a dict's value": ["d = {'k': Rec(a=2)}", "z = d['k'].a"],
     "a loop": ["out = []\nfor r in [Rec(a=1), Rec(a=2)]:\n    out.append(r.a)", "n = len(out)"],
     "a default": ["def h(r=Rec(a=3)):\n    return r.a", "q = h()"],
+    "hiding its class": ["c = Cls(5)", "w = c.a + 1", "c.a = 9", "w2 = c.a"],
+    "hiding its class, in a list": ["cs = [Cls(1), Cls(2)]", "tot = cs[0].a + cs[1].a"],
 }
 
 
@@ -109,9 +125,7 @@ def test_such_an_object_anywhere_in_a_notebook_runs_as_plain_python(cash_magics,
         for cell in cells:
             run_cash_cell(cash_magics, cell, cells=cells)
     ns = cash_magics.shell.user_ns
-    names = {
-        name for name, value in plain.items() if isinstance(value, (int, float, list)) and not name.startswith("_")
-    }
-    assert {name: ns[name] for name in names if not isinstance(plain[name], list)} == {
-        name: plain[name] for name in names if not isinstance(plain[name], list)
+    names = {name for name, value in plain.items() if type(value) in (int, float, list) and not name.startswith("_")}
+    assert {name: ns[name] for name in names if type(plain[name]) is not list} == {
+        name: plain[name] for name in names if type(plain[name]) is not list
     }

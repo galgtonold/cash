@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 from cash._memo import CODE_OBJECTS, NOTEBOOK_STATEMENTS, LruMemo
-from cash._user_attrs import attribute_or, has_attribute
+from cash._user_attrs import attribute_or, has_attribute, instance_of
 from cash.analysis.bytecode import argvals
 from cash.notebook.lineage_store import resolve_lineage
 from cash.source_norm import exact_source_digest, unparse_without_docstrings
@@ -901,7 +901,7 @@ def _collect_output_module_hashes(
         if out_var not in variable_lineage or (bound is not None and out_var not in bound):
             continue
         val = user_ns.get(out_var)
-        if isinstance(val, types.ModuleType):
+        if instance_of(val, types.ModuleType):
             hashes.append(f"out:{out_var}:{variable_lineage[out_var]}")
             logger.debug("[CACHE_KEY] Output module lineage for %r: %.12s...", out_var, variable_lineage[out_var])
         elif callable(val):

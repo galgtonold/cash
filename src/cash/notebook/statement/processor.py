@@ -17,7 +17,7 @@ from typing import Any
 from cash import _plain_data, stored_pickle, value_hash
 from cash._active import default_cash
 from cash._clock import perf_counter as _perf_counter
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, instance_of
 from cash.backends import memory_backend
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, PersistencePolicy
 from cash.control_markers import has_marker
@@ -2425,7 +2425,7 @@ class StatementProcessor:
         changed = {
             name
             for name in run.outputs & run.inputs
-            if name in user_ns and isinstance(user_ns[name], (type, types.ModuleType))
+            if name in user_ns and instance_of(user_ns[name], (type, types.ModuleType))
         }
         if not changed:
             return
@@ -2434,7 +2434,7 @@ class StatementProcessor:
             name
             for name in sorted(run.inputs - run.outputs)
             if name in user_ns
-            and not isinstance(user_ns[name], (type, types.ModuleType, types.FunctionType))
+            and not instance_of(user_ns[name], (type, types.ModuleType, types.FunctionType))
             and not is_value(user_ns[name], value_types)
         ]
         if not handed:
@@ -3255,7 +3255,7 @@ def reads_open_handle(names: Iterable[str], user_ns: Mapping[str, Any]) -> list[
 
 def _open_stream(value: Any) -> bool:
     """Is *value* a file or stream that can still be read or written?"""
-    if not isinstance(value, io.IOBase):
+    if not instance_of(value, io.IOBase):
         return False
     try:
         return not value.closed

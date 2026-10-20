@@ -15,11 +15,12 @@ attribute itself.
 
 from __future__ import annotations
 
-import inspect
 import threading
 import types
 import weakref
 from typing import Any
+
+from cash._user_attrs import instance_of, is_routine
 
 __all__ = ["clear_tags", "own_tag", "set_tags", "taggable"]
 
@@ -37,7 +38,7 @@ _SIDE_LOCK = threading.Lock()
 
 def taggable(value: Any) -> bool:
     """Whether *value* may carry a lineage tag: not a class, module or function."""
-    return not (isinstance(value, (type, types.ModuleType)) or inspect.isroutine(value))
+    return not (instance_of(value, (type, types.ModuleType)) or is_routine(value))
 
 
 def _forget(key: int, ref: weakref.ref) -> None:
@@ -87,7 +88,7 @@ def own_tag(value: Any, name: str = "_cash_lineage_hash") -> Any:
 
     The side table (`set_tags`) first, then the instance's own attribute.
     """
-    if isinstance(value, type):
+    if instance_of(value, type):
         return None
     if _SIDE:
         entry = _SIDE.get(id(value))

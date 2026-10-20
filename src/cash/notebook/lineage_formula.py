@@ -23,7 +23,7 @@ import types
 from collections.abc import Mapping
 from typing import Any, Callable, Iterable
 
-from cash._user_attrs import attribute_or, has_attribute
+from cash._user_attrs import attribute_or, has_attribute, instance_of
 
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.ast_util import parse_cached
@@ -80,7 +80,7 @@ def is_module_like(var_name: str, val: object, virtual_modules: Iterable[str]) -
     if val is None:
         return False
     try:
-        if isinstance(val, types.ModuleType):
+        if instance_of(val, types.ModuleType):
             return True
         # IPython internals and bound methods behave like modules -- skip them
         if callable(val) and (var_name.startswith("_") or has_attribute(val, "__self__")):
@@ -120,7 +120,7 @@ def changed_module_environment(
     reload; what the module's data holds, its readers key on themselves.
     Both engines ask here.
     """
-    if not (isinstance(value, types.ModuleType) or (value is None and name in virtual_modules)):
+    if not (instance_of(value, types.ModuleType) or (value is None and name in virtual_modules)):
         return environment
     bound = bound_names(code)
     return environment if bound is None or name in bound else ""
@@ -180,7 +180,7 @@ def module_read_lineage(
     uses the module other than by plain attribute reads, or the closure
     cannot be bounded. None is always correct; it is only slower.
     """
-    if function_tracker is None or not code or not isinstance(value, types.ModuleType):
+    if function_tracker is None or not code or not instance_of(value, types.ModuleType):
         return None
     mod_file = attribute_or(value, "__file__", None)
     real = attribute_or(value, "__name__", var_name)
@@ -270,7 +270,7 @@ def setting_output_lineage(
     ONE function for the runtime (``statement/lineage.py``) and the
     simulation (``upstream/statement_lineage.py``).
     """
-    if not (isinstance(value, types.ModuleType) or (value is None and name in virtual_modules)):
+    if not (instance_of(value, types.ModuleType) or (value is None and name in virtual_modules)):
         return None
     if repeatable_setting_receiver(parse_cached(code)) != name:
         return None
@@ -883,7 +883,7 @@ def module_source_component(
     """
     if function_tracker is None:
         return ""
-    if isinstance(value, types.ModuleType):
+    if instance_of(value, types.ModuleType):
         mod_file = attribute_or(value, "__file__", None)
         # By the module's OWN name, not the name the cell bound it to.
         # `tracked_modules` holds real module names, so `import tickets_lib

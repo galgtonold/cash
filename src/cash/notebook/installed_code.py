@@ -24,7 +24,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from cash._memo import CODE_OBJECTS, NOTEBOOK_STATEMENTS, LruMemo
-from cash._user_attrs import attribute_or, has_attribute
+from cash._user_attrs import attribute_or, has_attribute, instance_of
 from cash.code_digest import callable_identity
 from cash.decorator.closure_fold import iter_code_scopes
 from cash.decorator.code_args import installed_user_code, loaded_accessor_classes
@@ -103,7 +103,7 @@ def installed_code_parts(
 
     inputs = set(inputs)
     names = set(_statement_attributes(code))
-    if any(isinstance(user_ns.get(name), types.FunctionType) for name in inputs):
+    if any(type(user_ns.get(name)) is types.FunctionType for name in inputs):
         names |= _code_names(inputs, user_ns)
         try:
             names |= _code_names(called_function_globals(inputs, user_ns, variable_lineage=variable_lineage), user_ns)
@@ -130,7 +130,7 @@ def installed_code_parts(
     refs = sorted(
         ref
         for ref in reads
-        if not has_attribute(builtins, ref) and ref in user_ns and not isinstance(user_ns.get(ref), types.ModuleType)
+        if not has_attribute(builtins, ref) and ref in user_ns and not instance_of(user_ns.get(ref), types.ModuleType)
     )
     parts.update(f"installed-reads:{ref}:{variable_lineage.get(ref, 'ABSENT')}" for ref in refs)
     parts.update(f"installed-reads:{dep}" for dep in called_function_dependencies(refs, user_ns, variable_lineage))

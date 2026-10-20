@@ -19,6 +19,7 @@ import types
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from cash._user_attrs import instance_of
 from cash.tracking.randomness.state import object_carrier_state, rng_carrier_kind, same_carrier_state
 from cash.tracking.trace_recorder import is_user_code
 
@@ -88,7 +89,7 @@ def positions(roots: Mapping[str, Any], followed: Iterable[Any] = ()) -> dict[in
     budget = _BUDGET
     while frontier and budget > 0:
         path, obj, depth = frontier.pop()
-        if isinstance(obj, _LEAVES) or id(obj) in seen:
+        if instance_of(obj, _LEAVES) or id(obj) in seen:
             continue
         seen.add(id(obj))
         budget -= 1

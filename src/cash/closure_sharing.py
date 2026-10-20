@@ -29,7 +29,7 @@ def _parts(item: Any) -> Iterable[Any]:
         return item
     if kind is dict:
         return item.values()
-    if isinstance(item, (type, types.ModuleType, types.FunctionType)):
+    if issubclass(type(item), (type, types.ModuleType, types.FunctionType)):
         return ()
     attributes = attribute_or(item, "__dict__", None)
     return attributes.values() if type(attributes) is dict else ()
@@ -56,7 +56,7 @@ def closures_sharing(captured_vars: Mapping[str, Any]) -> list[str]:
                 continue
             seen.add(id(item))
             places.add(id(item))
-            if isinstance(item, types.FunctionType):
+            if type(item) is types.FunctionType:
                 functions.append((name, item))
             stack.extend(_parts(item))
     found: set[str] = set()
@@ -70,7 +70,7 @@ def closures_sharing(captured_vars: Mapping[str, Any]) -> list[str]:
         reached: set[int] = set()
         while stack:
             held = stack.pop()
-            if type(held) in IMMUTABLE_LEAF_TYPES or isinstance(held, types.FunctionType) or id(held) in reached:
+            if type(held) in IMMUTABLE_LEAF_TYPES or type(held) is types.FunctionType or id(held) in reached:
                 continue
             if id(held) in places:
                 found.add(name)

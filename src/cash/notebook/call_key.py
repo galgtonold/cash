@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 from cash import _plain_data
 from cash._memo import CODE_OBJECTS, LruMemo
 from cash._paths import is_pseudo_filename
-from cash._user_attrs import attribute_or, has_attribute
+from cash._user_attrs import attribute_or, has_attribute, instance_of
 from cash.analysis.bytecode import NAME_LOADS, argvals
 from cash.analysis.callee_effects import source_global_mutations
 from cash.analysis.namespace_effects import capturable_globals
@@ -239,16 +239,16 @@ def holds_a_closure_with_state(value) -> bool:
     while stack:
         item = stack.pop()
         kind = type(item)
-        if kind in atoms or isinstance(item, _ATOMS):
+        if kind in atoms or instance_of(item, _ATOMS):
             continue
-        if isinstance(item, _types.FunctionType):
+        if instance_of(item, _types.FunctionType):
             if changes_its_closure(item):
                 return True
             continue
-        if isinstance(item, (tuple, list, set, frozenset, dict)):
+        if instance_of(item, (tuple, list, set, frozenset, dict)):
             if id(item) in seen:
                 continue
-            children = item.values() if isinstance(item, dict) else item
+            children = item.values() if instance_of(item, dict) else item
             # Only atoms, by exact type: asked at C speed, where the loop
             # below took a Python step per item (22 ms for 200,000 ints).
             if atoms.issuperset(map(type, children)):

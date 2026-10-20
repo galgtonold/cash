@@ -22,7 +22,7 @@ import types
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, instance_of
 
 from .._memo import STATEMENTS, USER_CALLEES, LruMemo
 from ..diagnostics import warn_diagnostic
@@ -2215,7 +2215,7 @@ def is_estimator(value: object) -> bool:
     never loosen general mutation handling. One predicate for the runtime and
     the simulation.
     """
-    if isinstance(value, types.ModuleType):
+    if instance_of(value, types.ModuleType):
         return False
     return callable(attribute_or(value, "fit")) and callable(attribute_or(value, "get_params"))
 

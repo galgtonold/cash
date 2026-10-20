@@ -22,6 +22,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
+from .._user_attrs import instance_of
 from ..code_digest import unwrap_partials
 from ..effects import Action, classify_call
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -1167,7 +1168,7 @@ class CodeAnalyzer:
             for node in ast.walk(tree):
                 if isinstance(node, (ast.Import, ast.ImportFrom)):
                     bound.update((a.asname or a.name).split(".")[0] for a in node.names)
-            outputs = {o for o in outputs if o in bound or not isinstance(user_ns.get(o), types.ModuleType)}
+            outputs = {o for o in outputs if o in bound or not instance_of(user_ns.get(o), types.ModuleType)}
         return inputs, outputs
 
     @staticmethod
