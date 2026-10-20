@@ -14,12 +14,13 @@ writes. A sample would decide "unchanged" for an edit outside it.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import pickle
 import threading
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from time import perf_counter
 from typing import Any
 
@@ -384,9 +385,60 @@ def compute_hash(obj: Any) -> str:
     and an ``Int64`` column, a tz-naive and a tz-aware one, or a C- and an
     F-ordered array holding equal values hash apart.
     """
+    window = _one_read.memo
+    if window is not None and type(obj) not in _ATOMS:
+        found = window.get(id(obj))
+        if found is not None and found[0]() is obj:
+            return found[1]
     if value_watch.WATCHING and type(obj) not in _ATOMS:
-        return value_watch.digest(obj, _compute_hash, value_watch.KIND_VALUE, _reusable)
-    return _compute_hash(obj)
+        digest = value_watch.digest(obj, _compute_hash, value_watch.KIND_VALUE, _reusable)
+    else:
+        digest = _compute_hash(obj)
+    if window is not None and type(obj) not in _ATOMS and _reusable(obj, digest):
+        try:
+            window[id(obj)] = (weakref.ref(obj), digest)
+        except TypeError:
+            pass  # a list, dict or tuple: see `one_read`
+    return digest
+
+
+class _OneRead(threading.local):
+    """`one_read`'s digests, on the thread that opened it only."""
+
+    memo: dict[int, tuple[weakref.ref, str]] | None = None
+
+
+_one_read = _OneRead()
+
+
+@contextlib.contextmanager
+def one_read() -> Iterator[None]:
+    """Within it, `compute_hash` reads a value once on this thread: every
+    later digest of the same object is the first one's.
+
+    Only where nothing can change a value between two checks that read it:
+    after a statement ran and before the next one starts, its in-place
+    checks, its outputs' lineage and their session hashes all hashed a model
+    again, 7 reads of a 500-tree ensemble a statement where 2 do. Every one
+    of them is `compute_hash` of the same object, with no option of its
+    own (`budgeted_hash` only gives up past its budget, which a digest
+    already taken spares it), so the bytes are the same. The caller vouches
+    that no code of the user's runs inside, on any thread.
+
+    Kept by weak reference, and only for a value that takes one: a
+    reference held here would count as a holder to the checks that tell a
+    value shared (`_plain_data`), and a list's digest follows those. A
+    plain list, dict or tuple is read each time, as before. The identity
+    tier's digest is never kept. Nested, the outer one holds.
+    """
+    if _one_read.memo is not None:
+        yield
+        return
+    _one_read.memo = {}
+    try:
+        yield
+    finally:
+        _one_read.memo = None
 
 
 def _reusable(obj: Any, digest: str) -> bool:

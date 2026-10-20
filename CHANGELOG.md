@@ -221,7 +221,8 @@ recomputed.** Read **Breaking** before upgrading, and **Upgrading** at the end.
   (`DTYPE = np.float32`, `AGG = sum`), code reached through a value or a
   factory-made helper, and code reloaded by `%autoreload` are now keyed by
   their code; editing them served the old result. A numba-compiled helper
-  imported by name never cached at all.
+  imported by name never cached at all. A class or function renamed through
+  `__name__` alone kept its old key and served results with the old name.
 - **Data the key never saw.** The defaults and captures of a cached function
   another one calls, the `ttl` of a callee reached as a value, a global bound
   after the first call, a helper's captured data, attributes a class leaves

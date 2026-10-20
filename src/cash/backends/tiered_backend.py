@@ -431,24 +431,6 @@ class TieredBackend(CacheBackend):
             logger.debug("no private copy of %r", key, exc_info=True)
             return _NO_COPY
 
-    def _checked_copy(self, key: str, metadata: MetadataDict) -> tuple[Any, Any]:
-        """``(value, check)``: the first tier's copy of *key*'s value for a
-        persistent tier that `takes_private_values`, its own but for polars
-        frames that may share the caller's memory, and what tells, once it
-        is written, whether that memory changed meanwhile
-        (`InMemoryBackend.checked_copy`); else ``(_NO_COPY, None)``."""
-        if not any(getattr(b, "takes_private_values", False) for b in self.backends[1:]):
-            return _NO_COPY, None
-        checked_copy = getattr(self.backends[0], "checked_copy", None)
-        if checked_copy is None:
-            return _NO_COPY, None
-        try:
-            found = checked_copy(key, metadata)
-        except Exception:
-            logger.debug("no checked copy of %r", key, exc_info=True)
-            return _NO_COPY, None
-        return found if found is not None else (_NO_COPY, None)
-
     def _write_copy(self, key: str, value: Any, metadata: MetadataDict) -> Any:
         """A copy of *value* the first tier makes, cash's own, for a
         persistent tier that `takes_private_values` when that tier keeps no
@@ -509,7 +491,6 @@ class TieredBackend(CacheBackend):
         private: bool = False,
         copied: bool = False,
         serialized: Any = None,
-        check: Any = None,
     ) -> _TierWrites:
         """Write to every tier past RAM that takes an entry this size.
 
@@ -519,9 +500,7 @@ class TieredBackend(CacheBackend):
         *private*, a copy made for these writes alone (`_write_copy`), which
         the tier's queue holds until written. *serialized*: the
         bytes the RAM tier keeps *value* in (`InMemoryBackend.stored_payload`),
-        which such a tier writes as they are. *check*: with *private*, what
-        such a tier calls once the bytes are written, to keep them only
-        when it returns True (`InMemoryBackend.checked_copy`)."""
+        which such a tier writes as they are."""
         stored_destinations: list[str] = []
         errors: list[str] = []
         size_refused = False  # a tier skipped this object because it's too big
@@ -569,17 +548,16 @@ class TieredBackend(CacheBackend):
                     refusing_caps.append(int(cap))
                     continue
             try:
-                checked = {"check": check} if check is not None and private else {}
                 if serialized is not None and getattr(backend, "takes_private_values", False):
                     if serialized_copied:
-                        backend.set(key, value, metadata, serializer, serialized=serialized, copied=True, **checked)
+                        backend.set(key, value, metadata, serializer, serialized=serialized, copied=True)
                     else:
-                        backend.set(key, value, metadata, serializer, serialized=serialized, **checked)
+                        backend.set(key, value, metadata, serializer, serialized=serialized)
                 elif private and getattr(backend, "takes_private_values", False):
                     if copied:
-                        backend.set(key, value, metadata, serializer, private=True, copied=True, **checked)
+                        backend.set(key, value, metadata, serializer, private=True, copied=True)
                     else:
-                        backend.set(key, value, metadata, serializer, private=True, **checked)
+                        backend.set(key, value, metadata, serializer, private=True)
                 else:
                     backend.set(key, value, metadata, serializer)
                 stored_destinations.append(backend.source_label)
@@ -657,13 +635,11 @@ class TieredBackend(CacheBackend):
         # background write serializes it, so it is serialized now.
         holds_own_copy = getattr(self.backends[0], "holds_own_copy", None)
         private = not stored_metadata.get("by_reference") and holds_own_copy is not None and bool(holds_own_copy(key))
-        value, copied, check = entry[1], False, None
+        value, copied = entry[1], False
         if not private and serialized is None:
-            made, check = self._checked_copy(key, stored_metadata)
-            if made is _NO_COPY:
-                # A full copy of it, when one costs about its memory (`_write_copy`).
-                made = self._write_copy(key, value, metadata)
-                copied = made is not _NO_COPY
+            # A full copy of it, when one costs about its memory (`_write_copy`).
+            made = self._write_copy(key, value, metadata)
+            copied = made is not _NO_COPY
             if made is not _NO_COPY:
                 value, private = made, True
         writes = self._write_persistent_tiers(
@@ -675,7 +651,6 @@ class TieredBackend(CacheBackend):
             private=private,
             copied=copied,
             serialized=serialized,
-            check=check,
         )
         if not writes.stored:
             if writes.size_refused:
@@ -793,14 +768,9 @@ class TieredBackend(CacheBackend):
                     private = self._private_copy(key, metadata)
                     serialized = self._stored_payload(key, metadata)
                     copied = False
-                    check = None
-                    if private is _NO_COPY and serialized is None:
-                        # Its own but for polars frames that may share the
-                        # caller's memory: checked once it is written.
-                        private, check = self._checked_copy(key, metadata)
                     if private is _NO_COPY and serialized is None:
                         # None kept, or none of its own (refused, dropped,
-                        # copied by pandas): one made now, on this thread,
+                        # copied by pandas, kept uncopied): one made now, on this thread,
                         # at the cost of its arrays, so the pickling,
                         # checksum and write still run in the background,
                         # and nothing done to *value* after this call
@@ -816,7 +786,6 @@ class TieredBackend(CacheBackend):
                         private=private is not _NO_COPY,
                         copied=copied,
                         serialized=serialized,
-                        check=check,
                     )
                 else:
                     writes = _TierWrites([], False, cap_size, [], [])

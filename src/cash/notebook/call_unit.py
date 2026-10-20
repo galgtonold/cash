@@ -1189,7 +1189,10 @@ class CallUnit:
         )
         if held:
             self._hold(call.key, result, *held)
-            self.digested_results.add(id(result))
+            if self._digests.alone():
+                # The statement may take this digest of its result
+                # (`CallRouting.returned_digest`).
+                self.digested_results.add(id(result))
         return True
 
     def _func_name(self, fn) -> str:

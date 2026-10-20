@@ -634,6 +634,7 @@ def fold_arrow_column(h: Any, column: Any) -> None:
         _fold_arrow_ipc(h, column)
         return
     nulls, lengths, values = BulkHasher(), BulkHasher(), BulkHasher()
+    pieces = [] if kind == "fixed" and _gathers_pieces(chunks, width) else None
     base = 0
     for chunk in chunks:
         n = len(chunk)
@@ -644,7 +645,11 @@ def fold_arrow_column(h: Any, column: Any) -> None:
             nulls.update(missing.astype("<i8"))
         buffers = chunk.buffers()
         if kind == "fixed":
-            values.update(memoryview(buffers[1])[chunk.offset * width : (chunk.offset + n) * width])
+            piece = memoryview(buffers[1])[chunk.offset * width : (chunk.offset + n) * width]
+            if pieces is None:
+                values.update(piece)
+            else:
+                pieces.append(piece)
         elif kind == "bool":
             filled = chunk.fill_null(False) if chunk.null_count else chunk
             values.update(np.asarray(filled.to_numpy(zero_copy_only=False), dtype=np.bool_))
@@ -654,8 +659,36 @@ def fold_arrow_column(h: Any, column: Any) -> None:
             if buffers[2] is not None and offsets[-1] > offsets[0]:
                 values.update(memoryview(buffers[2])[int(offsets[0]) : int(offsets[-1])])
         base += n
+    if pieces:
+        _update_from_pieces(values, pieces)
     h.update(f"|arrow:{column.type}:{kind}:{base}|".encode())
     h.update(nulls.digest() + lengths.digest() + values.digest())
+
+
+def _gathers_pieces(chunks: list, width: int) -> bool:
+    """Whether `fold_arrow_column` gathers a fixed-width column's values into
+    blocks (`_update_from_pieces`) rather than hashing each chunk's where it
+    is: when the C extension can and the chunks are small. p08's log frame
+    comes in 1,280 chunks of ~2,900 rows, a call per chunk; a chunk of a
+    leaf or more is hashed where it is, with no copy."""
+    from ._native import kernels
+
+    if len(chunks) < 2 or kernels is None or not hasattr(kernels, "copy_pieces"):
+        return False
+    return sum(len(chunk) for chunk in chunks) * width < len(chunks) * LEAF_BYTES
+
+
+def _update_from_pieces(hasher: BulkHasher, pieces: list) -> None:
+    """``hasher.update`` each of *pieces* in order, through a block the C
+    extension's ``copy_pieces`` fills from as many of them as fit: the same
+    stream, a call per block instead of one per piece."""
+    from ._native import kernels
+
+    block = _view_blocks()[1]
+    index = skip = 0
+    while index < len(pieces):
+        index, skip, written = kernels.copy_pieces(pieces, index, skip, block)
+        hasher.update(memoryview(block)[:written])
 
 
 def _arrow_layout(arrow_type: Any) -> tuple[str | None, int]:
@@ -1022,7 +1055,7 @@ def hash_polars(value: Any) -> str | None:
             objects = [name for name, dtype in value.schema.items() if dtype == pl.Object]
             rest = value.drop(objects) if objects else value
             if rest.width:
-                _fold_polars_columns(h, _polars_arrow_columns(rest, pl), _rows_per_chunk(rest))
+                _fold_polars_columns(h, _polars_arrow_columns(rest, pl), _rows_read_at_once(rest))
             for name in objects:
                 h.update(f"|{name!r}|".encode("utf-8"))
                 h.update(_object_items_bytes(value.get_column(name).to_list()))
@@ -1077,13 +1110,12 @@ def polars_signature(value: Any) -> tuple | None:
         schema = tuple((name, repr(dtype)) for name, dtype in frame.schema.items())
         if any("Object" in dtype for _, dtype in schema):
             return None
-        table = frame.to_arrow(compat_level=pl.CompatLevel.newest())
         columns = tuple(
             tuple(
                 (chunk.offset, len(chunk), tuple(None if b is None else (b.address, b.size) for b in chunk.buffers()))
                 for chunk in column.chunks
             )
-            for column in table.columns
+            for column in _newest_arrow_columns(frame, pl)
         )
         return (schema, frame.height, columns)
     except Exception:  # noqa: BLE001 - polars or pyarrow refused: no signature, hash it
@@ -1092,6 +1124,28 @@ def polars_signature(value: Any) -> tuple | None:
         if not is_native_panic(exc):
             raise
         return None
+
+
+def _newest_arrow_columns(frame: Any, pl: Any) -> list:
+    """The columns of ``frame.to_arrow(compat_level=pl.CompatLevel.newest())``
+    for the polars DataFrame *frame*, chunk for chunk, without the table.
+
+    Each column is taken through its Arrow C stream (``pa.chunked_array`` of
+    the Series), as the table is built, but not as record batches: p08's log
+    frame comes in 1,280 chunks, and building a batch of each took 0.06-0.1 s
+    of each hash and of each `polars_signature`, its columns 0.01 s.
+
+    A frame whose columns are chunked apart is exported as the table still:
+    ``to_arrow`` first cuts every column at the same rows, in the frame
+    itself, and a list, struct or decimal column exported after that is
+    keyed by those chunks (`_fold_arrow_ipc`)."""
+    import pyarrow as pa
+
+    if hasattr(pl.Series, "__arrow_c_stream__"):
+        columns = [pa.chunked_array(series) for series in frame.get_columns()]
+        if len({tuple(map(len, column.chunks)) for column in columns}) < 2:
+            return columns
+    return frame.to_arrow(compat_level=pl.CompatLevel.newest()).columns
 
 
 def _polars_to_arrow(value: Any, pl: Any) -> Any:
@@ -1107,15 +1161,23 @@ def _polars_to_arrow(value: Any, pl: Any) -> Any:
     return value.to_arrow()
 
 
-#: Below this many rows per chunk a frame's columns are folded on the
+#: Below this many rows read at a time a frame's columns are folded on the
 #: calling thread: the readers then hand back the interpreter lock after a
 #: few thousand rows each, and threads queueing for it ran slower than one.
 PARALLEL_COLUMNS_MIN_ROWS = 200_000
 
 
-def _rows_per_chunk(frame: Any) -> int:
-    """The rows of the polars DataFrame *frame* over its most chunked column's chunks."""
+def _rows_read_at_once(frame: Any) -> int:
+    """The rows `fold_arrow_column` and `fold_view_column` read of the polars
+    DataFrame *frame* before handing back the interpreter lock: all of them
+    with the C extension's piece readers (``copy_pieces``), which read a
+    column's chunks a block at a time; else those of its most chunked
+    column's chunks, read one at a time."""
+    from ._native import kernels
+
     try:
+        if kernels is not None and hasattr(kernels, "copy_pieces"):
+            return frame.height
         return frame.height // max(1, *frame.n_chunks("all"))
     except Exception:  # noqa: BLE001 - polars raises its own types; fold on one thread
         return 0
@@ -1134,7 +1196,7 @@ class _Recorded:
         self.parts.append(bytes(data))
 
 
-def _fold_polars_columns(h: Any, columns: list[tuple[str, Any]], rows_per_chunk: int) -> None:
+def _fold_polars_columns(h: Any, columns: list[tuple[str, Any]], rows_at_once: int) -> None:
     """Fold each ``(name, column)`` into *h* in order, as
     ``h.update(f"|{name!r}|")`` then ``column.fold(h)``.
 
@@ -1142,16 +1204,16 @@ def _fold_polars_columns(h: Any, columns: list[tuple[str, Any]], rows_per_chunk:
     big frame each column is folded into a `_Recorded` on its own thread
     and the records are handed to *h* in column order: the same bytes in
     the same order, with the columns read side by side. p08's clean()
-    result took 0.48 s one column after another, 0.25 s side by side. Its
-    4M-row log frame in 1,280 chunks stays on one thread
-    (`PARALLEL_COLUMNS_MIN_ROWS`).
+    result took 0.48 s one column after another, 0.25 s side by side; its
+    4M-row log frame in 1,280 chunks, read a block at a time, 0.50 s and
+    0.31 s.
 
     A list, struct or decimal column is folded as its IPC stream, not as
     digests: a record of it would hold the whole column again, so it is
     folded into *h* in its turn, on this thread, after the others.
     """
     side_by_side = [i for i, (_name, column) in enumerate(columns) if column.folds_digests()]
-    threads = min(hashing_threads(), len(side_by_side)) if rows_per_chunk >= PARALLEL_COLUMNS_MIN_ROWS else 1
+    threads = min(hashing_threads(), len(side_by_side)) if rows_at_once >= PARALLEL_COLUMNS_MIN_ROWS else 1
     if threads < 2:
         for name, column in columns:
             h.update(f"|{name!r}|".encode("utf-8"))
@@ -1262,15 +1324,14 @@ def _polars_arrow_columns(frame: Any, pl: Any) -> list[tuple[str, Any]]:
     if (
         compat is None
         or kernels is None
-        or not hasattr(kernels, "view_values")
+        or not hasattr(kernels, "view_values_many")
         or not hasattr(pa.types, "is_string_view")
     ):
         table = _polars_to_arrow(frame, pl)
         return [(name, _ArrowColumn(column)) for name, column in zip(table.column_names, table.columns)]
 
-    table = frame.to_arrow(compat_level=compat.newest())
     out: list[tuple[str, Any]] = []
-    for name, column in zip(table.column_names, table.columns):
+    for name, column in zip(frame.columns, _newest_arrow_columns(frame, pl)):
         kind = column.type
         if pa.types.is_string_view(kind):
             out.append((name, _ViewColumn(column, "large_string")))
@@ -1304,22 +1365,20 @@ def fold_view_column(h: Any, column: Any, large: str) -> None:
     of type *large* (``large_string``/``large_binary``) it converts to:
     the same bytes, with neither the converted column nor its lengths made.
 
-    The C extension's ``view_lengths`` and ``view_values`` write each
-    value's length (int64, 0 for a missing one) and its bytes into blocks
-    that are hashed and used again (`VIEW_BLOCK_BYTES`). A block is hashed
-    when it is full, not at the end of each chunk: p08's log frame comes in
-    1,280 chunks of ~2,900 rows, and hashing each chunk's few KB apart,
-    on one thread, was most of what the frame cost."""
+    The C extension's ``view_lengths_many`` and ``view_values_many`` write
+    each value's length (int64, 0 for a missing one) and its bytes into
+    blocks that are hashed and used again (`VIEW_BLOCK_BYTES`), reading
+    chunk after chunk until a block is full: p08's log frame comes in 1,280
+    chunks of ~2,900 rows, and a call per chunk handed the interpreter lock
+    back so often that its columns could not be read side by side."""
     import numpy as np
     import pyarrow as pa
 
     from ._native import kernels
 
     chunks = column.chunks if isinstance(column, pa.ChunkedArray) else [column]
-    lengths_block, values_block = _view_blocks()
-    nulls, lengths, values = BulkHasher(), BulkHasher(), BulkHasher()
-    lengths_view, values_view = memoryview(lengths_block), memoryview(values_block)
-    lengths_at = values_at = 0  # bytes of the blocks filled and not yet hashed
+    nulls = BulkHasher()
+    pieces = []
     base = 0
     for chunk in chunks:
         n = len(chunk)
@@ -1330,26 +1389,18 @@ def fold_view_column(h: Any, column: Any, large: str) -> None:
             nulls.update(missing.astype("<i8"))
         buffers = chunk.buffers()
         validity = buffers[0] if chunk.null_count else None
-        views, datas = buffers[1], tuple(buffers[2:])
-        start, stop = chunk.offset, chunk.offset + n
-        row = start
-        while row < stop:
-            if len(lengths_block) - lengths_at < 8:
-                lengths.update(lengths_view[:lengths_at])
-                lengths_at = 0
-            rows = kernels.view_lengths(views, validity, row, stop, lengths_view[lengths_at:])
-            lengths_at += rows * 8
-            row += rows
-        row, skip = start, 0
-        while row < stop:
-            if values_at == len(values_block):
-                values.update(values_view[:values_at])
-                values_at = 0
-            row, skip, written = kernels.view_values(views, datas, validity, row, skip, stop, values_view[values_at:])
-            values_at += written
+        pieces.append((buffers[1], tuple(buffers[2:]), validity, chunk.offset, chunk.offset + n))
         base += n
-    lengths.update(lengths_view[:lengths_at])
-    values.update(values_view[:values_at])
+    lengths_block, values_block = _view_blocks()
+    lengths, values = BulkHasher(), BulkHasher()
+    index = row = 0
+    while index < len(pieces):
+        index, row, written = kernels.view_lengths_many(pieces, index, row, lengths_block)
+        lengths.update(memoryview(lengths_block)[:written])
+    index = row = skip = 0
+    while index < len(pieces):
+        index, row, skip, written = kernels.view_values_many(pieces, index, row, skip, values_block)
+        values.update(memoryview(values_block)[:written])
     h.update(f"|arrow:{large}:offsets:{base}|".encode())
     h.update(nulls.digest() + lengths.digest() + values.digest())
 

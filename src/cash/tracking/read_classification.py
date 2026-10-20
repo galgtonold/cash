@@ -27,14 +27,17 @@ from cash.install_paths import (
     norm_dir,
     normcase_path,
     site_roots,
+    sys_path_dir,
 )
 
 __all__ = [
     "SCRATCH_MEMMAP",
+    "import_folders",
     "incidental_read",
     "is_cash_internal",
     "is_pseudo_fs",
     "is_runtime_cache_path",
+    "module_kind",
     "own_lstat",
     "own_stat",
     "register_cache_dir",
@@ -359,7 +362,7 @@ def incidental_read(path: str, own_package: str | None = None, anchor: list | No
     state = _WalkState()
     below_top = None  # the top-level name of the frame walked last
     while frame is not None:
-        kind = _module_kind(frame)
+        kind = module_kind(frame)
         top = kind[3]
         if anchor is not None and top == "cash" and below_top not in (None, "cash"):
             mark = anchor[0]
@@ -388,7 +391,23 @@ class _WalkState:
         self.user_resource: bool | None = None
 
 
-def _module_kind(frame: Any) -> tuple[bool, bool, bool, str]:
+_IMPORT_FOLDERS: list = [None, frozenset()]
+
+
+def import_folders() -> frozenset[str]:
+    """The folders on ``sys.path`` as `norm_dir` prefixes, for as long as it
+    holds the same entries: each resolved as `installed_outside_project`
+    resolves it (`sys_path_dir`), so a relative entry names the same folder
+    for both after an ``os.chdir``."""
+    held = _IMPORT_FOLDERS
+    path = sys.path
+    if held[0] != path:
+        folders = frozenset(folder for folder in map(sys_path_dir, path) if folder)
+        held[:] = [list(path), folders]
+    return held[1]
+
+
+def module_kind(frame: Any) -> tuple[bool, bool, bool, str]:
     """(metadata module?, resource module?, read plumbing?, top-level name)
     of the module *frame* runs in, remembered per module."""
     module = frame.f_globals.get("__name__") or ""
@@ -457,7 +476,7 @@ def _steps_below(frame: Any, own_package: str | None, installed: Any) -> tuple:
     only the frames that can say something about a read."""
     steps = []
     while frame is not None:
-        is_metadata, is_resource, is_plumbing, top = _module_kind(frame)
+        is_metadata, is_resource, is_plumbing, top = module_kind(frame)
         if is_metadata:
             steps.append(("resource",) if is_resource else ("metadata",))
         elif top not in (own_package, "cash", "__main__", ""):

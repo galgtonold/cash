@@ -71,19 +71,6 @@ def test_what_the_caller_does_to_its_frame_or_a_hit_never_comes_back(mutate):
     assert again.equals(_frame())
 
 
-def test_a_disk_write_whose_check_fails_writes_nothing(tmp_path):
-    disk = FileBackend(str(tmp_path / "c"), flush_interval=0)
-    value = np.arange(ROWS)
-    disk.set("k", value, {"execution_time": 1.0}, private=True, check=lambda: False)
-    disk.set("ok", value, {"execution_time": 1.0}, private=True, check=lambda: True)
-    assert disk.get("k") == (None, None)
-    _meta, kept = disk.get("ok")
-    disk.shutdown()
-    assert np.array_equal(kept, value)
-    # The chunk the dropped write put is held by the one written after it.
-    assert len(list((tmp_path / "c" / "chunks").iterdir())) == 1
-
-
 def test_the_disk_tier_gets_the_values_from_before_the_write(tmp_path):
     tiers = TieredBackend([InMemoryBackend(), FileBackend(str(tmp_path / "c"), flush_interval=0)])
     a = np.arange(ROWS, dtype=np.float64)
