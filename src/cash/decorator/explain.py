@@ -478,6 +478,10 @@ def not_persisted_reason(stored_meta: dict[str, Any]) -> str | None:
         return "too big for the persistent tier's size cap"
     if skipped == "process_local":
         return "a dynamic_depends_on= source of a cached function it calls cannot be pickled"
+    if skipped == "shared":
+        # `TieredBackend.persist_from_memory`: written later only from a RAM
+        # copy that holds nothing the caller can still change.
+        return "the RAM copy shares a part with the returned value, so a later disk write could hold later edits"
     # The notebook's other reasons (the persistence floor, the cost model,
     # the rate ceiling) cannot apply to a decorated result: `@cash.cache`
     # persists what it is given, and only a size cap stops it (see
