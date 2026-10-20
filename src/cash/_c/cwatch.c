@@ -457,7 +457,14 @@ static unsigned long long c_world_bumps, c_world_ignored, c_fast_hits, c_fast_mi
 #define WD_UNKEYED 2u
 /* A world type's `live` tag stands for its `canon` one: the tag it had
  * before cash's own writes to it (see `expect`), which a memo holds. */
-typedef struct { uintptr_t addr; unsigned flags; unsigned int live, canon; } WEnt;
+/* A world type's `name`, `qualname`, `bases` and `mro` are the ones it had
+ * when watched (strong): setting ``__name__`` or ``__qualname__`` writes no
+ * dict and CPython tells no type watcher of it, and a change of bases in
+ * cash's window must not pass for cash's write (`expect_settle`). */
+typedef struct {
+    uintptr_t addr; unsigned flags; unsigned int live, canon;
+    PyObject *name, *qualname, *bases, *mro;
+} WEnt;
 static WEnt *wds = NULL; static size_t wds_cap = 0, wds_used = 0, wds_tomb = 0;  /* world dicts */
 static WEnt *wts = NULL; static size_t wts_cap = 0, wts_used = 0, wts_tomb = 0;  /* world types */
 static PyObject *world_names = NULL;   /* set of str */
@@ -494,7 +501,8 @@ static int went_add(WEnt **tabp, size_t *capp, size_t *usedp, size_t *tombp, uin
     size_t m = *capp - 1, i = hmix(a) & m;
     while ((*tabp)[i].addr && (*tabp)[i].addr != WTOMB) i = (i + 1) & m;
     if ((*tabp)[i].addr == WTOMB) (*tombp)--;
-    (*tabp)[i].addr = a; (*tabp)[i].flags = flags; (*tabp)[i].live = (*tabp)[i].canon = 0; (*usedp)++;
+    (*tabp)[i].addr = a; (*tabp)[i].flags = flags; (*tabp)[i].live = (*tabp)[i].canon = 0;
+    (*tabp)[i].name = (*tabp)[i].qualname = (*tabp)[i].bases = (*tabp)[i].mro = NULL; (*usedp)++;
     return 0;
 }
 
@@ -534,6 +542,12 @@ static void expect_settle(void) {
     if (now != expect.value) { world_bump(); return; }   /* not what cash set: a change */
     for (int i = 0; i < expect.nseen; i++) {
         PyTypeObject *t = expect.seen[i].t;
+        /* bases or MRO moved (no dict write shows it): not cash's write */
+        WEnt *e = went_find(wts, wts_cap, (uintptr_t)t);
+        if (!e || t->tp_bases != e->bases || t->tp_mro != e->mro) { world_bump(); return; }
+    }
+    for (int i = 0; i < expect.nseen; i++) {
+        PyTypeObject *t = expect.seen[i].t;
         unsigned int was = expect.seen[i].tag;
         WEnt *e = went_find(wts, wts_cap, (uintptr_t)t);
         if (!e || !PyUnstable_Type_AssignVersionTag(t)) continue;   /* no tag: a memo declines */
@@ -555,10 +569,14 @@ static int epoch_is(PyObject *o, uint64_t want);
 /* `stored` (a memo's) is t's tag now, or the one t's tag stands for */
 static int type_tag_is(PyObject *stored, PyTypeObject *t) {
     unsigned int now = t->tp_version_tag;
-    if (epoch_is(stored, now)) return 1;
     if (!now || !wts_used) return 0;
     WEnt *e = went_find(wts, wts_cap, (uintptr_t)t);
-    return e && e->live == now && epoch_is(stored, e->canon);
+    if (!e) return 0;
+    if (t->tp_flags & Py_TPFLAGS_HEAPTYPE) {
+        PyHeapTypeObject *h = (PyHeapTypeObject *)t;
+        if (e->name != h->ht_name || e->qualname != h->ht_qualname) { world_bump(); return 0; }   /* renamed */
+    }
+    return epoch_is(stored, now) || (e->live == now && epoch_is(stored, e->canon));
 }
 
 static int str_equal(PyObject *a, PyObject *b);
@@ -2009,6 +2027,18 @@ static PyObject *py_world_watch_type(PyObject *self, PyObject *t) {
     Py_DECREF(d);
     if (rc < 0) return NULL;
     WEnt *e = went_find(wts, wts_cap, (uintptr_t)t);
+    if (e && (tp->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
+        PyHeapTypeObject *h = (PyHeapTypeObject *)tp;
+        /* renamed or rebased since it was last watched: memos made before
+         * may name it */
+        if (e->name && (e->name != h->ht_name || e->qualname != h->ht_qualname || e->bases != tp->tp_bases ||
+                        e->mro != tp->tp_mro))
+            world_bump();
+        Py_XINCREF(h->ht_name); Py_XSETREF(e->name, h->ht_name);
+        Py_XINCREF(h->ht_qualname); Py_XSETREF(e->qualname, h->ht_qualname);
+        Py_XINCREF(tp->tp_bases); Py_XSETREF(e->bases, tp->tp_bases);
+        Py_XINCREF(tp->tp_mro); Py_XSETREF(e->mro, tp->tp_mro);
+    }
     if (e && e->live && e->live == tp->tp_version_tag) return PyLong_FromUnsignedLong(e->canon);
     return PyLong_FromUnsignedLong(tp->tp_version_tag);
 }
