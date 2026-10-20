@@ -1745,7 +1745,10 @@ that reading took longer than the statement's budget: four times what the
 statement took the last time it ran, at least half a second. cash stopped
 reading. The message names how long the statement ran. It is shown once per
 statement, and only for a statement that took a tenth of a second or more:
-for a quicker one, caching would not have mattered.
+for a quicker one, caching would not have mattered. A call inside a
+statement is told the same way, once per function, when finding whether
+what it returned shares an object with what it was handed took longer than
+the same budget: that call runs every time.
 
 **Why it matters.** The statement runs every time and is not stored. What it
 binds is keyed by its value, as a `# @cash:no-cache` statement's is: a cell

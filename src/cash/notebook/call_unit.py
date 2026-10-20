@@ -51,6 +51,8 @@ from cash.analysis.handed_callables import hands_a_state_changing_callable
 from cash.analysis.namespace_effects import user_callee_starting_workers, user_callee_using_pyplot
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, restore_kind
 from cash.cost_model import estimated_restore_time
+from cash.diagnostics import log_diagnostic, warn_diagnostic
+from cash.exceptions import CashCacheIneffectiveWarning
 from cash.notebook import shadow as _shadow
 from cash.notebook._trace import trace_event
 from cash.notebook.cache_key import CacheKeyContext
@@ -77,6 +79,7 @@ from cash.notebook.call_refs import (
 from cash.notebook.held_sentinels import find_for_call, put_back_for_call
 from cash.notebook.pyplot_state import pyplot_state
 from cash.notebook.read_handles import reaches_read_handle
+from cash.notebook.shared_objects import WalkBudgetExceeded, walk_budget
 from cash.notebook.write_observer import WrittenPaths, kept_writes, observe_writes
 from cash.sizing import estimate_object_size
 from cash.tracking.env_reads import environment_digests, note_reads
@@ -589,6 +592,8 @@ class CallUnit:
         #: The files and URLs read inside calls the cache holds, each with the
         #: sequence number of its last such read (see :meth:`files_read_since`).
         self._cached_reads: dict[str, int] = {}
+        #: Functions already told about NOTEBOOK-ANALYSIS-BUDGET (`_tell_past_budget`).
+        self._past_budget_told: set[str] = set()
         self.reads_seq = 0
         self._last_key_s: float | None = None
         self._invoked_keys: list[str | None] = []
@@ -1138,11 +1143,42 @@ class CallUnit:
     def _worth_storing(self, call: _Call, result, elapsed: float, result_held: bool = True) -> bool:
         """Past the cost floor, safe to hand back as a copy, and cheaper to
         restore than to compute again."""
-        return (
-            elapsed >= self._cost_floor_s()
-            and self._entries.storable(result, call.args, call.kwargs, call.fn, result_held)
-            and self._entries.restore_pays(result, elapsed)
+        if elapsed < self._cost_floor_s():
+            return False
+        # Walking what the result and the arguments hold may take at most
+        # what the statement share check of the same cost may.
+        from cash.notebook.statement.processor import share_check_budget  # imports this module
+
+        budget = share_check_budget(elapsed)
+        try:
+            with walk_budget(budget):
+                storable = self._entries.storable(result, call.args, call.kwargs, call.fn, result_held)
+        except WalkBudgetExceeded:
+            self._tell_past_budget(call, elapsed, budget)
+            return False
+        return storable and self._entries.restore_pays(result, elapsed)
+
+    def _tell_past_budget(self, call: _Call, elapsed: float, budget: float) -> None:
+        """Say once per function that its call is not stored because finding
+        whether its result shares an object with its arguments took longer
+        than *budget* (``NOTEBOOK-ANALYSIS-BUDGET``); only for a call slow
+        enough that storing it would have mattered."""
+        name = getattr(call.fn, "__qualname__", None) or repr(call.fn)
+        logger.debug("[CALL_UNIT] %s: the share check ran past %.1fs; not stored", name, budget)
+        if elapsed < COMPUTE_FLOOR_S or name in self._past_budget_told:
+            return
+        self._past_budget_told.add(name)
+        what = (
+            f"the call to {name} ran {elapsed:.2f}s and was not cached: finding whether what it returned "
+            f"shares an object with what it was handed took more than its {budget:.1f}s budget. "
+            "It runs every time."
         )
+        fix = (
+            "hand the function the values it needs rather than a large object holding them, or decorate "
+            "it with @cash.cache."
+        )
+        log_diagnostic(logger, "NOTEBOOK-ANALYSIS-BUDGET", what, fix)
+        warn_diagnostic(CashCacheIneffectiveWarning, "NOTEBOOK-ANALYSIS-BUDGET", what, fix)
 
     def _store_result(
         self,

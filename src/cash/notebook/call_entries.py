@@ -33,8 +33,11 @@ from cash.notebook.call_refs import (
 from cash.notebook.consumables import is_consumable_unrestorable
 from cash.notebook.shared_objects import (
     VALUE_TYPES,
+    WalkBudgetExceeded,
     holds_a_held_object,
     holds_part_of,
+    holds_through_libraries_what_is_held_elsewhere,
+    identities_of,
     ids_through_libraries,
     is_value,
     library_parts_held,
@@ -322,7 +325,7 @@ class CallEntries:
             reached = self._reached(result, fn, root_held or parts != {})
             return (
                 not holds_part_of(result, (*sources, *reached))
-                and not (parts != {} and self._shares_library_parts(result, parts, (*sources, *reached)))
+                and not self._shares_library_parts(result, parts, (*sources, *reached))
                 and not self._borrows(result, sources, reached, fn)
                 # Held by something else (*root_held*), and that holder is
                 # none of the arguments or of what the function reaches: a
@@ -332,26 +335,38 @@ class CallEntries:
                 and not is_consumable_unrestorable(result)
                 and not holds_a_closure_with_state(result)
             )
+        except WalkBudgetExceeded:
+            raise  # the caller's budget (`CallUnit._worth_storing`): not stored, and said so
         except Exception:
             logger.debug("storability check raised; the result is not stored", exc_info=True)
             return False
 
     @staticmethod
     def _shares_library_parts(result, parts: dict[int, Any] | None, sources: tuple[Any, ...]) -> bool:
-        """Whether an object inside a library object in *result* is one the
-        arguments or what the function reaches are or hold, read through
-        their library objects too (`ids_through_libraries`):
-        ``Namespace(fig=fig)`` with the notebook's ``rect`` on ``fig``'s
-        axes, or ``Namespace(rows=src.rows)`` with ``src`` a namespace.
-        *parts* are those held from outside (`library_parts_held`); None,
-        too many to tell, compares everything *result* holds. Nothing to
-        compare with, and the result is not read."""
+        """Whether *result* holds an object the arguments or what the
+        function reaches hold inside a library object or a frame's object
+        column, read down too (`ids_through_libraries`), which
+        `holds_part_of` does not read: ``Namespace(rows=src.rows)`` with
+        ``src`` a namespace, ``{'x': df['d'].iloc[0]}``. Compared are the
+        objects inside the library objects in *result* held from outside
+        (`library_parts_held`: ``Namespace(fig=fig)`` with the notebook's
+        ``rect`` on ``fig``'s axes) and what `holds_part_of` reads of it;
+        when *parts* is None, too many to tell, everything *result* holds.
+        A result holding nothing with an identity, or sources holding
+        nothing, and the other side is not read."""
+        own = identities_of(result)
+        if parts:
+            own.update(parts)
+        if not own and parts is not None:
+            return False
+        if not holds_through_libraries_what_is_held_elsewhere(result):
+            return False
         outside = ids_through_libraries(sources)
         if not outside:
             return False
         if parts is None:
-            parts = dict.fromkeys(ids_through_libraries([result]) - {id(result)})
-        shared = not outside.isdisjoint(parts)
+            own |= ids_through_libraries([result]) - {id(result)}
+        shared = not outside.isdisjoint(own)
         if shared:
             logger.debug("[CALL_UNIT] the result holds, inside a library object, an object of the caller's: not stored")
         return shared

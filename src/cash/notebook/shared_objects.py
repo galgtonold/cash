@@ -412,7 +412,8 @@ def _library_children(value: Any) -> list[Any] | None:
     that a restore copies with it, or None for a leaf: a ``deque``'s items,
     a ``UserDict``'s ``data``, a ``ChainMap``'s ``maps``, an object array's
     items (one that owns them: a view's items are its base's), and a
-    pandas object's ``attrs``."""
+    pandas object's ``attrs`` and the cells of its object columns
+    (`_object_cells`)."""
     kind = _LIBRARY_KINDS.get(type(value))
     if kind is None:
         kind = _library_kind(type(value))
@@ -431,7 +432,9 @@ def _library_children(value: Any) -> list[Any] | None:
             return list(value.flat)
         return None
     attrs = _pandas_attrs(value)
-    return [attrs] if attrs else None
+    held = [attrs] if attrs else []
+    held += _object_cells(value)
+    return held or None
 
 
 _LEAF, _DEQUE, _WRAPPING, _ARRAY, _PANDAS = "leaf", "deque", "wrapping", "array", "pandas"
@@ -751,6 +754,81 @@ def ids_through_libraries(values: Iterable[Any]) -> set[int]:
         if read_down:
             stack.extend(gc.get_referents(obj))
     return found
+
+
+def holds_through_libraries_what_is_held_elsewhere(value: Any) -> bool:
+    """Whether an object *value* holds (not *value* itself), read down
+    through library objects and object columns as `ids_through_libraries`
+    reads them, has a holder outside *value* by reference count, or sits on
+    memory another object may hold (a numpy view, a pandas object holding
+    object cells). When neither, no argument or global can share anything
+    with *value*, and they are not read: a call handed a namespace of a
+    million dicts that returns a fresh one."""
+    value_types = VALUE_TYPES + library_value_types()
+    nodes: dict[int, Any] = {}
+    inbound: dict[int, int] = {}
+    stack = [value]
+    while stack:
+        obj = stack.pop()
+        if id(obj) in nodes:
+            continue
+        children = children_of(obj)
+        if children is None:
+            read_down = _read_down(obj, value_types)
+            if read_down is None:
+                continue  # a type, a function, cash's own: not one to look for
+            children = gc.get_referents(obj) if read_down else ()
+        elif _object_cells(obj):
+            return True
+        nodes[id(obj)] = obj
+        if not len(nodes) & 1023:
+            check_walk_budget()
+        if view_bases(obj):
+            return True
+        for child in children:
+            if is_value(child, value_types):
+                continue
+            inbound[id(child)] = inbound.get(id(child), 0) + 1
+            stack.append(child)
+    obj = child = children = None  # this frame's own references, out of the counts
+    root = id(value)
+    return bool(excess_refs(nodes, inbound, [key for key in nodes if key != root]))
+
+
+def _object_cells(value: Any) -> list[Any]:
+    """The cells of *value*'s object columns, when it is a pandas frame or
+    series: ``pd.DataFrame({'d': [rect, [2]]})`` holds ``rect`` itself,
+    and ``df['d'].iloc[0] is rect``. A column of strings, or of other
+    values pandas tells apart in C (`infer_dtype`), is not listed."""
+    pd = sys.modules.get("pandas")
+    if pd is None:
+        return []
+    if isinstance(value, pd.Series):
+        columns = [value]
+    elif isinstance(value, pd.DataFrame):
+        columns = [value.iloc[:, i] for i, dtype in enumerate(value.dtypes) if dtype.kind == "O"]
+    else:
+        return []
+    cells: list[Any] = []
+    for column in columns:
+        if column.dtype.kind != "O":
+            continue
+        array = column.to_numpy(copy=False)
+        if pd.api.types.infer_dtype(array, skipna=True) in _VALUE_COLUMNS:
+            continue
+        cells.extend(array.ravel().tolist())
+    return cells
+
+
+#: `infer_dtype` answers for an object column holding only values.
+_VALUE_COLUMNS = frozenset(
+    {"string", "bytes", "integer", "floating", "decimal", "boolean", "empty", "datetime", "date", "timedelta", "time"}
+)
+
+
+def identities_of(value: Any) -> set[int]:
+    """The ids `holds_part_of` compares *value* by (`_identities`)."""
+    return set(_identities(value, VALUE_TYPES + library_value_types()))
 
 
 def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
