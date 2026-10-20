@@ -12,7 +12,9 @@ deep to key still raises.
 
 from __future__ import annotations
 
+import copy
 import pickle
+import sys
 
 import pytest
 
@@ -196,9 +198,20 @@ def test_a_key_is_never_taken_over_a_flattened_value(monkeypatch):
 
 
 def test_a_deep_chain_pickle_refuses_is_copied_by_the_ram_tier():
-    """A lambda in it sends the copy to deepcopy, which refused the chain."""
-    head = _chain(DEEP)
+    """A lambda in it sends the copy to deepcopy, which refused the chain.
+
+    Twice the recursion limit is deeper than deepcopy follows (it takes a
+    Python frame or more per level), and checked to be. `DEEP` levels cost
+    over a second per copy, so under a loaded test run the test went past
+    its timeout."""
+    head = _chain(2 * sys.getrecursionlimit())
     head.fn = lambda: 1
+    # Refused as the RAM tier sees it: a lambda (PicklingError, or
+    # AttributeError from 3.13), or the depth itself (RecursionError on 3.10).
+    with pytest.raises((pickle.PicklingError, AttributeError, RecursionError)):
+        pickle.dumps(head)
+    with pytest.raises(RecursionError):
+        copy.deepcopy(head)
     backend = InMemoryBackend()
     backend.set("k", head, {"copy_required": True})
     first, second = (backend.get("k")[1] for _ in range(2))
