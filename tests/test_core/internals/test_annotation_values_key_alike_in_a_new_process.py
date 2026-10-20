@@ -54,7 +54,7 @@ def _runs(script, cache_dir) -> int:
 
 def test_a_function_reading_annotated_fields_hits_in_a_new_process(tmp_path):
     script = tmp_path / "fields.py"
-    script.write_text(SCRIPT)
+    script.write_text(SCRIPT, encoding="utf-8")
     cache_dir = tmp_path / ".cash"
     assert _runs(script, cache_dir) == 1
     assert _runs(script, cache_dir) == 0, "a new process recomputed: the annotations' key is not stable"
