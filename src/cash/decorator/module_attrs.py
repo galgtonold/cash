@@ -137,6 +137,37 @@ def _library_attr_parts(
     return [(label, h)]
 
 
+def _library_class_attr_parts(
+    values: GlobalValues, reader: _AttrReader, cls: type, path: str, attr: str
+) -> list[tuple[str, str]]:
+    """Key parts for ``lib.Class.ATTR``: its value when it is plain data
+    (``json.JSONEncoder.item_separator``), as `_library_attr_parts` keys
+    ``lib.ATTR``. Read statically, from the class that holds it: a
+    descriptor of the library's is its code, not data, and runs nothing
+    here. ``json.JSONEncoder.item_separator = ";"`` served the result
+    computed with ``","``.
+    """
+    label = f"{path}.{attr}"
+    if label in reader.learned:
+        return []
+    owner = next((k for k in getattr(cls, "__mro__", ()) if attr in vars(k)), None)
+    if owner is None:
+        return []
+    value = vars(owner)[attr]
+    kind = plain_data_kind(value)
+    if kind is None:
+        return []
+    code = getattr(reader.func, "__code__", None)
+    if isinstance(code, types.CodeType) and (path, attr) in written_module_attrs(code):
+        return []
+    h = values.safe_global_hash(value, reader.func_name, label)
+    if h is None:
+        return []
+    if reader.watch is not None and kind == "plain":
+        reader.watch[label] = (h, "library", (vars(owner), attr), None)
+    return [(label, h)]
+
+
 @dataclass(frozen=True)
 class _AttrReader:
     """The function whose ``module.ATTR`` reads are folded, and the drift
@@ -340,6 +371,8 @@ class ModuleAttrFold:
                 return self._function_attr_parts(obj, attr, mod_name, func_name)
             if isinstance(obj, types.ModuleType):
                 return _library_attr_parts(self._values, reader, obj, mod_name, attr)
+            if isinstance(obj, type):
+                return _library_class_attr_parts(self._values, reader, obj, mod_name, attr)
             return []
         try:
             value = inspect.getattr_static(obj, attr) if is_cls else getattr(obj, attr)

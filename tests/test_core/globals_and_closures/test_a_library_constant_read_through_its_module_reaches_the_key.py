@@ -13,6 +13,7 @@ and modules keeps its key.
 
 from __future__ import annotations
 
+import json
 import math
 import sys
 import threading
@@ -21,7 +22,12 @@ import pytest
 
 from cash import Cash
 from cash.decorator import hit_memo
-from cash.decorator.module_attrs import _AttrReader, _library_attr_parts, written_module_attrs
+from cash.decorator.module_attrs import (
+    _AttrReader,
+    _library_attr_parts,
+    _library_class_attr_parts,
+    written_module_attrs,
+)
 from tests._scripts import run_python
 
 RUNS = {"n": 0}
@@ -35,6 +41,11 @@ def times_pi(x):
 def the_arguments(x):
     RUNS["n"] += 1
     return (x, tuple(sys.argv[1:]))
+
+
+def item_separator(x):
+    RUNS["n"] += 1
+    return (x, json.JSONEncoder.item_separator)
 
 
 def thread_name(x):
@@ -86,6 +97,25 @@ def test_a_library_class_renamed_through_its_module(c):
     finally:
         threading.Thread.__name__ = "Thread"
     assert f(1) == (1, "Thread")
+
+
+def test_a_library_class_constant_set_to_another_value(c):
+    """``lib.Class.ATTR``: plain data a library's class holds."""
+    f = c.cache(item_separator)
+    assert _call_until_served(f, 1) == (1, ", ")
+    json.JSONEncoder.item_separator = ";"
+    try:
+        assert f(1) == (1, ";")
+        assert _call_until_served(f, 1) == (1, ";")
+    finally:
+        json.JSONEncoder.item_separator = ", "
+    assert f(1) == (1, ", ")
+
+
+@pytest.mark.parametrize("attr", ["encode", "__init__", "no_such_name"])
+def test_a_library_class_s_code_adds_nothing(c, attr):
+    reader = _AttrReader(item_separator, "f", None, frozenset(), None, None, None)
+    assert _library_class_attr_parts(c._values, reader, json.JSONEncoder, "json.JSONEncoder", attr) == []
 
 
 SCRIPT = """\
