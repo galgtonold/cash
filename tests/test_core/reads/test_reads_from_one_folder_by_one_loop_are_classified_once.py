@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import os
 import sys
+import sysconfig
 
 import pytest
 
 from cash._paths import normalize_path
+from cash.install_paths import sys_path_dir
 from cash.tracking import file_tracker, read_credit
 from cash.tracking.file_tracker import FileAccessTracker
 
@@ -158,3 +160,49 @@ def test_a_folder_on_sys_path_is_classified_file_by_file(tmp_path, monkeypatch, 
     assert not again
     # ``mod_a`` is installed there; the files named for no package are the user's.
     assert fast.accessed_files == full.accessed_files == _resolved([files[1], files[3]])
+
+
+def test_a_relative_sys_path_entry_names_one_folder_after_a_chdir(tmp_path, monkeypatch, own_sys_path):
+    # "." on sys.path while the working folder is a ``pip install --target``
+    # folder; the loop moves to another folder, and sys.path then grows.
+    target, elsewhere = tmp_path / "relA", tmp_path / "relB"
+    files = _files(target, ["mod_r.txt", "other.txt", "mod_r.cfg", "other2.txt"])
+    _files(elsewhere, ["x.txt"])
+    info = target / "mod_r-1.0.dist-info"
+    info.mkdir()
+    (info / "RECORD").write_text("mod_r.py,,\n", encoding="utf-8")
+    monkeypatch.chdir(target)
+    sys.path.insert(0, ".")
+    # Each run below starts from the target folder with "." looked at there.
+    assert sys_path_dir(".")
+
+    def steps():
+        def move():
+            os.chdir(elsewhere)
+            sys.path.append(str(tmp_path / "zzz"))
+
+        def back():
+            os.chdir(target)
+            sys.path.remove(str(tmp_path / "zzz"))
+
+        return [("first", str(elsewhere / "x.txt")), move, *(("first", p) for p in files + files), back]
+
+    steps.where = tmp_path
+    (fast, _), (full, _), _again = _both_ways(monkeypatch, steps)
+    assert fast.accessed_files == full.accessed_files
+    assert _resolved([files[1], files[3]]) <= full.accessed_files
+
+
+def test_a_library_function_equal_to_a_user_helper_is_not_taken_for_it(tmp_path):
+    files = _files(tmp_path / "eq", [f"e{i}.txt" for i in range(6)])
+    source = "\n\ndef load(p):\n    with open(p, encoding='utf-8') as fh:\n        return fh.read()\n"
+    helper = _code("helper", source, filename=str(tmp_path / "helper.py"))["load"]
+    library = _code("eqlib", source, filename=os.path.join(sysconfig.get_paths()["purelib"], "eqlib", "__init__.py"))[
+        "load"
+    ]
+    assert helper.__code__ == library.__code__ and helper.__code__ is not library.__code__
+
+    _run([lambda fn=fn, p=p: fn(p) for p in files for fn in (helper, library)], tmp_path)
+    assert {
+        f for f in files if normalize_path(os.path.realpath(f)) in read_credit.credited_reads(helper.__code__)
+    } == set(files)

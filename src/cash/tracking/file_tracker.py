@@ -78,6 +78,19 @@ def install_read_watch() -> None:
 BACKGROUND_DIGEST_MIN_BYTES = 4_194_304  # 4 MiB
 
 
+def _same_reader(last: tuple, reader: tuple) -> bool:
+    """Is *reader* (`FileAccessTracker._reader_of`) the one *last* was? The
+    code objects by identity: equal code compares its bytecode and names,
+    not the file it is from, so a library's copy of a user helper matches."""
+    return (
+        last[0] == reader[0]
+        and last[2] is reader[2]
+        and last[3] is reader[3]
+        and len(last[1]) == len(reader[1])
+        and all(a is b for a, b in zip(last[1], reader[1]))
+    )
+
+
 class FileAccessTracker:
     """Context manager that intercepts file I/O to record which files a
     statement reads.
@@ -564,7 +577,7 @@ class FileAccessTracker:
             return found
         reader = self._reader_of(abs_path)
         last = self._last_reader
-        if reader is not None and last is not None and last[0] == reader and last[1] == sys.path:
+        if reader is not None and last is not None and _same_reader(last[0], reader) and last[1] == sys.path:
             # A read from the same folder, by the same code, as the last one
             # (a loop over a folder's files): classified and credited as it was.
             why, credited = last[2], last[3]

@@ -27,6 +27,7 @@ from cash.install_paths import (
     norm_dir,
     normcase_path,
     site_roots,
+    sys_path_dir,
 )
 
 __all__ = [
@@ -394,11 +395,14 @@ _IMPORT_FOLDERS: list = [None, frozenset()]
 
 
 def import_folders() -> frozenset[str]:
-    """The folders on ``sys.path`` as `norm_dir` prefixes, for as long as it holds the same entries."""
+    """The folders on ``sys.path`` as `norm_dir` prefixes, for as long as it
+    holds the same entries: each resolved as `installed_outside_project`
+    resolves it (`sys_path_dir`), so a relative entry names the same folder
+    for both after an ``os.chdir``."""
     held = _IMPORT_FOLDERS
     path = sys.path
     if held[0] != path:
-        folders = frozenset(norm_dir(entry) for entry in path if entry and not entry.lower().endswith(".zip"))
+        folders = frozenset(folder for folder in map(sys_path_dir, path) if folder)
         held[:] = [list(path), folders]
     return held[1]
 
