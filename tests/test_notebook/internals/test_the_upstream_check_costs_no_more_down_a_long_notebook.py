@@ -42,10 +42,13 @@ def _last_cell(magics, n: int, tag: str, monkeypatch):
         scopes.append(1)
         return real(self, *args, **kwargs)
 
-    monkeypatch.setattr(ReadScope, "relevant_read_paths", counting)
-    with hashed_bytes() as hashed:
-        run_cash_cell(magics, cells[-1], cells=cells)
-    monkeypatch.undo()
+    # Its own context: `monkeypatch.undo()` undid the autouse fixtures'
+    # patches too (the host threads), and the rest of the test ran with
+    # the one-read window shut.
+    with monkeypatch.context() as mp:
+        mp.setattr(ReadScope, "relevant_read_paths", counting)
+        with hashed_bytes() as hashed:
+            run_cash_cell(magics, cells[-1], cells=cells)
     return hashed.bytes, len(scopes)
 
 

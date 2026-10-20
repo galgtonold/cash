@@ -59,9 +59,11 @@ def _member_reads_for_the_last_cell(magics, monkeypatch, n: int, tag: str) -> in
     cells += [f"{tag}{i} = df.shape[0] + {i}" for i in range(n)]
     for cell in cells[:-1]:
         run_cash_cell(magics, cell, cells=cells)
-    reads = _member_reads(monkeypatch)
-    run_cash_cell(magics, cells[-1], cells=cells)
-    monkeypatch.undo()
+    # Its own context: `monkeypatch.undo()` undid the autouse fixtures'
+    # patches too (the host threads).
+    with monkeypatch.context() as mp:
+        reads = _member_reads(mp)
+        run_cash_cell(magics, cells[-1], cells=cells)
     return len(reads)
 
 

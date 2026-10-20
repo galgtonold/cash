@@ -36,7 +36,7 @@ np = pytest.importorskip("numpy")
 def test_a_big_list_column_is_not_copied_while_its_frame_is_hashed():
     n = 1_000_000
     frame = pl.DataFrame({"lst": [[i, i + 1, i + 2] for i in range(n)], "x": np.arange(n)})
-    assert content_hashers._rows_per_chunk(frame) >= content_hashers.PARALLEL_COLUMNS_MIN_ROWS
+    assert content_hashers._rows_read_at_once(frame) >= content_hashers.PARALLEL_COLUMNS_MIN_ROWS
     content_hashers.hash_polars(frame.head(10))  # imports and first-use set-up outside the measure
     tracemalloc.start()
     try:

@@ -897,10 +897,109 @@ def _owned_arrow(chunked: Any) -> Any:
     import pyarrow as pa
 
     chunks = chunked.chunks
-    owned = [chunk if _chunk_owned(chunk) else _owned_chunk(chunk) for chunk in chunks]
-    if all(new is old for new, old in zip(owned, chunks)):
+    todo = [i for i, chunk in enumerate(chunks) if not _chunk_owned(chunk)]
+    if not todo:
         return chunked
+    owned = list(chunks)
+    copied = _copied_together(chunked.type, [chunks[i] for i in todo]) if len(todo) > 1 else None
+    for i, copy in zip(todo, copied or [_owned_chunk(chunks[i]) for i in todo]):
+        owned[i] = copy
     return pa.chunked_array(owned, type=chunked.type)
+
+
+def _copied_together(arrow_type: Any, chunks: list[Any]) -> list[Any] | None:
+    """Copies of the Arrow *chunks* of one column, as `_owned_chunk` copies
+    each, made by the C extension for all of them in one call into buffers
+    Arrow allocated, one per kind of buffer, each chunk over its slice of
+    them; None when it cannot (no C extension, another type).
+
+    p08's 30 parsed log files come in 384 chunks each: copied one by one,
+    a text chunk cast to ``large_string`` and back, that was 3.3 s of
+    which a third was the calls themselves."""
+    import pyarrow as pa
+
+    from .._native import kernels
+
+    if kernels is None or not hasattr(kernels, "copy_view_chunks"):
+        return None
+    t = pa.types
+    if t.is_string_view(arrow_type) or t.is_binary_view(arrow_type):
+        return _views_copied_together(arrow_type, chunks, kernels)
+    if t.is_boolean(arrow_type) or t.is_dictionary(arrow_type) or isinstance(arrow_type, pa.ExtensionType):
+        return None
+    if (
+        not (
+            t.is_integer(arrow_type)
+            or t.is_floating(arrow_type)
+            or t.is_timestamp(arrow_type)
+            or t.is_date(arrow_type)
+            or t.is_time(arrow_type)
+            or t.is_duration(arrow_type)
+        )
+        or arrow_type.bit_width % 8
+    ):
+        return None
+    width = arrow_type.bit_width // 8
+    pieces, rows, nulls = [], 0, 0
+    for chunk in chunks:
+        n, buffers = len(chunk), chunk.buffers()
+        validity = buffers[0] if chunk.null_count else None
+        pieces.append(
+            (
+                buffers[1],
+                width,
+                validity,
+                chunk.offset,
+                chunk.offset + n,
+                rows * width,
+                None if validity is None else nulls,
+            )
+        )
+        rows += n
+        nulls += (n + 7) // 8 if validity is not None else 0
+    values_out, validity_out = pa.allocate_buffer(rows * width), pa.allocate_buffer(nulls) if nulls else None
+    kernels.copy_fixed_chunks(pieces, values_out, validity_out)
+    out = []
+    for chunk, piece in zip(chunks, pieces):
+        n = len(chunk)
+        validity = None if piece[6] is None else validity_out.slice(piece[6], (n + 7) // 8)
+        values = values_out.slice(piece[5], n * width)
+        out.append(pa.Array.from_buffers(arrow_type, n, [validity, values], null_count=chunk.null_count))
+    return out
+
+
+def _views_copied_together(arrow_type: Any, chunks: list[Any], kernels: Any) -> list[Any] | None:
+    """`_copied_together` for a string or binary view column: each chunk's
+    views and the bytes its own rows use (``copy_view_chunks``)."""
+    import pyarrow as pa
+
+    pieces = []
+    for chunk in chunks:
+        buffers = chunk.buffers()
+        validity = buffers[0] if chunk.null_count else None
+        pieces.append((buffers[1], tuple(buffers[2:]), validity, chunk.offset, chunk.offset + len(chunk)))
+    sizes = kernels.view_data_sizes(pieces)
+    if any(size > 2**31 - 1 for size in sizes):
+        return None  # a view's offset is 32 bits
+    placed, rows, data, nulls = [], 0, 0, 0
+    for piece, size in zip(pieces, sizes):
+        n = piece[4] - piece[3]
+        placed.append((*piece, rows * 16, data, None if piece[2] is None else nulls))
+        rows += n
+        data += size
+        nulls += (n + 7) // 8 if piece[2] is not None else 0
+    views_out, data_out = pa.allocate_buffer(rows * 16), pa.allocate_buffer(data)
+    validity_out = pa.allocate_buffer(nulls) if nulls else None
+    kernels.copy_view_chunks(placed, views_out, data_out, validity_out)
+    out = []
+    for chunk, piece, size in zip(chunks, placed, sizes):
+        n = len(chunk)
+        validity = None if piece[7] is None else validity_out.slice(piece[7], (n + 7) // 8)
+        buffers = [validity, views_out.slice(piece[5], n * 16)]
+        if size:
+            buffers.append(data_out.slice(piece[6], size))
+        out.append(pa.Array.from_buffers(arrow_type, n, buffers, null_count=chunk.null_count))
+    return out
 
 
 def owned_arrow_data(data: Any) -> Any:

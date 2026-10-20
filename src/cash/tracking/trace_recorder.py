@@ -28,11 +28,12 @@ from __future__ import annotations
 import sys
 import threading
 import types
+import weakref
 from typing import Any
 
 from ..tracking.tracker_context import untracked
 
-__all__ = ["TOOL_NAME", "Recorder", "Unit"]
+__all__ = ["TOOL_NAME", "Recorder", "Unit", "other_thread_alive", "runs_user_code"]
 
 TOOL_NAME = "cash-shadow"
 #: Tried in this order; 0-2 belong to debuggers, coverage and profilers.
@@ -216,21 +217,7 @@ class Recorder:
         return unit
 
     def _runs_user_code(self, t: threading.Thread) -> bool:
-        """Does thread *t* run code of the user's: its target, or its own
-        ``run`` method?"""
-        fn = getattr(t, "_target", None)
-        if fn is None and type(t).run is not threading.Thread.run:
-            fn = type(t).run
-        if fn is None:
-            return False
-        g = getattr(inspect_unwrap(fn), "__globals__", None)
-        if g is self.notebook_ns:
-            return True
-        name = getattr(fn, "__module__", None) or (g or {}).get("__name__")
-        if not isinstance(name, str) or name == "cash" or name.startswith("cash."):
-            return False
-        mod = sys.modules.get(name)
-        return mod is not None and is_user_code(mod)
+        return runs_user_code(t, self.notebook_ns)
 
     # -- callbacks --------------------------------------------------------
     def _classify(self, g: dict) -> tuple[dict, str | None, str]:
@@ -323,3 +310,129 @@ def is_user_code(mod: types.ModuleType) -> bool:
 
     with untracked():
         return is_user_code_module(mod)
+
+
+def runs_user_code(t: threading.Thread, notebook_ns: Any) -> bool:
+    """Does thread *t* run code of the user's: its target, or its own
+    ``run`` method?"""
+    fn = getattr(t, "_target", None)
+    if fn is None and type(t).run is not threading.Thread.run:
+        fn = type(t).run
+    if fn is None:
+        return False
+    g = getattr(inspect_unwrap(fn), "__globals__", None)
+    if g is notebook_ns:
+        return True
+    name = getattr(fn, "__module__", None) or (g or {}).get("__name__")
+    if not isinstance(name, str) or name == "cash" or name.startswith("cash."):
+        return False
+    mod = sys.modules.get(name)
+    return mod is not None and is_user_code(mod)
+
+
+#: Threads of what hosts the notebook that change none of its values (a test
+#: runner's watchdog), left out by `other_thread_alive`. Held weakly.
+HOST_THREADS: weakref.WeakSet[threading.Thread] = weakref.WeakSet()
+
+#: The packages of what hosts the notebook whose threads `threading` does
+#: not list (a test runner's channel threads), left out by
+#: `other_thread_alive`.
+HOST_PACKAGES: set[str] = set()
+
+
+def _unlisted_python_thread(listed: set[int | None]) -> bool:
+    """Is a thread running Python that `threading` does not list, other
+    than cash's own and the host's (`_hosts_unlisted`)? No frame is held
+    past the look: this thread's own, kept in a local, is a cycle that keeps
+    every caller's locals alive until a collection, and the checks that
+    count a value's holders would count them."""
+    frames = sys._current_frames()
+    try:
+        return any(ident not in listed and not _hosts_unlisted(frame) for ident, frame in frames.items())
+    finally:
+        frames.clear()
+
+
+def _hosts_unlisted(frame: Any) -> bool:
+    """Is the unlisted thread running *frame* cash's own or the host's, by
+    the module of its outermost frame?"""
+    while frame.f_back is not None:
+        frame = frame.f_back
+    name = frame.f_globals.get("__name__")
+    if not isinstance(name, str):
+        return False
+    root = name.partition(".")[0]
+    return root == "cash" or root in HOST_PACKAGES
+
+
+def _code_of(t: threading.Thread) -> Any:
+    """What *t* runs: a Timer's function, its target, or its own ``run``."""
+    if isinstance(t, threading.Timer):
+        return t.function
+    return getattr(t, "_target", None) or type(t).run
+
+
+#: The kernel's own threads, named exactly (``module:qualname`` of the
+#: thread's class, or of its target), whenever they started: pyzmq's garbage
+#: thread, started when a message is first sent without a copy, ipykernel's
+#: iopub and pipe watchers, started again when the kernel restarts its
+#: streams, and the rest of ipykernel's and IPython's. Not their packages,
+#: and not "alive when cash was imported": IPython runs a user's background
+#: job (``jobs.new(f)``) on its own Thread subclass, and a tornado loop a
+#: user starts on a thread runs the user's callbacks, in a cell before
+#: ``import cash`` as well as after.
+_KERNEL_THREADS = frozenset(
+    {
+        "zmq.utils.garbage:GarbageCollectorThread",
+        "ipykernel.iostream:IOPubThread._thread_main",
+        "ipykernel.iostream:OutStream._watch_pipe_fd",
+        "ipykernel.control:ControlThread",
+        "ipykernel.heartbeat:Heartbeat",
+        "ipykernel.shellchannel:ShellChannelThread",
+        "ipykernel.parentpoller:ParentPollerUnix",
+        "ipykernel.parentpoller:ParentPollerWindows",
+        "IPython.core.history:HistorySavingThread",
+    }
+)
+
+
+def _named(obj: Any) -> str | None:
+    module, qualname = getattr(obj, "__module__", None), getattr(obj, "__qualname__", None)
+    return f"{module}:{qualname}" if isinstance(module, str) and isinstance(qualname, str) else None
+
+
+def _kernel_code(t: threading.Thread) -> bool:
+    """Is *t* one of the kernel's own threads (`_KERNEL_THREADS`), by its
+    exact class or its target, whenever it started?"""
+    target = getattr(t, "_target", None)
+    if target is None:
+        return not isinstance(t, threading.Timer) and _named(type(t)) in _KERNEL_THREADS
+    return _named(getattr(target, "__func__", target)) in _KERNEL_THREADS
+
+
+def other_thread_alive(notebook_ns: Any) -> bool:
+    """Might another thread change a value between two checks that read it,
+    so that a digest one took cannot stand for the other: any live thread
+    but this one, cash's own (by the code it runs; a Timer by its function)
+    and the kernel's (its own threads named exactly, `_kernel_code`), daemon
+    or not. A pool's worker runs the user's code under a library's name,
+    which `runs_user_code` cannot see, and a wrong yes only costs a read
+    again. A thread a C library started (an audio or device callback) runs
+    Python unlisted by `threading`: any thread running Python that it does
+    not list counts too."""
+    me = threading.current_thread()
+    threads = threading.enumerate()
+    listed = {t.ident for t in threads}
+    if _unlisted_python_thread(listed):
+        return True
+    for t in threads:
+        if t is me or t in HOST_THREADS or not t.is_alive():
+            continue
+        if runs_user_code(t, notebook_ns):
+            return True
+        if _kernel_code(t):
+            continue
+        name = getattr(_code_of(t), "__module__", None)
+        if not (isinstance(name, str) and (name == "cash" or name.startswith("cash."))):
+            return True
+    return False

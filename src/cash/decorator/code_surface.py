@@ -15,6 +15,7 @@ import types
 from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, LruMemo
+from ..analysis.helper_code import renamed
 from ..code_digest import source_digest, unwrap_partials
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_norm import code_consts_without_docstring
@@ -331,7 +332,7 @@ class CodeSurface:
             ident = self._code_identity(obj)
             if not ident:
                 return None, layers
-            parts = [(getattr(obj, "__qualname__", "?"), "", ident)]
+            parts = [(getattr(obj, "__qualname__", "?") + renamed(obj), "", ident)]
             # And the user functions it runs besides its own code: what a
             # decorator wraps, a function a closure holds. A decorator's
             # wrapper code is shared by every function it wraps; the
@@ -377,11 +378,11 @@ class CodeSurface:
                 # A cached function: what a call of it computes from, its
                 # globals and dependencies included (`KeyBuilder.callee_state`),
                 # as when the code that reaches it calls it by name.
-                digests.append(f"{getattr(target, '__qualname__', '?')}:cached:{target._cash_state()}")
+                digests.append(f"{getattr(target, '__qualname__', '?')}{renamed(target)}:cached:{target._cash_state()}")
                 continue
             digest = self._code_surface_own(target)
             if digest is not None:
-                digests.append(f"{getattr(target, '__qualname__', '?')}:{digest}")
+                digests.append(f"{getattr(target, '__qualname__', '?')}{renamed(target)}:{digest}")
         return digests
 
     def _dataclass_field_parts(self, base: type, field_map: dict) -> list[tuple]:
