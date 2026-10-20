@@ -78,6 +78,9 @@ class StatementCacheMetadata:
     #: The input variables holding a scipy sparse matrix the statement put
     #: in canonical form by reading it (`sparse_order`): a hit does too.
     sparse_ordered: list[str] | None = None
+    #: The environment variables installed code read while it ran, each with
+    #: a digest of its value: the entry is served only while all match.
+    env_reads: dict[str, str] | None = None
     #: ``{variable: its lineage before this statement}`` for each variable
     #: stored with the outputs because it holds one of their objects too
     #: (``b = a`` before ``a['x'] = ...``). The entry restores only while each
@@ -103,6 +106,12 @@ class StatementCacheMetadata:
     #: ones: ``box = {'full': full}`` and then ``full`` bound to an equal new
     #: dict leaves the outputs holding ``box``'s, not ``full``'s.
     anchor_holds: dict[str, list[str]] | None = None
+    #: The edges its run linked (``note_share_edges``), as ``[src, dst]``
+    #: pairs, empty when none: what a hit on this entry links, and the
+    #: simulation with it. The record by text is the last place that text
+    #: ran, which may be another place in the notebook. None on older
+    #: entries, which take the record by text.
+    share_edges: list[list[str]] | None = None
     storage: list[str] | None = None
     source: str | None = None
     skipped_reason: str | None = None

@@ -7,7 +7,7 @@ import ast
 import hashlib
 import logging
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING
 
 from cash.control_markers import strip_markers
@@ -156,6 +156,11 @@ class StatementRandomness:
         #: seeded (see :meth:`observe_statement`), and only those: what a
         #: hit on it replays.
         self.moved_streams: dict = {}
+        #: The streams the LAST statement seeded as it ran.
+        self.reseeded_streams: frozenset[str] = frozenset()
+        #: Streams a hit put where its run, which seeded them unseen, left
+        #: them: adopted as that run's seed was (`adopt_seeds_of_a_hit`).
+        self._seeded_by_a_hit: set[str] = set()
         #: Where the generators a statement reaches through an attribute stood.
         self._held = HeldGenerators()
 
@@ -183,12 +188,13 @@ class StatementRandomness:
         adopted seed stood behind that has since been re-randomised
         (``seed(None)`` cash did not read) takes a lineage fresh per run.
         """
+        by_a_hit, self._seeded_by_a_hit = self._seeded_by_a_hit, set()
         try:
             watch_seeds()
-            seeded = process_seeded_streams()
+            seeded = process_seeded_streams() | by_a_hit
             for module in ("random", "numpy.random"):
                 generation = seed_generation(module)
-                if self._ledgered_generation.get(module, 0) == generation:
+                if self._ledgered_generation.get(module, 0) == generation and module not in by_a_hit:
                     continue
                 self._ledgered_generation[module] = generation
                 var = rng_virtual_var(module)
@@ -209,6 +215,22 @@ class StatementRandomness:
                 self._adopted.add(module)
         except Exception:
             logger.debug("%s could not adopt an unseen seed", _LOG_PROCESSOR, exc_info=True)
+
+    def adopt_seeds_of_a_hit(self, reseeded: Iterable[str] | None, code: str) -> None:
+        """A hit put back the streams its run seeded as it ran (*reseeded*),
+        where that run left them. Its run's seed, set inside a function,
+        was adopted before the next statement (`adopt_unseen_seeds`): the
+        hit's is too, from the same position, so the draws below key the
+        same after a hit as after the run. A seed the statement spells is
+        the ledger's, as after its run (`note_ledgered_seeds`)."""
+        if not reseeded:
+            return
+        try:
+            stripped = strip_markers(code)
+            spelled = get_seeding_rng_modules(stripped) | self.helper_seeds(stripped)
+        except (SyntaxError, ValueError, AttributeError, RecursionError):
+            return
+        self._seeded_by_a_hit |= {m for m in reseeded if m in ("random", "numpy.random")} - spelled
 
     def note_ledgered_seeds(self, code: str | None) -> None:
         """Account for the seeds a statement the ledger read as seeding just
@@ -259,6 +281,7 @@ class StatementRandomness:
         """
         self.observed_draw = set()
         self.moved_streams = {}
+        self.reseeded_streams = frozenset()
         self.draw_newly_seen = False
         self.newly_seen_draws = set()
         # A seed set inside a function the statement calls is seen as it is
@@ -699,12 +722,14 @@ class StatementRandomness:
             self._cell_post = post
             self._record_hidden_draws(code, self.observed_draw)
             reseeded = {m for m, g in self._generation_at_start.items() if seed_generation(m) != g}
+            self.reseeded_streams = frozenset(reseeded)
             if reseeded:
                 self.note_ledgered_seeds(code)
             self.moved_streams = self._moved_streams(code, post, changed | reseeded)
         except (TypeError, AttributeError):  # pragma: no cover - defensive
             self.observed_draw = set()
             self.moved_streams = {}
+            self.reseeded_streams = frozenset()
 
     def _moved_streams(self, code: str | None, post: dict, moved: set[str]) -> dict:
         """Where the statement *code* left the global streams it moved,

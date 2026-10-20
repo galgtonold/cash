@@ -82,6 +82,7 @@ from ..statement.derivation_edges import (
     apply_share_record,
     assigned_names,
     bump_derived_lineages,
+    own_share_edges,
     static_share_edges,
 )
 from ..statement.file_deps import compute_file_hash_component
@@ -96,6 +97,9 @@ if TYPE_CHECKING:
 __all__ = ["StatementLineage", "StatementOutcome", "unbound_builtin"]
 
 logger = logging.getLogger(__name__)
+
+#: An entry's metadata not read yet (`_entry_metadata`).
+_UNREAD = object()
 
 
 def unbound_builtin(name: str, variable_lineage: Mapping[str, str], bound: Mapping[str, str] | None = None) -> bool:
@@ -211,15 +215,25 @@ class StatementLineage:
             return recorded
         return static_share_edges(tree, self._function_source, self.shell.user_ns)
 
-    def relink(self, stmt_code: str, tree: ast.AST | None, rebound: set[str], bound: Container[str]) -> None:
+    def relink(
+        self,
+        stmt_code: str,
+        tree: ast.AST | None,
+        rebound: set[str],
+        bound: Container[str],
+        own: frozenset[tuple[str, str]] | None = None,
+    ) -> None:
         """Leave the walk's edges as running *stmt_code* left the runtime's:
         drop those of the names it binds afresh (*rebound*), then add the
-        ones its run linked (`share_record`) between names *bound* when it
-        runs, as a hit does. Outside a walk, nothing."""
+        ones its run here linked (*own*, from its entry), else the last run
+        of its text (`share_record`), between names *bound* when it runs,
+        as a hit does. Outside a walk, nothing."""
         edges = self.walk_edges
         if edges is None or is_control_body(stmt_code):
             return
-        apply_share_record(edges, rebound, self.share_record(stmt_code, tree), bound)
+        if own is None:
+            own = self.share_record(stmt_code, tree)
+        apply_share_record(edges, rebound, own, bound)
 
     # -- What a statement reads and writes ------------------------------------
 
@@ -873,8 +887,10 @@ class StatementLineage:
         inputs: set[str],
         virtual_lineage: dict[str, str],
         is_import: bool,
+        metadata: dict | None | object = _UNREAD,
     ) -> _CacheLookup:
         """Forward-propagate lineages from *cache_key*'s entry when it is valid.
+        *metadata* is the entry's, when the caller read it already.
 
         A hit takes the entry's output lineages. A miss -- no entry, no
         lineages, or a file the entry recorded has changed -- returns the
@@ -898,7 +914,8 @@ class StatementLineage:
             logger.debug("[UPSTREAM] Virtual lookup Key: %s", cache_key)
 
             t_lookup = _perf_counter()
-            metadata = self.probe.metadata(cache_key)
+            if metadata is _UNREAD:
+                metadata = self.probe.metadata(cache_key)
             lookup_time = _perf_counter() - t_lookup
 
             if metadata:
@@ -964,6 +981,17 @@ class StatementLineage:
             logger.debug("[UPSTREAM] Virtual lookup failed: %s", e)
 
         return _CacheLookup(False, lookup_time, files_stale, stmt_file_deps, files_to_check, held, carriers)
+
+    def _entry_metadata(self, cache_key: str) -> dict | None | object:
+        """The metadata of *cache_key*'s entry, read once for the statement
+        (`_lookup_cached_lineages` takes it); `_UNREAD` when it could not be
+        read, for the lookup to try again as it always did."""
+        if not self.probe.cash_instance:
+            return None
+        try:
+            return self.probe.metadata(cache_key)
+        except (KeyError, TypeError, OSError, ValueError):
+            return _UNREAD
 
     @staticmethod
     def _stale_paths(hist_files: Mapping[str, Any]) -> list[str]:
@@ -1038,11 +1066,10 @@ class StatementLineage:
                 self._advance_rng(drawn, draw_key, virtual_lineage)
                 return StatementOutcome(advanced, 0.0, False, {})
 
-            # The edges as its run left them, before what it changed in
-            # place moves the names that share an object with it; its
-            # outputs are bound by then, as after a hit's restore.
+            # Its outputs are bound when its edges are linked, as after a
+            # hit's restore (`_apply_writes`).
             bound = ChainMap(dict.fromkeys(outputs), virtual_lineage, self.shell.user_ns)
-            self.relink(stmt_code, tree, (outputs - inputs) | (assigned_names(tree) & outputs), bound)
+            rebound = (outputs - inputs) | (assigned_names(tree) & outputs)
 
             outcome = self._apply_writes(
                 stmt_code,
@@ -1055,6 +1082,7 @@ class StatementLineage:
                 virtual_lineage,
                 virtual_modules,
                 occurrence_index,
+                (rebound, bound),
             )
             self._advance_rng(drawn, draw_key, virtual_lineage)
             return outcome
@@ -1113,9 +1141,13 @@ class StatementLineage:
         virtual_lineage: dict[str, str],
         virtual_modules: set[str],
         occurrence_index: int,
+        relinked: tuple[set[str], Container[str]] = (set(), ()),
     ) -> StatementOutcome:
         """Give each of *outputs* its lineage: the cache entry's when it is
-        valid, else the runtime's formula's."""
+        valid, else the runtime's formula's. First the edges as its run left
+        them (`relink`, with *relinked*'s names bound afresh and bound),
+        before what it changed in place moves the names that share an
+        object with it."""
         input_lineage_map = self._input_lineages(
             stmt_code, inputs | lineage_hidden_reads(stmt_code), virtual_lineage, virtual_modules
         )
@@ -1129,8 +1161,13 @@ class StatementLineage:
         for var in hidden_writes:
             virtual_lineage[var] = hidden_write_lineage(cache_key)
 
+        metadata = self._entry_metadata(cache_key)
+        self.relink(stmt_code, tree, *relinked, own=own_share_edges(metadata))
+
         file_deps_to_check = self._session_file_deps(outputs)
-        lookup = self._lookup_cached_lineages(stmt_code, cache_key, outputs, inputs, virtual_lineage, is_import)
+        lookup = self._lookup_cached_lineages(
+            stmt_code, cache_key, outputs, inputs, virtual_lineage, is_import, metadata
+        )
 
         # The generators it draws from move on, as the runtime moves them on
         # after the run or the hit (`carrier_advances`).

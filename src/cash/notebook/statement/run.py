@@ -193,6 +193,9 @@ class StatementRun:
     #: The inputs holding a sparse matrix the run put in canonical form
     #: (`sparse_order`); None when it put none.
     sparse_ordered: list[str] | None = None
+    #: name -> digest of the environment variables installed code read while
+    #: it ran (`env_reads.environment_digests`).
+    env_reads: dict[str, str] | None = None
     #: For a statement that runs a magic or a shell command: the identity of
     #: every binding in the namespace before it ran (``calls_ipython``).
     ipython_bindings: dict[str, int] | None = None
@@ -275,6 +278,14 @@ class StatementRun:
     #: Seconds recording what it ran took (``Shadow.begin`` / ``end``), inside
     #: its timed run but cash's cost, not the statement's.
     record_time: float = 0.0
+    #: The edges its run linked (``StatementCacheMetadata.share_edges``),
+    #: or None when not recorded.
+    linked_edges: frozenset[tuple[str, str]] | None = None
+    #: Cached only if pyplot's code does not run in it: why it runs every
+    #: time when it does (``CacheabilityVerdict.unless_it_draws``).
+    unless_it_draws: str | None = None
+    #: What shadow mode recorded of its run (``Shadow.begin``), or None.
+    trace_unit: Any = None
     #: It ran with a kept value standing in for part of it (``ExpressionMemo``).
     memo_used: bool = False
     #: It ran over a loop header cash evaluated before it (``loop_iterable``).
@@ -324,6 +335,8 @@ class StatementExecution:
     #: Where it left the global RNG streams it moved or seeded, and only
     #: those (`StatementRandomness.moved_streams`): what a hit replays.
     rng_moved: dict[str, Any] = field(default_factory=dict)
+    #: The global streams it seeded as it ran (`reseeded_streams`).
+    rng_reseeded: frozenset[str] = frozenset()
 
 
 def echoes(code: str, tree: ast.Module | None, is_last: bool) -> bool:

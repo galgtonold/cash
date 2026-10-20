@@ -562,11 +562,13 @@ class StatementStore:
             frozen_tags=_frozen_tags(captured_vars, run.outputs),
             carriers_advanced=_carriers_advanced(run),
             sparse_ordered=run.sparse_ordered or None,
+            env_reads=run.env_reads,
             holders=run.holders or None,
             holders_moved=True if run.holders and run.moves_holders else None,
             anchors=run.anchors or None,
             anchor_links=sorted(run.anchor_links) if run.anchors else None,
             anchor_holds=run.anchor_holds or None,
+            share_edges=sorted([src, dst] for src, dst in run.linked_edges) if run.linked_edges is not None else None,
             ttl=run.effective_ttl,
             version_slot=_version_slot(run.source_hash, run.outputs),
             replay=replay_record(execution.captured),
@@ -847,6 +849,9 @@ class StatementStore:
             # Only the streams the statement moved or seeded: a hit leaves
             # every other stream where it stands, as a run would.
             "rng_state": dict(execution.rng_moved),
+            # The streams it seeded as it ran: a hit adopts their seed as
+            # the run did (`adopt_seeds_of_a_hit`).
+            "rng_reseeded": sorted(execution.rng_reseeded),
             # The seeding regime this state was captured under, so a later
             # restore can tell whether replaying it would clobber a re-seed
             # rather than continue the stream.

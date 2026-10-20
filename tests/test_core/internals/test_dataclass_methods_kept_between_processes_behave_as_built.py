@@ -112,16 +112,20 @@ def _kept_files(cache: Path) -> list[Path]:
 
 
 def test_kept_methods_match_freshly_compiled_ones(tmp_path):
-    compiled = _fingerprint(tmp_path / "off", kept=False)
-    assert not _kept_files(tmp_path / "off"), "switched off, no file is written"
+    # One bytecode folder for the three processes: switched off, cash neither
+    # reads nor writes the file, so the first process compiles every module's
+    # bytecode for the other two. A folder each compiled IPython and cash three
+    # times, and on a loaded Windows runner the test passed its 30 s timeout.
+    compiled = _fingerprint(tmp_path, kept=False)
+    assert not _kept_files(tmp_path), "switched off, no file is written"
     assert len(compiled) > 80, "cash's dataclasses were not found"
     frozen = [name for name, cls in compiled.items() if "frozen=True" in cls["params"]]
     assert frozen and all(compiled[n]["behaviour"]["assign"] == ["raised", "FrozenInstanceError"] for n in frozen)
 
-    first = _fingerprint(tmp_path / "kept", kept=True)
-    (written,) = _kept_files(tmp_path / "kept")
+    first = _fingerprint(tmp_path, kept=True)
+    (written,) = _kept_files(tmp_path)
     stamp = written.stat().st_mtime_ns
-    second = _fingerprint(tmp_path / "kept", kept=True)
+    second = _fingerprint(tmp_path, kept=True)
     assert written.stat().st_mtime_ns == stamp, "every method came from the file, yet it was written again"
 
     for name in compiled:
@@ -134,7 +138,8 @@ def test_an_unreadable_file_is_compiled_past_and_rewritten(tmp_path):
     _fingerprint(tmp_path, kept=True)
     (written,) = _kept_files(tmp_path)
     written.write_bytes(b"not marshal data")
-    compiled = _fingerprint(tmp_path / "off", kept=False)
+    compiled = _fingerprint(tmp_path, kept=False)  # switched off: the file is not read
+    assert written.read_bytes() == b"not marshal data", "control: switched off, the file is left as it is"
     assert _fingerprint(tmp_path, kept=True) == compiled
     assert written.read_bytes() != b"not marshal data"
 

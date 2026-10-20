@@ -120,12 +120,50 @@ def test_a_change_to_the_data_or_a_view_is_read_again(watching, counted, change)
             del NodeView.tag
 
 
-def test_filling_a_view_is_read_again_with_the_same_digest(watching, counted):
+def test_filling_a_view_keeps_the_digest_without_reading_again(watching, counted):
+    """networkx fills ``G.edges`` or ``G.degree`` on first use, and each
+    first use had the whole graph hashed again for the same digest."""
     net = Net(30)
     before = watched(net, counted)
     _ = net.nodes
-    assert reread(net, counted)
+    _ = net.degree
+    assert not reread(net, counted)
     assert value_watch.digest(net, counted) == before
+    assert value_watch._cw.stats()["views_kept"] >= 1
+
+
+def test_a_view_another_instance_filled_first_keeps_the_digest(watching, counted):
+    """Once another instance's dict holds the key, CPython 3.12 reports the
+    add to a dict sharing its keys as a change of a key, not an add."""
+    other = Net(30)
+    _ = other.nodes, other.degree
+    net = Net(30)
+    before = watched(net, counted)
+    _ = net.nodes
+    _ = net.degree
+    assert not reread(net, counted)
+    assert value_watch.digest(net, counted) == before
+
+
+FILLS = {
+    "a snapshot, not a view": lambda n: n.sizes,
+    "a plain attribute": lambda n: setattr(n, "extra", [1]),
+    "a view and a change to the data": lambda n: (n.nodes, n._node[3].__setitem__("w", -1)),
+    "a change to the data and a view": lambda n: (n._node[3].__setitem__("w", -1), n.nodes),
+    "a view that stops being one": lambda n: setattr(n.nodes, "_nodes", {"not": "held"}),
+    "a view, then a plain attribute": lambda n: (n.nodes, setattr(n, "extra", [1])),
+    "a view, then dropped": lambda n: (n.nodes, n.__dict__.pop("nodes"), setattr(n, "extra", 1)),
+}
+
+
+@pytest.mark.parametrize("fill", list(FILLS))
+def test_a_key_added_that_is_not_only_a_view_is_read_again(watching, counted, fill):
+    net = Net(30)
+    watched(net, counted)
+    FILLS[fill](net)
+    assert reread(net, counted)
+    value_watch.digest(net, counted)
+    assert value_watch.digest(net, counted) == _compute_hash(net)
 
 
 def test_a_view_that_stops_being_one_changes_the_digest(watching, counted):
@@ -188,3 +226,13 @@ def test_a_networkx_graph_changed_through_its_api_is_read_again(watching, counte
         assert reread(g, counted)
         value_watch.digest(g, counted)
         assert not reread(g, counted)
+
+
+def test_a_networkx_graph_is_not_read_again_when_a_call_fills_its_views(watching, counted):
+    nx = pytest.importorskip("networkx")
+    g = nx.gnm_random_graph(200, 600, seed=3)
+    before = watched(g, counted)
+    for call in (lambda: nx.density(g), lambda: dict(g.degree(weight="weight")), lambda: list(g.edges)):
+        call()
+        assert not reread(g, counted)
+    assert value_watch.digest(g, counted) == before

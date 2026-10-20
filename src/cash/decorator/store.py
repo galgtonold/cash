@@ -150,6 +150,9 @@ class StoreRequest:
     #: For a call that picks code by a run-time name, the trace of what it
     #: ran (`code_trace.build`).
     code_trace: list | None = None
+    #: name -> digest of the environment variables an installed package
+    #: read while the body ran (`env_reads.environment_digests`).
+    env_reads: dict[str, str] | None = None
 
 
 @dataclass
@@ -657,6 +660,7 @@ class ResultStore:
                 dynamic_resolvers=(dynamic.resolver_records or None) if dynamic is not None else None,
                 process_local=True if dynamic is not None and not dynamic.picklable else None,
                 code_trace=[list(item) for item in request.code_trace] if request.code_trace is not None else None,
+                env_reads=request.env_reads,
                 **(request.manifest or {}),
             )
 

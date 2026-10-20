@@ -73,6 +73,7 @@ __all__ = [
     "bump_derived_lineages",
     "clear_edges_for",
     "is_uncacheable_alias",
+    "own_share_edges",
     "record_shared_object_edges",
     "shared_object_partners",
     "static_share_edges",
@@ -158,6 +159,19 @@ def apply_share_record(
     for src, dst in record:
         if src != dst and (bound is None or (src in bound and dst in bound)):
             link(derivation_edges, src, dst)
+
+
+def own_share_edges(metadata: Any) -> frozenset[tuple[str, str]] | None:
+    """The edges the run stored in an entry linked, from its metadata (a
+    ``StatementCacheMetadata`` or its dict), or None when the entry does
+    not say (an older one): the caller takes the record by text."""
+    edges = metadata.get("share_edges") if isinstance(metadata, dict) else getattr(metadata, "share_edges", None)
+    if edges is None:
+        return None
+    try:
+        return frozenset((str(src), str(dst)) for src, dst in edges)
+    except (TypeError, ValueError):
+        return None
 
 
 def read_share_edges(record: dict | None) -> frozenset[tuple[str, str]] | None:

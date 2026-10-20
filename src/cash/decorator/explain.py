@@ -149,6 +149,7 @@ class MissKind(str, Enum):
     HANDED = "handed a function that changes state"
     UNTRACKABLE = "code picked by a run-time name"
     TRACE = "code picked by a run-time name changed"
+    ENVIRONMENT = "environment variable changed"
     RAISED = "raised"
 
     __str__ = str.__str__
