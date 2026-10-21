@@ -1886,7 +1886,7 @@ _REFERRERS_BLOCK = 256
 #: The C kernel `_referrers_of` reads the heap with (``cwalk.c``), answering
 #: as its Python loop does; None without the kernels, or in a build from
 #: before it.
-_REFERRERS_IN = getattr(_native.kernels, "referrers_in", None)
+_REFERRERS_IN = attribute_or(_native.kernels, "referrers_in", None)
 
 
 def _count_leaf_attributes(nodes: dict[int, Any], inbound: dict[int, int]) -> bool:

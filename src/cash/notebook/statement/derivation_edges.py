@@ -591,6 +591,7 @@ def bump_derived_lineages(
     record: Callable[[str, str], None],
     present: Callable[[str], bool],
     skip: Iterable[str] = (),
+    kept: Iterable[str] = (),
     code: str | None = None,
 ) -> set[str]:
     """Replay derivation bumps after outputs' lineages were written.
@@ -628,6 +629,13 @@ def bump_derived_lineages(
         with its entry (``held_lineage``): bumped, by what the statement
         changed, but not bumped through, on every path alike, so the runtime
         and the simulation agree.
+    kept:
+        Those of *skip* the statement left as they were
+        (`keep_held_lineage`): neither bumped nor bumped through.
+        ``pre.fit_transform(X)`` fits clones of the pipeline ``pre`` holds;
+        moved on by ``pre``'s lineage, the pipeline came out of a session
+        that fitted twice with another lineage than a Run All after a
+        restart, which fitted once, and the fit missed.
     code:
         The statement's text. An output it changed without naming it -- a
         global a function it calls changes (``bump()`` doing
@@ -642,6 +650,7 @@ def bump_derived_lineages(
     if not derivation_edges:
         return bumped
     skip = set(skip)
+    kept = set(kept)
 
     visited: set[str] = set()
     # Seed the walk with what the statement changed in place: an output it
@@ -670,7 +679,7 @@ def bump_derived_lineages(
         if src_lineage is None:
             continue
         for target in sorted(derivation_edges.get(src, ())):
-            if target in inputs or target in outputs:
+            if target in inputs or target in outputs or target in kept:
                 # Creation edge (``v = a[...]``): do NOT bump the base. Nor
                 # an output: the statement gave it its lineage just now.
                 continue

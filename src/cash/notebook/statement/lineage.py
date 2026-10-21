@@ -387,6 +387,7 @@ class StatementLineageBuilder:
         inputs: set[str],
         skip: set[str] | frozenset[str] = frozenset(),
         code: str | None = None,
+        kept: set[str] | frozenset[str] = frozenset(),
     ) -> set[str]:
         """Move on the variables a statement with *outputs* changed through
         another name (`bump_derived_lineages`); the names moved. *code*, the
@@ -420,6 +421,7 @@ class StatementLineageBuilder:
             record=record,
             present=lambda t: t in user_ns,
             skip=skip,
+            kept=kept,
             code=code,
         )
         for target, lineage_hash in moved.items():
