@@ -1397,12 +1397,27 @@ static int same_object(Root *R, PyObject *o) {
    million checks, however big or still. */
 typedef struct { uintptr_t addr; uint64_t until; float secs; uint8_t state; uint8_t watched; PyObject *wref; PyTypeObject *type; } Sight;
 #define SIGHT_BITS 13
+/* Slots per bucket. One slot an address could land in was first-come: a
+   value sighted once and never checked again (a temporary) held it for
+   SEEN_HOLD checks, and a variable landing there was never noted, never
+   watched. Four ways keep room for it beside three others. */
+#define SIGHT_WAYS 4
 static Sight sights[1 << SIGHT_BITS];
 enum { SG_NONE = 0, SG_SEEN = 1, SG_SKIP = 2 };
-/* checks a sighting keeps its slot from another value's (`py_seen`) */
+/* checks a sighting keeps its slot from another value's (`sight_place`) */
 #define SEEN_HOLD 1024
 
-static Sight *sight_of(uintptr_t a) { return &sights[hmix(a) & ((1u << SIGHT_BITS) - 1)]; }
+static Sight *sight_bucket(uintptr_t a) {
+    return &sights[(hmix(a) & ((1u << SIGHT_BITS) / SIGHT_WAYS - 1)) * SIGHT_WAYS];
+}
+
+/* a's sighting, or NULL */
+static Sight *sight_find(uintptr_t a) {
+    Sight *b = sight_bucket(a);
+    for (int w = 0; w < SIGHT_WAYS; w++)
+        if (b[w].addr == a && b[w].state != SG_NONE) return &b[w];
+    return NULL;
+}
 
 /* empty the slot, giving up its proof: a watched dict is alive here (its
    death empties the slot first), so unwatching it is safe */
@@ -1417,13 +1432,13 @@ static void sight_clear(Sight *g) {
 }
 
 static int sight_watches(uintptr_t a) {
-    Sight *g = sight_of(a);
-    return g->watched && g->addr == a;
+    Sight *g = sight_find(a);
+    return g && g->watched;
 }
 
 static void sight_dict_gone(uintptr_t a) {
-    Sight *g = sight_of(a);
-    if (g->watched && g->addr == a) {
+    Sight *g = sight_find(a);
+    if (g && g->watched) {
         g->watched = 0;   /* being freed: nothing to unwatch */
         sight_clear(g);
     }
@@ -1437,6 +1452,23 @@ static int sight_holds_live_skip(Sight *g) {
     return 1;
 }
 
+/* where a sighting of a goes: its own slot, else an empty one, a dead or
+   lapsed one, then the oldest sighting past SEEN_HOLD; a live skip or a
+   sighting within its hold is taken only *forced* (the oldest such), else
+   NULL: four values in the bucket keep their places */
+static Sight *sight_place(uintptr_t a, int forced) {
+    Sight *own = sight_find(a);
+    if (own) return own;
+    Sight *b = sight_bucket(a), *pick = NULL;
+    for (int w = 0; w < SIGHT_WAYS; w++) {
+        Sight *g = &b[w];
+        int held = sight_holds_live_skip(g) || (g->state == SG_SEEN && tick < g->until);
+        if (!held) return g;
+        if (forced && (!pick || g->until < pick->until)) pick = g;
+    }
+    return pick;
+}
+
 /* is the slot's skip still about `o`, not an object freed at its address? */
 static int sight_is(Sight *g, PyObject *o) {
     if (g->addr != (uintptr_t)o) return 0;
@@ -1446,7 +1478,7 @@ static int sight_is(Sight *g, PyObject *o) {
 
 static void skip_for(PyObject *o, uint64_t ticks) {
     uintptr_t a = (uintptr_t)o;
-    Sight *g = sight_of(a);
+    Sight *g = sight_place(a, 1);
     sight_clear(g);
     if (PyDict_Check(o)) {
         if (PyDict_Watch(dict_wid, o) < 0) { PyErr_Clear(); return; }
@@ -1564,8 +1596,8 @@ static PyObject *py_check(PyObject *self, PyObject *const *args, Py_ssize_t narg
         ti = verdict_of(t);
         if (ti && !ti->ok) { busy = 0; return PyLong_FromLong(ST_SKIP); }
     }
-    Sight *g = sight_of(a);
-    if (g->addr == a && g->state == SG_SKIP) {
+    Sight *g = sight_find(a);
+    if (g && g->state == SG_SKIP) {
         if (!sight_is(g, o)) {
             sight_clear(g);   /* skipped an object freed since: this one is new */
         } else {
@@ -1575,11 +1607,11 @@ static PyObject *py_check(PyObject *self, PyObject *const *args, Py_ssize_t narg
             return PyLong_FromLong(ST_ARM);
         }
     }
-    if (g->addr == a && g->state == SG_SEEN) { busy = 0; return PyLong_FromLong(ST_ARM); }
-    if (g->addr != a && sight_holds_live_skip(g)) {
-        /* another value's skip holds the slot, so this one's sighting could
-           not be kept, and every check would be its first: count this one
-           as its second instead */
+    if (g && g->state == SG_SEEN) { busy = 0; return PyLong_FromLong(ST_ARM); }
+    if (!sight_place(a, 0)) {
+        /* other values hold every slot of the bucket, so this one's
+           sighting could not be kept, and every check would be its first:
+           count this one as its second instead */
         busy = 0;
         return PyLong_FromLong(ST_ARM);
     }
@@ -1594,13 +1626,12 @@ static PyObject *py_seen(PyObject *self, PyObject *const *args, Py_ssize_t nargs
     double secs = PyFloat_AsDouble(args[1]);
     if (secs == -1.0 && PyErr_Occurred()) return NULL;
     uintptr_t a = (uintptr_t)args[0];
-    Sight *g = sight_of(a);
-    if (g->addr != a && sight_holds_live_skip(g)) Py_RETURN_NONE;  /* keep a live skip */
-    /* Another value's sighting holds the slot: it keeps it until its second
-       check arms it (which empties the slot) or SEEN_HOLD checks pass.
-       Written over, two values sharing the slot and checked in turn each
-       wiped the other's sighting: neither was ever armed. */
-    if (g->addr != a && g->state == SG_SEEN && tick < g->until) Py_RETURN_NONE;
+    /* Other values' sightings keep their slots until their second check
+       arms them (which empties the slot) or SEEN_HOLD checks pass, and live
+       skips keep theirs. Written over, two values sharing a slot and checked
+       in turn each wiped the other's sighting: neither was ever armed. */
+    Sight *g = sight_place(a, 0);
+    if (!g) Py_RETURN_NONE;
     sight_clear(g);
     g->addr = a; g->state = SG_SEEN; g->secs = (float)secs; g->until = tick + SEEN_HOLD;
     Py_RETURN_NONE;
@@ -1692,9 +1723,9 @@ static PyObject *arm_value(PyObject *o, PyObject *anchors, PyObject **kept) {
         r = root_new(a);
         if (r < 0) { Py_XDECREF(wref); busy = 0; return NULL; }
         R = &roots[r];
-        Sight *g = sight_of(a);
-        if (g->addr == a && g->state == SG_SEEN) R->hash_s = g->secs;
-        if (g->addr == a) sight_clear(g);
+        Sight *g = sight_find(a);
+        if (g && g->state == SG_SEEN) R->hash_s = g->secs;
+        if (g) sight_clear(g);
     }
     R->version++;
     R->dirty = 0; R->gone = 0;
@@ -2687,7 +2718,7 @@ static int exec_module(PyObject *m) {
         {"ARMED", A_ARMED}, {"ALREADY", A_ALREADY}, {"NEED_TYPE", A_NEED_TYPE},
         {"INELIGIBLE", A_INELIGIBLE}, {"TOO_SMALL", A_TOO_SMALL}, {"NO_ANCHOR", A_NO_ANCHOR},
         {"OVER_BUDGET", A_OVER_BUDGET}, {"ARM_BUSY", A_BUSY}, {"KEPT", A_KEPT}, {"KINDS", NKINDS},
-        {"SIGHT_BITS", SIGHT_BITS}};
+        {"SIGHT_BITS", SIGHT_BITS}, {"SIGHT_WAYS", SIGHT_WAYS}};
     for (size_t i = 0; i < sizeof consts / sizeof consts[0]; i++)
         if (PyModule_AddIntConstant(m, consts[i].n, consts[i].v) < 0) return -1;
     if (PyType_Ready(&AccType) < 0 || PyType_Ready(&TouchType) < 0) return -1;
