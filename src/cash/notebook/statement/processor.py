@@ -2342,9 +2342,15 @@ class StatementProcessor:
                     reason = self._take_holders(run, captured_vars, holders)
                 if reason is None and anchors:
                     user_ns = self.shell.user_ns
+                    # And the inputs the statement left as they were: ``df``
+                    # holding the anchor ``x`` in its rows gave ``w =
+                    # mk(df)`` the key of a frame holding equal lists, and
+                    # its hit bound ``w``'s cell to ``x``, not to the frame's
+                    # own list.
+                    unchanged = set(run.inputs) - run.outputs
                     anchor_holds = {
                         name: sorted(anchors_held(user_ns[name], anchors))
-                        for name in anchor_links - set(anchors)
+                        for name in (anchor_links | unchanged) - set(anchors)
                         if name in user_ns
                     }
         except WalkBudgetExceeded:
