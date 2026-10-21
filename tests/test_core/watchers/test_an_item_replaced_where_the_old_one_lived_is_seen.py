@@ -5,12 +5,17 @@ The pointers were borrowed: ``scores[0] = f()`` freed the old float, the
 new one landed at its address, the pointers compared equal and the digest
 of the old list was served for the new one. The same went for a set's
 items, an instance's slots, and the items of a tuple or frozenset, which
-had no record at all. Every value such a record holds by address is now
-held by the watch until the value is read again, so its address cannot be
-reused while the record stands.
+had no record at all. Every value such a record holds by address now has
+what it reads as recorded beside it (a float's bits, an int, a string's
+hash and length), compared too. Held instead, its address could not be
+reused, but the watch kept the user's old strings alive for as long as it
+stood: a list emptied in place kept its 50 MB string until it was read
+again, outside the watch's memory budget.
 """
 
 from __future__ import annotations
+
+import sys
 
 import pytest
 
@@ -88,7 +93,28 @@ def test_the_new_item_is_read(watching, counted, case):
     value = build()
     watching["value"] = value
     _watched(value, counted)
-    # Without the watch holding the old item, a new one lands at its
-    # address within a few tries; with it, never.
+    # A new item lands at the old one's address within a few tries.
     _replace_at_the_same_address(lambda: read(value), lambda x: write(value, x), make)
     assert value_watch.digest(value, counted) == _compute_hash(value), "a stale digest was served"
+
+
+def test_the_watch_keeps_no_item_alive(watching, counted):
+    big = "x" * 5_000_000
+    before = sys.getrefcount(big)
+    value = [big, float("1.5"), _new_int(9000001)]
+    watching["value"] = value
+    _watched(value, counted)
+    assert sys.getrefcount(big) == before + 1, "the watch holds the list's string"
+    value.clear()
+    assert sys.getrefcount(big) == before, "an emptied list's string stays alive"
+    assert value_watch._cw.stats()["table_bytes"] < 1_000_000
+
+
+def test_an_equal_item_made_at_the_same_address_is_served(watching, counted):
+    value = [float("1.5"), {"pad": 1}]
+    watching["value"] = value
+    _watched(value, counted)
+    assert _replace_at_the_same_address(lambda: value[0], lambda x: value.__setitem__(0, x), lambda i: float("1.5"))
+    calls = counted.calls
+    assert value_watch.digest(value, counted) == _compute_hash(value)
+    assert counted.calls == calls, "an equal float where the old one lived was hashed again"
