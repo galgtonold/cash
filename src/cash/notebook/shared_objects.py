@@ -52,7 +52,7 @@ from typing import Any
 
 from cash import _native, _plain_data
 from cash._clock import CpuLimit
-from cash.notebook.frame_cells import is_object_dtype
+from cash.notebook.frame_cells import addresses, is_object_dtype
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
 
@@ -2331,7 +2331,10 @@ def _held_in_pandas_slots(
 
     The slot is pandas' item cache (``y = df['t']`` stays in
     ``df._item_cache``; pandas 2 without copy-on-write, where ``y[0] = 99``
-    changes ``df`` too); an index's data is counted before
+    changes ``df`` too), or a cell of an object column (``l =
+    df['o'].iloc[1]``, whose ``l.append(9)`` changes ``df``: numpy does not
+    tell the garbage collector what such an array holds, so the search up
+    never finds it); an index's data is counted before
     (`_count_index_data`). `_holders_from_referrers` climbs to the same
     frame and stops there, a library's object, after one search
     of every object the garbage collector tracks per level: 20-60 ms a
@@ -2345,6 +2348,9 @@ def _held_in_pandas_slots(
     wanted = {key: sys.getrefcount(nodes[key]) - inbound[key] - _OVERHEAD for key in excess}
     names: set[str] = set()
     seen: set[int] = set(nodes)
+    # The slots read, by address: two frames on the same memory (a filter
+    # that kept every row, a view) hold its cells once.
+    slots: set[int] = set()
     try:
         for name, value in list(user_ns.items()):
             if name in known or not isinstance(value, frame_types) or id(value) in seen:
@@ -2358,6 +2364,10 @@ def _held_in_pandas_slots(
                     if id(item) in wanted:
                         wanted[id(item)] -= 1
                         held = True
+            for array in _object_columns(value) or ():
+                for key in _cells_wanted(array, wanted, slots):
+                    wanted[key] -= 1
+                    held = True
             if held:
                 names.add(name)
     except Exception:  # noqa: BLE001 - another layout: the search up decides
@@ -2365,6 +2375,26 @@ def _held_in_pandas_slots(
     if any(left != 0 for left in wanted.values()):
         return None
     return names
+
+
+def _cells_wanted(array: Any, wanted: Mapping[int, int], slots: set[int]) -> list[int]:
+    """The ids among *wanted* of the objects in the slots of the object
+    *array*, read by address, leaving out the slots in *slots* and adding
+    the others to it."""
+    np = sys.modules["numpy"]
+    keys = np.fromiter(wanted, dtype=np.int64, count=len(wanted))
+    held = addresses(array)
+    rows = np.flatnonzero(np.isin(held, keys))
+    if not len(rows):
+        return []
+    start = array.__array_interface__["data"][0]
+    found = []
+    for row, key in zip(rows.tolist(), held[rows].tolist()):
+        slot = start + row * array.strides[0]
+        if slot not in slots:
+            slots.add(slot)
+            found.append(key)
+    return found
 
 
 def _find_holders(
