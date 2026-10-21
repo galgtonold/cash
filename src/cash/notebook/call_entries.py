@@ -31,6 +31,7 @@ from cash.notebook.call_refs import (
     digest_and_size,
 )
 from cash.notebook.consumables import is_consumable_unrestorable
+from cash.notebook.helper_memos import unfilled as memos_unfilled
 from cash.notebook.shared_objects import (
     VALUE_TYPES,
     holds_a_held_object,
@@ -357,7 +358,7 @@ class CallEntries:
         when there is none (shadow mode asks whether an entry is kept)."""
         return self._cash.backend.peek_metadata(key)
 
-    def lookup(self, key: str) -> tuple[bool, Any, float, dict]:
+    def lookup(self, key: str, namespace: Mapping[str, Any] | None = None) -> tuple[bool, Any, float, dict]:
         """``(hit, value, recorded_execution_time, metadata)`` -- one backend read.
 
         ``backend.get`` returns ``(metadata, value)`` (``cash.backends._base``);
@@ -407,6 +408,9 @@ class CallEntries:
             return False, None, 0.0, {}
         env_reads = metadata.get("env_reads")
         if env_reads and not environment_unchanged(env_reads):
+            return False, None, 0.0, {}
+        memos = metadata.get("helper_memos")
+        if memos and memos_unfilled(memos, namespace or {}):
             return False, None, 0.0, {}
         if not self._ttl_fresh(metadata):
             return False, None, 0.0, {}
@@ -467,6 +471,7 @@ class CallEntries:
         code_module: str | None = None,
         held_refs: list | None = None,
         env_reads: dict[str, str] | None = None,
+        helper_memos: list[dict] | None = None,
     ) -> tuple[str, Any] | None:
         """Write through ``backend.set(key, value, metadata)`` -- the same
         two-positional-argument shape the statement path uses
@@ -520,6 +525,9 @@ class CallEntries:
             # What the environment variables installed code read held:
             # `lookup` checks them again.
             metadata["env_reads"] = env_reads
+        if helper_memos:
+            # What the helper memos it called held (`helper_memos.used`).
+            metadata["helper_memos"] = helper_memos
         if file_deps or remote_deps or probes:
             # The paths it only checked for (``probe_answers``) are checked as
             # the decorator checks them: still missing, or still there.

@@ -51,6 +51,7 @@ from cash.analysis.handed_callables import hands_a_state_changing_callable
 from cash.analysis.namespace_effects import user_callee_starting_workers, user_callee_using_pyplot
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, restore_kind
 from cash.cost_model import estimated_restore_time
+from cash.notebook import helper_memos
 from cash.notebook import shadow as _shadow
 from cash.notebook._trace import trace_event
 from cash.notebook.cache_key import CacheKeyContext
@@ -921,7 +922,7 @@ class CallUnit:
 
             call = _Call(fn, site, func_name, key, mutated_globals, args, kwargs)
             hit_started = _perf_counter()
-            hit, value, recorded_cost, metadata = self._entries.lookup(key)
+            hit, value, recorded_cost, metadata = self._entries.lookup(key, getattr(fn, "__globals__", None))
             self._last_key_s = _perf_counter() - key_started
             if _shadow.SHADOW is not None:
                 # False when what it ran changed since it was stored.
@@ -1029,6 +1030,7 @@ class CallUnit:
             getattr(call.fn, "__globals__", None),
             propagate_to_parent=True,
         )
+        memos_before = helper_memos.watched(getattr(call.fn, "__globals__", None) or {})
         self._running += 1
         shadow = _shadow.SHADOW
         unit = shadow.begin("call") if shadow is not None else None
@@ -1071,7 +1073,14 @@ class CallUnit:
             and not _inputs_moved(call_tracker)
         ):
             stored = self._store_result(
-                call, result, elapsed, call_tracker, stdout_text, stderr_text, environment_digests(env_reads)
+                call,
+                result,
+                elapsed,
+                call_tracker,
+                stdout_text,
+                stderr_text,
+                environment_digests(env_reads),
+                helper_memos.used(memos_before),
             )
         if unit is not None:
             shadow.call_finished(call.key, call.site, unit, stored, disk=True)
@@ -1153,6 +1162,7 @@ class CallUnit:
         stdout_text: str,
         stderr_text: str,
         env_reads: dict[str, str] | None = None,
+        memos: list[dict] | None = None,
     ) -> bool:
         """Write the result with what the call read, printed and wrote to its
         globals; ``False`` when those globals cannot be captured."""
@@ -1186,6 +1196,7 @@ class CallUnit:
             code_module=getattr(call.fn, "__module__", None),
             held_refs=find_for_call(call.fn, result),
             env_reads=env_reads or None,
+            helper_memos=memos,
         )
         if held:
             self._hold(call.key, result, *held)

@@ -26,6 +26,7 @@ from ..cache_key import compute_cache_key
 from ..cache_status import CacheStatus
 from ..call_refs import resolve_call_refs
 from ..control_structures import is_control_structure
+from ..helper_memos import unfilled as memos_unfilled
 from ..holder_patches import HolderPatch, apply_patch
 from ..lineage_formula import (
     held_lineage,
@@ -511,7 +512,10 @@ class CacheRestorer:
         for name, before in (metadata.get("holders") or {}).items():
             if name in user_ns and lineage.get(name) != before:
                 return True
-        env_reads = StatementCacheMetadata.from_dict(metadata).env_reads
+        recorded = StatementCacheMetadata.from_dict(metadata)
+        if recorded.helper_memos and memos_unfilled(recorded.helper_memos, user_ns):
+            return True
+        env_reads = recorded.env_reads
         return bool(env_reads) and not environment_unchanged(env_reads)
 
     def drop_probe_placeholders(self) -> None:

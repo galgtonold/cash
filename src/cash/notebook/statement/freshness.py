@@ -27,7 +27,7 @@ import copy
 import io
 import logging
 import time
-from collections.abc import Callable, Container
+from collections.abc import Callable, Container, Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
@@ -38,6 +38,7 @@ from ...tracking.env_reads import environment_unchanged
 from ...tracking.file_dep_snapshot import FreshnessMemo, snapshot_is_fresh
 from ...value_types import IMMUTABLE_LEAF_TYPES
 from ..call_refs import resolve_call_refs
+from ..helper_memos import unfilled as memos_unfilled
 from ..restored_var import present_holders
 from ._metadata import StatementCacheMetadata
 
@@ -191,6 +192,11 @@ class CacheFreshnessChecker:
             if cached_data and metadata.env_reads and not environment_unchanged(metadata.env_reads):
                 self.last_miss_reason = "an environment variable installed code read changed"
                 cached_data = None
+            if cached_data and metadata.helper_memos and isinstance(bound, Mapping):
+                unfilled = memos_unfilled(metadata.helper_memos, bound)
+                if unfilled:
+                    self.last_miss_reason = unfilled
+                    cached_data = None
             if cached_data:
                 cached_data = self._invalidate_if_direct_file_changed(metadata, cached_data)
             if cached_data and metadata.holders:
