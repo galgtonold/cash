@@ -707,6 +707,52 @@ def holds_a_held_object(value: Any) -> bool:
     return any(view_bases(obj) for obj in nodes.values())
 
 
+def library_parts_held(value: Any) -> dict[int, Any] | None:
+    """The objects inside the library objects *value* is or holds that
+    something besides them holds (`_held_from_outside`), by id; None when
+    there were too many to read. Neither `holds_a_held_object` nor
+    `holds_part_of` reads a library object: ``argparse.Namespace(rows=ROWS)``
+    holds ``ROWS`` where neither looks."""
+    value_types = VALUE_TYPES + library_value_types()
+    nodes, _inbound, _checked, owner, _breaks = _walk({"": value}, [], value_types)
+    inside, _owners = _held_from_outside(nodes, owner, value_types)
+    return inside
+
+
+def ids_through_libraries(values: Iterable[Any]) -> set[int]:
+    """The ids of the objects *values* are and hold, read as `_identities`
+    reads them and, inside a library object, as `_held_from_outside` reads
+    it down: ``argparse.Namespace(rows=rect)`` holds ``rect``, which
+    `_identities` does not read. A type, a function or cash's own record is
+    not one (`_read_down`)."""
+    value_types = VALUE_TYPES + library_value_types()
+    found: set[int] = set()
+    seen: set[int] = set()
+    stack = list(values)
+    while stack:
+        obj = stack.pop()
+        if id(obj) in seen or is_value(obj, value_types):
+            continue
+        seen.add(id(obj))
+        if not len(seen) & 1023:
+            check_walk_budget()
+        children = children_of(obj)
+        if children is not None:
+            if not isinstance(obj, _IMMUTABLE_CONTAINERS):
+                found.add(id(obj))
+                found.update(view_bases(obj))
+            stack.extend(children)
+            continue
+        read_down = _read_down(obj, value_types)
+        if read_down is None:
+            continue
+        found.add(id(obj))
+        found.update(view_bases(obj))
+        if read_down:
+            stack.extend(gc.get_referents(obj))
+    return found
+
+
 def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
     """Whether *value* is or holds an object one of *sources* is or holds.
 
