@@ -27,6 +27,7 @@ import sys
 import types
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import Any
 
 from cash.analysis.namespace_effects import code_waived_lines
 from cash.install_paths import is_user_code_file
@@ -34,7 +35,7 @@ from cash.purity import is_pure
 from cash.tracking import io_watch
 from cash.tracking.read_classification import is_runtime_cache_path
 
-__all__ = ["WrittenPaths", "kept_writes", "observe_writes"]
+__all__ = ["WrittenPaths", "children_left_running", "kept_writes", "observe_writes", "process_runs"]
 
 _WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
 
@@ -42,10 +43,16 @@ _WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
 class WrittenPaths(set):
     """The absolute paths a block wrote; :attr:`appended` holds those it
     only ever opened to append to, :attr:`waived` those it only wrote from
-    a line the user waived (``_write_waived``)."""
+    a line the user waived (``_write_waived``). :attr:`unseen` is the first
+    thing it did that may write files no event reports (`_UNSEEN_WRITERS`),
+    or None. :attr:`children_before` are the process's child processes as
+    the block first started one, or None when it started none
+    (`children_left_running`)."""
 
     def __init__(self) -> None:
         super().__init__()
+        self.unseen: str | None = None
+        self.children_before: frozenset[int] | None = None
         self.appended: set[str] = set()
         self._replaced: set[str] = set()
         self._unwaived: set[str] = set()
@@ -200,7 +207,85 @@ def _on_move(args: tuple) -> None:
         _record(sinks, args[1])  # the destination of an atomic write
 
 
+#: Audit events of work whose writes no ``open`` event reports: another
+#: process (a fork's child included), SQLite (its own file I/O in C). h5py and the like open through
+#: the C library, which the native file hook sees where it runs. A call
+#: through ctypes raises no event; the statement processor reads the
+#: statement for one (``statement_calls_through_ctypes``).
+_UNSEEN_WRITERS = frozenset(
+    {
+        "subprocess.Popen",
+        "os.system",
+        "os.fork",
+        "os.forkpty",
+        "os.posix_spawn",
+        "os.spawn",
+        "os.exec",
+        "os.startfile",
+        "_winapi.CreateProcess",
+        "sqlite3.connect",
+    }
+)
+
+
+#: The events of those that start another process.
+_PROCESS_STARTS = _UNSEEN_WRITERS - {"sqlite3.connect"}
+
+
+def _child_pids() -> frozenset[int]:
+    try:
+        import psutil
+
+        return frozenset(child.pid for child in psutil.Process().children())
+    except Exception:  # noqa: BLE001 - none known: every child is new
+        return frozenset()
+
+
+def _on_unseen_writer(event: str) -> io_watch.Consumer:
+    starts = event in _PROCESS_STARTS
+
+    def note(_args: tuple) -> None:
+        sinks = _active.get()
+        for sink in sinks:
+            if sink.unseen is None:
+                sink.unseen = event
+        if starts and any(sink.children_before is None for sink in sinks):
+            # Before the child exists: the event comes ahead of the start.
+            children = _child_pids()
+            for sink in sinks:
+                if sink.children_before is None:
+                    sink.children_before = children
+
+    return note
+
+
+def children_left_running(written: WrittenPaths) -> list[Any]:
+    """The child processes *written*'s block started that still run, as
+    ``psutil.Process`` objects: a ``subprocess.Popen`` it did not wait for."""
+    before = written.children_before
+    if before is None:
+        return []
+    try:
+        import psutil
+
+        return [child for child in psutil.Process().children() if child.pid not in before and process_runs(child)]
+    except Exception:  # noqa: BLE001 - none cash can see
+        return []
+
+
+def process_runs(process: Any) -> bool:
+    """Whether *process* still runs: not ended, nor ended and not yet reaped."""
+    try:
+        import psutil
+
+        return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+    except Exception:  # noqa: BLE001 - gone
+        return False
+
+
 io_watch.subscribe("open", _on_open)
+for _event in _UNSEEN_WRITERS:
+    io_watch.subscribe(_event, _on_unseen_writer(_event))
 io_watch.subscribe("os.rename", _on_move)
 io_watch.subscribe("os.replace", _on_move)
 

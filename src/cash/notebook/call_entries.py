@@ -35,7 +35,9 @@ from cash.notebook.shared_objects import (
     VALUE_TYPES,
     holds_a_held_object,
     holds_part_of,
+    ids_through_libraries,
     is_value,
+    library_parts_held,
     library_value_types,
 )
 from cash.sizing import estimate_object_size, pickled_size_estimate
@@ -316,9 +318,11 @@ class CallEntries:
         """
         try:
             sources = (*args, *kwargs.values())
-            reached = self._reached(result, fn, root_held)
+            parts = library_parts_held(result)
+            reached = self._reached(result, fn, root_held or parts != {})
             return (
                 not holds_part_of(result, (*sources, *reached))
+                and not (parts != {} and self._shares_library_parts(result, parts, (*sources, *reached)))
                 and not self._borrows(result, sources, reached, fn)
                 # Held by something else (*root_held*), and that holder is
                 # none of the arguments or of what the function reaches: a
@@ -331,6 +335,26 @@ class CallEntries:
         except Exception:
             logger.debug("storability check raised; the result is not stored", exc_info=True)
             return False
+
+    @staticmethod
+    def _shares_library_parts(result, parts: dict[int, Any] | None, sources: tuple[Any, ...]) -> bool:
+        """Whether an object inside a library object in *result* is one the
+        arguments or what the function reaches are or hold, read through
+        their library objects too (`ids_through_libraries`):
+        ``Namespace(fig=fig)`` with the notebook's ``rect`` on ``fig``'s
+        axes, or ``Namespace(rows=src.rows)`` with ``src`` a namespace.
+        *parts* are those held from outside (`library_parts_held`); None,
+        too many to tell, compares everything *result* holds. Nothing to
+        compare with, and the result is not read."""
+        outside = ids_through_libraries(sources)
+        if not outside:
+            return False
+        if parts is None:
+            parts = dict.fromkeys(ids_through_libraries([result]) - {id(result)})
+        shared = not outside.isdisjoint(parts)
+        if shared:
+            logger.debug("[CALL_UNIT] the result holds, inside a library object, an object of the caller's: not stored")
+        return shared
 
     @staticmethod
     def _borrows(result, sources: tuple[Any, ...], reached: list[Any], fn: Any) -> bool:

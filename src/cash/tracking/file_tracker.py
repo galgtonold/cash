@@ -340,6 +340,11 @@ class FileAccessTracker:
                     tracker.work_functions.append(fn)
         return trackers
 
+    @property
+    def work_running(self) -> bool:
+        """Whether work the block handed to a thread is still running."""
+        return self._work_running > 0
+
     @staticmethod
     def work_finished(trackers: list[FileAccessTracker]) -> None:
         """That work is done (or was cancelled before it ran)."""
