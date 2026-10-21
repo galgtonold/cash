@@ -1,4 +1,4 @@
-"""Review repros: the user's object inside a library object a call returns,
+"""The user's object inside a library object a call returns,
 compared with plain Python across two runs and a restart.
 
 The statement call unit only: a ``@cash.cache`` function hands back its

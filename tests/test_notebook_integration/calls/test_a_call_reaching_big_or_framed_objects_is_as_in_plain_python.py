@@ -1,6 +1,8 @@
-"""Review repros (round 2): a call that reaches something with identity and
-returns a library object too big to read; and the cost of reading a big
-library argument down. Prints every run's cell output (warnings included)."""
+"""A call that reaches something with identity and returns a library object
+too big to read, a call handed a big library object, and a call returning
+the user's object from a frame's object column, compared with plain Python
+across two runs and a restart. Prints every run's cell output (warnings
+included)."""
 
 import pytest
 

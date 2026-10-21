@@ -1,4 +1,4 @@
-"""Review repro: a call returning a fresh library object holding many parts
+"""A call returning a fresh library object holding many parts
 (more than _INSIDE_MAX_OBJECTS) -- is it still served on later runs?"""
 
 import pytest
