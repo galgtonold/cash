@@ -77,7 +77,10 @@ DECORATED = (
         ),
     ],
 )
-def test_an_entry_is_not_served_over_a_memo_without_what_it_read(setup, fill, read, then):
+def test_an_entry_is_not_served_over_a_memo_without_what_it_read(setup, fill, read, then, monkeypatch):
+    # Helpers that do something besides return (`_pure` is narrow; these
+    # one-liners would pass it, and a pure memo may be served emptied).
+    monkeypatch.setattr(helper_memos, "_pure", lambda memo: False)
     ns: dict = {}
     exec("import functools\n" + setup, ns)
     _record(ns, fill)  # the run that fills it, so its answers are seen
@@ -96,7 +99,8 @@ def test_a_memo_holding_more_answers_than_are_read_is_never_served_over():
     assert said[0] == helper_memos.FILLED and "more answers than cash checks" in said[1], said
 
 
-def test_a_run_that_makes_a_memo_compute_is_said_to_fill_it():
+def test_a_run_that_makes_a_memo_compute_is_said_to_fill_it(monkeypatch):
+    monkeypatch.setattr(helper_memos, "_pure", lambda memo: False)
     ns: dict = {}
     exec("import functools\n@functools.cache\ndef f(n):\n    return n", ns)
     said = _record(ns, "x = f(1)")
@@ -206,3 +210,30 @@ def test_a_memo_made_and_filled_in_the_same_statement_is_said_to_fill_it():
     exec("h = functools.cache(lambda n: [n])\nx = h(1)", ns)
     said = helper_memos.used(before, ns=ns)
     assert said and said[0] == helper_memos.FILLED and "h" in said[1], said
+
+
+@pytest.mark.parametrize(
+    ("body", "pure"),
+    [
+        ("return n * n", True),
+        ("return sum(range(n)) + len(str(n))", True),
+        ("return g(n) * 2", True),
+        ("print(n)\n    return n", False),
+        ("return SCALE * n", False),
+        ("return g_prints(n)", False),
+        ("return os.environ.get('X', n)", False),
+        ("return random.random()", False),
+        ("return next(COUNTER)", False),
+        ("return open(n).read()", False),
+        ("return n.upper()", False),
+    ],
+)
+def test_a_helper_is_pure_only_when_its_answer_comes_from_its_arguments_alone(body, pure):
+    ns: dict = {}
+    exec(
+        "import functools, itertools, os, random\nSCALE = 2\nCOUNTER = itertools.count()\n"
+        "def g(n):\n    return n + 1\ndef g_prints(n):\n    print(n)\n    return n\n"
+        f"@functools.cache\ndef h(n):\n    {body}\n",
+        ns,
+    )
+    assert helper_memos._pure(ns["h"]) is pure

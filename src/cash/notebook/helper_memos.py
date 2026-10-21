@@ -81,8 +81,6 @@ _digests: weakref.WeakKeyDictionary[Any, tuple[list[Any], list[str] | None]] = w
 #: what tells a statement that changed one in place (``f(1).append(5)``)
 #: from one that only read it.
 _answers_seen: weakref.WeakKeyDictionary[Any, dict[int, tuple[Any, str]]] = weakref.WeakKeyDictionary()
-#: ``memo -> (its code, whether it is pure)`` (`_pure`).
-_purity: weakref.WeakKeyDictionary[Any, tuple[Any, bool]] = weakref.WeakKeyDictionary()
 
 #: The types whose values nothing can change in place.
 _FIXED_TYPES = (int, float, complex, str, bytes, bool, type(None), range)
@@ -175,9 +173,25 @@ def _modules_of_user() -> tuple[Any, ...]:
     return _user_modules[1]
 
 
-def _ns_memos(ns: Mapping[str, Any]) -> list[tuple[list[str], Any]]:
+def _ns_memos(ns: Mapping[str, Any]) -> tuple[list[tuple[list[str], Any]], list[tuple[str, type]]]:
+    """The memos bound in *ns* outside classes, and the classes bound there
+    (whose bodies `_class_part` reads each time, as a class can be given a
+    memo without the namespace changing)."""
     seen: set[int] = set()
-    return [(["ns", *path], memo) for name, value in list(ns.items()) for path, memo in _memos_in(value, [name], seen)]
+    kinds = _HOLDER_TYPES
+    found: list[tuple[list[str], Any]] = []
+    classes: list[tuple[str, type]] = []
+    for name, value in list(ns.items()):
+        if isinstance(value, type):
+            classes.append((name, value))
+        elif type(value) in kinds:
+            found.extend((["ns", *path], memo) for path, memo in _memos_in(value, [name], seen))
+    return found, classes
+
+
+def _class_part(classes: list[tuple[str, type]]) -> list[tuple[list[str], Any]]:
+    seen: set[int] = set()
+    return [(["ns", *path], memo) for name, cls in classes for path, memo in _memos_in(cls, [name], seen)]
 
 
 def _module_memos() -> list[tuple[list[str], Any]]:
@@ -204,12 +218,13 @@ def _holders(ns: Mapping[str, Any]) -> tuple[int, ...]:
 
 #: Bumped before each statement (`new_statement`).
 _statement = 0
-#: ``id of a namespace -> (statement, its holders, its memos)`` and
-#: ``(statement, the user's modules then, their memos)``: a cached call in a
-#: loop looks again only when a function or class was bound in the
-#: namespace or a module imported, not at every call (walking hundreds of
-#: modules per call made a 50,000-call loop take over 30 s).
-_ns_reached: dict[int, tuple[int, tuple[int, ...], list[tuple[list[str], Any]]]] = {}
+#: ``id of a namespace -> (its holders, its memos outside classes, its
+#: classes)`` and ``(statement, the user's modules then, their memos)``: a
+#: namespace is looked through again only when a function or class was
+#: bound in it, and the modules once per statement or when one was
+#: imported (walking hundreds of modules per call made a 50,000-call loop
+#: take over 30 s).
+_ns_reached: dict[int, tuple[tuple[int, ...], list[tuple[list[str], Any]], list[tuple[str, type]]]] = {}
 _modules_reached: tuple[int, Any, list[tuple[list[str], Any]]] = (-1, None, [])
 
 
@@ -217,7 +232,6 @@ def new_statement() -> None:
     """A statement is about to run: look for the memos it reaches afresh."""
     global _statement
     _statement += 1
-    _ns_reached.clear()
 
 
 def _where(ns: Mapping[str, Any]) -> list[tuple[list[str], Any]]:
@@ -226,18 +240,25 @@ def _where(ns: Mapping[str, Any]) -> list[tuple[list[str], Any]]:
     global _modules_reached
     holders = _holders(ns)
     known = _ns_reached.get(id(ns))
-    if known is None or known[0] != _statement or known[1] != holders:
-        known = (_statement, holders, _ns_memos(ns))
+    if known is None or known[0] != holders:
+        if len(_ns_reached) > 64:
+            _ns_reached.clear()
+        known = (holders, *_ns_memos(ns))
         _ns_reached[id(ns)] = known
     modules = _modules_of_user()
-    if _modules_reached[0] != _statement or _modules_reached[1] is not modules:
+    if (
+        _modules_reached[0] != _statement
+        or _modules_reached[1] is not modules
+        # one rebound since (``mod.f = cache(g)`` in this statement)
+        or any(_resolve(where, ns) is not memo for where, memo in _modules_reached[2])
+    ):
         _modules_reached = (_statement, modules, _module_memos())
-    return known[2] + _modules_reached[2]
+    return known[1] + _class_part(known[2]) + _modules_reached[2]
 
 
-def watched(ns: Mapping[str, Any]) -> list[tuple[list[str], Any, int, int, int]] | None:
+def watched(ns: Mapping[str, Any]) -> list[tuple[list[str], Any, int, int, int, Any]] | None:
     """Before a statement or a cached call runs: each memo it can reach, with
-    its counters."""
+    its counters and which keys and answers it holds (`_held`)."""
     if _LRU_WRAPPER is None:
         return None
     out = []
@@ -246,7 +267,7 @@ def watched(ns: Mapping[str, Any]) -> list[tuple[list[str], Any, int, int, int]]
             info = memo.cache_info()
         except Exception:  # noqa: BLE001 - a wrapper whose counters raise
             continue
-        out.append((where, memo, info.hits, info.misses, info.currsize))
+        out.append((where, memo, info.hits, info.misses, info.currsize, _held(memo)))
     return out or None
 
 
@@ -313,7 +334,7 @@ def _item_digests(memo: Any) -> list[str] | None:
         known is not None
         and len(known[0]) == len(flat)
         and all(a is b for a, b in zip(known[0], flat))
-        and all(_fixed(part) for part in flat)
+        and all(_fixed(k, key=True) and _fixed(v) for k, v in items)
     ):
         return known[1]
     try:
@@ -324,35 +345,83 @@ def _item_digests(memo: Any) -> list[str] | None:
     return digests
 
 
-def _fixed(value: Any, depth: int = 3) -> bool:
+def _fixed(value: Any, depth: int = 3, *, key: bool = False) -> bool:
     """Nothing can change *value* in place: a number, a string, bytes, None,
-    or a tuple or frozenset of those."""
-    if type(value) in _FIXED_TYPES:
+    or a tuple or frozenset of those. In a *key*, the markers ``functools``
+    puts there count too: the bare ``object()`` between positional and
+    keyword arguments, and the argument types of a ``typed=True`` memo."""
+    if type(value) in _FIXED_TYPES or (key and (type(value) is object or isinstance(value, type))):
         return True
     if depth > 0 and type(value) in (tuple, frozenset):
-        return all(_fixed(part, depth - 1) for part in value)
+        return all(_fixed(part, depth - 1, key=key) for part in value)
     return False
 
 
-def _pure(memo: Any) -> bool:
-    """Whether the function under *memo* provably does nothing but return
-    (`PurityAnalyzer`): no print, no draw from a random stream, no write to
-    a file or a global, no call it cannot read. Then running its body where
-    a run would have found the answer kept differs in nothing."""
-    fn = getattr(memo, "__wrapped__", None)
-    code = getattr(fn, "__code__", None)
-    known = _purity.get(memo)
-    if known is not None and known[0] is code:
-        return known[1]
-    try:
-        from cash.analysis.purity_analyzer import get_analyzer
+#: The builtins a pure helper may call: each returns a value made from its
+#: arguments alone, and reads or writes nothing else.
+_PURE_BUILTINS = frozenset(
+    "abs all any bin bool bytes chr complex dict divmod enumerate filter float format frozenset hex int "
+    "isinstance issubclass len list map max min oct ord pow range repr reversed round set slice sorted str "
+    "sum tuple zip".split()
+)
+#: Instructions a pure helper never runs: reading an attribute (a method of
+#: anything, a module's state), writing or deleting a global or an
+#: attribute, importing, or reading a name a class body or exec resolves.
+_IMPURE_OPS = frozenset(
+    "LOAD_ATTR LOAD_METHOD LOAD_SUPER_ATTR STORE_ATTR DELETE_ATTR STORE_GLOBAL DELETE_GLOBAL IMPORT_NAME "
+    "IMPORT_FROM IMPORT_STAR LOAD_NAME STORE_NAME DELETE_NAME LOAD_CLASSDEREF LOAD_FROM_DICT_OR_GLOBALS "
+    "LOAD_FROM_DICT_OR_DEREF".split()
+)
 
-        report = get_analyzer().analyze_reached(fn)
-        pure = report.is_clean and not report.opaque_callees and not report.unwalkable
-    except Exception:  # noqa: BLE001 - not analysable: not known to be pure
-        pure = False
-    _purity[memo] = (code, pure)
-    return pure
+
+def _pure(memo: Any) -> bool:
+    """Whether the function under *memo* provably computes its answer from
+    its arguments alone and does nothing else, so running its body where a
+    run would have found the answer kept differs in nothing.
+
+    Narrow by design: the function and every function of the user's it
+    calls (followed by the globals they name) read no attribute, no global
+    but such a function or a builtin of `_PURE_BUILTINS`, no closure
+    variable, and write no global. ``return n * n`` and
+    ``return sum(range(n))`` qualify; a print, a random draw, a read of a
+    global, the environment or a file, a method call, a module's function
+    do not. Asked afresh each time, as a callee can be rebound."""
+    return _pure_function(getattr(memo, "__wrapped__", None), set(), 0)
+
+
+def _pure_function(fn: Any, seen: set[int], depth: int) -> bool:
+    import builtins
+    import dis
+
+    from cash.decorator.closure_fold import iter_code_scopes
+
+    if id(fn) in seen:
+        return True
+    code = getattr(fn, "__code__", None)
+    globals_ = getattr(fn, "__globals__", None)
+    if code is None or not isinstance(globals_, dict) or depth > 8 or code.co_freevars:
+        return False
+    if not is_user_code_file(code.co_filename):
+        return False
+    seen.add(id(fn))
+    try:
+        for scope in iter_code_scopes(code):
+            for instr in dis.get_instructions(scope):
+                if instr.opname in _IMPURE_OPS:
+                    return False
+                if instr.opname != "LOAD_GLOBAL":
+                    continue
+                name = instr.argval
+                if name in globals_:
+                    value = globals_[name]
+                    inner = value.__wrapped__ if _is_user_memo(value) else value
+                    if not (inspect.isfunction(inner) and _pure_function(inner, seen, depth + 1)):
+                        return False
+                elif not (name in _PURE_BUILTINS and name in vars(builtins)):
+                    return False
+    except Exception:  # noqa: BLE001 - code this cannot read: not known to be pure
+        return False
+    return True
 
 
 def _changed_in_place(memo: Any, items: list[tuple[Any, Any]]) -> bool | None:
@@ -381,6 +450,16 @@ def _changed_in_place(memo: Any, items: list[tuple[Any, Any]]) -> bool | None:
     return verdict
 
 
+def _held(memo: Any) -> frozenset[tuple[int, int]] | None:
+    """Which key and answer objects *memo* holds, or None past `MAX_KEYED`:
+    a run that empties it (``cache_clear`` by any name) and fills it again
+    can leave its counters as they were, not these."""
+    items = _items(memo)
+    if items is None or len(items) > MAX_KEYED:
+        return None
+    return frozenset((id(key), id(answer)) for key, answer in items)
+
+
 def _label(where: list[str]) -> str:
     """``f``, ``C.f``, ``mod.table`` for the warning."""
     head = ".".join(where[1:3]) if where and where[0] == "module" else (where[1] if len(where) > 1 else "?")
@@ -389,7 +468,7 @@ def _label(where: list[str]) -> str:
 
 
 def used(
-    before: list[tuple[list[str], Any, int, int, int]] | None,
+    before: list[tuple[list[str], Any, int, int, int, Any]] | None,
     *,
     clears: bool = False,
     ns: Mapping[str, Any] | None = None,
@@ -403,18 +482,31 @@ def used(
     before = list(before or ())
     if ns is not None and _LRU_WRAPPER is not None:
         known = {id(memo) for _, memo, *_ in before}
-        before += [(where, memo, 0, 0, 0) for where, memo in _where(ns) if id(memo) not in known]
+        fresh = [(where, memo) for where, memo in _where(ns) if id(memo) not in known]
+        # A memo rebound in the run where cash looked before it (a module's,
+        # by a reload in the same statement): the one bound now, from empty.
+        for where, *_ in before:
+            now = _resolve(where, ns)
+            if _is_user_memo(now) and id(now) not in known:
+                fresh.append((where, now))
+        seen_now: set[int] = set()
+        for where, memo in fresh:
+            if id(memo) not in seen_now:
+                seen_now.add(id(memo))
+                before.append((where, memo, 0, 0, 0, frozenset()))
     if not before:
         return None
     out: list[dict] = []
     why: str | None = None
-    for where, memo, hits, misses, size in before:
+    for where, memo, hits, misses, size, held in before:
         try:
             info = memo.cache_info()
         except Exception:  # noqa: BLE001 - a wrapper whose counters raise
             continue
         if (info.hits, info.misses, info.currsize) == (hits, misses, size) and not clears:
-            continue
+            if held is None or _held(memo) == held:
+                continue
+            clears = True  # emptied and filled again to the same counts
         label = _label(where)
         items = _items(memo)
         moved = _changed_in_place(memo, items) if items is not None else None
@@ -429,7 +521,7 @@ def used(
         elif moved:
             why = f"It changed an answer the helper memo {label} holds in place"
         elif info.misses != misses:
-            if _pure(memo) and all(_fixed(answer) for _, answer in items):
+            if all(_fixed(key, key=True) and _fixed(answer) for key, answer in items) and _pure(memo):
                 out.append({"where": where, "items": _item_digests(memo), "pure": True})
                 continue
             why = f"It filled the helper memo {label}: served, the memo would stay as it was"
@@ -440,7 +532,8 @@ def used(
             if digests is None:
                 why = f"It read the helper memo {label}, whose answers cash cannot digest"
             else:
-                out.append({"where": where, "items": digests, "pure": _pure(memo)})
+                pure = all(_fixed(key, key=True) and _fixed(answer) for key, answer in items) and _pure(memo)
+                out.append({"where": where, "items": digests, "pure": pure})
     if why is not None:
         return FILLED, f"{why} (statement re-executes)"
     return out or None
@@ -483,7 +576,7 @@ def unfilled(records: list[dict] | None, ns: Mapping[str, Any]) -> str | None:
         recorded = set(record.get("items") or ())
         if now is None:
             return f"the helper memo {label} does not hold the answers the statement read"
-        if record.get("pure"):
+        if record.get("pure") and _pure(memo):
             held = dict(item.split(":", 1) for item in now)
             if any(held.get(key, answer) != answer for key, answer in (item.split(":", 1) for item in recorded)):
                 return f"the helper memo {label} holds another answer than the statement read"
@@ -496,30 +589,50 @@ def unfilled(records: list[dict] | None, ns: Mapping[str, Any]) -> str | None:
 _clearing_code: weakref.WeakKeyDictionary[Any, bool] = weakref.WeakKeyDictionary()
 
 
+def _is_clear(value: Any) -> bool:
+    """*value* is a memo's own ``cache_clear``, under any name."""
+    return getattr(value, "__name__", None) == "cache_clear" and type(getattr(value, "__self__", None)) is _LRU_WRAPPER
+
+
 def _names_clear(fn: Any) -> bool:
+    """*fn* names ``cache_clear`` (an attribute, or a string it builds a
+    name from), or a global it names is a memo's ``cache_clear``."""
     code = getattr(fn, "__code__", None)
     if code is None:
         return False
     try:
-        return _clearing_code[code]
+        found = _clearing_code[code]
     except (KeyError, TypeError):
-        pass
+        from cash.decorator.closure_fold import iter_code_scopes
+
+        scopes = list(iter_code_scopes(code))
+        found = any(
+            "cache_clear" in scope.co_names
+            or any(isinstance(c, str) and ("cache_clear" in c or c.startswith("cache_")) for c in scope.co_consts)
+            for scope in scopes
+        )
+        try:
+            _clearing_code[code] = found
+        except TypeError:
+            pass
+    if found:
+        return True
+    globals_ = getattr(fn, "__globals__", None)
+    if not isinstance(globals_, dict):
+        return False
     from cash.decorator.closure_fold import iter_code_scopes
 
-    found = any("cache_clear" in scope.co_names for scope in iter_code_scopes(code))
-    try:
-        _clearing_code[code] = found
-    except TypeError:
-        pass
-    return found
+    return any(_is_clear(globals_.get(name)) for scope in iter_code_scopes(code) for name in scope.co_names)
 
 
 def clears(code: str | None, ns: Mapping[str, Any] | None, fn: Any = None) -> bool:
     """Whether a statement's *code* (or the call of *fn*) can empty a memo:
-    it, or a function of the user's it reaches, names ``cache_clear``.
-    ``cache_clear()`` resets the counters `used` compares, so a run that
-    empties a memo and fills it again can leave them as they were."""
-    from cash.notebook.callee_reach import reached_user_code
+    it, or a function of the user's it reaches, names ``cache_clear``, a
+    string with it (``getattr(f, "cache_" + "clear")``), or a name bound to
+    a memo's ``cache_clear``. ``cache_clear()`` resets the counters `used`
+    compares; one reached some other way is caught by the keys it leaves
+    (`_held`) unless it fills the memo again with the very same objects."""
+    from cash.notebook.callee_reach import names_read, reached_user_code
 
     if fn is not None:
         if _names_clear(fn):
@@ -529,8 +642,14 @@ def clears(code: str | None, ns: Mapping[str, Any] | None, fn: Any = None) -> bo
         if not (isinstance(name, str) and isinstance(globals_, dict) and globals_.get(name) is fn):
             return False
         code, ns = name, globals_
-    elif code is not None and "cache_clear" in code:
-        return True
+    elif code is not None:
+        if "cache_clear" in code:
+            return True
+        try:
+            if ns is not None and any(not attrs and _is_clear(ns.get(root)) for root, attrs in names_read(code)):
+                return True
+        except Exception:  # noqa: BLE001 - not parsed: the reach below decides
+            pass
     try:
         reached = reached_user_code(code or "", ns)
     except Exception:  # noqa: BLE001 - not followed: not known to clear

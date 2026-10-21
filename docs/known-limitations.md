@@ -256,21 +256,26 @@ in and return it.
 
 ### A helper memoised with `functools.cache`
 
-<!-- claim: cash/notebook/helper_memos.py:unfilled @ac0f2aa2, cash/notebook/helper_memos.py:used @e27c335d, cash/notebook/helper_memos.py:clears @b89f98db, cash/notebook/helper_memos.py:MAX_KEYED == 256 -->
+<!-- claim: cash/notebook/helper_memos.py:unfilled @3e143841, cash/notebook/helper_memos.py:used @fbd81a2a, cash/notebook/helper_memos.py:clears @06128baa, cash/notebook/helper_memos.py:MAX_KEYED == 256 -->
 A statement served from the cache does not run, so a `@functools.cache` or
 `@functools.lru_cache` helper it calls keeps what it held. A run leaves the
 answers in it, and a later call of the helper uses them without running its
 body. So cash follows these rules:
 
-- A helper that provably only returns (no print, no random draw, no write
-  to a file or a global, nothing cash cannot read, by the same analysis
-  `@cash.cache` uses) and whose answers are numbers, strings or tuples of
-  them: a statement that fills or reads its memo is cached as usual, since
-  running its body again changes nothing. It is not served while the memo
-  holds a different answer for a key the statement read.
+- A helper whose answer provably comes from its arguments alone: it and
+  every function of yours it calls read no global but such functions and
+  plain builtins (`len`, `sum`, `range`, ...), no attribute, no closure
+  variable, and write nothing (`return n * n`, `return sum(range(n))`),
+  with numbers, strings or tuples of them as keys and answers. A
+  statement that fills or reads its memo is cached as usual, since running
+  its body again gives the same answers and does nothing else. It is not
+  served while the memo holds a different answer for a key the statement
+  read. One thing still differs: served, the statement leaves the memo
+  empty, so `h.cache_info()` counts fewer answers than after a run.
 - Any other helper: a statement (or a call cash caches) whose run made the
-  memo compute an answer, emptied it (`cache_clear`, named by the
-  statement or a function of yours it calls), or changed an answer it holds
+  memo compute an answer, emptied it (`cache_clear` under any name the
+  statement or a function of yours it calls uses, or seen from the keys
+  the memo holds afterwards), or changed an answer it holds
   in place (`f(1).append(5)`) changes the memo the way appending to a list
   does: it reruns every time and is never served.
 - One that only read answers already there is served only while the memo
@@ -288,7 +293,8 @@ one of your classes (a `staticmethod`, a `classmethod` or a plain
 attribute). One reached only as an argument, an instance attribute or an
 item of a dict is not checked, and neither is Python's pure-Python
 `lru_cache` (used only when the `_functools` module is missing), nor a
-`cache_clear` reached only through a library. A memo you fill yourself in
+`cache_clear` reached only through a library after which the memo holds
+the very same key and answer objects again. A memo you fill yourself in
 a dict (`_cache[k] = v`) is a global the function changes, covered above.
 
 <!-- claim: cash/analysis/handed_callables.py:handed_callables @c55bd405, cash/analysis/handed_callables.py:hands_a_state_changing_callable @4c3c2d42 -->
