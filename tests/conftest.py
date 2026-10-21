@@ -690,6 +690,12 @@ def pytest_configure(config):
     from cash.notebook.statement import processor
 
     processor.HINT_ERROR_LEVEL = logging.WARNING
+    # The suite's own spies and stubs run inside cash's checks: code of the
+    # host's, not the user's, so they end no digest hand-on (a test's user
+    # code lives in its cells and in the modules it writes).
+    from cash.tracking import trace_recorder
+
+    trace_recorder.HOST_MODULES.add("tests")
     config.addinivalue_line("markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')")
     config.addinivalue_line("markers", "integration: marks tests as integration tests")
     config.addinivalue_line("markers", "requires_ipython: marks tests that require IPython")

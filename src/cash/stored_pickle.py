@@ -412,7 +412,7 @@ class _State:
     and the values whose digest ran out of its budget (id -> weak
     reference), whose pickle the store makes if it takes them (`nested`)."""
 
-    __slots__ = ("kept", "nests", "others", "past_bytes", "past_seconds", "pending", "wanted")
+    __slots__ = ("kept", "nests", "others", "past_bytes", "past_seconds", "pending", "wanted", "watch")
 
     def __init__(
         self,
@@ -428,6 +428,12 @@ class _State:
         self.kept: dict[int, tuple[weakref.ref, Part, frozenset[int]]] = {}
         self.nests: dict[int, tuple[Any, Any, list[Any]]] = {}
         self.pending: dict[int, weakref.ref] = {}
+        #: Open while no code of the user's ran since the window began
+        #: (`value_hash.watch`); closed, nothing kept is handed on.
+        self.watch: Any = None
+
+    def keeps(self) -> bool:
+        return self.watch is not None and self.watch.open
 
 
 @contextmanager
@@ -460,18 +466,24 @@ def keeping(
     the store: the kept bytes are the value as it was when digested. A value
     is kept by a weak reference (an object without one is not kept), so
     nothing here adds to its reference count, which the checks between
-    count. Everything kept is let go at the end."""
+    count. Code of the user's that runs inside (a finalizer, a value's own
+    ``__getstate__``) ends it: nothing kept before is handed to the store
+    (`value_hash.watch`). Everything kept is let go at the end."""
+    from . import value_hash
+
     outer = getattr(_local, "state", None)
-    _local.state = _State(wanted, others, past_budget, past_seconds)
+    state = _local.state = _State(wanted, others, past_budget, past_seconds)
+    state.watch = value_hash.watch()
     try:
         yield
     finally:
         _local.state = outer
+        state.watch.close()
 
 
 def _keeps(value: Any) -> bool:
     state = getattr(_local, "state", None)
-    if state is None:
+    if state is None or not state.keeps():
         return False
     try:
         return bool(state.wanted(value))
@@ -584,7 +596,7 @@ def _proven_apart(pickler: Any, others: list[Any]) -> frozenset[int]:
 
 def _remember(value: Any, part: Part, apart: frozenset[int]) -> None:
     state = getattr(_local, "state", None)
-    if state is None:
+    if state is None or not state.keeps():
         return
     try:
         ref = weakref.ref(value)
@@ -599,7 +611,7 @@ def apart(value: Any, other: Any) -> bool:
     (`_proven_apart`)? Both are alive from that digest to the store, so
     the id names the same object."""
     state = getattr(_local, "state", None)
-    if state is None:
+    if state is None or not state.keeps():
         return False
     found = state.kept.get(id(value))
     return found is not None and found[0]() is value and id(other) in found[2]
@@ -609,7 +621,7 @@ def kept(value: Any) -> Part | None:
     """The store pickle a digest of this very *value* kept (`keeping`), or
     None."""
     state = getattr(_local, "state", None)
-    if state is None:
+    if state is None or not state.keeps():
         return None
     found = state.kept.get(id(value))
     if found is None or found[0]() is not value:

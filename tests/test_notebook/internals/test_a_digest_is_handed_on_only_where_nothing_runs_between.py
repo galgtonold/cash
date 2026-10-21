@@ -101,6 +101,7 @@ def test_the_after_digest_reaches_the_statement_check(monkeypatch):
     handoff = _watched()
     handoff.digest(x)
     ticket = handoff.call_started()
+    handoff.open_after()
     handoff.note_after(ticket, (x,), ("d",))
     reads = _counting(handoff, monkeypatch)
     assert handoff.digest_after(x) == "d"

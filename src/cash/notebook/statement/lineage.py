@@ -36,7 +36,7 @@ from ...analysis.namespace_effects import fits_its_receiver
 from ...tracking.file_dep_snapshot import realpath_of_read_this_run
 from ...tracking.module_symbols import static_attribute_reads
 from ...tracking.read_classification import regular_file_stat
-from ...value_hash import budgeted_hash, compute_hash, costly_after
+from ...value_hash import budgeted_hash, compute_hash, costly_after, reading_once
 from ..cache_key import statement_source_hash
 from ..lineage_formula import (
     binding_source_hash,
@@ -477,12 +477,13 @@ class StatementLineageBuilder:
     def _hash_once(self, taken: dict[int, tuple[Any, str]]) -> Callable[[Any], str]:
         """The content hash (`compute_hash`, or the one this builder was
         given), noting each digest in *taken* by the value's id, with the
-        value held so the id stays its own."""
+        value held so the id stays its own. A digest noted is handed back
+        while no code of the user's ran since (`value_hash.reading_once`)."""
         hash_fn = self.compute_hash or compute_hash
 
         def content_hash(value: Any) -> str:
             found = taken.get(id(value))
-            if found is not None and found[0] is value:
+            if found is not None and found[0] is value and reading_once():
                 return found[1]
             digest = hash_fn(value)
             taken[id(value)] = (value, digest)
@@ -634,14 +635,14 @@ class StatementLineageBuilder:
         """Update variable_hashes and current_session_hashes for *var_name*.
 
         A digest in *taken* is the one this statement already took of this
-        very *value*, after it ran and with no user code since: it is used
-        rather than read again."""
+        very *value*, after it ran: it is used rather than read again while
+        no code of the user's ran since (`value_hash.reading_once`)."""
         content_hash: str | None = None
         if not hashed_by_lineage(value):
             if not self.compute_hash:
                 return
             found = taken.get(id(value)) if taken else None
-            if found is not None and found[0] is value:
+            if found is not None and found[0] is value and reading_once():
                 content_hash = found[1]
             else:
                 try:

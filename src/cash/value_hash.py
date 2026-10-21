@@ -385,30 +385,106 @@ def compute_hash(obj: Any) -> str:
     and an ``Int64`` column, a tz-naive and a tz-aware one, or a C- and an
     F-ordered array holding equal values hash apart.
     """
-    window = _one_read.memo
-    if window is not None and type(obj) not in _ATOMS:
-        found = window.get(id(obj))
+    window = _one_read.window
+    if window is not None and type(obj) not in _ATOMS and window.open:
+        found = window.digests.get(id(obj))
         if found is not None and found[0]() is obj:
             return found[1]
     if value_watch.WATCHING and type(obj) not in _ATOMS:
         digest = value_watch.digest(obj, _compute_hash, value_watch.KIND_VALUE, _reusable)
     else:
         digest = _compute_hash(obj)
-    if window is not None and type(obj) not in _ATOMS and _reusable(obj, digest):
+    if window is not None and type(obj) not in _ATOMS and window.open and _reusable(obj, digest):
         try:
-            window[id(obj)] = (weakref.ref(obj), digest)
+            window.digests[id(obj)] = (weakref.ref(obj), digest)
         except TypeError:
             pass  # a list, dict or tuple: see `one_read`
     return digest
 
 
-class _OneRead(threading.local):
-    """`one_read`'s digests, on the thread that opened it only."""
+class Watch:
+    """Open until code of the user's starts or resumes, on any thread
+    (`user_code_ran`): while it is, a digest taken since it opened still
+    stands for the value. Made by `watch`."""
 
-    memo: dict[int, tuple[weakref.ref, str]] | None = None
+    __slots__ = ("open", "statement_code_ok", "thread")
+
+    def __init__(self, statement_code_ok: bool = False) -> None:
+        self.open = True
+        self.thread = threading.get_ident()
+        #: A statement's own module-level code starting leaves it open: the
+        #: caller read that code (``y = f(x)`` only reads names before its
+        #: call starts, `call_effects._call_shape`).
+        self.statement_code_ok = statement_code_ok
+
+    def close(self) -> None:
+        self.open = False
+        with contextlib.suppress(ValueError):
+            OPEN_WATCHES.remove(self)
+
+
+class _Window(Watch):
+    """One `one_read`: a watch with the digests taken while it is open."""
+
+    __slots__ = ("digests",)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.digests: dict[int, tuple[weakref.ref, str]] = {}
+
+
+class _OneRead(threading.local):
+    """`one_read`'s window, on the thread that opened it only."""
+
+    window: _Window | None = None
 
 
 _one_read = _OneRead()
+
+#: The watches open now, on any thread: `user_code_ran` ends them.
+OPEN_WATCHES: list[Watch] = []
+
+
+def _open(w: Watch) -> Watch:
+    """*w*, watched from now on. Where nothing would see code of the user's
+    run (no ``sys.monitoring`` before Python 3.12, its tool id taken, or
+    ``CASH_TRACE=0`` with no traced call yet), it stays open, as every
+    hand-on was before there was a watch: there a finalizer run between two
+    checks goes unseen."""
+    from .decorator import code_trace
+
+    if code_trace.watching_user_code():
+        OPEN_WATCHES.append(w)
+    return w
+
+
+def watch(statement_code_ok: bool = False) -> Watch:
+    """A watch open from now until code of the user's runs (`_open`)."""
+    return _open(Watch(statement_code_ok))
+
+
+def user_code_ran(statement_code: bool = False, host: bool = False) -> None:
+    """Code of the user's started or resumed, on some thread (a ``__del__``
+    or weakref callback, a value's own ``__reduce__``, a hook): it can change
+    any value, so no digest taken before stands for a later read. A
+    statement's own module-level code (*statement_code*) ends only the
+    watches that did not read it; code run on a thread of what hosts the
+    notebook (*host*, `trace_recorder.HOST_THREADS`) only the ones opened
+    on it."""
+    me = threading.get_ident()
+    for w in list(OPEN_WATCHES):
+        if (statement_code and w.statement_code_ok) or (host and w.thread != me):
+            continue
+        w.close()
+        if isinstance(w, _Window):
+            w.digests = {}
+
+
+def reading_once() -> bool:
+    """Is a `one_read` window open on this thread, no code of the user's
+    having run since it opened?"""
+    window = _one_read.window
+    return window is not None and window.open
 
 
 @contextlib.contextmanager
@@ -423,22 +499,28 @@ def one_read() -> Iterator[None]:
     of them is `compute_hash` of the same object, with no option of its
     own (`budgeted_hash` only gives up past its budget, which a digest
     already taken spares it), so the bytes are the same. The caller vouches
-    that no code of the user's runs inside, on any thread.
+    that no other thread runs code that could change a value. Code of the
+    user's that runs inside, on any thread (a finalizer, a value's own
+    ``__getstate__``), ends the window (`user_code_ran`), and a digest taken
+    while it ran is not kept (where nothing would see it run, see `_open`).
 
     Kept by weak reference, and only for a value that takes one: a
     reference held here would count as a holder to the checks that tell a
-    value shared (`_plain_data`), and a list's digest follows those. A
-    plain list, dict or tuple is read each time, as before. The identity
-    tier's digest is never kept. Nested, the outer one holds.
+    value shared (`_plain_data`), and would keep a model the statement let
+    go of alive until the window ends. A plain list, dict or tuple is read
+    each time, as before. The identity tier's digest is never kept. Nested,
+    the outer one holds.
     """
-    if _one_read.memo is not None:
+    if _one_read.window is not None:
         yield
         return
-    _one_read.memo = {}
+    window = _one_read.window = _open(_Window())
     try:
         yield
     finally:
-        _one_read.memo = None
+        _one_read.window = None
+        window.close()
+        window.digests = {}
 
 
 def _reusable(obj: Any, digest: str) -> bool:

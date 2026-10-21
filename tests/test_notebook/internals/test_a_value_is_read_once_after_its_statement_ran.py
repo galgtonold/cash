@@ -11,11 +11,16 @@ the value between two of them: each reads for itself, as before.
 
 from __future__ import annotations
 
+import gc
+import sys
 import threading
+import time
+import weakref
 
 import pytest
 
 from cash import value_hash, value_watch
+from cash.decorator import code_trace
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
@@ -157,3 +162,171 @@ def test_a_thread_changing_the_model_between_two_checks_is_seen(cash_magics, moc
     m = mock_shell.user_ns["m"]
     assert m.rows[-1] == [-1, -1.0]
     assert cash_magics.tracking_state.current_session_hashes["m"] == value_hash.compute_hash(m)
+
+
+#: Code of the user's: a module of theirs, which a test writes and imports
+#: (the suite's own code is the host's, `trace_recorder.HOST_MODULES`).
+USER_MODULE = """
+def change(value, row):
+    value.rows.append(row)
+
+class Sneaky:
+    "A value whose own __reduce__ changes another one as it is read."
+
+    def __init__(self, other):
+        self.other = other
+
+    def __reduce__(self):
+        if self.other is not None:
+            self.other.rows.append([7, 7.0])
+        return (Sneaky, (None,))
+"""
+
+
+@pytest.fixture
+def user(tmp_path, monkeypatch):
+    name = f"_user_code_{id(tmp_path)}"
+    (tmp_path / f"{name}.py").write_text(USER_MODULE, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    mod = __import__(name)
+    yield mod
+    sys.modules.pop(name, None)
+
+
+@pytest.fixture
+def watched():
+    if code_trace._recorder() is None:
+        pytest.skip("no sys.monitoring tool id: nothing sees code of the user's run")
+
+
+def test_a_finalizer_changing_the_model_between_two_checks_is_seen(
+    cash_magics, mock_shell, monkeypatch, unwatched, watched
+):
+    """The collector runs a ``__del__`` of the user's after the in-place
+    check read the model and before its session hash is taken: it changed
+    the model, so the window ends and the session hash is the model as it
+    is now."""
+    mock_shell.user_ns["__name__"] = "__main__"
+    run_cash_cell(cash_magics, SETUP)
+    run_cash_cell(cash_magics, MAKE)
+    run_cash_cell(
+        cash_magics,
+        "fired = []\nclass Bomb:\n    def __del__(self):\n        m.rows.append([-1, -1.0])\n        fired.append(1)\n",
+    )
+    gc.disable()
+    try:
+        run_cash_cell(cash_magics, "b = Bomb()\nb.me = b\ndel b")
+        mock_shell.user_ns["fired"].clear()
+        windows = []
+        real_window = value_hash.one_read
+        monkeypatch.setattr(value_hash, "one_read", lambda: windows.append(1) or real_window())
+        routing = cash_magics._statement_processor._mutation_routing
+        real_observe = routing.observe
+
+        def observe(run):
+            real_observe(run)  # reads m
+            gc.collect()
+
+        monkeypatch.setattr(routing, "observe", observe)
+        run_cash_cell(cash_magics, "fit(m)")
+    finally:
+        gc.enable()
+    assert windows, "no other thread: the window opens"
+    assert mock_shell.user_ns["fired"] == [1], "the finalizer ran inside the window"
+    m = mock_shell.user_ns["m"]
+    assert m.rows[-1] == [-1, -1.0]
+    assert cash_magics.tracking_state.current_session_hashes["m"] == value_hash.compute_hash(m)
+
+
+def test_a_value_read_while_code_of_the_users_ran_is_not_kept(user, watched):
+    value = Big(20)
+    with value_hash.one_read():
+        before = value_hash.compute_hash(value)
+        value_hash.compute_hash(user.Sneaky(value))
+        assert value_hash.compute_hash(value) != before, "the window ended: read again"
+
+
+def test_a_callback_of_the_users_ends_the_window(user, watched):
+    value = Big(20)
+    with value_hash.one_read():
+        before = value_hash.compute_hash(value)
+        user.change(value, [3, 3.0])
+        assert value_hash.compute_hash(value) != before
+
+
+def test_a_thread_of_the_users_ends_the_window(user, watched):
+    value = Big(20)
+    with value_hash.one_read():
+        before = value_hash.compute_hash(value)
+        t = threading.Thread(target=user.change, args=(value, [5, 5.0]))
+        t.start()
+        t.join()
+        assert value_hash.compute_hash(value) != before
+
+
+def test_the_window_does_not_keep_a_model_alive():
+    value = Big(200)
+    gone = weakref.ref(value)
+    with value_hash.one_read():
+        value_hash.compute_hash(value)
+        del value
+        assert gone() is None, "the window holds its values weakly"
+
+
+def test_a_digest_handed_to_the_call_is_not_one_taken_before_code_of_the_users_ran(user, watched):
+    """``y = f(x)``: the statement's fingerprint of ``x`` before it ran is
+    handed to the call's hash before the call, unless code of the user's ran
+    in between (a finalizer the collector ran)."""
+    import ast
+
+    from cash.notebook.call_effects import DigestHandoff
+
+    value = Big(20)
+    for user_code_runs in (False, True):
+        handoff = DigestHandoff()
+        handoff.begin_statement()
+        handoff.watch(ast.parse("y = f(x)"), {"f": len, "x": value})
+        handoff.digest(value)
+        if user_code_runs:
+            user.change(value, [9, 9.0])
+        ticket = handoff.call_started()
+        assert handoff.digest_before(ticket)(value) == value_hash.compute_hash(value)
+
+
+def test_a_pickle_kept_for_the_store_is_dropped_once_code_of_the_users_ran(user, watched):
+    from cash import stored_pickle
+
+    value = Big(20)
+    with stored_pickle.keeping(lambda v: v is value):
+        stored_pickle.object_digest(value)
+        assert stored_pickle.kept(value) is not None
+        user.change(value, [4, 4.0])
+        assert stored_pickle.kept(value) is None, "the value changed since its pickle was kept"
+
+
+def _settle(pool_alive, want, deadline=20.0):
+    end = time.monotonic() + deadline
+    while time.monotonic() < end:
+        if pool_alive() == want:
+            return True
+        time.sleep(0.05)
+    return pool_alive() == want
+
+
+def test_a_pool_counts_as_alive_only_while_it_has_work():
+    """A process pool's manager and its queue's feeder thread stay alive
+    after its work is done (joblib's after an ``n_jobs`` fit): idle, they
+    change nothing; with work handed to them, they may."""
+    from concurrent.futures import ProcessPoolExecutor
+
+    from cash.tracking.trace_recorder import other_thread_alive
+
+    ns = {}
+    assert not other_thread_alive(ns)
+    with ProcessPoolExecutor(max_workers=1) as pool:
+        assert pool.submit(abs, -1).result(timeout=60) == 1
+        assert _settle(lambda: other_thread_alive(ns), False), "an idle pool's threads change nothing"
+        busy = pool.submit(time.sleep, 3)
+        assert other_thread_alive(ns), "a pool with work counts as alive"
+        busy.result(timeout=60)
+        assert _settle(lambda: other_thread_alive(ns), False)

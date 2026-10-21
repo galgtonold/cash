@@ -20,17 +20,20 @@ DEFS = (
     "def bump(a):\n    time.sleep(0.25)\n    a[0] += 1\n    return 0\n"
 )
 # Installed afresh on every use, over the real function, with a fresh count:
-# cash's modules outlive a test in a reused kernel.
+# cash's modules outlive a test in a reused kernel. Compiled as cash's own
+# code: the notebook's would be the user's, whose start ends cash's digest
+# hand-ons (`value_hash.watch`).
 COUNT = (
     "import cash.content_hashers as ch\n"
     "ch.hash_numpy = getattr(ch, 'real_hash_numpy', ch.hash_numpy)\n"
     "ch.real_hash_numpy = ch.hash_numpy\n"
     "ch.reads_of_x = []\n"
-    "def counting(value, *a, ch=ch, **k):\n"
-    "    if value is get_ipython().user_ns.get('x'):\n"
-    "        ch.reads_of_x.append(1)\n"
-    "    return ch.real_hash_numpy(value, *a, **k)\n"
-    "ch.hash_numpy = counting\n"
+    "_g = {'__name__': 'cash._test_count', 'ch': ch, 'ns': get_ipython().user_ns}\n"
+    "exec(compile('def counting(value, *a, **k):\\n"
+    "    if value is ns.get(\\'x\\'):\\n"
+    "        ch.reads_of_x.append(1)\\n"
+    "    return ch.real_hash_numpy(value, *a, **k)\\n', '<cash-test>', 'exec'), _g)\n"
+    "ch.hash_numpy = _g['counting']\n"
 )
 READS = "len(__import__('cash.content_hashers').content_hashers.reads_of_x)"
 

@@ -1127,6 +1127,7 @@ class CallUnit:
         # a hit would silently skip.
         if arg_hashes_before is None:
             return False
+        self._digests.open_after()
         arg_hashes_after = hash_args(call.args, call.kwargs, self._fingerprints)
         if arg_hashes_after != arg_hashes_before:
             return True

@@ -50,10 +50,15 @@ class Stored(NamedTuple):
 class Offer:
     """The digests one statement took of its names before it ran."""
 
-    __slots__ = ("binds_result", "claimed", "digests", "filename", "ran_body", "stored")
+    __slots__ = ("binds_result", "claimed", "digests", "filename", "ran_body", "stored", "watch")
 
-    def __init__(self, filename: str, digests: dict[int, tuple[Any, str]], binds_result: bool = False) -> None:
+    def __init__(
+        self, filename: str, digests: dict[int, tuple[Any, str]], binds_result: bool = False, watch: Any = None
+    ) -> None:
         self.filename = filename
+        #: Open while no code of the user's ran since the digests were taken
+        #: (`value_hash.watch`); closed, none is handed back.
+        self.watch = watch
         #: ``id(value) -> (value, digest)``; each value held, so no id is reused.
         self.digests = digests
         self.claimed = False
@@ -67,6 +72,8 @@ class Offer:
 
     def digest(self, value: Any) -> str | None:
         """The digest taken of this very *value*, or None."""
+        if self.watch is not None and not self.watch.open:
+            return None
         found = self.digests.get(id(value))
         return found[1] if found is not None and found[0] is value else None
 
@@ -87,9 +94,10 @@ def _count_open(before: Any, after: Any) -> None:
         offers(1 if after is not None else -1)
 
 
-def offer(filename: str, digests: dict[int, tuple[Any, str]], binds_result: bool = False) -> Offer:
-    """Offer *digests* to a call the statement compiled under *filename* makes."""
-    made = Offer(filename, dict(digests), binds_result)
+def offer(filename: str, digests: dict[int, tuple[Any, str]], binds_result: bool = False, watch: Any = None) -> Offer:
+    """Offer *digests* to a call the statement compiled under *filename*
+    makes, while *watch* (`value_hash.watch`) stays open."""
+    made = Offer(filename, dict(digests), binds_result, watch)
     _count_open(getattr(_local, "offer", None), made)
     _local.offer = made
     _local.last = made

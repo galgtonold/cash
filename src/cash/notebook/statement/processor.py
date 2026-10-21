@@ -2073,9 +2073,12 @@ class StatementProcessor:
         Updates ``run.outputs`` and ``run.skip_cache`` with what execution
         revealed (an observed mutation, an uncacheable value).
 
-        From its start to its outputs' lineage, only cash's code runs on this
-        thread: each value is read once there (`value_hash.one_read`), unless
-        another thread is alive and could change it in between.
+        From its start to its outputs' lineage, mostly cash's code runs on
+        this thread: each value is read once there (`value_hash.one_read`),
+        unless another thread is alive and could change it in between. Code
+        of the user's run inside (a finalizer, a value's own
+        ``__getstate__``) ends the window, and where nothing would see it
+        run none opens (`value_hash.watch`).
         """
         alive = self._other_thread_alive()
         with contextlib.ExitStack() as reads:
@@ -2117,9 +2120,10 @@ class StatementProcessor:
         # of an output takes is kept for the store to take
         # (`stored_pickle.keeping`), instead of pickling the value again.
         returned = self._calls.returned_digest(run.code)
-        if alive:
-            # Another thread may have changed a value since a check read it:
-            # each output is read again for its lineage.
+        if alive or not value_hash.reading_once():
+            # Another thread, or code of the user's (a finalizer), may have
+            # changed a value since a check read it: each output is read
+            # again for its lineage.
             run.settled_digests = {}
             returned = None
         if returned is not None:

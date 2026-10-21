@@ -25,6 +25,7 @@ thread during the unit and was recorded).
 
 from __future__ import annotations
 
+import collections
 import sys
 import threading
 import types
@@ -339,6 +340,11 @@ HOST_THREADS: weakref.WeakSet[threading.Thread] = weakref.WeakSet()
 #: `other_thread_alive`.
 HOST_PACKAGES: set[str] = set()
 
+#: The packages of what hosts the notebook whose code changes none of its
+#: values (a test suite's spies and stubs, run inside cash's checks): their
+#: code starting ends no digest hand-on (`cash.value_hash.watch`).
+HOST_MODULES: set[str] = set()
+
 
 def _unlisted_python_thread(listed: set[int | None]) -> bool:
     """Is a thread running Python that `threading` does not list, other
@@ -410,6 +416,52 @@ def _kernel_code(t: threading.Thread) -> bool:
     return _named(getattr(target, "__func__", target)) in _KERNEL_THREADS
 
 
+#: A process pool's manager thread (``module:qualname`` of its class): it
+#: hands the pool work and takes its results back, and runs the callbacks
+#: of a result (joblib's dispatches the next batch, pickling the user's
+#: values). joblib's (sklearn's ``n_jobs``) stays alive between calls.
+_POOL_MANAGERS = frozenset(
+    {
+        "joblib.externals.loky.process_executor:_ExecutorManagerThread",
+        "concurrent.futures.process:_ExecutorManagerThread",
+    }
+)
+
+#: A multiprocessing queue's feeder thread, by its target: it pickles what
+#: was put on the queue (a task and its arguments) and sends it.
+_QUEUE_FEEDERS = frozenset(
+    {
+        "joblib.externals.loky.backend.queues:Queue._feed",
+        "multiprocessing.queues:Queue._feed",
+    }
+)
+
+#: Where a pool's helper thread waits for something to do.
+_WAITS = frozenset({"threading", "selectors", "multiprocessing.connection"})
+
+
+def _idle_pool_helper(t: threading.Thread, frame: Any) -> bool:
+    """Is *t*, a pool's manager or a queue's feeder, idle: no work handed to
+    it that it has not finished (a manager's pending items, a feeder's
+    buffer), and waiting now? Until this thread hands it work it runs no
+    code of the user's and reads none of the user's values; a worker that
+    ends on its own only takes a manager through the pool's bookkeeping.
+    Busy, it runs a result's callbacks or pickles a task's arguments (a
+    value's own ``__reduce__``), so it counts as alive, and so does one
+    whose state is not read as idle."""
+    if frame is None or frame.f_globals.get("__name__") not in _WAITS:
+        return False
+    try:
+        if _named(type(t)) in _POOL_MANAGERS:
+            pending = t.pending_work_items
+            running = getattr(t, "running_work_items", ())
+            return type(pending) is dict and not pending and not running
+        buffer = t._args[0]
+    except (AttributeError, IndexError, TypeError):
+        return False
+    return type(buffer) is collections.deque and not buffer
+
+
 def other_thread_alive(notebook_ns: Any) -> bool:
     """Might another thread change a value between two checks that read it,
     so that a digest one took cannot stand for the other: any live thread
@@ -419,12 +471,16 @@ def other_thread_alive(notebook_ns: Any) -> bool:
     which `runs_user_code` cannot see, and a wrong yes only costs a read
     again. A thread a C library started (an audio or device callback) runs
     Python unlisted by `threading`: any thread running Python that it does
-    not list counts too."""
+    not list counts too. A process pool's manager or a queue's feeder
+    thread counts only while it has work (`_idle_pool_helper`): joblib's
+    stays alive after an ``n_jobs`` fit, and kept every model the session
+    fitted so from being read once after its statement."""
     me = threading.current_thread()
     threads = threading.enumerate()
     listed = {t.ident for t in threads}
     if _unlisted_python_thread(listed):
         return True
+    frames = None
     for t in threads:
         if t is me or t in HOST_THREADS or not t.is_alive():
             continue
@@ -432,6 +488,12 @@ def other_thread_alive(notebook_ns: Any) -> bool:
             return True
         if _kernel_code(t):
             continue
+        if _named(type(t)) in _POOL_MANAGERS or _named(getattr(_code_of(t), "__func__", _code_of(t))) in _QUEUE_FEEDERS:
+            if frames is None:
+                frames = sys._current_frames()
+            if _idle_pool_helper(t, frames.get(t.ident)):
+                continue
+            return True
         name = getattr(_code_of(t), "__module__", None)
         if not (isinstance(name, str) and (name == "cash" or name.startswith("cash."))):
             return True

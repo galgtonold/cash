@@ -43,7 +43,7 @@ from cash.source_reading import wrapper_layers
 from cash.tracking.file_dep_snapshot import dep_path_for_this_process
 from cash.tracking.trace_recorder import other_thread_alive
 from cash.tracking.tracker_context import active_tracker
-from cash.value_hash import compute_hash, is_identity_fallback_hash
+from cash.value_hash import compute_hash, is_identity_fallback_hash, watch
 
 logger = logging.getLogger(__name__)
 
@@ -652,6 +652,12 @@ class DigestHandoff:
         #: ``id(value) -> (value, digest)`` taken by `digest_after` since
         #: `begin_settled`, or ``None`` when not collecting (`take_settled`).
         self._settled: dict[int, tuple[Any, str]] | None = None
+        #: Open while no code of the user's ran since `_before` and `_after`
+        #: began to be taken (`value_hash.watch`): a finalizer or a hook
+        #: run in between may change a value. Closed or None: nothing of
+        #: it is handed on.
+        self._before_watch: Any = None
+        self._after_watch: Any = None
 
     def begin_cell(self) -> None:
         self.fingerprints.clear()
@@ -670,6 +676,8 @@ class DigestHandoff:
         self._watched = False
         self._settled = None
         self._crowded = False
+        self._before_watch = _closed(self._before_watch)
+        self._after_watch = _closed(self._after_watch)
         handed_digests.forget()
 
     def watch(self, tree: ast.Module | None, namespace: Mapping[str, Any] | None = None) -> None:
@@ -694,13 +702,14 @@ class DigestHandoff:
     def digest(self, value: Any) -> str:
         """`compute_hash` of *value*, kept for the call's hash before the
         call when nothing can run in between."""
+        kept = (self._before_ok or self._first_source is not None) and self._started == 0
+        if kept and self._before_watch is None:
+            # Open before the read: code of the user's run by it (a value's
+            # own ``__reduce__``) is seen. The statement's own code starting
+            # leaves it open: `_call_shape` read it.
+            self._before_watch = watch(statement_code_ok=True)
         digest = self.fingerprints.digest(value)
-        if (
-            (self._before_ok or self._first_source is not None)
-            and self._started == 0
-            and not is_identity_fallback_hash(value, digest)
-            and self.alone()
-        ):
+        if kept and _open(self._before_watch) and not is_identity_fallback_hash(value, digest) and self.alone():
             self._before[id(value)] = (value, digest)
         return digest
 
@@ -731,20 +740,30 @@ class DigestHandoff:
             return self.fingerprints.digest
         if not self.alone():
             return self.fingerprints.digest
+        opened = self._before_watch
 
         def digest(value: Any) -> str:
             found = before.get(id(value))
-            if found is not None and found[0] is value:
+            if found is not None and found[0] is value and _open(opened):
                 return found[1]
             return self.fingerprints.digest(value)
 
         return digest
+
+    def open_after(self) -> None:
+        """The call returned and its arguments are about to be read again:
+        what that read takes may be handed to the statement's check after
+        it while no code of the user's runs (`note_after`)."""
+        _closed(self._after_watch)
+        self._after_watch = watch()
 
     def note_after(self, ticket: tuple[int, int], values: tuple, digests: tuple) -> None:
         """The call holding *ticket* returned and hashed *values* to
         *digests*: kept for the statement's fingerprint after it, when the
         call is the whole statement and only its result's binding follows."""
         if ticket[0] != self._generation or ticket[1] != 1 or not self._after_ok or not self.alone():
+            return
+        if not _open(self._after_watch):
             return
         self._after = {id(v): (v, d) for v, d in zip(values, digests) if isinstance(d, str)}
         self._after_at = self._started
@@ -762,8 +781,9 @@ class DigestHandoff:
         if self._before_ok and self._started == 0:
             # With no digests too: the call still says where its result went
             # (`handed_digests.stored_result`).
-            digests = self._before if self.alone() else {}
-            self._offer = handed_digests.offer(filename, digests, binds_result=self._after_ok)
+            opened = self._before_watch
+            digests = self._before if self.alone() and _open(opened) else {}
+            self._offer = handed_digests.offer(filename, digests, binds_result=self._after_ok, watch=opened)
 
     def withdraw_offer(self) -> None:
         handed_digests.withdraw()
@@ -824,11 +844,21 @@ class DigestHandoff:
             found = offer.digest(value)
             if found is not None:
                 return found
-        if self._after and self._after_at == self._started:
+        if self._after and self._after_at == self._started and _open(self._after_watch):
             found = self._after.get(id(value))
             if found is not None and found[0] is value:
                 return found[1]
         return self.fingerprints.digest(value)
+
+
+def _open(w: Any) -> bool:
+    """Is *w*, a `value_hash.watch` or None, open?"""
+    return w is not None and w.open
+
+
+def _closed(w: Any) -> None:
+    if w is not None:
+        w.close()
 
 
 def hash_args(

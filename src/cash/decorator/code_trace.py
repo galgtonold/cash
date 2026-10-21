@@ -60,7 +60,7 @@ import weakref
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-from .._paths import is_pseudo_filename
+from .._paths import CELL_NAME_PREFIX, is_pseudo_filename
 from ..analysis.purity_report import (
     ISSUE_AMBIENT_READ,
     ISSUE_DISCARDED_CALL,
@@ -188,6 +188,7 @@ TraceUnit: Any = None
 
 
 def _recorder_class() -> type:
+    from .. import value_hash
     from ..install_paths import is_user_path, known_user_path
     from ..tracking import trace_recorder as rec
 
@@ -343,6 +344,8 @@ def _recorder_class() -> type:
                 events |= mon.events.CALL
             self.user_codes[code] = events
             mon.set_local_events(self.tool, code, events)
+            if value_hash.OPEN_WATCHES and not pool and not _host_code(kind[2]):
+                value_hash.user_code_ran(_statement_code(code), _host_thread())
             if self.active or self.stack:
                 if code.co_flags & rec.RESUMABLE and offset:
                     self._seen_resume(code, g, kind)
@@ -389,6 +392,13 @@ def _recorder_class() -> type:
                 self.active = [*self.active, unit]
             return unit
 
+        def watching(self) -> bool:
+            """`watching_user_code` on this recorder."""
+            if self.tool is None or not self._intact():
+                return False
+            self._rearm()
+            return True
+
         def _rearm(self) -> None:
             rearm, self.rearm = self.rearm, set()
             mon = sys.monitoring
@@ -423,7 +433,19 @@ def _recorder_class() -> type:
                 if kind is None or kind[0] is not g:
                     kind = self._classify(g)
                 self._seen_start(code, frame, g, kind)
+            if value_hash.OPEN_WATCHES:
+                self._seen_in_window(code, sys._getframe(1).f_globals)
             return DISABLE
+
+        def _seen_in_window(self, code: types.CodeType, g: dict) -> None:
+            """*code* started or resumed while a `value_hash.watch` is open:
+            unless it is a library's (pyplot's, the one library whose code
+            has events here), the watches end."""
+            kind = self._kinds.get(id(g))
+            if kind is None or kind[0] is not g:
+                kind = self._classify(g)
+            if (kind[1] is not None or self._unregistered_user_code(kind[2], code)) and not _host_code(kind[2]):
+                value_hash.user_code_ran(_statement_code(code), _host_thread())
 
         def _seen_start(self, code: types.CodeType, frame: Any, g: dict, kind: tuple) -> None:
             units = self.active
@@ -485,6 +507,8 @@ def _recorder_class() -> type:
                 if kind is None or kind[0] is not g:
                     kind = self._classify(g)
                 self._seen_resume(code, g, kind)
+            if value_hash.OPEN_WATCHES:
+                self._seen_in_window(code, sys._getframe(1).f_globals)
             return DISABLE
 
         def _seen_resume(self, code: types.CodeType, g: dict, kind: tuple) -> None:
@@ -571,6 +595,36 @@ def recorder_or_reason() -> Any:
     when its ``tool`` is None."""
     _recorder()
     return _RECORDER
+
+
+def _host_code(module: str) -> bool:
+    """Is *module* one of what hosts the notebook's (a test runner's), whose
+    code changes none of its values (`trace_recorder.HOST_MODULES`)?"""
+    from ..tracking.trace_recorder import HOST_MODULES
+
+    return bool(HOST_MODULES) and module.partition(".")[0] in HOST_MODULES
+
+
+def _host_thread() -> bool:
+    """Is this thread one of what hosts the notebook's, which change none of
+    its values (`trace_recorder.HOST_THREADS`)?"""
+    from ..tracking.trace_recorder import HOST_THREADS
+
+    return threading.current_thread() in HOST_THREADS
+
+
+def _statement_code(code: types.CodeType) -> bool:
+    """Is *code* a notebook statement's own module-level code?"""
+    return code.co_name == "<module>" and code.co_filename.startswith(CELL_NAME_PREFIX)
+
+
+def watching_user_code() -> bool:
+    """Will code of the user's that starts or resumes from now on, on any
+    thread, end the `value_hash.watch` watches open then? Only with the
+    process's recorder installed and intact; the events its callbacks
+    turned off on the user's code are armed again first."""
+    rec = _RECORDER
+    return rec is not None and rec.watching()
 
 
 def begin() -> Any:
