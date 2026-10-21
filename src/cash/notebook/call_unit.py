@@ -594,6 +594,8 @@ class CallUnit:
         self._cached_reads: dict[str, int] = {}
         #: Functions already told about NOTEBOOK-ANALYSIS-BUDGET (`_tell_past_budget`).
         self._past_budget_told: set[str] = set()
+        #: The functions `_tell_cells_shared` has warned for.
+        self._cells_shared_told: set[str] = set()
         self.reads_seq = 0
         self._last_key_s: float | None = None
         self._invoked_keys: list[str | None] = []
@@ -1150,12 +1152,15 @@ class CallUnit:
         from cash.notebook.statement.processor import share_check_budget  # imports this module
 
         budget = share_check_budget(elapsed)
+        explain = elapsed >= COMPUTE_FLOOR_S and _name_of(call) not in self._cells_shared_told
         try:
             with walk_budget(budget):
-                storable = self._entries.storable(result, call.args, call.kwargs, call.fn, result_held)
+                storable = self._entries.storable(result, call.args, call.kwargs, call.fn, result_held, explain)
         except WalkBudgetExceeded:
             self._tell_past_budget(call, elapsed, budget)
             return False
+        if explain and self._entries.cells_shared_with is not None:
+            self._tell_cells_shared(call, elapsed, self._entries.cells_shared_with)
         return storable and self._entries.restore_pays(result, elapsed)
 
     def _tell_past_budget(self, call: _Call, elapsed: float, budget: float) -> None:
@@ -1179,6 +1184,24 @@ class CallUnit:
         )
         log_diagnostic(logger, "NOTEBOOK-ANALYSIS-BUDGET", what, fix)
         warn_diagnostic(CashCacheIneffectiveWarning, "NOTEBOOK-ANALYSIS-BUDGET", what, fix)
+
+    def _tell_cells_shared(self, call: _Call, elapsed: float, argument: str) -> None:
+        """Say once per function that its call is not stored because its
+        result holds, in a frame's object column, the very objects
+        *argument*'s frame holds (``NOTEBOOK-CELLS-SHARED``); asked only for a
+        call slow enough that storing it would have mattered."""
+        name = _name_of(call)
+        self._cells_shared_told.add(name)
+        what = (
+            f"the call to {name} ran {elapsed:.2f}s and was not cached: its result shares cells with argument "
+            f"{argument}; runs every time until cash can keep them shared."
+        )
+        fix = (
+            "nothing, when nothing changes those objects in place; to cache the call, return copies of "
+            "them (the column's .map(copy.deepcopy))."
+        )
+        log_diagnostic(logger, "NOTEBOOK-CELLS-SHARED", what, fix)
+        warn_diagnostic(CashCacheIneffectiveWarning, "NOTEBOOK-CELLS-SHARED", what, fix)
 
     def _store_result(
         self,
@@ -1611,3 +1634,8 @@ def _left_pyplot_alone(fn: Any, unit: Any) -> bool:
     if unit is not None:
         return not unit.pyplot_ran
     return user_callee_using_pyplot(fn) is None
+
+
+def _name_of(call: _Call) -> str:
+    """The name a warning gives *call*'s function."""
+    return getattr(call.fn, "__qualname__", None) or repr(call.fn)

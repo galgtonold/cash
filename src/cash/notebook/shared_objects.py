@@ -412,8 +412,8 @@ def _library_children(value: Any) -> list[Any] | None:
     that a restore copies with it, or None for a leaf: a ``deque``'s items,
     a ``UserDict``'s ``data``, a ``ChainMap``'s ``maps``, an object array's
     items (one that owns them: a view's items are its base's), and a
-    pandas object's ``attrs`` and the cells of its object columns
-    (`_object_cells`)."""
+    pandas object's ``attrs`` and the cells of its object columns that
+    something else holds too (`_object_cells`)."""
     kind = _LIBRARY_KINDS.get(type(value))
     if kind is None:
         kind = _library_kind(type(value))
@@ -760,8 +760,7 @@ def holds_through_libraries_what_is_held_elsewhere(value: Any) -> bool:
     """Whether an object *value* holds (not *value* itself), read down
     through library objects and object columns as `ids_through_libraries`
     reads them, has a holder outside *value* by reference count, or sits on
-    memory another object may hold (a numpy view, a pandas object holding
-    object cells). When neither, no argument or global can share anything
+    memory another object may hold (a numpy view). When neither, no argument or global can share anything
     with *value*, and they are not read: a call handed a namespace of a
     million dicts that returns a fresh one."""
     value_types = VALUE_TYPES + library_value_types()
@@ -778,8 +777,6 @@ def holds_through_libraries_what_is_held_elsewhere(value: Any) -> bool:
             if read_down is None:
                 continue  # a type, a function, cash's own: not one to look for
             children = gc.get_referents(obj) if read_down else ()
-        elif _object_cells(obj):
-            return True
         nodes[id(obj)] = obj
         if not len(nodes) & 1023:
             check_walk_budget()
@@ -796,10 +793,13 @@ def holds_through_libraries_what_is_held_elsewhere(value: Any) -> bool:
 
 
 def _object_cells(value: Any) -> list[Any]:
-    """The cells of *value*'s object columns, when it is a pandas frame or
-    series: ``pd.DataFrame({'d': [rect, [2]]})`` holds ``rect`` itself,
-    and ``df['d'].iloc[0] is rect``. A column of strings, or of other
-    values pandas tells apart in C (`infer_dtype`), is not listed."""
+    """The cells of *value*'s object columns that something outside the
+    column holds too, when it is a pandas frame or series:
+    ``pd.DataFrame({'d': [rect, [2]]})`` holds ``rect`` itself, and
+    ``df['d'].iloc[0] is rect``. A cell only the column holds can be shared
+    with nothing, and a million of them are not listed for every share
+    check (`_cells_held_elsewhere`); nor is a column of strings, or of
+    other values pandas tells apart in C (`infer_dtype`)."""
     pd = sys.modules.get("pandas")
     if pd is None:
         return []
@@ -816,14 +816,76 @@ def _object_cells(value: Any) -> list[Any]:
         array = column.to_numpy(copy=False)
         if pd.api.types.infer_dtype(array, skipna=True) in _VALUE_COLUMNS:
             continue
-        cells.extend(array.ravel().tolist())
+        # The array holds each cell once per row, and so does its tolist.
+        cells += _cells_held_elsewhere(array.tolist(), 2)
     return cells
+
+
+def _cells_held_elsewhere(cells: list[Any], per: int) -> list[Any]:
+    """The objects of *cells* whose reference count is above *per* for each
+    time they occur in it, each once: what something else holds too. Not
+    an int, float, str, bytes, bool or None."""
+    if _CELLS_HELD_ELSEWHERE is not None:
+        return _CELLS_HELD_ELSEWHERE(cells, per)
+    # One at or below *per* occurs once and nothing else holds it: the same
+    # object has the same count wherever it occurs.
+    refcounts = _refcounts(cells)
+    above = [
+        (cell, refs)
+        for cell, refs in zip(cells, refcounts)
+        if refs - _REFCOUNTS_OVERHEAD > per and cell is not None and type(cell) not in _ATOM_CELLS
+    ]
+    counts: dict[int, int] = {}
+    for cell, _refs in above:
+        counts[id(cell)] = counts.get(id(cell), 0) + 1
+    return [
+        cell for cell, refs in above if (count := counts.pop(id(cell), 0)) and refs - _REFCOUNTS_OVERHEAD > per * count
+    ]
+
+
+def _refcounts(cells: list[Any]) -> list[int]:
+    """The reference count of each of *cells*, as `_REFCOUNTS_OVERHEAD`
+    calibrates it."""
+    return [sys.getrefcount(cell) for cell in cells]
+
+
+_ATOM_CELLS = frozenset({int, float, str, bytes, bool})
+
+#: What `_refcounts` adds to a count: measured on an object one list holds.
+_REFCOUNTS_OVERHEAD = _refcounts([types.SimpleNamespace()])[0] - 1
+
+#: The C kernel `_cells_held_elsewhere` counts with (``cwalk.c``), or None
+#: without the kernels, or in a build from before it.
+_CELLS_HELD_ELSEWHERE = getattr(_native.kernels, "cells_held_elsewhere", None)
 
 
 #: `infer_dtype` answers for an object column holding only values.
 _VALUE_COLUMNS = frozenset(
     {"string", "bytes", "integer", "floating", "decimal", "boolean", "empty", "datetime", "date", "timedelta", "time"}
 )
+
+
+def object_cell_ids(value: Any) -> set[int]:
+    """The ids of the object-column cells held elsewhere too
+    (`_object_cells`) of the pandas objects *value* is or holds, read as
+    `ids_through_libraries` reads it."""
+    value_types = VALUE_TYPES + library_value_types()
+    found: set[int] = set()
+    seen: set[int] = set()
+    stack = [value]
+    while stack:
+        obj = stack.pop()
+        if id(obj) in seen or is_value(obj, value_types):
+            continue
+        seen.add(id(obj))
+        if not len(seen) & 1023:
+            check_walk_budget()
+        found.update(map(id, _object_cells(obj)))
+        children = children_of(obj)
+        if children is None and _read_down(obj, value_types):
+            children = gc.get_referents(obj)
+        stack.extend(children or ())
+    return found
 
 
 def identities_of(value: Any) -> set[int]:

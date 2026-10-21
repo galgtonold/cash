@@ -1717,6 +1717,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-ANALYSIS-FAILED](#notebook-analysis-failed) | notebook | a safety check raised; the statement ran uncached |
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
+| [NOTEBOOK-CELLS-SHARED](#notebook-cells-shared) | notebook | a call's result holds the objects an argument's frame column holds; it runs every time |
 | [NOTEBOOK-CHANGED-BELOW](#notebook-changed-below) | notebook | a cell re-run on its own reads a value rebuilt without the in-place change a cell below made |
 | [NOTEBOOK-CLASS-KEPT](#notebook-class-kept) | notebook | a class's own state a cell changes could not be put back for a re-run, and another cell changes it too |
 | [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
@@ -1817,6 +1818,30 @@ longer invalidated when it changes.
 If it is not code, delete it or make it a markdown cell.
 
 **When it is safe to ignore.** When nothing below uses that cell.
+
+### NOTEBOOK-CELLS-SHARED {#notebook-cells-shared}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/notebook/call_unit.py:CallUnit._tell_cells_shared @062dbe72, cash/notebook/call_entries.py:_argument_sharing_cells @7f1acc6e -->
+**What happened.** A call inside a statement returned a pandas frame or
+series whose object column holds the very objects (lists, dicts, your own
+objects) a frame it was handed holds: `flt(df)` returning `df[mask]`
+selects rows, and the cells of the rows it keeps are `df`'s own. cash does
+not yet keep such cells shared when it restores a result, so the call is
+not stored. The message names the function and the argument. It is shown
+once per function, and only for a call that took a tenth of a second or
+more.
+
+**Why it matters.** The call runs every time. The result is correct: a
+restored copy would hold copies of the cells, and a later change to one
+through either frame would no longer show in the other.
+
+**What to do.** Nothing, when nothing changes those objects in place. To
+cache the call, return copies of them (the column's `.map(copy.deepcopy)`).
+
+**When it is safe to ignore.** When the call is quick enough to run every
+time.
 
 ### NOTEBOOK-CHANGED-BELOW {#notebook-changed-below}
 

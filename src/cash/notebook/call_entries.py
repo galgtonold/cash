@@ -9,6 +9,7 @@ only while the files it read and its statement's TTL say it is fresh.
 from __future__ import annotations
 
 import functools
+import inspect
 import logging
 import sys
 import time as _time
@@ -42,6 +43,7 @@ from cash.notebook.shared_objects import (
     is_value,
     library_parts_held,
     library_value_types,
+    object_cell_ids,
 )
 from cash.sizing import estimate_object_size, pickled_size_estimate
 from cash.tracking.env_reads import environment_unchanged
@@ -178,6 +180,10 @@ class CallEntries:
         persist_provider: Callable[[], bool] | None = None,
     ):
         self._cash = cash_instance
+        #: The argument whose frame's object cells the result last refused
+        #: by `storable` holds too (its parameter name), or None; looked up
+        #: only when asked (*explain_cells*): it walks the result again.
+        self.cells_shared_with: str | None = None
         # The TTL in force for the statement this call sits in, read at lookup
         # time because one `CallCache` serves every statement and each brings
         # its own annotation. `None` means "no TTL".
@@ -256,7 +262,9 @@ class CallEntries:
             "[CALL_UNIT] hit on %s took %.2fs to save %.2fs: dropped, runs plain", key[:16], hit_cost, saved or 0.0
         )
 
-    def storable(self, result, args, kwargs, fn: Any = None, root_held: bool = True) -> bool:
+    def storable(
+        self, result, args, kwargs, fn: Any = None, root_held: bool = True, explain_cells: bool = False
+    ) -> bool:
         """Refuse values whose *identity* is load-bearing.
 
         Three families, all of which the statement path already refuses in its
@@ -319,14 +327,19 @@ class CallEntries:
         not: it is exactly the silent wrong answer this method exists to
         prevent, handed back on every hit.
         """
+        self.cells_shared_with = None
         try:
             sources = (*args, *kwargs.values())
             parts = library_parts_held(result)
             reached = self._reached(result, fn, root_held or parts != {})
+            if holds_part_of(result, (*sources, *reached)) or self._shares_library_parts(
+                result, parts, (*sources, *reached)
+            ):
+                if explain_cells:
+                    self.cells_shared_with = _argument_sharing_cells(result, args, kwargs, fn)
+                return False
             return (
-                not holds_part_of(result, (*sources, *reached))
-                and not self._shares_library_parts(result, parts, (*sources, *reached))
-                and not self._borrows(result, sources, reached, fn)
+                not self._borrows(result, sources, reached, fn)
                 # Held by something else (*root_held*), and that holder is
                 # none of the arguments or of what the function reaches: a
                 # holder cash cannot name, so a copy might not be what it holds.
@@ -668,3 +681,28 @@ def _has_identity(value: Any) -> bool:
     if isinstance(value, (tuple, frozenset)):
         return not all(is_value(item, value_types) for item in value)
     return not is_value(value, value_types)
+
+
+def _argument_sharing_cells(result, args: tuple, kwargs: Mapping[str, Any], fn: Any) -> str | None:
+    """The parameter name of the argument holding, in a pandas object's
+    object column, a cell *result* holds in one too (`object_cell_ids`):
+    ``flt(df)`` returning ``df[mask]``, whose rows are ``df``'s own objects.
+    None when the result holds no such cell, or no argument does."""
+    try:
+        cells = object_cell_ids(result)
+        if not cells:
+            return None
+        sharing = [
+            index
+            for index, value in enumerate([*args, *kwargs.values()])
+            if not cells.isdisjoint(object_cell_ids(value))
+        ]
+    except WalkBudgetExceeded:
+        return None  # the refusal stands, only unexplained
+    if not sharing:
+        return None
+    try:
+        names = list(inspect.signature(fn).bind(*args, **kwargs).arguments) if fn is not None else []
+    except (TypeError, ValueError):
+        names = []
+    return names[sharing[0]] if sharing[0] < len(names) else f"#{sharing[0] + 1}"

@@ -1184,6 +1184,61 @@ static PyObject *py_referrers_in(PyObject *self, PyObject *const *args, Py_ssize
     return out;
 }
 
+/*
+ * cells_held_elsewhere(cells, per) -> list
+ *
+ * shared_objects._cells_held_elsewhere: the objects of the list *cells* (an
+ * object column's cells, read with tolist) whose reference count is above
+ * *per* for each time they occur in it, each once, in first-met order: the
+ * ones something outside the column holds too. An int, float, str, bytes,
+ * bool or None is never one (the small ones are immortal).
+ */
+static PyObject *py_cells_held_elsewhere(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    (void)self;
+    if (nargs != 2 || !PyList_CheckExact(args[0]) || !PyLong_CheckExact(args[1])) {
+        PyErr_SetString(PyExc_TypeError, "cells_held_elsewhere(list, int)");
+        return NULL;
+    }
+    PyObject *cells = args[0];
+    Py_ssize_t per = PyLong_AsSsize_t(args[1]);
+    if (per == -1 && PyErr_Occurred()) return NULL;
+    Py_ssize_t n = PyList_GET_SIZE(cells);
+    PyObject *out = PyList_New(0);
+    if (!out) return NULL;
+    PMap map = {0};
+    if (pm_init(&map, 16) < 0) goto fail;
+    for (Py_ssize_t i = 0; i < n; i++) {
+        PyObject *c = PyList_GET_ITEM(cells, i);
+        PyTypeObject *t = Py_TYPE(c);
+        if (c == Py_None || t == &PyLong_Type || t == &PyFloat_Type || t == &PyUnicode_Type ||
+            t == &PyBytes_Type || t == &PyBool_Type)
+            continue;
+        /* the same object has the same count wherever it occurs: one at or
+           below *per* occurs once and nothing else holds it */
+        if (Py_REFCNT(c) <= per) continue;
+        if ((map.used + 1) * 2 > map.cap && pm_grow(&map) < 0) goto fail;
+        PMEntry *e = pm_slot(&map, (uintptr_t)c);
+        if (!e->key) { e->key = (uintptr_t)c; e->val = 0; map.used++; }
+        e->val++;
+    }
+    for (Py_ssize_t i = 0; i < n; i++) {
+        PyObject *c = PyList_GET_ITEM(cells, i);
+        if (!map.used) break;
+        if (Py_REFCNT(c) <= per) continue;
+        PMEntry *e = pm_slot(&map, (uintptr_t)c);
+        if (!e->key || e->val <= 0) continue;
+        Py_ssize_t count = e->val;
+        e->val = -1; /* listed or not, once */
+        if (Py_REFCNT(c) > per * count && PyList_Append(out, c) < 0) goto fail;
+    }
+    pm_free(&map);
+    return out;
+fail:
+    pm_free(&map);
+    Py_DECREF(out);
+    return NULL;
+}
+
 static PyMethodDef cwalk_methods[] = {
     {"leaf_items", (PyCFunction)(void (*)(void))py_leaf_items, METH_FASTCALL,
      "leaf_items(group, mode, leaves) -> bool | NotImplemented"},
@@ -1204,6 +1259,8 @@ static PyMethodDef cwalk_methods[] = {
      "items_estimate(container, depth, max_depth, no_arrays, at_limit, estimate, seen) -> int | NotImplemented"},
     {"referrers_in", (PyCFunction)(void (*)(void))py_referrers_in, METH_FASTCALL,
      "referrers_in(heap, ids) -> list | NotImplemented"},
+    {"cells_held_elsewhere", (PyCFunction)(void (*)(void))py_cells_held_elsewhere, METH_FASTCALL,
+     "cells_held_elsewhere(cells, per) -> list"},
     {NULL, NULL, 0, NULL}};
 
 int cwalk_add_functions(PyObject *m) { return PyModule_AddFunctions(m, cwalk_methods); }

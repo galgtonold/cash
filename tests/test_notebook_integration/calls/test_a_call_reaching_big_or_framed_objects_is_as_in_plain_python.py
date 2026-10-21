@@ -1,6 +1,7 @@
 """A call that reaches something with identity and returns a library object
 too big to read, a call handed a big library object, and a call returning
-the user's object from a frame's object column, compared with plain Python
+the user's object from a frame's object column, and one returning a Series
+over its argument's array inside a namespace, compared with plain Python
 across two runs and a restart. Prints every run's cell output (warnings
 included)."""
 
@@ -51,6 +52,13 @@ CASES = {
         "def mk(d):\n    time.sleep(1.0)\n    return {'x': d['d'].iloc[0]}",
         "w = mk(df)",
         "rect.append(5)\nprint('SAME', w['x'] is rect, w['x'][-1])",
+    ),
+    # a Series over the argument's own array, inside a library object: a write to the array shows in it
+    "series_on_arg_in_namespace": (
+        "import numpy as np\narr = np.arange(5.0)",
+        "def mk(a):\n    time.sleep(1.0)\n    return argparse.Namespace(s=pd.Series(a, copy=False))",
+        "w = mk(arr)",
+        "arr[0] = 5.0\nprint('SAME', w.s.iloc[0] == 5.0, int(w.s.iloc[0]))",
     ),
 }
 

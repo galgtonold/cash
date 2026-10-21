@@ -3,7 +3,11 @@ object column, and that check has a budget.
 
 ``mk(df)`` returning ``Namespace(x=df['d'].iloc[0])`` hands back the very
 list the frame's object column holds: a stored copy would no longer be
-it. Neither side's walk read a frame's cells.
+it. Neither side's walk read a frame's cells. Read all, a million-row
+frame cost seconds in every share check: only the cells something else
+holds too are read. ``flt(df)`` returning ``df[mask]`` holds ``df``'s own
+cells; cash cannot yet keep them shared in a restored copy, so that call
+runs every time and says so.
 
 Reading a big argument down to compare is paid on every call that is not
 served: a namespace of a million dicts cost 3.5 s each time. A result that
@@ -26,6 +30,7 @@ from cash.notebook.statement import processor
 RECT = [1]
 DF = pd.DataFrame({"d": [RECT, [2]]})
 BIG = argparse.Namespace(rows=[{"i": i} for i in range(300_000)])
+TOKENS = pd.DataFrame({"tokens": [["a", str(i)] for i in range(1000)], "n": range(1000)})
 
 
 def cell(d):
@@ -41,6 +46,16 @@ def fresh(src):
 def part(src):
     time.sleep(0.12)  # over the compute floor: a refusal it pays for is told
     return argparse.Namespace(row=src.rows[-1])
+
+
+def flt(d):
+    time.sleep(0.12)
+    return d[d["n"] % 2 == 0]
+
+
+def tokens(n):
+    time.sleep(0.05)
+    return pd.DataFrame({"tokens": [["a", str(i)] for i in range(n)]})
 
 
 def _twice(call_unit_harness, fn, arg, name):
@@ -74,3 +89,20 @@ def test_a_comparison_past_its_budget_does_not_store_and_says_so(call_unit_harne
     assert hits == [False, False]
     assert w.row is BIG.rows[-1]
     assert sum("NOTEBOOK-ANALYSIS-BUDGET" in str(c.message) for c in caught) == 1, [str(c.message) for c in caught]
+
+
+def test_a_result_sharing_an_arguments_frame_cells_runs_every_time_and_says_so(call_unit_harness):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        hits, w = _twice(call_unit_harness, flt, TOKENS, "flt")
+    assert hits == [False, False]
+    assert w["tokens"].iloc[1] is TOKENS["tokens"].iloc[2]
+    told = [str(c.message) for c in caught if "NOTEBOOK-CELLS-SHARED" in str(c.message)]
+    assert len(told) == 1, [str(c.message) for c in caught]
+    assert "shares cells with argument d" in told[0]
+
+
+def test_a_fresh_frame_of_lists_is_served(call_unit_harness):
+    hits, w = _twice(call_unit_harness, tokens, 1000, "tokens")
+    assert hits == [False, True]
+    assert w["tokens"].iloc[7] == ["a", "7"]

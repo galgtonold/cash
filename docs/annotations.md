@@ -193,7 +193,7 @@ The statement around a cached call is then stored only for its own work; see
 The statement's `ttl=`, `persist` and `assume-safe` apply to the calls inside it,
 and `no-cache` switches them off.
 
-<!-- claim: cash/notebook/call_entries.py:CallEntries.storable @1e99e8b2, cash/notebook/call_entries.py:reached_objects @b3cdef27, cash/notebook/shared_objects.py:view_bases @631203da -->
+<!-- claim: cash/notebook/call_entries.py:CallEntries.storable @d61d777e, cash/notebook/call_entries.py:reached_objects @b3cdef27, cash/notebook/shared_objects.py:view_bases @631203da -->
 A hit hands back a copy of the stored result. So a call is not cached, and
 runs every time, when its result has to be the very object it is:
 
@@ -204,6 +204,10 @@ runs every time, when its result has to be the very object it is:
   attribute (`return Config.items`), a bound method of a global
   (`return LOG.append`), or a NumPy view of any of these
   (`return arr[i:i+3]`, `return np.split(arr, 2)`);
+- it holds, in a pandas object's object column, the very objects a frame
+  it was handed holds (`return df[mask]` on a column of token lists);
+  this one is told once per function
+  ([NOTEBOOK-CELLS-SHARED](warnings.md#notebook-cells-shared));
 - something else holds it and cash cannot tell what (a library object, a
   cache of the function's own);
 - it is a matplotlib figure or axes, an open file or a generator, or a

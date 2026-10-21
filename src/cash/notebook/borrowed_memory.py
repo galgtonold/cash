@@ -28,6 +28,7 @@ pandas objects whose blocks overlap are linked too (`_pandas_block_spans`).
 from __future__ import annotations
 
 import bisect
+import gc
 import logging
 import sys
 from collections.abc import Callable, Container, Iterable, Mapping
@@ -39,6 +40,7 @@ from cash import _plain_data
 from .shared_objects import (
     EXACT_CONTAINER_TYPES,
     VALUE_TYPES,
+    _read_down,
     check_walk_budget,
     children_of,
     exact_value_types,
@@ -351,7 +353,8 @@ def _borrowers_in(values: Iterable[Any]) -> list[tuple[Any, str]]:
     """The objects among *values*, or held in them, that may share memory
     with another library's (`_PARTNERS`), with their family. A numpy array
     only when it is a view: one that owns its memory lends it, it borrows
-    none."""
+    none. Inside a library's own object too, read as `ids_through_libraries`
+    reads it: ``argparse.Namespace(s=pd.Series(a, copy=False))``."""
     value_types = VALUE_TYPES + library_value_types()
     exact, containers = exact_value_types(), EXACT_CONTAINER_TYPES
     found: list[tuple[Any, str]] = []
@@ -375,6 +378,8 @@ def _borrowers_in(values: Iterable[Any]) -> list[tuple[Any, str]]:
         if type(obj) in (list, tuple) and _rows_of_values(obj, exact):
             continue
         children = children_of(obj)
+        if children is None and _read_down(obj, value_types):
+            children = gc.get_referents(obj)
         if not children or exact.issuperset(map(type, children)):
             continue
         for child in children:
@@ -461,7 +466,7 @@ def borrowed_memory_names(
     candidates' memory is looked up first, so a statement whose outputs
     could borrow from no variable costs a scan of the names, not the
     outputs' buffers. Walks the outputs under the walk budget in progress
-    (`check_walk_budget`).
+    (`check_walk_budget`), into library objects too (`_borrowers_in`).
     """
     if "numpy" not in sys.modules:
         return set()
@@ -532,5 +537,5 @@ def borrows_from(value: Any, sources: Iterable[Any]) -> bool:
 def holds_a_borrower(value: Any) -> bool:
     """Whether *value* is, or holds, an object that may keep its data in
     another library's memory (a pandas, polars or Arrow object, a numpy
-    view)."""
+    view), inside a library's own object too."""
     return bool(_borrowers_in([value]))
