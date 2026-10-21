@@ -1081,7 +1081,7 @@ class CallUnit:
             and self._worth_storing(call, result, elapsed, result_held)
             and not call_tracker.work_outlived_block
             and not _inputs_moved(call_tracker)
-            and not isinstance(memos := helper_memos.used(memos_before), tuple)
+            and not isinstance(memos := helper_memos.used(memos_before, clears=_clears(call.fn, memos_before)), tuple)
         ):
             stored = self._store_result(
                 call,
@@ -1597,3 +1597,9 @@ def _left_pyplot_alone(fn: Any, unit: Any) -> bool:
     if unit is not None:
         return not unit.pyplot_ran
     return user_callee_using_pyplot(fn) is None
+
+
+def _clears(fn: Any, memos_before: Any) -> bool:
+    """Whether the call can empty a memo it reaches (`helper_memos.clears`);
+    asked only when there is one."""
+    return bool(memos_before) and helper_memos.clears(None, None, fn)

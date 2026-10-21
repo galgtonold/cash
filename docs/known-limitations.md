@@ -256,29 +256,40 @@ in and return it.
 
 ### A helper memoised with `functools.cache`
 
-<!-- claim: cash/notebook/helper_memos.py:unfilled @0ae3e2a0, cash/notebook/helper_memos.py:used @18e90e56, cash/notebook/helper_memos.py:MAX_KEYED == 256 -->
+<!-- claim: cash/notebook/helper_memos.py:unfilled @ac0f2aa2, cash/notebook/helper_memos.py:used @e27c335d, cash/notebook/helper_memos.py:clears @b89f98db, cash/notebook/helper_memos.py:MAX_KEYED == 256 -->
 A statement served from the cache does not run, so a `@functools.cache` or
 `@functools.lru_cache` helper it calls keeps what it held. A run leaves the
 answers in it, and a later call of the helper uses them without running its
-body. So cash follows two rules:
+body. So cash follows these rules:
 
-- A statement (or a call cash caches) whose run made the memo compute an
-  answer changes the memo, the way appending to a list does: it reruns every
-  time and is never served.
+- A helper that provably only returns (no print, no random draw, no write
+  to a file or a global, nothing cash cannot read, by the same analysis
+  `@cash.cache` uses) and whose answers are numbers, strings or tuples of
+  them: a statement that fills or reads its memo is cached as usual, since
+  running its body again changes nothing. It is not served while the memo
+  holds a different answer for a key the statement read.
+- Any other helper: a statement (or a call cash caches) whose run made the
+  memo compute an answer, emptied it (`cache_clear`, named by the
+  statement or a function of yours it calls), or changed an answer it holds
+  in place (`f(1).append(5)`) changes the memo the way appending to a list
+  does: it reruns every time and is never served.
 - One that only read answers already there is served only while the memo
-  holds every key and answer it read. After a kernel restart it runs until
-  the memo is filled again.
+  holds every key and answer it read, compared by value. After a kernel
+  restart it runs until the memo is filled again, and the first statement
+  to read an answer that can change in place after that runs once more,
+  so cash has seen the answer as it was.
 
 Nothing to do: the results are the ones a run gives, at the cost of those
 runs. cash reads a memo's answers only when it holds at most 256 of them;
-above that, or when the memo cannot be read, statements over it are never
-served. It sees a memo bound in the notebook or at the top of one of your
-modules, under other decorators that set `__wrapped__`, and on one of your
-classes (a `staticmethod`, a `classmethod` or a plain attribute). One reached
-only as an argument, an instance attribute or an item of a dict is not
-checked, and neither is Python's pure-Python `lru_cache` (used only when the
-`_functools` module is missing). A memo you fill yourself in a dict
-(`_cache[k] = v`) is a global the function changes, covered above.
+a statement over a bigger memo reruns every time, and says so. It sees a
+memo bound in the notebook or at the top of one of your modules (a
+`reload` included), under other decorators that set `__wrapped__`, and on
+one of your classes (a `staticmethod`, a `classmethod` or a plain
+attribute). One reached only as an argument, an instance attribute or an
+item of a dict is not checked, and neither is Python's pure-Python
+`lru_cache` (used only when the `_functools` module is missing), nor a
+`cache_clear` reached only through a library. A memo you fill yourself in
+a dict (`_cache[k] = v`) is a global the function changes, covered above.
 
 <!-- claim: cash/analysis/handed_callables.py:handed_callables @c55bd405, cash/analysis/handed_callables.py:hands_a_state_changing_callable @4c3c2d42 -->
 ### A function handed to a call

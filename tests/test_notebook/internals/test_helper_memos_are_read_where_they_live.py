@@ -80,7 +80,7 @@ DECORATED = (
 def test_an_entry_is_not_served_over_a_memo_without_what_it_read(setup, fill, read, then):
     ns: dict = {}
     exec("import functools\n" + setup, ns)
-    exec(fill, ns)
+    _record(ns, fill)  # the run that fills it, so its answers are seen
     records = _record(ns, read)
     assert isinstance(records, list) and records, records
     assert helper_memos.unfilled(records, ns) is None, "control: as the statement left it"
@@ -92,28 +92,29 @@ def test_a_memo_holding_more_answers_than_are_read_is_never_served_over():
     ns: dict = {}
     exec("import functools\n@functools.cache\ndef f(n):\n    return n", ns)
     exec("[f(i) for i in range(300)]", ns)
-    records = _record(ns, "x = [f(i) for i in range(300)]")
-    assert records == [{"where": ["ns", "f"], "unread": True}], records
-    assert helper_memos.unfilled(records, ns), "not read: never served"
+    said = _record(ns, "x = [f(i) for i in range(300)]")
+    assert said[0] == helper_memos.FILLED and "more answers than cash checks" in said[1], said
 
 
 def test_a_run_that_makes_a_memo_compute_is_said_to_fill_it():
     ns: dict = {}
     exec("import functools\n@functools.cache\ndef f(n):\n    return n", ns)
-    assert _record(ns, "x = f(1)") == (helper_memos.FILLED, "f")
+    said = _record(ns, "x = f(1)")
+    assert said[0] == helper_memos.FILLED and "filled the helper memo f:" in said[1], said
     assert isinstance(_record(ns, "x = f(1)"), list), "the second run only reads it"
 
 
 def test_a_memo_in_a_module_of_the_users_is_followed(tmp_path, monkeypatch):
     (tmp_path / "memo_mod_hm.py").write_text(
-        "import functools\n\n@functools.cache\ndef table(n):\n    return list(range(n))\n",
+        "import functools\n\n@functools.cache\ndef table(n):\n    print(n)\n    return list(range(n))\n",
         encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
     mod = importlib.import_module("memo_mod_hm")
     try:
         ns: dict = {"mod": mod}
-        assert _record(ns, "t = mod.table(3)") == (helper_memos.FILLED, "memo_mod_hm.table")
+        said = _record(ns, "t = mod.table(3)")
+        assert said[0] == helper_memos.FILLED and "memo_mod_hm.table" in said[1], said
         records = _record(ns, "t = mod.table(3)")
         assert records and records[0]["where"] == ["module", "memo_mod_hm", "table"], records
         assert helper_memos.unfilled(records, ns) is None
@@ -152,3 +153,56 @@ def test_a_library_memo_is_not_watched():
 
     ns = {"split": functools.lru_cache()(str.split)}
     assert helper_memos.watched(ns) is None
+
+
+def test_the_memos_are_looked_for_again_only_when_something_could_bring_one(monkeypatch, tmp_path):
+    # Every cached call in a statement asks for the memos it reaches; looking
+    # through every module of the user's at each one made a 50,000-call loop
+    # take over 30 s where the suite imports hundreds of them.
+    looks = {"ns": 0, "modules": 0}
+    real_ns, real_modules = helper_memos._ns_memos, helper_memos._module_memos
+
+    def count(kind, real):
+        def counted(*args):
+            looks[kind] += 1
+            return real(*args)
+
+        return counted
+
+    monkeypatch.setattr(helper_memos, "_ns_memos", count("ns", real_ns))
+    monkeypatch.setattr(helper_memos, "_module_memos", count("modules", real_modules))
+    ns: dict = {"functools": __import__("functools")}
+    helper_memos.new_statement()
+    for i in range(100):
+        ns["i"] = i  # a loop variable: nothing that can hold a memo
+        assert helper_memos.watched(ns) is None
+    assert looks == {"ns": 1, "modules": 1}
+
+    # A memo made inside the statement (a loop body, a def in the cell) is
+    # seen by the cached calls after it.
+    exec("@functools.cache\ndef h(n):\n    return n", ns)
+    assert [w[0] for w in helper_memos.watched(ns)] == [["ns", "h"]]
+    exec("@functools.cache\ndef h(n):\n    return -n", ns)  # rebound
+    assert helper_memos.watched(ns)[0][1] is ns["h"]
+    assert looks["ns"] == 3
+
+    # So is one in a module imported inside the statement.
+    (tmp_path / "memo_mid_hm.py").write_text(
+        "import functools\n\n@functools.cache\ndef t(n):\n    return n\n", encoding="utf-8"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    try:
+        importlib.import_module("memo_mid_hm")
+        assert ["module", "memo_mid_hm", "t"] in [w[0] for w in helper_memos.watched(ns)]
+    finally:
+        sys.modules.pop("memo_mid_hm", None)
+
+
+def test_a_memo_made_and_filled_in_the_same_statement_is_said_to_fill_it():
+    ns: dict = {"functools": __import__("functools")}
+    helper_memos.new_statement()
+    before = helper_memos.watched(ns)
+    assert before is None
+    exec("h = functools.cache(lambda n: [n])\nx = h(1)", ns)
+    said = helper_memos.used(before, ns=ns)
+    assert said and said[0] == helper_memos.FILLED and "h" in said[1], said

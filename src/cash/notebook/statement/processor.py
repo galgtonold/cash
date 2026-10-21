@@ -1499,6 +1499,7 @@ class StatementProcessor:
         run.entry_lineages = {name: lineage[name] for name in run.inputs if name in lineage}
         unordered = sparse_order.unordered_sparse(run.inputs, self.shell.user_ns)
         env_reads: set[str] = set()
+        helper_memos.new_statement()
         memos_before = None if run.skip_cache else helper_memos.watched(self.shell.user_ns)
         try:
             with (
@@ -1583,16 +1584,18 @@ class StatementProcessor:
             # What the environment variables installed code read held: a
             # lookup checks them again (`env_reads`).
             run.env_reads = environment_digests(env_reads)
-        if memos_before is not None and execution.result.success:
+        if not run.skip_cache and execution.result.success:
             # What the helper memos it called held: a lookup checks them
             # again. One it made compute is changed, as a list appended to.
-            memos = helper_memos.used(memos_before)
+            user_ns = self.shell.user_ns
+            clears = bool(memos_before) and helper_memos.clears(run.code, user_ns)
+            memos = helper_memos.used(memos_before, clears=clears, ns=user_ns)
             if isinstance(memos, tuple):
+                # What it returns can differ run to run with the memo's
+                # state, which no key holds: its outputs are keyed by value.
                 run.skip_cache = True
-                run.metrics["uncacheable_reasons"].append(
-                    f"It filled the helper memo {memos[1]}: served, the memo would stay as it was "
-                    "(statement re-executes)"
-                )
+                run.value_varies = True
+                run.metrics["uncacheable_reasons"].append(memos[1])
             else:
                 run.helper_memos = memos
         if not run.skip_cache and execution.written_paths and execution.result.success:

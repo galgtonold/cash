@@ -45,7 +45,7 @@ def test_cache_clear_then_refill_other_keys_same_session(cash_magics):
     # cache_clear() resets misses: after a refill with as many other keys,
     # (currsize, misses) equals the stamp `_digests` holds and the stale
     # digests of the run's keys are reused.
-    square = "@functools.cache\ndef square(n):\n    return n * n"
+    square = "@functools.cache\ndef square(n):\n    print('BODY', n)\n    return n * n"
     fill = f"x = (square(3), time.sleep({ABOVE_PERSISTENCE_FLOOR_S}))[0]"
     for code in [IMPORTS, square, fill, "square.cache_clear()", "other = square(4)", fill]:
         run_cash_cell(cash_magics, code)
@@ -140,7 +140,7 @@ def _variant(cash_magics, cells, monkeypatch):
 
 
 def test_clear_via_function(cash_magics, monkeypatch):
-    square = "@functools.cache\ndef square(n):\n    return n * n"
+    square = "@functools.cache\ndef square(n):\n    print('BODY', n)\n    return n * n"
     fill = f"x = (square(3), time.sleep({ABOVE_PERSISTENCE_FLOOR_S}))[0]"
     seen = _variant(
         cash_magics,
@@ -159,7 +159,7 @@ def test_clear_via_function(cash_magics, monkeypatch):
 
 def test_clear_in_module(cash_magics, monkeypatch, tmp_path):
     (tmp_path / "memo_rev_mod.py").write_text(
-        "import functools\n@functools.cache\ndef square(n):\n    return n * n\n"
+        "import functools\n@functools.cache\ndef square(n):\n    print('BODY', n)\n    return n * n\n"
         "def reset():\n    square.cache_clear()\n    return square(4)\n",
         encoding="utf-8",
     )

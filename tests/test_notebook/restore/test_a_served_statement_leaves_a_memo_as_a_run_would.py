@@ -94,7 +94,7 @@ def test_a_statement_stored_when_its_memo_missed_is_not_served_where_it_hits(cas
 
 
 def test_a_memo_as_full_but_with_other_answers_does_not_serve(cash_magics):
-    square = "@functools.cache\ndef square(n):\n    return n * n"
+    square = "@functools.cache\ndef square(n):\n    print('BODY', n)\n    return n * n"
     fill = f"x = (square(3), time.sleep({ABOVE_PERSISTENCE_FLOOR_S}))[0]"
     for code in [IMPORTS, square, fill]:
         run_cash_cell(cash_magics, code)
@@ -119,3 +119,18 @@ def test_a_statement_that_only_read_the_memo_reruns_until_it_is_filled_again(cas
     assert _statuses(cash_magics) == ["COMPUTED"]
     run_cash_cell(cash_magics, look)
     assert _statuses(cash_magics) == ["RESTORED"], "filled again by its own run"
+
+
+def test_a_pure_helper_filled_by_a_loop_is_served_after_a_restart(cash_magics):
+    # The usual pattern: one cell defines the helper, the next loops over it.
+    # The helper does nothing but return numbers, so running its body where
+    # a run found the answer kept differs in nothing: the loop is served.
+    helper = "@functools.cache\ndef h(n):\n    return n * n"
+    loop = f"tot = (sum(h(i) for i in range(50)), time.sleep({ABOVE_PERSISTENCE_FLOOR_S}))[0]"
+    for code in [IMPORTS, helper, loop]:
+        run_cash_cell(cash_magics, code)
+    _restart(cash_magics, ["functools", "random", "time", "h", "tot"])
+    for code in [IMPORTS, helper, loop]:
+        run_cash_cell(cash_magics, code)
+    assert _statuses(cash_magics) == ["RESTORED"]
+    assert cash_magics.shell.user_ns["tot"] == sum(i * i for i in range(50))
