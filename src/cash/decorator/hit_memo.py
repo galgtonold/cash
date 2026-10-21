@@ -711,6 +711,12 @@ class HitMemo:
 
     #: Remembered calls per function at most.
     MAX_ENTRIES = 4096
+    #: A scan is due this long after the last one, whatever the backoff. The
+    #: backoff counts calls: 1,024 of a function whose ordinary hit checks a
+    #: file took seconds on a Windows runner, so a world that moved now and
+    #: then kept it off the memo for good. A scan takes ~0.5-1 ms, so this
+    #: costs at most ~0.4% of a run whose world never stays still.
+    RESCAN_AFTER_S = 0.25
 
     def __init__(self, spec: CachedFunction, runner: Any) -> None:
         self.spec = spec
@@ -728,6 +734,7 @@ class HitMemo:
         self.traces: dict[tuple, int] = {}
         self.slow_since_scan = 0
         self.backoff = 1
+        self.scanned_at = 0.0
         self.served_since_scan = 0
         #: What the key read of the classes met that no watcher sees.
         self.family: _Family | None = None
@@ -850,10 +857,12 @@ class HitMemo:
             if self.failed_epoch == world_now:
                 return
             self.slow_since_scan += 1
-            if self.slow_since_scan < self.backoff:
+            now = time.monotonic()
+            if self.slow_since_scan < self.backoff and now - self.scanned_at < self.RESCAN_AFTER_S:
                 return
             self.backoff = 1 if self.served_since_scan else min(self.backoff * 2, 1024)
             self.slow_since_scan = self.served_since_scan = 0
+            self.scanned_at = now
             state[S_WORLD] = -1
             state[S_ENTRIES] = {}
             try:

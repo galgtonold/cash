@@ -76,6 +76,21 @@ def test_run_notebook_cash_on_captures_statement_metrics(tmp_path):
     assert m.status in {"COMPUTED", "RESTORED", "SKIPPED", "UNKNOWN"}
 
 
+@pytest.mark.parametrize("own_cash_on", [False, True])
+def test_run_notebook_leaves_cash_s_io_watch_off(tmp_path, own_cash_on):
+    """``%cash_on`` holds cash's I/O watch open until ``%cash_off``. A run
+    that left it held kept the reader patches in for the rest of the
+    process: a later cached call's miss installed nothing, and two thread
+    tests run after the edit-floor benchmark in one worker failed."""
+    from cash.tracking import io_watch
+
+    source = "%load_ext cash\n%cash_on\nx = 1\n" if own_cash_on else "x = 1\n"
+    cells = [CodeCell(index=0, notebook_cell_index=0, source=source)]
+    assert not io_watch.holding()
+    run_notebook(cells, cash_enabled=not own_cash_on, cache_dir=None if own_cash_on else tmp_path)
+    assert not io_watch.holding()
+
+
 def test_run_notebook_cash_on_cold_then_warm_status_shifts(tmp_path):
     """Same cells run twice against the same cache dir: second run should
     have at least one RESTORED status (the cache is now populated).

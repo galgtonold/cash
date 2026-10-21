@@ -280,3 +280,25 @@ def test_a_generator_the_call_does_not_draw_from_does_not_stop_caching(c):
     sim = Sim(0)
     assert seed_of(sim) == 0
     assert seed_of(sim) == 0 and seed_of.cache_info()["hits"] == 1
+
+
+def test_the_check_thread_ends_once_idle_and_starts_again(c, monkeypatch):
+    """One thread per `Cash` that met a ``__cash_key__`` never ended: a
+    process that made many (a test suite, ``reset_session()``) kept them
+    all. It now ends once idle, and the next check starts it again."""
+    from cash.decorator import cash_key
+
+    monkeypatch.setattr(cash_key, "_IDLE_S", 0.05)
+
+    @c.cache
+    def total(store):
+        return float(store.data.sum())
+
+    check = c._args.key_check
+    assert "KEY-STALE-CASH-KEY" not in _run_checked(c, total, Store(1, [1, 2]))
+    thread = check._thread
+    assert thread is not None
+    thread.join(timeout=5)
+    assert not thread.is_alive() and check._thread is None
+    codes = _run_checked(c, total, Store(1, [3, 4]))
+    assert codes.count("KEY-STALE-CASH-KEY") == 1

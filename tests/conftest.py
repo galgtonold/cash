@@ -443,7 +443,12 @@ def cash_magics(mock_shell, cash_instance):
     """
     magics = CashMagics(mock_shell, cash_instance)
     yield magics
-    # Cleanup
+    # Cleanup. %cash_on holds cash's I/O watch until %cash_off or until the
+    # magics are collected, which a cycle can put off past later tests: a
+    # cached call's miss there installed none of its own reader patches.
+    release = magics._io_release
+    if release is not None and release.alive:
+        release()
     cash_instance.backend.clear()
     mock_shell.reset()
 
@@ -472,6 +477,30 @@ def disable_auto_magic_registration(monkeypatch):
     from cash.core import Cash
 
     monkeypatch.setattr(Cash, "register_magic", lambda self: None)
+
+
+@pytest.fixture(autouse=True)
+def _io_watch_held_no_longer_than_the_test():
+    """Turn off what a test left holding cash's I/O watch.
+
+    ``%cash_on`` holds the watch until ``%cash_off`` or until its magics are
+    collected (a ``weakref.finalize``). A test that turned cash on and left
+    the magics alive (in a shell, a cycle) kept it held into later tests in
+    the same worker, where a cached call's miss installed none of its own
+    reader patches. Each hold a test's ``%cash_on`` opened is closed after
+    it, as ``%cash_off`` would.
+    """
+    import weakref
+
+    from cash.tracking import io_watch
+
+    def releasers() -> set:
+        return {f for f, info in list(weakref.finalize._registry.items()) if info.func is io_watch.release}
+
+    before = releasers()
+    yield
+    for left in releasers() - before:
+        left()
 
 
 #: The process's own ``__main__``, as pytest started it.
