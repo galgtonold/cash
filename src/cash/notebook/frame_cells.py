@@ -29,6 +29,7 @@ __all__ = [
     "cell_links",
     "frames_in",
     "is_frame",
+    "is_object_dtype",
     "linked_cell_ids",
     "object_columns_on_both_sides",
     "relink_cells",
@@ -46,6 +47,14 @@ def _pandas() -> Any:
     return sys.modules.get("pandas")
 
 
+def is_object_dtype(dtype: Any) -> bool:
+    """Whether *dtype* is numpy's object dtype: a column of Python objects,
+    each a cell. Not a categorical, period or interval column, whose array
+    is built anew on each read and handed back as a plain object array, nor
+    pandas' string dtype, whose strings are made for the read."""
+    return isinstance(dtype, sys.modules["numpy"].dtype) and dtype.kind == "O"
+
+
 def _object_columns(value: Any, pd: Any) -> list[tuple[int, Any]]:
     """``(position, array)`` of *value*'s object columns that hold more than
     values pandas tells apart (`infer_dtype`); position -1 for a series."""
@@ -54,10 +63,10 @@ def _object_columns(value: Any, pd: Any) -> list[tuple[int, Any]]:
     if isinstance(value, pd.Series):
         columns = [(-1, value)]
     else:
-        columns = [(i, value.iloc[:, i]) for i, dtype in enumerate(value.dtypes) if dtype.kind == "O"]
+        columns = [(i, value.iloc[:, i]) for i, dtype in enumerate(value.dtypes) if is_object_dtype(dtype)]
     found = []
     for position, column in columns:
-        if column.dtype.kind != "O":
+        if not is_object_dtype(column.dtype):
             continue
         array = column.to_numpy(copy=False)
         if pd.api.types.infer_dtype(array, skipna=True) not in _VALUE_COLUMNS:
@@ -98,13 +107,14 @@ def addresses(array: Any) -> Any:
     if not n:
         return np.empty(0, dtype=np.int64)
     data = array.__array_interface__["data"][0]
-    step = array.strides[0] // 8
+    size = ctypes.sizeof(ctypes.c_void_p)
+    step = array.strides[0] // size
     if step == 0:
         return np.full(n, id(array[0]), dtype=np.int64)
-    first = data if step > 0 else data + (n - 1) * step * 8
+    first = data if step > 0 else data + (n - 1) * step * size
     span = (n - 1) * abs(step) + 1
-    slots = np.frombuffer((ctypes.c_int64 * span).from_address(first), dtype=np.int64)
-    return slots[::step].copy()
+    slots = np.frombuffer((ctypes.c_void_p * span).from_address(first), dtype=np.uintp)
+    return slots[::step].astype(np.int64)
 
 
 def object_columns_on_both_sides(result: Any, args: tuple, kwargs: dict) -> bool:
@@ -158,6 +168,12 @@ def cell_links(result: Any, args: tuple, kwargs: dict) -> tuple[list[dict], dict
             rows = np.flatnonzero(ordered[at] == own)
             if not len(rows):
                 continue
+            # A cell an argument holds in two places -- one list in two
+            # rows, or in two frames -- cannot say which place it was taken
+            # from: an argument holding equal lists in those rows has the
+            # same key, and its other one would be put back.
+            if (np.searchsorted(ordered, own[rows], side="right") - at[rows] > 1).any():
+                return None
             total += len(rows)
             if total > _MAX_LINKED:
                 return None
@@ -206,7 +222,7 @@ def _column(value: Any, position: int) -> Any:
     """The array behind *value*'s column at *position* (-1: the series),
     or None when it is not an object column."""
     column = value if position == -1 else value.iloc[:, position]
-    if column.dtype.kind != "O":
+    if not is_object_dtype(column.dtype):
         return None
     return column.to_numpy(copy=False)
 

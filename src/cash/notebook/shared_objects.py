@@ -52,6 +52,7 @@ from typing import Any
 
 from cash import _native, _plain_data
 from cash._clock import CpuLimit
+from cash.notebook.frame_cells import is_object_dtype
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
 
@@ -834,10 +835,10 @@ def _read_object_columns(value: Any, pd: Any) -> list[Any]:
     if isinstance(value, pd.Series):
         columns = [value]
     elif isinstance(value, pd.DataFrame):
-        columns = [value.iloc[:, i] for i, dtype in enumerate(value.dtypes) if dtype.kind == "O"]
+        columns = [value.iloc[:, i] for i, dtype in enumerate(value.dtypes) if is_object_dtype(dtype)]
     arrays = []
     for column in columns:
-        if column.dtype.kind != "O":
+        if not is_object_dtype(column.dtype):
             continue
         array = column.to_numpy(copy=False)
         if pd.api.types.infer_dtype(array, skipna=True) not in _VALUE_COLUMNS:
