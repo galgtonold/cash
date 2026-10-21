@@ -152,9 +152,7 @@ def cell_links(result: Any, args: tuple, kwargs: dict) -> tuple[list[dict], dict
         for position, array in _object_columns(value, pd):
             labels.append((place, position, len(array)))
             ids.append(addresses(array))
-    if not ids:
-        return None
-    every = np.concatenate(ids)
+    every = np.concatenate(ids) if ids else np.empty(0, dtype=np.int64)
     order = np.argsort(every, kind="stable")
     ordered = every[order]
     starts = np.cumsum([0] + [len(part) for part in ids])
@@ -162,7 +160,7 @@ def cell_links(result: Any, args: tuple, kwargs: dict) -> tuple[list[dict], dict
     linked: dict[int, list[Any]] = {}
     total = 0
     for path, frame in frames:
-        for position, array in _object_columns(frame, pd):
+        for position, array in _object_columns(frame, pd) if ids else ():
             own = addresses(array)
             at = np.minimum(np.searchsorted(ordered, own), len(ordered) - 1)
             rows = np.flatnonzero(ordered[at] == own)
@@ -193,9 +191,55 @@ def cell_links(result: Any, args: tuple, kwargs: dict) -> tuple[list[dict], dict
                     }
                 )
             linked.setdefault(id(frame), []).append(own[rows])
+        for position, categories in _categorical_columns(frame, pd):
+            # A categorical's objects are its categories, which a filter
+            # keeps as they are: the very dtype the argument's column has.
+            source = _same_dtype(frame.dtypes.iloc[position], sources, pd)
+            if source is None:
+                continue
+            place, column = source
+            links.append(
+                {"result": path, "column": position, "dtype_of": True, "source": place, "source_column": column}
+            )
+            linked.setdefault(id(frame), []).append(addresses(categories))
     if not links:
         return None
     return links, {key: np.unique(np.concatenate(parts)) for key, parts in linked.items()}
+
+
+def _categorical_columns(value: Any, pd: Any) -> list[tuple[int, Any]]:
+    """``(position, categories)`` of a frame *value*'s categorical columns
+    whose categories, an object array, hold more than values pandas tells
+    apart; none for a series."""
+    from cash.notebook.shared_objects import _VALUE_COLUMNS
+
+    if not isinstance(value, pd.DataFrame):
+        return []
+    found = []
+    for position, dtype in enumerate(value.dtypes):
+        if not isinstance(dtype, pd.CategoricalDtype):
+            continue
+        categories = dtype.categories.to_numpy(copy=False)
+        if (
+            is_object_dtype(categories.dtype)
+            and pd.api.types.infer_dtype(categories, skipna=True) not in _VALUE_COLUMNS
+        ):
+            found.append((position, categories))
+    return found
+
+
+def _same_dtype(dtype: Any, sources: list[tuple[list, Any]], pd: Any) -> tuple[list, int] | None:
+    """``(place, column)`` of the one column among the argument frames of
+    *sources* whose dtype is *dtype* itself, by identity; None when none
+    is, or more than one."""
+    found = []
+    for place, value in sources:
+        if isinstance(value, pd.Series):
+            if value.dtype is dtype:
+                found.append((place, -1))
+        elif isinstance(value, pd.DataFrame):
+            found.extend((place, i) for i, other in enumerate(value.dtypes) if other is dtype)
+    return found[0] if len(found) == 1 else None
 
 
 def _rows(rows: Any, length: int, np: Any) -> bytes | None:
@@ -227,6 +271,23 @@ def _column(value: Any, position: int) -> Any:
     return column.to_numpy(copy=False)
 
 
+def _relink_dtype(frame: Any, position: int, source: Any, source_column: int, pd: Any) -> bool:
+    """Make the categorical column of *frame* at *position* take the dtype
+    of *source*'s column, its categories the argument's own objects; False
+    when the two do not line up."""
+    if not isinstance(frame, pd.DataFrame):
+        return False
+    column = frame.iloc[:, position]
+    dtype = (source if source_column == -1 else source.iloc[:, source_column]).dtype
+    if not isinstance(column.dtype, pd.CategoricalDtype) or not isinstance(dtype, pd.CategoricalDtype):
+        return False
+    if len(column.dtype.categories) != len(dtype.categories) or column.dtype.ordered != dtype.ordered:
+        return False
+    codes = column.cat.codes.to_numpy()
+    frame.isetitem(position, pd.Categorical.from_codes(codes, dtype=dtype))
+    return frame.dtypes.iloc[position] is dtype
+
+
 def _walk(value: Any, path: list) -> Any:
     for step in path:
         value = value[step]
@@ -249,6 +310,10 @@ def relink_cells(value: Any, args: tuple, kwargs: dict, links: list[dict] | None
             source = args[where] if kind == "a" else kwargs[where]
             if not isinstance(frame, (pd.Series, pd.DataFrame)) or not isinstance(source, (pd.Series, pd.DataFrame)):
                 return RELINK_FAILED
+            if link.get("dtype_of"):
+                if not _relink_dtype(frame, link["column"], source, link["source_column"], pd):
+                    return RELINK_FAILED
+                continue
             target = _column(frame, link["column"])
             cells = _column(source, link["source_column"])
             if target is None or cells is None:
