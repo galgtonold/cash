@@ -548,6 +548,9 @@ class CallUnit:
         #: Looks call entries up and writes them; holds the sites refused.
         self._entries = CallEntries(cash_instance, ttl_provider, persist_provider)
         self.call_log: list[dict] = []
+        #: Why a found entry was not served, per site, when a helper memo it
+        #: read does not hold what it held (`helper_memos.unfilled`).
+        self._memo_misses: dict[CallSite, str] = {}
         #: The record each plain-run (site, callee) is counted in.
         self._plain_records: dict[tuple[str, str, int], dict] = {}
         #: Per call site, how its calls went in the statement run under way
@@ -926,7 +929,9 @@ class CallUnit:
             if hit and metadata.get("helper_memos"):
                 # Served only while the helper memos it called hold what its
                 # run left (`helper_memos.unfilled`).
-                if helper_memos.unfilled(metadata["helper_memos"], getattr(fn, "__globals__", None) or {}):
+                unfilled = helper_memos.unfilled(metadata["helper_memos"], getattr(fn, "__globals__", None) or {})
+                if unfilled:
+                    self._memo_misses[site] = unfilled
                     hit, value, recorded_cost, metadata = False, None, 0.0, {}
             self._last_key_s = _perf_counter() - key_started
             if _shadow.SHADOW is not None:
@@ -1035,7 +1040,7 @@ class CallUnit:
             getattr(call.fn, "__globals__", None),
             propagate_to_parent=True,
         )
-        memos_before = helper_memos.watched_by(call.fn)
+        memos_before = helper_memos.watched(getattr(call.fn, "__globals__", None) or {})
         self._running += 1
         shadow = _shadow.SHADOW
         unit = shadow.begin("call") if shadow is not None else None
@@ -1076,6 +1081,7 @@ class CallUnit:
             and self._worth_storing(call, result, elapsed, result_held)
             and not call_tracker.work_outlived_block
             and not _inputs_moved(call_tracker)
+            and not isinstance(memos := helper_memos.used(memos_before), tuple)
         ):
             stored = self._store_result(
                 call,
@@ -1085,7 +1091,7 @@ class CallUnit:
                 stdout_text,
                 stderr_text,
                 environment_digests(env_reads),
-                helper_memos.used(memos_before),
+                memos,
             )
         if unit is not None:
             shadow.call_finished(call.key, call.site, unit, stored, disk=True)
@@ -1263,7 +1269,7 @@ class CallUnit:
             "stored": bool(stored),
             # Why this call was not served: which part of its key moved since
             # the site was last keyed. Only on a miss, and only when known.
-            "miss_reason": None if cache_hit else self._keys.why_missed(site),
+            "miss_reason": None if cache_hit else self._memo_misses.pop(site, None) or self._keys.why_missed(site),
             # How many calls this record stands for (see above).
             "calls": 1,
         }

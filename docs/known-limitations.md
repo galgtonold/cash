@@ -256,19 +256,28 @@ in and return it.
 
 ### A helper memoised with `functools.cache`
 
-<!-- claim: cash/notebook/helper_memos.py:unfilled @6ad97674, cash/notebook/helper_memos.py:MAX_KEYED == 256 -->
+<!-- claim: cash/notebook/helper_memos.py:unfilled @0ae3e2a0, cash/notebook/helper_memos.py:used @18e90e56, cash/notebook/helper_memos.py:MAX_KEYED == 256 -->
 A statement served from the cache does not run, so a `@functools.cache` or
 `@functools.lru_cache` helper it calls keeps what it held. A run leaves the
 answers in it, and a later call of the helper uses them without running its
-body. So cash serves such a statement only while the helper's memo holds the
-answers the run left; after a kernel restart, the statements over a memoised
-helper run until the memo is filled again. Nothing to do: the results are
-the ones a run gives, at the cost of those runs.
+body. So cash follows two rules:
 
-cash checks the memo's keys when it holds at most 256 answers, and only how
-many it holds above that. It sees a memo bound in the notebook or at the top
-of one of your modules; one reached only as an argument, an attribute or an
-item of a dict is not checked. A memo you fill yourself in a dict
+- A statement (or a call cash caches) whose run made the memo compute an
+  answer changes the memo, the way appending to a list does: it reruns every
+  time and is never served.
+- One that only read answers already there is served only while the memo
+  holds every key and answer it read. After a kernel restart it runs until
+  the memo is filled again.
+
+Nothing to do: the results are the ones a run gives, at the cost of those
+runs. cash reads a memo's answers only when it holds at most 256 of them;
+above that, or when the memo cannot be read, statements over it are never
+served. It sees a memo bound in the notebook or at the top of one of your
+modules, under other decorators that set `__wrapped__`, and on one of your
+classes (a `staticmethod`, a `classmethod` or a plain attribute). One reached
+only as an argument, an instance attribute or an item of a dict is not
+checked, and neither is Python's pure-Python `lru_cache` (used only when the
+`_functools` module is missing). A memo you fill yourself in a dict
 (`_cache[k] = v`) is a global the function changes, covered above.
 
 <!-- claim: cash/analysis/handed_callables.py:handed_callables @c55bd405, cash/analysis/handed_callables.py:hands_a_state_changing_callable @4c3c2d42 -->

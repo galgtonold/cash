@@ -1584,8 +1584,17 @@ class StatementProcessor:
             # lookup checks them again (`env_reads`).
             run.env_reads = environment_digests(env_reads)
         if memos_before is not None and execution.result.success:
-            # What the helper memos it called held: a lookup checks them again.
-            run.helper_memos = helper_memos.used(memos_before)
+            # What the helper memos it called held: a lookup checks them
+            # again. One it made compute is changed, as a list appended to.
+            memos = helper_memos.used(memos_before)
+            if isinstance(memos, tuple):
+                run.skip_cache = True
+                run.metrics["uncacheable_reasons"].append(
+                    f"It filled the helper memo {memos[1]}: served, the memo would stay as it was "
+                    "(statement re-executes)"
+                )
+            else:
+                run.helper_memos = memos
         if not run.skip_cache and execution.written_paths and execution.result.success:
             wrote = self._kept_writes_reason(run, execution)
             if wrote:
