@@ -1184,57 +1184,172 @@ static PyObject *py_referrers_in(PyObject *self, PyObject *const *args, Py_ssize
     return out;
 }
 
+/* the value types `cells_held_elsewhere` was handed, read out of their
+   frozenset once: compared by address, so no type's hash runs */
+typedef struct { PyTypeObject **t; Py_ssize_t n; } ValueTypes;
+
+static int is_cell_container(PyTypeObject *t) {
+    return t == &PyList_Type || t == &PyTuple_Type || t == &PyDict_Type || t == &PySet_Type || t == &PyFrozenSet_Type;
+}
+
+static int cell_flat(PyObject *x, const ValueTypes *values, int depth);
+
+/* an item met inside a cell: a value, or a container only its parent holds
+   (*extra* references beside the parent's: an iterator's) holding only such
+   items, *depth* levels deep */
+static int item_flat(PyObject *x, const ValueTypes *values, int depth, Py_ssize_t extra) {
+    if (is_cell_container(Py_TYPE(x)) && Py_REFCNT(x) > 1 + extra) return 0;
+    return cell_flat(x, values, depth);
+}
+
+/* is x a value, or a list, tuple, set or dict holding only values, or
+   (*depth* deep) only such containers that nothing else holds? A cell
+   ``[rect]`` holds the user's list, which a share check must reach; a
+   list of tokens holds nothing it could share. 1 yes, 0 no, -1 error */
+static int cell_flat(PyObject *x, const ValueTypes *values, int depth) {
+    PyTypeObject *t = Py_TYPE(x);
+    if (x == Py_None || t == &PyUnicode_Type || t == &PyLong_Type || t == &PyFloat_Type || t == &PyBool_Type ||
+        t == &PyBytes_Type)
+        return 1;
+    if (t == &PyList_Type || t == &PyTuple_Type) {
+        if (depth <= 0) return 0;
+        Py_ssize_t n = PySequence_Fast_GET_SIZE(x);
+        PyObject **items = PySequence_Fast_ITEMS(x);
+        for (Py_ssize_t i = 0; i < n; i++) {
+            int r = item_flat(items[i], values, depth - 1, 0);
+            if (r != 1) return r;
+        }
+        return 1;
+    }
+    if (t == &PyDict_Type) {
+        if (depth <= 0) return 0;
+        Py_ssize_t pos = 0;
+        PyObject *k, *v;
+        while (PyDict_Next(x, &pos, &k, &v)) {
+            int r = item_flat(k, values, depth - 1, 0);
+            if (r == 1) r = item_flat(v, values, depth - 1, 0);
+            if (r != 1) return r;
+        }
+        return 1;
+    }
+    if (t == &PySet_Type || t == &PyFrozenSet_Type) {
+        if (depth <= 0) return 0;
+        PyObject *it = PyObject_GetIter(x), *k;
+        if (!it) return -1;
+        int r = 1;
+        while (r == 1 && (k = PyIter_Next(it)) != NULL) {
+            r = item_flat(k, values, depth - 1, 1);
+            Py_DECREF(k);
+        }
+        Py_DECREF(it);
+        if (PyErr_Occurred()) return -1;
+        return r;
+    }
+    for (Py_ssize_t i = 0; i < values->n; i++)
+        if (values->t[i] == t) return 1;
+    return 0;
+}
+
+/* sort *a* (m addresses) in place, a byte at a time from the lowest,
+   skipping the bytes all of them share */
+static int radix_sort(uintptr_t *a, size_t m) {
+    if (m < 2) return 0;
+    uintptr_t *b = PyMem_Malloc(sizeof(uintptr_t) * m), *src = a, *dst = b;
+    if (!b) { PyErr_NoMemory(); return -1; }
+    size_t count[256];
+    for (unsigned shift = 0; shift < 8 * sizeof(uintptr_t); shift += 8) {
+        memset(count, 0, sizeof count);
+        for (size_t i = 0; i < m; i++) count[(src[i] >> shift) & 255]++;
+        if (count[(src[0] >> shift) & 255] == m) continue;
+        size_t pos = 0;
+        for (int k = 0; k < 256; k++) { size_t c = count[k]; count[k] = pos; pos += c; }
+        for (size_t i = 0; i < m; i++) dst[count[(src[i] >> shift) & 255]++] = src[i];
+        uintptr_t *t = src; src = dst; dst = t;
+    }
+    if (src != a) memcpy(a, src, sizeof(uintptr_t) * m);
+    PyMem_Free(b);
+    return 0;
+}
+
 /*
- * cells_held_elsewhere(cells, per) -> list
+ * cells_held_elsewhere(cells, per, values) -> list
  *
  * shared_objects._cells_held_elsewhere: the objects of the list *cells* (an
- * object column's cells, read with tolist) whose reference count is above
- * *per* for each time they occur in it, each once, in first-met order: the
- * ones something outside the column holds too. An int, float, str, bytes,
- * bool or None is never one (the small ones are immortal).
+ * object column's cells, read with tolist) that something outside the column
+ * holds too -- a reference count above *per* for each time they occur in it
+ * -- or that hold something other than values (`cell_flat`, three levels
+ * deep, *values* the frozenset of value types), each once: first those
+ * only *cells* holds, in first-met order, then the others by address. A
+ * value is never one.
  */
 static PyObject *py_cells_held_elsewhere(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     (void)self;
-    if (nargs != 2 || !PyList_CheckExact(args[0]) || !PyLong_CheckExact(args[1])) {
-        PyErr_SetString(PyExc_TypeError, "cells_held_elsewhere(list, int)");
+    if (nargs != 3 || !PyList_CheckExact(args[0]) || !PyLong_CheckExact(args[1]) || !PyFrozenSet_Check(args[2])) {
+        PyErr_SetString(PyExc_TypeError, "cells_held_elsewhere(list, int, frozenset)");
         return NULL;
     }
     PyObject *cells = args[0];
     Py_ssize_t per = PyLong_AsSsize_t(args[1]);
     if (per == -1 && PyErr_Occurred()) return NULL;
     Py_ssize_t n = PyList_GET_SIZE(cells);
+    ValueTypes vt = {NULL, 0};
+    PyObject *kinds = PySequence_List(args[2]);
+    if (!kinds) return NULL;
+    vt.t = PyMem_Malloc(sizeof(PyTypeObject *) * (size_t)(PyList_GET_SIZE(kinds) + 1));
+    if (!vt.t) { Py_DECREF(kinds); return PyErr_NoMemory(); }
+    for (Py_ssize_t i = 0; i < PyList_GET_SIZE(kinds); i++)
+        if (PyType_Check(PyList_GET_ITEM(kinds, i))) vt.t[vt.n++] = (PyTypeObject *)PyList_GET_ITEM(kinds, i);
+    const ValueTypes *values = &vt;
     PyObject *out = PyList_New(0);
-    if (!out) return NULL;
-    PMap map = {0};
-    if (pm_init(&map, 16) < 0) goto fail;
-    for (Py_ssize_t i = 0; i < n; i++) {
+    if (!out) { PyMem_Free(vt.t); Py_DECREF(kinds); return NULL; }
+    uintptr_t *keys = NULL;
+    /* the cells a count could show held elsewhere, by address, sorted:
+       counted through a hash map, two million of them took half a second */
+    keys = PyMem_Malloc(sizeof(uintptr_t) * (size_t)(n ? n : 1));
+    if (!keys) { PyErr_NoMemory(); goto fail; }
+    size_t m = 0;
+    Py_INCREF(cells);
+    for (Py_ssize_t i = 0; i < n && i < PyList_GET_SIZE(cells); i++) {
         PyObject *c = PyList_GET_ITEM(cells, i);
-        PyTypeObject *t = Py_TYPE(c);
-        if (c == Py_None || t == &PyLong_Type || t == &PyFloat_Type || t == &PyUnicode_Type ||
-            t == &PyBytes_Type || t == &PyBool_Type)
-            continue;
+        int value = cell_flat(c, values, 0);
+        if (value < 0) goto fail_cells;
+        if (value) continue;
         /* the same object has the same count wherever it occurs: one at or
            below *per* occurs once and nothing else holds it */
-        if (Py_REFCNT(c) <= per) continue;
-        if ((map.used + 1) * 2 > map.cap && pm_grow(&map) < 0) goto fail;
-        PMEntry *e = pm_slot(&map, (uintptr_t)c);
-        if (!e->key) { e->key = (uintptr_t)c; e->val = 0; map.used++; }
-        e->val++;
+        if (Py_REFCNT(c) > per) { keys[m++] = (uintptr_t)c; continue; }
+        Py_INCREF(c);
+        int flat = cell_flat(c, values, 3);
+        int bad = flat < 0 || (!flat && PyList_Append(out, c) < 0);
+        Py_DECREF(c);
+        if (bad) goto fail_cells;
     }
-    for (Py_ssize_t i = 0; i < n; i++) {
-        PyObject *c = PyList_GET_ITEM(cells, i);
-        if (!map.used) break;
-        if (Py_REFCNT(c) <= per) continue;
-        PMEntry *e = pm_slot(&map, (uintptr_t)c);
-        if (!e->key || e->val <= 0) continue;
-        Py_ssize_t count = e->val;
-        e->val = -1; /* listed or not, once */
-        if (Py_REFCNT(c) > per * count && PyList_Append(out, c) < 0) goto fail;
+    if (radix_sort(keys, m) < 0) goto fail_cells;
+    for (size_t i = 0; i < m;) {
+        size_t j = i + 1;
+        while (j < m && keys[j] == keys[i]) j++;
+        PyObject *c = (PyObject *)keys[i];
+        int listed = Py_REFCNT(c) > per * (Py_ssize_t)(j - i);
+        if (!listed) {
+            Py_INCREF(c);
+            int flat = cell_flat(c, values, 3);
+            Py_DECREF(c);
+            if (flat < 0) goto fail_cells;
+            listed = !flat;
+        }
+        if (listed && PyList_Append(out, c) < 0) goto fail_cells;
+        i = j;
     }
-    pm_free(&map);
+    Py_DECREF(cells);
+    PyMem_Free(keys);
+    PyMem_Free(vt.t);
+    Py_DECREF(kinds);   /* after the last compare: it keeps the types alive */
     return out;
+fail_cells:
+    Py_DECREF(cells);
 fail:
-    pm_free(&map);
+    PyMem_Free(keys);
+    PyMem_Free(vt.t);
+    Py_DECREF(kinds);
     Py_DECREF(out);
     return NULL;
 }
@@ -1260,7 +1375,7 @@ static PyMethodDef cwalk_methods[] = {
     {"referrers_in", (PyCFunction)(void (*)(void))py_referrers_in, METH_FASTCALL,
      "referrers_in(heap, ids) -> list | NotImplemented"},
     {"cells_held_elsewhere", (PyCFunction)(void (*)(void))py_cells_held_elsewhere, METH_FASTCALL,
-     "cells_held_elsewhere(cells, per) -> list"},
+     "cells_held_elsewhere(cells, per, values) -> list"},
     {NULL, NULL, 0, NULL}};
 
 int cwalk_add_functions(PyObject *m) { return PyModule_AddFunctions(m, cwalk_methods); }

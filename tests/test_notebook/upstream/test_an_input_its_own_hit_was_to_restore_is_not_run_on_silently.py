@@ -41,8 +41,8 @@ def test_a_refused_hit_warns_and_stores_nothing(cash_magics, monkeypatch):
     # Run again alone, its own entry would restore w; the lookup refuses it.
     real = processor.StatementProcessor._live_objects_shared
 
-    def refuse(self, run, metadata):
-        return True if run.code == "w -= 1" else real(self, run, metadata)
+    def refuse(self, run, *rest):
+        return True if run.code == "w -= 1" else real(self, run, *rest)
 
     monkeypatch.setattr(processor.StatementProcessor, "_live_objects_shared", refuse)
     codes = _codes(cash_magics, "w -= 1")

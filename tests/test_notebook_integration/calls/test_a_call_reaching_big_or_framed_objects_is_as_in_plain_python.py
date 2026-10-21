@@ -60,7 +60,23 @@ CASES = {
         "w = mk(arr)",
         "arr[0] = 5.0\nprint('SAME', w.s.iloc[0] == 5.0, int(w.s.iloc[0]))",
     ),
+    # a filter of the argument's frame holds its very lists: served, still holding them
+    "frame_filter_of_arg": (
+        "df = pd.DataFrame({'t': [['a', str(i)] for i in range(1000)], 'n': range(1000)})",
+        "def mk(d):\n    time.sleep(1.0)\n    return d[d['n'] % 2 == 0]",
+        "t = time.time()\nw = mk(df)\nprint('T', round(time.time() - t, 1), len(w))",
+        "df['t'].iloc[2].append(5)\nprint('SAME', w['t'].iloc[1] is df['t'].iloc[2], w['t'].iloc[1][-1])",
+    ),
+    "series_filter_of_arg": (
+        "df = pd.DataFrame({'t': [['a', str(i)] for i in range(1000)], 'n': range(1000)})",
+        "def mk(s):\n    time.sleep(1.0)\n    return s[s.map(len) == 2].iloc[::2]",
+        "t = time.time()\nw = mk(df['t'])\nprint('T', round(time.time() - t, 1), len(w))",
+        "df['t'].iloc[2].append(5)\nprint('SAME', w.iloc[1] is df['t'].iloc[2], w.iloc[1][-1])",
+    ),
 }
+
+#: Served after the first run.
+SERVED = {"frame_filter_of_arg", "series_filter_of_arg"}
 
 
 @pytest.mark.parametrize("case", list(CASES))
@@ -80,3 +96,5 @@ def test_case(nb_runner, case):
         assert all(s[-1] == "SAME True 5" for s in seen), seen
     else:
         assert all(float(s[0].split()[1]) < 1.5 for s in seen[1:]), seen
+    if case in SERVED:
+        assert all(float(s[0].split()[1]) < 0.5 for s in seen[1:]), seen

@@ -152,7 +152,7 @@ from ..callee_reach import (
     module_state_writes,
     rebound_modules,
 )
-from ..holder_patches import holder_patches
+from ..holder_patches import FrameCellsPatch, frame_cells_patch, holder_patches
 from ..lineage_formula import (
     held_lineage,
     keep_held_lineage,
@@ -182,6 +182,7 @@ from ..shared_objects import (
     is_value,
     library_value_types,
     output_history,
+    outputs_with_frames,
     referring_names,
     share_group,
     view_base_names,
@@ -939,7 +940,7 @@ class StatementProcessor:
                 cached_data = None
         elif run.needs_trace:
             cached_data = None
-        if cached_data and self._live_objects_shared(run, metadata):
+        if cached_data and self._live_objects_shared(run, metadata, cached_data):
             cached_data = None
         if cached_data and not import_needs_reexecution(run.tree, self.shell.user_ns):
             hit_result = self._serve_hit(run, cached_data, metadata, unseeded_fits)
@@ -1319,7 +1320,9 @@ class StatementProcessor:
         )
         return hit_result
 
-    def _live_objects_shared(self, run: StatementRun, metadata: StatementCacheMetadata | None) -> bool:
+    def _live_objects_shared(
+        self, run: StatementRun, metadata: StatementCacheMetadata | None, cached_data: Any = None
+    ) -> bool:
         """Whether a hit of *run* must not restore over the objects its names
         are bound to now (`live_shared_reason`), with the miss reason set.
 
@@ -1327,9 +1330,11 @@ class StatementProcessor:
         changes in place (a fitted estimator among them) and the variables the
         entry stores with them. Nor is a name the upstream check's forward probe
         holds the place of (``FORWARD_PROBE_PLACEHOLDER``): no object of the
-        notebook's, it is there for this very hit to replace.
+        notebook's, it is there for this very hit to replace. Nor a frame
+        the entry takes cells back from (`FrameCellsPatch`): the hit leaves
+        it as it is.
         """
-        held = set((metadata.holders or {}) if metadata is not None else ())
+        held = set((metadata.holders or {}) if metadata is not None else ()) - _frames_left_alone(cached_data)
         mutated = set(run.analysis.all_mutated_vars) & run.outputs if run.analysis is not None else set()
         user_ns = self.shell.user_ns
         names = {name for name in run.outputs | held if user_ns.get(name) is not FORWARD_PROBE_PLACEHOLDER}
@@ -2164,11 +2169,12 @@ class StatementProcessor:
             # the outputs; JSON-like ones are walked once for all of them.
             with _plain_data.one_look(captured_vars):
                 holders = None
-                if not run.skip_cache:
-                    holders = self._refuse_unrestorable_outputs(run, captured_vars, execution.echo, execution.cost)
-                with logging_edges() as shared:
-                    self._record_shared_object_edges(run, captured_vars, holders, execution.echo, execution.cost)
-                    self._link_inputs_kept_by(run, execution.echo, execution.cost)
+                with outputs_with_frames(captured_vars, self.shell.user_ns):
+                    if not run.skip_cache:
+                        holders = self._refuse_unrestorable_outputs(run, captured_vars, execution.echo, execution.cost)
+                    with logging_edges() as shared:
+                        self._record_shared_object_edges(run, captured_vars, holders, execution.echo, execution.cost)
+                        self._link_inputs_kept_by(run, execution.echo, execution.cost)
                 if not is_control_body(run.code):
                     run.linked_edges = frozenset((src, dst) for src, dst in linked | shared if src != dst)
                     self._records.note_share_edges(run.source_hash, run.linked_edges)
@@ -2826,9 +2832,16 @@ class StatementProcessor:
         # rest (``for r in rows: normalize(r)``).
         patches = None
         if not _is_loop(run.tree):
-            patches = holder_patches(
-                holders, {name: captured_vars[name] for name in run.outputs if name in captured_vars}
-            )
+            outputs = {name: captured_vars[name] for name in run.outputs if name in captured_vars}
+            # A frame holding only cells the outputs' frames hold too
+            # (``df`` for ``df2 = df[mask]``): the outputs take them back
+            # from it, and it is not stored at all.
+            framed = {name: frame_cells_patch(value, outputs) for name, value in holders.items()}
+            framed = {name: patch for name, patch in framed.items() if patch is not None}
+            rest = {name: value for name, value in holders.items() if name not in framed}
+            patches = holder_patches(rest, outputs) if rest else {}
+            if patches is not None:
+                patches.update(framed)
         captured_vars.update(patches if patches is not None else holders)
         return None
 
@@ -3317,6 +3330,15 @@ def _open_stream(value: Any) -> bool:
         return not value.closed
     except Exception:  # noqa: BLE001 - a handle that cannot say is taken as open
         return True
+
+
+def _frames_left_alone(cached_data: Any) -> set[str]:
+    """The variables an entry's *cached_data* takes frame cells back from
+    (`FrameCellsPatch`), which a hit leaves as they are."""
+    variables = cached_data.get("variables") if isinstance(cached_data, dict) else None
+    if not isinstance(variables, dict):
+        return set()
+    return {name for name, value in variables.items() if isinstance(value, FrameCellsPatch)}
 
 
 def _is_loop(tree: ast.AST | None) -> bool:

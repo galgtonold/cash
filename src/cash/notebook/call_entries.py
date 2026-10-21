@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import itertools
 import logging
 import sys
 import time as _time
@@ -32,9 +33,11 @@ from cash.notebook.call_refs import (
     digest_and_size,
 )
 from cash.notebook.consumables import is_consumable_unrestorable
+from cash.notebook.frame_cells import cell_links, frames_in, is_frame, linked_cell_ids
 from cash.notebook.shared_objects import (
     VALUE_TYPES,
     WalkBudgetExceeded,
+    frames_together,
     holds_a_held_object,
     holds_part_of,
     holds_through_libraries_what_is_held_elsewhere,
@@ -184,6 +187,9 @@ class CallEntries:
         #: by `storable` holds too (its parameter name), or None; looked up
         #: only when asked (*explain_cells*): it walks the result again.
         self.cells_shared_with: str | None = None
+        #: Where the cells of the result last passed by `storable` sit that
+        #: are its arguments' frames' own (`frame_cells.cell_links`), or None.
+        self.cell_links: list[dict] | None = None
         # The TTL in force for the statement this call sits in, read at lookup
         # time because one `CallCache` serves every statement and each brings
         # its own annotation. `None` means "no TTL".
@@ -328,6 +334,30 @@ class CallEntries:
         prevent, handed back on every hit.
         """
         self.cells_shared_with = None
+        self.cell_links = None
+        try:
+            links = cell_links(result, args, kwargs)
+            if links is None:
+                return self._storable(result, args, kwargs, fn, root_held, explain_cells)
+            # The cells the result's frames hold of the arguments' frames are
+            # put back on a hit (`relink_cells`): only what else they hold is
+            # compared.
+            frames = itertools.chain(
+                (frame for _path, frame in frames_in(result)),
+                (value for value in (*args, *kwargs.values()) if is_frame(value)),
+            )
+            with frames_together(frames, linked_cell_ids(links)):
+                storable = self._storable(result, args, kwargs, fn, root_held, explain_cells)
+            if storable:
+                self.cell_links = links[0]
+            return storable
+        except WalkBudgetExceeded:
+            raise
+        except Exception:
+            logger.debug("storability check raised; the result is not stored", exc_info=True)
+            return False
+
+    def _storable(self, result, args, kwargs, fn: Any, root_held: bool, explain_cells: bool) -> bool:
         try:
             sources = (*args, *kwargs.values())
             parts = library_parts_held(result)
@@ -519,6 +549,7 @@ class CallEntries:
         code_module: str | None = None,
         held_refs: list | None = None,
         env_reads: dict[str, str] | None = None,
+        cell_links: list[dict] | None = None,
     ) -> tuple[str, Any] | None:
         """Write through ``backend.set(key, value, metadata)`` -- the same
         two-positional-argument shape the statement path uses
@@ -604,7 +635,11 @@ class CallEntries:
         # keeping, and pickling it for a digest took 2.6 s of 3.7. Whatever
         # the call took: its statement stores the reference instead of a
         # second copy of the value, which a token makes free.
-        if (plain_value or elapsed >= _REF_MIN_COMPUTE_S) and not callee_globals:
+        #
+        # Nor for one whose frames hold its arguments' frames' cells
+        # (`cell_links`): a statement reading the entry back would not put
+        # them back, and stores its own value with the frames it shares with.
+        if (plain_value or elapsed >= _REF_MIN_COMPUTE_S) and not callee_globals and not cell_links:
             estimate = self._too_big_to_digest(value, elapsed, plain_value)
             found = (
                 digest_and_size(value, for_store=True)
@@ -620,6 +655,10 @@ class CallEntries:
             # Where the sentinels the function names sit in the result
             # (`held_sentinels`): plain lists of strings, as metadata must be.
             metadata["held_refs"] = held_refs
+        if cell_links:
+            # Where the result holds its arguments' frames' cells
+            # (`frame_cells`): lists, strings, ints and bytes.
+            metadata["cell_links"] = cell_links
         if stdout:
             metadata["stdout"] = stdout
         if stderr:

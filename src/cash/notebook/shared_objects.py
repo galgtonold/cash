@@ -40,6 +40,7 @@ import enum
 import fractions
 import gc
 import inspect
+import itertools
 import pathlib
 import re
 import sys
@@ -792,55 +793,265 @@ def holds_through_libraries_what_is_held_elsewhere(value: Any) -> bool:
     return bool(excess_refs(nodes, inbound, [key for key in nodes if key != root]))
 
 
-def _object_cells(value: Any) -> list[Any]:
-    """The cells of *value*'s object columns that something outside the
-    column holds too, when it is a pandas frame or series:
-    ``pd.DataFrame({'d': [rect, [2]]})`` holds ``rect`` itself, and
-    ``df['d'].iloc[0] is rect``. A cell only the column holds can be shared
-    with nothing, and a million of them are not listed for every share
-    check (`_cells_held_elsewhere`); nor is a column of strings, or of
-    other values pandas tells apart in C (`infer_dtype`)."""
+def _object_columns(value: Any) -> list[Any] | None:
+    """The arrays of *value*'s object columns that hold more than values
+    pandas tells apart in C (`infer_dtype`), when it is a pandas frame or
+    series; None for anything else. Within `_columns_kept`, read once."""
     pd = sys.modules.get("pandas")
     if pd is None:
-        return []
+        return None
+    if not isinstance(value, (pd.Series, pd.DataFrame)):
+        return None
+    if _COLUMNS is not None:
+        if id(value) not in _COLUMNS:
+            _COLUMNS[id(value)] = _read_object_columns(value, pd)
+        return _COLUMNS[id(value)]
+    return _read_object_columns(value, pd)
+
+
+#: While `_columns_kept` runs: `_object_columns` by the id of each frame or
+#: series asked about (a variable's, or held in one, all along: no id is
+#: reused).
+_COLUMNS: dict[int, list[Any] | None] | None = None
+
+
+@contextlib.contextmanager
+def _columns_kept() -> Iterator[None]:
+    """Within it, the object columns of each frame are read once: no code
+    runs between the reads of one share check."""
+    global _COLUMNS
+    if _COLUMNS is not None:
+        yield
+        return
+    _COLUMNS = {}
+    try:
+        yield
+    finally:
+        _COLUMNS = None
+
+
+def _read_object_columns(value: Any, pd: Any) -> list[Any]:
     if isinstance(value, pd.Series):
         columns = [value]
     elif isinstance(value, pd.DataFrame):
         columns = [value.iloc[:, i] for i, dtype in enumerate(value.dtypes) if dtype.kind == "O"]
-    else:
-        return []
-    cells: list[Any] = []
+    arrays = []
     for column in columns:
         if column.dtype.kind != "O":
             continue
         array = column.to_numpy(copy=False)
-        if pd.api.types.infer_dtype(array, skipna=True) in _VALUE_COLUMNS:
-            continue
+        if pd.api.types.infer_dtype(array, skipna=True) not in _VALUE_COLUMNS:
+            arrays.append(array)
+    return arrays
+
+
+#: While `frames_together` runs: for each frame it was handed, by id, the
+#: cells `_object_cells` lists for it.
+_TOGETHER: dict[int, list[Any]] | None = None
+
+
+@contextlib.contextmanager
+def frames_together(values: Iterable[Any], linked: Mapping[int, Any] | None = None) -> Iterator[None]:
+    """Within it, the cells of the pandas frames and series among *values*
+    that only those frames hold are not listed (`_object_cells`): read as
+    one graph, ``df`` and ``df2 = df[mask]`` share their cells with each
+    other alone, and a walk of half a million cells would only find them
+    held where it already counts them. Cells holding more than values, or
+    held by anything else too, still are. Hand *values* over as an
+    iterator: a list the caller keeps is a holder of each frame.
+
+    *linked*: by a frame's id, the addresses, sorted, of cells a hit puts
+    back as another frame's own (`frame_cells`), not listed for it even
+    when they hold more than values; one held by anything else too still
+    is."""
+    global _TOGETHER
+    frames = [value for value in values if _object_columns(value)]
+    if len(frames) < 2 or (_TOGETHER is not None and not linked and all(id(frame) in _TOGETHER for frame in frames)):
+        # Too few to share, or read together already (`outputs_with_frames`
+        # around a share check).
+        frames = None
+        yield
+        return
+    columns = {id(frame): _object_columns(frame) or [] for frame in frames}
+    everything = _distinct_slots([array for arrays in columns.values() for array in arrays])
+    # Each slot holds its cell once, and so does *everything*.
+    beyond = {id(cell) for cell in _cells_held_elsewhere(everything, 2, exact_value_types())}
+    kept_apart = _held_by_frames_alone(everything, beyond, linked) if linked and beyond else {}
+    del everything
+    saved = _TOGETHER
+    together = dict(saved or {})
+    for frame in frames:
+        listed: list[Any] = []
+        if beyond:
+            mine = kept_apart.get(id(frame), ())
+            for array in columns[id(frame)]:
+                listed += [cell for cell in array.tolist() if id(cell) in beyond and id(cell) not in mine]
+        together[id(frame)] = listed
+    # This frame's own references, out of the counts the walks inside take.
+    frames = frame = columns = listed = None
+    _TOGETHER = together
+    try:
+        yield
+    finally:
+        _TOGETHER = saved
+
+
+@contextlib.contextmanager
+def outputs_with_frames(outputs: Mapping[str, Any], user_ns: Mapping[str, Any]) -> Iterator[None]:
+    """`frames_together` over the frames among a statement's *outputs* and
+    the variables of *user_ns* whose frames share their cells
+    (`_frames_sharing_cells`): ``df2 = df[mask]`` with a million rows of
+    ``df``'s lists, which every check of the outputs would otherwise read
+    a cell at a time."""
+    with _columns_kept():
+        if not any(_object_columns(value) for value in outputs.values()):
+            yield
+            return
+        try:
+            names = _frames_sharing_cells(outputs, user_ns, lambda name: False)
+        except WalkBudgetExceeded:
+            names = set()
+        # Handed over as they are read, not in a list of this frame's: a
+        # reference of its own would be counted as another holder.
+        with frames_together(itertools.chain(outputs.values(), (user_ns[name] for name in names))):
+            yield
+
+
+def _held_by_frames_alone(everything: list[Any], beyond: set[int], linked: Mapping[int, Any]) -> dict[int, set[int]]:
+    """By the frame of *linked* that links them, the ids of its linked
+    cells listed (*beyond*) for holding more than values that only the
+    slots *everything* reads hold: each slot once, and *everything* once
+    per slot."""
+    np = sys.modules["numpy"]
+    wanted = np.fromiter(beyond, dtype=np.int64, count=len(beyond))
+    by_frame = {key: set(wanted[np.isin(wanted, ids, assume_unique=True)].tolist()) for key, ids in linked.items()}
+    names = set().union(*by_frame.values())
+    if not names:
+        return {}
+    counts: dict[int, int] = {}
+    uniques: list[Any] = []
+    for cell in everything:
+        if id(cell) in names:
+            if id(cell) not in counts:
+                uniques.append(cell)
+            counts[id(cell)] = counts.get(id(cell), 0) + 1
+    cell = None  # the loop's own reference, out of the counts read below
+    # Held by its slots, by *everything* and by *uniques*.
+    alone = {
+        id(held)
+        for held, refs in zip(uniques, _refcounts(uniques))
+        if refs - _REFCOUNTS_OVERHEAD <= 2 * counts[id(held)] + 1
+    }
+    return {key: ids & alone for key, ids in by_frame.items()}
+
+
+def _distinct_slots(arrays: list[Any]) -> list[Any]:
+    """The cells of the object *arrays*, one per slot of memory: two views
+    of one block (``df`` and ``df.iloc[:10]``) hold a cell once between
+    them, and counted twice it would hide a third holder."""
+    np = sys.modules["numpy"]
+    spans = sorted(
+        (start, start + len(array) * array.strides[0])
+        if array.strides[0] >= 0
+        else (start + len(array) * array.strides[0], start + 8)
+        for array in arrays
+        for start in [array.__array_interface__["data"][0]]
+    )
+    if all(end <= spans[i + 1][0] for i, (_, end) in enumerate(spans[:-1])):
+        cells: list[Any] = []
+        for array in arrays:
+            cells += array.tolist()
+        return cells
+    addresses = [
+        np.int64(array.__array_interface__["data"][0]) + np.arange(len(array), dtype=np.int64) * array.strides[0]
+        for array in arrays
+    ]
+    _, first = np.unique(np.concatenate(addresses), return_index=True)
+    return np.concatenate(arrays).take(first).tolist()
+
+
+def _object_cells(value: Any, alone: bool = False) -> list[Any]:
+    """The cells of *value*'s object columns that something outside the
+    column holds too, or that hold more than values, when it is a pandas
+    frame or series: ``pd.DataFrame({'d': [rect, [2]]})`` holds ``rect``
+    itself, and ``df['d'].iloc[0] is rect``. A cell only the column holds,
+    of values alone (a list of tokens), can share nothing, and a million of
+    them are not listed for every share check (`_cells_held_elsewhere`);
+    nor is a column of strings, or of other values pandas tells apart in C
+    (`infer_dtype`). Within `frames_together`, not those only the frames
+    it was handed hold, unless *alone*."""
+    if not alone and _TOGETHER is not None and id(value) in _TOGETHER:
+        return _TOGETHER[id(value)]
+    arrays = _object_columns(value)
+    if not arrays:
+        return []
+    cells: list[Any] = []
+    values = exact_value_types()
+    for array in arrays:
         # The array holds each cell once per row, and so does its tolist.
-        cells += _cells_held_elsewhere(array.tolist(), 2)
+        cells += _cells_held_elsewhere(array.tolist(), 2, values)
     return cells
 
 
-def _cells_held_elsewhere(cells: list[Any], per: int) -> list[Any]:
-    """The objects of *cells* whose reference count is above *per* for each
-    time they occur in it, each once: what something else holds too. Not
-    an int, float, str, bytes, bool or None."""
+def _cells_held_elsewhere(cells: list[Any], per: int, values: frozenset[type]) -> list[Any]:
+    """The objects of *cells* that something else holds too -- a reference
+    count above *per* for each time they occur in it -- or that hold
+    something other than values (`_cell_flat`: ``[rect]`` holds the user's
+    list, which a share check must reach), each once: first those only
+    *cells* holds, in first-met order, then the others by address. Never a
+    value."""
     if _CELLS_HELD_ELSEWHERE is not None:
-        return _CELLS_HELD_ELSEWHERE(cells, per)
+        return _CELLS_HELD_ELSEWHERE(cells, per, values)
     # One at or below *per* occurs once and nothing else holds it: the same
     # object has the same count wherever it occurs.
     refcounts = _refcounts(cells)
-    above = [
-        (cell, refs)
-        for cell, refs in zip(cells, refcounts)
-        if refs - _REFCOUNTS_OVERHEAD > per and cell is not None and type(cell) not in _ATOM_CELLS
-    ]
+    alone: list[Any] = []
+    above: list[tuple[Any, int]] = []
+    for cell, refs in zip(cells, refcounts):
+        if _cell_flat(cell, values, 0):
+            continue
+        if refs - _REFCOUNTS_OVERHEAD > per:
+            above.append((cell, refs))
+        elif not _cell_flat(cell, values, 3):
+            alone.append(cell)
+    cell = None  # the loop's own reference, out of the counts read below
     counts: dict[int, int] = {}
-    for cell, _refs in above:
-        counts[id(cell)] = counts.get(id(cell), 0) + 1
-    return [
-        cell for cell, refs in above if (count := counts.pop(id(cell), 0)) and refs - _REFCOUNTS_OVERHEAD > per * count
+    for held, _refs in above:
+        counts[id(held)] = counts.get(id(held), 0) + 1
+    held = None
+    listed = [
+        held
+        for held, refs in above
+        if (count := counts.pop(id(held), 0))
+        and (refs - _REFCOUNTS_OVERHEAD > per * count or not _cell_flat(held, values, 3))
     ]
+    return alone + sorted(listed, key=id)
+
+
+def _cell_flat(value: Any, values: frozenset[type], depth: int) -> bool:
+    """Whether *value* is a value, or a list, tuple, set or dict holding only
+    values, or (*depth* deep) only such containers that nothing else holds:
+    a cell ``[rect]`` holds the user's list, which a share check must
+    reach; a list of tokens holds nothing it could share."""
+    kind = type(value)
+    if value is None or kind in _ATOM_CELLS:
+        return True
+    if kind not in _CELL_CONTAINERS:
+        return kind in values
+    if depth <= 0:
+        return False
+    items = [*value.keys(), *value.values()] if kind is dict else list(value)
+    refcounts = _refcounts(items)
+    # Each item is held by *value* and by *items*.
+    return all(
+        refs - _REFCOUNTS_OVERHEAD <= 2 and _cell_flat(item, values, depth - 1)
+        if type(item) in _CELL_CONTAINERS
+        else _cell_flat(item, values, depth - 1)
+        for item, refs in zip(items, refcounts)
+    )
+
+
+_CELL_CONTAINERS = frozenset({list, tuple, dict, set, frozenset})
 
 
 def _refcounts(cells: list[Any]) -> list[int]:
@@ -1226,6 +1437,25 @@ def share_group(
     bindings = [values, user_ns]
     cash_held = list(cash_held)
     named_held = list(named_held)
+    with _columns_kept():
+        return _share_group(
+            group, bindings, cash_held, named_held, user_ns, foreign, gave_up, anchorable, anchors, anchor_links
+        )
+
+
+def _share_group(
+    group: dict[str, Any],
+    bindings: list[Mapping[str, Any]],
+    cash_held: list[Any],
+    named_held: list[tuple[Mapping[str, Any], str]],
+    user_ns: Mapping[str, Any],
+    foreign: Callable[[str], bool],
+    gave_up: GaveUp | None,
+    anchorable: Callable[[str], bool] | None,
+    anchors: dict[str, Any] | None,
+    anchor_links: set[str] | None,
+) -> tuple[dict[str, Any], set[str]]:
+    """`share_group`, its object columns read once (`_columns_kept`)."""
     joined: set[str] = set()
     # What each round finds below a root of JSON-like data, for the next
     # round: no code runs between them, so what holds a part of it is the
@@ -1237,9 +1467,17 @@ def share_group(
     #: The anchor tried for each object, by id; None when it can be none.
     tried: dict[int, str | None] = {}
     rounds = anchor_rounds = 0
+    framed = _frames_sharing_cells(group, user_ns, foreign)
+    if framed:
+        # Found by address, not one cell at a time up its referrers: half a
+        # million cells ``df2 = df[mask]`` shares with ``df`` took seconds.
+        links.append((set(group), framed))
+        joined |= framed
+        group.update((name, user_ns[name]) for name in framed)
     while True:
         leaves.met.clear()
-        shared, found = _check_group(group, bindings, cash_held, named_held, None, user_ns, memo, partial, leaves)
+        with frames_together(group.values()):
+            shared, found = _check_group(group, bindings, cash_held, named_held, None, user_ns, memo, partial, leaves)
         if not shared:
             if anchors is not None:
                 anchors.update(_met_anchors(leaves, tried, user_ns))
@@ -1277,6 +1515,67 @@ def share_group(
         gave_up.complete = gave_up.complete and partial.complete
     outputs = set(group) - joined
     return {}, (shared & outputs) or outputs
+
+
+def _frames_sharing_cells(
+    group: Mapping[str, Any], user_ns: Mapping[str, Any], skip: Callable[[str], bool]
+) -> set[str]:
+    """The variables of *user_ns* bound to a pandas frame or series that
+    holds, in an object column, a cell that a frame or series of *group*
+    holds and that something else holds too, found by address: ``df`` for
+    ``df2 = df[mask]``, whose rows are ``df``'s own objects. Only when there
+    are more such cells than a walk takes on quickly; and, whatever their
+    number, the frames reading the same memory: their cells are the same
+    objects in one slot each, which no count shows."""
+    values = exact_value_types()
+    wanted: set[int] = set()
+    estimate = 0
+    spans: list[tuple[int, int]] = []
+    for value in group.values():
+        for array in _object_columns(value) or ():
+            spans.append(_span(array))
+            # A sample spread over the column: a variable sharing cells with
+            # it shares some of these, and one this misses is still found
+            # by the walk, a cell at a time.
+            step = max(1, len(array) // _SAMPLE)
+            held = _cells_held_elsewhere(array[::step].tolist(), 2, values)
+            wanted.update(map(id, held))
+            estimate += len(held) * step
+            del held
+    if not spans:
+        return set()
+    found: set[str] = set()
+    for name, value in user_ns.items():
+        if name in group or name.startswith("_") or skip(name):
+            continue
+        for array in _object_columns(value) or ():
+            check_walk_budget()
+            # On the same memory (``s[mask]`` that kept every row, a view):
+            # each cell is in one slot, the one both read.
+            start, end = _span(array)
+            if any(start < other_end and other_start < end for other_start, other_end in spans):
+                found.add(name)
+                break
+            if estimate >= _FEW_CELLS and not wanted.isdisjoint(map(id, array.tolist())):
+                found.add(name)
+                break
+    return found
+
+
+def _span(array: Any) -> tuple[int, int]:
+    """The bytes an object *array* reads its slots from, ``[start, end)``."""
+    start = array.__array_interface__["data"][0]
+    stride = array.strides[0] if array.ndim else 8
+    if stride >= 0:
+        return start, start + max(len(array) - 1, 0) * stride + 8
+    return start + (len(array) - 1) * stride, start + 8
+
+
+#: Fewest shared cells `_frames_sharing_cells` looks for by address.
+_FEW_CELLS = 64
+
+#: Cells of a column `_frames_sharing_cells` looks for.
+_SAMPLE = 4096
 
 
 #: More rounds `share_group` may take when it finds anchors: each one takes

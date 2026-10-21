@@ -19,6 +19,7 @@ value) is stored whole, as before.
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -34,7 +35,7 @@ from .shared_objects import (
     library_value_types,
 )
 
-__all__ = ["HolderPatch", "apply_patch", "holder_patches"]
+__all__ = ["FrameCellsPatch", "HolderPatch", "apply_patch", "frame_cells_patch", "holder_patches"]
 
 #: One step from a container to what it holds: ``("key", k)`` for a dict
 #: value, ``("item", i)`` for a list or tuple item, ``("attr", name)`` for an
@@ -50,6 +51,18 @@ class HolderPatch:
     variable itself."""
 
     places: tuple[tuple[Path, str, Path], ...]
+
+
+@dataclass(frozen=True)
+class FrameCellsPatch(HolderPatch):
+    """A pandas frame or series holding objects of the outputs only as the
+    cells of its object columns that the outputs' frames hold too:
+    ``df`` for ``df2 = df[mask]``. The holder stays as it is; the restored
+    outputs take its cells back where they held them
+    (`frame_cells.relink_cells`, *links*, with the holder as its one
+    argument)."""
+
+    links: tuple[dict, ...] = ()
 
 
 def _steps(value: Any, value_types: tuple[type, ...]) -> tuple[list[tuple[Step, Any]], list[Any]]:
@@ -205,13 +218,40 @@ def _get(obj: Any, step: Step) -> Any:
     return getattr(obj, label) if kind == "attr" else obj[label]
 
 
+def frame_cells_patch(holder: Any, outputs: Mapping[str, Any]) -> FrameCellsPatch | None:
+    """A `FrameCellsPatch` for *holder*, when it is a frame or series that
+    holds objects of *outputs* only as cells the outputs' frames hold too,
+    and only it and they hold them; None otherwise."""
+    from .frame_cells import cell_links, frames_in, is_frame, linked_cell_ids
+    from .shared_objects import frames_together, holds_part_of
+
+    if not is_frame(holder):
+        return None
+    links = cell_links(outputs, (holder,), {})
+    if links is None:
+        return None
+    frames = itertools.chain((frame for _path, frame in frames_in(outputs)), (holder,))
+    with frames_together(frames, linked_cell_ids(links)):
+        if holds_part_of(tuple(outputs.values()), [holder]):
+            return None
+    return FrameCellsPatch((), tuple(links[0]))
+
+
 def apply_patch(live: Any, patch: HolderPatch, restored: Mapping[str, Any]) -> Any:
     """Put the restored objects into *live*, the holder as the namespace
     has it, where *patch* says it held them; the holder's value afterwards
-    (*live*, or a restored object for the variable itself).
+    (*live*, or a restored object for the variable itself). A
+    `FrameCellsPatch` leaves *live* as it is and puts its cells back in the
+    restored outputs instead.
 
     Every place is found before any is set, so a holder that no longer has
     one (KeyError) is left as it was."""
+    if isinstance(patch, FrameCellsPatch):
+        from .frame_cells import RELINK_FAILED, relink_cells
+
+        if relink_cells(restored, (live,), {}, list(patch.links)) is RELINK_FAILED:
+            raise KeyError("the frame no longer holds the cells the outputs held of it")
+        return live
     sets = []
     for path, output, out_path in patch.places:
         try:

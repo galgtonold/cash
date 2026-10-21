@@ -6,7 +6,7 @@ list the frame's object column holds: a stored copy would no longer be
 it. Neither side's walk read a frame's cells. Read all, a million-row
 frame cost seconds in every share check: only the cells something else
 holds too are read. ``flt(df)`` returning ``df[mask]`` holds ``df``'s own
-cells; cash cannot yet keep them shared in a restored copy, so that call
+cells: a hit puts them back. When something else holds them too, the call
 runs every time and says so.
 
 Reading a big argument down to compare is paid on every call that is not
@@ -29,6 +29,8 @@ from cash.notebook.statement import processor
 
 RECT = [1]
 DF = pd.DataFrame({"d": [RECT, [2]]})
+INNER = [1]
+NESTED = pd.DataFrame({"d": [[INNER], [2]]})  # the cell holding INNER is the frame's alone
 BIG = argparse.Namespace(rows=[{"i": i} for i in range(300_000)])
 TOKENS = pd.DataFrame({"tokens": [["a", str(i)] for i in range(1000)], "n": range(1000)})
 
@@ -36,6 +38,11 @@ TOKENS = pd.DataFrame({"tokens": [["a", str(i)] for i in range(1000)], "n": rang
 def cell(d):
     time.sleep(0.05)  # above the call cost floor, so a miss is stored
     return argparse.Namespace(x=d["d"].iloc[0])
+
+
+def inner(d):
+    time.sleep(0.05)
+    return argparse.Namespace(x=d["d"].iloc[0][0])
 
 
 def fresh(src):
@@ -74,6 +81,12 @@ def test_a_frame_cell_the_result_holds_stays_the_frames(call_unit_harness):
     assert w.x is RECT
 
 
+def test_an_object_inside_a_cell_only_the_frame_holds_stays_the_frames(call_unit_harness):
+    hits, w = _twice(call_unit_harness, inner, NESTED, "inner")
+    assert hits == [False, False]
+    assert w.x is INNER
+
+
 def test_a_fresh_result_is_served_without_reading_a_big_argument(call_unit_harness):
     hits, w = _twice(call_unit_harness, fresh, BIG, "fresh")
     assert hits == [False, True]
@@ -91,12 +104,24 @@ def test_a_comparison_past_its_budget_does_not_store_and_says_so(call_unit_harne
     assert sum("NOTEBOOK-ANALYSIS-BUDGET" in str(c.message) for c in caught) == 1, [str(c.message) for c in caught]
 
 
-def test_a_result_sharing_an_arguments_frame_cells_runs_every_time_and_says_so(call_unit_harness):
+def test_a_result_holding_an_arguments_frame_cells_is_served_holding_them(call_unit_harness):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        hits, w = _twice(call_unit_harness, flt, TOKENS, "flt")
+    assert hits == [False, True]
+    assert w["tokens"].iloc[1] is TOKENS["tokens"].iloc[2]
+    assert w["tokens"].iloc[499] is TOKENS["tokens"].iloc[998]
+    assert w["n"].tolist() == list(range(0, 1000, 2))
+    assert not [str(c.message) for c in caught if "NOTEBOOK-CELLS-SHARED" in str(c.message)]
+
+
+def test_a_result_holding_cells_something_else_holds_too_runs_every_time_and_says_so(call_unit_harness):
+    held = TOKENS["tokens"].tolist()  # the cells, held outside the frames too
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         hits, w = _twice(call_unit_harness, flt, TOKENS, "flt")
     assert hits == [False, False]
-    assert w["tokens"].iloc[1] is TOKENS["tokens"].iloc[2]
+    assert w["tokens"].iloc[1] is held[2]
     told = [str(c.message) for c in caught if "NOTEBOOK-CELLS-SHARED" in str(c.message)]
     assert len(told) == 1, [str(c.message) for c in caught]
     assert "shares cells with argument d" in told[0]
@@ -106,3 +131,39 @@ def test_a_fresh_frame_of_lists_is_served(call_unit_harness):
     hits, w = _twice(call_unit_harness, tokens, 1000, "tokens")
     assert hits == [False, True]
     assert w["tokens"].iloc[7] == ["a", "7"]
+
+
+#: Cells holding a list only the frame holds: more than values, read by the
+#: share check, and still put back.
+BOXED = pd.DataFrame({"b": [[[i]] for i in range(200)], "n": range(200)})
+
+
+def pair(d):
+    time.sleep(0.12)
+    return d[d["n"] % 2 == 0], len(d)
+
+
+def test_a_result_holding_cells_that_hold_more_than_values_is_served_holding_them(call_unit_harness):
+    hits, w = _twice(call_unit_harness, flt, BOXED, "flt")
+    assert hits == [False, True]
+    assert w["b"].iloc[3] is BOXED["b"].iloc[6]
+    assert w["b"].iloc[3][0] is BOXED["b"].iloc[6][0]
+
+
+def test_cells_are_put_back_in_a_frame_a_tuple_holds_and_from_a_keyword_argument(call_unit_harness):
+    unit = call_unit_harness(lineage={"pair": "hash-pair", "arg": "hash-arg"}, user_ns={"arg": TOKENS})
+    site = CallSite(source="pair(d=arg)", free_names=frozenset({"pair", "arg"}), occurrence_index=0)
+    for _ in range(2):
+        unit.begin_statement()
+        w, n = unit.wrap(pair, site)(d=TOKENS)
+    assert [e["cache_hit"] for e in unit.drain()] == [False, True]
+    assert n == 1000
+    assert w["tokens"].iloc[5] is TOKENS["tokens"].iloc[10]
+
+
+def test_a_cell_that_cannot_be_put_back_runs_the_call(call_unit_harness, monkeypatch):
+    from cash.notebook import call_unit, frame_cells
+
+    monkeypatch.setattr(call_unit, "relink_cells", lambda *args: frame_cells.RELINK_FAILED)
+    _hits, w = _twice(call_unit_harness, flt, TOKENS, "flt")
+    assert w["tokens"].iloc[1] is TOKENS["tokens"].iloc[2]

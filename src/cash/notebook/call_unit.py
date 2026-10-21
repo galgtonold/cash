@@ -76,6 +76,7 @@ from cash.notebook.call_refs import (
     DIGEST_FIELD,
     SIZE_FIELD,
 )
+from cash.notebook.frame_cells import RELINK_FAILED, object_columns_on_both_sides, relink_cells
 from cash.notebook.held_sentinels import find_for_call, put_back_for_call
 from cash.notebook.pyplot_state import pyplot_state
 from cash.notebook.read_handles import reaches_read_handle
@@ -962,6 +963,10 @@ class CallUnit:
             # value belongs -- a miss costs a recompute, this would be
             # a silently wrong value.
             return call.fn(*call.args, **call.kwargs)
+        # The arguments' frames' own cells, where the result held them.
+        value = relink_cells(value, call.args, call.kwargs, metadata.get("cell_links"))
+        if value is RELINK_FAILED:
+            return call.fn(*call.args, **call.kwargs)
         # Replay the ORIGINAL execution's observations into the
         # statement's ambient capture (FileAccessTracker, live
         # stdout/stderr). The call itself does not run on a hit, so
@@ -1147,6 +1152,11 @@ class CallUnit:
         restore than to compute again."""
         if elapsed < self._cost_floor_s():
             return False
+        if call.site.source == self.plain_value_source and object_columns_on_both_sides(result, call.args, call.kwargs):
+            # ``f = flt(df)``: the statement stores *result* itself, and puts
+            # back the cells it shares with ``df`` (`FrameCellsPatch`); this
+            # entry would cost the same again to store.
+            return False
         # Walking what the result and the arguments hold may take at most
         # what the statement share check of the same cost may.
         from cash.notebook.statement.processor import share_check_budget  # imports this module
@@ -1188,13 +1198,14 @@ class CallUnit:
     def _tell_cells_shared(self, call: _Call, elapsed: float, argument: str) -> None:
         """Say once per function that its call is not stored because its
         result holds, in a frame's object column, the very objects
-        *argument*'s frame holds (``NOTEBOOK-CELLS-SHARED``); asked only for a
+        *argument*'s frame holds, and something else holds them too
+        (``NOTEBOOK-CELLS-SHARED``); asked only for a
         call slow enough that storing it would have mattered."""
         name = _name_of(call)
         self._cells_shared_told.add(name)
         what = (
             f"the call to {name} ran {elapsed:.2f}s and was not cached: its result shares cells with argument "
-            f"{argument}; runs every time until cash can keep them shared."
+            f"{argument}, which something else holds too; runs every time."
         )
         fix = (
             "nothing, when nothing changes those objects in place; to cache the call, return copies of "
@@ -1245,6 +1256,7 @@ class CallUnit:
             code_module=getattr(call.fn, "__module__", None),
             held_refs=find_for_call(call.fn, result),
             env_reads=env_reads or None,
+            cell_links=self._entries.cell_links,
         )
         if held:
             self._hold(call.key, result, *held)
