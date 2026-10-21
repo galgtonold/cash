@@ -195,7 +195,7 @@ def user(tmp_path, monkeypatch):
 
 @pytest.fixture
 def watched():
-    if code_trace._recorder() is None:
+    if sys.version_info < (3, 12) or code_trace._recorder() is None:
         pytest.skip("no sys.monitoring tool id: nothing sees code of the user's run")
 
 
