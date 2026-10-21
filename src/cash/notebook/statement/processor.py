@@ -2299,12 +2299,20 @@ class StatementProcessor:
                     gave_up=gave_up,
                     inputs=run.inputs,
                 )
-                if reason is not None and holders is not None:
+                if (
+                    reason is not None
+                    and holders is not None
+                    and (not gave_up or any(searched.found_variables for searched in gave_up))
+                ):
                     # Anchors only where holders alone refuse: an anchor binds
                     # the live object only while its digest is the one stored,
                     # which a holder restored with the outputs never needs
                     # (a restored ColumnTransformer can digest apart from the
-                    # one it was stored from, and the entry would miss).
+                    # one it was stored from, and the entry would miss). An
+                    # anchor is a variable found holding an object of the
+                    # outputs: when the search found none, the one with
+                    # anchors takes the same steps to the same refusal, and
+                    # each climb up `gc.get_referrers` reads the whole heap.
                     retry_holders: dict[str, Any] = {}
                     retry_gave_up: list[GaveUp] = []
                     retry = unrestorable_output_reason(

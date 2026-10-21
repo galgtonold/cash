@@ -1379,6 +1379,9 @@ class GaveUp:
     #: The modules whose namespace was found holding an object of the
     #: outputs, by their ``sys.modules`` name.
     modules: set[str] = dataclasses.field(default_factory=set)
+    #: Whether a round found variables holding the outputs' objects: only
+    #: then can a search with anchors end otherwise (`share_group`).
+    found_variables: bool = False
 
     def add(self, owners: Iterable[str], holders: Iterable[str]) -> None:
         """Note that *holders* share an object with *owners*."""
@@ -1479,6 +1482,8 @@ def _share_group(
         leaves.met.clear()
         with frames_together(group.values()):
             shared, found = _check_group(group, bindings, cash_held, named_held, None, user_ns, memo, partial, leaves)
+        if found and gave_up is not None:
+            gave_up.found_variables = True
         if not shared:
             if anchors is not None:
                 anchors.update(_met_anchors(leaves, tried, user_ns))
