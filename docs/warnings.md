@@ -158,7 +158,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 | [CACHE-NOT-WORTH-BYTES](#cache-not-worth-bytes) | notebook | a big, cheap value was not written to disk |
 | [CACHE-PER-ITEM-RERUN](#cache-per-item-rerun) | notebook | a slow step ran again over a whole collection, though most of it is unchanged |
 | [CACHE-RETURNS-AWAITABLE](#cache-returns-awaitable) | decorator | a sync function returned a coroutine, which is not stored |
-| [CACHE-RESULT-SHARED](#cache-result-shared) | decorator | the result shares state with the caller's object |
+| [CACHE-RESULT-SHARED](#cache-result-shared) | decorator | the result shares state with an object outside the call |
 | [CACHE-THRASH](#cache-thrash) | both | the cache is full and evicts what it just stored |
 | [CACHE-VALUE-TOO-BIG](#cache-value-too-big) | both | a value is bigger than the disk cap |
 | [CACHE-WRITE-ABANDONED](#cache-write-abandoned) | both | the process exited before its writes finished |
@@ -587,14 +587,31 @@ large frame of text columns hashes at about 0.2 s per million rows.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @8c38fe43, cash/decorator/purity_checks.py:PurityChecks._shared_with @edceb490 -->
-**What happened.** The result shares state with an object the caller still
-holds: it is an argument, holds one, is a view of an array argument, or is or
-holds a module global or closure variable the function names. On the first run, a write through one shows in the other. A
-cache hit returns a separate copy, so from then on it does not. A module
-global the function names and whose type compares by identity (a plain class
-without `__eq__`, such as a sentinel) is not reported: a hit hands back that
-global itself.
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @1910bd9c, cash/decorator/purity_checks.py:PurityChecks._shared_with @250028d7 -->
+**What happened.** The result shares state with an object outside the
+call: an argument, or something the function reaches by name. On the first
+run, a write through one shows in the other. A cache hit returns a separate
+copy, so from then on it does not. cash looks, two levels into the result
+(dicts of any kind, lists, tuples, sets, deques, object attributes, and the
+first 256 members of an object array), for:
+
+- an argument, or memory shared with an array argument;
+- a closure variable, a module global the body names, a default argument,
+  or an attribute of the function itself;
+- an attribute of a class or a module of yours the body names
+  (`Holder.ROWS`);
+- one of the first 256 items of any of those containers (`CONFIG["sub"]`,
+  a list inside a global tuple);
+- memory shared with any of those arrays (`return ARR[1:4]`).
+
+Not reported: a value nothing can be written through (a number, a string,
+an enum member, a frozen dataclass), and a global whose type compares by
+identity (a plain class without `__eq__`, such as a sentinel), since a hit
+hands back that global itself. Not seen: sharing deeper than two levels,
+an attribute of a library module, and a pandas column of a global frame (under copy-on-write, the
+pandas 3 default, a write to it does not reach the frame anyway). A library
+object a hit hands back as itself, such as a `logging.Logger`, is still
+reported.
 
 **Why it matters.** A caller that writes through the result, such as filling
 a preallocated array, works on the first run and silently stops working on

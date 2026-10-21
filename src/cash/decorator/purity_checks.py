@@ -4,6 +4,7 @@ effects it observes while a body runs."""
 from __future__ import annotations
 
 import ast
+import collections
 import dataclasses
 import enum
 import hashlib
@@ -128,24 +129,89 @@ def _by_reference(value) -> bool:
     return isinstance(value, (type, types.ModuleType)) or inspect.isroutine(value)
 
 
-def _named_variables(func):
-    """``(kind, name, value)`` for each closure variable of *func* and each
-    module global its body names."""
+#: How many items of a container the function names are looked for in its
+#: result (``return CONFIG["sub"]``), and how many members of an object ndarray
+#: the result is walked into.
+SHARED_ITEMS = 256
+
+
+def _unwritable(value) -> bool:
+    """Nothing can be written through *value* itself: an enum member, a
+    frozen dataclass, or a value `is_mutable` finds no way into."""
+    if isinstance(value, enum.Enum):
+        return True
+    params = getattr(type(value), "__dataclass_params__", None)
+    if params is not None and getattr(params, "frozen", False):
+        return True
+    return not is_mutable(value)
+
+
+def _items_of(value):
+    """``(label, item)`` for the first `SHARED_ITEMS` items of a container
+    (a frozen dataclass's fields included), or nothing."""
+    if isinstance(value, dict):
+        pairs = ((f"[{k!r}]", v) for k, v in value.items())
+    elif isinstance(value, (list, tuple, set, frozenset, collections.deque)):
+        pairs = ((f"[{i}]", v) for i, v in enumerate(value))
+    elif dataclasses.is_dataclass(value) and not isinstance(value, type):
+        pairs = ((f".{f.name}", getattr(value, f.name, None)) for f in dataclasses.fields(value))
+    else:
+        return
+    for count, pair in enumerate(pairs):
+        if count >= SHARED_ITEMS:
+            return
+        yield pair
+
+
+def _outside_objects(func):
+    """``(what, name, keeper, value)`` for each object outside a call that the
+    function reaches by name, so its result may hold it: each closure
+    variable, module global the body names, default argument and attribute
+    of the function itself; the attributes of a class or module of the
+    user's it names (``Holder.ROWS``); and the items of each container among
+    them (``CONFIG["sub"]``, ``NESTED[0]``). *keeper* is what keeps the
+    object, for the warning."""
+    named: list[tuple[str, str, str, Any]] = []
     try:
         code = func.__code__
         for name, cell in zip(code.co_freevars, func.__closure__ or ()):
             try:
-                yield "closure variable", name, cell.cell_contents
+                named.append(("the closure variable", name, "the closure", cell.cell_contents))
             except ValueError:  # an empty cell
                 continue
         globals_ = func.__globals__
-        named = {name for scope in iter_code_scopes(code) for name in scope.co_names}
+        names = {name for scope in iter_code_scopes(code) for name in scope.co_names}
     except (AttributeError, ValueError, RuntimeError):
         return
-    for name in sorted(named):
+    for name in sorted(names):
         value = globals_.get(name, _MISSING_GLOBAL)
         if value is not _MISSING_GLOBAL:
-            yield "module global", name, value
+            named.append(("the module global", name, "the module", value))
+    params = list(inspect.signature(func).parameters) if callable(func) else []
+    defaults = getattr(func, "__defaults__", None) or ()
+    positional = [p for p in params if p not in (getattr(func, "__kwdefaults__", None) or {})]
+    for name, value in zip(positional[len(positional) - len(defaults) :], defaults):
+        named.append(("the default argument", name, "the function", value))
+    for name, value in (getattr(func, "__kwdefaults__", None) or {}).items():
+        named.append(("the default argument", name, "the function", value))
+    for name, value in list((getattr(func, "__dict__", None) or {}).items()):
+        if not name.startswith("__"):
+            named.append(("the function attribute", f"{func.__name__}.{name}", "the function", value))
+    for what, name, keeper, value in named:
+        if isinstance(value, (type, types.ModuleType)):
+            module = value if isinstance(value, types.ModuleType) else sys.modules.get(value.__module__)
+            if not (is_user_code_module(module) or getattr(module, "__name__", None) in MAIN_MODULE_NAMES):
+                continue
+            kind = "the class attribute" if isinstance(value, type) else "the module global"
+            owner = "the class" if isinstance(value, type) else "its module"
+            for attr, held in list(vars(value).items()):
+                if not attr.startswith("__"):
+                    yield kind, f"{name}.{attr}", owner, held
+            continue
+        yield what, name, keeper, value
+        if isinstance(value, (dict, list, tuple, set, frozenset, collections.deque)) or dataclasses.is_dataclass(value):
+            for label, item in _items_of(value):
+                yield f"an item of {what}", name + label, keeper, item
 
 
 def held_sentinels(func) -> dict[int, list]:
@@ -241,8 +307,37 @@ def static_effect_kinds(report: Any) -> set[str]:
 _NETWORK_LABEL = observed_label(EffectKind.NETWORK)
 
 
-#: How deep into a returned container an argument is looked for.
+#: How deep into a returned container an argument or an object the
+#: function names is looked for.
 SHARED_RESULT_DEPTH = 2
+
+
+def _found_in(value, targets: dict[int, Any], depth: int) -> int | None:
+    """The id of the first of *targets* that *value* is or holds within
+    *depth* levels: a dict's values (``OrderedDict``, ``defaultdict``), a
+    list's, tuple's, set's or deque's items, an object's attributes, or the
+    first `SHARED_ITEMS` members of an object ndarray."""
+    key = id(value)
+    if key in targets and targets[key] is value:
+        return key
+    if depth <= 0:
+        return None
+    if isinstance(value, dict):
+        members = value.values()
+    elif isinstance(value, (list, tuple, set, frozenset, collections.deque)):
+        members = value
+    elif type(value).__name__ == "ndarray" and getattr(getattr(value, "dtype", None), "kind", None) == "O":
+        members = value.flat[:SHARED_ITEMS]
+    else:
+        state = getattr(value, "__dict__", None)
+        if not isinstance(state, dict):
+            return None
+        members = state.values()
+    for member in members:
+        found = _found_in(member, targets, depth - 1)
+        if found is not None:
+            return found
+    return None
 
 
 def describe_scope_use(reader: Any, name: str, cached: Any) -> str:
@@ -401,13 +496,13 @@ class PurityChecks:
             return
         if shared is None:
             return
-        what, name = shared
+        what, name, keeper = shared
         self._notices.warn_once(
             CashImpurityWarning,
             func_name,
             "shared-result",
-            f"@cash.cache on {func_name}: the result {what} '{name}', which the "
-            f"caller still holds. A cache HIT hands back a value rebuilt from "
+            f"@cash.cache on {func_name}: the result {what} '{name}', which "
+            f"{keeper} still holds. A cache HIT hands back a value rebuilt from "
             f"the stored bytes, so from the next run on they are separate "
             f"objects: writes through one will not be seen in the other.",
             code="CACHE-RESULT-SHARED",
@@ -419,8 +514,9 @@ class PurityChecks:
             ),
         )
 
-    def _shared_with(self, result, args, kwargs, func) -> tuple[str, str] | None:
-        """``(what, name)`` for the first sharing found in *result*, or None."""
+    def _shared_with(self, result, args, kwargs, func) -> tuple[str, str, str] | None:
+        """``(what, name, keeper)`` for the first sharing found in *result*,
+        or None. *keeper* is who still holds the shared object."""
 
         try:
             names = list(inspect.signature(func).parameters)
@@ -428,51 +524,49 @@ class PurityChecks:
             names = []
         supplied = [(names[i] if i < len(names) else f"arg{i}", value) for i, value in enumerate(args)]
         supplied += list(kwargs.items())
-
-        def contains(value, target, depth):
-            if value is target:
-                return True
-            if depth <= 0:
-                return False
-            kind = type(value)
-            if kind is dict:
-                return any(contains(v, target, depth - 1) for v in value.values())
-            if kind in (list, tuple, set, frozenset):
-                return any(contains(v, target, depth - 1) for v in value)
-            state = getattr(value, "__dict__", None)
-            if isinstance(state, dict):
-                return any(contains(v, target, depth - 1) for v in state.values())
-            return False
+        caller = "the caller"
 
         for name, value in supplied:
             if not is_mutable(value):
                 # Nothing can be written through it, so nothing can differ.
                 continue
             if value is result:
-                return "is the argument", name
-            if contains(result, value, SHARED_RESULT_DEPTH) and is_mutable(value):
-                return "holds the argument", name
+                return "is the argument", name, caller
+            if _found_in(result, {id(value): value}, SHARED_RESULT_DEPTH) is not None:
+                return "holds the argument", name, caller
             shared = shares_memory(result, value)
             if shared:
-                return "shares memory with the argument", name
+                return "shares memory with the argument", name, caller
         globals_ = getattr(func, "__globals__", None)
         if isinstance(globals_, dict):
             # A sentinel the body returns is handed back as itself on a hit.
             if sentinel_ref(func, result) is not None:
                 return None
             for name, value in list(globals_.items()):
-                if value is result and is_mutable(value):
-                    return "is the module global", name
-        # A global or closure variable the body names, held INSIDE the result
-        # (``{'rows': ROWS}``): plain Python hands back the caller's object, a
-        # hit a copy. Not one a hit puts back as itself (`held_sentinels`).
-        for what, name, value in _named_variables(func):
-            if _by_reference(value) or _sentinel_like(value) or not is_mutable(value):
+                if value is result and is_mutable(value) and not _unwritable(value):
+                    return "is the module global", name, "the module"
+        # An object outside the call the body reaches by name, the result
+        # or held INSIDE it (``{'rows': ROWS}``, ``CONFIG["sub"]``,
+        # ``ARR[1:4]``): plain Python hands back that object, a hit a copy.
+        # Not one a hit puts back as itself (`held_sentinels`). Collected
+        # first so the result is walked once whatever the function names.
+        outside: dict[int, tuple[str, str, str, Any]] = {}
+        arrays: list[tuple[str, str, str, Any]] = []
+        for what, name, keeper, value in _outside_objects(func):
+            if _by_reference(value) or _sentinel_like(value) or _unwritable(value):
                 continue
-            if value is result:
-                return f"is the {what}", name
-            if contains(result, value, SHARED_RESULT_DEPTH):
-                return f"holds the {what}", name
+            outside.setdefault(id(value), (what, name, keeper, value))
+            if type(value).__module__ == "numpy" and type(value).__name__ == "ndarray":
+                arrays.append((what, name, keeper, value))
+        if not outside:
+            return None
+        hit = _found_in(result, {key: entry[3] for key, entry in outside.items()}, SHARED_RESULT_DEPTH)
+        if hit is not None:
+            what, name, keeper, value = outside[hit]
+            return ("is " if value is result else "holds ") + what, name, keeper
+        for what, name, keeper, value in arrays:
+            if shares_memory(result, value):
+                return f"shares memory with {what}", name, keeper
         return None
 
     def learn_mutating_captures(self, func: Callable, func_name: str, watched: dict[str, tuple[str, str]]) -> bool:

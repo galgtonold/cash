@@ -134,3 +134,81 @@ def test_a_held_sentinel_global_says_nothing(cash_instance):
 
 
 _MARK = object()
+
+
+CONFIG_TREE: dict = {"sub": {"a": 1}}
+NESTED_T = ([1, 2],)
+
+
+class _Holder:
+    ROWS: list = [1, 2]
+
+
+@pytest.mark.parametrize(
+    ("label", "body", "named"),
+    [
+        ("an item of a global dict", "return CONFIG_TREE['sub']", "CONFIG_TREE['sub']"),
+        ("a list inside a global tuple", "return NESTED_T", "NESTED_T[0]"),
+        ("a class attribute", "return {'r': _Holder.ROWS}", "_Holder.ROWS"),
+        ("a global in a deque", "return collections.deque([ROWS])", "ROWS"),
+        ("a global in an OrderedDict", "return collections.OrderedDict(a=ROWS)", "ROWS"),
+    ],
+)
+def test_an_object_the_function_reaches_by_name_is_announced(cash_instance, label, body, named):
+    ns = {**globals(), "collections": __import__("collections")}
+    exec(f"def reach(n):\n    {body}\n", ns)
+    said = _warnings_of(cash_instance.cache(ns["reach"]), 1)
+    assert said, f"no warning for {label}"
+    assert named in said[0] and "which the caller" not in said[0], said[0]
+
+
+def test_a_default_and_a_function_attribute_are_announced(cash_instance):
+    def defaulted(n, d=[]):
+        return d
+
+    def attributed(n):
+        return attributed.store
+
+    attributed.store = [1]
+    said = _warnings_of(cash_instance.cache(defaulted), 1)
+    assert said and "default argument 'd'" in said[0], said
+    assert _warnings_of(cash_instance.cache(attributed), 1)
+
+
+def test_a_view_of_a_global_array_is_announced(cash_instance):
+    np = pytest.importorskip("numpy")
+    ns = {"ARR": np.arange(10.0)}
+    exec("def window(n):\n    return ARR[1:4]\n", ns)
+    said = _warnings_of(cash_instance.cache(ns["window"]), 1)
+    assert said and "shares memory with the module global 'ARR'" in said[0], said
+
+
+def test_an_enum_member_and_a_frozen_dataclass_say_nothing(cash_instance):
+    import dataclasses
+    import enum
+
+    class Color(enum.Enum):
+        RED = 1
+
+    @dataclasses.dataclass(frozen=True)
+    class Frozen:
+        x: int = 1
+
+    ns = {"RED": Color.RED, "CFG": Frozen()}
+    exec("def colored(n):\n    return {'c': RED}\ndef configured(n):\n    return {'cfg': CFG}\n", ns)
+    assert not _warnings_of(cash_instance.cache(ns["colored"]), 1)
+    assert not _warnings_of(cash_instance.cache(ns["configured"]), 1)
+
+
+def test_the_result_is_walked_once_whatever_the_function_names(cash_instance, monkeypatch):
+    from cash.decorator import purity_checks
+
+    walks = []
+    real = purity_checks._found_in
+    monkeypatch.setattr(
+        purity_checks, "_found_in", lambda v, t, d: walks.append(len(t)) or real(v, t, d) if d == 2 else real(v, t, d)
+    )
+    ns = {f"G{i}": {"k": i} for i in range(5)}
+    exec("def many(n):\n    return [G0, G1, G2, G3, G4] and [{'n': n}]\n", ns)
+    _warnings_of(cash_instance.cache(ns["many"]), 1)
+    assert len(walks) == 1, walks
