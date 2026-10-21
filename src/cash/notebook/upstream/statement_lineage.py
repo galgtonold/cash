@@ -74,7 +74,7 @@ from ..lineage_formula import (
 from ..loop_watch import branch_changes, loop_watch_hash, watch_candidates
 from ..pyplot_draws import pyplot_draw_names
 from ..restored_var import present_holders
-from ..run_memo import file_state_this_run, stats_this_run
+from ..run_memo import file_component_this_run, file_state_this_run, stats_this_run
 from ..stateful_carriers import carrier_kind_from_producer
 from ..statement import is_control_body
 from ..statement.carrier_advances import reachable_generators
@@ -85,7 +85,6 @@ from ..statement.derivation_edges import (
     own_share_edges,
     static_share_edges,
 )
-from ..statement.file_deps import compute_file_hash_component
 from ..statement.lineage import rewritten_by_the_notebook_since
 from ..tracking_state import TrackingState
 from .cache_probe import CacheProbe
@@ -744,7 +743,7 @@ class StatementLineage:
             if stat is not None and resolved == file_path:
                 present.add(file_path)
                 stmt_file_deps[file_path] = stat_key(stat)
-        return compute_file_hash_component(present) if present else ""
+        return file_component_this_run(present) if present else ""
 
     # -- Imports ---------------------------------------------------------------
 
@@ -1206,7 +1205,7 @@ class StatementLineage:
             # ones its outputs inherited -- with compute_file_hash_component.
             # Same files, same function: an unchanged file gives the
             # runtime's lineage, a changed one a different lineage.
-            file_hash_component = compute_file_hash_component(
+            file_hash_component = file_component_this_run(
                 *own_reads, self.tracking_state.statement_probes.get(cache_key)
             )
 

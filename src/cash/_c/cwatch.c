@@ -101,11 +101,14 @@ enum {
     A_KEPT = 9    /* re-armed with the digests it had: only views were added since */
 };
 /* snapshot record kinds */
-enum { R_LIST = 1, R_SET = 2, R_INST = 3, R_FUNC = 4, R_TYPE = 5, R_VIEW = 6 };
+enum { R_LIST = 1, R_SET = 2, R_INST = 3, R_FUNC = 4, R_TYPE = 5, R_VIEW = 6, R_TUPLE = 7, R_FSET = 8 };
 
 /* ------------------------------------------------------------ globals */
 typedef struct { uintptr_t addr; uint32_t root; uint32_t next; } WNode;
 typedef struct { WNode n; PyObject *key; /* borrowed: the root holds it in refs */ } KNode;
+
+/* an atom a record holds, by what it reads as (`atom_print`) */
+typedef struct { uintptr_t addr; PyTypeObject *t; uint64_t fp, len; } AtomPrint;
 
 typedef struct {
     uintptr_t addr;
@@ -113,6 +116,7 @@ typedef struct {
     uint32_t *nodes; uint32_t nnodes, capnodes;
     uintptr_t *snap; size_t nsnap, capsnap;
     PyObject **refs; uint32_t nrefs, caprefs;
+    AtomPrint *atoms; uint32_t natoms, capatoms;   /* the atoms its records hold (`record_item`) */
     PyObject *dg[NKINDS]; uint32_t dgver[NKINDS];
     uint32_t version;
     uint8_t used, dirty, gone, anchored;
@@ -324,7 +328,8 @@ static void rht_remove(uint32_t r) {
 static size_t root_bytes(Root *R) {
     return sizeof(Root) + (size_t)R->capnodes * 4 + R->capsnap * sizeof(uintptr_t) +
            (size_t)R->caprefs * sizeof(PyObject *) + (size_t)R->capvown * sizeof(uintptr_t) +
-           (size_t)R->cappk * (sizeof(uintptr_t) + sizeof(PyObject *));
+           (size_t)R->cappk * (sizeof(uintptr_t) + sizeof(PyObject *)) +
+           (size_t)R->capatoms * sizeof(AtomPrint);
 }
 
 static size_t table_bytes_total = 0;   /* sum of roots' bytes */
@@ -357,6 +362,7 @@ static void root_clear(Root *R) {
     R->nsnap = 0;
     for (uint32_t j = 0; j < R->nrefs; j++) Py_XDECREF(R->refs[j]);
     R->nrefs = 0;
+    R->natoms = 0;
     for (int k = 0; k < NKINDS; k++) { Py_CLEAR(R->dg[k]); R->dgver[k] = 0; }
     Py_CLEAR(R->wref);
     R->anchored = 0;
@@ -370,7 +376,7 @@ static void root_free(uint32_t r) {
     Root *R = &roots[r];
     table_bytes_total -= R->bytes;
     root_clear(R);
-    free(R->snap); free(R->nodes); free(R->refs); free(R->vown); free(R->pk_addr); free(R->pk_key);
+    free(R->snap); free(R->nodes); free(R->refs); free(R->atoms); free(R->vown); free(R->pk_addr); free(R->pk_key);
     rht_remove(r);
     memset(R, 0, sizeof *R);
     R->addr = 0; R->used = 0;
@@ -1025,6 +1031,58 @@ static size_t atom_size(PyObject *o, PyTypeObject *t) {
     return 24;
 }
 
+/* What an atom reads as, beside its address: a float's bits, an int that
+   fits in 64 bits, a str's or bytes' hash (cached on the object) and
+   length. 1 when it has none: an int past 64 bits. */
+static int atom_print(PyObject *x, PyTypeObject *t, uint64_t *fp, uint64_t *len) {
+    *len = 0;
+    if (t == &PyFloat_Type) {
+        double d = PyFloat_AS_DOUBLE(x);
+        memcpy(fp, &d, sizeof d);
+        return 0;
+    }
+    if (t == &PyLong_Type) {
+        int overflow = 0;
+        long long v = PyLong_AsLongLongAndOverflow(x, &overflow);
+        if (v == -1 && PyErr_Occurred()) { PyErr_Clear(); return 1; }
+        if (overflow) return 1;
+        *fp = (uint64_t)v;
+        return 0;
+    }
+    Py_hash_t h = PyObject_Hash(x);
+    if (h == -1 && PyErr_Occurred()) { PyErr_Clear(); return 1; }
+    *fp = (uint64_t)h;
+    *len = (uint64_t)(t == &PyUnicode_Type ? PyUnicode_GET_LENGTH(x) : PyBytes_GET_SIZE(x));
+    return 0;
+}
+
+/* An item a record holds by address: an atom is counted as content, and
+   what it reads as is recorded beside it (`atom_print`), for `verify` to
+   compare too. `scores[0] = f()` frees the old float, and the new one is
+   often made where it was: the pointers compare equal, and the old digest
+   was served. Not held: a root keeping the user's old strings alive kept
+   them for as long as it stood. An int past 64 bits, which has no print,
+   is held instead. Anything else is walked, its own record or watch
+   proving it unchanged. Only atoms: a share check counts references to the
+   user's containers and objects, never to values. */
+static int record_item(Walk *W, PyObject *x) {
+    PyTypeObject *xt = Py_TYPE(x);
+    if (!is_atom(x, xt)) return push(x);
+    W->content += atom_size(x, xt);
+    if (x == Py_None || xt == &PyBool_Type) return 0;   /* never freed */
+    uint64_t fp, len;
+    if (atom_print(x, xt, &fp, &len)) return root_ref(W->R, x);
+    Root *R = W->R;
+    if (R->natoms == R->capatoms) {
+        uint32_t nc = R->capatoms ? R->capatoms * 2 : 16;
+        AtomPrint *p = realloc(R->atoms, (size_t)nc * sizeof *p);
+        if (!p) { PyErr_NoMemory(); return -1; }
+        R->atoms = p; R->capatoms = nc;
+    }
+    R->atoms[R->natoms++] = (AtomPrint){(uintptr_t)x, xt, fp, len};
+    return 0;
+}
+
 static PyObject *set_dummy = NULL;
 
 /* a view the keyed pickle leaves out of its owner's state (`views_of`):
@@ -1149,44 +1207,37 @@ static int visit(Walk *W, PyObject *o) {
         PyObject **items = ((PyListObject *)o)->ob_item;
         if (n) memcpy(&R->snap[R->nsnap], items, (size_t)n * sizeof(PyObject *));
         R->nsnap += (size_t)n;
-        for (Py_ssize_t i = 0; i < n; i++) {
-            PyObject *x = ((PyListObject *)o)->ob_item[i];
-            PyTypeObject *xt = Py_TYPE(x);
-            if (is_atom(x, xt)) W->content += atom_size(x, xt); else if (push(x) < 0) return -1;
-        }
+        for (Py_ssize_t i = 0; i < n; i++)
+            if (record_item(W, ((PyListObject *)o)->ob_item[i]) < 0) return -1;
         return 0;
     }
-    if (t == &PyTuple_Type || t == &PyFrozenSet_Type) {
-        if (t == &PyTuple_Type) {
-            Py_ssize_t n = PyTuple_GET_SIZE(o);
-            W->content += 40 + (size_t)n * 8;
-            for (Py_ssize_t i = 0; i < n; i++) {
-                PyObject *x = PyTuple_GET_ITEM(o, i);
-                PyTypeObject *xt = Py_TYPE(x);
-                if (is_atom(x, xt)) W->content += atom_size(x, xt); else if (push(x) < 0) return -1;
-            }
-            return 0;
-        }
-        /* frozenset: fall through to the table walk without a record */
+    if (t == &PyTuple_Type) {
+        /* immutable, but one made where another was freed is another value:
+           recorded, its items held as a list's are */
+        Py_ssize_t n = PyTuple_GET_SIZE(o);
+        W->content += 40 + (size_t)n * 8;
+        if (snap_reserve(R, 2 + (size_t)n) < 0) return -1;
+        R->snap[R->nsnap++] = R_TUPLE | ((uintptr_t)n << 8);
+        R->snap[R->nsnap++] = (uintptr_t)o;
+        for (Py_ssize_t i = 0; i < n; i++) R->snap[R->nsnap++] = (uintptr_t)PyTuple_GET_ITEM(o, i);
+        for (Py_ssize_t i = 0; i < n; i++)
+            if (record_item(W, PyTuple_GET_ITEM(o, i)) < 0) return -1;
+        return 0;
     }
     if (t == &PySet_Type || t == &PyFrozenSet_Type) {
         PySetObject *so = (PySetObject *)o;
         Py_ssize_t n = so->used;
         W->content += 200 + (size_t)n * 16;
-        int record = t == &PySet_Type;
-        if (record) {
-            if (snap_reserve(R, 2 + (size_t)n) < 0) return -1;
-            R->snap[R->nsnap++] = R_SET | ((uintptr_t)n << 8);
-            R->snap[R->nsnap++] = (uintptr_t)o;
-        }
+        if (snap_reserve(R, 2 + (size_t)n) < 0) return -1;
+        R->snap[R->nsnap++] = (t == &PySet_Type ? R_SET : R_FSET) | ((uintptr_t)n << 8);
+        R->snap[R->nsnap++] = (uintptr_t)o;
         Py_ssize_t seen = 0;
         for (Py_ssize_t i = 0; i <= so->mask && seen < n; i++) {
             PyObject *x = so->table[i].key;
             if (!x || x == set_dummy) continue;
             seen++;
-            if (record) R->snap[R->nsnap++] = (uintptr_t)x;
-            PyTypeObject *xt = Py_TYPE(x);
-            if (is_atom(x, xt)) W->content += atom_size(x, xt); else if (push(x) < 0) return -1;
+            R->snap[R->nsnap++] = (uintptr_t)x;
+            if (record_item(W, x) < 0) return -1;
         }
         if (seen != n) { stop(W, A_INELIGIBLE, o); return 1; }
         return 0;
@@ -1242,11 +1293,7 @@ static int visit(Walk *W, PyObject *o) {
     for (Py_ssize_t i = 0; i < ns; i++) {
         PyObject *x = *(PyObject **)((char *)o + ti->offsets[i]);
         R->snap[R->nsnap++] = (uintptr_t)x;
-        if (x) {
-            PyTypeObject *xt = Py_TYPE(x);
-            if (is_atom(x, xt)) W->content += atom_size(x, xt);
-            else if (push(x) < 0) { Py_XDECREF(d); return -1; }
-        }
+        if (x && record_item(W, x) < 0) { Py_XDECREF(d); return -1; }
     }
     if (d && ti->views && views_of) {
         if (R->nvown == R->capvown) {
@@ -1305,8 +1352,14 @@ static int verify(Root *R) {
             if (n && memcmp(((PyListObject *)o)->ob_item, &s[2], n * sizeof(PyObject *)) != 0) return 0;
             s += 2 + n;
             break;
-        case R_SET: {
-            if (Py_TYPE(o) != &PySet_Type) return 0;
+        case R_TUPLE:
+            if (Py_TYPE(o) != &PyTuple_Type || (size_t)PyTuple_GET_SIZE(o) != n) return 0;
+            if (n && memcmp(((PyTupleObject *)o)->ob_item, &s[2], n * sizeof(PyObject *)) != 0) return 0;
+            s += 2 + n;
+            break;
+        case R_SET:
+        case R_FSET: {
+            if (Py_TYPE(o) != (kind == R_SET ? &PySet_Type : &PyFrozenSet_Type)) return 0;
             PySetObject *so = (PySetObject *)o;
             if ((size_t)so->used != n) return 0;
             size_t j = 0;
@@ -1374,6 +1427,15 @@ static int verify(Root *R) {
             return 0;
         }
     }
+    /* every record read the same, so each atom is still an item of a live
+       container there: is it the atom recorded, or a new one made at its
+       address? */
+    for (uint32_t j = 0; j < R->natoms; j++) {
+        AtomPrint *a = &R->atoms[j];
+        PyObject *x = (PyObject *)a->addr;
+        uint64_t fp, len;
+        if (Py_TYPE(x) != a->t || atom_print(x, a->t, &fp, &len) || fp != a->fp || len != a->len) return 0;
+    }
     return 1;
 }
 
@@ -1397,10 +1459,27 @@ static int same_object(Root *R, PyObject *o) {
    million checks, however big or still. */
 typedef struct { uintptr_t addr; uint64_t until; float secs; uint8_t state; uint8_t watched; PyObject *wref; PyTypeObject *type; } Sight;
 #define SIGHT_BITS 13
+/* Slots per bucket. One slot an address could land in was first-come: a
+   value sighted once and never checked again (a temporary) held it for
+   SEEN_HOLD checks, and a variable landing there was never noted, never
+   watched. Four ways keep room for it beside three others. */
+#define SIGHT_WAYS 4
 static Sight sights[1 << SIGHT_BITS];
 enum { SG_NONE = 0, SG_SEEN = 1, SG_SKIP = 2 };
+/* checks a sighting keeps its slot from another value's (`sight_place`) */
+#define SEEN_HOLD 1024
 
-static Sight *sight_of(uintptr_t a) { return &sights[hmix(a) & ((1u << SIGHT_BITS) - 1)]; }
+static Sight *sight_bucket(uintptr_t a) {
+    return &sights[(hmix(a) & ((1u << SIGHT_BITS) / SIGHT_WAYS - 1)) * SIGHT_WAYS];
+}
+
+/* a's sighting, or NULL */
+static Sight *sight_find(uintptr_t a) {
+    Sight *b = sight_bucket(a);
+    for (int w = 0; w < SIGHT_WAYS; w++)
+        if (b[w].addr == a && b[w].state != SG_NONE) return &b[w];
+    return NULL;
+}
 
 /* empty the slot, giving up its proof: a watched dict is alive here (its
    death empties the slot first), so unwatching it is safe */
@@ -1415,13 +1494,13 @@ static void sight_clear(Sight *g) {
 }
 
 static int sight_watches(uintptr_t a) {
-    Sight *g = sight_of(a);
-    return g->watched && g->addr == a;
+    Sight *g = sight_find(a);
+    return g && g->watched;
 }
 
 static void sight_dict_gone(uintptr_t a) {
-    Sight *g = sight_of(a);
-    if (g->watched && g->addr == a) {
+    Sight *g = sight_find(a);
+    if (g && g->watched) {
         g->watched = 0;   /* being freed: nothing to unwatch */
         sight_clear(g);
     }
@@ -1435,6 +1514,23 @@ static int sight_holds_live_skip(Sight *g) {
     return 1;
 }
 
+/* where a sighting of a goes: its own slot, else an empty one, a dead or
+   lapsed one, then the oldest sighting past SEEN_HOLD; a live skip or a
+   sighting within its hold is taken only *forced* (the oldest such), else
+   NULL: four values in the bucket keep their places */
+static Sight *sight_place(uintptr_t a, int forced) {
+    Sight *own = sight_find(a);
+    if (own) return own;
+    Sight *b = sight_bucket(a), *pick = NULL;
+    for (int w = 0; w < SIGHT_WAYS; w++) {
+        Sight *g = &b[w];
+        int held = sight_holds_live_skip(g) || (g->state == SG_SEEN && tick < g->until);
+        if (!held) return g;
+        if (forced && (!pick || g->until < pick->until)) pick = g;
+    }
+    return pick;
+}
+
 /* is the slot's skip still about `o`, not an object freed at its address? */
 static int sight_is(Sight *g, PyObject *o) {
     if (g->addr != (uintptr_t)o) return 0;
@@ -1444,7 +1540,7 @@ static int sight_is(Sight *g, PyObject *o) {
 
 static void skip_for(PyObject *o, uint64_t ticks) {
     uintptr_t a = (uintptr_t)o;
-    Sight *g = sight_of(a);
+    Sight *g = sight_place(a, 1);
     sight_clear(g);
     if (PyDict_Check(o)) {
         if (PyDict_Watch(dict_wid, o) < 0) { PyErr_Clear(); return; }
@@ -1562,8 +1658,8 @@ static PyObject *py_check(PyObject *self, PyObject *const *args, Py_ssize_t narg
         ti = verdict_of(t);
         if (ti && !ti->ok) { busy = 0; return PyLong_FromLong(ST_SKIP); }
     }
-    Sight *g = sight_of(a);
-    if (g->addr == a && g->state == SG_SKIP) {
+    Sight *g = sight_find(a);
+    if (g && g->state == SG_SKIP) {
         if (!sight_is(g, o)) {
             sight_clear(g);   /* skipped an object freed since: this one is new */
         } else {
@@ -1573,11 +1669,11 @@ static PyObject *py_check(PyObject *self, PyObject *const *args, Py_ssize_t narg
             return PyLong_FromLong(ST_ARM);
         }
     }
-    if (g->addr == a && g->state == SG_SEEN) { busy = 0; return PyLong_FromLong(ST_ARM); }
-    if (g->addr != a && sight_holds_live_skip(g)) {
-        /* another value's skip holds the slot, so this one's sighting could
-           not be kept, and every check would be its first: count this one
-           as its second instead */
+    if (g && g->state == SG_SEEN) { busy = 0; return PyLong_FromLong(ST_ARM); }
+    if (!sight_place(a, 0)) {
+        /* other values hold every slot of the bucket, so this one's
+           sighting could not be kept, and every check would be its first:
+           count this one as its second instead */
         busy = 0;
         return PyLong_FromLong(ST_ARM);
     }
@@ -1592,10 +1688,14 @@ static PyObject *py_seen(PyObject *self, PyObject *const *args, Py_ssize_t nargs
     double secs = PyFloat_AsDouble(args[1]);
     if (secs == -1.0 && PyErr_Occurred()) return NULL;
     uintptr_t a = (uintptr_t)args[0];
-    Sight *g = sight_of(a);
-    if (g->addr != a && sight_holds_live_skip(g)) Py_RETURN_NONE;  /* keep a live skip */
+    /* Other values' sightings keep their slots until their second check
+       arms them (which empties the slot) or SEEN_HOLD checks pass, and live
+       skips keep theirs. Written over, two values sharing a slot and checked
+       in turn each wiped the other's sighting: neither was ever armed. */
+    Sight *g = sight_place(a, 0);
+    if (!g) Py_RETURN_NONE;
     sight_clear(g);
-    g->addr = a; g->state = SG_SEEN; g->secs = (float)secs; g->until = 0;
+    g->addr = a; g->state = SG_SEEN; g->secs = (float)secs; g->until = tick + SEEN_HOLD;
     Py_RETURN_NONE;
 }
 
@@ -1685,9 +1785,9 @@ static PyObject *arm_value(PyObject *o, PyObject *anchors, PyObject **kept) {
         r = root_new(a);
         if (r < 0) { Py_XDECREF(wref); busy = 0; return NULL; }
         R = &roots[r];
-        Sight *g = sight_of(a);
-        if (g->addr == a && g->state == SG_SEEN) R->hash_s = g->secs;
-        if (g->addr == a) sight_clear(g);
+        Sight *g = sight_find(a);
+        if (g && g->state == SG_SEEN) R->hash_s = g->secs;
+        if (g) sight_clear(g);
     }
     R->version++;
     R->dirty = 0; R->gone = 0;
@@ -2679,7 +2779,8 @@ static int exec_module(PyObject *m) {
         {"FIRST", ST_FIRST}, {"ARM", ST_ARM}, {"SKIP", ST_SKIP}, {"BUSY", ST_BUSY}, {"OFF", ST_OFF},
         {"ARMED", A_ARMED}, {"ALREADY", A_ALREADY}, {"NEED_TYPE", A_NEED_TYPE},
         {"INELIGIBLE", A_INELIGIBLE}, {"TOO_SMALL", A_TOO_SMALL}, {"NO_ANCHOR", A_NO_ANCHOR},
-        {"OVER_BUDGET", A_OVER_BUDGET}, {"ARM_BUSY", A_BUSY}, {"KEPT", A_KEPT}, {"KINDS", NKINDS}};
+        {"OVER_BUDGET", A_OVER_BUDGET}, {"ARM_BUSY", A_BUSY}, {"KEPT", A_KEPT}, {"KINDS", NKINDS},
+        {"SIGHT_BITS", SIGHT_BITS}, {"SIGHT_WAYS", SIGHT_WAYS}};
     for (size_t i = 0; i < sizeof consts / sizeof consts[0]; i++)
         if (PyModule_AddIntConstant(m, consts[i].n, consts[i].v) < 0) return -1;
     if (PyType_Ready(&AccType) < 0 || PyType_Ready(&TouchType) < 0) return -1;

@@ -36,6 +36,7 @@ from ..cache_status import CacheStatus
 from ..consumables import is_write_stream
 from ..lineage_store import LineageWatch
 from ..magic_effects import magic_cell_of
+from ..run_memo import forget_file_state_this_run
 from ..tracking_state import TrackingState
 from ._types import CellCheck, ClassificationResult, ReexecutionPlan, SimulationCache, SimulationResult, latest_producer
 from .cache_probe import CacheProbe
@@ -646,6 +647,10 @@ class NotebookSimulator:
         overwritten -- or ``None`` to run them all. Every statement not in the
         result runs as it would have, in order, after the restores.
         """
+        # Each file looked at again: a write earlier in the cell that cash
+        # does not see as one (`_forget_file_answers_if_it_wrote`) left the
+        # stats and components the run kept from before it.
+        forget_file_state_this_run()
         try:
             vl = self.virtual_lineage
             planner = self.planner

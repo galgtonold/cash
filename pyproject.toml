@@ -181,6 +181,9 @@ dev = [
     # A figure's fig.show() sends a bundle with no text/plain; the display
     # replay test shows it as plain shows it.
     "plotly",
+    # A seaborn grid holds the user's frame next to a figure its axes hold
+    # back; test_a_frame_a_seaborn_grid_holds_stays_the_users.py needs a real one.
+    "seaborn",
     # test_a_jit_compiled_helper_is_keyed_as_code.py runs real @njit functions.
     "numba",
     # The soundfile reader tests read real .wav files through libsndfile.
