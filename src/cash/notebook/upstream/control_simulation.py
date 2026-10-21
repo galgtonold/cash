@@ -24,8 +24,8 @@ from ..callee_reach import module_state_names
 from ..control_structures import extract_target_names, get_control_structure_type
 from ..lineage_formula import output_lineage
 from ..loop_split import split_nodes
+from ..run_memo import file_component_this_run
 from ..statement.derivation_edges import bump_derived_lineages
-from ..statement.file_deps import compute_file_hash_component
 from ..tracking_state import TrackingState
 from ._types import SimulationResult, TraceEntry
 from .cache_probe import CacheProbe, ControlOutcome
@@ -253,7 +253,7 @@ class ControlSimulation:
         # lineages it produced.
         recorded = self._recorded_outcome(stmt_code, virtual_lineage)
         if recorded is not None:
-            if compute_file_hash_component(recorded[2]) != recorded[3]:
+            if file_component_this_run(recorded[2]) != recorded[3]:
                 # A file behind its outputs moved: the one change the entry
                 # lineages cannot show, because a `Path` does not change when
                 # the file it names does. Say so, or the loop trust keeps the
@@ -353,7 +353,7 @@ class ControlSimulation:
             return (
                 recorded is not None
                 and recorded[0] == input_hashes
-                and compute_file_hash_component(recorded[2]) == recorded[3]
+                and file_component_this_run(recorded[2]) == recorded[3]
             )
         except Exception:  # any doubt: it does not hold
             logger.debug("[UPSTREAM_DEBUG] could not check a loop's recorded outcome", exc_info=True)
