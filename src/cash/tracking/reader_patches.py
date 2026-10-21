@@ -591,6 +591,11 @@ def _runs_user_code(thread: threading.Thread) -> bool:
     return code is not None and is_user_code_file(code.co_filename)
 
 
+def _started_by_user_code(frame: Any) -> bool:
+    """Is *frame*, the caller of ``Thread.start``, code of the user's?"""
+    return frame is not None and is_user_code_file(frame.f_code.co_filename)
+
+
 def _patch_thread_start() -> None:
     """Run a thread a tracked block starts, on code of the user's, under the
     block's context.
@@ -605,21 +610,33 @@ def _patch_thread_start() -> None:
 
     The tracker also counts the thread until its ``run`` ends, as it counts
     pool work (`work_submitted`): a thread the block does not join can read a
-    file after the entry's fingerprints were taken.
+    file after the entry's fingerprints were taken. So is a thread the user's
+    code starts on a library's function (``threading.Timer(0.5,
+    lib.write).start()``), in its own context: what it writes lands while the
+    statements after it run. A library starting its own thread (a pool's
+    worker) is not counted.
     """
 
     def make(original):
         @functools.wraps(original)
         def start(self):
             tracker = active_tracker.get()
-            if tracker is None or not _runs_user_code(self):
+            if tracker is None:
                 return original(self)
-            run, context = self.run, contextvars.copy_context()
+            if _runs_user_code(self):
+                run, context = self.run, contextvars.copy_context()
+            elif _started_by_user_code(sys._getframe(1)):
+                run, context = self.run, None
+            else:
+                return original(self)
             trackers = tracker.work_submitted(_thread_function(self))
 
             def counted_run():
                 try:
-                    context.run(run)
+                    if context is None:
+                        run()
+                    else:
+                        context.run(run)
                 finally:
                     tracker.work_finished(trackers)
 

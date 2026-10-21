@@ -49,7 +49,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from time import perf_counter as _perf_counter
 from typing import Any
 
-from cash import _plain_data
+from cash import _native, _plain_data
 from cash._clock import CpuLimit
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
@@ -705,6 +705,52 @@ def holds_a_held_object(value: Any) -> bool:
     if excess_refs(nodes, inbound, [key for key in checked if key != root]):
         return True
     return any(view_bases(obj) for obj in nodes.values())
+
+
+def library_parts_held(value: Any) -> dict[int, Any] | None:
+    """The objects inside the library objects *value* is or holds that
+    something besides them holds (`_held_from_outside`), by id; None when
+    there were too many to read. Neither `holds_a_held_object` nor
+    `holds_part_of` reads a library object: ``argparse.Namespace(rows=ROWS)``
+    holds ``ROWS`` where neither looks."""
+    value_types = VALUE_TYPES + library_value_types()
+    nodes, _inbound, _checked, owner, _breaks = _walk({"": value}, [], value_types)
+    inside, _owners = _held_from_outside(nodes, owner, value_types)
+    return inside
+
+
+def ids_through_libraries(values: Iterable[Any]) -> set[int]:
+    """The ids of the objects *values* are and hold, read as `_identities`
+    reads them and, inside a library object, as `_held_from_outside` reads
+    it down: ``argparse.Namespace(rows=rect)`` holds ``rect``, which
+    `_identities` does not read. A type, a function or cash's own record is
+    not one (`_read_down`)."""
+    value_types = VALUE_TYPES + library_value_types()
+    found: set[int] = set()
+    seen: set[int] = set()
+    stack = list(values)
+    while stack:
+        obj = stack.pop()
+        if id(obj) in seen or is_value(obj, value_types):
+            continue
+        seen.add(id(obj))
+        if not len(seen) & 1023:
+            check_walk_budget()
+        children = children_of(obj)
+        if children is not None:
+            if not isinstance(obj, _IMMUTABLE_CONTAINERS):
+                found.add(id(obj))
+                found.update(view_bases(obj))
+            stack.extend(children)
+            continue
+        read_down = _read_down(obj, value_types)
+        if read_down is None:
+            continue
+        found.add(id(obj))
+        found.update(view_bases(obj))
+        if read_down:
+            stack.extend(gc.get_referents(obj))
+    return found
 
 
 def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
@@ -1619,8 +1665,9 @@ def _variables_holding(
         if name not in skip and not _SHELL_NAME.fullmatch(name) and not is_value(value, value_types):
             by_id.setdefault(id(value), []).append(name)
     stop = {id(user_ns), id(inside), id(by_id), *ignore}
-    module_dicts = {id(vars(module)) for module in list(sys.modules.values()) if module is not None}
-    module_dicts.discard(id(user_ns))
+    namespaces = [vars(module) for module in list(sys.modules.values()) if module is not None]
+    namespaces = [namespace for namespace in namespaces if namespace is not user_ns]
+    module_dicts = {id(namespace) for namespace in namespaces}
     stop.update(module_dicts)
     # Held in a container a library keeps, a library's own object is still
     # the library's (a module-level loss holding sklearn's ``Interval``); the
@@ -1640,6 +1687,10 @@ def _variables_holding(
             return None
         args = tuple(frontier)
         stop.add(id(args))
+        if _level and notebook_own and len(args) > _REFERRERS_BY_CALL and _held_by_a_module(args, namespaces):
+            # The answer the read of the heap below would give, when a module
+            # holds one of them: E18's seaborn grid read it twice (1.9 s).
+            return None
         referrers = gc.get_referrers(*args) if len(args) <= _REFERRERS_BY_CALL else _referrers_of(args, stop)
         stop.add(id(referrers))
         following: list[Any] = []
@@ -1672,6 +1723,15 @@ def _variables_holding(
     return names if not frontier else None
 
 
+def _held_by_a_module(objs: tuple[Any, ...], namespaces: list[dict]) -> bool:
+    """Whether one of *namespaces* (modules' globals) holds one of *objs*
+    itself: what `_variables_holding` gives up on past its first level,
+    found without reading the whole heap for their referrers."""
+    ids = {id(obj) for obj in objs}
+    referents = gc.get_referents
+    return any(not ids.isdisjoint(map(id, referents(namespace))) for namespace in namespaces)
+
+
 def _is_library_own(obj: Any) -> bool:
     """Whether *obj* is a library's own object: of a library's class
     (`_is_library_class`), read as one (not pandas or numpy data). A list,
@@ -1700,6 +1760,14 @@ def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
     ids = {id(obj) for obj in objs}
     heap = gc.get_objects()
     stop.add(id(heap))
+    if _REFERRERS_IN is not None:
+        # The same read in C, without an id() per referent.
+        found = _REFERRERS_IN(heap, ids)
+        if found is not NotImplemented:
+            # Neither the budget nor Ctrl-C stops the kernel: a 2-million
+            # object heap is ~0.3 s, checked once it is read.
+            check_walk_budget()
+            return found
     found = []
     referents, misses = gc.get_referents, ids.isdisjoint
     # A block of the heap is read in one call, and only a block holding one
@@ -1716,6 +1784,11 @@ def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
 
 #: Heap objects `_referrers_of` reads in one `gc.get_referents` call.
 _REFERRERS_BLOCK = 256
+
+#: The C kernel `_referrers_of` reads the heap with (``cwalk.c``), answering
+#: as its Python loop does; None without the kernels, or in a build from
+#: before it.
+_REFERRERS_IN = getattr(_native.kernels, "referrers_in", None)
 
 
 def _count_leaf_attributes(nodes: dict[int, Any], inbound: dict[int, int]) -> bool:

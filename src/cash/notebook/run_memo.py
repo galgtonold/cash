@@ -23,14 +23,15 @@ reads and fills both. Neither side imports the other for it.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any
 
-from .._paths import resolve_file_dep_path
+from .._paths import is_remote_url, normalize_path, resolve_file_dep_path
 from ..tracking import file_dep_snapshot as _fds
 from ..tracking.file_dep_snapshot import LISTING_MIN_FILES, FreshnessMemo, stats_from_listings
 
 __all__ = [
+    "file_component_this_run",
     "file_state_this_run",
     "forget_file_state_this_run",
     "known_fresh_entry",
@@ -103,6 +104,14 @@ def _locate_files(paths: Iterable[str], run: dict | None) -> dict[str, tuple[str
     found: dict[str, tuple[str | None, Any]] = {}
     for p in todo:
         st = listed.get(p)
+        if st is None and not is_remote_url(p):
+            # Where it was recorded: the stat that finds it is there is the
+            # stat the caller takes next (`resolve_file_dep_path` asked
+            # ``os.path.exists`` first, a stat of its own).
+            try:
+                st = os.stat(p)
+            except (OSError, ValueError):
+                st = None
         found[p] = (p, st) if st is not None else (resolve_file_dep_path(p), None)
     if run is not None and len(where) < 200_000:
         where.update(found)
@@ -129,3 +138,38 @@ def stats_this_run(paths: Iterable[str]) -> dict[str, tuple[str | None, Any]]:
                     st = None
             stats[p] = (resolved, st)
     return {p: stats[p] for p in paths}
+
+
+def file_component_this_run(
+    paths: set[str], remote: set[str] | None = None, probes: Mapping[str, str] | None = None
+) -> str:
+    """`compute_file_hash_component` of *paths*, with this run's stats
+    (`stats_this_run`) in place of a stat of each file of its own: the same
+    fields of the same file in the same run, so the same component; and the
+    component itself kept for the rest of the run, as the stats are. A
+    directory listing's stat is not handed on (it has no file identity, and
+    can lag a file edited through another hard link)."""
+    from .statement.file_deps import compute_file_hash_component
+
+    run = file_state_this_run()
+    components = run.setdefault("component", {}) if run is not None else None
+    key = None
+    if components is not None and not remote:  # an object store's token is asked each time
+        # One statement's files are asked for again by each lookup of the
+        # run: a cell below a read of 5,000 files built the same component
+        # three times.
+        try:
+            key = (frozenset(paths), frozenset(remote or ()), tuple(sorted((probes or {}).items())))
+        except TypeError:
+            key = None
+        if key is not None and key in components:
+            return components[key]
+    stats = {
+        normalize_path(p): st
+        for p, (resolved, st) in stats_this_run(paths).items()
+        if st is not None and resolved == p and st.st_ino
+    }
+    component = compute_file_hash_component(paths, remote, probes, stats=stats)
+    if key is not None:
+        components[key] = component
+    return component

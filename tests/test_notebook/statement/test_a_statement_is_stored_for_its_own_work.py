@@ -16,7 +16,7 @@ import time
 import pytest
 
 from cash.backends import FileBackend, InMemoryBackend, TieredBackend
-from cash.backends.persistence_policy import COMPUTE_FLOOR_S
+from cash.backends.persistence_policy import COMPUTE_FLOOR_S, STORE_FLOOR_S
 from tests._cell_driver import run_cash_cell
 
 DEFS = (
@@ -265,17 +265,30 @@ def test_a_call_under_the_persistence_floor_is_the_statements_work(tiers, mock_s
     left out of what storing the statement saves."""
     magics, ram, disk = tiers
     _setup(magics)
-    # Far under the floor. Not a sleep: macOS runners coalesce timers, and
-    # there even sleep(0.02) took 0.12-0.16 s. A counted loop takes the same
-    # CPU time however the OS schedules wake-ups. The call's time is wall
-    # time, though: with the whole suite at once a 0.035 s loop took 0.109 s,
-    # past the floor. 0.02 s keeps five times that under it.
-    n = _loop_count_for(0.02)
-    run_cash_cell(magics, f"def quick(x):\n    for _ in range({n}):\n        pass\n    return list(x)")
-    run_cash_cell(magics, "b = quick(a) + [1]")
-    quick_s = _call_seconds(ram, "quick")
-    assert 0.01 < quick_s < COMPUTE_FLOOR_S, f"quick() took {quick_s:.3f}s, not the range this tests"
-    meta, value = _entry(ram, "quick(a) + [1]")
+    # Between the store floor (a call quicker than that is not stored at
+    # all) and the persistence floor. Not a sleep: macOS runners coalesce
+    # timers, and there even sleep(0.02) took 0.12-0.16 s. A counted loop
+    # takes the same CPU time however the OS schedules wake-ups, but the
+    # call's time is wall time, and a busy machine moves it both ways (0.035
+    # s took 0.109 s with the whole suite at once; 0.02 s took 0.0097 s when
+    # the count was taken while other work slowed the core). So the count is
+    # corrected by what the call itself took, under the load it ran in, and
+    # a call out of the range is made again with a new name.
+    target = 0.03
+    turns = _loop_count_for(target)
+    for attempt in range(4):
+        name = f"quick{attempt}"
+        run_cash_cell(magics, f"def {name}(x):\n    for _ in range({turns}):\n        pass\n    return list(x)")
+        run_cash_cell(magics, f"b = {name}(a) + [1]")
+        try:
+            quick_s = _call_seconds(ram, name)
+        except AssertionError:  # not stored: under the store floor
+            quick_s = 0.0
+        if STORE_FLOOR_S < quick_s < COMPUTE_FLOOR_S:
+            break
+        turns = max(1, int(turns * target / quick_s)) if quick_s else turns * 3
+    assert STORE_FLOOR_S < quick_s < COMPUTE_FLOOR_S, f"{name}() took {quick_s:.3f}s, not the range this tests"
+    meta, value = _entry(ram, f"{name}(a) + [1]")
     assert value is not None and value["variables"]["b"][-1] == 1
     assert meta["store_time"] >= quick_s, meta
 
