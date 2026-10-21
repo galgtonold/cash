@@ -1291,6 +1291,9 @@ class StatementProcessor:
         # What changed through an alias moves on as a run moves it, past the
         # variables the entry restored with its outputs (moved on already).
         moved = set((metadata.holders or {}) if metadata is not None and metadata.holders_moved else ())
+        # Those the restore left at the lineage they had (`keep_held_lineage`).
+        lineage = self.tracking_state.variable_lineage
+        kept = {name for name in moved if lineage.get(name) == metadata.holders[name]}
         clear_rebound_edges(self.tracking_state, run.outputs, run.inputs, self.shell.user_ns, run.tree)
         # The restore put back the objects its run shared with other
         # variables (the entry stores them together): link them as its run
@@ -1302,7 +1305,7 @@ class StatementProcessor:
             if recorded:
                 apply_share_record(self.tracking_state.derivation_edges, (), recorded, self.shell.user_ns)
         self.lineage_builder.replay_derivation_bumps(
-            self.tracking_state, run.outputs, run.inputs, skip=moved, code=run.code
+            self.tracking_state, run.outputs, run.inputs, skip=moved, code=run.code, kept=kept
         )
         # The restore put the generators where the run left them; their
         # lineages follow, as the run's did.
@@ -1631,7 +1634,7 @@ class StatementProcessor:
         user_ns = self.shell.user_ns
         # ``# @cash:assume-safe`` on the statement: the user's word that the
         # work writes nothing the cells after it read, so they are served.
-        waived = getattr(run.annotation, "assume_safe", False)
+        waived = attribute_or(run.annotation, "assume_safe", False)
         if execution.children_running:
             if not waived:
                 for child in execution.children_running:
@@ -2204,7 +2207,7 @@ class StatementProcessor:
         # of it moves it (`held_lineage`), not through its edges, so a hit,
         # a run and the simulation leave it alike.
         self.lineage_builder.replay_derivation_bumps(
-            self.tracking_state, run.outputs, run.inputs, skip=moved, code=run.code
+            self.tracking_state, run.outputs, run.inputs, skip=moved, code=run.code, kept=run.holders_unchanged & moved
         )
         # After the save: the entry records each input's lineage as the
         # statement read it, before its draw moved it on.
@@ -3339,7 +3342,7 @@ def _work_label(functions: list[Any]) -> str:
     fn = functions[0] if functions else None
     while isinstance(fn, functools.partial):
         fn = fn.func
-    name = getattr(fn, "__qualname__", None) or getattr(fn, "__name__", None)
+    name = attribute_or(fn, "__qualname__", None) or attribute_or(fn, "__name__", None)
     return f"the thread running {name}()" if name else "a thread"
 
 
