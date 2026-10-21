@@ -587,7 +587,7 @@ large frame of text columns hashes at about 0.2 s per million rows.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @1910bd9c, cash/decorator/purity_checks.py:PurityChecks._shared_with @250028d7 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @1910bd9c, cash/decorator/purity_checks.py:PurityChecks._shared_with @a01dbd99 -->
 **What happened.** The result shares state with an object outside the
 call: an argument, or something the function reaches by name. On the first
 run, a write through one shows in the other. A cache hit returns a separate
@@ -602,16 +602,18 @@ first 256 members of an object array), for:
   (`Holder.ROWS`);
 - one of the first 256 items of any of those containers (`CONFIG["sub"]`,
   a list inside a global tuple);
-- memory shared with any of those arrays (`return ARR[1:4]`).
+- memory shared with any of those arrays (`return ARR[1:4]`), or, without
+  pandas copy-on-write (pandas 2 by default), with one of those frames
+  (`return DF["a"]`, a view of the frame there).
 
 Not reported: a value nothing can be written through (a number, a string,
 an enum member, a frozen dataclass), and a global whose type compares by
 identity (a plain class without `__eq__`, such as a sentinel), since a hit
-hands back that global itself. Not seen: sharing deeper than two levels,
-an attribute of a library module, and a pandas column of a global frame (under copy-on-write, the
-pandas 3 default, a write to it does not reach the frame anyway). A library
-object a hit hands back as itself, such as a `logging.Logger`, is still
-reported.
+hands back that global itself, and a pandas column under copy-on-write
+(the pandas 3 default), where a write through it copies first and never
+reaches the frame. Not seen: sharing deeper than two levels, and an
+attribute of a library module. A library object a hit hands back as
+itself, such as a `logging.Logger`, is still reported.
 
 **Why it matters.** A caller that writes through the result, such as filling
 a preallocated array, works on the first run and silently stops working on

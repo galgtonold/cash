@@ -212,3 +212,17 @@ def test_the_result_is_walked_once_whatever_the_function_names(cash_instance, mo
     exec("def many(n):\n    return [G0, G1, G2, G3, G4] and [{'n': n}]\n", ns)
     _warnings_of(cash_instance.cache(ns["many"]), 1)
     assert len(walks) == 1, walks
+
+
+@pytest.mark.parametrize("cow", [True, False], ids=["copy-on-write", "pandas-2-views"])
+def test_a_column_of_a_global_frame_is_announced_without_copy_on_write(cash_instance, monkeypatch, cow):
+    # Without copy-on-write, `DF["a"]` is a view of the frame: a write
+    # through the result reaches DF in plain Python, and not on a hit.
+    pd = pytest.importorskip("pandas")
+    from cash.decorator import purity_checks
+
+    monkeypatch.setattr(purity_checks, "is_cow_pandas", lambda value: cow)
+    ns = {"DF": pd.DataFrame({"a": [1.0, 2.0, 3.0]})}
+    exec("def column(n):\n    return DF['a']\n", ns)
+    said = _warnings_of(cash_instance.cache(ns["column"]), 1)
+    assert bool(said) is (not cow), said

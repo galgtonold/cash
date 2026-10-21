@@ -48,6 +48,7 @@ from ..source_reading import getsource, getsourcelines
 from ..tracking.randomness import capture_argument_carrier_states, moved_carriers, rng_carrier_kind
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
 from . import code_trace
+from .arg_hashing import is_cow_pandas
 from .arg_key import keyed_arguments
 from .cash_key import cash_key_method_of_type
 from .closure_fold import capture_digest, iter_code_scopes, unsafe_uses_of
@@ -236,19 +237,51 @@ def _sentinel_like(value) -> bool:
 
 
 def shares_memory(result, value) -> bool:
-    """Whether *result* and *value* may sit on the same buffer, cheaply.
+    """Whether *result* and *value* may sit on the same buffer, cheaply: an
+    ndarray, or a pandas frame or column without copy-on-write (``DF["a"]``
+    is a view of the frame there; under copy-on-write a write through it
+    copies first, so nothing is shared that a write could reach).
 
     ``may_share_memory`` is a bounds check, not the exact analysis, so it costs
     nothing and errs toward saying yes -- which for a warning is the right
     direction.
     """
+    mine, theirs = _buffers(result), _buffers(value)
+    if not mine or not theirs:
+        return False
+    import numpy as _np
+
+    return any(_np.may_share_memory(a, b) for a in mine for b in theirs)
+
+
+#: How many columns of a frame are looked at for shared memory.
+_FRAME_COLUMNS = 64
+
+
+def _buffers(value) -> list:
+    """The numpy arrays *value* writes into: itself for an ndarray, a pandas
+    column's or frame's numpy-backed columns without copy-on-write."""
+    kind = type(value)
+    if kind.__name__ == "ndarray" and kind.__module__ == "numpy":
+        return [value]
+    if kind.__name__ not in ("Series", "DataFrame") or not (kind.__module__ or "").startswith("pandas"):
+        return []
+    if is_cow_pandas(value):
+        return []
     try:
-        import numpy as _np
-    except ImportError:
-        return False
-    if not isinstance(result, _np.ndarray) or not isinstance(value, _np.ndarray):
-        return False
-    return bool(_np.may_share_memory(result, value))
+        columns = (
+            [value]
+            if kind.__name__ == "Series"
+            else [value.iloc[:, i] for i in range(min(value.shape[1], _FRAME_COLUMNS))]
+        )
+        found = []
+        for column in columns:
+            data = getattr(column, "_values", None)
+            if type(data).__name__ == "ndarray":
+                found.append(data)
+        return found
+    except Exception:  # noqa: BLE001 - a frame that cannot be read: nothing said
+        return []
 
 
 def make_opaque_issue(func_name: str, opaque_list: str) -> Any:
@@ -556,7 +589,7 @@ class PurityChecks:
             if _by_reference(value) or _sentinel_like(value) or _unwritable(value):
                 continue
             outside.setdefault(id(value), (what, name, keeper, value))
-            if type(value).__module__ == "numpy" and type(value).__name__ == "ndarray":
+            if _buffers(value):
                 arrays.append((what, name, keeper, value))
         if not outside:
             return None
