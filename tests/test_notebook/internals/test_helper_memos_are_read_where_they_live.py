@@ -18,7 +18,8 @@ def _call(ns, code):
 
 def test_a_memo_in_a_module_of_the_users_is_followed(tmp_path, monkeypatch):
     (tmp_path / "memo_mod_hm.py").write_text(
-        "import functools\n\n@functools.cache\ndef table(n):\n    return list(range(n))\n"
+        "import functools\n\n@functools.cache\ndef table(n):\n    return list(range(n))\n",
+        encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
     mod = importlib.import_module("memo_mod_hm")

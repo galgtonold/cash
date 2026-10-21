@@ -27,13 +27,14 @@ import gc
 import logging
 import sys
 import weakref
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
+from cash.decorator.closure_fold import iter_code_scopes
 from cash.install_paths import is_user_code_file, is_user_module
 from cash.value_hash import HASH_ERRORS, compute_hash
 
-__all__ = ["MAX_KEYED", "unfilled", "used", "watched"]
+__all__ = ["MAX_KEYED", "unfilled", "used", "watched", "watched_by"]
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +47,10 @@ MAX_KEYED = 256
 #: ``module -> (len of its namespace, its memo names)``: a module's top
 #: level is read again only when names were added to or taken from it.
 _module_memos: weakref.WeakKeyDictionary[Any, tuple[int, tuple[str, ...]]] = weakref.WeakKeyDictionary()
-#: ``(len(sys.modules), the user's modules)``: judged again only when a
-#: module was imported or dropped.
-_user_modules: tuple[int, tuple[Any, ...]] = (-1, ())
+#: ``((len(sys.modules), the last module's name), the user's modules)``:
+#: judged again when a module was imported or dropped (an import puts its
+#: name last, so one dropped and one imported still change the stamp).
+_user_modules: tuple[Any, tuple[Any, ...]] = (None, ())
 #: ``memo -> ((answers held, misses), key digests)``: every new answer is
 #: a miss, so a memo whose two counters stand still holds the same keys.
 _digests: weakref.WeakKeyDictionary[Any, tuple[tuple[int, int], list[str] | None]] = weakref.WeakKeyDictionary()
@@ -80,10 +82,14 @@ def _memos_of_module(mod: Any) -> list[tuple[str, Any]]:
     return [(name, namespace[name]) for name in known[1] if name in namespace]
 
 
-def _where(ns: Mapping[str, Any]) -> list[tuple[list[str], Any]]:
+def _where(ns: Mapping[str, Any], names: Iterable[str] | None = None) -> list[tuple[list[str], Any]]:
     """``(where, memo)`` for every memo of the user's the statement can reach:
-    ``["ns", name]`` or ``["module", module, name]``."""
-    found = [(["ns", name], value) for name, value in list(ns.items()) if _is_user_memo(value)]
+    ``["ns", name]`` or ``["module", module, name]``; of the namespace, only
+    those under *names* when given."""
+    if names is None:
+        found = [(["ns", name], value) for name, value in list(ns.items()) if _is_user_memo(value)]
+    else:
+        found = [(["ns", name], ns[name]) for name in names if name in ns and _is_user_memo(ns[name])]
     for mod in _modules_of_user():
         found.extend((["module", mod.__name__, attr], value) for attr, value in _memos_of_module(mod))
     return found
@@ -91,7 +97,8 @@ def _where(ns: Mapping[str, Any]) -> list[tuple[list[str], Any]]:
 
 def _modules_of_user() -> tuple[Any, ...]:
     global _user_modules
-    if _user_modules[0] == len(sys.modules):
+    stamp = (len(sys.modules), next(reversed(sys.modules), None))
+    if _user_modules[0] == stamp:
         return _user_modules[1]
     mods = []
     for mod in list(sys.modules.values()):
@@ -103,22 +110,42 @@ def _modules_of_user() -> tuple[Any, ...]:
                 mods.append(mod)
         except Exception:  # noqa: BLE001 - an odd entry in sys.modules
             continue
-    _user_modules = (len(sys.modules), tuple(mods))
+    _user_modules = (stamp, tuple(mods))
     return _user_modules[1]
 
 
-def watched(ns: Mapping[str, Any]) -> list[tuple[list[str], Any, int]] | None:
+def watched(ns: Mapping[str, Any], names: Iterable[str] | None = None) -> list[tuple[list[str], Any, int]] | None:
     """Before a statement runs: each memo it can reach with its call count."""
     if _LRU_WRAPPER is None:
         return None
     out = []
-    for where, memo in _where(ns):
+    for where, memo in _where(ns, names):
         try:
             info = memo.cache_info()
         except Exception:  # noqa: BLE001 - a wrapper whose counters raise
             continue
         out.append((where, memo, info.hits + info.misses))
     return out or None
+
+
+#: code -> the global names it and the functions nested in it read.
+_names_of: dict[Any, frozenset[str]] = {}
+
+
+def watched_by(fn: Any) -> list[tuple[list[str], Any, int]] | None:
+    """Before a call runs: the memos *fn* can reach by name, and *fn* itself."""
+    ns = getattr(fn, "__globals__", None)
+    code = getattr(fn, "__code__", None)
+    if not isinstance(ns, Mapping) or code is None:
+        return None
+    names = _names_of.get(code)
+    if names is None:
+        names = frozenset(n for scope in iter_code_scopes(code) for n in scope.co_names)
+        if len(_names_of) > 4096:
+            _names_of.clear()
+        _names_of[code] = names
+    own = getattr(fn, "__name__", None)
+    return watched(ns, names | {own} if isinstance(own, str) else names)
 
 
 def _cache_dict(memo: Any) -> dict | None:
@@ -165,7 +192,7 @@ def used(before: list[tuple[list[str], Any, int]] | None) -> list[dict] | None:
     for where, memo, calls in before:
         try:
             info = memo.cache_info()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - a wrapper whose counters raise
             continue
         if info.hits + info.misses == calls:
             continue
@@ -199,7 +226,7 @@ def unfilled(records: list[dict] | None, ns: Mapping[str, Any]) -> str | None:
             return f"the helper memo {label} it used is not bound"
         try:
             size = memo.cache_info().currsize
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - a wrapper whose counters raise
             return f"the helper memo {label} cannot be read"
         if size < int(record.get("size") or 0):
             return f"the helper memo {label} holds fewer answers than the run left"

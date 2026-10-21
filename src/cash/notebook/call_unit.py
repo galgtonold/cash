@@ -922,7 +922,12 @@ class CallUnit:
 
             call = _Call(fn, site, func_name, key, mutated_globals, args, kwargs)
             hit_started = _perf_counter()
-            hit, value, recorded_cost, metadata = self._entries.lookup(key, getattr(fn, "__globals__", None))
+            hit, value, recorded_cost, metadata = self._entries.lookup(key)
+            if hit and metadata.get("helper_memos"):
+                # Served only while the helper memos it called hold what its
+                # run left (`helper_memos.unfilled`).
+                if helper_memos.unfilled(metadata["helper_memos"], getattr(fn, "__globals__", None) or {}):
+                    hit, value, recorded_cost, metadata = False, None, 0.0, {}
             self._last_key_s = _perf_counter() - key_started
             if _shadow.SHADOW is not None:
                 # False when what it ran changed since it was stored.
@@ -1030,7 +1035,7 @@ class CallUnit:
             getattr(call.fn, "__globals__", None),
             propagate_to_parent=True,
         )
-        memos_before = helper_memos.watched(getattr(call.fn, "__globals__", None) or {})
+        memos_before = helper_memos.watched_by(call.fn)
         self._running += 1
         shadow = _shadow.SHADOW
         unit = shadow.begin("call") if shadow is not None else None
