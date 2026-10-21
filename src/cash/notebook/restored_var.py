@@ -18,7 +18,7 @@ import weakref
 from collections.abc import Callable, Container, Mapping
 from typing import TYPE_CHECKING, Any
 
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, instance_of
 from cash.content_hashers import builtin_hash_family
 from cash.notebook.lineage_store import restore_frozen_tag
 from cash.value_hash import budgeted_hash, is_costly, note_size
@@ -77,7 +77,7 @@ def hashed_by_lineage(value: Any, _seen: set[int] | None = None) -> bool:
     if t.__name__ in _LINEAGE_HASHED_TYPES or builtin_hash_family(t) is not None or _wraps_a_frame(t):
         return True
     artist = _artist_class()
-    if artist is not None and isinstance(value, artist):
+    if artist is not None and instance_of(value, artist):
         return True
     if t not in _COLLECTIONS:
         return False
@@ -95,7 +95,7 @@ def hashed_by_lineage(value: Any, _seen: set[int] | None = None) -> bool:
             if (
                 kind.__name__ in _LINEAGE_HASHED_TYPES
                 or builtin_hash_family(kind) is not None
-                or (artist is not None and isinstance(v, artist))
+                or (artist is not None and instance_of(v, artist))
             ):
                 return True
             if kind in _COLLECTIONS and id(v) not in seen:

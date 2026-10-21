@@ -35,7 +35,7 @@ from itertools import chain
 from typing import Any
 
 from cash import _plain_data
-from cash._user_attrs import attribute_or, has_attribute
+from cash._user_attrs import attribute_or, has_attribute, instance_of
 
 from .shared_objects import (
     EXACT_CONTAINER_TYPES,
@@ -513,12 +513,12 @@ def lazy_frame_sources(values: Iterable[Any], inputs: Iterable[str], user_ns: Ma
     is taken as a source: a write to ``arr`` reaches ``lf`` directly, one
     to the array under ``df`` through ``df``'s own link."""
     pl = sys.modules.get("polars")
-    if pl is None or not any(isinstance(value, pl.LazyFrame) for value in values):
+    if pl is None or not any(instance_of(value, pl.LazyFrame) for value in values):
         return set()
     return {
         name
         for name in inputs
-        if name in user_ns and (_family(user_ns[name]) is not None or isinstance(user_ns[name], pl.LazyFrame))
+        if name in user_ns and (_family(user_ns[name]) is not None or instance_of(user_ns[name], pl.LazyFrame))
     }
 
 

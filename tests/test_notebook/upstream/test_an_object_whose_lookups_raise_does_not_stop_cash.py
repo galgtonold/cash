@@ -113,6 +113,15 @@ FLOWS = {
     "a default": ["def h(r=Rec(a=3)):\n    return r.a", "q = h()"],
     "hiding its class": ["c = Cls(5)", "w = c.a + 1", "c.a = 9", "w2 = c.a"],
     "hiding its class, in a list": ["cs = [Cls(1), Cls(2)]", "tot = cs[0].a + cs[1].a"],
+    # cash checks values against a library's types only once it is loaded.
+    "hiding its class, libraries loaded": [
+        "import importlib\nfor _m in ('pandas', 'polars', 'pyarrow', 'matplotlib.pyplot', 'scipy.sparse', 'sklearn.base'):\n"
+        "    try:\n        importlib.import_module(_m)\n    except ImportError:\n        pass",
+        "c = Cls(5)",
+        "w = c.a + 1",
+        "c.a = 9",
+        "w2 = c.a",
+    ],
 }
 
 
