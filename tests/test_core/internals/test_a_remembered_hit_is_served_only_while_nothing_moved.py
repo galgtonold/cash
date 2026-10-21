@@ -497,6 +497,29 @@ def test_a_module_level_loop_keeps_the_memo_serving(c, tmp_path):
     assert int(done.stdout.split()[-1]) >= 990
 
 
+def test_a_memo_the_world_kept_off_scans_again_after_a_while(c):
+    """The backoff counts calls, and a scan that served nothing doubles it, up
+    to 1,024. On a Windows runner 1,024 ordinary hits of a function that reads
+    a file took seconds, so a world that moved now and then kept it off the
+    memo for good. A scan is also due a quarter second after the last one."""
+    f = c.cache(plus_one)
+    assert warm(f, 1) == 2
+    (memo,) = [m for m in hit_memo._MEMOS if m.state is hit_memo._STATE_OF[f]]
+    memo.backoff = 1024  # as ten scans that served nothing leave it
+    sys.modules["_cash_test_world_moves"] = None
+    del sys.modules["_cash_test_world_moves"]
+    deadline = time.monotonic() + 3.0
+    calls = 0
+    while time.monotonic() < deadline:
+        calls += 1
+        if served_fast(f, 1) == (2, True):
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError("never served again in 3 s")
+    assert calls < 1024
+
+
 def test_a_callees_miss_ends_its_callers_remembered_hits(c):
     inner = c.cache(times_rate)
 

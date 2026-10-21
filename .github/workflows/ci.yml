@@ -93,7 +93,13 @@ jobs:
       # package is missing from the dev extra shows up in the log.
       # The shard plugin keeps the tests whose node-id hash falls in this shard,
       # so the shards of one OS and Python run every test exactly once.
+      # A step that stalls past pytest-timeout (a deadlocked worker, a frozen
+      # runner) would otherwise hang for GitHub's 6 h default and leave no log:
+      # faulthandler_timeout dumps every thread's stack into the log after
+      # 120 s on one test, and timeout-minutes ends the step (the slowest,
+      # macOS, takes about 15 min).
       - name: Run unit tests
+        timeout-minutes: 20
         run: |
           python -m pytest tests/ \
             --ignore=tests/test_notebook_integration \
@@ -101,7 +107,8 @@ jobs:
             --ignore=tests/docs \
             -m "not perf" \
             -p tools.test_selection.shard --shard=${{ matrix.shard }} \
-            -n auto --tb=short -q -rs
+            -n auto --tb=short -q -rs \
+            -o faulthandler_timeout=120
         # Windows defaults to pwsh, where `\` does not continue a line.
         shell: bash
 

@@ -1086,6 +1086,104 @@ static PyObject *py_items_estimate(PyObject *self, PyObject *const *args, Py_ssi
     return total;
 }
 
+/*
+ * referrers_in(heap, ids) -> list | NotImplemented
+ *
+ * shared_objects._referrers_of's read of the heap:
+ *     [obj for obj in heap if not ids.isdisjoint(map(id, gc.get_referents(obj)))]
+ * in heap order. gc.get_referents reads an object the collector tracks
+ * through its type's tp_traverse, and so does this. The ids are sorted once
+ * and each referent looked up by its address: no id() per referent (an
+ * audit event each) and no int made for it. NotImplemented when an id is not
+ * an exact int.
+ */
+typedef struct {
+    const uintptr_t *ids;
+    size_t n;
+    int found;
+} RefCtx;
+
+static int cmp_address(const void *a, const void *b) {
+    uintptr_t x = *(const uintptr_t *)a, y = *(const uintptr_t *)b;
+    return x < y ? -1 : x > y;
+}
+
+static int visit_referent(PyObject *o, void *arg) {
+    RefCtx *cx = (RefCtx *)arg;
+    uintptr_t key = (uintptr_t)o;
+    if (cx->n && bsearch(&key, cx->ids, cx->n, sizeof(uintptr_t), cmp_address)) {
+        cx->found = 1;
+        return 1; /* stops the traverse: one is enough */
+    }
+    return 0;
+}
+
+static PyObject *py_referrers_in(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 2 || !PyList_CheckExact(args[0]) || !PyAnySet_Check(args[1])) {
+        PyErr_SetString(PyExc_TypeError, "referrers_in(list, set)");
+        return NULL;
+    }
+    PyObject *heap = args[0], *ids = args[1];
+    Py_ssize_t count = PySet_Size(ids);
+    if (count < 0) return NULL;
+    uintptr_t *sorted = PyMem_Malloc((size_t)(count ? count : 1) * sizeof(uintptr_t));
+    if (!sorted) return PyErr_NoMemory();
+    size_t n = 0;
+    PyObject *it = PyObject_GetIter(ids), *item;
+    if (!it) {
+        PyMem_Free(sorted);
+        return NULL;
+    }
+    while ((item = PyIter_Next(it))) {
+        void *address = PyLong_CheckExact(item) ? PyLong_AsVoidPtr(item) : NULL;
+        Py_DECREF(item);
+        if (!address || (Py_ssize_t)n >= count) {
+            /* not an exact int, or not an address an id() gives */
+            PyErr_Clear();
+            Py_DECREF(it);
+            PyMem_Free(sorted);
+            return NOT_IMPL();
+        }
+        sorted[n++] = (uintptr_t)address;
+    }
+    Py_DECREF(it);
+    if (PyErr_Occurred()) {
+        PyMem_Free(sorted);
+        return NULL;
+    }
+    qsort(sorted, n, sizeof(uintptr_t), cmp_address);
+    PyObject *out = PyList_New(0);
+    if (!out) {
+        PyMem_Free(sorted);
+        return NULL;
+    }
+    RefCtx cx = {sorted, n, 0};
+    GCPause gp;
+    gc_pause(&gp);
+    Py_INCREF(heap);
+    int err = 0;
+    for (Py_ssize_t i = 0; i < PyList_GET_SIZE(heap); i++) {
+        PyObject *o = PyList_GET_ITEM(heap, i);
+        if (!PyObject_IS_GC(o)) continue;
+        traverseproc traverse = Py_TYPE(o)->tp_traverse;
+        if (!traverse) continue;
+        cx.found = 0;
+        Py_INCREF(o);
+        traverse(o, visit_referent, &cx);
+        if (cx.found && PyList_Append(out, o) < 0) err = 1;
+        Py_DECREF(o);
+        if (err) break;
+    }
+    Py_DECREF(heap);
+    gc_resume(&gp);
+    PyMem_Free(sorted);
+    if (err) {
+        Py_DECREF(out);
+        return NULL;
+    }
+    return out;
+}
+
 static PyMethodDef cwalk_methods[] = {
     {"leaf_items", (PyCFunction)(void (*)(void))py_leaf_items, METH_FASTCALL,
      "leaf_items(group, mode, leaves) -> bool | NotImplemented"},
@@ -1104,6 +1202,8 @@ static PyMethodDef cwalk_methods[] = {
      "shared_parts(dict, min_rows, max_depth, max_keys, immutable_below) -> dict"},
     {"items_estimate", (PyCFunction)(void (*)(void))py_items_estimate, METH_FASTCALL,
      "items_estimate(container, depth, max_depth, no_arrays, at_limit, estimate, seen) -> int | NotImplemented"},
+    {"referrers_in", (PyCFunction)(void (*)(void))py_referrers_in, METH_FASTCALL,
+     "referrers_in(heap, ids) -> list | NotImplemented"},
     {NULL, NULL, 0, NULL}};
 
 int cwalk_add_functions(PyObject *m) { return PyModule_AddFunctions(m, cwalk_methods); }
