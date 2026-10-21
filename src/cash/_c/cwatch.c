@@ -107,12 +107,16 @@ enum { R_LIST = 1, R_SET = 2, R_INST = 3, R_FUNC = 4, R_TYPE = 5, R_VIEW = 6, R_
 typedef struct { uintptr_t addr; uint32_t root; uint32_t next; } WNode;
 typedef struct { WNode n; PyObject *key; /* borrowed: the root holds it in refs */ } KNode;
 
+/* an atom a record holds, by what it reads as (`atom_print`) */
+typedef struct { uintptr_t addr; PyTypeObject *t; uint64_t fp, len; } AtomPrint;
+
 typedef struct {
     uintptr_t addr;
     PyObject *wref;              /* weak reference to the value, or NULL */
     uint32_t *nodes; uint32_t nnodes, capnodes;
     uintptr_t *snap; size_t nsnap, capsnap;
     PyObject **refs; uint32_t nrefs, caprefs;
+    AtomPrint *atoms; uint32_t natoms, capatoms;   /* the atoms its records hold (`record_item`) */
     PyObject *dg[NKINDS]; uint32_t dgver[NKINDS];
     uint32_t version;
     uint8_t used, dirty, gone, anchored;
@@ -324,7 +328,8 @@ static void rht_remove(uint32_t r) {
 static size_t root_bytes(Root *R) {
     return sizeof(Root) + (size_t)R->capnodes * 4 + R->capsnap * sizeof(uintptr_t) +
            (size_t)R->caprefs * sizeof(PyObject *) + (size_t)R->capvown * sizeof(uintptr_t) +
-           (size_t)R->cappk * (sizeof(uintptr_t) + sizeof(PyObject *));
+           (size_t)R->cappk * (sizeof(uintptr_t) + sizeof(PyObject *)) +
+           (size_t)R->capatoms * sizeof(AtomPrint);
 }
 
 static size_t table_bytes_total = 0;   /* sum of roots' bytes */
@@ -357,6 +362,7 @@ static void root_clear(Root *R) {
     R->nsnap = 0;
     for (uint32_t j = 0; j < R->nrefs; j++) Py_XDECREF(R->refs[j]);
     R->nrefs = 0;
+    R->natoms = 0;
     for (int k = 0; k < NKINDS; k++) { Py_CLEAR(R->dg[k]); R->dgver[k] = 0; }
     Py_CLEAR(R->wref);
     R->anchored = 0;
@@ -370,7 +376,7 @@ static void root_free(uint32_t r) {
     Root *R = &roots[r];
     table_bytes_total -= R->bytes;
     root_clear(R);
-    free(R->snap); free(R->nodes); free(R->refs); free(R->vown); free(R->pk_addr); free(R->pk_key);
+    free(R->snap); free(R->nodes); free(R->refs); free(R->atoms); free(R->vown); free(R->pk_addr); free(R->pk_key);
     rht_remove(r);
     memset(R, 0, sizeof *R);
     R->addr = 0; R->used = 0;
@@ -895,7 +901,6 @@ static int root_ref(Root *R, PyObject *o) {
     return 0;
 }
 
-
 static void stop(Walk *W, int status, PyObject *detail) {
     W->status = status;
     Py_XINCREF(detail);
@@ -1026,18 +1031,56 @@ static size_t atom_size(PyObject *o, PyTypeObject *t) {
     return 24;
 }
 
-/* An item a record holds by address: an atom is counted as content and held
-   by the root until it is cleared, so a new atom cannot be made at its
-   address while the record stands (`scores[0] = f()` freed the old float and
-   the new one landed where it was: the pointers compared equal and the old
-   digest was served). Anything else is walked, its own record or watch
+/* What an atom reads as, beside its address: a float's bits, an int that
+   fits in 64 bits, a str's or bytes' hash (cached on the object) and
+   length. 1 when it has none: an int past 64 bits. */
+static int atom_print(PyObject *x, PyTypeObject *t, uint64_t *fp, uint64_t *len) {
+    *len = 0;
+    if (t == &PyFloat_Type) {
+        double d = PyFloat_AS_DOUBLE(x);
+        memcpy(fp, &d, sizeof d);
+        return 0;
+    }
+    if (t == &PyLong_Type) {
+        int overflow = 0;
+        long long v = PyLong_AsLongLongAndOverflow(x, &overflow);
+        if (v == -1 && PyErr_Occurred()) { PyErr_Clear(); return 1; }
+        if (overflow) return 1;
+        *fp = (uint64_t)v;
+        return 0;
+    }
+    Py_hash_t h = PyObject_Hash(x);
+    if (h == -1 && PyErr_Occurred()) { PyErr_Clear(); return 1; }
+    *fp = (uint64_t)h;
+    *len = (uint64_t)(t == &PyUnicode_Type ? PyUnicode_GET_LENGTH(x) : PyBytes_GET_SIZE(x));
+    return 0;
+}
+
+/* An item a record holds by address: an atom is counted as content, and
+   what it reads as is recorded beside it (`atom_print`), for `verify` to
+   compare too. `scores[0] = f()` frees the old float, and the new one is
+   often made where it was: the pointers compare equal, and the old digest
+   was served. Not held: a root keeping the user's old strings alive kept
+   them for as long as it stood. An int past 64 bits, which has no print,
+   is held instead. Anything else is walked, its own record or watch
    proving it unchanged. Only atoms: a share check counts references to the
    user's containers and objects, never to values. */
 static int record_item(Walk *W, PyObject *x) {
     PyTypeObject *xt = Py_TYPE(x);
     if (!is_atom(x, xt)) return push(x);
     W->content += atom_size(x, xt);
-    return root_ref(W->R, x);
+    if (x == Py_None || xt == &PyBool_Type) return 0;   /* never freed */
+    uint64_t fp, len;
+    if (atom_print(x, xt, &fp, &len)) return root_ref(W->R, x);
+    Root *R = W->R;
+    if (R->natoms == R->capatoms) {
+        uint32_t nc = R->capatoms ? R->capatoms * 2 : 16;
+        AtomPrint *p = realloc(R->atoms, (size_t)nc * sizeof *p);
+        if (!p) { PyErr_NoMemory(); return -1; }
+        R->atoms = p; R->capatoms = nc;
+    }
+    R->atoms[R->natoms++] = (AtomPrint){(uintptr_t)x, xt, fp, len};
+    return 0;
 }
 
 static PyObject *set_dummy = NULL;
@@ -1383,6 +1426,15 @@ static int verify(Root *R) {
         default:
             return 0;
         }
+    }
+    /* every record read the same, so each atom is still an item of a live
+       container there: is it the atom recorded, or a new one made at its
+       address? */
+    for (uint32_t j = 0; j < R->natoms; j++) {
+        AtomPrint *a = &R->atoms[j];
+        PyObject *x = (PyObject *)a->addr;
+        uint64_t fp, len;
+        if (Py_TYPE(x) != a->t || atom_print(x, a->t, &fp, &len) || fp != a->fp || len != a->len) return 0;
     }
     return 1;
 }
