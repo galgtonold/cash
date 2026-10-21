@@ -579,3 +579,47 @@ def test_the_estimate_sums_what_it_is_handed_as_python_does(monkeypatch):
     assert python[0] == c[0]
     assert [call for call in python[1] if call[0] not in containers] == c[1][1:]
     assert python[0] == 3 * 2**70
+
+
+# ------------------------------------------------------------ heap read
+
+
+def _referrers_in_python(heap, ids):
+    """`shared_objects._referrers_of`'s Python read of the heap."""
+    import gc
+
+    return [obj for obj in heap if not ids.isdisjoint(map(id, gc.get_referents(obj)))]
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_the_heap_read_finds_the_same_referrers_in_the_same_order(seed):
+    import gc
+
+    rng = random.Random(seed)
+    targets = [[i] for i in range(20)] + [Plain(), WithSlots(), {"k": 1}, (1, 2), "text", 7]
+    holders = []
+    for _ in range(200):
+        picked = rng.sample(targets, rng.randint(1, 3))
+        kind = rng.choice((list, tuple, dict, Plain, WithSlots, set))
+        if kind is dict:
+            holders.append({str(i): t for i, t in enumerate(picked)})
+        elif kind is Plain:
+            holder = Plain()
+            holder.parts = picked
+            holders.append(holder)
+        elif kind is WithSlots:
+            holders.append(WithSlots(*picked[:2]))
+        elif kind is set:
+            holders.append({t for t in picked if isinstance(t, (tuple, str, int))})
+        else:
+            holders.append(kind(picked))
+    for size in (0, 1, 3, len(targets)):
+        ids = {id(t) for t in rng.sample(targets, size)}
+        heap = gc.get_objects()
+        assert list(map(id, K.referrers_in(heap, ids))) == list(map(id, _referrers_in_python(heap, ids)))
+
+
+def test_the_heap_read_hands_back_an_id_it_cannot_read():
+    assert K.referrers_in([], {"not an id"}) is NotImplemented
+    with pytest.raises(TypeError):
+        K.referrers_in((), set())

@@ -27,7 +27,9 @@ from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 SLOW = f"time.sleep({ABOVE_PERSISTENCE_FLOOR_S})"
 THREAD = [
     "import time, threading\nstop = threading.Event()",
-    f"t = threading.Thread(target=stop.wait, args=(5,))\nt.start()\n{SLOW}",
+    # A thread that ends at once: while one a statement started runs, no
+    # statement is served (`thread_reach`), which is not what this checks.
+    f"t = threading.Thread(target=stop.wait, args=(0,))\nt.start()\n{SLOW}",
     f"n = ({SLOW}, len([t]) + 1)[1]",
     f"pair = ({SLOW}, [t, 1])[1]",
 ]

@@ -102,7 +102,28 @@ def run_notebook(
     statement_sink: list[StatementMetric] = []
     if cash_enabled:
         _enable_cash(shell, Path(cache_dir), statement_sink, session=session)
+    try:
+        timings = _run_cells(shell, cells, statement_sink)
+    finally:
+        _cash_off(shell)
 
+    if cash_enabled and not statement_sink:
+        # Cash was asked for and processed nothing. The cells still ran, and
+        # the wall times still look plausible — which is exactly the danger:
+        # a run like this is a cash-off measurement wearing a cash-on label,
+        # and averaging it silently understates every mode it appears in.
+        # Fail loudly instead; a sweep that skips one notebook is recoverable,
+        # a sweep with an invisible hole in it is not.
+        raise RuntimeError(
+            f"cash was enabled but not one of {len(cells)} cells produced a "
+            f"statement metric. The cell transform was not active, so this "
+            f"run measured uncached execution. Refusing to report it as a "
+            f"cash run."
+        )
+    return timings
+
+
+def _run_cells(shell, cells: list[CodeCell], statement_sink: list[StatementMetric]) -> list[CellTiming]:
     timings: list[CellTiming] = []
     for cell in cells:
         # Drain the sink so each cell only owns its own statements.
@@ -125,21 +146,21 @@ def run_notebook(
                 error=f"{type(exc).__name__}: {exc}" if exc is not None else None,
             )
         )
-
-    if cash_enabled and not statement_sink:
-        # Cash was asked for and processed nothing. The cells still ran, and
-        # the wall times still look plausible — which is exactly the danger:
-        # a run like this is a cash-off measurement wearing a cash-on label,
-        # and averaging it silently understates every mode it appears in.
-        # Fail loudly instead; a sweep that skips one notebook is recoverable,
-        # a sweep with an invisible hole in it is not.
-        raise RuntimeError(
-            f"cash was enabled but not one of {len(cells)} cells produced a "
-            f"statement metric. The cell transform was not active, so this "
-            f"run measured uncached execution. Refusing to report it as a "
-            f"cash run."
-        )
     return timings
+
+
+def _cash_off(shell) -> None:
+    """``%cash_off`` on *shell*, whoever turned cash on (this driver or the
+    notebook's own ``%cash_on``). ``%cash_on`` holds cash's I/O watch open
+    until then: left on, every later cached call in the process ran with
+    the reader patches already in, as if inside a notebook session."""
+    import contextlib
+    import io
+
+    magics = shell.magics_manager.registry.get("CashMagics")
+    if magics is not None:
+        with contextlib.redirect_stdout(io.StringIO()):
+            magics.cash_off("")
 
 
 def _enable_cash(shell, cache_dir: Path, sink: list[StatementMetric], session=None) -> None:
