@@ -24,13 +24,20 @@ HELPERS = (
 
 
 def _outputs(nb_runner, cell_num):
-    seen = []
+    seen, text = [], ""
+
+    def lines():
+        return [line for line in text.splitlines() if line and not line.startswith("[Cash]")]
+
     for o in nb_runner.nb.cells[cell_num - 1].outputs:
         if o.output_type == "stream" and o.name == "stdout":
-            seen.extend(line for line in o.text.splitlines() if line and not line.startswith("[Cash]"))
+            # One print can come in more than one message: ``print('row', i)``
+            # as "row" and " 0\n" when the kernel is slow to flush.
+            text += o.text
         elif o.output_type == "display_data" and "<b>shown</b>" in o.data.get("text/html", ""):
-            seen.append("html")
-    return seen
+            seen += [*lines(), "html"]
+            text = ""
+    return seen + lines()
 
 
 def test_a_call_that_displays_shows_it_when_the_statement_runs_again(nb_runner):
