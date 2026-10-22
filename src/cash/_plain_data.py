@@ -519,9 +519,11 @@ def one_look(named: Mapping[str, Any]):
 
     Nothing here holds a value: the checks count references, and *named*
     holds them already. A fact is used only while *named* still binds that
-    very object. Only for a stretch in which no code of the user's runs: a
-    value changed in place inside it would be answered from what it was.
-    Nested, the outermost one counts.
+    very object. A value changed in place inside it would be answered from
+    what it was, and the store at its end runs code of the user's (a
+    ``__reduce_ex__``, a ``__sizeof__``): the facts over wider leaves, which
+    only the checks before it read, are dropped before it
+    (`forget_wider_facts`). Nested, the outermost one counts.
     """
     token = _LOOKED.set((named, {})) if _LOOKED.get() is None else None
     try:
@@ -581,6 +583,17 @@ def _wider_facts(look: tuple[Mapping[str, Any], dict], name: str, value: Any, le
 
 #: `_wider_facts`'s part of a look's memo, beside each value's id.
 _WIDER = object()
+
+
+def forget_wider_facts() -> None:
+    """Drop what the open `one_look` found over wider leaves (`_wider_facts`),
+    before code of the user's may run in it and change a value it walked."""
+    look = _LOOKED.get()
+    if look is None:
+        return
+    memo = look[1]
+    for key in [key for key in memo if type(key) is tuple and key[1] is _WIDER]:
+        del memo[key]
 
 
 def _name_in(named: Mapping[str, Any], value: Any) -> str | None:

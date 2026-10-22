@@ -2228,6 +2228,10 @@ class StatementProcessor:
                 self._skip_a_newly_seen_draw(run)
 
                 saved_metadata = None
+                # The store runs the user's pickling and sizing hooks, which
+                # may change an output another check walked; it never reads
+                # the facts over wider leaves those checks took.
+                _plain_data.forget_wider_facts()
                 if not run.skip_cache:
                     saved_metadata = self._store.save(
                         run,
