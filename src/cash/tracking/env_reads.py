@@ -113,9 +113,17 @@ def _iter(self):
 def environ_get(name: str) -> str | None:
     """``os.environ.get(name)`` for cash's own lookups: not a read of the
     user's, and without walking the stack to learn that (every ``open`` asks
-    for ``NUMBA_CACHE_DIR``, `read_classification.is_runtime_cache_path`)."""
+    for ``NUMBA_CACHE_DIR``, `read_classification.is_runtime_cache_path`).
+
+    ``os.environ`` replaced by something else (``os.environ = dict(...)``,
+    ``mock.patch("os.environ", {...})``) is asked through its own ``get``:
+    the saved ``_Environ`` method raised on it, inside the ``open`` event,
+    and the read that ``open`` made was never recorded."""
+    environ = os.environ
+    if type(environ) is not _ENVIRON:
+        return environ.get(name)
     try:
-        return _ORIGINAL(os.environ, name)
+        return _ORIGINAL(environ, name)
     except KeyError:
         return None
 

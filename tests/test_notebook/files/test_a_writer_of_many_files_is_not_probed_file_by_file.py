@@ -81,3 +81,43 @@ def test_a_written_file_gone_again_does_not_count_towards_the_limit(tmp_path, mo
     _records(backend).persist_write_provenance("extract()", set(), None, kept | gone)
     (record,) = backend.stored.values()
     assert record["paths"] == sorted(kept)
+
+
+def test_cashs_own_checks_of_written_paths_are_not_the_statements_probes(tmp_path, monkeypatch):
+    """Whether a written path is a folder, and whether it is still there, is
+    cash's question: asked past ``os.stat``/``os.lstat`` (which the tracker
+    wraps, to record a probe of the statement's), and answered as
+    ``os.path`` would."""
+    import os
+
+    from cash.notebook import write_observer
+
+    folder = tmp_path / "out"
+    folder.mkdir()
+    file = tmp_path / "a.txt"
+    file.write_text("x", encoding="utf-8")
+    dangling = tmp_path / "link"
+    try:
+        dangling.symlink_to(tmp_path / "gone")
+    except OSError:
+        dangling = None
+    missing = tmp_path / "missing"
+    asked = []
+    for name in ("stat", "lstat"):
+        real = getattr(os, name)
+
+        def wrapper(*a, _real=real, **k):
+            asked.append(a)
+            return _real(*a, **k)
+
+        wrapper._is_file_tracker_patch = True  # as cash's own wrapper is marked
+        wrapper._original_func = real
+        monkeypatch.setattr(os, name, wrapper)
+    assert write_observer._names_a_folder(str(folder))
+    assert not write_observer._names_a_folder(str(file))
+    assert not write_observer._names_a_folder(str(missing))
+    assert write_observer._lexists(str(file))
+    assert not write_observer._lexists(str(missing))
+    if dangling is not None:
+        assert write_observer._lexists(str(dangling)), "a dangling link is there, as os.path.lexists says"
+    assert not asked, "went through the wrapped os.stat"

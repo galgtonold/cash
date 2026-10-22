@@ -39,6 +39,7 @@ __all__ = [
     "Patches",
     "add_patcher",
     "hold",
+    "on_consumer_error",
     "holding",
     "own_work",
     "release",
@@ -87,6 +88,28 @@ def _hook(event: str, args: tuple) -> None:
         try:
             consumer(args)
         except Exception:  # noqa: BLE001 - an exception here would fail the user's own call
+            _failed(event, args)
+
+
+#: Told when a consumer raised on an event (`on_consumer_error`).
+_failure_handlers: list[Callable[[str, tuple], None]] = []
+
+
+def on_consumer_error(handler: Callable[[str, tuple], None]) -> None:
+    """Call *handler(event, args)* whenever a consumer raises on an event.
+
+    The exception never reaches the user's call, but what the consumer was
+    to record (a read, a write) is then missing: dropped in silence, a
+    cached call that read the file was served after the file changed. The
+    handler marks the block as not fully seen instead."""
+    _failure_handlers.append(handler)
+
+
+def _failed(event: str, args: tuple) -> None:
+    for handler in _failure_handlers:
+        try:
+            handler(event, args)
+        except Exception:  # noqa: BLE001 - the same: never the user's call
             pass
 
 

@@ -1611,6 +1611,12 @@ class StatementProcessor:
                 run.metrics["uncacheable_reasons"].append(workers)
         if execution.result.success:
             self._left_work_running(run, execution)
+        failed = getattr(execution.file_tracker, "tracking_failed", None)
+        if failed and not run.skip_cache:
+            run.skip_cache = True
+            run.metrics["uncacheable_reasons"].append(
+                f"cash could not record what it read (a {failed[0]!r} event), so the statement runs every time"
+            )
         if positions:
             run.carriers_advanced = moved_carrier_names(positions, self.shell.user_ns)
         if hidden and not run.skip_cache and execution.result is not None and execution.result.success:
