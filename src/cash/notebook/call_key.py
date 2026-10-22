@@ -29,7 +29,12 @@ from cash._memo import CODE_OBJECTS, LruMemo
 from cash._paths import is_pseudo_filename
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 from cash.analysis.bytecode import NAME_LOADS, argvals
-from cash.analysis.callee_effects import source_global_mutations
+from cash.analysis.callee_effects import (
+    mutable_default_params,
+    params_mutated_in_function,
+    parse_function_def,
+    source_global_mutations,
+)
 from cash.analysis.namespace_effects import capturable_globals
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
 from cash.install_paths import is_user_path
@@ -208,6 +213,33 @@ def changes_its_closure(fn) -> bool:
     return bool(cells) and (rebinds_its_closure(fn) or any(n in cells for n in _source_mutations(fn)))
 
 
+#: ``code object -> whether the function changes a default it holds``.
+_CHANGES_DEFAULTS: LruMemo[Any, bool] = LruMemo(CODE_OBJECTS)
+
+
+def changes_its_defaults(fn) -> bool:
+    """Whether calling *fn* changes in place a default it holds: ``def
+    take(item, acc=[]): acc.append(item)``. A function is kept by
+    reference, so a hit hands back the one the last run made, its default
+    holding everything appended since."""
+    if type(fn) is not _types.FunctionType:
+        return False
+    held = [*(fn.__defaults__ or ()), *(fn.__kwdefaults__ or {}).values()]
+    if all(type(value) in _EXACT_ATOMS for value in held):
+        return False
+    code = fn.__code__
+    known = _CHANGES_DEFAULTS.get(code)
+    if known is None:
+        try:
+            fdef = parse_function_def(own_source(fn))
+        except SOURCE_RETRIEVAL_ERRORS:
+            fdef = None
+        # One that cannot be read is taken to change what it holds.
+        known = fdef is None or bool(mutable_default_params(fdef) & params_mutated_in_function(fdef))
+        _CHANGES_DEFAULTS[code] = known
+    return known
+
+
 #: Values with nothing inside them to look at: skipped without a call.
 _ATOMS = (int, float, complex, str, bytes, bool, type(None))
 
@@ -218,7 +250,8 @@ _EXACT_ATOMS = frozenset({*_ATOMS, _dt.datetime, _dt.date, _dt.time, _dt.timedel
 def holds_a_closure_with_state(value) -> bool:
     """Whether *value* is, or holds in its tuples, lists, sets and dicts
     however deeply nested, a function that changes what its closure holds
-    when called: a counter or a log a factory returned.
+    when called: a counter or a log a factory returned; or a default it
+    holds (`changes_its_defaults`).
 
     Such a value cannot be served from the cache. The store keeps a function
     by reference, so a hit hands back the closure the last run made, with
@@ -242,7 +275,7 @@ def holds_a_closure_with_state(value) -> bool:
         if kind in atoms or instance_of(item, _ATOMS):
             continue
         if instance_of(item, _types.FunctionType):
-            if changes_its_closure(item):
+            if changes_its_closure(item) or changes_its_defaults(item):
                 return True
             continue
         if instance_of(item, (tuple, list, set, frozenset, dict)):

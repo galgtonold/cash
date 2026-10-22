@@ -441,12 +441,12 @@ def function_arg_mutations(tree: ast.Module | None, resolve_source) -> frozenset
         if func_name.isidentifier():
             passed = {pos_params[i] for i in range(min(len(positional), len(pos_params)))}
             passed |= {param for param, _vars in keywords}
-            if any(param not in passed for param in _mutable_default_params(fdef) & mutated_params):
+            if any(param not in passed for param in mutable_default_params(fdef) & mutated_params):
                 out.add(func_name)
     return frozenset(out)
 
 
-def _mutable_default_params(fdef: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+def mutable_default_params(fdef: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     """The parameters whose default is not a constant (``acc=[]``)."""
     args = fdef.args
     positional = [*args.posonlyargs, *args.args]

@@ -73,3 +73,19 @@ def test_an_isolated_re_run_still_starts_from_fresh_state(cash_magics, mock_shel
     assert (ns["a"], ns["run1"], ns["t1"]) == (1, 1, ["x"])
     run_cash_cell(cash_magics, CELLS[2], cells=CELLS)
     assert (ns["a"], ns["run1"], ns["t1"]) == (1, 1, ["x"])
+
+
+def test_a_re_run_starts_from_fresh_state_when_the_machine_is_slow(cash_magics, mock_shell, monkeypatch):
+    """On a busy machine the ``def`` of ``take`` timed past the floor and was
+    stored. The re-run's reset then served it, and a function is kept by
+    reference: the very ``take`` whose ``acc`` held x, y and z already, so
+    ``t1`` came back as all four. A function changing a default it holds is
+    never served."""
+    import time
+
+    from cash import _clock
+
+    real = time.perf_counter
+    start = real()
+    monkeypatch.setattr(_clock, "_REAL", (lambda: start + (real() - start) * 100,))
+    test_an_isolated_re_run_still_starts_from_fresh_state(cash_magics, mock_shell)

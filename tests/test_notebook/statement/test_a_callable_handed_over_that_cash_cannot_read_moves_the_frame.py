@@ -64,7 +64,12 @@ READERS = {
 def test_a_reader_after_the_change_sees_it(cash_magics, change, reader):
     hold, edit = CHANGES[change]
     for z in (1, 2):
-        cells = ["import time\nimport numpy as np, pandas as pd", f"{FRAME}\n{hold}", edit.format(z=z), *READERS[reader]]
+        cells = [
+            "import time\nimport numpy as np, pandas as pd",
+            f"{FRAME}\n{hold}",
+            edit.format(z=z),
+            *READERS[reader],
+        ]
         for cell in cells:
             run_cash_cell(cash_magics, cell, cells=cells)
         ns = cash_magics.shell.user_ns

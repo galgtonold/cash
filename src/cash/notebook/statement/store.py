@@ -860,7 +860,7 @@ class StatementStore:
             if _stateful:
                 should_skip = True
                 skip_reason = (
-                    f"output(s) {', '.join(_stateful)} hold a function that changes its closure; "
+                    f"output(s) {', '.join(_stateful)} hold a function that changes its closure or its defaults; "
                     f"statement re-executes (lineage persists)"
                 )
         # A function kept by reference whose closure holds an object the
