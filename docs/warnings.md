@@ -158,7 +158,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 | [CACHE-NOT-WORTH-BYTES](#cache-not-worth-bytes) | notebook | a big, cheap value was not written to disk |
 | [CACHE-PER-ITEM-RERUN](#cache-per-item-rerun) | notebook | a slow step ran again over a whole collection, though most of it is unchanged |
 | [CACHE-RETURNS-AWAITABLE](#cache-returns-awaitable) | decorator | a sync function returned a coroutine, which is not stored |
-| [CACHE-RESULT-SHARED](#cache-result-shared) | decorator | the result shares state with the caller's object |
+| [CACHE-RESULT-SHARED](#cache-result-shared) | decorator | the result shares state with an object outside the call |
 | [CACHE-THRASH](#cache-thrash) | both | the cache is full and evicts what it just stored |
 | [CACHE-VALUE-TOO-BIG](#cache-value-too-big) | both | a value is bigger than the disk cap |
 | [CACHE-WRITE-ABANDONED](#cache-write-abandoned) | both | the process exited before its writes finished |
@@ -587,14 +587,66 @@ large frame of text columns hashes at about 0.2 s per million rows.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @8c38fe43, cash/decorator/purity_checks.py:PurityChecks._shared_with @edceb490 -->
-**What happened.** The result shares state with an object the caller still
-holds: it is an argument, holds one, is a view of an array argument, or is a
-module global. On the first run, a write through one shows in the other. A
-cache hit returns a separate copy, so from then on it does not. A module
-global the function names and whose type compares by identity (a plain class
-without `__eq__`, such as a sentinel) is not reported: a hit hands back that
-global itself.
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @692eb80f, cash/decorator/purity_checks.py:PurityChecks.warn_shared_on_hit @cdd6af30, cash/decorator/purity_checks.py:PurityChecks._shared_with @ee10af47 -->
+**What happened.** The result shares state with an object outside the
+call: an argument, or something the function reaches by name. On the first
+run, a write through one shows in the other. A cache hit returns a separate
+copy, so from then on it does not. The warning is stored with the entry,
+so a process that only ever gets the hit (after a restart) shows it too.
+cash looks at every result it stores, and says the warning once per
+function; each entry carries the words of what it shares, so a later
+process is told about the one it gets. cash looks two levels into the result, at the
+first 256 values of each dict of any kind, list, tuple, set, deque, object's
+attributes and object array, for:
+
+- an argument, an attribute of an argument that is an object of your class
+  (`return self.rows`, `{"rows": t.rows}`), or memory shared with an array
+  argument;
+- a closure variable, a module global the body names, a default argument,
+  or an attribute of the function itself;
+- an attribute of a class or a module of yours the body names
+  (`Holder.ROWS`), or of an object of your class it names
+  (`REGISTRY.entries`);
+- one of the first 256 items of any of those containers (`CONFIG["sub"]`,
+  `Holder.CFG["sub"]`, a list inside a global tuple);
+- memory shared with any of those arrays, at the top of the result or
+  inside it (`return ARR[1:4]`, `{"train": X[:8], "test": X[8:]}`), or,
+  without pandas copy-on-write (pandas 2 by default), with most columns of
+  one of those frames (`return DF["a"]`, a view of the frame there): numpy
+  columns, pandas' own `Int64`, `boolean`, `category`, time-zone
+  datetime, period and Python-string columns, and a column holding the very
+  interval, sparse or Arrow-backed array of the frame's;
+- the array of a column of one of those frames, or of a frame the call
+  is handed (`DF["c"].array` of a numpy, object or extension column, or
+  `.values` of an `Int64`, time-zone or category column), with
+  copy-on-write too: it is the frame's own, or one over its memory, and a
+  write through it reaches the frame.
+
+Not reported: a value nothing can be written through (a number, a string,
+an enum member, a frozen dataclass of immutable fields, a view of an array
+that is read-only all the way down), and a global whose type compares by
+identity (a plain class without `__eq__`, such as a sentinel), since a hit
+hands back that global itself, and a pandas column under copy-on-write
+(the pandas 3 default), where a write through it copies first and never
+reaches the frame. Nor are pandas' `Timestamp`, `Timedelta`, `Period` and
+`NaT`, its dtypes (`Int64Dtype()`, `CategoricalDtype([...])`), or an
+object, yours or a library's, that a hit hands back as itself, with what
+it holds: one pickle rebuilds by its name, or by a call on plain values
+with no state applied after, to `logging.getLogger` (a `logging.Logger`,
+`getLogger('app')`, already made) or a function that only returns a module
+global (`def get_registry(): return REGISTRY`). To find out, cash asks the
+object for its pickle recipe (its own `__reduce__`) and calls nothing that
+recipe names: it looks the logger up and reads the function. Any other
+call, a `functools.partial` of a class included, is reported. One rebuilt by calling its class is
+reported, a singleton too: a hit runs its `__init__` again on the live
+object. So is one whose pickle carries a state: a hit would write that
+state over the live object. Not seen: sharing deeper than
+two levels or past the 256th value of a container (`BIG_LIST[300]`), an
+item of an attribute of an object (`REGISTRY.entries["a"]`), what an enum
+member holds (`Color.RED.value`), an attribute of a library module or of a
+library object (`LOG.filters`), and memory two arrays share without one
+viewing the other or both viewing the same object (two arrays made from
+separate `memoryview`s of one buffer).
 
 **Why it matters.** A caller that writes through the result, such as filling
 a preallocated array, works on the first run and silently stops working on
