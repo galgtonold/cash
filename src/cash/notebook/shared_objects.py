@@ -1949,7 +1949,10 @@ def _share_group(
         links.append((set(group), framed))
         joined |= framed
         group.update((name, user_ns[name]) for name in framed)
-        framed = _frames_sharing_cells(group, user_ns, foreign)
+        fresh = {name: group[name] for name in framed if _holds_other_cells(group[name], group)}
+        framed = _frames_sharing_cells(fresh, user_ns, foreign) - set(group) if fresh else set()
+        # Its own references to the frames, out of the counts taken below.
+        fresh = None
         rounds += 1
     rounds = 0
     while True:
@@ -2019,6 +2022,32 @@ def _frames_sharing_cells(
     if found is None:
         found = _SHARING_READ[key] = _read_frames_sharing_cells(group, user_ns, lambda name: False)
     return {name for name in found if not skip(name)}
+
+
+#: Cells of a column `_holds_other_cells` looks for, and the longest columns
+#: of the group it looks among.
+_COVER_SAMPLE = 32
+_COVER_COLUMNS = 4
+
+
+def _holds_other_cells(value: Any, group: Mapping[str, Any]) -> bool:
+    """Whether a frame joined to *group* for the cells it shares holds, in
+    an object column, cells none of the longest columns of *group* holds,
+    by a sample: ``mg = df.merge(other)`` holds ``other``'s, and the frames
+    sharing those are looked for too; fifty filters of ``df`` hold only
+    ``df``'s, and are not read again. A sample that misses one leaves its
+    holder to the share check's own count, as before."""
+    columns = sorted(
+        (array for other in group.values() if other is not value for array in object_columns_of(other) or ()),
+        key=len,
+        reverse=True,
+    )[:_COVER_COLUMNS]
+    for array in object_columns_of(value) or ():
+        slots = addresses(array)
+        sample = slots[:: max(1, len(slots) // _COVER_SAMPLE)]
+        if not any(in_sorted(sample, sorted_cells(column)).all() for column in columns):
+            return True
+    return False
 
 
 def _read_frames_sharing_cells(
@@ -2094,12 +2123,16 @@ def _holding_categories(group: Mapping[str, Any], user_ns: Mapping[str, Any], sk
     names: set[str] = set()
     for name, value in user_ns.items():
         kind = type(value)
-        if name in group or name.startswith("_") or skip(name) or kind not in _CELL_CONTAINERS:
+        if name.startswith("_") or skip(name) or kind not in _CELL_CONTAINERS:
             continue
         check_walk_budget()
         found = collections.Counter(key for key in map(id, value.values() if kind is dict else value) if key in over)
         if found:
-            names.add(name)
+            # One of *group* accounts for its slots too, named or not: ``ks``
+            # joined, looked for again up the referrers for every frame of
+            # fifty that share ``df``'s categories.
+            if name not in group:
+                names.add(name)
             for key, count in found.items():
                 over[key] -= count
     left = [held[key] for key, count in over.items() if count > 0]
