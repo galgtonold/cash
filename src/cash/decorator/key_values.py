@@ -86,7 +86,7 @@ def code_ref(value: Any) -> str | None:
         return None
     try:
         owner = getattr(value, "__self__", None)
-        if isinstance(value, types.MethodType) and isinstance(owner, type):
+        if type(value) is types.MethodType and isinstance(owner, type):
             bound = code_ref(owner)
             name = getattr(value, "__name__", None)
             return f"{bound}.{name}" if bound is not None and isinstance(name, str) else None
@@ -130,12 +130,14 @@ def carried_payload(value: Any) -> Any:
     """
     if isinstance(value, functools.partial):
         return ("partial", value.func, value.args, dict(value.keywords))
-    if isinstance(value, types.MethodType):
+    if type(value) is types.MethodType:
         owner = value.__self__
-        if isinstance(owner, (type, types.ModuleType)):
+        if issubclass(type(owner), (type, types.ModuleType)):
             return None
         return ("method", owner)
-    if isinstance(value, (types.FunctionType, types.BuiltinFunctionType, type, types.ModuleType)) or is_mock(value):
+    if issubclass(type(value), (types.FunctionType, types.BuiltinFunctionType, type, types.ModuleType)) or is_mock(
+        value
+    ):
         return None
     if not callable(value) or jit_python_function(value) is not None:
         return None
@@ -255,7 +257,7 @@ def _stabilized(v: Any, hash_callable, _path: frozenset[int], carried: bool) -> 
     if (
         type(state) is dict
         and state
-        and not isinstance(v, (type, types.ModuleType))
+        and not issubclass(type(v), (type, types.ModuleType))
         and _state_is_its_dict(type(v))
         # A record of plain values holds no code: nothing to rewrite.
         and not all(type(x) in _NO_CODE_LEAVES for x in state.values())

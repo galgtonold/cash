@@ -203,7 +203,7 @@ class HelperWalk:
         root_reported = not (is_pure(root) or is_stateful(root))
         stack = [_Entry(root, 0, False, root_reported)]
         if (
-            isinstance(root, types.FunctionType)
+            type(root) is types.FunctionType
             and hasattr(root, "__wrapped__")
             and not own_code_is_user(root, self._root_module)
         ):
@@ -317,7 +317,7 @@ class HelperWalk:
             if entry.reported:
                 self._opaque.append(qualname)
             self._queue_class_refs(func, tree, entry.depth, entry.reported)
-            if isinstance(func, types.FunctionType) and func.__code__.co_name == "<lambda>":
+            if type(func) is types.FunctionType and func.__code__.co_name == "<lambda>":
                 # A lambda: its source is the statement it sits in, with no
                 # def to audit. What it calls still computes its result
                 # (`STEPS = [lambda x: price(x)]` runs `price`, which reads
@@ -363,7 +363,7 @@ class HelperWalk:
         self._record_resolution_path(func, qualname)
         self._record_walked_code(func)
         code_fn = jit_python_function(func) or func
-        if isinstance(code_fn, types.FunctionType):
+        if type(code_fn) is types.FunctionType:
             self._queue_bytecode_refs(entry._replace(func=code_fn))
 
     def _queue_bytecode_refs(self, entry: _Entry) -> None:
@@ -592,7 +592,7 @@ class HelperWalk:
             chain = callee_chain(node)
             if chain is None or chain[0] in shadowed:
                 continue
-            if not isinstance(body.namespace.get(chain[0]), (types.ModuleType, type)):
+            if not issubclass(type(body.namespace.get(chain[0])), (types.ModuleType, type)):
                 continue
             value = resolve_callee(node, body.namespace, modules_only=False)
             if value is None or is_mock(value):
@@ -634,7 +634,7 @@ class HelperWalk:
         # walked below; the class it reads through `cls` is not named anywhere
         # in the body, so its constants (`factor = 2`) reach the key only if
         # the class is keyed, as a class read by name is.
-        if isinstance(callee, types.MethodType) and isinstance(callee.__self__, type):
+        if type(callee) is types.MethodType and isinstance(callee.__self__, type):
             self._queue_hash_only(callee.__self__, body.func, body.depth, body.reported)
         # A ``@pure`` or ``@stateful`` callee settles what the helper may DO,
         # not what it computes: it is walked below like any helper, so an
@@ -720,7 +720,7 @@ class HelperWalk:
         """
         if (
             path is not None
-            and isinstance(callee, (types.FunctionType, types.BuiltinFunctionType))
+            and issubclass(type(callee), (types.FunctionType, types.BuiltinFunctionType))
             and resolve_binding(*path) is callee
         ):
             self._note_binding(callee, path)
@@ -837,14 +837,14 @@ class HelperWalk:
 
 def _is_function(value: Any) -> bool:
     """A plain function, or a JIT-compiled one (`cash.jit_functions`)."""
-    return isinstance(value, types.FunctionType) or jit_python_function(value) is not None
+    return type(value) is types.FunctionType or jit_python_function(value) is not None
 
 
 def _walk_id(func: Any) -> Any:
     """What makes two callables the same walk: a bound method is visited as
     its function and the object it is bound to, since ``Model.run`` read
     twice gives two method objects, one method."""
-    if isinstance(func, types.MethodType):
+    if type(func) is types.MethodType:
         return (id(func.__func__), id(func.__self__))
     return id(func)
 
@@ -930,7 +930,7 @@ def _anchor_issue_lines(issues: list[PurityIssue], func: Any) -> list[PurityIssu
     another file.
     """
     try:
-        target = func.__code__ if isinstance(func, types.FunctionType) and hasattr(func, "__wrapped__") else func
+        target = func.__code__ if type(func) is types.FunctionType and hasattr(func, "__wrapped__") else func
         first = getsourcelines(target)[1]
         filename = inspect.getsourcefile(target) or ""
     except SOURCE_RETRIEVAL_ERRORS:
@@ -947,7 +947,7 @@ def _anchor_issue_lines(issues: list[PurityIssue], func: Any) -> list[PurityIssu
 
 
 def _is_lambda(func: Any) -> bool:
-    return isinstance(func, types.FunctionType) and func.__code__.co_name == "<lambda>"
+    return type(func) is types.FunctionType and func.__code__.co_name == "<lambda>"
 
 
 def _dedent_width(raw: str, dedented: str) -> int:

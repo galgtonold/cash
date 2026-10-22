@@ -21,6 +21,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
+from cash._user_attrs import own_dict
 from cash.exceptions import CacheBackendError
 
 from .. import _native, _plain_data, cost_model, held_reads, kept_state, stored_pickle
@@ -308,8 +309,8 @@ def _at_least(value: Any, nbytes: int, nodes: int = 2048, items: int = 64) -> bo
             elif kind is list or kind is tuple:
                 found.extend(obj[:items])
             elif kind not in _ATOMS and not isinstance(obj, type):
-                attrs = getattr(obj, "__dict__", None)
-                if type(attrs) is dict:
+                attrs = own_dict(obj)
+                if attrs is not None:
                     found.extend(itertools.islice(attrs.values(), items))
         level = found
     return False

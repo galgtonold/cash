@@ -79,7 +79,7 @@ def _signature_owner(func: Any) -> Any:
 def _globals_of(obj: Any) -> dict[str, Any]:
     """The module namespace *obj*'s annotations are written in."""
     for _ in range(8):
-        if isinstance(obj, types.FunctionType):
+        if type(obj) is types.FunctionType:
             return obj.__globals__
         inner = getattr(obj, "__func__", None) or getattr(obj, "func", None)
         if inner is None or inner is obj:
@@ -345,7 +345,7 @@ def _lambda_source(fn: types.FunctionType) -> str | None:
 
 def _own_text(fn: Any) -> str | None:
     """*fn*'s own source, dedented, or None when it has none."""
-    if not isinstance(fn, types.FunctionType):
+    if type(fn) is not types.FunctionType:
         return None
     if fn.__name__ == "<lambda>":
         return _lambda_source(fn)
@@ -390,7 +390,7 @@ def _named_functions(src: str, namespace: dict[str, Any]) -> list[types.Function
     for node in ast.walk(tree):
         if isinstance(node, ast.Name):
             value = namespace.get(node.id)
-            if isinstance(value, types.FunctionType) and value not in out:
+            if type(value) is types.FunctionType and value not in out:
                 out.append(value)
     return out
 
@@ -409,7 +409,7 @@ def key_function_impurities(key_fn: Callable[..., Any]) -> list[str]:
     from ..analysis.purity_analyzer import get_analyzer
     from ..analysis.purity_report import ISSUE_AMBIENT_READ, ISSUE_IMPURE_CALL, ISSUE_NETWORK_READ
 
-    fn = inspect.unwrap(key_fn) if isinstance(key_fn, types.FunctionType) else key_fn
+    fn = inspect.unwrap(key_fn) if type(key_fn) is types.FunctionType else key_fn
     namespace = _globals_of(fn)
     text = _own_text(fn)
     found: list[str] = []

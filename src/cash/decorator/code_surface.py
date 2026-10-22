@@ -576,7 +576,7 @@ class CodeSurface:
             extra = [
                 layer
                 for layer in (outer, *user_layers(outer))
-                if layer is not target and isinstance(layer, types.FunctionType) and is_user_code_object(layer)
+                if layer is not target and type(layer) is types.FunctionType and is_user_code_object(layer)
             ]
             if extra:
                 ident = (ident, tuple(self._code_identity(layer) for layer in extra))

@@ -118,7 +118,7 @@ def _holds_only_c_code(cls: type) -> bool:
             for name, value in vars(klass).items():
                 if name in _C_TYPE_NAMES or isinstance(value, _C_MEMBERS):
                     continue
-                if isinstance(value, staticmethod) and isinstance(value.__func__, types.BuiltinFunctionType):
+                if isinstance(value, staticmethod) and type(value.__func__) is types.BuiltinFunctionType:
                     continue
                 return False
     except Exception:  # noqa: BLE001 - an odd class is judged as before
@@ -146,7 +146,7 @@ def _c_code_verdict(obj: Any) -> bool | None:
     owner = getattr(obj, "__self__", None)
     if owner is None:
         owner = getattr(obj, "__objclass__", None)
-    if isinstance(owner, types.ModuleType):
+    if issubclass(type(owner), types.ModuleType):
         return is_user_code_module(owner)
     if owner is None:
         return False

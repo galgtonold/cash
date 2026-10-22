@@ -22,6 +22,8 @@ import types
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
+from cash._user_attrs import attribute_or, instance_of, is_routine
+
 from .._memo import STATEMENTS, USER_CALLEES, LruMemo
 from ..diagnostics import warn_diagnostic
 from ..effects import is_open_write_mode
@@ -221,9 +223,9 @@ def _function_called(value: Any) -> Any:
     """The function calling *value* runs first: a method's function, a
     class's ``__init__``, a callable object's ``__call__``; *value* itself
     for anything else."""
-    if isinstance(value, types.MethodType):
+    if type(value) is types.MethodType:
         return value.__func__
-    if isinstance(value, types.FunctionType) or not callable(value):
+    if type(value) is types.FunctionType or not callable(value):
         return value
     owner = value if isinstance(value, type) else type(value)
     try:
@@ -343,9 +345,9 @@ def _examined_body(func: Any) -> "tuple[types.FunctionType, bool, bool, bool, tu
     read, or None for anything
     else: not a Python function, ``@pure``, from an installed package, or
     without source."""
-    if not isinstance(func, types.FunctionType):
+    if type(func) is not types.FunctionType:
         func = inspect.unwrap(func) if callable(func) else func
-        if not isinstance(func, types.FunctionType):
+        if type(func) is not types.FunctionType:
             return None
     if is_pure(func):
         return None
@@ -456,7 +458,7 @@ def statement_user_pyplot_call(
     for node in calls:
         # A method of the notebook's own class (``insp.nlines()``) as well.
         callee = resolve_callee(node.func, namespace, modules_only=False)
-        if isinstance(callee, types.MethodType):
+        if type(callee) is types.MethodType:
             callee = callee.__func__
         found = user_callee_using_pyplot(callee)
         if found:
@@ -478,7 +480,7 @@ def statement_user_pyplot_call(
 
 def _is_pyplot_object(value: Any) -> bool:
     """Whether *value* is the pyplot module or one of its functions."""
-    if isinstance(value, types.ModuleType):
+    if issubclass(type(value), types.ModuleType):
         return value.__name__ == "matplotlib.pyplot"
     return callable(value) and getattr(value, "__module__", None) == "matplotlib.pyplot"
 
@@ -1380,7 +1382,7 @@ def capturable_globals(names, namespace: Mapping[str, Any]) -> frozenset[str]:
     invent a variable (reconstruction then tries to produce it and re-runs the
     statement). A module is never a value to capture either.
     """
-    return frozenset(n for n in names if n in namespace and not isinstance(namespace[n], types.ModuleType))
+    return frozenset(n for n in names if n in namespace and not instance_of(namespace[n], types.ModuleType))
 
 
 def notebook_global_rebinds(tree: ast.AST | None, resolve_source, namespace: Mapping[str, Any]) -> frozenset[str]:
@@ -1583,7 +1585,7 @@ def _live_user_function_source(user_ns: Mapping[str, Any]) -> Callable[[str], st
 
     def resolve(name: str) -> str | None:
         fn = user_ns.get(name)
-        if not isinstance(fn, types.FunctionType):
+        if type(fn) is not types.FunctionType:
             return None
         code = fn.__code__
         if code in _USER_SOURCES:
@@ -1776,7 +1778,7 @@ def _followed_elsewhere(value: Any) -> bool:
     place (a module, a class, a function, an immutable value, a path, whose
     methods act on the file system and not on the object), or a random
     generator, whose draws are followed as a carrier's are."""
-    if isinstance(value, (types.ModuleType, type, pathlib.PurePath, _IMMUTABLE_ARGUMENT_TYPES)):
+    if issubclass(type(value), (types.ModuleType, type, pathlib.PurePath, _IMMUTABLE_ARGUMENT_TYPES)):
         return True
     return inspect.isroutine(value) or rng_carrier_kind(value) is not None
 
@@ -2213,9 +2215,9 @@ def _changeable(names: set[str], user_ns: Mapping[str, Any]) -> frozenset[str]:
         if name not in user_ns:
             continue
         value = user_ns[name]
-        if isinstance(value, (types.ModuleType, type, _IMMUTABLE_ARGUMENT_TYPES)):
+        if instance_of(value, (types.ModuleType, type, _IMMUTABLE_ARGUMENT_TYPES)):
             continue
-        if inspect.isroutine(value) or rng_carrier_kind(value) is not None:
+        if is_routine(value) or rng_carrier_kind(value) is not None:
             continue
         out.add(name)
     return frozenset(out)
@@ -2241,11 +2243,11 @@ def _users_code(target: Any) -> bool:
         target = target.__func__
     if isinstance(target, type):
         target = inspect.getattr_static(target, "__init__", None)
-    elif not isinstance(target, types.FunctionType) and not inspect.isroutine(target):
+    elif type(target) is not types.FunctionType and not inspect.isroutine(target):
         target = inspect.getattr_static(type(target), "__call__", None)
     if isinstance(target, (staticmethod, classmethod)):
         target = target.__func__
-    if not isinstance(target, types.FunctionType):
+    if type(target) is not types.FunctionType:
         return False
     try:
         target = inspect.unwrap(target)
@@ -2264,9 +2266,9 @@ def is_estimator(value: object) -> bool:
     never loosen general mutation handling. One predicate for the runtime and
     the simulation.
     """
-    if isinstance(value, types.ModuleType):
+    if instance_of(value, types.ModuleType):
         return False
-    return callable(getattr(value, "fit", None)) and callable(getattr(value, "get_params", None))
+    return callable(attribute_or(value, "fit")) and callable(attribute_or(value, "get_params"))
 
 
 #: Methods that fit their receiver in place, whatever they return.

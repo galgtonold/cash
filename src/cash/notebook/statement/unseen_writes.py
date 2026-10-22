@@ -31,6 +31,7 @@ import types
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from ..._user_attrs import attribute_or, has_attribute, instance_of
 from ...analysis.callee_effects import free_vars_mutated_in_function, scope_locals
 from ...analysis.mutations import MUTATING_METHODS
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -132,7 +133,7 @@ def writers_without_a_trace(
     todo: list[tuple[Any, int]] = []
     for name in names:
         value = namespace.get(name, _MISSING)
-        if value is not _MISSING and not isinstance(value, types.ModuleType):
+        if value is not _MISSING and not instance_of(value, types.ModuleType):
             todo.append((value, 0))
     seen: set[int] = set()
     classes: dict[type, None] = {}
@@ -161,7 +162,7 @@ def writers_without_a_trace(
     found: list[tuple[str, tuple[str, ...]]] = []
     for cls in classes:
         for fn in _users_special(cls, hc):
-            fn_code = getattr(fn, "__code__", None)
+            fn_code = attribute_or(fn, "__code__", None)
             if fn_code is None or library_made(fn_code, fn.__globals__) or hc._dataclass_made(fn, cls):
                 continue
             if not _named_where_held(fn, cls):
@@ -188,36 +189,38 @@ def _held(value: Any, kind: type, hc: Any) -> Iterable[Any]:
     """What `writers_without_a_trace` looks at inside *value*."""
     try:
         if kind in hc._OPENED:
-            held = value.data if isinstance(value, hc._HELD_IN_DATA) else value
+            held = value.data if instance_of(value, hc._HELD_IN_DATA) else value
             if len(held) > hc.ITEM_TYPES_AT:
                 return [_OVER]
             return list(held.values()) + list(held) if isinstance(held, dict) else list(held)
-        if isinstance(value, types.FunctionType):
+        if instance_of(value, types.FunctionType):
             if not is_user_code_file(value.__code__.co_filename) or library_made(value.__code__, value.__globals__):
                 return []
             out = [cell.cell_contents for cell in value.__closure__ or () if _filled(cell)]
             g = value.__globals__
             out.extend(g[n] for n in value.__code__.co_names if n in g and not isinstance(g[n], types.ModuleType))
             return out
-        if isinstance(value, (types.MethodType, classmethod, staticmethod)):
-            return [value.__func__, getattr(value, "__self__", None)]
-        if isinstance(value, functools.partial):
+        if instance_of(value, (types.MethodType, classmethod, staticmethod)):
+            return [value.__func__, attribute_or(value, "__self__", None)]
+        if instance_of(value, functools.partial):
             return [value.func, *value.args, *value.keywords.values()]
-        dtype = getattr(value, "dtype", None)
-        if getattr(dtype, "kind", None) == "O" and (hasattr(value, "to_numpy") or hasattr(value, "ravel")):
+        dtype = attribute_or(value, "dtype", None)
+        if attribute_or(dtype, "kind", None) == "O" and (
+            has_attribute(value, "to_numpy") or has_attribute(value, "ravel")
+        ):
             # An object-dtype array or column: ``arr + 1`` runs each item's
             # ``__add__``.
-            flat = (value.to_numpy() if hasattr(value, "to_numpy") else value).ravel()
+            flat = (value.to_numpy() if has_attribute(value, "to_numpy") else value).ravel()
             if len(flat) > hc.ITEM_TYPES_AT:
                 return [_OVER]
             return list(flat)
-        dtypes = getattr(value, "dtypes", None)
-        if dtypes is not None and hasattr(value, "columns") and kind.__module__.startswith("pandas"):
-            return [value[c] for c, d in zip(value.columns, dtypes) if getattr(d, "kind", None) == "O"]
+        dtypes = attribute_or(value, "dtypes", None)
+        if dtypes is not None and has_attribute(value, "columns") and kind.__module__.startswith("pandas"):
+            return [value[c] for c, d in zip(value.columns, dtypes) if attribute_or(d, "kind", None) == "O"]
         if (
-            (isinstance(value, type) and (hc._is_users_class(value) or _holds_users_code(value)))
+            (instance_of(value, type) and (hc._is_users_class(value) or _holds_users_code(value)))
             or hc._users_instance_type(kind)
-            or isinstance(value, types.SimpleNamespace)
+            or instance_of(value, types.SimpleNamespace)
         ):
             return list(vars(value).values())
     except Exception:  # noqa: BLE001 - a value that cannot be looked into
@@ -247,14 +250,14 @@ def _users_special(cls: type, hc: Any) -> list[Any]:
         except TypeError:
             continue
         for name, member in members:
-            if isinstance(member, property):
+            if instance_of(member, property):
                 fns = [member.fget, member.fset, member.fdel]
             elif name.startswith("__") and name.endswith("__") and name not in hc._NOT_RUN_BY_A_STATEMENT:
-                fns = [member.__func__ if isinstance(member, (staticmethod, classmethod)) else member]
+                fns = [member.__func__ if instance_of(member, (staticmethod, classmethod)) else member]
             else:
                 continue
             out.extend(
-                fn for fn in fns if isinstance(fn, types.FunctionType) and is_user_code_file(fn.__code__.co_filename)
+                fn for fn in fns if instance_of(fn, types.FunctionType) and is_user_code_file(fn.__code__.co_filename)
             )
     return out
 
@@ -269,9 +272,9 @@ def _holds_users_code(cls: type) -> bool:
     except TypeError:
         return False
     for member in members:
-        if isinstance(member, (staticmethod, classmethod)):
+        if instance_of(member, (staticmethod, classmethod)):
             member = member.__func__
-        if isinstance(member, types.FunctionType) and is_user_code_file(member.__code__.co_filename):
+        if instance_of(member, types.FunctionType) and is_user_code_file(member.__code__.co_filename):
             return True
     return False
 
@@ -279,10 +282,10 @@ def _holds_users_code(cls: type) -> bool:
 def _named_where_held(fn: Any, cls: type) -> bool:
     """Whether *fn* is held by a class of *cls*'s MRO under its own
     qualified name: written in the class's body, not set on it later."""
-    qualname = getattr(fn, "__qualname__", "")
+    qualname = attribute_or(fn, "__qualname__", "")
     for klass in cls.__mro__:
         for attr, member in list(vars(klass).items()):
-            if isinstance(member, (staticmethod, classmethod)):
+            if instance_of(member, (staticmethod, classmethod)):
                 member = member.__func__
             if member is fn:
                 return qualname == f"{klass.__qualname__}.{attr}"
@@ -322,7 +325,7 @@ def library_made(code: types.CodeType, globals_: Mapping[str, Any]) -> bool:
         return True
     if filename != "<string>":
         return False
-    if getattr(code, "co_qualname", "").startswith("__create_fn__.<locals>."):
+    if attribute_or(code, "co_qualname", "").startswith("__create_fn__.<locals>."):
         return True
     name = globals_.get("__name__") if isinstance(globals_, Mapping) else None
     return code.co_name == "<lambda>" and isinstance(name, str) and name.startswith("namedtuple_")
@@ -406,7 +409,7 @@ def _method_writes(code: types.CodeType, globals_: Mapping[str, Any]) -> list[st
         owner = globals_.get(sub.func.value.id, _MISSING)
         if owner is _MISSING or isinstance(owner, (type, types.ModuleType)):
             continue
-        method = getattr(type(owner), sub.func.attr, None)
+        method = attribute_or(type(owner), sub.func.attr, None)
         if isinstance(method, types.FunctionType) and is_user_code_file(method.__code__.co_filename):
             if _writes_its_object(method.__code__):
                 out.append(sub.func.value.id)

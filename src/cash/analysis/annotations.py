@@ -512,7 +512,7 @@ def _resolves_to(parts: list[str], bound: dict[str, Any], globals_: dict[str, An
     if obj is missing:
         obj = globals_.get(parts[0], missing)
     for attr in parts[1:]:
-        if not isinstance(obj, types.ModuleType):
+        if not issubclass(type(obj), types.ModuleType):
             return False
         obj = vars(obj).get(attr, missing)
     return obj is target

@@ -25,6 +25,7 @@ through ``mylib``. The key names that code (``cache_key``).
 from __future__ import annotations
 
 import collections
+import dataclasses
 import functools
 import gc
 import itertools
@@ -34,6 +35,8 @@ import types
 import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any, NamedTuple
+
+from cash._user_attrs import attribute_or, instance_of
 
 from .. import _native
 from .._memo import CODE_OBJECTS, LruMemo
@@ -123,8 +126,9 @@ _NOTHING = Held(())
 
 
 class _NoNotebookFunctions(Exception):
-    """A walk stopped early: no notebook function, and no object of a
-    class of the user's modules, exists to be found."""
+    """A walk stopped early: no notebook function, and no class of the
+    user's modules (an object of one, or the class held), exists to be
+    found."""
 
 
 #: What `_MEMO` keeps for a walk that stopped because no notebook function
@@ -156,7 +160,7 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
     *lineage* is the value's lineage, when it has one: the walk is then
     remembered for it.
     """
-    if value is None or type(value) in _leaves() or isinstance(value, types.ModuleType):
+    if value is None or type(value) in _leaves() or instance_of(value, types.ModuleType):
         return _NOTHING
     if type(value) is types.FunctionType and _plain_function(value):
         return Held((value.__code__,)) if _is_notebook(value, namespace) else _NOTHING
@@ -178,7 +182,7 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
     functions, classes, complete = found
     codes: dict[int, types.CodeType] = {}
     for fn in functions:
-        code = getattr(fn, "__code__", None)
+        code = attribute_or(fn, "__code__", None)
         if isinstance(code, types.CodeType):
             codes.setdefault(id(code), code)
     module_classes: dict[int, type] = {}
@@ -200,14 +204,14 @@ def _plain_function(fn: types.FunctionType) -> bool:
 def _globals_ids(namespace: Mapping[str, Any]) -> frozenset[int]:
     """The ids of the dicts a notebook function's ``__globals__`` can be:
     *namespace*, or each map of a ``ChainMap`` over it."""
-    maps = getattr(namespace, "maps", None)
+    maps = attribute_or(namespace, "maps", None)
     if isinstance(maps, list):
         return frozenset(id(m) for m in maps)
     return frozenset((id(namespace),))
 
 
 def _is_notebook(fn: Any, namespace: Mapping[str, Any]) -> bool:
-    return id(getattr(fn, "__globals__", None)) in _globals_ids(namespace)
+    return id(attribute_or(fn, "__globals__", None)) in _globals_ids(namespace)
 
 
 def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
@@ -246,7 +250,7 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
     """
     if _objects_frozen_since_import():
         return True
-    maps = getattr(namespace, "maps", None)
+    maps = attribute_or(namespace, "maps", None)
     dicts = list(maps) if isinstance(maps, list) else [namespace]
     globals_ids = _globals_ids(namespace)
     running = _code_running_in(globals_ids)
@@ -284,12 +288,34 @@ def _anything_to_find(namespace: Mapping[str, Any]) -> bool:
 
 def module_class_objects_exist() -> bool:
     """Whether any object of a class defined at the top of one of the
-    user's loaded modules, or of a class derived from one, exists.
+    user's loaded modules, or of a class derived from one, exists, or
+    anything else that holds such a class.
 
     An object refers to its class, so ``gc.get_referrers`` of the classes
     finds them all, in one pass at C speed. With no module of the user's
     loaded there is nothing to ask. Objects ``gc.freeze`` moved out of the
     collector's view are not searched, so then the answer is yes.
+
+    A value can hold the class itself and no object of it
+    (``[mylib.Order] + rows``): a statement calling it runs the module's
+    code. Answered no, a walk of a big value stopped before it met the class
+    and the key left the module out, where a small value's kept it: a cell's
+    ``mylib.K = 14`` served the old result. Whatever else refers to a class
+    counts too (`_holds_the_class`), but not what every class has: its module's globals, its subclasses, the
+    ``__mro__`` and ``__bases__`` of the classes asked about, its own
+    descriptors and ``__class__`` cells, a dataclass field, and cash's own
+    memos. Annotations, registries and library machinery still count, so
+    most notebooks using their own modules walk big values to the end
+    (~0.2 s per 400k objects with the C extension, ~0.5 s without). The
+    what-ran trace (3.12+) is not leaned on to stop sooner: it checks only
+    its own statement's hit, not a cell built from that statement, a call
+    cached inside one, or a restore after a restart, and a trace that was
+    dropped or cannot be used checks nothing. Still not seen: a class
+    reached through a module's ``__dict__`` held in a value
+    (``SimpleNamespace(d=vars(mylib))``). One reached only through the
+    ``__class__`` cell of its own method (``[mylib.C.helper] + rows`` with
+    ``super()`` in ``helper``) is seen, though not by design: the walk's
+    own memo (`Held.module_classes`) refers to the class, and counts.
     """
     classes = _users_module_classes()
     if not classes:
@@ -310,10 +336,86 @@ def module_class_objects_exist() -> bool:
             pending.extend(type.__subclasses__(cls))
         except TypeError:
             pass
-    found = any(type(referrer) in kinds for referrer in gc.get_referrers(*kinds))
+    # A tuple passes through ``*`` as it is: the call's arguments are then
+    # one of the asker's own.
+    asked_of = tuple(kinds)
+    own = {id(classes), id(pending), id(kinds), id(asked_of)}
+    for cls in kinds:
+        own.add(id(cls))
+        own.add(id(cls.__mro__))
+        own.add(id(cls.__bases__))
+    own |= _cash_memos()
+    for cls in kinds:
+        own |= _class_cells(cls)
+    found = any(type(referrer) in kinds or _holds_the_class(referrer, own) for referrer in gc.get_referrers(*asked_of))
     if found:
         _OBJECTS_SEEN[0] = asked
     return found
+
+
+#: What refers to every class, not to one a value holds: a slot's or
+#: ``__dict__``'s descriptor, the ``__class__`` cell of a method calling
+#: ``super()``, and the frame asking.
+_CLASS_MACHINERY = (types.GetSetDescriptorType, types.MemberDescriptorType, types.FrameType, dataclasses.Field)
+
+
+def _class_cells(cls: type) -> set[int]:
+    """The ids of the ``__class__`` cells of *cls*'s own methods (``super()``),
+    which refer to it in every class that calls ``super()``."""
+    found: set[int] = set()
+    for member in list(vars(cls).values()):
+        for fn in (member, attribute_or(member, "__func__"), attribute_or(member, "fget")):
+            code = attribute_or(fn, "__code__")
+            if code is None or "__class__" not in code.co_freevars:
+                continue
+            cells = attribute_or(fn, "__closure__") or ()
+            for name, cell in zip(code.co_freevars, cells):
+                if name == "__class__":
+                    found.add(id(cell))
+    return found
+
+
+#: ``(module count, ids)`` of `_cash_memos`.
+_CASH_MEMOS: list[Any] = [None]
+
+
+def _cash_memos() -> set[int]:
+    """The ids of the dicts cash's own modules keep at their top, an
+    `LruMemo`'s included: memos keyed by class (``_USERS_CLASSES``,
+    ``UNTAGGABLE_TYPES``) hold a class no value does."""
+    count = len(sys.modules)
+    held = _CASH_MEMOS[0]
+    if held is not None and held[0] == count:
+        return held[1]
+    from .._memo import LruMemo
+
+    ids: set[int] = set()
+    for name, module in list(sys.modules.items()):
+        if not (name == "cash" or name.startswith("cash.")):
+            continue
+        for value in list(attribute_or(module, "__dict__", {}).values()):
+            if isinstance(value, dict):
+                ids.add(id(value))
+            elif isinstance(value, LruMemo):
+                ids.add(id(value._data))
+    _CASH_MEMOS[0] = (count, ids)
+    return ids
+
+
+def _holds_the_class(referrer: Any, own: set[int]) -> bool:
+    """Whether *referrer*, which refers to a class of the user's modules,
+    may be part of a value: not one of *own* (the classes asked about, a
+    subclass refers to its base, their ``__mro__`` and ``__bases__``, and the
+    asker's own lists),
+    not `_CLASS_MACHINERY`, and not a module's globals."""
+    if id(referrer) in own or isinstance(referrer, _CLASS_MACHINERY):
+        return False
+    if type(referrer) is dict:
+        name = referrer.get("__name__")
+        module = sys.modules.get(name) if isinstance(name, str) else None
+        if module is not None and attribute_or(module, "__dict__") is referrer:
+            return False
+    return True
 
 
 #: The `_new_code` count and the classes asked about when
@@ -360,9 +462,9 @@ _USERS_MODULE: dict[str, tuple[types.ModuleType, bool]] = {}
 def _users_module(module: Any) -> bool:
     """Is *module* one of the user's own files (`is_local_module`), not the
     notebook's ``__main__``?"""
-    if not isinstance(module, types.ModuleType):
+    if not issubclass(type(module), types.ModuleType):
         return False
-    name = getattr(module, "__name__", None)
+    name = attribute_or(module, "__name__", None)
     if not isinstance(name, str) or name in _MAIN_NAMES:
         return False
     held = _USERS_MODULE.get(name)
@@ -389,8 +491,8 @@ def _of_a_users_module(cls: type) -> bool:
         return False
     if known is not None:
         return known
-    verdict = bool(getattr(cls, "__flags__", 0) & _HEAP_TYPE) and _users_module(
-        sys.modules.get(getattr(cls, "__module__", None) or "")
+    verdict = bool(attribute_or(cls, "__flags__", 0) & _HEAP_TYPE) and _users_module(
+        sys.modules.get(attribute_or(cls, "__module__", None) or "")
     )
     try:
         _USERS_CLASS[cls] = verdict
@@ -766,7 +868,7 @@ def _may_have_dict(kind: type) -> bool:
     object of *kind*: it has an instance dict, or a class along its MRO
     defines ``__dict__``. An openpyxl cell has slots only, and asking each of
     400,000 for its ``__dict__`` raised as many AttributeErrors."""
-    if getattr(kind, "__dictoffset__", 1):
+    if attribute_or(kind, "__dictoffset__", 1):
         return True
     try:
         return any("__dict__" in vars(klass) for klass in kind.__mro__)
@@ -835,8 +937,8 @@ def _member_functions(member: Any) -> list[Any]:
     if isinstance(member, (staticmethod, classmethod)):
         member = member.__func__
     if isinstance(member, property):
-        return [f for f in (member.fget, member.fset, member.fdel) if isinstance(f, types.FunctionType)]
-    return [member] if isinstance(member, types.FunctionType) else []
+        return [f for f in (member.fget, member.fset, member.fdel) if type(f) is types.FunctionType]
+    return [member] if type(member) is types.FunctionType else []
 
 
 def _defined_in(klass: type, globals_ids: frozenset[int]) -> bool:
@@ -848,8 +950,8 @@ def _defined_in(klass: type, globals_ids: frozenset[int]) -> bool:
         return False
     if any(id(fn.__globals__) in globals_ids for member in members for fn in _member_functions(member)):
         return True
-    module = sys.modules.get(getattr(klass, "__module__", None) or "")
-    return module is not None and id(getattr(module, "__dict__", None)) in globals_ids
+    module = sys.modules.get(attribute_or(klass, "__module__", None) or "")
+    return module is not None and id(attribute_or(module, "__dict__", None)) in globals_ids
 
 
 def _own_mro(cls: type, globals_ids: frozenset[int]) -> list[type]:
@@ -862,11 +964,11 @@ def _notebook_class(cls: type, globals_ids: frozenset[int]) -> bool:
     library is told at once by its module: its 500 members are not read."""
     if not cls.__flags__ & _HEAP_TYPE:
         return False  # a type built into the interpreter or an extension
-    name = getattr(cls, "__module__", None) or ""
+    name = attribute_or(cls, "__module__", None) or ""
     module = sys.modules.get(name)
     # ``builtins`` too: a class a cell ``exec``s with no ``__name__`` in
     # its namespace says it is from there.
-    if name not in _MAIN_NAMES and module is not None and id(getattr(module, "__dict__", None)) not in globals_ids:
+    if name not in _MAIN_NAMES and module is not None and id(attribute_or(module, "__dict__", None)) not in globals_ids:
         if not is_user_code_module(module):
             return False
     return bool(_own_mro(cls, globals_ids))

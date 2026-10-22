@@ -44,6 +44,7 @@ from collections.abc import Callable, Mapping
 from typing import Any, NamedTuple
 
 from cash import _plain_data
+from cash._user_attrs import instance_of
 from cash.analysis.analysis_budget import ANALYSIS_BUDGET_REASON, AnalysisBudgetExceeded
 from cash.analysis.annotations import CacheAnnotation
 from cash.analysis.ast_util import called_dotted_names, parse_cached
@@ -117,7 +118,7 @@ def is_lineage_exempt(var_name: str, val: Any) -> bool:
     is captured by other means) are exempt.  Used by ``_has_missing_lineage``
     to decide whether absence of a lineage entry is a cacheability blocker.
     """
-    if isinstance(val, types.ModuleType) or var_name == "get_ipython":
+    if issubclass(type(val), types.ModuleType) or var_name == "get_ipython":
         return True
     return bool(callable(val) and (var_name.startswith("_") or hasattr(val, "__self__")))
 
@@ -142,9 +143,9 @@ _EXHAUSTED = object()
 
 def _container_items(value: Any) -> Any:
     """The items a container can hold a coupled object in, or None for a leaf."""
-    if isinstance(value, dict):
+    if instance_of(value, dict):
         return (*value.keys(), *value.values())
-    if isinstance(value, _SCAN_CONTAINERS):
+    if instance_of(value, _SCAN_CONTAINERS):
         return value
     if (
         getattr(type(value), "__module__", None) == "numpy"

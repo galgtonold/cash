@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from cash._user_attrs import attribute_or
 from cash.control_markers import strip_markers
 
 if TYPE_CHECKING:
@@ -52,15 +53,15 @@ class InputHashes(dict):
 
 def key_lineages(input_hashes: dict[str, str]) -> dict[str, str]:
     """*input_hashes* plus the key-only lineages riding on it (``InputHashes``)."""
-    callee = getattr(input_hashes, "callee_lineages", None) or {}
-    hidden = {k: v for k, v in (getattr(input_hashes, "hidden_lineages", None) or {}).items() if v is not None}
+    callee = attribute_or(input_hashes, "callee_lineages", None) or {}
+    hidden = {k: v for k, v in (attribute_or(input_hashes, "hidden_lineages", None) or {}).items() if v is not None}
     return {**callee, **hidden, **input_hashes} if callee or hidden else input_hashes
 
 
 def key_inputs(inputs: set[str], input_hashes: dict[str, str]) -> set[str]:
     """The names a trace entry's cache key reads: its inputs plus the hidden
     variables riding on *input_hashes*, as the runtime keys it."""
-    hidden = getattr(input_hashes, "hidden_lineages", None)
+    hidden = attribute_or(input_hashes, "hidden_lineages", None)
     return set(inputs) | set(hidden) if hidden else set(inputs)
 
 

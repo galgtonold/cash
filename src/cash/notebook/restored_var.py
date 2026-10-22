@@ -14,9 +14,11 @@ import itertools
 import logging
 import sys
 import uuid
+import weakref
 from collections.abc import Callable, Container, Mapping
 from typing import TYPE_CHECKING, Any
 
+from cash._user_attrs import attribute_or, instance_of
 from cash.content_hashers import builtin_hash_family
 from cash.notebook.lineage_store import restore_frozen_tag
 from cash.value_hash import budgeted_hash, is_costly, note_size
@@ -75,22 +77,32 @@ def hashed_by_lineage(value: Any, _seen: set[int] | None = None) -> bool:
     if t.__name__ in _LINEAGE_HASHED_TYPES or builtin_hash_family(t) is not None or _wraps_a_frame(t):
         return True
     artist = _artist_class()
-    if artist is not None and isinstance(value, artist):
+    if artist is not None and instance_of(value, artist):
         return True
-    if t in _COLLECTIONS:
-        if len(value) > _LINEAGE_HASHED_ITEMS:
+    if t not in _COLLECTIONS:
+        return False
+    # Each collection looked into once: ``cyc.append(cyc)`` holds itself. A
+    # stack, not a call per level: a list nested 20,000 deep is a value too.
+    seen = set() if _seen is None else _seen
+    seen.add(id(value))
+    stack = [value]
+    while stack:
+        collection = stack.pop()
+        if len(collection) > _LINEAGE_HASHED_ITEMS:
             return True
-        # Each collection looked into once: ``cyc.append(cyc)`` holds itself.
-        seen = set() if _seen is None else _seen
-        seen.add(id(value))
-        items = value.values() if t is dict else value
-        return any(
-            type(v).__name__ in _LINEAGE_HASHED_TYPES
-            or builtin_hash_family(type(v)) is not None
-            or (artist is not None and isinstance(v, artist))
-            or (type(v) in _COLLECTIONS and id(v) not in seen and hashed_by_lineage(v, seen))
-            for v in items
-        )
+        for v in collection.values() if type(collection) is dict else collection:
+            kind = type(v)
+            if (
+                kind.__name__ in _LINEAGE_HASHED_TYPES
+                or builtin_hash_family(kind) is not None
+                or (artist is not None and instance_of(v, artist))
+            ):
+                return True
+            if kind in _COLLECTIONS and id(v) not in seen:
+                if is_costly(v):
+                    return True
+                seen.add(id(v))
+                stack.append(v)
     return False
 
 
@@ -105,7 +117,7 @@ def _wraps_a_frame(t: type) -> bool:
     or a resampler: an object over a frame, whose content hash pickles the
     frame whole. ``t = df.groupby('user_id')`` took 2.5 s after 0.006 s over
     a million rows."""
-    return (getattr(t, "__module__", "") or "").startswith(("pandas.core.", "pandas.api.typing"))
+    return (attribute_or(t, "__module__", "") or "").startswith(("pandas.core.", "pandas.api.typing"))
 
 
 def identity_digest(value: Any) -> str | None:
@@ -119,7 +131,7 @@ def identity_digest(value: Any) -> str | None:
     ``id``: a later figure can be given the same one.
     """
     artist = _artist_class()
-    if artist is None or not isinstance(value, artist):
+    if artist is None or not instance_of(value, artist):
         return None
     return f"{_IDENTITY_PREFIX}{next(_IDENTITY_COUNT)}"
 
@@ -134,7 +146,7 @@ def _artist_class() -> type | None:
     a check that would compare its content reads it as changed.
     """
     module = sys.modules.get("matplotlib.artist")
-    artist = getattr(module, "Artist", None)
+    artist = attribute_or(module, "Artist", None)
     return artist if isinstance(artist, type) else None
 
 
@@ -241,3 +253,29 @@ def _record_session_hash(
     if value_hash:
         state.variable_hashes.setdefault(name, set()).add(value_hash)
         state.current_session_hashes[name] = value_hash
+
+
+class HeldObject:
+    """Which object a name was bound to, without keeping it alive: held, it
+    would count as held by another container, and the share check refuse a
+    hit for it. A weak reference where the object takes one, so a new object
+    at the same address is not taken for it; else (a list, a dict) its id
+    and type, which can take a new object of the same type at the same
+    address for it: then a statement is left unstored needlessly, never
+    stored wrongly (`StatementProcessor._not_rebuilt`)."""
+
+    __slots__ = ("_id", "_ref", "_type")
+
+    def __init__(self, obj: Any) -> None:
+        self._id = id(obj)
+        self._type = type(obj)
+        try:
+            self._ref: weakref.ref[Any] | None = weakref.ref(obj)
+        except TypeError:
+            self._ref = None
+
+    def is_(self, obj: Any) -> bool:
+        """Whether *obj* is the object this was made from."""
+        if self._ref is not None:
+            return self._ref() is obj
+        return id(obj) == self._id and type(obj) is self._type

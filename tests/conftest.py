@@ -513,19 +513,24 @@ def _process_seeds_put_back():
 
     Outside a notebook a watched ``np.random.seed(...)`` makes every later
     drawing function key on the stream's position; a seed one test set would
-    otherwise turn the next test's unseeded draw into a seeded one. So does
-    the seed ledger a notebook test's cells published (`seed_epochs`): a
-    ``np.random.seed(42)`` cell left numpy seeded for the decorator tests
-    after it on the same worker.
+    otherwise turn the next test's unseeded draw into a seeded one.
+
+    The ledger a notebook's statement engine publishes (`publish_seed_epochs`)
+    is put back too: nothing unpublishes it when a test's notebook goes, so
+    a ``np.random.seed(42)`` in one test's notebook stood behind every later
+    decorator's draws in that worker, and their unseeded draws were keyed on
+    the stream and never hit (restore/test_realistic_commented_scenario.py
+    ahead of decorator/test_the_decorator_warns_about_unseeded_randomness.py:
+    6 failed, every time).
     """
     from cash.tracking.randomness import lineage
 
     seeded = lineage._PROCESS_SEEDED
     seeded.clear()
-    lineage.publish_seed_epochs(None)
+    published = lineage._ACTIVE_SEED_EPOCHS
     yield
     seeded.clear()
-    lineage.publish_seed_epochs(None)
+    lineage.publish_seed_epochs(published)
 
 
 @pytest.fixture(autouse=True)

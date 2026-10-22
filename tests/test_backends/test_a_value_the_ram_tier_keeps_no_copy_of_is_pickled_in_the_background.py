@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 from cash.backends import FileBackend, InMemoryBackend, TieredBackend
+from tests._label_writes import label_array
 
 MiB = 1 << 20
 ROWS = MiB // 2
@@ -116,8 +117,8 @@ def test_a_table_the_ram_tier_copied_with_pandas_is_serialized_by_the_writer(tmp
     # After the store, through handles that write in place.
     frame["home"].array[0] = "changed"
     frame["goals"].array[1] = 99
-    frame.index.array[2] = "relabelled"
-    frame.columns.array[2] = "q"
+    label_array(frame.index)[2] = "relabelled"
+    label_array(frame.columns)[2] = "q"
     disk.shutdown()
     assert serialized_on and threading.current_thread().name not in serialized_on
     pd.testing.assert_frame_equal(FileBackend(str(tmp_path / "c")).get("h")[1], _python_text_frame(), check_exact=True)

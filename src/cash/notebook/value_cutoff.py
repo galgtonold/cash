@@ -28,6 +28,8 @@ import sys
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 from .._plain_data import is_plain
 from ..analysis.namespace_effects import is_estimator
 from ..value_hash import digest_via_pickle, is_identity_fallback_hash
@@ -71,13 +73,13 @@ _GRAPHS = frozenset(name for module, name in _COMPARED if module == "networkx")
 
 def _compared(value: Any) -> bool:
     t = type(value)
-    if ((getattr(t, "__module__", None) or "").split(".", 1)[0], t.__name__) not in _COMPARED:
+    if ((attribute_or(t, "__module__", None) or "").split(".", 1)[0], t.__name__) not in _COMPARED:
         return False
     if t.__name__ in _GRAPHS:
         return True
     # An array of objects (``axes`` from ``plt.subplots``) is hashed by
     # pickling what it holds -- a whole figure.
-    return getattr(getattr(value, "dtype", None), "kind", "") != "O"
+    return attribute_or(attribute_or(value, "dtype", None), "kind", "") != "O"
 
 
 def _refitted(value: Any) -> bool:

@@ -24,6 +24,7 @@ import weakref
 from typing import Any
 
 from . import _native, _plain_data
+from ._user_attrs import instance_of, own_dict
 from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS, library_scalar_types
 
 logger = logging.getLogger(__name__)
@@ -325,8 +326,8 @@ def _is_instance(value: Any) -> bool:
     return not (
         kind in CODELESS_PRIMS
         or kind in BUILTIN_CONTAINERS
-        or isinstance(value, _HELD_BY_NAME)
-        or (getattr(value, "__dict__", None) is None and not _slot_names(kind))
+        or instance_of(value, _HELD_BY_NAME)
+        or (own_dict(value) is None and not _slot_names(kind))
     )
 
 
@@ -358,9 +359,9 @@ def _instance_estimate(value: Any, seen: set[int]) -> int:
                 # scikit-learn's ``Bunch`` (``fetch_lfw_people``) keeps its
                 # arrays as items. Read as 0, its RAM copy took the array
                 # copies over the pickle its digest had made (2 x 150 MB).
-                if isinstance(obj, dict):
+                if instance_of(obj, dict):
                     held = [*itertools.islice(obj.values(), _INSTANCE_OBJECTS), *held]
-                elif isinstance(obj, (list, tuple)) and len(obj) <= _INSTANCE_OBJECTS:
+                elif instance_of(obj, (list, tuple)) and len(obj) <= _INSTANCE_OBJECTS:
                     held = [*obj, *held]
             for item in held:
                 kind = type(item)
@@ -476,22 +477,22 @@ def estimate_object_size(obj: Any, _depth: int = 0) -> int:
         size = _data_size(obj)
         if size is not None:
             return size
-        if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        if dataclasses.is_dataclass(obj) and not instance_of(obj, type):
             base = sys.getsizeof(obj)
             return base + sum(estimate_object_size(getattr(obj, f.name), _depth + 1) for f in dataclasses.fields(obj))
-        if isinstance(obj, tuple) and hasattr(obj, "_fields"):  # namedtuple
+        if instance_of(obj, tuple) and hasattr(obj, "_fields"):  # namedtuple
             base = sys.getsizeof(obj)
             return base + sum(estimate_object_size(getattr(obj, name), _depth + 1) for name in obj._fields)
         if type_name in ("bytes", "bytearray"):
             return len(obj)
-        if isinstance(obj, (list, tuple)):
+        if instance_of(obj, (list, tuple)):
             return _estimate_indexable(obj, _depth)
-        if isinstance(obj, dict):
+        if instance_of(obj, dict):
             return _estimate_dict(obj, _depth)
-        if isinstance(obj, (set, frozenset)):
+        if instance_of(obj, (set, frozenset)):
             return _estimate_set(obj, _depth)
         return sys.getsizeof(obj)
-    except (TypeError, AttributeError, IndexError, KeyError, StopIteration):
+    except Exception:  # noqa: BLE001 - an object's own lookups (``__class__`` raising) are not cash's error
         return sys.getsizeof(obj)
 
 
@@ -592,16 +593,16 @@ def _own_footprint(obj: Any, seen: set[int], stack: list) -> int:
             return size
         size = sys.getsizeof(obj)
         held: list = []
-        if isinstance(obj, dict):
+        if instance_of(obj, dict):
             held += obj.values()
             held += obj
-        elif isinstance(obj, (list, tuple, set, frozenset)):
+        elif instance_of(obj, (list, tuple, set, frozenset)):
             sampled = _sampled_instances(obj, seen) if len(obj) > _plain_data.SIZE_EXACT_UP_TO else None
             if sampled is None:
                 held += obj
             else:
                 size += sampled
-        elif not isinstance(obj, _HELD_BY_NAME):
+        elif not instance_of(obj, _HELD_BY_NAME):
             size += _attrs_footprint(obj, seen, held)
     except (TypeError, RecursionError, ValueError):
         logger.debug("Could not estimate size of %s object", type(obj).__name__, exc_info=True)
@@ -652,8 +653,8 @@ def _sampled_instances(items: Any, seen: set[int]) -> int | None:
 
 def _attr_values(obj: Any) -> list:
     """The values in *obj*'s ``__dict__`` and ``__slots__``."""
-    attrs = getattr(obj, "__dict__", None)
-    values = list(attrs.values()) if type(attrs) is dict else []
+    attrs = own_dict(obj)
+    values = list(attrs.values()) if attrs is not None else []
     for name in _slot_names(type(obj)):
         value = getattr(obj, name, None)
         if value is not None:
@@ -673,8 +674,8 @@ def _attrs_footprint(obj: Any, seen: set[int], held: list) -> int:
     instances.
     """
     size = 0
-    attrs = getattr(obj, "__dict__", None)
-    if type(attrs) is dict and id(attrs) not in seen:
+    attrs = own_dict(obj)
+    if attrs is not None and id(attrs) not in seen:
         seen.add(id(attrs))
         size += sys.getsizeof(attrs)
         for value in attrs.values():

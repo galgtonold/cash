@@ -43,6 +43,8 @@ import types
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
+from cash._user_attrs import attribute_or, instance_of
+
 __all__ = ["SHADOW", "Shadow", "disable", "enable", "requested", "status"]
 
 _ENV = "CASH_SHADOW"
@@ -59,6 +61,7 @@ UNUSABLE = frozenset(
         "process_pool",
         "generator_resumed",
         "tool_conflict",
+        "trace_failed",
         "string_lookup",
         "jit",
         "memo",
@@ -284,7 +287,7 @@ class Shadow:
         if ns is None:
             return "missing"
         if module == self.notebook_name and ns is self.notebook:
-            if isinstance(ns.get(name), (types.ModuleType, types.FunctionType, type)):
+            if instance_of(ns.get(name), (types.ModuleType, types.FunctionType, type)):
                 # By what it is: a module by name (what of it ran is
                 # checked by items of its own; its lineage moves with any
                 # edit to it, used or not), a function by its code,
@@ -334,16 +337,16 @@ class Shadow:
             except Exception:  # noqa: BLE001 - a namespace that cannot be listed is skipped
                 continue
             for name, value in pairs:
-                if not isinstance(name, str) or name.startswith("__") or not isinstance(value, type):
+                if not isinstance(name, str) or name.startswith("__") or not instance_of(value, type):
                     continue
                 try:
                     members = list(type.__dict__["__dict__"].__get__(value).items())
                 except Exception:  # noqa: BLE001 - a class whose dict cannot be read is skipped
                     continue
                 for attr, member in members:
-                    if isinstance(member, (staticmethod, classmethod)):
+                    if instance_of(member, (staticmethod, classmethod)):
                         member = member.__func__
-                    if isinstance(member, types.FunctionType) and member.__code__ is code:
+                    if instance_of(member, types.FunctionType) and member.__code__ is code:
                         return module, f"{name}.{attr}"
         return None
 
@@ -440,7 +443,7 @@ class Shadow:
                     add(("environ", "", ""), _environ_digest())
                 if jit_python_function(value) is not None:
                     markers.add("jit")
-                if isinstance(value, types.ModuleType):
+                if issubclass(type(value), types.ModuleType):
                     for chain in table.chains:
                         head, _, rest = chain.partition(".")
                         if head != name:
@@ -451,7 +454,7 @@ class Shadow:
                             add(("attr", module, chain), self._attr_digest(module, chain))
         # What code looking names up by a string called: by the names that
         # hold it, where the string could have found it (`_followed`).
-        for fn, g in getattr(unit, "callees", {}).values():
+        for fn, g in attribute_or(unit, "callees", {}).values():
             for module, ns in ((nbn, nb), (g.get("__name__"), g)):
                 if not isinstance(module, str) or (ns is not nb and module == nbn):
                     continue
@@ -476,10 +479,10 @@ class Shadow:
         (``cache_key.lookups_followed``): the unit says so."""
         from ..string_lookups import code_lookups_traceable
 
-        if code not in getattr(self.recorder, "by_string", ()):
+        if code not in attribute_or(self.recorder, "by_string", ()):
             return False
         if code.co_name == "<module>":
-            return g is nb and getattr(unit, "lookups_followed", False)
+            return g is nb and attribute_or(unit, "lookups_followed", False)
         return code_lookups_traceable(code, g)
 
     def _code_items(self, code, g, module, add, add_class, user_class, ran=(), inside=frozenset()) -> None:
@@ -539,7 +542,7 @@ class Shadow:
             return "missing"
         obj = ns[parts[0]]
         for p in parts[1:]:
-            if not isinstance(obj, types.ModuleType):
+            if not issubclass(type(obj), types.ModuleType):
                 break
             try:
                 obj = inspect_getattr(obj, p)
@@ -764,7 +767,7 @@ class Shadow:
             return
         backend = proc.cash_instance.backend
         run.shadow = self.check(
-            "stmt", run.cache_key, _stmt_group(run), found, run.code, getattr(backend, "peek_metadata", None)
+            "stmt", run.cache_key, _stmt_group(run), found, run.code, attribute_or(backend, "peek_metadata", None)
         )
 
     def unseen_writes(self, key: str, outputs: Any) -> bool:
@@ -848,7 +851,7 @@ class Shadow:
         import hashlib
 
         h = hashlib.blake2b(digest_size=12)
-        h.update(repr((site.source, site.occurrence_index, getattr(site, "stmt_identity", None))).encode())
+        h.update(repr((site.source, site.occurrence_index, attribute_or(site, "stmt_identity", None))).encode())
         for p in parts:
             h.update(b"|" + repr(sorted(p.items()) if isinstance(p, Mapping) else p).encode())
         self._call_groups[key] = ("call:" + h.hexdigest(), frozenset(by_content))
@@ -927,7 +930,7 @@ _UNSET = object()
 
 
 def _defaults(fn: Any, code: Any, value_digest: Callable[[Any], str]) -> str:
-    if isinstance(fn, types.FunctionType) and fn.__code__ is code and (fn.__defaults__ or fn.__kwdefaults__):
+    if type(fn) is types.FunctionType and fn.__code__ is code and (fn.__defaults__ or fn.__kwdefaults__):
         return "/" + value_digest((fn.__defaults__, fn.__kwdefaults__))
     return ""
 
@@ -956,11 +959,11 @@ def _in_a_value(code: types.CodeType, spaces: Iterable[Mapping[str, Any]]) -> bo
     while pending and looked < _IN_A_VALUE_AT:
         value, depth = pending.pop()
         looked += 1
-        if isinstance(value, types.FunctionType):
+        if instance_of(value, types.FunctionType):
             if value.__code__ is code and depth:
                 return True
             continue
-        if depth >= 2 or isinstance(value, (type, types.ModuleType, str, bytes)):
+        if depth >= 2 or instance_of(value, (type, types.ModuleType, str, bytes)):
             continue
         try:
             if type(value) in (list, tuple):
@@ -993,7 +996,7 @@ def _held_digest(ns: Mapping[str, Any], name: str, value_digest: Callable[[Any],
         return "missing"
     if member is _UNSET:
         return "absent"
-    if isinstance(member, (staticmethod, classmethod)):
+    if instance_of(member, (staticmethod, classmethod)):
         member = member.__func__
     return value_digest(member)
 

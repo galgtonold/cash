@@ -324,7 +324,7 @@ class _Scan:
             self.klass(v)
         elif t is types.BuiltinFunctionType:
             owner = v.__self__
-            if owner is not None and not isinstance(owner, types.ModuleType):
+            if owner is not None and not issubclass(type(owner), types.ModuleType):
                 self.value(owner, names)
         elif t is types.MethodType:
             self.value(v.__func__, names)
@@ -444,7 +444,7 @@ class _Scan:
             for name, attr in list(vars(k).items()):
                 if _is_dunder(name) or name.startswith("_abc_"):
                     # Machinery, never data the key reads; but code it runs.
-                    if isinstance(attr, (types.FunctionType, staticmethod, classmethod, property)):
+                    if issubclass(type(attr), (types.FunctionType, staticmethod, classmethod, property)):
                         self.value(attr, frozenset())
                     continue
                 self.value(attr, frozenset())

@@ -19,6 +19,8 @@ import sys
 import types
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 from ..code_digest import callable_identity
 from ..install_paths import is_user_code_file, is_user_code_module
 from ..value_types import LEAF_TYPES
@@ -108,13 +110,13 @@ def _visit_group(
         return
     parts.append(f"obj:{code}")
     for obj in group:
-        attrs = getattr(obj, "__dict__", None)
+        attrs = attribute_or(obj, "__dict__", None)
         if isinstance(attrs, dict):
             children.extend(attrs.values())
 
 
 def _visit(obj: Any, parts: list[str], classes: dict[type, str | None], children: list[Any]) -> None:
-    if isinstance(obj, types.FunctionType):
+    if type(obj) is types.FunctionType:
         if _user_function(obj):
             parts.append(f"fn:{callable_identity(obj)}")
             children.extend(obj.__defaults__ or ())
@@ -124,7 +126,7 @@ def _visit(obj: Any, parts: list[str], classes: dict[type, str | None], children
                     children.append(cell.cell_contents)
                 except ValueError:  # an empty cell
                     pass
-    elif isinstance(obj, types.MethodType):
+    elif type(obj) is types.MethodType:
         children.extend((obj.__func__, obj.__self__))
     elif isinstance(obj, functools.partial):
         children.append(obj.func)
@@ -139,14 +141,14 @@ def _visit(obj: Any, parts: list[str], classes: dict[type, str | None], children
 
 
 def _user_function(fn: types.FunctionType) -> bool:
-    return is_user_code_file(getattr(fn.__code__, "co_filename", None))
+    return is_user_code_file(attribute_or(fn.__code__, "co_filename", None))
 
 
 def _user_class(cls: type) -> bool:
     """Is *cls* the user's: from a module of theirs (a notebook's
     ``__main__`` included), or, with its module not loaded, with methods
     written in their code?"""
-    module = sys.modules.get(getattr(cls, "__module__", None) or "")
+    module = sys.modules.get(attribute_or(cls, "__module__", None) or "")
     if module is not None:
         return is_user_code_module(module)
     return any(_user_function(fn) for member in vars(cls).values() for fn in _member_functions(member))
@@ -179,5 +181,5 @@ def _member_functions(member: Any) -> list[types.FunctionType]:
     if isinstance(member, (staticmethod, classmethod)):
         member = member.__func__
     if isinstance(member, property):
-        return [f for f in (member.fget, member.fset, member.fdel) if isinstance(f, types.FunctionType)]
-    return [member] if isinstance(member, types.FunctionType) else []
+        return [f for f in (member.fget, member.fset, member.fdel) if type(f) is types.FunctionType]
+    return [member] if type(member) is types.FunctionType else []

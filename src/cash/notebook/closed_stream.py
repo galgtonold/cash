@@ -15,6 +15,8 @@ import io
 import os
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 __all__ = ["ClosedStream", "stored_form"]
 
 _FILE_TYPES = (io.TextIOWrapper, io.BufferedReader, io.BufferedWriter, io.BufferedRandom, io.FileIO)
@@ -40,15 +42,18 @@ class ClosedStream:
 
 def stored_form(value: Any) -> Any:
     """*value*, or a :class:`ClosedStream` for a closed file opened by name."""
-    if type(value) not in _FILE_TYPES or not getattr(value, "closed", False):
+    if type(value) not in _FILE_TYPES or not attribute_or(value, "closed", False):
         return value
-    name = getattr(value, "name", None)
-    mode = getattr(value, "mode", None)
+    name = attribute_or(value, "name", None)
+    mode = attribute_or(value, "mode", None)
     if not isinstance(name, (str, bytes)) or not isinstance(mode, str):
         return value
     text = isinstance(value, io.TextIOWrapper)
     return ClosedStream(
-        name, mode, getattr(value, "encoding", None) if text else None, getattr(value, "errors", None) if text else None
+        name,
+        mode,
+        attribute_or(value, "encoding", None) if text else None,
+        attribute_or(value, "errors", None) if text else None,
     )
 
 

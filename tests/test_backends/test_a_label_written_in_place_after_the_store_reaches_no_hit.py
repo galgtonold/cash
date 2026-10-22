@@ -16,6 +16,7 @@ import pandas as pd
 import pytest
 
 from cash.backends.memory_backend import InMemoryBackend
+from tests._label_writes import label_array, label_values
 
 
 def _nullable(index):
@@ -48,11 +49,11 @@ def _labels(value) -> list:
 
 def _write_labels(value) -> None:
     frame = _frame(value)
-    frame.index.array[0] = frame.index[1]
+    label_array(frame.index)[0] = frame.index[1]
     if frame.ndim == 2:
-        frame.columns.values[0] = "edited"
+        label_values(frame.columns)[0] = "edited"
         if "c" in frame:
-            frame["c"].cat.categories.array[0] = "edited"
+            label_array(frame["c"].cat.categories)[0] = "edited"
 
 
 @pytest.mark.parametrize("name", TABLES)
