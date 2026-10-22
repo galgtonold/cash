@@ -187,6 +187,9 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
             codes.setdefault(id(code), code)
     module_classes: dict[int, type] = {}
     for cls in classes:
+        if type(cls) is types.FunctionType:
+            module_classes.setdefault(id(cls), cls)
+            continue
         for code in _class_codes(cls, namespace):
             codes.setdefault(id(code), code)
         for klass in cls.__mro__:
@@ -278,6 +281,14 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
             _NO_FUNCTIONS.clear()
         _NO_FUNCTIONS[globals_ids] = seen_at
     return False
+
+
+def _holds_a_function(children: list[Any]) -> bool:
+    """Whether *children* holds a function: one of the user's modules'
+    (``[mylib.helper] + rows``) is noted wherever it is held, as no question
+    about what exists can tell beforehand."""
+    kinds = _K.type_set(children) if _K is not None else set(map(type, children))
+    return types.FunctionType in kinds
 
 
 def _anything_to_find(namespace: Mapping[str, Any]) -> bool:
@@ -471,6 +482,17 @@ def _users_module(module: Any) -> bool:
 _USERS_CLASS: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
 
 
+def _of_a_users_module_function(fn: types.FunctionType) -> bool:
+    """Was *fn* defined at the top of one of the user's own modules (not a
+    cell): a ``def`` whose module holds it under its name?"""
+    module = sys.modules.get(attribute_or(fn, "__module__", None) or "")
+    return (
+        _users_module(module)
+        and fn.__globals__ is attribute_or(module, "__dict__", None)
+        and "<locals>" not in fn.__qualname__
+    )
+
+
 def _of_a_users_module(cls: type) -> bool:
     """Was *cls* defined by a ``class`` statement in one of the user's own
     modules (not a cell)?"""
@@ -553,7 +575,7 @@ def _walk(
         visited += sum(len(group) for _kind, group in level)
         if check_at is not None and visited > check_at:
             check_at = None
-            if not _anything_to_find(namespace):
+            if not _anything_to_find(namespace) and all(kind is not types.FunctionType for kind, _group in level):
                 raise _NoNotebookFunctions
         if visited > WALK_LIMIT:
             return tuple(functions.values()), tuple(classes.values()), False
@@ -568,7 +590,7 @@ def _walk(
             # Asked before the next level is sorted: a sheet's 400,000
             # cells cost more to dedup than the question does.
             check_at = None
-            if not _anything_to_find(namespace):
+            if not _anything_to_find(namespace) and not _holds_a_function(children):
                 raise _NoNotebookFunctions
         level = _next_level(children, seen)
     return tuple(functions.values()), tuple(classes.values()), True
@@ -675,6 +697,11 @@ def _visit_group(
         for fn in group:
             if id(fn.__globals__) in globals_ids:
                 functions.setdefault(id(fn), fn)
+            elif _of_a_users_module_function(fn):
+                # Noted, not entered, as a class of the user's modules is:
+                # its code and the module data it reads are keyed by its
+                # module (`Held.module_classes`).
+                classes.setdefault(id(fn), fn)
             children.extend(fn.__defaults__ or ())
             children.extend((fn.__kwdefaults__ or {}).values())
             children.extend(_cell_contents(fn.__closure__))
