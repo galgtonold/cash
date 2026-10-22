@@ -183,9 +183,12 @@ def is_pseudo_fs(path: str) -> bool:
     ``os.path.realpath`` is not identity-preserving here: on Windows it turns
     ``/proc/meminfo`` into ``C:/proc/meminfo``, which no ``/proc/`` prefix
     would match. Testing the raw string keeps the guard honest wherever the
-    read comes from.
+    read comes from. The roots count too: ``psutil`` lists ``/proc`` to find
+    a process's children, and that listing changes whenever any process on
+    the machine starts or ends.
     """
-    return str(path).replace("\\", "/").startswith(_PSEUDO_FS_PREFIXES)
+    raw = str(path).replace("\\", "/")
+    return raw.startswith(_PSEUDO_FS_PREFIXES) or raw.rstrip("/") + "/" in _PSEUDO_FS_PREFIXES
 
 
 # ---------------------------------------------------------------------------

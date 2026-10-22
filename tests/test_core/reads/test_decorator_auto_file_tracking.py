@@ -147,11 +147,29 @@ def test_pseudo_fs_reads_are_not_tracked_as_dependencies():
     assert is_pseudo_fs("/dev/urandom")
     assert not is_pseudo_fs("/home/me/data.csv")
     assert not is_pseudo_fs("/tmp/procession.csv")  # prefix, not a path component
+    assert is_pseudo_fs("/proc") and is_pseudo_fs("/sys/") and is_pseudo_fs("/dev")
+    assert not is_pseudo_fs("/process")
 
     tracker = FileAccessTracker({})
     tracker.track_path("/proc/meminfo")
     tracker.track_path("/sys/kernel/mm/transparent_hugepage/enabled")
     assert tracker.accessed_files == set(), f"pseudo-fs paths leaked into deps: {tracker.accessed_files}"
+
+
+def test_looking_up_a_statements_child_processes_reads_nothing_of_its():
+    """``p = !cmd`` starts a process, so cash looks up the children the
+    statement had (`write_observer._child_pids`): on Linux psutil lists
+    ``/proc``, a listing that changes whenever any process on the machine
+    starts or ends. Recorded as the statement's read, its lineage differed
+    from the one the upstream check worked out, and the cell below rebuilt
+    the name from the Python above the shell command."""
+    from cash.notebook import write_observer
+    from cash.tracking.file_tracker import FileAccessTracker
+
+    with FileAccessTracker() as tracker:
+        write_observer._child_pids()
+        os.listdir("/proc") if os.path.isdir("/proc") else None
+    assert tracker.accessed_files == set(), f"machine state leaked into deps: {tracker.accessed_files}"
 
 
 def test_a_chunked_iterator_still_hits_after_an_eviction_check(tmp_path):

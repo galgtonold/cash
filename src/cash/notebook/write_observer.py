@@ -34,6 +34,7 @@ from cash.install_paths import is_user_code_file
 from cash.purity import is_pure
 from cash.tracking import io_watch
 from cash.tracking.read_classification import is_runtime_cache_path
+from cash.tracking.tracker_context import untracked
 
 __all__ = ["WrittenPaths", "children_left_running", "kept_writes", "observe_writes", "process_runs"]
 
@@ -233,10 +234,14 @@ _PROCESS_STARTS = _UNSEEN_WRITERS - {"sqlite3.connect"}
 
 
 def _child_pids() -> frozenset[int]:
+    """The process's children now. cash's own lookup, not a read of the
+    statement's: on Linux psutil lists ``/proc`` and opens each process's
+    ``stat``."""
     try:
         import psutil
 
-        return frozenset(child.pid for child in psutil.Process().children())
+        with untracked():
+            return frozenset(child.pid for child in psutil.Process().children())
     except Exception:  # noqa: BLE001 - none known: every child is new
         return frozenset()
 
