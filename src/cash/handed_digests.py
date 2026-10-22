@@ -114,8 +114,15 @@ def withdraw() -> None:
 def forget() -> None:
     """A new statement starts: nothing of the last one's call is handed on."""
     _count_open(getattr(_local, "offer", None), None)
+    last = getattr(_local, "last", None)
     _local.offer = None
     _local.last = None
+    if last is not None and last.digests:
+        # The offer may be all that still holds an old value.
+        from .value_hash import letting_go
+
+        letting_go(last.digests)
+        last.digests.clear()
 
 
 def stored_result(filename: str) -> Stored | None:

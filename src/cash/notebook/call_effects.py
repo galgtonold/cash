@@ -43,7 +43,7 @@ from cash.source_reading import wrapper_layers
 from cash.tracking.file_dep_snapshot import dep_path_for_this_process
 from cash.tracking.trace_recorder import other_thread_alive
 from cash.tracking.tracker_context import active_tracker
-from cash.value_hash import compute_hash, is_identity_fallback_hash, watch
+from cash.value_hash import compute_hash, is_identity_fallback_hash, letting_go, watch
 
 logger = logging.getLogger(__name__)
 
@@ -668,12 +668,15 @@ class DigestHandoff:
         self._generation += 1
         self._before_ok = self._after_ok = False
         self._first_source = None
-        self._before.clear()
-        self._after.clear()
+        # What the last statement left may be all that still holds an old
+        # value (``x = f(x)``): `letting_go` before each drop.
+        _let_go(self._before)
+        _let_go(self._after)
         self._started = 0
         self._after_at = -1
         self._offer = None
         self._watched = False
+        _let_go(self._settled)
         self._settled = None
         self._crowded = False
         self._before_watch = _closed(self._before_watch)
@@ -718,7 +721,7 @@ class DigestHandoff:
         `digest_before` and `note_after`."""
         self._started += 1
         if self._started > 1:
-            self._before.clear()
+            _let_go(self._before)
         return self._generation, self._started
 
     def digest_before(self, ticket: tuple[int, int], source: str | None = None) -> Callable[[Any], str]:
@@ -735,10 +738,13 @@ class DigestHandoff:
             return self.fingerprints.digest
         before, self._before = self._before, {}
         if ticket[1] != 1 or not before:
+            _let_go(before)
             return self.fingerprints.digest
         if not self._before_ok and (source is None or source != self._first_source):
+            _let_go(before)
             return self.fingerprints.digest
         if not self.alone():
+            _let_go(before)
             return self.fingerprints.digest
         opened = self._before_watch
 
@@ -765,6 +771,7 @@ class DigestHandoff:
             return
         if not _open(self._after_watch):
             return
+        _let_go(self._after)
         self._after = {id(v): (v, d) for v, d in zip(values, digests) if isinstance(d, str)}
         self._after_at = self._started
 
@@ -805,7 +812,7 @@ class DigestHandoff:
         """The statement ran and nothing of the user's runs until its
         outputs are recorded: keep what `digest_after` reads, for them
         (`take_settled`). What was kept for a call before it is let go."""
-        self._before = {}
+        _let_go(self._before)
         self._settled = {}
 
     def take_settled(self) -> dict[int, tuple[Any, str]]:
@@ -854,6 +861,14 @@ class DigestHandoff:
 def _open(w: Any) -> bool:
     """Is *w*, a `value_hash.watch` or None, open?"""
     return w is not None and w.open
+
+
+def _let_go(held: dict[int, tuple[Any, str]] | None) -> None:
+    """Empty *held* in place, every watch ended first when that drops the
+    last reference to a value (`value_hash.letting_go`)."""
+    if held:
+        letting_go(held)
+        held.clear()
 
 
 def _closed(w: Any) -> None:

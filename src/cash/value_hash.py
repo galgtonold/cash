@@ -17,8 +17,10 @@ from __future__ import annotations
 import contextlib
 import gc
 import hashlib
+import importlib
 import logging
 import pickle
+import sys
 import threading
 import weakref
 from collections.abc import Callable, Iterator
@@ -423,10 +425,8 @@ class Watch:
 
     def close(self) -> None:
         self.open = False
-        with _COLLECTOR_LOCK:
-            with contextlib.suppress(ValueError):
-                OPEN_WATCHES.remove(self)
-            _restore_threshold()
+        with contextlib.suppress(ValueError):
+            OPEN_WATCHES.remove(self)
 
 
 class _Window(Watch):
@@ -450,54 +450,33 @@ _one_read = _OneRead()
 #: The watches open now, on any thread: `user_code_ran` ends them.
 OPEN_WATCHES: list[Watch] = []
 
-#: Guards `OPEN_WATCHES` going from empty to not and back, and the
-#: collector's threshold with it. Re-entrant: a collection run while it is
-#: held ends the watches from its callback (`_on_collection`).
-_COLLECTOR_LOCK = threading.RLock()
 
-#: The youngest generation's threshold while a watch is open, and the one
-#: it replaced (None: not raised).
-_WATCHED_THRESHOLD = 200_000
-_raised_from: tuple[int, ...] | None = None
-
-
-def _raise_threshold() -> None:
-    """The first watch opens: the collector waits for 100 times more new
-    objects than it does by default before a collection.
+def _collect_young() -> None:
+    """The first watch opens: collect the youngest generation now if it is
+    past half its threshold, so that cash's own checks inside the watch do
+    not start a collection.
 
     A collection that frees something ends every watch (`_on_collection`),
-    and cash's own work between two checks leaves cyclic garbage of its own
-    (recursive closures of its syntax-tree walks, an import): 3 cached calls
-    in 10 lost the digest their statement handed them that way, for a second
-    full read of the argument. Raised, not turned off: a watch stays open
-    through a library's code (``model = fit(X)`` runs none of the user's),
-    which may run long and leave garbage of its own, and the collection it
-    then triggers ends the watch as before."""
-    global _raised_from
-    if OPEN_WATCHES or _raised_from is not None or not gc.isenabled():
+    and cash's own work before a watch leaves cyclic garbage of its own (an
+    import, the standard library's syntax-tree walks): 3 cached calls in 10
+    lost the digest their statement handed them that way, for a second full
+    read of the argument. Collected here, a watch whose checks make fewer
+    new objects than half the threshold (1,000 by default) never sees one.
+    Nothing of the user's program changes: the collector keeps its own
+    threshold, this is one of the collections it would have run a little
+    later anyway, and a watch open through a library's long call
+    (``model = fit(X)``) ends at the first collection that frees something
+    there, as before."""
+    if OPEN_WATCHES or not gc.isenabled():
         return
-    now = gc.get_threshold()
-    if now[0] and now[0] < _WATCHED_THRESHOLD:
-        gc.set_threshold(_WATCHED_THRESHOLD, *now[1:])
-        _raised_from = now
-
-
-def _restore_threshold() -> None:
-    """The last watch closed: the threshold it found, unless something set
-    another meanwhile."""
-    global _raised_from
-    if OPEN_WATCHES or _raised_from is None:
-        return
-    was, _raised_from = _raised_from, None
-    now = gc.get_threshold()
-    if now[0] == _WATCHED_THRESHOLD and now[1:] == was[1:]:
-        gc.set_threshold(*was)
+    threshold = gc.get_threshold()[0]
+    if threshold and gc.get_count()[0] * 2 > threshold:
+        gc.collect(0)
 
 
 def end_watches() -> None:
     """End every watch still open: a cell's statements are done, and
-    nothing taken in one cell is handed on to the next, and the
-    collector's threshold is back to its own (`_raise_threshold`)."""
+    nothing taken in one cell is handed on to the next."""
     for w in list(OPEN_WATCHES):
         w.close()
         if isinstance(w, _Window):
@@ -509,15 +488,19 @@ def _open(w: Watch) -> Watch:
     run (no ``sys.monitoring`` before Python 3.12, its tool id taken, or
     ``CASH_TRACE=0`` with no traced call yet), it is closed at once: a
     finalizer run between two checks would go unseen there, so nothing is
-    handed on and each check reads for itself."""
+    handed on and each check reads for itself.
+
+    Watched first, armed second: arming turns the user's code's events back
+    on (`code_trace`'s re-arm), and a callback of another thread that ran
+    between the two would have found no watch to end and turned its code's
+    events off again, for this watch to miss it running. Registered first,
+    that callback ends this watch instead."""
     from .decorator import code_trace
 
-    if code_trace.watching_user_code():
-        with _COLLECTOR_LOCK:
-            _raise_threshold()
-            OPEN_WATCHES.append(w)
-    else:
-        w.open = False
+    _collect_young()
+    OPEN_WATCHES.append(w)
+    if not code_trace.watching_user_code():
+        w.close()
     return w
 
 
@@ -546,13 +529,80 @@ def user_code_ran(statement_code: bool = False, host: bool = False) -> None:
             w.digests = {}
 
 
+def letting_go(held: dict[int, tuple[Any, str]]) -> None:
+    """cash is about to let go of *held* (``id -> (value, digest)``): a
+    value only it holds dies then, and a finalizer the user gave it may be C
+    code (``weakref.finalize(old, rows.append, x)``) that changes another
+    value with no code of the user's starting, which no watch would see.
+    After ``x = f(x)`` the statement's hand-off is what still holds the old
+    ``x``. So when one of them has no other holder, every watch ends first.
+
+    Counted, not tested by kind: a value with no finalizer dies just as
+    quietly, and how many holders it has is a single look. Two references
+    are the entry's and the look's own (one on Python versions that lend
+    the look theirs): any more and the value outlives the drop."""
+    if not OPEN_WATCHES or not held:
+        return
+    for entry in held.values():
+        if sys.getrefcount(entry[0]) <= 2:
+            user_code_ran()
+            return
+
+
+#: Collections cash starts itself and knows free only its own garbage.
+_own_collections = 0
+
+
+@contextlib.contextmanager
+def own_garbage() -> Iterator[None]:
+    """Run cash's own work that leaves cyclic garbage without ending the open
+    watches by the collections it starts.
+
+    For cash's rare first-time work inside a watch: the import of a library
+    it uses itself (`import_unwatched`), the first look at the installed
+    packages a function reaches (``importlib.metadata`` leaves cycles of
+    lambdas behind each lookup). Both ended the window a statement's
+    argument was handed in, for a second full read of it. A collection
+    first frees what was garbage before (and ends the watches if that freed
+    something); then the work runs with the collector paused, and the
+    collection after it frees only what the work left, which
+    `_on_collection` does not count. With no watch open, or the collector
+    off, the work just runs."""
+    if not OPEN_WATCHES or not gc.isenabled():
+        yield
+        return
+    global _own_collections
+    gc.collect(0)
+    gc.disable()
+    try:
+        yield
+    finally:
+        _own_collections += 1
+        try:
+            gc.collect(0)
+        finally:
+            _own_collections -= 1
+            gc.enable()
+
+
+def import_unwatched(name: str) -> Any:
+    """``importlib.import_module(name)`` in `own_garbage`: ``pyarrow`` for the
+    first polars frame cash hashes makes thousands of classes and frees part
+    of them. Already imported, it costs a dictionary lookup."""
+    module = sys.modules.get(name)
+    if module is not None:
+        return module
+    with own_garbage():
+        return importlib.import_module(name)
+
+
 def _on_collection(phase: str, info: dict) -> None:
     """A collection freed something: the finalizers and weakref callbacks
     it ran may be the user's code handed to C (``weakref.ref(obj,
     rows.append)``, ``weakref.finalize(obj, arr.fill, 0)``, a C type's
     ``tp_finalize``), which starts no Python code for the recorder to see.
-    So every watch ends, as when code of the user's runs. Fewer run while
-    one is open (`_raise_threshold`).
+    So every watch ends, as when code of the user's runs. Fewer start while
+    one is open (`_collect_young`).
 
     At its end, and only when it freed something: those run only for the
     objects it finds unreachable, and most collections free nothing (a
@@ -562,7 +612,7 @@ def _on_collection(phase: str, info: dict) -> None:
     callback, a C type's ``tp_dealloc``), which no collection runs and no
     event announces, and a C ``tp_finalize`` that makes everything it was
     found with reachable again, so that the collection frees nothing."""
-    if phase == "stop" and OPEN_WATCHES and (info["collected"] or info["uncollectable"]):
+    if phase == "stop" and OPEN_WATCHES and not _own_collections and (info["collected"] or info["uncollectable"]):
         user_code_ran()
 
 

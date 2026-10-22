@@ -247,11 +247,15 @@ def _recorder_class() -> type:
             #: that queued its code before another thread's `_rearm` took the
             #: queue would disable the code that `_rearm` had just armed, and
             #: no queue would hold it: every later watch missed it running.
-            #: `_rearm` holds `_rearming` while it drains and arms, and moves
-            #: `rearm_gen` on before letting go; a callback that sees either
-            #: (checked after its last call, so no other thread runs between
-            #: the check and the disable) leaves its events on instead.
-            self._rearming = threading.Lock()
+            #: `_rearm` counts itself in `rearming` while it drains and arms,
+            #: and moves `rearm_gen` on before it counts itself out; a
+            #: callback that sees either (checked after its last call, so no
+            #: other thread runs between the check and the disable) leaves
+            #: its events on instead. Re-entrant: what `_rearm` allocates can
+            #: start a collection, whose finalizer may open a watch and so
+            #: re-arm on the same thread.
+            self._rearm_lock = threading.RLock()
+            self.rearming = 0
             self.rearm_gen = 0
             #: The user's code that looks names up by a string in its own
             #: globals (`string_lookups`): what it calls is recorded for a
@@ -417,22 +421,30 @@ def _recorder_class() -> type:
             return True
 
         def _rearm(self) -> None:
-            with self._rearming:
-                pending = self.rearm
-                rearm = set()
-                while pending:
-                    rearm.add(pending.popleft())
-                mon = sys.monitoring
-                if not self.rearm_works:
-                    if rearm:
-                        mon.restart_events()
-                else:
-                    for code in rearm:
-                        events = self.user_codes.get(code)
-                        if events is not None:
-                            mon.set_local_events(self.tool, code, 0)
-                            mon.set_local_events(self.tool, code, events)
-                self.rearm_gen += 1
+            with self._rearm_lock:
+                self.rearming += 1
+                try:
+                    # What is queued now, not until the queue is empty: other
+                    # threads keep queueing while this drains (their callbacks
+                    # see `rearming` and leave their events on), and a drain
+                    # that waited for empty ran without end under 32 threads.
+                    pending = self.rearm
+                    rearm = set()
+                    for _ in range(len(pending)):
+                        rearm.add(pending.popleft())
+                    mon = sys.monitoring
+                    if not self.rearm_works:
+                        if rearm:
+                            mon.restart_events()
+                    else:
+                        for code in rearm:
+                            events = self.user_codes.get(code)
+                            if events is not None:
+                                mon.set_local_events(self.tool, code, 0)
+                                mon.set_local_events(self.tool, code, events)
+                finally:
+                    self.rearm_gen += 1
+                    self.rearming -= 1
 
         def end(self, unit: Any) -> Any:
             if unit.kind != "decorator":
@@ -458,7 +470,7 @@ def _recorder_class() -> type:
                 self._seen_start(code, frame, g, kind)
             if value_hash.OPEN_WATCHES:
                 self._seen_in_window(code, sys._getframe(1))
-            return DISABLE if not self._rearming.locked() and self.rearm_gen == gen else None
+            return DISABLE if not self.rearming and self.rearm_gen == gen else None
 
         def _seen_in_window(self, code: types.CodeType, frame: Any) -> None:
             """*code* started or resumed while a `value_hash.watch` is open:
@@ -534,7 +546,7 @@ def _recorder_class() -> type:
                 self._seen_resume(code, g, kind)
             if value_hash.OPEN_WATCHES:
                 self._seen_in_window(code, sys._getframe(1))
-            return DISABLE if not self._rearming.locked() and self.rearm_gen == gen else None
+            return DISABLE if not self.rearming and self.rearm_gen == gen else None
 
         def _seen_resume(self, code: types.CodeType, g: dict, kind: tuple) -> None:
             if kind[1] is not None:
@@ -572,7 +584,7 @@ def _recorder_class() -> type:
                     return None
                 gen = self.rearm_gen
                 self.rearm.append(code)
-                return DISABLE if not self._rearming.locked() and self.rearm_gen == gen else None
+                return DISABLE if not self.rearming and self.rearm_gen == gen else None
             try:
                 if fn is getattr:
                     if arg0 is sys.monitoring.MISSING:

@@ -174,26 +174,182 @@ def test_a_cell_started_on_another_thread_ends_the_watch(user):
         w.close()
 
 
-def test_cashs_own_garbage_waits_while_a_watch_is_open():
-    """A collection that frees only cash's own leftovers would end the watch
-    as surely as a finalizer: fewer run while one is open, and the
-    threshold is the collector's own again once it closes."""
+def test_a_watch_leaves_the_collectors_threshold_alone():
+    """The user's program runs as it would without cash: a watch open
+    through a library's call must not let its garbage pile up."""
     own = gc.get_threshold()
     w = value_hash.watch()
     try:
-        assert gc.get_threshold()[0] > own[0]
-        for _ in range(5000):  # cyclic garbage, as cash's syntax-tree walks leave
-            a = []
-            a.append(a)
-        assert w.open
+        assert gc.get_threshold() == own
     finally:
         w.close()
-    assert gc.get_threshold() == own
+
+
+def test_young_garbage_is_collected_before_a_watch_opens():
+    """cash's own leftovers, collected before the watch rather than inside
+    it, where the collection would end it."""
+    threshold = gc.get_threshold()[0]
+    for _ in range(threshold):  # cyclic garbage, as an import leaves
+        a = []
+        a.append(a)
+    w = value_hash.watch()
+    try:
+        assert gc.get_count()[0] < threshold // 2
+        kept = [[] for _ in range(threshold // 4)]  # what cash's checks make
+        assert kept
+        assert w.open, "no collection ended it"
+    finally:
+        w.close()
+
+
+def _cycles(n):
+    for _ in range(n):
+        a = []
+        a.append(a)
+
+
+def test_cashs_own_garbage_inside_a_watch_does_not_end_it():
+    """What cash's first-time work leaves (an import, a look at the installed
+    packages) is collected without ending the watch, however much it is."""
+    gc.collect()
+    w = value_hash.watch()
+    try:
+        with value_hash.own_garbage():
+            _cycles(gc.get_threshold()[0] * 3)
+        assert w.open
+        assert gc.isenabled()
+    finally:
+        w.close()
+
+
+def test_garbage_left_before_cashs_own_work_still_ends_the_watch():
+    """Only what the work itself leaves is passed over: a cycle that was
+    garbage before it, whose collection may run the user's callbacks, ends
+    the watch."""
+
+    class Node:
+        pass
+
+    gc.collect()
+    w = value_hash.watch()
+    try:
+        holder = Node()
+        holder.me = holder
+        weakref.finalize(holder, int)
+        del holder
+        with value_hash.own_garbage():
+            pass
+        assert not w.open
+    finally:
+        w.close()
+
+
+def test_the_syntax_tree_fixer_leaves_no_garbage_and_fixes_as_the_stdlib():
+    import ast
+
+    from cash.analysis.ast_util import fix_locations
+
+    source = "x = f(a, b=[1, 2])\nif x:\n    y = x + 1\n"
+    ours, theirs = ast.parse(source), ast.parse(source)
+    for tree in (ours, theirs):
+        tree.body.append(ast.Expr(ast.Call(ast.Name("g", ast.Load()), [ast.Constant(1)], [])))
+    gc.collect()
+    gc.disable()
+    try:
+        fix_locations(ours)
+        assert gc.collect() == 0, "the fixer left a cycle"
+    finally:
+        gc.enable()
+    ast.fix_missing_locations(theirs)
+    assert ast.dump(ours, include_attributes=True) == ast.dump(theirs, include_attributes=True)
 
 
 def test_a_cells_end_ends_every_watch_left_open():
-    own = gc.get_threshold()
     w = value_hash.watch()
     value_hash.end_watches()
     assert not w.open
-    assert gc.get_threshold() == own
+    assert not value_hash.OPEN_WATCHES
+
+
+def test_code_run_while_a_watch_is_being_armed_ends_it(user, monkeypatch):
+    """A watch is registered before the user's code is armed again: another
+    thread's call in between finds it and ends it, rather than turning its
+    code's events off again for the watch to miss."""
+    user.touch()
+    user.touch()  # discovered, armed, its events off after one run
+    real = code_trace.watching_user_code
+
+    def other_thread_runs_first():
+        b = threading.Thread(target=user.touch)
+        b.start()
+        b.join()
+        return real()
+
+    monkeypatch.setattr(code_trace, "watching_user_code", other_thread_runs_first)
+    with value_hash.one_read():
+        monkeypatch.setattr(code_trace, "watching_user_code", real)
+        del user.value.rows[50:]
+        before = value_hash.compute_hash(user.value)
+        user.touch()
+        assert value_hash.compute_hash(user.value) != before
+
+
+def test_a_finalizer_that_opens_a_watch_while_code_is_armed_does_not_hang():
+    """Arming allocates, an allocation can start a collection, and a
+    finalizer it runs may open a watch, which arms again on this thread."""
+    left = [300]
+
+    class Res:
+        def __del__(self):
+            value_hash.watch().close()
+            if left[0] > 0:  # the next piece of cyclic garbage
+                left[0] -= 1
+                n = Res()
+                n.me = n
+
+    def opens():
+        for _ in range(300):
+            with value_hash.one_read():
+                pass
+
+    own = gc.get_threshold()
+    r = Res()
+    r.me = r
+    del r
+    gc.set_threshold(1)
+    try:
+        t = threading.Thread(target=opens, daemon=True)
+        t.start()
+        t.join(30)
+    finally:
+        gc.set_threshold(*own)
+    assert not t.is_alive(), "hung re-arming inside its own re-arm"
+
+
+class _Old:
+    pass
+
+
+def test_cash_letting_go_of_a_values_last_holder_ends_the_window():
+    """After ``x = f(x)`` cash's hand-off may be all that holds the old
+    ``x``; a finalizer the user gave it in C runs when cash lets go, with no
+    code of the user's starting."""
+    value = [[i, i * 2.0] for i in range(50)]
+    old = _Old()
+    weakref.finalize(old, value.append, [-1, -1.0])
+    held = {id(old): (old, "digest")}
+    del old
+    with value_hash.one_read():
+        before = value_hash.compute_hash(value)
+        value_hash.letting_go(held)
+        held.clear()
+        assert len(value) == 51, "the finalizer ran"
+        assert not value_hash.reading_once()
+        assert value_hash.compute_hash(value) != before
+
+
+def test_letting_go_of_a_value_held_elsewhere_keeps_the_window():
+    kept = _Old()
+    with value_hash.one_read():
+        value_hash.letting_go({id(kept): (kept, "digest")})
+        assert value_hash.reading_once()
