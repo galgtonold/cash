@@ -310,8 +310,10 @@ def module_class_objects_exist() -> bool:
     cached inside one, or a restore after a restart, and a trace that was
     dropped or cannot be used checks nothing. Still not seen: a class
     reached through a module's ``__dict__`` held in a value
-    (``SimpleNamespace(d=vars(mylib))``), or only through the ``__class__``
-    cell of its own method.
+    (``SimpleNamespace(d=vars(mylib))``). One reached only through the
+    ``__class__`` cell of its own method (``[mylib.C.helper] + rows`` with
+    ``super()`` in ``helper``) is seen, though not by design: the walk's
+    own memo (`Held.module_classes`) refers to the class, and counts.
     """
     classes = _users_module_classes()
     if not classes:
