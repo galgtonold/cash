@@ -278,9 +278,12 @@ def test_a_memo_recorded_under_two_names_is_filled_once():
 
 
 def test_the_forward_probe_only_checks_and_leaves_the_memo_empty():
+    """A memo lacking a key the statement read is refused by the probe, as
+    the lookup at the statement's place may once a cell above ran, and the
+    probe fills nothing."""
     ns, records = _filled()
     ns["f"].cache_clear()
-    assert helper_memos.unfilled(records, ns, refill=False) is None
+    assert helper_memos.unfilled(records, ns, refill=False) is not None
     assert ns["f"].cache_info().currsize == 0
 
 
