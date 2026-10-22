@@ -364,11 +364,11 @@ def _class_cells(cls: type) -> set[int]:
     which refer to it in every class that calls ``super()``."""
     found: set[int] = set()
     for member in list(vars(cls).values()):
-        for fn in (member, getattr(member, "__func__", None), getattr(member, "fget", None)):
-            code = getattr(fn, "__code__", None)
+        for fn in (member, attribute_or(member, "__func__"), attribute_or(member, "fget")):
+            code = attribute_or(fn, "__code__")
             if code is None or "__class__" not in code.co_freevars:
                 continue
-            cells = getattr(fn, "__closure__", None) or ()
+            cells = attribute_or(fn, "__closure__") or ()
             for name, cell in zip(code.co_freevars, cells):
                 if name == "__class__":
                     found.add(id(cell))
@@ -393,7 +393,7 @@ def _cash_memos() -> set[int]:
     for name, module in list(sys.modules.items()):
         if not (name == "cash" or name.startswith("cash.")):
             continue
-        for value in list(getattr(module, "__dict__", {}).values()):
+        for value in list(attribute_or(module, "__dict__", {}).values()):
             if isinstance(value, dict):
                 ids.add(id(value))
             elif isinstance(value, LruMemo):
@@ -413,7 +413,7 @@ def _holds_the_class(referrer: Any, own: set[int]) -> bool:
     if type(referrer) is dict:
         name = referrer.get("__name__")
         module = sys.modules.get(name) if isinstance(name, str) else None
-        if module is not None and getattr(module, "__dict__", None) is referrer:
+        if module is not None and attribute_or(module, "__dict__") is referrer:
             return False
     return True
 
