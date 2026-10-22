@@ -41,7 +41,7 @@ from cash.notebook.cache_key import (
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.call_effects import DigestHandoff
 from cash.notebook.compiled_source import register_cell_source
-from cash.notebook.consumables import drawn_stream_inputs
+from cash.notebook.consumables import drawn_stream_inputs, held_stream_paths
 from cash.notebook.per_item_reruns import MIN_COST_S as PER_ITEM_MIN_COST_S
 from cash.notebook.read_handles import reaches_read_handle
 from cash.notebook.statement import sparse_order
@@ -115,7 +115,7 @@ from ...analysis.cacheability_decision import (
     cacheability_verdict,
     identity_coupled_reason,
 )
-from ...analysis.code_analyzer import CodeAnalyzer, calls_ipython, statement_code
+from ...analysis.code_analyzer import CodeAnalyzer, calls_ipython, reaches_the_shell, statement_code
 from ...analysis.handed_callables import answers_shared, new_analysis_round, stop_sharing_answers
 from ...analysis.mutation_effects import (
     StatementEffects,
@@ -243,6 +243,10 @@ _LOG_ANNOTATION = "[ANNOTATION]"
 
 #: Why a statement that runs a magic or a shell command is not cached.
 _IPYTHON_REASON = "Runs an IPython magic or shell command, which cash cannot see into, so it runs every time"
+_SHELL_REASON = (
+    "Asks IPython's shell for names by a string (get_ipython().ev, .user_ns): what that reads is known only "
+    "when it runs, so the statement runs every time"
+)
 
 #: Why a statement that read a file replaced while it ran is not cached.
 INPUT_CHANGED_REASON = (
@@ -884,13 +888,19 @@ class StatementProcessor:
         if run.tree is not None and calls_ipython(run.tree):
             run.metrics["uncacheable_reasons"].append(_IPYTHON_REASON)
             run.skip_cache = True
-            run.value_pinned = True  # what it binds gets a magic's lineage (`record_magic`)
             run.ipython_bindings = self.bindings()
             # One the user wrote at cell level: the simulation reads a loop or
             # a branch as one unit, so one in a body keeps no lineage, as before.
             if len(run.tree.body) == 1 and is_magic_statement(run.tree.body[0]) and not is_control_body(run.code):
                 run.magic_reads = self.magic_reads(run.tree.body[0])
                 run.magic_snapshots = self._mutations.magic_snapshots(run.tree.body[0], run.code)
+                run.value_pinned = True  # what it binds gets a magic's lineage (`record_magic`)
+        elif run.tree is not None and reaches_the_shell(run.tree):
+            # What it binds is keyed by its value; what it rebinds through
+            # the shell is forgotten, as a magic's is (`_forget_ipython_bindings`).
+            run.metrics["uncacheable_reasons"].append(_SHELL_REASON)
+            run.skip_cache = True
+            run.ipython_bindings = self.bindings()
 
         done = self._check_redundant_import(run)
         if done is not None:
@@ -1243,6 +1253,14 @@ class StatementProcessor:
             )
             run.skip_cache = True
             run.drew_from_stream = any(isinstance(self.shell.user_ns.get(name), io.IOBase) for name in drawn)
+            return
+        held = held_stream_paths(run.tree, self.shell.user_ns)
+        if held:
+            run.metrics["uncacheable_reasons"].append(
+                f"Can draw from {', '.join(held)}, an iterator no name it reads holds: "
+                f"a cache hit would not advance it, so the statement runs every time"
+            )
+            run.skip_cache = True
             return
         looked_at = reads_open_handle(run.inputs - run.outputs, self.shell.user_ns)
         if looked_at:
@@ -1906,8 +1924,13 @@ class StatementProcessor:
         (:meth:`forget_rebound`), its assignment targets among them."""
         if run.ipython_bindings is None:
             return
-        self.forget_rebound(run.ipython_bindings)
-        for name in run.outputs:
+        # A call the user wrote (``v = get_ipython().ev('k')``) reads what
+        # its key cannot name: what it binds is keyed by its value, which
+        # stays, so a reader below misses when the value changed.
+        ns = self.shell.user_ns
+        kept = {name for name in run.outputs if name in ns} if not run.value_pinned else set()
+        self.forget_rebound({**run.ipython_bindings, **{name: id(ns[name]) for name in kept}})
+        for name in run.outputs - kept:
             self.forget_variable(name)
 
     def _is_module(self, name: str) -> bool:
@@ -2206,6 +2229,7 @@ class StatementProcessor:
                     no_cache=(run.annotation is not None and run.annotation.no_cache)
                     or run.value_varies
                     or (run.skip_cache and not run.value_pinned and not self._binds_the_namespace(run))
+                    or run.needs_trace
                     or run.past_budget
                     or inputs_moved
                     or self._binds_a_stream(run),

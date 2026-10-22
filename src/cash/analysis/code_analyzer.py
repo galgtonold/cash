@@ -1317,6 +1317,25 @@ def calls_ipython(tree: ast.AST) -> bool:
     return False
 
 
+def reaches_the_shell(tree: ast.AST) -> bool:
+    """Whether *tree* asks IPython's shell for anything but a magic or a shell
+    command (``get_ipython().ev('k')``, ``get_ipython().user_ns['k']``).
+
+    What it reads or binds is named by a string the shell looks up, which no
+    key can name.
+    """
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr not in _IPYTHON_RUNNERS
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "get_ipython"
+        ):
+            return True
+    return False
+
+
 #: Line magics whose argument is a Python statement run in the user's namespace.
 PYTHON_ARG_MAGICS = frozenset({"time", "timeit", "prun"})
 

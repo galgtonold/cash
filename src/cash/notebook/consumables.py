@@ -56,6 +56,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "drawn_stream_inputs",
+    "held_stream_paths",
     "is_consumable_unrestorable",
     "consumable_state",
     "has_diverged",
@@ -306,6 +307,96 @@ def drawn_stream_inputs(
         if is_stream(value):
             found.append(name)
     return found
+
+
+#: How far the look for an iterator held out of sight goes: below a function
+#: the statement calls, its globals and closure cells, their attributes or
+#: items, one level more; and how many objects it looks at in all.
+_HELD_DEPTH = 3
+_HELD_BUDGET = 2000
+
+
+def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> list[str]:
+    """The iterators and generators a statement can draw from that no name
+    it reads holds itself, as paths (``m.g``, ``f.gen``).
+
+    One an attribute or item it spells holds (``next(m.g)``), or one a
+    function it calls reaches through its globals or closure (``def f():
+    return next(gen)``), moves when it runs, and no lineage follows it: a hit
+    would leave it where it was, and the statement's outputs, served under
+    the same key, would not be what a run gives. An open file is left to the
+    file checks, which see what is read from it.
+    """
+    from .statement.hidden_generators import _children
+
+    if tree is None:
+        return []
+    found: list[str] = []
+    frontier: list[tuple[str, Any, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Attribute, ast.Subscript)) and not isinstance(node.ctx, ast.Store):
+            path, value = _spelled(node, user_ns)
+            if path is not None and _held_stream(value):
+                found.append(path)
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            func = user_ns.get(node.func.id)
+            if instance_of(func, (types.FunctionType, types.MethodType)):
+                frontier.append((node.func.id, func, 0))
+    seen: set[int] = set()
+    budget = _HELD_BUDGET
+    while frontier and budget > 0:
+        path, obj, depth = frontier.pop()
+        if id(obj) in seen or instance_of(obj, (str, bytes, int, float, bool, type(None), type)):
+            continue
+        seen.add(id(obj))
+        budget -= 1
+        if depth > 0 and _held_stream(obj):
+            found.append(path)
+            continue
+        if depth >= _HELD_DEPTH:
+            continue
+        try:
+            for label, child in _children(obj):
+                frontier.append(
+                    (f"{path}{label}" if label.startswith(("[", ".")) else f"{path}.{label}", child, depth + 1)
+                )
+        except Exception:  # noqa: BLE001 - a look into arbitrary objects must not break the statement
+            continue
+    return sorted(set(found))
+
+
+def _spelled(node: ast.expr, user_ns: Mapping[str, Any]) -> tuple[str | None, Any]:
+    """The path and value of an attribute or constant-key item chain over a
+    name (``m.g``, ``d['g']``), read from the objects' own dicts so nothing
+    of theirs runs; ``(None, None)`` when it cannot be read so."""
+    if isinstance(node, ast.Name):
+        if node.id not in user_ns:
+            return None, None
+        return node.id, user_ns[node.id]
+    if isinstance(node, ast.Attribute):
+        path, owner = _spelled(node.value, user_ns)
+        if path is None:
+            return None, None
+        try:
+            attrs = object.__getattribute__(owner, "__dict__")
+        except (AttributeError, TypeError):
+            return None, None
+        if not instance_of(attrs, dict) or node.attr not in attrs:
+            return None, None
+        return f"{path}.{node.attr}", attrs[node.attr]
+    if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
+        path, owner = _spelled(node.value, user_ns)
+        if path is None or type(owner) not in (dict, list, tuple):
+            return None, None
+        try:
+            return f"{path}[{node.slice.value!r}]", owner[node.slice.value]
+        except (KeyError, IndexError, TypeError):
+            return None, None
+    return None, None
+
+
+def _held_stream(obj: Any) -> bool:
+    return not instance_of(obj, io.IOBase) and is_stream(obj)
 
 
 def is_stream(obj: Any) -> bool:
