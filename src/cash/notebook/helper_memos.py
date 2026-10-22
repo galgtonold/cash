@@ -537,6 +537,7 @@ def used(
         if why is not None:
             continue  # already told; the rest only remember their answers
         if clears:
+            label = _changed_label(before) or label
             why = f"It may empty the helper memo {label} or read its counters (cache_clear, cache_info)"
         elif info.misses < misses or info.hits < hits:
             why = f"It emptied the helper memo {label}"
@@ -563,6 +564,23 @@ def used(
     if why is not None:
         return FILLED, f"{why} (statement re-executes)"
     return out or None
+
+
+def _changed_label(before: list[tuple[list[str], Any, int, int, int, Any]]) -> str | None:
+    """The label of the first memo in *before* whose counters or held keys
+    and answers moved, for a warning about code that can clear one: the
+    memo it found first may be one the statement never touched."""
+    for where, memo, hits, misses, size, held in before:
+        try:
+            info = memo.cache_info()
+        except Exception:  # noqa: BLE001 - a wrapper whose counters raise
+            continue
+        now = _held(memo)
+        if (info.hits, info.misses, info.currsize) != (hits, misses, size) or (
+            held is not None and now is not None and now[0] != held[0]
+        ):
+            return _label(where)
+    return None
 
 
 def _calls_of(memo: Any, items: list[tuple[Any, Any]]) -> list[list[str]] | None:
