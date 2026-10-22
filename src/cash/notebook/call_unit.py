@@ -933,7 +933,7 @@ class CallUnit:
             if hit and metadata.get("helper_memos"):
                 # Served only while the helper memos it called hold what its
                 # run left (`helper_memos.unfilled`).
-                unfilled = helper_memos.unfilled(metadata["helper_memos"], getattr(fn, "__globals__", None) or {})
+                unfilled = helper_memos.unfilled(metadata["helper_memos"], attribute_or(fn, "__globals__", None) or {})
                 if unfilled:
                     self._memo_misses[site] = unfilled
                     hit, value, recorded_cost, metadata = False, None, 0.0, {}
