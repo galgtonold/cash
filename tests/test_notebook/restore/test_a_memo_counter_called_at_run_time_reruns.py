@@ -34,6 +34,9 @@ CASES = {
     "one_site_after_len": (STATS, "stats(f)"),
     "a_dict_key_handed_on": ("fs = [f]", "getattr(fs[0], next(iter({'cache_info': 0})))()"),
     "methodcaller_of_a_built_name": ("", "operator.methodcaller('_'.join(['cache', 'info']))(f)"),
+    # A default after the name: the name is still read.
+    "getattr_with_a_default": ("K = 'cache_info'", "getattr(f, K, None)()"),
+    "getattr_by_a_built_name_with_a_default": ("", "getattr(f, '_'.join(['cache', 'info']), None)()"),
 }
 
 
@@ -54,3 +57,21 @@ def test_a_statement_that_called_no_counter_is_served(cash_magics):
     _, seen, _ = _cycle2(cash_magics, cells, cells)
     assert seen[-1] == ["RESTORED"]
     assert cash_magics.shell.user_ns.get("a") == (2, 3)
+
+
+@pytest.mark.parametrize(
+    "expr",
+    [
+        # A default after a plain name (``getattr(fn, '__name__', repr(fn))``)
+        # reads no counter: the name is the second argument, not the last.
+        "label(f)",
+        "getattr(f, '__name__', None)",
+        "getattr(f, '__doc__', '')",
+    ],
+)
+def test_getattr_with_a_default_by_a_plain_name_is_served(cash_magics, expr):
+    label = "def label(fn):\n    return getattr(fn, '__name__', repr(fn))"
+    statement = f"a = (f(1), {expr}, time.sleep({SLEEP}))[:2]"
+    cells = [IMPORTS, MEMO, label, "x = f(5)", statement]
+    _, seen, _ = _cycle2(cash_magics, cells, cells)
+    assert seen[-1] == ["RESTORED"]

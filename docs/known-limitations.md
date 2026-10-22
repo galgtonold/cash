@@ -309,15 +309,28 @@ however the code came by it: by a name no text holds
 (`getattr(f, "_".join(parts))`), from a loop over `[len, f.cache_info]`, an
 attribute or a closure that held something else first (`self.g()`), or
 handed to code it does not see by any argument the frame holds
-(`groupby(fs, key=info)`, `pool.map(info, fs)`). Not seen: a site that
-first called a method the receiver's own class holds (`o.stat()`,
-`rows.append(x)`; cash stops watching it) and later calls a counter an
-object holds as an attribute, and a counter made in an earlier cell and
-handed to a library inside an expression (`pool.submit(self.g)`). On
-Python 3.10 and 3.11 there is no run-time trace: while a memo is about, a
+(`groupby(fs, key=info)`, `pool.map(info, fs)`, `pool.submit(box.g)`).
+"A memo is about" means any `lru_cache` or `functools.cache` anywhere in
+the notebook's namespace; while one is, a call site that may call something
+else next time (a loop's variable, `NS.fn(i)`) costs about 1 µs per call.
+Not seen:
+
+- a counter held in a dict made in an earlier cell and handed on from it
+  (`groupby(fs, key=D["k"])`);
+- a site that first called a method the receiver's own class holds
+  (`o.stat()`, `rows.append(x)`), or first handed a library function data
+  alone (`np.mean(a)`), and later, in the same run, calls or hands on a
+  counter: cash stops watching such a site after its first call.
+
+On Python 3.10 and 3.11 there is no run-time trace. While a memo is about, a
 statement that reaches a function of yours that looks an attribute up by a
 name it does not write out (`getattr(obj, name)`) or hands `getattr` on
-reruns every time, and says why.
+reruns every time, and says why. Only lookups spelled `getattr`,
+`__getattribute__`, `attrgetter` or `methodcaller` are seen there; these
+are not: `getattr` under another name (`ga = getattr; ga(f, name)`),
+`inspect.getattr_static(f, name)`, `vars(type(f))[name]` written inline,
+and a counter held in a closure or a registry object made in an earlier
+cell.
 
 <!-- claim: cash/analysis/handed_callables.py:handed_callables @c55bd405, cash/analysis/handed_callables.py:hands_a_state_changing_callable @4c3c2d42 -->
 ### A function handed to a call

@@ -11,7 +11,14 @@ import sys
 
 import pytest
 
-from cash.decorator.code_trace import callee_varies, harmless, reads_counters
+from cash.decorator.code_trace import (
+    HANDS_A_CALLABLE,
+    HANDS_A_COUNTER,
+    callee_varies,
+    harmless,
+    reads_counters,
+    what_is_handed,
+)
 
 pytestmark = pytest.mark.skipif(sys.version_info < (3, 12), reason="what ran is recorded on Python 3.12+ only")
 
@@ -117,3 +124,43 @@ def test_a_global_or_an_attribute_does_not():
 
 def test_a_call_whose_result_is_called_varies():
     assert _sites(_result) == [False, True]
+
+
+def _handed(fn, frame_locals):
+    call = [i for i in dis.get_instructions(fn) if i.opname in ("CALL", "CALL_KW")][-1]
+
+    class Frame:
+        f_locals = frame_locals
+        f_globals: dict = {}
+
+    return what_is_handed(fn.__code__, call.offset, Frame)
+
+
+def _lib(x, **kw):
+    return functools.reduce(x, kw)
+
+
+def _hand(a, key):
+    return _lib(a, key=key)
+
+
+@pytest.mark.parametrize(
+    "a, key, handed",
+    [
+        # Data alone (``np.mean(a)``, ``os.path.basename(s)``): the site is let go.
+        ("a/b", [1.0, 2.0], None),
+        ([1, 2], float, None),
+        ("x", None, None),
+        # Something callable may be swapped for a counter by a later call.
+        ([1], len, HANDS_A_CALLABLE),
+        ([len], 1, HANDS_A_CALLABLE),
+    ],
+)
+def test_what_a_library_call_is_handed(a, key, handed):
+    assert _handed(_hand, {"a": a, "key": key}) is handed
+
+
+def test_a_counter_handed_to_a_library_call():
+    m = _memo()
+    assert _handed(_hand, {"a": [m.cache_info], "key": 1}) is HANDS_A_COUNTER
+    assert _handed(_hand, {"a": 1, "key": "cache_clear"}) is HANDS_A_COUNTER

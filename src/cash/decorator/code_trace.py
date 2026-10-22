@@ -566,8 +566,13 @@ def _recorder_class() -> type:
                     t = type(arg0)
                     if t is not STR and t is not BUILTIN and t is not PARTIAL and t not in DESCRIPTORS:
                         sites = SITES_get(id(code))
-                        if sites is not None and sites[1].get(offset, True) is True:
-                            return None
+                        if sites is not None:
+                            varies = sites[1].get(offset, True)
+                            # An attribute site (``NS.fn(i)``) is kept as
+                            # well, unless it calls the receiver's own
+                            # method, which the slow path lets go.
+                            if varies is True or (varies and not from_class(fn, arg0, varies)):
+                                return None
             if not units and not stack:
                 self.rearm.add(code)
                 return DISABLE
@@ -597,14 +602,13 @@ def _recorder_class() -> type:
                         # what it is handed, a library's function or class):
                         # what it is handed is read at each call, every
                         # argument and keyword the frame holds, not only the
-                        # first. A site handing on none of those is let go
+                        # first. A site handing on nothing callable
+                        # (``np.mean(a)``, ``os.path.basename(s)``) is let go
                         # as a harmless one is, unless it calls what varies.
-                        frame = sys._getframe(rec.WATCHED_FRAME)
-                        if hands_on_a_counter(code, offset, frame):
+                        handed = what_is_handed(code, offset, sys._getframe(rec.WATCHED_FRAME))
+                        if handed is HANDS_A_COUNTER:
                             stack[-1].counters_read = True
-                        keep = (
-                            id(fn) in TAKERS or bool(handed_names(code).get(offset)) or _varies(code, offset, fn, arg0)
-                        )
+                        keep = id(fn) in TAKERS or handed is not None or _varies(code, offset, fn, arg0)
                     elif _varies(code, offset, fn, arg0):
                         # What it calls next may be a counter: seen every time.
                         keep = True
@@ -970,36 +974,62 @@ def handed_names(code: types.CodeType) -> dict[int, tuple[str, ...]]:
     return known[1]
 
 
-def _hands_a_counter(value: Any) -> bool:
+#: `what_is_handed`'s answers.
+HANDS_A_COUNTER = "counter"
+HANDS_A_CALLABLE = "callable"
+
+
+def _handed(value: Any) -> str | None:
     """Is *value* a counter, a counter's name, a ``partial``,
     ``methodcaller`` or ``attrgetter`` made for one, or a list, tuple or set
-    holding one?"""
+    holding one (`HANDS_A_COUNTER`); else is it, or does such a container
+    hold, something the call may call (`HANDS_A_CALLABLE`, `_may_call`)?"""
     if reads_counters(value, value):
-        return True
+        return HANDS_A_COUNTER
     if type(value) in (list, tuple, set, frozenset):
-        return any(reads_counters(item, item) for item in itertools.islice(value, _HANDED_ITEMS))
-    return False
+        found = None
+        for item in itertools.islice(value, _HANDED_ITEMS):
+            if reads_counters(item, item):
+                return HANDS_A_COUNTER
+            if found is None and _may_call(item):
+                found = HANDS_A_CALLABLE
+        return found
+    return HANDS_A_CALLABLE if _may_call(value) else None
 
 
-def hands_on_a_counter(code: types.CodeType, offset: int, frame: Any) -> bool:
+def _may_call(value: Any) -> bool:
+    """Is *value* something the call it is handed to may call, and that
+    could be a counter a later call swaps in: not a class (``dtype=float``),
+    whose call runs code the trace sees or a builtin's."""
+    return callable(value) and not isinstance(value, type)
+
+
+def what_is_handed(code: types.CodeType, offset: int, frame: Any) -> str | None:
     """Does the call at *offset* in *code* hand a counter on, by any
-    argument or keyword the frame holds? sys.monitoring tells the first
-    argument only, which is ``self`` for a method (``pool.submit(...)``),
-    and code the trace does not see may call any of them."""
+    argument or keyword the frame holds (`HANDS_A_COUNTER`), or else
+    something callable (`HANDS_A_CALLABLE`), which a later call at the site
+    may swap for a counter? None when it hands on neither: data alone
+    (``np.mean(a)``, ``os.path.basename(s)``). sys.monitoring tells the
+    first argument only, which is ``self`` for a method
+    (``pool.submit(...)``), and code the trace does not see may call any of
+    them."""
     names = handed_names(code).get(offset)
     if not names:
-        return False
+        return None
     local = frame.f_locals
     g = frame.f_globals
+    found = None
     for name in names:
         value = local.get(name, _MISSING)
         if value is _MISSING:
             value = g.get(name, _MISSING)
             if value is _MISSING:
                 continue
-        if _hands_a_counter(value):
-            return True
-    return False
+        handed = _handed(value)
+        if handed is HANDS_A_COUNTER:
+            return handed
+        found = found or handed
+    return found
 
 
 def names_a_counter(code: types.CodeType, offset: int, frame: Any, target: Any) -> bool:
@@ -1082,9 +1112,10 @@ _SKIPPED = frozenset({"CACHE", "EXTENDED_ARG", "NOP"})
 
 
 def _plan(code: types.CodeType, offset: int) -> tuple[str, Any] | None:
-    """How to read the last argument of the two-argument call at *offset*:
-    ``("const", value)``, ``("local", name)`` or ``("global", name)``, or
-    None when an expression computed it."""
+    """How to read the name a ``getattr(obj, name)`` or ``getattr(obj, name,
+    default)`` at *offset* looks up: ``("const", value)``, ``("local",
+    name)`` or ``("global", name)``, or None when an expression computed
+    it."""
     plans = _INSTRUCTIONS.get(code)
     if plans is None:
         if len(_INSTRUCTIONS) > 4096:
@@ -1096,7 +1127,11 @@ def _plan(code: types.CodeType, offset: int) -> tuple[str, Any] | None:
     previous = None
     for ins in dis.get_instructions(code):
         if ins.offset == offset:
-            if ins.opname == "CALL" and ins.arg == 2 and previous is not None:
+            if ins.opname == "CALL" and ins.arg == 3:
+                # A default follows the name, and may be an expression
+                # (``repr(fn)``): the name is read from the source.
+                plan = _plan_from_source(code, ins)
+            elif ins.opname == "CALL" and ins.arg == 2 and previous is not None:
                 op, val = previous.opname, previous.argval
                 if op in ("LOAD_CONST", "LOAD_SMALL_INT"):
                     plan = ("const", val)
@@ -1111,6 +1146,25 @@ def _plan(code: types.CodeType, offset: int) -> tuple[str, Any] | None:
             previous = ins
     plans[offset] = plan
     return plan
+
+
+def _plan_from_source(code: types.CodeType, ins: Any) -> tuple[str, Any] | None:
+    """`_plan` for the call *ins*, its second argument read from the
+    source."""
+    import ast
+
+    pos = ins.positions
+    ends = _call_nodes(code) if pos is not None else None
+    call = ends.get((pos.end_lineno, pos.end_col_offset)) if ends else None
+    if call is None or len(call.args) < 2 or call.keywords:
+        return None
+    arg = call.args[1]
+    if isinstance(arg, ast.Constant):
+        return ("const", arg.value)
+    if isinstance(arg, ast.Name):
+        local = arg.id in code.co_varnames or arg.id in code.co_cellvars or arg.id in code.co_freevars
+        return ("local", arg.id) if local else ("global", arg.id)
+    return None
 
 
 def _last_argument(code: types.CodeType, offset: int, frame: Any) -> str | None:
