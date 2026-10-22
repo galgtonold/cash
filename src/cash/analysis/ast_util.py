@@ -23,7 +23,7 @@ import types
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from cash._user_attrs import instance_of
+from cash._user_attrs import instance_of, own_dict
 
 __all__ = [
     "CallScope",
@@ -175,11 +175,8 @@ def _static_attribute(obj: Any, attr: str) -> Any | None:
 
 def _in_instance_dict(obj: Any, attr: str) -> bool:
     """Was *attr* found in the object's own ``__dict__``, where Python does not bind?"""
-    try:
-        own = object.__getattribute__(obj, "__dict__")
-    except AttributeError:
-        return False
-    return isinstance(own, dict) and attr in own
+    own = own_dict(obj)
+    return own is not None and attr in own
 
 
 def _is_mock(obj: Any) -> bool:

@@ -23,6 +23,7 @@ import time
 import types
 
 from ._memo import CODE_OBJECTS, LruMemo
+from ._user_attrs import own_dict
 from .tracking.tracker_context import untracked
 
 __all__ = [
@@ -489,11 +490,10 @@ def wrapper_layers(fn: object) -> list[object]:
         # Read from the object's own ``__dict__``, where ``functools.wraps``
         # puts it: no ``__getattr__`` runs, and a mock's made-up attributes
         # do not lead on forever.
-        try:
-            own = object.__getattribute__(current, "__dict__")
-        except (AttributeError, TypeError):
+        own = own_dict(current)
+        if own is None:
             return layers
-        current = own.get("__wrapped__") if isinstance(own, dict) else None
+        current = own.get("__wrapped__")
         if current is None or id(current) in seen:
             return layers
         seen.add(id(current))

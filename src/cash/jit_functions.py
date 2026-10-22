@@ -20,6 +20,8 @@ import hashlib
 import types
 from typing import Any
 
+from ._user_attrs import own_dict
+
 __all__ = ["jit_identity", "jit_options", "jit_python_function", "is_jit_type"]
 
 
@@ -36,11 +38,7 @@ def is_jit_type(t: type) -> bool:
 
 def _own_dict(obj: Any) -> dict | None:
     """*obj*'s instance ``__dict__``, read without running its ``__getattr__``."""
-    try:
-        state = object.__getattribute__(obj, "__dict__")
-    except Exception:  # noqa: BLE001 - no dict, or one that refuses to be read
-        return None
-    return state if isinstance(state, dict) else None
+    return own_dict(obj)
 
 
 def jit_python_function(obj: Any) -> types.FunctionType | None:

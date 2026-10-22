@@ -36,7 +36,7 @@ import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any, NamedTuple
 
-from cash._user_attrs import attribute_or, instance_of
+from cash._user_attrs import attribute_or, instance_of, own_dict
 
 from .. import _native
 from .._memo import CODE_OBJECTS, LruMemo
@@ -711,11 +711,8 @@ def _visit_group(
     children.append(kind)
     if _may_have_dict(kind):
         for obj in group:
-            try:
-                attrs = object.__getattribute__(obj, "__dict__")
-            except (AttributeError, TypeError):
-                attrs = None
-            if isinstance(attrs, dict):
+            attrs = own_dict(obj)
+            if attrs is not None:
                 children.extend(attrs.values())
     for name in _slot_names(kind):
         getter = _slot_getter(kind, name)
