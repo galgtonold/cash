@@ -20,7 +20,7 @@ value) is stored whole, as before.
 from __future__ import annotations
 
 import itertools
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,7 +35,16 @@ from .shared_objects import (
     library_value_types,
 )
 
-__all__ = ["FrameCellsPatch", "HolderPatch", "apply_patch", "frame_cells_patch", "holder_patches", "shares_categories"]
+__all__ = [
+    "FrameCellsPatch",
+    "HolderPatch",
+    "apply_patch",
+    "frame_cells_patch",
+    "frame_cells_patches",
+    "holder_patches",
+    "put_back_objects",
+    "shares_categories",
+]
 
 #: One step from a container to what it holds: ``("key", k)`` for a dict
 #: value, ``("item", i)`` for a list or tuple item, ``("attr", name)`` for an
@@ -51,6 +60,12 @@ class HolderPatch:
     variable itself."""
 
     places: tuple[tuple[Path, str, Path], ...]
+
+    #: Never changed once made: the RAM tier keeps it as it is when storing,
+    #: instead of copying it by a pickle round trip whose reading, next to a
+    #: statement of a millisecond, had the copy of the whole entry taken
+    #: again to time it.
+    _cash_stored_as_is = True
 
 
 @dataclass(frozen=True)
@@ -154,6 +169,12 @@ def holder_patches(
     group = _tree_group(holders, outputs, value_types)
     if group is None:
         group = _paths(outputs, value_types)
+        # And the cells of the outputs' frames the holders reach, which no
+        # step names either: ``rect`` in ``df``'s column ``m``.
+        held = _reachable_within(list(holders.values()), value_types, _HELD_MAX, left)
+        if held:
+            for key, place in _cell_paths(outputs, held).items():
+                group.setdefault(key, place)
         # And the categorical's objects, which no walk of a frame reads.
         targets = _reachable(list(outputs.values()), value_types) | set(group)
     else:
@@ -240,6 +261,30 @@ def _places(
     return places
 
 
+def _cell_paths(outputs: Mapping[str, Any], held: set[int]) -> dict[int, tuple[str, Path]]:
+    """``(output, path)`` to each cell of the outputs' frames (themselves,
+    or at their top level) whose object's id is in *held*, by address
+    (`frame_cells.addresses`): ``("cell", (column, row))`` from the frame,
+    column -1 for a series."""
+    from .frame_cells import _frames_in, _object_columns, _pandas, addresses
+
+    pd = _pandas()
+    np = __import__("sys").modules.get("numpy")
+    if pd is None or np is None or not held:
+        return {}
+    wanted = np.fromiter(held, dtype=np.int64, count=len(held))
+    found: dict[int, tuple[str, Path]] = {}
+    for name, value in outputs.items():
+        kind = "key" if type(value) is dict else "item"
+        for path, frame in _frames_in(value, pd):
+            steps = tuple((kind, step) for step in path)
+            for position, array in _object_columns(frame, pd):
+                own = addresses(array)
+                for row in np.flatnonzero(np.isin(own, wanted)).tolist():
+                    found.setdefault(int(own[row]), (name, (*steps, ("cell", (position, row)))))
+    return found
+
+
 def _category_steps(value: Any) -> list[tuple[Step, Any]]:
     """``(("cat", (column, index)), object)`` for each object a categorical
     of the frame or series *value* holds among its categories (column -1
@@ -264,6 +309,11 @@ def _category_steps(value: Any) -> list[tuple[Step, Any]]:
 
 def _get(obj: Any, step: Step) -> Any:
     kind, label = step
+    if kind == "cell":
+        from .frame_cells import _column
+
+        position, row = label
+        return _column(obj, position)[row]
     if kind == "cat":
         from .frame_cells import _dtype_at
 
@@ -309,6 +359,124 @@ def frame_cells_patch(holder: Any, outputs: Mapping[str, Any]) -> FrameCellsPatc
         if holds_part_of(tuple(outputs.values()), [holder], True, put_back_dtypes(outputs, links[0])):
             return None
     return FrameCellsPatch((), tuple(links[0]))
+
+
+def frame_cells_patches(holders: Mapping[str, Any], outputs: Mapping[str, Any]) -> dict[str, FrameCellsPatch]:
+    """`frame_cells_patch` for each of *holders*, those it gives one, in one
+    pass: the outputs' identities are read once, and the frames are read
+    together once.
+
+    Each cell of the outputs' frames needs taking back from one holder
+    only: the first one, in *holders*' order, that holds it. Once those
+    linked so far take back every cell of the outputs' frames, a further
+    holder frame holds the outputs' cells only as those -- the live cells it
+    holds too -- and is given no links of its own: ``df`` and fifty views
+    or filters of it, for ``v = df.iloc[3:]``, link to ``df`` alone instead
+    of reading half a million addresses per view. Whether a holder holds
+    the outputs' objects otherwise is asked of each as before
+    (`holds_part_of`)."""
+    from .frame_cells import _object_columns as _frame_columns
+    from .frame_cells import addresses, cell_links, frames_in, is_frame, put_back_dtypes
+    from .shared_objects import (
+        VALUE_TYPES,
+        _identities,
+        _object_columns,
+        frames_together,
+        library_value_types,
+    )
+
+    np = __import__("sys").modules.get("numpy")
+    framed = {name: value for name, value in holders.items() if is_frame(value)}
+    if not framed or np is None:
+        return {}
+    out_frames = frames_in(outputs)
+    # Only frames among the outputs, at their top level: anything else they
+    # hold is compared a holder at a time (`frame_cells_patch`).
+    if any(not is_frame(value) for value in outputs.values()):
+        return {name: patch for name in framed if (patch := frame_cells_patch(framed[name], outputs)) is not None}
+    pd = __import__("sys").modules["pandas"]
+    # The object columns of the outputs' frames, and those a holder takes
+    # back whole (a link of every row, in order): ``df`` does for ``v =
+    # df.iloc[3:]``.
+    needed = {(tuple(path), position) for path, frame in out_frames for position, _ in _frame_columns(frame, pd)}
+    whole: set[tuple] = set()
+    # The addresses of each output frame's cells no holder takes back yet,
+    # read only when some column is not taken back whole.
+    left: dict[int, Any] | None = None
+    found: dict[str, list[dict]] = {}
+    linked: dict[int, list[Any]] = {}
+    for name, holder in framed.items():
+        if needed <= whole or (left is not None and all(not len(rest) for rest in left.values())):
+            found[name] = []
+            continue
+        if left is None and found:
+            left = {
+                id(frame): _not_in(
+                    np.unique(np.concatenate([addresses(array) for array in arrays])), linked.get(id(frame), ()), np
+                )
+                for _path, frame in out_frames
+                if (arrays := _object_columns(frame))
+            }
+            if all(not len(rest) for rest in left.values()):
+                found[name] = []
+                continue
+        links = cell_links(outputs, (holder,), {})
+        if links is None:
+            continue
+        found[name] = links[0]
+        whole.update(
+            (tuple(link["result"]), link["column"])
+            for link in links[0]
+            if not link.get("dtype_of") and link["rows"] is None
+        )
+        for key, ids in links[1].items():
+            linked.setdefault(key, []).append(ids)
+            if left is not None and key in left:
+                left[key] = _not_in(left[key], (ids,), np)
+    if not found:
+        return {}
+    every = [link for links in found.values() for link in links]
+    put_back = put_back_dtypes(outputs, every)
+    value_types = VALUE_TYPES + library_value_types()
+    joined = {key: parts[0] if len(parts) == 1 else np.unique(np.concatenate(parts)) for key, parts in linked.items()}
+    frames = itertools.chain((frame for _path, frame in out_frames), (framed[name] for name in found))
+    patches: dict[str, FrameCellsPatch] = {}
+    with frames_together(frames, joined):
+        own = set(_identities(tuple(outputs.values()), value_types, True, put_back))
+        for name in found:
+            check_walk_budget()
+            # Nor the holder's categoricals with a dtype the outputs take
+            # back: its objects are the ones the restored outputs hold.
+            if own and any(key in own for key in _identities(framed[name], value_types, True, put_back)):
+                continue
+            patches[name] = FrameCellsPatch((), tuple(found[name]))
+    return patches
+
+
+def _not_in(ids: Any, parts: Iterable[Any], np: Any) -> Any:
+    """The sorted unique *ids* that none of the sorted unique *parts* holds."""
+    for part in parts:
+        ids = ids[~np.isin(ids, part, assume_unique=True)]
+    return ids
+
+
+def put_back_objects(outputs: Mapping[str, Any], patches: Iterable[FrameCellsPatch]) -> set[int]:
+    """The ids of the objects of the outputs' categoricals whose dtype
+    *patches* take back from a holder frame on a hit (``dtype_of``): they
+    come back as that frame's own, which ``ks`` holding them holds too, so
+    nothing need put them back into it."""
+    from .frame_cells import _dtype_at, frames_in
+
+    links = [link for patch in patches for link in patch.links if link.get("dtype_of")]
+    if not links:
+        return set()
+    framed = {tuple(path): frame for path, frame in frames_in(outputs)}
+    found: set[int] = set()
+    for link in links:
+        frame = framed.get(tuple(link["result"]))
+        if frame is not None:
+            found.update(map(id, _dtype_at(frame, link["column"]).categories.to_numpy(copy=False).tolist()))
+    return found
 
 
 def apply_patch(live: Any, patch: HolderPatch, restored: Mapping[str, Any]) -> Any:

@@ -1004,12 +1004,48 @@ def _distinct_slots(arrays: list[Any]) -> list[Any]:
         for array in arrays:
             cells += array.tolist()
         return cells
+    merged = _merged_on_bases(arrays, np)
+    if merged is not None:
+        return merged
     addresses = [
         np.int64(array.__array_interface__["data"][0]) + np.arange(len(array), dtype=np.int64) * array.strides[0]
         for array in arrays
     ]
     _, first = np.unique(np.concatenate(addresses), return_index=True)
     return np.concatenate(arrays).take(first).tolist()
+
+
+def _merged_on_bases(arrays: list[Any], np: Any) -> list[Any] | None:
+    """`_distinct_slots` for object *arrays* that are each a run of
+    consecutive slots of a C-contiguous array they are views of: the union
+    of the runs, read off each base once. Fifty views of one frame
+    (``df.iloc[i:]``) are one run, not five million addresses to sort.
+    None when one is not such a view."""
+    runs: dict[int, tuple[Any, list[tuple[int, int]]]] = {}
+    size = np.dtype(object).itemsize
+    for array in arrays:
+        if array.ndim != 1 or array.strides[0] != size:
+            return None
+        root = array
+        while isinstance(root.base, np.ndarray):
+            root = root.base
+        if root is array or not root.flags.c_contiguous or root.dtype != array.dtype:
+            return None
+        start = (array.__array_interface__["data"][0] - root.__array_interface__["data"][0]) // size
+        if start < 0 or start + len(array) > root.size:
+            return None
+        runs.setdefault(id(root), (root, []))[1].append((start, start + len(array)))
+    cells: list[Any] = []
+    for root, spans in runs.values():
+        flat = root.reshape(-1)
+        end = -1
+        for first, last in sorted(spans):
+            if first > end:
+                cells += flat[first:last].tolist()
+            elif last > end:
+                cells += flat[end:last].tolist()
+            end = max(end, last)
+    return cells
 
 
 def _object_cells(value: Any, alone: bool = False) -> list[Any]:
@@ -1633,26 +1669,43 @@ def _holding_categories(group: Mapping[str, Any], user_ns: Mapping[str, Any], sk
 
     pandas holds each such object in one slot of each categories array (its
     index of them takes no reference), so an object counted above that is
-    held by something else, which is looked for up its referrers
-    (`referring_names`). One not counted above it has no other holder: no
-    search. Raises `WalkBudgetExceeded` when the search is cut short."""
+    held by something else. A list, tuple, set or dict bound to a variable
+    holding it directly accounts for its slots there; only references left
+    over after those are looked for up the referrers (`referring_names`).
+    An object not counted above its slots has no other holder: no search.
+    Raises `WalkBudgetExceeded` when the search is cut short."""
     arrays = {_span(array): array for value in group.values() for array in _object_categories(value)}
     items = [item for array in arrays.values() for item in array.tolist()]
     occurs = collections.Counter(map(id, items))
     # Each occurrence is one slot of an array and one of *items*.
-    held = [
-        item
+    over = {
+        id(item): refs - _REFCOUNTS_OVERHEAD - 2 * occurs[id(item)]
         for item, refs in zip(items, _refcounts(items))
         if refs - _REFCOUNTS_OVERHEAD > 2 * occurs[id(item)] and not is_value(item, VALUE_TYPES)
-    ]
-    del items
-    if not held:
+    }
+    if not over:
         return set()
-    held = list({id(item): item for item in held}.values())
-    names, complete = referring_names(held, user_ns, 1.0, lambda name: name.startswith("_") or skip(name))
+    held = {id(item): item for item in items if id(item) in over}
+    del items
+    names: set[str] = set()
+    for name, value in user_ns.items():
+        kind = type(value)
+        if name in group or name.startswith("_") or skip(name) or kind not in _CELL_CONTAINERS:
+            continue
+        check_walk_budget()
+        found = collections.Counter(key for key in map(id, value.values() if kind is dict else value) if key in over)
+        if found:
+            names.add(name)
+            for key, count in found.items():
+                over[key] -= count
+    left = [held[key] for key, count in over.items() if count > 0]
+    held.clear()
+    if not left:
+        return names
+    more, complete = referring_names(left, user_ns, 1.0, lambda name: name.startswith("_") or skip(name))
     if not complete:
         raise WalkBudgetExceeded
-    return {name for name in names if name not in group}
+    return names | {name for name in more if name not in group}
 
 
 def _span(array: Any) -> tuple[int, int]:

@@ -152,7 +152,14 @@ from ..callee_reach import (
     module_state_writes,
     rebound_modules,
 )
-from ..holder_patches import FrameCellsPatch, HolderPatch, frame_cells_patch, holder_patches, shares_categories
+from ..holder_patches import (
+    FrameCellsPatch,
+    HolderPatch,
+    frame_cells_patches,
+    holder_patches,
+    put_back_objects,
+    shares_categories,
+)
 from ..lineage_formula import (
     held_lineage,
     keep_held_lineage,
@@ -2855,12 +2862,30 @@ class StatementProcessor:
             # A frame holding only cells the outputs' frames hold too
             # (``df`` for ``df2 = df[mask]``): the outputs take them back
             # from it, and it is not stored at all.
-            framed = {name: frame_cells_patch(value, outputs) for name, value in holders.items()}
-            framed = {name: patch for name, patch in framed.items() if patch is not None}
+            # The statement's inputs first: ``df`` for ``v = df.iloc[3:]``
+            # takes back every cell, and its other views need no links.
+            ordered = sorted(holders, key=lambda name: name not in run.inputs)
+            framed = frame_cells_patches({name: holders[name] for name in ordered}, outputs)
+            # An output changed in place whose cells a frame left as it is
+            # holds too: a hit restores it over the live object, apart from
+            # that frame (`_live_objects_shared` refuses every one), so it is
+            # not stored at all.
+            changed = run.analysis.all_mutated_vars & run.outputs if run.analysis is not None else set()
+            kept = sorted(name for name in changed if id(outputs.get(name)) == run.bound_before.get(name))
+            if framed and kept:
+                run.holders, run.moves_holders, run.holders_unchanged = {}, False, set()
+                names = ", ".join(f"'{n}'" for n in kept)
+                return (
+                    f"it changes {names} in place, whose cells {', '.join(sorted(framed))} hold too, and a hit "
+                    "would restore it apart from them, so the statement re-runs every time"
+                )
             rest = {name: value for name, value in holders.items() if name not in framed}
             # Holding the outputs' objects only through those frames
             # (``frames = {'a': df}``), a holder stays as it is too.
             left = {id(holders[name]) for name in framed}
+            # And a categorical's objects a frame patch takes back with its
+            # dtype: ``ks`` holding them holds the live ones already.
+            left |= put_back_objects(outputs, framed.values())
             patches = holder_patches(rest, outputs, left) if rest else {}
             if patches is not None:
                 patches.update(framed)
