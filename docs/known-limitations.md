@@ -873,6 +873,14 @@ default argument or base class does. **Fix:** move the binding above this cell.
   multiprocessing do the same). Results are equal; only code that depends on
   that order sees a difference, such as the key order of a dict built by
   looping over the set. Use `sorted(s)` where the order matters.
+- **An object's own pickle recipe runs when cash copies it.** The memory
+  tier keeps its own copy of a result, made the way pickle rebuilds it, and
+  every hit is such a copy too, as a disk hit is. A class whose
+  `__reduce__` rebuilds through a call with an effect (a constructor that
+  connects, `logging.getLogger`, which registers a logger) has that effect
+  once when the result is stored and once per hit. One that would open a
+  file to write (`(open, (path, "w"))`) is not rebuilt: the result is not
+  cached, and the file keeps what it held.
 
 ## Reporting something not on this page
 
