@@ -587,15 +587,15 @@ large frame of text columns hashes at about 0.2 s per million rows.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @ca302950, cash/decorator/purity_checks.py:PurityChecks.warn_shared_on_hit @cdd6af30, cash/decorator/purity_checks.py:PurityChecks._shared_with @4bd243b0 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @692eb80f, cash/decorator/purity_checks.py:PurityChecks.warn_shared_on_hit @cdd6af30, cash/decorator/purity_checks.py:PurityChecks._shared_with @ee10af47 -->
 **What happened.** The result shares state with an object outside the
 call: an argument, or something the function reaches by name. On the first
 run, a write through one shows in the other. A cache hit returns a separate
 copy, so from then on it does not. The warning is stored with the entry,
 so a process that only ever gets the hit (after a restart) shows it too.
-Once a function has warned, cash stops looking at its later results; only
-an entry it looked at and found sharing carries the warning to a later
-process. cash looks two levels into the result, at the
+cash looks at every result it stores, and says the warning once per
+function; each entry carries the words of what it shares, so a later
+process is told about the one it gets. cash looks two levels into the result, at the
 first 256 values of each dict of any kind, list, tuple, set, deque, object's
 attributes and object array, for:
 
@@ -609,9 +609,9 @@ attributes and object array, for:
 - memory shared with any of those arrays (`return ARR[1:4]`), or, without
   pandas copy-on-write (pandas 2 by default), with most columns of one of
   those frames (`return DF["a"]`, a view of the frame there): numpy
-  columns and pandas' own `Int64`, `boolean`, `category`, time-zone
-  datetime, period and Python-string columns. Sparse, interval and
-  Arrow-backed columns are not looked at.
+  columns, pandas' own `Int64`, `boolean`, `category`, time-zone
+  datetime, period and Python-string columns, and a column holding the very
+  interval or Arrow-backed array of the frame's.
 
 Not reported: a value nothing can be written through (a number, a string,
 an enum member, a frozen dataclass of immutable fields, a view of an array
@@ -619,12 +619,13 @@ that is read-only all the way down), and a global whose type compares by
 identity (a plain class without `__eq__`, such as a sentinel), since a hit
 hands back that global itself, and a pandas column under copy-on-write
 (the pandas 3 default), where a write through it copies first and never
-reaches the frame. Not seen: sharing deeper than two levels or past the
+reaches the frame. Nor are pandas' `Timestamp`, `Timedelta`, `Period` and
+`NaT`, or a library object a hit hands back as itself (a
+`logging.Logger`, rebuilt by its name). Not seen: sharing deeper than two levels or past the
 256th value of a container (`BIG_LIST[300]`), an attribute of a library
 module, and memory two arrays share without one viewing the other or both
 viewing the same object (two arrays made from separate `memoryview`s of
-one buffer). A library object a hit hands back as
-itself, such as a `logging.Logger`, is still reported.
+one buffer).
 
 **Why it matters.** A caller that writes through the result, such as filling
 a preallocated array, works on the first run and silently stops working on

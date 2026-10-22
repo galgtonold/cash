@@ -284,7 +284,7 @@ def test_the_result_is_looked_into_as_far_as_its_first_items(cash_instance):
     assert not _warnings_of(cash_instance.cache(ns["late"]), 1)
 
 
-def test_once_a_function_has_warned_its_later_stores_skip_the_check(cash_instance, monkeypatch):
+def test_every_store_is_looked_at_and_warns_once(cash_instance, monkeypatch):
     from cash.decorator.purity_checks import PurityChecks
 
     looks = []
@@ -293,9 +293,9 @@ def test_once_a_function_has_warned_its_later_stores_skip_the_check(cash_instanc
     ns = {"ROWS": [1, 2]}
     exec("def rows(n):\n    return ROWS\n", ns)
     rows = cash_instance.cache(ns["rows"])
-    for n in range(4):
-        _warnings_of(rows, n)
-    assert len(looks) == 1, looks
+    said = [_warnings_of(rows, n) for n in range(4)]
+    assert len(looks) == 4, looks
+    assert said[0] and not any(said[1:]), said
 
 
 def test_a_hit_in_a_process_that_never_ran_the_call_says_it_too(tmp_path):
@@ -318,20 +318,82 @@ def test_a_hit_in_a_process_that_never_ran_the_call_says_it_too(tmp_path):
     assert said and "the module global 'ROWS'" in said[0], said
 
 
-def test_an_entry_not_looked_at_carries_no_warning(tmp_path):
-    # pick(True) is ROWS and warns; pick(False), stored after, is a fresh list.
-    # Its entry was not looked at, so a process that only hits it says nothing.
+def _store_then_hit(tmp_path, ns, name, stored, hit):
+    """Store *name* for each of *stored* in one process; in another, the
+    warnings of a hit of *hit* alone."""
     from cash import Cash
     from cash.backends._writes import all_pending_writes
 
-    ns = {"ROWS": [1, 2]}
-    exec("def pick(flag):\n    return ROWS if flag else [0]\n", ns)
-    first = Cash(cache_dir=str(tmp_path), register_magic=False)
-    picked = first.cache(ns["pick"])
-    assert _warnings_of(picked, True)
-    assert not _warnings_of(picked, False)
+    first = Cash(cache_dir=str(tmp_path), register_magic=False).cache(ns[name])
+    for args in stored:
+        _warnings_of(first, *args)
     for queue in all_pending_writes():
         queue.wait_all()
-    later = Cash(cache_dir=str(tmp_path), register_magic=False).cache(ns["pick"])
-    assert not _warnings_of(later, False)
+    later = Cash(cache_dir=str(tmp_path), register_magic=False).cache(ns[name])
+    said = _warnings_of(later, *hit)
     assert later.cache_info()["hits"] == 1, later.cache_info()
+    return said
+
+
+def test_a_later_entry_sharing_another_object_says_so_on_its_own_hit(tmp_path):
+    # get("a") warns first; get("b"), stored after, shares CONFIGS["b"]: a
+    # process that only hits get("b") is told so, naming it.
+    ns = {"CONFIGS": {"a": [1], "b": [2]}}
+    exec("def get(name):\n    return CONFIGS[name]\n", ns)
+    said = _store_then_hit(tmp_path, ns, "get", [("a",), ("b",)], ("b",))
+    assert said and "CONFIGS['b']" in said[0], said
+
+
+def test_a_later_entry_of_its_own_says_nothing_on_its_hit(tmp_path):
+    # pick(True) is ROWS and warns; pick(False), stored after, is a fresh
+    # list: a process that only hits it says nothing.
+    ns = {"ROWS": [1, 2]}
+    exec("def pick(flag):\n    return ROWS if flag else [0]\n", ns)
+    assert not _store_then_hit(tmp_path, ns, "pick", [(True,), (False,)], (False,))
+
+
+@pytest.mark.parametrize(
+    ("label", "column"),
+    [
+        ("interval", "pd.arrays.IntervalArray.from_breaks(range(4))"),
+        ("int64[pyarrow]", "pd.array([1, 2, 3], dtype='int64[pyarrow]')"),
+        ("string[pyarrow]", "pd.array(list('abc'), dtype='string[pyarrow]')"),
+    ],
+)
+def test_an_extension_column_of_a_global_frame_is_announced(cash_instance, monkeypatch, label, column):
+    # The column holds the very extension array the frame's block does: a
+    # write through it reaches the frame without copy-on-write.
+    pd = pytest.importorskip("pandas")
+    if "pyarrow" in column:
+        pytest.importorskip("pyarrow")
+    from cash.decorator import purity_checks
+
+    monkeypatch.setattr(purity_checks, "is_cow_pandas", lambda value: False)
+    ns = {"pd": pd}
+    exec(f"DF = pd.DataFrame({{'c': {column}, 'x': [1.0, 2.0, 3.0]}})\ndef col(n):\n    return DF['c']\n", ns)
+    if not any(
+        v is w for v in purity_checks._extension_values(ns["col"](1)) for w in purity_checks._extension_values(ns["DF"])
+    ):
+        pytest.skip(f"this pandas copies {label}")
+    assert _warnings_of(cash_instance.cache(ns["col"]), 1), f"no warning for {label}"
+    exec("def fresh(n):\n    return DF['c'].copy()\n", ns)
+    assert not _warnings_of(cash_instance.cache(ns["fresh"]), 1)
+
+
+@pytest.mark.parametrize(
+    "made",
+    [
+        "pd.Timestamp('2024-01-01')",
+        "pd.Timedelta('1D')",
+        "pd.Period('2024-01')",
+        "pd.NaT",
+        "logging.getLogger('app.shared-result')",
+    ],
+)
+def test_a_global_a_hit_gives_back_as_itself_says_nothing(cash_instance, made):
+    pd = pytest.importorskip("pandas")
+    import logging
+
+    ns = {"pd": pd, "logging": logging}
+    exec(f"HELD = {made}\ndef wrap(n):\n    return {{'h': HELD, 'n': n}}\n", ns)
+    assert not _warnings_of(cash_instance.cache(ns["wrap"]), 1)

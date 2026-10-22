@@ -136,10 +136,33 @@ def _by_reference(value) -> bool:
     return isinstance(value, (type, types.ModuleType)) or inspect.isroutine(value)
 
 
+def _comes_back_as_itself(value) -> bool:
+    """*value* is rebuilt as the very same object (a ``logging.Logger``,
+    pickled by its name): a hit hands back what the run did. Asked only of
+    a type with a reduce of its own, and not of an array or frame, so a
+    plain container is never pickled for it."""
+    kind = type(value)
+    if kind.__name__ in _BUFFER_TYPES or (
+        getattr(kind, "__reduce__", None) is object.__reduce__
+        and getattr(kind, "__reduce_ex__", None) is object.__reduce_ex__
+    ):
+        return False
+    import pickle
+
+    try:
+        return pickle.loads(pickle.dumps(value)) is value
+    except Exception:  # noqa: BLE001 - not picklable: not known to be itself
+        return False
+
+
 #: How many items of a container the function names are looked for in its
 #: result (``return CONFIG["sub"]``), and how many members of an object ndarray
 #: the result is walked into.
 SHARED_ITEMS = 256
+
+
+#: pandas' immutable scalars, whose ``__dict__`` `is_mutable` counts.
+_PANDAS_SCALARS = frozenset({"Timestamp", "Timedelta", "Period", "NaTType"})
 
 
 def _unwritable(value) -> bool:
@@ -147,7 +170,10 @@ def _unwritable(value) -> bool:
     frozen dataclass, or a value `is_mutable` finds no way into."""
     if isinstance(value, enum.Enum):
         return True
-    params = getattr(type(value), "__dataclass_params__", None)
+    kind = type(value)
+    if kind.__name__ in _PANDAS_SCALARS and (kind.__module__ or "").startswith("pandas"):
+        return True  # a ``__dict__`` only for attributes set by hand
+    params = getattr(kind, "__dataclass_params__", None)
     if params is not None and getattr(params, "frozen", False):
         return True
     return not is_mutable(value)
@@ -303,6 +329,21 @@ def _buffers(value) -> list:
             for part in ("_ndarray", "_data", "_mask"):
                 found.extend(_array_slot(data, part))
         return found
+    except Exception:  # noqa: BLE001 - a frame that cannot be read: nothing said
+        return []
+
+
+def _extension_values(value) -> list:
+    """The extension arrays (not ndarrays) the blocks of a pandas column or
+    frame without copy-on-write hold: a column taken from a frame holds the
+    very object its frame's block does."""
+    kind = type(value)
+    if kind.__name__ not in ("Series", "DataFrame") or not (kind.__module__ or "").startswith("pandas"):
+        return []
+    if is_cow_pandas(value):
+        return []
+    try:
+        return [block.values for block in value._mgr.blocks if type(block.values).__name__ != "ndarray"]
     except Exception:  # noqa: BLE001 - a frame that cannot be read: nothing said
         return []
 
@@ -568,10 +609,6 @@ class PurityChecks:
         # observer stays quiet for these: it would be a second warning about
         # the same function, and the user has already been told.
         self._static_flagged: set[str] = set()
-        # func_name -> (code, what was said) once a result of it was found
-        # shared: later stores skip the check and carry the same words, so
-        # a hit in a new process still says it (`warn_shared_on_hit`).
-        self._shared_said: dict[str, tuple[Any, str]] = {}
 
     def warn_shared_result(self, func, func_name: str, result, args, kwargs) -> str | None:
         """Say so when the result shares state with something the caller holds.
@@ -589,15 +626,11 @@ class PurityChecks:
         result being, holding or sharing memory with an argument, a module
         global, or an object the function reaches by name. The words are
         returned for the entry to keep, so a hit in another process says
-        them too. Once a function has warned, its later stores skip the
-        check and mark nothing: an entry is marked only when it was looked
-        at and found sharing.
+        them too. Every store is looked at (the walks are capped), so each
+        entry carries the words of what it shares, or none; the warning is
+        said once per function.
         """
         if self._registry.purity_mode(func_name) == "silent":
-            return None
-        code = getattr(func, "__code__", None)
-        known = self._shared_said.get(func_name)
-        if known is not None and known[0] is code:
             return None
         try:
             shared = self._shared_with(result, args, kwargs, func)
@@ -607,7 +640,6 @@ class PurityChecks:
             return None
         what, name, keeper = shared
         said = f"the result {what} '{name}', which {keeper} still holds"
-        self._shared_said[func_name] = (code, said)
         self.warn_shared_on_hit(func_name, said)
         return said
 
@@ -663,6 +695,8 @@ class PurityChecks:
                 return None
             for name, value in list(globals_.items()):
                 if value is result and is_mutable(value) and not _unwritable(value):
+                    if _comes_back_as_itself(value):
+                        return None
                     return "is the module global", name, "the module"
         # An object outside the call the body reaches by name, the result
         # or held INSIDE it (``{'rows': ROWS}``, ``CONFIG["sub"]``,
@@ -681,7 +715,7 @@ class PurityChecks:
                 arrays.append(entry)
 
         def quiet(value) -> bool:
-            return _by_reference(value) or _sentinel_like(value) or _unwritable(value)
+            return _by_reference(value) or _sentinel_like(value) or _unwritable(value) or _comes_back_as_itself(value)
 
         targets = {key: entry[3] for key, entry in outside.items()}
         for attempt in range(4):
@@ -697,7 +731,12 @@ class PurityChecks:
                 targets = {key: value for key, value in targets.items() if not quiet(value)}
         mine = _buffers(result) if arrays else []
         roots = {id(_root(array)) for array in mine}
+        held = {id(values) for values in _extension_values(result)} if arrays else set()
         for what, name, keeper, value in arrays:
+            if held and any(id(values) in held for values in _extension_values(value)):
+                # The very extension array (interval, Arrow-backed): a
+                # write through either reaches the other.
+                return f"shares memory with {what}", _label(name), keeper
             theirs = _buffers(value)
             if not any(id(_root(array)) in roots for array in theirs) or _unwritable(value):
                 continue
