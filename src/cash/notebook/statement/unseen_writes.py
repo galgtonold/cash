@@ -29,7 +29,7 @@ import json
 import os
 import sys
 import types
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from ..._user_attrs import attribute_or, instance_of, own_dict
@@ -39,7 +39,14 @@ from ...exceptions import SOURCE_RETRIEVAL_ERRORS
 from ...install_paths import is_user_code_file
 from ...source_reading import getsource
 
-__all__ = ["UNSEEN_WRITES_REASON", "library_made", "own_writes", "unseen_writers", "writers_without_a_trace"]
+__all__ = [
+    "UNSEEN_WRITES_REASON",
+    "library_made",
+    "live_writers",
+    "own_writes",
+    "unseen_writers",
+    "writers_without_a_trace",
+]
 
 #: What the statement says when it is not stored for one.
 UNSEEN_WRITES_REASON = (
@@ -109,6 +116,71 @@ def unseen_writers(
     return found
 
 
+def live_writers(
+    codes: Mapping[types.CodeType, tuple[dict, str]],
+    found: Iterable[tuple[str, tuple[str, ...]]],
+    notebook: Mapping[str, Any],
+    notebook_name: str,
+) -> list[Callable[[], bool]]:
+    """For each function `unseen_writers` *found* among *codes*, whether it
+    is still there: alive, and named by its module and qualified name
+    still. Redefined (its name now gives other code) or gone, it is not.
+    One that cannot be found at all stands as there for good."""
+    import gc
+    import weakref
+
+    names = {fn for fn, _ in found}
+    out: list[Callable[[], bool]] = []
+    for code, (_globals, module) in list(codes.items()):
+        qualname = code.co_qualname
+        if qualname not in names:
+            continue
+        function = _named_function(module, qualname, notebook, notebook_name)
+        if function is not None and function.__code__ is code:
+            out.append(
+                functools.partial(_still_named, weakref.ref(function), module, qualname, notebook, notebook_name)
+            )
+            continue
+        # A lambda in a dict, a function made in another: what holds its
+        # code (looked for once, for a statement refused).
+        function = next(
+            (f for f in gc.get_referrers(code) if type(f) is types.FunctionType and f.__code__ is code), None
+        )
+        out.append(_always if function is None else functools.partial(_alive, weakref.ref(function)))
+    return out or [_always]
+
+
+def _named_function(module: str, qualname: str, notebook: Mapping[str, Any], notebook_name: str) -> Any:
+    """The function *qualname* of *module* names now (a method, a property's
+    or a ``cached_property``'s function), or None."""
+    from ...tracking.trace_items import candidates, resolve
+
+    try:
+        _code, obj, _owner = resolve(module, qualname, notebook, notebook_name)
+        held = [obj, attribute_or(obj, "func", None)] if instance_of(obj, functools.cached_property) else [obj]
+        return next((f for o in held for f in candidates(o) if f.__code__.co_qualname == qualname), None)
+    except Exception:  # noqa: BLE001 - not found by its name
+        return None
+
+
+def _always() -> bool:
+    return True
+
+
+def _alive(ref: Any) -> bool:
+    return ref() is not None
+
+
+def _still_named(ref: Any, module: str, qualname: str, notebook: Mapping[str, Any], notebook_name: str) -> bool:
+    """Whether the function *ref* holds is alive and still the one
+    *qualname* of *module* names (gone from there, it cannot be told)."""
+    function = ref()
+    if function is None:
+        return False
+    now = _named_function(module, qualname, notebook, notebook_name)
+    return now is None or now.__code__ is function.__code__
+
+
 #: How many values `writers_without_a_trace` opens for one statement (past
 #: it, or a container too big to open, a class of the user's with a writing
 #: special method anywhere counts), and how many steps down it goes.
@@ -169,29 +241,28 @@ def writers_without_a_trace(
             continue
         seen.add(id(value))
         kind = type(value)
-        if kind in hc._OPENED:
-            # The items a container hands over are looked at too: a grid
-            # of numbers is a few thousand values and millions of items.
-            scanned += len(value)
-            if scanned > _SCAN_AT:
-                over = True
-                break
+        # The items a container or an array hands over are looked at too:
+        # a grid of numbers is a few thousand values and millions of items.
+        scanned += _item_count(value, kind, hc)
+        if scanned > _SCAN_AT:
+            over = True
+            break
         if kind not in classes and _users_special(kind, hc):
             classes[kind] = None
         todo.extend((item, depth + 1) for item in _held(value, kind, hc))
-    if over and hc._special_classes_exist(namespace):
+    if over and hc.special_classes_exist(namespace):
         classes.update(dict.fromkeys(_live_writing_classes(namespace, hc)))
     found: list[tuple[str, tuple[str, ...]]] = []
     for cls in classes:
-        for fn in _users_special(cls, hc):
+        for attr, fn in _users_special(cls, hc):
             fn_code = attribute_or(fn, "__code__", None)
-            if fn_code is None or library_made(fn_code, fn.__globals__) or hc._dataclass_made(fn, cls):
+            if fn_code is None or library_made(fn_code, fn.__globals__) or hc.dataclass_made(fn, cls):
                 continue
             if not _named_where_held(fn, cls):
                 # Set on the class after it was made (``Vec.__add__ =
                 # lambda self, o: 10``): no key reads it, so an edit to it
                 # would go unseen.
-                found.append((f"{cls.__qualname__}.{fn.__name__}", (SET_LATER,)))
+                found.append((f"{cls.__qualname__}.{attr}", (SET_LATER,)))
                 continue
             writes = own_writes(fn_code) | set(_method_writes(fn_code, fn.__globals__))
             if fn.__globals__ is namespace:
@@ -217,21 +288,14 @@ def _not_plain(items: Iterable[Any]) -> list[Any]:
     return [item for item in items if type(item) not in _PLAIN]
 
 
-def _module_of(kind: type) -> str:
-    """*kind*'s module, read from the class itself: a metaclass's own
-    lookup is not asked."""
-    found = type.__dict__["__module__"].__get__(kind)
-    return found if isinstance(found, str) else ""
-
-
 def _held(value: Any, kind: type, hc: Any) -> Iterable[Any]:
     """What `writers_without_a_trace` looks at inside *value*. Read by type
     and Python's own slots: no property, ``__getattr__`` or method of the
     user's runs (``dtype``, ``columns``, ``to_numpy``), and plain values
     are not taken."""
     try:
-        if kind in hc._OPENED:
-            held = value.data if instance_of(value, hc._HELD_IN_DATA) else value
+        if kind in hc.OPENED:
+            held = value.data if instance_of(value, hc.HELD_IN_DATA) else value
             if len(held) > hc.ITEM_TYPES_AT:
                 return [_OVER]
             if isinstance(held, dict):
@@ -248,14 +312,14 @@ def _held(value: Any, kind: type, hc: Any) -> Iterable[Any]:
             return [value.__func__, attribute_or(value, "__self__", None)]
         if instance_of(value, functools.partial):
             return [value.func, *value.args, *value.keywords.values()]
-        module = _module_of(kind)
-        if module.startswith(("numpy", "pandas")):
-            return _array_items(value, kind, module, hc)
+        array = _array_kind(kind)
+        if array is not None:
+            return _array_items(value, array, hc)
         if instance_of(value, type):
-            if hc._is_users_class(value) or _holds_users_code(value):
+            if hc.is_users_class(value) or _holds_users_code(value):
                 return _not_plain(type.__dict__["__dict__"].__get__(value).values())
             return []
-        if hc._users_instance_type(kind) or kind is types.SimpleNamespace:
+        if hc.users_instance_type(kind) or kind is types.SimpleNamespace:
             attributes = own_dict(value)
             return _not_plain(attributes.values()) if attributes else []
     except Exception:  # noqa: BLE001 - a value that cannot be looked into
@@ -263,20 +327,81 @@ def _held(value: Any, kind: type, hc: Any) -> Iterable[Any]:
     return []
 
 
-def _array_items(value: Any, kind: type, module: str, hc: Any) -> list[Any]:
-    """The items of a numpy array or a pandas Series of object dtype
-    (``arr + 1`` runs each item's ``__add__``), or a DataFrame's object
-    columns; nothing for one of plain values."""
-    if module.startswith("pandas") and kind.__name__ == "DataFrame":
-        return [value[c] for c, d in zip(value.columns, value.dtypes) if d.kind == "O"]
-    if kind.__name__ not in ("ndarray", "Series", "Index"):
-        return []
-    if value.dtype.kind != "O":
-        return []  # numbers, dates, strings of a fixed width: no object's method runs
-    flat = (value.to_numpy() if kind.__name__ != "ndarray" else value).ravel()
-    if len(flat) > hc.ITEM_TYPES_AT:
-        return [_OVER]
-    return _not_plain(flat)
+def _array_kind(kind: type) -> str | None:
+    """``"ndarray"``, ``"series"`` (a Series or an Index), ``"frame"`` or
+    ``"extension"`` for *kind*, a subclass of the user's included (``class
+    S(pd.Series)``, a masked array); None for anything else. Asked only of
+    numpy and pandas as they are loaded."""
+    np = sys.modules.get("numpy")
+    if np is not None and issubclass(kind, np.ndarray):
+        return "ndarray"
+    pd = sys.modules.get("pandas")
+    if pd is None or not hasattr(pd, "Series"):
+        return None
+    if issubclass(kind, pd.DataFrame):
+        return "frame"
+    if issubclass(kind, (pd.Series, pd.Index)):
+        return "series"
+    if issubclass(kind, pd.api.extensions.ExtensionArray):
+        return "extension"
+    return None
+
+
+def _item_count(value: Any, kind: type, hc: Any) -> int:
+    """How many items *value* hands `writers_without_a_trace`: a container's,
+    or an array's (each is looked at), counted before any is read."""
+    if kind in hc.OPENED:
+        held = value.data if instance_of(value, hc.HELD_IN_DATA) else value
+        return len(held)
+    array = _array_kind(kind)
+    if array == "ndarray":
+        return int(sys.modules["numpy"].ndarray.size.__get__(value))
+    if array is not None:
+        pd = sys.modules["pandas"]
+        base = {"frame": pd.DataFrame, "series": pd.Series if issubclass(kind, pd.Series) else pd.Index}.get(array)
+        return int(base.size.__get__(value)) if base is not None else len(value)
+    return 0
+
+
+def _array_items(value: Any, array: str, hc: Any) -> list[Any]:
+    """The items of a numpy array, a pandas Series, Index or extension
+    array holding objects (``arr + 1`` runs each item's ``__add__``), or an
+    exact DataFrame's columns holding them; nothing for one of plain values
+    (numbers, dates, strings of either kind). Read through numpy's and
+    pandas's own descriptors: a property of a subclass of the user's does
+    not run."""
+    np = sys.modules["numpy"]
+    if array == "ndarray":
+        if np.ndarray.dtype.__get__(value) != np.dtype(object):
+            return []
+        if np.ndarray.size.__get__(value) > hc.ITEM_TYPES_AT:
+            return [_OVER]
+        # A base-class view: no method of a subclass's runs.
+        return _not_plain(np.asarray(value).ravel())
+    pd = sys.modules["pandas"]
+    if array == "frame":
+        if type(value) is not pd.DataFrame:
+            return []  # a subclass's columns come through its own constructors
+        return [value[c] for c, d in zip(value.columns, value.dtypes) if d == np.dtype(object)]
+    if array == "series":
+        base = pd.Series if isinstance(value, pd.Series) else pd.Index
+        held = _object_array(vars(base)["array"].__get__(value, base), pd, np)
+    else:
+        held = _object_array(value, pd, np)
+    return [] if held is None else [held]
+
+
+def _object_array(held: Any, pd: Any, np: Any) -> Any:
+    """The numpy array of objects the pandas array *held* keeps its items
+    in (``NumpyExtensionArray``), or a ``Categorical``'s categories in; None
+    for one of plain values (numbers, dates, strings of either kind)."""
+    if isinstance(held, pd.Categorical):
+        categories = vars(pd.Categorical)["categories"].__get__(held, pd.Categorical)
+        held = vars(pd.Index)["array"].__get__(categories, pd.Index)
+    if type(held).__name__ != "NumpyExtensionArray" or not type(held).__module__.startswith("pandas"):
+        return None
+    found = held._ndarray
+    return found if type(found) is np.ndarray and found.dtype == np.dtype(object) else None
 
 
 #: Stands for what a container too big to open holds.
@@ -286,10 +411,11 @@ _OVER = object()
 _HEAPTYPE = 1 << 9
 
 
-def _users_special(cls: type, hc: Any) -> list[Any]:
+def _users_special(cls: type, hc: Any) -> list[tuple[str, Any]]:
     """The special methods and property functions of *cls*'s MRO written in
-    code of the user's, whatever module the class names: a function set on
-    a class later makes it one (``Vec.__add__ = lambda self, o: 10``)."""
+    code of the user's, whatever module the class names, each with the name
+    the class holds it under: a function set on a class later makes it one
+    (``Vec.__add__ = lambda self, o: 10``)."""
     if issubclass(cls, (type, types.ModuleType, types.FunctionType, types.MethodType)):
         return []
     out: list[Any] = []
@@ -303,12 +429,14 @@ def _users_special(cls: type, hc: Any) -> list[Any]:
         for name, member in members:
             if instance_of(member, property):
                 fns = [member.fget, member.fset, member.fdel]
-            elif name.startswith("__") and name.endswith("__") and name not in hc._NOT_RUN_BY_A_STATEMENT:
+            elif name.startswith("__") and name.endswith("__") and name not in hc.NOT_RUN_BY_A_STATEMENT:
                 fns = [member.__func__ if instance_of(member, (staticmethod, classmethod)) else member]
             else:
                 continue
             out.extend(
-                fn for fn in fns if instance_of(fn, types.FunctionType) and is_user_code_file(fn.__code__.co_filename)
+                (name, fn)
+                for fn in fns
+                if instance_of(fn, types.FunctionType) and is_user_code_file(fn.__code__.co_filename)
             )
     return out
 
@@ -355,10 +483,10 @@ def _live_writing_classes(namespace: Mapping[str, Any], hc: Any) -> list[type]:
     from cash.notebook.held_functions import users_module_classes
 
     try:
-        bound = [v for v in list(namespace.values()) if isinstance(v, type) and hc._is_users_class(v)]
+        bound = [v for v in list(namespace.values()) if isinstance(v, type) and hc.is_users_class(v)]
     except Exception:  # noqa: BLE001 - changed while read
         bound = []
-    return [c for c in bound + users_module_classes() + hc._live_users_classes() if hc._reaching_special_functions(c)]
+    return [c for c in bound + users_module_classes() + hc.live_users_classes() if hc.reaching_special_functions(c)]
 
 
 def library_made(code: types.CodeType, globals_: Mapping[str, Any]) -> bool:
@@ -520,7 +648,9 @@ def _function_node(code: types.CodeType) -> ast.FunctionDef | ast.AsyncFunctionD
         try:
             tree = ast.parse("(" + text.strip().rstrip(",").rstrip("\\") + ")")
         except SyntaxError:
-            return None
+            # A lambda in a literal over several lines (``'key': lambda r:
+            # r[1],``, as black writes a dict): read from the whole text.
+            return _lambda_in_its_text(code) if code.co_name == "<lambda>" else None
         first_line_moved = 1 - (len(text) - len(text.lstrip()))
     if code.co_name != "<lambda>":
         for node in ast.walk(tree):
@@ -549,6 +679,30 @@ def _function_node(code: types.CodeType) -> ast.FunctionDef | ast.AsyncFunctionD
         if (line, col) == want:
             return node
     return None
+
+
+def _lambda_in_its_text(code: types.CodeType) -> ast.Lambda | None:
+    """The lambda of *code* read from the whole of its file or cell: the
+    one starting on its first line, or, of several there, the one whose
+    body starts where *code*'s does. None when it cannot be told."""
+    import linecache
+
+    try:
+        tree = ast.parse("".join(linecache.getlines(code.co_filename)))
+    except (SyntaxError, ValueError):
+        return None
+    lambdas = [node for node in ast.walk(tree) if isinstance(node, ast.Lambda) and node.lineno == code.co_firstlineno]
+    if len(lambdas) < 2:
+        return lambdas[0] if lambdas else None
+    if sys.version_info < (3, 11):
+        return None
+    starts = [
+        (line, col)
+        for line, _, col, end in code.co_positions()
+        if line is not None and col is not None and not (col == 0 and end == 0)
+    ]
+    want = min(starts) if starts else None
+    return next((node for node in lambdas if (node.body.lineno, node.body.col_offset) == want), None)
 
 
 _COMPREHENSIONS = {

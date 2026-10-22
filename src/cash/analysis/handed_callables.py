@@ -53,7 +53,7 @@ from typing import Any, NamedTuple
 from .. import _plain_data
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import is_pseudo_filename
-from .._user_attrs import instance_of
+from .._user_attrs import instance_of, own_dict
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import own_source, wrapper_layers
 from ..tracking.function_tracker import is_local_module
@@ -105,7 +105,7 @@ _NONE = HandedCallables()
 #: Containers opened for the callables they hold: their items are read at C
 #: speed and no code of the user's runs. A ``UserList`` or ``UserDict`` is
 #: read through its ``.data``.
-_OPENED = frozenset(
+OPENED = frozenset(
     {
         list,
         tuple,
@@ -119,7 +119,7 @@ _OPENED = frozenset(
         collections.UserDict,
     }
 )
-_HELD_IN_DATA = (collections.UserList, collections.UserDict)
+HELD_IN_DATA = (collections.UserList, collections.UserDict)
 
 #: How many objects of the user's classes one statement's handed arguments
 #: may lead through (`_Found.add`). Not a depth: each is opened once. Past
@@ -789,7 +789,7 @@ def _unresolved_reference(
         if instance_of(step, ast.Subscript):
             following = _item(value, step.slice)
             if following is _MISSING:
-                if type(value) in _OPENED:
+                if type(value) in OPENED:
                     out.any_of.append((value, root))
                 elif _is_users_object(value) and _class_member(type(value), "__getitem__") is not None:
                     out.unknown.append(step)
@@ -798,7 +798,7 @@ def _unresolved_reference(
             following = _attribute(value, step.attr)
             if following is _MISSING:
                 if not instance_of(value, types.ModuleType) and (
-                    _is_users_object(value) or (instance_of(value, type) and _is_users_class(value))
+                    _is_users_object(value) or (instance_of(value, type) and is_users_class(value))
                 ):
                     out.unknown.append(step)
                 return
@@ -874,7 +874,7 @@ def _of_the_users(found: tuple[Any, str] | None, node: ast.expr, bound) -> bool:
             return is_local_module(value)
         except (TypeError, AttributeError):
             return True
-    return _is_users_object(value) or (instance_of(value, type) and _is_users_class(value))
+    return _is_users_object(value) or (instance_of(value, type) and is_users_class(value))
 
 
 def _iterated_reference(
@@ -900,7 +900,7 @@ def _iterated_reference(
         resolved = _resolve_argument(iterated, namespace, bound, following | {name})
         out.unknown.extend(resolved.unknown)
         for value, root in chain(resolved.values, resolved.any_of):
-            if _openable(value) and (type(value) in _OPENED or not callable(value)):
+            if _openable(value) and (type(value) in OPENED or not callable(value)):
                 if not steps:
                     # ``f`` in ``fns``: any of its items, looked into only
                     # where the call calls it (`_Resolved.any_of`).
@@ -950,7 +950,7 @@ def _follow_steps(values: list[Any], steps: list[ast.expr]) -> tuple[list[Any], 
                 methods[kind] = member.__func__
             if member is not _MISSING:
                 following_values.append(member)
-            elif _is_users_object(value) or (instance_of(value, type) and _is_users_class(value)):
+            elif _is_users_object(value) or (instance_of(value, type) and is_users_class(value)):
                 unknown.append(index)  # a property or ``__getattr__`` of the user's
         values = following_values
     return _one_per_class(values), unknown
@@ -1017,15 +1017,15 @@ def _is_users_callable(value: Any) -> bool:
         fn = value.__func__
         return instance_of(fn, types.FunctionType) and _is_users(fn)
     if instance_of(value, type):
-        return _is_users_class(value)
+        return is_users_class(value)
     return _is_users_object(value) and callable(value)
 
 
-#: ``class -> whether it is the user's`` (`_is_users_class`).
+#: ``class -> whether it is the user's`` (`is_users_class`).
 _USERS_CLASSES: LruMemo[type, bool] = LruMemo(CODE_OBJECTS)
 
 
-def _is_users_class(cls: type) -> bool:
+def is_users_class(cls: type) -> bool:
     """A class defined in a cell or in a local module: by its module, or by
     the functions it defines (a class made by ``exec`` names no module)."""
     known = _USERS_CLASSES.get(cls)
@@ -1047,7 +1047,7 @@ def _is_users_object(value: Any) -> bool:
     """An instance of a class of the user's (not a class, function or module)."""
     if instance_of(value, (type, types.ModuleType, types.FunctionType, types.MethodType)):
         return False
-    return _is_users_class(type(value))
+    return is_users_class(type(value))
 
 
 def _users_objects(values: Iterable[Any]) -> list[Any]:
@@ -1055,14 +1055,14 @@ def _users_objects(values: Iterable[Any]) -> list[Any]:
     (`_is_users_object`), asked once per type: whether a value is one
     depends on its type alone."""
     values = list(values)
-    users = {kind for kind in set(map(type, values)) if _users_instance_type(kind)}
+    users = {kind for kind in set(map(type, values)) if users_instance_type(kind)}
     return list(compress(values, map(users.__contains__, map(type, values)))) if users else []
 
 
 def _openable(value: Any) -> bool:
     """A value `_Found.add` looks inside of where the callee calls what it
     is handed: a builtin container, or an object of the user's."""
-    return type(value) in _OPENED or _is_users_object(value)
+    return type(value) in OPENED or _is_users_object(value)
 
 
 def _wraps_another(value: Any) -> bool:
@@ -1096,7 +1096,7 @@ def _users_target(func: ast.Name | ast.Attribute, namespace: Mapping[str, Any]) 
     for attr in reversed(attrs):
         if instance_of(value, types.ModuleType):
             value = vars(value).get(attr, _MISSING)
-        elif (instance_of(value, type) and _is_users_class(value)) or _is_users_object(value):
+        elif (instance_of(value, type) and is_users_class(value)) or _is_users_object(value):
             value = _attribute(value, attr)
         else:
             return None
@@ -1148,12 +1148,12 @@ _ITEM_TYPES: dict[int, tuple[Any, frozenset[type] | None]] = {}
 def _item_types(container: Any) -> frozenset[type] | None:
     """The types of the items (a dict's values) of the builtin *container*;
     none for any other value, and None past `ITEM_TYPES_AT` items."""
-    if type(container) not in _OPENED:
+    if type(container) not in OPENED:
         return frozenset()
     known = _ITEM_TYPES.get(id(container))
     if known is not None and known[0] is container:
         return known[1]
-    held = container.data if isinstance(container, _HELD_IN_DATA) else container
+    held = container.data if isinstance(container, HELD_IN_DATA) else container
     try:
         if len(held) > ITEM_TYPES_AT:
             kinds = None
@@ -1182,9 +1182,9 @@ def _index(index: ast.expr) -> Any:
 
 def _item(container: Any, index: ast.expr) -> Any:
     key = _index(index)
-    if key is _MISSING or type(container) not in _OPENED:
+    if key is _MISSING or type(container) not in OPENED:
         return _MISSING
-    if instance_of(container, _HELD_IN_DATA):
+    if instance_of(container, HELD_IN_DATA):
         container = container.data
     try:
         if instance_of(container, dict):
@@ -1278,7 +1278,7 @@ def _instance_dict(owner: Any) -> dict:
 #: Special methods a statement naming an object does not run through it:
 #: making, setting up and dropping it (an ``__init__`` runs on a call of the
 #: class, which is read as such).
-_NOT_RUN_BY_A_STATEMENT = frozenset(
+NOT_RUN_BY_A_STATEMENT = frozenset(
     {
         "__init__",
         "__new__",
@@ -1309,12 +1309,12 @@ def is_users_instance(value: Any) -> bool:
     return _is_users_object(value)
 
 
-#: ``class -> (what its classes hold, `_reaching_special_functions`)``: read
+#: ``class -> (what its classes hold, `reaching_special_functions`)``: read
 #: again only when a class of its MRO holds something else.
 _SPECIAL_MEMO: dict[type, tuple[tuple, list[Any]]] = {}
 
 
-def _reaching_special_functions(cls: type) -> list[Any]:
+def reaching_special_functions(cls: type) -> list[Any]:
     """`special_functions` of *cls* whose text changes a global, calls a
     function by name or calls a method of a global object: the others
     change nothing outside their objects, whatever their globals hold."""
@@ -1336,7 +1336,7 @@ def _reaching_special_functions(cls: type) -> list[Any]:
     from ..install_paths import is_user_code_file
 
     for fn in special_functions(cls):
-        if _dataclass_made(fn, cls):
+        if dataclass_made(fn, cls):
             continue
         code = getattr(inspect.unwrap(fn), "__code__", None)
         if code is not None and not is_user_code_file(code.co_filename):
@@ -1379,10 +1379,10 @@ def _calls_by_name(source: str, fn: Any) -> bool:
 
     if any(counts(name) for name in called_names(node) - own):
         return True
-    return any(counts(name) and not isinstance(globals_.get(name), type) for name in handed_names(node) - own)
+    return any(counts(name) and not instance_of(globals_.get(name), type) for name in handed_names(node) - own)
 
 
-def _dataclass_made(fn: Any, cls: type) -> bool:
+def dataclass_made(fn: Any, cls: type) -> bool:
     """*fn* is a special method ``@dataclass`` wrote (`_DATACLASS_MADE`) on
     a class of *cls*'s MRO: compiled from text of its own (``<string>``),
     not from a file of the user's, for a class with dataclass fields."""
@@ -1406,13 +1406,13 @@ def special_functions(cls: type) -> list[Any]:
     classes of the user's in its MRO."""
     out: list[Any] = []
     for klass in cls.__mro__:
-        if klass is object or not _is_users_class(klass):
+        if klass is object or not is_users_class(klass):
             continue
         for name, member in list(vars(klass).items()):
             if instance_of(member, property):
                 out.extend(fn for fn in (member.fget, member.fset, member.fdel) if fn is not None)
                 continue
-            if not (name.startswith("__") and name.endswith("__")) or name in _NOT_RUN_BY_A_STATEMENT:
+            if not (name.startswith("__") and name.endswith("__")) or name in NOT_RUN_BY_A_STATEMENT:
                 continue
             if instance_of(member, (staticmethod, classmethod)):
                 member = member.__func__
@@ -1499,9 +1499,9 @@ class _Found:
                 self.add(item, root, False)
             if complete:
                 self._cover(covered, opened)
-            if type(value) in _OPENED or not callable(value):
+            if type(value) in OPENED or not callable(value):
                 return
-        elif type(value) in _OPENED:
+        elif type(value) in OPENED:
             return
         # A bound method is made anew on each attribute read, and its id
         # reused once it is dropped: it is known by its object and function.
@@ -1516,7 +1516,7 @@ class _Found:
         when it is an object of the user's class, that a callee handed it
         calls (``model.predict(v)``); with *held*, of the objects of the
         user's it holds as well (``s.fn(v)`` for ``s`` in ``steps``)."""
-        objects = [value] if _is_users_object(value) or (instance_of(value, type) and _is_users_class(value)) else []
+        objects = [value] if _is_users_object(value) or (instance_of(value, type) and is_users_class(value)) else []
         covered: set[int] | None = None
         opened: list[Any] = []
         complete = False
@@ -1641,13 +1641,13 @@ class _Found:
                 owner = scope.get(name, _MISSING)
                 if owner is _MISSING:
                     continue
-                if _is_users_object(owner) or (instance_of(owner, type) and _is_users_class(owner)):
+                if _is_users_object(owner) or (instance_of(owner, type) and is_users_class(owner)):
                     member = _attribute(owner, attr)
                     if member is not _MISSING and callable(member):
                         self.add(member, root_of(name), False)
                         # ``return kk.m(a)``: what ``m`` reads by a free name.
                         method = getattr(member, "__func__", member)
-                        if isinstance(method, types.FunctionType) and self._users(method):
+                        if type(method) is types.FunctionType and self._users(method):
                             pending.append(method)
                 else:
                     for callback in _logging_callbacks(owner, attr):
@@ -1661,7 +1661,7 @@ class _Found:
         """`_global_object_types`, and a reason the statement runs uncached
         for a container read there too big to look through."""
         kinds, too_big = _global_object_types(fn)
-        if too_big and not _special_classes_exist(fn.__globals__):
+        if too_big and not special_classes_exist(fn.__globals__):
             too_big = []
         for name in too_big:
             what = (
@@ -1904,7 +1904,7 @@ class _Found:
     ) -> None:
         for arg in call.args[:1]:
             for obj, obj_root in _resolve_argument(arg, namespace, bound).values:
-                if _is_users_object(obj) or (instance_of(obj, type) and _is_users_class(obj)):
+                if _is_users_object(obj) or (instance_of(obj, type) and is_users_class(obj)):
                     member = _attribute(obj, name)
                     if member is not _MISSING and callable(member):
                         self.add(member, obj_root, False)
@@ -1922,7 +1922,7 @@ class _Found:
                 manager = node.context_expr
                 if isinstance(manager, ast.Call) and isinstance(manager.func, (ast.Name, ast.Attribute)):
                     target = _users_target(manager.func, namespace)
-                    if target is not None and isinstance(target[0], type) and _is_users_class(target[0]):
+                    if target is not None and isinstance(target[0], type) and is_users_class(target[0]):
                         self._special_methods(target[0])
             elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
                 value = namespace.get(node.id, _MISSING)
@@ -1975,7 +1975,7 @@ class _Found:
         the statement runs uncached."""
         kinds = _item_types(container)
         if kinds is None:
-            if not _special_classes_exist(self.namespace):
+            if not special_classes_exist(self.namespace):
                 return
             what = (
                 f"an item of {label} is read by an index cash cannot tell, and {label} holds more than "
@@ -1985,7 +1985,7 @@ class _Found:
             _warn_too_big(what)
             return
         for kind in kinds:
-            if _users_instance_type(kind):
+            if users_instance_type(kind):
                 self._special_methods(kind)
 
     def _special_methods(self, cls: type) -> None:
@@ -1994,7 +1994,7 @@ class _Found:
         if cls in self._special_seen:
             return
         self._special_seen.add(cls)
-        for fn in _reaching_special_functions(cls):
+        for fn in reaching_special_functions(cls):
             self.method_called(fn)
 
     def method_called(self, value: Any) -> None:
@@ -2403,8 +2403,8 @@ def _reaches_through_globals(fn: types.FunctionType) -> bool:
             continue
         seen.add(current.__code__)
         kinds, too_big = _global_object_types(current)
-        if (too_big and _special_classes_exist(current.__globals__)) or any(
-            _reaching_special_functions(kind) for kind in kinds
+        if (too_big and special_classes_exist(current.__globals__)) or any(
+            reaching_special_functions(kind) for kind in kinds
         ):
             return True
         facts = _call_facts(current)
@@ -2413,7 +2413,7 @@ def _reaches_through_globals(fn: types.FunctionType) -> bool:
         scope = current.__globals__
         for name, attr in facts.global_methods:
             owner = scope.get(name)
-            if _is_users_object(owner) or (instance_of(owner, type) and _is_users_class(owner)):
+            if _is_users_object(owner) or (instance_of(owner, type) and is_users_class(owner)):
                 return True
             if attr in _LOGGING_CALLS and _logging_callbacks(owner, attr):
                 return True
@@ -2441,38 +2441,38 @@ def _global_object_types(fn: types.FunctionType) -> tuple[set[type], list[str]]:
     for code in iter_code_scopes(fn.__code__):
         for name in code.co_names:
             value = scope.get(name, _MISSING)
-            if value is _MISSING or isinstance(value, types.ModuleType):
+            if value is _MISSING or instance_of(value, types.ModuleType):
                 continue
-            if type(value) in _OPENED:
+            if type(value) in OPENED:
                 held = _item_types(value)
                 if held is None:
                     too_big.append(name)
                     continue
-            elif _users_instance_type(type(value)):
+            elif users_instance_type(type(value)):
                 kinds.add(type(value))
                 held = _attribute_types(value)
-            elif isinstance(value, (type, types.SimpleNamespace)):
+            elif instance_of(value, (type, types.SimpleNamespace)):
                 held = _attribute_types(value)
             else:
                 continue
-            kinds.update(kind for kind in held if _users_instance_type(kind))
+            kinds.update(kind for kind in held if users_instance_type(kind))
     return kinds, too_big
 
 
-#: ``id(namespace) -> (namespace, answer)`` for `_special_classes_exist`;
+#: ``id(namespace) -> (namespace, answer)`` for `special_classes_exist`;
 #: cleared with `_ITEM_TYPES`.
 _SPECIAL_CLASSES: dict[int, tuple[Any, bool]] = {}
 
 
-def _special_classes_exist(namespace: Mapping[str, Any]) -> bool:
+def special_classes_exist(namespace: Mapping[str, Any]) -> bool:
     """Whether a class of the user's has a special method that can change
-    something outside its objects (`_reaching_special_functions`). With
+    something outside its objects (`reaching_special_functions`). With
     none, an item of a container too big to look through runs nothing that
     matters when an operator meets it.
 
     First the classes the notebook binds and those at the top of a module
     of the user's, with what derives from them; then, when none of those
-    has one, every class alive (`_live_users_classes`): one made inside a
+    has one, every class alive (`live_users_classes`): one made inside a
     function, deleted from the namespace after its objects were made, or
     held only in a dict is alive while its objects are. Asked only of a
     statement reading such a container."""
@@ -2490,10 +2490,10 @@ def _special_classes_exist(namespace: Mapping[str, Any]) -> bool:
         return kept[2]
 
     try:
-        bound = [v for v in list(namespace.values()) if isinstance(v, type) and _is_users_class(v)]
+        bound = [v for v in list(namespace.values()) if instance_of(v, type) and is_users_class(v)]
     except Exception:  # noqa: BLE001 - changed while read
         bound = []
-    answer = _any_special(bound + users_module_classes()) or _any_special(_live_users_classes(), deep=False)
+    answer = _any_special(bound + users_module_classes()) or _any_special(live_users_classes(), deep=False)
     _SPECIAL_CLASSES[id(namespace)] = (namespace, answer)
     if len(_SPECIAL_UNTIL_CODE_RUNS) > 16:
         _SPECIAL_UNTIL_CODE_RUNS.clear()
@@ -2502,13 +2502,13 @@ def _special_classes_exist(namespace: Mapping[str, Any]) -> bool:
 
 
 #: ``id(namespace) -> (namespace, new_code_count(), answer)`` of
-#: `_special_classes_exist`, kept past an analysis round.
+#: `special_classes_exist`, kept past an analysis round.
 _SPECIAL_UNTIL_CODE_RUNS: dict[int, tuple[Any, int, bool]] = {}
 
 
 def _any_special(classes: list[type], deep: bool = True) -> bool:
     """Whether one of *classes* (and, *deep*, what derives from them) has a
-    special method `_reaching_special_functions` finds."""
+    special method `reaching_special_functions` finds."""
     pending = list(classes)
     seen: set[type] = set()
     while pending:
@@ -2516,7 +2516,7 @@ def _any_special(classes: list[type], deep: bool = True) -> bool:
         if cls in seen:
             continue
         seen.add(cls)
-        if _reaching_special_functions(cls):
+        if reaching_special_functions(cls):
             return True
         if deep:
             try:
@@ -2553,11 +2553,11 @@ def _warn_too_big(what: str) -> None:
     warn_diagnostic(CashWarning, "NOTEBOOK-ITEMS-UNREAD", what, fix)
 
 
-#: Module name -> whether it is one of the user's, for `_live_users_classes`.
+#: Module name -> whether it is one of the user's, for `live_users_classes`.
 _USERS_MODULE_NAMES: dict[str, bool] = {}
 
 
-def _live_users_classes() -> list[type]:
+def live_users_classes() -> list[type]:
     """Every class alive whose module is the notebook or one of the user's,
     found by walking ``object.__subclasses__()`` (~10 ms for 5,000 classes)."""
     found: list[type] = []
@@ -2578,12 +2578,12 @@ def _live_users_classes() -> list[type]:
         if not isinstance(name, str) or name == "builtins" or name not in sys.modules:
             # ``exec``'d code names ``builtins`` (or no module loaded):
             # judged class by class, by the functions it defines.
-            if _is_users_class(cls):
+            if is_users_class(cls):
                 found.append(cls)
             continue
         users = _USERS_MODULE_NAMES.get(name)
         if users is None:
-            users = _USERS_MODULE_NAMES[name] = _is_users_class(cls)
+            users = _USERS_MODULE_NAMES[name] = is_users_class(cls)
         if users:
             found.append(cls)
     return found
@@ -2596,9 +2596,9 @@ _HEAP_TYPE = 1 << 9
 def _attribute_types(owner: Any) -> set[type]:
     """The types of what the class, namespace or object *owner* holds in
     its own ``__dict__``; none when it has none."""
-    try:
-        own = vars(owner)
-    except TypeError:
+    # Read without the object's own lookups (`own_dict`), which may raise.
+    own = type.__dict__["__dict__"].__get__(owner) if issubclass(type(owner), type) else own_dict(owner)
+    if own is None:
         return set()
     try:
         return set(map(type, list(own.values())))
@@ -3029,7 +3029,7 @@ def _reached_from(
         for kind in set(map(type, items)):
             known = opens.get(kind)
             if known is None:
-                known = opens[kind] = kind in _OPENED or _users_instance_type(kind)
+                known = opens[kind] = kind in OPENED or users_instance_type(kind)
             if known:
                 opened.add(kind)
         if not opened:
@@ -3044,8 +3044,8 @@ def _reached_from(
         if opened_out is not None:
             opened_out.extend(nested)
         if objects:
-            found.extend(c for c in nested if type(c) not in _OPENED and not callable(c))
-        users_objects += sum(1 for c in nested if type(c) not in _OPENED)
+            found.extend(c for c in nested if type(c) not in OPENED and not callable(c))
+        users_objects += sum(1 for c in nested if type(c) not in OPENED)
         if users_objects > limit:
             return found, False
         level = nested
@@ -3145,19 +3145,19 @@ def _this_round(key: tuple[Any, ...], objects: tuple[Any, ...], work: Callable[[
     return answer
 
 
-def _users_instance_type(kind: type) -> bool:
+def users_instance_type(kind: type) -> bool:
     """Whether objects of the type *kind* are objects of the user's class:
     not classes, functions or modules."""
     if issubclass(kind, (type, types.ModuleType, types.FunctionType, types.MethodType)):
         return False
-    return _is_users_class(kind)
+    return is_users_class(kind)
 
 
 def _items(container: Any) -> Iterable[Any]:
     """What `_callables_reached` looks at in *container*: a builtin
     container's items (a dict's keys and values), an object's attributes."""
-    if type(container) in _OPENED:
-        if instance_of(container, _HELD_IN_DATA):
+    if type(container) in OPENED:
+        if instance_of(container, HELD_IN_DATA):
             container = container.data
         if instance_of(container, dict):
             return chain(dict.keys(container), dict.values(container))

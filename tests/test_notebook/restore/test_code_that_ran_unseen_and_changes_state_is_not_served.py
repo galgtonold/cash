@@ -12,6 +12,7 @@ served after a restart with ``calls == []``, where a run appends.
 from __future__ import annotations
 
 import sys
+import types
 import warnings
 
 import pytest
@@ -27,6 +28,22 @@ from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S as F
 NEEDS_THE_TRACE = pytest.mark.skipif(not code_trace.on(), reason="reads the trace of the run (3.12+)")
 
 SLEEP = f"(time.sleep({F}), 0)[1]"
+
+
+@pytest.fixture
+def main_namespace(mock_shell, monkeypatch):
+    """The notebook's namespace is ``__main__``'s, as in IPython. A class
+    of an object served from memory is looked up by its name there, as a
+    read from disk does: with a namespace of its own, an object made before
+    the class's cell ran again came back of the old class (3.10 under load:
+    ``v = Vec()`` slow enough to be stored, then ``v + 1`` ran the old
+    class's ``__add__``)."""
+    main = types.ModuleType("__main__")
+    main.__dict__.update(mock_shell.user_ns)
+    mock_shell.user_ns = mock_shell.user_global_ns = main.__dict__
+    monkeypatch.setitem(sys.modules, "__main__", main)
+
+
 HEAD = """import time, types, functools, operator
 calls = []
 class Vec:
@@ -222,12 +239,14 @@ def test_a_method_a_library_wrote_for_a_class_in_a_module_is_stored(cash_magics,
     assert not [w for w in seen if "UNSEEN" in str(w.message)]
 
 
+@pytest.mark.parametrize("made", ["v = Vec()\n", f"v = (Vec(), {SLEEP})[0]\n"], ids=["made", "stored"])
 @pytest.mark.parametrize("how", ["lambda", "def", "staticmethod"])
-def test_a_special_method_set_on_the_class_later_and_edited_runs_again(cash_magics, how):
+def test_a_special_method_set_on_the_class_later_and_edited_runs_again(main_namespace, cash_magics, how, made):
     """``Vec.__add__ = lambda self, o: 10`` has no name of its own: an edit
     to 20 went unseen by the trace and the hit served 10. The trace finds it
-    again as ``Vec.__add__``; code it cannot find again does not vouch."""
-    made = {
+    again as ``Vec.__add__``; code it cannot find again does not vouch.
+    ``v`` served from a stored entry is of the class defined again."""
+    setting = {
         "lambda": "Vec.__add__ = lambda self, o: {mark}\n",
         "def": "def _add(self, o):\n    return {mark}\nVec.__add__ = _add\ndel _add\n",
         "staticmethod": "Vec.mk = staticmethod(lambda: {mark})\nVec.__add__ = lambda self, o: Vec.mk()\n",
@@ -236,8 +255,8 @@ def test_a_special_method_set_on_the_class_later_and_edited_runs_again(cash_magi
     for mark in (10, 20):
         for cell in (
             "import time\nclass Vec:\n    pass\n",
-            "v = Vec()\n",
-            made.format(mark=mark),
+            made,
+            setting.format(mark=mark),
             f"w = (v + 1, {SLEEP})",
         ):
             run_cash_cell(cash_magics, cell)
@@ -273,3 +292,86 @@ def test_a_special_method_that_changes_a_global_another_way_runs_each_time(cash_
         run_cash_cell(cash_magics, f"w = (d[k][0] + 1, {SLEEP})")
         assert eval(effect, cash_magics.shell.user_ns) == expected
         _restart(cash_magics)
+
+
+#: A writer in a module that a later run need not reach: a cached property
+#: filled by the first, a hash a tuple keeps from 3.14 on.
+SKIPPED_LATER = {
+    "cached_property": (
+        "import functools\ncalls = []\nclass Vec:\n    @functools.cached_property\n    def val(self):\n"
+        "        calls.append(1)\n        return 1\n    def __add__(self, o):\n        return self.val\n",
+        "d = {{'a': [{m}.Vec()]}}\nk = 'a'",
+        "w = (d[k][0] + 1, {s})",
+    ),
+    "namedtuple_hash": (
+        "from collections import namedtuple\ncalls = []\nclass W:\n    def __hash__(self):\n"
+        "        calls.append(1)\n        return 7\nP = namedtuple('P', 'a')\n",
+        "p1 = {m}.P({m}.W())",
+        "w = (hash(p1), {s})",
+    ),
+    "tuple_hash": (
+        "calls = []\nclass W:\n    def __hash__(self):\n        calls.append(1)\n        return 7\n",
+        "p1 = ({m}.W(), 1)",
+        "w = (hash(p1), {s})",
+    ),
+}
+
+
+@NEEDS_THE_TRACE
+@pytest.mark.parametrize("kind", list(SKIPPED_LATER))
+def test_a_run_that_skipped_the_writer_is_not_stored(cash_magics, tmp_path, monkeypatch, kind):
+    """Refused once for the writer, the statement ran again without it (the
+    property filled, the hash kept) and that run was stored, its trace
+    holding no writer: after a restart it was served, and the writer that
+    runs there did not. It is not stored while the writer is alive."""
+    name = f"skipped_{kind}"
+    module, setup, statement = SKIPPED_LATER[kind]
+    (tmp_path / f"{name}.py").write_text(module, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    setup = f"import time\nimport {name}\n" + setup.format(m=name)
+    statement = statement.format(s=SLEEP)
+    try:
+        for _ in range(2):
+            sys.modules.pop(name, None)
+            run_cash_cell(cash_magics, setup)
+            for _ in range(2):
+                run_cash_cell(cash_magics, statement)
+                assert _status(cash_magics) == ["COMPUTED"]
+            assert len(sys.modules[name].calls) >= 1
+            _restart(cash_magics)
+    finally:
+        sys.modules.pop(name, None)
+
+
+@NEEDS_THE_TRACE
+def test_a_writer_that_is_gone_lets_the_statement_be_stored(cash_magics):
+    """Once the class holding the writer is gone (redefined without it,
+    nothing holding the old one), the statement is stored again."""
+    import gc
+
+    setup, statement = CASES["two_steps_down"]
+    run_cash_cell(cash_magics, HEAD + setup)
+    run_cash_cell(cash_magics, statement)
+    assert _status(cash_magics) == ["COMPUTED"]
+    run_cash_cell(cash_magics, "class Vec:\n    def __add__(self, x):\n        return 0\nd = {'a': [Vec()]}")
+    gc.collect()
+    for _ in range(2):
+        run_cash_cell(cash_magics, statement)
+    assert _status(cash_magics) == ["RESTORED"]
+
+
+MULTI_LINE = "import time\ncalls = []\nKEYS = {{\n    'first': lambda r: r[0],\n    'second': lambda r: {body},\n}}\nxs = [(1, 3), (2, 1)]"
+
+
+@NEEDS_THE_TRACE
+@pytest.mark.parametrize("body, stored", [("r[1]", True), ("calls.append(1) or r[1]", False)], ids=["pure", "writes"])
+def test_a_lambda_in_a_literal_over_several_lines_is_read(cash_magics, body, stored):
+    """``'second': lambda r: r[1],`` on a line of its own (black's dict)
+    does not parse alone: it was "unreadable text" and refused every run.
+    Read from the cell, a pure one is stored; one that writes is not."""
+    run_cash_cell(cash_magics, MULTI_LINE.format(body=body))
+    statement = f"w = (sorted(xs, key=KEYS['second'])[0][0], {SLEEP})"
+    said = _codes(cash_magics, statement)
+    run_cash_cell(cash_magics, statement)
+    assert _status(cash_magics) == (["RESTORED"] if stored else ["COMPUTED"])
+    assert ("NOTEBOOK-UNSEEN-WRITES" in said) is not stored

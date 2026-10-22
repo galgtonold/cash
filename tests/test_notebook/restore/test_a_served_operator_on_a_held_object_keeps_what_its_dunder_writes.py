@@ -126,11 +126,11 @@ def _only_the_notebooks_classes(monkeypatch):
     from cash.analysis import handed_callables
     from cash.notebook import held_functions
 
-    real = handed_callables._live_users_classes
+    real = handed_callables.live_users_classes
     monkeypatch.setattr(held_functions, "users_module_classes", lambda: [])
     monkeypatch.setattr(
         handed_callables,
-        "_live_users_classes",
+        "live_users_classes",
         lambda: [c for c in real() if not (c.__module__ or "").startswith(("tests", "conftest"))],
     )
     monkeypatch.setattr(handed_callables, "ITEM_TYPES_AT", 100)
@@ -180,8 +180,8 @@ def test_with_no_such_class_a_too_big_container_is_served(cash_magics, monkeypat
     # A class lives on while anything holds it, cash's memos of classes
     # included: the ``W`` the tests above made would still count (and make
     # this run, the cautious way). Only this test's classes are asked about.
-    gate = handed_callables._live_users_classes
-    monkeypatch.setattr(handed_callables, "_live_users_classes", lambda: [c for c in gate() if c.__name__ == "P"])
+    gate = handed_callables.live_users_classes
+    monkeypatch.setattr(handed_callables, "live_users_classes", lambda: [c for c in gate() if c.__name__ == "P"])
     run_cash_cell(cash_magics, TOO_BIG_SETUP + "class P:\n    def __add__(self, x):\n        return 0\n"
                   "lst = [0] * 150 + [P()]\ni = 150\n")  # fmt: skip
     statement = f"w = (lst[i] + 1, {SLEEP})"
@@ -243,8 +243,8 @@ def test_a_class_whose_special_methods_change_nothing_outside_lets_a_big_list_be
     monkeypatch.setattr(handed_callables, "ITEM_TYPES_AT", 100)
     monkeypatch.setattr(handed_callables, "_TOO_BIG_SAID", set())
     # The ``W``s of the tests above live on in cash's memos: only ``A`` is asked about.
-    gate = handed_callables._live_users_classes
-    monkeypatch.setattr(handed_callables, "_live_users_classes", lambda: [c for c in gate() if c.__name__ == "A"])
+    gate = handed_callables.live_users_classes
+    monkeypatch.setattr(handed_callables, "live_users_classes", lambda: [c for c in gate() if c.__name__ == "A"])
     run_cash_cell(cash_magics, "import time\n" + kind + "a0 = A()\nbig = [0.5] * 151\ni = 7\n")
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")

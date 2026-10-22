@@ -577,13 +577,15 @@ text instead, and misses a change made:
   a dict);
 - by `__init__`, `__post_init__`, a `default_factory` or an attrs hook;
 - by an object held in a slot, a namedtuple, a list or dict subclass, a
-  default argument, a `ChainMap` or a property.
+  default argument, a `ChainMap`, a property, or a column of a subclass of
+  `DataFrame`.
 
-A served result then leaves out that change. With or without the record, a
-writer the stored run did not call (a `functools.cached_property` already
-filled, a tuple's hash Python 3.14 kept) is served after a restart, and a
-cell that reads what the method changed keeps its earlier value in the same
-session.
+A served result then leaves out that change. Without the record, a writer
+the stored run did not call (a `functools.cached_property` already filled,
+a tuple's hash Python 3.14 kept) is served after a restart; with it, a
+statement refused once for a writer is not stored again in that session
+while the writer is still defined. Either way a cell that reads what the
+method changed keeps its earlier value in the same session.
 **Fix:** pass what the method changes in and return it, or put
 `# @cash:no-cache` on the statement.
 

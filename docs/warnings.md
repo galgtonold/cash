@@ -2262,7 +2262,15 @@ what it changes through a method of a global; it does not follow the
 functions it calls (see [known limitations](known-limitations.md)). A special
 method set on a class after the class was made (`Vec.__add__ = lambda ...`)
 gets its own message without a record: cash cannot see an edit to it, so
-the statement runs every time.
+the statement runs every time. A function whose text cash cannot read (one
+made by `exec`, or in a `%%time` cell, whose text IPython does not keep) is
+said to change "what its unreadable text changes", and the statement runs
+every time; define it in a cell or a module of its own.
+
+Once a statement was not stored for a function, a later run of it that did
+not call that function (a `functools.cached_property` it filled the first
+time, a hash Python 3.14 keeps in a tuple) is not stored either, while the
+function is still defined: after a restart it would run again.
 
 **Why it matters.** Served from the cache, the statement would not run the
 function, so the change would not happen. Cash runs the statement every
