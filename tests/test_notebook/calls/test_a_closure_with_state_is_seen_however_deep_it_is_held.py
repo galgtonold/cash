@@ -12,9 +12,13 @@ from __future__ import annotations
 
 import argparse
 import collections
+import dataclasses
 import functools
+import reprlib
 import time
 import types
+
+import pytest
 
 from cash.notebook.call_interception import CallSite
 from cash.notebook.call_key import holds_a_closure_with_state
@@ -224,17 +228,164 @@ def test_a_memo_in_a_default_on_a_class_or_a_base_is_seen():
     assert holds_a_closure_with_state(argparse.Namespace(memo=functools.cache(_double)))
 
 
+class _Parts:
+    def __init__(self, i):
+        self.parts = [i, (i,)]
+
+
 def test_a_value_with_more_holders_than_are_looked_into_is_not_stored(monkeypatch):
     # Past the cap what the rest holds is unknown: not stored (one rerun),
-    # never served unchecked. The memo sits where the walk comes last.
+    # never served unchecked, and said so apart from a memo found.
     from cash.notebook import call_key
+    from cash.notebook.statement.store import _holds_state
 
     monkeypatch.setattr(call_key, "_HOLDERS_LOOKED_INTO", 50)
-    assert holds_a_closure_with_state(
-        (types.SimpleNamespace(memo=functools.cache(_double)), [_Row(i) for i in range(51)])
-    )
-    assert holds_a_closure_with_state([_Row(i) for i in range(51)])
-    assert not holds_a_closure_with_state([_Row(i) for i in range(40)])
+    with pytest.raises(call_key.TooMuchToLookThrough):
+        holds_a_closure_with_state(
+            (types.SimpleNamespace(memo=functools.cache(_double)), [_Parts(i) for i in range(51)])
+        )
+    assert _holds_state([_Parts(i) for i in range(51)]) == "too_many"
+    assert not holds_a_closure_with_state([_Parts(i) for i in range(40)])
+    # Records of plain values have nothing inside to look at: not counted.
+    assert not holds_a_closure_with_state([_Row(i) for i in range(1000)])
+    assert _holds_state([_Row(i) for i in range(1000)]) is None
+    assert _holds_state([functools.cache(_double)]) == "state"
+
+
+@dataclasses.dataclass
+class _Rec:
+    a: int
+    b: str
+
+
+@dataclasses.dataclass(frozen=True)
+class _FrozenRec:
+    a: int
+
+
+class _Pretty:
+    @reprlib.recursive_repr()
+    def __repr__(self):
+        return "pretty"
+
+
+def _made_dataclass():
+    @dataclasses.dataclass
+    class Made:
+        a: int
+
+    return Made(1)
+
+
+def test_a_record_or_a_named_class_with_a_memo_method_is_storable(monkeypatch):
+    # A class its module names comes back as that very class: its memo is
+    # the live one, as in plain Python. A dataclass's ``__repr__`` guard
+    # keeps nothing between calls.
+    class _Model:
+        def __init__(self, n):
+            self.n = n
+
+        @functools.lru_cache(maxsize=None)
+        def score(self, x):
+            return self.n * x
+
+    # Named by the module for this test only: a memo on a class at the top
+    # of a test module is one of the user's to every other test.
+    _Model.__qualname__ = "_Model"
+    monkeypatch.setitem(globals(), "_Model", _Model)
+    assert not holds_a_closure_with_state([_Rec(i, str(i)) for i in range(100)])
+    assert not holds_a_closure_with_state(_FrozenRec(1))
+    assert not holds_a_closure_with_state(_Model(3))
+    assert not holds_a_closure_with_state(_Pretty())
+    assert not holds_a_closure_with_state(_made_dataclass())
+
+
+def load_recs():
+    time.sleep(0.05)  # above the call cost floor, so a miss is stored
+    return [_Rec(i, str(i)) for i in range(100)]
+
+
+def test_a_call_returning_records_is_served(call_unit_harness):
+    # Refused on every run while the walk counted a dataclass's ``__repr__``
+    # guard as a closure that keeps state.
+    unit = call_unit_harness(lineage={"load_recs": "hash-load-recs"}, user_ns={})
+    site = CallSite(source="load_recs()", free_names=frozenset({"load_recs"}), occurrence_index=0)
+    for _ in range(3):
+        unit.begin_statement()
+        unit.wrap(load_recs, site)()
+
+    assert [entry["cache_hit"] for entry in unit.call_log] == [False, True, True]
+
+
+def test_a_statement_holding_records_is_restored(cash_magics):
+    from tests._cell_driver import run_cash_cell
+
+    setup = "import dataclasses, time\n@dataclasses.dataclass\nclass Rec:\n    a: int\n    b: str\n"
+    statement = "recs = (time.sleep(0.05), [Rec(i, str(i)) for i in range(100)])[1]"
+    statuses = []
+    for _ in range(3):
+        run_cash_cell(cash_magics, setup)
+        run_cash_cell(cash_magics, statement)
+        statuses.append(str(cash_magics.cash_status("dict")["last_cell"]["statements"][-1]["status"]))
+
+    assert statuses[1:] == ["RESTORED", "RESTORED"], statuses
+
+
+class _RowsList(list):
+    pass
+
+
+class _RowsDict(dict):
+    pass
+
+
+def _property_over_a_memo():
+    memo = functools.cache(_double)
+
+    class Tool:
+        @property
+        def m(self):
+            return memo
+
+    return Tool()
+
+
+def test_a_memo_on_a_container_subclass_a_property_or_a_library_holder_is_seen():
+    rows = _RowsList([1])
+    rows.memo = functools.cache(_double)
+    assert holds_a_closure_with_state(rows)
+    table = _RowsDict(a=1)
+    table.memo = functools.cache(_double)
+    assert holds_a_closure_with_state(table)
+    assert holds_a_closure_with_state(_property_over_a_memo())
+    assert holds_a_closure_with_state(collections.UserDict(m=functools.cache(_double)))
+    assert holds_a_closure_with_state(collections.UserList([functools.cache(_double)]))
+    assert holds_a_closure_with_state(collections.ChainMap({"m": functools.cache(_double)}))
+    assert not holds_a_closure_with_state(_RowsList([1, 2]))
+
+
+class _Iterates(list):
+    asked: list = []
+
+    def __iter__(self):
+        _Iterates.asked.append("__iter__")
+        return super().__iter__()
+
+
+class _Values(dict):
+    asked: list = []
+
+    def values(self):
+        _Values.asked.append("values")
+        raise RuntimeError("values raised")
+
+
+def test_a_users_container_subclass_is_read_without_asking_it():
+    _Iterates.asked.clear()
+    _Values.asked.clear()
+    assert holds_a_closure_with_state(_Iterates([functools.cache(_double)]))
+    assert holds_a_closure_with_state(_Values(m=functools.cache(_double)))
+    assert _Iterates.asked == [] and _Values.asked == []
 
 
 class _Hostile:

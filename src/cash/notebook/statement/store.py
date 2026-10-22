@@ -41,7 +41,7 @@ from cash.tracking.randomness import capture_object_rng_states
 from cash.value_hash import known_size
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
-from ..call_key import holds_a_closure_with_state
+from ..call_key import TooMuchToLookThrough, holds_a_closure_with_state
 from ..call_refs import DECORATOR_ENTRY, REF_BYTES_FIELD, REFS_FIELD, CallRef
 from ..closed_stream import ClosedStream, stored_form
 from ..lineage_store import frozen_tag
@@ -777,12 +777,20 @@ class StatementStore:
         # restore handed back the closure the last run made, still holding
         # what it had appended.
         if not should_skip:
-            _stateful = sorted(_name for _name, _v in captured_vars.items() if _holds_state(_v))
+            _found = {_name: _holds_state(_v) for _name, _v in sorted(captured_vars.items())}
+            _stateful = [_name for _name, _why in _found.items() if _why == "state"]
+            _too_many = [_name for _name, _why in _found.items() if _why == "too_many"]
             if _stateful:
                 should_skip = True
                 skip_reason = (
-                    f"output(s) {', '.join(_stateful)} hold a function or memo that keeps state, "
-                    f"or too much to look through for one; statement re-executes (lineage persists)"
+                    f"output(s) {', '.join(_stateful)} hold a function or memo that keeps state; "
+                    f"statement re-executes (lineage persists)"
+                )
+            elif _too_many:
+                should_skip = True
+                skip_reason = (
+                    f"output(s) {', '.join(_too_many)} hold too many objects to check for a function "
+                    f"or memo that keeps state; not stored, statement re-executes (lineage persists)"
                 )
         # Perpetual-miss guard. After the gates above so it can override their
         # exemptions: ``has_file_dependencies`` waives the whole size-aware
@@ -1099,11 +1107,15 @@ def _user_decorated_calls(events: Any) -> list[str]:
     return list(names)
 
 
-def _holds_state(value: Any) -> bool:
-    """`holds_a_closure_with_state`, taken as yes when looking raised: not
-    stored is one rerun, stored unchecked may be served wrong."""
+def _holds_state(value: Any) -> str | None:
+    """`holds_a_closure_with_state`: ``"state"`` when it does, or when
+    looking raised (not stored is one rerun, stored unchecked may be served
+    wrong); ``"too_many"`` when it holds more objects than it looks through;
+    None when it does not."""
     try:
-        return holds_a_closure_with_state(value)
+        return "state" if holds_a_closure_with_state(value) else None
+    except TooMuchToLookThrough:
+        return "too_many"
     except Exception:
         logger.debug("looking for state in an output raised; not stored", exc_info=True)
-        return True
+        return "state"
