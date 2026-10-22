@@ -38,11 +38,13 @@ a self-iterator *and* it hits the by-ref fallback.
 from __future__ import annotations
 
 import ast
+import functools
 import inspect
 import io
 import itertools
 import logging
 import queue
+import sys
 import types
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -51,6 +53,7 @@ from cash._user_attrs import attribute_or, has_attribute, instance_of
 
 from ..analysis.mutation_effects import captured_call_receivers
 from ..analysis.mutations import consumed_input_names
+from ..install_paths import is_user_code_file, is_user_code_module
 
 logger = logging.getLogger(__name__)
 
@@ -309,44 +312,58 @@ def drawn_stream_inputs(
     return found
 
 
-#: How far the look for an iterator held out of sight goes: below a function
-#: the statement calls, its globals and closure cells, their attributes or
-#: items, one level more; and how many objects it looks at in all.
-_HELD_DEPTH = 3
+#: How far the look for an iterator held out of sight goes: below what the
+#: statement calls, through functions' globals, closure cells and defaults,
+#: an instance's or class's attributes, items; and how many objects it looks
+#: at in all.
+_HELD_DEPTH = 6
 _HELD_BUDGET = 2000
+#: A container a variable indexes is looked through up to this many items.
+_HELD_WIDTH = 64
+#: ``Py_TPFLAGS_HEAPTYPE``: a class made by a ``class`` statement.
+_HEAP_TYPE = 1 << 9
+#: What is looked into whatever its class: containers, functions, methods,
+#: modules (a library's own walked no further, `hidden_generators.children`).
+_WALKED = (
+    list,
+    tuple,
+    set,
+    frozenset,
+    dict,
+    types.SimpleNamespace,
+    types.FunctionType,
+    types.MethodType,
+    types.ModuleType,
+)
 
 
 def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> list[str]:
     """The iterators and generators a statement can draw from that no name
     it reads holds itself, as paths (``m.g``, ``f.gen``).
 
-    One an attribute or item it spells holds (``next(m.g)``), or one a
-    function it calls reaches through its globals or closure (``def f():
-    return next(gen)``), moves when it runs, and no lineage follows it: a hit
-    would leave it where it was, and the statement's outputs, served under
-    the same key, would not be what a run gives. An open file is left to the
-    file checks, which see what is read from it.
+    One an attribute or item it spells holds (``next(m.g)``, ``next(gens[i])``),
+    or one what it calls reaches -- a function through its globals, closure
+    or defaults, a method through its instance or class, a callable
+    instance, a ``partial``, a generator's own ``__next__`` -- moves when it
+    runs, and no lineage follows it: a hit would leave it where it was, and
+    the statement's outputs, served under the same key, would not be what a
+    run gives. An open file is left to the file checks, which see what is
+    read from it.
     """
-    from .statement.hidden_generators import children
-
     if tree is None:
         return []
     found: list[str] = []
     frontier: list[tuple[str, Any, int]] = []
     for node in ast.walk(tree):
         if isinstance(node, (ast.Attribute, ast.Subscript)) and not isinstance(node.ctx, ast.Store):
-            path, value = _spelled(node, user_ns)
-            if path is not None and _held_stream(value):
-                found.append(path)
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            func = user_ns.get(node.func.id)
-            if instance_of(func, (types.FunctionType, types.MethodType)):
-                frontier.append((node.func.id, func, 0))
+            found.extend(path for path, value in _spelled(node, user_ns) if _held_stream(value))
+        if isinstance(node, ast.Call):
+            frontier.extend((path, callee, 0) for path, callee in _callees(node.func, user_ns))
     seen: set[int] = set()
     budget = _HELD_BUDGET
     while frontier and budget > 0:
         path, obj, depth = frontier.pop()
-        if id(obj) in seen or instance_of(obj, (str, bytes, int, float, bool, type(None), type)):
+        if id(obj) in seen or instance_of(obj, (str, bytes, int, float, complex, bool, type(None))):
             continue
         seen.add(id(obj))
         budget -= 1
@@ -356,7 +373,7 @@ def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> li
         if depth >= _HELD_DEPTH:
             continue
         try:
-            for label, child in children(obj):
+            for label, child in _reached(obj):
                 frontier.append(
                     (f"{path}{label}" if label.startswith(("[", ".")) else f"{path}.{label}", child, depth + 1)
                 )
@@ -365,34 +382,127 @@ def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> li
     return sorted(set(found))
 
 
-def _spelled(node: ast.expr, user_ns: Mapping[str, Any]) -> tuple[str | None, Any]:
-    """The path and value of an attribute or constant-key item chain over a
-    name (``m.g``, ``d['g']``), read from the objects' own dicts so nothing
-    of theirs runs; ``(None, None)`` when it cannot be read so."""
+def _reached(obj: Any) -> Iterable[tuple[str, Any]]:
+    """What calling or reading *obj* can reach: `hidden_generators.children`,
+    and a function's defaults, a ``partial``'s function and arguments, a
+    builtin method's object, a class of the user's and its attributes, an
+    instance's class."""
+    from .statement.hidden_generators import children
+
+    if instance_of(obj, type):
+        if _users_class(obj):
+            for name, value in list(object.__getattribute__(obj, "__dict__").items()):
+                if not name.startswith("__") or name == "__call__":
+                    yield f".{name}", _unwrapped(value)
+        return
+    if instance_of(obj, (classmethod, staticmethod)):
+        yield "__func__", obj.__func__
+        return
+    if instance_of(obj, functools.partial):
+        yield "func", obj.func
+        for i, arg in enumerate(obj.args[:_HELD_WIDTH]):
+            yield f"args[{i}]", arg
+        for key, arg in list(obj.keywords.items())[:_HELD_WIDTH]:
+            yield f"keywords[{key!r}]", arg
+        return
+    if instance_of(obj, (types.BuiltinMethodType, types.MethodWrapperType)):
+        owner = obj.__self__
+        if not instance_of(owner, types.ModuleType):
+            yield "__self__", owner
+        return
+    if not instance_of(obj, _WALKED) and not _users_class(type(obj)):
+        # A library's object keeps its own counters and iterators
+        # (matplotlib's callback ids): what it draws from is its business.
+        return
+    yield from children(obj)
+    if instance_of(obj, types.FunctionType):
+        for i, value in enumerate(obj.__defaults__ or ()):
+            yield f"__defaults__[{i}]", value
+        for key, value in (obj.__kwdefaults__ or {}).items():
+            yield f"__kwdefaults__[{key!r}]", value
+        return
+    cls = type(obj)
+    if not instance_of(obj, types.MethodType) and _users_class(cls):
+        yield "__class__", cls
+
+
+def _users_class(cls: type) -> bool:
+    """Whether *cls* was defined in the user's code: a function of its own
+    was compiled from a notebook cell or a file of theirs, or, with none, its
+    module is theirs (a notebook's ``__main__``). A library's class keeps its
+    counters and iterators to itself, as `hidden_generators` treats them."""
+    try:
+        attrs = object.__getattribute__(cls, "__dict__")
+    except (AttributeError, TypeError):
+        return False
+    for value in list(attrs.values())[:_HELD_WIDTH]:
+        if instance_of(value, (types.FunctionType, classmethod, staticmethod)):
+            code = getattr(_unwrapped(value), "__code__", None)
+            if code is not None:
+                return is_user_code_file(code.co_filename)
+    name = getattr(cls, "__module__", None) or ""
+    if name == "builtins":
+        # A class ``exec``'d without a module of its own; the interpreter's
+        # are static types.
+        return bool(cls.__flags__ & _HEAP_TYPE)
+    module = sys.modules.get(name)
+    return module is None or is_user_code_module(module)
+
+
+def _unwrapped(value: Any) -> Any:
+    return value.__func__ if instance_of(value, (classmethod, staticmethod)) else value
+
+
+def _callees(func: ast.expr, user_ns: Mapping[str, Any]) -> list[tuple[str, Any]]:
+    """What the call ``func(...)`` runs, with what it runs on: the function a
+    name, an item or an attribute holds; a method with its instance (or
+    class); read statically, so nothing of the objects' runs."""
+    if isinstance(func, ast.Attribute):
+        found = []
+        for path, owner in _spelled(func.value, user_ns):
+            try:
+                attr = inspect.getattr_static(owner, func.attr)
+            except (AttributeError, TypeError):
+                continue
+            found.append((f"{path}.{func.attr}", _unwrapped(attr)))
+            if instance_of(attr, (types.FunctionType, classmethod)):
+                found.append((path, owner))
+        return found
+    return _spelled(func, user_ns)
+
+
+def _spelled(node: ast.expr, user_ns: Mapping[str, Any]) -> list[tuple[str, Any]]:
+    """The paths and values of an attribute or item chain over a name
+    (``m.g``, ``d['g']``, ``gens[i]``: an item a variable picks stands for
+    each item of a small list, tuple or dict), read from the objects' own
+    dicts so nothing of theirs runs; empty when it cannot be read so."""
     if isinstance(node, ast.Name):
-        if node.id not in user_ns:
-            return None, None
-        return node.id, user_ns[node.id]
+        return [(node.id, user_ns[node.id])] if node.id in user_ns else []
     if isinstance(node, ast.Attribute):
-        path, owner = _spelled(node.value, user_ns)
-        if path is None:
-            return None, None
-        try:
-            attrs = object.__getattribute__(owner, "__dict__")
-        except (AttributeError, TypeError):
-            return None, None
-        if not instance_of(attrs, dict) or node.attr not in attrs:
-            return None, None
-        return f"{path}.{node.attr}", attrs[node.attr]
-    if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
-        path, owner = _spelled(node.value, user_ns)
-        if path is None or type(owner) not in (dict, list, tuple):
-            return None, None
-        try:
-            return f"{path}[{node.slice.value!r}]", owner[node.slice.value]
-        except (KeyError, IndexError, TypeError):
-            return None, None
-    return None, None
+        found = []
+        for path, owner in _spelled(node.value, user_ns):
+            try:
+                attrs = object.__getattribute__(owner, "__dict__")
+            except (AttributeError, TypeError):
+                continue
+            if instance_of(attrs, (dict, types.MappingProxyType)) and node.attr in attrs:
+                found.append((f"{path}.{node.attr}", _unwrapped(attrs[node.attr])))
+        return found
+    if isinstance(node, ast.Subscript):
+        found = []
+        for path, owner in _spelled(node.value, user_ns):
+            if type(owner) not in (dict, list, tuple):
+                continue
+            if isinstance(node.slice, ast.Constant):
+                try:
+                    found.append((f"{path}[{node.slice.value!r}]", owner[node.slice.value]))
+                except (KeyError, IndexError, TypeError):
+                    continue
+            elif len(owner) <= _HELD_WIDTH:
+                items = owner.items() if type(owner) is dict else enumerate(owner)
+                found.extend((f"{path}[{key!r}]", item) for key, item in items)
+        return found
+    return []
 
 
 def _held_stream(obj: Any) -> bool:

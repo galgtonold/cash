@@ -39,6 +39,49 @@ CASES = {
         "f()",
         "f()\nf()",
     ),
+    "a generator in an item a variable picks": (
+        "gens = [(i for i in range(100))]\ni = 0",
+        "next(gens[i])",
+        "next(gens[0])",
+    ),
+    "a generator in an attribute's item a variable picks": (
+        "class M:\n    pass\nm = M()\nm.gens = [(i for i in range(100))]\ni = 0",
+        "next(m.gens[i])",
+        "next(m.gens[0])",
+    ),
+    "a generator a method draws from its instance": (
+        "class M:\n    def __init__(self):\n        self.g = (i for i in range(100))\n    def draw(self):\n        return next(self.g)\nm = M()",
+        "m.draw()",
+        "m.draw()\nm.draw()",
+    ),
+    "a generator a classmethod draws from its class": (
+        "class C:\n    g = (i for i in range(100))\n    @classmethod\n    def draw(cls):\n        return next(cls.g)",
+        "C.draw()",
+        "C.draw()",
+    ),
+    "a generator a callable instance draws from": (
+        "class D:\n    def __init__(self):\n        self.g = (i for i in range(100))\n    def __call__(self):\n        return next(self.g)\nd = D()",
+        "d()",
+        "d()",
+    ),
+    "a generator a partial of next holds": (
+        "import functools\nf = functools.partial(next, (i for i in range(100)))",
+        "f()",
+        "f()",
+    ),
+    "a generator's bound __next__": ("nx = (i for i in range(100)).__next__", "nx()", "nx()"),
+    "a generator a lambda in a dict reads": (
+        "gen = (i for i in range(100))\nops = {'n': lambda: next(gen)}",
+        "ops['n']()",
+        "ops['n']()",
+    ),
+    "a generator in a default argument": ("def f(it=(i for i in range(100))):\n    return next(it)", "f()", "f()"),
+    "a generator four calls deep": (
+        "gen = (i for i in range(100))\ndef h():\n    return next(gen)\ndef g2():\n    return h()\n"
+        "def g1():\n    return g2()\ndef f():\n    return g1()",
+        "f()",
+        "f()",
+    ),
 }
 
 
