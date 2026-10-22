@@ -145,23 +145,43 @@ def _leaf_digests(view: memoryview, count: int) -> list[bytes]:
 def _as_bytes_view(data: Any) -> memoryview:
     view = data if isinstance(data, memoryview) else memoryview(data)
     if view.ndim != 1 or view.itemsize != 1 or view.format not in ("B", "b", "c"):
-        view = view.cast("B") if view.c_contiguous else memoryview(_c_order_bytes(view))
+        view = view.cast("B") if view.c_contiguous else memoryview(view.tobytes())
     return view
 
 
-def _c_order_bytes(view: memoryview) -> Any:
-    """*view*'s bytes in C order, as ``view.tobytes()`` gives them. numpy
-    copies them over twice as fast for a column-ordered array (a frame's
-    ``to_numpy()``: 0.35 s instead of 0.79 s for MNIST's 70,000 x 784)."""
+#: How much of a buffer that is not in C order is put in order at a time to
+#: take its digest: enough leaves to share out among the hashing threads.
+_BLOCK_BYTES = 32 << 20
+
+
+def _ordered_digest(data: Any) -> bytes | None:
+    """`bulk_digest` of *data* when it is a buffer not in C order (a
+    column-ordered array, a frame's ``to_numpy()``), or None when it is in
+    order. Its bytes are put in C order a block of rows at a time into one
+    small buffer, not all at once: MNIST's 70,000 x 784 int64 takes 0.25 s
+    instead of 0.8 s with ``tobytes``, and no second 440 MB."""
+    view = data if isinstance(data, memoryview) else memoryview(data)
+    if view.c_contiguous:
+        return None
     try:
         import numpy as np
 
-        copied = np.ascontiguousarray(np.asarray(view))
+        array = np.asarray(view)
     except Exception:  # noqa: BLE001 - no numpy, or a format numpy reads otherwise
-        return view.tobytes()
-    if copied.nbytes != view.nbytes or copied.dtype.itemsize != view.itemsize:
-        return view.tobytes()
-    return memoryview(copied).cast("B")
+        return None
+    if array.ndim < 2 or not array.nbytes or array.nbytes != view.nbytes or array.dtype.itemsize != view.itemsize:
+        return None
+    row_bytes = array.nbytes // len(array)
+    if row_bytes > _BLOCK_BYTES:
+        return None
+    rows = _BLOCK_BYTES // row_bytes
+    block = np.empty((min(rows, len(array)),) + array.shape[1:], dtype=array.dtype)
+    hasher = BulkHasher()
+    for first in range(0, len(array), rows):
+        part = block[: min(rows, len(array) - first)]
+        np.copyto(part, array[first : first + rows])
+        hasher.update(memoryview(part).cast("B"))
+    return hasher.digest()
 
 
 class BulkHasher:
@@ -215,6 +235,9 @@ class BulkHasher:
 def bulk_digest(data: Any) -> bytes:
     """`BulkHasher`'s digest of one buffer, without copying its last,
     partial leaf aside first."""
+    ordered = _ordered_digest(data)
+    if ordered is not None:
+        return ordered
     view = _as_bytes_view(data)
     n = len(view)
     whole = n // LEAF_BYTES
@@ -233,9 +256,16 @@ def fold_buffer(h: Any, data: Any) -> None:
     Up to `DIRECT_MAX_BYTES` they go in as they are, behind ``r`` and their
     length; a bigger buffer goes in as its tree digest (`bulk_digest`),
     behind ``t`` and its length. *data* is anything with the buffer
-    protocol; one that is not contiguous is copied first.
+    protocol; one that is not contiguous is put in order first.
     """
-    view = _as_bytes_view(data)
+    view = data if isinstance(data, memoryview) else memoryview(data)
+    if view.nbytes > DIRECT_MAX_BYTES and not view.c_contiguous:
+        ordered = _ordered_digest(view)
+        if ordered is not None:
+            h.update(b"t" + view.nbytes.to_bytes(8, "little"))
+            h.update(ordered)
+            return
+    view = _as_bytes_view(view)
     n = len(view)
     if n <= DIRECT_MAX_BYTES:
         h.update(b"r" + n.to_bytes(8, "little"))
