@@ -43,7 +43,6 @@ __all__ = [
     "load_flat",
     "named_now",
     "one_keying",
-    "packing_once",
     "reducers",
     "restore_with_dict",
     "restores_alike_apart",
@@ -1439,50 +1438,7 @@ def packed_records(array: Any) -> Any:
     packed = _packed_dtype(dtype)
     if packed is None:
         return array
-    memo = _packing.memo
-    if memo is None or dtype.hasobject:
-        return _pack(array, packed)
-    found = memo.get(id(array))
-    if found is not None and found[0] is array:
-        return found[1]
-    copy = memo[id(array)] = (array, _pack(array, packed))
-    return copy[1]
-
-
-def _pack(array: Any, packed: Any) -> Any:
     return array.astype(packed)
-
-
-class _Packing(threading.local):
-    """`packing_once`'s copies, on the thread that opened it only."""
-
-    memo: dict[int, tuple[Any, Any]] | None = None
-
-
-_packing = _Packing()
-
-
-@contextlib.contextmanager
-def packing_once() -> Iterator[None]:
-    """Within it, a record array is packed once (`packed_records`): a later
-    read of the same array gets the copy the first one made.
-
-    For one pass over values with nothing run between the reads, which the
-    caller vouches for (a statement's names moved on together,
-    `replay_derivation_bumps`, inside `value_hash.one_read`): a voting
-    classifier's fitted forests were packed again through each list
-    holding them, 4 times a pass. Each array is held until the pass ends,
-    so no other array takes its id, and only arrays whose fields hold no
-    objects, so a copy holds nothing a later read could find changed.
-    Nothing is kept past the pass. Nested, the outer one holds."""
-    if _packing.memo is not None:
-        yield
-        return
-    _packing.memo = {}
-    try:
-        yield
-    finally:
-        _packing.memo = None
 
 
 @functools.lru_cache(maxsize=256)
