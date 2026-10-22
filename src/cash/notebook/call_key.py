@@ -10,17 +10,22 @@ statement it sits in.
 
 from __future__ import annotations
 
+import argparse
 import builtins
+import collections
+import contextlib
 import dataclasses
 import datetime as _dt
 import decimal as _decimal
 import fractions as _fractions
 import functools
+import gc
 import hashlib
 import logging
 import pathlib as _pathlib
 import sys
 import types as _types
+import weakref
 from collections.abc import Callable, Mapping
 from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING, Any
@@ -221,57 +226,73 @@ if not isinstance(_MEMO_WRAPPER, type):
     _MEMO_WRAPPER = None
 
 #: How many functions, partials, methods, objects and classes the walk looks
-#: into before it stops (answering as it did before it looked past containers).
-_HOLDERS_LOOKED_INTO = 10_000
+#: into. Past it, what the rest holds is not known: the value is taken as
+#: holding state, and not served (one rerun), rather than served unchecked.
+_HOLDERS_LOOKED_INTO = 100_000
 
 #: ``type -> whether it is a class of the user's`` (its module is user code).
-_USERS_TYPES: dict[type, bool] = {}
+#: Weak: a class a call made is not kept alive, nor the memo on it.
+_USERS_TYPES: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
+
+#: Read through ``type``'s own descriptors: a metaclass's
+#: ``__getattribute__`` is not asked.
+_CLASS_DICT = type.__dict__["__dict__"].__get__
+_CLASS_MRO = type.__dict__["__mro__"].__get__
+_CLASS_MODULE = type.__dict__["__module__"].__get__
+_CLASS_NAME = type.__dict__["__name__"].__get__
+
+#: Plain attribute bags and containers of the library, read like the user's
+#: objects: what they hold is what was put in them.
+_PLAIN_HOLDERS = (_types.SimpleNamespace, argparse.Namespace, collections.deque)
 
 
 def _users_type(kind: type) -> bool:
-    known = _USERS_TYPES.get(kind)
+    try:
+        known = _USERS_TYPES.get(kind)
+    except TypeError:  # not weakly referable
+        known = None
     if known is None:
         try:
             # A class made in a notebook cell: `__main__`, which under a
             # test runner is the runner's own module; or made by `exec` in a
             # namespace with no `__name__`, which names it `builtins`.
-            module = kind.__module__
+            module = _CLASS_MODULE(kind)
             known = (
                 module in MAIN_MODULE_NAMES
-                or (module == "builtins" and getattr(builtins, kind.__name__, None) is not kind)
-                or is_user_code_module(sys.modules.get(module))
+                or (module == "builtins" and getattr(builtins, _CLASS_NAME(kind), None) is not kind)
+                or (isinstance(module, str) and is_user_code_module(sys.modules.get(module)))
             )
         except Exception:  # noqa: BLE001 - not known to be the user's: not looked into
             known = False
-        if len(_USERS_TYPES) < 4096:
+        with contextlib.suppress(TypeError):
             _USERS_TYPES[kind] = known
     return known
 
 
 def _held_by(item) -> list | None:
     """What a holder that is not a container keeps a function or a memo in:
-    a function's closure and attributes, a ``partial``'s function and
-    arguments, a bound method's function and object, a ``SimpleNamespace``'s
-    or a user's object's attributes, a user's class's members. None for
-    anything else: a library object is not looked into."""
-    if isinstance(item, _types.FunctionType):
-        parts = [cell.cell_contents for cell in item.__closure__ or () if _filled(cell)]
-        return parts + list(getattr(item, "__dict__", {}).values())
-    if isinstance(item, functools.partial):
-        return [item.func, *item.args, *item.keywords.values()]
-    if isinstance(item, _types.MethodType):
-        return [item.__func__, item.__self__]
-    if isinstance(item, (classmethod, staticmethod)):
-        return [item.__func__]
-    if isinstance(item, type):
-        return list(vars(item).values()) if _users_type(item) else None
+    a function's closure, defaults and attributes, a ``partial``'s function
+    and arguments, a bound method's function and object, what a
+    ``SimpleNamespace``, an ``argparse.Namespace``, a ``deque`` or a user's
+    object holds (its class included), and the members of a user's class
+    and of its user's bases. None for anything else: a library object is
+    not looked into. Read without asking the object (``gc.get_referents``,
+    ``type``'s own descriptors): an object's ``__getattr__``, a ``__dict__``
+    property or a metaclass runs no code here."""
     kind = type(item)
-    if kind is _types.SimpleNamespace or _users_type(kind):
-        held = list(getattr(item, "__dict__", {}).values())
-        for slot in getattr(kind, "__slots__", ()):
-            if isinstance(slot, str) and hasattr(item, slot):
-                held.append(getattr(item, slot))
-        return held
+    if kind is _types.FunctionType:
+        parts = [cell.cell_contents for cell in item.__closure__ or () if _filled(cell)]
+        parts.extend(item.__defaults__ or ())
+        parts.extend((item.__kwdefaults__ or {}).values())
+        return parts + list(item.__dict__.values())
+    if kind is _types.MethodType:
+        return [item.__func__, item.__self__]
+    if issubclass(kind, type):
+        if not _users_type(item):
+            return None
+        return [value for base in _CLASS_MRO(item) if _users_type(base) for value in _CLASS_DICT(base).values()]
+    if issubclass(kind, (functools.partial, classmethod, staticmethod, *_PLAIN_HOLDERS)) or _users_type(kind):
+        return gc.get_referents(item)
     return None
 
 
@@ -317,27 +338,32 @@ def holds_a_closure_with_state(value) -> bool:
     while stack:
         item = stack.pop()
         kind = type(item)
-        if kind in atoms or isinstance(item, _ATOMS):
+        # By type, not `isinstance`: that asks an object for its
+        # `__class__`, which may be the user's code.
+        if kind in atoms or issubclass(kind, _ATOMS):
             continue
         if kind is _types.FunctionType:
             if changes_its_closure(item):
                 return True
-            if item.__closure__ is None and not item.__dict__:
+            if item.__closure__ is None and item.__defaults__ is None and not item.__kwdefaults__ and not item.__dict__:
                 continue  # holds nothing of its own: most functions
-        if _MEMO_WRAPPER is not None and isinstance(item, _MEMO_WRAPPER):
+        if _MEMO_WRAPPER is not None and issubclass(kind, _MEMO_WRAPPER):
             return True
-        if not isinstance(item, (tuple, list, set, frozenset, dict)):
-            if id(item) in seen or looked_into >= _HOLDERS_LOOKED_INTO:
+        if not issubclass(kind, (tuple, list, set, frozenset, dict)):
+            if id(item) in seen:
                 continue
+            if looked_into >= _HOLDERS_LOOKED_INTO:
+                logger.debug("[CALL_UNIT] a value holds too much to look through for state: not stored")
+                return True
             held = _held_by(item)
             if held:
                 seen.add(id(item))
                 looked_into += 1
-                stack.extend(part for part in held if type(part) not in atoms)
+                stack.extend(part for part in held if type(part) not in atoms and id(part) not in seen)
             continue
         if id(item) in seen:
             continue
-        children = item.values() if isinstance(item, dict) else item
+        children = item.values() if issubclass(kind, dict) else item
         # Only atoms, by exact type: asked at C speed, where the loop
         # below took a Python step per item (22 ms for 200,000 ints).
         if atoms.issuperset(map(type, children)):

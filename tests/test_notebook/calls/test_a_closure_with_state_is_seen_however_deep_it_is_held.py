@@ -10,6 +10,8 @@ notebook again handed back a counter that went on from where it was.
 
 from __future__ import annotations
 
+import argparse
+import collections
 import functools
 import time
 import types
@@ -161,3 +163,125 @@ def test_a_memo_on_an_object_a_call_made_is_not_served_already_filled(call_unit_
     box = unit.wrap(make_box, site)()
 
     assert box.memo.cache_info().currsize == 0, "the memo the last run filled was served again"
+
+
+class _Row:
+    def __init__(self, i):
+        self.i = i
+
+
+def _defaulted():
+    def fast(n, _memo=functools.cache(_double)):
+        return _memo(n)
+
+    return fast
+
+
+def _kw_defaulted():
+    def fast(n, *, _memo=functools.cache(_double)):
+        return _memo(n)
+
+    return fast
+
+
+def _instance_of_a_made_class():
+    class Scores:
+        @classmethod
+        @functools.cache
+        def of(cls, n):
+            return n * 2
+
+    return Scores()
+
+
+def _instance_with_a_class_memo():
+    class Tool:
+        memo = staticmethod(functools.cache(_double))
+
+    return Tool()
+
+
+def _subclass_of_a_class_with_a_memo():
+    class Base:
+        @staticmethod
+        @functools.cache
+        def of(n):
+            return n * 2
+
+    class Sub(Base):
+        pass
+
+    return Sub
+
+
+def test_a_memo_in_a_default_on_a_class_or_a_base_is_seen():
+    assert holds_a_closure_with_state(_defaulted())
+    assert holds_a_closure_with_state(_kw_defaulted())
+    assert holds_a_closure_with_state(_instance_of_a_made_class())
+    assert holds_a_closure_with_state(_instance_with_a_class_memo())
+    assert holds_a_closure_with_state(_subclass_of_a_class_with_a_memo())
+    assert holds_a_closure_with_state(collections.deque([functools.cache(_double)]))
+    assert holds_a_closure_with_state(argparse.Namespace(memo=functools.cache(_double)))
+
+
+def test_a_value_with_more_holders_than_are_looked_into_is_not_stored(monkeypatch):
+    # Past the cap what the rest holds is unknown: not stored (one rerun),
+    # never served unchecked. The memo sits where the walk comes last.
+    from cash.notebook import call_key
+
+    monkeypatch.setattr(call_key, "_HOLDERS_LOOKED_INTO", 50)
+    assert holds_a_closure_with_state(
+        (types.SimpleNamespace(memo=functools.cache(_double)), [_Row(i) for i in range(51)])
+    )
+    assert holds_a_closure_with_state([_Row(i) for i in range(51)])
+    assert not holds_a_closure_with_state([_Row(i) for i in range(40)])
+
+
+class _Hostile:
+    __slots__ = ("a", "b")
+    asked: list = []
+
+    def __init__(self):
+        self.a = functools.cache(_double)
+
+    def __getattr__(self, name):
+        _Hostile.asked.append(name)
+        raise RuntimeError("a remote fetch")
+
+
+def test_the_walk_asks_an_object_nothing():
+    import gc
+
+    _Hostile.asked.clear()
+    assert holds_a_closure_with_state(_Hostile())
+    assert _Hostile.asked == []
+
+    # Made here, not at module level: a live class whose metaclass answers
+    # lookups itself changes how later tests in the same process are cached.
+    asked = []
+
+    class AsksBack(type):
+        def __getattribute__(cls, name):
+            asked.append(name)
+            return super().__getattribute__(name)
+
+    class Guarded(metaclass=AsksBack):
+        memo = staticmethod(functools.cache(_double))
+
+    assert holds_a_closure_with_state(Guarded)
+    assert holds_a_closure_with_state(Guarded())
+    assert asked == []
+    del Guarded, AsksBack
+    gc.collect()
+
+
+def test_a_class_a_call_made_is_not_kept_alive_by_the_walk():
+    import gc
+    import weakref
+
+    made = _subclass_of_a_class_with_a_memo()
+    holds_a_closure_with_state(made)
+    gone = weakref.ref(made)
+    del made
+    gc.collect()
+    assert gone() is None

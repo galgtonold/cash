@@ -777,12 +777,12 @@ class StatementStore:
         # restore handed back the closure the last run made, still holding
         # what it had appended.
         if not should_skip:
-            _stateful = sorted(_name for _name, _v in captured_vars.items() if holds_a_closure_with_state(_v))
+            _stateful = sorted(_name for _name, _v in captured_vars.items() if _holds_state(_v))
             if _stateful:
                 should_skip = True
                 skip_reason = (
-                    f"output(s) {', '.join(_stateful)} hold a function that changes its closure; "
-                    f"statement re-executes (lineage persists)"
+                    f"output(s) {', '.join(_stateful)} hold a function or memo that keeps state, "
+                    f"or too much to look through for one; statement re-executes (lineage persists)"
                 )
         # Perpetual-miss guard. After the gates above so it can override their
         # exemptions: ``has_file_dependencies`` waives the whole size-aware
@@ -1097,3 +1097,13 @@ def _user_decorated_calls(events: Any) -> list[str]:
             if isinstance(name, str) and name:
                 names[name] = None
     return list(names)
+
+
+def _holds_state(value: Any) -> bool:
+    """`holds_a_closure_with_state`, taken as yes when looking raised: not
+    stored is one rerun, stored unchecked may be served wrong."""
+    try:
+        return holds_a_closure_with_state(value)
+    except Exception:
+        logger.debug("looking for state in an output raised; not stored", exc_info=True)
+        return True
