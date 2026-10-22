@@ -105,11 +105,17 @@ def draws_through_pyplot(tree: ast.AST | None, namespace: Mapping[str, Any]) -> 
     return False
 
 
+#: IPython's output and input history: ``Out`` keeps every value a cell
+#: showed, an axes from ``sns.barplot(...)`` among them, and naming it made a
+#: drawing statement hash every frame ever shown.
+_HISTORY_NAMES = frozenset({"In", "Out"})
+
+
 def current_figure_names(namespace: Mapping[str, Any]) -> set[str]:
     """The names of *namespace* bound to pyplot's current figure, to its
     current axes, or to a list, tuple, dict or array holding either.
     Empty when pyplot is not imported or holds no figure (asking it then
-    would make one)."""
+    would make one). IPython's history (``Out``) is not the user's data."""
     plt = sys.modules.get("matplotlib.pyplot")
     if plt is None:
         return set()
@@ -122,7 +128,7 @@ def current_figure_names(namespace: Mapping[str, Any]) -> set[str]:
         return set()
     names: set[str] = set()
     for name, value in namespace.items():
-        if name.startswith("_"):
+        if name.startswith("_") or name in _HISTORY_NAMES:
             continue
         if value is fig or (current is not None and value is current):
             names.add(name)

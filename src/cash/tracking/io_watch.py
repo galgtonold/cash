@@ -29,7 +29,8 @@ from __future__ import annotations
 
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from .. import _native
@@ -39,6 +40,7 @@ __all__ = [
     "add_patcher",
     "hold",
     "holding",
+    "own_work",
     "release",
     "subscribe",
     "subscribe_always",
@@ -79,7 +81,7 @@ def _hook(event: str, args: tuple) -> None:
     # every unpickled class): one dict lookup unless a consumer wants it.
     # Under the C hook, only for the events a table names (`_C_HOOK`).
     consumers = _active.get(event)
-    if consumers is None:
+    if consumers is None or getattr(_own, "work", False):
         return
     for consumer in consumers:
         try:
@@ -203,6 +205,23 @@ def release() -> None:
                 return
             for _install, remove in reversed(_patchers):
                 remove()
+
+
+#: Set while cash does work of its own from inside a consumer (`own_work`).
+_own = threading.local()
+
+
+@contextmanager
+def own_work() -> Iterator[None]:
+    """Cash's own work, run from inside a consumer: what it opens or starts
+    is no event of the code observed (the ``/proc`` files `psutil` reads
+    to list child processes were taken for the statement's own reads)."""
+    before = getattr(_own, "work", False)
+    _own.work = True
+    try:
+        yield
+    finally:
+        _own.work = before
 
 
 def holding() -> bool:
