@@ -26,6 +26,8 @@ IN_ONE_CELL = [
     "sys.stdout = old\nprint(repr(buf.getvalue()))",
     "import io, sys\nerr = io.StringIO()\nold_err = sys.stderr\nsys.stderr = err\nprint('warned', file=sys.stderr)\n"
     "sys.stderr = old_err\nprint(repr(err.getvalue()))",
+    # A print that comes 150 ms into its statement is one output all the same.
+    "import time\nprint(time.sleep(0.15) or 'late')",
 ]
 ACROSS_CELLS = [
     "import io, sys\nbuf = io.StringIO()\nold = sys.stdout\nsys.stdout = buf\nprint('same cell')",
@@ -61,7 +63,11 @@ def test_what_the_notebook_shows_matches_plain(tmp_path, cells):
     served = [_saved(c) for c in ran[len(cells) :]]
 
     if cells is IN_ONE_CELL:
-        assert plain == [[("stream", "stdout", "'hello\\n'\n")], [("stream", "stdout", "'warned\\n'\n")]]
+        assert plain == [
+            [("stream", "stdout", "'hello\\n'\n")],
+            [("stream", "stdout", "'warned\\n'\n")],
+            [("stream", "stdout", "late\n")],
+        ]
     else:
         assert plain[3] == [("stream", "stdout", "'same cell\\nnext cell\\n'\n")]
     assert computed == plain

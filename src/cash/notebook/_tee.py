@@ -31,8 +31,11 @@ class TeeWriter:
     * Always call ``self._real.write(s)`` so the data enters the kernel's
       output buffer immediately.
     * Only call ``self._real.flush()`` if ≥ ``_FLUSH_INTERVAL_S`` seconds
-      have elapsed since the last flush.  Jupyter's own ``OutStream`` uses a
-      similar strategy (~200 ms batching).
+      have elapsed since the last flush, and at the end of a line.  Jupyter's
+      own ``OutStream`` uses a similar strategy (~200 ms batching).
+      ``print('x')`` writes ``'x'`` and ``'\n'`` apart: a flush between them
+      sent the notebook two outputs for one line where plain Python sends
+      one (a statement whose first print came 100 ms in).
     * Accumulate text in a plain Python list (O(1) append) and join once at
       the end for the metrics/cache record.
 
@@ -58,7 +61,7 @@ class TeeWriter:
         self._real.write(s)
         self._chunks.append(s)
         now = time.monotonic()
-        if now - self._last_flush >= self._FLUSH_INTERVAL_S:
+        if s.endswith("\n") and now - self._last_flush >= self._FLUSH_INTERVAL_S:
             self._real.flush()
             self._last_flush = now
         return len(s)
