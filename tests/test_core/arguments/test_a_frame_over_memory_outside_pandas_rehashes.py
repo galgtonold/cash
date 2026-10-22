@@ -28,6 +28,7 @@ pd = pytest.importorskip("pandas")
 from cash import Cash
 from cash.backends import InMemoryBackend
 from cash.decorator import arg_hashing
+from tests._label_writes import label_array
 
 pytestmark = pytest.mark.skipif(
     not arg_hashing.is_cow_pandas(pd.Series([1.0])), reason="the frame memo runs under copy-on-write only"
@@ -98,8 +99,8 @@ def test_an_arrow_column_over_the_callers_array(seen):
 
 
 HANDLES = {
-    "pd.Index(df['a']).array": lambda d: pd.Index(d["a"]).array.__setitem__(0, 100.0),
-    "df.set_index('a').index.array": lambda d: d.set_index("a").index.array.__setitem__(0, 100.0),
+    "pd.Index(df['a']).array": lambda d: label_array(pd.Index(d["a"])).__setitem__(0, 100.0),
+    "df.set_index('a').index.array": lambda d: label_array(d.set_index("a").index).__setitem__(0, 100.0),
     "pd.array(df['a'], copy=False)": lambda d: pd.array(d["a"], copy=False).__setitem__(0, 100.0),
     "pd.DatetimeIndex(df['t']).asi8": lambda d: pd.DatetimeIndex(d["t"]).asi8.__setitem__(0, 0),
 }
