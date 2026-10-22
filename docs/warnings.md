@@ -1875,7 +1875,7 @@ If it is not code, delete it or make it a markdown cell.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/notebook/call_unit.py:CallUnit._tell_cells_shared @2114ea01, cash/notebook/call_entries.py:_argument_sharing_cells @7f1acc6e -->
+<!-- claim: cash/notebook/call_unit.py:CallUnit._tell_cells_shared @2114ea01, cash/notebook/call_entries.py:_argument_sharing_cells @7f1acc6e, cash/notebook/statement/processor.py:_tell_cells_not_linked @e12881a7 -->
 **What happened.** A call inside a statement returned a pandas frame or
 series whose object column holds the very objects (lists, dicts, your own
 objects) a frame it was handed holds, and something else holds those
@@ -1887,6 +1887,13 @@ something else holds them too, cash cannot tell which holder the result
 took them from, so the call is not stored. The message names the function
 and the argument. It is shown once per function, and only for a call that
 took a tenth of a second or more.
+
+A statement can be refused the same way, as a whole. A hit puts a frame's
+cells back by where they sit in the frame it took them from, and cash
+records those places only up to four million cells, and only when each
+cell sits in one row. Past that, `f = flt(df)` over a larger `df` of lists
+is not stored, and the message names the statement's outputs and the frame
+they share cells with.
 
 **Why it matters.** The call runs every time. The result is correct: a
 restored copy would hold copies of the cells, and a later change to one

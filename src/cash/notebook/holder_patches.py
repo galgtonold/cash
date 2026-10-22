@@ -37,6 +37,7 @@ from .shared_objects import (
 )
 
 __all__ = [
+    "CellsNotLinked",
     "FrameCellsPatch",
     "HolderPatch",
     "apply_patch",
@@ -52,6 +53,33 @@ __all__ = [
 #: attribute of an object `attributes_of` opens.
 Step = tuple[str, Any]
 Path = tuple[Step, ...]
+
+
+class CellsNotLinked(Exception):
+    """A frame holding cells of the outputs' frames that `cell_links` cannot
+    say where to put back (more than it records, or one cell in two rows):
+    a hit would hand the outputs back holding copies of them, apart from
+    the frame. *names*: the frames."""
+
+    def __init__(self, names: list[str]) -> None:
+        super().__init__(names)
+        self.names = names
+
+
+def _shares_cells(holder: Any, outputs: Mapping[str, Any]) -> bool:
+    """Does the frame *holder* hold, in an object column, a cell the outputs'
+    frames hold in one (by address)?"""
+    import sys
+
+    from .frame_cells import addresses, frames_in
+    from .shared_objects import object_columns_of
+
+    np = sys.modules["numpy"]
+    theirs = [addresses(array) for _path, frame in frames_in(outputs) for array in object_columns_of(frame) or ()]
+    mine = [addresses(array) for array in object_columns_of(holder) or ()]
+    if not theirs or not mine:
+        return False
+    return bool(np.isin(np.concatenate(mine), np.concatenate(theirs)).any())
 
 
 @dataclass(frozen=True)
@@ -382,7 +410,8 @@ def shares_categories(holder: Any, outputs: Mapping[str, Any]) -> bool:
 def frame_cells_patch(holder: Any, outputs: Mapping[str, Any]) -> FrameCellsPatch | None:
     """A `FrameCellsPatch` for *holder*, when it is a frame or series that
     holds objects of *outputs* only as cells the outputs' frames hold too,
-    and only it and they hold them; None otherwise."""
+    and only it and they hold them; None otherwise. `CellsNotLinked` (with
+    no names) when it holds such cells `cell_links` cannot place."""
     from .frame_cells import cell_links, frames_in, is_frame, linked_cell_ids, put_back_dtypes
     from .shared_objects import frames_together, holds_part_of
 
@@ -390,6 +419,8 @@ def frame_cells_patch(holder: Any, outputs: Mapping[str, Any]) -> FrameCellsPatc
         return None
     links = cell_links(outputs, (holder,), {})
     if links is None:
+        if _shares_cells(holder, outputs):
+            raise CellsNotLinked([])
         return None
     frames = itertools.chain((frame for _path, frame in frames_in(outputs)), (holder,))
     with frames_together(frames, linked_cell_ids(links)):
@@ -413,7 +444,12 @@ def frame_cells_patches(holders: Mapping[str, Any], outputs: Mapping[str, Any]) 
     or filters of it, for ``v = df.iloc[3:]``, link to ``df`` alone instead
     of reading half a million addresses per view. Whether a holder holds
     the outputs' objects otherwise is asked of each as before
-    (`holds_part_of`)."""
+    (`holds_part_of`).
+
+    `CellsNotLinked` when a holder frame holds cells of the outputs' frames
+    that `cell_links` cannot place: ``f = flt(df)`` over four million rows
+    of lists was stored with copies of them, and a change made through
+    ``df`` did not reach the ``f`` a hit gave back."""
     from .frame_cells import addresses, cell_links, frames_in, is_frame, put_back_dtypes, sorted_unique
     from .frame_cells import object_columns as frame_object_columns
     from .shared_objects import (
@@ -432,7 +468,15 @@ def frame_cells_patches(holders: Mapping[str, Any], outputs: Mapping[str, Any]) 
     # Only frames among the outputs, at their top level: anything else they
     # hold is compared a holder at a time (`frame_cells_patch`).
     if any(not is_frame(value) for value in outputs.values()):
-        return {name: patch for name in framed if (patch := frame_cells_patch(framed[name], outputs)) is not None}
+        patches = {}
+        for name, holder in framed.items():
+            try:
+                patch = frame_cells_patch(holder, outputs)
+            except CellsNotLinked:
+                raise CellsNotLinked([name]) from None
+            if patch is not None:
+                patches[name] = patch
+        return patches
     pd = __import__("sys").modules["pandas"]
     # The object columns of the outputs' frames, and those a holder takes
     # back whole (a link of every row, in order): ``df`` does for ``v =
@@ -461,6 +505,8 @@ def frame_cells_patches(holders: Mapping[str, Any], outputs: Mapping[str, Any]) 
                 continue
         links = cell_links(outputs, (holder,), {})
         if links is None:
+            if _shares_cells(holder, outputs):
+                raise CellsNotLinked([name])
             continue
         found[name] = links[0]
         whole.update(

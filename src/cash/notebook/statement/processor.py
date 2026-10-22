@@ -156,6 +156,7 @@ from ..callee_reach import (
 )
 from ..frame_cells import is_frame
 from ..holder_patches import (
+    CellsNotLinked,
     FrameCellsPatch,
     HolderPatch,
     frame_cells_patches,
@@ -2397,7 +2398,7 @@ class StatementProcessor:
                     reason = self._lazy_frame_refusal(run, captured_vars)
                 if reason is None and holders:
                     found = dict(holders)
-                    reason = self._take_holders(run, captured_vars, holders)
+                    reason = self._take_holders(run, captured_vars, holders, cost)
                 if reason is None and anchors:
                     user_ns = self.shell.user_ns
                     # And the inputs the statement left as they were: ``df``
@@ -2878,7 +2879,9 @@ class StatementProcessor:
                 unchanged.add(name)
         return unchanged
 
-    def _take_holders(self, run: StatementRun, captured_vars: dict[str, Any], holders: dict[str, Any]) -> str | None:
+    def _take_holders(
+        self, run: StatementRun, captured_vars: dict[str, Any], holders: dict[str, Any], cost: float = 0.0
+    ) -> str | None:
         """Store *holders*, the variables holding an output's object too, with
         *run*'s outputs (`share_group`); why not, when one has no lineage to
         check a later hit against.
@@ -2918,7 +2921,11 @@ class StatementProcessor:
             # takes back every cell, and its other views need no links. Then
             # the longest frames, which more likely do.
             ordered = sorted(holders, key=lambda name: (name not in run.inputs, -_frame_rows(holders[name])))
-            framed = frame_cells_patches({name: holders[name] for name in ordered}, outputs)
+            try:
+                framed = frame_cells_patches({name: holders[name] for name in ordered}, outputs)
+            except CellsNotLinked as unlinked:
+                run.holders, run.moves_holders, run.holders_unchanged = {}, False, set()
+                return _tell_cells_not_linked(run.outputs, unlinked.names, cost)
             # An output changed in place whose cells a frame left as it is
             # holds too: a hit restores it over the live object, apart from
             # that frame (`_live_objects_shared` refuses every one), so it is
@@ -3469,6 +3476,30 @@ def _frames_left_alone(cached_data: Any) -> set[str]:
 def _frame_rows(value: Any) -> int:
     """The rows of a pandas frame or series *value*; 0 for anything else."""
     return len(value) if is_frame(value) else 0
+
+
+def _tell_cells_not_linked(outputs: Iterable[str], holders: list[str], cost: float) -> str:
+    """Say that a statement is not stored because its outputs hold cells of
+    *holders*' frames that a hit could not put back as theirs
+    (``NOTEBOOK-CELLS-SHARED``, as for a call), and return the reason. Said
+    only when the statement took long enough that storing it would have
+    mattered (`COMPUTE_FLOOR_S`)."""
+    names = ", ".join(f"'{name}'" for name in sorted(outputs))
+    frames = ", ".join(f"'{name}'" for name in holders)
+    what = (
+        f"the statement binding {names} was not cached: its result shares cells with {frames} that cash "
+        "cannot record where to put back (too many, or one cell in two rows); runs every time."
+    )
+    fix = (
+        "nothing, when nothing changes those objects in place; to cache it, return copies of them "
+        "(the column's .map(copy.deepcopy))."
+    )
+    if cost >= COMPUTE_FLOOR_S:
+        log_diagnostic(logger, "NOTEBOOK-CELLS-SHARED", what, fix)
+        warn_diagnostic(CashCacheIneffectiveWarning, "NOTEBOOK-CELLS-SHARED", what, fix)
+    return (
+        f"its outputs share cells with {frames} that cannot be put back on a hit, so the statement re-runs every time"
+    )
 
 
 def _is_loop(tree: ast.AST | None) -> bool:
