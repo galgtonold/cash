@@ -1,4 +1,4 @@
-"""Review round 6 of serving through a helper memo.
+"""Serving through a helper memo: the probe, counter reads and old records.
 
 - The forward probe passed a pure memo lacking a key the statement read; a
   statement of the cell above patched a builtin the helper reads and the

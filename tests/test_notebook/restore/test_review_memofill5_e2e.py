@@ -1,4 +1,4 @@
-"""A served statement over a helper memo gives what a run gives, round 5:
+"""A served statement over a helper memo gives what a run gives:
 a key with no text (an int of 5000 digits) leaves the cell working, a
 statement reading ``cache_info`` reruns, keys equal across types (``1``,
 ``1.0``, ``True``) stay apart, and a helper redefined or a builtin patched
