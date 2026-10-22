@@ -97,7 +97,7 @@ def passthrough_shape(func: Any, wrapped: Any) -> tuple[int, frozenset[str]] | N
     session, click's ``pass_obj``) shifts the binding: the caller's first
     argument is the wrapped function's SECOND parameter.
     """
-    if not isinstance(func, types.FunctionType):
+    if type(func) is not types.FunctionType:
         return None
     params = inspect.signature(func, follow_wrapped=False).parameters.values()
     star = next((p.name for p in params if p.kind is inspect.Parameter.VAR_POSITIONAL), None)

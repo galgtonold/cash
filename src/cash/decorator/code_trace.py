@@ -62,6 +62,7 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from .._paths import CELL_NAME_PREFIX, is_pseudo_filename
+from .._user_attrs import instance_of
 from ..analysis.purity_report import (
     ISSUE_AMBIENT_READ,
     ISSUE_DISCARDED_CALL,
@@ -125,7 +126,7 @@ _BY_STRING_NAMES = frozenset(
 def _namespace_like(value: Any, g: dict) -> bool:
     """Is *value* a namespace a string is looked up in: *g* itself, the
     module table, or the module *g* is?"""
-    return value is g or value is sys.modules or (isinstance(value, types.ModuleType) and value.__dict__ is g)
+    return value is g or value is sys.modules or (instance_of(value, types.ModuleType) and value.__dict__ is g)
 
 
 #: Markers that leave a trace nothing can check (`recorder` module).
@@ -134,6 +135,7 @@ _UNUSABLE = {
     "process_pool": "it ran work in other processes",
     "generator_resumed": "it resumed a generator started before it",
     "tool_conflict": "another tool took the monitoring tool id",
+    "trace_failed": "cash could not read code it saw run",
 }
 #: Findings in a function the call ran that a hit would skip or miss.
 _REFUSED_KINDS = frozenset(
@@ -271,11 +273,11 @@ def _recorder_class() -> type:
             mon.use_tool_id(self.tool, self.tool_name)
             ev = mon.events
             self.rearm_works = self._rearm_works()
-            mon.register_callback(self.tool, ev.PY_START, self._on_start)
-            mon.register_callback(self.tool, ev.PY_RESUME, self._on_resume)
-            mon.register_callback(self.tool, ev.CALL, self._on_call)
-            mon.register_callback(self.disc, ev.PY_START, self._discover)
-            mon.register_callback(self.disc, ev.PY_RESUME, self._discover)
+            mon.register_callback(self.tool, ev.PY_START, self._guarded(self._on_start))
+            mon.register_callback(self.tool, ev.PY_RESUME, self._guarded(self._on_resume))
+            mon.register_callback(self.tool, ev.CALL, self._guarded(self._on_call))
+            mon.register_callback(self.disc, ev.PY_START, self._guarded(self._discover))
+            mon.register_callback(self.disc, ev.PY_RESUME, self._guarded(self._discover))
             mon.set_events(self.disc, ev.PY_START | ev.PY_RESUME)
             return True
 
@@ -348,7 +350,7 @@ def _recorder_class() -> type:
                         user = is_user_path(filename)
                 if not user:
                     return DISABLE
-            frame = sys._getframe(1)
+            frame = sys._getframe(rec.WATCHED_FRAME)
             g = frame.f_globals
             kind = self._kinds.get(id(g))
             if kind is None or kind[0] is not g:
@@ -462,14 +464,14 @@ def _recorder_class() -> type:
             gen = self.rearm_gen
             self.rearm.append(code)
             if self.active or self.stack:
-                frame = sys._getframe(1)
+                frame = sys._getframe(rec.WATCHED_FRAME)
                 g = frame.f_globals
                 kind = self._kinds.get(id(g))
                 if kind is None or kind[0] is not g:
                     kind = self._classify(g)
                 self._seen_start(code, frame, g, kind)
             if value_hash.OPEN_WATCHES:
-                self._seen_in_window(code, sys._getframe(1))
+                self._seen_in_window(code, sys._getframe(rec.WATCHED_FRAME))
             return DISABLE if not self.rearming and self.rearm_gen == gen else None
 
         def _seen_in_window(self, code: types.CodeType, frame: Any) -> None:
@@ -526,7 +528,7 @@ def _recorder_class() -> type:
                 if cells is not None:
                     unit.cells.setdefault(code, cells)
                 if recv is not None:
-                    unit.receivers.setdefault(code, recv if isinstance(recv, type) else type(recv))
+                    unit.receivers.setdefault(code, recv if issubclass(type(recv), type) else type(recv))
 
         @staticmethod
         def _unregistered_user_code(name: str, code: types.CodeType) -> bool:
@@ -539,13 +541,13 @@ def _recorder_class() -> type:
             gen = self.rearm_gen
             self.rearm.append(code)
             if (self.active or self.stack) and code.co_flags & rec.RESUMABLE:
-                g = sys._getframe(1).f_globals
+                g = sys._getframe(rec.WATCHED_FRAME).f_globals
                 kind = self._kinds.get(id(g))
                 if kind is None or kind[0] is not g:
                     kind = self._classify(g)
                 self._seen_resume(code, g, kind)
             if value_hash.OPEN_WATCHES:
-                self._seen_in_window(code, sys._getframe(1))
+                self._seen_in_window(code, sys._getframe(rec.WATCHED_FRAME))
             return DISABLE if not self.rearming and self.rearm_gen == gen else None
 
         def _seen_resume(self, code: types.CodeType, g: dict, kind: tuple) -> None:
@@ -578,7 +580,7 @@ def _recorder_class() -> type:
             if stack and code in self.by_string:
                 callees = stack[-1].callees
                 if id(fn) not in callees:
-                    callees[id(fn)] = (fn, sys._getframe(1).f_globals)
+                    callees[id(fn)] = (fn, sys._getframe(rec.WATCHED_FRAME).f_globals)
             if not units:
                 if stack and code in self.by_string:
                     return None
@@ -589,7 +591,7 @@ def _recorder_class() -> type:
                 if fn is getattr:
                     if arg0 is sys.monitoring.MISSING:
                         return None
-                    name = _last_argument(code, offset, sys._getframe(1))
+                    name = _last_argument(code, offset, sys._getframe(rec.WATCHED_FRAME))
                     entry = ("getattr", arg0, name)
                     slot = ("getattr", id(arg0), name)
                 elif fn is self._import_module or fn is builtins.__import__:
@@ -774,7 +776,7 @@ def _digest(value: Any) -> str | None:
     from ..install_paths import is_cash_path
     from ..tracking.trace_items import value_digest
 
-    wrapped = getattr(value, "__wrapped__", None) if isinstance(value, types.FunctionType) else None
+    wrapped = getattr(value, "__wrapped__", None) if type(value) is types.FunctionType else None
     if wrapped is not None and is_cash_path(value.__code__.co_filename):
         # A ``@cash.cache`` wrapper: by the function it wraps (its state,
         # when it is served inside the call, is a "cached" item of its own).
@@ -787,7 +789,7 @@ def _code_digest(code: types.CodeType, fn: Any) -> str | None:
     from ..tracking.trace_items import code_digest
 
     got = code_digest(code)
-    if isinstance(fn, types.FunctionType) and fn.__code__ is code and (fn.__defaults__ or fn.__kwdefaults__):
+    if type(fn) is types.FunctionType and fn.__code__ is code and (fn.__defaults__ or fn.__kwdefaults__):
         defaults = _digest((fn.__defaults__, fn.__kwdefaults__))
         if defaults is None:
             return None
@@ -821,7 +823,7 @@ def _find(module: str, qualname: str) -> Any:
 def _user_module(mod: Any) -> bool:
     from ..tracking.trace_recorder import is_user_code
 
-    return isinstance(mod, types.ModuleType) and is_user_code(mod)
+    return issubclass(type(mod), types.ModuleType) and is_user_code(mod)
 
 
 def _user_class(cls: Any) -> bool:
@@ -952,7 +954,7 @@ class _Build:
         self.holders = [
             target.__dict__
             for kind, target, _name in unit.lookups.values()
-            if kind == "getattr" and isinstance(target, types.ModuleType)
+            if kind == "getattr" and issubclass(type(target), types.ModuleType)
         ]
         for code, (g, module) in list(unit.codes.items()):
             if code in self.static:
@@ -979,7 +981,7 @@ class _Build:
                     _ABSENT if value is _MISSING else _digest(value),
                     f"{qn} reads the global {name}, whose value cannot be checked",
                 )
-                if isinstance(value, types.ModuleType) and _user_module(value):
+                if issubclass(type(value), types.ModuleType) and _user_module(value):
                     for chain in table.chains:
                         head, _, rest = chain.partition(".")
                         if head == name and rest:
@@ -999,7 +1001,7 @@ class _Build:
         rc, fn, _owner = resolve(module, qn, {}, "\x00")
         if rc is code and set(code.co_freevars) <= {"__class__"}:
             self.add(("code", module, qn), _code_digest(code, fn), f"{qn} has defaults that cannot be checked")
-            if isinstance(fn, types.FunctionType):
+            if type(fn) is types.FunctionType:
                 self.functions.append(fn)
             return
         if "<locals>" in qn and qn.rsplit(".<locals>.", 1)[0] in ran:
@@ -1035,7 +1037,7 @@ class _Build:
                 raise _Untraceable("it imports a module whose name is not a string")
             self.add(("import", name), _import_digest(name), f"the module {name} has no file to check")
             return
-        if isinstance(target, types.ModuleType):
+        if issubclass(type(target), types.ModuleType):
             module, qualname = target.__name__, ""
             if name is None and not _user_module(target):
                 raise _Untraceable(f"it looks up a computed name on {module}, a library module")
@@ -1073,7 +1075,7 @@ def _chain_digest(module: str, chain: str) -> str | None:
         return _ABSENT
     obj = ns[parts[0]]
     for p in parts[1:]:
-        if not isinstance(obj, types.ModuleType):
+        if not issubclass(type(obj), types.ModuleType):
             break
         try:
             obj = inspect_getattr(obj, p)

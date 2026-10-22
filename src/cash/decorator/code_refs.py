@@ -161,7 +161,7 @@ class CodeRefs:
             if not names:
                 continue
             modules = [glb.get(n) for n in code.co_names]
-            modules = [m for m in modules if isinstance(m, types.ModuleType) and is_user_module(m)]
+            modules = [m for m in modules if issubclass(type(m), types.ModuleType) and is_user_module(m)]
             for name in names:
                 seen_names.add(name)
                 consider(glb.get(name))

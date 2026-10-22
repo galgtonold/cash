@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from cash._clock import perf_counter as _perf_counter
+from cash._user_attrs import attribute_or
 from cash.diagnostics import log_diagnostic, warn_diagnostic
 from cash.exceptions import CashCacheIneffectiveWarning
 from cash.notebook.file_round_trips import quote
@@ -82,7 +83,7 @@ def _plain(value: Any) -> bool:
 
 def _numpy_scalar(value: Any) -> bool:
     """A numpy number (``grid_s.index[0]`` unpacks to ``np.int64``)."""
-    return type(value).__module__ == "numpy" and getattr(value, "shape", None) == () and value.dtype.kind in "biuf"
+    return type(value).__module__ == "numpy" and attribute_or(value, "shape", None) == () and value.dtype.kind in "biuf"
 
 
 def _others_digest(lineages: Mapping[str, str], values: Mapping[str, Any], fingerprinted: Iterable[str]) -> str:

@@ -25,6 +25,8 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from cash._user_attrs import attribute_or, instance_of
+
 from ..content_hashers import builtin_hash_family
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..tracking.randomness.state import rng_carrier_kind
@@ -125,7 +127,7 @@ def live_function_source(name: str, namespace: Mapping[str, Any]) -> str | None:
         return None
     seen: set[int] = set()
     for value in namespace.values():
-        module_globals = getattr(value, "__globals__", None)
+        module_globals = attribute_or(value, "__globals__")
         if not isinstance(module_globals, dict) or id(module_globals) in seen:
             continue
         seen.add(id(module_globals))
@@ -441,7 +443,7 @@ class _LoopNames:
                 value = inspect.getattr_static(value, attr)
             except AttributeError:
                 return False
-        if isinstance(value, types.ModuleType):
+        if issubclass(type(value), types.ModuleType):
             return True
         return _is_path_value(value)
 
@@ -630,7 +632,7 @@ def _iterable_roots(node: ast.expr, names: _LoopNames | None = None) -> set[str]
                     roots |= _function_global_reads(source)
                 elif (
                     names.namespace is not None
-                    and isinstance(names.namespace.get(sub.func.id), (types.FunctionType, type(None)))
+                    and issubclass(type(names.namespace.get(sub.func.id)), (types.FunctionType, type(None)))
                     and users_callee(sub.func, names.namespace)
                 ):
                     # A function of the user's whose body cannot be read (a
@@ -965,7 +967,7 @@ def _stores_what_it_is_handed(func: ast.Attribute, namespace: Mapping[str, Any])
     if func.attr in MUTATING_METHODS:
         return True
     base = _receiver_root(func.value)
-    return base is not None and isinstance(namespace.get(base), _KNOWN_METHOD_TYPES)
+    return base is not None and instance_of(namespace.get(base), _KNOWN_METHOD_TYPES)
 
 
 def _chain_calls(func: ast.expr) -> list[ast.Call]:
@@ -989,7 +991,7 @@ def _watchable(name: str, namespace: Mapping[str, Any], is_module: Callable[[str
     if is_module(name) or name not in namespace:
         return False
     value = namespace[name]
-    if isinstance(value, (types.ModuleType, type, *_IMMUTABLE_VALUES)):
+    if issubclass(type(value), (types.ModuleType, type, *_IMMUTABLE_VALUES)):
         return False
     return not inspect.isroutine(value)
 
@@ -1332,7 +1334,7 @@ class StatementEffects:
 def is_module_name(name: str, namespace: Mapping[str, Any], virtual_modules: Iterable[str] = ()) -> bool:
     """Whether *name* is bound to a module: live in *namespace*, or, when it is
     not bound there yet, among the *virtual_modules* a simulation bound."""
-    if isinstance(namespace.get(name), types.ModuleType):
+    if instance_of(namespace.get(name), types.ModuleType):
         return True
     return name not in namespace and name in virtual_modules
 
@@ -1520,7 +1522,7 @@ def captured_call_receivers(tree: ast.Module | None, namespace: Mapping[str, Any
         if base not in namespace or method in RECEIVER_READONLY_WRITE_METHODS:
             continue
         value = namespace[base]
-        if isinstance(value, (types.ModuleType, type, _KNOWN_METHOD_TYPES)) or inspect.isroutine(value):
+        if issubclass(type(value), (types.ModuleType, type, _KNOWN_METHOD_TYPES)) or inspect.isroutine(value):
             continue
         if builtin_hash_family(type(value)) is not None or rng_carrier_kind(value) is not None:
             continue

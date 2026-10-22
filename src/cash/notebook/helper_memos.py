@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import functools
 import gc
-import inspect
 import logging
 import sys
 import types
@@ -41,6 +40,7 @@ import weakref
 from collections.abc import Iterator, Mapping
 from typing import Any
 
+from cash._user_attrs import attribute_or, instance_of
 from cash.install_paths import is_user_code_file, is_user_module
 from cash.value_hash import compute_hash
 
@@ -49,7 +49,7 @@ __all__ = ["FILLED", "MAX_KEYED", "new_statement", "unfilled", "used", "watched"
 logger = logging.getLogger(__name__)
 
 #: The type ``functools.cache`` and ``functools.lru_cache`` return.
-_LRU_WRAPPER = getattr(functools, "_lru_cache_wrapper", None)
+_LRU_WRAPPER = attribute_or(functools, "_lru_cache_wrapper", None)
 
 #: A memo holding more answers than this is not read: an entry over it is
 #: never served.
@@ -89,7 +89,7 @@ _FIXED_TYPES = (int, float, complex, str, bytes, bool, type(None), range)
 def _is_user_memo(value: Any) -> bool:
     if _LRU_WRAPPER is None or type(value) is not _LRU_WRAPPER:
         return False
-    code = getattr(getattr(value, "__wrapped__", None), "__code__", None)
+    code = attribute_or(attribute_or(value, "__wrapped__", None), "__code__", None)
     return code is not None and is_user_code_file(code.co_filename)
 
 
@@ -101,11 +101,11 @@ def _memos_in(value: Any, path: list[str], seen: set[int]) -> Iterator[tuple[lis
         if _is_user_memo(value):
             yield path, value
             return
-        inner = getattr(value, "__wrapped__", None) if inspect.isfunction(value) else None
+        inner = attribute_or(value, "__wrapped__", None) if instance_of(value, types.FunctionType) else None
         if inner is None:
             break
         value, path = inner, [*path, "~"]
-    if isinstance(value, type) and id(value) not in seen:
+    if instance_of(value, type) and id(value) not in seen:
         seen.add(id(value))
         for steps, memo in _class_memos(value, seen):
             yield [*path, *steps], memo
@@ -126,8 +126,8 @@ def _class_memos(cls: type, seen: set[int]) -> list[tuple[list[str], Any]]:
         return known[1]
     found: list[tuple[list[str], Any]] = []
     for attr, raw in list(namespace.items()):
-        held = getattr(raw, "__func__", raw) if isinstance(raw, (staticmethod, classmethod)) else raw
-        if inspect.isfunction(held) or _is_user_memo(held):
+        held = attribute_or(raw, "__func__", raw) if instance_of(raw, (staticmethod, classmethod)) else raw
+        if instance_of(held, types.FunctionType) or _is_user_memo(held):
             found.extend(_memos_in(held, ["." + attr], seen))
     try:
         _owner_memos[cls] = (holders, found)
@@ -161,7 +161,7 @@ def _modules_of_user() -> tuple[Any, ...]:
         return _user_modules[1]
     mods = []
     for mod in list(sys.modules.values()):
-        name = getattr(mod, "__name__", None)
+        name = attribute_or(mod, "__name__", None)
         if not isinstance(name, str) or name == "__main__":
             continue  # the notebook's own namespace is looked at as such
         try:
@@ -182,7 +182,7 @@ def _ns_memos(ns: Mapping[str, Any]) -> tuple[list[tuple[list[str], Any]], list[
     found: list[tuple[list[str], Any]] = []
     classes: list[tuple[str, type]] = []
     for name, value in list(ns.items()):
-        if isinstance(value, type):
+        if instance_of(value, type):
             classes.append((name, value))
         elif type(value) in kinds:
             found.extend((["ns", *path], memo) for path, memo in _memos_in(value, [name], seen))
@@ -213,7 +213,7 @@ def _holders(ns: Mapping[str, Any]) -> tuple[int, ...]:
     wrappers, classes): binding or rebinding one changes this, and nothing
     else bound in the namespace can bring a memo in."""
     kinds = _HOLDER_TYPES
-    return tuple(id(v) for v in list(ns.values()) if type(v) in kinds or isinstance(v, type))
+    return tuple(id(v) for v in list(ns.values()) if type(v) in kinds or instance_of(v, type))
 
 
 #: Bumped before each statement (`new_statement`).
@@ -295,7 +295,7 @@ def _items(memo: Any) -> list[tuple[Any, Any]] | None:
         refs = refs[1:]
     if maxsize is None:
         cache = refs[0] if refs else None
-        if type(cache) is not dict or len(cache) != size or cache is getattr(memo, "__dict__", None):
+        if type(cache) is not dict or len(cache) != size or cache is attribute_or(memo, "__dict__", None):
             return None
         return list(cache.items())
     typed = len(refs) > 2 and isinstance(refs[2], type) and refs[2].__name__ == "_lru_list_elem"
@@ -353,7 +353,7 @@ def _fixed(value: Any, depth: int = 3, *, key: bool = False) -> bool:
     or a tuple or frozenset of those. In a *key*, the markers ``functools``
     puts there count too: the bare ``object()`` between positional and
     keyword arguments, and the argument types of a ``typed=True`` memo."""
-    if type(value) in _FIXED_TYPES or (key and (type(value) is object or isinstance(value, type))):
+    if type(value) in _FIXED_TYPES or (key and (type(value) is object or instance_of(value, type))):
         return True
     if depth > 0 and type(value) in (tuple, frozenset):
         return all(_fixed(part, depth - 1, key=key) for part in value)
@@ -395,14 +395,17 @@ def _pure(memo: Any) -> bool:
 
     from cash.decorator.closure_fold import iter_code_scopes
 
-    fn = getattr(memo, "__wrapped__", None)
-    code = getattr(fn, "__code__", None)
-    globals_ = getattr(fn, "__globals__", None)
+    fn = attribute_or(memo, "__wrapped__", None)
+    code = attribute_or(fn, "__code__", None)
+    globals_ = attribute_or(fn, "__globals__", None)
     if code is None or not isinstance(globals_, dict) or code.co_freevars:
         return False
     if not is_user_code_file(code.co_filename):
         return False
-    defaults = (*(getattr(fn, "__defaults__", None) or ()), *(getattr(fn, "__kwdefaults__", None) or {}).values())
+    defaults = (
+        *(attribute_or(fn, "__defaults__", None) or ()),
+        *(attribute_or(fn, "__kwdefaults__", None) or {}).values(),
+    )
     if not all(_fixed(value) for value in defaults):
         return False
     try:
@@ -634,16 +637,16 @@ def _resolve(where: list[str], ns: Mapping[str, Any]) -> Any:
         value, steps = ns.get(where[1]), where[2:]
     else:
         mod = sys.modules.get(where[1])
-        value = getattr(mod, where[2], None) if mod is not None else None
+        value = attribute_or(mod, where[2], None) if mod is not None else None
         steps = where[3:]
     for step in steps:
         if value is None:
             return None
         if step == "~":
-            value = getattr(value, "__wrapped__", None)
+            value = attribute_or(value, "__wrapped__", None)
             continue
-        raw = vars(value).get(step[1:]) if isinstance(value, type) else getattr(value, step[1:], None)
-        value = getattr(raw, "__func__", raw) if isinstance(raw, (staticmethod, classmethod)) else raw
+        raw = vars(value).get(step[1:]) if instance_of(value, type) else attribute_or(value, step[1:], None)
+        value = attribute_or(raw, "__func__", raw) if instance_of(raw, (staticmethod, classmethod)) else raw
     return value
 
 
@@ -697,13 +700,16 @@ _clearing_code: weakref.WeakKeyDictionary[Any, bool] = weakref.WeakKeyDictionary
 def _is_clear(value: Any) -> bool:
     """*value* is a memo's own ``cache_clear`` or ``cache_info``, under any
     name."""
-    return getattr(value, "__name__", None) in _COUNTER_NAMES and type(getattr(value, "__self__", None)) is _LRU_WRAPPER
+    return (
+        attribute_or(value, "__name__", None) in _COUNTER_NAMES
+        and type(attribute_or(value, "__self__", None)) is _LRU_WRAPPER
+    )
 
 
 def _names_clear(fn: Any) -> bool:
     """*fn* names ``cache_clear`` or ``cache_info`` (an attribute, or a
     string it builds a name from), or a global it names is a memo's."""
-    code = getattr(fn, "__code__", None)
+    code = attribute_or(fn, "__code__", None)
     if code is None:
         return False
     try:
@@ -726,7 +732,7 @@ def _names_clear(fn: Any) -> bool:
             pass
     if found:
         return True
-    globals_ = getattr(fn, "__globals__", None)
+    globals_ = attribute_or(fn, "__globals__", None)
     if not isinstance(globals_, dict):
         return False
     from cash.decorator.closure_fold import iter_code_scopes
@@ -775,8 +781,8 @@ def clears(code: str | None, ns: Mapping[str, Any] | None, fn: Any = None) -> bo
     if fn is not None:
         if _names_clear(fn):
             return True
-        name = getattr(fn, "__name__", None)
-        globals_ = getattr(fn, "__globals__", None)
+        name = attribute_or(fn, "__name__", None)
+        globals_ = attribute_or(fn, "__globals__", None)
         if not (isinstance(name, str) and isinstance(globals_, dict) and globals_.get(name) is fn):
             return False
         code, ns = name, globals_

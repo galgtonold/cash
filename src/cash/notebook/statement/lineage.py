@@ -30,6 +30,8 @@ import types
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
+from cash._user_attrs import attribute_or, instance_of
+
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutations import assigned_method_call_receivers, standalone_method_call_receivers
 from ...analysis.namespace_effects import fits_its_receiver
@@ -385,6 +387,7 @@ class StatementLineageBuilder:
         inputs: set[str],
         skip: set[str] | frozenset[str] = frozenset(),
         code: str | None = None,
+        kept: set[str] | frozenset[str] = frozenset(),
     ) -> set[str]:
         """Move on the variables a statement with *outputs* changed through
         another name (`bump_derived_lineages`); the names moved. *code*, the
@@ -418,6 +421,7 @@ class StatementLineageBuilder:
             record=record,
             present=lambda t: t in user_ns,
             skip=skip,
+            kept=kept,
             code=code,
         )
         for target, lineage_hash in moved.items():
@@ -575,7 +579,7 @@ class StatementLineageBuilder:
         output_lineage_hash: str,
     ) -> None:
         """Apply deferred granular lineage update when a tracked module is re-imported."""
-        if isinstance(value, types.ModuleType) and var_name in tracking_state.granular_preserved_vars:
+        if instance_of(value, types.ModuleType) and var_name in tracking_state.granular_preserved_vars:
             preserved = tracking_state.granular_preserved_vars.pop(var_name)
             for pv in preserved:
                 pv_inputs = tracking_state.executed_input_lineages.get(pv)
@@ -612,8 +616,8 @@ class StatementLineageBuilder:
             # Tracked under its REAL name; recorded under the name read,
             # which is what the invalidator looks it up by.
             if not (
-                isinstance(input_val, types.ModuleType)
-                and getattr(input_val, "__name__", input_name) in self.function_tracker.tracked_modules
+                instance_of(input_val, types.ModuleType)
+                and attribute_or(input_val, "__name__", input_name) in self.function_tracker.tracked_modules
             ):
                 continue
             attrs = static_attribute_reads(code, input_name)

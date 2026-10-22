@@ -23,6 +23,8 @@ import types
 from collections.abc import Iterator, Mapping
 from typing import Any, Literal, TypeVar
 
+from cash._user_attrs import instance_of
+
 __all__ = [
     "CallScope",
     "bytecode_global_refs",
@@ -170,7 +172,7 @@ def resolve_callee(
     for attr in reversed(parts):
         if obj is None:
             return None
-        if isinstance(obj, types.ModuleType) or _is_mock(obj):
+        if issubclass(type(obj), types.ModuleType) or _is_mock(obj):
             obj = getattr(obj, attr, None)
         elif modules_only:
             return None
@@ -202,7 +204,7 @@ def _static_attribute(obj: Any, attr: str) -> Any | None:
         return raw.__func__
     if isinstance(raw, classmethod):
         return types.MethodType(raw.__func__, obj if is_class else type(obj))
-    if isinstance(raw, types.FunctionType):
+    if type(raw) is types.FunctionType:
         if is_class or _in_instance_dict(obj, attr):
             return raw
         return types.MethodType(raw, obj)
@@ -225,7 +227,7 @@ def _in_instance_dict(obj: Any, attr: str) -> bool:
 def _is_mock(obj: Any) -> bool:
     """A ``unittest.mock`` object; never imports ``unittest.mock`` itself."""
     module = sys.modules.get("unittest.mock")
-    return module is not None and isinstance(obj, module.NonCallableMock)
+    return module is not None and instance_of(obj, module.NonCallableMock)
 
 
 #: Which calls :func:`called_names` reports.
@@ -370,8 +372,8 @@ def bytecode_global_refs(func: Any) -> list[tuple[str, ...]]:
     chains: list[tuple[str, ...]] = [(n,) for n in names if n in g]
     for (root,) in list(chains):
         module = g[root]
-        if isinstance(module, types.ModuleType):
+        if issubclass(type(module), types.ModuleType):
             chains.extend(
-                (root, n) for n in names if n != root and isinstance(getattr(module, n, None), types.FunctionType)
+                (root, n) for n in names if n != root and (type(getattr(module, n, None)) is types.FunctionType)
             )
     return chains

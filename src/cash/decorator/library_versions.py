@@ -513,7 +513,7 @@ def _code_names(code: types.CodeType) -> tuple[str, ...]:
 
 
 def _defining_module(value: Any) -> types.ModuleType | None:
-    if isinstance(value, types.ModuleType):
+    if issubclass(type(value), types.ModuleType):
         return value
     if isinstance(value, type) or callable(value):
         name = getattr(value, "__module__", None)

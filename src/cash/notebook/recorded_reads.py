@@ -335,7 +335,9 @@ def may_change_module_data(code: str, user_ns: Mapping[str, Any] | None) -> froz
     try:
         return reached_user_code(code, user_ns).modules | module_state_writes(code, user_ns)
     except Exception:  # noqa: BLE001 - when unsure, every module may change
-        return frozenset(name for name, module in list(sys.modules.items()) if isinstance(module, types.ModuleType))
+        return frozenset(
+            name for name, module in list(sys.modules.items()) if issubclass(type(module), types.ModuleType)
+        )
 
 
 def _named_in(code: str, user_ns: Mapping[str, Any] | None, value: Any) -> bool:
@@ -427,7 +429,7 @@ def _module_of(label: str) -> str | None:
     parts = label.split(".")
     for end in range(len(parts) - 1, 0, -1):
         name = ".".join(parts[:end])
-        if isinstance(sys.modules.get(name), types.ModuleType):
+        if issubclass(type(sys.modules.get(name)), types.ModuleType):
             return name
     return None
 
@@ -439,7 +441,7 @@ def _module_value(label: str) -> tuple[bool, Any]:
         return False, None
     obj: Any = sys.modules[name]
     for attr in label[len(name) + 1 :].split("."):
-        namespace = vars(obj) if isinstance(obj, (types.ModuleType, type)) else None
+        namespace = vars(obj) if issubclass(type(obj), (types.ModuleType, type)) else None
         if namespace is None or attr not in namespace:
             return False, None
         obj = namespace[attr]

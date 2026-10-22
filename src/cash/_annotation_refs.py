@@ -87,7 +87,7 @@ def _walk(value: Any, namespace: dict, out: list, seen: dict) -> None:
     if isinstance(forward, str):
         _walk(forward, namespace, out, seen)
         return
-    if isinstance(value, (type, types.FunctionType)):
+    if issubclass(type(value), (type, types.FunctionType)):
         out.append(value)
         # A generic alias of a user class (`Box[int]`) is not a type; its
         # origin is. Plain classes have no args to walk.
@@ -103,7 +103,7 @@ def _walk(value: Any, namespace: dict, out: list, seen: dict) -> None:
         _walk(arg, namespace, out, seen)
     # `Annotated[int, AfterValidator(check)]`: the validator's function runs.
     func = getattr(value, "func", None)
-    if isinstance(func, types.FunctionType):
+    if type(func) is types.FunctionType:
         out.append(func)
 
 
@@ -133,7 +133,7 @@ def annotation_referents(obj: Any, is_user: Any = None) -> list[Any]:
                     owners.extend(a for a in (member.fget, member.fset) if a is not None)
                     continue
                 member = getattr(member, "__func__", member)
-                if isinstance(member, types.FunctionType):
+                if type(member) is types.FunctionType:
                     owners.append(getattr(member, "__wrapped__", member))
     else:
         obj = getattr(obj, "__func__", obj)

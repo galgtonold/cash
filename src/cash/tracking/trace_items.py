@@ -274,16 +274,16 @@ class _Digester:
                 raise _Opaque
             h.update(b"b" + struct.pack("<q", len(v)) + bytes(v))
             return
-        if isinstance(v, types.ModuleType):
+        if issubclass(type(v), types.ModuleType):
             h.update(b"m" + str(v.__name__).encode())
             return
-        if isinstance(v, types.FunctionType):
+        if type(v) is types.FunctionType:
             self._function(v)
             return
         if isinstance(v, (types.BuiltinFunctionType, types.BuiltinMethodType)):
             owner = getattr(v, "__self__", None)
             h.update(b"B" + f"{getattr(v, '__module__', None)}.{getattr(v, '__qualname__', '')}".encode())
-            if owner is not None and not isinstance(owner, types.ModuleType):
+            if owner is not None and not issubclass(type(owner), types.ModuleType):
                 h.update(b"@" + type(owner).__qualname__.encode())
             return
         if isinstance(v, type):
@@ -317,7 +317,7 @@ class _Digester:
             parts = sorted(value_digest(x) for x in v)
             h.update(t.__name__.encode() + "|".join(parts).encode())
             return
-        if isinstance(v, types.MethodType):
+        if type(v) is types.MethodType:
             h.update(b"M" + type(v.__self__).__qualname__.encode())
             self.feed(v.__func__)
             return
@@ -535,18 +535,18 @@ def candidates(obj: Any) -> Iterable[types.FunctionType]:
     while stack and seen < 16:
         seen += 1
         o = stack.pop()
-        if isinstance(o, types.FunctionType):
+        if type(o) is types.FunctionType:
             yield o
             wrapped = o.__dict__.get("__wrapped__") if o.__dict__ else None
             if wrapped is not None:
                 stack.append(wrapped)
-        elif isinstance(o, (types.MethodType, staticmethod, classmethod)):
+        elif issubclass(type(o), (types.MethodType, staticmethod, classmethod)):
             stack.append(o.__func__)
         elif isinstance(o, property):
             stack.extend(f for f in (o.fget, o.fset, o.fdel) if f is not None)
         elif isinstance(o, functools.partial):
             stack.append(o.func)
-        elif o is not None and not isinstance(o, (type, types.ModuleType)):
+        elif o is not None and not issubclass(type(o), (type, types.ModuleType)):
             jitted = jit_python_function(o)
             if jitted is not None:
                 stack.append(jitted)
@@ -618,7 +618,7 @@ def inspect_getattr(obj: Any, name: str) -> Any:
             if found is not _MISSING:
                 return found
         raise AttributeError(name)
-    if isinstance(obj, types.ModuleType):
+    if issubclass(type(obj), types.ModuleType):
         found = obj.__dict__.get(name, _MISSING)
         if found is _MISSING:
             raise AttributeError(name)

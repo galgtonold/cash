@@ -6,6 +6,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from cash._user_attrs import attribute_or
+
 if TYPE_CHECKING:
     from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
     from cash.notebook.tracking_state import TrackingState
@@ -174,7 +176,7 @@ class RebuildCostLedger:
         final ``sales`` is one of them. Still only in a
         notebook, where a restart re-runs cells by their source.
         """
-        backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
+        backend = attribute_or(self.cash_instance, "backend", None) if self.cash_instance else None
         last, self._cell_last_key = self._cell_last_key, {}
         later = self.tracking_state.read_by_later_cells
         self.tracking_state.read_by_later_cells = None

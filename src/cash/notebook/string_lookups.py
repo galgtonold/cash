@@ -48,6 +48,8 @@ import types
 from collections.abc import Iterable, Mapping
 from typing import Any, NamedTuple
 
+from cash._user_attrs import attribute_or, instance_of
+
 from .._memo import CODE_OBJECTS, NOTEBOOK_STATEMENTS, LruMemo
 from ..analysis.ast_util import fix_locations
 from ..analysis.bytecode import instructions
@@ -128,7 +130,7 @@ def _facts(code: types.CodeType) -> _Facts:
 
 
 def _is_notebook_module(value: Any, namespace: Mapping[str, Any]) -> bool:
-    return isinstance(value, types.ModuleType) and getattr(value, "__dict__", None) is namespace
+    return instance_of(value, types.ModuleType) and attribute_or(value, "__dict__", None) is namespace
 
 
 def _holds_a_namespace(value: Any, namespace: Mapping[str, Any]) -> bool:

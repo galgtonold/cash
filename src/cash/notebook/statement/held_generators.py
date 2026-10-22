@@ -58,10 +58,10 @@ def _method_draws(obj: Any, method: str) -> tuple[tuple[str, ...], ...]:
     """The attribute chains from ``self`` that the method *method* of *obj*'s
     own class (code of the user's) draws from: ``("rng",)`` for a body that
     calls ``self.rng.normal()``."""
-    if isinstance(obj, (type, types.ModuleType)):
+    if issubclass(type(obj), (type, types.ModuleType)):
         return ()
     fn = _attribute(type(obj), method)
-    if not isinstance(fn, types.FunctionType) or not is_user_code_file(fn.__code__.co_filename):
+    if type(fn) is not types.FunctionType or not is_user_code_file(fn.__code__.co_filename):
         return ()
     known = _METHOD_CHAINS.get(fn.__code__)
     if known is None:

@@ -606,13 +606,42 @@ class TieredBackend(CacheBackend):
             stored_metadata["persist_skipped"] = "bytes"
         if not decision.persist:
             return False
+        self._persist_call_refs(stored_metadata.get("call_refs"))
+        return self._write_from_memory(key, stored_metadata, rebuild_seconds)
+
+    def _persist_call_refs(self, refs) -> None:
+        """Write to the persistent tiers the call entries an entry about to be
+        written there refers to (``call_refs``), where only the RAM tier
+        holds them.
+
+        A statement's entry holds a ``CallRef`` in place of a call's result,
+        and restoring it reads the call entry. Written without them, the
+        statement's entry on disk pointed at entries a restart had dropped:
+        ``raw = pd.concat(parts)``, whose concat took long enough to get an
+        entry of its own but not one on disk, was written at the end of its
+        cell, and after a restart missed and rebuilt the folder it came from.
+        The call entries are never judged on their own (`_drop_persisted_call_refs`):
+        the statement's decision is theirs.
+        """
+        for ref in refs or ():
+            try:
+                entry = self.backends[0].peek_entry(ref, value=False)
+                if entry is not None and not self._persisted(entry[0].get("storage")):
+                    self._write_from_memory(ref, entry[0], entry[0].get("rebuild_time"))
+            except Exception:  # the statement then misses after a restart, never more
+                logger.debug("Could not persist call ref %r", ref, exc_info=True)
+
+    def _write_from_memory(self, key: str, stored_metadata: dict, rebuild_seconds: float | None) -> bool:
+        """Write the entry under *key*, whose metadata the RAM tier holds as
+        *stored_metadata*, to the persistent tiers. True when written."""
         size = stored_metadata.get("cost_model_size_bytes", stored_metadata.get("size", 0))
         metadata = {
             k: v
             for k, v in stored_metadata.items()
             if k not in ("persist_skipped", "source", "storage", "defer_persist")
         }
-        metadata["rebuild_time"] = rebuild_seconds
+        if rebuild_seconds is not None:
+            metadata["rebuild_time"] = rebuild_seconds
         serialized = self._stored_payload(key, stored_metadata)
         may_share = getattr(self.backends[0], "may_share_with_caller", None)
         if serialized is None and may_share is not None and may_share(key):
@@ -752,6 +781,8 @@ class TieredBackend(CacheBackend):
                         decorated=metadata.get(DECORATED_CALLS_FIELD),
                     )
                 self._drop_persisted_call_refs(metadata.get("call_refs"))
+            if decision.persist:
+                self._persist_call_refs(metadata.get("call_refs"))
             try:
                 if decision.persist and disk_alone:
                     metadata[DISK_ALONE] = True
