@@ -181,6 +181,7 @@ def _fresh(held: list[Iterable[Any]], places: set[int], limit: CpuLimit) -> list
 
 _SLOTS: dict[type, tuple] = {}
 _USERS: dict[type, bool] = {}
+_REDUCES: dict[type, bool] = {}
 _MODULE_OF = type.__dict__["__module__"].__get__
 
 
@@ -212,9 +213,12 @@ def _object_parts(item: Any, kind: type) -> list:
     """What pickle writes with *item*, an object of *kind* that is no
     builtin container: its attributes, its slots, the items of a builtin
     container it subclasses, and, for a library's object with no attributes
-    of its own (a numpy object array, a ``functools.partial``, a pandas
-    block), what its own ``__reduce_ex__`` hands pickle. No code of a user's
-    class runs."""
+    of its own (a numpy object array, a ``functools.partial``) or a reduce
+    of its own (a pandas block), what its own ``__reduce_ex__`` hands
+    pickle. A pandas block keeps its values out of its attributes, and once
+    its dtype is read it has one (``_cache``): read by its attributes alone,
+    a function in a frame's object column went unseen after ``df.dtypes``.
+    No code of a user's class runs."""
     if kind is types.MethodType:  # read by the type's own members, as pickle reads it
         return [item.__func__, item.__self__]
     parts: list = []
@@ -228,9 +232,20 @@ def _object_parts(item: Any, kind: type) -> list:
             continue
     if issubclass(kind, _BUILTIN_CONTAINERS):
         parts.extend(_items(item, kind))
-    elif not attributes and not _users(kind):
+    elif not _users(kind) and (not attributes or _reduces(kind)):
         parts.extend(_reduced(item, kind))
     return parts
+
+
+def _reduces(kind: type) -> bool:
+    """Does *kind*, a library's class, define how pickle reduces it
+    (``__reduce_ex__`` or ``__reduce__`` other than ``object``'s)?"""
+    found = _REDUCES.get(kind)
+    if found is None:
+        found = _REDUCES[kind] = (
+            kind.__reduce_ex__ is not object.__reduce_ex__ or kind.__reduce__ is not object.__reduce__
+        )
+    return found
 
 
 def _items(item: Any, kind: type) -> list:

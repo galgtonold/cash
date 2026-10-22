@@ -218,3 +218,15 @@ def test_in_a_notebook_an_object_array_or_frame_column_holding_a_closure_keeps_t
         for cell in cells:
             run_cash_cell(cash_magics, cell, cells=cells)
         assert cash_magics.shell.user_ns["r"] == 27.0, kind
+
+
+def test_a_function_in_a_frame_column_is_found_after_the_frames_dtypes_are_read():
+    """A pandas block keeps its values out of its attributes, and reading
+    its dtype gives it one (``_cache``): read by that attribute alone, the
+    block hid the function in its column."""
+    import pandas as pd
+
+    arr = np.zeros(3)
+    frame = pd.DataFrame({"f": [lambda: arr, None]})
+    _ = frame.dtypes, frame["f"].dtype
+    assert closures_sharing({"a": arr, "g": frame}, 5.0) == (["g"], True)
