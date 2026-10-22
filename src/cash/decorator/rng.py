@@ -238,7 +238,7 @@ def unseeded_library_calls_in(
         func_node = node.func
         if isinstance(func_node, ast.Attribute) and func_node.attr == "sample":
             receiver = resolve_callee(func_node.value, namespace)
-            if isinstance(receiver, types.ModuleType) or len(node.args) > _SAMPLE_SEED_POSITION:
+            if issubclass(type(receiver), types.ModuleType) or len(node.args) > _SAMPLE_SEED_POSITION:
                 continue  # `random.sample` is the source scan's; a seed passed by position
             spelled = ast.unparse(func_node.value)
             last = spelled.rsplit(".", 1)[-1]

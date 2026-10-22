@@ -4,10 +4,12 @@ effects it observes while a body runs."""
 from __future__ import annotations
 
 import ast
+import collections
 import dataclasses
 import enum
 import hashlib
 import inspect
+import itertools
 import logging
 import sys
 import textwrap
@@ -47,6 +49,7 @@ from ..source_reading import getsource, getsourcelines
 from ..tracking.randomness import capture_argument_carrier_states, moved_carriers, rng_carrier_kind
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
 from . import code_trace
+from .arg_hashing import is_cow_pandas
 from .arg_key import keyed_arguments
 from .cash_key import cash_key_method_of_type
 from .closure_fold import capture_digest, iter_code_scopes, unsafe_uses_of
@@ -89,7 +92,7 @@ def compared_by_identity(value) -> bool:
     own object (`ResultStore.restore_identity`): ``MISSING = object()``. A
     class, function or module pickles by reference and needs none of this.
     """
-    if value is None or isinstance(value, (type, types.ModuleType)) or inspect.isroutine(value):
+    if value is None or issubclass(type(value), (type, types.ModuleType)) or inspect.isroutine(value):
         return False
     return type(value).__eq__ is object.__eq__
 
@@ -123,6 +126,232 @@ def sentinel_ref(func, result) -> list | None:
 _MISSING_GLOBAL = object()
 
 
+#: Values nothing can be written through, told apart by type alone so the
+#: thousands of items a function may reach cost a set lookup each.
+_PLAIN_IMMUTABLE = frozenset({int, float, complex, bool, str, bytes, type(None), range, slice})
+
+
+def _by_reference(value) -> bool:
+    """A class, function or module: pickled by reference, so a hit's is itself."""
+    return isinstance(value, (type, types.ModuleType)) or inspect.isroutine(value)
+
+
+def _comes_back_as_itself(value) -> bool:
+    """*value* is rebuilt by pickle as the very same object, with nothing
+    applied to it: a ``logging.Logger`` (``getLogger('app')``), an object
+    pickled by its name. A hit hands back what the run did. Read from the
+    shape of its reduce, never by pickling it: rebuilt by a call on plain
+    immutable arguments with no state, items or setter, and that call
+    gives back *value* itself. A state a reduce carries would be applied to
+    the live object by a hit, so it is not itself (a singleton whose reduce
+    returns its ``__dict__``). Not asked of a plain container, an array or a
+    frame, whose reduce would copy what they hold."""
+    kind = type(value)
+    if (
+        kind.__name__ in _BUFFER_TYPES
+        or isinstance(value, (dict, list, tuple, set, frozenset, collections.deque, bytearray))
+        or (
+            getattr(kind, "__reduce__", None) is object.__reduce__
+            and getattr(kind, "__reduce_ex__", None) is object.__reduce_ex__
+        )
+    ):
+        return False
+    if isinstance(value, logging.Logger):
+        # Its own reduce calls `getLogger(name)`, which makes and registers
+        # a logger for a name none has: looked up instead.
+        return _known_logger((value.name,)) is value
+    try:
+        rv = value.__reduce_ex__(5)
+        if isinstance(rv, str):
+            import pickle
+
+            module = sys.modules.get(pickle.whichmodule(value, rv))
+            found: Any = module
+            for part in rv.split("."):
+                found = getattr(found, part)
+            return found is value
+        if not isinstance(rv, tuple) or len(rv) < 2 or not callable(rv[0]):
+            return False
+        if any(part is not None for part in rv[2:]) or not _plain_arguments(rv[1]):
+            return False
+        return _rebuilt_by(rv[0], rv[1]) is value
+    except Exception:  # noqa: BLE001 - not rebuilt as itself, as far as is known
+        return False
+
+
+#: What `_rebuilt_by` answers for a call it will not make.
+_NOT_CALLED = object()
+
+
+def _rebuilt_by(maker, args):
+    """What a hit's ``maker(*args)`` gives back, found without running any
+    code: ``logging.getLogger(name)`` is looked up among the loggers already
+    made, and a function is only read, and only when its body is a bare
+    ``return NAME`` of a module global. Nothing is called. A class
+    would run its ``__init__`` here on each store (opening what it opens),
+    and again on each hit; a ``functools.partial`` or another library
+    wrapper reports a library module whatever it wraps (``partial(Client,
+    timeout=9)``); and a library function can do anything (``open(path,
+    'w')`` empties the file). Anything else: `_NOT_CALLED`."""
+    if maker is logging.getLogger:
+        return _known_logger(args)
+    if isinstance(maker, types.FunctionType) and not args:
+        name = _bare_global_return(maker.__code__)
+        if name is not None and name in maker.__globals__:
+            return maker.__globals__[name]
+    return _NOT_CALLED
+
+
+def _known_logger(args):
+    """The logger ``logging.getLogger(*args)`` would hand back, when it is
+    already made; looked up rather than called, which would make and
+    register a new one for a name no logger has yet."""
+    if not args or args[0] is None or args[0] == logging.root.name:
+        return logging.root
+    if len(args) != 1:
+        return _NOT_CALLED
+    found = logging.Logger.manager.loggerDict.get(args[0])
+    return found if isinstance(found, logging.Logger) else _NOT_CALLED
+
+
+def _bare_global_return(code) -> str | None:
+    """``NAME`` for a function whose whole body is ``return NAME``, NAME
+    a global; otherwise None."""
+    import dis
+
+    if code.co_argcount or code.co_kwonlyargcount or code.co_flags & (inspect.CO_VARARGS | inspect.CO_VARKEYWORDS):
+        return None
+    steps = [i for i in dis.get_instructions(code) if i.opname not in ("RESUME", "NOP", "CACHE")]
+    if len(steps) == 2 and steps[0].opname == "LOAD_GLOBAL" and steps[1].opname == "RETURN_VALUE":
+        return steps[0].argval
+    return None
+
+
+def _plain_arguments(args) -> bool:
+    """*args* is a tuple of plain immutable values (tuples of them included)."""
+    if not isinstance(args, tuple):
+        return False
+    return all(type(a) in _PLAIN_IMMUTABLE or (type(a) is tuple and _plain_arguments(a)) for a in args)
+
+
+#: How many items of a container the function names are looked for in its
+#: result (``return CONFIG["sub"]``), and how many members of an object ndarray
+#: the result is walked into.
+SHARED_ITEMS = 256
+
+
+#: pandas' immutable scalars, whose ``__dict__`` `is_mutable` counts.
+_PANDAS_SCALARS = frozenset({"Timestamp", "Timedelta", "Period", "NaTType"})
+
+
+def _unwritable(value) -> bool:
+    """Nothing can be written through *value* itself: an enum member, a
+    frozen dataclass, or a value `is_mutable` finds no way into."""
+    if isinstance(value, enum.Enum):
+        return True
+    kind = type(value)
+    if kind.__name__ in _PANDAS_SCALARS and (kind.__module__ or "").startswith("pandas"):
+        return True  # a ``__dict__`` only for attributes set by hand
+    if any(k.__name__ == "ExtensionDtype" and (k.__module__ or "").startswith("pandas") for k in kind.__mro__):
+        return True  # a dtype (``Int64Dtype()``, ``CategoricalDtype([...])``): immutable
+    params = getattr(kind, "__dataclass_params__", None)
+    if params is not None and getattr(params, "frozen", False):
+        return True
+    return not is_mutable(value)
+
+
+def _items_of(value):
+    """``(key, item)`` for the first `SHARED_ITEMS` items of a container (a
+    dataclass's fields included), or None. *key* is ``(False, k)`` for an
+    item, ``(True, name)`` for a field: `_label` builds the text only when
+    warning."""
+    if isinstance(value, dict):
+        items = value.items() if len(value) <= SHARED_ITEMS else itertools.islice(value.items(), SHARED_ITEMS)
+        return (((False, k), v) for k, v in items)
+    if isinstance(value, (list, tuple, set, frozenset, collections.deque)):
+        return (((False, i), v) for i, v in enumerate(itertools.islice(value, SHARED_ITEMS)))
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        fields = dataclasses.fields(value)[:SHARED_ITEMS]
+        return (((True, f.name), getattr(value, f.name, None)) for f in fields)
+    return None
+
+
+def _label(name) -> str:
+    """The text of a name `_outside_objects` gave: a string, or ``(base, key)``
+    for an item (``CONFIG['sub']``) or a field (``SETTINGS.rows``)."""
+    if isinstance(name, str):
+        return name
+    base, (field, key) = name
+    return f"{base}.{key}" if field else f"{base}[{key!r}]"
+
+
+def _outside_objects(func):
+    """``(what, name, keeper, value)`` for each object outside a call that the
+    function reaches by name, so its result may hold it: each closure
+    variable, module global the body names, default argument and attribute
+    of the function itself; the attributes of a class or module of the
+    user's it names (``Holder.ROWS``); and the first `SHARED_ITEMS` items of
+    each container among all of them (``CONFIG["sub"]``, ``NESTED[0]``,
+    ``Holder.CFG["sub"]``). *keeper* is what keeps the object, for the
+    warning; *name* is for `_label`."""
+    named: list[tuple[str, str, str, Any]] = []
+    try:
+        code = func.__code__
+        for name, cell in zip(code.co_freevars, func.__closure__ or ()):
+            try:
+                named.append(("the closure variable", name, "the closure", cell.cell_contents))
+            except ValueError:  # an empty cell
+                continue
+        globals_ = func.__globals__
+        names = {name for scope in iter_code_scopes(code) for name in scope.co_names}
+    except (AttributeError, ValueError, RuntimeError):
+        return
+    for name in sorted(names):
+        value = globals_.get(name, _MISSING_GLOBAL)
+        if value is not _MISSING_GLOBAL:
+            named.append(("the module global", name, "the module", value))
+    params = list(inspect.signature(func).parameters) if callable(func) else []
+    defaults = getattr(func, "__defaults__", None) or ()
+    positional = [p for p in params if p not in (getattr(func, "__kwdefaults__", None) or {})]
+    for name, value in zip(positional[len(positional) - len(defaults) :], defaults):
+        named.append(("the default argument", name, "the function", value))
+    for name, value in (getattr(func, "__kwdefaults__", None) or {}).items():
+        named.append(("the default argument", name, "the function", value))
+    for name, value in list((getattr(func, "__dict__", None) or {}).items()):
+        if not name.startswith("__"):
+            named.append(("the function attribute", f"{func.__name__}.{name}", "the function", value))
+    reached: list[tuple[str, Any, str, Any]] = []
+    for what, name, keeper, value in named:
+        if isinstance(value, (type, types.ModuleType)):
+            module = value if isinstance(value, types.ModuleType) else sys.modules.get(value.__module__)
+            if not (is_user_code_module(module) or getattr(module, "__name__", None) in MAIN_MODULE_NAMES):
+                continue
+            if isinstance(value, enum.EnumMeta):
+                continue  # its members come back as themselves (pickled by name)
+            kind = "the class attribute" if isinstance(value, type) else "the module global"
+            owner = "the class" if isinstance(value, type) else "its module"
+            for attr, held in list(vars(value).items()):
+                if not attr.startswith("__"):
+                    reached.append((kind, f"{name}.{attr}", owner, held))
+            continue
+        reached.append((what, name, keeper, value))
+    for entry in reached:
+        yield entry
+        if type(entry[3]) in _PLAIN_IMMUTABLE:
+            continue
+        items = _items_of(entry[3])
+        what, name, keeper, _ = entry
+        if items is not None:
+            item_of = f"an item of {what}"
+            for key, item in items:
+                if type(item) not in _PLAIN_IMMUTABLE:
+                    yield item_of, (name, key), keeper, item
+        elif not isinstance(entry[3], (type, types.ModuleType)):
+            # An object of the user's class (``REGISTRY.entries``).
+            for attr, held in _own_attributes(entry[3]):
+                yield f"an attribute of {what}", (name, (True, attr)), keeper, held
+
+
 def held_sentinels(func) -> dict[int, list]:
     """``id(object) -> ["global" | "closure", name]`` for each sentinel-like
     object *func*'s body names: a bare ``object()``, or an instance of the
@@ -145,19 +374,213 @@ def _sentinel_like(value) -> bool:
 
 
 def shares_memory(result, value) -> bool:
-    """Whether *result* and *value* may sit on the same buffer, cheaply.
+    """Whether *result* and *value* may sit on the same buffer, cheaply: an
+    ndarray, or a pandas frame or column without copy-on-write (``DF["a"]``
+    is a view of the frame there; under copy-on-write a write through it
+    copies first, so nothing is shared that a write could reach).
 
     ``may_share_memory`` is a bounds check, not the exact analysis, so it costs
     nothing and errs toward saying yes -- which for a warning is the right
     direction.
     """
+    mine, theirs = _buffers(result), _buffers(value)
+    if not mine or not theirs:
+        return False
+    import numpy as _np
+
+    return any(_np.may_share_memory(a, b) for a in mine for b in theirs)
+
+
+def _buffers(value) -> list:
+    """The numpy arrays *value* writes into: itself for an ndarray; for a
+    pandas column or frame without copy-on-write, the arrays of its blocks
+    (a frame keeps each dtype's columns in one block, so this is every
+    column), an extension array's own ndarray included (``Int64``'s values
+    and mask, a datetime's)."""
+    kind = type(value)
+    if kind.__name__ == "ndarray" and kind.__module__ == "numpy":
+        return [value]
+    if kind.__name__ not in ("Series", "DataFrame") or not (kind.__module__ or "").startswith("pandas"):
+        return []
+    if is_cow_pandas(value):
+        return []
     try:
-        import numpy as _np
-    except ImportError:
+        found = []
+        for block in value._mgr.blocks:
+            data = block.values
+            if type(data).__name__ == "ndarray":
+                found.append(data)
+                continue
+            for part in ("_ndarray", "_data", "_mask"):
+                found.extend(_array_slot(data, part))
+        return found
+    except Exception:  # noqa: BLE001 - a frame that cannot be read: nothing said
+        return []
+
+
+def _extension_values(value) -> list:
+    """The extension arrays (not ndarrays) the blocks of a pandas column or
+    frame without copy-on-write hold: a column taken from a frame holds the
+    very object its frame's block does."""
+    kind = type(value)
+    if kind.__name__ not in ("Series", "DataFrame") or not (kind.__module__ or "").startswith("pandas"):
+        return []
+    if is_cow_pandas(value):
+        return []
+    try:
+        return [block.values for block in value._mgr.blocks if type(block.values).__name__ != "ndarray"]
+    except Exception:  # noqa: BLE001 - a frame that cannot be read: nothing said
+        return []
+
+
+def _block_arrays(value) -> list:
+    """The arrays a pandas frame's or column's blocks hold, ndarrays and
+    extension arrays, with copy-on-write or without: ``DF['c'].array`` and
+    ``.values`` of an extension column hand back that very object, and
+    ``.array`` of a numpy column one over the block's own writable ndarray.
+    A write through either reaches the frame."""
+    kind = type(value)
+    if kind.__name__ not in ("Series", "DataFrame") or not (kind.__module__ or "").startswith("pandas"):
+        return []
+    try:
+        return [block.values for block in value._mgr.blocks]
+    except Exception:  # noqa: BLE001 - a frame that cannot be read: nothing said
+        return []
+
+
+_EXTENSION_PARTS = ("_ndarray", "_data", "_mask", "_codes")
+
+
+def _exposed_in(held_arrays: list) -> tuple[set[int], list]:
+    """The extension arrays among *held_arrays* (``DF['c'].array``), and the
+    ndarrays they keep: what `_exposes` compares a frame's blocks with."""
+    exposed = [value for value in held_arrays if _is_extension_array(value)]
+    parts = [array for value in exposed for part in _EXTENSION_PARTS for array in _array_slot(value, part)]
+    return {id(value) for value in exposed}, parts
+
+
+def _exposes(frame, exposed: set[int], exposed_parts: list) -> bool:
+    """An extension array of the result is *frame*'s own, or one over its
+    memory, copy-on-write or not: a write through it reaches *frame*."""
+    blocks = _block_arrays(frame)
+    if any(id(values) in exposed for values in blocks):
+        return True
+    if not exposed_parts or _read_only(exposed_parts):
         return False
-    if not isinstance(result, _np.ndarray) or not isinstance(value, _np.ndarray):
+    theirs = [
+        array
+        for values in blocks
+        for array in (
+            [values]
+            if type(values).__name__ == "ndarray"
+            else [a for part in _EXTENSION_PARTS for a in _array_slot(values, part)]
+        )
+    ]
+    if not theirs:
         return False
-    return bool(_np.may_share_memory(result, value))
+    import numpy as _np
+
+    return any(_np.may_share_memory(a, b) for a in exposed_parts for b in theirs)
+
+
+def _is_extension_array(value) -> bool:
+    """A pandas ExtensionArray itself (``DF['c'].array``), not a column."""
+    return any(
+        k.__name__ == "ExtensionArray" and (k.__module__ or "").startswith("pandas") for k in type(value).__mro__
+    )
+
+
+def _held_arrays(result, depth: int | None = None) -> list:
+    """*result* and what it holds within *depth* levels that holds memory:
+    ndarrays, pandas columns and frames, extension arrays. The same walk as
+    `_found_in`, the first `SHARED_ITEMS` of each container
+    (``{"train": X[:8]}``)."""
+    found: list = []
+    pending = [(result, SHARED_RESULT_DEPTH if depth is None else depth)]
+    while pending:
+        value, left = pending.pop()
+        name = type(value).__name__
+        if name in _BUFFER_TYPES or _is_extension_array(value):
+            found.append(value)
+            continue
+        if left <= 0 or isinstance(value, enum.Enum) or type(value) in _PLAIN_IMMUTABLE:
+            continue
+        if isinstance(value, dict):
+            members = value.values()
+        elif isinstance(value, (list, tuple, set, frozenset, collections.deque)):
+            members = value
+        else:
+            state = getattr(value, "__dict__", None)
+            if not isinstance(state, dict):
+                continue
+            members = state.values()
+        pending.extend((member, left - 1) for member in itertools.islice(members, SHARED_ITEMS))
+    return found
+
+
+def _quiet(value, cheap: bool = False) -> bool:
+    """A hit hands back *value* as it is, or nothing can be written through
+    it: nothing to say for a result holding it. *cheap* leaves out the
+    question to its reduce (`_comes_back_as_itself`)."""
+    if _by_reference(value) or _sentinel_like(value) or _unwritable(value):
+        return True
+    return not cheap and _comes_back_as_itself(value)
+
+
+def _own_attributes(value):
+    """``(name, attribute)`` of the first `SHARED_ITEMS` attributes of an
+    object of the user's class that something could be written through."""
+    module = sys.modules.get(type(value).__module__)
+    if not (is_user_code_module(module) or getattr(module, "__name__", None) in MAIN_MODULE_NAMES):
+        return []
+    state = getattr(value, "__dict__", None)
+    if not isinstance(state, dict):
+        return []
+    return [
+        (attr, held)
+        for attr, held in itertools.islice(list(state.items()), SHARED_ITEMS)
+        if type(held) not in _PLAIN_IMMUTABLE
+    ]
+
+
+#: The types `_buffers` finds arrays in.
+_BUFFER_TYPES = frozenset({"ndarray", "Series", "DataFrame"})
+
+
+def _root(array):
+    """What *array* views in the end: the array that owns the memory, or the
+    object (a ``bytearray``, an ``mmap``) it was built over. Two arrays that
+    share memory share it, so comparing roots first spares a bounds check
+    per array a function names."""
+    while type(array).__name__ == "ndarray" and array.base is not None:
+        array = array.base
+    return array
+
+
+def _array_slot(data: Any, part: str) -> list:
+    """The ndarray an extension array keeps in *part*, as a plain attribute
+    or a slot of its own; never through a property (``_data`` of
+    ``ArrowStringArray`` is a deprecated one that warns)."""
+    held = inspect.getattr_static(data, part, None)
+    if type(held).__name__ == "ndarray":
+        return [held]
+    if isinstance(held, (types.GetSetDescriptorType, types.MemberDescriptorType)):
+        held = getattr(data, part, None)
+        return [held] if type(held).__name__ == "ndarray" else []
+    return []
+
+
+def _read_only(arrays: list) -> bool:
+    """Every one of *arrays*, and every ndarray it views, is read-only: no
+    write can reach the memory through any of them or what they came from."""
+    for array in arrays:
+        while type(array).__name__ == "ndarray":
+            if array.flags.writeable:
+                return False
+            array = array.base
+        if array is not None and not isinstance(array, bytes):
+            return False
+    return True
 
 
 def make_opaque_issue(func_name: str, opaque_list: str) -> Any:
@@ -216,8 +639,39 @@ def static_effect_kinds(report: Any) -> set[str]:
 _NETWORK_LABEL = observed_label(EffectKind.NETWORK)
 
 
-#: How deep into a returned container an argument is looked for.
+#: How deep into a returned container an argument or an object the
+#: function names is looked for.
 SHARED_RESULT_DEPTH = 2
+
+
+def _found_in(value, targets: dict[int, Any], depth: int) -> int | None:
+    """The id of the first of *targets* that *value* is or holds within
+    *depth* levels: a dict's values (``OrderedDict``, ``defaultdict``), a
+    list's, tuple's, set's or deque's items, an object's attributes, or an
+    object ndarray's members -- the first `SHARED_ITEMS` of each, so a
+    result of a million rows costs what one of 256 does."""
+    key = id(value)
+    if key in targets and targets[key] is value:
+        return key
+    if depth <= 0 or isinstance(value, enum.Enum):
+        # A member comes back as itself, with all it holds.
+        return None
+    if isinstance(value, dict):
+        members = value.values()
+    elif isinstance(value, (list, tuple, set, frozenset, collections.deque)):
+        members = value
+    elif type(value).__name__ == "ndarray" and getattr(getattr(value, "dtype", None), "kind", None) == "O":
+        members = value.flat
+    else:
+        state = getattr(value, "__dict__", None)
+        if not isinstance(state, dict):
+            return None
+        members = state.values()
+    for member in itertools.islice(members, SHARED_ITEMS):
+        found = _found_in(member, targets, depth - 1)
+        if found is not None:
+            return found
+    return None
 
 
 def describe_scope_use(reader: Any, name: str, cached: Any) -> str:
@@ -351,7 +805,7 @@ class PurityChecks:
         # the same function, and the user has already been told.
         self._static_flagged: set[str] = set()
 
-    def warn_shared_result(self, func, func_name: str, result, args, kwargs) -> None:
+    def warn_shared_result(self, func, func_name: str, result, args, kwargs) -> str | None:
         """Say so when the result shares state with something the caller holds.
 
         A hit hands back a value rebuilt from the stored bytes, so what the
@@ -363,26 +817,38 @@ class PurityChecks:
 
         Cash cannot tell whether the caller relies on that sharing, so this
         names what will differ rather than refusing to cache; ``assume_safe``
-        waives it. Detection is cheap and evidence-only: memory shared with an
-        ndarray argument (a bounds check), the result BEING or holding an
-        argument (identity), or the result being one of the function's module
-        globals (identity).
+        waives it. Detection is cheap and evidence-only (`_shared_with`): the
+        result being, holding or sharing memory with an argument, a module
+        global, or an object the function reaches by name. The words are
+        returned for the entry to keep, so a hit in another process says
+        them too. Every store is looked at (the walks are capped), so each
+        entry carries the words of what it shares, or none; the warning is
+        said once per function.
         """
         if self._registry.purity_mode(func_name) == "silent":
-            return
+            return None
         try:
             shared = self._shared_with(result, args, kwargs, func)
         except Exception:  # noqa: BLE001 - a diagnostic must never break a call
-            return
+            return None
         if shared is None:
+            return None
+        what, name, keeper = shared
+        said = f"the result {what} '{name}', which {keeper} still holds"
+        self.warn_shared_on_hit(func_name, said)
+        return said
+
+    def warn_shared_on_hit(self, func_name: str, said: str) -> None:
+        """The warning for a result found shared (`warn_shared_result`), said
+        again by the first hit of a process that never ran the call: there
+        the hit is the first value the caller gets, already separate."""
+        if self._registry.purity_mode(func_name) == "silent":
             return
-        what, name = shared
         self._notices.warn_once(
             CashImpurityWarning,
             func_name,
             "shared-result",
-            f"@cash.cache on {func_name}: the result {what} '{name}', which the "
-            f"caller still holds. A cache HIT hands back a value rebuilt from "
+            f"@cash.cache on {func_name}: {said}. A cache HIT hands back a value rebuilt from "
             f"the stored bytes, so from the next run on they are separate "
             f"objects: writes through one will not be seen in the other.",
             code="CACHE-RESULT-SHARED",
@@ -394,8 +860,9 @@ class PurityChecks:
             ),
         )
 
-    def _shared_with(self, result, args, kwargs, func) -> tuple[str, str] | None:
-        """``(what, name)`` for the first sharing found in *result*, or None."""
+    def _shared_with(self, result, args, kwargs, func) -> tuple[str, str, str] | None:
+        """``(what, name, keeper)`` for the first sharing found in *result*,
+        or None. *keeper* is who still holds the shared object."""
 
         try:
             names = list(inspect.signature(func).parameters)
@@ -403,41 +870,116 @@ class PurityChecks:
             names = []
         supplied = [(names[i] if i < len(names) else f"arg{i}", value) for i, value in enumerate(args)]
         supplied += list(kwargs.items())
+        caller = "the caller"
 
-        def contains(value, target, depth):
-            if value is target:
-                return True
-            if depth <= 0:
-                return False
-            kind = type(value)
-            if kind is dict:
-                return any(contains(v, target, depth - 1) for v in value.values())
-            if kind in (list, tuple, set, frozenset):
-                return any(contains(v, target, depth - 1) for v in value)
-            state = getattr(value, "__dict__", None)
-            if isinstance(state, dict):
-                return any(contains(v, target, depth - 1) for v in state.values())
-            return False
-
+        held_arrays: list | None = None
+        attributes: dict[int, tuple[str, Any]] = {}
         for name, value in supplied:
             if not is_mutable(value):
                 # Nothing can be written through it, so nothing can differ.
                 continue
             if value is result:
-                return "is the argument", name
-            if contains(result, value, SHARED_RESULT_DEPTH) and is_mutable(value):
-                return "holds the argument", name
-            shared = shares_memory(result, value)
-            if shared:
-                return "shares memory with the argument", name
+                return "is the argument", name, caller
+            if _found_in(result, {id(value): value}, SHARED_RESULT_DEPTH) is not None:
+                return "holds the argument", name, caller
+            if type(value).__name__ in _BUFFER_TYPES:
+                if held_arrays is None:
+                    held_arrays = _held_arrays(result)
+                if any(shares_memory(array, value) for array in held_arrays):
+                    return "shares memory with the argument", name, caller
+                exposed, exposed_parts = _exposed_in(held_arrays)
+                if exposed and _exposes(value, exposed, exposed_parts):
+                    return "shares memory with the argument", name, caller
+            for attr, held in _own_attributes(value):
+                attributes.setdefault(id(held), (f"{name}.{attr}", held))
+        if attributes:
+            # An attribute of an argument (``return self.rows``,
+            # ``obj.rows``): a run hands back the argument's own object.
+            targets = {key: held for key, (_, held) in attributes.items()}
+            for _ in range(len(targets)):
+                hit = _found_in(result, targets, SHARED_RESULT_DEPTH)
+                if hit is None:
+                    break
+                label, held = attributes[hit]
+                if not _quiet(held):
+                    return ("is " if held is result else "holds ") + "an attribute of the argument", label, caller
+                del targets[hit]
         globals_ = getattr(func, "__globals__", None)
         if isinstance(globals_, dict):
             # A sentinel the body returns is handed back as itself on a hit.
             if sentinel_ref(func, result) is not None:
                 return None
             for name, value in list(globals_.items()):
-                if value is result and is_mutable(value):
-                    return "is the module global", name
+                if value is result and is_mutable(value) and not _unwritable(value):
+                    if _comes_back_as_itself(value):
+                        return None
+                    return "is the module global", name, "the module"
+        # An object outside the call the body reaches by name, the result
+        # or held INSIDE it (``{'rows': ROWS}``, ``CONFIG["sub"]``,
+        # ``ARR[1:4]``): plain Python hands back that object, a hit a copy.
+        # Not one a hit puts back as itself (`held_sentinels`). Collected
+        # first so the result is walked once whatever the function names;
+        # whether one found can be written is settled only for that one.
+        outside: dict[int, tuple[str, Any, str, Any]] = {}
+        arrays: list[tuple[str, Any, str, Any]] = []
+        # What each item or attribute is of: an object a hit hands back as
+        # itself hands back what it holds with it (``{"reg": REGISTRY}``).
+        named_ids: dict[str, int] = {}
+        held_by: dict[int, list[int]] = {}
+        for entry in _outside_objects(func):
+            value = entry[3]
+            if type(value) in _PLAIN_IMMUTABLE:
+                continue
+            if isinstance(entry[1], str):
+                named_ids.setdefault(entry[1], id(value))
+            elif entry[1][0] in named_ids:
+                held_by.setdefault(named_ids[entry[1][0]], []).append(id(value))
+            outside.setdefault(id(value), entry)
+            if type(value).__name__ in _BUFFER_TYPES:
+                arrays.append(entry)
+
+        targets = {key: entry[3] for key, entry in outside.items()}
+        for attempt in range(len(targets)):
+            hit = _found_in(result, targets, SHARED_RESULT_DEPTH)
+            if hit is None:
+                break
+            what, name, keeper, value = outside[hit]
+            if not _quiet(value):
+                return ("is " if value is result else "holds ") + what, _label(name), keeper
+            del targets[hit]
+            if not _unwritable(value):
+                for inner in held_by.get(hit, ()):
+                    targets.pop(inner, None)
+            if attempt == 2:
+                # A result holding many such objects: settle them all once,
+                # by the tests that cost a type check (`_quiet`'s reduce is
+                # asked only of an object found in the result).
+                targets = {key: value for key, value in targets.items() if not _quiet(value, cheap=True)}
+        if not arrays:
+            return None
+        if held_arrays is None:
+            held_arrays = _held_arrays(result)
+        if not held_arrays:
+            return None
+        mine = [array for value in held_arrays for array in _buffers(value)]
+        roots = {id(_root(array)) for array in mine}
+        held = {id(values) for value in held_arrays for values in _extension_values(value)}
+        held |= {id(value) for value in held_arrays if _is_extension_array(value)}
+        exposed, exposed_parts = _exposed_in(held_arrays)
+        for what, name, keeper, value in arrays:
+            if held and any(id(values) in held for values in _extension_values(value)):
+                # The very extension array (interval, Arrow-backed): a
+                # write through either reaches the other.
+                return f"shares memory with {what}", _label(name), keeper
+            if exposed and _exposes(value, exposed, exposed_parts):
+                # ``DF['c'].array`` / ``.values``: the frame's own array, or
+                # one over its memory, copy-on-write or not.
+                return f"shares memory with {what}", _label(name), keeper
+            theirs = _buffers(value)
+            if not any(id(_root(array)) in roots for array in theirs) or _unwritable(value):
+                continue
+            if any(shares_memory(array, value) for array in held_arrays) and not _read_only(mine + theirs):
+                return f"shares memory with {what}", _label(name), keeper
         return None
 
     def learn_mutating_captures(self, func: Callable, func_name: str, watched: dict[str, tuple[str, str]]) -> bool:
@@ -995,7 +1537,7 @@ class PurityChecks:
         except Exception:  # noqa: BLE001 - user source; a heuristic must not break a call
             return False
         value = module_ns[name]
-        if isinstance(value, types.ModuleType):
+        if issubclass(type(value), types.ModuleType):
             # `conf.RATE` reads of a module of the user's are folded by value
             # (`ModuleAttrFold.module_attr_parts`); "mutated elsewhere" is `conf.RATE = ...`.
             return is_user_module(value, own_package(reader))

@@ -485,7 +485,7 @@ def _plain_attr(obj: Any, attr: str) -> str:
 
 def _library_of(obj: Any) -> str | None:
     """The top-level package *obj* (a module or a function) belongs to."""
-    name = _plain_attr(obj, "__name__") if isinstance(obj, types.ModuleType) else ""
+    name = _plain_attr(obj, "__name__") if issubclass(type(obj), types.ModuleType) else ""
     if not name:
         name = _plain_attr(obj, "__module__") or _plain_attr(type(obj), "__module__")
     return name.split(".")[0] or None
@@ -503,7 +503,7 @@ def _resolve_callee(func: ast.AST, namespace: dict[str, Any]) -> Any:
         return _UNRESOLVED
     obj = namespace[node.id]
     for attr in reversed(parts):
-        if not isinstance(obj, types.ModuleType):
+        if not issubclass(type(obj), types.ModuleType):
             return _UNRESOLVED
         try:
             obj = getattr(obj, attr, _UNRESOLVED)
@@ -544,7 +544,7 @@ def library_fresh_calls(func_def: ast.AST, namespace: dict[str, Any]) -> frozens
         if name in _LIBRARY_VIEW_FUNCTIONS or any(kw.arg in _SHARING_KEYWORDS for kw in node.keywords):
             continue
         obj = _resolve_callee(func, namespace)
-        if obj is _UNRESOLVED or isinstance(obj, types.ModuleType) or not callable(obj):
+        if obj is _UNRESOLVED or issubclass(type(obj), types.ModuleType) or not callable(obj):
             continue
         real_name = _plain_attr(obj, "__name__")
         if real_name in _LIBRARY_VIEW_FUNCTIONS:

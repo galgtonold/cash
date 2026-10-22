@@ -266,7 +266,7 @@ def _wrapped_originals() -> dict[int, tuple[Any, Any]]:
         return _originals_memo[1]
     found: dict[int, tuple[Any, Any]] = {}
     for owner, _name, new, old in _patches.installed():
-        if not isinstance(owner, types.ModuleType) or not callable(old):
+        if not issubclass(type(owner), types.ModuleType) or not callable(old):
             continue
         if _is_patch(new) and getattr(new, "_original_func", None) is old:
             found[id(old)] = (old, new)
@@ -277,7 +277,7 @@ def _wrapped_originals() -> dict[int, tuple[Any, Any]]:
 def _is_user_module(module: Any) -> bool:
     """A module of the user's own code, loaded from a file: a script or an
     import. Not a notebook's namespace -- see `patch_reader_aliases`."""
-    return isinstance(module, types.ModuleType) and is_user_path(getattr(module, "__file__", None))
+    return issubclass(type(module), types.ModuleType) and is_user_path(getattr(module, "__file__", None))
 
 
 def _patch_aliases_in(module: types.ModuleType) -> None:
@@ -380,7 +380,7 @@ def _patch_library_reexports() -> None:
         found = []
         for name, module in _modules_now():
             top, dot, _ = name.partition(".")
-            if dot and top in tops and isinstance(module, types.ModuleType):
+            if dot and top in tops and issubclass(type(module), types.ModuleType):
                 found.append((name, module))
         _library_modules[:] = [len(sys.modules), tuple(found)]
     for name, module in _library_modules[1]:

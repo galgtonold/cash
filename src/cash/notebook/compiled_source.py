@@ -23,6 +23,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from cash._paths import CELL_NAME_PREFIX
+from cash._user_attrs import attribute_or
 
 # Every cash-compiled unit's name starts with this after ``cash._paths.CELL_ROOT``; frame
 # filters match the prefix because each name carries a per-statement digest.
@@ -110,7 +111,7 @@ def register_cell_source(code: str) -> str:
             lines = cell_lines  # the lines around it too, as IPython shows them
         else:
             lines = ["\n"] * offset + lines
-        named = getattr(compiler, "_filename_map", None)
+        named = attribute_or(compiler, "_filename_map", None)
         if isinstance(named, dict):
             named[name] = number
     linecache.cache[name] = (sum(map(len, lines)), None, lines, name)

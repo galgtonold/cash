@@ -53,12 +53,16 @@ def test_an_output_of_the_statement_is_never_moved_again():
     assert lineage == {"a": "a1", "b": "b1"}
 
 
-def test_a_name_the_statement_already_moved_is_skipped():
-    """A holder a hit restores with the statement already has its lineage."""
-    edges = {"m": {"models"}, "models": {"m"}}
-    lineage = {"m": "m1", "models": "x1"}
-    assert _bump(edges, lineage, {"m"}, {"m"}, skip={"models"}) == set()
-    assert lineage["models"] == "x1"
+def test_a_name_the_statement_already_moved_is_moved_but_not_through():
+    """A holder a hit restores with the statement (``held_lineage``) moved by
+    the entry's key alone, which is the same whatever a file the statement
+    read holds; it moves by what the statement changed too. What it holds in
+    turn is not moved through it."""
+    edges = {"m": {"models"}, "models": {"m", "zoo"}, "zoo": {"models"}}
+    lineage = {"m": "m1", "models": "x1", "zoo": "z1"}
+    assert _bump(edges, lineage, {"m"}, {"m"}, skip={"models"}) == {"models"}
+    assert lineage["models"] != "x1"
+    assert lineage["zoo"] == "z1"
 
 
 @pytest.mark.parametrize(

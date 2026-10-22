@@ -19,6 +19,7 @@ import types
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from cash._user_attrs import instance_of
 from cash.tracking.randomness.state import object_carrier_state, rng_carrier_kind, same_carrier_state
 from cash.tracking.trace_recorder import is_user_code
 
@@ -36,24 +37,24 @@ _MODULE_WIDTH = 256
 
 
 def _children(obj: Any) -> Iterable[tuple[str, Any]]:
-    if isinstance(obj, types.ModuleType):
+    if instance_of(obj, types.ModuleType):
         # A library's generators are its own business (`np.random`'s global
         # stream has its own watch); a module of the user's is walked.
         attrs = obj.__dict__
         if len(attrs) <= _MODULE_WIDTH and is_user_code(obj):
             yield from ((f".{k}", v) for k, v in list(attrs.items()) if not k.startswith("__"))
         return
-    if isinstance(obj, (list, tuple, set, frozenset)):
+    if instance_of(obj, (list, tuple, set, frozenset)):
         if len(obj) <= _WIDTH:
             for i, item in enumerate(obj):
                 yield f"[{i}]", item
         return
-    if isinstance(obj, dict):
+    if instance_of(obj, dict):
         if len(obj) <= _WIDTH:
             for k, v in obj.items():
                 yield f"[{k!r}]", v
         return
-    if isinstance(obj, types.FunctionType):
+    if instance_of(obj, types.FunctionType):
         code = obj.__code__
         for name, cell in zip(code.co_freevars, obj.__closure__ or (), strict=False):
             try:
@@ -65,7 +66,7 @@ def _children(obj: Any) -> Iterable[tuple[str, Any]]:
             if name in g:
                 yield name, g[name]
         return
-    if isinstance(obj, types.MethodType):
+    if instance_of(obj, types.MethodType):
         yield "__self__", obj.__self__
         yield "__func__", obj.__func__
         return
@@ -88,7 +89,7 @@ def positions(roots: Mapping[str, Any], followed: Iterable[Any] = ()) -> dict[in
     budget = _BUDGET
     while frontier and budget > 0:
         path, obj, depth = frontier.pop()
-        if isinstance(obj, _LEAVES) or id(obj) in seen:
+        if instance_of(obj, _LEAVES) or id(obj) in seen:
             continue
         seen.add(id(obj))
         budget -= 1

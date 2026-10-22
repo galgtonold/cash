@@ -27,7 +27,7 @@ from typing import Any
 
 from cash import kept_state, value_hash
 
-__all__ = ["AnchorRef", "anchor_digests", "resolve_anchors", "with_anchor_refs"]
+__all__ = ["AnchorRef", "AnchorUnrebuilt", "anchor_digests", "resolve_anchors", "with_anchor_refs"]
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,18 @@ class AnchorRef:
     """Where an entry's value held the object of variable *name*."""
 
     name: str
+
+
+class AnchorUnrebuilt(Exception):
+    """The copy `with_anchor_refs` makes could not be rebuilt around the
+    reference to variable *name*, the last one it loaded: the value held
+    that object in a form a reference does not stand for (``results.append``
+    is rebuilt as ``getattr(ref, 'append')``). The cause is the error the
+    rebuild raised."""
+
+    def __init__(self, name: str | None) -> None:
+        super().__init__(name)
+        self.name = name
 
 
 #: Marks a persistent id kept as the object itself (`_RefPickler`).
@@ -57,9 +69,13 @@ class _RefPickler(pickle.Pickler):
         return name
 
 
-def _round_trip(value: Any, name_of: Callable[[Any], str | None], load: Callable[[str], Any]) -> Any:
+def _round_trip(
+    value: Any, name_of: Callable[[Any], str | None], load: Callable[[str], Any], *, naming: bool = False
+) -> Any:
     """A copy of *value*, each object *name_of* names replaced by *load* of
-    that name: one pickle round trip, so what the parts share stays shared."""
+    that name: one pickle round trip, so what the parts share stays shared.
+    *naming*: a rebuild that fails raises `AnchorUnrebuilt` for the name
+    loaded last; the pickling's own errors are the value's."""
     stream = io.BytesIO()
     buffers: list[pickle.PickleBuffer] = []
     pickler = _RefPickler(stream, name_of, buffers)
@@ -69,21 +85,28 @@ def _round_trip(value: Any, name_of: Callable[[Any], str | None], load: Callable
         buffers=[bytes(b) if memoryview(b).readonly else bytearray(b) for b in buffers],
     )
     kept = pickler.kept
+    loaded: list[str] = []
 
     def persistent_load(pid: Any) -> Any:
         if type(pid) is tuple and pid[0] == _KEPT:
             return kept[pid[1]]
+        loaded.append(pid)
         return load(pid)
 
-    unpickler.persistent_load = persistent_load if kept else load  # type: ignore[assignment]
-    return unpickler.load()
+    unpickler.persistent_load = persistent_load  # type: ignore[assignment]
+    if not naming:
+        return unpickler.load()
+    try:
+        return unpickler.load()
+    except Exception as exc:
+        raise AnchorUnrebuilt(loaded[-1] if loaded else None) from exc
 
 
 def with_anchor_refs(value: Any, anchors: Mapping[str, Any]) -> Any:
     """A copy of *value* with an `AnchorRef` in each place it holds one of
     the objects of *anchors* (``{name: object}``)."""
     by_id = {id(obj): name for name, obj in anchors.items()}
-    return _round_trip(value, lambda obj: by_id.get(id(obj)), AnchorRef)
+    return _round_trip(value, lambda obj: by_id.get(id(obj)), AnchorRef, naming=True)
 
 
 def anchor_digests(anchors: Mapping[str, Any], compute_hash: Callable[[Any], str] | None) -> dict[str, str] | None:

@@ -26,6 +26,7 @@ import threading
 import weakref
 from dataclasses import dataclass, field
 
+from cash._user_attrs import attribute_or
 from cash.diagnostics import log_diagnostic, warn_diagnostic
 from cash.exceptions import CashWarning
 from cash.install_paths import is_user_code_file
@@ -48,27 +49,27 @@ def _code_of(fn: object) -> object | None:
         if isinstance(fn, functools.partial):
             fn = fn.func
             continue
-        inner = getattr(fn, "__func__", None)
+        inner = attribute_or(fn, "__func__", None)
         if inner is not None:
             fn = inner
             continue
         break
-    return getattr(fn, "__code__", None)
+    return attribute_or(fn, "__code__", None)
 
 
 def user_code_of(thread: threading.Thread) -> object | None:
     """The function of the user's *thread* runs, or None when it runs
     library code (or nothing cash can name)."""
-    fn = getattr(thread, "_target", None)
+    fn = attribute_or(thread, "_target", None)
     if fn is None and isinstance(thread, threading.Timer):
         fn = thread.function
     if fn is None:
-        run = getattr(type(thread), "run", None)
+        run = attribute_or(type(thread), "run", None)
         if run is threading.Thread.run:
             return None
         fn = run
     code = _code_of(fn)
-    if code is None or not is_user_code_file(getattr(code, "co_filename", None)):
+    if code is None or not is_user_code_file(attribute_or(code, "co_filename", None)):
         return None
     return fn
 
@@ -76,7 +77,7 @@ def user_code_of(thread: threading.Thread) -> object | None:
 def _label(fn: object) -> str:
     while isinstance(fn, functools.partial):
         fn = fn.func
-    return getattr(fn, "__qualname__", None) or getattr(fn, "__name__", None) or repr(fn)
+    return attribute_or(fn, "__qualname__", None) or attribute_or(fn, "__name__", None) or repr(fn)
 
 
 @dataclass

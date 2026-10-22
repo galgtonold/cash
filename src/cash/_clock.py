@@ -22,7 +22,7 @@ import types
 
 def _real_perf_counter():
     current = time.perf_counter
-    if isinstance(current, types.BuiltinFunctionType):
+    if type(current) is types.BuiltinFunctionType:
         return current
     saved = getattr(sys.modules.get("freezegun.api"), "real_perf_counter", None)
     return saved if callable(saved) else current

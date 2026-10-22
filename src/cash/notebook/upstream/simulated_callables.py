@@ -16,6 +16,8 @@ import sys
 import types
 from collections.abc import Mapping
 
+from cash._user_attrs import attribute_or
+
 from ...source_norm import source_identity_digest
 from .._protocols import ShellProtocol
 from ..cache_key import (
@@ -123,7 +125,7 @@ class SimulatedCallables:
                 lineage = virtual_lineage.get(name)
                 if not lineage or name in self.shell.user_ns:
                     continue
-                obj = getattr(module, alias.name, None) if module is not None else None
+                obj = attribute_or(module, alias.name, None) if module is not None else None
                 if obj is not None and tracker is not None:
                     if not callable(obj):
                         continue
@@ -131,7 +133,7 @@ class SimulatedCallables:
                         digest = tracker.get_function_source_hash(obj)
                     except Exception:  # noqa: BLE001 - a digest we cannot take is one we do not claim
                         continue
-                    code = getattr(obj, "__code__", None)
+                    code = attribute_or(obj, "__code__", None)
                     is_class = isinstance(obj, type)
                 else:
                     entry = self.probe.import_bindings(stmt_code).get(name) if stmt_code else None

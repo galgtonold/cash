@@ -32,6 +32,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 from ..stored_pickle import object_digest_and_size
 from ..value_hash import note_size
 
@@ -266,7 +268,7 @@ def _swap_refs(value: Any, depth: int, loaded: dict[str, Any], backend: Any) -> 
     plain dicts, lists and tuples, replaced by the value it refers to."""
     if isinstance(value, CallRef):
         loaded_value = _load_ref(value, loaded, backend)
-        item = getattr(value, "item", None)
+        item = attribute_or(value, "item", None)
         if item is None:
             return loaded_value
         try:

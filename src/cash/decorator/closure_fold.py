@@ -283,7 +283,7 @@ def module_capture_identity(module: types.ModuleType, attrs: frozenset[str]) -> 
     code = []
     for attr in sorted(attrs):
         value = namespace.get(attr)
-        if isinstance(value, (types.FunctionType, type)) and is_user_code_object(value):
+        if issubclass(type(value), (types.FunctionType, type)) and is_user_code_object(value):
             code.append((attr, hash_callable_source(value)))
     return ("module", module.__name__, tuple(code))
 
@@ -511,7 +511,7 @@ def _cannot_change(value: Any) -> bool:
         is_immutable_capture(value)
         or isinstance(value, IMMUTABLE_VALUE_TYPES)
         or isinstance(value, SYNC_TYPES)
-        or isinstance(value, (types.FunctionType, types.BuiltinFunctionType, types.ModuleType, type))
+        or issubclass(type(value), (types.FunctionType, types.BuiltinFunctionType, types.ModuleType, type))
     )
 
 
@@ -616,12 +616,12 @@ class HelperIdentity:
                 continue
             if isinstance(value, SYNC_TYPES):
                 continue
-            if callable(value) or isinstance(value, types.ModuleType):
+            if callable(value) or issubclass(type(value), types.ModuleType):
                 # Code: the user's is followed as a helper in its own right.
                 # What it names is keyed here, for the code the helper walk
                 # does not follow: `make(np.float32)` and `make(np.float64)`,
                 # `make(sum)` and `make(max)` shared one key.
-                ref = None if isinstance(value, types.ModuleType) or is_cash_wrapper(value) else code_ref(value)
+                ref = None if issubclass(type(value), types.ModuleType) or is_cash_wrapper(value) else code_ref(value)
                 if ref is not None:
                     captures.append((name, f"ref:{ref}"))
                 continue
@@ -870,7 +870,7 @@ class ClosureFold:
                 v = cell.cell_contents
             except ValueError:
                 continue
-            if isinstance(v, types.ModuleType):
+            if issubclass(type(v), types.ModuleType):
                 # A module pickles as nothing, so it fell to the content-hash
                 # path below, failed, and was skipped: `make(ha)` and
                 # `make(hb)`, each reading `cap.helper`, shared one key and
@@ -1183,7 +1183,7 @@ class ClosureFold:
 
         Raises `KeyBuildFailed` when that state cannot be hashed.
         """
-        if isinstance(key_fn, types.FunctionType):
+        if type(key_fn) is types.FunctionType:
             return self._helpers.identity(key_fn)
         if is_user_callable_instance(key_fn):
             owner = key_fn

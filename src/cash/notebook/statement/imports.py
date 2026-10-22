@@ -14,6 +14,8 @@ import sys
 from collections.abc import Mapping
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 __all__ = [
     "import_bindings_hold",
     "import_needs_reexecution",
@@ -88,7 +90,7 @@ def import_bindings_hold(tree: ast.AST, ns: Mapping[str, Any]) -> bool:
             if module is None:
                 return False
             for alias in node.names:
-                expected = getattr(module, alias.name, missing)
+                expected = attribute_or(module, alias.name, missing)
                 if expected is missing:
                     expected = sys.modules.get(f"{node.module}.{alias.name}", missing)
                 if expected is missing or ns.get(alias.asname or alias.name, missing) is not expected:
