@@ -8,9 +8,11 @@ import dis
 import functools
 import operator
 import sys
+import weakref
 
 import pytest
 
+from cash.decorator import code_trace
 from cash.decorator.code_trace import (
     HANDS_A_CALLABLE,
     HANDS_A_COUNTER,
@@ -164,3 +166,105 @@ def test_a_counter_handed_to_a_library_call():
     m = _memo()
     assert _handed(_hand, {"a": [m.cache_info], "key": 1}) is HANDS_A_COUNTER
     assert _handed(_hand, {"a": 1, "key": "cache_clear"}) is HANDS_A_COUNTER
+
+
+class _Box:
+    pass
+
+
+_BOX = _Box()
+
+
+def _each_later(*xs):
+    out = None
+    for x in xs:
+        done = weakref.finalize(_BOX, x)  # one site: data first, then the counter
+        if x is None:
+            done.detach()
+        else:
+            out = done()
+    return out
+
+
+@pytest.mark.skipif(not code_trace.on(), reason="what ran is recorded on Python 3.12+ only")
+def test_a_site_handing_data_first_and_a_counter_next_is_seen():
+    # The library calls what it is handed where the trace does not see. The
+    # site was let go once its first call handed data (None), so the counter
+    # the second call handed went unseen and the statement was served.
+    m = _memo()
+    m(1)
+    rec = code_trace.recorder_or_reason()
+    unit = rec.begin("call")  # a notebook call, its memos about
+    unit.counters_watched = True
+    try:
+        info = _each_later(None, m.cache_info)
+    finally:
+        rec.end(unit)
+    assert info.currsize == 1
+    assert unit.counters_read
+
+
+def _library_calls(a):
+    import os.path
+
+    operator.neg(3)
+    operator.neg(a)
+    operator.neg(os.path.sep)
+    operator.neg(-a + 1)
+    operator.neg(f"{a}")
+    operator.neg([1, (2, "x")])
+    operator.neg(a.real)
+    operator.neg(len(a))
+    operator.neg(*a)
+    return operator.neg(a or 1)
+
+
+@pytest.mark.parametrize(
+    "index, data",
+    [
+        (0, True),  # a literal
+        (1, False),  # a name: data now, a counter next time
+        (2, True),  # a library module's attribute
+        (3, True),  # arithmetic
+        (4, True),  # an f-string
+        (5, True),  # a display of literals
+        (6, False),  # an attribute of what a name holds
+        (7, False),  # a call's result
+        (8, False),  # a starred name
+        (9, False),  # ``a or 1`` hands ``a`` on as it is
+    ],
+)
+def test_a_site_is_let_go_only_when_its_text_hands_on_data(index, data):
+    calls = [i for i in dis.get_instructions(_library_calls) if i.opname in ("CALL", "CALL_KW", "CALL_FUNCTION_EX")]
+    calls = [c for c in calls if c.positions is not None and c.positions.col_offset in (4, 11)]
+
+    class Frame:
+        f_locals = {"a": 2}
+        f_globals = {"operator": operator}
+
+    import os
+
+    Frame.f_locals["os"] = os
+    assert code_trace.hands_data_only(_library_calls.__code__, calls[index].offset, Frame) is data
+
+
+def test_an_attribute_of_a_users_module_is_not_data(tmp_path, monkeypatch):
+    (tmp_path / "users_settings_mod.py").write_text("FN = None\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    import importlib
+
+    mod = importlib.import_module("users_settings_mod")
+    try:
+
+        def uses():
+            return operator.neg(users_settings_mod.FN)  # noqa: F821 - read from the frame below
+
+        call = [i for i in dis.get_instructions(uses) if i.opname == "CALL"][-1]
+
+        class Frame:
+            f_locals: dict = {}
+            f_globals = {"users_settings_mod": mod}
+
+        assert code_trace.hands_data_only(uses.__code__, call.offset, Frame) is False
+    finally:
+        sys.modules.pop("users_settings_mod", None)

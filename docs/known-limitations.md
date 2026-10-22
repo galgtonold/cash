@@ -312,14 +312,17 @@ handed to code it does not see by any argument the frame holds
 (`groupby(fs, key=info)`, `pool.map(info, fs)`, `pool.submit(box.g)`).
 "A memo is about" means any `lru_cache` or `functools.cache` anywhere in
 the notebook's namespace; while one is, a call site that may call something
-else next time (a loop's variable, `NS.fn(i)`) costs about 1 µs per call.
+else next time (a loop's variable, `NS.fn(i)`) costs about 1 µs per call,
+and so does a library call handed a name, an attribute of your object or a
+call's result (`np.mean(a)`): what it holds may be a counter on a later call.
+One handed only literals, arithmetic or a library's attribute
+(`pd.read_csv("data.csv", dtype=np.float32)`) is let go after its first call.
 Not seen:
 
 - a counter held in a dict made in an earlier cell and handed on from it
   (`groupby(fs, key=D["k"])`);
 - a site that first called a method the receiver's own class holds
-  (`o.stat()`, `rows.append(x)`), or first handed a library function data
-  alone (`np.mean(a)`), and later, in the same run, calls or hands on a
+  (`o.stat()`, `rows.append(x)`) and later, in the same run, calls a
   counter: cash stops watching such a site after its first call.
 
 On Python 3.10 and 3.11 there is no run-time trace. While a memo is about, a

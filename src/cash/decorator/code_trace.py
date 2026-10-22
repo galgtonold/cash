@@ -204,6 +204,7 @@ def _recorder_class() -> type:
     FUNCTION, LRU, STR, BUILTIN, PARTIAL = types.FunctionType, _LRU, str, _BUILTIN, functools.partial
     DESCRIPTORS = frozenset(_DESCRIPTORS)
     SITES_get = _SITES.get
+    WATCHED_get = _WATCHED_SITES.get
     USER_FN_get = _USER_FN.get
     TAKERS = _TAKERS
     LOOKUPS = _LOOKUPS
@@ -585,6 +586,20 @@ def _recorder_class() -> type:
                 if id(fn) not in callees:
                     callees[id(fn)] = (fn, sys._getframe(rec.WATCHED_FRAME).f_globals)
             if stack and stack[-1].counters_watched:
+                watched = WATCHED_get((id(code), offset))
+                if watched is not None and watched[0] is fn and not units and code not in self.by_string:
+                    # A library call kept seen for what it may be handed: its
+                    # values read again, the rest judged at its first call.
+                    try:
+                        if (
+                            reads_counters(fn, arg0)
+                            or what_is_handed(code, offset, sys._getframe(rec.WATCHED_FRAME)) is HANDS_A_COUNTER
+                        ):
+                            stack[-1].counters_read = True
+                    except Exception:  # noqa: BLE001 - not known: the slow path judges it
+                        pass
+                    else:
+                        return None
                 try:
                     if reads_counters(fn, arg0):
                         stack[-1].counters_read = True
@@ -605,10 +620,18 @@ def _recorder_class() -> type:
                         # first. A site handing on nothing callable
                         # (``np.mean(a)``, ``os.path.basename(s)``) is let go
                         # as a harmless one is, unless it calls what varies.
-                        handed = what_is_handed(code, offset, sys._getframe(rec.WATCHED_FRAME))
+                        frame = sys._getframe(rec.WATCHED_FRAME)
+                        handed = what_is_handed(code, offset, frame)
                         if handed is HANDS_A_COUNTER:
                             stack[-1].counters_read = True
-                        keep = id(fn) in TAKERS or handed is not None or _varies(code, offset, fn, arg0)
+                        keep = (
+                            id(fn) in TAKERS
+                            or handed is not None
+                            or not hands_data_only(code, offset, frame)
+                            or _varies(code, offset, fn, arg0)
+                        )
+                        if keep:
+                            _watch_site(code, offset, fn)
                     elif _varies(code, offset, fn, arg0):
                         # What it calls next may be a counter: seen every time.
                         keep = True
@@ -928,21 +951,27 @@ def _varying_calls(code: types.CodeType, g: Mapping[str, Any] | None = None) -> 
 
 #: id(code) -> (a weak reference to it, {offset of a call: what of its
 #: arguments can be read from the frame}), as `_SITES`.
-_HANDED: dict[int, tuple[Any, dict[int, tuple[str, ...]]]] = {}
+_HANDED: dict[int, tuple[Any, dict[int, tuple[str, ...]], dict[int, tuple[str, ...] | None]]] = {}
 #: How many items of a list, tuple or set handed on are looked at.
 _HANDED_ITEMS = 64
 
 
-def _handed_names(code: types.CodeType) -> dict[int, tuple[str, ...]]:
+def _handed_names(code: types.CodeType) -> tuple[dict[int, tuple[str, ...]], dict[int, tuple[str, ...] | None]]:
     """Per call in *code*, the names its arguments and keywords read whose
     values the frame holds: a name, a starred name, the names of a list,
     tuple or set display (``groupby([f], key=DESC)``). An argument the call
     computes (``submit(pick(f))``) is not among them: its counter was got
-    by a lookup the trace sees (`names_a_counter`)."""
+    by a lookup the trace sees (`names_a_counter`).
+
+    And per call, whether its arguments are data by their text alone
+    (`_data_roots`): the names of the modules whose attributes it reads,
+    which must be libraries', or None when an argument may hold something
+    callable (a name, a call's result, a user object's attribute)."""
     import ast
 
     ends = _call_nodes(code) or {}
     out: dict[int, tuple[str, ...]] = {}
+    data: dict[int, tuple[str, ...] | None] = {}
     for ins in dis.get_instructions(code):
         if ins.opname not in ("CALL", "CALL_KW", "CALL_FUNCTION_EX"):
             continue
@@ -959,20 +988,87 @@ def _handed_names(code: types.CodeType) -> dict[int, tuple[str, ...]]:
             elif isinstance(arg, (ast.List, ast.Tuple, ast.Set)):
                 names.extend(item.id for item in arg.elts if isinstance(item, ast.Name))
         out[ins.offset] = tuple(names)
-    return out
+        roots: list[str] = []
+        args = [*call.args, *(kw.value for kw in call.keywords if kw.arg is not None)]
+        if len(args) == len(call.args) + len(call.keywords) and all(_data_roots(arg, roots) for arg in args):
+            data[ins.offset] = tuple(roots)
+        else:
+            data[ins.offset] = None
+    return out, data
+
+
+def _data_roots(node: Any, roots: list[str]) -> bool:
+    """Is the argument *node* data by its text: a literal, arithmetic or a
+    comparison, an f-string, a display of those, or an attribute of a
+    module (whose name goes in *roots*, to be asked whether it is a
+    library's)? A name, a call's result, a subscript or a user object's
+    attribute may hold a counter swapped in on a later call."""
+    import ast
+
+    if isinstance(node, (ast.Constant, ast.JoinedStr, ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare)):
+        if isinstance(node, ast.BoolOp):
+            # ``a or b`` hands on one of its operands as it is.
+            return all(_data_roots(value, roots) for value in node.values)
+        return True
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return all(_data_roots(item, roots) for item in node.elts)
+    if isinstance(node, ast.Dict):
+        return all(item is not None and _data_roots(item, roots) for item in (*node.keys, *node.values))
+    if isinstance(node, ast.Attribute):
+        root = node.value
+        while isinstance(root, ast.Attribute):
+            root = root.value
+        if isinstance(root, ast.Name):
+            roots.append(root.id)
+            return True
+    return False
 
 
 def handed_names(code: types.CodeType) -> dict[int, tuple[str, ...]]:
     """`_handed_names`, kept per code as `_SITES` is."""
+    return _handed_for(code)[1]
+
+
+def _handed_for(code: types.CodeType) -> tuple[Any, dict, dict]:
     key = id(code)
     known = _HANDED.get(key)
     if known is None:
         known = _HANDED[key] = (
             weakref.ref(code, lambda _, key=key, handed=_HANDED: handed.pop(key, None)),
-            _handed_names(code),
+            *_handed_names(code),
         )
-    return known[1]
+    return known
 
+
+def hands_data_only(code: types.CodeType, offset: int, frame: Any) -> bool:
+    """Is every argument and keyword of the call at *offset* data by its
+    text (`_data_roots`), each module it reads an attribute of a library's?
+    Only then is the site let go: what it hands on cannot be a counter on
+    a later call either. Decided by the text, not by the first call's
+    values -- a name holding data first may hold a counter next."""
+    roots = _handed_for(code)[2].get(offset)
+    if roots is None:
+        return False
+    if not roots:
+        return True
+    from ..install_paths import is_user_path
+
+    g = frame.f_globals
+    local = frame.f_locals
+    for name in roots:
+        value = local.get(name, _MISSING)
+        if value is _MISSING:
+            value = g.get(name, builtins.__dict__.get(name, _MISSING))
+        if type(value) is not types.ModuleType:
+            return False
+        filename = attribute_or(value, "__file__", None)
+        if isinstance(filename, str) and is_user_path(filename):
+            return False
+    return True
+
+
+#: Values handed on that are neither a counter nor callable, by exact type.
+_PLAIN_HANDED = frozenset({int, float, bool, complex, bytes, type(None)})
 
 #: `what_is_handed`'s answers.
 HANDS_A_COUNTER = "counter"
@@ -984,6 +1080,11 @@ def _handed(value: Any) -> str | None:
     ``methodcaller`` or ``attrgetter`` made for one, or a list, tuple or set
     holding one (`HANDS_A_COUNTER`); else is it, or does such a container
     hold, something the call may call (`HANDS_A_CALLABLE`, `_may_call`)?"""
+    t = type(value)
+    if t is str:
+        return HANDS_A_COUNTER if value in _COUNTERS else None
+    if t in _PLAIN_HANDED:
+        return None
     if reads_counters(value, value):
         return HANDS_A_COUNTER
     if type(value) in (list, tuple, set, frozenset):
@@ -1002,6 +1103,18 @@ def _may_call(value: Any) -> bool:
     could be a counter a later call swaps in: not a class (``dtype=float``),
     whose call runs code the trace sees or a builtin's."""
     return callable(value) and not isinstance(value, type)
+
+
+#: (id(code), offset) -> (the library callable, its code) at a site kept
+#: seen for what it is handed: later calls of the same callable there only
+#: read what they hand on (`what_is_handed`).
+_WATCHED_SITES: dict[tuple[int, int], tuple[Any, Any]] = {}
+
+
+def _watch_site(code: types.CodeType, offset: int, fn: Any) -> None:
+    if len(_WATCHED_SITES) > 4096:
+        _WATCHED_SITES.clear()
+    _WATCHED_SITES[(id(code), offset)] = (fn, code)
 
 
 def what_is_handed(code: types.CodeType, offset: int, frame: Any) -> str | None:
