@@ -32,10 +32,12 @@ ENTRY_BYTES_REPORT = (
     "        _chunk = os.path.join(_cash, 'chunks', _name)\n"
     "        if os.path.exists(_chunk):\n"
     "            _n += os.path.getsize(_chunk)\n"
-    "    return _n, store_seconds(_meta)\n"
+    "    return _n, store_seconds(_meta), float(_meta.get('rebuild_time') or 0.0)\n"
     "_datas = glob.glob(os.path.join(_cash, '*.entry'))\n"
-    "_maxb, _maxs = max((_held(f) for f in _datas), default=(0, 0.0))\n"
-    "print(f'DATA_FILES={len(_datas)} MAX_DATA_BYTES={_maxb} MAX_DATA_SECONDS={_maxs:.3f}')"
+    "_helds = [_held(f) for f in _datas]\n"
+    "_maxb, _maxs, _ = max(_helds, default=(0, 0.0, 0.0))\n"
+    "_maxr = max((_h[2] for _h in _helds), default=0.0)\n"
+    "print(f'DATA_FILES={len(_datas)} MAX_DATA_BYTES={_maxb} MAX_DATA_SECONDS={_maxs:.3f} MAX_DATA_REBUILD={_maxr:.3f}')"
 )
 
 

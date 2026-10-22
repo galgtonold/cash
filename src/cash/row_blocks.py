@@ -226,6 +226,8 @@ def _all_blocks(
         sample.append(digest(*span))
         now = _perf_counter()
         quickest = min(quickest, now - started)
+        if len(sample) == len(spans):
+            break  # done: a hash that finished is kept, however late
         if now > deadline:
             raise HashBudgetSpent
         if now + quickest * (len(spans) - len(sample)) / threads <= deadline:
@@ -238,9 +240,10 @@ def _all_blocks(
             return (*sample, *pool.map(lambda span: digest(*span), todo))
     rest = []
     for span in todo:
-        rest.append(digest(*span))
-        if deadline is not None and _perf_counter() > deadline:
+        # Before a block, not after: a hash that finished is kept.
+        if rest and deadline is not None and _perf_counter() > deadline:
             raise HashBudgetSpent
+        rest.append(digest(*span))
     return (*sample, *rest)
 
 
@@ -358,7 +361,7 @@ def fingerprint(
         for i in range(count):
             started = _perf_counter()
             digests.append(_block_digest(digest_kind, part(i * block, min((i + 1) * block, rows))))
-            if deadline is not None:
+            if deadline is not None and i < count - 1:
                 now = _perf_counter()
                 quickest = min(quickest, now - started)
                 # Judged from the quickest of the first blocks (`_all_blocks`).

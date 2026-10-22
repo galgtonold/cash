@@ -204,3 +204,67 @@ def test_blocks_all_too_slow_give_up_before_hashing_the_rest(monkeypatch, shape)
     with pytest.raises(HashBudgetSpent):
         fingerprint(_SHAPES[shape](), deadline=2.0)
     assert clock.now < 1.0
+
+
+class _BlockClock:
+    """A ``perf_counter`` that moves only while a block is hashed: block
+    *i* (from 0) takes ``cost(i)`` seconds. Also notes which thread hashed
+    each."""
+
+    def __init__(self, monkeypatch, cost):
+        import threading
+
+        from cash import row_blocks
+
+        self.now, self.threads = 0.0, []
+        hasher = row_blocks.leaf_hasher
+
+        def timed(prefix):
+            self.now += cost(len(self.threads))
+            self.threads.append(threading.get_ident())
+            return hasher(prefix)
+
+        monkeypatch.setattr(row_blocks, "leaf_hasher", timed)
+        monkeypatch.setattr(row_blocks, "_perf_counter", lambda: self.now)
+
+
+def test_a_hash_that_finished_past_its_deadline_is_kept(monkeypatch):
+    # 63 blocks of 0.5 s and a last one of 2 s against 33 s: the first
+    # block says the rest fit, and the deadline passes while the last block
+    # is hashed. That hash is done, and kept rather than given up.
+    _BlockClock(monkeypatch, lambda i: 2.0 if i == MAX_BLOCKS - 1 else 0.5)
+    blocks, _ = fingerprint(_images(3000), deadline=33.0)
+    assert len(blocks.digests) == MAX_BLOCKS
+
+
+def test_blocks_slower_than_the_first_said_give_up_once_the_deadline_passed(monkeypatch):
+    # The first block says 64 x 0.5 s fit in 40 s; from the tenth on they
+    # take 5 s. Hashing stops at the first block past the deadline.
+    clock = _BlockClock(monkeypatch, lambda i: 0.5 if i < 10 else 5.0)
+    with pytest.raises(HashBudgetSpent):
+        fingerprint(_images(3000), deadline=40.0)
+    assert len(clock.threads) < 20
+
+
+def test_timing_stops_once_the_first_block_says_the_rest_fit(monkeypatch):
+    import threading
+
+    from cash import row_blocks
+
+    monkeypatch.setattr(row_blocks, "hashing_threads", lambda: 4)
+    clock = _BlockClock(monkeypatch, lambda i: 1e-6)
+    big = np.zeros((8 * 2**20 // 8 + 64, 1))  # past PARALLEL_MIN_BYTES: the rest go to threads
+    fingerprint(big, deadline=1.0)
+    assert clock.threads.count(threading.get_ident()) == 1
+
+
+def test_without_a_deadline_nothing_is_timed(monkeypatch):
+    import threading
+
+    from cash import row_blocks
+
+    monkeypatch.setattr(row_blocks, "hashing_threads", lambda: 4)
+    clock = _BlockClock(monkeypatch, lambda i: 1e-6)
+    monkeypatch.setattr(row_blocks, "_perf_counter", lambda: pytest.fail("read the clock"))
+    fingerprint(np.zeros((8 * 2**20 // 8 + 64, 1)))
+    assert clock.threads.count(threading.get_ident()) == 0
