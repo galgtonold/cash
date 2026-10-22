@@ -299,6 +299,10 @@ def decide_cacheability(**kwargs: Any) -> tuple[bool, list[str]]:
     return verdict.cacheable, verdict.reasons
 
 
+#: Side effects whose call gives back what the world holds now.
+_OF_THE_WORLD = frozenset({"network", "database_write", "system"})
+
+
 def cacheability_verdict(
     *,
     code: str,
@@ -332,14 +336,18 @@ def cacheability_verdict(
     try:
         forbidden = scan_forbidden(code, user_ns, tree)
     except Exception as exc:  # noqa: BLE001 - an unjudged statement is not a pure one
-        return CacheabilityVerdict(False, [analysis_failed("scan the statement for calls it must not cache", exc)])
+        return CacheabilityVerdict(
+            False, [analysis_failed("scan the statement for calls it must not cache", exc)], varies=True
+        )
     if forbidden:
         return CacheabilityVerdict(False, list(forbidden), varies=True)
     if not waived:
         try:
             ambient = _helper_ambient_reasons(code, user_ns)
         except Exception as exc:  # noqa: BLE001 - an unjudged statement is not a pure one
-            return CacheabilityVerdict(False, [analysis_failed("check the functions the statement calls", exc)])
+            return CacheabilityVerdict(
+                False, [analysis_failed("check the functions the statement calls", exc)], varies=True
+            )
         if ambient:
             return CacheabilityVerdict(False, ambient, varies=True)
 
@@ -380,14 +388,19 @@ def cacheability_verdict(
             if not pyplot_seen_as_it_runs:
                 return CacheabilityVerdict(False, [drawn_reason], varies=True)
     except Exception as exc:  # noqa: BLE001 - an unjudged statement is not a pure one
-        return CacheabilityVerdict(False, [analysis_failed("check the functions the statement calls", exc)])
+        return CacheabilityVerdict(
+            False, [analysis_failed("check the functions the statement calls", exc)], varies=True
+        )
 
     ast_reasons = analysis.skip_reasons(outputs, side_effects=not waived)
     if ast_reasons or _has_missing_lineage(inputs, user_ns, variable_lineage):
         if drawn_reason is not None:
             return CacheabilityVerdict(False, [drawn_reason], varies=True)
         if ast_reasons:
-            return CacheabilityVerdict(False, ast_reasons)
+            # What a call to a process, the network or a database gives back
+            # moves with the world: what it binds is keyed by its value.
+            varies = not waived and any(e.kind in _OF_THE_WORLD for e in analysis.side_effects)
+            return CacheabilityVerdict(False, ast_reasons, varies=varies and bool(outputs))
         return CacheabilityVerdict(False, ["Input variable missing lineage"])
 
     return CacheabilityVerdict(True, [], unless_it_draws=drawn_reason)
