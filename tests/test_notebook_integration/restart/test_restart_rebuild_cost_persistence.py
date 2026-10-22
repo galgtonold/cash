@@ -70,7 +70,13 @@ def test_a_cheap_value_over_a_costly_input_is_restored_after_a_restart(nb_runner
 #: ``pd.concat`` took long enough to get such an entry and the test above
 #: failed the same way.
 SLOW_CONCAT = SETUP + "\ndef slow_concat(parts):\n    time.sleep(0.05)\n    return pd.concat(parts, ignore_index=True)"
-CELLS_SLOW_CONCAT = [CELLS[0], SLOW_CONCAT, LOAD.replace("pd.concat(parts, ignore_index=True)", "slow_concat(parts)"), LATEST, SHOW]
+CELLS_SLOW_CONCAT = [
+    CELLS[0],
+    SLOW_CONCAT,
+    LOAD.replace("pd.concat(parts, ignore_index=True)", "slow_concat(parts)"),
+    LATEST,
+    SHOW,
+]
 
 
 def test_a_value_over_a_call_result_kept_in_ram_is_restored_after_a_restart(nb_runner):
