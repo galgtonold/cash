@@ -236,7 +236,8 @@ def _child_pids() -> frozenset[int]:
     try:
         import psutil
 
-        return frozenset(child.pid for child in psutil.Process().children())
+        with io_watch.own_work():
+            return frozenset(child.pid for child in psutil.Process().children())
     except Exception:  # noqa: BLE001 - none known: every child is new
         return frozenset()
 
