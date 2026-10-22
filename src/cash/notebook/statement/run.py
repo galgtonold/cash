@@ -126,6 +126,13 @@ class StatementRun:
     #: Refused because what it binds can differ between two runs with the
     #: same key (``CacheabilityVerdict.varies``): the clock, a fresh id.
     value_varies: bool = False
+    #: Refused for a reason that leaves what it binds the same for the same
+    #: code over the same input lineages (an import, a write it keeps, an
+    #: in-place change whose receiver's lineage moves on). Any other refusal
+    #: keys its outputs by value (`no_cache_value_digest`): the statement runs
+    #: every time because its key does not hold all it read, so the same
+    #: lineage could stand for a new value and serve a reader below stale.
+    value_pinned: bool = False
     allow_random: bool = False
     unseeded_calls: list = field(default_factory=list)
     inputs: set[str] = field(default_factory=set)

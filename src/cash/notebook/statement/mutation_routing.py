@@ -424,6 +424,7 @@ class MutationRouting:
         produced = run.metrics.setdefault("evaluated_vars", [])
         produced.extend(n for n in sorted(changed) if n not in produced)
         run.skip_cache = True
+        run.value_pinned = True
         run.metrics.setdefault("uncacheable_reasons", []).append(
             f"In-place mutation on: {', '.join(sorted(changed))} (observed; receiver lineage bumped; statement re-executes)"
         )
@@ -438,6 +439,7 @@ class MutationRouting:
             run.in_place |= newly_mutated - run.outputs
             if fresh:
                 run.skip_cache = True
+                run.value_pinned = True
                 metrics.setdefault("uncacheable_reasons", []).append(
                     f"In-place mutation on: {', '.join(sorted(fresh))} (observed; statement re-executes)"
                 )
@@ -456,6 +458,7 @@ class MutationRouting:
         skip_observed = newly_mutated - run.est_fit
         if skip_observed:
             run.skip_cache = True
+            run.value_pinned = True
             metrics.setdefault("uncacheable_reasons", []).append(
                 f"In-place mutation on: {', '.join(sorted(skip_observed))} "
                 "(observed; receiver lineage bumped; statement re-executes)"
@@ -472,6 +475,7 @@ class MutationRouting:
         if seen:
             run.in_place |= seen
             run.skip_cache = True
+            run.value_pinned = True
             run.metrics.setdefault("uncacheable_reasons", []).append(
                 f"In-place mutation on: {', '.join(sorted(seen))} (observed; statement re-executes)"
             )
@@ -527,6 +531,8 @@ def _is_structure(tree: ast.Module | None) -> bool:
 
 
 def _skip(run: StatementRun, reason: str) -> None:
-    """Skip-cache *run*, giving *reason*."""
+    """Skip-cache *run*, giving *reason*. An in-place change: the receiver's
+    lineage moves on, so what the statement binds is pinned by its key."""
     run.skip_cache = True
+    run.value_pinned = True
     run.metrics["uncacheable_reasons"].append(reason)

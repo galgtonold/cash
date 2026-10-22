@@ -40,10 +40,12 @@ def test_a_reader_of_what_the_thread_changed_is_not_served_its_old_output(nb_run
 
 
 def test_a_reader_of_an_unchanged_value_is_still_served(nb_runner):
-    nb_runner.create_notebook([START, READ])
+    # The work ends leaving ``data`` as it was: nothing is served while it
+    # runs (NOTEBOOK-WORK-RUNNING), and after, the reader of the same value is.
+    nb_runner.create_notebook([START.replace("data.extend([1, 2, 3])", "pass"), READ, RELEASE])
     nb_runner.start_kernel()
     nb_runner.run_all()
     nb_runner.run_cell(2)
-    again = " ".join(nb_runner.get_raw_output(2).split())
-    assert "snap=0" in again, again
-    assert "CACHED: _ = (time.sleep(0.05)" in again, again
+    lines = [line.strip() for line in nb_runner.get_raw_output(2).splitlines()]
+    assert "snap=0" in lines, lines
+    assert any(line.startswith("CACHED: _ = (time.sleep(0.05)") for line in lines), lines

@@ -884,6 +884,7 @@ class StatementProcessor:
         if run.tree is not None and calls_ipython(run.tree):
             run.metrics["uncacheable_reasons"].append(_IPYTHON_REASON)
             run.skip_cache = True
+            run.value_pinned = True  # what it binds gets a magic's lineage (`record_magic`)
             run.ipython_bindings = self.bindings()
             # One the user wrote at cell level: the simulation reads a loop or
             # a branch as one unit, so one in a body keeps no lineage, as before.
@@ -1192,6 +1193,7 @@ class StatementProcessor:
             run.metrics["uncacheable_reasons"].extend(reasons)
             run.skip_cache = True
             run.value_varies = varies
+            run.value_pinned = not varies
             return
         run.unless_it_draws = unless_it_draws
         unfollowed, by_string, unkeyed_modules, followed = unkeyed_reach(
@@ -1593,6 +1595,7 @@ class StatementProcessor:
             and pyplot_state() != figures_before
         ):
             run.skip_cache = True
+            run.value_pinned = True
             run.metrics["uncacheable_reasons"].append(CHANGED_PYPLOT_REASON)
         if env_reads:
             # What the environment variables installed code read held: a
@@ -1616,11 +1619,13 @@ class StatementProcessor:
             wrote = self._kept_writes_reason(run, execution)
             if wrote:
                 run.skip_cache = True
+                run.value_pinned = True
                 run.metrics["uncacheable_reasons"].append(wrote)
         if not run.skip_cache and execution.result.success and not attribute_or(run.annotation, "assume_safe", False):
             workers = self._workers_reason(run)
             if workers:
                 run.skip_cache = True
+                run.value_pinned = True
                 run.metrics["uncacheable_reasons"].append(workers)
         if execution.result.success:
             self._left_work_running(run, execution)
@@ -1690,10 +1695,6 @@ class StatementProcessor:
             reached = self._thread_reach.reached(names)
             if reached:
                 run.skip_cache = True
-                # The same code over the same lineages binds what the thread
-                # left there by now: its outputs are keyed by value, so what
-                # reads them is served only while they are the same.
-                run.value_varies = True
                 shown = ", ".join(f"'{name}' (by {fn})" for name, fn in reached[:3])
                 run.metrics["uncacheable_reasons"].append(
                     f"it reads {shown}, which work left running in a thread can change outside cash's view, "
@@ -2194,6 +2195,7 @@ class StatementProcessor:
                     probes=execution.probes,
                     no_cache=(run.annotation is not None and run.annotation.no_cache)
                     or run.value_varies
+                    or (run.skip_cache and not run.value_pinned)
                     or run.past_budget
                     or inputs_moved
                     or self._binds_a_stream(run),
@@ -2400,6 +2402,7 @@ class StatementProcessor:
         run.share_gave_up = gave_up[0] if gave_up else None
         if reason is not None:
             run.skip_cache = True
+            run.value_pinned = True
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)
             return None
         return holders
@@ -2440,6 +2443,7 @@ class StatementProcessor:
         run.pyplot_drawn = names
         if not run.skip_cache:
             run.skip_cache = True
+            run.value_pinned = True
             run.metrics["uncacheable_reasons"].append(
                 f"Draws through pyplot on: {', '.join(sorted(names))} (statement re-executes)"
             )
@@ -3073,6 +3077,7 @@ class StatementProcessor:
         """
         if self._randomness.draw_newly_seen and not run.skip_cache:
             run.skip_cache = True
+            run.value_pinned = True  # keyed by the draw from its next run on
             logger.debug(
                 "%s Not storing %s: hidden RNG draw discovered after its key was built; next run keys it correctly",
                 _LOG_ANNOTATION,
@@ -3146,6 +3151,7 @@ class StatementProcessor:
                     code.strip(),
                 )
                 run.skip_cache = True
+                run.value_pinned = True
                 return None
 
             if not all_present:
@@ -3156,6 +3162,7 @@ class StatementProcessor:
                 # bound THEN: `from helper import summary` restored after an
                 # edit to helper.py put the pre-edit function back.
                 run.skip_cache = True
+                run.value_pinned = True
                 return None
             if all_present:
                 logger.debug("%s SKIPPING redundant import: %s", _LOG_OPTIMIZATION, code.strip())
