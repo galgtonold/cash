@@ -15,17 +15,23 @@ def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
     reading its fields from a dict) failed cash's own question about it --
     ``fit``, ``__code__`` -- and the cell with it, where plain Python never
     asks. The question is cash's, so the answer is: not there.
+
+    ``__code__`` is there only as a code object: a config class whose
+    ``__getattr__`` answers every name (``self._d.get(name, 0)``) hands back
+    ``0``, which cash's walk of what a function runs read as code and failed
+    the cell with.
     """
     kind = type(obj)
     own = _OWN_LOOKUP.get(kind)
     if own is None:
         own = _own_lookup(kind)
     try:
-        if own:
-            return object.__getattribute__(obj, name)
-        return getattr(obj, name, default)
+        found = object.__getattribute__(obj, name) if own else getattr(obj, name, default)
     except Exception:  # noqa: BLE001 - the object's own error, not one of cash's
         return default
+    if name == "__code__" and type(found) is not types.CodeType:
+        return default
+    return found
 
 
 #: Per type, `_own_lookup`'s answer. Dropped whole past `_OWN_LOOKUP_MAX`
