@@ -27,6 +27,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from cash import handed_digests
+from cash._user_attrs import attribute_or
 from cash.analysis.bytecode import DEREF_WRITES, argvals
 from cash.analysis.read_only_callees import reads_its_arguments_only
 from cash.content_hashers import builtin_family_of, polars_signature
@@ -113,7 +114,7 @@ def call_capturing_output(fn, args: tuple, kwargs: dict) -> tuple[Any, str, str,
     """
     __tracebackhide__ = True
     callers = _statement_globals(sys._getframe(1))
-    if callers is not None and getattr(fn, "__globals__", None) is callers:
+    if callers is not None and attribute_or(fn, "__globals__", None) is callers:
         callers = None  # a function of the cell's: nothing to name
     with (
         StreamTaken("stdout", TeeWriter) as tee_out,
@@ -145,8 +146,8 @@ def _displays_counted():
     displays = [0]
     ipython = sys.modules.get("IPython")
     shell = ipython.get_ipython() if ipython is not None else None
-    pub = getattr(shell, "display_pub", None)
-    own = getattr(pub, "__dict__", None)
+    pub = attribute_or(shell, "display_pub", None)
+    own = attribute_or(pub, "__dict__", None)
     if own is None:
         yield displays
         return
@@ -268,8 +269,8 @@ def closure_cells(fn) -> dict[str, _types.CellType]:
     """
     cells: dict[str, _types.CellType] = {}
     for layer in wrapper_layers(fn):
-        code = getattr(layer, "__code__", None)
-        closure = getattr(layer, "__closure__", None)
+        code = attribute_or(layer, "__code__", None)
+        closure = attribute_or(layer, "__closure__", None)
         if isinstance(code, _types.CodeType) and closure:
             for name, cell in zip(code.co_freevars, closure):
                 cells.setdefault(name, cell)
@@ -315,7 +316,7 @@ def rebinds_its_closure(fn) -> bool:
     """
     for layer in wrapper_layers(fn):
         # Every layer of a ``functools.wraps`` wrapper runs.
-        code = getattr(layer, "__code__", None)
+        code = attribute_or(layer, "__code__", None)
         if isinstance(code, _types.CodeType) and code.co_freevars and _rebinds(code, frozenset(code.co_freevars)):
             return True
     return False
@@ -941,7 +942,7 @@ def capture_globals(fn, names: tuple[str, ...]) -> dict[str, Any] | None:
     """
     if not names:
         return {}
-    globals_dict = getattr(fn, "__globals__", None) or {}
+    globals_dict = attribute_or(fn, "__globals__", None) or {}
     cells = closure_cells(fn)
     captured: dict[str, Any] = {}
     for name in names:
@@ -994,7 +995,7 @@ def restore_globals(fn, names: tuple[str, ...], recorded: Mapping[str, Any] | No
         return
     if not isinstance(recorded, Mapping) or not recorded:
         return
-    globals_dict = getattr(fn, "__globals__", None)
+    globals_dict = attribute_or(fn, "__globals__", None)
     cells = closure_cells(fn)
     for name in names:
         if name in recorded:

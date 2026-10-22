@@ -14,6 +14,8 @@ import logging
 import types
 from collections.abc import Iterator, Set
 
+from cash._user_attrs import attribute_or, instance_of
+
 from ..._memo import NOTEBOOK_CELLS, NOTEBOOK_VERSIONS
 from ...analysis.ast_util import called_names
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
@@ -127,9 +129,9 @@ def _bound_by(fn: "ast.AST") -> set[str]:
     on something no cell above could possibly provide.
     """
     bound: set[str] = set()
-    args = getattr(fn, "args", None)
+    args = attribute_or(fn, "args", None)
     if args is not None:
-        for a in (*getattr(args, "posonlyargs", []), *args.args, *args.kwonlyargs):
+        for a in (*attribute_or(args, "posonlyargs", []), *args.args, *args.kwonlyargs):
             bound.add(a.arg)
         for extra in (args.vararg, args.kwarg):
             if extra is not None:
@@ -218,7 +220,7 @@ class NotebookVetter:
         orphaned = {
             v
             for v in set(self.tracking_state.variable_lineage) - produced
-            if v in user_ns and not v.startswith("_") and not isinstance(user_ns[v], types.ModuleType)
+            if v in user_ns and not v.startswith("_") and not instance_of(user_ns[v], types.ModuleType)
         }
         if not orphaned:
             return

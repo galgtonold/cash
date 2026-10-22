@@ -1532,6 +1532,7 @@ class CallRunner:
             call.capture_watch,
             observer=run.observer,
             inputs_moved=self._inputs_moved_check(spec, call),
+            cost=execution_time,
         )
         if refusal is None and untraced:
             refusal = self._refuse_untraced(spec, untraced)

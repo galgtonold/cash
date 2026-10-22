@@ -2441,6 +2441,8 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 | [STORE-LOCK-FAILED](#store-lock-failed) | decorator | the per-key lock failed; ran without it |
 | [STORE-METADATA-INVALID](#store-metadata-invalid) | decorator | a stored entry's metadata is unreadable |
 | [STORE-PARTS-SHARED](#store-parts-shared) | decorator | two parts of the result share memory a hit would split; not stored |
+| [STORE-PARTS-UNCHECKED](#store-parts-unchecked) | both | the result was too big to look through in time for a function sharing a part of it; not stored |
+| [STORE-REF-UNSUPPORTED](#store-ref-unsupported) | notebook | the value holds a variable's object in a form cash cannot keep as a reference (a bound method); not stored |
 | [STORE-RESULT-WRITTEN](#store-result-written) | both | a table kept uncopied was written past pandas after its store; entry dropped |
 | [STORE-STATE-CHANGED](#store-state-changed) | decorator | a global the key read changed during the call; not stored |
 | [STORE-WORK-RUNNING](#store-work-running) | both | work it handed to a thread or thread pool still ran when it returned; not stored |
@@ -2603,7 +2605,7 @@ interrupted write.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/result_parts.py:split_by_a_hit @0ed503f3 -->
+<!-- claim: cash/decorator/result_parts.py:split_by_a_hit @0ed503f3, cash/closure_sharing.py:closures_sharing @a604358a -->
 **What happened.** The result holds two parts over the same memory: two
 numpy arrays whose data overlap, such as `return a, a[2:5]`, a numpy
 array and a polars or pandas frame made over it, such as
@@ -2616,6 +2618,9 @@ Arrays that share a base but no element, such as
 returned twice. So is a pair no one can write through: two read-only
 arrays, or a read-only array from a frame that never writes it, such as
 `return df, df["y"].to_numpy()` under polars or pandas copy-on-write.
+The same holds for a result holding a function whose closure holds another
+part of it, `return arr, lambda: arr`: the function cannot be pickled, so a
+hit keeps it as it is and copies `arr`.
 
 **Why it matters.** On the first run a write to one part, `a[2] = -1`,
 shows in the other too. A cache hit hands the two back as separate copies,
@@ -2628,6 +2633,54 @@ function cannot be served from the cache.
 
 **When it is safe to ignore.** When the function is cheap: it runs every
 time, which is what the code means.
+
+### STORE-PARTS-UNCHECKED {#store-parts-unchecked}
+
+<span class="md-tag cash-warning-path">both</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
+
+<!-- claim: cash/closure_sharing.py:closures_sharing @cc3436aa, cash/closure_sharing.py:closure_check_budget @f0cbe2b2 -->
+**What happened.** Before storing a result, cash looks through it for a
+function whose closure holds another part of it, `return arr, lambda: arr`
+(see [STORE-PARTS-SHARED](#store-parts-shared)). The look takes at most
+twice what the function, call or statement took, and at least a second. It
+ran out of time before it had seen the whole result, so the result was not
+stored. The message names the time it had.
+
+**Why it matters.** A function past where the look stopped could close over
+another part of the result. A cache hit would copy that part and keep the
+function as it is, so the two would no longer share it. Not storing keeps
+the run exactly as it is.
+
+**What to do.** Nothing, if the work is cheap: it runs every time. To have
+it cached, return a smaller result, or its data without the objects that
+hold functions; in a notebook, bind the large data and the objects holding
+functions in separate statements.
+
+**When it is safe to ignore.** When the work is cheap enough to run every
+time.
+
+### STORE-REF-UNSUPPORTED {#store-ref-unsupported}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
+
+<!-- claim: cash/notebook/statement/store.py:_warn_not_stored @75647304 -->
+**What happened.** A statement's value holds the object of another
+variable, and cash keeps such a value with a reference to that variable in
+its place, so a hit holds the variable's object as it is then and not a
+copy. Here the value holds it in a form that cannot be rebuilt around a
+reference: a bound method, `hooks = {'add': results.append}`, is rebuilt
+as `getattr(results, 'append')`. The message names the variable it could
+not be rebuilt around. A value whose own pickling fails is STORE-FAILED, as
+it is without such a variable. The statement ran but was not stored.
+
+**Why it matters.** Your result is correct. The statement runs again every
+time.
+
+**What to do.** Nothing, for a correct result. To have it cached, hold the
+variable itself (`hooks = {'target': results}`, called as
+`hooks['target'].append(5)`) rather than its method.
+
+**When it is safe to ignore.** When the statement is cheap.
 
 ### STORE-RESULT-WRITTEN {#store-result-written}
 

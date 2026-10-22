@@ -45,12 +45,14 @@ import re
 import sys
 import types
 import uuid
+import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from time import perf_counter as _perf_counter
 from typing import Any
 
 from cash import _native, _plain_data
 from cash._clock import CpuLimit
+from cash._user_attrs import attribute_or, has_attribute, instance_of
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
 
@@ -240,10 +242,10 @@ def _bound_objects(value: Any) -> list[Any] | None:
     garbage collector tracks for their holders, and found the module: 2 s
     on E11's ``from sklearn.datasets import load_iris``.
     """
-    if isinstance(value, types.FunctionType):
+    if instance_of(value, types.FunctionType):
         return list(value.__closure__) if value.__closure__ and not _found_by_name(value) else None
-    owner = getattr(value, "__self__", None)
-    if owner is None or isinstance(owner, (types.ModuleType, type)):
+    owner = attribute_or(value, "__self__", None)
+    if owner is None or instance_of(owner, (types.ModuleType, type)):
         return None
     return [owner]
 
@@ -252,11 +254,11 @@ def _found_by_name(fn: types.FunctionType) -> bool:
     """*fn* is found again by its module and qualified name, as pickle looks
     it up, in a module other than the notebook's own (``__main__``, whose
     functions a store keeps by value)."""
-    module = getattr(fn, "__module__", None) or ""
+    module = attribute_or(fn, "__module__", None) or ""
     if module == "__main__":
         return False
     target: Any = sys.modules.get(module)
-    for part in (getattr(fn, "__qualname__", "") or "").split("."):
+    for part in (attribute_or(fn, "__qualname__", "") or "").split("."):
         if target is None or part.startswith("<"):
             return False
         try:
@@ -274,9 +276,9 @@ def is_value(value: Any, value_types: tuple[type, ...]) -> bool:
     ``BagObj``, ``np.load(...).f``), makes an ``isinstance`` against an ABC
     raise: it is read by its type alone."""
     try:
-        if isinstance(value, value_types):
+        if instance_of(value, value_types):
             return True
-        return isinstance(value, _CALLABLE_TYPES) and _bound_objects(value) is None
+        return instance_of(value, _CALLABLE_TYPES) and _bound_objects(value) is None
     except Exception:  # noqa: BLE001 - see above
         return issubclass(type(value), value_types)
 
@@ -291,7 +293,7 @@ def _is_estimator_class(cls: type) -> bool:
     known = _ESTIMATOR_CLASSES.get(cls)
     if known is None:
         try:
-            known = callable(getattr(cls, "get_params", None)) and callable(getattr(cls, "fit", None))
+            known = callable(attribute_or(cls, "get_params", None)) and callable(attribute_or(cls, "fit", None))
         except Exception:  # noqa: BLE001 - a class that cannot be asked is a leaf
             known = False
         _ESTIMATOR_CLASSES[cls] = known
@@ -310,7 +312,7 @@ def _is_local_module_class(cls: type) -> bool:
     if known is None:
         try:
             module = sys.modules.get(cls.__module__)
-            known = isinstance(module, types.ModuleType) and is_local_module(module)
+            known = instance_of(module, types.ModuleType) and is_local_module(module)
         except Exception:  # noqa: BLE001 - a class that cannot be asked is a leaf
             known = False
         _LOCAL_MODULE_CLASSES[cls] = known
@@ -365,7 +367,7 @@ def _slot_members(cls: type) -> tuple[tuple[str, Any], ...]:
         found: list[tuple[str, Any]] = []
         for klass in cls.__mro__:
             for name, member in vars(klass).items():
-                if isinstance(member, types.MemberDescriptorType) and "__slots__" in vars(klass):
+                if instance_of(member, types.MemberDescriptorType) and "__slots__" in vars(klass):
                     found.append((name, member))
         known = _SLOT_MEMBERS[cls] = tuple(found)
     return known
@@ -385,13 +387,13 @@ def _values_only(value: Any, exact: frozenset[type]) -> bool:
 
 def children_of(value: Any) -> Iterable[Any] | None:
     """What *value* holds that a restore copies with it, or None for a leaf."""
-    if isinstance(value, dict):
+    if instance_of(value, dict):
         return [*value.keys(), *value.values()]
-    if isinstance(value, _CONTAINERS):
+    if instance_of(value, _CONTAINERS):
         return list(value)
-    if isinstance(value, _CALLABLE_TYPES):
+    if instance_of(value, _CALLABLE_TYPES):
         return _bound_objects(value)
-    if isinstance(value, types.CellType):
+    if instance_of(value, types.CellType):
         try:
             return [value.cell_contents]
         except ValueError:
@@ -497,7 +499,7 @@ def attrs_copied_apart(roots: Iterable[Any]) -> bool:
         if is_value(obj, value_types) or id(obj) in seen:
             continue
         seen.add(id(obj))
-        if isinstance(obj, (pd.DataFrame, pd.Series)):
+        if instance_of(obj, (pd.DataFrame, pd.Series)):
             attrs = _pandas_attrs(obj)
             if attrs:
                 frames.append(attrs)
@@ -529,7 +531,7 @@ def _identities(value: Any, value_types: tuple[type, ...]) -> Iterable[int]:
         if is_value(obj, value_types) or id(obj) in seen:
             continue
         seen.add(id(obj))
-        if not isinstance(obj, _IMMUTABLE_CONTAINERS):
+        if not instance_of(obj, _IMMUTABLE_CONTAINERS):
             yield id(obj)
             yield from view_bases(obj)
         kind = type(obj)
@@ -549,28 +551,33 @@ def view_bases(value: Any) -> list[int]:
     chain), empty for anything else. ``arr[2:5]`` is a new object, but
     writing through it writes into ``arr``."""
     np = sys.modules.get("numpy")
-    if np is None or not isinstance(value, np.ndarray):
+    if np is None or not instance_of(value, np.ndarray):
         return []
     found: list[int] = []
     base = value.base
     while base is not None and id(base) not in found:
         found.append(id(base))
-        base = getattr(base, "base", None)
+        base = attribute_or(base, "base", None)
     return found
 
 
 def view_base_names(
-    values: Iterable[Any], user_ns: Mapping[str, Any], skip_name: Callable[[str], bool] = lambda name: False
+    values: Iterable[Any],
+    user_ns: Mapping[str, Any],
+    skip_name: Callable[[str], bool] = lambda name: False,
 ) -> set[str]:
     """The variables of *user_ns* bound to an array that a numpy view among
-    *values*, or held in them, sits on (`view_bases`), or holding one in a
-    container or an attribute (`_holds_bases`).
+    *values*, or held in them, sits on (`view_bases`), and those that hold
+    one in a container or an attribute, at any depth (`_holding_bases`).
+    Every variable, not only those the statement read: a dict a function
+    filled as a side effect holds the array with no link to show it.
 
     The share check counts references, and an array is a leaf to it: ``head
     = big[:5]`` holds ``big`` through ``head.base``, which no count of
     ``head`` shows, while a later ``big *= 3`` changes what ``head`` reads.
     Walked as `_identities` walks, under the walk budget in progress
     (`check_walk_budget`); JSON-like data holds no array and is not walked.
+    Out of budget, `ViewBasesCutShort` carries the variables found so far.
     """
     np = sys.modules.get("numpy")
     if np is None:
@@ -598,43 +605,153 @@ def view_base_names(
     del stack, seen
     if not bases:
         return set()
-    return {
-        name
-        for name, value in list(user_ns.items())
-        if not skip_name(name) and _holds_bases(value, bases, views, np, value_types, plain_leaves)
-    }
+    names: set[str] = set()
+    containers: dict[int, list[str]] = {}
+    for name, value in list(user_ns.items()):
+        if skip_name(name):
+            continue
+        if on_bases(value, bases, views, np):
+            names.add(name)
+        elif _may_hold_bases(value, np, plain_leaves):
+            containers.setdefault(id(value), []).append(name)
+    if containers:
+        try:
+            names |= _holding_bases(containers, user_ns, bases, views, np, value_types)
+        except WalkBudgetExceeded:
+            raise ViewBasesCutShort(names) from None
+    return names
 
 
-def _holds_bases(
-    value: Any, bases: set[int], views: list[Any], np: Any, value_types: tuple[type, ...], plain_leaves: Any
-) -> bool:
-    """Whether *value* is an array on *bases* (`on_bases`), or holds one at
-    any depth: ``data = {'x': arr}`` holds the array ``data['x'][2:5]`` sits
-    on, and a write through that view changes ``data``. An array is not
-    looked into, nor a module or a class (shared, never part of a value),
-    nor JSON-like data; under the walk budget in progress."""
-    if on_bases(value, bases, views, np):
-        return True
-    if isinstance(value, (np.ndarray, type, types.ModuleType)) or _plain_data.is_tree(value, plain_leaves):
-        return False
+def _may_hold_bases(value: Any, np: Any, plain_leaves: Any) -> bool:
+    """Whether *value* is worth walking for an array: not an array (looked
+    at by `on_bases`), a module or a class (shared, never part of a value),
+    nor JSON-like data."""
+    if instance_of(value, np.ndarray):
+        return value.dtype.hasobject
+    return not instance_of(value, (type, types.ModuleType)) and not _plain_data.is_tree(value, plain_leaves)
+
+
+def _holding_bases(
+    containers: dict[int, list[str]],
+    user_ns: Mapping[str, Any],
+    bases: set[int],
+    views: list[Any],
+    np: Any,
+    value_types: tuple[type, ...],
+) -> set[str]:
+    """The names of *containers* (by the id of the value they are bound to)
+    whose value holds an array on *bases* at any depth: ``data = {'x':
+    arr}`` holds the array ``data['x'][2:5]`` sits on, and a write through
+    that view changes ``data``. Holding the views themselves is not holding
+    what they sit on.
+
+    One walk down from all of them at once, each object read once however
+    many of them hold it, remembering who reached whom; then up from the
+    objects found to the variables. An array is not looked into; a
+    library's object is, by what the garbage collector sees it hold; and what a weak reference
+    points at."""
     view_ids = {id(view) for view in views}
-    seen: set[int] = set()
-    stack = list(children_of(value) or ())
+    parents: dict[int, list[int]] = {key: [] for key in containers}
+    stack = [(user_ns[names[0]], key) for key, names in containers.items()]
+    expanded: set[int] = set()
+    hits: set[int] = set()
     pops = 0
     while stack:
         pops += 1
         if not pops & 1023:
             check_walk_budget()
-        obj = stack.pop()
-        if is_value(obj, value_types) or id(obj) in seen:
+        obj, key = stack.pop()
+        if key in expanded:
             continue
-        seen.add(id(obj))
-        # Holding the views themselves is not holding what they sit on.
-        if id(obj) not in view_ids and on_bases(obj, bases, views, np):
-            return True
-        if not isinstance(obj, (np.ndarray, type, types.ModuleType)):
-            stack.extend(children_of(obj) or ())
-    return False
+        expanded.add(key)
+        children = _object_items(obj, np)
+        if children is None:
+            children = children_of(obj)
+            if children is None:
+                children = _held_below(obj)
+        for child in children:
+            if is_value(child, value_types):
+                continue
+            ckey = id(child)
+            if ckey not in view_ids and on_bases(child, bases, views, np):
+                hits.add(key)
+                continue
+            if instance_of(child, (type, types.ModuleType)) or (
+                instance_of(child, np.ndarray) and not child.dtype.hasobject
+            ):
+                continue
+            seen_from = parents.get(ckey)
+            if seen_from is not None:
+                seen_from.append(key)
+                continue
+            parents[ckey] = [key]
+            stack.append((child, ckey))
+    found: set[str] = set()
+    climb = list(hits)
+    reached: set[int] = set()
+    while climb:
+        key = climb.pop()
+        if key in reached:
+            continue
+        reached.add(key)
+        found.update(containers.get(key, ()))
+        climb.extend(parents.get(key, ()))
+    return found
+
+
+def _object_items(obj: Any, np: Any) -> list[Any] | None:
+    """What an object array holds, a view's too (``g = np.array([lambda:
+    arr], dtype=object)`` holds ``arr`` through the function), and for a
+    pandas frame or series, its attributes and the arrays of its object
+    columns, which a function in a cell may hold an array through; None
+    for anything else. The garbage collector sees neither: numpy's object
+    arrays are not tracked."""
+    if instance_of(obj, np.ndarray):
+        return list(obj.flat) if obj.dtype.hasobject else None
+    if not (_type_module(type(obj)) or "").startswith("pandas"):
+        return None
+    mgr = attribute_or(obj, "_mgr", None)
+    arrays = attribute_or(mgr, "arrays", None) if mgr is not None else None
+    if not isinstance(arrays, list):
+        return None
+    attrs = children_of(obj) or []
+    return [*attrs, *(array for array in arrays if isinstance(array, np.ndarray) and array.dtype.hasobject)]
+
+
+_type_module = type.__dict__["__module__"].__get__
+
+
+def _held_below(obj: Any) -> list[Any]:
+    """What *obj*, an object the share check reads as one closed value,
+    holds that a view of it can write: a function's closure cells and
+    defaults (``getter = lambda: arr``), never its globals, which hold the
+    whole namespace; a bound method's object; and for a library's object
+    (``v = model.coef_[2:5]``), what the garbage collector sees it hold; and what a weak reference
+    points at.
+    Nothing of cash's own (``__cash_call__``, bound to its call cache, which
+    holds every call's result)."""
+    if _is_cash_own(obj) or _is_cash_own(attribute_or(obj, "__self__", None)):
+        return []
+    if instance_of(obj, types.FunctionType):
+        held: list[Any] = []
+        for cell in obj.__closure__ or ():
+            try:
+                held.append(cell.cell_contents)
+            except ValueError:  # an empty cell
+                continue
+        held.extend(obj.__defaults__ or ())
+        held.extend((obj.__kwdefaults__ or {}).values())
+        return held
+    if instance_of(obj, types.MethodType):
+        return [obj.__self__]
+    if instance_of(obj, weakref.ref):
+        # A WeakValueDictionary's values: the collector sees a weak
+        # reference hold nothing, yet ``reg['k']`` reads the array.
+        target = obj()
+        return [] if target is None else [target]
+    if instance_of(obj, _NOT_PARTS):
+        return []
+    return gc.get_referents(obj)
 
 
 def on_bases(value: Any, bases: set[int], views: list[Any], np: Any) -> bool:
@@ -643,7 +760,7 @@ def on_bases(value: Any, bases: set[int], views: list[Any], np: Any) -> bool:
     itself a view, so ``big[0].base`` is the buffer under both, not ``big``."""
     if id(value) in bases:
         return True
-    if not isinstance(value, np.ndarray) or value.base is None:
+    if not instance_of(value, np.ndarray) or value.base is None:
         return False
     if not any(found in bases for found in view_bases(value)):
         return False
@@ -679,7 +796,7 @@ def refers_back(value: Any) -> bool:
                     if obj is not value:
                         return True
                     continue
-                if id(ref) in seen or not gc.is_tracked(ref) or isinstance(ref, _NOT_PARTS):
+                if id(ref) in seen or not gc.is_tracked(ref) or instance_of(ref, _NOT_PARTS):
                     continue
                 seen.add(id(ref))
                 below.append(ref)
@@ -827,13 +944,13 @@ def output_history(
     named = [n for n in ("_", "__", "___") if user_ns.get(n) is not None and id(user_ns.get(n)) in shown]
     named += [f"_{k}" for k, v in out.items() if v is not None and user_ns.get(f"_{k}") is v]
     held = [(user_ns, n) for n in named]
-    hidden = getattr(shell, "user_ns_hidden", None)
-    if isinstance(hidden, dict):
+    hidden = attribute_or(shell, "user_ns_hidden", None)
+    if instance_of(hidden, dict):
         held += [(hidden, n) for n in named if hidden.get(n) is user_ns.get(n)]
-    hook_attrs = getattr(getattr(shell, "displayhook", None), "__dict__", None)
+    hook_attrs = attribute_or(attribute_or(shell, "displayhook", None), "__dict__", None)
     if hook_attrs is not None:
         held += [(hook_attrs, n) for n in ("_", "__", "___") if id(hook_attrs.get(n)) in shown]
-    last = getattr(getattr(shell, "last_execution_result", None), "__dict__", None)
+    last = attribute_or(attribute_or(shell, "last_execution_result", None), "__dict__", None)
     if last is not None and id(last.get("result")) in shown:
         held.append((last, "result"))
     return [out], held
@@ -878,6 +995,15 @@ def shared_names(
 
 class WalkBudgetExceeded(Exception):
     """The share check ran past its time budget (:func:`walk_budget`)."""
+
+
+class ViewBasesCutShort(WalkBudgetExceeded):
+    """`view_base_names` ran out of budget; *names* are the variables it
+    found bound to a base array before it did."""
+
+    def __init__(self, names: set[str]) -> None:
+        super().__init__()
+        self.names = names
 
 
 _DEADLINE: list[CpuLimit | None] = [None]
@@ -978,7 +1104,7 @@ def referring_names(
         stop.add(id(following))
         for obj in referrers:
             key = id(obj)
-            if key in seen or key in stop or isinstance(obj, (types.FrameType, types.ModuleType)):
+            if key in seen or key in stop or instance_of(obj, (types.FrameType, types.ModuleType)):
                 continue
             seen.add(key)
             names.update(by_id.get(key, ()))
@@ -1278,7 +1404,7 @@ def _copies_keep_old_objects(group: Mapping[str, Any], leaves: Leaves | None = N
         if is_value(obj, value_types) or id(obj) in seen or (leaves and id(obj) in leaves.ids):
             continue
         seen.add(id(obj))
-        if isinstance(obj, (types.FunctionType, types.BuiltinFunctionType)):
+        if instance_of(obj, (types.FunctionType, types.BuiltinFunctionType)):
             return True
         stack.extend(children_of(obj) or ())
     return False
@@ -1445,7 +1571,7 @@ def _held_within(nodes: dict[int, Any], inbound: dict[int, int], excess: list[in
 _INSIDE_MAX_OBJECTS = 50_000
 _STREAM_NAMES = ("stdin", "stdout", "stderr", "__stdin__", "__stdout__", "__stderr__")
 #: The standard streams as cash found them when it was imported.
-_STREAMS_AT_START = tuple(getattr(sys, name, None) for name in _STREAM_NAMES)
+_STREAMS_AT_START = tuple(attribute_or(sys, name, None) for name in _STREAM_NAMES)
 
 
 def _standard_streams() -> set[int]:
@@ -1459,7 +1585,7 @@ def _standard_streams() -> set[int]:
     the climb from it went up eight levels of their objects, a full heap
     scan each, and gave up. A file object of the user's is still climbed
     from."""
-    found = {id(getattr(sys, name, None)) for name in _STREAM_NAMES}
+    found = {id(attribute_or(sys, name, None)) for name in _STREAM_NAMES}
     found.update(id(stream) for stream in _STREAMS_AT_START)
     found.discard(id(None))
     return found
@@ -1549,7 +1675,7 @@ def _is_extension_dtype(obj: Any) -> bool:
     if pd is None:
         return False
     try:
-        return isinstance(obj, pd.api.extensions.ExtensionDtype)
+        return instance_of(obj, pd.api.extensions.ExtensionDtype)
     except AttributeError:
         return False
 
@@ -1570,7 +1696,7 @@ def _holds_only_values(obj: Any, value_types: tuple[type, ...], depth: int = 3) 
 def _is_cash_own(obj: Any) -> bool:
     """Whether *obj* is one of cash's own records (its type is cash's)."""
     module = type(obj).__module__
-    return isinstance(module, str) and (module == "cash" or module.startswith("cash."))
+    return instance_of(module, str) and (module == "cash" or module.startswith("cash."))
 
 
 #: Built-in scalar types: an instance is a value whenever its type is among
@@ -1707,7 +1833,7 @@ def _variables_holding(
             if key in by_id:
                 names.update(by_id[key])
                 continue
-            if isinstance(obj, type) and _is_library_class(obj):
+            if instance_of(obj, type) and _is_library_class(obj):
                 # A library's class, found again by its name as its module
                 # is: what it holds itself (sklearn's ``interval_y_pred``) is
                 # the library's own, as its globals are. Reached through a
@@ -1750,8 +1876,8 @@ def _is_library_class(cls: type) -> bool:
     loss holds too (``interval_y_pred``): climbing past the class, through
     its subclasses, methods and module, read the heap seven times and never
     ended, so the fit was refused as shared."""
-    module = getattr(cls, "__module__", None)
-    return isinstance(module, str) and module != "__main__" and not _is_local_module_class(cls)
+    module = attribute_or(cls, "__module__", None)
+    return instance_of(module, str) and module != "__main__" and not _is_local_module_class(cls)
 
 
 def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
@@ -1788,7 +1914,7 @@ _REFERRERS_BLOCK = 256
 #: The C kernel `_referrers_of` reads the heap with (``cwalk.c``), answering
 #: as its Python loop does; None without the kernels, or in a build from
 #: before it.
-_REFERRERS_IN = getattr(_native.kernels, "referrers_in", None)
+_REFERRERS_IN = attribute_or(_native.kernels, "referrers_in", None)
 
 
 def _count_leaf_attributes(nodes: dict[int, Any], inbound: dict[int, int]) -> bool:
@@ -1858,7 +1984,7 @@ def _count_index_data(nodes: dict[int, Any], inbound: dict[int, int], user_ns: M
     seen: set[int] = set()
     try:
         for value in list(user_ns.values()):
-            if not isinstance(value, frame_types) or id(value) in nodes or id(value) in seen:
+            if not instance_of(value, frame_types) or id(value) in nodes or id(value) in seen:
                 continue
             seen.add(id(value))
             for axis in vars(value)["_mgr"].axes:
@@ -1867,7 +1993,7 @@ def _count_index_data(nodes: dict[int, Any], inbound: dict[int, int], user_ns: M
                 seen.add(id(axis))
                 slots = vars(axis)
                 engine = slots.get("_cache", {}).get("_engine")
-                for item in (slots.get("_data"), getattr(engine, "values", None)):
+                for item in (slots.get("_data"), attribute_or(engine, "values", None)):
                     if item is not None and id(item) in inbound:
                         inbound[id(item)] += 1
     except Exception:  # noqa: BLE001 - another layout: counted as held elsewhere
@@ -1902,7 +2028,7 @@ def _held_in_pandas_slots(
     seen: set[int] = set(nodes)
     try:
         for name, value in list(user_ns.items()):
-            if name in known or not isinstance(value, frame_types) or id(value) in seen:
+            if name in known or not instance_of(value, frame_types) or id(value) in seen:
                 continue
             seen.add(id(value))
             own = vars(value)
@@ -1999,7 +2125,7 @@ def _holders_from_names(
     for _depth in range(_DOWN_DEPTH):
         below = []
         for obj in level:
-            if not isinstance(obj, _CONTAINERS):
+            if not instance_of(obj, _CONTAINERS):
                 attrs = attributes_of(obj)
                 if attrs is None:
                     continue
@@ -2098,7 +2224,7 @@ def _holders_from_referrers(
             if holder is user_ns:
                 found.update(name for name, value in user_ns.items() if id(value) in level_ids and name not in known)
                 continue
-            if not (isinstance(holder, _CONTAINERS) or attributes_of(holder) is not None) or _is_module_namespace(
+            if not (instance_of(holder, _CONTAINERS) or attributes_of(holder) is not None) or _is_module_namespace(
                 holder
             ):
                 # A frame, a closure cell, a function, a module or its
@@ -2132,7 +2258,7 @@ def _is_module_namespace(holder: Any) -> bool:
     if type(name) is not str:
         return False
     module = sys.modules.get(name)
-    return module is not None and getattr(module, "__dict__", None) is holder
+    return module is not None and attribute_or(module, "__dict__", None) is holder
 
 
 def _gave_up(
@@ -2159,7 +2285,7 @@ def _gave_up(
                 for name, value in list(user_ns.items())
                 if id(value) in outside
                 and name not in known
-                and (isinstance(value, (type, types.FunctionType)) or not is_value(value, value_types))
+                and (instance_of(value, (type, types.FunctionType)) or not is_value(value, value_types))
             )
             # A module's namespace holding it (``HELD.append(rows)`` in a
             # module's function) is named for the caller to weigh: a module
@@ -2167,7 +2293,7 @@ def _gave_up(
             gave_up.modules.update(
                 name
                 for name, module in list(sys.modules.items())
-                if isinstance(module, types.ModuleType) and id(module.__dict__) in outside
+                if instance_of(module, types.ModuleType) and id(module.__dict__) in outside
             )
         gave_up.complete = gave_up.complete and complete
     return None
@@ -2330,7 +2456,7 @@ def _iterator_parts(value: Any) -> list[Any] | None:
     search of the whole heap for it cost 0.2-0.5 s a run on E11.
     """
     kind = type(value)
-    if getattr(kind, "__next__", None) is None or hasattr(value, "__dict__"):
+    if attribute_or(kind, "__next__", None) is None or has_attribute(value, "__dict__"):
         return None
     return gc.get_referents(value)
 
@@ -2434,7 +2560,7 @@ def _walk(
     containers = EXACT_CONTAINER_TYPES
     for ckey in reversed(order):
         value = nodes[ckey]
-        if isinstance(value, _IMMUTABLE_CONTAINERS):
+        if instance_of(value, _IMMUTABLE_CONTAINERS):
             carries[ckey] = any(
                 type(c) not in exact
                 and (type(c) in containers or not is_value(c, value_types))

@@ -14,6 +14,7 @@ import logging
 import types
 from dataclasses import dataclass, field
 
+from cash._user_attrs import instance_of
 from cash.control_markers import strip_markers
 
 from ...analysis.cacheability_decision import is_lineage_exempt
@@ -23,6 +24,7 @@ from .._protocols import ShellProtocol
 from .._trace import trace_event
 from ..cache_key import statement_source_hash
 from ..cache_status import CacheStatus
+from ..lineage_store import statement_tag
 from ..statement.derivation_edges import shared_object_partners
 from ..tracking_state import TrackingState
 from ._types import (
@@ -177,7 +179,7 @@ class MismatchClassifier:
         # 'logreg', on a run order with no edit. A VALUE computed by
         # calling one is still walked through it: `best = score(1)` read `rows`.
         user_ns = self.shell.user_ns
-        if isinstance(user_ns.get(var_name), (types.FunctionType, type)):
+        if instance_of(user_ns.get(var_name), (types.FunctionType, type)):
             return False
         seen: set[str] = set()
         todo = [var_name]
@@ -223,7 +225,7 @@ class MismatchClassifier:
             if inp in virtual_modules:
                 continue
             val = self.shell.user_ns.get(inp)
-            if val is not None and isinstance(val, types.ModuleType):
+            if val is not None and issubclass(type(val), types.ModuleType):
                 continue
             data_inputs.add(inp)
         return data_inputs
@@ -667,6 +669,19 @@ class MismatchClassifier:
                 "[UPSTREAM_DEBUG]   -> '%s' is written by the current cell, "
                 "but re-running it on the edited upstream state does not give "
                 "its live lineage. Marking broken.",
+                m.var_name,
+            )
+            m.broken_vars.add(m.var_name)
+            return True
+        if statement_tag(self.shell.user_ns.get(m.var_name)) is None:
+            # A value that carries no lineage (an array, a list): reset, it
+            # passes for the cell's entry state, and only the cell's own
+            # entry, served, puts that state back. Refused (``w -=
+            # float(open(p).read())`` after ``p`` changed), the cell ran on
+            # its own last output. Broken, the forward probe keeps it when
+            # that entry is served, and the producers rebuild it otherwise.
+            logger.debug(
+                "[UPSTREAM_DEBUG]   -> '%s' is written by the current cell and carries no lineage. Marking broken.",
                 m.var_name,
             )
             m.broken_vars.add(m.var_name)

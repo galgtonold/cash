@@ -15,6 +15,8 @@ from contextlib import contextmanager
 from io import StringIO
 from typing import TYPE_CHECKING, Any
 
+from cash._user_attrs import attribute_or, has_attribute
+
 from .._tee import StreamTaken, TeeWriter
 
 if TYPE_CHECKING:
@@ -50,16 +52,16 @@ def replay_record(captured: Any) -> dict | None:
     showed more than ``REPLAY_RECORD_CAP`` bytes or a rich output that is
     not plain display data: that statement is run rather than skipped.
     """
-    stdout = getattr(captured, "stdout", "") or ""
-    stderr = getattr(captured, "stderr", "") or ""
-    outputs = list(getattr(captured, "outputs", None) or [])
+    stdout = attribute_or(captured, "stdout", "") or ""
+    stderr = attribute_or(captured, "stderr", "") or ""
+    outputs = list(attribute_or(captured, "outputs", None) or [])
     if not (stdout or stderr or outputs):
         return None
     rich: list[dict] = []
     size = len(stdout) + len(stderr)
     for output in outputs:
-        data = getattr(output, "data", None) if not isinstance(output, dict) else output.get("data")
-        metadata = getattr(output, "metadata", None) if not isinstance(output, dict) else output.get("metadata")
+        data = attribute_or(output, "data", None) if not isinstance(output, dict) else output.get("data")
+        metadata = attribute_or(output, "metadata", None) if not isinstance(output, dict) else output.get("metadata")
         if not isinstance(data, dict) or not all(isinstance(v, (str, dict, list)) for v in data.values()):
             return {"complete": False}
         size += sum(len(str(v)) for v in data.values())
@@ -203,9 +205,9 @@ def _attach_kernel_publisher_api(pub: Any, real: Any) -> None:
     does not get to change their behaviour.
     """
     for name in _KERNEL_PUBLISHER_METHODS:
-        if hasattr(pub, name):
+        if has_attribute(pub, name):
             continue
-        target = getattr(real, name, None)
+        target = attribute_or(real, name, None)
         if target is None:
             # A publisher that never had this method (a plain terminal
             # ``DisplayPublisher``) is not one ipykernel calls it on either, so
@@ -232,8 +234,8 @@ def _kernel_safe_capture(cls: Any) -> Any:
             captured = super().__enter__()
             # ``self.display`` goes False when there is no shell to swap on, in
             # which case nothing was installed and there is nothing to repair.
-            if getattr(self, "display", False) and self.shell is not None:
-                pub = getattr(self.shell, "display_pub", None)
+            if attribute_or(self, "display", False) and self.shell is not None:
+                pub = attribute_or(self.shell, "display_pub", None)
                 if pub is not None:
                     _attach_kernel_publisher_api(pub, self.save_display_pub)
             return captured
@@ -262,7 +264,7 @@ class _Captured:
 
     @property
     def outputs(self) -> list:
-        return list(getattr(self._shown, "outputs", None) or [])
+        return list(attribute_or(self._shown, "outputs", None) or [])
 
 
 @contextmanager
@@ -371,7 +373,7 @@ def replay_outputs(stdout: str = "", stderr: str = "", rich: list | None = None)
 def _is_captured_display(output: Any) -> bool:
     """A display that ``capture_output`` recorded (IPython's ``RichOutput``):
     the mime bundle it was sent with, and a ``display()`` that sends it again."""
-    return isinstance(getattr(output, "data", None), dict) and callable(getattr(output, "display", None))
+    return isinstance(attribute_or(output, "data", None), dict) and callable(attribute_or(output, "display", None))
 
 
 #: What an interrupted statement printed or displayed and nobody has shown
@@ -387,9 +389,9 @@ def unshown_output(exc: BaseException, captured: Any, silent: bool, stream_outpu
     Streamed, the prints have been shown as they came; the displays have not.
     An upstream replay's statement keeps it on *exc* too, and nothing shows
     it: plain never ran that statement."""
-    stdout = "" if stream_output else (getattr(captured, "stdout", "") or "")
-    stderr = "" if stream_output else (getattr(captured, "stderr", "") or "")
-    rich = list(getattr(captured, "outputs", None) or ())
+    stdout = "" if stream_output else (attribute_or(captured, "stdout", "") or "")
+    stderr = "" if stream_output else (attribute_or(captured, "stderr", "") or "")
+    rich = list(attribute_or(captured, "outputs", None) or ())
     if not (stdout or stderr or rich):
         return
     if not silent:
@@ -403,7 +405,7 @@ def unshown_output(exc: BaseException, captured: Any, silent: bool, stream_outpu
 
 def show_unshown_output(exc: BaseException) -> None:
     """Show, once, what the statement *exc* interrupted printed and displayed."""
-    held = getattr(exc, _UNSHOWN, None)
+    held = attribute_or(exc, _UNSHOWN, None)
     if held is None:
         return
     try:

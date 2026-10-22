@@ -1,0 +1,131 @@
+"""Reading an attribute of a notebook's object without its errors becoming cash's."""
+
+from __future__ import annotations
+
+import types
+from typing import Any
+
+
+def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
+    """``getattr(obj, name, default)``, with any error the lookup raises taken
+    as the attribute missing.
+
+    Python's own default covers AttributeError only. A class whose
+    ``__getattr__`` raises KeyError for a name it does not hold (a record
+    reading its fields from a dict) failed cash's own question about it --
+    ``fit``, ``__code__`` -- and the cell with it, where plain Python never
+    asks. The question is cash's, so the answer is: not there.
+    """
+    kind = type(obj)
+    own = _OWN_LOOKUP.get(kind)
+    if own is None:
+        own = _own_lookup(kind)
+    try:
+        if own:
+            return object.__getattribute__(obj, name)
+        return getattr(obj, name, default)
+    except Exception:  # noqa: BLE001 - the object's own error, not one of cash's
+        return default
+
+
+#: Per type, `_own_lookup`'s answer. Dropped whole past `_OWN_LOOKUP_MAX`
+#: types: a class made per call (``df.itertuples()``) is not kept alive.
+_OWN_LOOKUP: dict[type, bool] = {}
+_OWN_LOOKUP_MAX = 4096
+
+
+def _own_lookup(kind: type) -> bool:
+    """Does *kind* look its attributes up with a ``__getattribute__`` of
+    its own, written in Python? cash's questions about such an object
+    (``fit``, ``__code__``, the ``__class__`` an ``isinstance`` asks for
+    when the type does not match) ran it, where plain Python never asks:
+    they are answered by Python's generic lookup and the real type."""
+    own = _OWN_LOOKUP.get(kind)
+    if own is None:
+        if len(_OWN_LOOKUP) >= _OWN_LOOKUP_MAX:
+            _OWN_LOOKUP.clear()
+        own = _OWN_LOOKUP[kind] = type(kind.__getattribute__) is types.FunctionType
+    return own
+
+
+_MISSING = object()
+
+
+def has_attribute(obj: Any, name: str) -> bool:
+    """``hasattr(obj, name)``, with any error the lookup raises taken as the
+    attribute missing (`attribute_or`)."""
+    return attribute_or(obj, name, _MISSING) is not _MISSING
+
+
+def instance_of(obj: Any, kinds: type | tuple[type, ...]) -> bool:
+    """``isinstance(obj, kinds)``, with any error the object's own lookups
+    raise answered by its real type.
+
+    When the type does not match, ``isinstance`` asks the object for its
+    ``__class__`` (a proxy's way to pass for what it wraps), and so does an
+    ABC's check. An object whose ``__getattribute__`` raises for it failed
+    cash's own question and the cell with it, where plain Python never asks.
+    An object with a ``__getattribute__`` of its own in Python is not asked
+    at all (`_own_lookup`): its real type answers, so a proxy written that
+    way passes for itself.
+    """
+    kind = type(obj)
+    own = _OWN_LOOKUP.get(kind)
+    if own is None:
+        own = _own_lookup(kind)
+    if own:
+        return issubclass(kind, kinds)
+    try:
+        return isinstance(obj, kinds)
+    except Exception:  # noqa: BLE001 - the object's own error, not one of cash's
+        return issubclass(kind, kinds)
+
+
+def is_routine(obj: Any) -> bool:
+    """``inspect.isroutine(obj)``, with any error the object's own lookups
+    raise (`instance_of`) taken as not a routine: a function, method or
+    builtin is not an object whose lookups raise."""
+    import inspect
+
+    if _own_lookup(type(obj)):
+        return False
+    try:
+        return inspect.isroutine(obj)
+    except Exception:  # noqa: BLE001 - the object's own error, not one of cash's
+        return False
+
+
+#: What Python's own ``__dict__`` slot is, on a class or a module.
+_SLOT_READERS = (types.GetSetDescriptorType, types.MemberDescriptorType)
+#: Per type, how to read an instance's own attribute dict (`own_dict`).
+_DICT_READERS: dict[type, Any] = {}
+
+
+def own_dict(obj: Any) -> dict | None:
+    """The attribute dict Python keeps for *obj*, read without running code
+    of the object's, or None when it has none.
+
+    ``obj.__dict__`` runs a ``__dict__`` the class defines itself (a
+    property computing it), and a lazy tree's makes a new child at each
+    read: a walk over what an object holds read one more each time, and
+    never ended, where plain Python never asks. The slot Python gives an
+    instance is read instead; a class whose ``__dict__`` is its own, not
+    that slot, has none that cash reads.
+    """
+    kind = type(obj)
+    reader = _DICT_READERS.get(kind)
+    if reader is None:
+        reader = False
+        for klass in kind.__mro__:
+            found = klass.__dict__.get("__dict__")
+            if found is not None:
+                reader = found if type(found) in _SLOT_READERS else False
+                break
+        _DICT_READERS[kind] = reader
+    if reader is False:
+        return None
+    try:
+        attributes = reader.__get__(obj, kind)
+    except Exception:  # noqa: BLE001 - the object's own slot, not cash's error
+        return None
+    return attributes if type(attributes) is dict else None

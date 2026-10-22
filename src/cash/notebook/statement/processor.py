@@ -18,6 +18,7 @@ from typing import Any
 from cash import _plain_data, stored_pickle, value_hash
 from cash._active import default_cash
 from cash._clock import perf_counter as _perf_counter
+from cash._user_attrs import attribute_or, instance_of
 from cash.backends import memory_backend
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, PersistencePolicy
 from cash.control_markers import has_marker
@@ -179,6 +180,7 @@ from ..run_memo import forget_file_state_this_run
 from ..shared_objects import (
     VALUE_TYPES,
     GaveUp,
+    ViewBasesCutShort,
     WalkBudgetExceeded,
     anchors_held,
     is_value,
@@ -219,7 +221,7 @@ _KERNEL_PACKAGES = frozenset({"IPython", "ipykernel"})
 def _may_hold_memory(value: Any) -> bool:
     """Could another value borrow *value*'s memory? Not a module, class or
     function, nor a number or a string."""
-    if isinstance(value, (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType)):
+    if issubclass(type(value), (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType)):
         return False
     return not isinstance(value, (int, float, complex, str, bool, type(None)))
 
@@ -316,12 +318,12 @@ class StatementProcessor:
         self.expected_run_time: Callable[[str], float | None] = lambda code: None
 
         # The Cash instance's own, which the dashboard reads (`Cash.show_stats`).
-        analytics = getattr(cash_instance, "analytics", None)
+        analytics = attribute_or(cash_instance, "analytics", None)
         self.analytics_manager = (
             analytics
             if isinstance(analytics, AnalyticsManager)
             else AnalyticsManager(
-                enabled=getattr(getattr(cash_instance, "config", None), "analytics", True) is not False
+                enabled=attribute_or(attribute_or(cash_instance, "config", None), "analytics", True) is not False
             )
         )
 
@@ -1291,6 +1293,9 @@ class StatementProcessor:
         # What changed through an alias moves on as a run moves it, past the
         # variables the entry restored with its outputs (moved on already).
         moved = set((metadata.holders or {}) if metadata is not None and metadata.holders_moved else ())
+        # Those the restore left at the lineage they had (`keep_held_lineage`).
+        lineage = self.tracking_state.variable_lineage
+        kept = {name for name in moved if lineage.get(name) == metadata.holders[name]}
         clear_rebound_edges(self.tracking_state, run.outputs, run.inputs, self.shell.user_ns, run.tree)
         # The restore put back the objects its run shared with other
         # variables (the entry stores them together): link them as its run
@@ -1302,7 +1307,7 @@ class StatementProcessor:
             if recorded:
                 apply_share_record(self.tracking_state.derivation_edges, (), recorded, self.shell.user_ns)
         self.lineage_builder.replay_derivation_bumps(
-            self.tracking_state, run.outputs, run.inputs, skip=moved, code=run.code
+            self.tracking_state, run.outputs, run.inputs, skip=moved, code=run.code, kept=kept
         )
         # The restore put the generators where the run left them; their
         # lineages follow, as the run's did.
@@ -1366,14 +1371,14 @@ class StatementProcessor:
         user_ns = self.shell.user_ns
         stale = sorted(
             name
-            for name, (held_id, _lineage, code) in held.items()
-            if code == run.code and name in run.inputs and id(user_ns.get(name, FORWARD_PROBE_PLACEHOLDER)) == held_id
+            for name, (was, _lineage, code) in held.items()
+            if code == run.code and name in run.inputs and was.is_(user_ns.get(name, FORWARD_PROBE_PLACEHOLDER))
         )
         if not stale:
             return
         lineage = self.tracking_state.lineage
         for name in stale:
-            _held_id, before, _code = held.pop(name)
+            _was, before, _code = held.pop(name)
             if before is None:
                 lineage.discard(name)
             else:
@@ -1604,7 +1609,7 @@ class StatementProcessor:
             if wrote:
                 run.skip_cache = True
                 run.metrics["uncacheable_reasons"].append(wrote)
-        if not run.skip_cache and execution.result.success and not getattr(run.annotation, "assume_safe", False):
+        if not run.skip_cache and execution.result.success and not attribute_or(run.annotation, "assume_safe", False):
             workers = self._workers_reason(run)
             if workers:
                 run.skip_cache = True
@@ -1647,7 +1652,7 @@ class StatementProcessor:
         user_ns = self.shell.user_ns
         # ``# @cash:assume-safe`` on the statement: the user's word that the
         # work writes nothing the cells after it read, so they are served.
-        waived = getattr(run.annotation, "assume_safe", False)
+        waived = attribute_or(run.annotation, "assume_safe", False)
         if execution.children_running:
             if not waived:
                 for child in execution.children_running:
@@ -1744,13 +1749,13 @@ class StatementProcessor:
         backend = self.cash_instance.backend if self.cash_instance else None
         written = kept_writes(
             execution.written_paths,
-            getattr(backend, "local_dir", None),
+            attribute_or(backend, "local_dir", None),
             execution.appended_paths,
             execution.waived_paths,
         )
         if not written:
             return None
-        if getattr(run.annotation, "assume_safe", False):
+        if attribute_or(run.annotation, "assume_safe", False):
             return None
         more = f" and {len(written) - 1} more" if len(written) > 1 else ""
         return (
@@ -1883,7 +1888,7 @@ class StatementProcessor:
             self.forget_variable(name)
 
     def _is_module(self, name: str) -> bool:
-        return isinstance(self.shell.user_ns.get(name), types.ModuleType)
+        return issubclass(type(self.shell.user_ns.get(name)), types.ModuleType)
 
     def magic_reads(self, node: ast.stmt) -> dict[str, str | None]:
         """The lineage of each name the magic statement *node* reads, now
@@ -2009,7 +2014,7 @@ class StatementProcessor:
         on the next one. ``is True``, because tests pass a MagicMock
         cash_instance whose attributes are all truthy.
         """
-        return getattr(getattr(self.cash_instance, "config", None), "persist_all", False) is True
+        return attribute_or(attribute_or(self.cash_instance, "config", None), "persist_all", False) is True
 
     def begin_cell_statement_log(self) -> None:
         """Start this cell's statement log, before its statements run."""
@@ -2183,7 +2188,7 @@ class StatementProcessor:
                     replay_bumps=False,
                     lineage_reads=run.pyplot_drawn,
                     settled=run.settled_digests,
-                    file_stats=getattr(execution.file_tracker, "checked_stats", None),
+                    file_stats=attribute_or(execution.file_tracker, "checked_stats", None),
                 )
             # Let go of the values they hold: the checks below count references.
             run.settled_digests = {}
@@ -2230,7 +2235,7 @@ class StatementProcessor:
         # of it moves it (`held_lineage`), not through its edges, so a hit,
         # a run and the simulation leave it alike.
         self.lineage_builder.replay_derivation_bumps(
-            self.tracking_state, run.outputs, run.inputs, skip=moved, code=run.code
+            self.tracking_state, run.outputs, run.inputs, skip=moved, code=run.code, kept=run.holders_unchanged & moved
         )
         # After the save: the entry records each input's lineage as the
         # statement read it, before its draw moved it on.
@@ -2280,7 +2285,7 @@ class StatementProcessor:
 
         past = None
         if cost > value_hash.CHANGE_CHECK_BUDGET_S:
-            past = memory_backend.room_past_budget(getattr(self.cash_instance, "backend", None))
+            past = memory_backend.room_past_budget(attribute_or(self.cash_instance, "backend", None))
         return stored_pickle.keeping(stored, others, past, cost * PAST_BUDGET_SHARE)
 
     def _refuse_unrestorable_outputs(
@@ -2480,7 +2485,7 @@ class StatementProcessor:
         harmless line; no cell's data is changed in place through it."""
         if value is self.shell:
             return True
-        module = getattr(type(value), "__module__", None) or ""
+        module = attribute_or(type(value), "__module__", None) or ""
         return module.partition(".")[0] in _KERNEL_PACKAGES
 
     def _link_inputs_kept_by(self, run: StatementRun, echo: tuple[Any, ...] = (), cost: float = 0.0) -> None:
@@ -2505,7 +2510,7 @@ class StatementProcessor:
         changed = {
             name
             for name in run.outputs & run.inputs
-            if name in user_ns and isinstance(user_ns[name], (type, types.ModuleType))
+            if name in user_ns and instance_of(user_ns[name], (type, types.ModuleType))
         }
         if not changed:
             return
@@ -2514,13 +2519,13 @@ class StatementProcessor:
             name
             for name in sorted(run.inputs - run.outputs)
             if name in user_ns
-            and not isinstance(user_ns[name], (type, types.ModuleType, types.FunctionType))
+            and not instance_of(user_ns[name], (type, types.ModuleType, types.FunctionType))
             and not is_value(user_ns[name], value_types)
         ]
         if not handed:
             return
         history, named = output_history(user_ns, self.shell)
-        hidden = getattr(self.shell, "user_ns_hidden", None) or {}
+        hidden = attribute_or(self.shell, "user_ns_hidden", None) or {}
         cash_held = [*self._calls.held_call_results(), echo, run.metrics, *history]
         gave_up = GaveUp()
         try:
@@ -2615,7 +2620,7 @@ class StatementProcessor:
             return [], True
         user_ns = self.shell.user_ns
         history, named = output_history(user_ns, self.shell)
-        hidden = getattr(self.shell, "user_ns_hidden", None) or {}
+        hidden = attribute_or(self.shell, "user_ns_hidden", None) or {}
         # *held* are containers cash holds itself (a loop's iterable), each
         # one counted as such whatever else refers to it.
         cash_held = [
@@ -2685,7 +2690,7 @@ class StatementProcessor:
         if "numpy" not in sys.modules:
             return [], True
         user_ns = self.shell.user_ns
-        hidden = getattr(self.shell, "user_ns_hidden", None) or {}
+        hidden = attribute_or(self.shell, "user_ns_hidden", None) or {}
         links: list[tuple[Iterable[str], set[str]]] = []
 
         def skip_name(other: str) -> bool:
@@ -2695,7 +2700,13 @@ class StatementProcessor:
         try:
             with walk_budget(share_check_budget(cost)):
                 for name in outputs:
-                    found = view_base_names([captured_vars[name]], user_ns, skip_name=skip_name)
+                    try:
+                        found = view_base_names([captured_vars[name]], user_ns, skip_name=skip_name)
+                    except ViewBasesCutShort as cut:
+                        # What it found before the budget ran out stays linked.
+                        if cut.names - {name}:
+                            links.append(([name], cut.names - {name}))
+                        raise
                     found |= borrowed_memory_names(
                         [captured_vars[name]], user_ns, skip_name=skip_name, containers=inputs
                     )
@@ -3172,7 +3183,7 @@ class StatementProcessor:
             bool(execution.written_paths)
             or execution.unseen_writer is not None
             or (tracker is not None and bool(tracker.touched_dirs or tracker.created_files))
-            or not getattr(execution.result, "success", False)
+            or not attribute_or(execution.result, "success", False)
         )
         if not wrote:
             try:
@@ -3339,7 +3350,7 @@ def reads_open_handle(names: Iterable[str], user_ns: Mapping[str, Any]) -> list[
 
 def _open_stream(value: Any) -> bool:
     """Is *value* a file or stream that can still be read or written?"""
-    if not isinstance(value, io.IOBase):
+    if not instance_of(value, io.IOBase):
         return False
     try:
         return not value.closed
@@ -3349,7 +3360,7 @@ def _open_stream(value: Any) -> bool:
 
 def _is_loop(tree: ast.AST | None) -> bool:
     """Whether *tree*, a statement's parse, is a ``for`` or ``while`` loop."""
-    body = getattr(tree, "body", None)
+    body = attribute_or(tree, "body", None)
     node = body[0] if isinstance(body, list) and len(body) == 1 else tree
     return isinstance(node, (ast.For, ast.AsyncFor, ast.While))
 
@@ -3359,7 +3370,7 @@ def _work_label(functions: list[Any]) -> str:
     fn = functions[0] if functions else None
     while isinstance(fn, functools.partial):
         fn = fn.func
-    name = getattr(fn, "__qualname__", None) or getattr(fn, "__name__", None)
+    name = attribute_or(fn, "__qualname__", None) or attribute_or(fn, "__name__", None)
     return f"the thread running {name}()" if name else "a thread"
 
 

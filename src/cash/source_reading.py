@@ -468,7 +468,7 @@ def own_source(fn: object) -> str:
     text; whoever needs the wrapped half reaches it through ``__wrapped__``.
     Raises what ``inspect.getsource`` raises (`SOURCE_RETRIEVAL_ERRORS`).
     """
-    if isinstance(fn, types.FunctionType) and hasattr(fn, "__wrapped__"):
+    if type(fn) is types.FunctionType and hasattr(fn, "__wrapped__"):
         return getsource(fn.__code__)
     return getsource(fn)
 

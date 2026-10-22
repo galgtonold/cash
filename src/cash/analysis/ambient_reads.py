@@ -118,7 +118,7 @@ def clock_helper_read(value: Any) -> str | None:
     reported at all when the helper is reached from a cached function.
     """
     code = getattr(value, "__code__", None)
-    if not isinstance(value, types.FunctionType) or code is None:
+    if type(value) is not types.FunctionType or code is None:
         return None
     if getattr(value, "_cash_cached", False) is True:
         # Judged by its own analysis. And every cached function shares its
@@ -213,7 +213,7 @@ def log_helper_names(func_def: ast.AST, func: Any) -> frozenset[str]:
 
 def _is_log_helper_function(value: Any) -> bool:
     code = getattr(value, "__code__", None)
-    if not isinstance(value, types.FunctionType) or code is None:
+    if type(value) is not types.FunctionType or code is None:
         return False
     known = _LOG_HELPER_CACHE.get(code)
     if known is None:

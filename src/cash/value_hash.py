@@ -25,6 +25,7 @@ from time import perf_counter
 from typing import Any
 
 from . import value_watch
+from ._user_attrs import instance_of
 from .content_hashers import builtin_hash, builtin_hash_family, is_native_panic
 from .sizing import pandas_nbytes
 from .stored_pickle import HashBudgetExceeded, run_on, running_on, sized_object_digest
@@ -458,7 +459,7 @@ def _compute_hash(obj: Any) -> str:
         digest = builtin_hash(obj)
         if digest is not None:
             return digest
-        if isinstance(obj, tuple) and isinstance(getattr(type(obj), "_fields", None), tuple):
+        if instance_of(obj, tuple) and isinstance(getattr(type(obj), "_fields", None), tuple):
             # A namedtuple is its name, its fields and its values. Pickling it
             # pickles its CLASS by reference, which fails for a class made on
             # the spot -- as `df.itertuples()` makes one per call -- and the
