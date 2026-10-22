@@ -10,6 +10,8 @@ since it lets a walk run, which finds what is there. A no is asked afresh.
 from __future__ import annotations
 
 import gc
+import sys
+import types
 
 from cash.notebook import held_functions
 
@@ -28,7 +30,8 @@ def test_objects_of_a_users_module_class_are_looked_for_once_until_code_runs(mon
 
     def counting(*objects):
         scans.append(len(objects))
-        return real(*objects)
+        # Not the arguments tuple this wrapper made, which holds the classes.
+        return [referrer for referrer in real(*objects) if referrer is not objects]
 
     monkeypatch.setattr(held_functions, "_users_module_classes", lambda: [_OfAUsersModule])
     monkeypatch.setattr(held_functions.gc, "get_referrers", counting)
@@ -48,7 +51,8 @@ def test_no_object_is_looked_for_again_each_time(monkeypatch):
 
     def counting(*objects):
         scans.append(len(objects))
-        return real(*objects)
+        # Not the arguments tuple this wrapper made, which holds the classes.
+        return [referrer for referrer in real(*objects) if referrer is not objects]
 
     class Fresh:
         pass
@@ -60,3 +64,41 @@ def test_no_object_is_looked_for_again_each_time(monkeypatch):
     assert held_functions.module_class_objects_exist()
     assert len(scans) == 2, scans
     del made
+
+
+def test_a_class_held_without_an_object_of_it_counts(monkeypatch):
+    # ``[mylib.Order] + rows`` holds the class and no object of it: answered
+    # no, a walk of a big value stopped before it met the class, and the key
+    # left the module out.
+    class Held:
+        pass
+
+    monkeypatch.setattr(held_functions, "_users_module_classes", lambda: [Held])
+    rows = [Held, 1, 2]
+    assert held_functions.module_class_objects_exist()
+    del rows
+    by_name = {"cls": Held}
+    assert held_functions.module_class_objects_exist()
+    del by_name
+
+
+def test_what_every_class_has_does_not_count(monkeypatch):
+    # Its module's globals, a subclass, its ``__mro__`` and ``__bases__``, its
+    # slot and ``__dict__`` descriptors, and the ``__class__`` cell of a
+    # method calling ``super()``.
+    class Base:
+        __slots__ = ("a",)
+
+        def m(self):
+            return super().__repr__()
+
+    class Derived(Base):
+        def m(self):
+            return super().m()
+
+    module = types.ModuleType("_a_users_module")
+    module.Base = Base
+    monkeypatch.setitem(sys.modules, "_a_users_module", module)
+    monkeypatch.setattr(held_functions, "_users_module_classes", lambda: [Base])
+    assert not held_functions.module_class_objects_exist()
+    assert Derived.__mro__[1] is Base

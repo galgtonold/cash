@@ -123,8 +123,9 @@ _NOTHING = Held(())
 
 
 class _NoNotebookFunctions(Exception):
-    """A walk stopped early: no notebook function, and no object of a
-    class of the user's modules, exists to be found."""
+    """A walk stopped early: no notebook function, and no class of the
+    user's modules (an object of one, or the class held), exists to be
+    found."""
 
 
 #: What `_MEMO` keeps for a walk that stopped because no notebook function
@@ -284,12 +285,23 @@ def _anything_to_find(namespace: Mapping[str, Any]) -> bool:
 
 def module_class_objects_exist() -> bool:
     """Whether any object of a class defined at the top of one of the
-    user's loaded modules, or of a class derived from one, exists.
+    user's loaded modules, or of a class derived from one, exists, or
+    anything else that holds such a class.
 
     An object refers to its class, so ``gc.get_referrers`` of the classes
     finds them all, in one pass at C speed. With no module of the user's
     loaded there is nothing to ask. Objects ``gc.freeze`` moved out of the
     collector's view are not searched, so then the answer is yes.
+
+    A value can hold the class itself and no object of it
+    (``[mylib.Order] + rows``): a statement calling it runs the module's
+    code. Answered no, a walk of a big value stopped before it met the class
+    and the key left the module out, where a small value's kept it: a cell's
+    ``mylib.K = 14`` served the old result. So whatever else refers to a
+    class counts too (`_holds_the_class`), but not what every class has:
+    its module's globals, its subclasses, the ``__mro__`` and ``__bases__``
+    of the classes asked about, and its own descriptors and ``__class__``
+    cells.
     """
     classes = _users_module_classes()
     if not classes:
@@ -310,10 +322,39 @@ def module_class_objects_exist() -> bool:
             pending.extend(type.__subclasses__(cls))
         except TypeError:
             pass
-    found = any(type(referrer) in kinds for referrer in gc.get_referrers(*kinds))
+    # A tuple passes through ``*`` as it is: the call's arguments are then
+    # one of the asker's own.
+    asked_of = tuple(kinds)
+    own = {id(classes), id(pending), id(kinds), id(asked_of)}
+    for cls in kinds:
+        own.add(id(cls))
+        own.add(id(cls.__mro__))
+        own.add(id(cls.__bases__))
+    found = any(type(referrer) in kinds or _holds_the_class(referrer, own) for referrer in gc.get_referrers(*asked_of))
     if found:
         _OBJECTS_SEEN[0] = asked
     return found
+
+
+#: What refers to every class, not to one a value holds: a slot's or
+#: ``__dict__``'s descriptor, the ``__class__`` cell of a method calling
+#: ``super()``, and the frame asking.
+_CLASS_MACHINERY = (types.GetSetDescriptorType, types.MemberDescriptorType, types.CellType, types.FrameType)
+
+
+def _holds_the_class(referrer: Any, own: set[int]) -> bool:
+    """Whether *referrer*, which refers to a class of the user's modules,
+    may be part of a value: not one of *own* (the classes asked about, a
+    subclass refers to its base, their ``__mro__`` and ``__bases__``, and the
+    asker's own lists),
+    not `_CLASS_MACHINERY`, and not a module's globals."""
+    if id(referrer) in own or isinstance(referrer, _CLASS_MACHINERY):
+        return False
+    if type(referrer) is dict:
+        module = sys.modules.get(referrer.get("__name__"))  # type: ignore[arg-type]
+        if module is not None and getattr(module, "__dict__", None) is referrer:
+            return False
+    return True
 
 
 #: The `_new_code` count and the classes asked about when
