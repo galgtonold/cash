@@ -927,5 +927,21 @@ def module_source_component(
             if (alias.asname or alias.name) == var_name:
                 if note_from_import is not None:
                     note_from_import(var_name, node.module)
-                return _from_module_hash(node.module, function_tracker, alias.name)
+                component = _from_module_hash(node.module, function_tracker, alias.name)
+                if component:
+                    component += _imported_value_component(node.module, alias.name, value)
+                return component
     return ""
+
+
+def _imported_value_component(module_name: str, name: str, value: Any) -> str:
+    """The value a ``from module_name import name`` binds, digested: what
+    the module holds under *name* now (what the import binds when it runs
+    again), else *value*. A cell above that sets ``helpers.CFG = 5`` or
+    changes ``helpers.TABLE`` in place moves the lineage of the imported
+    name, and everything that reads it: the module's source alone does not
+    change, and a Run All served what read the old value."""
+    namespace = attribute_or(sys.modules.get(module_name), "__dict__", None)
+    if isinstance(namespace, dict) and name in namespace:
+        value = namespace[name]
+    return f":from_value:{module_data_digest(f'{module_name}.{name}', value)}"
