@@ -40,23 +40,19 @@ from .cacheability_decision import analysis_failed, receiver_is_identity_coupled
 from .callee_effects import (
     all_param_names,
     argument_roots,
-    body_mutations,
     callee_global_mutations,
     function_arg_mutations,
     handed_or_called_on,
     iterated_sources,
     mutating_partials,
-    params_mutated_in_function,
-    parse_function_def,
     partial_arg_mutations,
-    positional_param_names,
     reduce_free_mutations,
     resolve_function_def,
     stateful_closure_vars,
     stateful_self_functions,
 )
 from .code_analyzer import CodeAnalyzer, magic_python, parse_cell_source
-from .handed_callables import function_source, handed_callables, handed_resolution, is_users_callable, one_reading
+from .handed_callables import handed_callables, handed_resolution, one_reading
 from .mutations import (
     MUTATING_METHODS,
     RECEIVER_READONLY_WRITE_METHODS,
@@ -83,6 +79,8 @@ from .namespace_effects import (
     users_callee,
 )
 from .object_protocol import ObjectProtocolResets, changed_through_their_objects, object_protocol_mutations
+from .parameter_changes import callable_changes_parameters, lambda_changes_parameters
+from .parameter_changes import is_users as parameter_is_users
 
 __all__ = [
     "CellEffects",
@@ -1651,137 +1649,154 @@ def _changed_through_lambda_parameters(
     tree: ast.Module | None, calls: Any, namespace: Mapping[str, Any] | None = None
 ) -> set[str]:
     """The names a callable changing its own parameter in place changes, in
-    *tree*: the receiver and the arguments of the call it is handed to.
-    ``df['o'].map(lambda d: d.update(z=2))`` changes the dicts ``df`` holds,
-    and ``d`` names none of the notebook's variables. So does a function of
-    the user's that changes its parameter (``df['o'].apply(upd)``,
-    ``map(upd, df['o'])``, or ``lambda d: upd(d, 2)``), read from its code,
-    and ``lambda d: operator.setitem(d, 'z', 2)``.
+    *tree*: the receiver and the other arguments of the call it is handed
+    to, and what those are built from. ``df['o'].map(lambda d:
+    d.update(z=2))`` changes the dicts ``df`` holds, and ``d`` names none
+    of the notebook's variables. So does a callable of the user's that
+    changes its parameter (``df['o'].apply(upd)``, ``sorted(df['o'],
+    key=upd)``, ``df.loc[pick]``), read from its code (`parameter_changes`).
 
-    A callable of the user's handed to a call that runs it over items
-    (`_RUNS_OVER_ITEMS`) and that cash cannot read as leaving its parameter
-    as it was counts as changing it: a partial, a bound or static method, a
-    callable object, what a call of the user's returns. A reader then
-    reruns where it might have been served the items as they were."""
+    A callable of the user's whose code cannot be read whole -- a call in
+    it cash cannot follow, a callable object of a class that answers its
+    own attributes, what a call of the user's returns -- counts as changing
+    what it is handed: a reader then reruns where it might have been served
+    the items as they were."""
     if tree is None:
         return set()
     changed = set(calls.mutation_receivers) | set(calls.changed_receivers)
     found: set[str] = set()
-    for call in ast.walk(tree):
-        if not isinstance(call, ast.Call):
+    builders: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Subscript):
+            # ``df.loc[pick]``: pandas calls a callable key with the frame.
+            if namespace is not None and _handed_changes(node.slice, changed, namespace):
+                found |= _argument_roots(node.value)
             continue
-        handed = [*call.args, *(keyword.value for keyword in call.keywords)]
+        if not isinstance(node, ast.Call):
+            continue
+        handed = [*node.args, *(keyword.value for keyword in node.keywords)]
         if not handed:
             continue
-        hands = namespace is not None and _hands_on_items(call, namespace)
+        if namespace is not None and not _runs_what_it_is_handed(node, namespace):
+            # A function of the user's handed a callable: that function's
+            # argument, fingerprinted as any is.
+            handed = [given for given in handed if isinstance(given, ast.Lambda)]
         for given in handed:
-            if isinstance(given, ast.Lambda):
-                if not _lambda_changes_parameters(given, changed, namespace):
-                    continue
-            elif not (hands and _handed_callable_changes(given, namespace, _runs_over_items(call))):
+            if not _handed_changes(given, changed, namespace):
                 continue
-            if isinstance(call.func, ast.Attribute) and (root := _receiver_root(call.func.value)):
-                found.add(root)
-            for arg in handed:
-                if arg is not given and (root := _receiver_root(arg)):
-                    found.add(root)
+            if isinstance(node.func, ast.Attribute):
+                found |= _argument_roots(node.func.value)
+            for arg in handed if namespace is None else [*node.args, *(k.value for k in node.keywords)]:
+                if arg is not given:
+                    found |= _argument_roots(arg)
+            # ``np.vectorize(setz)(df['o'])``: what it builds is called on them.
+            builders.add(id(node))
+    if namespace is None:
+        return found
+    iterated = iterated_sources(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Call) and id(node.func) in builders:
+            for arg in (*node.args, *(k.value for k in node.keywords)):
+                found |= _argument_roots(arg)
+        elif iterated and isinstance(node.func, (ast.Name, ast.Attribute)):
+            # ``[fix(d) for d in df['o']]``: a callable of the user's called
+            # on the items of what the statement iterates.
+            items = {a.id for a in node.args if isinstance(a, ast.Name) and a.id in iterated}
+            if items and _handed_callable_changes(node.func, namespace):
+                for item in items:
+                    found |= set(iterated[item])
     return found
 
 
-def _hands_on_items(call: ast.Call, namespace: Mapping[str, Any]) -> bool:
-    """Whether *call* runs a function it is handed over the items of what
-    it is called on or handed: a method (``s.apply(f)``, ``df.pipe(f)``),
-    or the builtin ``map`` or ``filter``. A function handed to a function
-    of the user's is that function's argument, fingerprinted as any is."""
+def _handed_changes(given: ast.expr, changed: set[str], namespace: Mapping[str, Any] | None) -> bool:
+    """Whether the argument *given* is a callable that changes what it is
+    handed (`_lambda_changes_parameters`, `_handed_callable_changes`)."""
+    if isinstance(given, ast.Lambda):
+        return _lambda_changes_parameters(given, changed, namespace)
+    if isinstance(given, ast.Starred):
+        given = given.value
+    return namespace is not None and _handed_callable_changes(given, namespace)
+
+
+def _runs_what_it_is_handed(call: ast.Call, namespace: Mapping[str, Any]) -> bool:
+    """Whether *call* may run a callable it is handed over what it is called
+    on or handed: any method (``s.apply(f)``, ``df.sort_values(key=f)``)
+    and any function but one of the user's (``sorted``, ``map``,
+    ``itertools.starmap``, ``np.vectorize``)."""
     func = call.func
-    if isinstance(func, ast.Attribute):
-        return True
-    return isinstance(func, ast.Name) and func.id in {"map", "filter"} and func.id not in namespace
+    if isinstance(func, ast.Name):
+        value = namespace.get(func.id, _MISSING_NAME)
+        return value is _MISSING_NAME or not (type(value) is types.FunctionType and parameter_is_users(value))
+    return True
 
 
-#: Methods that call what they are handed with the items of what they are
-#: called on (or, ``pipe``, with the object itself): there a callable cash
-#: cannot read counts as changing its parameter.
-_RUNS_OVER_ITEMS = frozenset({"apply", "map", "applymap", "transform", "agg", "aggregate", "pipe", "filter"})
+_MISSING_NAME = object()
 
 
-def _runs_over_items(call: ast.Call) -> bool:
-    func = call.func
-    return (isinstance(func, ast.Attribute) and func.attr in _RUNS_OVER_ITEMS) or isinstance(func, ast.Name)
+def _argument_roots(node: ast.AST) -> set[str]:
+    """The names an argument is built from: ``df`` in ``df['o']``,
+    ``list(df['o'])``, ``pd.Series(df['o'])`` and ``zip(df['o'], ks)``;
+    module names among them are dropped by the caller."""
+    out: set[str] = set()
+    pending = [node]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, ast.Name):
+            out.add(current.id)
+        elif isinstance(current, (ast.Attribute, ast.Subscript, ast.Starred)):
+            pending.append(current.value)
+        elif isinstance(current, ast.Call):
+            if isinstance(current.func, ast.Attribute):
+                pending.append(current.func.value)
+            pending.extend(current.args)
+            pending.extend(k.value for k in current.keywords)
+        elif isinstance(current, (ast.Tuple, ast.List, ast.Set)):
+            pending.extend(current.elts)
+        elif isinstance(current, ast.Dict):
+            pending.extend(v for v in current.values if v is not None)
+    return out
 
 
-def _handed_callable_changes(given: ast.expr, namespace: Mapping[str, Any], runs: bool) -> bool:
+def _handed_callable_changes(given: ast.expr, namespace: Mapping[str, Any]) -> bool:
     """Whether the argument *given* hands over a callable of the user's that
-    changes its parameter in place: a function whose code says so, read
-    without running any of the user's code (`handed_values`: names,
-    attributes, constant subscripts, a partial's function). With *runs*
-    (the call runs it over items), also one that cannot be read, or an
-    argument that cannot be resolved without running code."""
+    changes its parameter in place, or whose code cannot be read whole
+    (`callable_changes_parameters`), read without running any of the
+    user's code (`handed_values`: names, attributes, constant subscripts,
+    a partial's function). A call's result is a callable handed over when
+    what it calls is the user's (``make_scorer(2)``), or when a callable
+    handed to it is (``functools.partial(upd, z=2)``, which hands ``upd``
+    on): ``df['o'].map(str)`` is data, as a comprehension or a constant is."""
+    if isinstance(given, ast.Call):
+        callee = _static_callee(given.func, namespace)
+        if callee is not None and parameter_is_users(callee):
+            return True
+        return any(
+            _handed_callable_changes(argument, namespace)
+            for argument in (*given.args, *(keyword.value for keyword in given.keywords))
+        )
+    if isinstance(given, ast.Name):
+        value = namespace.get(given.id, _MISSING_NAME)
+        if value is _MISSING_NAME or not parameter_is_users(value):
+            return False
+        return callable_changes_parameters(value) is not False
+    if not isinstance(given, (ast.Attribute, ast.Subscript)):
+        return False
     resolved = handed_resolution(given, namespace)
-    if runs and resolved.unknown:
+    if resolved.unknown:
         return True
     for value, _root in (*resolved.values, *resolved.any_of):
-        if not is_users_callable(value):
-            continue
-        verdict = _callable_changes_parameters(value)
-        if verdict or (verdict is None and runs):
+        if parameter_is_users(value) and callable_changes_parameters(value) is not False:
             return True
     return False
 
 
-def _callable_changes_parameters(value: Any, depth: int = 0) -> bool | None:
-    """Whether calling the user's callable *value* changes a parameter it
-    is handed in place; None when its code cannot be read: an object or a
-    class of the user's, a function with no source. Read by exact type, so
-    no property, ``__getattr__`` or ``__class__`` of the user's runs."""
-    kind = type(value)
-    if depth > 4:
-        return None
-    if kind is functools.partial:
-        return _callable_changes_parameters(value.func, depth + 1)
-    if kind is types.MethodType:
-        return _callable_changes_parameters(value.__func__, depth + 1)
-    if kind is staticmethod or kind is classmethod:
-        return _callable_changes_parameters(value.__func__, depth + 1)
-    if kind is not types.FunctionType:
-        return None
-    fdef = _function_def_of(value)
-    if fdef is None:
-        return None
-    return bool(_function_changes(fdef, value))
-
-
-def _function_def_of(fn: types.FunctionType) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
-    """*fn*'s own ``def``, read from its code object (`function_source`)."""
-    source = function_source(fn)
-    return parse_function_def(source) if source else None
-
-
-def _function_changes(fdef: ast.FunctionDef | ast.AsyncFunctionDef, fn: types.FunctionType) -> frozenset[str]:
-    """The parameters the function *fn* (*fdef*) changes in place: as
-    `params_mutated_in_function` reads them, through the functions of its
-    module it calls too; and by ``setattr`` on one, a dunder that sets an
-    item (``d.__setitem__``), a change through ``vars(o)``, or a change to
-    an item of one it loops over (``for d in frame['o']: d['z'] = 1``)."""
-    resolve = functools.partial(_global_function_source, fn.__globals__)
-    params = frozenset(all_param_names(fdef))
-    mutated = set(params_mutated_in_function(fdef, resolve))
-    mutated |= _changed_by_calls(fdef, params, fn.__globals__)
-    looped = iterated_sources(fdef)
-    if looped:
-        visitor_targets = _changed_names(fdef)
-        for target in visitor_targets:
-            mutated |= looped.get(target, frozenset()) & params
-    return frozenset(mutated)
-
-
-def _global_function_source(module_globals: Any, name: str) -> str | None:
-    """The source of the function *name* in *module_globals*, when it is a
-    plain function: read from its code object, nothing else asked."""
-    if type(module_globals) is not dict:
-        return None
-    value = module_globals.get(name)
-    return function_source(value) if type(value) is types.FunctionType else None
+def _static_callee(func: ast.expr, namespace: Mapping[str, Any]) -> Any:
+    """The value a callee expression names, when it is a plain name."""
+    if isinstance(func, ast.Name):
+        return namespace.get(func.id)
+    return None
 
 
 #: Dunders that change their object in place.
@@ -1842,13 +1857,6 @@ def _instance_dict_of(node: ast.expr) -> str | None:
     return None
 
 
-def _changed_names(fdef: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
-    """The names *fdef*'s body changes in place, a call's changes included
-    (`_changed_by_calls` on every name it binds)."""
-    names = {node.id for node in ast.walk(fdef) if isinstance(node, ast.Name)}
-    return set(body_mutations(fdef)) | _changed_by_calls(fdef, frozenset(names), None)
-
-
 #: Functions changing their first argument in place.
 _SETS_ITS_FIRST_ARGUMENT = frozenset(
     {"setitem", "delitem", "setattr", "delattr", "iadd", "isub", "imul", "ior", "iand", "iconcat"}
@@ -1868,6 +1876,8 @@ def _lambda_changes_parameters(lam: ast.Lambda, changed: set[str], namespace: Ma
         return True
     if _changed_by_calls(lam.body, frozenset(params), namespace):
         return True
+    if namespace is not None and lambda_changes_parameters(lam, namespace):
+        return True
     for sub in ast.walk(lam.body):
         if not isinstance(sub, ast.Call):
             continue
@@ -1881,15 +1891,6 @@ def _lambda_changes_parameters(lam: ast.Lambda, changed: set[str], namespace: Ma
             and (name in {"setattr", "delattr"} or isinstance(func, ast.Attribute) or _from_operator(name, namespace))
         ):
             return True
-        if isinstance(func, ast.Name) and namespace is not None:
-            positions = {i for i, arg in enumerate(sub.args) if isinstance(arg, ast.Name) and arg.id in params}
-            keywords = {
-                kw.arg for kw in sub.keywords if kw.arg and isinstance(kw.value, ast.Name) and kw.value.id in params
-            }
-            if not positions and not keywords:
-                continue
-            if _users_function_changes(func, namespace, positions, keywords):
-                return True
     return False
 
 
@@ -1898,32 +1899,6 @@ def _from_operator(name: str, namespace: Mapping[str, Any] | None) -> bool:
     import operator
 
     return namespace is not None and namespace.get(name) is getattr(operator, name, None)
-
-
-def _users_function_changes(
-    func: ast.Name,
-    namespace: Mapping[str, Any],
-    positions: set[int] | None = None,
-    keywords: set[str] | None = None,
-) -> bool:
-    """Whether the function of the user's *func* names changes in place a
-    parameter it is handed: any of them, or, with *positions* and
-    *keywords*, one of those it takes there. Read from its code object
-    (`_function_changes`); one that cannot be read changes nothing here."""
-    fn = namespace.get(func.id)
-    if type(fn) is not types.FunctionType or not is_users_callable(fn):
-        return False
-    fdef = _function_def_of(fn)
-    if fdef is None:
-        return False
-    mutated = _function_changes(fdef, fn)
-    if not mutated:
-        return False
-    if positions is None and keywords is None:
-        return True
-    ordered = positional_param_names(fdef)
-    named = {ordered[i] for i in positions or () if i < len(ordered)}
-    return bool(mutated & (named | set(keywords or ())))
 
 
 def _receiver_root(node: ast.AST) -> str | None:

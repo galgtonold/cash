@@ -1183,6 +1183,15 @@ class StatementProcessor:
     def _decide_cacheability(self, run: StatementRun) -> None:
         """Skip-cache *run* when the static cacheability decision refuses it."""
         if run.skip_cache:
+            if run.outputs and not run.value_varies:
+                # Refused already (an in-place change: ``df['o'].apply(upd)``),
+                # its outputs' lineage still comes from its key. Where the key
+                # cannot name what it reaches, they are keyed by value: an
+                # ``exec`` in ``upd`` changed ``df`` by what the string read,
+                # and the reader below was served the frame the last run left.
+                reach = unkeyed_reach(run.code, run.inputs, self.shell.user_ns, self.tracking_state.variable_lineage)
+                if reach.unfollowed or reach.unkeyed_modules or (reach.by_string and not reach.followed):
+                    run.value_varies = True
             return
         cacheable, reasons, varies, unless_it_draws = cacheability_verdict(
             code=run.code,

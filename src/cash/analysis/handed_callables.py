@@ -1023,14 +1023,17 @@ def _unbound(func: ast.expr, namespace: Mapping[str, Any]) -> bool:
 def _is_users_callable(value: Any) -> bool:
     """A function, method, class or callable object of the user's: calling
     it runs their code."""
-    if instance_of(value, functools.partial):
+    # By exact type: ``isinstance`` asks an object of the user's for its
+    # ``__class__``, which a property of theirs answers.
+    kind = type(value)
+    if kind is functools.partial:
         return _is_users_callable(value.func)
-    if instance_of(value, types.FunctionType):
+    if kind is types.FunctionType:
         return _is_users(value)
-    if instance_of(value, types.MethodType):
+    if kind is types.MethodType:
         fn = value.__func__
-        return instance_of(fn, types.FunctionType) and _is_users(fn)
-    if instance_of(value, type):
+        return type(fn) is types.FunctionType and _is_users(fn)
+    if issubclass(kind, type):
         return _is_users_class(value)
     return _is_users_object(value) and callable(value)
 
@@ -1047,7 +1050,12 @@ def _is_users_class(cls: type) -> bool:
     the functions it defines (a class made by ``exec`` names no module)."""
     known = _USERS_CLASSES.get(cls)
     if known is None:
-        name = getattr(cls, "__module__", None)
+        # Read through ``type``'s own descriptor: a metaclass of the user's
+        # can answer ``cls.__module__`` itself.
+        try:
+            name = type.__dict__["__module__"].__get__(cls, type)
+        except (AttributeError, TypeError):
+            name = None
         try:
             module = sys.modules.get(name) if isinstance(name, str) else None
             known = name == "__main__" or (module is not None and is_local_module(module))
@@ -1062,9 +1070,10 @@ def _is_users_class(cls: type) -> bool:
 
 def _is_users_object(value: Any) -> bool:
     """An instance of a class of the user's (not a class, function or module)."""
-    if instance_of(value, (type, types.ModuleType, types.FunctionType, types.MethodType)):
+    kind = type(value)
+    if issubclass(kind, (type, types.ModuleType, types.FunctionType, types.MethodType)):
         return False
-    return _is_users_class(type(value))
+    return _is_users_class(kind)
 
 
 def _users_objects(values: Iterable[Any]) -> list[Any]:
@@ -2101,7 +2110,10 @@ def _generated_dataclass_init(cls: type, init: Any) -> bool:
 def _is_users(fn: types.FunctionType) -> bool:
     """Defined in a cell (``__main__``, or globals of no module at all, as
     code run with ``exec``) or in a local module."""
-    name = fn.__globals__.get("__name__")
+    # Through ``dict``'s own ``get``: ``exec(src, SpyDict())`` gives a
+    # function globals whose ``get`` is the user's.
+    held = fn.__globals__
+    name = dict.get(held, "__name__") if isinstance(held, dict) else None
     if name is None or name == "__main__":
         return True
     module = sys.modules.get(name) if isinstance(name, str) else None
@@ -2274,7 +2286,10 @@ def _global_source(namespace: Mapping[str, Any], name: str) -> str | None:
 
 def _is_cashs(fn: types.FunctionType) -> bool:
     """Whether *fn* is cash's own code (a wrapper ``@cash.cache`` made)."""
-    name = fn.__globals__.get("__name__")
+    # Through ``dict``'s own ``get``: ``exec(src, SpyDict())`` gives a
+    # function globals whose ``get`` is the user's.
+    held = fn.__globals__
+    name = dict.get(held, "__name__") if isinstance(held, dict) else None
     return isinstance(name, str) and (name == "cash" or name.startswith("cash."))
 
 
