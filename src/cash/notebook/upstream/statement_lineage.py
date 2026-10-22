@@ -461,8 +461,9 @@ class StatementLineage:
             drawn = self.pyplot_draw_outputs(stmt_code, tree)
             outputs |= drawn
             inputs |= drawn
-        # Nor IPython's history, as the runtime takes it (`history_names`).
-        outputs -= history_names(outputs, self.shell.user_ns)
+        # Nor IPython's history it does not bind, as the runtime takes it
+        # (`history_names`).
+        outputs -= history_names(outputs - set(effects.outputs), self.shell.user_ns)
         return effects, inputs, outputs
 
     def _inputs_moved(self, inputs: set[str], virtual_lineage: Mapping[str, str], stmt_code: str = "") -> bool:
