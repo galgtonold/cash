@@ -1317,23 +1317,31 @@ def calls_ipython(tree: ast.AST) -> bool:
     return False
 
 
-def reaches_the_shell(tree: ast.AST) -> bool:
+def reaches_the_shell(tree: ast.AST, user_ns: Mapping[str, Any] | None = None, shell: Any = None) -> bool:
     """Whether *tree* asks IPython's shell for anything but a magic or a shell
-    command (``get_ipython().ev('k')``, ``get_ipython().user_ns['k']``).
+    command (``get_ipython().ev('k')``, ``get_ipython().user_ns['k']``,
+    ``IPython.get_ipython().ev('k')``, or ``ip.ev('k')`` with ``ip`` a name
+    in *user_ns* bound to *shell*).
 
     What it reads or binds is named by a string the shell looks up, which no
     key can name.
     """
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Attribute)
-            and node.attr not in _IPYTHON_RUNNERS
-            and isinstance(node.value, ast.Call)
-            and isinstance(node.value.func, ast.Name)
-            and node.value.func.id == "get_ipython"
-        ):
+        if not isinstance(node, ast.Attribute) or node.attr in _IPYTHON_RUNNERS:
+            continue
+        owner = node.value
+        if isinstance(owner, ast.Call) and _names_get_ipython(owner.func):
+            return True
+        if shell is not None and user_ns is not None and isinstance(owner, ast.Name) and user_ns.get(owner.id) is shell:
             return True
     return False
+
+
+def _names_get_ipython(func: ast.expr) -> bool:
+    """``get_ipython`` or ``<module>.get_ipython`` (``IPython.get_ipython``)."""
+    if isinstance(func, ast.Name):
+        return func.id == "get_ipython"
+    return isinstance(func, ast.Attribute) and func.attr == "get_ipython"
 
 
 #: Line magics whose argument is a Python statement run in the user's namespace.

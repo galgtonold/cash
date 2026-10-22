@@ -895,7 +895,7 @@ class StatementProcessor:
                 run.magic_reads = self.magic_reads(run.tree.body[0])
                 run.magic_snapshots = self._mutations.magic_snapshots(run.tree.body[0], run.code)
                 run.value_pinned = True  # what it binds gets a magic's lineage (`record_magic`)
-        elif run.tree is not None and reaches_the_shell(run.tree):
+        elif run.tree is not None and reaches_the_shell(run.tree, self.shell.user_ns, self.shell):
             # What it binds is keyed by its value; what it rebinds through
             # the shell is forgotten, as a magic's is (`_forget_ipython_bindings`).
             run.metrics["uncacheable_reasons"].append(_SHELL_REASON)

@@ -38,6 +38,7 @@ a self-iterator *and* it hits the by-ref fallback.
 from __future__ import annotations
 
 import ast
+import collections
 import functools
 import inspect
 import io
@@ -320,73 +321,104 @@ _HELD_DEPTH = 6
 _HELD_BUDGET = 2000
 #: A container a variable indexes is looked through up to this many items.
 _HELD_WIDTH = 64
+#: Containers whose items are read in order.
+_CONTAINERS = (list, tuple, set, frozenset, collections.deque)
+#: pandas' indexers: ``s.iloc[i]`` reads an item of ``s``.
+_INDEXERS = frozenset({"iloc", "loc", "iat", "at"})
 #: ``Py_TPFLAGS_HEAPTYPE``: a class made by a ``class`` statement.
 _HEAP_TYPE = 1 << 9
-#: What is looked into whatever its class: containers, functions, methods,
-#: modules (a library's own walked no further, `hidden_generators.children`).
-_WALKED = (
-    list,
-    tuple,
-    set,
-    frozenset,
-    dict,
-    types.SimpleNamespace,
-    types.FunctionType,
-    types.MethodType,
-    types.ModuleType,
-)
 
 
 def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> list[str]:
     """The iterators and generators a statement can draw from that no name
     it reads holds itself, as paths (``m.g``, ``f.gen``).
 
-    One an attribute or item it spells holds (``next(m.g)``, ``next(gens[i])``),
-    or one what it calls reaches -- a function through its globals, closure
-    or defaults, a method through its instance or class, a callable
-    instance, a ``partial``, a generator's own ``__next__`` -- moves when it
-    runs, and no lineage follows it: a hit would leave it where it was, and
-    the statement's outputs, served under the same key, would not be what a
-    run gives. An open file is left to the file checks, which see what is
-    read from it.
+    One an attribute or item it spells holds (``next(m.g)``, ``next(gens[i])``,
+    ``next(s.iloc[0])``), or one what it calls reaches -- a function through
+    its globals, closure or defaults, a method through its instance or class,
+    a callable instance, a ``partial``, a generator's own ``__next__``, a
+    function it hands to a call -- moves when it runs, and no lineage follows
+    it: a hit would leave it where it was, and the statement's outputs, served
+    under the same key, would not be what a run gives. An open file is left
+    to the file checks, which see what is read from it.
+
+    Inside a library's objects and functions only a generator of the user's
+    counts: a library keeps its own counters (matplotlib's callback ids). A
+    look that runs out of objects before it is done gives the path it
+    stopped at, so the statement runs rather than be served unlooked.
     """
     if tree is None:
         return []
     found: list[str] = []
-    frontier: list[tuple[str, Any, int]] = []
+    frontier: list[tuple[str, Any, int, bool]] = []
     for node in ast.walk(tree):
         if isinstance(node, (ast.Attribute, ast.Subscript)) and not isinstance(node.ctx, ast.Store):
             found.extend(path for path, value in _spelled(node, user_ns) if _held_stream(value))
         if isinstance(node, ast.Call):
-            frontier.extend((path, callee, 0) for path, callee in _callees(node.func, user_ns))
+            frontier.extend((path, callee, 0, _owned(callee)) for path, callee in _callees(node.func, user_ns))
+            for arg in [*node.args, *(k.value for k in node.keywords)]:
+                frontier.extend((path, value, 0, True) for path, value in _spelled(arg, user_ns) if _callable(value))
     seen: set[int] = set()
     budget = _HELD_BUDGET
     while frontier and budget > 0:
-        path, obj, depth = frontier.pop()
+        path, obj, depth, owned = frontier.pop()
         if id(obj) in seen or instance_of(obj, (str, bytes, int, float, complex, bool, type(None))):
             continue
         seen.add(id(obj))
         budget -= 1
         if depth > 0 and _held_stream(obj):
-            found.append(path)
+            if owned or _users_generator(obj):
+                found.append(path)
             continue
         if depth >= _HELD_DEPTH:
             continue
         try:
             for label, child in _reached(obj):
                 frontier.append(
-                    (f"{path}{label}" if label.startswith(("[", ".")) else f"{path}.{label}", child, depth + 1)
+                    (
+                        f"{path}{label}" if label.startswith(("[", ".")) else f"{path}.{label}",
+                        child,
+                        depth + 1,
+                        owned and _owned(child),
+                    )
                 )
         except Exception:  # noqa: BLE001 - a look into arbitrary objects must not break the statement
             continue
+    if frontier and budget <= 0:
+        found.append(f"{frontier[-1][0]} (the look stopped after {_HELD_BUDGET} objects)")
     return sorted(set(found))
+
+
+def _callable(value: Any) -> bool:
+    return instance_of(value, (types.FunctionType, types.MethodType, functools.partial))
+
+
+def _owned(obj: Any) -> bool:
+    """Whether what *obj* holds is the user's to draw from: anything but a
+    library's object or function."""
+    if instance_of(obj, types.FunctionType):
+        return is_user_code_file(obj.__code__.co_filename)
+    if instance_of(obj, (types.MethodType, functools.partial, classmethod, staticmethod, *_CONTAINERS)):
+        return True
+    if instance_of(obj, (types.SimpleNamespace, types.ModuleType)):
+        return True
+    if instance_of(obj, type):
+        return _users_class(obj)
+    return _users_class(type(obj))
+
+
+def _users_generator(obj: Any) -> bool:
+    """Whether *obj* is a generator the user's code made."""
+    code = getattr(obj, "gi_code", None) or getattr(obj, "ag_code", None)
+    return code is not None and is_user_code_file(code.co_filename)
 
 
 def _reached(obj: Any) -> Iterable[tuple[str, Any]]:
     """What calling or reading *obj* can reach: `hidden_generators.children`,
     and a function's defaults, a ``partial``'s function and arguments, a
     builtin method's object, a class of the user's and its attributes, an
-    instance's class."""
+    instance's class, the items of a container a library makes (a deque, a
+    pandas object column)."""
     from .statement.hidden_generators import children
 
     if instance_of(obj, type):
@@ -410,10 +442,11 @@ def _reached(obj: Any) -> Iterable[tuple[str, Any]]:
         if not instance_of(owner, types.ModuleType):
             yield "__self__", owner
         return
-    if not instance_of(obj, _WALKED) and not _users_class(type(obj)):
-        # A library's object keeps its own counters and iterators
-        # (matplotlib's callback ids): what it draws from is its business.
-        return
+    items = _items(obj)
+    if items is not None:
+        yield from items
+        if not instance_of(obj, (dict, list, tuple)):
+            return
     yield from children(obj)
     if instance_of(obj, types.FunctionType):
         for i, value in enumerate(obj.__defaults__ or ()):
@@ -424,6 +457,32 @@ def _reached(obj: Any) -> Iterable[tuple[str, Any]]:
     cls = type(obj)
     if not instance_of(obj, types.MethodType) and _users_class(cls):
         yield "__class__", cls
+
+
+def _items(owner: Any) -> list[tuple[str, Any]] | None:
+    """The items of a container, up to `_HELD_WIDTH` of them, read without
+    running the user's code: a list, tuple, deque or dict of any kind; a
+    pandas object column or a numpy array of objects. ``None`` for anything
+    else."""
+    if instance_of(owner, dict):
+        return [(f"[{k!r}]", v) for k, v in itertools.islice(dict.items(owner), _HELD_WIDTH)]
+    if instance_of(owner, _CONTAINERS):
+        return [(f"[{i}]", v) for i, v in enumerate(itertools.islice(owner, _HELD_WIDTH))]
+    module = type(owner).__module__ or ""
+    if module.startswith("numpy") and getattr(getattr(owner, "dtype", None), "kind", None) == "O":
+        return [(f"[{i}]", v) for i, v in enumerate(itertools.islice(owner.flat, _HELD_WIDTH))]
+    if module.split(".")[0] == "pandas":
+        name = type(owner).__name__
+        if name == "Series" and owner.dtype.kind == "O":
+            return [(f".iloc[{i}]", v) for i, v in enumerate(itertools.islice(owner.array, _HELD_WIDTH))]
+        if name == "DataFrame":
+            found = []
+            for col in [c for c, dtype in owner.dtypes.items() if dtype.kind == "O"][:_HELD_WIDTH]:
+                found.extend(
+                    (f"[{col!r}].iloc[{i}]", v) for i, v in enumerate(itertools.islice(owner[col].array, _HELD_WIDTH))
+                )
+            return found
+    return None
 
 
 def _users_class(cls: type) -> bool:
@@ -481,6 +540,10 @@ def _spelled(node: ast.expr, user_ns: Mapping[str, Any]) -> list[tuple[str, Any]
     if isinstance(node, ast.Attribute):
         found = []
         for path, owner in _spelled(node.value, user_ns):
+            if node.attr in _INDEXERS and (type(owner).__module__ or "").split(".")[0] == "pandas":
+                # ``s.iloc[0]``: the accessor indexes the object itself.
+                found.append((f"{path}.{node.attr}", owner))
+                continue
             try:
                 attrs = object.__getattribute__(owner, "__dict__")
             except (AttributeError, TypeError):
@@ -491,16 +554,17 @@ def _spelled(node: ast.expr, user_ns: Mapping[str, Any]) -> list[tuple[str, Any]
     if isinstance(node, ast.Subscript):
         found = []
         for path, owner in _spelled(node.value, user_ns):
-            if type(owner) not in (dict, list, tuple):
-                continue
-            if isinstance(node.slice, ast.Constant):
+            if type(owner) in (dict, list, tuple) and isinstance(node.slice, ast.Constant):
                 try:
                     found.append((f"{path}[{node.slice.value!r}]", owner[node.slice.value]))
                 except (KeyError, IndexError, TypeError):
-                    continue
-            elif len(owner) <= _HELD_WIDTH:
-                items = owner.items() if type(owner) is dict else enumerate(owner)
-                found.extend((f"{path}[{key!r}]", item) for key, item in items)
+                    pass
+                continue
+            # An item a variable picks, or one of a container whose lookup
+            # runs its own code: any item it holds.
+            items = _items(owner)
+            if items is not None:
+                found.extend((f"{path}{label}", item) for label, item in items)
         return found
     return []
 

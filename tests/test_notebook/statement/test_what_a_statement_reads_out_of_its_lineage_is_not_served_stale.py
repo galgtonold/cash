@@ -82,6 +82,41 @@ CASES = {
         "f()",
         "f()",
     ),
+    "a generator a library object holds": (
+        "import collections\nud = collections.UserDict(g=(i for i in range(100)))\ndef f():\n    return next(ud['g'])",
+        "f()",
+        "f()",
+    ),
+    "a generator in a pandas object column": (
+        "import pandas as pd\ns = pd.Series([(i for i in range(100))], dtype=object)",
+        "next(s.iloc[0])",
+        "next(s.iloc[0])",
+    ),
+    "a list in a pandas object column a function reads": (
+        "import pandas as pd\ndf = pd.DataFrame({'c': [[(i for i in range(100))]]})\ndef f():\n    return next(df['c'].iloc[0][0])",
+        "f()",
+        "f()",
+    ),
+    "a generator a function handed to a library call reads": (
+        "gen = (i for i in range(100))\nf = lambda _: next(gen)",
+        "list(map(f, [0]))[0]",
+        "next(gen)",
+    ),
+    "a generator in a deque": (
+        "import collections\ndq = collections.deque([(i for i in range(100))])\ndef f():\n    return next(dq[0])",
+        "f()",
+        "f()",
+    ),
+    "a generator in an OrderedDict a variable picks": (
+        "import collections\nod = collections.OrderedDict(g=(i for i in range(100)))\nk = 'g'",
+        "next(od[k])",
+        "next(od['g'])",
+    ),
+    "a generator among more than 64 a variable picks": (
+        "gens = [(i for i in range(100)) for _ in range(65)]\ni = 0",
+        "next(gens[i])",
+        "next(gens[0])",
+    ),
 }
 
 
@@ -103,8 +138,12 @@ def test_a_reader_below_is_not_served_what_the_old_value_gave(cash_magics, monke
     first = ns["v"]
     exec(change, ns)
 
-    _runs(cash_magics, cells, start=1)
-    assert ns["v"] != first, "the change did not reach the statement"
+    run_cash_cell(cash_magics, cells[1], cells=cells)
+    ran = [str(s.get("status")) for s in cash_magics.cash_status("dict")["last_cell"]["statements"]]
+    run_cash_cell(cash_magics, cells[2], cells=cells)
+    # The statement runs: either it gives the new value, or cash rebuilt the
+    # iterator above it as a run from the top would; never is it served.
+    assert "RESTORED" not in ran[-1], f"the statement was served {first!r}"
     assert ns["w"] == [ns["v"], "read"], f"the reader was served what {first!r} gave"
 
 
@@ -123,6 +162,20 @@ def test_a_traced_lookup_and_its_reader_are_still_served_while_nothing_changed(c
 def test_an_attribute_that_is_not_an_iterator_keeps_the_statement_cached(cash_magics, monkeypatch):
     monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
     cells = ["class M:\n    pass\nm = M()\nm.g = [1, 2, 3]\nRUNS = []", "v = [len(m.g), RUNS.append(1)][0]"]
+    _runs(cash_magics, cells)
+    _runs(cash_magics, cells, start=1)
+    assert cash_magics.shell.user_ns["RUNS"] == [1]
+
+
+def test_a_librarys_own_counter_does_not_refuse_the_statement(cash_magics, monkeypatch):
+    """A library object keeps its own counters (matplotlib's callback ids are
+    an ``itertools.count``): a statement whose function reaches one is still
+    served."""
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    cells = [
+        "import queue\nq = queue.Queue()\nRUNS = []\ndef f():\n    return q.qsize()",
+        "v = [f(), RUNS.append(1)][0]",
+    ]
     _runs(cash_magics, cells)
     _runs(cash_magics, cells, start=1)
     assert cash_magics.shell.user_ns["RUNS"] == [1]
