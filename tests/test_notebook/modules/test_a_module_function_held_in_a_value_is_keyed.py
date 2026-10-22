@@ -60,7 +60,7 @@ def test_a_setting_of_its_module_reruns_the_call(cash_magics, mock_shell, shop, 
         run_cash_cell(cash_magics, cell, cells=cells)
     assert mock_shell.user_ns["t"] == 6
     run_cash_cell(cash_magics, cells[1], cells=cells)
-    assert open(log).read() == "x", "control: served when nothing changed"
+    assert open(log, encoding="utf-8").read() == "x", "control: served when nothing changed"
     run_cash_cell(cash_magics, cells[2], cells=cells)
     run_cash_cell(cash_magics, cells[1], cells=cells)
     assert mock_shell.user_ns["t"] == 42

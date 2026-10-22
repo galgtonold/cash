@@ -19,9 +19,7 @@ from cash.analysis.annotations import CacheAnnotation
 _PERSIST = CacheAnnotation(persist=True)
 
 CLASSES = (
-    "class Bad(dict):\n"
-    "    def values(self):\n"
-    "        raise RuntimeError('values raised')\n",
+    "class Bad(dict):\n    def values(self):\n        raise RuntimeError('values raised')\n",
     "class D(dict):\n"
     "    def values(self):\n        raise RuntimeError('values raised')\n"
     "    def items(self):\n        raise RuntimeError('items raised')\n"
