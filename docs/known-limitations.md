@@ -344,7 +344,9 @@ The same holds for code of yours that the statement runs without naming it:
   reads by name or one step into such a value (`return v + 1`,
   `return d["k"] + 1`, `return C.x + 1`). A container of more than 100,000
   items read by an index cash cannot read, while a class of yours has such
-  a method, runs each time with a warning;
+  a method (any class alive, one made inside a function included), runs
+  each time with a warning
+  ([NOTEBOOK-ITEMS-UNREAD](warnings.md#notebook-items-unread));
 - the function that a wrapper made without `functools.wraps`, or a
   `compose(f, g)` closure, calls; a `functools.partial`, `np.vectorize` or
   `operator.methodcaller` called by its own name; a `functools.singledispatch`
