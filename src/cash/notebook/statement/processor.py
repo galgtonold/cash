@@ -1247,7 +1247,10 @@ class StatementProcessor:
         if by_string and followed and _shadow.SHADOW is not None and not refused:
             # What the string found is recorded as it runs, and its trace is
             # checked before a hit is served (``cache_key.lookups_followed``).
+            # Refused after it ran (an in-place change seen), what it binds or
+            # fills is keyed by its value.
             run.needs_trace = True
+            run.reads_outside_lineage = True
         elif by_string:
             # Its key cannot name the function a string spells at run time
             # (``string_lookups``): served, it could be stale. Refused for
@@ -1735,13 +1738,17 @@ class StatementProcessor:
                     "from then on is in no key, so the statement runs every time"
                 )
             return
-        if not run.skip_cache:
-            try:
-                names = carrier_candidates(run.inputs or (), user_ns, self.tracking_state.variable_lineage)
-            except Exception:  # noqa: BLE001 - the inputs alone, then
-                names = set(run.inputs or ())
-            reached = self._thread_reach.reached(names)
-            if reached:
+        try:
+            names = carrier_candidates(run.inputs or (), user_ns, self.tracking_state.variable_lineage)
+        except Exception:  # noqa: BLE001 - the inputs alone, then
+            names = set(run.inputs or ())
+        reached = self._thread_reach.reached(names)
+        if reached:
+            # What work in a thread changed is in no lineage: what the
+            # statement binds or fills from it is keyed by its value, whatever
+            # else refused it (an alias, an in-place change).
+            run.reads_outside_lineage = True
+            if not run.skip_cache:
                 run.skip_cache = True
                 shown = ", ".join(f"'{name}' (by {fn})" for name, fn in reached[:3])
                 run.metrics["uncacheable_reasons"].append(
@@ -2258,8 +2265,11 @@ class StatementProcessor:
                     or run.past_budget
                     or inputs_moved
                     or self._binds_a_stream(run),
-                    # What it changed in place keeps the lineage the change gives it.
-                    value_kept=run.outputs - run.bound,
+                    # What it changed in place keeps the lineage the change gives
+                    # it, unless what it put there came from outside the lineage.
+                    value_kept=(
+                        frozenset() if run.reads_outside_lineage or run.value_varies else run.outputs - run.bound
+                    ),
                     replay_bumps=False,
                     lineage_reads=run.pyplot_drawn,
                     settled=run.settled_digests,

@@ -20,7 +20,7 @@ import pickle
 import secrets
 import sys
 import types
-from collections.abc import Mapping
+from collections.abc import Hashable, Mapping, MutableMapping
 from typing import Any, Callable, Iterable
 
 from cash._user_attrs import attribute_or, has_attribute, instance_of
@@ -382,7 +382,9 @@ def _held_hash(before: str, cache_key: str) -> str:
     return hashlib.sha256(f"held:{before}:{cache_key}".encode("utf-8")).hexdigest()
 
 
-def no_cache_value_digest(value: Any) -> str:
+def no_cache_value_digest(
+    value: Any, too_costly: MutableMapping[Hashable, int | None] | None = None, key: Hashable = None
+) -> str:
     """The digest of what a ``# @cash:no-cache`` statement bound, for its
     output's lineage.
 
@@ -398,15 +400,47 @@ def no_cache_value_digest(value: Any) -> str:
     The digest has the budget of a check whether a value changed
     (`budgeted_hash`): a value of many objects can take seconds to read,
     several times what bound it, on every run. Past it the value gets a
-    digest of its own, and its readers recompute.
+    digest of its own, and its readers recompute. Where the caller keeps
+    *too_costly*, the output (*key*) that went past it is remembered with
+    its length, and gets a digest of its own at once from then on, until its
+    value is less than half as long: no run pays the budget again for it,
+    and a value near the budget does not switch between its digest and one
+    of its own from run to run.
     """
     handle = read_handle_digest(value)
     if handle is not None:
         return handle
+    size = _length(value)
+    if too_costly is not None and key in too_costly:
+        known = too_costly[key]
+        if size is None or known is None or 2 * size >= known:
+            return _fresh_digest()
+        del too_costly[key]
     digest = budgeted_hash(value)
-    if digest is None or is_identity_fallback_hash(value, digest):
-        return "fresh:" + secrets.token_hex(16)
+    if digest is None:
+        if too_costly is not None:
+            too_costly[key] = size
+        return _fresh_digest()
+    if is_identity_fallback_hash(value, digest):
+        return _fresh_digest()
     return digest
+
+
+def _fresh_digest() -> str:
+    return "fresh:" + secrets.token_hex(16)
+
+
+def _length(value: Any) -> int | None:
+    """The length of a container, read without running the user's code."""
+    if type(value) in (list, tuple, dict, set, frozenset, str, bytes, bytearray):
+        return len(value)
+    shape = getattr(type(value), "shape", None)
+    if shape is not None and not callable(shape):
+        try:
+            return int(len(value))
+        except Exception:  # noqa: BLE001 - a length is a hint only
+            return None
+    return None
 
 
 def no_cache_value_component(digests: Mapping[str, str] | None, name: str) -> str:
