@@ -1135,12 +1135,22 @@ def frames_together(values: Iterable[Any], linked: Mapping[int, Any] | None = No
     del everything, arrays
     saved = _TOGETHER
     together = dict(saved or {})
+    np = sys.modules["numpy"]
+    # By address: a loop over each slot of each frame's columns took 0.5 s
+    # for a statement over fifty frames of a hundred thousand rows.
+    wanted = np.sort(np.fromiter(beyond, dtype=np.int64, count=len(beyond))) if beyond else None
     for frame in frames:
         listed: list[Any] = []
-        if beyond:
+        if wanted is not None:
             mine = kept_apart.get(id(frame), ())
+            apart = np.sort(np.fromiter(mine, dtype=np.int64, count=len(mine))) if mine else None
             for array in columns[id(frame)]:
-                listed += [cell for cell in array.tolist() if id(cell) in beyond and id(cell) not in mine]
+                slots = addresses(array)
+                keep = in_sorted(slots, wanted)
+                if apart is not None:
+                    keep &= ~in_sorted(slots, apart)
+                if keep.any():
+                    listed += array[keep].tolist()
         together[id(frame)] = listed
     # This frame's own references, out of the counts the walks inside take.
     frames = frame = columns = listed = None
@@ -1183,14 +1193,13 @@ def _held_by_frames_alone(everything: list[Any], beyond: set[int], linked: Mappi
     names = set().union(*by_frame.values())
     if not names:
         return {}
-    counts: dict[int, int] = {}
-    uniques: list[Any] = []
-    for cell in everything:
-        if id(cell) in names:
-            if id(cell) not in counts:
-                uniques.append(cell)
-            counts[id(cell)] = counts.get(id(cell), 0) + 1
-    cell = None  # the loop's own reference, out of the counts read below
+    # By address, in numpy: a loop over the slots of fifty frames of a
+    # hundred thousand rows took 0.8 s on each call it was asked for.
+    ids = np.fromiter(map(id, everything), dtype=np.int64, count=len(everything))
+    at = np.flatnonzero(in_sorted(ids, np.sort(np.fromiter(names, dtype=np.int64, count=len(names)))))
+    found, first, times = np.unique(ids[at], return_index=True, return_counts=True)
+    counts = dict(zip(found.tolist(), times.tolist()))
+    uniques = [everything[i] for i in at[first].tolist()]
     # Held by its slots, by *everything* and by *uniques*.
     alone = {
         id(held)
