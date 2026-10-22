@@ -45,7 +45,9 @@ from .callee_effects import (
     handed_or_called_on,
     iterated_sources,
     mutating_partials,
+    params_mutated_in_function,
     partial_arg_mutations,
+    positional_param_names,
     reduce_free_mutations,
     resolve_function_def,
     stateful_closure_vars,
@@ -1634,7 +1636,7 @@ def classify_receivers(
     mutated |= drawn_args
     mutated |= {
         base
-        for base in _changed_through_lambda_parameters(tree, calls)
+        for base in _changed_through_lambda_parameters(tree, calls, namespace)
         if not is_module_name(base, namespace, virtual_modules)
     }
     if verdict is None:
@@ -1645,11 +1647,16 @@ def classify_receivers(
     return ReceiverClasses(frozenset(mutated), frozenset(unknown), unknown_args, provisional)
 
 
-def _changed_through_lambda_parameters(tree: ast.Module | None, calls: Any) -> set[str]:
-    """The names a lambda changing its own parameter in place changes, in
+def _changed_through_lambda_parameters(
+    tree: ast.Module | None, calls: Any, namespace: Mapping[str, Any] | None = None
+) -> set[str]:
+    """The names a callable changing its own parameter in place changes, in
     *tree*: the receiver and the arguments of the call it is handed to.
     ``df['o'].map(lambda d: d.update(z=2))`` changes the dicts ``df`` holds,
-    and ``d`` names none of the notebook's variables."""
+    and ``d`` names none of the notebook's variables. So does a function of
+    the user's that changes its parameter (``df['o'].apply(upd)``, or
+    ``lambda d: upd(d, 2)``), read from its source in *namespace*, and
+    ``lambda d: operator.setitem(d, 'z', 2)``."""
     if tree is None:
         return set()
     changed = set(calls.mutation_receivers) | set(calls.changed_receivers)
@@ -1658,21 +1665,112 @@ def _changed_through_lambda_parameters(tree: ast.Module | None, calls: Any) -> s
         if not isinstance(call, ast.Call):
             continue
         handed = [*call.args, *(keyword.value for keyword in call.keywords)]
-        for lam in handed:
-            if not isinstance(lam, ast.Lambda):
-                continue
-            params = {arg.arg for arg in (*lam.args.posonlyargs, *lam.args.args, *lam.args.kwonlyargs)}
-            params |= {arg.arg for arg in (lam.args.vararg, lam.args.kwarg) if arg is not None}
-            inside = top_level_calls(ast.Module(body=[ast.Expr(lam.body)], type_ignores=[]))
-            touched = set(inside.mutation_receivers) | set(inside.changed_receivers)
-            if not (params & touched & changed):
+        for given in handed:
+            if isinstance(given, ast.Lambda):
+                if not _lambda_changes_parameters(given, changed, namespace):
+                    continue
+            elif not (
+                isinstance(given, ast.Name)
+                and namespace is not None
+                and _hands_on_items(call, namespace)
+                and _users_function_changes(given, namespace)
+            ):
                 continue
             if isinstance(call.func, ast.Attribute) and (root := _receiver_root(call.func.value)):
                 found.add(root)
             for arg in handed:
-                if arg is not lam and (root := _receiver_root(arg)):
+                if arg is not given and (root := _receiver_root(arg)):
                     found.add(root)
     return found
+
+
+def _hands_on_items(call: ast.Call, namespace: Mapping[str, Any]) -> bool:
+    """Whether *call* runs a function it is handed over the items of what
+    it is called on or handed: a method (``s.apply(f)``, ``df.pipe(f)``),
+    or the builtin ``map`` or ``filter``. A function handed to a function
+    of the user's is that function's argument, fingerprinted as any is."""
+    func = call.func
+    if isinstance(func, ast.Attribute):
+        return True
+    return isinstance(func, ast.Name) and func.id in {"map", "filter"} and func.id not in namespace
+
+
+#: Functions changing their first argument in place.
+_SETS_ITS_FIRST_ARGUMENT = frozenset(
+    {"setitem", "delitem", "setattr", "delattr", "iadd", "isub", "imul", "ior", "iand", "iconcat"}
+)
+
+
+def _lambda_changes_parameters(lam: ast.Lambda, changed: set[str], namespace: Mapping[str, Any] | None) -> bool:
+    """Whether the lambda *lam* changes one of its parameters in place: by a
+    method it calls on it (in *changed*), by ``operator.setitem`` and its
+    kind, or by handing it to a function of the user's that changes the
+    parameter it takes it as."""
+    params = {arg.arg for arg in (*lam.args.posonlyargs, *lam.args.args, *lam.args.kwonlyargs)}
+    params |= {arg.arg for arg in (lam.args.vararg, lam.args.kwarg) if arg is not None}
+    inside = top_level_calls(ast.Module(body=[ast.Expr(lam.body)], type_ignores=[]))
+    touched = set(inside.mutation_receivers) | set(inside.changed_receivers)
+    if params & touched & changed:
+        return True
+    for sub in ast.walk(lam.body):
+        if not isinstance(sub, ast.Call):
+            continue
+        func = sub.func
+        name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else None
+        if (
+            name in _SETS_ITS_FIRST_ARGUMENT
+            and sub.args
+            and isinstance(sub.args[0], ast.Name)
+            and sub.args[0].id in params
+            and (name in {"setattr", "delattr"} or isinstance(func, ast.Attribute) or _from_operator(name, namespace))
+        ):
+            return True
+        if isinstance(func, ast.Name) and namespace is not None:
+            positions = {i for i, arg in enumerate(sub.args) if isinstance(arg, ast.Name) and arg.id in params}
+            keywords = {
+                kw.arg for kw in sub.keywords if kw.arg and isinstance(kw.value, ast.Name) and kw.value.id in params
+            }
+            if not positions and not keywords:
+                continue
+            if _users_function_changes(func, namespace, positions, keywords):
+                return True
+    return False
+
+
+def _from_operator(name: str, namespace: Mapping[str, Any] | None) -> bool:
+    """Whether the bare *name* is the operator module's function."""
+    import operator
+
+    return namespace is not None and namespace.get(name) is getattr(operator, name, None)
+
+
+def _users_function_changes(
+    func: ast.Name,
+    namespace: Mapping[str, Any],
+    positions: set[int] | None = None,
+    keywords: set[str] | None = None,
+) -> bool:
+    """Whether the function of the user's *func* names changes in place a
+    parameter it is handed: any of them, or, with *positions* and
+    *keywords*, one of those it takes there."""
+    if not instance_of(namespace.get(func.id), types.FunctionType) or not users_callee(func, namespace):
+        return False
+    resolve = functools.partial(_live_source_of, namespace=namespace)
+    fdef = resolve_function_def(func.id, resolve)
+    if fdef is None:
+        return False
+    mutated = params_mutated_in_function(fdef, resolve)
+    if not mutated:
+        return False
+    if positions is None and keywords is None:
+        return True
+    ordered = positional_param_names(fdef)
+    named = {ordered[i] for i in positions or () if i < len(ordered)}
+    return bool(mutated & (named | set(keywords or ())))
+
+
+def _live_source_of(name: str, namespace: Mapping[str, Any]) -> str | None:
+    return live_function_source(name, namespace)
 
 
 def _receiver_root(node: ast.AST) -> str | None:

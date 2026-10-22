@@ -435,6 +435,10 @@ class LoopPass:
 
     def __init__(self) -> None:
         self.fired: set[str] = set()
+        # What the branches that ran changed themselves (``d`` in ``if
+        # d['i'] == 3: d['z'] = 1``): through a loop target, the container
+        # it comes out of changed too (`unchanged`).
+        self.branch_changed: set[str] = set()
         # What each condition changes, asked once per loop rather than per
         # pass: the body's nodes are the same on every pass.
         self._changes: dict[int, tuple[ast.expr, frozenset[str]]] = {}
@@ -455,6 +459,8 @@ class LoopPass:
         branch = _evaluated_chain(node, tests, body)
         own = _evaluated_chain(node, tests, _without_branches(body) or [ast.Pass()])
         self.fired |= structure_mutations(shell, statement_processor, own)
+        if body:
+            self.branch_changed |= structure_mutations(shell, statement_processor, branch)
         update_lineage_after_execution(shell, statement_processor, branch, ast.unparse(node), link_shares=False)
 
     def unchanged(self, shell, statement_processor, node: ast.For) -> set[str]:
@@ -472,7 +478,17 @@ class LoopPass:
         )
         always = structure_mutations(shell, statement_processor, stripped)
         conditional = structure_mutations(shell, statement_processor, node) - always
-        return conditional - self.fired
+        # A branch that changed a loop target in place changed the items of
+        # what the target comes out of: ``for d in df['o']: if d['i'] == 3:
+        # d['z'] = 1`` changes ``df``, which the branch's own update, run on
+        # the ``if`` alone, does not know.
+        through = {
+            root
+            for target, roots in target_roots(shell, statement_processor, node).items()
+            if target in self.branch_changed
+            for root in roots
+        }
+        return conditional - self.fired - through
 
 
 def current_loop_pass(dispatcher: Any) -> LoopPass | None:
