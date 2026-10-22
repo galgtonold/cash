@@ -34,7 +34,7 @@ from ..effects import ENVIRONMENT_TEXT_MARKERS, environment_component, environme
 from ..source_norm import unparse_without_docstrings
 from ..tracking.module_symbols import closure_digest, static_attribute_reads
 from ..tracking.randomness import hidden_lineage_reads, observed_rng_reads
-from ..value_hash import compute_hash, is_identity_fallback_hash
+from ..value_hash import budgeted_hash, compute_hash, is_identity_fallback_hash
 from .callee_reach import Reach, reached_user_code
 from .held_code import held_code_digest
 from .read_handles import read_handle_digest
@@ -905,6 +905,13 @@ def module_source_component(
         digest = read_module_source_hash(mod_file, dep_files)
         return f":mod_src:{digest}" if digest else ""
 
+    if callable(value) and not _a_definition(value):
+        # A configured callable (``partial(mul, k=2)``, an instance with
+        # ``__call__``): what it does is what it holds, which a cell above
+        # can set; taken by value as a constant is.
+        found = _from_import_component(function_tracker, value, var_name, code, tree, note_from_import)
+        if found is not None:
+            return found
     if callable(value):
         obj_module = attribute_or(value, "__module__", None)
         if not (obj_module and obj_module in _tracked(function_tracker)):
@@ -916,10 +923,32 @@ def module_source_component(
         # has no import to read a name from, and keeps the whole module.
         return _from_module_hash(obj_module, function_tracker, _imported_name(var_name, code, tree))
 
+    return _from_import_component(function_tracker, value, var_name, code, tree, note_from_import) or ""
+
+
+def _a_definition(value: Any) -> bool:
+    """Is *value* a function, a class or a builtin, or one wrapped by a
+    decorator: what its source says, which the module's source covers?"""
+    return instance_of(value, (types.FunctionType, types.BuiltinFunctionType, type)) or has_attribute(
+        value, "__wrapped__"
+    )
+
+
+def _from_import_component(
+    function_tracker: Any,
+    value: Any,
+    var_name: str,
+    code: str,
+    tree: ast.Module | None,
+    note_from_import: Callable[[str, str], None] | None,
+) -> str | None:
+    """The component of *var_name* bound by a ``from X import`` in *code*:
+    the narrowed source of X and the value it binds; None when no such
+    import in *code* binds it."""
     try:
         parsed = tree if tree is not None else ast.parse(code.strip())
     except SyntaxError:
-        return ""
+        return None
     for node in parsed.body:
         if not (isinstance(node, ast.ImportFrom) and node.module):
             continue
@@ -931,7 +960,7 @@ def module_source_component(
                 if component:
                     component += _imported_value_component(node.module, alias.name, value)
                 return component
-    return ""
+    return None
 
 
 def _imported_value_component(module_name: str, name: str, value: Any) -> str:
@@ -944,4 +973,17 @@ def _imported_value_component(module_name: str, name: str, value: Any) -> str:
     namespace = attribute_or(sys.modules.get(module_name), "__dict__", None)
     if isinstance(namespace, dict) and name in namespace:
         value = namespace[name]
-    return f":from_value:{module_data_digest(f'{module_name}.{name}', value)}"
+    # Within the budget a check whether a value changed has: a 3-million
+    # entry dict took 6-7.5 s per Run All. One too costly to read is new
+    # each time, and what reads it runs again.
+    try:
+        digest = budgeted_hash(value)
+    except Exception:  # a value that cannot be hashed
+        logger.debug("Could not hash imported value %s.%s", module_name, name, exc_info=True)
+        digest = None
+    if digest is None:
+        return f":from_value:{UNHASHABLE}{secrets.token_hex(16)}"
+    code = held_code_digest(value)
+    if code:
+        digest = hashlib.sha256(f"{digest}:code:{code}".encode("utf-8")).hexdigest()
+    return f":from_value:{digest}"

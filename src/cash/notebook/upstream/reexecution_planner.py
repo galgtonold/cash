@@ -67,6 +67,19 @@ def _imported_roots(code: str) -> set[str]:
     return roots
 
 
+def _imported_from_roots(code: str) -> set[str]:
+    """The top-level modules a ``from M import name`` in *code* binds from."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return set()
+    return {
+        node.module.split(".")[0]
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom) and node.module and not node.level
+    }
+
+
 class ReexecutionPlanner:
     """Phase 3 of NotebookSimulator: build the re-execution plan.
 
@@ -217,6 +230,10 @@ class ReexecutionPlanner:
                 simulation_trace,
             )
             stmts_to_run_indices = self._complete_import_path_setup(
+                stmts_to_run_indices,
+                simulation_trace,
+            )
+            stmts_to_run_indices = self._complete_module_setting_writers(
                 stmts_to_run_indices,
                 simulation_trace,
             )
@@ -727,6 +744,36 @@ class ReexecutionPlanner:
                 if "sys" in simulation_trace[j].outputs and "path" in entry_code:
                     added.add(j)
                     trace_event("import_path_setup", stmt=entry_code[:80], before=code[:80])
+        return sorted(scheduled | added)
+
+    @staticmethod
+    def _complete_module_setting_writers(stmts_to_run_indices: list[int], simulation_trace: list) -> list[int]:
+        """Before a re-run ``from helpers import CFG`` of a module that is not
+        loaded, the notebook's earlier statements that set something on it
+        (``helpers.CFG = 5``, ``helpers.TABLE['k'] += 1``).
+
+        The import binds what the module holds, and a fresh import holds
+        what its file says: after a restart, a jump below re-ran the import
+        without the setting above it, and ``t = CFG + 1`` computed 2 where a
+        Run All gives 6. A module already loaded holds the settings it was
+        given; running them again could apply one twice.
+        """
+        scheduled = set(stmts_to_run_indices)
+        added: set[int] = set()
+        for i in sorted(scheduled):
+            code = simulation_trace[i].stmt_code
+            if not import_only(code):
+                continue
+            roots = {m for m in _imported_from_roots(code) if m not in sys.modules}
+            if not roots:
+                continue
+            for j in range(i):
+                if j in scheduled or j in added:
+                    continue
+                entry = simulation_trace[j]
+                if roots & set(entry.outputs) and not import_only(entry.stmt_code):
+                    added.add(j)
+                    trace_event("module_setting_writer", stmt=entry.stmt_code[:80], before=code[:80])
         return sorted(scheduled | added)
 
     def _complete_stateful_carrier_history(
