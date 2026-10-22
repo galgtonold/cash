@@ -87,7 +87,7 @@ def closures_sharing(captured_vars: Mapping[str, Any], seconds: float) -> Closur
             return ClosureCheck([], finished=False)
         if found:
             plain.add(name)
-    places: set[int] = set()
+    places: dict[int, Any] = {}
     functions: list[tuple[str, types.FunctionType]] = []
     deferred: list[tuple[str, Any]] = []  # (name, what a deferred array hands pickle)
     for name, value in captured_vars.items():
@@ -128,7 +128,7 @@ def _plain(value: Any, limit: CpuLimit) -> bool | None:
 
 
 def _walk(
-    name: str, value: Any, places: set[int], functions: list, limit: CpuLimit, deferred: list | None = None
+    name: str, value: Any, places: dict[int, Any], functions: list, limit: CpuLimit, deferred: list | None = None
 ) -> bool:
     """Add to *places* the id of every object *value* holds, and to
     *functions* each function with a closure among them, with *name*;
@@ -193,18 +193,22 @@ def _plain_cells(array: Any, limit: CpuLimit) -> bool | None:
     return True
 
 
-def _fresh(held: list[Iterable[Any]], places: set[int], limit: CpuLimit) -> list | None:
+def _fresh(held: list[Iterable[Any]], places: dict[int, Any], limit: CpuLimit) -> list | None:
     """What *held* yields that is not an atom and not in *places*, each
     once, now added to it; None when *limit* ran out first. Taken in
     chunks, each a few passes in C: a level of ten million strings is
-    typed and dropped, never remembered one by one."""
+    typed and dropped, never remembered one by one.
+
+    *places* holds each object by its id while the look lasts: the tuples
+    and lists a reduce hands over are made for the look, and one dropped
+    could leave its id to a later one, read as seen and not looked into."""
     leaves = _LEAVES
     items = chain.from_iterable(held)
     fresh: list = []
     while chunk := list(islice(items, _CHUNK)):
         if not leaves.issuperset(map(type, chunk)):
             new = {id(item): item for item in chunk if type(item) not in leaves}
-            for key in places.intersection(new):
+            for key in places.keys() & new.keys():
                 del new[key]
             places.update(new)
             fresh.extend(new.values())
@@ -317,7 +321,7 @@ def _reduced(item: Any, kind: type) -> list:
     return parts
 
 
-def _reaches(fn: types.FunctionType, places: set[int], limit: CpuLimit) -> bool | None:
+def _reaches(fn: types.FunctionType, places: dict[int, Any], limit: CpuLimit) -> bool | None:
     """Does what *fn*'s closure holds reach an object in *places*? None
     when *limit* ran out first. Another function met on the way is not
     followed: its own check is its own."""
@@ -327,7 +331,7 @@ def _reaches(fn: types.FunctionType, places: set[int], limit: CpuLimit) -> bool 
             held.append(cell.cell_contents)
         except ValueError:  # an empty cell
             continue
-    reached: set[int] = set()
+    reached: dict[int, Any] = {}
     level = _fresh([held], reached, limit)
     while level:
         if any(id(item) in places for item in level if not issubclass(type(item), _OPAQUE)):
