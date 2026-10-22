@@ -63,3 +63,15 @@ def _run(magics: Any, code: str, ttl: int | None, cell_id: str | None = None) ->
     if isinstance(result, (RunInstead, PipelineSyntaxError)):
         return
     magics._finalize_cell_body(code, result)
+
+
+def restart_kernel(magics: Any, names: list[str]) -> None:
+    """What a kernel restart leaves of *magics*'s session: no lineage, no
+    simulation, and a namespace without *names* or any public name. The
+    modules a test imported stay in ``sys.modules``; a test drops its own."""
+    magics.tracking_state.reset_session_state()
+    magics._upstream_checker.simulator.cache.reset()
+    for name in list(magics.shell.user_ns):
+        if name in names or not name.startswith("_") or name.startswith("_w"):
+            if name in names or name not in ("In", "Out", "get_ipython", "exit", "quit"):
+                magics.shell.user_ns.pop(name, None)

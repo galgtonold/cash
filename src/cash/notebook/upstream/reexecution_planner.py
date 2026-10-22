@@ -16,6 +16,7 @@ from ...analysis.mutations import consumed_input_names
 from .._trace import trace_event
 from ..cache_key import statement_source_hash
 from ..stateful_carriers import carrier_kind_from_producer, stateful_carrier_kind
+from . import module_settings
 from ._types import ClassificationResult, ReexecutionPlan, SimulationResult, latest_producer
 from .carrier_fills import fills_carrier
 from .figure_writes import FigureWriteGuard
@@ -65,19 +66,6 @@ def _imported_roots(code: str) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
             roots.add(node.module.split(".")[0])
     return roots
-
-
-def _imported_from_roots(code: str) -> set[str]:
-    """The top-level modules a ``from M import name`` in *code* binds from."""
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return set()
-    return {
-        node.module.split(".")[0]
-        for node in tree.body
-        if isinstance(node, ast.ImportFrom) and node.module and not node.level
-    }
 
 
 class ReexecutionPlanner:
@@ -746,35 +734,67 @@ class ReexecutionPlanner:
                     trace_event("import_path_setup", stmt=entry_code[:80], before=code[:80])
         return sorted(scheduled | added)
 
-    @staticmethod
-    def _complete_module_setting_writers(stmts_to_run_indices: list[int], simulation_trace: list) -> list[int]:
-        """Before a re-run ``from helpers import CFG`` of a module that is not
-        loaded, the notebook's earlier statements that set something on it
-        (``helpers.CFG = 5``, ``helpers.TABLE['k'] += 1``).
+    def _complete_module_setting_writers(self, stmts_to_run_indices: list[int], simulation_trace: list) -> list[int]:
+        """Before a re-run ``from helpers import CFG``, the notebook's earlier
+        statements that set what it binds (`module_settings`), and that have
+        not run in this kernel since.
 
         The import binds what the module holds, and a fresh import holds
         what its file says: after a restart, a jump below re-ran the import
         without the setting above it, and ``t = CFG + 1`` computed 2 where a
-        Run All gives 6. A module already loaded holds the settings it was
-        given; running them again could apply one twice.
+        Run All gives 6. Re-running the imports cell first, or setting it
+        through ``import helpers as h``, a submodule or an object taken from
+        the module, did the same. A setting that already ran here is not run
+        again: it could apply twice (`_ran_here`).
         """
         scheduled = set(stmts_to_run_indices)
         added: set[int] = set()
+        live = self.tracking_state.variable_lineage
         for i in sorted(scheduled):
             code = simulation_trace[i].stmt_code
             if not import_only(code):
                 continue
-            roots = {m for m in _imported_from_roots(code) if m not in sys.modules}
-            if not roots:
+            imported = module_settings.imported_from(code)
+            if not imported:
+                continue
+            roots = {module.split(".")[0] for module, _ in imported}
+            bindings: dict[str, str] = {}
+            for j in range(i):
+                for name, path in module_settings.module_bindings(simulation_trace[j].stmt_code).items():
+                    if path.split(".")[0] in roots:
+                        bindings[name] = path
+                    else:
+                        bindings.pop(name, None)  # bound to something else since
+            if not bindings:
                 continue
             for j in range(i):
                 if j in scheduled or j in added:
                     continue
                 entry = simulation_trace[j]
-                if roots & set(entry.outputs) and not import_only(entry.stmt_code):
-                    added.add(j)
-                    trace_event("module_setting_writer", stmt=entry.stmt_code[:80], before=code[:80])
+                touched = entry.outputs & bindings.keys()
+                if not touched or import_only(entry.stmt_code):
+                    continue
+                paths = module_settings.written_paths(entry.stmt_code, bindings)
+                if not module_settings.sets_what_is_imported(paths, imported):
+                    continue
+                if self._ran_here(j, i, touched, simulation_trace, live):
+                    continue
+                added.add(j)
+                trace_event("module_setting_writer", stmt=entry.stmt_code[:80], before=code[:80])
         return sorted(scheduled | added)
+
+    @staticmethod
+    def _ran_here(j: int, i: int, names: set[str], simulation_trace: list, live: dict[str, str]) -> bool:
+        """Did statement *j* run in this kernel: does a name it changes hold
+        the lineage *j*, or a statement after it before *i*, left it with?"""
+        for name in names:
+            now = live.get(name)
+            if now is None:
+                continue
+            for k in range(j, i):
+                if simulation_trace[k].produced_lineages.get(name) == now:
+                    return True
+        return False
 
     def _complete_stateful_carrier_history(
         self,

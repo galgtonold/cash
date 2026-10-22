@@ -13,6 +13,7 @@ ingredients they have; this module decides how they combine.
 from __future__ import annotations
 
 import ast
+import functools
 import hashlib
 import logging
 import os
@@ -963,27 +964,75 @@ def _from_import_component(
     return None
 
 
+#: Past this many items a list, tuple, set or dict imported from a module
+#: is not read for whether it changed (a 3-million entry dict took 0.6 s a
+#: read, three reads a Run All); what reads it runs each time. Decided by
+#: size, so the same value is decided the same way on a busy machine.
+FOLLOWED_ITEMS = 500_000
+#: The same for an array or a frame, by its bytes (a 1 GB array reads in
+#: about 0.2 s).
+FOLLOWED_BYTES = 4 << 30
+
+
 def _imported_value_component(module_name: str, name: str, value: Any) -> str:
     """The value a ``from module_name import name`` binds, digested: what
     the module holds under *name* now (what the import binds when it runs
     again), else *value*. A cell above that sets ``helpers.CFG = 5`` or
     changes ``helpers.TABLE`` in place moves the lineage of the imported
     name, and everything that reads it: the module's source alone does not
-    change, and a Run All served what read the old value."""
+    change, and a Run All served what read the old value.
+
+    A value too big to read each time (`FOLLOWED_ITEMS`, `FOLLOWED_BYTES`),
+    or one only its identity hashes (an object holding a lock), is new each
+    time: what reads it runs again, where a digest that never moves would
+    serve it stale after a change in place."""
     namespace = attribute_or(sys.modules.get(module_name), "__dict__", None)
     if isinstance(namespace, dict) and name in namespace:
         value = namespace[name]
-    # Within the budget a check whether a value changed has: a 3-million
-    # entry dict took 6-7.5 s per Run All. One too costly to read is new
-    # each time, and what reads it runs again.
-    try:
-        digest = budgeted_hash(value)
-    except Exception:  # a value that cannot be hashed
-        logger.debug("Could not hash imported value %s.%s", module_name, name, exc_info=True)
-        digest = None
+    too_big = _too_big_to_follow(value)
+    digest = None if too_big else _value_digest(module_name, name, value, budgeted=too_big is None)
     if digest is None:
         return f":from_value:{UNHASHABLE}{secrets.token_hex(16)}"
     code = held_code_digest(value)
     if code:
         digest = hashlib.sha256(f"{digest}:code:{code}".encode("utf-8")).hexdigest()
     return f":from_value:{digest}"
+
+
+def _too_big_to_follow(value: Any) -> bool | None:
+    """Is *value* past `FOLLOWED_ITEMS` or `FOLLOWED_BYTES`? None when its
+    size is not known this way: the time budget decides then."""
+    if type(value) in (list, tuple, set, frozenset, dict):
+        return len(value) > FOLLOWED_ITEMS
+    nbytes = attribute_or(value, "nbytes", None)
+    if type(nbytes) is int:
+        return nbytes > FOLLOWED_BYTES
+    return None
+
+
+def _value_digest(module_name: str, name: str, value: Any, budgeted: bool = True) -> str | None:
+    """*value*'s digest, within the budget of a check when *budgeted* (its
+    size not known), so that one near the budget may be decided either way
+    on a loaded machine; None when it is too costly or cannot be hashed. A ``functools.partial`` by its parts: its
+    own pickle digested one way while its import ran and another after,
+    so a jump to a reader never matched the Run All that stored it. None
+    as well for a digest of its identity alone (an object holding a lock),
+    which does not move when the object changes in place."""
+    if type(value) is functools.partial:
+        func = value.func
+        value = (
+            "partial",
+            attribute_or(func, "__module__", None),
+            attribute_or(func, "__qualname__", None),
+            value.args,
+            value.keywords,
+            attribute_or(value, "__dict__", None) or {},
+        )
+    try:
+        digest = budgeted_hash(value) if budgeted else compute_hash(value)
+    except Exception:  # a value that cannot be hashed
+        logger.debug("Could not hash imported value %s.%s", module_name, name, exc_info=True)
+        return None
+    # Only its identity hashed (a lock inside): the same digest after a
+    # change in place, so it could be served stale.
+    return None if digest is None or is_identity_fallback_hash(value, digest) else digest
