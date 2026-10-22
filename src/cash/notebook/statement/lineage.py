@@ -188,6 +188,9 @@ class StatementLineageBuilder:
         self.function_tracker = function_tracker
         self._file_deps = file_deps
         self.compute_hash = compute_hash
+        #: The outputs whose value went past the digest's budget, with its
+        #: length (`no_cache_value_digest`).
+        self._too_costly: dict[tuple[str, str], int | None] = {}
 
     # ------------------------------------------------------------------
     # Public entries
@@ -321,7 +324,9 @@ class StatementLineageBuilder:
                 func_component,
                 self._compute_module_lineage_component(tracking_state, value, var_name, code, tree),
                 changed_module_environment(var_name, value, code, environment),
-                self._no_cache_value(value_digests, var_name, value) if no_cache and var_name not in value_kept else "",
+                self._no_cache_value(value_digests, (source_hash, var_name), value)
+                if no_cache and var_name not in value_kept
+                else "",
             )
             # A module set by a setting that is the same when run again
             # (``pd.set_option('display.width', 120)``) keeps one run's
@@ -496,10 +501,11 @@ class StatementLineageBuilder:
 
         return content_hash
 
-    @staticmethod
-    def _no_cache_value(digests: dict[str, str], var_name: str, value: Any) -> str:
-        """Record the digest of a no-cache output's value; return its component."""
-        digests[var_name] = no_cache_value_digest(value)
+    def _no_cache_value(self, digests: dict[str, str], output: tuple[str, str], value: Any) -> str:
+        """Record the digest of a no-cache output's value; return its component.
+        *output* is the statement's source hash and the output's name."""
+        var_name = output[1]
+        digests[var_name] = no_cache_value_digest(value, self._too_costly, output)
         return no_cache_value_component(digests, var_name)
 
     def build_output_lineages(self, tracking_state: "TrackingState", outputs: set[str]) -> dict[str, str]:

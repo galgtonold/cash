@@ -152,23 +152,70 @@ def test_a_reason_that_pins_does_not_hide_one_that_does_not(cash_magics, monkeyp
     assert ns["w"] == [ns["v"], "read"], f"the reader was served what {first!r} gave"
 
 
+def _lineages_of_v(cash_magics, cells, runs):
+    """The lineage of ``v`` after each of *runs* runs of its statement."""
+    lineage = cash_magics.tracking_state.variable_lineage
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    seen = [lineage["v"]]
+    for _ in range(runs - 1):
+        run_cash_cell(cash_magics, cells[1], cells=cells)
+        seen.append(lineage["v"])
+    return seen
+
+
+#: A value whose content hashes (no identity fallback), bound anew each run.
+COSTLY = ["N = 300\ndef g():\n    return {i: float(i) for i in range(N)}", "v = globals()['g']()"]
+
+
+def test_a_value_within_the_budget_keeps_its_digest(cash_magics, monkeypatch):
+    monkeypatch.setattr(shadow, "SHADOW", None)
+    seen = _lineages_of_v(cash_magics, COSTLY, 3)
+    assert len(set(seen)) == 1, "the same value was keyed apart"
+
+
 def test_a_value_too_costly_to_digest_gets_a_lineage_of_its_own(cash_magics, monkeypatch):
     """The value digest has a change check's budget: past it, the value is
     keyed apart each run and its readers recompute, rather than every run
     pay seconds for a value of many objects."""
-    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
     monkeypatch.setattr(shadow, "SHADOW", None)
     monkeypatch.setattr(value_hash, "CHANGE_CHECK_BUDGET_S", 0.0)
-    setup = (
-        "class Box:\n    def __init__(self, i):\n        self.i = i\ndef g():\n    return [Box(i) for i in range(300)]"
-    )
-    cells = [setup, "v = globals()['g']()"]
+    seen = _lineages_of_v(cash_magics, COSTLY, 3)
+    assert len(set(seen)) == 3
+
+
+def test_a_value_once_too_costly_is_not_digested_again_until_it_shrinks(cash_magics, monkeypatch):
+    """Past the budget once, the output gets a digest of its own at once from
+    then on, budget or not: no run pays the budget again, and a value near it
+    does not switch between its digest and one of its own. A value less than
+    half as long is digested again."""
+    monkeypatch.setattr(shadow, "SHADOW", None)
+    calls = []
+    real = value_hash.budgeted_hash
+
+    def counted(value, *args, **kwargs):
+        calls.append(type(value).__name__)
+        return real(value, *args, **kwargs)
+
+    import cash.notebook.lineage_formula as lineage_formula
+
+    monkeypatch.setattr(lineage_formula, "budgeted_hash", counted)
+    monkeypatch.setattr(value_hash, "CHANGE_CHECK_BUDGET_S", 0.0)
+    _lineages_of_v(cash_magics, COSTLY, 1)
+    monkeypatch.setattr(value_hash, "CHANGE_CHECK_BUDGET_S", 10.0)
+    calls.clear()
+    seen = _lineages_of_v(cash_magics, COSTLY, 2)
+    assert "dict" not in calls, "the value was digested again"
+    assert len(set(seen)) == 2
+
+    exec("N = 100", cash_magics.shell.user_ns)
     lineage = cash_magics.tracking_state.variable_lineage
-    for cell in cells:
-        run_cash_cell(cash_magics, cell, cells=cells)
-    before = lineage["v"]
-    run_cash_cell(cash_magics, cells[1], cells=cells)
-    assert lineage["v"] != before
+    seen = []
+    for _ in range(2):
+        run_cash_cell(cash_magics, COSTLY[1], cells=COSTLY)
+        seen.append(lineage["v"])
+    assert "dict" in calls
+    assert len(set(seen)) == 1, "a value half as long was not digested again"
 
 
 #: name: (setup, the statement's expression, a change to what the code it
@@ -207,3 +254,96 @@ def test_a_hit_its_trace_refuses_gives_a_reader_below_the_new_value(cash_magics,
         run_cash_cell(cash_magics, cell, cells=cells)
     assert ns["v"] != first, "the change did not reach the statement"
     assert ns["w"] == [ns["v"], "read"], f"the reader was served what {first!r} gave"
+
+
+G1, G2 = "def g():\n    return 1", "def g():\n    return 2"
+TMP_FILE = (
+    "import os, subprocess, sys, tempfile\np = os.path.join(tempfile.mkdtemp(), 'f')\nopen(p, 'w').write('1')\n"
+    "CAT = [sys.executable, '-c', 'import sys; print(open(sys.argv[1]).read())']"
+)
+
+#: name: (cells, the cell edited and its new source or None, a change made
+#: outside cash's view or None, whether the tracer is off). The third cell
+#: changes in place what the second binds, with what it reads outside its
+#: lineage; the fourth reads it.
+FILLED = {
+    "an item set from a string lookup": (
+        [G1, "D = {}", "D['k'] = globals()['g']()", "w = dict(D)"],
+        (0, G2),
+        None,
+        True,
+    ),
+    "an item set from a string lookup, traced": (
+        [G1, "D = {}", "D['k'] = globals()['g']()", "w = dict(D)"],
+        (0, G2),
+        None,
+        False,
+    ),
+    "a column set from a string lookup": (
+        [
+            G1 + "\nimport pandas as pd",
+            "df = pd.DataFrame({'a': [1, 2]})",
+            "df['c'] = globals()['g']()",
+            "w = df['c'].tolist()",
+        ],
+        (0, G2 + "\nimport pandas as pd"),
+        None,
+        True,
+    ),
+    "an item set from an iterator": (
+        ["it = iter(range(100))", "D = {}", "D['k'] = next(it)", "w = dict(D)"],
+        None,
+        "next(it); next(it)",
+        False,
+    ),
+    "an append of a string lookup": ([G1, "L = []", "L.append(globals()['g']())", "w = list(L)"], (0, G2), None, True),
+    "an item set from a process's output": (
+        [TMP_FILE, "D = {}", "D['k'] = subprocess.check_output(CAT + [p]).decode().strip()", "w = dict(D)"],
+        None,
+        "open(p, 'w').write('2')",
+        False,
+    ),
+    "an extend by a thread's data": (
+        [
+            "import threading\ndata = [1]\nev = threading.Event()\ndef worker():\n    ev.wait()\n    data.append(2)\n"
+            "th = threading.Thread(target=worker, daemon=True)\nth.start()",
+            "L = []",
+            "L.extend(data)",
+            "w = list(L)",
+        ],
+        None,
+        "ev.set(); th.join()",
+        False,
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(FILLED))
+def test_what_an_outside_read_fills_in_place_is_keyed_by_its_value(cash_magics, monkeypatch, case):
+    """``D['k'] = globals()['g']()`` changes ``D`` in place, and the change's
+    lineage over ``D = {}`` above comes out the same each Run All: the reader
+    below was served what the old ``g`` gave. What an outside read fills is
+    keyed by its value."""
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    cells, edit, change, tracer_off = FILLED[case]
+    cells = list(cells)
+    if tracer_off:
+        monkeypatch.setattr(shadow, "SHADOW", None)
+    if case.endswith("traced") and shadow.SHADOW is None:
+        pytest.skip("the tracer follows a string lookup on Python 3.12+ only")
+    ns = cash_magics.shell.user_ns
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    first = ns["w"]
+    if edit is not None:
+        cells[edit[0]] = edit[1]
+    else:
+        exec(change, ns)
+    # Run All, from the top: a single rerun of the changing cell chains its
+    # change onto the last and hides a lineage that comes out the same.
+    for cell in cells[0 if edit is not None else 1 :]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    plain = dict(ns)
+    exec(cells[-1], plain)
+    assert plain["w"] != first, "the change did not reach the statement"
+    assert ns["w"] == plain["w"], f"the reader was served what {first!r} gave"
