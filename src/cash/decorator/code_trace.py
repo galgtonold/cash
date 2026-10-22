@@ -49,10 +49,12 @@ from __future__ import annotations
 
 import atexit
 import builtins
+import collections
 import dis
 import functools
 import hashlib
 import importlib
+import itertools
 import operator
 import os
 import sys
@@ -63,7 +65,7 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from .._paths import is_pseudo_filename
-from .._user_attrs import instance_of
+from .._user_attrs import attribute_or, instance_of
 from ..analysis.purity_report import (
     ISSUE_AMBIENT_READ,
     ISSUE_DISCARDED_CALL,
@@ -202,9 +204,25 @@ def _recorder_class() -> type:
     FUNCTION, LRU, STR, BUILTIN, PARTIAL = types.FunctionType, _LRU, str, _BUILTIN, functools.partial
     DESCRIPTORS = frozenset(_DESCRIPTORS)
     SITES_get = _SITES.get
+    USER_FN_get = _USER_FN.get
     TAKERS = _TAKERS
+    LOOKUPS = _LOOKUPS
     _POOL_QUALNAMES = frozenset(qualname for _, qualname in rec.POOL_STARTS)
     _PYPLOT_FILES = ("matplotlib/pyplot.py", "matplotlib\\pyplot.py")
+
+    def _varies(code: types.CodeType, offset: int, fn: Any, arg0: Any) -> bool:
+        """`callee_varies`, the code's globals read only the first time; a
+        method the receiver's own class holds (``rows.append(x)``,
+        ``model.fit(x)``) does not vary as the attribute it is called by
+        would (`from_class`)."""
+        sites = SITES_get(id(code))
+        if sites is None:
+            varies = callee_varies(code, offset, sys._getframe(rec.WATCHED_FRAME + 1).f_globals)
+        else:
+            varies = sites[1].get(offset, True)
+        if varies is True or not varies:
+            return bool(varies)
+        return not from_class(fn, arg0, varies)
 
     class _Recorder(rec.Recorder):
         """The process's one recorder, for traced calls and for the
@@ -540,14 +558,15 @@ def _recorder_class() -> type:
                 # it was. `_plain_call` written out: it runs on every call.
                 t = type(fn)
                 if (
-                    t is FUNCTION
+                    (t is FUNCTION and USER_FN_get(id(fn)) is True)
                     or t is LRU
                     or (t is BUILTIN and type(fn.__self__) is not LRU and id(fn) not in TAKERS)
+                    or (t in DESCRIPTORS and fn.__objclass__ is not LRU and id(fn) not in TAKERS)
                 ):
                     t = type(arg0)
                     if t is not STR and t is not BUILTIN and t is not PARTIAL and t not in DESCRIPTORS:
                         sites = SITES_get(id(code))
-                        if sites is not None and sites[1].get(offset, True):
+                        if sites is not None and sites[1].get(offset, True) is True:
                             return None
             if not units and not stack:
                 self.rearm.add(code)
@@ -565,7 +584,28 @@ def _recorder_class() -> type:
                     if reads_counters(fn, arg0):
                         stack[-1].counters_read = True
                         keep = True
-                    elif not harmless(fn) or callee_varies(code, offset):
+                    elif id(fn) in LOOKUPS:
+                        # ``getattr(f, name)``: a counter got by a name no
+                        # text holds, handed on later where no trace runs.
+                        keep = True
+                        if (type(arg0) is LRU or arg0 is LRU) and names_a_counter(
+                            code, offset, sys._getframe(rec.WATCHED_FRAME), arg0
+                        ):
+                            stack[-1].counters_read = True
+                    elif not harmless(fn):
+                        # Code the trace does not see (a builtin that calls
+                        # what it is handed, a library's function or class):
+                        # what it is handed is read at each call, every
+                        # argument and keyword the frame holds, not only the
+                        # first. A site handing on none of those is let go
+                        # as a harmless one is, unless it calls what varies.
+                        frame = sys._getframe(rec.WATCHED_FRAME)
+                        if hands_on_a_counter(code, offset, frame):
+                            stack[-1].counters_read = True
+                        keep = (
+                            id(fn) in TAKERS or bool(handed_names(code).get(offset)) or _varies(code, offset, fn, arg0)
+                        )
+                    elif _varies(code, offset, fn, arg0):
                         # What it calls next may be a counter: seen every time.
                         keep = True
                 except Exception:  # noqa: BLE001 - a call that cannot be judged stays seen
@@ -625,9 +665,27 @@ _TAKERS: frozenset[int] = frozenset(
         getattr(operator, "call", None),
         object.__getattribute__,
         type.__getattribute__,
+        list.sort,
+        itertools.groupby,
+        itertools.starmap,
+        itertools.accumulate,
+        itertools.filterfalse,
+        itertools.takewhile,
+        itertools.dropwhile,
+        collections.defaultdict,
+        functools.cmp_to_key,
     )
     if fn is not None
 )
+#: Builtins that look an attribute up by a name: one asked of a memo, by a
+#: name that is a counter's or that cannot be read, hands one back.
+_LOOKUPS: frozenset[int] = frozenset(id(fn) for fn in (getattr, object.__getattribute__, type.__getattribute__))
+#: co_filename -> is it the user's code (`harmless`).
+_USER_FILE: dict[str, bool] = {}
+#: id(function) -> is it the user's code (`_user_function`); the weak
+#: reference in `_USER_FN_REFS` takes it out as the function goes.
+_USER_FN: dict[int, bool] = {}
+_USER_FN_REFS: dict[int, Any] = {}
 
 
 def _counter_method(obj: Any) -> bool:
@@ -664,17 +722,29 @@ def reads_counters(fn: Any, arg0: Any) -> bool:
 
 def harmless(fn: Any) -> bool:
     """Is *fn* a callable that cannot reach a memo's counters other than by
-    code of its own the trace sees: a Python function or method, a class, a
-    memo, a builtin that does not call or look up what it is handed, a
-    method of a builtin type other than a memo's, a numpy ufunc."""
+    code of its own the trace sees: a function, method or class of the
+    user's, a memo, a builtin or a builtin type that does not call or look
+    up what it is handed, a method of a builtin type other than a memo's, a
+    numpy ufunc. A library's function or class is not: the trace does not
+    see its code, which may call what it is handed (a thread pool's
+    ``submit``) in a thread of its own."""
     if id(fn) in _TAKERS:
         return False
     t = type(fn)
-    if t is types.FunctionType or t is _LRU or isinstance(fn, type):
+    if t is _LRU:
         # A memo's own call runs the user's code or none.
         return True
+    if t is types.FunctionType:
+        return _user_function(fn)
+    if isinstance(fn, type):
+        if not fn.__flags__ & _HEAP_TYPE:
+            return True  # a builtin type: dict, list, a C library's
+        # A class statement's: what its call runs is the ``__new__`` and
+        # ``__init__`` it finds first, the user's or a library's.
+        return all(_user_init(fn, name) for name in ("__new__", "__init__"))
     if t is types.MethodType:
-        return type(fn.__func__) is types.FunctionType
+        func = fn.__func__
+        return type(func) is types.FunctionType and _user_function(func)
     if t is _BUILTIN:
         return type(fn.__self__) is not _LRU
     if t in _DESCRIPTORS:
@@ -682,41 +752,132 @@ def harmless(fn: Any) -> bool:
     return t.__name__ == "ufunc" and t.__module__ == "numpy"
 
 
+_HEAP_TYPE = 1 << 9  # Py_TPFLAGS_HEAPTYPE: a class made by a ``class`` statement
+
+
+def _user_init(cls: type, name: str) -> bool:
+    """Is the *name* (``__new__`` or ``__init__``) *cls* runs the user's
+    code or a builtin's (``object.__init__``), not a library's?"""
+    for klass in cls.__mro__:
+        found = klass.__dict__.get(name)
+        if found is None:
+            continue
+        if type(found) is staticmethod:
+            found = found.__func__
+        code = attribute_or(found, "__code__", None)
+        return code is None or _user_file(code.co_filename)
+    return True
+
+
+def _user_function(fn: types.FunctionType) -> bool:
+    """Is *fn* the user's code? Kept by the function, for `_on_call`'s quick
+    path: reading ``__code__`` there raises an audit event per call."""
+    key = id(fn)
+    known = _USER_FN.get(key)
+    if known is None:
+        known = _user_file(fn.__code__.co_filename)
+        try:
+            _USER_FN_REFS[key] = weakref.ref(
+                fn, lambda _, key=key: (_USER_FN.pop(key, None), _USER_FN_REFS.pop(key, None))
+            )
+        except TypeError:
+            return known
+        _USER_FN[key] = known
+    return known
+
+
+def _user_file(filename: str) -> bool:
+    """`is_user_code_file`, kept per name."""
+    known = _USER_FILE.get(filename)
+    if known is None:
+        from ..install_paths import is_user_code_file
+
+        if len(_USER_FILE) > 4096:
+            _USER_FILE.clear()
+        known = _USER_FILE[filename] = is_user_code_file(filename)
+    return known
+
+
 #: id(code) -> (a weak reference to it, {offset of a call: does the
 #: callable it calls vary run to run}); by id, as `_on_call` reads it on
 #: every call at a site it keeps seen. The reference takes the entry out as
 #: the code goes, before its id can be another's: a notebook compiles each
 #: statement into code of its own, which nothing here keeps alive.
-_SITES: dict[int, tuple[Any, dict[int, bool]]] = {}
-#: file name -> (its source, {end of each call in it: its callee's node}).
+_SITES: dict[int, tuple[Any, dict[int, bool | str]]] = {}
+#: file name -> (its source, {end of each call in it: its node}).
 _CALL_ENDS: dict[str, tuple[str, dict[tuple[int, int], Any]]] = {}
 
 
-def callee_varies(code: types.CodeType, offset: int) -> bool:
+def callee_varies(code: types.CodeType, offset: int, g: Mapping[str, Any] | None = None) -> bool | str:
     """May the call at *offset* in *code* call something else next time?
     Its callee is a name *code* binds itself (a loop's variable: ``for g in
-    [len, f.cache_info]: g()``), an argument or local, an item, a call's
-    result: anything but a name *code* never binds (a global, a builtin, a
-    closure's) or an attribute (``obj.method()``). Read from the source;
-    a call it cannot place varies."""
+    [len, f.cache_info]: g()``), an argument or local, a closure's variable
+    (a factory's closures share one code, each its own cell), an attribute
+    (``self.g()``, ``o.stat()``: nothing ties one to one callable), an
+    item, a call's result: anything but a global or builtin name, or an
+    attribute of a module or class *g* (the code's globals) binds a global
+    or builtin name to (``np.sqrt(x)``, ``Model.make()``, ``', '.join(x)``).
+    An attribute's call that varies answers with the attribute's name, for
+    `from_class`. Read from the source; a call it cannot place varies."""
     key = id(code)
     known = _SITES.get(key)
     if known is None:
         known = _SITES[key] = (
             weakref.ref(code, lambda _, key=key, sites=_SITES: sites.pop(key, None)),
-            _varying_calls(code),
+            _varying_calls(code, g),
         )
     return known[1].get(offset, True)
 
 
-def _varying_calls(code: types.CodeType) -> dict[int, bool]:
+def _fixed_base(node: Any, bound: set[str], g: Mapping[str, Any] | None) -> bool:
+    """Is the attribute call's *node* (its ``.value``) a literal, or a module
+    or class a global or builtin name binds (through modules: ``np.linalg``)?"""
+    import ast
+
+    if isinstance(node, ast.Constant):
+        return True  # ``', '.join(parts)``
+    path: list[str] = []
+    while isinstance(node, ast.Attribute):
+        path.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name) or node.id in bound or g is None:
+        return False
+    value = g.get(node.id, _MISSING)
+    if value is _MISSING:
+        value = builtins.__dict__.get(node.id, _MISSING)
+    for attr in reversed(path):
+        if type(value) is not types.ModuleType:
+            return False
+        value = value.__dict__.get(attr, _MISSING)
+    return type(value) is types.ModuleType or isinstance(value, type)
+
+
+def from_class(fn: Any, receiver: Any, name: str) -> bool:
+    """Is the call of *fn* at an attribute site (``obj.name(...)``) a method
+    the receiver's own class holds under *name*, the receiver handed as its
+    first argument (``rows.append(x)``, ``model.fit(x)``)? What such a site
+    calls next is the method of the next receiver's class: a counter only
+    if a class holds one as a method, not an attribute an object was handed
+    (``self.g()``, ``o.stat()``), which is not called this way."""
+    if receiver is sys.monitoring.MISSING:
+        return False
+    for klass in type(receiver).__mro__:
+        found = klass.__dict__.get(name)
+        if found is not None:
+            return found is fn
+    return False
+
+
+def _call_nodes(code: types.CodeType) -> dict[tuple[int, int], Any] | None:
+    """The calls in *code*'s source, by where each ends; None when there is
+    no source to read."""
     import ast
     import linecache
 
     filename = code.co_filename
     source = "".join(linecache.getlines(filename))
     if not source:
-        return {}
+        return None
     known = _CALL_ENDS.get(filename)
     if known is None or known[0] != source:
         ends: dict[tuple[int, int], Any] = {}
@@ -727,26 +888,129 @@ def _varying_calls(code: types.CodeType) -> dict[int, bool]:
         if tree is not None:
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call) and node.end_lineno is not None:
-                    ends[(node.end_lineno, node.end_col_offset or 0)] = node.func
+                    ends[(node.end_lineno, node.end_col_offset or 0)] = node
         if len(_CALL_ENDS) > 256:
             _CALL_ENDS.clear()
         known = _CALL_ENDS[filename] = (source, ends)
-    ends = known[1]
-    bound = set(code.co_varnames) | set(code.co_cellvars)
+    return known[1]
+
+
+def _varying_calls(code: types.CodeType, g: Mapping[str, Any] | None = None) -> dict[int, bool | str]:
+    import ast
+
+    ends = _call_nodes(code)
+    if ends is None:
+        return {}
+    bound = set(code.co_varnames) | set(code.co_cellvars) | set(code.co_freevars)
     for ins in dis.get_instructions(code):
         if ins.opname.startswith(("STORE_", "DELETE_")):
             bound.update(ins.argval if isinstance(ins.argval, tuple) else (ins.argval,))
-    sites: dict[int, bool] = {}
+    sites: dict[int, bool | str] = {}
     for ins in dis.get_instructions(code):
         if ins.opname not in ("CALL", "CALL_KW", "CALL_FUNCTION_EX"):
             continue
         pos = ins.positions
-        func = ends.get((pos.end_lineno, pos.end_col_offset)) if pos is not None else None
+        call = ends.get((pos.end_lineno, pos.end_col_offset)) if pos is not None else None
+        func = call.func if call is not None else None
         if isinstance(func, ast.Name):
             sites[ins.offset] = func.id in bound
         elif isinstance(func, ast.Attribute):
-            sites[ins.offset] = func.attr in _COUNTERS
+            if func.attr in _COUNTERS:
+                sites[ins.offset] = True
+            else:
+                sites[ins.offset] = not _fixed_base(func.value, bound, g) and func.attr
     return sites
+
+
+#: id(code) -> (a weak reference to it, {offset of a call: what of its
+#: arguments can be read from the frame}), as `_SITES`.
+_HANDED: dict[int, tuple[Any, dict[int, tuple[str, ...]]]] = {}
+#: How many items of a list, tuple or set handed on are looked at.
+_HANDED_ITEMS = 64
+
+
+def _handed_names(code: types.CodeType) -> dict[int, tuple[str, ...]]:
+    """Per call in *code*, the names its arguments and keywords read whose
+    values the frame holds: a name, a starred name, the names of a list,
+    tuple or set display (``groupby([f], key=DESC)``). An argument the call
+    computes (``submit(pick(f))``) is not among them: its counter was got
+    by a lookup the trace sees (`names_a_counter`)."""
+    import ast
+
+    ends = _call_nodes(code) or {}
+    out: dict[int, tuple[str, ...]] = {}
+    for ins in dis.get_instructions(code):
+        if ins.opname not in ("CALL", "CALL_KW", "CALL_FUNCTION_EX"):
+            continue
+        pos = ins.positions
+        call = ends.get((pos.end_lineno, pos.end_col_offset)) if pos is not None else None
+        if call is None:
+            continue
+        names: list[str] = []
+        for arg in [*call.args, *(kw.value for kw in call.keywords)]:
+            if isinstance(arg, ast.Starred):
+                arg = arg.value
+            if isinstance(arg, ast.Name):
+                names.append(arg.id)
+            elif isinstance(arg, (ast.List, ast.Tuple, ast.Set)):
+                names.extend(item.id for item in arg.elts if isinstance(item, ast.Name))
+        out[ins.offset] = tuple(names)
+    return out
+
+
+def handed_names(code: types.CodeType) -> dict[int, tuple[str, ...]]:
+    """`_handed_names`, kept per code as `_SITES` is."""
+    key = id(code)
+    known = _HANDED.get(key)
+    if known is None:
+        known = _HANDED[key] = (
+            weakref.ref(code, lambda _, key=key, handed=_HANDED: handed.pop(key, None)),
+            _handed_names(code),
+        )
+    return known[1]
+
+
+def _hands_a_counter(value: Any) -> bool:
+    """Is *value* a counter, a counter's name, a ``partial``,
+    ``methodcaller`` or ``attrgetter`` made for one, or a list, tuple or set
+    holding one?"""
+    if reads_counters(value, value):
+        return True
+    if type(value) in (list, tuple, set, frozenset):
+        return any(reads_counters(item, item) for item in itertools.islice(value, _HANDED_ITEMS))
+    return False
+
+
+def hands_on_a_counter(code: types.CodeType, offset: int, frame: Any) -> bool:
+    """Does the call at *offset* in *code* hand a counter on, by any
+    argument or keyword the frame holds? sys.monitoring tells the first
+    argument only, which is ``self`` for a method (``pool.submit(...)``),
+    and code the trace does not see may call any of them."""
+    names = handed_names(code).get(offset)
+    if not names:
+        return False
+    local = frame.f_locals
+    g = frame.f_globals
+    for name in names:
+        value = local.get(name, _MISSING)
+        if value is _MISSING:
+            value = g.get(name, _MISSING)
+            if value is _MISSING:
+                continue
+        if _hands_a_counter(value):
+            return True
+    return False
+
+
+def names_a_counter(code: types.CodeType, offset: int, frame: Any, target: Any) -> bool:
+    """Does the lookup (``getattr(target, name)``) at *offset* ask a memo,
+    or the memos' class, for a counter: by the name of one, or by a name
+    the frame does not hold (``'_'.join(PARTS)``)? What it hands back can
+    then be called by code the trace does not see."""
+    if type(target) is not _LRU and target is not _LRU:
+        return False
+    name = _last_argument(code, offset, frame)
+    return name is None or name in _COUNTERS
 
 
 _RECORDER: Any = None

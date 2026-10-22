@@ -110,7 +110,9 @@ def test_a_callee_bound_in_the_code_varies():
 
 
 def test_a_global_or_an_attribute_does_not():
-    assert _sites(_fixed) == [False, False, False]
+    # ``obj.method()`` on a handed object is named by its attribute: the
+    # watch lets it go once the method is found on the object's class.
+    assert _sites(_fixed) == [False, "method", False]
 
 
 def test_a_call_whose_result_is_called_varies():

@@ -1612,7 +1612,16 @@ class StatementProcessor:
             clears = bool(memos_before) and (
                 (run.trace_unit is not None and run.trace_unit.counters_read) or helper_memos.clears(run.code, user_ns)
             )
-            memos = helper_memos.used(memos_before, clears=clears, ns=user_ns)
+            # No run-time trace watched it for counters (Python 3.10 and 3.11,
+            # or the trace off): a name looked up that is not written out may
+            # be a counter's.
+            unseen = (
+                bool(memos_before)
+                and not clears
+                and not (run.trace_unit is not None and run.trace_unit.counters_watched)
+                and helper_memos.looks_up_unread_names(run.code, user_ns)
+            )
+            memos = helper_memos.used(memos_before, clears=clears, unseen=unseen, ns=user_ns)
             if isinstance(memos, tuple):
                 # What it returns can differ run to run with the memo's
                 # state, which no key holds: its outputs are keyed by value.

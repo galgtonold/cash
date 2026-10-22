@@ -494,6 +494,7 @@ def used(
     before: list[tuple[list[str], Any, int, int, int, Any]] | None,
     *,
     clears: bool = False,
+    unseen: bool = False,
     ns: Mapping[str, Any] | None = None,
 ) -> tuple[str, str] | list[dict] | None:
     """After a statement ran: ``(FILLED, why)`` when what it did to a memo
@@ -501,7 +502,9 @@ def used(
     with the answers it held then. *clears*: the code that ran names
     ``cache_clear``, which resets the counters this reads. *ns*: look for
     memos the run made or bound too (a ``def`` in it, a module it imported),
-    each taken as empty before it."""
+    each taken as empty before it. *unseen*: no run-time trace watched it,
+    and code it reached looks an attribute up by a name it does not write
+    out (`looks_up_unread_names`), which may be a counter's."""
     before = list(before or ())
     if ns is not None and _LRU_WRAPPER is not None:
         known = {id(memo) for _, memo, *_ in before}
@@ -526,7 +529,7 @@ def used(
             info = memo.cache_info()
         except Exception:  # noqa: BLE001 - a wrapper whose counters raise
             continue
-        if (info.hits, info.misses, info.currsize) == (hits, misses, size) and not clears:
+        if (info.hits, info.misses, info.currsize) == (hits, misses, size) and not clears and not unseen:
             now = _held(memo)
             if held is None or (now is not None and now[0] == held[0]):
                 continue
@@ -538,6 +541,12 @@ def used(
             continue  # already told; the rest only remember their answers
         if clears:
             why = f"It may empty the helper memo {label} or read its counters (cache_clear, cache_info)"
+        elif unseen:
+            why = (
+                f"It calls code that looks an attribute up by a name it does not write out, which may read"
+                f" the counters of the helper memo {label} (cache_info); without the run-time trace"
+                f" (Python 3.12+) cash cannot tell"
+            )
         elif info.misses < misses or info.hits < hits:
             why = f"It emptied the helper memo {label}"
         elif items is None or len(items) > MAX_KEYED:
@@ -699,10 +708,12 @@ _clearing_code: weakref.WeakKeyDictionary[Any, bool] = weakref.WeakKeyDictionary
 
 def _is_clear(value: Any) -> bool:
     """*value* is a memo's own ``cache_clear`` or ``cache_info``, under any
-    name."""
+    name, bound to a memo or not (``vars(type(f))['cache_info']``)."""
+    if attribute_or(value, "__name__", None) not in _COUNTER_NAMES:
+        return False
     return (
-        attribute_or(value, "__name__", None) in _COUNTER_NAMES
-        and type(attribute_or(value, "__self__", None)) is _LRU_WRAPPER
+        type(attribute_or(value, "__self__", None)) is _LRU_WRAPPER
+        or attribute_or(value, "__objclass__", None) is _LRU_WRAPPER
     )
 
 
@@ -756,6 +767,93 @@ def _names_clear(fn: Any) -> bool:
             if _is_clear(value) or (isinstance(value, str) and value in _COUNTER_NAMES) or _holds_a_counter_name(value):
                 return True
     return False
+
+
+#: The callables that look an attribute up by a name they are handed.
+_LOOKUP_CALLS = frozenset({"getattr", "__getattribute__", "attrgetter", "methodcaller"})
+#: ``code -> whether it looks an attribute up by a name it does not write out``.
+_unread_lookup_code: weakref.WeakKeyDictionary[Any, bool] = weakref.WeakKeyDictionary()
+
+
+def _looks_up_an_unread_name(fn: Any) -> bool:
+    """Does *fn*'s code (its nested functions too) call ``getattr``,
+    ``__getattribute__``, ``attrgetter`` or ``methodcaller`` with a name it
+    does not write out (``getattr(g, '_'.join(PARTS))``)? Such a name can be
+    a memo's counter's, which only the run-time trace sees. Code whose
+    source cannot be read does, when it names one of them."""
+    code = attribute_or(fn, "__code__", None)
+    if type(code) is not types.CodeType:
+        return False
+    try:
+        return _unread_lookup_code[code]
+    except (KeyError, TypeError):
+        pass
+    from cash.decorator.closure_fold import iter_code_scopes
+
+    scopes = list(iter_code_scopes(code))
+    found = any(_LOOKUP_CALLS.intersection(scope.co_names) for scope in scopes) and _unread_in_source(code, scopes)
+    try:
+        _unread_lookup_code[code] = found
+    except TypeError:
+        pass
+    return found
+
+
+def _unread_in_source(code: types.CodeType, scopes: list[types.CodeType]) -> bool:
+    import ast
+    import linecache
+
+    lines = [line for scope in scopes for _, _, line in scope.co_lines() if line]
+    source = "".join(linecache.getlines(code.co_filename))
+    if not source or not lines:
+        return True
+    first, last = min(lines), max(lines)
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError, RecursionError):
+        return True
+    callees = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
+    for node in ast.walk(tree):
+        if not first <= attribute_or(node, "lineno", 0) <= last:
+            continue
+        if isinstance(node, ast.Name) and node.id in _LOOKUP_CALLS and id(node) not in callees:
+            return True  # handed on: ``reduce(getattr, names, f)``
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        called = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else None
+        if called not in _LOOKUP_CALLS:
+            continue
+        at = 0 if called in ("attrgetter", "methodcaller") else 1
+        if called == "__getattribute__" and isinstance(func, ast.Attribute) and len(node.args) == 1:
+            at = 0  # ``obj.__getattribute__(name)``
+        named = node.args[at] if len(node.args) > at else None
+        if named is None or isinstance(named, ast.Starred) or not isinstance(named, ast.Constant):
+            return True
+    return False
+
+
+def looks_up_unread_names(code: str | None, ns: Mapping[str, Any] | None, fn: Any = None) -> bool:
+    """Does a function of the user's that the statement's *code* (or the
+    call of *fn*) reaches look an attribute up by a name it does not write
+    out (`_looks_up_an_unread_name`)? Asked where no run-time trace watched
+    the run (Python 3.10 and 3.11, or the trace off) and a memo is about:
+    the name may be a counter's, so the statement runs again and says why."""
+    from cash.notebook.callee_reach import reached_user_code
+
+    if fn is not None:
+        if _looks_up_an_unread_name(fn):
+            return True
+        name = attribute_or(fn, "__name__", None)
+        globals_ = attribute_or(fn, "__globals__", None)
+        if not (isinstance(name, str) and isinstance(globals_, dict) and globals_.get(name) is fn):
+            return False
+        code, ns = name, globals_
+    try:
+        reached = reached_user_code(code or "", ns)
+    except Exception:  # noqa: BLE001 - not followed: not known to look up
+        return False
+    return any(_looks_up_an_unread_name(found) for found in reached.functions)
 
 
 #: How many items `_holds_a_counter_name` looks at in one value.
@@ -838,7 +936,7 @@ def _text_names_counters(code: str, ns: Mapping[str, Any] | None = None) -> bool
                 return True
             if ns is not None and isinstance(node.ctx, ast.Load):
                 held = ns.get(node.id)
-                if isinstance(held, str) and held in _COUNTER_NAMES:
+                if (isinstance(held, str) and held in _COUNTER_NAMES) or _is_clear(held):
                     return True
                 if _holds_a_counter_name(held):
                     # ``names[0]``, ``NAMES['i']``, ``cfg.k``, ``m.K``.

@@ -1090,7 +1090,12 @@ class CallUnit:
             and not call_tracker.work_outlived_block
             and not _inputs_moved(call_tracker)
             and not isinstance(
-                memos := helper_memos.used(memos_before, clears=_clears(call.fn, memos_before, unit)), tuple
+                memos := helper_memos.used(
+                    memos_before,
+                    clears=_clears(call.fn, memos_before, unit),
+                    unseen=_unseen(call.fn, memos_before, unit),
+                ),
+                tuple,
             )
         ):
             stored = self._store_result(
@@ -1621,6 +1626,17 @@ def _left_pyplot_alone(fn: Any, unit: Any) -> bool:
     if unit is not None:
         return not unit.pyplot_ran
     return user_callee_using_pyplot(fn) is None
+
+
+def _unseen(fn: Any, memos_before: Any, unit: Any = None) -> bool:
+    """Whether the call, which no run-time trace watched for counters, can
+    look an attribute up by a name it does not write out
+    (`helper_memos.looks_up_unread_names`); asked only when a memo is about."""
+    return (
+        bool(memos_before)
+        and not (unit is not None and unit.counters_watched)
+        and helper_memos.looks_up_unread_names(None, None, fn)
+    )
 
 
 def _clears(fn: Any, memos_before: Any, unit: Any = None) -> bool:

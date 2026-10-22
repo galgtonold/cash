@@ -304,6 +304,21 @@ the very same key and answer objects again (cash keeps the ones it saw, so
 it compares objects, not addresses). A memo you fill yourself in
 a dict (`_cache[k] = v`) is a global the function changes, covered above.
 
+On Python 3.12+ cash sees a memo's `cache_info` or `cache_clear` called
+however the code came by it: by a name no text holds
+(`getattr(f, "_".join(parts))`), from a loop over `[len, f.cache_info]`, an
+attribute or a closure that held something else first (`self.g()`), or
+handed to code it does not see by any argument the frame holds
+(`groupby(fs, key=info)`, `pool.map(info, fs)`). Not seen: a site that
+first called a method the receiver's own class holds (`o.stat()`,
+`rows.append(x)`; cash stops watching it) and later calls a counter an
+object holds as an attribute, and a counter made in an earlier cell and
+handed to a library inside an expression (`pool.submit(self.g)`). On
+Python 3.10 and 3.11 there is no run-time trace: while a memo is about, a
+statement that reaches a function of yours that looks an attribute up by a
+name it does not write out (`getattr(obj, name)`) or hands `getattr` on
+reruns every time, and says why.
+
 <!-- claim: cash/analysis/handed_callables.py:handed_callables @c55bd405, cash/analysis/handed_callables.py:hands_a_state_changing_callable @4c3c2d42 -->
 ### A function handed to a call
 
