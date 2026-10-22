@@ -40,6 +40,7 @@ from ..magic_effects import (
     is_rerun_magic,
     magic_base,
     magic_effects,
+    magic_files,
     magic_output_lineage,
     magic_rng_advances,
     simulation_cell,
@@ -602,7 +603,7 @@ class VirtualLineage:
             if name not in sim.virtual_modules and name in read
         }
         reads = {name: virtual_lineage.get(name, live.get(name)) for name in read}
-        base = magic_base(stmt_code, reads)
+        base = magic_base(stmt_code, reads, magic_files(self.tracking_state, stmt_code))
         digests = self.tracking_state.magic_values.get(base, {})
         rerun = is_rerun_magic(node)
         for name in changed:

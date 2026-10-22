@@ -271,3 +271,29 @@ def test_a_folder_beside_the_cache_dir_is_the_users(tmp_path):
             f.write("a,b\n")
     written = [detail.split(", at ")[0] for kind, detail in observer.effects if kind == "file write"]
     assert written == [str(exports / "report.csv")], observer.effects
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc"), reason="psutil reads /proc only on Linux")
+def test_cash_listing_child_processes_is_no_read_of_the_code():
+    # Starting a process makes cash list its children (`psutil`), which lists
+    # /proc and reads files there from inside the audit hook. Taken as the statement's
+    # own reads, a file that changes every moment made the next cell rebuild
+    # `p = !echo a b` from the Python above it: `p` came back as `load()`.
+    from cash.notebook.write_observer import children_left_running, observe_writes
+
+    tracker = FileAccessTracker()
+    with tracker, observe_writes() as written:
+        subprocess.run(["true"], check=True)
+        children_left_running(written)  # still inside the statement's scope
+    assert not [p for p in _tracked(tracker) if "/proc" in p], _tracked(tracker)
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc"), reason="the Linux pseudo-filesystems")
+def test_a_listing_of_a_pseudo_filesystem_or_by_bytes_records_no_odd_spelling(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "sub").mkdir()
+    tracker = FileAccessTracker()
+    with tracker:
+        os.listdir(b"sub")
+        os.listdir("/proc")
+    assert sorted(_tracked(tracker)) == sorted({"sub", str(tmp_path / "sub").replace("\\", "/")}), _tracked(tracker)

@@ -143,6 +143,7 @@ from ...tracking.randomness import (
     rng_virtual_var,
 )
 from ...tracking.trace_recorder import other_thread_alive
+from .. import helper_memos
 from ..anchors import anchor_digests
 from ..borrowed_memory import borrowed_memory_names, lazy_frame_sources
 from ..callee_reach import (
@@ -166,6 +167,7 @@ from ..magic_effects import (
     is_rerun_magic,
     magic_base,
     magic_effects,
+    magic_files,
     magic_output_lineage,
     magic_rng_advances,
     simulation_cell,
@@ -1503,6 +1505,8 @@ class StatementProcessor:
         run.entry_lineages = {name: lineage[name] for name in run.inputs if name in lineage}
         unordered = sparse_order.unordered_sparse(run.inputs, self.shell.user_ns)
         env_reads: set[str] = set()
+        helper_memos.new_statement()
+        memos_before = None if run.skip_cache else helper_memos.watched(self.shell.user_ns)
         try:
             with (
                 self.watching_reads(run.code),
@@ -1586,6 +1590,20 @@ class StatementProcessor:
             # What the environment variables installed code read held: a
             # lookup checks them again (`env_reads`).
             run.env_reads = environment_digests(env_reads)
+        if not run.skip_cache and execution.result.success:
+            # What the helper memos it called held: a lookup checks them
+            # again. One it made compute is changed, as a list appended to.
+            user_ns = self.shell.user_ns
+            clears = bool(memos_before) and helper_memos.clears(run.code, user_ns)
+            memos = helper_memos.used(memos_before, clears=clears, ns=user_ns)
+            if isinstance(memos, tuple):
+                # What it returns can differ run to run with the memo's
+                # state, which no key holds: its outputs are keyed by value.
+                run.skip_cache = True
+                run.value_varies = True
+                run.metrics["uncacheable_reasons"].append(memos[1])
+            else:
+                run.helper_memos = memos
         if not run.skip_cache and execution.written_paths and execution.result.success:
             wrote = self._kept_writes_reason(run, execution)
             if wrote:
@@ -1852,6 +1870,11 @@ class StatementProcessor:
         self._forget_ipython_bindings(run)
         if run.magic_reads is not None:
             self.note_magic_changes(run.code, run.magic_snapshots)
+            self.tracking_state.magic_file_reads[run.code] = (
+                frozenset(execution.accessed_files or ()),
+                frozenset(execution.accessed_remote or ()),
+                dict(execution.probes or {}),
+            )
             self.record_magic(run.code, run.tree.body[0], run.magic_reads)
         return metrics
 
@@ -1918,6 +1941,7 @@ class StatementProcessor:
         for node in tree.body:
             _, read = magic_effects(node, self._is_module)
             code = statement_code(node, source)
+            self.tracking_state.magic_file_reads.pop(code, None)  # IPython ran it untracked
             self.note_magic_changes(code, (snapshots or {}).get(code))
             running.update(self.record_magic(code, node, {n: running.get(n) for n in read}))
 
@@ -1936,7 +1960,7 @@ class StatementProcessor:
         # (`%time train(model)`), as the simulation reads it back.
         changed |= {n for n in self._mutations.magic_changed_arguments(code) if n in read and not self._is_module(n)}
         rerun = is_rerun_magic(node)
-        base = magic_base(code, reads)
+        base = magic_base(code, reads, magic_files(self.tracking_state, code))
         digests: dict[str, str] = {}
         for name in sorted(changed):
             if name not in ns:
@@ -1946,6 +1970,10 @@ class StatementProcessor:
             if not rerun:
                 self.tracking_state.magic_lineages.add(lineage)
             self.tracking_state.lineage.record(name, lineage, value=ns[name])
+            # The files it read are in its lineage: as the name's own files,
+            # they would key the statement that bound it before (``p =
+            # load()``) on them, and a change rebuild ``p`` from it.
+            self.tracking_state.executed_file_deps.pop(name, None)
         if digests:
             self.tracking_state.magic_values[base] = digests
             self.tracking_state.magic_generation += 1
