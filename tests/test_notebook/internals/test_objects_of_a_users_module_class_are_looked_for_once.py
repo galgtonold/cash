@@ -20,6 +20,16 @@ class _OfAUsersModule:
     pass
 
 
+def _asked_about(monkeypatch, cls):
+    """Ask about *cls* as a class of a user's module, kept by that module
+    alone (a closure over it would hold it as a value does)."""
+    module = types.ModuleType("_a_users_module")
+    name = cls.__name__
+    setattr(module, name, cls)
+    monkeypatch.setitem(sys.modules, "_a_users_module", module)
+    monkeypatch.setattr(held_functions, "_users_module_classes", lambda: [getattr(module, name)])
+
+
 def test_objects_of_a_users_module_class_are_looked_for_once_until_code_runs(monkeypatch):
     # Each statement's keys asked this many times, and each asked was a scan
     # of every object the collector tracks (~17 ms per million): late in a
@@ -57,7 +67,7 @@ def test_no_object_is_looked_for_again_each_time(monkeypatch):
     class Fresh:
         pass
 
-    monkeypatch.setattr(held_functions, "_users_module_classes", lambda: [Fresh])
+    _asked_about(monkeypatch, Fresh)
     monkeypatch.setattr(held_functions.gc, "get_referrers", counting)
     assert not held_functions.module_class_objects_exist()
     made = Fresh()
@@ -73,7 +83,8 @@ def test_a_class_held_without_an_object_of_it_counts(monkeypatch):
     class Held:
         pass
 
-    monkeypatch.setattr(held_functions, "_users_module_classes", lambda: [Held])
+    monkeypatch.setattr(held_functions, "_trace_on", lambda: False)
+    _asked_about(monkeypatch, Held)
     rows = [Held, 1, 2]
     assert held_functions.module_class_objects_exist()
     del rows
@@ -96,9 +107,45 @@ def test_what_every_class_has_does_not_count(monkeypatch):
         def m(self):
             return super().m()
 
-    module = types.ModuleType("_a_users_module")
-    module.Base = Base
-    monkeypatch.setitem(sys.modules, "_a_users_module", module)
-    monkeypatch.setattr(held_functions, "_users_module_classes", lambda: [Base])
+    monkeypatch.setattr(held_functions, "_trace_on", lambda: False)
+    _asked_about(monkeypatch, Base)
+    from cash.analysis import handed_callables
+
+    handed_callables._is_users_class(Base)  # cash's own memo of it does not count
     assert not held_functions.module_class_objects_exist()
     assert Derived.__mro__[1] is Base
+
+
+def test_with_the_trace_on_only_an_object_of_the_class_counts(monkeypatch):
+    # Each hit is checked against the module code its trace ran: a big
+    # value need not be walked to the class.
+    class Held:
+        pass
+
+    monkeypatch.setattr(held_functions, "_trace_on", lambda: True)
+    _asked_about(monkeypatch, Held)
+    rows = [Held, 1, 2]
+    assert not held_functions.module_class_objects_exist()
+    made = Held()
+    assert held_functions.module_class_objects_exist()
+    del rows, made
+
+
+def test_a_closure_over_the_class_counts_and_an_odd_name_does_not_raise(monkeypatch):
+    class Held:
+        pass
+
+    monkeypatch.setattr(held_functions, "_trace_on", lambda: False)
+    _asked_about(monkeypatch, Held)
+
+    def factory():
+        k = Held
+        return lambda: k
+
+    made = factory()
+    assert held_functions.module_class_objects_exist()
+    del made
+    held_functions._OBJECTS_SEEN[0] = None
+    record = {"__name__": ["x"], "kind": Held}  # a parsed JSON record
+    assert held_functions.module_class_objects_exist()
+    del record
