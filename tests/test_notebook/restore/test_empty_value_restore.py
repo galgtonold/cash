@@ -15,6 +15,13 @@ the conservative refusal stands.
 The pre-existing guard test in ``test_upstream_trusts_values_derived_from_loop_mutations.py`` covers the unconfirmed
 direction and passes UNCHANGED — it supplies no expected lineages, so nothing is
 confirmed. These tests cover the confirmed direction and the boundary.
+
+The trace check runs first, as in a kernel by default: each entry carries a
+trace with nothing in it (stored by this version, nothing changed since).
+Without one the check refuses every restore here, and whether it was on
+depended on the tests before: the first notebook a test process builds turns
+it on for the rest of that process, so under ``-n 4`` these failed or passed
+by which tests a worker had run.
 """
 
 from __future__ import annotations
@@ -23,15 +30,31 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from cash.notebook import shadow
 from cash.notebook.upstream import UpstreamChecker
 from cash.notebook.upstream.cache_restore import lineage_confirmed_vars
 
 METADATA = {"output_lineages": {"rows": "h1"}, "execution_time": 1.0}
+EMPTY_TRACE = {"items": [], "markers": []}
+
+
+@pytest.fixture(autouse=True)
+def _trace_check_on():
+    """The trace check on, as a kernel runs, whatever the tests before left."""
+    before = shadow.SHADOW
+    if before is None:
+        shadow.enable()
+    yield
+    if before is None:
+        shadow.disable()
 
 
 def _make_simulator(shell_ns: dict, metadata=None, variables=None):
     cash_instance = MagicMock()
-    cash_instance.backend.get.return_value = (metadata or METADATA, {"variables": variables or {}})
+    cash_instance.backend.get.return_value = (
+        {"trace": EMPTY_TRACE, **(metadata or METADATA)},
+        {"variables": variables or {}},
+    )
     shell = MagicMock()
     shell.user_ns = shell_ns
     checker = UpstreamChecker(shell, cash_instance)
