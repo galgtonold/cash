@@ -206,15 +206,24 @@ class Counted:
 """
 
 
-def test_cash_asks_such_an_object_nothing_but_to_pickle_it(cash_magics, tmp_path, monkeypatch):
+@pytest.mark.parametrize("flat_first", [False, True], ids=["pickled", "walked-first"])
+def test_cash_asks_such_an_object_nothing_but_to_pickle_it(cash_magics, tmp_path, monkeypatch, flat_first):
     """Its ``__getattribute__`` is the user's code: cash's own questions
     (``isinstance`` asking for ``__class__``, ``fit``, ``__code__``) read
     its real type and Python's generic lookup instead. Storing it pickles
-    it, and pickle asks."""
-    (tmp_path / "counted_mod.py").write_text(COUNTED, encoding="utf-8")
+    it, and pickle asks. Also where values are walked before they are
+    pickled (`kept_state.FLAT_FIRST`, Python 3.10 on Windows), with numpy
+    loaded, whose array check asked it twice more."""
+    import numpy  # noqa: F401 - `kept_state._flat_array` looks only once numpy is loaded
+
+    from cash import kept_state
+
+    monkeypatch.setattr(kept_state, "FLAT_FIRST", flat_first)
+    module = f"counted_mod_{flat_first}"  # one per case: an imported module is kept
+    (tmp_path / f"{module}.py").write_text(COUNTED, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     cells = [
-        "from counted_mod import Counted, CALLS, ASKED_CLASS",
+        f"from {module} import Counted, CALLS, ASKED_CLASS",
         "w = 0",
         "c = Counted(5)",
         "w = c.v + 1",
