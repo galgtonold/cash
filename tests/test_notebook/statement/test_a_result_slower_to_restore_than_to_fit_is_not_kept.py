@@ -238,3 +238,35 @@ def test_a_restore_importing_on_both_reads_is_not_judged(tiers, cash_instance, t
     assert _rerun_restores(magics)
     assert len(LOADS) == 2
     assert _disk_bytes(disk) >= Fit(1 << 17).model["exog"].nbytes, "a reading that imported was judged"
+
+
+@pytest.mark.parametrize("how", ["raises", "vanished"])
+def test_a_second_read_that_fails_after_an_import_leaves_the_restore_unjudged(
+    tiers, cash_instance, tmp_path, monkeypatch, how
+):
+    """The first reading imported, and the second failed (a MemoryError
+    holding two copies, an unpickling error) or found the entry gone: its
+    time is no reading. It was taken as an infinitely slow one, the entry
+    left disk and the class was refused from then on."""
+    magics, _ram, disk = tiers
+    run_cash_cell(magics, "fit = fit_model()")
+    disk = _restart(cash_instance, disk, tmp_path)
+    STALLS.append(SLOW_LOAD_S)
+    IMPORTS.append((_IMPORTED + "failed", True))
+    fired, real_get = [], disk.get
+
+    def get(key):
+        if LOADS and not fired:  # the second reading
+            fired.append(1)
+            if how == "raises":
+                raise OSError("a read error on the second reading")
+            disk.delete(key)
+        return real_get(key)
+
+    monkeypatch.setattr(disk, "get", get)
+    assert _rerun_restores(magics)
+    assert fired, "the restore was not read again: the test checks nothing"
+    rates = memory_backend._ROUND_TRIP_RATES
+    assert not any(rate == float("inf") for kept in rates.values() for rate in kept), dict(rates)
+    if how == "raises":
+        assert _disk_bytes(disk) >= Fit(1 << 17).model["exog"].nbytes, "a failed reading took the result off disk"

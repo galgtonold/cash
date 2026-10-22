@@ -357,11 +357,15 @@ class TieredBackend(CacheBackend):
                 imported = len(sys.modules) != modules
                 if memory_backend.restore_too_slow(value, metadata, restore_s):
                     # One stalled read is not enough: read again, the faster
-                    # kept; after one that imported, the second alone.
+                    # kept; after one that imported, the second alone, and
+                    # a second that failed or found the entry gone is no
+                    # reading: the restore is left unjudged.
                     modules = len(sys.modules)
                     again = self._read_seconds(backend, key)
-                    restore_s = again if imported else min(restore_s, again)
-                    imported = len(sys.modules) != modules
+                    if imported:
+                        restore_s, imported = again, again == float("inf") or len(sys.modules) != modules
+                    else:
+                        restore_s, imported = min(restore_s, again), len(sys.modules) != modules
                 if not imported and memory_backend.restored_no_faster(value, metadata, restore_s):
                     # It proved no faster than computing it again: not
                     # restored from here again. Handed out this once.
