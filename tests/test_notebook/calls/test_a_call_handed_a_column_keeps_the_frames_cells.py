@@ -35,9 +35,11 @@ CATEGORICAL = (
 
 
 def _run(cash_magics, cells, rounds=2):
-    """Each round's (whether the last cell was served, warnings it gave).
-    Served is read from its status, not its time: on a loaded machine a hit
-    that takes 10 ms quiet took 0.36 s, past the 0.3 s the call sleeps."""
+    """Each round's (whether the last cell's call was served, warnings it
+    gave). Served is read from the call counts, not the time: on a loaded
+    machine a hit that takes 10 ms quiet took 0.36 s, past the 0.3 s the
+    call sleeps. The call's own entry serves it, or, where the statement
+    timed past its floor too, the statement's."""
     out = []
     for cell in cells[:-1]:
         run_cash_cell(cash_magics, cell, cells=cells)
@@ -45,7 +47,11 @@ def _run(cash_magics, cells, rounds=2):
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             run_cash_cell(cash_magics, cells[-1], cells=cells)
-            served = str(cash_magics.cash_status("dict")["last_cell"]["status"]) == "RESTORED"
+            statement = cash_magics.cash_status("dict")["last_cell"]["statements"][-1]
+            calls = statement.get("calls", {})
+            served = str(statement["status"]) == "RESTORED" or (
+                calls.get("restored") == 1 and not calls.get("computed")
+            )
             out.append((served, [str(w.message) for w in caught if "NOT-FOUND" not in str(w.message)]))
     return out
 
