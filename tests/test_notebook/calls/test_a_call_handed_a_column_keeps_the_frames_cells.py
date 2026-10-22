@@ -17,7 +17,6 @@ categories of a categorical of objects are read as its cells.
 
 from __future__ import annotations
 
-import time
 import warnings
 
 from tests._cell_driver import run_cash_cell
@@ -36,25 +35,25 @@ CATEGORICAL = (
 
 
 def _run(cash_magics, cells, rounds=2):
-    """Each round's (seconds the last cell took, warnings it gave)."""
+    """Each round's (whether the last cell was served, warnings it gave).
+    Served is read from its status, not its time: on a loaded machine a hit
+    that takes 10 ms quiet took 0.36 s, past the 0.3 s the call sleeps."""
     out = []
     for cell in cells[:-1]:
         run_cash_cell(cash_magics, cell, cells=cells)
     for _ in range(rounds):
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            started = time.perf_counter()
             run_cash_cell(cash_magics, cells[-1], cells=cells)
-            out.append(
-                (time.perf_counter() - started, [str(w.message) for w in caught if "NOT-FOUND" not in str(w.message)])
-            )
+            served = str(cash_magics.cash_status("dict")["last_cell"]["status"]) == "RESTORED"
+            out.append((served, [str(w.message) for w in caught if "NOT-FOUND" not in str(w.message)]))
     return out
 
 
 def test_a_copy_of_a_column_is_served_with_the_frames_cells(cash_magics, mock_shell):
     cells = [SETUP, f"def mk(v):\n    time.sleep({SLEEP})\n    return v.copy()", "w = mk(df['o'])"]
     (first, _), (second, told) = _run(cash_magics, cells)
-    assert first > SLEEP and second < SLEEP and told == []
+    assert not first and second and told == []
     ns = mock_shell.user_ns
     assert ns["w"].iloc[4] is ns["df"]["o"].iloc[4]
 
@@ -62,7 +61,7 @@ def test_a_copy_of_a_column_is_served_with_the_frames_cells(cash_magics, mock_sh
 def test_a_column_handed_back_whole_is_served_or_says_why(cash_magics, mock_shell):
     cells = [SETUP, f"def mk(v):\n    time.sleep({SLEEP})\n    return v", "w = mk(df['o'])"]
     (_, told), (second, _) = _run(cash_magics, cells)
-    assert second < SLEEP or any("NOTEBOOK-CELLS-SHARED" in message for message in told)
+    assert second or any("NOTEBOOK-CELLS-SHARED" in message for message in told)
     ns = mock_shell.user_ns
     assert ns["w"].iloc[4] is ns["df"]["o"].iloc[4]
 
