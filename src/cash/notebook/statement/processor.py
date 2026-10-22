@@ -183,6 +183,7 @@ from ..shared_objects import (
     ViewBasesCutShort,
     WalkBudgetExceeded,
     anchors_held,
+    history_names,
     is_value,
     library_value_types,
     output_history,
@@ -1155,6 +1156,13 @@ class StatementProcessor:
         # sufficient.
         if callee_globals:
             outputs = outputs | callee_globals
+        # ``Out[2].set_title('x')`` changes the axes ``Out`` holds, not
+        # IPython's history, which as an output got a lineage and was
+        # evicted as a name no cell binds (`history_names`). A statement
+        # binding ``Out`` (``Out = {...}``) binds it all the same: still
+        # IPython's before it runs, it is the user's after.
+        bound = set(effects.outputs) - callee_globals
+        outputs -= history_names(outputs - bound, self.shell.user_ns)
         run.inputs, run.outputs = set(effects.inputs), outputs
         # Exposed so the badge can show a short prefix in the row-detail "Key"
         # field: two runs of the same statement in the same slot or not.
