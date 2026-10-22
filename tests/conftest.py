@@ -513,14 +513,19 @@ def _process_seeds_put_back():
 
     Outside a notebook a watched ``np.random.seed(...)`` makes every later
     drawing function key on the stream's position; a seed one test set would
-    otherwise turn the next test's unseeded draw into a seeded one.
+    otherwise turn the next test's unseeded draw into a seeded one. So does
+    the seed ledger a notebook test's cells published (`seed_epochs`): a
+    ``np.random.seed(42)`` cell left numpy seeded for the decorator tests
+    after it on the same worker.
     """
     from cash.tracking.randomness import lineage
 
     seeded = lineage._PROCESS_SEEDED
     seeded.clear()
+    lineage.publish_seed_epochs(None)
     yield
     seeded.clear()
+    lineage.publish_seed_epochs(None)
 
 
 @pytest.fixture(autouse=True)
