@@ -3,7 +3,8 @@ counts as called: what it changes of the globals is the statement's.
 
 A method called on an object or a class (a static or class method, a hook
 reached through ``super()``), a context manager's ``__enter__``/``__exit__``,
-a property, the special methods of an object the statement names, the
+a property, the special methods of an object the statement names (the
+target of ``v += 4`` included), the
 functions a closure wraps (a decorator without ``functools.wraps``, a
 ``compose``), a ``functools.partial``, ``np.vectorize`` or
 ``operator.methodcaller`` called by its own name, a ``singledispatch``
@@ -69,6 +70,14 @@ class Bag:
 class Plain:
     def __getitem__(self, k):
         return k
+class Vec:
+    def __add__(self, x):
+        LOG.append(x)
+        return Vec()
+class Box:
+    def __iadd__(self, x):
+        LOG.append(x)
+        return self
 def with_retry(fn):
     def call(*a):
         return fn(*a)
@@ -92,6 +101,8 @@ store = Store()
 job = Job()
 bag = Bag()
 plain = Plain()
+vec = Vec()
+box = Box()
 pipe = compose(write_row, clean)
 pz = functools.partial(write_row, 'Z')
 mc = operator.methodcaller('process', 'Z')
@@ -134,6 +145,8 @@ def _changed_globals(statement: str, namespace: dict) -> frozenset[str]:
         "with timer():\n    x = 1",
         "a = bag['k']",
         "a = bag.value",
+        "vec += 4",
+        "box += 7",
         "out = save_row('Z')",
         "out = pipe(' Z ')",
         "out = pz()",

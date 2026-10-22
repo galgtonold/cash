@@ -81,6 +81,10 @@ class StatementCacheMetadata:
     #: The environment variables installed code read while it ran, each with
     #: a digest of its value: the entry is served only while all match.
     env_reads: dict[str, str] | None = None
+    #: The ``functools`` memos of the user's the statement called, each with
+    #: the answers it held after the run: served only while they hold them
+    #: again (`helper_memos.unfilled`).
+    helper_memos: list[dict] | None = None
     #: ``{variable: its lineage before this statement}`` for each variable
     #: stored with the outputs because it holds one of their objects too
     #: (``b = a`` before ``a['x'] = ...``). The entry restores only while each

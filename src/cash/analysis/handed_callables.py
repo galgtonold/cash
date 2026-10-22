@@ -1780,6 +1780,13 @@ class _Found:
                 value = namespace.get(node.id, _MISSING)
                 if value is not _MISSING and _is_users_object(value):
                     self._special_methods(type(value))
+            elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+                # ``v += 4`` reads ``v`` too: its target is a store, so the
+                # Load rule above never sees it, yet it runs ``__iadd__`` or
+                # ``__add__`` on the object ``v`` holds.
+                value = namespace.get(node.target.id, _MISSING)
+                if value is not _MISSING and _is_users_object(value):
+                    self._special_methods(type(value))
             elif isinstance(node, ast.Attribute):
                 owner = _static_value(node.value, namespace)
                 if owner is None:
