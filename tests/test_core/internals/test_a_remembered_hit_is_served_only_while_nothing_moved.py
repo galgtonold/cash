@@ -157,13 +157,39 @@ def warm(f, *args, **kwargs):
     loaded run made six too few. Whatever the memo serves is still
     checked by the test."""
     deadline = time.monotonic() + 5.0
+    worlds = []
     while True:
         result, fast = served_fast(f, *args, **kwargs)
         if fast:
             return result
+        worlds.append(hit_memo.status().get("world_epoch"))
         if time.monotonic() > deadline:
             break
-    raise AssertionError(f"{f.__name__}{args} was never served from the memo")
+    raise AssertionError(f"{f.__name__}{args} was never served from the memo\n{_memo_dump(worlds)}")
+
+
+def _memo_dump(worlds: list) -> str:
+    """What kept a memo from serving, for a failure only CI has shown."""
+    import traceback
+
+    lines = [
+        f"status: {hit_memo.status()}",
+        f"world epochs over {len(worlds)} calls: {sorted(set(worlds), key=str)[:20]}",
+    ]
+    for memo in list(hit_memo._MEMOS):
+        state = memo.state
+        lines.append(
+            f"memo {memo.spec.name}: failed_epoch={memo.failed_epoch} backoff={memo.backoff}"
+            f" slow_since_scan={memo.slow_since_scan} scanned_at={memo.scanned_at:.3f}"
+            f" now={time.monotonic():.3f} world={state[hit_memo.S_WORLD]} entries={len(state[hit_memo.S_ENTRIES])}"
+            f" traces={list(memo.traces.values())} errors={memo.errors}"
+        )
+    frames = sys._current_frames()
+    for t in threading.enumerate():
+        frame = frames.get(t.ident)
+        stack = "".join(traceback.format_stack(frame)[-6:]) if frame is not None else ""
+        lines.append(f"thread {t.name}:\n{stack}")
+    return "\n".join(lines)
 
 
 # -- served, and counted as an ordinary hit is ----------------------------
@@ -657,3 +683,22 @@ def test_a_state_that_is_not_one_is_never_served():
     assert hit_memo.fast_call([], (1,), {}) is hit_memo.MISS
     with pytest.raises(TypeError):
         hit_memo.fast_call(hit_memo.new_state(), [1], {})
+
+
+def test_a_scan_that_broke_once_is_tried_again_in_a_quiet_world(c, monkeypatch):
+    """A scan can break on what another thread changes under it; pinned to
+    the world it broke in, a world that never moved again kept the memo off
+    for good (the Windows runner's never-served memo)."""
+    real = hit_memo.scan
+    broke = []
+
+    def breaks_once(*a, **k):
+        if not broke:
+            broke.append(1)
+            raise RuntimeError("dictionary changed size during iteration")
+        return real(*a, **k)
+
+    monkeypatch.setattr(hit_memo, "scan", breaks_once)
+    f = c.cache(plus_one)
+    assert warm(f, 1) == 2
+    assert broke

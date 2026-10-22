@@ -730,8 +730,12 @@ class HitMemo:
         state[S_SPEC] = spec
         state[S_LOG] = runner._calls
         self.failed_epoch = -1
+        #: The last few scans that broke (not `Ineligible`), for a test to show.
+        self.errors: list[str] = []
         #: Traces watched (`scan_trace`) -> the world epoch they were at.
         self.traces: dict[tuple, int] = {}
+        #: Traces whose scan broke -> when: scanned again `RESCAN_AFTER_S` on.
+        self.trace_broke_at: dict[tuple, float] = {}
         self.slow_since_scan = 0
         self.backoff = 1
         self.scanned_at = 0.0
@@ -867,8 +871,16 @@ class HitMemo:
             state[S_ENTRIES] = {}
             try:
                 cells, tags, callees, family = scan(spec, runner._registry)
-            except Exception:  # noqa: BLE001 - Ineligible, or a scan that broke: the ordinary path
+            except Ineligible:
                 self.failed_epoch = world_now
+                return
+            except Exception as e:  # noqa: BLE001 - a scan that broke: the ordinary path, and a scan again later
+                # Not pinned to this world: a scan can break on what another
+                # thread changes under it (a dict changing size), and a
+                # world that then never moved kept the memo off for good.
+                # The next scan waits as any other does (`RESCAN_AFTER_S`).
+                self.errors.append(repr(e))
+                del self.errors[:-5]
                 return
             self.family = family
             state[S_GUARD] = family.guard if family is not None else None
@@ -880,6 +892,7 @@ class HitMemo:
             state[S_CELLS], state[S_TYPES] = cells, tags
             state[S_WORLD] = world_now
             self.traces = {}
+            self.trace_broke_at = {}
             return
         trace = call.metadata.code_trace if call.metadata is not None else None
         if trace and not self._watch_trace(trace, world_now):
@@ -909,12 +922,23 @@ class HitMemo:
             return True
         if key in self.traces:
             return False  # watched before, and something moved since: Ineligible then
+        broke_at = self.trace_broke_at.get(key)
+        now = time.monotonic()
+        if broke_at is not None and now - broke_at < self.RESCAN_AFTER_S:
+            return False
         state = self.state
         try:
             cells, tags, callees, family = scan_trace(self.spec, self.runner._registry, trace)
-        except Exception:  # noqa: BLE001 - Ineligible, or a scan that broke: the ordinary path
+        except Ineligible:
             self.traces[key] = -1
             return False
+        except Exception as e:  # noqa: BLE001 - a scan that broke: the ordinary path, and a scan again later
+            # As in `offer`: not pinned to this world, scanned again later.
+            self.trace_broke_at[key] = now
+            self.errors.append(repr(e))
+            del self.errors[:-5]
+            return False
+        self.trace_broke_at.pop(key, None)
         if family is not None:
             joined = family.joined(self.family)
             if joined is None:
