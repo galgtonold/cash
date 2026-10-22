@@ -83,7 +83,6 @@ def test_a_class_held_without_an_object_of_it_counts(monkeypatch):
     class Held:
         pass
 
-    monkeypatch.setattr(held_functions, "_trace_on", lambda: False)
     _asked_about(monkeypatch, Held)
     rows = [Held, 1, 2]
     assert held_functions.module_class_objects_exist()
@@ -107,7 +106,6 @@ def test_what_every_class_has_does_not_count(monkeypatch):
         def m(self):
             return super().m()
 
-    monkeypatch.setattr(held_functions, "_trace_on", lambda: False)
     _asked_about(monkeypatch, Base)
     from cash.analysis import handed_callables
 
@@ -116,26 +114,26 @@ def test_what_every_class_has_does_not_count(monkeypatch):
     assert Derived.__mro__[1] is Base
 
 
-def test_with_the_trace_on_only_an_object_of_the_class_counts(monkeypatch):
-    # Each hit is checked against the module code its trace ran: a big
-    # value need not be walked to the class.
+def test_with_the_trace_on_a_class_held_without_an_object_still_counts(monkeypatch):
+    # The trace checks only its own statement's hit: not a cell built from
+    # it, a call cached inside one, or a restore after a restart. A walk
+    # it stopped short left the module out of all of those keys.
+    from cash.notebook import shadow
+
     class Held:
         pass
 
-    monkeypatch.setattr(held_functions, "_trace_on", lambda: True)
+    monkeypatch.setattr(shadow, "requested", lambda: True)
     _asked_about(monkeypatch, Held)
     rows = [Held, 1, 2]
-    assert not held_functions.module_class_objects_exist()
-    made = Held()
     assert held_functions.module_class_objects_exist()
-    del rows, made
+    del rows
 
 
 def test_a_closure_over_the_class_counts_and_an_odd_name_does_not_raise(monkeypatch):
     class Held:
         pass
 
-    monkeypatch.setattr(held_functions, "_trace_on", lambda: False)
     _asked_about(monkeypatch, Held)
 
     def factory():

@@ -278,10 +278,6 @@ class StatementRun:
     #: It looks names up by a string, which its trace follows
     #: (``cache_key.lookups_followed``): served only on a checked trace.
     needs_trace: bool = False
-    #: Its key may leave out a class of the user's modules a big value holds,
-    #: on the trace's account (`held_functions.leaned_on_trace`): served
-    #: only on a checked trace, as `needs_trace`, with nothing else changed.
-    trace_vouches: bool = False
     #: Seconds recording what it ran took (``Shadow.begin`` / ``end``), inside
     #: its timed run but cash's cost, not the statement's.
     record_time: float = 0.0

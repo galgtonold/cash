@@ -41,7 +41,6 @@ from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.call_effects import DigestHandoff
 from cash.notebook.compiled_source import register_cell_source
 from cash.notebook.consumables import drawn_stream_inputs
-from cash.notebook.held_functions import leaned_on_trace
 from cash.notebook.per_item_reruns import MIN_COST_S as PER_ITEM_MIN_COST_S
 from cash.notebook.read_handles import reaches_read_handle
 from cash.notebook.statement import sparse_order
@@ -936,12 +935,11 @@ class StatementProcessor:
             if cached_data and _shadow.SHADOW.stale(run.shadow):
                 # Code it ran changed since it was stored: it runs again.
                 cached_data = None
-            elif cached_data and (run.needs_trace or run.trace_vouches) and not _shadow.SHADOW.agreed(run.shadow):
-                # Its key does not name what a string found, or a module
-                # class a big value holds: only a trace checked unchanged
-                # serves it, not one dropped or unusable.
+            elif cached_data and run.needs_trace and not _shadow.SHADOW.agreed(run.shadow):
+                # Its key does not name what a string found: only a trace
+                # checked unchanged serves it.
                 cached_data = None
-        elif run.needs_trace or run.trace_vouches:
+        elif run.needs_trace:
             cached_data = None
         if cached_data and self._live_objects_shared(run, metadata):
             cached_data = None
@@ -1120,11 +1118,9 @@ class StatementProcessor:
 
         Returns ``(effects, analysis_time, hash_time)``.
         """
-        leaned = leaned_on_trace()
         effects, run.source_hash, run.cache_key, analysis_time, hash_time = self._analyze_and_hash(
             run.code, occurrence_index=run.occurrence_index, tree=run.tree
         )
-        run.trace_vouches = leaned_on_trace() != leaned
         outputs = set(effects.outputs)
         callee_globals = set(effects.callee_globals)
         # Caller-forced outputs (accumulator-loop fast path): capture
@@ -1188,11 +1184,9 @@ class StatementProcessor:
             run.value_varies = varies
             return
         run.unless_it_draws = unless_it_draws
-        leaned = leaned_on_trace()
         unfollowed, by_string, unkeyed_modules, followed = unkeyed_reach(
             run.code, run.inputs, self.shell.user_ns, self.tracking_state.variable_lineage
         )
-        run.trace_vouches = run.trace_vouches or leaned_on_trace() != leaned
         if unfollowed:
             # Its key cannot name what the notebook functions held in them
             # read (``held_functions``): served, it could be stale.
