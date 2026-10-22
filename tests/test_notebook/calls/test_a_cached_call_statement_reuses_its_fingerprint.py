@@ -72,6 +72,21 @@ def reads_of_raw(monkeypatch, mock_shell):
     return seen
 
 
+def _run_without_collections(cash_magics, source):
+    """*source* run with no collection starting inside it. A collection that
+    frees something ends the window (`value_hash._on_collection`): safe, a
+    read more, and what it frees is whatever earlier tests and cells left
+    (from 3.14 a young collection also frees part of the old generation),
+    so the count would depend on the run order. That ending has tests of
+    its own (`test_a_digest_is_not_handed_on_past_code_that_changed_the_value`)."""
+    gc.collect()
+    gc.disable()
+    try:
+        run_cash_cell(cash_magics, source)
+    finally:
+        gc.enable()
+
+
 def _frame(cash_magics, lib):
     run_cash_cell(cash_magics, f"import {lib}\nimport polars as pl")
     run_cash_cell(cash_magics, "raw = pl.DataFrame({'x': list(range(50_000))})")
@@ -80,12 +95,8 @@ def _frame(cash_magics, lib):
 @pytest.mark.usefixtures("user_code_watched")
 def test_a_miss_reads_the_argument_twice(cash_magics, lib, reads_of_raw):
     _frame(cash_magics, lib)
-    # What earlier tests left: from 3.14 a young collection also frees part
-    # of the old generation, and a collection that frees something ends the
-    # window (`value_hash._on_collection`): safe, but a read more.
-    gc.collect()
     reads_of_raw.clear()
-    run_cash_cell(cash_magics, f"df = {lib}.clean(raw, 3)")
+    _run_without_collections(cash_magics, f"df = {lib}.clean(raw, 3)")
     assert len(reads_of_raw) == 2, f"raw was hashed {len(reads_of_raw)} times"
     assert cash_magics.shell.user_ns["df"]["y"][5] == 15
 
@@ -95,7 +106,7 @@ def test_a_hit_reads_the_argument_once(cash_magics, lib, reads_of_raw):
     _frame(cash_magics, lib)
     run_cash_cell(cash_magics, f"df = {lib}.clean(raw, 3)")
     reads_of_raw.clear()
-    run_cash_cell(cash_magics, f"other = {lib}.clean(raw, 3)")
+    _run_without_collections(cash_magics, f"other = {lib}.clean(raw, 3)")
     assert len(reads_of_raw) == 1, f"raw was hashed {len(reads_of_raw)} times"
     assert cash_magics.shell.user_ns["other"]["y"][5] == 15
 
