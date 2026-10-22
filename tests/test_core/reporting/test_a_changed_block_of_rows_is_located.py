@@ -168,7 +168,8 @@ def test_a_frame_hashed_by_rows_is_hashed_in_chunks_the_same(monkeypatch):
 class _StallingClock:
     """A ``perf_counter`` under which the first block hashed seems to take
     *first* seconds (a preemption, or the GIL coming back late) and every
-    other one *rest*."""
+    other one *rest*. It counts on the first block being timed by the first
+    two reads, which every shape's first block is."""
 
     def __init__(self, first, rest):
         self.now, self.calls, self.first, self.rest = 0.0, 0, first, rest

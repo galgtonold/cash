@@ -221,20 +221,27 @@ def _all_blocks(
     sample: list[str] = []
     quickest = math.inf
     now = 0.0
-    for span in spans[:_SAMPLE_BLOCKS]:
+    for span in spans[:_SAMPLE_BLOCKS] if deadline is not None else ():
         started = _perf_counter()
         sample.append(digest(*span))
         now = _perf_counter()
         quickest = min(quickest, now - started)
-        if deadline is not None and now > deadline:
+        if now > deadline:
             raise HashBudgetSpent
+        if now + quickest * (len(spans) - len(sample)) / threads <= deadline:
+            break  # the rest fit: no need to time more one by one
     todo = spans[len(sample) :]
     if deadline is not None and todo and now + quickest * len(todo) / threads > deadline:
         raise HashBudgetSpent
     if threads > 1 and len(todo) > 1:
         with ThreadPoolExecutor(max_workers=threads) as pool:
             return (*sample, *pool.map(lambda span: digest(*span), todo))
-    return (*sample, *(digest(*span) for span in todo))
+    rest = []
+    for span in todo:
+        rest.append(digest(*span))
+        if deadline is not None and _perf_counter() > deadline:
+            raise HashBudgetSpent
+    return (*sample, *rest)
 
 
 def _block_digest(kind: str, part: Any) -> str:
