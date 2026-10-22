@@ -1258,8 +1258,9 @@ def _held_beyond_copies(arrays: list[Any]) -> set[int] | None:
     if len(arrays) < 2 or any(array.ndim != 1 or array.strides[0] != size for array in arrays):
         return None
     # One memory several frames hold (the categories of ``df`` and of
-    # ``df[mask]``) is one set of slots: read once.
-    arrays = list({(_address(array), len(array)): array for array in arrays}.values())
+    # ``df[mask]``, or ``df`` and ``df.iloc[i:]``) is one set of slots: read
+    # once.
+    arrays = list({(_address(array), len(array)): array for array in _runs_of_one_memory(arrays, np)}.values())
     spans = sorted((start, start + len(array) * size) for array in arrays for start in [_address(array)])
     if any(end > spans[i + 1][0] for i, (_, end) in enumerate(spans[:-1])):
         return None
@@ -1291,6 +1292,45 @@ def _held_beyond_copies(arrays: list[Any]) -> set[int] | None:
             beyond.update(id(cell) for cell in _cells_held_elsewhere(cells, count + 1, values))
             cells = None
     return beyond
+
+
+def _runs_of_one_memory(arrays: list[Any], np: Any) -> list[Any]:
+    """*arrays*, with the views of one C-contiguous array among them (each a
+    run of its slots, as ``df`` and ``df.iloc[i:]`` are of their block)
+    given as the runs they cover between them, each once: fifty views
+    beside fifty copies (``df[df.x > i]``) are one memory and fifty
+    copies of it, not memory read fifty times over. An array not such a
+    view is kept as it is."""
+    size = np.dtype(object).itemsize
+    runs: dict[int, tuple[Any, list[tuple[int, int]]]] = {}
+    kept: list[Any] = []
+    for array in arrays:
+        root = array
+        while isinstance(root.base, np.ndarray):
+            root = root.base
+        start = (_address(array) - _address(root)) // size
+        if (
+            not root.flags.c_contiguous
+            or root.dtype != array.dtype
+            or (_address(array) - _address(root)) % size
+            or start < 0
+            or start + len(array) > root.size
+        ):
+            kept.append(array)
+            continue
+        runs.setdefault(id(root), (root, []))[1].append((start, start + len(array)))
+    for root, spans in runs.values():
+        flat = root.reshape(-1)
+        first, end = None, -1
+        for start, last in sorted(spans):
+            if start > end:
+                if first is not None:
+                    kept.append(flat[first:end])
+                first = start
+            end = max(end, last)
+        if first is not None:
+            kept.append(flat[first:end])
+    return kept
 
 
 def _address(array: Any) -> int:
@@ -1949,7 +1989,8 @@ def _share_group(
         links.append((set(group), framed))
         joined |= framed
         group.update((name, user_ns[name]) for name in framed)
-        fresh = {name: group[name] for name in framed if _holds_other_cells(group[name], group)}
+        holding = _holding_other_cells({name: group[name] for name in framed}, group)
+        fresh = {name: group[name] for name in framed if name in holding}
         framed = _frames_sharing_cells(fresh, user_ns, foreign) - set(group) if fresh else set()
         # Its own references to the frames, out of the counts taken below.
         fresh = None
@@ -2024,30 +2065,44 @@ def _frames_sharing_cells(
     return {name for name in found if not skip(name)}
 
 
-#: Cells of a column `_holds_other_cells` looks for, and the longest columns
+#: Cells of a column `_holding_other_cells` looks for, and the longest columns
 #: of the group it looks among.
 _COVER_SAMPLE = 32
 _COVER_COLUMNS = 4
 
 
-def _holds_other_cells(value: Any, group: Mapping[str, Any]) -> bool:
-    """Whether a frame joined to *group* for the cells it shares holds, in
-    an object column, cells none of the longest columns of *group* holds,
-    by a sample: ``mg = df.merge(other)`` holds ``other``'s, and the frames
-    sharing those are looked for too; fifty filters of ``df`` hold only
-    ``df``'s, and are not read again. A sample that misses one leaves its
-    holder to the share check's own count, as before."""
-    columns = sorted(
-        (array for other in group.values() if other is not value for array in object_columns_of(other) or ()),
-        key=len,
+def _holding_other_cells(values: Mapping[str, Any], group: Mapping[str, Any]) -> set[str]:
+    """The names of the frames of *values*, joined to *group* for the cells
+    they share, that hold, in an object column, cells none of the longest
+    columns of *group* (but their own) holds, by a sample: ``mg =
+    df.merge(other)`` holds ``other``'s, and the frames sharing those are
+    looked for too; fifty filters of ``df`` hold only ``df``'s, and are not
+    read again. A sample that misses one leaves its holder to the share
+    check's own count, as before. The group's columns are ordered, and each
+    one's addresses sorted, once for all of *values*: per frame, a hundred
+    frames each took the group's hundred again."""
+    longest = sorted(
+        ((array, other) for other in group.values() for array in object_columns_of(other) or ()),
+        key=lambda pair: len(pair[0]),
         reverse=True,
-    )[:_COVER_COLUMNS]
-    for array in object_columns_of(value) or ():
-        slots = addresses(array)
-        sample = slots[:: max(1, len(slots) // _COVER_SAMPLE)]
-        if not any(in_sorted(sample, sorted_cells(column)).all() for column in columns):
-            return True
-    return False
+    )
+    ordered: dict[int, Any] = {}
+
+    def cells(array: Any) -> Any:
+        if id(array) not in ordered:
+            ordered[id(array)] = sorted_cells(array)
+        return ordered[id(array)]
+
+    names: set[str] = set()
+    for name, value in values.items():
+        columns = [array for array, other in longest if other is not value][:_COVER_COLUMNS]
+        for array in object_columns_of(value) or ():
+            slots = addresses(array)
+            sample = slots[:: max(1, len(slots) // _COVER_SAMPLE)]
+            if not any(in_sorted(sample, cells(column)).all() for column in columns):
+                names.add(name)
+                break
+    return names
 
 
 def _read_frames_sharing_cells(
@@ -2081,7 +2136,7 @@ def _read_frames_sharing_cells(
         if categories and any(not categories.isdisjoint(map(id, array.tolist())) for array in object_categories(value)):
             found.add(name)
             continue
-        for array in object_columns_of(value) or ():
+        for array in _object_dtype_arrays(value):
             check_walk_budget()
             # On the same memory (``s[mask]`` that kept every row, a view):
             # each cell is in one slot, the one both read.
@@ -2093,6 +2148,26 @@ def _read_frames_sharing_cells(
                 found.add(name)
                 break
     return found
+
+
+def _object_dtype_arrays(value: Any) -> list[Any]:
+    """The arrays of *value*'s object-dtype columns when it is a pandas
+    frame or series, none read for what they hold (`column_values_only`):
+    a column of values only holds none of the cells `_cells_held_elsewhere`
+    lists, nor the memory of a column holding more, so it is found by
+    neither test it is put to. Reading each with ``infer_dtype`` took a
+    tenth of a second a statement over a hundred frames of a hundred
+    thousand rows."""
+    pd = sys.modules.get("pandas")
+    if pd is None or not instance_of(value, (pd.Series, pd.DataFrame)):
+        return []
+    if _COLUMNS is not None and id(value) in _COLUMNS:
+        return _COLUMNS[id(value)] or []
+    if instance_of(value, pd.Series):
+        columns = [value]
+    else:
+        columns = [value.iloc[:, i] for i, dtype in enumerate(value.dtypes) if is_object_dtype(dtype)]
+    return [column.to_numpy(copy=False) for column in columns if is_object_dtype(column.dtype)]
 
 
 def _holding_categories(group: Mapping[str, Any], user_ns: Mapping[str, Any], skip: Callable[[str], bool]) -> set[str]:
@@ -2931,13 +3006,17 @@ def frames_sharing_cells(
     runs and not others, and unlinked, ``L[3]['z'] = 2`` left ``df`` at its
     lineage from before and a statement reading ``df['o']`` was served what
     it read then. A read of each frame's slots (`sorted_cells`) and of each
-    output's top level, not a walk. A frame among the outputs sharing cells
-    with another frame is the share check's own case (`cell_links`)."""
+    output's top level, not a walk. An output holding containers below the
+    two levels read, or past the bound of the second, may hold any frame's
+    cells, and is taken to: every frame with an object column is among its
+    variables. A frame among the outputs sharing cells with another frame is
+    the share check's own case (`cell_links`)."""
     np = sys.modules.get("numpy")
     if np is None or "pandas" not in sys.modules:
         return []
     value_types = set(VALUE_TYPES)
     held: dict[str, Any] = {}
+    unread: set[str] = set()
     for name, value in outputs.items():
         if type(value) in value_types:
             continue
@@ -2949,10 +3028,17 @@ def frames_sharing_cells(
         budget = _NESTED_READ
         for item in level:
             if budget <= 0:
+                # ``{'pad': [{}] * 4_000_000, 'L': list(df['o'])}``: the
+                # bound spent before the list holding the cells was read.
+                unread.add(name)
                 break
             inner = _container_items(item, value_types)
             budget -= len(inner)
             ids += map(id, inner)
+            if name not in unread and not _CELL_CONTAINERS.isdisjoint(map(type, inner)):
+                # ``{'a': {'L': list(df['o'])}}``, ``{'R': [{'o': c}, ...]}``:
+                # what is held deeper than the two levels read.
+                unread.add(name)
         del level
         held[name] = np.array(ids, dtype=np.int64)
     if not held:
@@ -2964,6 +3050,10 @@ def frames_sharing_cells(
         columns = object_columns_of(value)
         if not columns:
             continue
+        # An output not read to the end may hold any frame's cells: a change
+        # through it moves every frame with an object column.
+        for name in unread:
+            found[name].add(other)
         for array in columns:
             cells = sorted_cells(array)
             for name, ids in held.items():
