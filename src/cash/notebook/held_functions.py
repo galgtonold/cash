@@ -317,11 +317,14 @@ def module_class_objects_exist() -> bool:
 
 
 #: The `_new_code` count and the classes asked about when
-#: `module_class_objects_exist` last found an object. A yes only makes a walk run, which finds what is there, so it is
-#: taken again until code runs from an ``exec`` (the next statement): a
-#: statement's keys asked it many times, each a scan of every tracked object
-#: (~17 ms per million; a test timed out after 30 s in a long run). A no is
-#: never kept: running code can make an object without new code.
+#: `module_class_objects_exist` last found an object. It is taken again
+#: until code runs from an ``exec`` (the next statement): a statement's keys
+#: asked it many times, each a scan of every tracked object (~17 ms per
+#: million; a test timed out after 30 s in a long run). A yes kept stale (the
+#: object collected since, or a class id reused by a class ``type()`` made
+#: without an ``exec``) can only add to a key: it lets a walk run, which
+#: finds what is there. A no is never kept: running code can make an object
+#: without new code.
 _OBJECTS_SEEN: list[Any] = [None]
 
 

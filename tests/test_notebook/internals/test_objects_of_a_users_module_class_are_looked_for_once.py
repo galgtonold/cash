@@ -2,8 +2,9 @@
 scanning every object the collector tracks (``gc.get_referrers``), about
 17 ms per million objects. A statement's keys asked it many times: late in
 a long test run, with a big heap on a loaded machine, one statement took
-over 30 s. A yes only lets a walk run, which finds what is there, so it is
-kept until code runs from an ``exec`` again; a no is asked afresh.
+over 30 s. A yes is kept until code runs from an ``exec`` again: kept
+stale (the object collected, a class id reused), it can only add to a key,
+since it lets a walk run, which finds what is there. A no is asked afresh.
 """
 
 from __future__ import annotations
