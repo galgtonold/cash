@@ -97,3 +97,19 @@ def test_a_generator_in_a_variable_is_still_followed(cash_magics):
     _run_all(cash_magics, cells)
     _restart(cash_magics)
     assert "RESTORED" in _run_all(cash_magics, cells)[2], "the draw is stored"
+
+
+def test_the_draw_below_matches_plain_after_a_restart_when_the_machine_is_slow(cash_magics, tlib, monkeypatch):
+    """On a busy machine ``h, peek = tlib.make_helper()`` timed past the floor
+    and was stored. A function is kept by reference, so the re-run served
+    the helper the first run made, its generator already past the draw
+    ``h()`` stands for: ``x`` came back as plain's second number. A function
+    whose closure holds a generator is never served."""
+    import time
+
+    from cash import _clock
+
+    real = time.perf_counter
+    start = real()
+    monkeypatch.setattr(_clock, "_REAL", (lambda: start + (real() - start) * 100,))
+    test_the_draw_below_matches_plain_after_a_restart(cash_magics, tlib, "a helper's closure")

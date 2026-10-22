@@ -63,3 +63,64 @@ def test_a_factory_returning_nested_handlers_is_not_served_the_last_run_s(call_u
     handlers = unit.wrap(make_handlers, site)()
 
     assert handlers["on"]["click"][0]() == 1, "the counter the last run made was served again"
+
+
+class Stepper:
+    def __init__(self):
+        self.n = 0
+        self.size = 3
+
+    def step(self):
+        self.n += 1
+        return self.n
+
+
+def make_movers():
+    import random
+
+    import numpy as np
+
+    g = np.random.default_rng(0)
+    r = random.Random(0)
+    it = iter(range(9))
+    o = Stepper()
+
+    def draw():
+        return float(g.normal())
+
+    def pick():
+        return r.random()
+
+    def take():
+        return next(it)
+
+    def step():
+        return o.step()
+
+    return draw, pick, take, step
+
+
+def make_readers():
+    import numpy as np
+
+    cfg = {"a": 1}
+    arr = np.zeros(3)
+    o = Stepper()
+
+    def read():
+        return cfg["a"] + float(arr.sum()) + o.size
+
+    return read
+
+
+def test_a_closure_whose_generator_iterator_or_object_moves_when_called_is_seen():
+    """A draw, a ``next`` or a method of the user's object moves what the
+    closure holds without the source rule seeing a write: served by
+    reference after a re-run, ``h, peek = make_helper()`` handed back a
+    generator already past the draw ``h()`` stands for."""
+    for mover in make_movers():
+        assert holds_a_closure_with_state(mover), mover.__name__
+
+
+def test_a_closure_only_reading_what_it_holds_is_still_storable():
+    assert not holds_a_closure_with_state(make_readers())

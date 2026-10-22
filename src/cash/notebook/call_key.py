@@ -10,6 +10,7 @@ statement it sits in.
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import datetime as _dt
 import decimal as _decimal
@@ -37,12 +38,13 @@ from cash.analysis.callee_effects import (
 )
 from cash.analysis.namespace_effects import capturable_globals
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
-from cash.install_paths import is_user_path
+from cash.install_paths import is_user_code_module, is_user_path
 from cash.notebook import shadow as _shadow
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_effects import closure_cells, rebinds_its_closure
 from cash.sizing import pandas_nbytes
 from cash.source_reading import own_source, wrapper_layers
+from cash.tracking.randomness.state import rng_carrier_kind
 from cash.value_hash import compute_hash
 
 if TYPE_CHECKING:
@@ -240,6 +242,76 @@ def changes_its_defaults(fn) -> bool:
     return known
 
 
+#: ``code object -> the closure variables it calls a method of``, None when
+#: its source cannot be read.
+_METHODS_CALLED: LruMemo[Any, Any] = LruMemo(CODE_OBJECTS)
+_UNREAD = object()
+
+
+def _closure_methods_called(fn) -> frozenset[str] | None:
+    """The closure variables *fn* (every ``functools.wraps`` layer) calls a
+    method of, however deep: ``g.normal()``, ``o.inner.step()``. None when a
+    layer's source cannot be read."""
+    found: set[str] = set()
+    for layer in wrapper_layers(fn):
+        code = attribute_or(layer, "__code__", None)
+        if not isinstance(code, _types.CodeType) or not code.co_freevars:
+            continue
+        known = _METHODS_CALLED.get(code, _UNREAD)
+        if known is _UNREAD:
+            try:
+                fdef = parse_function_def(own_source(layer))
+            except SOURCE_RETRIEVAL_ERRORS:
+                fdef = None
+            if fdef is not None:
+                roots = set()
+                for node in ast.walk(fdef):
+                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                        root = node.func.value
+                        while isinstance(root, (ast.Attribute, ast.Subscript)):
+                            root = root.value
+                        if isinstance(root, ast.Name):
+                            roots.add(root.id)
+                known = frozenset(roots & set(code.co_freevars))
+            _METHODS_CALLED[code] = known
+        if known is None:
+            return None
+        found |= known
+    return frozenset(found)
+
+
+def changes_what_its_closure_holds(fn) -> bool:
+    """Whether calling *fn* moves an object its closure holds in a way the
+    source rule (`changes_its_closure`) does not see: a random generator or
+    an iterator it reads at all -- a draw or a ``next`` moves it -- or an
+    object of the user's class it calls a method of. ``h, peek =
+    make_helper()`` served after a re-run handed back the helper the last
+    run made, its generator already past the draw ``h()`` stands for."""
+    if type(fn) is not _types.FunctionType:
+        return False
+    called: frozenset[str] | None = frozenset()
+    looked = False
+    for name, cell in closure_cells(fn).items():
+        try:
+            value = cell.cell_contents
+        except ValueError:
+            continue
+        kind = type(value)
+        if kind in _EXACT_ATOMS or instance_of(value, (_types.FunctionType, type, _ModuleType)):
+            continue
+        if rng_carrier_kind(value) is not None or attribute_or(kind, "__next__", None) is not None:
+            return True
+        module = sys.modules.get(attribute_or(kind, "__module__", None) or "")
+        if module is None or not is_user_code_module(module):
+            continue
+        if not looked:
+            called, looked = _closure_methods_called(fn), True
+        # One that cannot be read is taken to change what it holds.
+        if called is None or name in called:
+            return True
+    return False
+
+
 #: Values with nothing inside them to look at: skipped without a call.
 _ATOMS = (int, float, complex, str, bytes, bool, type(None))
 
@@ -275,7 +347,7 @@ def holds_a_closure_with_state(value) -> bool:
         if kind in atoms or instance_of(item, _ATOMS):
             continue
         if instance_of(item, _types.FunctionType):
-            if changes_its_closure(item) or changes_its_defaults(item):
+            if changes_its_closure(item) or changes_its_defaults(item) or changes_what_its_closure_holds(item):
                 return True
             continue
         if instance_of(item, (tuple, list, set, frozenset, dict)):
