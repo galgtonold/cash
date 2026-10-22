@@ -855,7 +855,7 @@ class CallKeys:
             digests.extend(f"{name}:{compute_hash(kwargs[name])}" for name in sorted(kwargs))
             if loop_vars:
                 loop_vars = _loop_vars_the_call_can_read(fn, received, loop_vars, None)
-            return call_cache_key(
+            key = call_cache_key(
                 received,
                 ctx=self._ctx_provider(),
                 arg_digests=digests,
@@ -863,6 +863,9 @@ class CallKeys:
                 loop_var_digests=self._current_loop_var_digests(),
                 by_content=True,
             )
+            if _shadow.SHADOW is not None and key is not None:
+                _shadow.SHADOW.note_call(key, site, (digests, self._current_loop_var_digests()))
+            return key
         except Exception:  # noqa: BLE001 - never let keying break the call
             logger.debug("call unit: key build failed for %s", site.source)
             return None

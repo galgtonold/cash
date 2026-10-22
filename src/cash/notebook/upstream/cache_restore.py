@@ -23,6 +23,7 @@ from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cel
 from ...backends._base import ttl_expired
 from ...tracking.env_reads import environment_unchanged
 from ...tracking.file_dep_snapshot import snapshot_is_fresh
+from .. import shadow as _shadow
 from ..anchors import resolve_anchors
 from ..cache_key import compute_cache_key
 from ..cache_status import CacheStatus
@@ -162,6 +163,13 @@ class CacheRestorer:
             saved_time = metadata.get("execution_time", 0.0) if metadata else 0.0
 
             if metadata and cached_data is not None:
+                if _shadow.SHADOW is not None and not _shadow.SHADOW.restore_vouched(
+                    cache_key, stmt_code, metadata.get("trace"), self
+                ):
+                    # What it ran changed since it was stored, or there is
+                    # no trace to tell: as at a lookup, it is not restored.
+                    logger.debug("[UPSTREAM] Restore failed: its trace does not vouch for it")
+                    return set(), _perf_counter() - start_time, 0.0
                 # 3. Check file dependencies (Critical!)
                 file_deps = metadata.get("file_dependencies", {})
                 fresh, stale = snapshot_is_fresh(file_deps)

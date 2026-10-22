@@ -40,9 +40,9 @@ import time
 def inner(x):
     return x * 2
 
-def slow_inner(x):
+def slow_inner(x, b=0):
     time.sleep(0.25)
-    return inner(x)
+    return inner(x) + b
 """
 
 
@@ -105,6 +105,49 @@ def test_a_cached_call_with_no_trace_runs_again(trace_on, statement_processor, m
     statement_processor.process_statement("x = slow_inner(2) + 1")
 
     assert mock_shell.user_ns["x"] == 21, dict(on.counts)
+
+
+@pytest.mark.parametrize("call", ["slow_inner(2, **kw)", "slow_inner(*args)"])
+def test_a_cached_call_written_with_unpacking_is_checked_by_its_trace(trace_on, statement_processor, mock_shell, call):
+    """A call with ``*``/``**`` is keyed on what it received: its key went
+    unnoted, its hit unchecked, and ``inner`` edited inside it was served
+    (5 where 21 is right)."""
+    on, mod = trace_on
+    _run(statement_processor, f"import {mod}\nfrom {mod} import slow_inner\nkw = {{'b': 0}}\nargs = (2,)")
+    for _ in range(2):
+        statement_processor.process_statement(f"y = {call} + 0")
+    assert mock_shell.user_ns["y"] == 4
+    sys.modules[mod].inner.__code__ = (lambda x: x * 10).__code__
+
+    statement_processor.process_statement(f"y = {call} + 1")
+
+    assert mock_shell.user_ns["y"] == 21, dict(on.counts)
+
+
+def test_a_statement_above_is_restored_only_when_its_trace_vouches(trace_on, cash_magics):
+    """A jump run restores a statement above the one run without running it
+    (``try_virtual_restore``): that never asked the trace, and ``t`` came
+    back 6 after ``inner`` was edited to ``x * 10``."""
+    from tests._cell_driver import run_cash_cell
+    from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
+
+    cells = [
+        "import time\ndef inner(x):\n    return x * 2",
+        f"t = (inner(3), time.sleep({ABOVE_PERSISTENCE_FLOOR_S}))[0]",
+        "u = t + 1",
+    ]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    ns = cash_magics.shell.user_ns
+    assert (ns["t"], ns["u"]) == (6, 7)
+    ns["inner"].__code__ = (lambda x: x * 10).__code__
+    del ns["t"]
+
+    run_cash_cell(cash_magics, cells[2], cells=cells)
+
+    # ``u`` keeps the lineage ``t`` was restored with: a rerun forced by a
+    # trace does not change it yet (the restart work's lineage fix).
+    assert ns["t"] == 30
 
 
 def test_a_check_that_could_not_start_does_not_serve(trace_on, statement_processor, mock_shell, monkeypatch):

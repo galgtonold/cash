@@ -9,10 +9,18 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from cash.notebook import shadow
 from cash.notebook.upstream import UpstreamChecker
 from cash.notebook.upstream.cache_probe import CacheProbe
 from cash.notebook.upstream.virtual_lineage import VirtualLineage
 from cash.tracking.file_dep_snapshot import snapshot_file_deps
+
+
+@pytest.fixture(autouse=True)
+def _no_trace_check(monkeypatch):
+    """The entries here are made up, with no trace: the trace's own say on a
+    restore is tested in ``test_a_hit_with_no_trace_to_check_runs_again``."""
+    monkeypatch.setattr(shadow, "SHADOW", None)
 
 
 class TestUpstreamCheckerImport:

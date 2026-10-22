@@ -54,6 +54,9 @@ _ENV = "CASH_SHADOW"
 _LOG_ENV = "CASH_SHADOW_LOG"
 #: Traces kept per statement (per call and arguments): the newest keys.
 _PER_GROUP = 4
+
+#: The group of a call whose key `note_call` was not told of.
+_UNNOTED = "call:unnoted"
 #: Lines past which a traces file mostly of replaced traces is rewritten.
 _COMPACT_AT = 2000
 _TEXT = 300
@@ -202,12 +205,13 @@ class Shadow:
                     lines += 1
                     try:
                         t = json.loads(line)
-                    except ValueError:
+                        if not t.get("disk") and t.get("pid") != me:
+                            continue
+                        t["items"] = tuple(_interned(tuple(i), self._items) for i in t["items"])
+                        self._keep(t)
+                    except (ValueError, TypeError, KeyError, AttributeError):
+                        # A line cut short or of another shape: skipped.
                         continue
-                    if not t.get("disk") and t.get("pid") != me:
-                        continue
-                    t["items"] = tuple(_interned(tuple(i), self._items) for i in t["items"])
-                    self._keep(t)
         except OSError:
             # Its entries have no trace now: they run again (`vouched`).
             self.counts["load_failed"] += 1
@@ -752,12 +756,10 @@ class Shadow:
         return self.entry_trace("stmt", run.cache_key, _stmt_group(run), run.code, unit, run.inputs)
 
     def call_trace(self, key: str, site: Any, unit) -> dict | None:
-        """The trace a cached call's entry is stored with (`entry_trace`);
-        None for a call `note_call` did not see."""
-        noted = self._call_groups.get(key)
-        if unit is None or noted is None:
+        """The trace a cached call's entry is stored with (`entry_trace`)."""
+        if unit is None:
             return None
-        group, by_content = noted
+        group, by_content = self._call_groups.get(key) or (_UNNOTED, frozenset())
         inputs = [n for n in site.free_names if n not in by_content]
         return self.entry_trace("call", key, group, site.source, unit, inputs)
 
@@ -785,6 +787,62 @@ class Shadow:
             attribute_or(backend, "peek_metadata", None),
             entry,
         )
+
+    def _defined(self, item: tuple) -> bool:
+        """Whether what *item* names is bound now: its module is loaded, and
+        holds the first name of its qualified name."""
+        from ...tracking.trace_items import namespace_of
+
+        ns = namespace_of(item[1], self.notebook or {}, self.notebook_name)
+        return ns is not None and len(item) > 2 and str(item[2]).split(".", 1)[0] in ns
+
+    def restore_vouched(self, key: str, code: str, entry: Any, proc: Any = None) -> bool:
+        """May an entry an upstream restore found (``try_virtual_restore``,
+        which restores a statement above the one run without running it)
+        be restored, by the trace it carries (*entry*)? As at a lookup
+        (`vouched`): not when its trace says what it ran changed, nor with
+        no trace to check. *proc* has the notebook it is read against (a
+        restore can come before any statement of the kernel looked up)."""
+        if proc is not None:
+            try:
+                self.attach(proc.shell.user_ns, proc.tracking_state.variable_lineage, proc.probe.cash_instance.backend)
+            except Exception as exc:  # noqa: BLE001 - no check made: not vouched
+                self.counts["errors"] += 1
+                logger.debug("cash: the trace check could not start: %r", exc)
+                return not self.ok
+        if not self.ok:
+            return True
+        t = time.perf_counter()
+        try:
+            trace = self._from_entry(entry)
+            if trace is None:
+                verdict = "no_trace"
+            elif not self._usable(trace):
+                verdict = "unusable"
+            else:
+                # Its inputs are not bound yet (restored virtually, by the
+                # lineage its key names): only code found changed counts,
+                # and what is not defined yet tells nothing.
+                memo: dict = {}
+                verdict = "agree"
+                for item in trace["items"]:
+                    if item[0] == "global":
+                        continue
+                    now = self._now(item, memo)
+                    if now is None or now == "absent" or (now == "missing" and not self._defined(item)):
+                        continue
+                    if now != item[-1]:
+                        verdict = "stale_suspect"
+                        break
+        except Exception as exc:  # noqa: BLE001 - a check that failed vouches for nothing
+            self.counts["errors"] += 1
+            logger.debug("cash: the trace check of a restore failed: %r", exc)
+            verdict = "error"
+        finally:
+            self.spent += time.perf_counter() - t
+        ok = verdict in ("agree", "unusable")
+        self.counts[f"upstream:{'hit' if ok else 'miss'}:{verdict}"] += 1
+        return ok
 
     @staticmethod
     def agreed(pending: dict | None) -> bool:
@@ -851,9 +909,10 @@ class Shadow:
         """Check a call's entry before it is served, by the trace it carries
         (*entry*): False when the trace says it is stale or there is none to
         check, and the call runs again."""
-        noted = self._call_groups.get(key)
-        if noted is None:
-            return hit
+        # A key built where `note_call` was not told (a call written with
+        # ``*``/``**`` before it was) is checked all the same: a hit by the
+        # trace its entry carries.
+        noted = self._call_groups.get(key) or (_UNNOTED, frozenset())
         pending = self.check("call", key, noted[0], hit, site.source, peek, entry)
         if hit and not self.vouched(pending):
             self.resolve(pending, False)

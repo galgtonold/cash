@@ -18,6 +18,9 @@ import types
 from collections.abc import Mapping
 from unittest.mock import MagicMock
 
+import pytest
+
+from cash.notebook import shadow
 from cash.notebook.tracking_state import TrackingState
 from cash.notebook.upstream import UpstreamChecker
 from cash.notebook.upstream._types import CellCheck, SimulationResult, TraceEntry
@@ -25,6 +28,14 @@ from cash.notebook.upstream.cache_probe import CacheProbe
 from cash.notebook.upstream.cache_restore import lineage_conflict
 from cash.tracking.file_dep_snapshot import snapshot_file_deps
 from cash.tracking.read_classification import stat_key
+
+
+@pytest.fixture(autouse=True)
+def _no_trace_check(monkeypatch):
+    """The entries here are made up, with no trace: the trace's own say on a
+    restore is tested in ``test_a_hit_with_no_trace_to_check_runs_again``."""
+    monkeypatch.setattr(shadow, "SHADOW", None)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
