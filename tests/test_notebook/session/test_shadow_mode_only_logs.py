@@ -78,12 +78,21 @@ def test_a_trace_saying_changed_on_a_hit_runs_the_statement_again(shadow_on, sta
     on, log = shadow_on
     _run(statement_processor, "rate = {'std': 2}")
     _run(statement_processor, "def total(n):\n    return n * rate['std']")
-    first = _run(statement_processor, "t = total(3)")
-    trace = on.traces[first["cache_key"]]
-    trace["items"] = tuple(
-        (*item[:-1], "not-what-it-held") if item[:3] == ("global", on.notebook_name, "rate") else item
-        for item in trace["items"]
-    )
+    real = on.statement_trace
+
+    def tampered(run):
+        trace = real(run)
+        trace["items"] = [
+            [*item[:-1], "not-what-it-held"] if tuple(item[:3]) == ("global", on.notebook_name, "rate") else item
+            for item in trace["items"]
+        ]
+        return trace
+
+    on.statement_trace = tampered
+    try:
+        _run(statement_processor, "t = total(3)")
+    finally:
+        del on.statement_trace
 
     assert _run(statement_processor, "t = total(3)")["status"] == CacheStatus.COMPUTED
     assert mock_shell.user_ns["t"] == 6

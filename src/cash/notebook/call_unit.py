@@ -940,7 +940,9 @@ class CallUnit:
             self._last_key_s = _perf_counter() - key_started
             if _shadow.SHADOW is not None:
                 # False when what it ran changed since it was stored.
-                hit = _shadow.SHADOW.call_lookup(key, site, hit, self._entries.peek_metadata)
+                hit = _shadow.SHADOW.call_lookup(
+                    key, site, hit, self._entries.peek_metadata, metadata.get("trace") if hit else None
+                )
             if hit:
                 # What it read when it ran, for the statement around it.
                 note_reads(metadata.get("env_reads") or ())
@@ -1098,9 +1100,8 @@ class CallUnit:
                 stderr_text,
                 environment_digests(env_reads),
                 memos,
+                shadow.call_trace(call.key, call.site, unit) if unit is not None else None,
             )
-        if unit is not None:
-            shadow.call_finished(call.key, call.site, unit, stored, disk=True)
         if stored:
             self._cached(
                 elapsed,
@@ -1180,6 +1181,7 @@ class CallUnit:
         stderr_text: str,
         env_reads: dict[str, str] | None = None,
         memos: list[dict] | None = None,
+        trace: dict | None = None,
     ) -> bool:
         """Write the result with what the call read, printed and wrote to its
         globals; ``False`` when those globals cannot be captured."""
@@ -1228,6 +1230,7 @@ class CallUnit:
             held_refs=find_for_call(call.fn, result),
             env_reads=env_reads or None,
             helper_memos=memos,
+            trace=trace,
         )
         if held:
             self._hold(call.key, result, *held)

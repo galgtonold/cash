@@ -590,12 +590,15 @@ class Shadow:
         found: bool,
         code: str,
         peek: Callable[[str], Any] | None,
+        entry: Any = None,
     ) -> dict | None:
         """Verify the traces for a lookup of *key* in *group*: the verdict to
-        log once the outcome is known (`resolve`)."""
+        log once the outcome is known (`resolve`). A hit is checked by the
+        trace its entry carries (*entry*, from its metadata), never by one
+        kept elsewhere: a file of traces shared by caches could hold another
+        cache's trace for the same key."""
         t = time.perf_counter()
         try:
-            self._ensure_loaded()
             memo: dict = {}
             pending: dict = {"kind": kind, "key": key, "group": group, "code": code[:_TEXT], "found": found}
             if not found and not self.diagnose:
@@ -604,7 +607,7 @@ class Shadow:
                 pending["miss"] = "unchecked"
                 return pending
             if found:
-                trace = self.traces.get(key)
+                trace = self._from_entry(entry)
                 if trace is None:
                     pending["hit"] = "no_trace"
                 elif not self._usable(trace):
@@ -616,6 +619,7 @@ class Shadow:
                     pending["verify"] = v
                     pending["trace_code"] = trace.get("code")
             else:
+                self._ensure_loaded()
                 keys = [k for k in self.groups.get(group, ()) if k != key]
                 pending["miss"] = "no_candidates" if not keys else "agree"
                 unusable = 0
@@ -682,10 +686,13 @@ class Shadow:
             row["gaps"] = v.get("gaps", 0)
             self._write("log", row)
 
-    def store(self, kind: str, key: str, group: str, code: str, unit, inputs: Iterable[str], disk: bool) -> None:
-        """Keep the trace of *unit*, which ran and was stored under *key*."""
+    def entry_trace(self, kind: str, key: str, group: str, code: str, unit, inputs: Iterable[str]) -> dict | None:
+        """The trace of *unit*, which ran and is about to be stored under
+        *key*: what the entry carries in its own metadata (`check` reads it
+        from there), or None when it could not be built. Kept here too for
+        the miss diagnosis."""
         if unit is None:
-            return
+            return None
         t = time.perf_counter()
         try:
             items, markers, notes = self.build(unit, inputs)
@@ -697,10 +704,10 @@ class Shadow:
                 "items": items,
                 "markers": sorted(markers),
                 "notes": sorted(notes),
-                "disk": disk,
                 "pid": os.getpid(),
             }
-            self._ensure_loaded()
+            if self.diagnose:
+                self._ensure_loaded()
             self._keep(trace)
             self.counts[f"{kind}:traces"] += 1
             for m in markers:
@@ -709,16 +716,55 @@ class Shadow:
                 self._write(
                     "log", {"event": "trace_unusable", "unit": kind, "code": code[:_TEXT], "markers": sorted(markers)}
                 )
-            self._write("traces", trace)
+            if self.diagnose:
+                self._write("traces", trace)
+            # Plain lists of strings, as metadata must be.
+            return {"items": [list(i) for i in items], "markers": sorted(markers)}
         except Exception as exc:  # noqa: BLE001 - never break the user's run
             self.counts["errors"] += 1
             self._write("log", {"event": "shadow_error", "where": "store", "error": repr(exc)})
+            return None
         finally:
             self.spent += time.perf_counter() - t
 
+    def _from_entry(self, entry: Any) -> dict | None:
+        """The trace an entry's metadata carries, as `verify` reads it; None
+        for an entry stored without one, or with one that does not read."""
+        if not isinstance(entry, Mapping):
+            return None
+        try:
+            items = tuple(_interned(tuple(str(part) for part in i), self._items) for i in entry["items"])
+            markers = [str(m) for m in entry.get("markers", ())]
+        except Exception:  # noqa: BLE001 - a trace that does not read vouches for nothing
+            self.counts["entry_trace_unread"] += 1
+            return None
+        return {"items": items, "markers": markers}
+
+    def statement_trace(self, run: Any) -> dict | None:
+        """The trace a statement's entry is stored with (`entry_trace`)."""
+        unit = getattr(run, "trace_unit", None)
+        if unit is None or run.skip_cache or not run.cache_key:
+            return None
+        if run.memo_used:
+            unit.markers.add("memo")
+        if run.handed_iterable:
+            unit.markers.add("handed_iterable")
+        return self.entry_trace("stmt", run.cache_key, _stmt_group(run), run.code, unit, run.inputs)
+
+    def call_trace(self, key: str, site: Any, unit) -> dict | None:
+        """The trace a cached call's entry is stored with (`entry_trace`);
+        None for a call `note_call` did not see."""
+        noted = self._call_groups.get(key)
+        if unit is None or noted is None:
+            return None
+        group, by_content = noted
+        inputs = [n for n in site.free_names if n not in by_content]
+        return self.entry_trace("call", key, group, site.source, unit, inputs)
+
     # -- statements -------------------------------------------------------
-    def statement_lookup(self, proc: Any, run: Any, found: bool) -> None:
-        """Before a statement is served or runs: verify its traces."""
+    def statement_lookup(self, proc: Any, run: Any, found: bool, entry: Any = None) -> None:
+        """Before a statement is served or runs: verify its traces, a hit by
+        the trace its entry carries (*entry*)."""
         try:
             self.attach(proc.shell.user_ns, proc.tracking_state.variable_lineage, proc.cash_instance.backend)
         except Exception as exc:  # noqa: BLE001 - shadow never breaks a statement
@@ -731,7 +777,13 @@ class Shadow:
             return
         backend = proc.cash_instance.backend
         run.shadow = self.check(
-            "stmt", run.cache_key, _stmt_group(run), found, run.code, attribute_or(backend, "peek_metadata", None)
+            "stmt",
+            run.cache_key,
+            _stmt_group(run),
+            found,
+            run.code,
+            attribute_or(backend, "peek_metadata", None),
+            entry,
         )
 
     @staticmethod
@@ -776,23 +828,9 @@ class Shadow:
             return
         if CacheStatus.parse(metrics.get("status")) is not CacheStatus.COMPUTED:
             return
-        storage = metrics.get("storage") or ()
-        if not storage:
+        if not metrics.get("storage"):
+            # Its trace went with its entry (`statement_trace`), if it had one.
             self.counts["stmt:not_stored"] += 1
-            return
-        if run.memo_used:
-            unit.markers.add("memo")
-        if run.handed_iterable:
-            unit.markers.add("handed_iterable")
-        self.store(
-            "stmt",
-            run.cache_key,
-            _stmt_group(run),
-            run.code,
-            unit,
-            run.inputs,
-            disk=any(s != "RAM" for s in storage),
-        )
 
     # -- cached calls -----------------------------------------------------
     def note_call(self, key: str, site: Any, parts: Iterable[Any], by_content: Iterable[str] = ()) -> None:
@@ -809,13 +847,14 @@ class Shadow:
         while len(self._call_groups) > 4096:
             self._call_groups.popitem(last=False)
 
-    def call_lookup(self, key: str, site: Any, hit: bool, peek: Callable[[str], Any] | None) -> bool:
-        """Check a call's entry before it is served: False when its trace
-        says it is stale, and the call runs again."""
+    def call_lookup(self, key: str, site: Any, hit: bool, peek: Callable[[str], Any] | None, entry: Any = None) -> bool:
+        """Check a call's entry before it is served, by the trace it carries
+        (*entry*): False when the trace says it is stale or there is none to
+        check, and the call runs again."""
         noted = self._call_groups.get(key)
         if noted is None:
             return hit
-        pending = self.check("call", key, noted[0], hit, site.source, peek)
+        pending = self.check("call", key, noted[0], hit, site.source, peek, entry)
         if hit and not self.vouched(pending):
             self.resolve(pending, False)
             return False
@@ -823,21 +862,13 @@ class Shadow:
         if hit:
             unit = self.current()
             if unit is not None:
-                trace = self.traces.get(key)
+                trace = self._from_entry(entry)
                 if trace is None:
                     unit.markers.add("call_hit_untraced")
                 else:
                     unit.extra.extend(trace["items"])
                     unit.markers.update(trace.get("markers", ()))
         return hit
-
-    def call_finished(self, key: str, site: Any, unit, stored: bool, disk: bool) -> None:
-        noted = self._call_groups.get(key)
-        if unit is None or noted is None or not stored:
-            return
-        group, by_content = noted
-        inputs = [n for n in site.free_names if n not in by_content]
-        self.store("call", key, group, site.source, unit, inputs, disk)
 
     # -- reporting --------------------------------------------------------
     def summary(self) -> dict:

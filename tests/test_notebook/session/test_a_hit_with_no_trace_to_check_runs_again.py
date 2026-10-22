@@ -1,13 +1,19 @@
-"""With the trace on, an entry is served only when its trace was checked
-and agreed. An entry with no trace to check, or whose check could not run,
-runs again and stores a trace.
+"""With the trace on, an entry is served only when the trace it carries was
+checked and agreed. An entry with no trace to check, or whose check could
+not run, runs again and stores one.
 
-A missing trace counted as fine: after traces moved into each cache's own
-folder, every entry stored before had none where traces are read now, and
-was served on its key alone for good (a hit writes no trace). A function
-given new code outside any statement, the edit the trace exists for, then
-went unseen. And when the cache's ``local_dir`` raised, the check never
-started, and stale hits were served with nothing logged.
+A missing trace counted as fine: entries stored before traces were kept
+where they are read now had none, and were served on their key alone for
+good (a hit writes no trace). A function given new code outside any
+statement, the edit the trace exists for, then went unseen. And when the
+cache's ``local_dir`` raised, the check never started, and stale hits were
+served with nothing logged.
+
+Each entry now carries its own trace in its metadata, so the trace goes
+wherever the entry goes, on every backend. Before, traces were kept in a
+file per cache folder, and caches with no folder (SQLite, Redis, S3) shared
+one under the temp dir, keyed by cache key alone: another notebook's trace
+for the same key vouched for this one's stale entry.
 """
 
 from __future__ import annotations
@@ -62,20 +68,18 @@ def _run(processor, code):
     return processor.process_statement(code, annotation=_PERSIST)
 
 
-def _forget_traces(on, tmp_path):
-    """As a new kernel whose traces are not where it reads them: the
-    entries stay, their traces are gone."""
-    on.traces.clear()
-    on.groups.clear()
-    on.dir = str(tmp_path / "traces_elsewhere")
-    on._loaded = False
+def _stored_without_traces(on, monkeypatch):
+    """Store as a version that kept no trace with the entry did."""
+    monkeypatch.setattr(on, "statement_trace", lambda run: None)
+    monkeypatch.setattr(on, "call_trace", lambda key, site, unit: None)
 
 
-def test_an_entry_with_no_trace_runs_and_then_has_one(trace_on, statement_processor, mock_shell, tmp_path):
+def test_an_entry_with_no_trace_runs_and_then_has_one(trace_on, statement_processor, mock_shell, monkeypatch):
     on, _ = trace_on
     _run(statement_processor, "def inner(x):\n    return x * 2")
-    assert _run(statement_processor, "t = inner(3)")["status"] == CacheStatus.COMPUTED
-    _forget_traces(on, tmp_path)
+    with monkeypatch.context() as m:
+        _stored_without_traces(on, m)
+        assert _run(statement_processor, "t = inner(3)")["status"] == CacheStatus.COMPUTED
     mock_shell.user_ns["inner"].__code__ = (lambda x: x * 10).__code__
 
     again = _run(statement_processor, "t = inner(3)")
@@ -88,13 +92,14 @@ def test_an_entry_with_no_trace_runs_and_then_has_one(trace_on, statement_proces
     assert on.counts["stmt:hit:agree"] == 1, dict(on.counts)
 
 
-def test_a_cached_call_with_no_trace_runs_again(trace_on, statement_processor, mock_shell, tmp_path):
+def test_a_cached_call_with_no_trace_runs_again(trace_on, statement_processor, mock_shell, monkeypatch):
     on, mod = trace_on
     _run(statement_processor, f"import {mod}\nfrom {mod} import slow_inner")
-    for _ in range(2):
-        statement_processor.process_statement("x = slow_inner(2) + 0")
-    assert on.counts["call:traces"] >= 1
-    _forget_traces(on, tmp_path)
+    with monkeypatch.context() as m:
+        _stored_without_traces(on, m)
+        for _ in range(2):
+            statement_processor.process_statement("x = slow_inner(2) + 0")
+    assert mock_shell.user_ns["x"] == 4
     sys.modules[mod].inner.__code__ = (lambda x: x * 10).__code__
 
     statement_processor.process_statement("x = slow_inner(2) + 1")
@@ -119,11 +124,11 @@ def test_a_check_that_could_not_start_does_not_serve(trace_on, statement_process
     assert on.counts["errors"] >= 1
 
 
-def test_with_no_tool_to_record_traces_the_key_decides(trace_on, statement_processor, tmp_path, monkeypatch):
+def test_with_no_tool_to_record_traces_the_key_decides(trace_on, statement_processor, monkeypatch):
     on, _ = trace_on
     _run(statement_processor, "def inner(x):\n    return x * 2")
+    _stored_without_traces(on, monkeypatch)
     _run(statement_processor, "t = inner(3)")
-    _forget_traces(on, tmp_path)
     monkeypatch.setattr(on, "ok", False)
 
     assert _run(statement_processor, "t = inner(3)")["status"] == CacheStatus.RESTORED

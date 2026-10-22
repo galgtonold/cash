@@ -934,7 +934,9 @@ class StatementProcessor:
             self._warn_work_running(running)
         run.entry_holders = bool(metadata is not None and metadata.holders)
         if _shadow.SHADOW is not None:
-            _shadow.SHADOW.statement_lookup(self, run, bool(cached_data))
+            _shadow.SHADOW.statement_lookup(
+                self, run, bool(cached_data), metadata.trace if metadata is not None else None
+            )
             if cached_data and _shadow.SHADOW.stale(run.shadow):
                 # Code it ran changed since it was stored: it runs again.
                 cached_data = None

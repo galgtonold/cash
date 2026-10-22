@@ -29,6 +29,7 @@ from cash.backends.store_notices import DECORATED_CALLS_FIELD
 from cash.closure_sharing import closure_check_budget, closures_sharing
 from cash.diagnostics import log_diagnostic, warn_diagnostic
 from cash.exceptions import CashCacheStoreFailedWarning
+from cash.notebook import shadow as _shadow
 from cash.notebook.anchors import AnchorUnrebuilt, with_anchor_refs
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.capture import replay_record
@@ -661,6 +662,7 @@ class StatementStore:
             ttl=run.effective_ttl,
             version_slot=_version_slot(run.source_hash, run.outputs),
             replay=replay_record(execution.captured),
+            trace=_shadow.SHADOW.statement_trace(run) if _shadow.SHADOW is not None else None,
             **cost_fields,
         )
         wire = self._wire(run, metadata, referenced)

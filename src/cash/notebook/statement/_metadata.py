@@ -133,6 +133,10 @@ class StatementCacheMetadata:
     #: for a cell run that skips it to show again; absent when it showed
     #: nothing.
     replay: dict[str, Any] | None = None
+    #: What its run ran, to check before it is served (`Shadow.entry_trace`):
+    #: kept with the entry, so it goes where the entry goes and no other
+    #: cache's trace can stand in for it; absent when none was recorded.
+    trace: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {f.name: value for f in fields(self) if (value := getattr(self, f.name)) is not None}
