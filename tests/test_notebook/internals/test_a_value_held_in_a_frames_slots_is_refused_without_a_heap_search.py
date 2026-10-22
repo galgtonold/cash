@@ -26,17 +26,17 @@ def _check(names, ns, *, search: bool):
     ``(shared, gave_up names, complete, heap searches)``."""
     searches = []
     real_search = shared_objects._holders_from_referrers
-    real_slots = shared_objects._held_in_pandas_slots
+    real_slots = shared_objects._pandas_slot_holders
     try:
         shared_objects._holders_from_referrers = lambda *a, **k: searches.append(1) or real_search(*a, **k)
         if search:
-            shared_objects._held_in_pandas_slots = lambda *a, **k: None
+            shared_objects._pandas_slot_holders = lambda *a, **k: None
         gave_up = GaveUp()
         # The captured values are a dict of their own, as the processor passes them.
         _holders, shared = share_group(names, {n: ns[n] for n in names}, ns, gave_up=gave_up)
     finally:
         shared_objects._holders_from_referrers = real_search
-        shared_objects._held_in_pandas_slots = real_slots
+        shared_objects._pandas_slot_holders = real_slots
     return shared, gave_up.names, gave_up.complete, len(searches)
 
 

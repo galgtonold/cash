@@ -1632,12 +1632,47 @@ def classify_receivers(
     # df['label']`` changes its receiver all the same.
     mutated |= {base for base in changed if not is_module_name(base, namespace, virtual_modules)}
     mutated |= drawn_args
+    mutated |= {
+        base
+        for base in _changed_through_lambda_parameters(tree, calls)
+        if not is_module_name(base, namespace, virtual_modules)
+    }
     if verdict is None:
         unknown_args = args
     else:
         mutated |= {name for name in args if name in verdict}
         unknown_args = frozenset()
     return ReceiverClasses(frozenset(mutated), frozenset(unknown), unknown_args, provisional)
+
+
+def _changed_through_lambda_parameters(tree: ast.Module | None, calls: Any) -> set[str]:
+    """The names a lambda changing its own parameter in place changes, in
+    *tree*: the receiver and the arguments of the call it is handed to.
+    ``df['o'].map(lambda d: d.update(z=2))`` changes the dicts ``df`` holds,
+    and ``d`` names none of the notebook's variables."""
+    if tree is None:
+        return set()
+    changed = set(calls.mutation_receivers) | set(calls.changed_receivers)
+    found: set[str] = set()
+    for call in ast.walk(tree):
+        if not isinstance(call, ast.Call):
+            continue
+        handed = [*call.args, *(keyword.value for keyword in call.keywords)]
+        for lam in handed:
+            if not isinstance(lam, ast.Lambda):
+                continue
+            params = {arg.arg for arg in (*lam.args.posonlyargs, *lam.args.args, *lam.args.kwonlyargs)}
+            params |= {arg.arg for arg in (lam.args.vararg, lam.args.kwarg) if arg is not None}
+            inside = top_level_calls(ast.Module(body=[ast.Expr(lam.body)], type_ignores=[]))
+            touched = set(inside.mutation_receivers) | set(inside.changed_receivers)
+            if not (params & touched & changed):
+                continue
+            if isinstance(call.func, ast.Attribute) and (root := _receiver_root(call.func.value)):
+                found.add(root)
+            for arg in handed:
+                if arg is not lam and (root := _receiver_root(arg)):
+                    found.add(root)
+    return found
 
 
 def _receiver_root(node: ast.AST) -> str | None:

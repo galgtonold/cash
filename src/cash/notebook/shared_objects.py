@@ -2200,14 +2200,18 @@ def _check_group(
         internal |= {id(memo), *(id(listed) for listed in memo.values() if listed is not None)}
         internal |= {id(m) for m in bindings if m is not user_ns}
         discounted = {key for mapping, key in named_held if mapping is user_ns}
-        if breaks.isdisjoint(excess):
-            # Held only in a pandas object's own slots: the search up would
-            # stop at that object, so its answer is known without it.
-            in_frames = _held_in_pandas_slots(nodes, inbound, excess, user_ns, set(group) | discounted)
-            if in_frames is not None:
-                if gave_up is not None:
-                    gave_up.names |= in_frames
+        # Held in a pandas object's own slots: the search up would stop at
+        # that object, so its answer is known without it. Those frames hold
+        # the objects whatever else does too (``L = list(df['o'])`` holds
+        # ``df``'s cells, and ``c3 = df['o'].iloc[3]`` one of them), and are
+        # linked; the search up looks only for what they leave.
+        in_frames = _pandas_slot_holders(nodes, inbound, excess, user_ns, set(group) | discounted)
+        if in_frames is not None and in_frames[0]:
+            if gave_up is not None:
+                gave_up.names |= in_frames[0]
+            if not in_frames[1]:
                 return shared, None
+            excess = in_frames[1]
         partial = GaveUp() if gave_up is not None else None
         found = _find_holders([nodes[k] for k in excess], internal, user_ns, set(group) | discounted, partial)
         if found is not None or breaks.isdisjoint(excess):
@@ -2757,15 +2761,17 @@ def _count_category_slots(nodes: dict[int, Any], inbound: dict[int, int]) -> Non
                 inbound[id(item)] += 1
 
 
-def _held_in_pandas_slots(
+def _pandas_slot_holders(
     nodes: dict[int, Any],
     inbound: dict[int, int],
     excess: list[int],
     user_ns: Mapping[str, Any],
     known: set[str],
-) -> set[str] | None:
-    """The variables bound to the pandas frames whose own slots hold every
-    reference left over on *excess*, or None when any is held elsewhere.
+) -> tuple[set[str], list[int]] | None:
+    """``(names, left)``: the variables bound to the pandas frames whose own
+    slots hold references left over on *excess*, and the keys of *excess*
+    with references they do not hold; None when the frames could not be
+    read, or hold more than was left over.
 
     The slot is pandas' item cache (``y = df['t']`` stays in
     ``df._item_cache``; pandas 2 without copy-on-write, where ``y[0] = 99``
@@ -2812,9 +2818,9 @@ def _held_in_pandas_slots(
                 names.add(name)
     except Exception:  # noqa: BLE001 - another layout: the search up decides
         return None
-    if any(left != 0 for left in wanted.values()):
+    if any(left < 0 for left in wanted.values()):
         return None
-    return names
+    return names, [key for key in excess if wanted[key]]
 
 
 def _cells_wanted(array: Any, keys: Any, slots: set[int]) -> list[int]:
