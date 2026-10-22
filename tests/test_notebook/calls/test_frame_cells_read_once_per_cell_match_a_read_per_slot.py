@@ -106,3 +106,19 @@ def test_a_view_of_the_argument_is_linked_as_the_search_links_it(start, monkeypa
     assert {key: ids.tolist() for key, ids in fast[1].items()} == {
         key: ids.tolist() for key, ids in searched[1].items()
     }
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_frames_on_the_very_memory_of_another_are_its_slots_read_once(seed):
+    """``df[df.x > -25]`` that keeps every row is ``df``'s own memory (a
+    second array over the same slots); read once, as the slots are."""
+    rng = random.Random(seed)
+    base = np.empty(300, dtype=object)
+    base[:] = [{"i": i} if i % 5 else [Thing()] for i in range(300)]
+    same = [base[:] for _ in range(rng.randrange(1, 5))]
+    arrays = [base, *same, *(_copy(base[rng.randrange(40) :]) for _ in range(4))]
+    kept = [base[rng.randrange(300)] for _ in range(2)]
+    once = shared_objects._held_beyond_copies(arrays)
+    assert once is not None
+    assert once == _every_slot(arrays)
+    assert {id(cell) for cell in kept} <= once

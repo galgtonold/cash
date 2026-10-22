@@ -391,21 +391,65 @@ def values_only(value: Any, exact: frozenset[type]) -> bool:
 
 def children_of(value: Any) -> Iterable[Any] | None:
     """What *value* holds that a restore copies with it, or None for a leaf."""
-    if instance_of(value, dict):
+    kind = _CHILD_KIND.get(type(value))
+    if kind is None:
+        kind = _child_kind(value)
+    if kind == _OBJECT:
+        attrs = attributes_of(value)
+        return list(attrs.values()) if attrs is not None else _library_children(value)
+    if kind == _DICT:
         return [*value.keys(), *value.values()]
-    if instance_of(value, _CONTAINERS):
+    if kind == _CONTAINER:
         return list(value)
-    if instance_of(value, _CALLABLE_TYPES):
+    if kind == _CALLABLE:
         return _bound_objects(value)
-    if instance_of(value, types.CellType):
-        try:
-            return [value.cell_contents]
-        except ValueError:
-            return None
-    attrs = attributes_of(value)
-    if attrs is not None:
-        return list(attrs.values())
-    return _library_children(value)
+    try:
+        return [value.cell_contents]
+    except ValueError:
+        return None
+
+
+_DICT, _CONTAINER, _CALLABLE, _CELL, _OBJECT = range(5)
+#: Per exact type, which of `children_of`'s cases its objects take, for a
+#: type whose objects answer ``isinstance`` by it alone (`_child_kind`).
+#: Dropped whole past `_CHILD_KIND_MAX` types.
+_CHILD_KIND: dict[type, int] = {}
+_CHILD_KIND_MAX = 4096
+_CLASS_OF = object.__dict__["__class__"]
+_CHILD_KIND_BUILTINS = frozenset({dict, *_CONTAINERS, *_CALLABLE_TYPES, types.CellType})
+
+
+def _child_kind(value: Any) -> int:
+    """Which of `children_of`'s cases *value* takes, remembered for its type
+    when every object of it answers alike: the builtins asked about, and a
+    class that leaves ``__class__`` and the lookup to ``object`` (``isinstance``
+    asks an object for its ``__class__`` when the type does not match; a
+    proxy forwards it).
+    The commonest objects of a walk -- the dicts of a frame's column, a
+    thousand objects of the user's class in its categories -- were asked
+    four ``isinstance`` questions each, in every walk of every check."""
+    if instance_of(value, dict):
+        found = _DICT
+    elif instance_of(value, _CONTAINERS):
+        found = _CONTAINER
+    elif instance_of(value, _CALLABLE_TYPES):
+        found = _CALLABLE
+    elif instance_of(value, types.CellType):
+        found = _CELL
+    else:
+        found = _OBJECT
+    kind = type(value)
+    if kind in _CHILD_KIND_BUILTINS or (
+        kind.__getattribute__ is object.__getattribute__
+        and all(
+            type.__dict__["__dict__"].__get__(klass).get("__class__", _CLASS_OF) is _CLASS_OF
+            for klass in type.__dict__["__mro__"].__get__(kind)
+        )
+    ):
+        if len(_CHILD_KIND) >= _CHILD_KIND_MAX:
+            _CHILD_KIND.clear()
+        _CHILD_KIND[kind] = found
+    return found
 
 
 #: The standard library's wrapping containers, each holding its contents in
@@ -959,17 +1003,19 @@ _COLUMNS: dict[int, list[Any] | None] | None = None
 def _columns_kept() -> Iterator[None]:
     """Within it, the object columns of each frame are read once: no code
     runs between the reads of one share check."""
-    global _COLUMNS, _VALUES_READ
+    global _COLUMNS, _VALUES_READ, _SHARING_READ
     if _COLUMNS is not None:
         yield
         return
     _COLUMNS = {}
     _VALUES_READ = {}
+    _SHARING_READ = {}
     try:
         yield
     finally:
         _COLUMNS = None
         _VALUES_READ = None
+        _SHARING_READ = None
 
 
 def _read_object_columns(value: Any, pd: Any) -> list[Any]:
@@ -990,6 +1036,9 @@ def _read_object_columns(value: Any, pd: Any) -> list[Any]:
 #: While `_columns_kept` runs: by the span of memory of each object array
 #: read, whether it holds only values pandas tells apart (`infer_dtype`).
 _VALUES_READ: dict[tuple[int, int], bool] | None = None
+#: Within `_columns_kept`, `_frames_sharing_cells`'s answer with nothing
+#: skipped, by the names and objects of the group asked about.
+_SHARING_READ: dict[tuple, set[str]] | None = None
 
 
 def column_values_only(array: Any, pd: Any) -> bool:
@@ -1153,7 +1202,8 @@ def _held_by_frames_alone(everything: list[Any], beyond: set[int], linked: Mappi
 def _held_beyond_copies(arrays: list[Any]) -> set[int] | None:
     """`_cells_held_elsewhere` over the distinct slots of the object
     *arrays*, as the ids it lists, for arrays each in memory of its own
-    where most copy another's cells: fifty frames a hit put back as
+    (or the very memory of another, read once) where most copy another's
+    cells: fifty frames a hit put back as
     ``df.iloc[i:]`` each hold ``df``'s dicts in slots of their own, five
     million slots to read for a hundred thousand cells. Each copy is proven
     one by the addresses its slots hold: a run of the other's, or each at
@@ -1166,6 +1216,9 @@ def _held_beyond_copies(arrays: list[Any]) -> set[int] | None:
     size = np.dtype(object).itemsize
     if len(arrays) < 2 or any(array.ndim != 1 or array.strides[0] != size for array in arrays):
         return None
+    # One memory several frames hold (the categories of ``df`` and of
+    # ``df[mask]``) is one set of slots: read once.
+    arrays = list({(_address(array), len(array)): array for array in arrays}.values())
     spans = sorted((start, start + len(array) * size) for array in arrays for start in [_address(array)])
     if any(end > spans[i + 1][0] for i, (_, end) in enumerate(spans[:-1])):
         return None
@@ -1899,7 +1952,24 @@ def _frames_sharing_cells(
     ``df2 = df[mask]``, whose rows are ``df``'s own objects; and the frames
     reading the same memory: their cells are the same objects in one slot
     each, which no count shows. Or one holding an object of a categorical of
-    *group* among its own categories (`object_categories`)."""
+    *group* among its own categories (`object_categories`).
+
+    Within `_columns_kept` it is read once for a group with nothing skipped,
+    and filtered by *skip* after: the frames sharing a statement's outputs
+    are looked for to read them together and again by the share check, and
+    no code runs in between."""
+    if _SHARING_READ is None:
+        return _read_frames_sharing_cells(group, user_ns, skip)
+    key = tuple(sorted((name, id(value)) for name, value in group.items()))
+    found = _SHARING_READ.get(key)
+    if found is None:
+        found = _SHARING_READ[key] = _read_frames_sharing_cells(group, user_ns, lambda name: False)
+    return {name for name in found if not skip(name)}
+
+
+def _read_frames_sharing_cells(
+    group: Mapping[str, Any], user_ns: Mapping[str, Any], skip: Callable[[str], bool]
+) -> set[str]:
     values = exact_value_types()
     wanted: set[int] = set()
     spans: list[tuple[int, int]] = []
