@@ -44,29 +44,53 @@ def test_with_factory_binding(nb_runner):
 
 #: What hands a ``with`` its manager, the manager's class being the user's:
 #: a factory, a local it builds, a global it returns, a factory two calls
-#: deep, the class handed in, a method.
+#: deep, the class handed in, a default parameter, a local alias, a
+#: classmethod constructor, a method, a ``@contextmanager`` around it, an
+#: ``ExitStack``, a conditional.
 FACTORIES = {
-    "a factory": ("def cm():\n    return Mgr()", "cm()"),
-    "a local it builds": ("def cm():\n    m = Mgr()\n    return m", "cm()"),
-    "a global it returns": ("shared = Mgr()\ndef cm():\n    return shared", "cm()"),
-    "two calls deep": ("def inner():\n    return Mgr()\ndef cm():\n    return inner()", "cm()"),
-    "the class handed in": ("def cm(kind):\n    return kind()", "cm(Mgr)"),
-    "a method": ("class Pool:\n    def lease(self):\n        return Mgr()\npool = Pool()", "pool.lease()"),
+    "a factory": ("def cm():\n    return Mgr()", "with cm() as x:"),
+    "a local it builds": ("def cm():\n    m = Mgr()\n    return m", "with cm() as x:"),
+    "a global it returns": ("shared = Mgr()\ndef cm():\n    return shared", "with cm() as x:"),
+    "two calls deep": ("def inner():\n    return Mgr()\ndef cm():\n    return inner()", "with cm() as x:"),
+    "the class handed in": ("def cm(kind):\n    return kind()", "with cm(Mgr) as x:"),
+    "a default parameter": ("def cm(kind=Mgr):\n    return kind()", "with cm() as x:"),
+    "a local alias": ("def cm():\n    make = Mgr\n    return make()", "with cm() as x:"),
+    "a classmethod constructor": ("", "with Mgr.open() as x:"),
+    "a method": ("class Pool:\n    def lease(self):\n        return Mgr()\npool = Pool()", "with pool.lease() as x:"),
+    "a contextmanager around it": (
+        "import contextlib\n@contextlib.contextmanager\ndef cm():\n    with Mgr() as m:\n        yield m",
+        "with cm() as x:",
+    ),
+    "an ExitStack": (
+        "import contextlib\ndef cm():\n    return Mgr()",
+        "with contextlib.ExitStack() as st:\n    x = st.enter_context(cm())",
+    ),
+    "a conditional": (
+        "import contextlib\ndef cm():\n    return Mgr()",
+        "with (cm() if True else contextlib.nullcontext()) as x:",
+    ),
 }
+
+MGR = (
+    "import time\nhits = []\nclass Mgr:\n    def __enter__(self):\n        hits.append(1)\n        return len(hits)\n"
+    "    def __exit__(self, *a):\n        hits.append(-1)\n        return False\n"
+    "    @classmethod\n    def open(cls):\n        return cls()\n"
+)
 
 
 @pytest.mark.parametrize("how", list(FACTORIES))
-def test_with_factory_binding_stored(nb_runner, how):
-    # The sleep makes the statement cost enough to be stored, as a loaded
-    # machine does: served, it would skip ``__enter__``.
-    setup, call = FACTORIES[how]
-    _rerun(
-        nb_runner,
-        "import time\nhits = []\nclass Mgr:\n    def __enter__(self):\n        hits.append(1)\n"
-        "        return len(hits)\n    def __exit__(self, *a):\n        return False\n" + setup,
-        f"with {call} as x:\n    v = x\n    time.sleep(0.05)\nprint('hits', len(hits), 'v', v)",
-        "hits 1 v 1",
-    )
+def test_with_factory_binding_after_a_restart(nb_runner, how):
+    # The sleep makes the statement cost enough to be stored. Served after
+    # the restart, it would skip ``__enter__`` and ``__exit__``.
+    setup, line = FACTORIES[how]
+    nb_runner.create_notebook([MGR + setup, f"{line}\n    v = x\n    time.sleep(0.25)"])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert nb_runner.peek("(hits, v)") == "([1, -1], 1)"
+    nb_runner.restart()
+    nb_runner._init_cash()
+    nb_runner.run_all()
+    assert nb_runner.peek("(hits, v)") == "([1, -1], 1)"
 
 
 def test_aliased_decorated_function(nb_runner):

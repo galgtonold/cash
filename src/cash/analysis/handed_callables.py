@@ -53,7 +53,7 @@ from typing import Any, NamedTuple
 from .. import _plain_data
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import is_pseudo_filename
-from .._user_attrs import instance_of
+from .._user_attrs import attribute_or, instance_of
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import own_source, wrapper_layers
 from ..tracking.function_tracker import is_local_module
@@ -1776,10 +1776,21 @@ class _Found:
                     target = _users_target(manager.func, namespace)
                     if target is not None and isinstance(target[0], type) and _is_users_class(target[0]):
                         self._special_methods(target[0])
-                    elif target is not None:
-                        # ``with cm() as x:`` where ``def cm(): return Mgr()``.
-                        for cls in _managers_made_by(target[0], namespace):
-                            self._special_methods(cls)
+                        continue
+                if isinstance(manager, (ast.Call, ast.IfExp, ast.BoolOp, ast.Subscript)):
+                    # ``with cm() as x:`` where ``def cm(): return Mgr()``.
+                    for cls in manager_classes(manager, namespace):
+                        self._special_methods(cls)
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("enter_context", "enter_async_context")
+                and len(node.args) == 1
+                and isinstance(node.args[0], (ast.Call, ast.IfExp, ast.BoolOp, ast.Subscript))
+            ):
+                # ``stack.enter_context(cm())``: an ``ExitStack`` enters it.
+                for cls in manager_classes(node.args[0], namespace):
+                    self._special_methods(cls)
             elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
                 value = namespace.get(node.id, _MISSING)
                 if value is not _MISSING and _is_users_object(value):
@@ -2079,79 +2090,316 @@ def _generated_dataclass_init(cls: type, init: Any) -> bool:
     )
 
 
-#: How many factories deep `_managers_made_by` follows ``return other()``.
+#: How many calls deep `_Managers` follows a factory (``return other()``).
 _FACTORY_DEPTH = 3
+#: How many items of a container `_Managers` reads for ``KINDS[name]``.
+_MANAGER_ITEMS = 64
+#: The methods that make a class a context manager.
+_MANAGER_METHODS = ("__enter__", "__exit__", "__aenter__", "__aexit__")
 
 
-def _managers_made_by(fn: Any, namespace: Mapping[str, Any], depth: int = 0) -> list[type]:
-    """The classes of the user's whose objects the user's function *fn*
-    hands to a ``with`` (``def cm(): return Mgr()``): what its returns
-    construct, or name as a global or a local made from such a call.
+class _Made:
+    """An object of the class *cls* that the code constructs."""
 
-    A return read no further (a parameter, an expression) may hand over an
-    object of any class of the user's, so then every class of the user's in
-    *namespace* that defines ``__enter__`` or ``__exit__`` counts: which one
-    runs is not known. A library object handed back is the library's
-    business, and a generator's body (``@contextmanager``) is its callee's
-    own text already."""
-    if instance_of(fn, types.MethodType):
-        fn = fn.__func__
-    if not instance_of(fn, types.FunctionType) or not _is_users(fn):
-        return []
-    if fn.__code__.co_flags & (inspect.CO_GENERATOR | inspect.CO_ASYNC_GENERATOR):
-        return []
+    __slots__ = ("cls",)
+
+    def __init__(self, cls: type) -> None:
+        self.cls = cls
+
+
+class _Scope(NamedTuple):
+    """What one function's own scope binds: ``locals`` maps a name to the
+    expressions assigned to it (None when it is bound otherwise: a loop, a
+    ``with ... as``, unpacking), ``returns`` the expressions it returns,
+    ``managers`` the ``with`` items of its own body."""
+
+    locals: Mapping[str, list[ast.expr] | None]
+    returns: tuple[ast.expr, ...]
+    managers: tuple[ast.expr, ...]
+
+
+#: ``code object -> its _Scope`` (None when its source cannot be read).
+_SCOPES: LruMemo[Any, _Scope | None] = LruMemo(CODE_OBJECTS)
+
+
+def _scope_of(fn: types.FunctionType) -> _Scope | None:
+    code = fn.__code__
+    if code in _SCOPES:
+        return _SCOPES.get(code)
     source = _source_of(fn)
     node = parse_function_source(source) if source is not None else None
-    if node is None or depth > _FACTORY_DEPTH:
-        return _every_users_manager(namespace)
-    made: dict[str, list[ast.expr]] = {}
-    for sub in ast.walk(node):
-        if isinstance(sub, ast.Assign):
-            for target in sub.targets:
-                if isinstance(target, ast.Name):
-                    made.setdefault(target.id, []).append(sub.value)
-    found: list[type] = []
-    unread = False
-    params = all_param_names(node)
+    scope = None if node is None else _read_scope(node)
+    _SCOPES[code] = scope
+    return scope
 
-    def read(expr: ast.expr, seen: frozenset[str]) -> None:
-        nonlocal unread
-        if isinstance(expr, ast.Constant):
-            return
-        if isinstance(expr, ast.Call) and isinstance(expr.func, (ast.Name, ast.Attribute)):
-            target = _users_target(expr.func, fn.__globals__)
-            if target is None:
-                unread = True
-            elif instance_of(target[0], type):
-                if _is_users_class(target[0]):
-                    found.append(target[0])
-            else:
-                found.extend(_managers_made_by(target[0], namespace, depth + 1))
-        elif isinstance(expr, ast.Name) and expr.id in made and expr.id not in seen:
-            for value in made[expr.id]:
-                read(value, seen | {expr.id})
-        elif isinstance(expr, ast.Name) and expr.id not in params and expr.id in fn.__globals__:
-            value = fn.__globals__[expr.id]
-            if _is_users_object(value):
-                found.append(type(value))
-        else:
-            unread = True
 
-    for sub in ast.walk(node):
+def _read_scope(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda) -> _Scope:
+    local: dict[str, list[ast.expr] | None] = {}
+    returns: list[ast.expr] = []
+    managers: list[ast.expr] = []
+
+    def unknown(target: ast.AST) -> None:
+        for sub in ast.walk(target):
+            if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
+                local[sub.id] = None
+
+    if isinstance(node, ast.Lambda):
+        returns.append(node.body)
+        return _Scope(local, tuple(returns), ())
+    stack: list[ast.AST] = list(node.body)
+    while stack:
+        sub = stack.pop()
+        if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            local[sub.name] = None
+            continue  # its own scope
+        if isinstance(sub, ast.Lambda):
+            continue
         if isinstance(sub, ast.Return) and sub.value is not None:
-            read(sub.value, frozenset())
-    return _every_users_manager(namespace) if unread else found
+            returns.append(sub.value)
+        elif isinstance(sub, ast.Assign):
+            for target in sub.targets:
+                if isinstance(target, ast.Name) and local.get(target.id, []) is not None:
+                    local.setdefault(target.id, []).append(sub.value)  # type: ignore[union-attr]
+                else:
+                    unknown(target)
+        elif isinstance(sub, (ast.AnnAssign, ast.AugAssign, ast.For, ast.AsyncFor, ast.NamedExpr)):
+            unknown(sub.target)
+        elif isinstance(sub, (ast.With, ast.AsyncWith)):
+            for item in sub.items:
+                managers.append(item.context_expr)
+                if item.optional_vars is not None:
+                    unknown(item.optional_vars)
+        elif isinstance(sub, (ast.Import, ast.ImportFrom)):
+            for alias in sub.names:
+                local[alias.asname or alias.name.split(".")[0]] = None
+        stack.extend(ast.iter_child_nodes(sub))
+    return _Scope(local, tuple(returns), tuple(managers))
+
+
+class _Managers:
+    """The classes of the user's whose ``__enter__``/``__exit__`` a ``with``
+    item may run (`manager_classes`).
+
+    An expression is read to the objects it may give: a class of the
+    user's called makes one of its objects (`_Made`); a function of the
+    user's called gives what its returns give, its parameters bound to what
+    the call hands it or to their defaults; a name, an attribute and an
+    item are looked up. What a library gives is the library's business and
+    adds nothing. What cannot be read that could still be an object of the
+    user's (a parameter nothing binds, a call of what a parameter holds, a
+    user object's own lookup) is *unread*: then every class of the user's
+    the code can reach that is a context manager counts."""
+
+    def __init__(self, namespace: Mapping[str, Any]) -> None:
+        self.namespace = namespace
+        self.found: list[Any] = []
+        self.unread_in: list[Mapping[str, Any]] = []
+
+    # -- expressions --------------------------------------------------------
+
+    def values(self, expr: ast.expr, env: "_Env", depth: int) -> list[Any]:
+        if isinstance(expr, ast.Name):
+            return env.lookup(expr.id, self, depth)
+        if isinstance(expr, ast.Attribute):
+            out = []
+            for owner in self.values(expr.value, env, depth):
+                if instance_of(owner, _Unread):
+                    self.unread(owner.env)
+                elif instance_of(owner, _Made):
+                    self.unread(env)  # an attribute of an object made here
+                elif (
+                    instance_of(owner, types.ModuleType)
+                    or (instance_of(owner, type) and _is_users_class(owner))
+                    or _is_users_object(owner)
+                ):
+                    value = _attribute(owner, expr.attr)
+                    if value is not _MISSING:
+                        out.append(value)
+            return out
+        if isinstance(expr, ast.Subscript):
+            out = []
+            for owner in self.values(expr.value, env, depth):
+                if instance_of(owner, _Unread):
+                    self.unread(owner.env)
+                elif instance_of(owner, (dict, list, tuple)):
+                    out.extend(self._items(owner, expr.slice))
+                elif _is_users_object(owner) or instance_of(owner, _Made):
+                    self.unread(env)  # the user's own ``__getitem__``
+            return out
+        if isinstance(expr, ast.IfExp):
+            return self.values(expr.body, env, depth) + self.values(expr.orelse, env, depth)
+        if isinstance(expr, ast.BoolOp):
+            return [v for value in expr.values for v in self.values(value, env, depth)]
+        if isinstance(expr, ast.NamedExpr):
+            return self.values(expr.value, env, depth)
+        if isinstance(expr, ast.Call):
+            out = []
+            for callee in self.values(expr.func, env, depth):
+                out.extend(self.called(callee, expr, env, depth))
+            return out
+        return []
+
+    def _items(self, container: Any, index: ast.expr) -> list[Any]:
+        if isinstance(index, ast.Constant):
+            item = _item(container, index)
+            return [] if item is _MISSING else [item]
+        try:
+            items = list(container.values() if instance_of(container, dict) else container)
+        except Exception:  # noqa: BLE001 - a container that cannot be listed
+            return []
+        return items[:_MANAGER_ITEMS]
+
+    def called(self, callee: Any, call: ast.Call, env: "_Env", depth: int) -> list[Any]:
+        if instance_of(callee, _Unread):
+            self.unread(callee.env)
+            return []
+        if instance_of(callee, type):
+            return [_Made(callee)] if _is_users_class(callee) else []
+        bound_to = None
+        if instance_of(callee, types.MethodType):
+            bound_to, callee = callee.__self__, callee.__func__
+        wrapped = attribute_or(callee, "__wrapped__") if instance_of(callee, types.FunctionType) else None
+        if instance_of(wrapped, types.FunctionType) and _is_users(wrapped) and _is_generator(wrapped):
+            # ``@contextmanager``: the generator's own ``with`` items run.
+            callee = wrapped
+        if not instance_of(callee, types.FunctionType) or not _is_users(callee):
+            if _is_users_object(callee):
+                self.unread(env)  # the user's own ``__call__``
+            return []
+        if depth >= _FACTORY_DEPTH:
+            self.unread(callee.__globals__)
+            return []
+        scope = _scope_of(callee)
+        if scope is None:
+            self.unread(callee.__globals__)
+            return []
+        inner = _Env(callee, scope, self._arguments(callee, call, env, depth, bound_to))
+        if _is_generator(callee):
+            for manager in scope.managers:
+                self.found.extend(self.values(manager, inner, depth + 1))
+            return []
+        return [v for ret in scope.returns for v in self.values(ret, inner, depth + 1)]
+
+    def _arguments(self, fn: types.FunctionType, call: ast.Call, env: "_Env", depth: int, bound_to: Any) -> dict:
+        """What *fn*'s parameters hold for *call*: a list of values each,
+        or `_Unread` for one the call hands what cannot be read."""
+        code = fn.__code__
+        names = code.co_varnames[: code.co_argcount + code.co_kwonlyargcount]
+        held: dict[str, Any] = {}
+        positional = list(names[: code.co_argcount])
+        if bound_to is not None and positional:
+            held[positional.pop(0)] = [bound_to]
+        defaults = fn.__defaults__ or ()
+        for name, value in zip(positional[len(positional) - len(defaults) :], defaults):
+            held[name] = [value]
+        held.update({name: [value] for name, value in (fn.__kwdefaults__ or {}).items()})
+        for name, arg in zip(positional, call.args):
+            held[name] = _Unread(env) if isinstance(arg, ast.Starred) else self.values(arg, env, depth)
+        for keyword in call.keywords:
+            if keyword.arg is not None:
+                held[keyword.arg] = self.values(keyword.value, env, depth)
+        return held
+
+    def unread(self, globals_: Any) -> None:
+        self.unread_in.append(globals_.globals if instance_of(globals_, _Env) else globals_)
+
+    def classes(self) -> list[type]:
+        out: dict[type, None] = {}
+        for value in self.found:
+            cls = value.cls if instance_of(value, _Made) else type(value) if _is_users_object(value) else None
+            if cls is not None:
+                out[cls] = None
+        for globals_ in self.unread_in:
+            for spot in (globals_, self.namespace):
+                for cls in _every_users_manager(spot):
+                    out[cls] = None
+        return list(out)
+
+
+class _Unread:
+    """A value no reading gives: a parameter nothing binds."""
+
+    __slots__ = ("env",)
+
+    def __init__(self, env: Any) -> None:
+        self.env = env
+
+
+class _Env:
+    """Where names are looked up: a function's own scope over its globals,
+    or the notebook's namespace (*fn* None)."""
+
+    def __init__(self, fn: types.FunctionType | None, scope: _Scope | None, held: dict, globals_: Any = None):
+        self.fn = fn
+        self.scope = scope
+        self.held = held
+        self.globals = fn.__globals__ if fn is not None else globals_
+        self.seen: set[str] = set()
+
+    def lookup(self, name: str, managers: _Managers, depth: int) -> list[Any]:
+        if name in self.held:
+            value = self.held[name]
+            return [_Unread(self)] if instance_of(value, _Unread) else value
+        if self.fn is not None and self.scope is not None:
+            if name in _parameters(self.fn):
+                return [_Unread(self)]  # a parameter the call leaves to its caller
+            if name in self.scope.locals:
+                assigned = self.scope.locals[name]
+                if assigned is None or name in self.seen:
+                    return [_Unread(self)]
+                self.seen.add(name)
+                try:
+                    return [v for expr in assigned for v in managers.values(expr, self, depth)]
+                finally:
+                    self.seen.discard(name)
+        value = self.globals.get(name, _MISSING)
+        return [] if value is _MISSING else [value]
+
+
+def _parameters(fn: types.FunctionType) -> tuple[str, ...]:
+    """Every parameter name of *fn*, ``*args`` and ``**kwargs`` too."""
+    code = fn.__code__
+    count = code.co_argcount + code.co_kwonlyargcount
+    count += bool(code.co_flags & inspect.CO_VARARGS) + bool(code.co_flags & inspect.CO_VARKEYWORDS)
+    return code.co_varnames[:count]
+
+
+def _is_generator(fn: types.FunctionType) -> bool:
+    return bool(fn.__code__.co_flags & (inspect.CO_GENERATOR | inspect.CO_ASYNC_GENERATOR))
+
+
+def manager_classes(expr: ast.expr, namespace: Mapping[str, Any]) -> list[type]:
+    """The classes of the user's whose ``__enter__`` and ``__exit__`` (or
+    async ones) the ``with`` item *expr*, read in *namespace*, may run.
+
+    ``with cm():`` where ``def cm(): return Mgr()``, ``cm(Mgr)`` where
+    ``def cm(kind): return kind()``, ``Mgr.open()`` where ``open`` is a
+    classmethod returning ``cls()``, ``KINDS[name]()``, ``a() if flag else
+    nullcontext()``, a ``@contextmanager`` generator whose body runs ``with
+    Mgr():``. See `_Managers` for what is read and what counts when
+    something cannot be."""
+    managers = _Managers(namespace)
+    env = _Env(None, None, {}, namespace)
+    managers.found.extend(managers.values(expr, env, 0))
+    found = []
+    for value in managers.found:
+        if instance_of(value, _Unread):
+            managers.unread(value.env)
+        else:
+            found.append(value)
+    managers.found = found
+    return managers.classes()
 
 
 def _every_users_manager(namespace: Mapping[str, Any]) -> list[type]:
-    """The classes of the user's in *namespace* that define ``__enter__``
-    or ``__exit__``."""
+    """The classes of the user's in *namespace* that define ``__enter__``,
+    ``__exit__``, ``__aenter__`` or ``__aexit__``."""
     out = []
     for value in list(namespace.values()):
         if instance_of(value, type) and _is_users_class(value):
             try:
                 mro = value.__mro__[:-1]
-                if any("__enter__" in vars(k) or "__exit__" in vars(k) for k in mro):
+                if any(method in vars(k) for k in mro for method in _MANAGER_METHODS):
                     out.append(value)
             except TypeError:
                 continue
