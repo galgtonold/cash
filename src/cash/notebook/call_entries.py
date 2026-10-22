@@ -306,9 +306,10 @@ class CallEntries:
            refuses such an output for the same reason.
 
         4. **A closure that keeps state** -- a counter or a log a factory
-           returns (:func:`~cash.notebook.call_key.holds_a_closure_with_state`).
+           returns, or a ``functools.cache`` memo
+           (:func:`~cash.notebook.call_key.holds_a_closure_with_state`).
            A function is kept by reference too, so a hit hands back the one
-           the last run made, still holding what it counted.
+           the last run made, still holding what it counted or memoised.
 
         A caching optimisation must never be why user code fails, so a check
         that raises is caught -- and answers "not storable". Refusing to store

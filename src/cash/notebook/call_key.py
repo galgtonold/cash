@@ -213,6 +213,9 @@ _ATOMS = (int, float, complex, str, bytes, bool, type(None))
 #: The same, by exact type, plus dates: one set lookup instead of a scan of `_ATOMS`.
 _EXACT_ATOMS = frozenset({*_ATOMS, _dt.datetime, _dt.date, _dt.time, _dt.timedelta})
 
+#: ``functools.cache`` / ``lru_cache``'s wrapper: a memo that fills as it is called.
+_MEMO_WRAPPER = getattr(functools, "_lru_cache_wrapper", None)
+
 
 def holds_a_closure_with_state(value) -> bool:
     """Whether *value* is, or holds in its tuples, lists, sets and dicts
@@ -222,7 +225,10 @@ def holds_a_closure_with_state(value) -> bool:
     Such a value cannot be served from the cache. The store keeps a function
     by reference, so a hit hands back the closure the last run made, with
     everything it has counted or collected since: ``counter =
-    make_counter(0)`` run again gave a counter that went on from 2. Only two
+    make_counter(0)`` run again gave a counter that went on from 2. A
+    ``functools.cache`` memo is one too: ``functools.cache(g)`` stored, then
+    filled later in the statement, came back already filled after a restart,
+    and ``g`` did not run (or print) where plain Python ran it. Only two
     levels of containers were looked into, so ``{"on": {"click":
     [counter]}}`` was served; a seen set now ends a container that holds
     itself.
@@ -244,6 +250,8 @@ def holds_a_closure_with_state(value) -> bool:
             if changes_its_closure(item):
                 return True
             continue
+        if _MEMO_WRAPPER is not None and isinstance(item, _MEMO_WRAPPER):
+            return True
         if isinstance(item, (tuple, list, set, frozenset, dict)):
             if id(item) in seen:
                 continue

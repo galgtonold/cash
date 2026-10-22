@@ -10,6 +10,7 @@ notebook again handed back a counter that went on from where it was.
 
 from __future__ import annotations
 
+import functools
 import time
 
 from cash.notebook.call_interception import CallSite
@@ -63,3 +64,33 @@ def test_a_factory_returning_nested_handlers_is_not_served_the_last_run_s(call_u
     handlers = unit.wrap(make_handlers, site)()
 
     assert handlers["on"]["click"][0]() == 1, "the counter the last run made was served again"
+
+
+def _double(n):
+    return n * 2
+
+
+def make_memo():
+    time.sleep(0.05)  # above the call cost floor, so a miss is stored
+    return functools.cache(_double)
+
+
+def test_a_memo_is_a_function_that_keeps_state():
+    assert holds_a_closure_with_state(functools.cache(_double))
+    assert holds_a_closure_with_state({"memo": [functools.lru_cache(maxsize=8)(_double)]})
+
+
+def test_a_memo_a_call_made_is_not_served_already_filled(call_unit_harness):
+    # `functools.cache(g)` was stored when it took over the cost floor (a busy
+    # machine), then filled later in the statement: after a restart the hit
+    # handed back the filled memo and `g` never ran where plain Python ran it.
+    unit = call_unit_harness(lineage={"make_memo": "hash-make-memo"}, user_ns={})
+    site = CallSite(source="make_memo()", free_names=frozenset({"make_memo"}), occurrence_index=0)
+
+    unit.begin_statement()
+    first = unit.wrap(make_memo, site)()
+    first(1)
+    unit.begin_statement()
+    memo = unit.wrap(make_memo, site)()
+
+    assert memo.cache_info().currsize == 0, "the memo the last run filled was served again"
