@@ -42,3 +42,23 @@ def test_the_shared_dtype_is_repacked_once():
 def test_a_dtype_with_no_padding_is_left_as_it_is():
     a = np.zeros(4, dtype=[("x", "f8"), ("y", "i8")])
     assert kept_state.packed_records(a) is a
+
+
+@pytest.mark.parametrize("first", ["plain", "record"])
+def test_a_record_typed_dtype_is_packed_as_itself_whichever_comes_first(first):
+    """``np.dtype((np.record, NODE))`` equals ``NODE`` and hashes alike, but
+    numpy packs it keeping its record type: one cache entry for both gave
+    whichever was packed first, and a key that hung on what was hashed
+    before."""
+    import pickle
+
+    record = np.dtype((np.record, NODE))
+    order = [NODE, record] if first == "plain" else [record, NODE]
+    kept_state._packed_dtype.cache_clear()
+    for dtype in order:
+        a = _nodes(0).view(dtype)
+        packed = kept_state.packed_records(a)
+        expected = a.astype(recfunctions.repack_fields(dtype, recurse=True))
+        assert packed.dtype.type is expected.dtype.type
+        assert pickle.dumps(packed.dtype) == pickle.dumps(expected.dtype)
+        assert packed.tobytes() == expected.tobytes()
