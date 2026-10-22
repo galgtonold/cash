@@ -63,6 +63,7 @@ def _session_hash(magics, name):
     return magics.tracking_state.current_session_hashes.get(name)
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_the_statement_takes_the_digest_its_call_took(magics, mock_shell):
     run_cash_cell(magics, "G = build()")
     assert PICKLED == [1], "the call's store and the statement each pickled the result"

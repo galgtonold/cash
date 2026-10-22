@@ -124,6 +124,7 @@ def _from_disk(cache_dir, key):
         fresh.shutdown()
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_an_echo_apart_from_the_output_takes_the_digests_pickle(tiers, mock_shell):
     magics, ram, disk, _cache_dir = tiers
     run_cash_cell(magics, ECHO_APART)
@@ -147,6 +148,7 @@ def test_an_echo_sharing_an_object_with_the_output_comes_back_sharing_it(tiers, 
     assert payload[ECHO_FIELD] is payload["variables"]["fit"].names
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_a_second_output_apart_from_the_first_takes_the_digests_pickle(tiers, mock_shell):
     magics, ram, disk, _cache_dir = tiers
     run_cash_cell(magics, "fit, rows = (Fit(), {'r': [1, 2]}) if time.sleep(0.3) is None else (None, None)")
@@ -180,6 +182,7 @@ def test_a_change_after_the_store_is_not_in_the_entry(tiers, mock_shell):
     assert payload["variables"]["fit"].names == ["a", "b"] and payload[ECHO_FIELD] == ["a", "b"]
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_a_change_check_past_its_budget_leaves_the_pickle_to_the_store(tiers, mock_shell, monkeypatch):
     from cash.notebook.statement import processor
 
@@ -199,6 +202,7 @@ def test_a_change_check_past_its_budget_leaves_the_pickle_to_the_store(tiers, mo
     assert np.array_equal(payload["variables"]["fit"].coef, mock_shell.user_ns["fit"].coef)
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_a_change_check_past_its_budget_makes_no_pickle_a_store_refuses(tiers, mock_shell, monkeypatch):
     from cash.notebook.statement import processor
 
@@ -234,6 +238,7 @@ def test_a_change_check_past_its_budget_makes_no_pickle_a_store_refuses(tiers, m
     assert made == [], "pickled on for a store that did not take it"
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_a_pickle_left_to_the_store_is_made_within_its_time(tiers, cash_instance, mock_shell, monkeypatch):
     from cash.notebook.statement import processor
 
@@ -260,6 +265,7 @@ def _apart(value, others, past_budget=None):
         return [stored_pickle.apart(value, other) for other in others]
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_only_objects_that_restore_alike_apart_may_be_shared():
     fit = Fit()
     names = list(fit.names)  # the same strings: alike apart
@@ -272,12 +278,14 @@ def test_only_objects_that_restore_alike_apart_may_be_shared():
     ]
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_an_other_too_big_to_check_is_not_apart(monkeypatch):
     monkeypatch.setattr(stored_pickle, "_APART_MAX_BYTES", 1000)
     fit = Fit()
     assert _apart(fit, [[str(i) for i in range(1000)]]) == [False]
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_a_budgeted_digest_leaves_its_pickle_to_the_store_within_its_bytes(stalled_clock):
     for past, made in ((None, None), (1000, False), (1 << 30, True)):
         fit = TickingFit()
@@ -297,6 +305,7 @@ def test_a_budgeted_digest_leaves_its_pickle_to_the_store_within_its_bytes(stall
                 assert stored_pickle.kept(fit).digest is None
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_a_pickle_left_to_the_store_is_nested_only_apart_from_the_rest(stalled_clock):
     fit = TickingFit()
     for others, nests in (([["x"]], True), ([fit.names], False)):

@@ -76,6 +76,7 @@ def _entry(ram, name):
     return None, False
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_a_stored_output_is_pickled_once(tiers, mock_shell):
     magics, ram, disk = tiers
     run_cash_cell(magics, BUILD)

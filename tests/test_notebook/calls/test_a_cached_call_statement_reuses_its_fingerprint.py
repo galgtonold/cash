@@ -76,6 +76,7 @@ def _frame(cash_magics, lib):
     run_cash_cell(cash_magics, "raw = pl.DataFrame({'x': list(range(50_000))})")
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_a_miss_reads_the_argument_twice(cash_magics, lib, reads_of_raw):
     _frame(cash_magics, lib)
     reads_of_raw.clear()
@@ -84,6 +85,7 @@ def test_a_miss_reads_the_argument_twice(cash_magics, lib, reads_of_raw):
     assert cash_magics.shell.user_ns["df"]["y"][5] == 15
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_a_hit_reads_the_argument_once(cash_magics, lib, reads_of_raw):
     _frame(cash_magics, lib)
     run_cash_cell(cash_magics, f"df = {lib}.clean(raw, 3)")
