@@ -736,14 +736,17 @@ def _names_clear(fn: Any) -> bool:
 
 def _text_names_counters(code: str, ns: Mapping[str, Any] | None = None) -> bool:
     """The statement's *code* names ``cache_clear`` or ``cache_info``: as an
-    attribute or a name; as a string that is one, or that a name is built
-    from (``getattr(f, "cache_" + "info")``, an f-string), or that
-    ``getattr``, ``methodcaller`` or ``attrgetter`` is handed; or by a
+    attribute or a name; as a string that is one, wherever it stands
+    (``f.__getattribute__('cache_info')``, ``vars(type(f))['cache_info']``,
+    ``reduce(getattr, ['cache_info'], f)``) but as a key of a dict display;
+    as a string a name is built from (``getattr(f, "cache_" + "info")``, an
+    f-string whose first part is a word), or that ``methodcaller`` or
+    ``attrgetter`` is handed; as a name it reads that *ns* binds to one
+    (``info(f, n)``, ``n = 'cache_info'`` in another statement); or by a
     ``getattr`` of a memo of *ns* whose name is not written out
-    (``getattr(f, n)``, *n* bound in another statement). Not a name or a
-    string that only contains one (``cache_info_rows``, ``'cache_dir/x.csv'``,
-    a dict key ``'cache_info'``). Text that does not parse is taken by its
-    letters."""
+    (``getattr(f, n)``). Not a name or a string that only contains one
+    (``cache_info_rows``, ``'cache_dir/x.csv'``). Text that does not parse
+    is taken by its letters."""
     import ast
 
     try:
@@ -764,6 +767,8 @@ def _text_names_counters(code: str, ns: Mapping[str, Any] | None = None) -> bool
             text.startswith("cache") or text.endswith(("info", "clear")) or text in _COUNTER_NAMES
         )
 
+    # A key of a dict display is a label (``{'cache_info': ...}``), not a name.
+    keys = {id(key) for node in ast.walk(tree) if isinstance(node, ast.Dict) for key in node.keys if key is not None}
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute):
             if node.attr in _COUNTER_NAMES:
@@ -771,6 +776,12 @@ def _text_names_counters(code: str, ns: Mapping[str, Any] | None = None) -> bool
         elif isinstance(node, ast.Name):
             if node.id in _COUNTER_NAMES:
                 return True
+            if ns is not None and isinstance(node.ctx, ast.Load):
+                held = ns.get(node.id)
+                if isinstance(held, str) and held in _COUNTER_NAMES:
+                    return True
+        elif names_one(node) and id(node) not in keys:
+            return True
         elif isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
             if builds_one(node.left) or builds_one(node.right):
                 return True
