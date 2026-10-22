@@ -942,6 +942,10 @@ class StatementProcessor:
                 # Its key does not name what a string found: only a trace
                 # checked unchanged serves it.
                 cached_data = None
+            elif cached_data and not _shadow.SHADOW.vouched(run.shadow):
+                # No trace to check it by, or the check failed: it runs, and
+                # stores one.
+                cached_data = None
         elif run.needs_trace:
             cached_data = None
         if cached_data and self._live_objects_shared(run, metadata):

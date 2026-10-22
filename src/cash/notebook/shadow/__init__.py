@@ -34,6 +34,7 @@ import collections
 import contextlib
 import contextvars
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -46,6 +47,8 @@ from typing import Any
 from cash._user_attrs import attribute_or, instance_of
 
 __all__ = ["SHADOW", "Shadow", "disable", "enable", "requested", "status"]
+
+logger = logging.getLogger(__name__)
 
 _ENV = "CASH_SHADOW"
 _LOG_ENV = "CASH_SHADOW_LOG"
@@ -170,8 +173,13 @@ class Shadow:
             # taken for "no local folder": every notebook's traces went to
             # one folder under the system temp dir, and the traces kept per
             # statement were counted across them.
-            local = getattr(backend, "local_dir", None)
-            base = local() if callable(local) else local
+            try:
+                local = getattr(backend, "local_dir", None)
+                base = local() if callable(local) else local
+            except Exception as exc:  # noqa: BLE001 - said, and the temp dir used
+                self.counts["errors"] += 1
+                logger.warning("cash: traces kept in the temp dir: the cache's local_dir failed: %r", exc)
+                base = None
             if not base:
                 base = os.environ.get("CASH_CACHE_DIR") or tempfile.gettempdir()
             self.dir = os.path.join(base, "shadow")
@@ -201,6 +209,8 @@ class Shadow:
                     t["items"] = tuple(_interned(tuple(i), self._items) for i in t["items"])
                     self._keep(t)
         except OSError:
+            # Its entries have no trace now: they run again (`vouched`).
+            self.counts["load_failed"] += 1
             return
         self.counts["traces_loaded"] = len(self.traces)
         if lines > _COMPACT_AT and lines > 4 * len(self.traces):
@@ -711,7 +721,11 @@ class Shadow:
         """Before a statement is served or runs: verify its traces."""
         try:
             self.attach(proc.shell.user_ns, proc.tracking_state.variable_lineage, proc.cash_instance.backend)
-        except Exception:  # noqa: BLE001 - shadow never breaks a statement
+        except Exception as exc:  # noqa: BLE001 - shadow never breaks a statement
+            # No check made: ``run.shadow`` stays None, not vouched.
+            self.counts["errors"] += 1
+            self._write("log", {"event": "shadow_error", "where": "attach", "error": repr(exc)})
+            logger.debug("cash: the trace check could not start: %r", exc)
             return
         if run.skip_cache or not run.cache_key:
             return
@@ -725,6 +739,20 @@ class Shadow:
         """Did the check before a lookup (`check`) find the entry's trace,
         usable, with nothing it names changed?"""
         return pending is not None and pending.get("hit") == "agree"
+
+    def vouched(self, pending: dict | None) -> bool:
+        """May the entry a lookup found be served, by its trace? Only when
+        the check ran and found the trace with nothing it names changed. An
+        entry with no trace (stored before traces were kept where they are
+        read now, or its trace lost or not written) or a check that failed is
+        not vouched for: it runs again, and its run stores a trace. A trace
+        that cannot give a verdict (`UNUSABLE`) leaves it to the key, as
+        before: running again would only record another such trace. With no
+        monitoring tool to record traces at all, the key alone decides, as
+        with traces off."""
+        if not self.ok:
+            return True
+        return pending is not None and pending.get("hit") in ("agree", "unusable")
 
     @staticmethod
     def stale(pending: dict | None) -> bool:
@@ -788,7 +816,7 @@ class Shadow:
         if noted is None:
             return hit
         pending = self.check("call", key, noted[0], hit, site.source, peek)
-        if hit and self.stale(pending):
+        if hit and not self.vouched(pending):
             self.resolve(pending, False)
             return False
         self.resolve(pending, hit)
