@@ -266,9 +266,9 @@ def _cell_paths(outputs: Mapping[str, Any], held: set[int]) -> dict[int, tuple[s
     or at their top level) whose object's id is in *held*, by address
     (`frame_cells.addresses`): ``("cell", (column, row))`` from the frame,
     column -1 for a series."""
-    from .frame_cells import _frames_in, _object_columns, _pandas, addresses
+    from .frame_cells import addresses, frames_with, loaded_pandas, object_columns
 
-    pd = _pandas()
+    pd = loaded_pandas()
     np = __import__("sys").modules.get("numpy")
     if pd is None or np is None or not held:
         return {}
@@ -276,9 +276,9 @@ def _cell_paths(outputs: Mapping[str, Any], held: set[int]) -> dict[int, tuple[s
     found: dict[int, tuple[str, Path]] = {}
     for name, value in outputs.items():
         kind = "key" if type(value) is dict else "item"
-        for path, frame in _frames_in(value, pd):
+        for path, frame in frames_with(value, pd):
             steps = tuple((kind, step) for step in path)
-            for position, array in _object_columns(frame, pd):
+            for position, array in object_columns(frame, pd):
                 own = addresses(array)
                 for row in np.flatnonzero(np.isin(own, wanted)).tolist():
                     found.setdefault(int(own[row]), (name, (*steps, ("cell", (position, row)))))
@@ -291,16 +291,16 @@ def _category_steps(value: Any) -> list[tuple[Step, Any]]:
     for a series). A restore copies them apart from a list holding them
     too (``ks``, ``df['ck'] = pd.Categorical([ks[i % 3] ...])``): the
     holder takes the restored ones back at its own places."""
-    from .frame_cells import _categorical_columns, _pandas
-    from .shared_objects import _object_categories
+    from .frame_cells import categorical_columns, loaded_pandas
+    from .shared_objects import object_categories
 
-    pd = _pandas()
+    pd = loaded_pandas()
     if pd is None or not isinstance(value, (pd.DataFrame, pd.Series)):
         return []
     if isinstance(value, pd.Series):
-        columns = [(-1, categories) for categories in _object_categories(value)]
+        columns = [(-1, categories) for categories in object_categories(value)]
     else:
-        columns = _categorical_columns(value, pd)
+        columns = categorical_columns(value, pd)
     steps: list[tuple[Step, Any]] = []
     for position, categories in columns:
         steps += [(("cat", (position, i)), item) for i, item in enumerate(categories.tolist())]
@@ -310,15 +310,15 @@ def _category_steps(value: Any) -> list[tuple[Step, Any]]:
 def _get(obj: Any, step: Step) -> Any:
     kind, label = step
     if kind == "cell":
-        from .frame_cells import _column
+        from .frame_cells import column_at
 
         position, row = label
-        return _column(obj, position)[row]
+        return column_at(obj, position)[row]
     if kind == "cat":
-        from .frame_cells import _dtype_at
+        from .frame_cells import dtype_at
 
         position, index = label
-        return _dtype_at(obj, position).categories[index]
+        return dtype_at(obj, position).categories[index]
     return getattr(obj, label) if kind == "attr" else obj[label]
 
 
@@ -329,10 +329,10 @@ def shares_categories(holder: Any, outputs: Mapping[str, Any]) -> bool:
     the copy's memo of what it already copied. A frame that is an output's
     own (``w = mk(df)``, ``df`` and ``w`` one frame) comes back as one."""
     from .frame_cells import frames_in
-    from .shared_objects import _object_categories
+    from .shared_objects import object_categories
 
     def ids(frames: list[Any]) -> set[int]:
-        return {id(item) for frame in frames for array in _object_categories(frame) for item in array.tolist()}
+        return {id(item) for frame in frames for array in object_categories(frame) for item in array.tolist()}
 
     theirs = [frame for _path, frame in frames_in(tuple(outputs.values()))]
     same = {id(frame) for frame in theirs}
@@ -375,14 +375,14 @@ def frame_cells_patches(holders: Mapping[str, Any], outputs: Mapping[str, Any]) 
     of reading half a million addresses per view. Whether a holder holds
     the outputs' objects otherwise is asked of each as before
     (`holds_part_of`)."""
-    from .frame_cells import _object_columns as _frame_columns
     from .frame_cells import addresses, cell_links, frames_in, is_frame, put_back_dtypes
+    from .frame_cells import object_columns as frame_object_columns
     from .shared_objects import (
         VALUE_TYPES,
-        _identities,
-        _object_columns,
         frames_together,
+        identities,
         library_value_types,
+        object_columns_of,
     )
 
     np = __import__("sys").modules.get("numpy")
@@ -398,7 +398,7 @@ def frame_cells_patches(holders: Mapping[str, Any], outputs: Mapping[str, Any]) 
     # The object columns of the outputs' frames, and those a holder takes
     # back whole (a link of every row, in order): ``df`` does for ``v =
     # df.iloc[3:]``.
-    needed = {(tuple(path), position) for path, frame in out_frames for position, _ in _frame_columns(frame, pd)}
+    needed = {(tuple(path), position) for path, frame in out_frames for position, _ in frame_object_columns(frame, pd)}
     whole: set[tuple] = set()
     # The addresses of each output frame's cells no holder takes back yet,
     # read only when some column is not taken back whole.
@@ -415,7 +415,7 @@ def frame_cells_patches(holders: Mapping[str, Any], outputs: Mapping[str, Any]) 
                     np.unique(np.concatenate([addresses(array) for array in arrays])), linked.get(id(frame), ()), np
                 )
                 for _path, frame in out_frames
-                if (arrays := _object_columns(frame))
+                if (arrays := object_columns_of(frame))
             }
             if all(not len(rest) for rest in left.values()):
                 found[name] = []
@@ -442,12 +442,12 @@ def frame_cells_patches(holders: Mapping[str, Any], outputs: Mapping[str, Any]) 
     frames = itertools.chain((frame for _path, frame in out_frames), (framed[name] for name in found))
     patches: dict[str, FrameCellsPatch] = {}
     with frames_together(frames, joined):
-        own = set(_identities(tuple(outputs.values()), value_types, True, put_back))
+        own = set(identities(tuple(outputs.values()), value_types, True, put_back))
         for name in found:
             check_walk_budget()
             # Nor the holder's categoricals with a dtype the outputs take
             # back: its objects are the ones the restored outputs hold.
-            if own and any(key in own for key in _identities(framed[name], value_types, True, put_back)):
+            if own and any(key in own for key in identities(framed[name], value_types, True, put_back)):
                 continue
             patches[name] = FrameCellsPatch((), tuple(found[name]))
     return patches
@@ -465,7 +465,7 @@ def put_back_objects(outputs: Mapping[str, Any], patches: Iterable[FrameCellsPat
     *patches* take back from a holder frame on a hit (``dtype_of``): they
     come back as that frame's own, which ``ks`` holding them holds too, so
     nothing need put them back into it."""
-    from .frame_cells import _dtype_at, frames_in
+    from .frame_cells import dtype_at, frames_in
 
     links = [link for patch in patches for link in patch.links if link.get("dtype_of")]
     if not links:
@@ -475,7 +475,7 @@ def put_back_objects(outputs: Mapping[str, Any], patches: Iterable[FrameCellsPat
     for link in links:
         frame = framed.get(tuple(link["result"]))
         if frame is not None:
-            found.update(map(id, _dtype_at(frame, link["column"]).categories.to_numpy(copy=False).tolist()))
+            found.update(map(id, dtype_at(frame, link["column"]).categories.to_numpy(copy=False).tolist()))
     return found
 
 

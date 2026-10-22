@@ -44,7 +44,7 @@ _MAX_LINKED = 4_000_000
 RELINK_FAILED = object()
 
 
-def _pandas() -> Any:
+def loaded_pandas() -> Any:
     return sys.modules.get("pandas")
 
 
@@ -56,10 +56,10 @@ def is_object_dtype(dtype: Any) -> bool:
     return isinstance(dtype, sys.modules["numpy"].dtype) and dtype.kind == "O"
 
 
-def _object_columns(value: Any, pd: Any) -> list[tuple[int, Any]]:
+def object_columns(value: Any, pd: Any) -> list[tuple[int, Any]]:
     """``(position, array)`` of *value*'s object columns that hold more than
     values pandas tells apart (`infer_dtype`); position -1 for a series."""
-    from cash.notebook.shared_objects import _VALUE_COLUMNS
+    from cash.notebook.shared_objects import VALUE_COLUMNS
 
     if isinstance(value, pd.Series):
         columns = [(-1, value)]
@@ -70,12 +70,12 @@ def _object_columns(value: Any, pd: Any) -> list[tuple[int, Any]]:
         if not is_object_dtype(column.dtype):
             continue
         array = column.to_numpy(copy=False)
-        if pd.api.types.infer_dtype(array, skipna=True) not in _VALUE_COLUMNS:
+        if pd.api.types.infer_dtype(array, skipna=True) not in VALUE_COLUMNS:
             found.append((position, array))
     return found
 
 
-def _frames_in(value: Any, pd: Any) -> list[tuple[list, Any]]:
+def frames_with(value: Any, pd: Any) -> list[tuple[list, Any]]:
     """``(path, frame)`` for *value* when it is a frame or series, or for
     each one in it at its top level (a tuple's, a list's or a dict's)."""
     kinds = (pd.Series, pd.DataFrame)
@@ -89,14 +89,14 @@ def _frames_in(value: Any, pd: Any) -> list[tuple[list, Any]]:
 
 
 def frames_in(value: Any) -> list[tuple[list, Any]]:
-    """`_frames_in`, or none without pandas."""
-    pd = _pandas()
-    return _frames_in(value, pd) if pd is not None else []
+    """`frames_with`, or none without pandas."""
+    pd = loaded_pandas()
+    return frames_with(value, pd) if pd is not None else []
 
 
 def is_frame(value: Any) -> bool:
     """Whether *value* is a pandas frame or series."""
-    pd = _pandas()
+    pd = loaded_pandas()
     return pd is not None and isinstance(value, (pd.Series, pd.DataFrame))
 
 
@@ -121,13 +121,13 @@ def addresses(array: Any) -> Any:
 def object_columns_on_both_sides(result: Any, args: tuple, kwargs: dict) -> bool:
     """Whether a frame *result* is or holds at its top level and a frame
     among the arguments both have object columns holding more than values."""
-    pd = _pandas()
+    pd = loaded_pandas()
     if pd is None:
         return False
-    if not any(_object_columns(frame, pd) for _path, frame in _frames_in(result, pd)):
+    if not any(object_columns(frame, pd) for _path, frame in frames_with(result, pd)):
         return False
     return any(
-        isinstance(value, (pd.Series, pd.DataFrame)) and _object_columns(value, pd)
+        isinstance(value, (pd.Series, pd.DataFrame)) and object_columns(value, pd)
         for value in (*args, *kwargs.values())
     )
 
@@ -137,11 +137,11 @@ def cell_links(result: Any, args: tuple, kwargs: dict) -> tuple[list[dict], dict
     sit in each, and those cells' addresses by result frame, sorted; None
     when there are none, or too many to record. Plain builtins, as
     metadata must be."""
-    pd = _pandas()
+    pd = loaded_pandas()
     if pd is None:
         return None
     np = sys.modules["numpy"]
-    frames = _frames_in(result, pd)
+    frames = frames_with(result, pd)
     if not frames:
         return None
     sources = [(["a", i], value) for i, value in enumerate(args)]
@@ -150,7 +150,7 @@ def cell_links(result: Any, args: tuple, kwargs: dict) -> tuple[list[dict], dict
     for place, value in sources:
         if not isinstance(value, (pd.Series, pd.DataFrame)):
             continue
-        for position, array in _object_columns(value, pd):
+        for position, array in object_columns(value, pd):
             labels.append((place, position, len(array)))
             ids.append(addresses(array))
     every = np.concatenate(ids) if ids else np.empty(0, dtype=np.int64)
@@ -161,7 +161,7 @@ def cell_links(result: Any, args: tuple, kwargs: dict) -> tuple[list[dict], dict
     linked: dict[int, list[Any]] = {}
     total = 0
     for path, frame in frames:
-        for position, array in _object_columns(frame, pd) if ids else ():
+        for position, array in object_columns(frame, pd) if ids else ():
             own = addresses(array)
             at = np.minimum(np.searchsorted(ordered, own), len(ordered) - 1)
             rows = np.flatnonzero(ordered[at] == own)
@@ -192,7 +192,7 @@ def cell_links(result: Any, args: tuple, kwargs: dict) -> tuple[list[dict], dict
                     }
                 )
             linked.setdefault(id(frame), []).append(own[rows])
-        for position, categories in _categorical_columns(frame, pd):
+        for position, categories in categorical_columns(frame, pd):
             # A categorical's objects are its categories, which a filter
             # keeps as they are: the very dtype the argument's column has.
             source = _same_dtype(frame.dtypes.iloc[position], sources, pd)
@@ -208,11 +208,11 @@ def cell_links(result: Any, args: tuple, kwargs: dict) -> tuple[list[dict], dict
     return links, {key: np.unique(np.concatenate(parts)) for key, parts in linked.items()}
 
 
-def _categorical_columns(value: Any, pd: Any) -> list[tuple[int, Any]]:
+def categorical_columns(value: Any, pd: Any) -> list[tuple[int, Any]]:
     """``(position, categories)`` of a frame *value*'s categorical columns
     whose categories, an object array, hold more than values pandas tells
     apart; none for a series."""
-    from cash.notebook.shared_objects import _VALUE_COLUMNS
+    from cash.notebook.shared_objects import VALUE_COLUMNS
 
     if not isinstance(value, pd.DataFrame):
         return []
@@ -221,10 +221,7 @@ def _categorical_columns(value: Any, pd: Any) -> list[tuple[int, Any]]:
         if not isinstance(dtype, pd.CategoricalDtype):
             continue
         categories = dtype.categories.to_numpy(copy=False)
-        if (
-            is_object_dtype(categories.dtype)
-            and pd.api.types.infer_dtype(categories, skipna=True) not in _VALUE_COLUMNS
-        ):
+        if is_object_dtype(categories.dtype) and pd.api.types.infer_dtype(categories, skipna=True) not in VALUE_COLUMNS:
             found.append((position, categories))
     return found
 
@@ -263,7 +260,7 @@ def put_back_dtypes(value: Any, links: list[dict]) -> set[int]:
     argument's own again."""
     framed = {tuple(path): frame for path, frame in frames_in(value)}
     found = {
-        id(_dtype_at(framed[tuple(link["result"])], link["column"]))
+        id(dtype_at(framed[tuple(link["result"])], link["column"]))
         for link in links
         if link.get("dtype_of") and tuple(link["result"]) in framed
     }
@@ -271,7 +268,7 @@ def put_back_dtypes(value: Any, links: list[dict]) -> set[int]:
     return found
 
 
-def _dtype_at(frame: Any, position: int) -> Any:
+def dtype_at(frame: Any, position: int) -> Any:
     return frame.dtype if position == -1 else frame.dtypes.iloc[position]
 
 
@@ -281,7 +278,7 @@ def linked_cell_ids(links: tuple[list[dict], dict[int, Any]] | None) -> dict[int
     return links[1] if links else {}
 
 
-def _column(value: Any, position: int) -> Any:
+def column_at(value: Any, position: int) -> Any:
     """The array behind *value*'s column at *position* (-1: the series),
     or None when it is not an object column."""
     column = value if position == -1 else value.iloc[:, position]
@@ -333,7 +330,7 @@ def relink_cells(value: Any, args: tuple, kwargs: dict, links: list[dict] | None
     argument's own; `RELINK_FAILED` when one cannot be."""
     if not links:
         return value
-    pd = _pandas()
+    pd = loaded_pandas()
     if pd is None:
         return RELINK_FAILED
     np = sys.modules["numpy"]
@@ -348,8 +345,8 @@ def relink_cells(value: Any, args: tuple, kwargs: dict, links: list[dict] | None
                 if not _relink_dtype(frame, link["column"], source, link["source_column"], pd):
                     return RELINK_FAILED
                 continue
-            target = _column(frame, link["column"])
-            cells = _column(source, link["source_column"])
+            target = column_at(frame, link["column"])
+            cells = column_at(source, link["source_column"])
             if target is None or cells is None:
                 return RELINK_FAILED
             rows = _read_rows(link["rows"], len(target), np)
@@ -366,7 +363,7 @@ def relink_cells(value: Any, args: tuple, kwargs: dict, links: list[dict] | None
                 frame.iloc[:] = column
             else:
                 frame.isetitem(link["column"], column)
-            if len(rows) and _column(frame, link["column"])[rows[0]] is not cells[source_rows[0]]:
+            if len(rows) and column_at(frame, link["column"])[rows[0]] is not cells[source_rows[0]]:
                 return RELINK_FAILED
     except (KeyError, IndexError, TypeError, ValueError):
         return RELINK_FAILED

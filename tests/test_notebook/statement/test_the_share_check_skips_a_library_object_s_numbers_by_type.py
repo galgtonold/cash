@@ -33,8 +33,8 @@ def _tar() -> tarfile.TarFile:
 def test_a_tarfile_s_members_are_read_without_a_call_per_number(monkeypatch):
     tar = _tar()
     asked = []
-    real = shared_objects._read_down
-    monkeypatch.setattr(shared_objects, "_read_down", lambda obj, types: asked.append(type(obj)) or real(obj, types))
+    real = shared_objects.reads_down
+    monkeypatch.setattr(shared_objects, "reads_down", lambda obj, types: asked.append(type(obj)) or real(obj, types))
     inside, owners = shared_objects._held_from_outside({id(tar): tar}, {id(tar): "tar"}, shared_objects.VALUE_TYPES)
     assert inside == {} and owners == set()
     # A member and its header dict each; nothing they hold that is a number,

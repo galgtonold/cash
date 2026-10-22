@@ -40,13 +40,13 @@ from cash import _plain_data
 from .shared_objects import (
     EXACT_CONTAINER_TYPES,
     VALUE_TYPES,
-    _read_down,
     check_walk_budget,
     children_of,
     exact_value_types,
     is_value,
     library_value_types,
     object_free_leaves,
+    reads_down,
 )
 
 logger = logging.getLogger(__name__)
@@ -378,7 +378,7 @@ def _borrowers_in(values: Iterable[Any]) -> list[tuple[Any, str]]:
         if type(obj) in (list, tuple) and _rows_of_values(obj, exact):
             continue
         children = children_of(obj)
-        if children is None and _read_down(obj, value_types):
+        if children is None and reads_down(obj, value_types):
             children = gc.get_referents(obj)
         if not children or exact.issuperset(map(type, children)):
             continue
