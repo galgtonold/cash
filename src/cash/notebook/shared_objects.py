@@ -1096,6 +1096,11 @@ def object_categories(value: Any, skip: Container[int] = ()) -> list[Any]:
 #: cells `_object_cells` lists for it.
 _TOGETHER: dict[int, list[Any]] | None = None
 
+#: For each list of `_TOGETHER`, the arrays and the rows of each it was
+#: read from: a read within it empties the lists of the frames it reads
+#: again and fills them back from these after.
+_LISTED_FROM: dict[int, list[tuple[Any, Any]]] | None = None
+
 
 @contextlib.contextmanager
 def frames_together(values: Iterable[Any], linked: Mapping[int, Any] | None = None) -> Iterator[None]:
@@ -1111,7 +1116,7 @@ def frames_together(values: Iterable[Any], linked: Mapping[int, Any] | None = No
     back as another frame's own (`frame_cells`), not listed for it even
     when they hold more than values; one held by anything else too still
     is."""
-    global _TOGETHER
+    global _TOGETHER, _LISTED_FROM
     frames = [value for value in values if object_columns_of(value)]
     if len(frames) < 2 or (_TOGETHER is not None and not linked and all(id(frame) in _TOGETHER for frame in frames)):
         # Too few to share, or read together already (`outputs_with_frames`
@@ -1119,6 +1124,35 @@ def frames_together(values: Iterable[Any], linked: Mapping[int, Any] | None = No
         frames = None
         yield
         return
+    saved, saved_from = _TOGETHER, _LISTED_FROM
+    # The lists the read around this one keeps for the frames read again
+    # here, emptied while it runs: each holds its cells once more, which no
+    # count accounts for. ``mg = df.merge(other)``, read for ``df``'s cells
+    # without ``other``, lists ``other``'s too; read again with ``other``,
+    # they looked held by something else, and so did every result sharing
+    # ``df``'s cells after it.
+    emptied = [id(frame) for frame in frames if saved and saved.get(id(frame))]
+    for key in emptied:
+        saved[key].clear()
+    try:
+        _TOGETHER, _LISTED_FROM = _read_together(frames, linked, saved, saved_from)
+        # This frame's own references, out of the counts the walks inside take.
+        frames = None
+        yield
+    finally:
+        _TOGETHER, _LISTED_FROM = saved, saved_from
+        for key in emptied:
+            saved[key].extend(cell for array, keep in saved_from[key] for cell in array[keep].tolist())
+
+
+def _read_together(
+    frames: list[Any],
+    linked: Mapping[int, Any] | None,
+    saved: dict[int, list[Any]] | None,
+    saved_from: dict[int, list[tuple[Any, Any]]] | None,
+) -> tuple[dict[int, list[Any]], dict[int, list[tuple[Any, Any]]]]:
+    """`frames_together`'s lists for *frames*, over *saved*, the read around
+    it, and the arrays and rows each was read from."""
     columns = {id(frame): object_columns_of(frame) or [] for frame in frames}
     arrays = [array for arrays in columns.values() for array in arrays]
     beyond = _held_beyond_copies(arrays)
@@ -1133,14 +1167,15 @@ def frames_together(values: Iterable[Any], linked: Mapping[int, Any] | None = No
     else:
         kept_apart = {}
     del everything, arrays
-    saved = _TOGETHER
     together = dict(saved or {})
+    together_from = dict(saved_from or {})
     np = sys.modules["numpy"]
     # By address: a loop over each slot of each frame's columns took 0.5 s
     # for a statement over fifty frames of a hundred thousand rows.
     wanted = np.sort(np.fromiter(beyond, dtype=np.int64, count=len(beyond))) if beyond else None
     for frame in frames:
         listed: list[Any] = []
+        read: list[tuple[Any, Any]] = []
         if wanted is not None:
             mine = kept_apart.get(id(frame), ())
             apart = np.sort(np.fromiter(mine, dtype=np.int64, count=len(mine))) if mine else None
@@ -1151,14 +1186,10 @@ def frames_together(values: Iterable[Any], linked: Mapping[int, Any] | None = No
                     keep &= ~in_sorted(slots, apart)
                 if keep.any():
                     listed += array[keep].tolist()
+                    read.append((array, keep))
         together[id(frame)] = listed
-    # This frame's own references, out of the counts the walks inside take.
-    frames = frame = columns = listed = None
-    _TOGETHER = together
-    try:
-        yield
-    finally:
-        _TOGETHER = saved
+        together_from[id(frame)] = read
+    return together, together_from
 
 
 @contextlib.contextmanager
@@ -1246,9 +1277,17 @@ def _held_beyond_copies(arrays: list[Any]) -> set[int] | None:
     beyond: set[int] = set()
     for base in bases:
         slots = base.slots(np)
+        rows = np.arange(len(slots))
+        found, first, inverse = np.unique(addresses(base.array), return_index=True, return_inverse=True)
+        if len(found) < len(rows):
+            # A cell in several rows (``df.merge(other)`` repeats each of
+            # ``other``'s): held by the slots of all of them, read once.
+            slots = np.bincount(inverse.reshape(-1), weights=slots).astype(np.int64)
+            rows = first
+        del found, first, inverse
         for count in sorted_unique(slots).tolist():
-            cells = base.array[slots == count].tolist()
-            # Held by its *count* slots and by *cells*, once per row.
+            cells = base.array[rows[slots == count]].tolist()
+            # Held by its *count* slots and by *cells*, once each.
             beyond.update(id(cell) for cell in _cells_held_elsewhere(cells, count + 1, values))
             cells = None
     return beyond
@@ -1902,12 +1941,17 @@ def _share_group(
     tried: dict[int, str | None] = {}
     rounds = anchor_rounds = 0
     framed = _frames_sharing_cells(group, user_ns, foreign)
-    if framed:
+    while framed and rounds < _MAX_ROUNDS:
         # Found by address, not one cell at a time up its referrers: half a
         # million cells ``df2 = df[mask]`` shares with ``df`` took seconds.
+        # And the frames sharing cells with those: ``mg = df.merge(other)``
+        # joined for ``df``'s cells holds ``other``'s too.
         links.append((set(group), framed))
         joined |= framed
         group.update((name, user_ns[name]) for name in framed)
+        framed = _frames_sharing_cells(group, user_ns, foreign)
+        rounds += 1
+    rounds = 0
     while True:
         leaves.met.clear()
         with frames_together(group.values()):

@@ -122,3 +122,16 @@ def test_frames_on_the_very_memory_of_another_are_its_slots_read_once(seed):
     assert once is not None
     assert once == _every_slot(arrays)
     assert {id(cell) for cell in kept} <= once
+
+
+def test_a_cell_repeated_in_many_rows_is_read_with_all_their_slots():
+    """``df.merge(other)`` holds each of ``other``'s cells in many rows: read
+    once with each row's slots alone allowed, every one of them was listed."""
+    other = np.empty(7, dtype=object)
+    other[:] = [{"g": g} for g in range(7)]
+    merged = np.empty(70, dtype=object)
+    merged[:] = [other[i % 7] for i in range(70)]
+    kept = _copy(merged[:30])
+    assert shared_objects._held_beyond_copies([merged, kept, other]) == _every_slot([merged, kept, other]) == set()
+    held = other[2]
+    assert shared_objects._held_beyond_copies([merged, kept, other]) == {id(held)}
