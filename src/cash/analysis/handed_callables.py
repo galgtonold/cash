@@ -47,7 +47,7 @@ import sys
 import types
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from itertools import chain, compress, islice, repeat
+from itertools import chain, compress, repeat
 from typing import Any, NamedTuple
 
 from .. import _plain_data
@@ -169,6 +169,8 @@ def _handed_callables(
     tree: ast.AST | None, namespace: Mapping[str, Any] | None, scope: CallScope = "all"
 ) -> HandedCallables:
     _CLASS_ATTRIBUTES.clear()
+    _ITEM_TYPES.clear()
+    _SPECIAL_CLASSES.clear()
     _CHANGES_ITS_OBJECT.clear()
     _SLOT_MEMBERS.clear()
     _THROUGH_ITS_OBJECT.clear()
@@ -254,6 +256,8 @@ def handed_callable_values(
     `iteration_bindings`), what a method of the user's reaches through its
     object (``bus.emit(3)``)."""
     _CLASS_ATTRIBUTES.clear()
+    _ITEM_TYPES.clear()
+    _SPECIAL_CLASSES.clear()
     _CHANGES_ITS_OBJECT.clear()
     _SLOT_MEMBERS.clear()
     _THROUGH_ITS_OBJECT.clear()
@@ -636,6 +640,8 @@ def handed_values(arg: ast.expr, namespace: Mapping[str, Any]) -> list[tuple[Any
     'name')`` and ``d.get('key')`` read like ``obj.name`` and ``d['key']``;
     and what a lambda among them calls (`_resolve_argument`)."""
     _CLASS_ATTRIBUTES.clear()
+    _ITEM_TYPES.clear()
+    _SPECIAL_CLASSES.clear()
     _CHANGES_ITS_OBJECT.clear()
     _SLOT_MEMBERS.clear()
     _THROUGH_ITS_OBJECT.clear()
@@ -1124,35 +1130,65 @@ def _static_value(node: ast.expr, namespace: Mapping[str, Any]) -> tuple[Any, st
     return value, node.id
 
 
-#: How many items of a builtin container `_item_types` looks at.
-ITEM_TYPES_AT = 1000
+#: How many items a builtin container may hold for `_item_types` to read
+#: their types: every one, at C speed (~13 ns an item, 1.3 ms for this
+#: many). Past it the statement cannot tell what an item read by an index
+#: not known here runs, and runs uncached with a warning.
+ITEM_TYPES_AT = 100_000
+
+#: ``id(container) -> (container, its item types or None)``: one statement
+#: reading ``lst[i]`` 20 times scans ``lst`` once. Cleared with
+#: `_CLASS_ATTRIBUTES`; the container is kept so its id is not reused.
+_ITEM_TYPES: dict[int, tuple[Any, frozenset[type] | None]] = {}
 
 
-def _item_types(container: Any) -> set[type]:
-    """The types of the items (a dict's values) of the builtin *container*,
-    of its first `ITEM_TYPES_AT`; none for any other value."""
+def _item_types(container: Any) -> frozenset[type] | None:
+    """The types of the items (a dict's values) of the builtin *container*;
+    none for any other value, and None past `ITEM_TYPES_AT` items."""
     if type(container) not in _OPENED:
-        return set()
-    if isinstance(container, _HELD_IN_DATA):
-        container = container.data
+        return frozenset()
+    known = _ITEM_TYPES.get(id(container))
+    if known is not None and known[0] is container:
+        return known[1]
+    held = container.data if isinstance(container, _HELD_IN_DATA) else container
     try:
-        items = container.values() if isinstance(container, dict) else container
-        return set(map(type, islice(items, ITEM_TYPES_AT)))
+        if len(held) > ITEM_TYPES_AT:
+            kinds = None
+        else:
+            kinds = frozenset(map(type, held.values() if isinstance(held, dict) else held))
     except Exception:  # noqa: BLE001 - changed while read
-        return set()
+        kinds = None
+    _ITEM_TYPES[id(container)] = (container, kinds)
+    return kinds
+
+
+def _index(index: ast.expr) -> Any:
+    """The value of a constant index, ``-1`` included; `_MISSING` for any
+    other."""
+    if isinstance(index, ast.Constant):
+        return index.value
+    if (
+        isinstance(index, ast.UnaryOp)
+        and isinstance(index.op, ast.USub)
+        and isinstance(index.operand, ast.Constant)
+        and type(index.operand.value) is int
+    ):
+        return -index.operand.value
+    return _MISSING
 
 
 def _item(container: Any, index: ast.expr) -> Any:
-    if not isinstance(index, ast.Constant) or type(container) not in _OPENED:
+    key = _index(index)
+    if key is _MISSING or type(container) not in _OPENED:
         return _MISSING
     if isinstance(container, _HELD_IN_DATA):
         container = container.data
     try:
         if isinstance(container, dict):
             # ``dict.get``: a defaultdict's factory does not run.
-            return dict.get(container, index.value, _MISSING)
+            return dict.get(container, key, _MISSING)
         if isinstance(container, (list, tuple, collections.deque)):
-            return container[index.value]
+            return container[key]
     except (IndexError, TypeError):
         pass
     return _MISSING
@@ -1186,6 +1222,8 @@ def _static_attribute(owner: Any, attr: str) -> Any:
             member = _MISSING
         if len(_CLASS_ATTRIBUTES) > 1024:
             _CLASS_ATTRIBUTES.clear()
+            _ITEM_TYPES.clear()
+            _SPECIAL_CLASSES.clear()
         _CLASS_ATTRIBUTES[key] = _OWN if in_own and member is own[attr] else member
         if member is None:
             return None
@@ -1518,6 +1556,10 @@ class _Found:
                 continue
             self._globals_seen.add(current.__code__)
             self._closed_over(current)
+            # ``return v + 1``, ``return d['k'] + 1``: from the code's names
+            # alone, so a lambda's too, whose source is not read.
+            for kind in self._global_object_types(current):
+                self._special_methods(kind)
             facts = _call_facts(current)
             if facts is None:
                 continue
@@ -1531,6 +1573,10 @@ class _Found:
                     member = _attribute(owner, attr)
                     if member is not _MISSING and callable(member):
                         self.add(member, root_of(name), False)
+                        # ``return kk.m(a)``: what ``m`` reads by a free name.
+                        method = getattr(member, "__func__", member)
+                        if isinstance(method, types.FunctionType) and self._users(method):
+                            pending.append(method)
                 else:
                     for callback in _logging_callbacks(owner, attr):
                         self.add(callback, None, False)
@@ -1538,8 +1584,19 @@ class _Found:
                 target = scope.get(name)
                 if isinstance(target, types.FunctionType) and self._users(target):
                     pending.append(target)
-            for kind in _global_object_types(current):
-                self._special_methods(kind)  # ``return v + 1``
+
+    def _global_object_types(self, fn: types.FunctionType) -> set[type]:
+        """`_global_object_types`, and a reason the statement runs uncached
+        for a container read there too big to look through."""
+        kinds, too_big = _global_object_types(fn)
+        if too_big and not _special_classes_exist(fn.__globals__):
+            too_big = []
+        for name in too_big:
+            self.unreadable.append(
+                f"{fn.__qualname__}() reads {name}, which holds more than {ITEM_TYPES_AT:,} items to look "
+                "through for objects of your classes"
+            )
+        return kinds
 
     def _closed_over(self, fn: types.FunctionType) -> None:
         """The callables of the user's the function *fn* closes over: a
@@ -1828,9 +1885,25 @@ class _Found:
                     continue
                 container = _static_value(node.value, namespace)
                 if container is not None:
-                    for kind in _item_types(container[0]):
-                        if _users_instance_type(kind):
-                            self._special_methods(kind)
+                    self._held_items(container[0], _short(node.value))
+
+    def _held_items(self, container: Any, label: str) -> None:
+        """The special methods of the user's classes whose objects the
+        builtin *container* holds, as an item read by an index not known
+        here may be any of them; too big to read (`ITEM_TYPES_AT`), a reason
+        the statement runs uncached."""
+        kinds = _item_types(container)
+        if kinds is None:
+            if not _special_classes_exist(self.namespace):
+                return
+            self.unreadable.append(
+                f"an item of {label} is read by an index cash cannot tell, and {label} holds more than "
+                f"{ITEM_TYPES_AT:,} items to look through for objects of your classes"
+            )
+            return
+        for kind in kinds:
+            if _users_instance_type(kind):
+                self._special_methods(kind)
 
     def _special_methods(self, cls: type) -> None:
         """The special methods (``__getitem__``, ``__exit__``, ...) and the
@@ -2157,6 +2230,8 @@ def hands_a_state_changing_callable(
     *objects*: count a method changing its own object (`_Found.objects`). The
     decorator passes False, as it watches the arguments for that itself."""
     _CLASS_ATTRIBUTES.clear()
+    _ITEM_TYPES.clear()
+    _SPECIAL_CLASSES.clear()
     _CHANGES_ITS_OBJECT.clear()
     _SLOT_MEMBERS.clear()
     _THROUGH_ITS_OBJECT.clear()
@@ -2244,6 +2319,11 @@ def _reaches_through_globals(fn: types.FunctionType) -> bool:
         if current.__code__ in seen:
             continue
         seen.add(current.__code__)
+        kinds, too_big = _global_object_types(current)
+        if (too_big and _special_classes_exist(current.__globals__)) or any(
+            _reaching_special_functions(kind) for kind in kinds
+        ):
+            return True
         facts = _call_facts(current)
         if facts is None:
             continue
@@ -2258,26 +2338,92 @@ def _reaches_through_globals(fn: types.FunctionType) -> bool:
             target = scope.get(name)
             if isinstance(target, types.FunctionType) and _is_users(target):
                 pending.append(target)
-        if any(_reaching_special_functions(kind) for kind in _global_object_types(current)):
-            return True
     return False
 
 
-def _global_object_types(fn: types.FunctionType) -> set[type]:
+def _global_object_types(fn: types.FunctionType) -> tuple[set[type], list[str]]:
     """The classes of the user's whose objects *fn* reads by a free name
-    (``v`` in ``return v + 1``): an operator on one runs its special
+    (``v`` in ``return v + 1``), or one step into a value it reads so: an
+    item of a builtin container (``d['k'] + 1``, ``lst[a] + 1``) and an
+    attribute of a class, a namespace or an object of the user's
+    (``C.x + 1``, ``ns.x + 1``): an operator on one runs its special
     methods. Any name the code names counts, attributes' too, which can only
-    add one."""
+    add one. And the names of the containers too big to look through
+    (`ITEM_TYPES_AT`)."""
     from cash.decorator.closure_fold import iter_code_scopes
 
     scope = fn.__globals__
-    kinds = set()
+    kinds: set[type] = set()
+    too_big: list[str] = []
     for code in iter_code_scopes(fn.__code__):
         for name in code.co_names:
             value = scope.get(name, _MISSING)
-            if value is not _MISSING and _users_instance_type(type(value)):
+            if value is _MISSING or isinstance(value, types.ModuleType):
+                continue
+            if type(value) in _OPENED:
+                held = _item_types(value)
+                if held is None:
+                    too_big.append(name)
+                    continue
+            elif _users_instance_type(type(value)):
                 kinds.add(type(value))
-    return kinds
+                held = _attribute_types(value)
+            elif isinstance(value, (type, types.SimpleNamespace)):
+                held = _attribute_types(value)
+            else:
+                continue
+            kinds.update(kind for kind in held if _users_instance_type(kind))
+    return kinds, too_big
+
+
+#: ``id(namespace) -> (namespace, answer)`` for `_special_classes_exist`;
+#: cleared with `_ITEM_TYPES`.
+_SPECIAL_CLASSES: dict[int, tuple[Any, bool]] = {}
+
+
+def _special_classes_exist(namespace: Mapping[str, Any]) -> bool:
+    """Whether a class of the user's has a special method that can change
+    something outside its objects (`_reaching_special_functions`): a class
+    the notebook binds, one at the top of a module of the user's, or one
+    derived from either. With none, an item of a container too big to look
+    through runs nothing that matters when an operator meets it."""
+    known = _SPECIAL_CLASSES.get(id(namespace))
+    if known is not None and known[0] is namespace:
+        return known[1]
+    from cash.notebook.held_functions import _users_module_classes
+
+    try:
+        bound = [v for v in list(namespace.values()) if isinstance(v, type) and _is_users_class(v)]
+    except Exception:  # noqa: BLE001 - changed while read
+        bound = []
+    pending = bound + _users_module_classes()
+    seen: set[type] = set()
+    answer = False
+    while pending and not answer:
+        cls = pending.pop()
+        if cls in seen:
+            continue
+        seen.add(cls)
+        answer = bool(_reaching_special_functions(cls))
+        try:
+            pending.extend(type.__subclasses__(cls))
+        except TypeError:
+            pass
+    _SPECIAL_CLASSES[id(namespace)] = (namespace, answer)
+    return answer
+
+
+def _attribute_types(owner: Any) -> set[type]:
+    """The types of what the class, namespace or object *owner* holds in
+    its own ``__dict__``; none when it has none."""
+    try:
+        own = vars(owner)
+    except TypeError:
+        return set()
+    try:
+        return set(map(type, list(own.values())))
+    except Exception:  # noqa: BLE001 - changed while read
+        return set()
 
 
 def _global_source(namespace: Mapping[str, Any], name: str) -> str | None:
@@ -2749,6 +2895,8 @@ def new_analysis_round() -> None:
     _ANSWERED_THIS_ROUND.clear()
     _STEPS_THIS_ROUND.clear()
     _CLASS_ATTRIBUTES.clear()
+    _ITEM_TYPES.clear()
+    _SPECIAL_CLASSES.clear()
     _CHANGES_ITS_OBJECT.clear()
     _SLOT_MEMBERS.clear()
     _THROUGH_ITS_OBJECT.clear()
@@ -2867,6 +3015,8 @@ def users_object_attributes(value: Any) -> list[Any]:
     of the user's class (its ``__dict__`` and ``__slots__``, read without
     running code); empty for anything else."""
     _CLASS_ATTRIBUTES.clear()
+    _ITEM_TYPES.clear()
+    _SPECIAL_CLASSES.clear()
     _CHANGES_ITS_OBJECT.clear()
     _SLOT_MEMBERS.clear()
     _THROUGH_ITS_OBJECT.clear()
