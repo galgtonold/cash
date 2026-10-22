@@ -77,6 +77,7 @@ def _counting(handoff, monkeypatch):
     return reads
 
 
+@pytest.mark.usefixtures("user_code_watched")
 @pytest.mark.parametrize("source, shared", [("f(x)", True), ("g(x)", False), (None, False)])
 def test_the_first_call_takes_the_statement_digest_only_by_its_source(monkeypatch, source, shared):
     x = np.arange(10.0)
@@ -158,6 +159,7 @@ def reads_of_x(monkeypatch, mock_shell):
     return seen
 
 
+@pytest.mark.usefixtures("user_code_watched")
 @pytest.mark.parametrize(
     "statement, reads",
     [
@@ -218,6 +220,7 @@ def _pickles_of(monkeypatch, mock_shell, name, label=lambda value: 1):
     return seen
 
 
+@pytest.mark.usefixtures("user_code_watched")
 @pytest.mark.parametrize("watched_before", [False, True])
 def test_a_graph_a_statement_changes_is_read_once_after_it(
     cash_magics, mock_shell, monkeypatch, unwatched, watched_before
@@ -254,6 +257,7 @@ def test_a_graph_a_statement_changes_is_read_once_after_it(
     assert state.current_session_hashes["G"] == compute_hash(mock_shell.user_ns["G"])
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_a_graph_read_by_a_call_inside_print_is_read_once_before_the_call(
     cash_magics, mock_shell, monkeypatch, unwatched
 ):

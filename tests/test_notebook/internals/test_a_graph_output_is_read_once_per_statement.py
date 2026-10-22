@@ -42,6 +42,7 @@ def _counting_pickles(monkeypatch, mock_shell, name):
     return seen
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_a_graph_output_is_pickled_once(cash_magics, mock_shell, monkeypatch):
     run_cash_cell(cash_magics, "import networkx as nx")
     run_cash_cell(cash_magics, "G = nx.gnm_random_graph(200, 800, seed=1)")

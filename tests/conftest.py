@@ -675,6 +675,18 @@ def sample_dataframe():
         pytest.skip("pandas not installed")
 
 
+@pytest.fixture
+def user_code_watched():
+    """Skip unless code of the user's ends a `value_hash.watch`: with no
+    ``sys.monitoring`` tool id (Python 3.10/3.11, or taken) nothing would
+    see a finalizer run between two checks, so no digest is handed from one
+    to the next (`value_hash._open`) and each check reads for itself."""
+    from cash.decorator import code_trace
+
+    if sys.version_info < (3, 12) or code_trace._recorder() is None:
+        pytest.skip("no sys.monitoring tool id: no digest is handed on")
+
+
 # ============================================================================
 # Pytest Configuration
 # ============================================================================

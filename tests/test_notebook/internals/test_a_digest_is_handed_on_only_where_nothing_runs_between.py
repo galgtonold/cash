@@ -57,6 +57,7 @@ def _counting(handoff, monkeypatch):
     return reads
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_the_first_call_takes_the_statement_digest(monkeypatch):
     x = np.arange(10.0)
     handoff = _watched()
@@ -96,6 +97,7 @@ def test_another_object_under_the_name_is_hashed(monkeypatch):
     assert reads == [rebound]
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_the_after_digest_reaches_the_statement_check(monkeypatch):
     x = np.arange(10.0)
     handoff = _watched()

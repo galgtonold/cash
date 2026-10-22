@@ -54,6 +54,7 @@ SETUP = (
 ARRAY = "x = np.arange(300_000.0)"
 
 
+@pytest.mark.usefixtures("user_code_watched")
 @pytest.mark.parametrize(
     "statement",
     ["y = normalize(x)", "y = scaled(x, 3.0)", "y = scaled(x, k=3.0)"],
@@ -88,6 +89,7 @@ def test_a_frame_is_read_once_when_it_provably_did_not_change(cash_magics, mock_
     assert len(reads_of_x) <= 1, f"x was hashed {len(reads_of_x)} times"
 
 
+@pytest.mark.usefixtures("user_code_watched")
 @pytest.mark.parametrize(
     "statement, reads",
     [

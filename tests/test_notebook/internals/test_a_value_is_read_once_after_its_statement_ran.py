@@ -32,6 +32,7 @@ class Big:
         self.rows = [[i, i * 2.0] for i in range(n)]
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_inside_the_window_an_object_is_read_once(monkeypatch):
     reads = []
     real = value_hash._compute_hash
@@ -104,6 +105,7 @@ def unwatched(monkeypatch):
     monkeypatch.setattr(value_watch, "WATCHING", False)
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_a_model_changed_in_place_is_read_once_after_its_statement(cash_magics, mock_shell, monkeypatch, unwatched):
     mock_shell.user_ns["__name__"] = "__main__"
     run_cash_cell(cash_magics, SETUP)
@@ -193,14 +195,8 @@ def user(tmp_path, monkeypatch):
     sys.modules.pop(name, None)
 
 
-@pytest.fixture
-def watched():
-    if sys.version_info < (3, 12) or code_trace._recorder() is None:
-        pytest.skip("no sys.monitoring tool id: nothing sees code of the user's run")
-
-
 def test_a_finalizer_changing_the_model_between_two_checks_is_seen(
-    cash_magics, mock_shell, monkeypatch, unwatched, watched
+    cash_magics, mock_shell, monkeypatch, unwatched, user_code_watched
 ):
     """The collector runs a ``__del__`` of the user's after the in-place
     check read the model and before its session hash is taken: it changed
@@ -238,7 +234,7 @@ def test_a_finalizer_changing_the_model_between_two_checks_is_seen(
     assert cash_magics.tracking_state.current_session_hashes["m"] == value_hash.compute_hash(m)
 
 
-def test_a_value_read_while_code_of_the_users_ran_is_not_kept(user, watched):
+def test_a_value_read_while_code_of_the_users_ran_is_not_kept(user, user_code_watched):
     value = Big(20)
     with value_hash.one_read():
         before = value_hash.compute_hash(value)
@@ -246,7 +242,7 @@ def test_a_value_read_while_code_of_the_users_ran_is_not_kept(user, watched):
         assert value_hash.compute_hash(value) != before, "the window ended: read again"
 
 
-def test_a_callback_of_the_users_ends_the_window(user, watched):
+def test_a_callback_of_the_users_ends_the_window(user, user_code_watched):
     value = Big(20)
     with value_hash.one_read():
         before = value_hash.compute_hash(value)
@@ -254,7 +250,7 @@ def test_a_callback_of_the_users_ends_the_window(user, watched):
         assert value_hash.compute_hash(value) != before
 
 
-def test_a_thread_of_the_users_ends_the_window(user, watched):
+def test_a_thread_of_the_users_ends_the_window(user, user_code_watched):
     value = Big(20)
     with value_hash.one_read():
         before = value_hash.compute_hash(value)
@@ -273,7 +269,7 @@ def test_the_window_does_not_keep_a_model_alive():
         assert gone() is None, "the window holds its values weakly"
 
 
-def test_a_digest_handed_to_the_call_is_not_one_taken_before_code_of_the_users_ran(user, watched):
+def test_a_digest_handed_to_the_call_is_not_one_taken_before_code_of_the_users_ran(user, user_code_watched):
     """``y = f(x)``: the statement's fingerprint of ``x`` before it ran is
     handed to the call's hash before the call, unless code of the user's ran
     in between (a finalizer the collector ran)."""
@@ -293,7 +289,7 @@ def test_a_digest_handed_to_the_call_is_not_one_taken_before_code_of_the_users_r
         assert handoff.digest_before(ticket)(value) == value_hash.compute_hash(value)
 
 
-def test_a_pickle_kept_for_the_store_is_dropped_once_code_of_the_users_ran(user, watched):
+def test_a_pickle_kept_for_the_store_is_dropped_once_code_of_the_users_ran(user, user_code_watched):
     from cash import stored_pickle
 
     value = Big(20)
@@ -330,3 +326,48 @@ def test_a_pool_counts_as_alive_only_while_it_has_work():
         assert other_thread_alive(ns), "a pool with work counts as alive"
         busy.result(timeout=60)
         assert _settle(lambda: other_thread_alive(ns), False)
+
+
+@pytest.fixture
+def nothing_watches(monkeypatch):
+    """As on Python 3.10/3.11, or with the ``sys.monitoring`` tool id taken:
+    nothing would see code of the user's run between two checks."""
+    monkeypatch.setattr(code_trace, "watching_user_code", lambda: False)
+
+
+def test_where_nothing_watches_each_check_reads_for_itself(nothing_watches, monkeypatch):
+    reads = []
+    real = value_hash._compute_hash
+    monkeypatch.setattr(value_hash, "_compute_hash", lambda v: reads.append(type(v)) or real(v))
+    value = Big(20)
+    with value_hash.one_read():
+        assert not value_hash.reading_once()
+        value_hash.compute_hash(value)
+        value_hash.compute_hash(value)
+    assert reads.count(Big) == 2
+
+
+def test_where_nothing_watches_no_digest_is_handed_to_the_call(nothing_watches, user):
+    import ast
+
+    from cash.notebook.call_effects import DigestHandoff
+
+    value = Big(20)
+    handoff = DigestHandoff()
+    handoff.begin_statement()
+    handoff.watch(ast.parse("y = f(x)"), {"f": len, "x": value})
+    before = handoff.digest(value)
+    user.change(value, [9, 9.0])  # unseen: no watch would end
+    ticket = handoff.call_started()
+    after = handoff.digest_before(ticket)(value)
+    assert after != before
+    assert after == value_hash.compute_hash(value)
+
+
+def test_where_nothing_watches_no_pickle_is_kept_for_the_store(nothing_watches):
+    from cash import stored_pickle
+
+    value = Big(20)
+    with stored_pickle.keeping(lambda v: v is value):
+        stored_pickle.object_digest(value)
+        assert stored_pickle.kept(value) is None

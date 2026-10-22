@@ -31,6 +31,7 @@ COUNT = (
 HASHED = "len(__import__('cash.notebook.call_effects').notebook.call_effects.frame_hashes)"
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_a_comprehension_and_a_loop_hash_the_frame_once_each(nb_runner):
     nb_runner.create_notebook(
         [

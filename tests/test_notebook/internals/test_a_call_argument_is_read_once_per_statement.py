@@ -50,6 +50,7 @@ def normalize(a):
 """
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_a_rerun_on_new_inputs_reads_the_argument_twice(cash_magics, mock_shell, monkeypatch, tmp_path):
     """The function lives in a module, so what it does to ``x`` is not read
     from its source: the verdict of the first run is checked again on the

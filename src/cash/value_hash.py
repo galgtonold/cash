@@ -448,13 +448,15 @@ OPEN_WATCHES: list[Watch] = []
 def _open(w: Watch) -> Watch:
     """*w*, watched from now on. Where nothing would see code of the user's
     run (no ``sys.monitoring`` before Python 3.12, its tool id taken, or
-    ``CASH_TRACE=0`` with no traced call yet), it stays open, as every
-    hand-on was before there was a watch: there a finalizer run between two
-    checks goes unseen."""
+    ``CASH_TRACE=0`` with no traced call yet), it is closed at once: a
+    finalizer run between two checks would go unseen there, so nothing is
+    handed on and each check reads for itself."""
     from .decorator import code_trace
 
     if code_trace.watching_user_code():
         OPEN_WATCHES.append(w)
+    else:
+        w.open = False
     return w
 
 

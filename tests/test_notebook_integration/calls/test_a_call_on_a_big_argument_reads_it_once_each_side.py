@@ -38,6 +38,7 @@ COUNT = (
 READS = "len(__import__('cash.content_hashers').content_hashers.reads_of_x)"
 
 
+@pytest.mark.usefixtures("user_code_watched")
 def test_a_first_run_reads_the_argument_once_before_and_once_after(nb_runner):
     nb_runner.create_notebook([SETUP, DEFS, "y = normalize(x)", "print('Y', round(float(y[-1]), 4))"])
     nb_runner.start_kernel()
