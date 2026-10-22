@@ -6,19 +6,9 @@ transitively; the safety guard still refuses a restore that would hand back an
 empty value where memory holds a filled one.
 """
 
-import pytest
-
-from cash.notebook import shadow
 from cash.notebook.upstream._types import TraceEntry
 from cash.notebook.upstream.virtual_lineage import loop_derived_vars
 from tests._cell_driver import run_cash_cell
-
-
-@pytest.fixture(autouse=True)
-def _no_trace_check(monkeypatch):
-    """The entries here are made up, with no trace: the trace's own say on a
-    restore is tested in ``test_a_hit_with_no_trace_to_check_runs_again``."""
-    monkeypatch.setattr(shadow, "SHADOW", None)
 
 
 class TestTransitiveLoopMutation:
@@ -58,7 +48,7 @@ class TestTransitiveLoopMutation:
         cash_instance = MagicMock()
         # Cache returns empty list
         cash_instance.backend.get.return_value = (
-            {"output_lineages": {"my_list": "hash123"}, "execution_time": 1.0},
+            {"output_lineages": {"my_list": "hash123"}, "execution_time": 1.0, "trace": {"items": [], "markers": []}},
             {"variables": {"my_list": []}},  # EMPTY cached value
         )
 
@@ -87,7 +77,7 @@ class TestTransitiveLoopMutation:
 
         cash_instance = MagicMock()
         cash_instance.backend.get.return_value = (
-            {"output_lineages": {"x": "hash456"}, "execution_time": 0.5},
+            {"output_lineages": {"x": "hash456"}, "execution_time": 0.5, "trace": {"items": [], "markers": []}},
             {"variables": {"x": 99}},
         )
 

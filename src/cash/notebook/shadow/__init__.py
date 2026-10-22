@@ -197,16 +197,13 @@ class Shadow:
         path = os.path.join(self.dir, "traces.jsonl")
         if not os.path.exists(path):
             return
-        me = os.getpid()
         lines = 0
         try:
-            with open(path, encoding="utf-8") as fh:
+            with open(path, encoding="utf-8", errors="replace") as fh:
                 for line in fh:
                     lines += 1
                     try:
                         t = json.loads(line)
-                        if not t.get("disk") and t.get("pid") != me:
-                            continue
                         t["items"] = tuple(_interned(tuple(i), self._items) for i in t["items"])
                         self._keep(t)
                     except (ValueError, TypeError, KeyError, AttributeError):
@@ -788,13 +785,57 @@ class Shadow:
             entry,
         )
 
-    def _defined(self, item: tuple) -> bool:
-        """Whether what *item* names is bound now: its module is loaded, and
-        holds the first name of its qualified name."""
-        from ...tracking.trace_items import namespace_of
+    def _restore_verdict(self, items: Iterable[tuple]) -> str:
+        """`restore_vouched`'s verdict on the items of a trace. The
+        notebook's own globals are its inputs, not bound yet (restored
+        virtually, by the lineage its key names): skipped, and so is what
+        the notebook does not define yet (a ``def`` above, run first when
+        it is needed). A module's items are checked as at a lookup when it
+        is loaded. A module of the user's not loaded yet (imported inside a
+        function, after a restart) can have been edited on disk: its
+        functions are compiled from its file, unrun, and compared; anything
+        else of it cannot be told, and the statement runs. A library not
+        loaded tells nothing: it changes with an install, not an edit."""
+        memo: dict = {}
+        files: dict[str, Any] = {}
+        nbn = self.notebook_name
+        for item in items:
+            kind, module = item[0], item[1]
+            if kind == "gap":
+                continue
+            if kind == "environ":
+                now = self._now(item, memo)
+            elif module == nbn:
+                if kind == "global":
+                    continue
+                now = self._now(item, memo)
+                bound = len(item) > 2 and str(item[2]).split(".", 1)[0] in (self.notebook or {})
+                if now is None or now == "absent" or (now == "missing" and not bound):
+                    continue
+            elif module in sys.modules:
+                now = self._now(item, memo)
+                if now is None:
+                    continue
+            else:
+                if module not in files:
+                    files[module] = _unloaded_users_module(module)
+                found = files[module]
+                if found is None:
+                    continue
+                if kind != "code" or found is False:
+                    return "module_not_loaded"
+                compiled = _compiled_code(found, item[2])
+                if compiled is None:
+                    return "module_not_loaded"
+                from ...tracking.trace_items import code_digest
 
-        ns = namespace_of(item[1], self.notebook or {}, self.notebook_name)
-        return ns is not None and len(item) > 2 and str(item[2]).split(".", 1)[0] in ns
+                # Its defaults are not read without running the module.
+                if code_digest(compiled) != str(item[-1]).split("/", 1)[0]:
+                    return "stale_suspect"
+                continue
+            if now != item[-1]:
+                return "stale_suspect"
+        return "agree"
 
     def restore_vouched(self, key: str, code: str, entry: Any, proc: Any = None) -> bool:
         """May an entry an upstream restore found (``try_virtual_restore``,
@@ -818,22 +859,11 @@ class Shadow:
             if trace is None:
                 verdict = "no_trace"
             elif not self._usable(trace):
-                verdict = "unusable"
+                # A statement that found code by a string is served on an
+                # agreeing trace only, as at a lookup (``needs_trace``).
+                verdict = "string_lookup" if "string_lookup" in trace.get("markers", ()) else "unusable"
             else:
-                # Its inputs are not bound yet (restored virtually, by the
-                # lineage its key names): only code found changed counts,
-                # and what is not defined yet tells nothing.
-                memo: dict = {}
-                verdict = "agree"
-                for item in trace["items"]:
-                    if item[0] == "global":
-                        continue
-                    now = self._now(item, memo)
-                    if now is None or now == "absent" or (now == "missing" and not self._defined(item)):
-                        continue
-                    if now != item[-1]:
-                        verdict = "stale_suspect"
-                        break
+                verdict = self._restore_verdict(trace["items"])
         except Exception as exc:  # noqa: BLE001 - a check that failed vouches for nothing
             self.counts["errors"] += 1
             logger.debug("cash: the trace check of a restore failed: %r", exc)
@@ -968,6 +998,55 @@ class Shadow:
 
 
 _UNSET = object()
+
+
+def _unloaded_users_module(module: str) -> Any:
+    """For a module not imported: its file's compiled code when the module
+    is the user's (a file outside the standard library and site-packages),
+    False when its file cannot be read or compiled, None for a library or
+    a module that is not found. Found without importing anything: a
+    package's ``__init__`` is not run to find a module in it."""
+    import importlib.machinery
+
+    from ...install_paths import is_user_code_file
+
+    path: list[str] | None = None
+    spec = None
+    parts = module.split(".")
+    for i, part in enumerate(parts):
+        name = ".".join(parts[: i + 1])
+        loaded = sys.modules.get(name)
+        if loaded is not None and i < len(parts) - 1:
+            path = list(attribute_or(loaded, "__path__", None) or [])
+            continue
+        try:
+            spec = importlib.machinery.PathFinder.find_spec(part if path is None else name, path)
+        except (ImportError, ValueError):
+            return None
+        if spec is None:
+            return None
+        path = list(spec.submodule_search_locations or [])
+    origin = spec.origin if spec is not None else None
+    if not origin or not origin.endswith(".py") or not is_user_code_file(origin):
+        return None
+    try:
+        with open(origin, "rb") as fh:
+            return compile(fh.read(), origin, "exec", dont_inherit=True)
+    except (OSError, SyntaxError, ValueError):
+        return False
+
+
+def _compiled_code(module_code: types.CodeType, qualname: str) -> types.CodeType | None:
+    """The code of the function *qualname* in a module's compiled code."""
+    pending = [module_code]
+    while pending:
+        code = pending.pop()
+        for const in code.co_consts:
+            if isinstance(const, types.CodeType):
+                if const.co_qualname == qualname:
+                    return const
+                pending.append(const)
+    return None
 
 
 def _defaults(fn: Any, code: Any, value_digest: Callable[[Any], str]) -> str:

@@ -150,6 +150,67 @@ def test_a_statement_above_is_restored_only_when_its_trace_vouches(trace_on, cas
     assert ns["t"] == 30
 
 
+def test_a_statement_above_using_a_module_edited_before_it_loaded_is_not_restored(
+    trace_on, cash_magics, tmp_path, monkeypatch
+):
+    """``g`` imports a module of the user's in its body. The module was
+    edited while it was not loaded (a restart): nothing bound tells, but its
+    file does. Restored, ``t`` came back 6."""
+    from tests._cell_driver import run_cash_cell
+    from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
+
+    _, mod = trace_on
+    name = mod + "_lazy"
+    (tmp_path / f"{name}.py").write_text("def f(x):\n    return x * 2\n", encoding="utf-8")
+    cells = [
+        f"import time\ndef g(x):\n    import {name}\n    return {name}.f(x)",
+        f"t = (g(3), time.sleep({ABOVE_PERSISTENCE_FLOOR_S}))[0]",
+        "u = t + 1",
+    ]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    ns = cash_magics.shell.user_ns
+    assert ns["t"] == 6
+    (tmp_path / f"{name}.py").write_text("def f(x):\n    return x * 10\n", encoding="utf-8")
+    monkeypatch.delitem(sys.modules, name)
+    del ns["t"]
+
+    run_cash_cell(cash_magics, cells[2], cells=cells)
+
+    assert ns["t"] == 30
+    sys.modules.pop(name, None)
+
+
+def test_a_statement_above_reading_a_module_setting_changed_since_is_not_restored(trace_on, cash_magics, tmp_path):
+    """``helpers.CFG = 5`` in a cell above, then a jump run: the restore
+    skipped every global its trace names, a loaded module's too, and ``t``
+    came back 4."""
+    from tests._cell_driver import run_cash_cell
+    from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
+
+    _, mod = trace_on
+    name = mod + "_cfg"
+    (tmp_path / f"{name}.py").write_text("CFG = 1\ndef f(x):\n    return x + CFG\n", encoding="utf-8")
+    cells = [
+        f"import time, {name}",
+        f"{name}.CFG = 1",
+        f"t = ({name}.f(3), time.sleep({ABOVE_PERSISTENCE_FLOOR_S}))[0]",
+        "u = t + 1",
+    ]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    ns = cash_magics.shell.user_ns
+    assert ns["t"] == 4
+    cells[1] = f"{name}.CFG = 5"
+    run_cash_cell(cash_magics, cells[1], cells=cells)
+    del ns["t"]
+
+    run_cash_cell(cash_magics, cells[3], cells=cells)
+
+    assert ns["t"] == 8
+    sys.modules.pop(name, None)
+
+
 def test_a_check_that_could_not_start_does_not_serve(trace_on, statement_processor, mock_shell, monkeypatch):
     on, _ = trace_on
     _run(statement_processor, "def inner(x):\n    return x * 2")
