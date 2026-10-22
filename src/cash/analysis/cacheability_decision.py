@@ -146,7 +146,10 @@ def _container_items(value: Any) -> Any:
         return (*value.keys(), *value.values())
     if isinstance(value, _SCAN_CONTAINERS):
         return value
-    if type(value).__module__ == "numpy" and getattr(getattr(value, "dtype", None), "kind", "") == "O":
+    if (
+        getattr(type(value), "__module__", None) == "numpy"
+        and getattr(getattr(value, "dtype", None), "kind", "") == "O"
+    ):
         return value.flat
     return None
 

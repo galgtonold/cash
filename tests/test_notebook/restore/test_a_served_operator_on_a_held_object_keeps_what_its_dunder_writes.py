@@ -14,6 +14,8 @@ method reading one that a function calls (``return kk.m(a)``).
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 from tests._cell_driver import run_cash_cell
@@ -190,3 +192,73 @@ def test_with_no_such_class_a_too_big_container_is_served(cash_magics, monkeypat
     assert not any("NOTEBOOK-ITEMS-UNREAD" in str(w.message) for w in caught)
     statuses = [str(s["status"]) for s in cash_magics.cash_status("dict")["last_cell"]["statements"]]
     assert statuses == ["RESTORED"], statuses
+
+
+def test_a_class_exec_made_after_the_gate_was_asked_still_counts(cash_magics, monkeypatch):
+    """``exec(src, g)`` with no ``__name__`` in ``g`` makes a class of
+    module ``builtins``: judged by its own functions each time, not by a
+    verdict kept for ``builtins`` when the gate was first asked."""
+    _only_the_notebooks_classes(monkeypatch)
+    from cash.analysis import handed_callables
+
+    monkeypatch.setattr(handed_callables, "_TOO_BIG_SAID", set())
+    # What the first ask records for ``builtins`` from Python's own
+    # (``ExceptionGroup``): not the user's.
+    monkeypatch.setattr(handed_callables, "_USERS_MODULE_NAMES", {"builtins": False})
+    made = []
+    for _ in range(2):
+        run_cash_cell(cash_magics, "import time\ncalls = []\nbig = [0] * 152\nj = 5\n")
+        monkeypatch.setattr(handed_callables, "ITEM_TYPES_AT", 100)
+        run_cash_cell(cash_magics, f"w0 = (big[j] + 1, {SLEEP})")
+        run_cash_cell(
+            cash_magics,
+            "src = 'class W:\\n    def __add__(self, x):\\n        calls.append(1)\\n        return 0\\n'\n"
+            "g = {'calls': calls}\nexec(src, g)\nbig[151] = g['W']()\ndel g\ni = 151\n",
+        )
+        run_cash_cell(cash_magics, f"w = (big[i] + 1, {SLEEP})")
+        made.append(list(cash_magics.shell.user_ns["calls"]))
+        _restart(cash_magics)
+        for name in ("big", "j", "w0", "src"):
+            cash_magics.shell.user_ns.pop(name, None)
+    assert made == [[1], [1]]
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "class A:\n    x: int = 0\n",
+        "import dataclasses\n@dataclasses.dataclass\nclass A:\n    x: int = 0\n",
+        "class A:\n    def __eq__(self, other):\n        return isinstance(other, A)\n    __hash__ = None\n",
+        "class A:\n    def __repr__(self):\n        return str(len('a'))\n",
+    ],
+    ids=["annotated", "dataclass", "eq-calls-isinstance", "repr-calls-len"],
+)
+def test_a_class_whose_special_methods_change_nothing_outside_lets_a_big_list_be_served(cash_magics, monkeypatch, kind):
+    """An annotated class (3.14 writes it an ``__annotate__``), a dataclass,
+    or special methods calling only builtins change nothing a statement
+    leaves out: a big list of numbers read by an index is served."""
+    _only_the_notebooks_classes(monkeypatch)
+    from cash.analysis import handed_callables
+
+    monkeypatch.setattr(handed_callables, "ITEM_TYPES_AT", 100)
+    monkeypatch.setattr(handed_callables, "_TOO_BIG_SAID", set())
+    # The ``W``s of the tests above live on in cash's memos: only ``A`` is asked about.
+    gate = handed_callables._live_users_classes
+    monkeypatch.setattr(handed_callables, "_live_users_classes", lambda: [c for c in gate() if c.__name__ == "A"])
+    run_cash_cell(cash_magics, "import time\n" + kind + "a0 = A()\nbig = [0.5] * 151\ni = 7\n")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        run_cash_cell(cash_magics, f"w = (big[i] + 1, {SLEEP})")
+        run_cash_cell(cash_magics, f"w = (big[i] + 1, {SLEEP})")
+    assert not any("NOTEBOOK-ITEMS-UNREAD" in str(w.message) for w in caught)
+    assert [str(s["status"]) for s in cash_magics.cash_status("dict")["last_cell"]["statements"]] == ["RESTORED"]
+
+
+def test_an_object_of_a_class_with_no_module_runs_as_plain_python(cash_magics):
+    """``type('W', (), {})`` exec'd in a dict with no ``__name__`` makes a
+    class that has no ``__module__`` at all: reading one raised inside cash,
+    and the cell failed where plain Python runs it."""
+    run_cash_cell(cash_magics, "g = {}\nexec(\"W = type('W', (), {})\", g)\n")
+    run_cash_cell(cash_magics, "x = g['W']()\n")
+    run_cash_cell(cash_magics, "y = 1\n")
+    assert cash_magics.shell.user_ns["y"] == 1
