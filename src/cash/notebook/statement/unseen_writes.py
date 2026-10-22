@@ -23,6 +23,7 @@ an entry whose recorded trace holds such a function is not served.
 from __future__ import annotations
 
 import ast
+import dis
 import functools
 import json
 import os
@@ -30,11 +31,13 @@ import types
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from ...analysis.callee_effects import free_vars_mutated_in_function
+from ...analysis.callee_effects import free_vars_mutated_in_function, scope_locals
+from ...analysis.mutations import MUTATING_METHODS
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS
+from ...install_paths import is_user_code_file
 from ...source_reading import getsource
 
-__all__ = ["UNSEEN_WRITES_REASON", "own_writes", "unseen_writers"]
+__all__ = ["UNSEEN_WRITES_REASON", "library_made", "own_writes", "unseen_writers", "writers_without_a_trace"]
 
 #: What the statement says when it is not stored for one.
 UNSEEN_WRITES_REASON = (
@@ -74,9 +77,9 @@ def unseen_writers(
     inside = {c for code in codes for c in code.co_consts if isinstance(c, types.CodeType)}
     found: list[tuple[str, tuple[str, ...]]] = []
     for code, (globals_, _module) in list(codes.items()):
-        if code in own or code in inside or code.co_qualname == "<module>":
+        if code in own or code in inside or code.co_qualname == "<module>" or library_made(code, globals_):
             continue
-        writes = own_writes(code)
+        writes = own_writes(code) | set(_method_writes(code, globals_))
         if not writes:
             continue
         targets: list[str] = []
@@ -96,6 +99,235 @@ def unseen_writers(
     return found
 
 
+#: How many values `writers_without_a_trace` opens for one statement (past
+#: it, or a container too big to open, a class of the user's with a writing
+#: special method anywhere counts), and how many steps down it goes.
+_OPEN_AT = 20_000
+_DEPTH = 6
+
+
+def writers_without_a_trace(
+    statement: str, namespace: Mapping[str, Any], outputs: Iterable[str] = ()
+) -> list[tuple[str, tuple[str, ...]]]:
+    """What `unseen_writers` would find, read from the objects instead of a
+    trace (none on Python 3.10 and 3.11, with ``CASH_TRACE=0``, or while a
+    debugger holds `sys.monitoring`): a special method of a class of the
+    user's whose objects *statement* reaches through what it reads (an item
+    of a container, ``d[k][0]``; an attribute; an object-dtype array or
+    column; a function's closure or the globals it names) that changes
+    something outside its objects. Any of them may run unseen."""
+    from ...analysis import handed_callables as hc
+
+    try:
+        code = compile(statement, "<cash-statement>", "exec")
+    except (SyntaxError, ValueError):
+        return []
+    names: set[str] = set()
+    pending_codes = [code]
+    while pending_codes:
+        current = pending_codes.pop()
+        # What it reads, not what it only binds (``d = {'a': [Vec()]}``).
+        names.update(i.argval for i in dis.get_instructions(current) if i.opname in _LOADS)
+        pending_codes.extend(c for c in current.co_consts if isinstance(c, types.CodeType))
+    todo: list[tuple[Any, int]] = []
+    for name in names:
+        value = namespace.get(name, _MISSING)
+        if value is not _MISSING and not isinstance(value, types.ModuleType):
+            todo.append((value, 0))
+    seen: set[int] = set()
+    classes: dict[type, None] = {}
+    over = False
+    while todo:
+        value, depth = todo.pop()
+        if value is _OVER:
+            over = True
+            continue
+        if depth > _DEPTH:
+            # Deeper than an operator reaches from what the statement
+            # names in one expression (``d[k][0].items[1] + 1``).
+            continue
+        if id(value) in seen:
+            continue
+        seen.add(id(value))
+        if len(seen) > _OPEN_AT:
+            over = True
+            break
+        kind = type(value)
+        if kind not in classes and _users_special(kind, hc):
+            classes[kind] = None
+        todo.extend((item, depth + 1) for item in _held(value, kind, hc))
+    if over and hc._special_classes_exist(namespace):
+        classes.update(dict.fromkeys(_live_writing_classes(namespace, hc)))
+    found: list[tuple[str, tuple[str, ...]]] = []
+    for cls in classes:
+        for fn in _users_special(cls, hc):
+            fn_code = getattr(fn, "__code__", None)
+            if fn_code is None or library_made(fn_code, fn.__globals__) or hc._dataclass_made(fn, cls):
+                continue
+            if not _named_where_held(fn, cls):
+                # Set on the class after it was made (``Vec.__add__ =
+                # lambda self, o: 10``): no key reads it, so an edit to it
+                # would go unseen.
+                found.append((f"{cls.__qualname__}.{fn.__name__}", ("the class it was set on later",)))
+                continue
+            writes = own_writes(fn_code) | set(_method_writes(fn_code, fn.__globals__))
+            if fn.__globals__ is namespace:
+                writes -= set(outputs)
+            if writes:
+                what = ("what its unreadable text changes" if w == _UNKNOWN else repr(w) for w in sorted(writes))
+                found.append((fn.__qualname__, tuple(what)))
+    return found
+
+
+_MISSING = object()
+
+_LOADS = frozenset({"LOAD_NAME", "LOAD_GLOBAL", "LOAD_FROM_DICT_OR_GLOBALS"})
+
+
+def _held(value: Any, kind: type, hc: Any) -> Iterable[Any]:
+    """What `writers_without_a_trace` looks at inside *value*."""
+    try:
+        if kind in hc._OPENED:
+            held = value.data if isinstance(value, hc._HELD_IN_DATA) else value
+            if len(held) > hc.ITEM_TYPES_AT:
+                return [_OVER]
+            return list(held.values()) + list(held) if isinstance(held, dict) else list(held)
+        if isinstance(value, types.FunctionType):
+            if not is_user_code_file(value.__code__.co_filename) or library_made(value.__code__, value.__globals__):
+                return []
+            out = [cell.cell_contents for cell in value.__closure__ or () if _filled(cell)]
+            g = value.__globals__
+            out.extend(g[n] for n in value.__code__.co_names if n in g and not isinstance(g[n], types.ModuleType))
+            return out
+        if isinstance(value, (types.MethodType, classmethod, staticmethod)):
+            return [value.__func__, getattr(value, "__self__", None)]
+        if isinstance(value, functools.partial):
+            return [value.func, *value.args, *value.keywords.values()]
+        dtype = getattr(value, "dtype", None)
+        if getattr(dtype, "kind", None) == "O" and (hasattr(value, "to_numpy") or hasattr(value, "ravel")):
+            # An object-dtype array or column: ``arr + 1`` runs each item's
+            # ``__add__``.
+            flat = (value.to_numpy() if hasattr(value, "to_numpy") else value).ravel()
+            if len(flat) > hc.ITEM_TYPES_AT:
+                return [_OVER]
+            return list(flat)
+        dtypes = getattr(value, "dtypes", None)
+        if dtypes is not None and hasattr(value, "columns") and kind.__module__.startswith("pandas"):
+            return [value[c] for c, d in zip(value.columns, dtypes) if getattr(d, "kind", None) == "O"]
+        if (
+            (isinstance(value, type) and (hc._is_users_class(value) or _holds_users_code(value)))
+            or hc._users_instance_type(kind)
+            or isinstance(value, types.SimpleNamespace)
+        ):
+            return list(vars(value).values())
+    except Exception:  # noqa: BLE001 - a value that cannot be looked into
+        return []
+    return []
+
+
+#: Stands for what a container too big to open holds.
+_OVER = object()
+
+
+_HEAPTYPE = 1 << 9
+
+
+def _users_special(cls: type, hc: Any) -> list[Any]:
+    """The special methods and property functions of *cls*'s MRO written in
+    code of the user's, whatever module the class names: a function set on
+    a class later makes it one (``Vec.__add__ = lambda self, o: 10``)."""
+    if issubclass(cls, (type, types.ModuleType, types.FunctionType, types.MethodType)):
+        return []
+    out: list[Any] = []
+    for klass in cls.__mro__:
+        if not klass.__flags__ & _HEAPTYPE:
+            continue
+        try:
+            members = list(vars(klass).items())
+        except TypeError:
+            continue
+        for name, member in members:
+            if isinstance(member, property):
+                fns = [member.fget, member.fset, member.fdel]
+            elif name.startswith("__") and name.endswith("__") and name not in hc._NOT_RUN_BY_A_STATEMENT:
+                fns = [member.__func__ if isinstance(member, (staticmethod, classmethod)) else member]
+            else:
+                continue
+            out.extend(
+                fn for fn in fns if isinstance(fn, types.FunctionType) and is_user_code_file(fn.__code__.co_filename)
+            )
+    return out
+
+
+def _holds_users_code(cls: type) -> bool:
+    """A class made in code of the user's: one holding a function written
+    there, whatever module it names."""
+    if not cls.__flags__ & _HEAPTYPE:
+        return False
+    try:
+        members = list(vars(cls).values())
+    except TypeError:
+        return False
+    for member in members:
+        if isinstance(member, (staticmethod, classmethod)):
+            member = member.__func__
+        if isinstance(member, types.FunctionType) and is_user_code_file(member.__code__.co_filename):
+            return True
+    return False
+
+
+def _named_where_held(fn: Any, cls: type) -> bool:
+    """Whether *fn* is held by a class of *cls*'s MRO under its own
+    qualified name: written in the class's body, not set on it later."""
+    qualname = getattr(fn, "__qualname__", "")
+    for klass in cls.__mro__:
+        for attr, member in list(vars(klass).items()):
+            if isinstance(member, (staticmethod, classmethod)):
+                member = member.__func__
+            if member is fn:
+                return qualname == f"{klass.__qualname__}.{attr}"
+    return True
+
+
+def _filled(cell: Any) -> bool:
+    try:
+        cell.cell_contents
+    except ValueError:
+        return False
+    return True
+
+
+def _live_writing_classes(namespace: Mapping[str, Any], hc: Any) -> list[type]:
+    from cash.notebook.held_functions import users_module_classes
+
+    try:
+        bound = [v for v in list(namespace.values()) if isinstance(v, type) and hc._is_users_class(v)]
+    except Exception:  # noqa: BLE001 - changed while read
+        bound = []
+    return [c for c in bound + users_module_classes() + hc._live_users_classes() if hc._reaching_special_functions(c)]
+
+
+def library_made(code: types.CodeType, globals_: Mapping[str, Any]) -> bool:
+    """Is *code* a method a library wrote for a class of the user's, from
+    text of its own: what ``@dataclass`` (``__create_fn__``), attrs
+    (``<attrs generated ...>``) or ``namedtuple`` (its ``__new__``) make.
+    They set the object's own fields and change nothing outside it; what
+    they call of the user's (a ``default_factory``, ``__post_init__``) ran
+    as code of its own and is read in turn. Their text has no file, so read
+    as any other function's they would count as changing what their
+    unreadable text changes: every statement making such an object of a
+    class in a module of the user's was refused."""
+    filename = code.co_filename
+    if filename.startswith("<attrs generated"):
+        return True
+    if filename != "<string>":
+        return False
+    if getattr(code, "co_qualname", "").startswith("__create_fn__.<locals>."):
+        return True
+    name = globals_.get("__name__") if isinstance(globals_, Mapping) else None
+    return code.co_name == "<lambda>" and isinstance(name, str) and name.startswith("namedtuple_")
+
+
 @functools.lru_cache(maxsize=4096)
 def own_writes(code: types.CodeType) -> frozenset[str]:
     """The free names the function of *code* changes by its own text: a
@@ -110,7 +342,105 @@ def own_writes(code: types.CodeType) -> frozenset[str]:
     except RecursionError:
         return frozenset((_UNKNOWN,))
     changed |= _rebound(node)
+    changed |= _handed_writes(node) - scope_locals(node)
     return frozenset(changed)
+
+
+#: Functions that change their first argument: ``next(GEN)`` moves it on.
+_FIRST_ARG_CHANGERS = frozenset({"next", "heappush", "heappop", "heapify", "heapreplace", "heappushpop", "shuffle"})
+_FIRST_ARG_MODULES = frozenset({"heapq", "random"})
+
+
+def _handed_writes(node: ast.AST) -> set[str]:
+    """Free names *node* changes in ways the shared reader leaves to a
+    statement's own analysis: a global handed to a function that changes
+    it (``next(GEN)``, ``heapq.heappush(H, 1)``, ``random.shuffle(L)``), or
+    whose mutating method is handed on (``map(calls.append, rows)``)."""
+    out: set[str] = set()
+    called: set[int] = set()
+    for sub in ast.walk(node):
+        if not isinstance(sub, ast.Call):
+            continue
+        called.add(id(sub.func))
+        func = sub.func
+        name = (
+            func.id
+            if isinstance(func, ast.Name)
+            else func.attr
+            if isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id in _FIRST_ARG_MODULES
+            else None
+        )
+        if name in _FIRST_ARG_CHANGERS and sub.args and isinstance(sub.args[0], ast.Name):
+            out.add(sub.args[0].id)
+    for sub in ast.walk(node):
+        if (
+            isinstance(sub, ast.Attribute)
+            and id(sub) not in called
+            and isinstance(sub.ctx, ast.Load)
+            and sub.attr in MUTATING_METHODS
+            and isinstance(sub.value, ast.Name)
+        ):
+            out.add(sub.value.id)
+    return out
+
+
+def _method_writes(code: types.CodeType, globals_: Mapping[str, Any]) -> list[str]:
+    """Globals *code* changes through a method of theirs that changes its
+    object (``STATE.bump()``, ``bump`` setting ``self.n``): a method of a
+    class written in code of the user's."""
+    node = _function_node(code)
+    if node is None:
+        return []
+    own = scope_locals(node)
+    out: list[str] = []
+    for sub in ast.walk(node):
+        if not (
+            isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Attribute)
+            and isinstance(sub.func.value, ast.Name)
+            and sub.func.value.id not in own
+        ):
+            continue
+        owner = globals_.get(sub.func.value.id, _MISSING)
+        if owner is _MISSING or isinstance(owner, (type, types.ModuleType)):
+            continue
+        method = getattr(type(owner), sub.func.attr, None)
+        if isinstance(method, types.FunctionType) and is_user_code_file(method.__code__.co_filename):
+            if _writes_its_object(method.__code__):
+                out.append(sub.func.value.id)
+    return out
+
+
+@functools.lru_cache(maxsize=4096)
+def _writes_its_object(code: types.CodeType) -> bool:
+    """Whether the method of *code* changes its first parameter's object:
+    stores to ``self.x`` or ``self[k]``, ``self.x += 1``, a mutating method
+    on ``self`` or ``self.x``."""
+    node = _function_node(code)
+    if node is None or not node.args.args:
+        return node is None
+    me = node.args.args[0].arg
+
+    def rooted(target: ast.AST) -> bool:
+        while isinstance(target, (ast.Attribute, ast.Subscript)):
+            target = target.value
+        return isinstance(target, ast.Name) and target.id == me
+
+    for sub in ast.walk(node):
+        if isinstance(sub, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Delete)):
+            targets = sub.targets if isinstance(sub, (ast.Assign, ast.Delete)) else [sub.target]
+            if any(isinstance(t, (ast.Attribute, ast.Subscript)) and rooted(t) for t in targets):
+                return True
+        elif (
+            isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Attribute)
+            and sub.func.attr in MUTATING_METHODS
+            and rooted(sub.func.value)
+        ):
+            return True
+    return False
 
 
 @functools.lru_cache(maxsize=4096)

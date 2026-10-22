@@ -195,7 +195,7 @@ from . import hidden_generators
 from .lineage import note_own_writes
 from .observed_draws import ObservedDrawStore
 from .thread_reach import ThreadReach
-from .unseen_writes import UNSEEN_WRITES_REASON, unseen_writers
+from .unseen_writes import UNSEEN_WRITES_REASON, unseen_writers, writers_without_a_trace
 
 __all__ = ["StatementProcessor", "is_control_body"]
 
@@ -1052,22 +1052,30 @@ class StatementProcessor:
         something its outputs leave out (`unseen_writes`): a served entry
         would not change it. Said once for each function."""
         unit = run.trace_unit
-        if unit is None or run.skip_cache or not execution.result.success:
+        if run.skip_cache or not execution.result.success:
             return
         if getattr(run.annotation, "assume_safe", False):
             return
         ns = self.shell.user_ns
-        statement = [code for code, (g, _m) in unit.codes.items() if code.co_qualname == "<module>" and g is ns]
-        found = unseen_writers(unit.codes, statement, run.outputs, ns, run.code)
+        if unit is None:
+            # No record of what ran: what the statement's objects could
+            # run instead (`writers_without_a_trace`).
+            found = writers_without_a_trace(run.code, ns, run.outputs)
+        else:
+            statement = [code for code, (g, _m) in unit.codes.items() if code.co_qualname == "<module>" and g is ns]
+            found = unseen_writers(unit.codes, statement, run.outputs, ns, run.code)
         if not found:
             return
         fn, targets = found[0]
         what = UNSEEN_WRITES_REASON.format(fn=fn, targets=", ".join(targets), it="it" if len(targets) == 1 else "them")
         run.skip_cache = True
         run.metrics["uncacheable_reasons"].append(what)
-        if fn in self._unseen_warned:
+        # Read from the objects, a statement only near the method (one
+        # filling the list) counts too: said for each statement.
+        said = fn if unit is not None else f"{fn}\n{run.code}"
+        if said in self._unseen_warned:
             return
-        self._unseen_warned.add(fn)
+        self._unseen_warned.add(said)
         fix = (
             "name what the function changes in the statement (pass it in and return it), or put "
             "'# @cash:assume-safe' on the statement if the change does not matter."

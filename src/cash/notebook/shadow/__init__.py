@@ -323,7 +323,29 @@ class Shadow:
                         score = len(codes & ran)
                         if score > best_score:
                             best, best_score = (module, name), score
-        return best
+        if best is not None:
+            return best
+        # Or a class attribute: a function set on a class after it was made
+        # (``Vec.__add__ = lambda self, o: 10``) has no name of its own to
+        # find it again by, and its edit went unseen.
+        for module, ns in spaces:
+            try:
+                pairs = list(ns.items())
+            except Exception:  # noqa: BLE001 - a namespace that cannot be listed is skipped
+                continue
+            for name, value in pairs:
+                if not isinstance(name, str) or name.startswith("__") or not isinstance(value, type):
+                    continue
+                try:
+                    members = list(type.__dict__["__dict__"].__get__(value).items())
+                except Exception:  # noqa: BLE001 - a class whose dict cannot be read is skipped
+                    continue
+                for attr, member in members:
+                    if isinstance(member, (staticmethod, classmethod)):
+                        member = member.__func__
+                    if isinstance(member, types.FunctionType) and member.__code__ is code:
+                        return module, f"{name}.{attr}"
+        return None
 
     def build(self, unit, inputs: Iterable[str] = ()) -> tuple[tuple, set[str], set[str]]:
         """The verify items of a finished *unit*, its markers and notes."""
@@ -376,6 +398,16 @@ class Shadow:
                 return
             add(("class", cls.__module__, q), class_digest(cls))
 
+        # A lambda or function made inside code that ran (the statement's
+        # own ``df.apply(lambda r: ...)``) is part of that code's text: the
+        # statement's key or that code's digest holds it.
+        inside: set[types.CodeType] = set()
+        pending = list(unit.codes)
+        while pending:
+            for const in pending.pop().co_consts:
+                if isinstance(const, types.CodeType) and const not in inside:
+                    inside.add(const)
+                    pending.append(const)
         for code, (g, module) in list(unit.codes.items()):
             qn = code.co_qualname
             table = name_table(code)
@@ -389,7 +421,7 @@ class Shadow:
                 if not (module == nbn and g is nb):
                     add(("gap", module, qn), "module body")
             elif optimized and not own(module, qn):
-                self._code_items(code, g, module, add, add_class, user_class, unit.codes)
+                self._code_items(code, g, module, add, add_class, user_class, unit.codes, inside)
             recv = unit.receivers.get(code)
             if recv is not None and user_class(recv):
                 add_class(recv)
@@ -450,7 +482,7 @@ class Shadow:
             return g is nb and getattr(unit, "lookups_followed", False)
         return code_lookups_traceable(code, g)
 
-    def _code_items(self, code, g, module, add, add_class, user_class, ran=()) -> None:
+    def _code_items(self, code, g, module, add, add_class, user_class, ran=(), inside=frozenset()) -> None:
         """The items naming *code*, a function or method that ran: by its
         qualified name, or through the global holding it; and the class it
         was found on, with that class's subclasses."""
@@ -466,13 +498,28 @@ class Shadow:
         if held is not None:
             hmod, hname = held
             hns = namespace_of(hmod, nb, nbn)
-            add(("held", hmod, hname, qn), value_digest(hns.get(hname)) if hns is not None else "missing")
+            add(("held", hmod, hname, qn), _held_digest(hns, hname, value_digest) if hns is not None else "missing")
         if found:
             add(("code", module, qn), code_digest(code) + _defaults(fn, code, value_digest))
             if code.co_freevars and held is None:
                 add(("gap", module, qn + "#closure"), "closure not held by a global")
         elif held is None:
-            add(("gap", module, qn), "unresolved")
+            # Code a library wrote for a class (``@dataclass``'s ``__init__``)
+            # changes with the class's own text, which the trace holds.
+            from ..statement.unseen_writes import library_made
+
+            if code in inside:
+                kind = "inside"
+            elif library_made(code, g):
+                kind = "library-made"
+            elif _in_a_value(code, [g, nb]):
+                # Held in a list, a dict or an object a global holds
+                # (``aggs = {'a': lambda s: s.max()}``): set again only
+                # by changing that value, which its readers are keyed on.
+                kind = "in a value"
+            else:
+                kind = "unresolved"
+            add(("gap", module, qn), kind)
         if isinstance(owner, type) and user_class(owner):
             add_class(owner)
             try:
@@ -523,7 +570,7 @@ class Shadow:
             now = "missing" if rc is None else code_digest(rc) + _defaults(fn, rc, value_digest)
         elif kind == "held":
             ns = namespace_of(item[1], nb, nbn)
-            now = "missing" if ns is None else value_digest(ns[item[2]]) if item[2] in ns else "absent"
+            now = "missing" if ns is None else _held_digest(ns, item[2], value_digest)
         elif kind == "class":
             ns = namespace_of(item[1], nb, nbn)
             obj: Any = None
@@ -556,6 +603,11 @@ class Shadow:
             now = self._now(item, memo)
             if now is None:
                 gaps += 1
+                if item[0] == "gap" and item[-1] == "unresolved":
+                    # Code that ran and that nothing here can find again:
+                    # whether it changed cannot be told, so the trace
+                    # does not vouch for the entry.
+                    changed.append([*item[:-1], "unresolved", "unresolved"])
                 continue
             was = item[-1]
             if was.startswith("opaque:"):
@@ -884,6 +936,66 @@ def _environ_digest() -> str:
     from ...tracking.trace_items import value_digest
 
     return value_digest(sorted(os.environ.items()))
+
+
+#: How many items `_in_a_value` looks at, all globals together.
+_IN_A_VALUE_AT = 5_000
+
+
+def _in_a_value(code: types.CodeType, spaces: Iterable[Mapping[str, Any]]) -> bool:
+    """Whether a function of *code* is an item of a list, tuple or dict, or
+    an attribute of an object (not a class), that a global of *spaces*
+    holds, one or two steps down."""
+    looked = 0
+    pending: list[tuple[Any, int]] = []
+    for ns in spaces:
+        try:
+            pending.extend((v, 0) for k, v in list(ns.items()) if isinstance(k, str) and not k.startswith("_"))
+        except Exception:  # noqa: BLE001 - a namespace that cannot be listed
+            continue
+    while pending and looked < _IN_A_VALUE_AT:
+        value, depth = pending.pop()
+        looked += 1
+        if isinstance(value, types.FunctionType):
+            if value.__code__ is code and depth:
+                return True
+            continue
+        if depth >= 2 or isinstance(value, (type, types.ModuleType, str, bytes)):
+            continue
+        try:
+            if type(value) in (list, tuple):
+                items = list(value[:1000])
+            elif type(value) is dict:
+                items = list(value.values())[:1000]
+            else:
+                # Not ``value.__dict__``: no ``__getattr__`` of the user's runs.
+                own = object.__getattribute__(value, "__dict__")
+                items = list(own.values())[:1000] if type(own) is dict else []
+        except Exception:  # noqa: BLE001 - a value that cannot be looked into
+            continue
+        pending.extend((item, depth + 1) for item in items)
+    return False
+
+
+def _held_digest(ns: Mapping[str, Any], name: str, value_digest: Callable[[Any], str]) -> str:
+    """The digest of what the global *name* of *ns* holds, or of the class
+    attribute ``Class.attr`` it names (`Shadow._holder`), read from the
+    class's own dict."""
+    if "." not in name:
+        return value_digest(ns[name]) if name in ns else "absent"
+    owner, attr = name.split(".", 1)
+    cls = ns.get(owner)
+    if not isinstance(cls, type):
+        return "absent"
+    try:
+        member = type.__dict__["__dict__"].__get__(cls).get(attr, _UNSET)
+    except Exception:  # noqa: BLE001 - a class whose dict cannot be read
+        return "missing"
+    if member is _UNSET:
+        return "absent"
+    if isinstance(member, (staticmethod, classmethod)):
+        member = member.__func__
+    return value_digest(member)
 
 
 def _stmt_group(run: Any) -> str:

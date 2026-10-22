@@ -546,6 +546,9 @@ def candidates(obj: Any) -> Iterable[types.FunctionType]:
             stack.extend(f for f in (o.fget, o.fset, o.fdel) if f is not None)
         elif isinstance(o, functools.partial):
             stack.append(o.func)
+        elif isinstance(o, functools._lru_cache_wrapper):
+            # ``@functools.cache``: a C object, its function kept as set.
+            stack.append(o.__wrapped__)
         elif o is not None and not isinstance(o, (type, types.ModuleType)):
             jitted = jit_python_function(o)
             if jitted is not None:
