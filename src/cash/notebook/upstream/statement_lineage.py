@@ -187,6 +187,9 @@ class StatementLineage:
         #: magics as IPython runs them. Built when first needed.
         self._notebook_cells: list[str] = []
         self._notebook_statements: str | None = None
+        #: Each cell as the runtime writes it (`_as_run`), in order. Built
+        #: when first needed.
+        self._run_cells: list[str] | None = None
         #: Lineages the simulation gave a variable that holds a random
         #: generator: one bound by a call that makes one, and each lineage a
         #: draw moved it on to. After a restart the namespace has no
@@ -254,6 +257,7 @@ class StatementLineage:
         self._notebook_text = "\n".join(notebook_cells)
         self._notebook_cells = list(notebook_cells)
         self._notebook_statements = None
+        self._run_cells = None
         sources: dict[str, str] = {}
         for code in notebook_cells:
             sources.update(cell_definitions(code, (ast.FunctionDef, ast.AsyncFunctionDef)))
@@ -554,6 +558,7 @@ class StatementLineage:
             virtual_callables=self.callables.by_lineage,
             reads=self.tracking_state.reads,
             in_notebook=self.in_notebook,
+            written_below=self.written_below,
         )
 
     def in_notebook(self, code: str) -> bool:
@@ -571,6 +576,36 @@ class StatementLineage:
         if self._notebook_statements is None:
             self._notebook_statements = "\n".join(self._as_run(cell) for cell in self._notebook_cells)
         return statement in self._notebook_statements
+
+    def written_below(self, writer: str, reader: str) -> bool:
+        """Whether the statement *writer* is written in the notebook only
+        below the statement *reader*: a change it made comes after the
+        reader in a run of the notebook, so the reader saw the value from
+        before it. One also written above, or either not found, does not
+        count: the reader may have read what it left."""
+        below = self._places(writer)
+        above = self._places(reader)
+        return bool(below) and bool(above) and min(below) > max(above)
+
+    def _places(self, code: str) -> list[tuple[int, int]]:
+        """Where the statement *code* is written: ``(cell, offset)`` of each
+        place, in the cells as written or, found in none, as the runtime
+        writes them (`in_notebook`)."""
+        statement = strip_markers(code).strip()
+        if not statement:
+            return []
+        if self._run_cells is None and statement not in self._notebook_text:
+            self._run_cells = [self._as_run(cell) for cell in self._notebook_cells]
+        for cells in (self._notebook_cells, self._run_cells or []):
+            found = []
+            for i, cell in enumerate(cells):
+                at = cell.find(statement)
+                while at != -1:
+                    found.append((i, at))
+                    at = cell.find(statement, at + 1)
+            if found:
+                return found
+        return []
 
     def _as_run(self, cell: str) -> str:
         """*cell*'s statements as the runtime writes them, or "" when it does

@@ -29,6 +29,7 @@ lost monitoring tool id) gives no verdict and is counted as unusable.
 
 from __future__ import annotations
 
+import ast
 import atexit
 import collections
 import contextlib
@@ -42,7 +43,7 @@ import threading
 import time
 import types
 from collections.abc import Callable, Iterable, Mapping
-from typing import Any
+from typing import Any, NamedTuple
 
 from cash._user_attrs import attribute_or, instance_of
 
@@ -449,6 +450,14 @@ class Shadow:
                     add(("global", module, name), self._global_digest(module, name, ns, snap if ns is nb else None))
         for name in inputs:
             add(("global", nbn, name), self._global_digest(nbn, name, nb, snap))
+        # The file of each module of the user's the trace names, as it was
+        # loaded: what a restore reads when the module is not loaded yet
+        # (`_restore_verdict`), wherever ``sys.path`` points then.
+        for module in {item[1] for item in found_items if item[0] != "file"}:
+            if module and module != nbn:
+                filed = _loaded_file(module, found_items)
+                if filed is not None:
+                    add(("file", module, filed[0]), filed[1])
         out = [_interned((*k, v), self._items) for k, v in found_items.items()]
         out.extend(unit.extra)
         return tuple(dict.fromkeys(out)), markers, notes
@@ -560,6 +569,14 @@ class Shadow:
             now = self._attr_digest(item[1], item[2])
         elif kind == "environ":
             now = _environ_digest()
+        elif kind == "file":
+            # A loaded module is checked by its items, as it runs: an edit
+            # to its file not loaded yet changes nothing a run would see.
+            if item[1] in sys.modules:
+                now = item[-1]
+            else:
+                state = _file_state(item[2])
+                now = "missing" if state is None else state.digest
         else:
             now = None
         memo[item[:-1]] = now
@@ -795,14 +812,25 @@ class Shadow:
         function, after a restart) can have been edited on disk: its
         functions are compiled from its file, unrun, and compared; anything
         else of it cannot be told, and the statement runs. A library not
-        loaded tells nothing: it changes with an install, not an edit."""
+        loaded tells nothing: it changes with an install, not an edit.
+        A trace that names the module's file, as it was loaded, is read by
+        it instead (`_vouched_by_file`): wherever ``sys.path`` points now, a
+        file gone or edited does not vouch, and an unchanged one vouches
+        for what its text settles."""
         memo: dict = {}
         files: dict[str, Any] = {}
         nbn = self.notebook_name
+        items = list(items)
+        filed = {item[1]: item for item in items if item[0] == "file" and len(item) == 4}
         for item in items:
             kind, module = item[0], item[1]
             if kind == "gap":
                 continue
+            if module in filed and module not in sys.modules:
+                verdict = _vouched_by_file(item, filed[module])
+                if verdict == "agree":
+                    continue
+                return verdict
             if kind == "environ":
                 now = self._now(item, memo)
             elif module == nbn:
@@ -1034,6 +1062,222 @@ def _unloaded_users_module(module: str) -> Any:
             return compile(fh.read(), origin, "exec", dont_inherit=True)
     except (OSError, SyntaxError, ValueError):
         return False
+
+
+class _FileState(NamedTuple):
+    digest: str
+    #: Its compiled code, None when it does not compile.
+    code: types.CodeType | None
+    #: ``{name: what binds it}`` for each module global bound once, by a
+    #: plain statement of the module's own (`_settled_names`).
+    settled: dict[str, ast.stmt]
+    #: Every name the module's text binds, at any depth outside its
+    #: functions and classes, or declares ``global``; None when its
+    #: globals can be bound by text it does not hold (``import *``,
+    #: ``globals()``).
+    bound: frozenset[str] | None
+
+
+#: ``path -> (mtime_ns, size, state)``: a file's `_FileState`, read again
+#: when its stat changes. One older than `_SETTLED_S` when read is kept: an
+#: edit within a coarse mtime's tick could keep both.
+_FILE_STATES: dict[str, tuple[int, int, _FileState]] = {}
+_SETTLED_S = 2.0
+
+
+def _file_state(path: str) -> _FileState | None:
+    """The state of the module file *path*, or None when it cannot be read.
+    Cash's own read: not a file the statement being stored read."""
+    from ...tracking.tracker_context import untracked
+
+    with untracked():
+        return _read_file_state(path)
+
+
+def _read_file_state(path: str) -> _FileState | None:
+    try:
+        st = os.stat(path)
+    except (OSError, ValueError):
+        return None
+    kept = _FILE_STATES.get(path)
+    if kept is not None and kept[0] == st.st_mtime_ns and kept[1] == st.st_size:
+        return kept[2]
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return None
+    import hashlib
+
+    try:
+        code: types.CodeType | None = compile(data, path, "exec", dont_inherit=True)
+        tree: ast.Module | None = ast.parse(data)
+    except (SyntaxError, ValueError):
+        code = tree = None
+    settled, bound = _settled_names(data, tree)
+    # Its code, not its formatting: a comment or a docstring reworded
+    # changes nothing a run computes.
+    text = data if tree is None else _without_docstrings(tree).encode()
+    state = _FileState(hashlib.blake2b(text, digest_size=16).hexdigest(), code, settled, bound)
+    if time.time() - st.st_mtime > _SETTLED_S:
+        _FILE_STATES[path] = (st.st_mtime_ns, st.st_size, state)
+    return state
+
+
+def _without_docstrings(tree: ast.Module) -> str:
+    """*tree* dumped without positions, its docstrings left out."""
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if (
+            isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and isinstance(body, list)
+            and body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            body[0] = ast.Pass()
+    return ast.dump(tree)
+
+
+#: Text by which a module binds its globals without naming them.
+_UNNAMED_BINDS = (b"globals()", b"vars(", b"sys.modules", b"__dict__", b"setattr(")
+
+
+def _settled_names(data: bytes, tree: ast.Module | None) -> tuple[dict[str, ast.stmt], frozenset[str] | None]:
+    """The module globals *data*'s text binds once and for good, and every
+    name it binds (`_FileState`). A name is settled when one statement of
+    the module body binds it -- a ``def``, a ``class``, an ``import`` or an
+    assignment of a literal -- and nothing else binds it or declares it
+    ``global``. Nothing is settled in a module that can bind globals
+    without naming them."""
+    if tree is None or any(text in data for text in _UNNAMED_BINDS):
+        return {}, None
+    count: collections.Counter[str] = collections.Counter()
+    plain: dict[str, ast.stmt] = {}
+    star = False
+
+    def binds(node: ast.AST) -> None:
+        nonlocal star
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            count[node.name] += 1
+            return
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                if alias.name == "*":
+                    star = True
+                else:
+                    count[alias.asname or alias.name.split(".", 1)[0]] += 1
+            return
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            count[node.id] += 1
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            count[node.name] += 1
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            count[node.name] += 1
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            count[node.rest] += 1
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+                continue
+            binds(child)
+
+    for stmt in tree.body:
+        binds(stmt)
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Import)):
+            names = (
+                [stmt.name]
+                if not isinstance(stmt, ast.Import)
+                else [a.asname or a.name.split(".", 1)[0] for a in stmt.names]
+            )
+            plain.update(dict.fromkeys(names, stmt))
+        elif isinstance(stmt, ast.ImportFrom) and stmt.level == 0 and stmt.module:
+            plain.update({a.asname or a.name: stmt for a in stmt.names if a.name != "*"})
+        elif isinstance(stmt, (ast.Assign, ast.AnnAssign)) and stmt.value is not None:
+            targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+            if all(isinstance(t, ast.Name) for t in targets) and _literal(stmt.value):
+                plain.update(dict.fromkeys((t.id for t in targets if isinstance(t, ast.Name)), stmt))
+    declared = {name for node in ast.walk(tree) if isinstance(node, ast.Global) for name in node.names}
+    if star:
+        return {}, None
+    settled = {name: stmt for name, stmt in plain.items() if count[name] == 1 and name not in declared}
+    return settled, frozenset(count) | declared
+
+
+def _literal(node: ast.expr) -> bool:
+    try:
+        ast.literal_eval(node)
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        return False
+    return True
+
+
+def _loaded_file(module: str, items: Mapping[tuple, str]) -> tuple[str, str] | None:
+    """``(path, digest)`` of the file *module*, loaded and the user's, was
+    loaded from; a digest that matches no file when the file was edited
+    since: a code of it the trace names (*items*) is not its file's."""
+    from ...install_paths import is_user_code_file
+    from ...tracking.trace_items import code_digest
+    from ...tracking.tracker_context import untracked
+
+    path = attribute_or(sys.modules.get(module), "__file__", None)
+    if not isinstance(path, str) or not path.endswith(".py"):
+        return None
+    with untracked():
+        if not is_user_code_file(path):
+            return None
+    state = _file_state(path)
+    if state is None:
+        return None
+    for item, digest in items.items():
+        if item[0] == "code" and item[1] == module:
+            compiled = _compiled_code(state.code, item[2]) if state.code is not None else None
+            if compiled is None or code_digest(compiled) != digest.split("/", 1)[0]:
+                return path, "edited since it was loaded"
+    return path, state.digest
+
+
+def _vouched_by_file(item: tuple, filed: tuple) -> str:
+    """`Shadow._restore_verdict` on *item*, of a module not loaded, by the
+    file its trace names (*filed*, a ``file`` item): the module would be
+    loaded from what that file holds now (a run imports it again). Gone
+    or edited: ``stale_suspect``. Unchanged, it vouches for its code and
+    for globals its text settles (`_settled_names`): a literal compared
+    by value, a name bound by a ``def``, ``class`` or ``import`` by the
+    text, and a name it never binds still absent. Anything else of it
+    cannot be told unrun: ``module_not_loaded``."""
+    from ...tracking.trace_items import value_digest
+
+    state = _file_state(filed[2])
+    if state is None or state.digest != filed[-1]:
+        return "stale_suspect"
+    kind = item[0]
+    if kind in ("file", "code"):
+        return "agree"
+    if kind not in ("global", "class", "held") or state.bound is None:
+        return "module_not_loaded"
+    name = str(item[2]).split(".", 1)[0]
+    if kind == "global" and item[-1] == "absent":
+        return "agree" if name not in state.bound else "module_not_loaded"
+    stmt = state.settled.get(name)
+    if stmt is None:
+        return "module_not_loaded"
+    if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+        if kind != "global" or stmt.value is None:
+            return "module_not_loaded"
+        return "agree" if value_digest(ast.literal_eval(stmt.value)) == item[-1] else "stale_suspect"
+    if isinstance(stmt, ast.ImportFrom):
+        # Bound to what another module holds: told only for a library's,
+        # which an install changes, not an edit.
+        from ...install_paths import is_user_code_module
+        from ...tracking.tracker_context import untracked
+
+        source = sys.modules.get(stmt.module or "")
+        if source is None:
+            return "module_not_loaded"
+        with untracked():
+            return "module_not_loaded" if is_user_code_module(source) else "agree"
+    return "agree"
 
 
 def _compiled_code(module_code: types.CodeType, qualname: str) -> types.CodeType | None:

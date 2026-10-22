@@ -306,6 +306,11 @@ class CacheKeyContext:
     #: Whether a statement's text is one of the notebook's cells: a change it
     #: made is the notebook's own (``recorded_reads.choose``). None: none is.
     in_notebook: Callable[[str], bool] | None = None
+    #: Whether a statement (the first) is written in the notebook only below
+    #: another (the second): a change it made is one the notebook makes
+    #: after that one read the value (``recorded_reads.choose``). None: take
+    #: `in_notebook` alone.
+    written_below: Callable[[str, str], bool] | None = None
     #: The runtime's own key for a statement it runs recorded: one that looks
     #: names up by a string its trace follows (`lookups_followed`) is keyed
     #: as any other, and served only once its trace is checked. Every other
@@ -1003,8 +1008,9 @@ def _recorded_reads_component(code: str, ctx: CacheKeyContext, statement: str) -
     where the environment and the modules hold what the whole notebook left
     in them, so an ``os.environ["MODE"] = "b"`` or a ``mylib.K = 7`` in a
     cell below a reader would re-key the reader and send it to run again: a
-    value a statement of the notebook changed is taken from the record. One
-    changed outside the notebook's cells is read now
+    value a statement of the notebook below the reader changed is taken
+    from the record. One changed by a statement above it (which ran before
+    it, so it read that value), or outside the notebook's cells, is read now
     (``recorded_reads.choose``).
     """
     record = ctx.reads
@@ -1019,7 +1025,9 @@ def _recorded_reads_component(code: str, ctx: CacheKeyContext, statement: str) -
     recorded = record.seen.get(digest)
     if recorded is None:
         return live.component()
-    return choose(recorded, live, record.writes, ctx.in_notebook).component()
+    below = ctx.written_below
+    ours = ctx.in_notebook if below is None else (lambda writer: below(writer, code))
+    return choose(recorded, live, record.writes, ours).component()
 
 
 def compute_cache_key(

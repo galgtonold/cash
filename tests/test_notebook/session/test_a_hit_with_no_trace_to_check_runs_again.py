@@ -211,6 +211,153 @@ def test_a_statement_above_reading_a_module_setting_changed_since_is_not_restore
     sys.modules.pop(name, None)
 
 
+def _jump_after_a_restart(cash_magics, cells, folder, name, edit=None, on_path=True):
+    """Run *cells*, change module *name*'s file in *folder* (*edit*: its new
+    text, None to delete it) while it is not loaded, as across a restart,
+    then run the last cell alone."""
+    from tests._cell_driver import run_cash_cell
+
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    ns = cash_magics.shell.user_ns
+    first = ns["t"]
+    path = folder / f"{name}.py"
+    if edit is None:
+        path.unlink()
+    elif edit is not False:
+        path.write_text(edit, encoding="utf-8")
+    sys.modules.pop(name, None)
+    if not on_path:
+        sys.path.remove(str(folder))
+    del ns["t"]
+    run_cash_cell(cash_magics, cells[-1], cells=cells)
+    return first, ns
+
+
+def _lazy_cells(name):
+    from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
+
+    return [
+        f"import time\ndef g(x):\n    import {name}\n    return {name}.f(x)",
+        f"t = (g(3), time.sleep({ABOVE_PERSISTENCE_FLOOR_S}))[0]",
+        "u = t + 1",
+    ]
+
+
+def test_a_module_found_through_a_path_a_cell_adds_is_read_from_its_file(trace_on, cash_magics, tmp_path):
+    """``sys.path.insert`` in a cell above, which a jump run does not run:
+    the module was not found, counted as a library's, and ``t`` came back
+    6 after its file was edited to ``x * 10``. Its file is read where it
+    was loaded from: not restored, ``t`` runs again, and without the cell
+    above that cannot find the module, which cash says."""
+    from cash.exceptions import UpstreamStateError
+
+    _, mod = trace_on
+    name = mod + "_src"
+    folder = tmp_path / "src"
+    folder.mkdir()
+    (folder / f"{name}.py").write_text("def f(x):\n    return x * 2\n", encoding="utf-8")
+    cells = [f"import sys\nsys.path.insert(0, {str(folder)!r})", *_lazy_cells(name)]
+
+    with pytest.raises(UpstreamStateError, match="ModuleNotFoundError"):
+        _jump_after_a_restart(cash_magics, cells, folder, name, "def f(x):\n    return x * 10\n", on_path=False)
+
+    assert "t" not in cash_magics.shell.user_ns
+
+
+def test_an_edited_default_of_a_module_not_loaded_is_seen(trace_on, cash_magics, tmp_path):
+    """Defaults are not in a function's code: ``k=2`` edited to ``k=10``
+    was restored as 6."""
+    _, mod = trace_on
+    name = mod + "_k"
+    (tmp_path / f"{name}.py").write_text("def f(x, k=2):\n    return x * k\n", encoding="utf-8")
+
+    first, ns = _jump_after_a_restart(
+        cash_magics, _lazy_cells(name), tmp_path, name, "def f(x, k=10):\n    return x * k\n"
+    )
+
+    assert (first, ns["t"]) == (6, 30)
+
+
+def test_a_statement_above_using_a_module_since_deleted_is_not_restored(trace_on, cash_magics, tmp_path):
+    """Its module gone, the statement cannot be run again: it was restored
+    as 6, a value the notebook no longer makes. It runs, and cash says it
+    failed."""
+    from cash.exceptions import UpstreamStateError
+
+    on, mod = trace_on
+    name = mod + "_gone"
+    (tmp_path / f"{name}.py").write_text("def f(x):\n    return x * 2\n", encoding="utf-8")
+
+    with pytest.raises(UpstreamStateError, match="ModuleNotFoundError"):
+        _jump_after_a_restart(cash_magics, _lazy_cells(name), tmp_path, name, None)
+
+    assert "t" not in cash_magics.shell.user_ns, dict(on.counts)
+
+
+def test_a_module_not_loaded_and_unchanged_vouches_for_what_its_text_settles(trace_on, cash_magics, tmp_path):
+    """Its functions calling each other (``helpers.step`` calls ``h0``):
+    the global ``h0`` of a module not loaded could not be told unrun, and
+    every such restore was refused, 2-2.7x slower jump runs. Its file
+    unchanged settles it: a ``def`` once, a constant by value, a builtin
+    it never binds."""
+    on, mod = trace_on
+    name = mod + "_steps"
+    text = "SCALE = 2\ndef h0(x):\n    return x * SCALE\ndef f(x):\n    return len([h0(x)]) * h0(x)\n"
+    (tmp_path / f"{name}.py").write_text(text, encoding="utf-8")
+
+    first, ns = _jump_after_a_restart(cash_magics, _lazy_cells(name), tmp_path, name, False)
+
+    assert (first, ns["t"]) == (6, 6)
+    assert on.counts["upstream:hit:agree"] >= 1, dict(on.counts)
+    assert not [k for k in on.counts if k.startswith("upstream:miss")], dict(on.counts)
+
+
+def test_a_constant_of_a_module_not_loaded_is_compared_by_value(trace_on, cash_magics, tmp_path):
+    """``SCALE = 2`` edited to ``SCALE = 10`` is a change of the file, and
+    of the constant: not restored."""
+    _, mod = trace_on
+    name = mod + "_scale"
+    (tmp_path / f"{name}.py").write_text("SCALE = 2\ndef f(x):\n    return x * SCALE\n", encoding="utf-8")
+
+    first, ns = _jump_after_a_restart(
+        cash_magics, _lazy_cells(name), tmp_path, name, "SCALE = 10\ndef f(x):\n    return x * SCALE\n"
+    )
+
+    assert (first, ns["t"]) == (6, 30)
+
+
+def test_a_module_setting_read_through_a_local_import_and_set_above_is_seen(trace_on, cash_magics, tmp_path):
+    """``g`` imports the module in its body and reads ``CFG``: the trace
+    names nothing of it, and the restore's key kept the value recorded
+    before ``CFG = 5`` in a cell above, so ``t`` came back 4."""
+    from tests._cell_driver import run_cash_cell
+    from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
+
+    _, mod = trace_on
+    name = mod + "_lcfg"
+    (tmp_path / f"{name}.py").write_text("CFG = 1\n", encoding="utf-8")
+    cells = [
+        f"import time, {name}",
+        f"{name}.CFG = 1",
+        f"def g(x):\n    import {name}\n    return x + {name}.CFG",
+        f"t = (g(3), time.sleep({ABOVE_PERSISTENCE_FLOOR_S}))[0]",
+        "u = t + 1",
+    ]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    ns = cash_magics.shell.user_ns
+    assert ns["t"] == 4
+    cells[1] = f"{name}.CFG = 5"
+    run_cash_cell(cash_magics, cells[1], cells=cells)
+    del ns["t"]
+
+    run_cash_cell(cash_magics, cells[-1], cells=cells)
+
+    assert ns["t"] == 8
+    sys.modules.pop(name, None)
+
+
 def test_a_check_that_could_not_start_does_not_serve(trace_on, statement_processor, mock_shell, monkeypatch):
     on, _ = trace_on
     _run(statement_processor, "def inner(x):\n    return x * 2")
