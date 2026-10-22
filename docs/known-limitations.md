@@ -254,7 +254,7 @@ while the call inside it is served from the cache together with its effect on
 the global. Nothing to do. If you would rather not rely on this, pass the state
 in and return it.
 
-<!-- claim: cash/analysis/handed_callables.py:handed_callables @c55bd405, cash/analysis/handed_callables.py:hands_a_state_changing_callable @4c3c2d42 -->
+<!-- claim: cash/analysis/handed_callables.py:handed_callables @c55bd405, cash/analysis/handed_callables.py:hands_a_state_changing_callable @4c3c2d42, cash/analysis/handed_callables.py:ITEM_TYPES_AT == 1000 -->
 ### A function handed to a call
 
 A function you hand to another call counts as called. One that only reads
@@ -287,7 +287,11 @@ The same holds for code of yours that the statement runs without naming it:
   class method, a hook reached through `super()`), a property, or a context
   manager's `__enter__` and `__exit__` (`with timer("fit"):`);
 - the special methods of an object of your class the statement names
-  (`bag["k"]`, `len(bag)`, `bag + 1`, `f"{bag}"`, iterating it);
+  (`bag["k"]`, `len(bag)`, `bag + 1`, `f"{bag}"`, iterating it), reads
+  from a list, tuple or dict (`d["k"] += 1`, `lst[i] + 1`; by an index
+  cash cannot read, any of the first 1,000 items), from a class or a
+  library's namespace (`C.x + 1`, `ns.x += 1`), or that a function of
+  yours it calls reads by name (`return v + 1`);
 - the function that a wrapper made without `functools.wraps`, or a
   `compose(f, g)` closure, calls; a `functools.partial`, `np.vectorize` or
   `operator.methodcaller` called by its own name; a `functools.singledispatch`

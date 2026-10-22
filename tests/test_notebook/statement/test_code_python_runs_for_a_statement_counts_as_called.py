@@ -3,8 +3,10 @@ counts as called: what it changes of the globals is the statement's.
 
 A method called on an object or a class (a static or class method, a hook
 reached through ``super()``), a context manager's ``__enter__``/``__exit__``,
-a property, the special methods of an object the statement names, the
-functions a closure wraps (a decorator without ``functools.wraps``, a
+a property, the special methods of an object the statement names (one held
+in a builtin container, by a class or by a library's namespace included:
+``d['k'] += 1``, ``C.x + 1``) or that a function it calls reads by name
+(``return v + 1``), the functions a closure wraps (a decorator without ``functools.wraps``, a
 ``compose``), a ``functools.partial``, ``np.vectorize`` or
 ``operator.methodcaller`` called by its own name, a ``singledispatch``
 implementation. Each was left out, the statement served from the cache, and
@@ -95,6 +97,23 @@ plain = Plain()
 pipe = compose(write_row, clean)
 pz = functools.partial(write_row, 'Z')
 mc = operator.methodcaller('process', 'Z')
+import types
+class Vec:
+    def __add__(self, x):
+        LOG.append(x)
+        return Vec()
+vec = Vec()
+held = {'k': Vec()}
+row = [Vec()]
+i = 0
+nums = [1, 2]
+class Shelf:
+    x = Vec()
+    def m(self):
+        return 0
+spaced = types.SimpleNamespace(x=Vec())
+def bump(a):
+    return vec + a
 """
 
 
@@ -140,13 +159,24 @@ def _changed_globals(statement: str, namespace: dict) -> frozenset[str]:
         "out = mc(store)",
         "out = operator.methodcaller('process', 'Z')(store)",
         "out = note('Z')",
+        "held['k'] += 1",
+        "w = held['k'] + 1",
+        "row[0] += 1",
+        "w = row[i] + 1",
+        "Shelf.x += 1",
+        "w = Shelf.x + 1",
+        "spaced.x += 1",
+        "w = spaced.x + 1",
+        "w = bump(1)",
     ],
 )
 def test_the_code_python_runs_counts_as_called(namespace, statement):
     assert "LOG" in _changed_globals(statement, namespace)
 
 
-@pytest.mark.parametrize("statement", ["n = store.pure('r')", "a = plain['k']", "x = 1"])
+@pytest.mark.parametrize(
+    "statement", ["n = store.pure('r')", "a = plain['k']", "x = 1", "nums[0] += 1", "w = nums[i] + 1"]
+)
 def test_code_changing_no_global_adds_nothing(namespace, statement):
     assert "LOG" not in _changed_globals(statement, namespace)
 
@@ -156,4 +186,5 @@ def test_a_call_into_a_closure_over_a_writer_is_not_served(namespace):
     function it closes over, which appends."""
     assert hands_a_state_changing_callable(namespace["save_row"], ("Z",), {})
     assert hands_a_state_changing_callable(namespace["note"], ("Z",), {})
+    assert hands_a_state_changing_callable(namespace["bump"], (1,), {})  # ``vec + a``
     assert not hands_a_state_changing_callable(functools.partial(len), ("Z",), {})

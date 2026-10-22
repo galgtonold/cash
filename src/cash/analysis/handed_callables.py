@@ -47,7 +47,7 @@ import sys
 import types
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from itertools import chain, compress, repeat
+from itertools import chain, compress, islice, repeat
 from typing import Any, NamedTuple
 
 from .. import _plain_data
@@ -1124,6 +1124,24 @@ def _static_value(node: ast.expr, namespace: Mapping[str, Any]) -> tuple[Any, st
     return value, node.id
 
 
+#: How many items of a builtin container `_item_types` looks at.
+ITEM_TYPES_AT = 1000
+
+
+def _item_types(container: Any) -> set[type]:
+    """The types of the items (a dict's values) of the builtin *container*,
+    of its first `ITEM_TYPES_AT`; none for any other value."""
+    if type(container) not in _OPENED:
+        return set()
+    if isinstance(container, _HELD_IN_DATA):
+        container = container.data
+    try:
+        items = container.values() if isinstance(container, dict) else container
+        return set(map(type, islice(items, ITEM_TYPES_AT)))
+    except Exception:  # noqa: BLE001 - changed while read
+        return set()
+
+
 def _item(container: Any, index: ast.expr) -> Any:
     if not isinstance(index, ast.Constant) or type(container) not in _OPENED:
         return _MISSING
@@ -1520,6 +1538,8 @@ class _Found:
                 target = scope.get(name)
                 if isinstance(target, types.FunctionType) and self._users(target):
                     pending.append(target)
+            for kind in _global_object_types(current):
+                self._special_methods(kind)  # ``return v + 1``
 
     def _closed_over(self, fn: types.FunctionType) -> None:
         """The callables of the user's the function *fn* closes over: a
@@ -1781,22 +1801,36 @@ class _Found:
                 owner = _static_value(node.value, namespace)
                 if owner is None:
                     continue
-                if not _is_users_object(owner[0]):
-                    continue  # a class's attribute: a property runs on objects only
-                cls = type(owner[0])
-                try:
-                    member = inspect.getattr_static(cls, node.attr)
-                except AttributeError:
-                    member = _MISSING
-                if isinstance(member, property):
-                    for fn in (member.fget, member.fset, member.fdel):
-                        self.method_called(fn)
-                elif member is not _MISSING and _is_users_object(member):
-                    # A descriptor of the user's class (``__get__``).
-                    self._special_methods(type(member))
+                if _is_users_object(owner[0]):  # a property runs on objects only
+                    try:
+                        member = inspect.getattr_static(type(owner[0]), node.attr)
+                    except AttributeError:
+                        member = _MISSING
+                    if isinstance(member, property):
+                        for fn in (member.fget, member.fset, member.fdel):
+                            self.method_called(fn)
+                    elif member is not _MISSING and _is_users_object(member):
+                        # A descriptor of the user's class (``__get__``).
+                        self._special_methods(type(member))
+                # An object of the user's held there, by an object, a class
+                # (``C.x += 1``) or a namespace of a library's (``ns.x``).
                 member = _attribute(owner[0], node.attr)
                 if member is not _MISSING and _is_users_object(member):
                     self._special_methods(type(member))
+            elif isinstance(node, ast.Subscript):
+                # An object of the user's held in a builtin container
+                # (``d['k'] += 1``, ``lst[i] + 1``): the item read, or, by an
+                # index not known here, any the container holds.
+                held = _static_value(node, namespace)
+                if held is not None:
+                    if _is_users_object(held[0]):
+                        self._special_methods(type(held[0]))
+                    continue
+                container = _static_value(node.value, namespace)
+                if container is not None:
+                    for kind in _item_types(container[0]):
+                        if _users_instance_type(kind):
+                            self._special_methods(kind)
 
     def _special_methods(self, cls: type) -> None:
         """The special methods (``__getitem__``, ``__exit__``, ...) and the
@@ -2224,7 +2258,26 @@ def _reaches_through_globals(fn: types.FunctionType) -> bool:
             target = scope.get(name)
             if isinstance(target, types.FunctionType) and _is_users(target):
                 pending.append(target)
+        if any(_reaching_special_functions(kind) for kind in _global_object_types(current)):
+            return True
     return False
+
+
+def _global_object_types(fn: types.FunctionType) -> set[type]:
+    """The classes of the user's whose objects *fn* reads by a free name
+    (``v`` in ``return v + 1``): an operator on one runs its special
+    methods. Any name the code names counts, attributes' too, which can only
+    add one."""
+    from cash.decorator.closure_fold import iter_code_scopes
+
+    scope = fn.__globals__
+    kinds = set()
+    for code in iter_code_scopes(fn.__code__):
+        for name in code.co_names:
+            value = scope.get(name, _MISSING)
+            if value is not _MISSING and _users_instance_type(type(value)):
+                kinds.add(type(value))
+    return kinds
 
 
 def _global_source(namespace: Mapping[str, Any], name: str) -> str | None:
