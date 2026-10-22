@@ -41,6 +41,7 @@ from cash.notebook.carrier_history import FIGURE_KINDS, carrier_history_fingerpr
 from cash.notebook.stateful_carriers import stateful_carrier_kind
 from cash.notebook.statement.derivation_edges import read_share_edges
 from cash.tracking.file_dep_snapshot import snapshot_file_deps
+from cash.tracking.read_classification import own_stat
 
 if TYPE_CHECKING:
     from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
@@ -465,12 +466,13 @@ class StatementRecords:
         """*paths* without cash's own storage (its cache directories)."""
         if not paths:
             return frozenset()
-        roots = set()
         backend = self.cash_instance.backend if self.cash_instance else None
         root = backend.local_dir if backend is not None else None
-        if isinstance(root, (str, os.PathLike)):
-            roots.add(os.path.normcase(os.path.abspath(os.fspath(root))) + os.sep)
-        return frozenset(p for p in paths if not any(os.path.normcase(p).startswith(r) for r in roots))
+        if not isinstance(root, (str, os.PathLike)):
+            return frozenset(paths)
+        prefix = os.path.normcase(os.path.abspath(os.fspath(root))) + os.sep
+        normcase = os.path.normcase
+        return frozenset(p for p in paths if not normcase(p).startswith(prefix))
 
     def persist_write_provenance(
         self,
@@ -499,11 +501,19 @@ class StatementRecords:
         try:
             raw_paths = statement_written_paths(code, tree, self.shell.user_ns) or set()
             named = {os.path.abspath(p) for p in raw_paths}
-            seen = {p for p in written if os.path.exists(p)} - named
+            if len(named) > self._MAX_PROVENANCE_FILES:
+                return  # snapshotting would cost more than a re-fire saves
+            # Looked for only up to the limit: ``tar.extractall()`` wrote
+            # 100,000 files, each probed in turn to learn there were too many.
+            seen: set[str] = set()
+            room = self._MAX_PROVENANCE_FILES - len(named)
+            for p in written:
+                if p not in named and _exists(p):
+                    seen.add(p)
+                    if len(seen) > room:
+                        return
             if not named and not seen:
                 return  # nothing resolvable, nothing observed -> stay conservative
-            if len(named) + len(seen) > self._MAX_PROVENANCE_FILES:
-                return  # snapshotting would cost more than a re-fire saves
             paths = sorted(named | seen)
             file_deps = snapshot_file_deps(set(paths))
             # Every recorded path must be readable now, else there is nothing to
@@ -556,3 +566,13 @@ class StatementRecords:
             if fingerprint is not None:
                 histories[name] = fingerprint
         return histories
+
+
+def _exists(path: str) -> bool:
+    """``os.path.exists`` past cash's own wrapper of ``os.stat``: cash asks
+    about a file the statement wrote, the user did not."""
+    try:
+        own_stat(path)
+    except (OSError, ValueError):
+        return False
+    return True
