@@ -1084,7 +1084,7 @@ class CallUnit:
             not displayed
             and pyplot_state() == figures_before
             and _left_pyplot_alone(call.fn, unit)
-            and self._worth_storing(call, result, elapsed, result_held)
+            and self._worth_storing(call, result, elapsed, result_held, unit)
             and not call_tracker.work_outlived_block
             and not _inputs_moved(call_tracker)
             and not isinstance(memos := helper_memos.used(memos_before, clears=_clears(call.fn, memos_before)), tuple)
@@ -1161,12 +1161,15 @@ class CallUnit:
         self._digests.note_after(ticket, (*call.args, *call.kwargs.values()), arg_hashes_after)
         return False
 
-    def _worth_storing(self, call: _Call, result, elapsed: float, result_held: bool = True) -> bool:
+    def _worth_storing(self, call: _Call, result, elapsed: float, result_held: bool = True, unit: Any = None) -> bool:
         """Past the cost floor, safe to hand back as a copy, and cheaper to
-        restore than to compute again."""
+        restore than to compute again. *unit* is the call's trace, when one
+        was recorded: what ran in it."""
         return (
             elapsed >= self._cost_floor_s()
-            and self._entries.storable(result, call.args, call.kwargs, call.fn, result_held)
+            and self._entries.storable(
+                result, call.args, call.kwargs, call.fn, result_held, ran=attribute_or(unit, "codes", None)
+            )
             and self._entries.restore_pays(result, elapsed)
         )
 

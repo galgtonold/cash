@@ -841,7 +841,8 @@ class StatementStore:
         # restore handed back the closure the last run made, still holding
         # what it had appended.
         if not should_skip:
-            _found = {_name: _holds_state(_v) for _name, _v in sorted(captured_vars.items())}
+            _ran = attribute_or(run.trace_unit, "codes", None)
+            _found = {_name: _holds_state(_v, _ran) for _name, _v in sorted(captured_vars.items())}
             _stateful = [_name for _name, _why in _found.items() if _why == "state"]
             _too_many = [_name for _name, _why in _found.items() if _why == "too_many"]
             if _stateful:
@@ -1195,13 +1196,13 @@ def _user_decorated_calls(events: Any) -> list[str]:
     return list(names)
 
 
-def _holds_state(value: Any) -> str | None:
+def _holds_state(value: Any, ran: Any = None) -> str | None:
     """`holds_a_closure_with_state`: ``"state"`` when it does, or when
     looking raised (not stored is one rerun, stored unchecked may be served
     wrong); ``"too_many"`` when it holds more objects than it looks through;
     None when it does not."""
     try:
-        return "state" if holds_a_closure_with_state(value) else None
+        return "state" if holds_a_closure_with_state(value, ran) else None
     except TooMuchToLookThrough:
         return "too_many"
     except Exception:

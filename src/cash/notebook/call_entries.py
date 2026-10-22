@@ -254,7 +254,7 @@ class CallEntries:
             "[CALL_UNIT] hit on %s took %.2fs to save %.2fs: dropped, runs plain", key[:16], hit_cost, saved or 0.0
         )
 
-    def storable(self, result, args, kwargs, fn: Any = None, root_held: bool = True) -> bool:
+    def storable(self, result, args, kwargs, fn: Any = None, root_held: bool = True, ran: Any = None) -> bool:
         """Refuse values whose *identity* is load-bearing.
 
         Three families, all of which the statement path already refuses in its
@@ -332,7 +332,7 @@ class CallEntries:
                 and not (root_held and _has_identity(result))
                 and identity_coupled_reason("<intercepted call>", result) is None
                 and not is_consumable_unrestorable(result)
-                and not holds_a_closure_with_state(result)
+                and not holds_a_closure_with_state(result, ran)
             )
         except Exception:
             logger.debug("storability check raised; the result is not stored", exc_info=True)

@@ -232,6 +232,10 @@ if not isinstance(_MEMO_WRAPPER, type):
 #: into. Past it, what the rest holds is not known: the value is taken as
 #: holding state, and not served (one rerun), rather than served unchecked.
 _HOLDERS_LOOKED_INTO = 100_000
+#: How many values the walk takes in all, plain records included: past it,
+#: as past `_HOLDERS_LOOKED_INTO`, not known. A million records took 2.7 s
+#: to the end; this many take about a second.
+_STEPS_AT = 300_000
 
 #: ``type -> whether it is a class of the user's`` (its module is user code).
 #: Weak: a class a call made is not kept alive, nor the memo on it.
@@ -329,7 +333,61 @@ def _reading(kind: type) -> int:
 
 class TooMuchToLookThrough(Exception):
     """`holds_a_closure_with_state` looked into `_HOLDERS_LOOKED_INTO`
-    objects and found more: what the rest holds is not known."""
+    objects, or took `_STEPS_AT` values, and found more: what the rest
+    holds is not known."""
+
+
+def _plain_part(part: Any, ptype: type, atoms: frozenset) -> bool:
+    """Is *part*, something a holder holds, a plain value or a list or
+    tuple of them: nothing inside to look at? A record's attribute dict
+    of them is too (`_plain_record`). On 3.12+ an instance hands over its
+    attributes themselves, not a dict, until something asks for its
+    ``__dict__``."""
+    if ptype is list or ptype is tuple:
+        return atoms.issuperset(map(type, part))
+    return ptype is dict and _plain_record(part, atoms)
+
+
+def _memos_on(cls: type) -> list[tuple[Any, Any]]:
+    """``(memo, its wrapped function)`` for each ``functools.cache`` memo a
+    class body member holds: itself, or inside a ``staticmethod``,
+    ``classmethod``, ``property`` or ``partialmethod``. Read through
+    ``type``'s descriptors and the wrappers' own slots."""
+    found = []
+    for value in _CLASS_DICT(cls).values():
+        kind = type(value)
+        if kind is staticmethod or kind is classmethod:
+            value = value.__func__
+        elif kind is property:
+            value = value.fget
+        elif kind is functools.partialmethod:
+            value = value.func
+        if _MEMO_WRAPPER is not None and type(value) is _MEMO_WRAPPER:
+            wrapped = value.__dict__.get("__wrapped__")
+            found.append((value, wrapped))
+    return found
+
+
+def _named_class_memo_changed(cls: type, ran: Any) -> bool:
+    """Did the call put a memo on a class its module names (*cls* or a base
+    of the user's), or fill one? Served, the next run finds the class's
+    memo as the first run left it, where plain Python makes it again or
+    fills it: a memo whose function is not the class body's own was set on
+    it from outside (``Holder.memo = staticmethod(cache(f))``); one holding
+    entries whose function ran in the call (*ran*, the codes its trace
+    recorded) was filled by it. With no trace, one holding entries counts:
+    an earlier fill cannot be told from this call's."""
+    for base in _CLASS_MRO(cls):
+        if not (_users_type(base) and _named(base)):
+            continue
+        prefix = type.__dict__["__qualname__"].__get__(base) + "."
+        for memo, wrapped in _memos_on(base):
+            if type(wrapped) is not _types.FunctionType or not wrapped.__qualname__.startswith(prefix):
+                return True
+            code = wrapped.__code__
+            if memo.cache_info().currsize and (ran is None or code in ran):
+                return True
+    return False
 
 
 def _named(kind: type) -> bool:
@@ -423,7 +481,7 @@ def _filled(cell) -> bool:
     return True
 
 
-def holds_a_closure_with_state(value) -> bool:
+def holds_a_closure_with_state(value, ran: Any = None) -> bool:
     """Whether *value* is, or holds however deeply nested, a function that
     changes what its closure holds when called (a counter or a log a factory
     returned), or a ``functools.cache`` memo. Looked for in tuples, lists,
@@ -445,12 +503,15 @@ def holds_a_closure_with_state(value) -> bool:
     [counter]}}`` was served; a seen set now ends a container that holds
     itself.
 
-    A class its module names is not looked into: a copy of the result comes
-    back with that very class, whose memo the next run uses in plain Python
-    too (a dataclass, a class with a ``functools.cache`` method); a class a
-    call made is. The standard library's guard on a dataclass's
-    ``__repr__`` keeps no state between calls. Past `_HOLDERS_LOOKED_INTO`
-    objects with something inside to look at, it raises
+    A class its module names is looked into for its memos only: a copy of
+    the result comes back with that very class, whose memo the next run
+    uses in plain Python too (a dataclass, a class with a
+    ``functools.cache`` method), unless the call put the memo there or
+    filled it (`_named_class_memo_changed`; *ran* is the code the call's
+    trace recorded, None without one). A class a call made is looked into
+    whole. The standard library's guard on a dataclass's ``__repr__`` keeps
+    no state between calls. Past `_HOLDERS_LOOKED_INTO` objects with
+    something inside to look at, or `_STEPS_AT` values in all, it raises
     `TooMuchToLookThrough`: not known, so not served.
     """
     if _plain_data.is_tree(value):
@@ -464,8 +525,12 @@ def holds_a_closure_with_state(value) -> bool:
     atoms = _EXACT_ATOMS
     # How each type is read, for this walk: thousands of records share one.
     readings: dict[type, int] = {}
+    steps = 0
     while stack:
         item = stack.pop()
+        steps += 1
+        if steps > _STEPS_AT:
+            raise TooMuchToLookThrough
         # By type, not `isinstance`: that asks an object for its
         # `__class__`, which may be the user's code.
         kind = type(item)
@@ -493,6 +558,13 @@ def holds_a_closure_with_state(value) -> bool:
             if id(item) in seen:
                 continue
             seen.add(id(item))  # a class each record holds is looked at once
+            if reading == _ONE and issubclass(kind, type) and _users_type(item):
+                # Its bases its module names, and itself when it is one:
+                # their memos only (`_named_class_memo_changed`).
+                if _named_class_memo_changed(item, ran):
+                    return True
+                if _named(item):
+                    continue
             held = gc.get_referents(item) if reading == _REFERENTS else _held_by(item)
             if held:
                 pushed = False
@@ -500,7 +572,7 @@ def holds_a_closure_with_state(value) -> bool:
                     ptype = type(part)
                     if ptype in atoms or id(part) in seen:
                         continue
-                    if ptype is dict and _plain_record(part, atoms):
+                    if _plain_part(part, ptype, atoms):
                         continue  # a record's attributes: nothing inside to look at
                     stack.append(part)
                     pushed = True

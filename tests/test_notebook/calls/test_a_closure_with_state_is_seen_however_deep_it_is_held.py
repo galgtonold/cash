@@ -289,10 +289,7 @@ def test_a_record_or_a_named_class_with_a_memo_method_is_storable(monkeypatch):
         def score(self, x):
             return self.n * x
 
-    # Named by the module for this test only: a memo on a class at the top
-    # of a test module is one of the user's to every other test.
-    _Model.__qualname__ = "_Model"
-    monkeypatch.setitem(globals(), "_Model", _Model)
+    _named_here(monkeypatch, _Model)
     assert not holds_a_closure_with_state([_Rec(i, str(i)) for i in range(100)])
     assert not holds_a_closure_with_state(_FrozenRec(1))
     assert not holds_a_closure_with_state(_Model(3))
@@ -436,3 +433,96 @@ def test_a_class_a_call_made_is_not_kept_alive_by_the_walk():
     del made
     gc.collect()
     assert gone() is None
+
+
+def _named_here(monkeypatch, cls):
+    """*cls*, named by this module for one test: a memo on a class at the
+    top of a test module is one of the user's to every other test."""
+    cls.__qualname__ = cls.__name__
+    for member in vars(cls).values():
+        inner = member.__func__ if isinstance(member, (staticmethod, classmethod)) else member
+        wrapped = getattr(inner, "__wrapped__", None)
+        if wrapped is not None:
+            wrapped.__qualname__ = f"{cls.__name__}.{wrapped.__name__}"
+    monkeypatch.setitem(globals(), cls.__name__, cls)
+    return cls
+
+
+def put_a_memo_on_a_named_class():
+    time.sleep(0.05)  # above the call cost floor, so a miss is stored
+    holder = globals()["_MemoHolder"]  # named by the test that runs it
+    holder.memo = staticmethod(functools.cache(_double))
+    return holder()
+
+
+def test_a_memo_the_call_puts_on_a_named_class_is_not_served(call_unit_harness, monkeypatch):
+    # Served, the class kept the first run's memo, filled since; plain
+    # Python puts a new one there on every run.
+    class _MemoHolder:
+        pass
+
+    _named_here(monkeypatch, _MemoHolder)
+    unit = call_unit_harness(lineage={"put_a_memo_on_a_named_class": "hash-put-memo"}, user_ns={})
+    site = CallSite(
+        source="put_a_memo_on_a_named_class()",
+        free_names=frozenset({"put_a_memo_on_a_named_class"}),
+        occurrence_index=0,
+    )
+    for _ in range(2):
+        unit.begin_statement()
+        held = unit.wrap(put_a_memo_on_a_named_class, site)()
+        held.memo(3)
+
+    assert [entry["cache_hit"] for entry in unit.call_log] == [False, False]
+    assert _MemoHolder.memo.cache_info().hits == 0
+
+
+def test_a_memo_on_a_named_class_counts_when_the_call_filled_it(monkeypatch):
+    # After a restart the class comes back with an empty memo, which the
+    # call filled in plain Python: ``y = (lookup(1), hits)`` read (2, 0)
+    # served where it is (2, 1).
+    class _Looks:
+        @staticmethod
+        @functools.cache
+        def lookup(n):
+            return n * 2
+
+    _named_here(monkeypatch, _Looks)
+    assert not holds_a_closure_with_state(_Looks())
+    _Looks.lookup(1)
+    ran_here = {_Looks.lookup.__wrapped__.__code__: None}
+
+    assert holds_a_closure_with_state(_Looks(), ran_here), "filled in the call"
+    assert not holds_a_closure_with_state(_Looks(), {}), "filled before the call, not in it"
+    assert holds_a_closure_with_state(_Looks()), "no trace: an earlier fill cannot be told apart"
+    assert holds_a_closure_with_state(type("Sub", (_Looks,), {})(), ran_here), "on a named base"
+
+
+class _Tagged:
+    def __init__(self, i):
+        self.i = i
+        self.tags = [i, "x"]
+
+
+def test_records_with_lists_of_plain_values_are_not_counted(monkeypatch):
+    # On 3.12+ an instance hands over its attributes themselves, not a dict:
+    # a record with a list was counted as a holder, and 200k of them were
+    # not stored.
+    from cash.notebook import call_key
+
+    monkeypatch.setattr(call_key, "_HOLDERS_LOOKED_INTO", 50)
+    assert not holds_a_closure_with_state([_Tagged(i) for i in range(1000)])
+
+
+def test_the_walk_takes_a_bounded_number_of_values(monkeypatch):
+    # With plain records not counted the walk had no end: a million took
+    # 2.7 s. Past the bound it is not known, so not stored, and said so.
+    from cash.notebook import call_key
+    from cash.notebook.statement.store import _holds_state
+
+    monkeypatch.setattr(call_key, "_STEPS_AT", 1000)
+    rows = [_Tagged(i) for i in range(2000)]
+    with pytest.raises(call_key.TooMuchToLookThrough):
+        holds_a_closure_with_state(rows)
+    assert _holds_state(rows) == "too_many"
+    assert not holds_a_closure_with_state(rows[:500])
