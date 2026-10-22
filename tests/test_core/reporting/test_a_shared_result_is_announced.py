@@ -520,3 +520,101 @@ def test_an_attribute_of_an_argument_is_announced(cash_instance, monkeypatch):
     table = ns["Table"]()
     said = _warnings_of(cash_instance.cache(ns["rows_of"]), table)
     assert said and "t.rows" in said[0], said
+
+
+_INITS: list = []
+
+
+class _Client:
+    """Rebuilt from its config: its ``__init__`` opens what it opens."""
+
+    def __init__(self, url):
+        _INITS.append(url)
+        self.url = url
+
+    def __reduce__(self):
+        return (_Client, (self.url,))
+
+
+class _Registry:
+    """A singleton whose ``__init__`` re-initialises it: a hit's unpickle
+    calls ``_Registry()`` and wipes the live one."""
+
+    _inst = None
+
+    def __new__(cls):
+        if cls._inst is None:
+            cls._inst = super().__new__(cls)
+        return cls._inst
+
+    def __init__(self):
+        self.entries = {}
+
+    def __reduce__(self):
+        return (_Registry, ())
+
+    # Compared by value: one compared by identity is a sentinel, handed back
+    # as itself.
+    def __eq__(self, other):
+        return isinstance(other, _Registry) and other.entries == self.entries
+
+    __hash__ = None
+
+
+def test_the_check_never_calls_a_class_its_reduce_names(cash_instance):
+    from cash.decorator import purity_checks
+
+    client = _Client("db://x")
+    del _INITS[:]
+    assert not purity_checks._comes_back_as_itself(client)
+    assert _INITS == []
+
+
+def test_a_singleton_a_hit_re_initialises_is_announced(cash_instance):
+    reg = _Registry()
+    reg.entries["model"] = "trained"
+    ns = {"REG": reg, "__name__": __name__}
+    exec("def with_reg(n):\n    return {'reg': REG, 'n': n}\n", ns)
+    assert _warnings_of(cash_instance.cache(ns["with_reg"]), 1)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "return DF['a'].array",
+        "return {'v': DF['a'].array}",
+        "return DF['o'].array",
+        "return df['a'].array",
+        "return df['i'].array",
+        "return df['i'].values",
+        "return df['k'].values",
+        "return {'v': df['i'].array}",
+    ],
+)
+def test_an_array_a_write_through_reaches_the_frame_is_announced(cash_instance, body):
+    # A numpy column's ``.array`` is over the block's own writable memory,
+    # copy-on-write or not; and an argument frame is looked at as a global.
+    pd = pytest.importorskip("pandas")
+
+    def frame():
+        return pd.DataFrame(
+            {
+                "a": np.arange(6.0),
+                "o": pd.Series(list("abcdef"), dtype=object),
+                "i": pd.array(range(6), dtype="Int64"),
+                "k": pd.Categorical(list("ababab")),
+            }
+        )
+
+    ns = {"DF": frame()}
+    exec(f"def f(df, n):\n    {body}\n", ns)
+    said = _warnings_of(cash_instance.cache(ns["f"]), frame(), 1)
+    assert said, body
+
+
+@pytest.mark.parametrize("dtype", ["pd.CategoricalDtype(['a', 'b'])", "pd.Int64Dtype()"])
+def test_a_pandas_dtype_held_in_a_global_says_nothing(cash_instance, dtype):
+    pd = pytest.importorskip("pandas")
+    ns = {"pd": pd}
+    exec(f"G = {dtype}\ndef f(n):\n    return {{'v': G, 'n': n}}\n", ns)
+    assert not _warnings_of(cash_instance.cache(ns["f"]), 1)

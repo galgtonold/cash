@@ -616,10 +616,11 @@ attributes and object array, for:
   columns, pandas' own `Int64`, `boolean`, `category`, time-zone
   datetime, period and Python-string columns, and a column holding the very
   interval, sparse or Arrow-backed array of the frame's;
-- the array of an extension column of one of those frames
-  (`DF["c"].array`, or `.values` of an `Int64`, time-zone or category
-  column), with copy-on-write too: it is the frame's own, and a write
-  through it reaches the frame.
+- the array of a column of one of those frames, or of a frame the call
+  is handed (`DF["c"].array` of a numpy, object or extension column, or
+  `.values` of an `Int64`, time-zone or category column), with
+  copy-on-write too: it is the frame's own, or one over its memory, and a
+  write through it reaches the frame.
 
 Not reported: a value nothing can be written through (a number, a string,
 an enum member, a frozen dataclass of immutable fields, a view of an array
@@ -628,11 +629,16 @@ identity (a plain class without `__eq__`, such as a sentinel), since a hit
 hands back that global itself, and a pandas column under copy-on-write
 (the pandas 3 default), where a write through it copies first and never
 reaches the frame. Nor are pandas' `Timestamp`, `Timedelta`, `Period` and
-`NaT`, or an object, yours or a library's, that a hit hands back as
-itself, with what it holds: one pickle rebuilds by its name, or by a call
-on plain values with no state applied after (a `logging.Logger`,
-`getLogger('app')`). One whose pickle carries a state is reported: a hit
-would write that state over the live object. Not seen: sharing deeper than
+`NaT`, its dtypes (`Int64Dtype()`, `CategoricalDtype([...])`), or an
+object, yours or a library's, that a hit hands back as itself, with what
+it holds: one pickle rebuilds by its name, or by a call on plain values
+with no state applied after, to a library function (a `logging.Logger`,
+`getLogger('app')`) or a function of yours that only returns a module
+global (`def get_registry(): return REGISTRY`). Cash never calls a class
+or other code of yours to find out. One rebuilt by calling its class is
+reported, a singleton too: a hit runs its `__init__` again on the live
+object. So is one whose pickle carries a state: a hit would write that
+state over the live object. Not seen: sharing deeper than
 two levels or past the 256th value of a container (`BIG_LIST[300]`), an
 item of an attribute of an object (`REGISTRY.entries["a"]`), what an enum
 member holds (`Color.RED.value`), an attribute of a library module or of a

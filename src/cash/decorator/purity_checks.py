@@ -170,9 +170,52 @@ def _comes_back_as_itself(value) -> bool:
             return False
         if any(part is not None for part in rv[2:]) or not _plain_arguments(rv[1]):
             return False
-        return rv[0](*rv[1]) is value
+        return _rebuilt_by(rv[0], rv[1]) is value
     except Exception:  # noqa: BLE001 - not rebuilt as itself, as far as is known
         return False
+
+
+#: What `_rebuilt_by` answers for a call it will not make.
+_NOT_CALLED = object()
+
+
+def _rebuilt_by(maker, args):
+    """What a hit's ``maker(*args)`` gives back, found without running
+    the user's code: a library function (``logging.getLogger``) is called;
+    a user function only read, and only when its body is a bare ``return
+    NAME`` of a module global. A class is never called: its ``__init__``
+    would run here on each store (opening what it opens), and runs again on
+    each hit, re-initialising even a singleton ``__new__`` hands back, so it
+    is not handed back as it was. Anything else: `_NOT_CALLED`."""
+    import copyreg
+
+    if isinstance(maker, type) or maker is copyreg.__newobj__ or maker is getattr(copyreg, "__newobj_ex__", None):
+        return _NOT_CALLED
+    func = getattr(maker, "__func__", maker)
+    owner = getattr(maker, "__self__", None)
+    if owner is not None and not isinstance(owner, types.ModuleType):
+        return _NOT_CALLED  # a method of an object: its code is the object's
+    module = sys.modules.get(getattr(func, "__module__", None) or "")
+    if module is not None and not is_user_code_module(module):
+        return maker(*args)
+    if isinstance(func, types.FunctionType) and not args:
+        name = _bare_global_return(func.__code__)
+        if name is not None and name in func.__globals__:
+            return func.__globals__[name]
+    return _NOT_CALLED
+
+
+def _bare_global_return(code) -> str | None:
+    """``NAME`` for a function whose whole body is ``return NAME``, NAME
+    a global; otherwise None."""
+    import dis
+
+    if code.co_argcount or code.co_kwonlyargcount or code.co_flags & (inspect.CO_VARARGS | inspect.CO_VARKEYWORDS):
+        return None
+    steps = [i for i in dis.get_instructions(code) if i.opname not in ("RESUME", "NOP", "CACHE")]
+    if len(steps) == 2 and steps[0].opname == "LOAD_GLOBAL" and steps[1].opname == "RETURN_VALUE":
+        return steps[0].argval
+    return None
 
 
 def _plain_arguments(args) -> bool:
@@ -200,6 +243,8 @@ def _unwritable(value) -> bool:
     kind = type(value)
     if kind.__name__ in _PANDAS_SCALARS and (kind.__module__ or "").startswith("pandas"):
         return True  # a ``__dict__`` only for attributes set by hand
+    if any(k.__name__ == "ExtensionDtype" and (k.__module__ or "").startswith("pandas") for k in kind.__mro__):
+        return True  # a dtype (``Int64Dtype()``, ``CategoricalDtype([...])``): immutable
     params = getattr(kind, "__dataclass_params__", None)
     if params is not None and getattr(params, "frozen", False):
         return True
@@ -380,16 +425,53 @@ def _extension_values(value) -> list:
 
 
 def _block_arrays(value) -> list:
-    """The extension arrays a pandas frame's or column's blocks hold, with
-    copy-on-write or without: ``DF['c'].array`` and ``.values`` hand back
-    that very object, and a write through it reaches the frame either way."""
+    """The arrays a pandas frame's or column's blocks hold, ndarrays and
+    extension arrays, with copy-on-write or without: ``DF['c'].array`` and
+    ``.values`` of an extension column hand back that very object, and
+    ``.array`` of a numpy column one over the block's own writable ndarray.
+    A write through either reaches the frame."""
     kind = type(value)
     if kind.__name__ not in ("Series", "DataFrame") or not (kind.__module__ or "").startswith("pandas"):
         return []
     try:
-        return [block.values for block in value._mgr.blocks if type(block.values).__name__ != "ndarray"]
+        return [block.values for block in value._mgr.blocks]
     except Exception:  # noqa: BLE001 - a frame that cannot be read: nothing said
         return []
+
+
+_EXTENSION_PARTS = ("_ndarray", "_data", "_mask", "_codes")
+
+
+def _exposed_in(held_arrays: list) -> tuple[set[int], list]:
+    """The extension arrays among *held_arrays* (``DF['c'].array``), and the
+    ndarrays they keep: what `_exposes` compares a frame's blocks with."""
+    exposed = [value for value in held_arrays if _is_extension_array(value)]
+    parts = [array for value in exposed for part in _EXTENSION_PARTS for array in _array_slot(value, part)]
+    return {id(value) for value in exposed}, parts
+
+
+def _exposes(frame, exposed: set[int], exposed_parts: list) -> bool:
+    """An extension array of the result is *frame*'s own, or one over its
+    memory, copy-on-write or not: a write through it reaches *frame*."""
+    blocks = _block_arrays(frame)
+    if any(id(values) in exposed for values in blocks):
+        return True
+    if not exposed_parts or _read_only(exposed_parts):
+        return False
+    theirs = [
+        array
+        for values in blocks
+        for array in (
+            [values]
+            if type(values).__name__ == "ndarray"
+            else [a for part in _EXTENSION_PARTS for a in _array_slot(values, part)]
+        )
+    ]
+    if not theirs:
+        return False
+    import numpy as _np
+
+    return any(_np.may_share_memory(a, b) for a in exposed_parts for b in theirs)
 
 
 def _is_extension_array(value) -> bool:
@@ -796,6 +878,9 @@ class PurityChecks:
                     held_arrays = _held_arrays(result)
                 if any(shares_memory(array, value) for array in held_arrays):
                     return "shares memory with the argument", name, caller
+                exposed, exposed_parts = _exposed_in(held_arrays)
+                if exposed and _exposes(value, exposed, exposed_parts):
+                    return "shares memory with the argument", name, caller
             for attr, held in _own_attributes(value):
                 attributes.setdefault(id(held), (f"{name}.{attr}", held))
         if attributes:
@@ -871,33 +956,16 @@ class PurityChecks:
         roots = {id(_root(array)) for array in mine}
         held = {id(values) for value in held_arrays for values in _extension_values(value)}
         held |= {id(value) for value in held_arrays if _is_extension_array(value)}
-        exposed = {id(value) for value in held_arrays if _is_extension_array(value)}
-        exposed_parts = [
-            array
-            for value in held_arrays
-            if _is_extension_array(value)
-            for part in ("_ndarray", "_data", "_mask", "_codes")
-            for array in _array_slot(value, part)
-        ]
+        exposed, exposed_parts = _exposed_in(held_arrays)
         for what, name, keeper, value in arrays:
             if held and any(id(values) in held for values in _extension_values(value)):
                 # The very extension array (interval, Arrow-backed): a
                 # write through either reaches the other.
                 return f"shares memory with {what}", _label(name), keeper
-            if exposed:
+            if exposed and _exposes(value, exposed, exposed_parts):
                 # ``DF['c'].array`` / ``.values``: the frame's own array, or
                 # one over its memory, copy-on-write or not.
-                blocks = _block_arrays(value)
-                if any(id(values) in exposed for values in blocks):
-                    return f"shares memory with {what}", _label(name), keeper
-                theirs = [
-                    a for v in blocks for p in ("_ndarray", "_data", "_mask", "_codes") for a in _array_slot(v, p)
-                ]
-                if theirs and exposed_parts and not _read_only(exposed_parts):
-                    import numpy as _np
-
-                    if any(_np.may_share_memory(a, b) for a in exposed_parts for b in theirs):
-                        return f"shares memory with {what}", _label(name), keeper
+                return f"shares memory with {what}", _label(name), keeper
             theirs = _buffers(value)
             if not any(id(_root(array)) in roots for array in theirs) or _unwritable(value):
                 continue
