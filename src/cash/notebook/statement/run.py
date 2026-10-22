@@ -286,6 +286,11 @@ class StatementRun:
     #: It looks names up by a string, which its trace follows
     #: (``cache_key.lookups_followed``): served only on a checked trace.
     needs_trace: bool = False
+    #: An entry was found under its key, and its trace refused it: what the
+    #: code it ran reads changed, which the key does not hold. Its outputs are
+    #: keyed by value (`no_cache_value_digest`), so a reader below, keyed on
+    #: the same lineage, is not served what the old value gave.
+    trace_refused: bool = False
     #: Seconds recording what it ran took (``Shadow.begin`` / ``end``), inside
     #: its timed run but cash's cost, not the statement's.
     record_time: float = 0.0
