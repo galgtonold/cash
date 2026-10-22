@@ -57,6 +57,7 @@ import sys
 import threading
 import types
 import weakref
+from collections import deque
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
@@ -235,7 +236,23 @@ def _recorder_class() -> type:
             # Code that is gone cannot run again, so nothing it would have
             # recorded is lost; code still alive stays.
             self.user_codes: weakref.WeakKeyDictionary[types.CodeType, int] = weakref.WeakKeyDictionary()
-            self.rearm: set[types.CodeType] = set()
+            #: Code whose events a callback turned off, to arm again. Filled
+            #: by every thread and drained by `_rearm`: a deque, which both
+            #: may use at once. A set swapped for a new one lost the code a
+            #: thread added to the old one just after the swap (never armed
+            #: again, so its next start went unseen), and one iterated while
+            #: another thread added to it raised.
+            self.rearm: deque[types.CodeType] = deque()
+            #: A callback disables its code only after it returns, so one
+            #: that queued its code before another thread's `_rearm` took the
+            #: queue would disable the code that `_rearm` had just armed, and
+            #: no queue would hold it: every later watch missed it running.
+            #: `_rearm` holds `_rearming` while it drains and arms, and moves
+            #: `rearm_gen` on before letting go; a callback that sees either
+            #: (checked after its last call, so no other thread runs between
+            #: the check and the disable) leaves its events on instead.
+            self._rearming = threading.Lock()
+            self.rearm_gen = 0
             #: The user's code that looks names up by a string in its own
             #: globals (`string_lookups`): what it calls is recorded for a
             #: notebook unit, the callable a string found among it.
@@ -345,7 +362,7 @@ def _recorder_class() -> type:
             self.user_codes[code] = events
             mon.set_local_events(self.tool, code, events)
             if value_hash.OPEN_WATCHES and not pool and not _host_code(kind[2]):
-                value_hash.user_code_ran(_statement_code(code), _host_thread())
+                value_hash.user_code_ran(_statement_code(code, frame), _host_thread())
             if self.active or self.stack:
                 if code.co_flags & rec.RESUMABLE and offset:
                     self._seen_resume(code, g, kind)
@@ -400,17 +417,22 @@ def _recorder_class() -> type:
             return True
 
         def _rearm(self) -> None:
-            rearm, self.rearm = self.rearm, set()
-            mon = sys.monitoring
-            if not self.rearm_works:
-                if rearm:
-                    mon.restart_events()
-            else:
-                for code in rearm:
-                    events = self.user_codes.get(code)
-                    if events is not None:
-                        mon.set_local_events(self.tool, code, 0)
-                        mon.set_local_events(self.tool, code, events)
+            with self._rearming:
+                pending = self.rearm
+                rearm = set()
+                while pending:
+                    rearm.add(pending.popleft())
+                mon = sys.monitoring
+                if not self.rearm_works:
+                    if rearm:
+                        mon.restart_events()
+                else:
+                    for code in rearm:
+                        events = self.user_codes.get(code)
+                        if events is not None:
+                            mon.set_local_events(self.tool, code, 0)
+                            mon.set_local_events(self.tool, code, events)
+                self.rearm_gen += 1
 
         def end(self, unit: Any) -> Any:
             if unit.kind != "decorator":
@@ -425,7 +447,8 @@ def _recorder_class() -> type:
             return unit
 
         def _on_start(self, code: types.CodeType, offset: int) -> Any:
-            self.rearm.add(code)
+            gen = self.rearm_gen
+            self.rearm.append(code)
             if self.active or self.stack:
                 frame = sys._getframe(1)
                 g = frame.f_globals
@@ -434,18 +457,19 @@ def _recorder_class() -> type:
                     kind = self._classify(g)
                 self._seen_start(code, frame, g, kind)
             if value_hash.OPEN_WATCHES:
-                self._seen_in_window(code, sys._getframe(1).f_globals)
-            return DISABLE
+                self._seen_in_window(code, sys._getframe(1))
+            return DISABLE if not self._rearming.locked() and self.rearm_gen == gen else None
 
-        def _seen_in_window(self, code: types.CodeType, g: dict) -> None:
+        def _seen_in_window(self, code: types.CodeType, frame: Any) -> None:
             """*code* started or resumed while a `value_hash.watch` is open:
             unless it is a library's (pyplot's, the one library whose code
             has events here), the watches end."""
+            g = frame.f_globals
             kind = self._kinds.get(id(g))
             if kind is None or kind[0] is not g:
                 kind = self._classify(g)
             if (kind[1] is not None or self._unregistered_user_code(kind[2], code)) and not _host_code(kind[2]):
-                value_hash.user_code_ran(_statement_code(code), _host_thread())
+                value_hash.user_code_ran(_statement_code(code, frame), _host_thread())
 
         def _seen_start(self, code: types.CodeType, frame: Any, g: dict, kind: tuple) -> None:
             units = self.active
@@ -500,7 +524,8 @@ def _recorder_class() -> type:
             return bool(filename) and not is_pseudo_filename(filename) and is_user_path(filename)
 
         def _on_resume(self, code: types.CodeType, offset: int) -> Any:
-            self.rearm.add(code)
+            gen = self.rearm_gen
+            self.rearm.append(code)
             if (self.active or self.stack) and code.co_flags & rec.RESUMABLE:
                 g = sys._getframe(1).f_globals
                 kind = self._kinds.get(id(g))
@@ -508,8 +533,8 @@ def _recorder_class() -> type:
                     kind = self._classify(g)
                 self._seen_resume(code, g, kind)
             if value_hash.OPEN_WATCHES:
-                self._seen_in_window(code, sys._getframe(1).f_globals)
-            return DISABLE
+                self._seen_in_window(code, sys._getframe(1))
+            return DISABLE if not self._rearming.locked() and self.rearm_gen == gen else None
 
         def _seen_resume(self, code: types.CodeType, g: dict, kind: tuple) -> None:
             if kind[1] is not None:
@@ -545,8 +570,9 @@ def _recorder_class() -> type:
             if not units:
                 if stack and code in self.by_string:
                     return None
-                self.rearm.add(code)
-                return DISABLE
+                gen = self.rearm_gen
+                self.rearm.append(code)
+                return DISABLE if not self._rearming.locked() and self.rearm_gen == gen else None
             try:
                 if fn is getattr:
                     if arg0 is sys.monitoring.MISSING:
@@ -613,9 +639,23 @@ def _host_thread() -> bool:
     return threading.current_thread() in HOST_THREADS
 
 
-def _statement_code(code: types.CodeType) -> bool:
-    """Is *code* a notebook statement's own module-level code?"""
-    return code.co_name == "<module>" and code.co_filename.startswith(CELL_NAME_PREFIX)
+#: Where cash runs a notebook statement's code (`StatementRun.run`).
+_STATEMENT_RUNNER = os.path.join("cash", "notebook", "statement", "run.py")
+
+
+def _statement_code(code: types.CodeType, frame: Any) -> bool:
+    """Is *code*, starting in *frame*, the module-level code of the notebook
+    statement cash is running: a cell's code, started by cash's statement
+    runner itself? Another cell's code run from anywhere else (a finalizer
+    that ``exec``s it, a hook) is code the statement's checks never read."""
+    if code.co_name != "<module>" or not code.co_filename.startswith(CELL_NAME_PREFIX):
+        return False
+    caller = frame.f_back
+    return (
+        caller is not None
+        and caller.f_code.co_name in ("run", "run_async")
+        and caller.f_code.co_filename.endswith(_STATEMENT_RUNNER)
+    )
 
 
 def watching_user_code() -> bool:

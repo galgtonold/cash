@@ -15,6 +15,7 @@ writes. A sample would decide "unchanged" for an edit outside it.
 from __future__ import annotations
 
 import contextlib
+import gc
 import hashlib
 import logging
 import pickle
@@ -414,7 +415,10 @@ class Watch:
         self.thread = threading.get_ident()
         #: A statement's own module-level code starting leaves it open: the
         #: caller read that code (``y = f(x)`` only reads names before its
-        #: call starts, `call_effects._call_shape`).
+        #: call starts, `call_effects._call_shape`). Once, and on this
+        #: thread: the statement starts once, and another statement's code
+        #: (a nested ``run_cell``, a cell run on another thread) is code the
+        #: caller did not read (`user_code_ran`).
         self.statement_code_ok = statement_code_ok
 
     def close(self) -> None:
@@ -475,11 +479,36 @@ def user_code_ran(statement_code: bool = False, host: bool = False) -> None:
     on it."""
     me = threading.get_ident()
     for w in list(OPEN_WATCHES):
-        if (statement_code and w.statement_code_ok) or (host and w.thread != me):
+        if statement_code and w.statement_code_ok and w.thread == me:
+            w.statement_code_ok = False  # this statement's own start, seen
+            continue
+        if host and w.thread != me:
             continue
         w.close()
         if isinstance(w, _Window):
             w.digests = {}
+
+
+def _on_collection(phase: str, info: dict) -> None:
+    """A collection freed something: the finalizers and weakref callbacks
+    it ran may be the user's code handed to C (``weakref.ref(obj,
+    rows.append)``, ``weakref.finalize(obj, arr.fill, 0)``, a C type's
+    ``tp_finalize``), which starts no Python code for the recorder to see.
+    So every watch ends, as when code of the user's runs.
+
+    At its end, and only when it freed something: those run only for the
+    objects it finds unreachable, and most collections free nothing (a
+    300-tree forest's pickling starts about one: were each an end, no window
+    would outlast its first read of the forest). Still out of reach: such C
+    code run when a refcount drops to zero (``del obj`` with a C weakref
+    callback, a C type's ``tp_dealloc``), which no collection runs and no
+    event announces, and a C ``tp_finalize`` that makes everything it was
+    found with reachable again, so that the collection frees nothing."""
+    if phase == "stop" and OPEN_WATCHES and (info["collected"] or info["uncollectable"]):
+        user_code_ran()
+
+
+gc.callbacks.append(_on_collection)
 
 
 def reading_once() -> bool:

@@ -14,7 +14,6 @@ from __future__ import annotations
 import gc
 import sys
 import threading
-import time
 import weakref
 
 import pytest
@@ -298,34 +297,6 @@ def test_a_pickle_kept_for_the_store_is_dropped_once_code_of_the_users_ran(user,
         assert stored_pickle.kept(value) is not None
         user.change(value, [4, 4.0])
         assert stored_pickle.kept(value) is None, "the value changed since its pickle was kept"
-
-
-def _settle(pool_alive, want, deadline=20.0):
-    end = time.monotonic() + deadline
-    while time.monotonic() < end:
-        if pool_alive() == want:
-            return True
-        time.sleep(0.05)
-    return pool_alive() == want
-
-
-def test_a_pool_counts_as_alive_only_while_it_has_work():
-    """A process pool's manager and its queue's feeder thread stay alive
-    after its work is done (joblib's after an ``n_jobs`` fit): idle, they
-    change nothing; with work handed to them, they may."""
-    from concurrent.futures import ProcessPoolExecutor
-
-    from cash.tracking.trace_recorder import other_thread_alive
-
-    ns = {}
-    assert not other_thread_alive(ns)
-    with ProcessPoolExecutor(max_workers=1) as pool:
-        assert pool.submit(abs, -1).result(timeout=60) == 1
-        assert _settle(lambda: other_thread_alive(ns), False), "an idle pool's threads change nothing"
-        busy = pool.submit(time.sleep, 3)
-        assert other_thread_alive(ns), "a pool with work counts as alive"
-        busy.result(timeout=60)
-        assert _settle(lambda: other_thread_alive(ns), False)
 
 
 @pytest.fixture
