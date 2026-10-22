@@ -400,3 +400,117 @@ def test_a_local_dir_that_raises_keeps_traces_in_the_temp_dir(tmp_path, monkeypa
     assert kept.dir == os.path.join(tempfile.gettempdir(), "shadow")
     assert kept.counts["errors"] == 1
     assert "local_dir failed" in caplog.text
+
+
+def _edit_later(path, text):
+    """Write *text* to *path* with a later mtime, so Python's own compiled
+    file check sees the edit however quick (same size, same second)."""
+    st = path.stat()
+    path.write_text(text, encoding="utf-8")
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+
+
+@pytest.mark.parametrize(
+    ("body", "change"),
+    [
+        ("import {s}\nTABLE = {{'k': 2}}\nTABLE.update({s}.OVERRIDES)\n", "settings"),
+        ("import os\nTABLE = {{'k': 2}}\nif os.environ.get({var!r}):\n    TABLE['k'] = 9\n", "environ"),
+    ],
+    ids=["updated_from_another_module", "set_by_an_environment_variable"],
+)
+def test_a_module_body_that_runs_code_vouches_for_none_of_its_settings(
+    trace_on, cash_magics, tmp_path, monkeypatch, body, change
+):
+    """``TABLE = {'k': 2}`` then ``TABLE.update(settings.OVERRIDES)``, or a
+    branch on the environment: the file unchanged, its text does not settle
+    ``TABLE``, which was vouched for and served as 6 after the other module
+    or the environment changed."""
+    _, mod = trace_on
+    name, settings, var = mod + "_tab", mod + "_set", (mod + "_BIG").upper()
+    (tmp_path / f"{settings}.py").write_text("OVERRIDES = {}\n", encoding="utf-8")
+    text = body.format(s=settings, var=var) + "def f(x):\n    return x * TABLE['k']\n"
+    (tmp_path / f"{name}.py").write_text(text, encoding="utf-8")
+    from tests._cell_driver import run_cash_cell
+
+    cells = _lazy_cells(name)
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    ns = cash_magics.shell.user_ns
+    assert ns["t"] == 6
+    if change == "settings":
+        _edit_later(tmp_path / f"{settings}.py", "OVERRIDES = {'k': 9}\n")
+    else:
+        monkeypatch.setenv(var, "1")
+    sys.modules.pop(name, None)
+    sys.modules.pop(settings, None)
+    del ns["t"]
+    run_cash_cell(cash_magics, cells[-1], cells=cells)
+
+    assert ns["t"] == 27
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        (
+            "class C:\n    K = 2\ndef f(x):\n    return x * C.K\n",
+            "class C:\n    K = 9\ndef f(x):\n    return x * C.K\n",
+        ),
+        ("def f(x, k=2):\n    return x * k\n", "def f(x, k=9):\n    return x * k\n"),
+    ],
+    ids=["class_attribute", "default"],
+)
+def test_a_file_edited_while_its_module_is_loaded_does_not_vouch_for_it(trace_on, cash_magics, tmp_path, before, after):
+    """The module loaded, its file edited, a statement then stored: the
+    trace held what the old module computed and the new file's digest, and
+    after a restart the unchanged file vouched for 6. What was loaded is
+    what the file is held against."""
+    from tests._cell_driver import run_cash_cell
+
+    _, mod = trace_on
+    name = mod + "_lg"
+    path = tmp_path / f"{name}.py"
+    path.write_text(before, encoding="utf-8")
+    cells = [*_lazy_cells(name)]
+    run_cash_cell(cash_magics, cells[0], cells=cells)
+    run_cash_cell(cash_magics, "w = g(1)", cells=cells)
+    _edit_later(path, after)
+    for cell in cells[1:]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    ns = cash_magics.shell.user_ns
+    assert ns["t"] == 6  # the module loaded is the old one
+    sys.modules.pop(name, None)
+    del ns["t"]
+    run_cash_cell(cash_magics, cells[-1], cells=cells)
+
+    assert ns["t"] == 27
+
+
+def test_a_file_swapped_keeping_its_mtime_and_size_is_read_again(tmp_path):
+    """``cp -p`` or ``touch -r``: the same mtime and size, other text. The
+    file's state was kept by mtime and size and the old one served."""
+    from cash.notebook import shadow
+
+    path = tmp_path / "swapped.py"
+    path.write_text("def f(x):\n    return x * 2\n", encoding="utf-8")
+    old = path.stat()
+    os.utime(path, ns=(old.st_atime_ns, old.st_mtime_ns - 10_000_000_000))
+    old = path.stat()
+    first = shadow._file_state(str(path))
+    path.write_text("def f(x):\n    return x * 9\n", encoding="utf-8")
+    os.utime(path, ns=(old.st_atime_ns, old.st_mtime_ns))
+
+    assert shadow._file_state(str(path)).digest != first.digest
+
+
+def test_a_docstring_edit_changes_the_files_digest(tmp_path):
+    """A docstring can be read as the code runs (``int(f.__doc__)``,
+    ``description=__doc__``): an edit of one is an edit of the file."""
+    from cash.notebook import shadow
+
+    path = tmp_path / "doc.py"
+    path.write_text('def f(x):\n    "2"\n    return x\n', encoding="utf-8")
+    first = shadow._file_state(str(path)).digest
+    path.write_text('def f(x):\n    "9"\n    return x\n# a comment\n', encoding="utf-8")
+
+    assert shadow._file_state(str(path)).digest != first

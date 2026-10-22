@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import ast
 import atexit
+import builtins
 import collections
 import contextlib
 import contextvars
@@ -178,7 +179,10 @@ class Shadow:
             # one folder under the system temp dir, and the traces kept per
             # statement were counted across them.
             try:
-                local = getattr(backend, "local_dir", None)
+                try:
+                    local = backend.local_dir
+                except AttributeError:
+                    local = None
                 base = local() if callable(local) else local
             except Exception as exc:  # noqa: BLE001 - said, and the temp dir used
                 self.counts["errors"] += 1
@@ -760,7 +764,7 @@ class Shadow:
 
     def statement_trace(self, run: Any) -> dict | None:
         """The trace a statement's entry is stored with (`entry_trace`)."""
-        unit = getattr(run, "trace_unit", None)
+        unit = attribute_or(run, "trace_unit", None)
         if unit is None or run.skip_cache or not run.cache_key:
             return None
         if run.memo_used:
@@ -1074,14 +1078,19 @@ class _FileState(NamedTuple):
     #: Every name the module's text binds, at any depth outside its
     #: functions and classes, or declares ``global``; None when its
     #: globals can be bound by text it does not hold (``import *``,
-    #: ``globals()``).
+    #: ``globals()``) or its body runs code (`_inert_imports`).
     bound: frozenset[str] | None
+    #: The modules its body imports, which must be libraries for what its
+    #: text settles to hold (`_vouched_by_file`).
+    imports: frozenset[str]
 
 
-#: ``path -> (mtime_ns, size, state)``: a file's `_FileState`, read again
-#: when its stat changes. One older than `_SETTLED_S` when read is kept: an
-#: edit within a coarse mtime's tick could keep both.
-_FILE_STATES: dict[str, tuple[int, int, _FileState]] = {}
+#: ``path -> (stat, state)``: a file's `_FileState`, read again when its
+#: stat changes: mtime, size, inode (an atomic save) and ctime, which a
+#: copy keeping the mtime (``cp -p``, ``touch -r``) cannot set back. One
+#: older than `_SETTLED_S` when read is kept: an edit within a coarse
+#: mtime's tick could keep both.
+_FILE_STATES: dict[str, tuple[tuple[int, int, int, int], _FileState]] = {}
 _SETTLED_S = 2.0
 
 
@@ -1099,9 +1108,10 @@ def _read_file_state(path: str) -> _FileState | None:
         st = os.stat(path)
     except (OSError, ValueError):
         return None
+    stat = (st.st_mtime_ns, st.st_size, st.st_ino, st.st_ctime_ns)
     kept = _FILE_STATES.get(path)
-    if kept is not None and kept[0] == st.st_mtime_ns and kept[1] == st.st_size:
-        return kept[2]
+    if kept is not None and kept[0] == stat:
+        return kept[1]
     try:
         with open(path, "rb") as fh:
             data = fh.read()
@@ -1114,30 +1124,119 @@ def _read_file_state(path: str) -> _FileState | None:
         tree: ast.Module | None = ast.parse(data)
     except (SyntaxError, ValueError):
         code = tree = None
-    settled, bound = _settled_names(data, tree)
-    # Its code, not its formatting: a comment or a docstring reworded
-    # changes nothing a run computes.
-    text = data if tree is None else _without_docstrings(tree).encode()
-    state = _FileState(hashlib.blake2b(text, digest_size=16).hexdigest(), code, settled, bound)
+    imports = _inert_imports(tree) if tree is not None else None
+    settled, bound = _settled_names(data, tree) if imports is not None else ({}, None)
+    # Its code, not its formatting: a comment reworded changes nothing a
+    # run computes. A docstring can (``description=__doc__``).
+    text = data if tree is None else ast.dump(tree).encode()
+    state = _FileState(hashlib.blake2b(text, digest_size=16).hexdigest(), code, settled, bound, imports or frozenset())
     if time.time() - st.st_mtime > _SETTLED_S:
-        _FILE_STATES[path] = (st.st_mtime_ns, st.st_size, state)
+        _FILE_STATES[path] = (stat, state)
     return state
 
 
-def _without_docstrings(tree: ast.Module) -> str:
-    """*tree* dumped without positions, its docstrings left out."""
-    for node in ast.walk(tree):
-        body = getattr(node, "body", None)
-        if (
-            isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-            and isinstance(body, list)
-            and body
-            and isinstance(body[0], ast.Expr)
-            and isinstance(body[0].value, ast.Constant)
-            and isinstance(body[0].value.value, str)
-        ):
-            body[0] = ast.Pass()
-    return ast.dump(tree)
+def _inert_imports(tree: ast.Module) -> frozenset[str] | None:
+    """The modules *tree*'s body imports, when running it can bind its
+    globals only as its text says: it defines functions and classes,
+    assigns literals and imports modules, and runs nothing else. None when
+    it runs code whose outcome its text does not settle: a call
+    (``TABLE.update(settings.OVERRIDES)``, ``settings.apply(__name__)``),
+    a branch (``if os.environ.get(...)``), a store to an attribute or an
+    item, an augmented assignment, a walrus. The imports must then be
+    libraries' (`_vouched_by_file`): a module of the user's can set this
+    one's globals as it is imported."""
+    imports: set[str] = set()
+    imported_names: set[str] = set()
+
+    def plain_value(node: ast.expr | None) -> bool:
+        if node is None or isinstance(node, ast.Lambda):
+            return True
+        while isinstance(node, ast.Attribute):
+            node = node.value
+        return isinstance(node, ast.Name) or _literal(node)
+
+    def library_call(node: ast.expr | None) -> bool:
+        # ``logging.getLogger(__name__)``, ``re.compile("x+")``: a call of
+        # an imported module's function (a library's, `_library_imports`)
+        # or a builtin, handed plain values; it binds only what it is
+        # assigned to, which the text does not settle.
+        if not isinstance(node, ast.Call):
+            return False
+        root = node.func
+        while isinstance(root, ast.Attribute):
+            root = root.value
+        if not isinstance(root, ast.Name) or root.id in _BINDING_BUILTINS:
+            return False
+        if root.id not in imported_names and root.id not in vars(builtins):
+            return False
+        return all(plain_value(a) for a in node.args) and all(plain_value(k.value) for k in node.keywords)
+
+    def decorator(node: ast.expr) -> bool:
+        if isinstance(node, ast.Call):
+            if not all(_literal(a) for a in node.args) or not all(_literal(k.value) for k in node.keywords):
+                return False
+            node = node.func
+        return isinstance(node, (ast.Name, ast.Attribute)) and plain_value(node)
+
+    def function(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+        args = node.args
+        defaults = [*args.defaults, *(d for d in args.kw_defaults if d is not None)]
+        return all(decorator(d) for d in node.decorator_list) and all(_literal(d) for d in defaults)
+
+    def body(stmts: list[ast.stmt], *, in_class: bool) -> bool:
+        for stmt in stmts:
+            if isinstance(stmt, ast.Pass) or (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant)):
+                continue
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if not function(stmt):
+                    return False
+            elif isinstance(stmt, ast.ClassDef):
+                if not (
+                    all(decorator(d) for d in stmt.decorator_list)
+                    and all(plain_value(b) and not _literal(b) for b in stmt.bases)
+                    and all(plain_value(k.value) for k in stmt.keywords)
+                    and body(stmt.body, in_class=True)
+                ):
+                    return False
+            elif isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+                targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+                if not all(isinstance(t, ast.Name) for t in targets) or not (
+                    plain_value(stmt.value) or library_call(stmt.value)
+                ):
+                    return False
+            elif isinstance(stmt, ast.Expr) and library_call(stmt.value) and not in_class:
+                continue
+            elif isinstance(stmt, ast.Import) and not in_class:
+                imports.update(alias.name for alias in stmt.names)
+                imported_names.update(alias.asname or alias.name.split(".", 1)[0] for alias in stmt.names)
+            elif isinstance(stmt, ast.ImportFrom) and not in_class and stmt.level == 0 and stmt.module:
+                imports.add(stmt.module)
+                imported_names.update(alias.asname or alias.name for alias in stmt.names)
+            elif not in_class and _main_guard(stmt):
+                continue  # not run on import
+            else:
+                return False
+        return True
+
+    return frozenset(imports) if body(tree.body, in_class=False) else None
+
+
+#: Builtins that bind names, or run code, by what they are handed.
+_BINDING_BUILTINS = frozenset({"setattr", "delattr", "exec", "eval", "globals", "vars", "locals", "__import__"})
+
+
+def _main_guard(stmt: ast.stmt) -> bool:
+    """``if __name__ == "__main__":``, with no ``else``."""
+    test = stmt.test if isinstance(stmt, ast.If) and not stmt.orelse else None
+    return (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name)
+        and test.left.id == "__name__"
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Eq)
+        and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value == "__main__"
+    )
 
 
 #: Text by which a module binds its globals without naming them.
@@ -1229,12 +1328,61 @@ def _loaded_file(module: str, items: Mapping[tuple, str]) -> tuple[str, str] | N
     state = _file_state(path)
     if state is None:
         return None
+    if not _loaded_from(module, path, state):
+        return path, "edited since it was loaded"
     for item, digest in items.items():
         if item[0] == "code" and item[1] == module:
             compiled = _compiled_code(state.code, item[2]) if state.code is not None else None
             if compiled is None or code_digest(compiled) != digest.split("/", 1)[0]:
                 return path, "edited since it was loaded"
     return path, state.digest
+
+
+#: module name -> (the module, the digest of its file when cash first
+#: read it while loaded): what a later read of the file is held against.
+_LOADED_DIGESTS: dict[str, tuple[Any, str]] = {}
+
+
+def _loaded_from(module: str, path: str, state: _FileState) -> bool:
+    """Is *state*, the file *path* as it is now, what *module* was loaded
+    from? The module's compiled file keeps the source's mtime and size of
+    when it was loaded (written then, or found matching); the digest cash
+    first read for the module, while loaded, must match too. An edit made
+    while it is loaded, and a statement stored after, then pairs no old
+    value with the new file. Without a compiled file to tell (bytecode not
+    written), it cannot be told: not."""
+    loaded = sys.modules.get(module)
+    kept = _LOADED_DIGESTS.get(module)
+    if kept is not None and kept[0] is loaded:
+        return kept[1] == state.digest
+    if not _compiled_matches(loaded, path):
+        return False
+    if len(_LOADED_DIGESTS) > 4096:
+        _LOADED_DIGESTS.clear()
+    _LOADED_DIGESTS[module] = (loaded, state.digest)
+    return True
+
+
+def _compiled_matches(module: Any, path: str) -> bool:
+    """Does *module*'s compiled file (``__cached__``) record the mtime and
+    size *path* has now? CPython writes them there as it loads the source."""
+    cached = attribute_or(module, "__cached__", None)
+    if not isinstance(cached, str):
+        return False
+    from ...tracking.tracker_context import untracked
+
+    try:
+        with untracked():
+            st = os.stat(path)
+            with open(cached, "rb") as fh:
+                header = fh.read(16)
+    except OSError:
+        return False
+    if len(header) < 16 or int.from_bytes(header[4:8], "little") != 0:
+        return False  # a hash-based compiled file: not by mtime
+    mtime = int.from_bytes(header[8:12], "little")
+    size = int.from_bytes(header[12:16], "little")
+    return mtime == int(st.st_mtime) & 0xFFFFFFFF and size == st.st_size & 0xFFFFFFFF
 
 
 def _vouched_by_file(item: tuple, filed: tuple) -> str:
@@ -1252,9 +1400,15 @@ def _vouched_by_file(item: tuple, filed: tuple) -> str:
     if state is None or state.digest != filed[-1]:
         return "stale_suspect"
     kind = item[0]
-    if kind in ("file", "code"):
+    if kind == "file":
         return "agree"
-    if kind not in ("global", "class", "held") or state.bound is None:
+    if state.bound is None or not _library_imports(state.imports):
+        # Its body runs code its text does not settle: a function of it can
+        # be replaced as it is imported (``settings.patch(__name__)``).
+        return "module_not_loaded"
+    if kind == "code":
+        return "agree"
+    if kind not in ("global", "class", "held"):
         return "module_not_loaded"
     name = str(item[2]).split(".", 1)[0]
     if kind == "global" and item[-1] == "absent":
@@ -1278,6 +1432,23 @@ def _vouched_by_file(item: tuple, filed: tuple) -> str:
         with untracked():
             return "module_not_loaded" if is_user_code_module(source) else "agree"
     return "agree"
+
+
+def _library_imports(names: frozenset[str]) -> bool:
+    """Are the modules *names* all loaded, and none the user's? One of the
+    user's can set the importing module's globals as it is imported
+    (``import overrides``, a self-import)."""
+    if not names:
+        return True
+    from ...install_paths import is_user_code_module
+    from ...tracking.tracker_context import untracked
+
+    with untracked():
+        for name in names:
+            module = sys.modules.get(name)
+            if module is None or is_user_code_module(module):
+                return False
+    return True
 
 
 def _compiled_code(module_code: types.CodeType, qualname: str) -> types.CodeType | None:
