@@ -1136,93 +1136,227 @@ def _read_file_state(path: str) -> _FileState | None:
 
 
 def _inert_imports(tree: ast.Module) -> frozenset[str] | None:
-    """The modules *tree*'s body imports, when running it can bind its
-    globals only as its text says: it defines functions and classes,
-    assigns literals and imports modules, and runs nothing else. None when
-    it runs code whose outcome its text does not settle: a call
-    (``TABLE.update(settings.OVERRIDES)``, ``settings.apply(__name__)``),
-    a branch (``if os.environ.get(...)``), a store to an attribute or an
-    item, an augmented assignment, a walrus. The imports must then be
-    libraries' (`_vouched_by_file`): a module of the user's can set this
-    one's globals as it is imported."""
-    imports: set[str] = set()
-    imported_names: set[str] = set()
+    """The modules *tree*'s body imports, when importing it runs no code of
+    the user's and binds its globals only as its text says; None
+    otherwise. Allowed, and nothing else:
 
-    def plain_value(node: ast.expr | None) -> bool:
-        if node is None or isinstance(node, ast.Lambda):
-            return True
+    - imports, which must be libraries' (`_library_imports`): a module of
+      the user's can set this one's globals as it is imported;
+    - a name bound to a literal, a lambda or a name (``ALIAS = np.float64``),
+      or to a call of a library function known to read nothing but its
+      arguments (`_SAFE_CALLS`: ``logging.getLogger(__name__)``);
+    - a ``def`` with literal defaults, and a ``class`` whose body holds only
+      such defs, classes and names bound to literals, names or those calls; each with
+      decorators, bases and keywords of a library's or builtins
+      (``@dataclass``, ``@property``, ``(Exception)``), or bases among the
+      module's own classes;
+    - ``if __name__ == "__main__":`` and ``if TYPE_CHECKING:``, which do
+      not run on import.
+
+    Refused, as each runs code as the module is imported: a decorator or
+    a metaclass of the module's own (``@scale``), ``__init_subclass__``, a
+    module ``__getattr__``, a call in a class body (``K =
+    os.getenv(...)``), any other call (``importlib.import_module(...)``,
+    ``TABLE.update(...)``), a branch, a store to an attribute or an item,
+    an augmented assignment, a walrus."""
+    imports: set[str] = set()
+    #: The name each import binds -> the dotted name it stands for.
+    imported: dict[str, str] = {}
+    classes: set[str] = set()
+
+    def dotted(node: ast.expr) -> str | None:
+        """``np.linalg.norm`` -> ``numpy.linalg.norm``, through what the
+        module imported; None for anything else."""
+        attrs: list[str] = []
+        while isinstance(node, ast.Attribute):
+            attrs.append(node.attr)
+            node = node.value
+        if not isinstance(node, ast.Name) or node.id not in imported:
+            return None
+        return ".".join([imported[node.id], *reversed(attrs)])
+
+    def name_or_attr(node: ast.expr) -> bool:
         while isinstance(node, ast.Attribute):
             node = node.value
-        return isinstance(node, ast.Name) or _literal(node)
+        return isinstance(node, ast.Name)
 
-    def library_call(node: ast.expr | None) -> bool:
-        # ``logging.getLogger(__name__)``, ``re.compile("x+")``: a call of
-        # an imported module's function (a library's, `_library_imports`)
-        # or a builtin, handed plain values; it binds only what it is
-        # assigned to, which the text does not settle.
+    def plain_value(node: ast.expr | None) -> bool:
+        return node is None or isinstance(node, ast.Lambda) or _literal(node) or name_or_attr(node)
+
+    def safe_call(node: ast.expr | None) -> bool:
+        # ``Path(__file__).parent``: an attribute of the result too.
+        while isinstance(node, ast.Attribute):
+            node = node.value
         if not isinstance(node, ast.Call):
             return False
-        root = node.func
-        while isinstance(root, ast.Attribute):
-            root = root.value
-        if not isinstance(root, ast.Name) or root.id in _BINDING_BUILTINS:
-            return False
-        if root.id not in imported_names and root.id not in vars(builtins):
-            return False
-        return all(plain_value(a) for a in node.args) and all(plain_value(k.value) for k in node.keywords)
+        return (
+            dotted(node.func) in _SAFE_CALLS
+            and all(plain_value(a.value if isinstance(a, ast.Starred) else a) for a in node.args)
+            and all(plain_value(k.value) for k in node.keywords)
+        )
+
+    def library_name(node: ast.expr, builtin: frozenset[str] | None = None) -> bool:
+        """A library's name (through an import), or one of *builtin*."""
+        if isinstance(node, ast.Subscript):  # ``Generic[T]``
+            return library_name(node.value, builtin) and _type_expr(node.slice)
+        if isinstance(node, ast.Name) and builtin is not None and node.id in builtin:
+            return node.id not in imported and node.id not in classes
+        return dotted(node) is not None
 
     def decorator(node: ast.expr) -> bool:
         if isinstance(node, ast.Call):
             if not all(_literal(a) for a in node.args) or not all(_literal(k.value) for k in node.keywords):
                 return False
             node = node.func
-        return isinstance(node, (ast.Name, ast.Attribute)) and plain_value(node)
+        return library_name(node, _BUILTIN_DECORATORS)
 
     def function(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
         args = node.args
         defaults = [*args.defaults, *(d for d in args.kw_defaults if d is not None)]
         return all(decorator(d) for d in node.decorator_list) and all(_literal(d) for d in defaults)
 
-    def body(stmts: list[ast.stmt], *, in_class: bool) -> bool:
+    def base(node: ast.expr) -> bool:
+        if isinstance(node, ast.Name) and node.id in classes:
+            return True  # the module's own: its body was checked, no ``__init_subclass__``
+        return library_name(node, _BUILTIN_TYPES)
+
+    def class_body(stmts: list[ast.stmt]) -> bool:
         for stmt in stmts:
             if isinstance(stmt, ast.Pass) or (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant)):
                 continue
             if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                if not function(stmt):
+                if stmt.name in _CLASS_HOOKS or not function(stmt):
                     return False
             elif isinstance(stmt, ast.ClassDef):
-                if not (
-                    all(decorator(d) for d in stmt.decorator_list)
-                    and all(plain_value(b) and not _literal(b) for b in stmt.bases)
-                    and all(plain_value(k.value) for k in stmt.keywords)
-                    and body(stmt.body, in_class=True)
+                if not klass(stmt):
+                    return False
+            elif isinstance(stmt, ast.Assign):
+                if not all(isinstance(t, ast.Name) for t in stmt.targets) or not (
+                    _literal(stmt.value) or isinstance(stmt.value, ast.Name) or safe_call(stmt.value)
                 ):
                     return False
-            elif isinstance(stmt, (ast.Assign, ast.AnnAssign)):
-                targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
-                if not all(isinstance(t, ast.Name) for t in targets) or not (
-                    plain_value(stmt.value) or library_call(stmt.value)
-                ):
+            elif isinstance(stmt, ast.AnnAssign):
+                if not isinstance(stmt.target, ast.Name) or not _type_expr(stmt.annotation):
                     return False
-            elif isinstance(stmt, ast.Expr) and library_call(stmt.value) and not in_class:
-                continue
-            elif isinstance(stmt, ast.Import) and not in_class:
-                imports.update(alias.name for alias in stmt.names)
-                imported_names.update(alias.asname or alias.name.split(".", 1)[0] for alias in stmt.names)
-            elif isinstance(stmt, ast.ImportFrom) and not in_class and stmt.level == 0 and stmt.module:
-                imports.add(stmt.module)
-                imported_names.update(alias.asname or alias.name for alias in stmt.names)
-            elif not in_class and _main_guard(stmt):
-                continue  # not run on import
+                if stmt.value is not None and not (_literal(stmt.value) or safe_call(stmt.value)):
+                    return False
             else:
                 return False
         return True
 
-    return frozenset(imports) if body(tree.body, in_class=False) else None
+    def klass(node: ast.ClassDef) -> bool:
+        return (
+            all(decorator(d) for d in node.decorator_list)
+            and all(base(b) for b in node.bases)
+            and all(k.arg is not None and library_name(k.value) for k in node.keywords)
+            and class_body(node.body)
+        )
+
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Pass) or (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant)):
+            continue
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if stmt.name == "__getattr__" or not function(stmt):
+                return None
+        elif isinstance(stmt, ast.ClassDef):
+            if not klass(stmt):
+                return None
+            classes.add(stmt.name)
+        elif isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+            targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+            if not all(isinstance(t, ast.Name) for t in targets) or not (
+                plain_value(stmt.value) or safe_call(stmt.value)
+            ):
+                return None
+            if isinstance(stmt, ast.AnnAssign) and not _type_expr(stmt.annotation):
+                return None
+        elif isinstance(stmt, ast.Expr) and safe_call(stmt.value):
+            continue
+        elif isinstance(stmt, ast.Import):
+            for alias in stmt.names:
+                imports.add(alias.name)
+                if alias.asname:
+                    imported[alias.asname] = alias.name
+                else:
+                    top = alias.name.split(".", 1)[0]
+                    imported[top] = top
+        elif isinstance(stmt, ast.ImportFrom) and stmt.level == 0 and stmt.module:
+            imports.add(stmt.module)
+            for alias in stmt.names:
+                if alias.name == "*":
+                    return None
+                imported[alias.asname or alias.name] = f"{stmt.module}.{alias.name}"
+        elif _main_guard(stmt) or _type_checking(stmt):
+            continue  # not run on import
+        else:
+            return None
+    return frozenset(imports)
 
 
-#: Builtins that bind names, or run code, by what they are handed.
-_BINDING_BUILTINS = frozenset({"setattr", "delattr", "exec", "eval", "globals", "vars", "locals", "__import__"})
+#: Library functions a module may call as it is imported: each reads
+#: nothing but what it is handed, and binds only what it is assigned to.
+_SAFE_CALLS = frozenset(
+    {
+        "logging.getLogger",
+        "re.compile",
+        "collections.namedtuple",
+        "typing.NamedTuple",
+        "typing.TypeVar",
+        "typing.NewType",
+        "typing.ParamSpec",
+        "typing.TypedDict",
+        "typing_extensions.TypeVar",
+        "typing_extensions.ParamSpec",
+        "dataclasses.field",
+        "enum.auto",
+        "functools.partial",
+        "operator.itemgetter",
+        "operator.attrgetter",
+        "pathlib.Path",
+        "pathlib.PurePath",
+        "decimal.Decimal",
+        "fractions.Fraction",
+        "datetime.date",
+        "datetime.datetime",
+        "datetime.time",
+        "datetime.timedelta",
+        "contextvars.ContextVar",
+        "threading.Lock",
+        "threading.RLock",
+        "threading.local",
+        "warnings.filterwarnings",
+        "warnings.simplefilter",
+    }
+)
+#: Builtins a ``def`` or ``class`` may be decorated with.
+_BUILTIN_DECORATORS = frozenset({"property", "staticmethod", "classmethod"})
+#: Builtin names a class may derive from: every builtin class.
+_BUILTIN_TYPES = frozenset(name for name, value in vars(builtins).items() if isinstance(value, type))
+#: Methods of a class that run as it, or a class derived from it, is made.
+_CLASS_HOOKS = frozenset({"__init_subclass__", "__set_name__", "__class_getitem__", "__prepare__"})
+
+
+def _type_expr(node: ast.expr) -> bool:
+    """An annotation that runs no code: names, attributes, literals and
+    their subscripts, tuples and ``|`` (``dict[str, list[int]] | None``)."""
+    if isinstance(node, ast.Subscript):
+        return _type_expr(node.value) and _type_expr(node.slice)
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return all(_type_expr(e) for e in node.elts)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return _type_expr(node.left) and _type_expr(node.right)
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return isinstance(node, (ast.Name, ast.Constant))
+
+
+def _type_checking(stmt: ast.stmt) -> bool:
+    """``if TYPE_CHECKING:`` (or ``typing.TYPE_CHECKING``), with no ``else``."""
+    if not isinstance(stmt, ast.If) or stmt.orelse:
+        return False
+    test = stmt.test
+    name = test.attr if isinstance(test, ast.Attribute) else test.id if isinstance(test, ast.Name) else None
+    return name == "TYPE_CHECKING"
 
 
 def _main_guard(stmt: ast.stmt) -> bool:
@@ -1345,17 +1479,15 @@ _LOADED_DIGESTS: dict[str, tuple[Any, str]] = {}
 
 def _loaded_from(module: str, path: str, state: _FileState) -> bool:
     """Is *state*, the file *path* as it is now, what *module* was loaded
-    from? The module's compiled file keeps the source's mtime and size of
-    when it was loaded (written then, or found matching); the digest cash
-    first read for the module, while loaded, must match too. An edit made
-    while it is loaded, and a statement stored after, then pairs no old
-    value with the new file. Without a compiled file to tell (bytecode not
-    written), it cannot be told: not."""
+    from (`_unchanged_since_loaded`)? The digest cash first read for the
+    module, while loaded, must match too: an edit made while it is loaded,
+    and a statement stored after, then pairs no old value with the new
+    file."""
     loaded = sys.modules.get(module)
     kept = _LOADED_DIGESTS.get(module)
     if kept is not None and kept[0] is loaded:
         return kept[1] == state.digest
-    if not _compiled_matches(loaded, path):
+    if not _unchanged_since_loaded(loaded, path):
         return False
     if len(_LOADED_DIGESTS) > 4096:
         _LOADED_DIGESTS.clear()
@@ -1363,26 +1495,44 @@ def _loaded_from(module: str, path: str, state: _FileState) -> bool:
     return True
 
 
-def _compiled_matches(module: Any, path: str) -> bool:
-    """Does *module*'s compiled file (``__cached__``) record the mtime and
-    size *path* has now? CPython writes them there as it loads the source."""
-    cached = attribute_or(module, "__cached__", None)
-    if not isinstance(cached, str):
-        return False
+def _unchanged_since_loaded(module: Any, path: str) -> bool:
+    """Is the file *path* unchanged since *module* was loaded from it? Its
+    inode change time (which a copy keeping the mtime, ``cp -p`` or
+    ``touch -r``, cannot set back) is older than this process; or the module's compiled file
+    (``__cached__``), which CPython writes or checks as it loads the
+    source, records the source's mtime and size now and was written after
+    the source last changed (an edit within the mtime's second keeps
+    both). With neither to tell (bytecode not written, a file edited since
+    the process started), it cannot be told: not."""
+    from ...process_start import process_start_time
     from ...tracking.tracker_context import untracked
 
     try:
         with untracked():
             st = os.stat(path)
+    except OSError:
+        return False
+    # The process's start as read is no later than it was (``/proc``
+    # counts whole seconds and ticks); a change time in whole seconds may
+    # be up to a coarse clock's tick earlier than the change.
+    tick = _SETTLED_S if st.st_ctime_ns % 1_000_000_000 == 0 else 0.0
+    if st.st_ctime_ns < (process_start_time() - tick) * 1e9:
+        return True
+    cached = attribute_or(module, "__cached__", None)
+    if not isinstance(cached, str):
+        return False
+    try:
+        with untracked():
             with open(cached, "rb") as fh:
                 header = fh.read(16)
+                compiled_at = os.fstat(fh.fileno()).st_mtime_ns
     except OSError:
         return False
     if len(header) < 16 or int.from_bytes(header[4:8], "little") != 0:
         return False  # a hash-based compiled file: not by mtime
     mtime = int.from_bytes(header[8:12], "little")
     size = int.from_bytes(header[12:16], "little")
-    return mtime == int(st.st_mtime) & 0xFFFFFFFF and size == st.st_size & 0xFFFFFFFF
+    return mtime == int(st.st_mtime) & 0xFFFFFFFF and size == st.st_size & 0xFFFFFFFF and st.st_ctime_ns <= compiled_at
 
 
 def _vouched_by_file(item: tuple, filed: tuple) -> str:
@@ -1435,20 +1585,63 @@ def _vouched_by_file(item: tuple, filed: tuple) -> str:
 
 
 def _library_imports(names: frozenset[str]) -> bool:
-    """Are the modules *names* all loaded, and none the user's? One of the
+    """Are the modules *names* all libraries' (`_is_library`)? One of the
     user's can set the importing module's globals as it is imported
     (``import overrides``, a self-import)."""
-    if not names:
-        return True
-    from ...install_paths import is_user_code_module
+    return all(_is_library(name) for name in names)
+
+
+#: ``name -> is it a library's``, `_is_library`'s answers, kept while
+#: ``sys.path`` is what it was (`_LIBRARY_PATH`).
+_LIBRARIES: dict[str, bool] = {}
+_LIBRARY_PATH: list[Any] = [None]
+
+
+def _is_library(name: str) -> bool:
+    """Is the module *name* a library's: built in, frozen, or found in the
+    standard library or site-packages? Told by where its file is, without
+    importing it: after a restart a helper's ``import numpy`` is not run
+    yet when a restore is checked. A loaded module is told by its own file.
+    Not found: not one (it cannot be told what it would bind)."""
+    path = tuple(sys.path)
+    if _LIBRARY_PATH[0] != path:
+        _LIBRARIES.clear()
+        _LIBRARY_PATH[0] = path
+    known = _LIBRARIES.get(name)
+    if known is None:
+        known = _LIBRARIES[name] = _find_library(name)
+    return known
+
+
+def _find_library(name: str) -> bool:
+    import importlib.machinery
+
+    from ...install_paths import is_user_code_file, is_user_code_module
     from ...tracking.tracker_context import untracked
 
     with untracked():
-        for name in names:
-            module = sys.modules.get(name)
-            if module is None or is_user_code_module(module):
-                return False
-    return True
+        module = sys.modules.get(name)
+        if module is not None:
+            return not is_user_code_module(module)
+        top = name.split(".", 1)[0]
+        if top in sys.builtin_module_names:
+            return True
+        loaded = sys.modules.get(top)
+        if loaded is not None:
+            # ``import mypkg.sub``: the package's own file tells.
+            return not is_user_code_module(loaded)
+        try:
+            if importlib.machinery.FrozenImporter.find_spec(top) is not None:
+                return True
+            spec = importlib.machinery.PathFinder.find_spec(top)
+        except (ImportError, ValueError):
+            return False
+        if spec is None:
+            return False
+        where = spec.origin if spec.origin not in (None, "namespace") else None
+        if where is None:
+            where = next(iter(spec.submodule_search_locations or ()), None)
+        return isinstance(where, str) and not is_user_code_file(where)
 
 
 def _compiled_code(module_code: types.CodeType, qualname: str) -> types.CodeType | None:

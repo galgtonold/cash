@@ -486,31 +486,68 @@ def test_a_file_edited_while_its_module_is_loaded_does_not_vouch_for_it(trace_on
     assert ns["t"] == 27
 
 
-def test_a_file_swapped_keeping_its_mtime_and_size_is_read_again(tmp_path):
-    """``cp -p`` or ``touch -r``: the same mtime and size, other text. The
-    file's state was kept by mtime and size and the old one served."""
-    from cash.notebook import shadow
+@pytest.mark.parametrize(
+    "body",
+    [
+        "import os\nclass C:\n    K = os.getenv({var!r}, '2')\ndef f(x):\n    return x * int(C.K)\n",
+        (
+            "import os\ndef scale(fn):\n    k = int(os.environ.get({var!r}, '2'))\n"
+            "    def run(x):\n        return fn(x) * k\n    return run\n"
+            "@scale\ndef f(x):\n    return x\n"
+        ),
+        "import importlib\nCFG = 2\nimportlib.import_module({s!r})\ndef f(x):\n    return x * CFG\n",
+    ],
+    ids=["a_class_body_reading_the_environment", "a_decorator_of_its_own", "importlib_running_another_module"],
+)
+def test_a_module_whose_import_runs_code_vouches_for_nothing_it_binds(
+    trace_on, cash_magics, tmp_path, monkeypatch, body
+):
+    """Each body binds what ``f`` uses from outside the file as it is
+    imported: an environment variable read in a class body or by a
+    decorator of the module's own, a module of the user's run by name that
+    sets ``CFG``. The file unchanged vouched for the ``def`` or ``class``
+    and served 6 after the change."""
+    _, mod = trace_on
+    name, settings, var = mod + "_run", mod + "_ovr", (mod + "_K").upper()
+    (tmp_path / f"{settings}.py").write_text("pass\n", encoding="utf-8")
+    (tmp_path / f"{name}.py").write_text(body.format(s=settings, var=var), encoding="utf-8")
+    from tests._cell_driver import run_cash_cell
 
-    path = tmp_path / "swapped.py"
-    path.write_text("def f(x):\n    return x * 2\n", encoding="utf-8")
-    old = path.stat()
-    os.utime(path, ns=(old.st_atime_ns, old.st_mtime_ns - 10_000_000_000))
-    old = path.stat()
-    first = shadow._file_state(str(path))
-    path.write_text("def f(x):\n    return x * 9\n", encoding="utf-8")
-    os.utime(path, ns=(old.st_atime_ns, old.st_mtime_ns))
+    cells = _lazy_cells(name)
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    ns = cash_magics.shell.user_ns
+    assert ns["t"] == 6
+    monkeypatch.setenv(var, "9")
+    _edit_later(tmp_path / f"{settings}.py", f"import {name}\n{name}.CFG = 9\n")
+    sys.modules.pop(name, None)
+    sys.modules.pop(settings, None)
+    del ns["t"]
+    run_cash_cell(cash_magics, cells[-1], cells=cells)
 
-    assert shadow._file_state(str(path)).digest != first.digest
+    assert ns["t"] == 27
 
 
-def test_a_docstring_edit_changes_the_files_digest(tmp_path):
-    """A docstring can be read as the code runs (``int(f.__doc__)``,
-    ``description=__doc__``): an edit of one is an edit of the file."""
-    from cash.notebook import shadow
+def test_a_module_importing_a_library_not_loaded_yet_still_vouches(trace_on, cash_magics, tmp_path, monkeypatch):
+    """After a restart a helper's ``import numpy`` has not run when the
+    restore is checked: told by whether it was loaded, every such restore
+    was refused."""
+    on, mod = trace_on
+    name = mod + "_lib"
+    text = "import colorsys\nSCALE = 2\ndef f(x):\n    return x * SCALE\n"
+    (tmp_path / f"{name}.py").write_text(text, encoding="utf-8")
+    monkeypatch.delitem(sys.modules, "colorsys", raising=False)
+    from tests._cell_driver import run_cash_cell
 
-    path = tmp_path / "doc.py"
-    path.write_text('def f(x):\n    "2"\n    return x\n', encoding="utf-8")
-    first = shadow._file_state(str(path)).digest
-    path.write_text('def f(x):\n    "9"\n    return x\n# a comment\n', encoding="utf-8")
+    cells = _lazy_cells(name)
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    sys.modules.pop(name, None)
+    sys.modules.pop("colorsys", None)
+    on.counts.clear()
+    del cash_magics.shell.user_ns["t"]
+    run_cash_cell(cash_magics, cells[-1], cells=cells)
 
-    assert shadow._file_state(str(path)).digest != first
+    assert cash_magics.shell.user_ns["t"] == 6
+    assert on.counts["upstream:hit:agree"] >= 1, dict(on.counts)
+    assert not [k for k in on.counts if k.startswith("upstream:miss")], dict(on.counts)
