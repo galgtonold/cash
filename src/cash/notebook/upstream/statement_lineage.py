@@ -582,7 +582,11 @@ class StatementLineage:
         below the statement *reader*: a change it made comes after the
         reader in a run of the notebook, so the reader saw the value from
         before it. One also written above, or either not found, does not
-        count: the reader may have read what it left."""
+        count: the reader may have read what it left. The reader itself
+        does (``tempfile.gettempdir()`` sets what it reads): it read the
+        value before its own change, as the runtime's key recorded it."""
+        if strip_markers(writer).strip() == strip_markers(reader).strip():
+            return True
         below = self._places(writer)
         above = self._places(reader)
         return bool(below) and bool(above) and min(below) > max(above)
