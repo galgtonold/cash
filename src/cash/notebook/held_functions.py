@@ -48,6 +48,7 @@ __all__ = [
     "WALK_LIMIT",
     "Held",
     "held_notebook_code",
+    "leaned_on_trace",
     "module_class_objects_exist",
     "notebook_functions_exist",
 ]
@@ -306,9 +307,14 @@ def module_class_objects_exist() -> bool:
     memos. Annotations, registries and library machinery still count, so
     with the trace off most notebooks using their own modules walk big
     values to the end (~0.2 s per 400k objects with the C extension, ~0.5 s
-    without). With the trace on (3.12+, the default) a hit is checked
-    against the module code it ran, so an object of the class is all
-    that counts, as before.
+    without). With the trace on (3.12+, the default) an object of the
+    class is all that counts, as before, and a statement whose walk this
+    stops is served only when its trace, which names the module code it
+    ran, is found, usable and unchanged (`leaned_on_trace`): an entry whose
+    trace was dropped (4 are kept per statement) runs again. Still not
+    seen with the trace off: a class reached through a module's
+    ``__dict__`` held in a value (``SimpleNamespace(d=vars(mylib))``), or
+    only through the ``__class__`` cell of its own method.
     """
     classes = _users_module_classes()
     if not classes:
@@ -338,9 +344,13 @@ def module_class_objects_exist() -> bool:
         own.add(id(cls.__mro__))
         own.add(id(cls.__bases__))
     if _trace_on():
-        # Every hit is checked against the code its trace ran, the
-        # module's included: an object of the class is all a walk needs.
+        # A hit is checked against the code its trace ran, the module's
+        # included: an object of the class is all a walk needs. A walk this
+        # stops leans on that check (`leaned_on_trace`): the statement is
+        # then served only on its trace, found and unchanged.
         found = any(type(referrer) in kinds for referrer in gc.get_referrers(*asked_of))
+        if not found:
+            _LEANED[0] += 1
     else:
         own |= _cash_memos()
         for cls in kinds:
@@ -360,11 +370,24 @@ _CLASS_MACHINERY = (types.GetSetDescriptorType, types.MemberDescriptorType, type
 
 
 def _trace_on() -> bool:
-    """Whether what ran is recorded and every hit checked against it
-    (`shadow.requested`): then a class a value holds needs no walk to it."""
-    from .shadow import requested
+    """Whether what ran is recorded (`shadow.requested`, and installed: the
+    monitoring tool ids may be another's): then a class a value holds needs
+    no walk to it, on a hit served only on its trace (`leaned_on_trace`)."""
+    from . import shadow
 
-    return requested()
+    return shadow.requested() and shadow.SHADOW is not None
+
+
+#: How many times a walk stopped on the trace's account (`_trace_on`).
+_LEANED = [0]
+
+
+def leaned_on_trace() -> int:
+    """A count that grows each time `module_class_objects_exist` answers no
+    on the trace's account: a statement keyed while it grew has a key that
+    may leave out a class a big value holds, and is served only when its
+    trace is found, usable and unchanged. Read before and after keying."""
+    return _LEANED[0]
 
 
 def _class_cells(cls: type) -> set[int]:
