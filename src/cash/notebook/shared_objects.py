@@ -52,7 +52,7 @@ from typing import Any
 
 from cash import _native, _plain_data
 from cash._clock import CpuLimit
-from cash.notebook.frame_cells import addresses, is_object_dtype
+from cash.notebook.frame_cells import addresses, in_sorted, is_object_dtype, sorted_unique
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
 
@@ -61,6 +61,7 @@ __all__ = [
     "Leaves",
     "anchors_held",
     "attrs_copied_apart",
+    "column_values_only",
     "holds_part_of",
     "output_history",
     "referring_names",
@@ -373,7 +374,7 @@ def _slot_members(cls: type) -> tuple[tuple[str, Any], ...]:
     return known
 
 
-def _values_only(value: Any, exact: frozenset[type]) -> bool:
+def values_only(value: Any, exact: frozenset[type]) -> bool:
     """Is *value* an exact list, tuple, set, frozenset or dict whose items
     (a dict's keys and values) are all of the *exact* value types? What
     `_walk`'s first step finds for it, without copying the items out."""
@@ -840,15 +841,17 @@ _COLUMNS: dict[int, list[Any] | None] | None = None
 def _columns_kept() -> Iterator[None]:
     """Within it, the object columns of each frame are read once: no code
     runs between the reads of one share check."""
-    global _COLUMNS
+    global _COLUMNS, _VALUES_READ
     if _COLUMNS is not None:
         yield
         return
     _COLUMNS = {}
+    _VALUES_READ = {}
     try:
         yield
     finally:
         _COLUMNS = None
+        _VALUES_READ = None
 
 
 def _read_object_columns(value: Any, pd: Any) -> list[Any]:
@@ -861,9 +864,43 @@ def _read_object_columns(value: Any, pd: Any) -> list[Any]:
         if not is_object_dtype(column.dtype):
             continue
         array = column.to_numpy(copy=False)
-        if pd.api.types.infer_dtype(array, skipna=True) not in VALUE_COLUMNS:
+        if not column_values_only(array, pd):
             arrays.append(array)
     return arrays
+
+
+#: While `_columns_kept` runs: by the span of memory of each object array
+#: read, whether it holds only values pandas tells apart (`infer_dtype`).
+_VALUES_READ: dict[tuple[int, int], bool] | None = None
+
+
+def column_values_only(array: Any, pd: Any) -> bool:
+    """Whether the object *array* holds only values pandas tells apart in C
+    (`infer_dtype`). Within `_columns_kept`, an array in the memory of one
+    found so is so too, unread: fifty views of ``df``'s column of strings
+    are its slots, and no code runs to change them in between. One in the
+    memory of an array found otherwise is read as holding more, unread
+    too: its own few rows may be values only, and are then checked as
+    though they were not."""
+    span = _span(array)
+    if _VALUES_READ is not None and span is not None:
+        for (start, end), values in _VALUES_READ.items():
+            if start <= span[0] and span[1] <= end:
+                return values
+    values = pd.api.types.infer_dtype(array, skipna=True) in VALUE_COLUMNS
+    if _VALUES_READ is not None and span is not None:
+        _VALUES_READ[span] = values
+    return values
+
+
+def _span(array: Any) -> tuple[int, int] | None:
+    """The memory *array*'s slots take, first byte to last; None when it
+    is empty or not a one-dimensional array."""
+    if getattr(array, "ndim", None) != 1 or not len(array):
+        return None
+    start = array.__array_interface__["data"][0]
+    end = start + (len(array) - 1) * array.strides[0]
+    return (min(start, end), max(start, end) + array.itemsize)
 
 
 def object_categories(value: Any, skip: Container[int] = ()) -> list[Any]:
@@ -915,11 +952,19 @@ def frames_together(values: Iterable[Any], linked: Mapping[int, Any] | None = No
         yield
         return
     columns = {id(frame): object_columns_of(frame) or [] for frame in frames}
-    everything = _distinct_slots([array for arrays in columns.values() for array in arrays])
-    # Each slot holds its cell once, and so does *everything*.
-    beyond = {id(cell) for cell in _cells_held_elsewhere(everything, 2, exact_value_types())}
-    kept_apart = _held_by_frames_alone(everything, beyond, linked) if linked and beyond else {}
-    del everything
+    arrays = [array for arrays in columns.values() for array in arrays]
+    beyond = _held_beyond_copies(arrays)
+    everything = None
+    if beyond is None:
+        everything = _distinct_slots(arrays)
+        # Each slot holds its cell once, and so does *everything*.
+        beyond = {id(cell) for cell in _cells_held_elsewhere(everything, 2, exact_value_types())}
+    if linked and beyond:
+        everything = _distinct_slots(arrays) if everything is None else everything
+        kept_apart = _held_by_frames_alone(everything, beyond, linked)
+    else:
+        kept_apart = {}
+    del everything, arrays
     saved = _TOGETHER
     together = dict(saved or {})
     for frame in frames:
@@ -987,6 +1032,100 @@ def _held_by_frames_alone(everything: list[Any], beyond: set[int], linked: Mappi
     return {key: ids & alone for key, ids in by_frame.items()}
 
 
+def _held_beyond_copies(arrays: list[Any]) -> set[int] | None:
+    """`_cells_held_elsewhere` over the distinct slots of the object
+    *arrays*, as the ids it lists, for arrays each in memory of its own
+    where most copy another's cells: fifty frames a hit put back as
+    ``df.iloc[i:]`` each hold ``df``'s dicts in slots of their own, five
+    million slots to read for a hundred thousand cells. Each copy is proven
+    one by the addresses its slots hold: a run of the other's, or each at
+    one row of it (``df[mask]``). A cell is then read once, with a
+    reference count allowed for each slot holding it. A cell two arrays
+    that copy nothing of each other both hold is counted over, and listed.
+    None when the arrays share memory, are not each one contiguous run of
+    slots, or hold no copies."""
+    np = sys.modules["numpy"]
+    size = np.dtype(object).itemsize
+    if len(arrays) < 2 or any(array.ndim != 1 or array.strides[0] != size for array in arrays):
+        return None
+    spans = sorted((start, start + len(array) * size) for array in arrays for start in [_address(array)])
+    if any(end > spans[i + 1][0] for i, (_, end) in enumerate(spans[:-1])):
+        return None
+    bases: list[_Base] = []
+    copies = 0
+    for array in sorted(arrays, key=len, reverse=True):
+        slots = addresses(array)
+        if any(base.run(slots, np) or base.gather(slots, np) for base in bases):
+            copies += 1
+        else:
+            bases.append(_Base(array, slots, np))
+    if not copies:
+        return None
+    values = exact_value_types()
+    beyond: set[int] = set()
+    for base in bases:
+        slots = base.slots(np)
+        for count in sorted_unique(slots).tolist():
+            cells = base.array[slots == count].tolist()
+            # Held by its *count* slots and by *cells*, once per row.
+            beyond.update(id(cell) for cell in _cells_held_elsewhere(cells, count + 1, values))
+            cells = None
+    return beyond
+
+
+def _address(array: Any) -> int:
+    return array.__array_interface__["data"][0]
+
+
+class _Base:
+    """An object array of `_held_beyond_copies` others are copies of, with
+    the slots counted so far for each of its cells."""
+
+    def __init__(self, array: Any, held: Any, np: Any) -> None:
+        self.array = array
+        self.held = held
+        self.more = np.zeros(len(array) + 1, dtype=np.int64)
+        self.extra = np.zeros(len(array), dtype=np.int64)
+        self.order: Any = None
+
+    def run(self, slots: Any, np: Any) -> bool:
+        """Whether *slots* is a run of this array's, address for address;
+        if so its slots are counted (by difference)."""
+        held = self.held
+        if len(slots) > len(held) or not len(slots):
+            return False
+        for start in np.flatnonzero(held[: len(held) - len(slots) + 1] == slots[0])[:4].tolist():
+            if np.array_equal(held[start : start + len(slots)], slots):
+                self.more[start] += 1
+                self.more[start + len(slots)] -= 1
+                return True
+        return False
+
+    def gather(self, slots: Any, np: Any) -> bool:
+        """Whether every address *slots* holds is one this array holds, at
+        one row only (``df[mask]`` of its rows); if so each is counted at
+        that row."""
+        if not len(slots):
+            return False
+        if self.order is None:
+            order = np.argsort(self.held, kind="stable")
+            ordered = self.held[order]
+            # A cell at two rows: which row a copy's slot counts at is unknown.
+            self.order = False if len(ordered) > 1 and bool((ordered[1:] == ordered[:-1]).any()) else (order, ordered)
+        if self.order is False:
+            return False
+        order, ordered = self.order
+        at = np.searchsorted(ordered, slots)
+        if bool((at >= len(ordered)).any()) or not np.array_equal(ordered[at], slots):
+            return False
+        np.add.at(self.extra, order[at], 1)
+        return True
+
+    def slots(self, np: Any) -> Any:
+        """How many slots, of all the arrays read, hold each cell."""
+        return 1 + np.cumsum(self.more[:-1]) + self.extra
+
+
 def _distinct_slots(arrays: list[Any]) -> list[Any]:
     """The cells of the object *arrays*, one per slot of memory: two views
     of one block (``df`` and ``df.iloc[:10]``) hold a cell once between
@@ -1011,7 +1150,10 @@ def _distinct_slots(arrays: list[Any]) -> list[Any]:
         np.int64(array.__array_interface__["data"][0]) + np.arange(len(array), dtype=np.int64) * array.strides[0]
         for array in arrays
     ]
-    _, first = np.unique(np.concatenate(addresses), return_index=True)
+    every = np.concatenate(addresses)
+    order = np.argsort(every, kind="stable")
+    ordered = every[order]
+    first = order[np.concatenate(([True], ordered[1:] != ordered[:-1]))] if len(ordered) > 1 else order
     return np.concatenate(arrays).take(first).tolist()
 
 
@@ -2502,6 +2644,8 @@ def _held_in_pandas_slots(
         return None
     frame_types = (pd.DataFrame, pd.Series)
     wanted = {key: sys.getrefcount(nodes[key]) - inbound[key] - _OVERHEAD for key in excess}
+    np = sys.modules.get("numpy")
+    keys = np.sort(np.fromiter(wanted, dtype=np.int64, count=len(wanted))) if np is not None else None
     names: set[str] = set()
     seen: set[int] = set(nodes)
     # The slots read, by address: two frames on the same memory (a filter
@@ -2521,7 +2665,7 @@ def _held_in_pandas_slots(
                         wanted[id(item)] -= 1
                         held = True
             for array in object_columns_of(value) or ():
-                for key in _cells_wanted(array, wanted, slots):
+                for key in _cells_wanted(array, keys, slots):
                     wanted[key] -= 1
                     held = True
             if held:
@@ -2533,14 +2677,13 @@ def _held_in_pandas_slots(
     return names
 
 
-def _cells_wanted(array: Any, wanted: Mapping[int, int], slots: set[int]) -> list[int]:
-    """The ids among *wanted* of the objects in the slots of the object
-    *array*, read by address, leaving out the slots in *slots* and adding
-    the others to it."""
+def _cells_wanted(array: Any, keys: Any, slots: set[int]) -> list[int]:
+    """The ids among the sorted *keys* of the objects in the slots of the
+    object *array*, read by address, leaving out the slots in *slots* and
+    adding the others to it."""
     np = sys.modules["numpy"]
-    keys = np.fromiter(wanted, dtype=np.int64, count=len(wanted))
     held = addresses(array)
-    rows = np.flatnonzero(np.isin(held, keys))
+    rows = np.flatnonzero(in_sorted(held, keys))
     if not len(rows):
         return []
     start = array.__array_interface__["data"][0]
@@ -3032,7 +3175,7 @@ def _walk(
         nodes[key] = root
         owner[key] = name
         order.append(key)
-        if _values_only(root, exact):
+        if values_only(root, exact):
             # A flat list or dict of values (``[f(i) for i in ...]``): nothing
             # below the root to count, asked at C speed. Before the tree
             # check, which also sizes every item for the facts it keeps.

@@ -152,6 +152,7 @@ from ..callee_reach import (
     module_state_writes,
     rebound_modules,
 )
+from ..frame_cells import is_frame
 from ..holder_patches import (
     FrameCellsPatch,
     HolderPatch,
@@ -2863,8 +2864,9 @@ class StatementProcessor:
             # (``df`` for ``df2 = df[mask]``): the outputs take them back
             # from it, and it is not stored at all.
             # The statement's inputs first: ``df`` for ``v = df.iloc[3:]``
-            # takes back every cell, and its other views need no links.
-            ordered = sorted(holders, key=lambda name: name not in run.inputs)
+            # takes back every cell, and its other views need no links. Then
+            # the longest frames, which more likely do.
+            ordered = sorted(holders, key=lambda name: (name not in run.inputs, -_frame_rows(holders[name])))
             framed = frame_cells_patches({name: holders[name] for name in ordered}, outputs)
             # An output changed in place whose cells a frame left as it is
             # holds too: a hit restores it over the live object, apart from
@@ -3411,6 +3413,11 @@ def _frames_left_alone(cached_data: Any) -> set[str]:
         for name, value in variables.items()
         if isinstance(value, FrameCellsPatch) or (isinstance(value, HolderPatch) and not value.places)
     }
+
+
+def _frame_rows(value: Any) -> int:
+    """The rows of a pandas frame or series *value*; 0 for anything else."""
+    return len(value) if is_frame(value) else 0
 
 
 def _is_loop(tree: ast.AST | None) -> bool:

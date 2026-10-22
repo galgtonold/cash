@@ -29,11 +29,13 @@ __all__ = [
     "addresses",
     "cell_links",
     "frames_in",
+    "in_sorted",
     "is_frame",
     "is_object_dtype",
     "linked_cell_ids",
     "object_columns_on_both_sides",
     "relink_cells",
+    "sorted_unique",
 ]
 
 #: More cells than this to put back, and the call is not stored: the
@@ -58,8 +60,8 @@ def is_object_dtype(dtype: Any) -> bool:
 
 def object_columns(value: Any, pd: Any) -> list[tuple[int, Any]]:
     """``(position, array)`` of *value*'s object columns that hold more than
-    values pandas tells apart (`infer_dtype`); position -1 for a series."""
-    from cash.notebook.shared_objects import VALUE_COLUMNS
+    values pandas tells apart (`column_values_only`); position -1 for a series."""
+    from cash.notebook.shared_objects import column_values_only
 
     if isinstance(value, pd.Series):
         columns = [(-1, value)]
@@ -70,7 +72,7 @@ def object_columns(value: Any, pd: Any) -> list[tuple[int, Any]]:
         if not is_object_dtype(column.dtype):
             continue
         array = column.to_numpy(copy=False)
-        if pd.api.types.infer_dtype(array, skipna=True) not in VALUE_COLUMNS:
+        if not column_values_only(array, pd):
             found.append((position, array))
     return found
 
@@ -118,6 +120,29 @@ def addresses(array: Any) -> Any:
     return slots[::step].astype(np.int64)
 
 
+def sorted_unique(values: Any) -> Any:
+    """`numpy.unique` of the int64 *values*, by one sort: numpy 2.5's own
+    takes some twenty times as long on a hundred thousand addresses."""
+    np = sys.modules["numpy"]
+    ordered = np.sort(values)
+    if len(ordered) < 2:
+        return ordered
+    return ordered[np.concatenate(([True], ordered[1:] != ordered[:-1]))]
+
+
+def in_sorted(values: Any, ordered: Any) -> Any:
+    """Which of the int64 *values* are among the sorted int64 *ordered*,
+    as a mask: one binary search each, where `numpy.isin` sorts both
+    arrays again on every call (a hundred thousand addresses against a
+    hundred thousand ids, for each of fifty frames)."""
+    np = sys.modules["numpy"]
+    if not len(ordered):
+        return np.zeros(len(values), dtype=bool)
+    at = np.searchsorted(ordered, values)
+    at[at == len(ordered)] = 0
+    return ordered[at] == values
+
+
 def object_columns_on_both_sides(result: Any, args: tuple, kwargs: dict) -> bool:
     """Whether a frame *result* is or holds at its top level and a frame
     among the arguments both have object columns holding more than values."""
@@ -146,23 +171,48 @@ def cell_links(result: Any, args: tuple, kwargs: dict) -> tuple[list[dict], dict
         return None
     sources = [(["a", i], value) for i, value in enumerate(args)]
     sources += [(["k", name], value) for name, value in kwargs.items()]
-    labels, ids = [], []
+    labels, ids, columns = [], [], []
     for place, value in sources:
         if not isinstance(value, (pd.Series, pd.DataFrame)):
             continue
         for position, array in object_columns(value, pd):
             labels.append((place, position, len(array)))
             ids.append(addresses(array))
+            columns.append(array)
     every = np.concatenate(ids) if ids else np.empty(0, dtype=np.int64)
     order = np.argsort(every, kind="stable")
     ordered = every[order]
     starts = np.cumsum([0] + [len(part) for part in ids])
+    # With no cell held twice by the arguments, a result column in an
+    # argument column's own memory (``df.iloc[3:]``) holds its cells where
+    # that column does, row for row, unsearched.
+    once = len(ordered) < 2 or not bool((ordered[1:] == ordered[:-1]).any())
+    spans = [_slots_span(array) for array in columns] if once else []
     links: list[dict] = []
     linked: dict[int, list[Any]] = {}
     total = 0
     for path, frame in frames:
         for position, array in object_columns(frame, pd) if ids else ():
             own = addresses(array)
+            inside = _inside(array, spans)
+            if inside is not None and len(own):
+                label, first = inside
+                total += len(own)
+                if total > _MAX_LINKED:
+                    return None
+                place, column, _length = labels[label]
+                links.append(
+                    {
+                        "result": path,
+                        "column": position,
+                        "rows": None,
+                        "source": place,
+                        "source_column": column,
+                        "source_rows": _rows(first + np.arange(len(own), dtype=np.int64), -1, np),
+                    }
+                )
+                linked.setdefault(id(frame), []).append(own)
+                continue
             at = np.minimum(np.searchsorted(ordered, own), len(ordered) - 1)
             rows = np.flatnonzero(ordered[at] == own)
             if not len(rows):
@@ -178,7 +228,7 @@ def cell_links(result: Any, args: tuple, kwargs: dict) -> tuple[list[dict], dict
                 return None
             found = order[at[rows]]
             source = np.searchsorted(starts, found, side="right") - 1
-            for label in np.unique(source):
+            for label in sorted_unique(source).tolist():
                 mine = source == label
                 place, column, _length = labels[label]
                 links.append(
@@ -205,7 +255,33 @@ def cell_links(result: Any, args: tuple, kwargs: dict) -> tuple[list[dict], dict
             linked.setdefault(id(frame), []).append(addresses(categories))
     if not links:
         return None
-    return links, {key: np.unique(np.concatenate(parts)) for key, parts in linked.items()}
+    return links, {key: sorted_unique(np.concatenate(parts)) for key, parts in linked.items()}
+
+
+def _slots_span(array: Any) -> tuple[int, int, int] | None:
+    """``(first, end, step)``: the bytes of memory the slots of the object
+    *array* take, and the step between two; None when it is not one
+    dimension, or steps backwards or not at all."""
+    step = array.strides[0] if array.ndim == 1 else 0
+    if step <= 0 or not len(array):
+        return None
+    first = array.__array_interface__["data"][0]
+    return first, first + len(array) * step, step
+
+
+def _inside(array: Any, spans: list[tuple[int, int, int] | None]) -> tuple[int, int] | None:
+    """``(i, row)`` when the slots of *array* are rows ``row`` on of the
+    array whose memory ``spans[i]`` is, one for one: its very slots."""
+    own = _slots_span(array)
+    if own is None:
+        return None
+    first, end, step = own
+    for i, span in enumerate(spans):
+        if span is None or span[2] != step:
+            continue
+        if span[0] <= first and end <= span[1] and (first - span[0]) % step == 0:
+            return i, (first - span[0]) // step
+    return None
 
 
 def categorical_columns(value: Any, pd: Any) -> list[tuple[int, Any]]:

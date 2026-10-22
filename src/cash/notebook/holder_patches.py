@@ -128,6 +128,38 @@ def _reachable_within(
     return seen
 
 
+def _reaches_any(outputs: Mapping[str, Any], held: set[int], value_types: tuple[type, ...]) -> bool:
+    """Whether a walk of the outputs, into their frames' categoricals'
+    objects too, meets an object of *held*: all `_paths` and `_reachable`
+    name, as each step `_steps` names is a child `children_of` gives."""
+    from .frame_cells import is_frame
+
+    seen: set[int] = set()
+    dtypes: set[int] = set()
+    stack = list(outputs.values())
+    while stack:
+        if not len(seen) & 1023:
+            check_walk_budget()
+        obj = stack.pop()
+        if is_value(obj, value_types) or id(obj) in seen:
+            continue
+        if id(obj) in held:
+            return True
+        seen.add(id(obj))
+        if is_frame(obj):
+            # Each dtype's objects once: fifty views share ``df``'s.
+            fresh = [dtype for dtype in _frame_dtypes(obj) if id(dtype) not in dtypes]
+            if fresh:
+                dtypes.update(id(dtype) for dtype in fresh)
+                stack.extend(child for _step, child in _category_steps(obj))
+        stack.extend(children_of(obj) or ())
+    return False
+
+
+def _frame_dtypes(frame: Any) -> list[Any]:
+    return [frame.dtype] if frame.ndim == 1 else list(frame.dtypes)
+
+
 def _paths(outputs: Mapping[str, Any], value_types: tuple[type, ...]) -> dict[int, tuple[str, Path]]:
     """A path from an output to each object of the outputs a step can name:
     a frame's categorical's objects among them (`_category_steps`)."""
@@ -168,15 +200,21 @@ def holder_patches(
     value_types = VALUE_TYPES + library_value_types()
     group = _tree_group(holders, outputs, value_types)
     if group is None:
-        group = _paths(outputs, value_types)
         # And the cells of the outputs' frames the holders reach, which no
         # step names either: ``rect`` in ``df``'s column ``m``.
         held = _reachable_within(list(holders.values()), value_types, _HELD_MAX, left)
-        if held:
-            for key, place in _cell_paths(outputs, held).items():
+        cells = _cell_paths(outputs, held) if held else {}
+        if held is not None and not cells and not _reaches_any(outputs, held, value_types):
+            # `_places` asks only of what the holders reach whether it is
+            # the outputs': none is, so no path is needed (fifty views of
+            # ``df``, each with ``ks``'s thousand objects as categories).
+            group, targets = {}, set()
+        else:
+            group = _paths(outputs, value_types)
+            for key, place in cells.items():
                 group.setdefault(key, place)
-        # And the categorical's objects, which no walk of a frame reads.
-        targets = _reachable(list(outputs.values()), value_types) | set(group)
+            # And the categorical's objects, which no walk of a frame reads.
+            targets = _reachable(list(outputs.values()), value_types) | set(group)
     else:
         targets = set(group)
     patches: dict[str, HolderPatch] = {}
@@ -266,13 +304,13 @@ def _cell_paths(outputs: Mapping[str, Any], held: set[int]) -> dict[int, tuple[s
     or at their top level) whose object's id is in *held*, by address
     (`frame_cells.addresses`): ``("cell", (column, row))`` from the frame,
     column -1 for a series."""
-    from .frame_cells import addresses, frames_with, loaded_pandas, object_columns
+    from .frame_cells import addresses, frames_with, in_sorted, loaded_pandas, object_columns
 
     pd = loaded_pandas()
     np = __import__("sys").modules.get("numpy")
     if pd is None or np is None or not held:
         return {}
-    wanted = np.fromiter(held, dtype=np.int64, count=len(held))
+    wanted = np.sort(np.fromiter(held, dtype=np.int64, count=len(held)))
     found: dict[int, tuple[str, Path]] = {}
     for name, value in outputs.items():
         kind = "key" if type(value) is dict else "item"
@@ -280,7 +318,7 @@ def _cell_paths(outputs: Mapping[str, Any], held: set[int]) -> dict[int, tuple[s
             steps = tuple((kind, step) for step in path)
             for position, array in object_columns(frame, pd):
                 own = addresses(array)
-                for row in np.flatnonzero(np.isin(own, wanted)).tolist():
+                for row in np.flatnonzero(in_sorted(own, wanted)).tolist():
                     found.setdefault(int(own[row]), (name, (*steps, ("cell", (position, row)))))
     return found
 
@@ -375,7 +413,7 @@ def frame_cells_patches(holders: Mapping[str, Any], outputs: Mapping[str, Any]) 
     of reading half a million addresses per view. Whether a holder holds
     the outputs' objects otherwise is asked of each as before
     (`holds_part_of`)."""
-    from .frame_cells import addresses, cell_links, frames_in, is_frame, put_back_dtypes
+    from .frame_cells import addresses, cell_links, frames_in, is_frame, put_back_dtypes, sorted_unique
     from .frame_cells import object_columns as frame_object_columns
     from .shared_objects import (
         VALUE_TYPES,
@@ -412,7 +450,7 @@ def frame_cells_patches(holders: Mapping[str, Any], outputs: Mapping[str, Any]) 
         if left is None and found:
             left = {
                 id(frame): _not_in(
-                    np.unique(np.concatenate([addresses(array) for array in arrays])), linked.get(id(frame), ()), np
+                    sorted_unique(np.concatenate([addresses(array) for array in arrays])), linked.get(id(frame), ()), np
                 )
                 for _path, frame in out_frames
                 if (arrays := object_columns_of(frame))
@@ -438,7 +476,9 @@ def frame_cells_patches(holders: Mapping[str, Any], outputs: Mapping[str, Any]) 
     every = [link for links in found.values() for link in links]
     put_back = put_back_dtypes(outputs, every)
     value_types = VALUE_TYPES + library_value_types()
-    joined = {key: parts[0] if len(parts) == 1 else np.unique(np.concatenate(parts)) for key, parts in linked.items()}
+    joined = {
+        key: parts[0] if len(parts) == 1 else sorted_unique(np.concatenate(parts)) for key, parts in linked.items()
+    }
     frames = itertools.chain((frame for _path, frame in out_frames), (framed[name] for name in found))
     patches: dict[str, FrameCellsPatch] = {}
     with frames_together(frames, joined):
