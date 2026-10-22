@@ -23,6 +23,7 @@ from cash.backends import frame_sharing
 from cash.backends.file_backend import FileBackend
 from cash.backends.memory_backend import InMemoryBackend
 from cash.backends.tiered_backend import TieredBackend
+from tests._label_writes import label_array
 
 pytestmark = pytest.mark.skipif(
     int(pd.__version__.split(".", 1)[0]) < 3, reason="pandas 3 keeps text as str: an older one keeps objects"
@@ -152,7 +153,7 @@ def test_a_hit_after_the_caller_lets_go_matches_and_can_be_changed():
     with pytest.raises(ValueError):
         first["fare"].array[0] = -9.0  # frozen: shared by every hit, no handle writes it
     with pytest.raises(ValueError):
-        first.columns.array[0] = "x"  # its labels too
+        label_array(first.columns)[0] = "x"  # its labels too
     pd.testing.assert_frame_equal(backend.get("k")[1]["variables"]["df"], expected)
 
 
