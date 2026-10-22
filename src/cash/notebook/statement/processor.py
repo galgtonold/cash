@@ -1256,6 +1256,16 @@ class StatementProcessor:
             run.skip_cache = True
             run.drew_from_stream = True
 
+    def _binds_the_namespace(self, run: StatementRun) -> bool:
+        """Whether all *run* binds is the notebook's namespace (``NS = globals()``).
+
+        Its value is everything the notebook holds, so a digest of it is new
+        every run and would rerun every reader. What a reader finds through
+        it is looked up by a string, which that reader's own check follows
+        (``unkeyed_reach``), so the name keeps its lineage."""
+        ns = self.shell.user_ns
+        return bool(run.outputs) and all(ns.get(name) is ns for name in run.outputs)
+
     def _lookup(
         self, run: StatementRun, analysis_time: float, hash_time: float
     ) -> tuple[StatementCacheMetadata | None, Any | None]:
@@ -2195,7 +2205,7 @@ class StatementProcessor:
                     probes=execution.probes,
                     no_cache=(run.annotation is not None and run.annotation.no_cache)
                     or run.value_varies
-                    or (run.skip_cache and not run.value_pinned)
+                    or (run.skip_cache and not run.value_pinned and not self._binds_the_namespace(run))
                     or run.past_budget
                     or inputs_moved
                     or self._binds_a_stream(run),
