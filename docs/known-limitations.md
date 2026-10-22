@@ -450,7 +450,7 @@ print("end", file=log)       # cell 3: re-run alone, "end" twice
 <!-- claim: cash/analysis/code_analyzer.py:_cell_magic_body @3566e904, cash/analysis/code_analyzer.py:_is_magic_line @d120bf9b, cash/notebook/statement/processor.py:StatementProcessor.forget_rebound @70d43250 -->
 cash reads a cell's Python, not what IPython makes of its magics. A magic or a
 shell command runs every time, uncached, and cash never runs one for you.
-<!-- claim: cash/notebook/magic_effects.py:magic_effects @420435ff, cash/notebook/upstream/simulator.py:NotebookSimulator._warn_stale_magic @777a3665, cash/notebook/magic_effects.py:is_rerun_magic @17c29890, cash/notebook/statement/mutations.py:MutationClassifier.magic_snapshots @24994a9f, cash/analysis/code_analyzer.py:magic_python @1a6291b3 -->
+<!-- claim: cash/notebook/magic_effects.py:magic_effects @420435ff, cash/notebook/upstream/simulator.py:NotebookSimulator._warn_stale_magic @777a3665, cash/notebook/magic_effects.py:is_rerun_magic @17c29890, cash/notebook/statement/mutations.py:MutationClassifier.magic_snapshots @24994a9f, cash/analysis/code_analyzer.py:magic_python @1a6291b3, cash/notebook/magic_effects.py:magic_base @0d0485ca -->
 The names it binds or changes (`files = !ls`, `t = %time f()`,
 `%time x = f()`, the receiver of `%time model.fit()`, an argument
 `%time train(model)` was seen changing in place) keep the value it left,
@@ -462,8 +462,9 @@ edit above `model = M(k)` and `%time model.fit()`, or a restart, the cell
 below gets the model fitted on the new `k`. A `%timeit` rebuilt this way times
 its statement again. In a loop or `if` body, such a line reads and changes
 what its statement does: `for i in r: %time acc.append(i * k)` changes `acc`. A shell command or any other magic is never run for you:
-after an edit to a cell it reads, or a restart, cash keeps the value the name
-has (or leaves it undefined) and warns
+after an edit to a cell it reads, a change to a file or folder its line read
+in Python (`!wc -l {max(glob.glob('logs/*.log'))}`), or a restart, cash keeps
+the value the name has (or leaves it undefined) and warns
 ([NOTEBOOK-MAGIC-STALE](warnings.md#notebook-magic-stale)). A name another
 magic binds (`%run`, `%store -r`, `%%capture out`, `%%bash --out o`) has no
 producer cash knows of: a statement that reads it runs uncached. The body of a

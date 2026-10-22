@@ -270,6 +270,10 @@ class TrackingState:
     # W: StatementProcessor, VirtualLineage. R: VirtualLineage, MismatchClassifier.
     magic_values: dict[str, dict[str, str]] = field(default_factory=dict)
     magic_lineages: set[str] = field(default_factory=set)
+    # magic statement code -> (files, remote objects, probes) it read on its
+    # last run, folded into its ``magic_base``.
+    # W: StatementProcessor. R: StatementProcessor, VirtualLineage.
+    magic_file_reads: dict[str, tuple[frozenset[str], frozenset[str], dict[str, str]]] = field(default_factory=dict)
     # Bumped each time a magic records its values: a simulation snapshot of a
     # cell holding magics taken before is out of date.
     magic_generation: int = 0
