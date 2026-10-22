@@ -20,9 +20,9 @@ yourself. Figures on this page are derived from the repository by
 
 | Suite | Size | What it covers |
 |---|---|---|
-| Unit | <!-- docnum:tests_unit -->~15,650<!-- /docnum --> | keys, lineage, hashing, backends, the decorator, the notebook engine with a real IPython shell |
+| Unit | <!-- docnum:tests_unit -->~15,670<!-- /docnum --> | keys, lineage, hashing, backends, the decorator, the notebook engine with a real IPython shell |
 | Notebook integration | <!-- docnum:tests_integration -->~4,750<!-- /docnum --> | real kernels running real notebooks, one folder per feature |
-| Docs | <!-- docnum:tests_docs -->~620<!-- /docnum --> | the documentation's examples and claims ([below](#the-docs-are-tested-too)) |
+| Docs | <!-- docnum:tests_docs -->~630<!-- /docnum --> | the documentation's examples and claims ([below](#the-docs-are-tested-too)) |
 
 ## What runs where
 
@@ -61,7 +61,7 @@ test that passes without the fix proves nothing and is rewritten.
   For a decorated function, it checks that the hits and misses match the
   example's comments (`# cache hit`, `# cache miss`).
 - **Claims are pinned to the code.** About
-  <!-- docnum:claims -->~510<!-- /docnum --> statements about behaviour carry an
+  <!-- docnum:claims -->~520<!-- /docnum --> statements about behaviour carry an
   anchor naming the source that decides them, with a fingerprint of that
   source. When the code changes, the claim is listed for re-reading. Pull
   requests report drift without failing; a release fails on it.
