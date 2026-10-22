@@ -160,6 +160,21 @@ def test_an_extensions_heap_type_is_not_user_code():
         assert not is_user_code_object(native)
 
 
+def test_an_extensions_heap_type_stays_c_code_once_copy_was_asked_for_one():
+    """``copy.copy`` or ``pickle`` of a ``PyDataFrame`` fails, but leaves
+    ``copyreg``'s ``__slotnames__`` on its class: in a suite, a test earlier
+    on the worker made every polars frame argument walk its frame's
+    methods as user code."""
+    import copy
+
+    pl = pytest.importorskip("polars")
+    native = pl.DataFrame({"a": [1]})._df
+    with pytest.raises(TypeError):
+        copy.copy(native)
+    assert "__slotnames__" in vars(type(native))
+    assert not is_user_code_object(type(native))
+
+
 @pytest.mark.parametrize(
     "body",
     ["class A:\n    pass", "class A:\n    def f(self):\n        return 1", "class A:\n    x = 1"],
