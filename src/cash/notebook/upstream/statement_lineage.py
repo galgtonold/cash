@@ -17,7 +17,7 @@ from collections import ChainMap
 from collections.abc import Callable, Container, Mapping
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, instance_of
 
 from ..._clock import perf_counter as _perf_counter
 from ...analysis.ast_util import parse_cached
@@ -776,7 +776,7 @@ class StatementLineage:
 
         def is_module(out: str) -> bool:
             if out in user_ns:
-                return isinstance(user_ns[out], types.ModuleType)
+                return instance_of(user_ns[out], types.ModuleType)
             if out in recorded:
                 return bool(recorded[out].get("module"))
             return True

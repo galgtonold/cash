@@ -177,7 +177,7 @@ class NotebookSimulator:
 
         names: set[str] = set()
         for value in list(user_ns.values()):
-            if isinstance(value, types.ModuleType):
+            if issubclass(type(value), types.ModuleType):
                 names.add(value.__name__)
             else:
                 owner = attribute_or(value, "__module__", None)

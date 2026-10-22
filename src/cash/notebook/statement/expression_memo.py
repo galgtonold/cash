@@ -36,7 +36,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from cash._user_attrs import attribute_or, has_attribute
+from cash._user_attrs import attribute_or, has_attribute, instance_of
 from cash.analysis.ast_util import copy_tree
 
 from ..shared_objects import output_history
@@ -204,7 +204,7 @@ class ExpressionMemo:
                 return None  # ``del df``: the statement must raise as it would
             if name in lineages:
                 parts.append((name, lineages[name]))
-            elif isinstance(namespace.get(name), types.ModuleType):
+            elif instance_of(namespace.get(name), types.ModuleType):
                 parts.append((name, "module:" + namespace[name].__name__))
             else:
                 return None

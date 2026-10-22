@@ -141,7 +141,7 @@ class CodeTable:
                 value = g.get(name, MISSING)
                 if not self._settled(g, name, value, seen):
                     return False
-                if isinstance(value, types.ModuleType) and is_user_code_module(value):
+                if issubclass(type(value), types.ModuleType) and is_user_code_module(value):
                     # A library module's attributes are not folded, and the
                     # code they hold is not followed: only a user module's.
                     attrs = vars(value)
@@ -152,7 +152,7 @@ class CodeTable:
 
     def _settled(self, space: dict, name: str, value: Any, seen: set) -> bool:
         if value is not MISSING and not isinstance(value, _SETTLED_TYPES):
-            if not (isinstance(value, (types.FunctionType, type)) and not is_user_code_object(value)):
+            if not (issubclass(type(value), (types.FunctionType, type)) and not is_user_code_object(value)):
                 return False
         if (id(space), name) not in seen:
             seen.add((id(space), name))

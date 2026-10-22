@@ -178,7 +178,7 @@ class MethodClassDeps:
                 # Recurse into what this method itself reaches through self.
                 _, sub_attrs, _ = self._analyze_method_self_deps(member)
                 worklist.extend(a for a in sub_attrs if a not in seen)
-            elif not isinstance(member, (types.ModuleType, type)) and not callable(member):
+            elif not issubclass(type(member), (types.ModuleType, type)) and not callable(member):
                 # A class-level DATA attribute (a constant). Fold its value.
                 try:
                     parts.append(f"c:{attr}:{self._args.hash_payload((member,), {})}")

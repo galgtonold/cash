@@ -175,7 +175,7 @@ def _functions_reached_in(globals_dict: dict, fn) -> list:
             names = _CODE_NAMES[code] = _code_names(code)
         for name in names:
             value = globals_dict.get(name)
-            if isinstance(value, _types.FunctionType) and value.__globals__ is globals_dict and id(value) not in seen:
+            if type(value) is _types.FunctionType and value.__globals__ is globals_dict and id(value) not in seen:
                 seen.add(id(value))
                 reached.append(value)
                 pending.append(value)
@@ -202,7 +202,7 @@ def changes_its_closure(fn) -> bool:
     """Whether calling *fn* rebinds a variable of the function it was made
     in, or changes an object one of them holds: ``nonlocal count; count +=
     1``, ``seen.append(x)``."""
-    if not isinstance(fn, _types.FunctionType):
+    if type(fn) is not _types.FunctionType:
         return False
     cells = closure_cells(fn)
     return bool(cells) and (rebinds_its_closure(fn) or any(n in cells for n in _source_mutations(fn)))
@@ -457,7 +457,7 @@ def _code_names(code: _types.CodeType) -> frozenset[str]:
 
 
 def _plain_or_code(value, seen: set[int], budget: list[int]) -> bool:
-    if isinstance(value, _types.FunctionType):
+    if type(value) is _types.FunctionType:
         if attribute_or(value, "_is_file_tracker_patch", False) or attribute_or(value, "_cash_cached", False):
             return True  # cash's own: keyed or tracked by cash itself
 
@@ -536,14 +536,14 @@ def global_names_reached(fn, seen: set[int] | None = None) -> set[str]:
         namespace = attribute_or(current, "__globals__", None) or {}
         for name in own:
             value = namespace.get(name)
-            if isinstance(value, _types.FunctionType):
+            if type(value) is _types.FunctionType:
                 pending.append(value)
             elif isinstance(value, type) and id(value) not in seen:
                 # A class the callee builds or calls into: its methods read globals too.
                 seen.add(id(value))
                 for member in vars(value).values():
                     member = attribute_or(member, "__func__", member)
-                    if isinstance(member, _types.FunctionType):
+                    if type(member) is _types.FunctionType:
                         pending.append(member)
     return names
 
@@ -570,7 +570,7 @@ def _user_global_names_reached(fn) -> set[str]:
         namespace = attribute_or(current, "__globals__", None) or {}
         for name in own:
             value = namespace.get(name)
-            if isinstance(value, _types.FunctionType):
+            if type(value) is _types.FunctionType:
                 pending.append(value)
             elif isinstance(value, type) and id(value) not in seen:
                 # A class it builds: its methods are followed as far as they
@@ -579,7 +579,7 @@ def _user_global_names_reached(fn) -> set[str]:
                 pending.extend(
                     member
                     for member in (attribute_or(m, "__func__", m) for m in vars(value).values())
-                    if isinstance(member, _types.FunctionType)
+                    if type(member) is _types.FunctionType
                 )
     return names
 
@@ -630,9 +630,9 @@ def _is_code_arg(value, budget: list[int]) -> bool:
     (`_plain_or_code`): a fit function handed to a backtest. Only a plain
     function, a builtin or a ufunc; a class, a module or a bound method is
     not taken for code here."""
-    if isinstance(value, _types.FunctionType):
+    if type(value) is _types.FunctionType:
         return _plain_or_code(value, set(), budget)
-    if isinstance(value, _types.BuiltinFunctionType):
+    if type(value) is _types.BuiltinFunctionType:
         return True
     np = sys.modules.get("numpy")
     return np is not None and isinstance(value, np.ufunc)
@@ -647,7 +647,7 @@ def code_arg_positions(site: CallSite, args: tuple, kwargs: dict) -> tuple[int, 
     positions = tuple(
         pos
         for pos, value in enumerate(combined)
-        if isinstance(value, (_types.FunctionType, _types.BuiltinFunctionType))
+        if issubclass(type(value), (_types.FunctionType, _types.BuiltinFunctionType))
         or (np is not None and isinstance(value, np.ufunc))
     )
     if not positions:

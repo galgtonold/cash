@@ -37,24 +37,24 @@ _MODULE_WIDTH = 256
 
 
 def _children(obj: Any) -> Iterable[tuple[str, Any]]:
-    if isinstance(obj, types.ModuleType):
+    if instance_of(obj, types.ModuleType):
         # A library's generators are its own business (`np.random`'s global
         # stream has its own watch); a module of the user's is walked.
         attrs = obj.__dict__
         if len(attrs) <= _MODULE_WIDTH and is_user_code(obj):
             yield from ((f".{k}", v) for k, v in list(attrs.items()) if not k.startswith("__"))
         return
-    if isinstance(obj, (list, tuple, set, frozenset)):
+    if instance_of(obj, (list, tuple, set, frozenset)):
         if len(obj) <= _WIDTH:
             for i, item in enumerate(obj):
                 yield f"[{i}]", item
         return
-    if isinstance(obj, dict):
+    if instance_of(obj, dict):
         if len(obj) <= _WIDTH:
             for k, v in obj.items():
                 yield f"[{k!r}]", v
         return
-    if isinstance(obj, types.FunctionType):
+    if instance_of(obj, types.FunctionType):
         code = obj.__code__
         for name, cell in zip(code.co_freevars, obj.__closure__ or (), strict=False):
             try:
@@ -66,7 +66,7 @@ def _children(obj: Any) -> Iterable[tuple[str, Any]]:
             if name in g:
                 yield name, g[name]
         return
-    if isinstance(obj, types.MethodType):
+    if instance_of(obj, types.MethodType):
         yield "__self__", obj.__self__
         yield "__func__", obj.__func__
         return

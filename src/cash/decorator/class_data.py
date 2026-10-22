@@ -60,7 +60,7 @@ def _function_layers(fn: Any) -> list[types.FunctionType]:
     walked: set[int] = set()
     while fn is not None and id(fn) not in walked:  # every layer; a cycle ends
         walked.add(id(fn))
-        if isinstance(fn, types.FunctionType) and not is_cash_wrapper(fn):
+        if type(fn) is types.FunctionType and not is_cash_wrapper(fn):
             layers.append(fn)
         fn = getattr(fn, "__wrapped__", None)
     return layers
@@ -73,7 +73,7 @@ def _member_functions(member: Any) -> list[types.FunctionType]:
         member = member.__func__
     if isinstance(member, property):
         candidates = [member.fget, member.fset, member.fdel]
-    elif isinstance(member, types.FunctionType):
+    elif type(member) is types.FunctionType:
         candidates = [member]
     else:
         candidates = [getattr(member, attr, None) for attr in ("__func__", "fget", "func")]
@@ -98,7 +98,7 @@ def class_surface_functions(cls: type) -> list[types.FunctionType]:
                 found.extend(functions)
                 if (
                     not functions
-                    and not isinstance(member, (type, types.ModuleType))
+                    and not issubclass(type(member), (type, types.ModuleType))
                     and not wraps_code(member)
                     and type(member) not in walked
                     and is_user_code_object(type(member))
@@ -147,12 +147,12 @@ def implicit_access_functions(cls: type) -> list[types.FunctionType]:
         for name, member in vars(base).items():
             if isinstance(member, property):
                 found.extend(_function_layers(member.fget))
-            elif hasattr(member, "attrname") and isinstance(getattr(member, "func", None), types.FunctionType):
+            elif hasattr(member, "attrname") and (type(getattr(member, "func", None)) is types.FunctionType):
                 found.extend(_function_layers(member.func))  # functools.cached_property
             elif name.startswith("__") and name.endswith("__") and name not in _NOT_USE_DUNDERS:
                 if isinstance(member, (staticmethod, classmethod)):
                     member = member.__func__
-                if isinstance(member, types.FunctionType):
+                if type(member) is types.FunctionType:
                     found.extend(_function_layers(member))
     seen: set[int] = set()
     return [f for f in found if not (id(f) in seen or seen.add(id(f)))]
@@ -188,9 +188,9 @@ def class_data_items(
         for name, value in list(vars(base).items()):
             if _is_class_machinery(name) or name in skip:
                 continue
-            if isinstance(value, types.ModuleType) or is_cash_wrapper(value):
+            if issubclass(type(value), types.ModuleType) or is_cash_wrapper(value):
                 continue
-            if isinstance(value, (types.FunctionType, type)) or wraps_code(value):
+            if issubclass(type(value), (types.FunctionType, type)) or wraps_code(value):
                 # The user's own code is keyed by the class's code channels.
                 # Library code is not: ``dtype = np.float32`` or
                 # ``rounder = staticmethod(math.floor)``, rebound at run time
@@ -475,7 +475,7 @@ def _library_code(value: Any) -> Any:
     staticmethod, classmethod or property wraps. None for the user's own
     code, a mock, cash's wrapper, or a descriptor around nothing callable."""
     inner = value
-    if not isinstance(value, (types.FunctionType, type)):
+    if not issubclass(type(value), (types.FunctionType, type)):
         for attr in ("__func__", "fget", "func"):
             candidate = getattr(value, attr, None)
             if callable(candidate):
@@ -510,7 +510,8 @@ def _kept_by_identity(value: Any) -> bool:
     """Is *value*'s digest fixed while it is the same object: immutable data,
     or a library class or function (named by its ``module:qualname``)?"""
     return is_immutable_capture(value) or (
-        isinstance(value, (type, types.FunctionType, types.BuiltinFunctionType)) and not is_user_code_object(value)
+        issubclass(type(value), (type, types.FunctionType, types.BuiltinFunctionType))
+        and not is_user_code_object(value)
     )
 
 
@@ -652,7 +653,7 @@ class ClassDataFold:
             member = f"{label}:{item_label}"
             if member in learned or plain_data_kind(value) is not None:
                 continue
-            if isinstance(value, (type, types.ModuleType)) or (
+            if issubclass(type(value), (type, types.ModuleType)) or (
                 callable(value) and not isinstance(value, (dict, list, tuple, set, frozenset))
             ):
                 continue  # code itself: its class surface keys it

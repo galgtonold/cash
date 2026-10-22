@@ -39,7 +39,7 @@ import types
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, instance_of
 
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.callee_effects import callee_global_mutations
@@ -488,7 +488,7 @@ class ControlStructureProcessor:
         scanned: list[tuple[str | None, Any]] = [
             (resolve(name), user_ns)
             for name in set(reads) | callee_names
-            if isinstance(user_ns.get(name), types.FunctionType) and not is_cash_instrumentation(user_ns.get(name))
+            if instance_of(user_ns.get(name), types.FunctionType) and not is_cash_instrumentation(user_ns.get(name))
         ]
         # Every function of the user's the loop can reach or hands over: a
         # function of their module (``tools.stamp(i)``), a method of their

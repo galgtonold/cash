@@ -271,7 +271,7 @@ def handed_callable_values(
     elif isinstance(call.func, ast.Attribute):
         # ``bus.emit(3)`` calling ``cb(x)`` for ``cb`` in ``self.subs``.
         method = _users_target(call.func, namespace)
-        if method is not None and isinstance(method[0], types.MethodType):
+        if method is not None and type(method[0]) is types.MethodType:
             for item in _held_callables(method[0]):
                 _add_callable(out, item)
     for position, keyword, arg in _arguments(call):
@@ -1521,7 +1521,7 @@ class _Found:
                         self.add(callback, None, False)
             for name in facts.named_calls:
                 target = scope.get(name)
-                if isinstance(target, types.FunctionType) and self._users(target):
+                if type(target) is types.FunctionType and self._users(target):
                     pending.append(target)
 
     def _closed_over(self, fn: types.FunctionType) -> None:
@@ -1542,7 +1542,7 @@ class _Found:
         what its object holds (``cb(x)`` for ``cb`` in ``self.subs``) or
         another of its methods: what those change, the call changes."""
         found = _users_target(func, namespace)
-        if found is None or not isinstance(found[0], types.MethodType):
+        if found is None or type(found[0]) is not types.MethodType:
             return
         owner, fn = found[0].__self__, found[0].__func__
         if instance_of(owner, (type, types.ModuleType)) or not instance_of(fn, types.FunctionType):
@@ -1841,7 +1841,7 @@ class _Found:
         the class every instance shares: the names bound to it are changed.
         What it changes on the object itself is seen when it runs."""
         found = _users_target(func, namespace)
-        if found is None or not isinstance(found[0], types.MethodType):
+        if found is None or type(found[0]) is not types.MethodType:
             return
         owner, fn = found[0].__self__, found[0].__func__
         if instance_of(owner, type) or not instance_of(fn, types.FunctionType) or not self._users(fn):
@@ -1855,7 +1855,7 @@ class _Found:
     def _changed(self, obj: Any, root: str | None) -> None:
         """*obj*, which *root* holds or is, is changed in place by the call."""
         self.changes = True
-        if root is not None and not isinstance(self.namespace.get(root), types.ModuleType):
+        if root is not None and not issubclass(type(self.namespace.get(root)), types.ModuleType):
             self.receivers.add(root)
         if obj is not None and not instance_of(obj, types.ModuleType):
             # The other names of the notebook bound to that very object.
@@ -1945,7 +1945,7 @@ class _Found:
         if not callable(value) or instance_of(value, types.ModuleType):
             return
         call = _class_member(type(value), "__call__")
-        if isinstance(call, types.FunctionType) and self._users(call):
+        if type(call) is types.FunctionType and self._users(call):
             source = self._source(call, label)
             if source is not None and _changes_its_first_argument(call, type(value), source):
                 if self.objects:
@@ -2225,7 +2225,7 @@ def _reaches_through_globals(fn: types.FunctionType) -> bool:
                 return True
         for name in facts.named_calls:
             target = scope.get(name)
-            if isinstance(target, types.FunctionType) and _is_users(target):
+            if type(target) is types.FunctionType and _is_users(target):
                 pending.append(target)
     return False
 
@@ -2512,7 +2512,7 @@ def _called_params(fn: types.FunctionType, seen: frozenset[Any] = frozenset()) -
     seen = seen | {fn.__code__}
     for name, handed in facts.handoffs:
         target = fn.__globals__.get(name)
-        if not isinstance(target, types.FunctionType) or target.__code__ in seen or not _is_users(target):
+        if type(target) is not types.FunctionType or target.__code__ in seen or not _is_users(target):
             continue
         inner = _called_params(target, seen)
         if not inner:

@@ -1003,7 +1003,7 @@ class RandomnessDetector:
         ``(*args, **kwargs)`` and lands in the ``*args`` silence above.
         """
         func = self._live_callee(callee)
-        if not isinstance(func, types.FunctionType):
+        if type(func) is not types.FunctionType:
             return None
 
         try:

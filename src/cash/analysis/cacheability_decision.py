@@ -118,7 +118,7 @@ def is_lineage_exempt(var_name: str, val: Any) -> bool:
     is captured by other means) are exempt.  Used by ``_has_missing_lineage``
     to decide whether absence of a lineage entry is a cacheability blocker.
     """
-    if isinstance(val, types.ModuleType) or var_name == "get_ipython":
+    if issubclass(type(val), types.ModuleType) or var_name == "get_ipython":
         return True
     return bool(callable(val) and (var_name.startswith("_") or hasattr(val, "__self__")))
 

@@ -28,7 +28,7 @@ import types
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, instance_of
 
 __all__ = ["ThreadReach"]
 
@@ -88,7 +88,7 @@ class ThreadReach:
             if attribute_or(fn, "__globals__", None) is user_ns:
                 for c in _codes(code):
                     for name in c.co_names:
-                        if name in user_ns and not isinstance(user_ns[name], _NOT_STATE):
+                        if name in user_ns and not instance_of(user_ns[name], _NOT_STATE):
                             self.names.setdefault(name, label)
             cells = attribute_or(fn, "__closure__", None) or ()
             if not cells:

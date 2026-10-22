@@ -797,9 +797,9 @@ def _callee_source(func: ast.expr, function_source, namespace) -> str | None:
             return function_source(func.id)
         if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
             module = namespace.get(func.value.id)
-            if isinstance(module, types.ModuleType):
+            if issubclass(type(module), types.ModuleType):
                 fn = attribute_or(module, func.attr, None)
-                if isinstance(fn, types.FunctionType):
+                if type(fn) is types.FunctionType:
                     return inspect.getsource(fn)
     except Exception:  # noqa: BLE001 - no source: a new object, as for a library call
         return None

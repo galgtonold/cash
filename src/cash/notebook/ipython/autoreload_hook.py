@@ -216,7 +216,7 @@ _LOCAL: dict[str, tuple[types.ModuleType, bool]] = {}
 
 
 def _is_local(module: Any) -> bool:
-    if not isinstance(module, types.ModuleType):
+    if not issubclass(type(module), types.ModuleType):
         return False
     name = attribute_or(module, "__name__", None)
     held = _LOCAL.get(name) if isinstance(name, str) else None

@@ -35,7 +35,7 @@ import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any, NamedTuple
 
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, instance_of
 
 from .. import _native
 from .._memo import CODE_OBJECTS, LruMemo
@@ -158,7 +158,7 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
     *lineage* is the value's lineage, when it has one: the walk is then
     remembered for it.
     """
-    if value is None or type(value) in _leaves() or isinstance(value, types.ModuleType):
+    if value is None or type(value) in _leaves() or instance_of(value, types.ModuleType):
         return _NOTHING
     if type(value) is types.FunctionType and _plain_function(value):
         return Held((value.__code__,)) if _is_notebook(value, namespace) else _NOTHING
@@ -333,7 +333,7 @@ _USERS_MODULE: dict[str, tuple[types.ModuleType, bool]] = {}
 def _users_module(module: Any) -> bool:
     """Is *module* one of the user's own files (`is_local_module`), not the
     notebook's ``__main__``?"""
-    if not isinstance(module, types.ModuleType):
+    if not issubclass(type(module), types.ModuleType):
         return False
     name = attribute_or(module, "__name__", None)
     if not isinstance(name, str) or name in _MAIN_NAMES:
@@ -808,8 +808,8 @@ def _member_functions(member: Any) -> list[Any]:
     if isinstance(member, (staticmethod, classmethod)):
         member = member.__func__
     if isinstance(member, property):
-        return [f for f in (member.fget, member.fset, member.fdel) if isinstance(f, types.FunctionType)]
-    return [member] if isinstance(member, types.FunctionType) else []
+        return [f for f in (member.fget, member.fset, member.fdel) if type(f) is types.FunctionType]
+    return [member] if type(member) is types.FunctionType else []
 
 
 def _defined_in(klass: type, globals_ids: frozenset[int]) -> bool:

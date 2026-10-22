@@ -490,7 +490,7 @@ def called_function_dependencies(
         return found
 
     def is_module(ref: str) -> bool:
-        if isinstance(user_ns.get(ref), types.ModuleType):
+        if instance_of(user_ns.get(ref), types.ModuleType):
             return True
         return virtual is not None and ref not in user_ns and virtual.is_module(ref)
 
@@ -646,7 +646,7 @@ def called_function_globals(
             for ref in _global_names(code_obj):
                 if ref in ("get_ipython", "__builtins__") or has_attribute(builtins, ref):
                     continue
-                if isinstance(user_ns.get(ref), types.ModuleType) or (
+                if instance_of(user_ns.get(ref), types.ModuleType) or (
                     virtual is not None and ref not in user_ns and virtual.is_module(ref)
                 ):
                     if keep_modules:

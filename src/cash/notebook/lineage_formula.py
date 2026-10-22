@@ -462,7 +462,7 @@ def call_time_reads(code: str, user_ns: Mapping[str, Any], virtual_modules: Iter
     return frozenset(
         name
         for name in body_only_reads(code)
-        if name not in modules and not isinstance(user_ns.get(name), types.ModuleType)
+        if name not in modules and not instance_of(user_ns.get(name), types.ModuleType)
     )
 
 

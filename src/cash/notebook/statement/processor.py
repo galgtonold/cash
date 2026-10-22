@@ -219,7 +219,7 @@ _KERNEL_PACKAGES = frozenset({"IPython", "ipykernel"})
 def _may_hold_memory(value: Any) -> bool:
     """Could another value borrow *value*'s memory? Not a module, class or
     function, nor a number or a string."""
-    if isinstance(value, (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType)):
+    if issubclass(type(value), (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType)):
         return False
     return not isinstance(value, (int, float, complex, str, bool, type(None)))
 
@@ -1865,7 +1865,7 @@ class StatementProcessor:
             self.forget_variable(name)
 
     def _is_module(self, name: str) -> bool:
-        return isinstance(self.shell.user_ns.get(name), types.ModuleType)
+        return issubclass(type(self.shell.user_ns.get(name)), types.ModuleType)
 
     def magic_reads(self, node: ast.stmt) -> dict[str, str | None]:
         """The lineage of each name the magic statement *node* reads, now

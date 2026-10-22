@@ -95,7 +95,7 @@ class LoopRules:
                     if inp in loop_target_vars or unbound_builtin(inp, self.tracking_state.variable_lineage):
                         continue
                     val = self.shell.user_ns.get(inp)
-                    if val is not None and isinstance(val, types.ModuleType):
+                    if val is not None and issubclass(type(val), types.ModuleType):
                         continue
                     tainted.add(acc)
                     break
@@ -161,7 +161,7 @@ class LoopRules:
                     or unbound_builtin(inp, self.tracking_state.variable_lineage, input_hashes)
                 ):
                     continue
-                if isinstance(self.shell.user_ns.get(inp), types.ModuleType):
+                if issubclass(type(self.shell.user_ns.get(inp)), types.ModuleType):
                     continue
                 now, then = input_hashes.get(inp), recorded[0].get(inp)
                 if now is not None and then is not None and now != then:

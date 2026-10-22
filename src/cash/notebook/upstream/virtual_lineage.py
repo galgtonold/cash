@@ -505,7 +505,7 @@ class VirtualLineage:
         # names only: a from-imported name's lineage is cleared on purpose.
         for name in reloaded:
             live = self.tracking_state.variable_lineage.get(name)
-            if live and isinstance(self.shell.user_ns.get(name), types.ModuleType):
+            if live and issubclass(type(self.shell.user_ns.get(name)), types.ModuleType):
                 sim.virtual_lineage[name] = live
 
         new_cache_entries = list(self.cache.entries[:first_changed_cell]) if self.cache.entries else []

@@ -72,7 +72,9 @@ def _draws_from_its_own_generator(call: str, namespace: dict) -> bool:
     of its own rather than numpy's global stream when given no seed? polars
     does; pandas and scikit-learn take ``np.random`` for ``random_state=None``."""
     value = namespace.get(call.partition(".")[0])
-    module = attribute_or(value, "__name__", None) if isinstance(value, types.ModuleType) else type(value).__module__
+    module = (
+        attribute_or(value, "__name__", None) if issubclass(type(value), types.ModuleType) else type(value).__module__
+    )
     return isinstance(module, str) and module.partition(".")[0] == "polars"
 
 

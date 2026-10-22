@@ -43,7 +43,7 @@ import types
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, instance_of
 
 __all__ = ["SHADOW", "Shadow", "disable", "enable", "requested", "status"]
 
@@ -287,7 +287,7 @@ class Shadow:
         if ns is None:
             return "missing"
         if module == self.notebook_name and ns is self.notebook:
-            if isinstance(ns.get(name), (types.ModuleType, types.FunctionType, type)):
+            if instance_of(ns.get(name), (types.ModuleType, types.FunctionType, type)):
                 # By what it is: a module by name (what of it ran is
                 # checked by items of its own; its lineage moves with any
                 # edit to it, used or not), a function by its code,
@@ -411,7 +411,7 @@ class Shadow:
                     add(("environ", "", ""), _environ_digest())
                 if jit_python_function(value) is not None:
                     markers.add("jit")
-                if isinstance(value, types.ModuleType):
+                if issubclass(type(value), types.ModuleType):
                     for chain in table.chains:
                         head, _, rest = chain.partition(".")
                         if head != name:
@@ -495,7 +495,7 @@ class Shadow:
             return "missing"
         obj = ns[parts[0]]
         for p in parts[1:]:
-            if not isinstance(obj, types.ModuleType):
+            if not issubclass(type(obj), types.ModuleType):
                 break
             try:
                 obj = inspect_getattr(obj, p)
@@ -851,7 +851,7 @@ _UNSET = object()
 
 
 def _defaults(fn: Any, code: Any, value_digest: Callable[[Any], str]) -> str:
-    if isinstance(fn, types.FunctionType) and fn.__code__ is code and (fn.__defaults__ or fn.__kwdefaults__):
+    if type(fn) is types.FunctionType and fn.__code__ is code and (fn.__defaults__ or fn.__kwdefaults__):
         return "/" + value_digest((fn.__defaults__, fn.__kwdefaults__))
     return ""
 

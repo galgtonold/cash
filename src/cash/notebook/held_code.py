@@ -116,7 +116,7 @@ def _visit_group(
 
 
 def _visit(obj: Any, parts: list[str], classes: dict[type, str | None], children: list[Any]) -> None:
-    if isinstance(obj, types.FunctionType):
+    if type(obj) is types.FunctionType:
         if _user_function(obj):
             parts.append(f"fn:{callable_identity(obj)}")
             children.extend(obj.__defaults__ or ())
@@ -126,7 +126,7 @@ def _visit(obj: Any, parts: list[str], classes: dict[type, str | None], children
                     children.append(cell.cell_contents)
                 except ValueError:  # an empty cell
                     pass
-    elif isinstance(obj, types.MethodType):
+    elif type(obj) is types.MethodType:
         children.extend((obj.__func__, obj.__self__))
     elif isinstance(obj, functools.partial):
         children.append(obj.func)
@@ -181,5 +181,5 @@ def _member_functions(member: Any) -> list[types.FunctionType]:
     if isinstance(member, (staticmethod, classmethod)):
         member = member.__func__
     if isinstance(member, property):
-        return [f for f in (member.fget, member.fset, member.fdel) if isinstance(f, types.FunctionType)]
-    return [member] if isinstance(member, types.FunctionType) else []
+        return [f for f in (member.fget, member.fset, member.fdel) if type(f) is types.FunctionType]
+    return [member] if type(member) is types.FunctionType else []

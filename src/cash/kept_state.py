@@ -1811,7 +1811,7 @@ def named_now(obj: Any) -> Any:
         return None
     if isinstance(obj, type) and isinstance(current, type):
         return current
-    if isinstance(obj, types.FunctionType) and isinstance(current, types.FunctionType):
+    if type(obj) is types.FunctionType and type(current) is types.FunctionType:
         return current
     return None
 

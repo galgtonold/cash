@@ -14,6 +14,7 @@ import logging
 import types
 from dataclasses import dataclass, field
 
+from cash._user_attrs import instance_of
 from cash.control_markers import strip_markers
 
 from ...analysis.cacheability_decision import is_lineage_exempt
@@ -178,7 +179,7 @@ class MismatchClassifier:
         # 'logreg', on a run order with no edit. A VALUE computed by
         # calling one is still walked through it: `best = score(1)` read `rows`.
         user_ns = self.shell.user_ns
-        if isinstance(user_ns.get(var_name), (types.FunctionType, type)):
+        if instance_of(user_ns.get(var_name), (types.FunctionType, type)):
             return False
         seen: set[str] = set()
         todo = [var_name]
@@ -224,7 +225,7 @@ class MismatchClassifier:
             if inp in virtual_modules:
                 continue
             val = self.shell.user_ns.get(inp)
-            if val is not None and isinstance(val, types.ModuleType):
+            if val is not None and issubclass(type(val), types.ModuleType):
                 continue
             data_inputs.add(inp)
         return data_inputs

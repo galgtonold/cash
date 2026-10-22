@@ -189,7 +189,7 @@ class CodeArgs:
 
         functions = class_functions(carrier) if isinstance(carrier, type) else [getattr(carrier, "__func__", carrier)]
         for fn in functions:
-            if not isinstance(fn, types.FunctionType):
+            if type(fn) is not types.FunctionType:
                 continue
             mark = (id(fn.__code__), func_name)
             if mark in self._warned_untrackable_carrier:
@@ -534,20 +534,20 @@ class CodeArgs:
             yield _Deeper(list(values), True)
             return
         for v in values:
-            if type(v) in CODELESS_PRIMS or id(v) in _seen or isinstance(v, types.ModuleType):
+            if type(v) in CODELESS_PRIMS or id(v) in _seen or issubclass(type(v), types.ModuleType):
                 continue
             if is_runtime_machinery(v):
                 continue
             if type(v) in BUILTIN_CONTAINERS:
                 _seen.add(id(v))
                 yield from self._find_user_code(v.values() if isinstance(v, dict) else v, _depth + 1, _seen)
-            elif isinstance(v, (types.FunctionType, type)):
+            elif issubclass(type(v), (types.FunctionType, type)):
                 if defined_in_user_code(v):
                     yield from self._walk_carriers(v, _depth, _seen)
             elif jit_python_function(v) is not None:
                 if defined_in_user_code(jit_python_function(v)):
                     yield from self._walk_carriers(v, _depth, _seen)
-            elif isinstance(v, types.MethodType):
+            elif type(v) is types.MethodType:
                 _seen.add(id(v))
                 yield from self._find_user_code((v.__func__, v.__self__), _depth + 1, _seen)
             elif isinstance(v, functools.partial):
@@ -618,7 +618,7 @@ class CodeArgs:
         names: frozenset[str] | None = None
         for param, value in (*((None, a) for a in args), *kwargs.items()):
             parts.extend(self.carrier_parts(value, func_name, param, seen_carriers, owner_code))
-            if func is None or type(value) in CODELESS_PRIMS or isinstance(value, (type, types.ModuleType)):
+            if func is None or type(value) in CODELESS_PRIMS or issubclass(type(value), (type, types.ModuleType)):
                 continue
             if names is None:
                 names = self._attribute_names(func, report)
@@ -666,7 +666,7 @@ class CodeArgs:
                 elif target is not None:
                     functions.append(target)
             for ref in report.helper_objects.values():
-                target = ref() if callable(ref) and not isinstance(ref, types.FunctionType) else ref
+                target = ref() if callable(ref) and type(ref) is not types.FunctionType else ref
                 if target is not None:
                     functions.append(target)
         names: set[str] = set()
@@ -955,7 +955,7 @@ class CodeArgs:
         # what that code reads was not.
         fn = unwrap_partials(carrier)
         fn = getattr(fn, "__func__", fn)
-        if not isinstance(fn, types.FunctionType):
+        if type(fn) is not types.FunctionType:
             return []
         digest = self._globals.fold_passed_function_reads(fn, func_name, owner_code)
         return [f"argglobal:{getattr(fn, '__qualname__', '?')}:{digest}"] if digest else []
@@ -1029,12 +1029,12 @@ def installed_user_code(attr: Any) -> list[Any]:
         attr = attr.__func__
     if isinstance(attr, property):
         candidates = [attr.fget, attr.fset, attr.fdel]
-    elif isinstance(attr, (types.FunctionType, type)):
+    elif issubclass(type(attr), (types.FunctionType, type)):
         candidates = [attr]
     else:
         held = getattr(attr, "__dict__", None)
         candidates = list(held.values()) if isinstance(held, dict) else []
-    return [c for c in candidates if isinstance(c, (types.FunctionType, type)) and defined_in_user_code(c)]
+    return [c for c in candidates if issubclass(type(c), (types.FunctionType, type)) and defined_in_user_code(c)]
 
 
 def _carrier_functions(carrier: Any, of_class: Any) -> list[types.FunctionType]:
@@ -1044,4 +1044,4 @@ def _carrier_functions(carrier: Any, of_class: Any) -> list[types.FunctionType]:
         return [fn for fn in of_class(carrier) if is_user_code_object(fn)]
     fn = unwrap_partials(carrier)
     fn = getattr(fn, "__func__", fn)
-    return [fn] if isinstance(fn, types.FunctionType) and is_user_code_object(fn) else []
+    return [fn] if type(fn) is types.FunctionType and is_user_code_object(fn) else []

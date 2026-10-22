@@ -41,7 +41,7 @@ def _is_state(name: str, value: Any) -> bool:
     """Whether *name* in a class's ``__dict__`` is state, not behaviour."""
     if name.startswith("__") and name.endswith("__"):
         return False
-    if isinstance(value, (types.FunctionType, staticmethod, classmethod, property, type)):
+    if issubclass(type(value), (types.FunctionType, staticmethod, classmethod, property, type)):
         return False
     return not has_attribute(type(value), "__get__")
 

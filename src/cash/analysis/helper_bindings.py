@@ -146,7 +146,7 @@ def resolve_callee_chain(namespace: dict[str, Any], chain: tuple[str, ...]) -> A
     """What *chain* names in *namespace*, through modules only; None if nothing."""
     obj = namespace.get(chain[0])
     for part in chain[1:]:
-        if not isinstance(obj, types.ModuleType):
+        if not issubclass(type(obj), types.ModuleType):
             return None
         obj = getattr(obj, part, None)
     return obj

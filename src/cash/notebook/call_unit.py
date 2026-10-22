@@ -1545,7 +1545,7 @@ def _module_globals(fn) -> dict[str, Any] | None:
     or of a library."""
     namespace = attribute_or(fn, "__globals__", None)
     module = sys.modules.get(namespace.get("__name__")) if isinstance(namespace, dict) else None
-    if not isinstance(module, types.ModuleType) or vars(module) is not namespace:
+    if not issubclass(type(module), types.ModuleType) or vars(module) is not namespace:
         return None
     try:
         local = is_local_module(module)

@@ -61,7 +61,7 @@ def _code_names(names: Iterable[str], user_ns: Mapping[str, Any]) -> set[str]:
     found: set[str] = set()
     for name in names:
         fn = user_ns.get(name)
-        if isinstance(fn, types.FunctionType):
+        if type(fn) is types.FunctionType:
             for scope in iter_code_scopes(fn.__code__):
                 found.update(scope.co_names)
     return found
@@ -81,7 +81,7 @@ def _user_code(attr: Any) -> tuple[Any, ...]:
 def _functions(carrier: Any) -> list[types.FunctionType]:
     if isinstance(carrier, type):
         return class_functions(carrier)
-    return [carrier] if isinstance(carrier, types.FunctionType) else []
+    return [carrier] if type(carrier) is types.FunctionType else []
 
 
 def installed_code_parts(

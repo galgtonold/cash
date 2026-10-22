@@ -52,19 +52,19 @@ def jit_python_function(obj: Any) -> types.FunctionType | None:
     (``DUFunc``, ``GUFunc``, ``CFunc``) keep it as ``_pyfunc`` or, through
     ``functools.update_wrapper``, as ``__wrapped__``.
     """
-    if isinstance(obj, (types.FunctionType, type, types.ModuleType, types.MethodType)):
+    if issubclass(type(obj), (types.FunctionType, type, types.ModuleType, types.MethodType)):
         return None
     state = _own_dict(obj)
     if state is None:
         return None
     fn = state.get("py_func")
-    if isinstance(fn, types.FunctionType) and "targetoptions" in state:
+    if type(fn) is types.FunctionType and "targetoptions" in state:
         return fn
     if not is_jit_type(type(obj)):
         return None
     for name in ("py_func", "_pyfunc", "__wrapped__"):
         fn = state.get(name)
-        if isinstance(fn, types.FunctionType):
+        if type(fn) is types.FunctionType:
             return fn
     return None
 
@@ -93,7 +93,7 @@ def _stable(value: Any) -> str:
         return "(" + ",".join(_stable(v) for v in value) + ")"
     if value is None or isinstance(value, (bool, int, float, str, bytes)):
         return repr(value)
-    if isinstance(value, (type, types.FunctionType)):
+    if issubclass(type(value), (type, types.FunctionType)):
         return f"{getattr(value, '__module__', '?')}.{getattr(value, '__qualname__', '?')}"
     # A numba type (``float64``, ``array(float64, 1d, C)``) prints as itself.
     return f"{type(value).__qualname__}:{value}"

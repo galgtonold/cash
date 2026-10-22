@@ -18,7 +18,7 @@ import textwrap
 import types
 from typing import TYPE_CHECKING
 
-from cash._user_attrs import has_attribute
+from cash._user_attrs import has_attribute, instance_of
 
 from ..._memo import NOTEBOOK_STATEMENTS, STATEMENTS
 from ..._paths import resolve_file_dep_path
@@ -833,7 +833,7 @@ class FileWriterScheduler:
     def _unbound_helpers(self, names, defs: dict) -> list:
         """The ``def`` entries for *names* that are not live functions."""
         user_ns = self._user_ns() or {}
-        return [defs[n] for n in names if n in defs and not isinstance(user_ns.get(n), types.FunctionType)]
+        return [defs[n] for n in names if n in defs and not instance_of(user_ns.get(n), types.FunctionType)]
 
     def _is_file_writer(self, stmt_code: str, simulation_trace: list | None = None) -> bool:
         """A statement that writes files -- in its own text, or through a user

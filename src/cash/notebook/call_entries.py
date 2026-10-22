@@ -131,7 +131,7 @@ def reached_objects(fn: Any) -> list[Any]:
     todo = [fn]
     while todo and len(seen) < _MAX_FUNCTIONS:
         func = todo.pop()
-        if not isinstance(func, types.FunctionType) or id(func) in seen:
+        if type(func) is not types.FunctionType or id(func) in seen:
             continue
         seen.add(id(func))
         for cell in func.__closure__ or ():
@@ -150,14 +150,14 @@ def reached_objects(fn: Any) -> list[Any]:
             value = namespace.get(name, _ABSENT)
             if value is _ABSENT:
                 continue
-            if isinstance(value, types.FunctionType) and value.__globals__ is namespace:
+            if type(value) is types.FunctionType and value.__globals__ is namespace:
                 todo.append(value)
-            elif isinstance(value, (type, types.ModuleType)):
+            elif issubclass(type(value), (type, types.ModuleType)):
                 owners.append((value, names))
             else:
                 found.append(value)
     for owner, names in owners:
-        if isinstance(owner, (type, types.ModuleType)):
+        if issubclass(type(owner), (type, types.ModuleType)):
             found += _attributes_named(owner, names)
     return found
 

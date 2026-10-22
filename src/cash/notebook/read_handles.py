@@ -29,7 +29,7 @@ import os
 import types
 from typing import Any
 
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, instance_of
 
 __all__ = ["is_read_handle", "reaches_read_handle", "read_handle_digest"]
 
@@ -92,7 +92,7 @@ def reaches_read_handle(value: Any) -> bool:
     owner = attribute_or(value, "__self__", None) if callable(value) else None
     if owner is not None:
         near.append(owner)
-    if isinstance(value, types.FunctionType):
+    if type(value) is types.FunctionType:
         namespace = value.__globals__
         near += [namespace[name] for name in value.__code__.co_names if name in namespace]
         near += value.__defaults__ or ()
@@ -102,7 +102,7 @@ def reaches_read_handle(value: Any) -> bool:
                 near.append(cell.cell_contents)
             except ValueError:  # an empty cell
                 pass
-    elif isinstance(value, functools.partial):
+    elif instance_of(value, functools.partial):
         near += [value.func, *value.args, *value.keywords.values()]
     elif type(value) in (dict, list, tuple) and len(value) <= _HANDLE_LOOK_MAX:
         near += value.values() if type(value) is dict else value

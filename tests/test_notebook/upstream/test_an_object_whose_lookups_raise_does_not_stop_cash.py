@@ -138,3 +138,81 @@ def test_such_an_object_anywhere_in_a_notebook_runs_as_plain_python(cash_magics,
     assert {name: ns[name] for name in names if type(plain[name]) is not list} == {
         name: plain[name] for name in names if type(plain[name]) is not list
     }
+
+
+#: A class whose ``__getattribute__`` raises for every name but ``v``, in a
+#: module: called, mutated, held in a list, a dict, a tuple, a default and a
+#: closure. Each cell runs as plain Python, edited or after a restart.
+HOSTILE = """
+class Hostile:
+    def __init__(self, v):
+        object.__setattr__(self, 'v', v)
+    def __getattribute__(self, k):
+        if k != 'v':
+            raise KeyError(k)
+        return object.__getattribute__(self, k)
+    def __setattr__(self, k, v):
+        object.__setattr__(self, k, v)
+def getv(o):
+    return o.v
+def bump(o):
+    o.v += 1
+"""
+SHAPES = {
+    "an attribute as argument": ["c = Hostile(5)", "w = getv(Hostile(c.v))"],
+    "the object as argument": ["c = Hostile(5)", "w = getv(c)"],
+    "a call that changes it": ["c = Hostile(5)", "bump(c)", "w = c.v"],
+    "a loop": ["cs = [Hostile(1), Hostile(2)]", "w = 0\nfor x in cs:\n    w += getv(x)"],
+    "a dict holding it": ["c = Hostile(5)", "d = {'k': c}", "w = getv(d['k'])"],
+    "a function by another name": ["c = Hostile(5)", "f = getv", "w = f(c)"],
+    "a tuple output": ["c = Hostile(5)", "t = (c, c.v)", "w = t[1]"],
+    "a default": ["c = Hostile(5)", "def h(o=c):\n    return o.v", "w = h()"],
+    "a closure": ["c = Hostile(5)", "def mk():\n    return lambda: c.v", "w = mk()()"],
+}
+
+
+@pytest.mark.parametrize("restart", [False, True], ids=["rerun", "restart"])
+@pytest.mark.parametrize("shape", list(SHAPES))
+def test_an_object_raising_for_every_lookup_runs_as_plain_python(cash_magics, monkeypatch, tmp_path, shape, restart):
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    (tmp_path / "hostile_mod.py").write_text(HOSTILE, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    cells = ["from hostile_mod import Hostile, getv, bump", *SHAPES[shape]]
+    plain = _plain(cells)
+    ns = cash_magics.shell.user_ns
+    for run in range(2):
+        if run and restart:
+            cash_magics.tracking_state.reset_session_state()
+            cash_magics._upstream_checker.simulator.cache.reset()
+            for name in plain:
+                ns.pop(name, None)
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        assert ns["w"] == plain["w"]
+
+
+COUNTED = """
+CALLS = {}
+class Counted:
+    def __init__(self, v):
+        object.__setattr__(self, 'v', v)
+    def __getattribute__(self, k):
+        CALLS[k] = CALLS.get(k, 0) + 1
+        return object.__getattribute__(self, k)
+"""
+
+
+def test_cash_asks_such_an_object_nothing_but_to_pickle_it(cash_magics, tmp_path, monkeypatch):
+    """Its ``__getattribute__`` is the user's code: cash's own questions
+    (``isinstance`` asking for ``__class__``, ``fit``, ``__code__``) read
+    its real type and Python's generic lookup instead. Storing it pickles
+    it, and pickle asks."""
+    (tmp_path / "counted_mod.py").write_text(COUNTED, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    cells = ["from counted_mod import Counted, CALLS", "w = 0", "c = Counted(5)", "w = c.v + 1", "w2 = c.v"]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    pickling = {"__class__", "__reduce_ex__", "__reduce__", "__getstate__"}
+    asked = {name: n for name, n in cash_magics.shell.user_ns["CALLS"].items() if name not in pickling | {"v"}}
+    assert asked == {}
+    assert cash_magics.shell.user_ns["CALLS"].get("__class__", 0) <= 1  # the store's one pickle

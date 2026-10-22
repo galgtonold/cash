@@ -61,6 +61,7 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from .._paths import is_pseudo_filename
+from .._user_attrs import instance_of
 from ..analysis.purity_report import (
     ISSUE_AMBIENT_READ,
     ISSUE_DISCARDED_CALL,
@@ -124,7 +125,7 @@ _BY_STRING_NAMES = frozenset(
 def _namespace_like(value: Any, g: dict) -> bool:
     """Is *value* a namespace a string is looked up in: *g* itself, the
     module table, or the module *g* is?"""
-    return value is g or value is sys.modules or (isinstance(value, types.ModuleType) and value.__dict__ is g)
+    return value is g or value is sys.modules or (instance_of(value, types.ModuleType) and value.__dict__ is g)
 
 
 #: Markers that leave a trace nothing can check (`recorder` module).
@@ -669,7 +670,7 @@ def _digest(value: Any) -> str | None:
     from ..install_paths import is_cash_path
     from ..tracking.trace_items import value_digest
 
-    wrapped = getattr(value, "__wrapped__", None) if isinstance(value, types.FunctionType) else None
+    wrapped = getattr(value, "__wrapped__", None) if type(value) is types.FunctionType else None
     if wrapped is not None and is_cash_path(value.__code__.co_filename):
         # A ``@cash.cache`` wrapper: by the function it wraps (its state,
         # when it is served inside the call, is a "cached" item of its own).
@@ -682,7 +683,7 @@ def _code_digest(code: types.CodeType, fn: Any) -> str | None:
     from ..tracking.trace_items import code_digest
 
     got = code_digest(code)
-    if isinstance(fn, types.FunctionType) and fn.__code__ is code and (fn.__defaults__ or fn.__kwdefaults__):
+    if type(fn) is types.FunctionType and fn.__code__ is code and (fn.__defaults__ or fn.__kwdefaults__):
         defaults = _digest((fn.__defaults__, fn.__kwdefaults__))
         if defaults is None:
             return None
@@ -716,7 +717,7 @@ def _find(module: str, qualname: str) -> Any:
 def _user_module(mod: Any) -> bool:
     from ..tracking.trace_recorder import is_user_code
 
-    return isinstance(mod, types.ModuleType) and is_user_code(mod)
+    return issubclass(type(mod), types.ModuleType) and is_user_code(mod)
 
 
 def _user_class(cls: Any) -> bool:
@@ -847,7 +848,7 @@ class _Build:
         self.holders = [
             target.__dict__
             for kind, target, _name in unit.lookups.values()
-            if kind == "getattr" and isinstance(target, types.ModuleType)
+            if kind == "getattr" and issubclass(type(target), types.ModuleType)
         ]
         for code, (g, module) in list(unit.codes.items()):
             if code in self.static:
@@ -874,7 +875,7 @@ class _Build:
                     _ABSENT if value is _MISSING else _digest(value),
                     f"{qn} reads the global {name}, whose value cannot be checked",
                 )
-                if isinstance(value, types.ModuleType) and _user_module(value):
+                if issubclass(type(value), types.ModuleType) and _user_module(value):
                     for chain in table.chains:
                         head, _, rest = chain.partition(".")
                         if head == name and rest:
@@ -894,7 +895,7 @@ class _Build:
         rc, fn, _owner = resolve(module, qn, {}, "\x00")
         if rc is code and set(code.co_freevars) <= {"__class__"}:
             self.add(("code", module, qn), _code_digest(code, fn), f"{qn} has defaults that cannot be checked")
-            if isinstance(fn, types.FunctionType):
+            if type(fn) is types.FunctionType:
                 self.functions.append(fn)
             return
         if "<locals>" in qn and qn.rsplit(".<locals>.", 1)[0] in ran:
@@ -930,7 +931,7 @@ class _Build:
                 raise _Untraceable("it imports a module whose name is not a string")
             self.add(("import", name), _import_digest(name), f"the module {name} has no file to check")
             return
-        if isinstance(target, types.ModuleType):
+        if issubclass(type(target), types.ModuleType):
             module, qualname = target.__name__, ""
             if name is None and not _user_module(target):
                 raise _Untraceable(f"it looks up a computed name on {module}, a library module")
@@ -968,7 +969,7 @@ def _chain_digest(module: str, chain: str) -> str | None:
         return _ABSENT
     obj = ns[parts[0]]
     for p in parts[1:]:
-        if not isinstance(obj, types.ModuleType):
+        if not issubclass(type(obj), types.ModuleType):
             break
         try:
             obj = inspect_getattr(obj, p)

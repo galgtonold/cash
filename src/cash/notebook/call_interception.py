@@ -268,7 +268,7 @@ def interceptable(fn) -> bool:
     log: 11 s plain, 51 s with the copy kept).
     """
     return (
-        isinstance(fn, types.FunctionType)
+        type(fn) is types.FunctionType
         and fn.__module__ != "copy"
         and not attribute_or(fn, "_cash_cached", False)
         and not attribute_or(fn, "_cash_stateful", False)
@@ -295,7 +295,7 @@ def _static_callee(node: ast.AST, namespace) -> object:
     if isinstance(node, ast.Attribute):
         base = _static_callee(node.value, namespace)
         try:
-            if isinstance(base, types.ModuleType):
+            if issubclass(type(base), types.ModuleType):
                 return attribute_or(base, node.attr, _NOT_FOUND)
             if isinstance(base, type):
                 found = inspect.getattr_static(base, node.attr, _NOT_FOUND)
@@ -726,7 +726,7 @@ def _loop_argument_names(loop: ast.For, namespace: Mapping[str, object]) -> set[
         for value in [*node.args, *(kw.value for kw in node.keywords)]:
             for name in names_read(value):
                 bound = namespace.get(name, _NOT_FOUND)
-                if isinstance(bound, (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType)):
+                if issubclass(type(bound), (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType)):
                     continue
                 names.add(name)
     return names

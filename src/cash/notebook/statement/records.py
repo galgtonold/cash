@@ -164,7 +164,7 @@ class StatementRecords:
                 if name == "*" or name not in user_ns:
                     continue
                 value = user_ns[name]
-                entry: dict[str, Any] = {"module": isinstance(value, types.ModuleType)}
+                entry: dict[str, Any] = {"module": issubclass(type(value), types.ModuleType)}
                 if callable(value) and not entry["module"] and self.function_tracker is not None:
                     try:
                         entry["digest"] = self.function_tracker.get_function_source_hash(value)

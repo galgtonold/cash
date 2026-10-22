@@ -442,7 +442,7 @@ def runs_whole_unevaluated(node: ast.For, user_ns: dict[str, Any]) -> bool:
 def _is_builtin_callable(value: Any) -> bool:
     """A builtin function or type (``str``, ``len``, ``int``): calling it runs
     no notebook code."""
-    if isinstance(value, types.BuiltinFunctionType):
+    if type(value) is types.BuiltinFunctionType:
         return attribute_or(value, "__module__", None) == "builtins"
     return isinstance(value, type) and value.__module__ == "builtins"
 
@@ -495,7 +495,7 @@ def header_may_be_left_to_the_unit(iter_node: ast.AST, user_ns: dict[str, Any]) 
         value = _static_value(sub, user_ns)
         if value is _UNKNOWN:
             return False
-        if callable(value) and not _is_builtin_callable(value) and not isinstance(value, types.ModuleType):
+        if callable(value) and not _is_builtin_callable(value) and not issubclass(type(value), types.ModuleType):
             return False  # a notebook function handed on, or a class built per item
         try:
             if _is_own_iterator(value):
@@ -518,7 +518,7 @@ def _plain_attribute(base: Any, attr: str) -> Any:
     a module global, or a class attribute that is no descriptor -- read
     without running a property, ``__getattr__`` or ``__getattribute__``;
     else :data:`_UNKNOWN`."""
-    if isinstance(base, types.ModuleType):
+    if issubclass(type(base), types.ModuleType):
         return vars(base).get(attr, _UNKNOWN)
     getter = inspect.getattr_static(type(base), "__getattribute__", None)
     if getter is not object.__getattribute__ and getter is not type.__getattribute__:

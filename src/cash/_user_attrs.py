@@ -16,10 +16,36 @@ def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
     ``fit``, ``__code__`` -- and the cell with it, where plain Python never
     asks. The question is cash's, so the answer is: not there.
     """
+    kind = type(obj)
+    own = _OWN_LOOKUP.get(kind)
+    if own is None:
+        own = _own_lookup(kind)
     try:
+        if own:
+            return object.__getattribute__(obj, name)
         return getattr(obj, name, default)
     except Exception:  # noqa: BLE001 - the object's own error, not one of cash's
         return default
+
+
+#: Per type, `_own_lookup`'s answer. Dropped whole past `_OWN_LOOKUP_MAX`
+#: types: a class made per call (``df.itertuples()``) is not kept alive.
+_OWN_LOOKUP: dict[type, bool] = {}
+_OWN_LOOKUP_MAX = 4096
+
+
+def _own_lookup(kind: type) -> bool:
+    """Does *kind* look its attributes up with a ``__getattribute__`` of
+    its own, written in Python? cash's questions about such an object
+    (``fit``, ``__code__``, the ``__class__`` an ``isinstance`` asks for
+    when the type does not match) ran it, where plain Python never asks:
+    they are answered by Python's generic lookup and the real type."""
+    own = _OWN_LOOKUP.get(kind)
+    if own is None:
+        if len(_OWN_LOOKUP) >= _OWN_LOOKUP_MAX:
+            _OWN_LOOKUP.clear()
+        own = _OWN_LOOKUP[kind] = type(kind.__getattribute__) is types.FunctionType
+    return own
 
 
 _MISSING = object()
@@ -39,11 +65,20 @@ def instance_of(obj: Any, kinds: type | tuple[type, ...]) -> bool:
     ``__class__`` (a proxy's way to pass for what it wraps), and so does an
     ABC's check. An object whose ``__getattribute__`` raises for it failed
     cash's own question and the cell with it, where plain Python never asks.
+    An object with a ``__getattribute__`` of its own in Python is not asked
+    at all (`_own_lookup`): its real type answers, so a proxy written that
+    way passes for itself.
     """
+    kind = type(obj)
+    own = _OWN_LOOKUP.get(kind)
+    if own is None:
+        own = _own_lookup(kind)
+    if own:
+        return issubclass(kind, kinds)
     try:
         return isinstance(obj, kinds)
     except Exception:  # noqa: BLE001 - the object's own error, not one of cash's
-        return issubclass(type(obj), kinds)
+        return issubclass(kind, kinds)
 
 
 def is_routine(obj: Any) -> bool:
@@ -52,6 +87,8 @@ def is_routine(obj: Any) -> bool:
     builtin is not an object whose lookups raise."""
     import inspect
 
+    if _own_lookup(type(obj)):
+        return False
     try:
         return inspect.isroutine(obj)
     except Exception:  # noqa: BLE001 - the object's own error, not one of cash's

@@ -89,7 +89,7 @@ def compared_by_identity(value) -> bool:
     own object (`ResultStore.restore_identity`): ``MISSING = object()``. A
     class, function or module pickles by reference and needs none of this.
     """
-    if value is None or isinstance(value, (type, types.ModuleType)) or inspect.isroutine(value):
+    if value is None or issubclass(type(value), (type, types.ModuleType)) or inspect.isroutine(value):
         return False
     return type(value).__eq__ is object.__eq__
 
@@ -995,7 +995,7 @@ class PurityChecks:
         except Exception:  # noqa: BLE001 - user source; a heuristic must not break a call
             return False
         value = module_ns[name]
-        if isinstance(value, types.ModuleType):
+        if issubclass(type(value), types.ModuleType):
             # `conf.RATE` reads of a module of the user's are folded by value
             # (`ModuleAttrFold.module_attr_parts`); "mutated elsewhere" is `conf.RATE = ...`.
             return is_user_module(value, own_package(reader))

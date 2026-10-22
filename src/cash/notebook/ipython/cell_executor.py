@@ -238,7 +238,7 @@ def _arguments_its_callees_change(
     changed: set[str] = set()
     for call in statement_calls(tree):
         fn = resolve_callee(call.func, namespace)
-        if not isinstance(fn, types.FunctionType):
+        if type(fn) is not types.FunctionType:
             continue
         handed = [argument_roots(arg, iterated) for arg in call.args]
         by_keyword = [(kw.arg, argument_roots(kw.value, iterated)) for kw in call.keywords]

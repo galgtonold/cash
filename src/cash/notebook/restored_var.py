@@ -131,7 +131,7 @@ def identity_digest(value: Any) -> str | None:
     ``id``: a later figure can be given the same one.
     """
     artist = _artist_class()
-    if artist is None or not isinstance(value, artist):
+    if artist is None or not instance_of(value, artist):
         return None
     return f"{_IDENTITY_PREFIX}{next(_IDENTITY_COUNT)}"
 

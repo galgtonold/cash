@@ -38,7 +38,7 @@ def _resolve_dotted(g: dict, path: str) -> Any:
     head, _, rest = path.partition(".")
     value = g.get(head)
     for attr in rest.split(".") if rest else ():
-        if not isinstance(value, types.ModuleType):
+        if not issubclass(type(value), types.ModuleType):
             return None
         value = vars(value).get(attr)
     return value
@@ -133,7 +133,7 @@ def _library_attr_parts(
         return []
     value = namespace[attr]
     label = f"{mod_name}.{attr}"
-    if isinstance(value, types.ModuleType) or label in reader.learned:
+    if issubclass(type(value), types.ModuleType) or label in reader.learned:
         return []
     code = getattr(reader.func, "__code__", None)
     if isinstance(code, types.CodeType) and (mod_name, attr) in written_module_attrs(code):
@@ -233,12 +233,12 @@ class ModuleAttrFold:
             attr_reads.setdefault(mod_name, set()).add(attr)
 
         def fold(label: str, value: Any) -> None:
-            if isinstance(value, types.ModuleType):
+            if issubclass(type(value), types.ModuleType):
                 if not is_user_module(value, own_pkg):
                     return
             elif is_cash_wrapper(value):
                 pass
-            elif not isinstance(value, (types.FunctionType, type)) or not is_user_code_object(value):
+            elif not issubclass(type(value), (types.FunctionType, type)) or not is_user_code_object(value):
                 return
             doc = getattr(value, "__doc__", None)
             if isinstance(doc, str):
@@ -253,7 +253,7 @@ class ModuleAttrFold:
                     parts.append(("__doc__", hashlib.sha256(value.encode("utf-8")).hexdigest()))
                 continue
             fold(name, value)
-            if isinstance(value, types.ModuleType) and is_user_module(value, own_pkg):
+            if issubclass(type(value), types.ModuleType) and is_user_module(value, own_pkg):
                 for attr in sorted(attr_reads.get(name, ())):
                     fold(f"{name}.{attr}", getattr(value, attr, None))
         return parts
@@ -303,7 +303,7 @@ class ModuleAttrFold:
                 return None
 
         def fold(label: str, value: Any) -> None:
-            if isinstance(value, types.ModuleType):
+            if issubclass(type(value), types.ModuleType):
                 return
             if isinstance(value, type) or (callable(value) and not isinstance(value, (dict, list, tuple, set))):
                 # Code: the helper walk follows the user's; what it names is keyed here.
@@ -320,7 +320,7 @@ class ModuleAttrFold:
 
         for name, attrs in attr_reads.items():
             obj = resolve(name)
-            if not isinstance(obj, types.ModuleType) or not is_user_module(obj, own_pkg):
+            if not issubclass(type(obj), types.ModuleType) or not is_user_module(obj, own_pkg):
                 continue
             for attr in sorted(attrs):
                 try:
@@ -330,7 +330,7 @@ class ModuleAttrFold:
                 fold(f"local:{name}.{attr}", value)
         for name in sorted(bare_reads):
             obj = resolve(name)
-            if obj is not None and not isinstance(obj, types.ModuleType):
+            if obj is not None and not issubclass(type(obj), types.ModuleType):
                 fold(f"local:{name}", obj)
         return parts
 
@@ -374,7 +374,7 @@ class ModuleAttrFold:
         """Key parts for one ``mod_name.attr`` read (`GlobalReads.module_attr_pairs`)."""
         func, func_name, own_pkg = reader.func, reader.func_name, reader.own_pkg
         obj = _resolve_dotted(g, mod_name)
-        is_mod = isinstance(obj, types.ModuleType) and is_user_module(obj, own_pkg)
+        is_mod = issubclass(type(obj), types.ModuleType) and is_user_module(obj, own_pkg)
         # ``Cfg.LIMIT`` -- a class constant read through the class NAME -- is
         # the same bytecode shape (LOAD_GLOBAL Cfg; LOAD_ATTR LIMIT), with a
         # class in place of the module. Fold user-class attributes too.
@@ -383,9 +383,9 @@ class ModuleAttrFold:
             # `scale.k` with `scale.k = 1` set on a function of the
             # user's: an attribute stored on the function object, which
             # its source does not show.
-            if isinstance(obj, types.FunctionType):
+            if type(obj) is types.FunctionType:
                 return self._function_attr_parts(obj, attr, mod_name, func_name)
-            if isinstance(obj, types.ModuleType):
+            if issubclass(type(obj), types.ModuleType):
                 return _library_attr_parts(self._values, reader, obj, mod_name, attr)
             if isinstance(obj, type):
                 return _library_class_attr_parts(self._values, reader, obj, mod_name, attr)
@@ -407,7 +407,7 @@ class ModuleAttrFold:
                 )
             # `settings.DTYPE = np.float32` edited to `np.float64`.
             return class_parts + self._ref_parts(reader, label, value)
-        if isinstance(value, types.ModuleType):
+        if issubclass(type(value), types.ModuleType):
             return []
         parts: list[tuple[str, str]] = []
         if is_mod:
@@ -494,7 +494,7 @@ class ModuleAttrFold:
             if inner not in helper_globals:
                 continue
             iv = helper_globals[inner]
-            if isinstance(iv, types.ModuleType):
+            if issubclass(type(iv), types.ModuleType):
                 continue
             if isinstance(iv, type) or (callable(iv) and not isinstance(iv, (dict, list, tuple, set))):
                 ref = self._values.code_ref_part(iv, getattr(value, "__module__", None), func_name, f"{label}.{inner}")
@@ -512,7 +512,7 @@ class ModuleAttrFold:
         if not isinstance(stored, dict) or attr not in stored or not is_user_code_object(fn):
             return []
         value = stored[attr]
-        if isinstance(value, (types.ModuleType, type)) or (
+        if issubclass(type(value), (types.ModuleType, type)) or (
             callable(value) and not isinstance(value, (dict, list, tuple, set))
         ):
             return []

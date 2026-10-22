@@ -143,7 +143,7 @@ def _loaded_identity(module: types.ModuleType) -> str:
     for attr, value in list(vars(module).items()):
         if isinstance(value, type) and attribute_or(value, "__module__", None) == name:
             functions = class_functions(value)
-        elif isinstance(value, types.FunctionType) and value.__module__ == name:
+        elif type(value) is types.FunctionType and value.__module__ == name:
             functions = [value]
         else:
             continue
