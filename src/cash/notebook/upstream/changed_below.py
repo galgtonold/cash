@@ -27,18 +27,27 @@ __all__ = ["warn_changed_below"]
 logger = logging.getLogger(__name__)
 
 
-def _changes_in_place(code: str, name: str) -> bool:
-    """Does the statement *code* change *name* in place without rebinding it?"""
+def _how_changed(code: str, name: str) -> str | None:
+    """How the statement *code*, which last changed *name*, changed it
+    without rebinding it by name: ``"in place"`` (``s.iloc[0] = 1e9``),
+    ``"through what it calls"`` (a function it calls, or a thread it starts
+    and joins, setting ``D['k']`` or a ``global``), or None."""
     tree = parse_cached(code)
     if tree is None:
-        return False
+        return None
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, (ast.Store, ast.Del)):
-            return False
+            return None
     try:
-        return name in analyze_statement(code, None).top_level_mutated_vars
+        if name in analyze_statement(code, None).top_level_mutated_vars:
+            return "in place"
     except (SyntaxError, ValueError, TypeError, RecursionError):
-        return False
+        return None
+    # Recorded as the statement that last changed *name*, it changed it
+    # through a call: its own text neither binds nor changes the name.
+    if any(isinstance(node, ast.Call) for node in ast.walk(tree)):
+        return "through what it calls"
+    return None
 
 
 @functools.lru_cache(maxsize=512)
@@ -58,10 +67,15 @@ def _statements_of(cell: str) -> dict[str, str]:
 
 
 def _as_written(cell: str, code: str) -> str | None:
-    """*code* as cell *cell* writes it, or None when the cell does not hold it."""
-    if code in cell:
-        return code
-    return _statements_of(cell).get(code)
+    """*code* as cell *cell* writes it, or None when the cell does not hold
+    it as a statement: ``fill()`` is in the text ``def fill():`` too."""
+    statements = _statements_of(cell)
+    if not statements:
+        return code if code in cell else None
+    written = statements.get(code)
+    if written is not None:
+        return written
+    return code if code in statements.values() else None
 
 
 def _cell_below_holding(code: str, cells: list[str], cell_idx: int) -> tuple[int, str] | None:
@@ -82,7 +96,8 @@ def warn_changed_below(
 ) -> bool:
     """Warn NOTEBOOK-CHANGED-BELOW when *name*, an input of cell *cell_idx*
     that is about to be rebuilt as the cells above leave it, was last changed
-    in place by *last_code*, a statement of a cell below. Once per cell,
+    in place, or through what it calls, by *last_code*, a statement of a
+    cell below. Once per cell,
     name and statement (*warned*). Returns whether it warned."""
     if not last_code or not 0 <= cell_idx < len(cells):
         return False
@@ -90,7 +105,8 @@ def warn_changed_below(
     if not code:
         return False
     found = _cell_below_holding(code, cells, cell_idx)
-    if found is None or not _changes_in_place(code, name):
+    how = _how_changed(code, name) if found is not None else None
+    if found is None or how is None:
         return False
     below, written = found
     key = (cell_idx, name, code)
@@ -101,7 +117,7 @@ def warn_changed_below(
     if len(first) > 60:
         first = first[:57] + "..."
     what = (
-        f"cell {cell_idx + 1} reads '{name}', which cell {below + 1} below changed in place "
+        f"cell {cell_idx + 1} reads '{name}', which cell {below + 1} below changed {how} "
         f"(`{first}`). Re-run on its own, cell {cell_idx + 1} gets '{name}' rebuilt as the cells "
         f"above leave it, so it computes without that change, and '{name}' no longer holds it "
         f"until cell {below + 1} runs again."

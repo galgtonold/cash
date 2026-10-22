@@ -7,6 +7,8 @@ computes without the change, and the variable no longer holds it.
 
 import warnings
 
+import pytest
+
 from tests._cell_driver import run_cash_cell
 
 CELLS = ["import pandas as pd\ns = pd.Series([0.0, 1.0, 2.0])", "out = float(s.sum())", "s.iloc[0] = 1e9"]
@@ -47,3 +49,26 @@ def test_a_cell_below_that_binds_a_new_value_is_quiet(cash_magics):
     assert not _run(cash_magics, [0, 1, 2], cells)
     assert not _run(cash_magics, [1], cells)
     assert _run(cash_magics, [0, 1, 2, 1])
+
+
+#: A cell below that changes the input through what it calls: a thread it
+#: starts and joins, a function setting a ``global``, a function changing
+#: it in place.
+THROUGH_CALLS = {
+    "a joined thread": [
+        "import threading\nD = {'k': 1}",
+        "v = D['k']",
+        "def fill():\n    D['k'] = 2\nth = threading.Thread(target=fill)\nth.start()\nth.join()",
+    ],
+    "a global set by a function": ["k = 1\ndef setk(x):\n    global k\n    k = x", "v = k + 0", "setk(2)"],
+    "a function changing it in place": ["D = {'k': 1}\ndef fill():\n    D['k'] = 2", "v = D['k']", "fill()"],
+}
+
+
+@pytest.mark.parametrize("how", list(THROUGH_CALLS))
+def test_a_change_made_through_a_call_below_warns(cash_magics, how):
+    cells = THROUGH_CALLS[how]
+    _run(cash_magics, [0, 1, 2], cells)
+    found = _run(cash_magics, [1], cells)
+    assert len(found) == 1, found
+    assert "cell 3 below changed through what it calls" in found[0]
