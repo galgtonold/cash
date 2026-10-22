@@ -137,22 +137,49 @@ def _by_reference(value) -> bool:
 
 
 def _comes_back_as_itself(value) -> bool:
-    """*value* is rebuilt as the very same object (a ``logging.Logger``,
-    pickled by its name): a hit hands back what the run did. Asked only of
-    a type with a reduce of its own, and not of an array or frame, so a
-    plain container is never pickled for it."""
+    """*value* is rebuilt by pickle as the very same object, with nothing
+    applied to it: a ``logging.Logger`` (``getLogger('app')``), an object
+    pickled by its name. A hit hands back what the run did. Read from the
+    shape of its reduce, never by pickling it: rebuilt by a call on plain
+    immutable arguments with no state, items or setter, and that call
+    gives back *value* itself. A state a reduce carries would be applied to
+    the live object by a hit, so it is not itself (a singleton whose reduce
+    returns its ``__dict__``). Not asked of a plain container, an array or a
+    frame, whose reduce would copy what they hold."""
     kind = type(value)
-    if kind.__name__ in _BUFFER_TYPES or (
-        getattr(kind, "__reduce__", None) is object.__reduce__
-        and getattr(kind, "__reduce_ex__", None) is object.__reduce_ex__
+    if (
+        kind.__name__ in _BUFFER_TYPES
+        or isinstance(value, (dict, list, tuple, set, frozenset, collections.deque, bytearray))
+        or (
+            getattr(kind, "__reduce__", None) is object.__reduce__
+            and getattr(kind, "__reduce_ex__", None) is object.__reduce_ex__
+        )
     ):
         return False
-    import pickle
-
     try:
-        return pickle.loads(pickle.dumps(value)) is value
-    except Exception:  # noqa: BLE001 - not picklable: not known to be itself
+        rv = value.__reduce_ex__(5)
+        if isinstance(rv, str):
+            import pickle
+
+            module = sys.modules.get(pickle.whichmodule(value, rv))
+            found: Any = module
+            for part in rv.split("."):
+                found = getattr(found, part)
+            return found is value
+        if not isinstance(rv, tuple) or len(rv) < 2 or not callable(rv[0]):
+            return False
+        if any(part is not None for part in rv[2:]) or not _plain_arguments(rv[1]):
+            return False
+        return rv[0](*rv[1]) is value
+    except Exception:  # noqa: BLE001 - not rebuilt as itself, as far as is known
         return False
+
+
+def _plain_arguments(args) -> bool:
+    """*args* is a tuple of plain immutable values (tuples of them included)."""
+    if not isinstance(args, tuple):
+        return False
+    return all(type(a) in _PLAIN_IMMUTABLE or (type(a) is tuple and _plain_arguments(a)) for a in args)
 
 
 #: How many items of a container the function names are looked for in its
@@ -259,12 +286,16 @@ def _outside_objects(func):
         if type(entry[3]) in _PLAIN_IMMUTABLE:
             continue
         items = _items_of(entry[3])
+        what, name, keeper, _ = entry
         if items is not None:
-            what, name, keeper, _ = entry
             item_of = f"an item of {what}"
             for key, item in items:
                 if type(item) not in _PLAIN_IMMUTABLE:
                     yield item_of, (name, key), keeper, item
+        elif not isinstance(entry[3], (type, types.ModuleType)):
+            # An object of the user's class (``REGISTRY.entries``).
+            for attr, held in _own_attributes(entry[3]):
+                yield f"an attribute of {what}", (name, (True, attr)), keeper, held
 
 
 def held_sentinels(func) -> dict[int, list]:
@@ -346,6 +377,79 @@ def _extension_values(value) -> list:
         return [block.values for block in value._mgr.blocks if type(block.values).__name__ != "ndarray"]
     except Exception:  # noqa: BLE001 - a frame that cannot be read: nothing said
         return []
+
+
+def _block_arrays(value) -> list:
+    """The extension arrays a pandas frame's or column's blocks hold, with
+    copy-on-write or without: ``DF['c'].array`` and ``.values`` hand back
+    that very object, and a write through it reaches the frame either way."""
+    kind = type(value)
+    if kind.__name__ not in ("Series", "DataFrame") or not (kind.__module__ or "").startswith("pandas"):
+        return []
+    try:
+        return [block.values for block in value._mgr.blocks if type(block.values).__name__ != "ndarray"]
+    except Exception:  # noqa: BLE001 - a frame that cannot be read: nothing said
+        return []
+
+
+def _is_extension_array(value) -> bool:
+    """A pandas ExtensionArray itself (``DF['c'].array``), not a column."""
+    return any(
+        k.__name__ == "ExtensionArray" and (k.__module__ or "").startswith("pandas") for k in type(value).__mro__
+    )
+
+
+def _held_arrays(result, depth: int | None = None) -> list:
+    """*result* and what it holds within *depth* levels that holds memory:
+    ndarrays, pandas columns and frames, extension arrays. The same walk as
+    `_found_in`, the first `SHARED_ITEMS` of each container
+    (``{"train": X[:8]}``)."""
+    found: list = []
+    pending = [(result, SHARED_RESULT_DEPTH if depth is None else depth)]
+    while pending:
+        value, left = pending.pop()
+        name = type(value).__name__
+        if name in _BUFFER_TYPES or _is_extension_array(value):
+            found.append(value)
+            continue
+        if left <= 0 or isinstance(value, enum.Enum) or type(value) in _PLAIN_IMMUTABLE:
+            continue
+        if isinstance(value, dict):
+            members = value.values()
+        elif isinstance(value, (list, tuple, set, frozenset, collections.deque)):
+            members = value
+        else:
+            state = getattr(value, "__dict__", None)
+            if not isinstance(state, dict):
+                continue
+            members = state.values()
+        pending.extend((member, left - 1) for member in itertools.islice(members, SHARED_ITEMS))
+    return found
+
+
+def _quiet(value, cheap: bool = False) -> bool:
+    """A hit hands back *value* as it is, or nothing can be written through
+    it: nothing to say for a result holding it. *cheap* leaves out the
+    question to its reduce (`_comes_back_as_itself`)."""
+    if _by_reference(value) or _sentinel_like(value) or _unwritable(value):
+        return True
+    return not cheap and _comes_back_as_itself(value)
+
+
+def _own_attributes(value):
+    """``(name, attribute)`` of the first `SHARED_ITEMS` attributes of an
+    object of the user's class that something could be written through."""
+    module = sys.modules.get(type(value).__module__)
+    if not (is_user_code_module(module) or getattr(module, "__name__", None) in MAIN_MODULE_NAMES):
+        return []
+    state = getattr(value, "__dict__", None)
+    if not isinstance(state, dict):
+        return []
+    return [
+        (attr, held)
+        for attr, held in itertools.islice(list(state.items()), SHARED_ITEMS)
+        if type(held) not in _PLAIN_IMMUTABLE
+    ]
 
 
 #: The types `_buffers` finds arrays in.
@@ -677,6 +781,8 @@ class PurityChecks:
         supplied += list(kwargs.items())
         caller = "the caller"
 
+        held_arrays: list | None = None
+        attributes: dict[int, tuple[str, Any]] = {}
         for name, value in supplied:
             if not is_mutable(value):
                 # Nothing can be written through it, so nothing can differ.
@@ -685,9 +791,25 @@ class PurityChecks:
                 return "is the argument", name, caller
             if _found_in(result, {id(value): value}, SHARED_RESULT_DEPTH) is not None:
                 return "holds the argument", name, caller
-            shared = shares_memory(result, value)
-            if shared:
-                return "shares memory with the argument", name, caller
+            if type(value).__name__ in _BUFFER_TYPES:
+                if held_arrays is None:
+                    held_arrays = _held_arrays(result)
+                if any(shares_memory(array, value) for array in held_arrays):
+                    return "shares memory with the argument", name, caller
+            for attr, held in _own_attributes(value):
+                attributes.setdefault(id(held), (f"{name}.{attr}", held))
+        if attributes:
+            # An attribute of an argument (``return self.rows``,
+            # ``obj.rows``): a run hands back the argument's own object.
+            targets = {key: held for key, (_, held) in attributes.items()}
+            for _ in range(len(targets)):
+                hit = _found_in(result, targets, SHARED_RESULT_DEPTH)
+                if hit is None:
+                    break
+                label, held = attributes[hit]
+                if not _quiet(held):
+                    return ("is " if held is result else "holds ") + "an attribute of the argument", label, caller
+                del targets[hit]
         globals_ = getattr(func, "__globals__", None)
         if isinstance(globals_, dict):
             # A sentinel the body returns is handed back as itself on a hit.
@@ -706,41 +828,80 @@ class PurityChecks:
         # whether one found can be written is settled only for that one.
         outside: dict[int, tuple[str, Any, str, Any]] = {}
         arrays: list[tuple[str, Any, str, Any]] = []
+        # What each item or attribute is of: an object a hit hands back as
+        # itself hands back what it holds with it (``{"reg": REGISTRY}``).
+        named_ids: dict[str, int] = {}
+        held_by: dict[int, list[int]] = {}
         for entry in _outside_objects(func):
             value = entry[3]
             if type(value) in _PLAIN_IMMUTABLE:
                 continue
+            if isinstance(entry[1], str):
+                named_ids.setdefault(entry[1], id(value))
+            elif entry[1][0] in named_ids:
+                held_by.setdefault(named_ids[entry[1][0]], []).append(id(value))
             outside.setdefault(id(value), entry)
             if type(value).__name__ in _BUFFER_TYPES:
                 arrays.append(entry)
 
-        def quiet(value) -> bool:
-            return _by_reference(value) or _sentinel_like(value) or _unwritable(value) or _comes_back_as_itself(value)
-
         targets = {key: entry[3] for key, entry in outside.items()}
-        for attempt in range(4):
+        for attempt in range(len(targets)):
             hit = _found_in(result, targets, SHARED_RESULT_DEPTH)
             if hit is None:
                 break
             what, name, keeper, value = outside[hit]
-            if not quiet(value):
+            if not _quiet(value):
                 return ("is " if value is result else "holds ") + what, _label(name), keeper
             del targets[hit]
+            if not _unwritable(value):
+                for inner in held_by.get(hit, ()):
+                    targets.pop(inner, None)
             if attempt == 2:
-                # A result holding many such objects: settle them all once.
-                targets = {key: value for key, value in targets.items() if not quiet(value)}
-        mine = _buffers(result) if arrays else []
+                # A result holding many such objects: settle them all once,
+                # by the tests that cost a type check (`_quiet`'s reduce is
+                # asked only of an object found in the result).
+                targets = {key: value for key, value in targets.items() if not _quiet(value, cheap=True)}
+        if not arrays:
+            return None
+        if held_arrays is None:
+            held_arrays = _held_arrays(result)
+        if not held_arrays:
+            return None
+        mine = [array for value in held_arrays for array in _buffers(value)]
         roots = {id(_root(array)) for array in mine}
-        held = {id(values) for values in _extension_values(result)} if arrays else set()
+        held = {id(values) for value in held_arrays for values in _extension_values(value)}
+        held |= {id(value) for value in held_arrays if _is_extension_array(value)}
+        exposed = {id(value) for value in held_arrays if _is_extension_array(value)}
+        exposed_parts = [
+            array
+            for value in held_arrays
+            if _is_extension_array(value)
+            for part in ("_ndarray", "_data", "_mask", "_codes")
+            for array in _array_slot(value, part)
+        ]
         for what, name, keeper, value in arrays:
             if held and any(id(values) in held for values in _extension_values(value)):
                 # The very extension array (interval, Arrow-backed): a
                 # write through either reaches the other.
                 return f"shares memory with {what}", _label(name), keeper
+            if exposed:
+                # ``DF['c'].array`` / ``.values``: the frame's own array, or
+                # one over its memory, copy-on-write or not.
+                blocks = _block_arrays(value)
+                if any(id(values) in exposed for values in blocks):
+                    return f"shares memory with {what}", _label(name), keeper
+                theirs = [
+                    a for v in blocks for p in ("_ndarray", "_data", "_mask", "_codes") for a in _array_slot(v, p)
+                ]
+                if theirs and exposed_parts and not _read_only(exposed_parts):
+                    import numpy as _np
+
+                    if any(_np.may_share_memory(a, b) for a in exposed_parts for b in theirs):
+                        return f"shares memory with {what}", _label(name), keeper
             theirs = _buffers(value)
             if not any(id(_root(array)) in roots for array in theirs) or _unwritable(value):
                 continue
-            if shares_memory(result, value) and not _read_only(mine + theirs):
+            if any(shares_memory(array, value) for array in held_arrays) and not _read_only(mine + theirs):
                 return f"shares memory with {what}", _label(name), keeper
         return None
 

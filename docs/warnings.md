@@ -599,19 +599,27 @@ process is told about the one it gets. cash looks two levels into the result, at
 first 256 values of each dict of any kind, list, tuple, set, deque, object's
 attributes and object array, for:
 
-- an argument, or memory shared with an array argument;
+- an argument, an attribute of an argument that is an object of your class
+  (`return self.rows`, `{"rows": t.rows}`), or memory shared with an array
+  argument;
 - a closure variable, a module global the body names, a default argument,
   or an attribute of the function itself;
 - an attribute of a class or a module of yours the body names
-  (`Holder.ROWS`);
+  (`Holder.ROWS`), or of an object of your class it names
+  (`REGISTRY.entries`);
 - one of the first 256 items of any of those containers (`CONFIG["sub"]`,
   `Holder.CFG["sub"]`, a list inside a global tuple);
-- memory shared with any of those arrays (`return ARR[1:4]`), or, without
-  pandas copy-on-write (pandas 2 by default), with most columns of one of
-  those frames (`return DF["a"]`, a view of the frame there): numpy
+- memory shared with any of those arrays, at the top of the result or
+  inside it (`return ARR[1:4]`, `{"train": X[:8], "test": X[8:]}`), or,
+  without pandas copy-on-write (pandas 2 by default), with most columns of
+  one of those frames (`return DF["a"]`, a view of the frame there): numpy
   columns, pandas' own `Int64`, `boolean`, `category`, time-zone
   datetime, period and Python-string columns, and a column holding the very
-  interval or Arrow-backed array of the frame's.
+  interval, sparse or Arrow-backed array of the frame's;
+- the array of an extension column of one of those frames
+  (`DF["c"].array`, or `.values` of an `Int64`, time-zone or category
+  column), with copy-on-write too: it is the frame's own, and a write
+  through it reaches the frame.
 
 Not reported: a value nothing can be written through (a number, a string,
 an enum member, a frozen dataclass of immutable fields, a view of an array
@@ -620,12 +628,17 @@ identity (a plain class without `__eq__`, such as a sentinel), since a hit
 hands back that global itself, and a pandas column under copy-on-write
 (the pandas 3 default), where a write through it copies first and never
 reaches the frame. Nor are pandas' `Timestamp`, `Timedelta`, `Period` and
-`NaT`, or a library object a hit hands back as itself (a
-`logging.Logger`, rebuilt by its name). Not seen: sharing deeper than two levels or past the
-256th value of a container (`BIG_LIST[300]`), an attribute of a library
-module, and memory two arrays share without one viewing the other or both
-viewing the same object (two arrays made from separate `memoryview`s of
-one buffer).
+`NaT`, or an object, yours or a library's, that a hit hands back as
+itself, with what it holds: one pickle rebuilds by its name, or by a call
+on plain values with no state applied after (a `logging.Logger`,
+`getLogger('app')`). One whose pickle carries a state is reported: a hit
+would write that state over the live object. Not seen: sharing deeper than
+two levels or past the 256th value of a container (`BIG_LIST[300]`), an
+item of an attribute of an object (`REGISTRY.entries["a"]`), what an enum
+member holds (`Color.RED.value`), an attribute of a library module or of a
+library object (`LOG.filters`), and memory two arrays share without one
+viewing the other or both viewing the same object (two arrays made from
+separate `memoryview`s of one buffer).
 
 **Why it matters.** A caller that writes through the result, such as filling
 a preallocated array, works on the first run and silently stops working on

@@ -14,6 +14,7 @@ so it says what will differ and lets the user waive it (``assume_safe=True``).
 
 from __future__ import annotations
 
+import sys
 import warnings
 
 import pytest
@@ -397,3 +398,125 @@ def test_a_global_a_hit_gives_back_as_itself_says_nothing(cash_instance, made):
     ns = {"pd": pd, "logging": logging}
     exec(f"HELD = {made}\ndef wrap(n):\n    return {{'h': HELD, 'n': n}}\n", ns)
     assert not _warnings_of(cash_instance.cache(ns["wrap"]), 1)
+
+
+def test_a_singleton_whose_reduce_carries_state_is_announced(cash_instance, monkeypatch):
+    # Loading its state on a hit rewrites the live object's attributes: it
+    # is not handed back as it was, and the check never applies the state.
+    ns: dict = {"__name__": __name__}
+    exec(
+        "class Settings:\n"
+        "    _inst = None\n"
+        "    def __new__(cls):\n"
+        "        if cls._inst is None:\n"
+        "            cls._inst = super().__new__(cls)\n"
+        "        return cls._inst\n"
+        "    def __reduce__(self):\n"
+        "        return (Settings, (), dict(self.__dict__))\n"
+        "    def __setstate__(self, state):\n"
+        "        self.__dict__.update(state)\n"
+        "    def __eq__(self, other):\n"
+        "        return isinstance(other, Settings) and self.__dict__ == other.__dict__\n"
+        "    __hash__ = None\n"
+        "SETTINGS = Settings()\n"
+        "SETTINGS.tags = ['a']\n"
+        "def current(n):\n"
+        "    return {'settings': SETTINGS, 'n': n}\n",
+        ns,
+    )
+    # Found by its name, as a class of a module is: pickle rebuilds it.
+    monkeypatch.setattr(sys.modules[__name__], "Settings", ns["Settings"], raising=False)
+    assert _warnings_of(cash_instance.cache(ns["current"]), 1)
+
+
+def test_an_object_rebuilt_by_name_says_nothing_nor_does_what_it_holds(cash_instance, monkeypatch):
+    ns: dict = {"__name__": __name__}
+    exec(
+        "def get_registry():\n"
+        "    return REGISTRY\n"
+        "class Registry:\n"
+        "    def __init__(self):\n"
+        "        self.entries = {'a': [1]}\n"
+        "    def __reduce__(self):\n"
+        "        return (get_registry, ())\n"
+        "    def __eq__(self, other):\n"
+        "        return isinstance(other, Registry) and other.entries == self.entries\n"
+        "    __hash__ = None\n"
+        "REGISTRY = Registry()\n"
+        "def whole(n):\n"
+        "    return {'reg': REGISTRY, 'n': n}\n"
+        "def entries(n):\n"
+        "    return REGISTRY.entries\n",
+        ns,
+    )
+    monkeypatch.setattr(sys.modules[__name__], "get_registry", ns["get_registry"], raising=False)
+    assert not _warnings_of(cash_instance.cache(ns["whole"]), 1)
+    said = _warnings_of(cash_instance.cache(ns["entries"]), 1)
+    assert said and "REGISTRY.entries" in said[0], said
+
+
+def test_a_global_not_in_the_result_is_never_asked_its_reduce(cash_instance, monkeypatch):
+    from cash.decorator import purity_checks
+
+    asked = []
+    real = purity_checks._comes_back_as_itself
+    monkeypatch.setattr(purity_checks, "_comes_back_as_itself", lambda v: asked.append(v) or real(v))
+    import logging
+
+    ns = {"logging": logging, "VOCAB": {f"w{i}" for i in range(1000)}}
+    exec(
+        "A = logging.getLogger('a.shared'); B = logging.getLogger('b.shared')\n"
+        "C = logging.getLogger('c.shared'); D = logging.getLogger('d.shared')\n"
+        "def window(n):\n"
+        "    _ = len(VOCAB)\n"
+        "    return {'a': A, 'b': B, 'c': C, 'd': D, 'n': n}\n",
+        ns,
+    )
+    assert not _warnings_of(cash_instance.cache(ns["window"]), 1)
+    assert all(v is not ns["VOCAB"] for v in asked)
+
+
+@pytest.mark.parametrize(
+    "body",
+    ["return {'train': X[:8], 'test': X[8:]}", "return [X[1:4]]", "return {'v': {'w': X[1:4]}}"],
+)
+def test_a_view_of_a_global_array_inside_the_result_is_announced(cash_instance, body):
+    ns = {"X": np.arange(10.0)}
+    exec(f"def split(n):\n    {body}\n", ns)
+    said = _warnings_of(cash_instance.cache(ns["split"]), 1)
+    assert said and "X" in said[0], said
+
+
+@pytest.mark.parametrize("column", ["pd.array([1, 2, 3], dtype='Int64')", "pd.date_range('2024', periods=3, tz='UTC')"])
+@pytest.mark.parametrize("attr", ["array", "values"])
+def test_the_array_of_a_global_frames_extension_column_is_announced(cash_instance, column, attr):
+    # The frame's own array: a write through it reaches the frame, under
+    # copy-on-write too.
+    pd = pytest.importorskip("pandas")
+    ns = {"pd": pd}
+    exec(f"DF = pd.DataFrame({{'c': {column}}})\ndef col(n):\n    return DF['c'].{attr}\n", ns)
+    got = ns["col"](1)
+    if type(got).__name__ == "ndarray":
+        pytest.skip("this pandas hands back a numpy array")
+    assert _warnings_of(cash_instance.cache(ns["col"]), 1)
+    exec(f"def fresh(n):\n    return DF['c'].{attr}.copy()\n", ns)
+    assert not _warnings_of(cash_instance.cache(ns["fresh"]), 1)
+
+
+def test_an_attribute_of_an_argument_is_announced(cash_instance, monkeypatch):
+    ns: dict = {"__name__": __name__}
+    exec(
+        "class Table:\n"
+        "    def __init__(self):\n"
+        "        self.rows = [1, 2]\n"
+        "    def __eq__(self, other):\n"
+        "        return isinstance(other, Table) and other.rows == self.rows\n"
+        "    __hash__ = None\n"
+        "def rows_of(t):\n"
+        "    return {'rows': t.rows}\n",
+        ns,
+    )
+    monkeypatch.setattr(sys.modules[__name__], "Table", ns["Table"], raising=False)
+    table = ns["Table"]()
+    said = _warnings_of(cash_instance.cache(ns["rows_of"]), table)
+    assert said and "t.rows" in said[0], said
