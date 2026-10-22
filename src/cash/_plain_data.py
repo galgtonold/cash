@@ -533,17 +533,54 @@ def one_look(named: Mapping[str, Any]):
 
 def _looked_at(value: Any, leaves: tuple | None) -> Any:
     """`tree_facts` of *value* when a `one_look` is about it (None when it
-    is not JSON-like data), else `_UNKNOWN`. Also `_UNKNOWN` for *leaves*
-    the walk did not count as leaves when it found no tree: "not a tree"
-    says nothing about them. A tree it found is one over wider *leaves*
-    too, with the same containers."""
+    is not JSON-like data), else `_UNKNOWN`. For *leaves* the walk did not
+    count as leaves when it found no tree, the facts over those leaves too
+    (`_wider_facts`): "not a tree" says nothing about them. A tree it found
+    is one over wider *leaves* too, with the same containers."""
     look = _LOOKED.get()
-    if look is None or _name_in(look[0], value) is None:
+    if look is None:
+        return _UNKNOWN
+    name = _name_in(look[0], value)
+    if name is None:
         return _UNKNOWN
     facts = tree_facts(value)
     if facts is None and leaves is not None and not frozenset(leaves) <= _facts_leaves():
-        return _UNKNOWN
+        return _wider_facts(look, name, value, frozenset(leaves))
     return facts
+
+
+def _wider_facts(look: tuple[Mapping[str, Any], dict], name: str, value: Any, leaves: frozenset) -> Any:
+    """`tree_facts` of *value* over the default leaves and *leaves*, from a
+    walk in the look over leaves that answer for these; `_UNKNOWN` without
+    the C walk. Parsed rows holding a ``pd.Timestamp`` are no tree over the
+    default leaves, and every check taking library leaves walked them again:
+    five walks of two million rows, 3.5 s a statement.
+
+    A tree over some leaves names every type it holds, so it answers for any
+    leaves (`TreeFacts.leaves_within`); "no tree" answers for leaves within
+    the ones it was walked over."""
+    if _K is None:
+        return _UNKNOWN
+    named, memo = look
+    key = (id(value), _WIDER)
+    known = memo.get(key)
+    if known is None or named.get(known[0]) is not value:
+        known = memo[key] = (name, [])
+    for walked, facts in known[1]:
+        if facts is not None or leaves <= walked:
+            return facts
+    walked = _facts_leaves() | leaves
+    with _gc_paused():
+        got = _K.tree_facts(value, walked, False, 0, _picks)
+    if got is NotImplemented:
+        return _UNKNOWN
+    facts = None if got is None else TreeFacts(*got[:4])
+    known[1].append((walked, facts))
+    return facts
+
+
+#: `_wider_facts`'s part of a look's memo, beside each value's id.
+_WIDER = object()
 
 
 def _name_in(named: Mapping[str, Any], value: Any) -> str | None:

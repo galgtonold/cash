@@ -1854,6 +1854,13 @@ class _Found:
                 value = namespace.get(node.id, _MISSING)
                 if value is not _MISSING and _is_users_object(value):
                     self._special_methods(type(value))
+            elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+                # ``v += 4`` reads ``v`` too: its target is a store, so the
+                # Load rule above never sees it, yet it runs ``__iadd__`` or
+                # ``__add__`` on the object ``v`` holds.
+                value = namespace.get(node.target.id, _MISSING)
+                if value is not _MISSING and _is_users_object(value):
+                    self._special_methods(type(value))
             elif isinstance(node, ast.Attribute):
                 owner = _static_value(node.value, namespace)
                 if owner is None:
@@ -2390,13 +2397,13 @@ def _special_classes_exist(namespace: Mapping[str, Any]) -> bool:
     known = _SPECIAL_CLASSES.get(id(namespace))
     if known is not None and known[0] is namespace:
         return known[1]
-    from cash.notebook.held_functions import _users_module_classes
+    from cash.notebook.held_functions import users_module_classes
 
     try:
         bound = [v for v in list(namespace.values()) if isinstance(v, type) and _is_users_class(v)]
     except Exception:  # noqa: BLE001 - changed while read
         bound = []
-    pending = bound + _users_module_classes()
+    pending = bound + users_module_classes()
     seen: set[type] = set()
     answer = False
     while pending and not answer:
