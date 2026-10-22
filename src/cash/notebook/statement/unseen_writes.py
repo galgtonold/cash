@@ -148,7 +148,9 @@ _COMPREHENSIONS = {
     "<dictcomp>": ast.DictComp,
 }
 
-_NO_ARGUMENTS = ast.arguments(posonlyargs=[], args=[], vararg=None, kwonlyargs=[], kw_defaults=[], kwarg=None, defaults=[])
+_NO_ARGUMENTS = ast.arguments(
+    posonlyargs=[], args=[], vararg=None, kwonlyargs=[], kw_defaults=[], kwarg=None, defaults=[]
+)
 
 
 def _comprehension_node(code: types.CodeType, kind: type) -> ast.Lambda | None:
