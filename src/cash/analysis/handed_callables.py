@@ -75,7 +75,10 @@ __all__ = [
     "answers_shared",
     "handed_callable_values",
     "handed_callables",
+    "function_source",
+    "handed_resolution",
     "handed_values",
+    "is_users_callable",
     "hands_a_state_changing_callable",
     "iteration_bindings",
     "new_analysis_round",
@@ -645,6 +648,23 @@ def handed_values(arg: ast.expr, namespace: Mapping[str, Any]) -> list[tuple[Any
     return _resolve_argument(arg, namespace).values
 
 
+def handed_resolution(arg: ast.expr, namespace: Mapping[str, Any]) -> _Resolved:
+    """`handed_values` with what may be handed (``any_of``: a partial's
+    function, ``random.choice(fns)``'s items) and what cannot be resolved
+    without running code (``unknown``)."""
+    _CLASS_ATTRIBUTES.clear()
+    _CHANGES_ITS_OBJECT.clear()
+    _SLOT_MEMBERS.clear()
+    _THROUGH_ITS_OBJECT.clear()
+    return _resolve_argument(arg, namespace)
+
+
+def function_source(fn: Any) -> str | None:
+    """The source of the plain function *fn*, read from its code object
+    (`_source_of`); None for anything else, or when it cannot be read."""
+    return _source_of(fn) if type(fn) is types.FunctionType else None
+
+
 class _Resolved(NamedTuple):
     """What an argument expression hands over (`_resolve_argument`)."""
 
@@ -1013,6 +1033,9 @@ def _is_users_callable(value: Any) -> bool:
     if instance_of(value, type):
         return _is_users_class(value)
     return _is_users_object(value) and callable(value)
+
+
+is_users_callable = _is_users_callable
 
 
 #: ``class -> whether it is the user's`` (`_is_users_class`).

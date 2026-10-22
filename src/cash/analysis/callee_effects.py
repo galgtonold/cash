@@ -166,6 +166,20 @@ def _direct_param_mutations(func: ast.FunctionDef | ast.AsyncFunctionDef) -> fro
     return frozenset({m.variable for m in visitor.mutations} & params)
 
 
+def body_mutations(func: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:
+    """The names *func*'s own body changes in place as it runs, parameters
+    or not (`_RunningMutationVisitor`)."""
+    visitor = _RunningMutationVisitor()
+    for stmt in func.body:
+        visitor.visit(stmt)
+    return frozenset(m.variable for m in visitor.mutations)
+
+
+def parse_function_def(source: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    """*source*'s first statement when it is a ``def`` (memoised)."""
+    return _parse_function_def(source)
+
+
 def resolve_function_def(name, resolve_source):
     """Parse *name*'s source via *resolve_source* into a FunctionDef, or None."""
     if resolve_source is None:
