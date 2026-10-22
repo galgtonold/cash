@@ -152,7 +152,7 @@ from ..callee_reach import (
     module_state_writes,
     rebound_modules,
 )
-from ..holder_patches import FrameCellsPatch, frame_cells_patch, holder_patches
+from ..holder_patches import FrameCellsPatch, frame_cells_patch, holder_patches, shares_categories
 from ..lineage_formula import (
     held_lineage,
     keep_held_lineage,
@@ -2214,6 +2214,9 @@ class StatementProcessor:
         # statement read it, before its draw moved it on.
         self._advance_carriers(run.source_hash, run.carriers_advanced, run.cache_key, run.code)
         self._report_saved(run, saved_metadata)
+        # A call refused for the cells it shares runs every time only when
+        # the statement is not stored either: ``w = mk(df)`` is served.
+        self._calls.settle_cells_shared(stored=saved_metadata is not None)
         self._tell_past_budget(run, execution.cost or execution.wall_time or 0.0)
         storage = (saved_metadata.storage if saved_metadata else None) or ()
         self._rebuild_cost.note(
@@ -2856,6 +2859,25 @@ class StatementProcessor:
             patches = holder_patches(rest, outputs) if rest else {}
             if patches is not None:
                 patches.update(framed)
+        # A holder stored whole comes back apart from a categorical's
+        # objects it shares with the outputs (``w = mkc(df['c'])``); only a
+        # frame patch putting its dtype back keeps them its own.
+        whole = (
+            sorted(
+                name
+                for name, value in holders.items()
+                if not isinstance((patches or {}).get(name), FrameCellsPatch) and shares_categories(value, outputs)
+            )
+            if not _is_loop(run.tree)
+            else []
+        )
+        if whole:
+            run.holders, run.moves_holders, run.holders_unchanged = {}, False, set()
+            names = ", ".join(f"'{n}'" for n in whole)
+            return (
+                f"{names} holds a categorical's objects this statement's outputs hold too, which a restore "
+                "would copy apart, so the statement re-runs every time"
+            )
         captured_vars.update(patches if patches is not None else holders)
         return None
 

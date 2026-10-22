@@ -597,6 +597,10 @@ class CallUnit:
         self._past_budget_told: set[str] = set()
         #: The functions `_tell_cells_shared` has warned for.
         self._cells_shared_told: set[str] = set()
+        #: This statement's calls refused for cells something else holds
+        #: too, by function: ``(seconds, argument)``, said only if the
+        #: statement is not stored either (`settle_cells_shared`).
+        self._cells_shared_pending: dict[str, tuple[float, str]] = {}
         self.reads_seq = 0
         self._last_key_s: float | None = None
         self._invoked_keys: list[str | None] = []
@@ -640,6 +644,7 @@ class CallUnit:
         self.plain_sites.clear()
         self._keys.begin_statement()
         self.last_returned = None
+        self._cells_shared_pending.clear()
         self._release_unreferenced()
 
     def _release_unreferenced(self) -> None:
@@ -1171,7 +1176,8 @@ class CallUnit:
             # entry would cost the same again to store. Not for a frame made
             # for the call (``mk(df['o'])``): no name holds it for the
             # statement to put cells back from, and it ran every time. Cells
-            # something else holds too it refuses as this entry would: said.
+            # something else holds too it refuses as this entry would: said
+            # if the statement does too.
             if explain:
                 try:
                     with walk_budget(budget):
@@ -1179,7 +1185,7 @@ class CallUnit:
                 except WalkBudgetExceeded:
                     return False
                 if self._entries.cells_shared_with is not None:
-                    self._tell_cells_shared(call, elapsed, self._entries.cells_shared_with)
+                    self._note_cells_shared(call, elapsed, self._entries.cells_shared_with)
             return False
         try:
             with walk_budget(budget):
@@ -1188,7 +1194,7 @@ class CallUnit:
             self._tell_past_budget(call, elapsed, budget)
             return False
         if explain and self._entries.cells_shared_with is not None:
-            self._tell_cells_shared(call, elapsed, self._entries.cells_shared_with)
+            self._note_cells_shared(call, elapsed, self._entries.cells_shared_with)
         return storable and self._entries.restore_pays(result, elapsed)
 
     def _tell_past_budget(self, call: _Call, elapsed: float, budget: float) -> None:
@@ -1213,13 +1219,28 @@ class CallUnit:
         log_diagnostic(logger, "NOTEBOOK-ANALYSIS-BUDGET", what, fix)
         warn_diagnostic(CashCacheIneffectiveWarning, "NOTEBOOK-ANALYSIS-BUDGET", what, fix)
 
-    def _tell_cells_shared(self, call: _Call, elapsed: float, argument: str) -> None:
+    def _note_cells_shared(self, call: _Call, elapsed: float, argument: str) -> None:
+        """Keep, for `settle_cells_shared`, that *call* is not stored for the
+        cells it shares with *argument*: the statement around it may store
+        its result all the same (``w = mk(df)``), and then it is served."""
+        self._cells_shared_pending.setdefault(_name_of(call), (elapsed, argument))
+
+    def settle_cells_shared(self, stored: bool) -> None:
+        """The statement whose calls `_note_cells_shared` kept is done: when
+        it was not *stored* either, those calls run every time, said."""
+        pending = dict(self._cells_shared_pending)
+        self._cells_shared_pending.clear()
+        if stored:
+            return
+        for name, (elapsed, argument) in pending.items():
+            if name not in self._cells_shared_told:
+                self._tell_cells_shared(name, elapsed, argument)
+
+    def _tell_cells_shared(self, name: str, elapsed: float, argument: str) -> None:
         """Say once per function that its call is not stored because its
-        result holds, in a frame's object column, the very objects
-        *argument*'s frame holds, and something else holds them too
-        (``NOTEBOOK-CELLS-SHARED``); asked only for a
-        call slow enough that storing it would have mattered."""
-        name = _name_of(call)
+        result holds the very objects *argument*'s frame holds, and
+        something else holds them too (``NOTEBOOK-CELLS-SHARED``); asked
+        only for a call slow enough that storing it would have mattered."""
         self._cells_shared_told.add(name)
         what = (
             f"the call to {name} ran {elapsed:.2f}s and was not cached: its result shares cells with argument "
@@ -1535,6 +1556,10 @@ class CallCache:
         # One call per statement run: each site's guard starts over.
         self._call_unit.begin_statement()
         self._call_unit.plain_value_source = plain_value_source
+
+    def settle_cells_shared(self, stored: bool) -> None:
+        """The statement is done (`CallUnit.settle_cells_shared`)."""
+        self._call_unit.settle_cells_shared(stored)
 
     def fold_plain_counts(self) -> None:
         """Count the calls the rewritten lines made to the sites run plain

@@ -66,12 +66,16 @@ def tokens(n):
 
 
 def _twice(call_unit_harness, fn, arg, name):
+    """Two statements calling *fn*, neither of them stored itself: a call
+    refused for the cells it shares then says so."""
     unit = call_unit_harness(lineage={name: "hash-" + name, "arg": "hash-arg"}, user_ns={"arg": arg})
     site = CallSite(source=f"{name}(arg)", free_names=frozenset({name, "arg"}), occurrence_index=0)
     unit.begin_statement()
     unit.wrap(fn, site)(arg)
+    unit.settle_cells_shared(stored=False)
     unit.begin_statement()
     result = unit.wrap(fn, site)(arg)
+    unit.settle_cells_shared(stored=False)
     return [e["cache_hit"] for e in unit.drain()], result
 
 

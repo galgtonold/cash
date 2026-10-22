@@ -257,6 +257,24 @@ def _read_rows(raw: bytes | None, length: int, np: Any) -> Any:
     return np.frombuffer(raw, dtype=np.int64)
 
 
+def put_back_dtypes(value: Any, links: list[dict]) -> set[int]:
+    """The ids of the categorical dtypes of *value*'s frames that *links*
+    take from an argument on a hit (``dtype_of``): their objects are the
+    argument's own again."""
+    framed = {tuple(path): frame for path, frame in frames_in(value)}
+    found = {
+        id(_dtype_at(framed[tuple(link["result"])], link["column"]))
+        for link in links
+        if link.get("dtype_of") and tuple(link["result"]) in framed
+    }
+    del framed  # a holder of each frame, to the counts the caller takes
+    return found
+
+
+def _dtype_at(frame: Any, position: int) -> Any:
+    return frame.dtype if position == -1 else frame.dtypes.iloc[position]
+
+
 def linked_cell_ids(links: tuple[list[dict], dict[int, Any]] | None) -> dict[int, Any]:
     """The addresses of the cells *links* puts back, sorted, by the result
     frame holding them (`frames_together`)."""

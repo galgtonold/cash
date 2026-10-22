@@ -33,7 +33,7 @@ from cash.notebook.call_refs import (
     digest_and_size,
 )
 from cash.notebook.consumables import is_consumable_unrestorable
-from cash.notebook.frame_cells import cell_links, frames_in, is_frame, linked_cell_ids
+from cash.notebook.frame_cells import cell_links, frames_in, is_frame, linked_cell_ids, put_back_dtypes
 from cash.notebook.shared_objects import (
     VALUE_TYPES,
     WalkBudgetExceeded,
@@ -339,6 +339,9 @@ class CallEntries:
             links = cell_links(result, args, kwargs)
             if links is None:
                 return self._storable(result, args, kwargs, fn, root_held, explain_cells)
+            # A categorical's dtype a hit takes from the argument
+            # (``dtype_of``): its objects are the argument's own again.
+            put_back = put_back_dtypes(result, links[0])
             # The cells the result's frames hold of the arguments' frames are
             # put back on a hit (`relink_cells`): only what else they hold is
             # compared.
@@ -347,7 +350,7 @@ class CallEntries:
                 (value for value in (*args, *kwargs.values()) if is_frame(value)),
             )
             with frames_together(frames, linked_cell_ids(links)):
-                storable = self._storable(result, args, kwargs, fn, root_held, explain_cells)
+                storable = self._storable(result, args, kwargs, fn, root_held, explain_cells, put_back)
             if storable:
                 self.cell_links = links[0]
             return storable
@@ -357,14 +360,23 @@ class CallEntries:
             logger.debug("storability check raised; the result is not stored", exc_info=True)
             return False
 
-    def _storable(self, result, args, kwargs, fn: Any, root_held: bool, explain_cells: bool) -> bool:
+    def _storable(
+        self,
+        result,
+        args,
+        kwargs,
+        fn: Any,
+        root_held: bool,
+        explain_cells: bool,
+        put_back: frozenset | set = frozenset(),
+    ) -> bool:
         try:
             sources = (*args, *kwargs.values())
             parts = library_parts_held(result)
             reached = self._reached(result, fn, root_held or parts != {})
-            if holds_part_of(result, (*sources, *reached)) or self._shares_library_parts(
-                result, parts, (*sources, *reached)
-            ):
+            if holds_part_of(
+                result, (*sources, *reached), categories=True, put_back=put_back
+            ) or self._shares_library_parts(result, parts, (*sources, *reached)):
                 if explain_cells:
                     self.cells_shared_with = _argument_sharing_cells(result, args, kwargs, fn)
                 return False
@@ -726,7 +738,9 @@ def _argument_sharing_cells(result, args: tuple, kwargs: Mapping[str, Any], fn: 
     """The parameter name of the argument holding, in a pandas object's
     object column, a cell *result* holds in one too (`object_cell_ids`):
     ``flt(df)`` returning ``df[mask]``, whose rows are ``df``'s own objects.
-    None when the result holds no such cell, or no argument does."""
+    Or a cell the result holds outside a frame: ``{'f': v.iloc[4]}``, one
+    of a categorical's objects, an item of ``df['o'].values``. None when
+    the result holds no such cell, or no argument does."""
     handed = [*args, *kwargs.values()]
     try:
         # The argument itself, a column a frame holds: ``mk(df['o'])``
@@ -734,9 +748,13 @@ def _argument_sharing_cells(result, args: tuple, kwargs: Mapping[str, Any], fn: 
         sharing = [index for index, value in enumerate(handed) if value is result and is_frame(value)]
         if not sharing:
             cells = object_cell_ids(result)
-            if not cells:
-                return None
-            sharing = [index for index, value in enumerate(handed) if not cells.isdisjoint(object_cell_ids(value))]
+            if cells:
+                sharing = [index for index, value in enumerate(handed) if not cells.isdisjoint(object_cell_ids(value))]
+        if not sharing:
+            held = identities_of(result, categories=True)
+            sharing = [
+                index for index, value in enumerate(handed) if not held.isdisjoint(object_cell_ids(value, views=True))
+            ]
     except WalkBudgetExceeded:
         return None  # the refusal stands, only unexplained
     if not sharing:

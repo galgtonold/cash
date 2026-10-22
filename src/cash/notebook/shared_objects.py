@@ -46,7 +46,7 @@ import re
 import sys
 import types
 import uuid
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Container, Iterable, Iterator, Mapping
 from time import perf_counter as _perf_counter
 from typing import Any
 
@@ -523,10 +523,16 @@ def attrs_copied_apart(roots: Iterable[Any]) -> bool:
     return any(key in inside for root, tree in zip(roots, trees) if tree for key in _identities(root, value_types))
 
 
-def _identities(value: Any, value_types: tuple[type, ...]) -> Iterable[int]:
+def _identities(
+    value: Any, value_types: tuple[type, ...], categories: bool = False, put_back: Container[int] = ()
+) -> Iterable[int]:
     """The ids of the objects *value* is and holds, as `_walk` goes through
     them, that have an identity of their own: not values, nor tuples and
-    frozensets (their contents are yielded)."""
+    frozensets (their contents are yielded), and an object view's items
+    (`_view_items`). With *categories*, a frame's categories of objects
+    too (`_object_categories`): ``{'first': d['c'].iloc[1]}`` holds one of
+    ``d``'s, and so does ``d.groupby('c').sum()``; not of the dtypes in
+    *put_back*, by id."""
     seen: set[int] = set()
     stack = [value]
     while stack:
@@ -547,6 +553,20 @@ def _identities(value: Any, value_types: tuple[type, ...]) -> Iterable[int]:
             # holds: whatever else holds part of it holds *obj* itself.
             continue
         stack.extend(children_of(obj) or ())
+        stack.extend(_view_items(obj))
+        if categories:
+            for array in _object_categories(obj, put_back):
+                stack.extend(array.tolist())
+
+
+def _view_items(value: Any) -> Iterable[Any]:
+    """The items of an object array that is a view, which `children_of`
+    leaves to its base: ``df['o'].values`` holds ``df``'s own cells, and a
+    result holding them holds the frame's objects."""
+    np = sys.modules.get("numpy")
+    if np is None or not isinstance(value, np.ndarray) or value.dtype.kind != "O" or value.base is None:
+        return ()
+    return value.flat
 
 
 def view_bases(value: Any) -> list[int]:
@@ -843,15 +863,28 @@ def _read_object_columns(value: Any, pd: Any) -> list[Any]:
         array = column.to_numpy(copy=False)
         if pd.api.types.infer_dtype(array, skipna=True) not in _VALUE_COLUMNS:
             arrays.append(array)
-    # A categorical's categories are its cells' objects: ``d['c'].iloc[1]``
-    # is one of them, and a result holding it held the frame's object.
+    return arrays
+
+
+def _object_categories(value: Any, skip: Container[int] = ()) -> list[Any]:
+    """The categories arrays of *value*'s categoricals of objects, when it
+    is a pandas frame or series. They are its cells' objects
+    (``d['c'].iloc[1]`` is one of them), but not read as its cells: the
+    index pandas keeps of them holds each too, which no count accounts for.
+    Not those of the dtypes in *skip*, by id."""
+    pd = sys.modules.get("pandas")
+    if pd is None or not isinstance(value, (pd.Series, pd.DataFrame)):
+        return []
     dtypes = [value.dtype] if isinstance(value, pd.Series) else list(value.dtypes)
+    found: list[Any] = []
     for dtype in {id(dtype): dtype for dtype in dtypes}.values():
+        if id(dtype) in skip:
+            continue
         if isinstance(dtype, pd.CategoricalDtype) and is_object_dtype(dtype.categories.dtype):
             array = dtype.categories.to_numpy(copy=False)
             if pd.api.types.infer_dtype(array, skipna=True) not in _VALUE_COLUMNS:
-                arrays.append(array)
-    return arrays
+                found.append(array)
+    return found
 
 
 #: While `frames_together` runs: for each frame it was handed, by id, the
@@ -1085,10 +1118,12 @@ _VALUE_COLUMNS = frozenset(
 )
 
 
-def object_cell_ids(value: Any) -> set[int]:
+def object_cell_ids(value: Any, views: bool = False) -> set[int]:
     """The ids of the object-column cells held elsewhere too
     (`_object_cells`) of the pandas objects *value* is or holds, read as
-    `ids_through_libraries` reads it."""
+    `ids_through_libraries` reads it; with *views*, of an object view's
+    items (`_view_items`) and of their categories of objects
+    (`_object_categories`) too: ``df['o'].values``'s are ``df``'s cells."""
     value_types = VALUE_TYPES + library_value_types()
     found: set[int] = set()
     seen: set[int] = set()
@@ -1101,6 +1136,9 @@ def object_cell_ids(value: Any) -> set[int]:
         if not len(seen) & 1023:
             check_walk_budget()
         found.update(map(id, _object_cells(obj)))
+        if views:
+            found.update(map(id, _view_items(obj)))
+            found.update(id(item) for array in _object_categories(obj) for item in array.tolist())
         children = children_of(obj)
         if children is None and _read_down(obj, value_types):
             children = gc.get_referents(obj)
@@ -1108,12 +1146,12 @@ def object_cell_ids(value: Any) -> set[int]:
     return found
 
 
-def identities_of(value: Any) -> set[int]:
+def identities_of(value: Any, categories: bool = False) -> set[int]:
     """The ids `holds_part_of` compares *value* by (`_identities`)."""
-    return set(_identities(value, VALUE_TYPES + library_value_types()))
+    return set(_identities(value, VALUE_TYPES + library_value_types(), categories))
 
 
-def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
+def holds_part_of(value: Any, sources: Iterable[Any], categories: bool = False, put_back: Container[int] = ()) -> bool:
     """Whether *value* is or holds an object one of *sources* is or holds.
 
     A function's result restored as a copy is only the same as calling the
@@ -1123,13 +1161,16 @@ def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
     ``c['n'] = 5`` must reach through both names. Walked as `_walk` walks:
     the builtin containers and the attributes of the notebook's own objects.
     A numpy view holds the arrays it sits on (`view_bases`), on both sides:
-    ``window(a, 2)`` returning ``a[2:5]`` holds part of ``a``.
+    ``window(a, 2)`` returning ``a[2:5]`` holds part of ``a``. With
+    *categories*, a frame's categories of objects are compared too
+    (`_identities`), but for *value*'s dtypes in *put_back* (by id), which
+    a hit takes from the argument (`frame_cells`).
     """
     value_types = VALUE_TYPES + library_value_types()
-    own = set(_identities(value, value_types))
+    own = set(_identities(value, value_types, categories, put_back))
     if not own:
         return False
-    return any(key in own for source in sources for key in _identities(source, value_types))
+    return any(key in own for source in sources for key in _identities(source, value_types, categories))
 
 
 def excess_refs(nodes: dict[int, Any], inbound: dict[int, int], ids: Iterable[int]) -> list[int]:
@@ -1537,13 +1578,12 @@ def _frames_sharing_cells(
     """The variables of *user_ns* bound to a pandas frame or series that
     holds, in an object column, a cell that a frame or series of *group*
     holds and that something else holds too, found by address: ``df`` for
-    ``df2 = df[mask]``, whose rows are ``df``'s own objects. Only when there
-    are more such cells than a walk takes on quickly; and, whatever their
-    number, the frames reading the same memory: their cells are the same
-    objects in one slot each, which no count shows."""
+    ``df2 = df[mask]``, whose rows are ``df``'s own objects; and the frames
+    reading the same memory: their cells are the same objects in one slot
+    each, which no count shows. Or one holding an object of a categorical of
+    *group* among its own categories (`_object_categories`)."""
     values = exact_value_types()
     wanted: set[int] = set()
-    estimate = 0
     spans: list[tuple[int, int]] = []
     for value in group.values():
         for array in _object_columns(value) or ():
@@ -1554,13 +1594,23 @@ def _frames_sharing_cells(
             step = max(1, len(array) // _SAMPLE)
             held = _cells_held_elsewhere(array[::step].tolist(), 2, values)
             wanted.update(map(id, held))
-            estimate += len(held) * step
             del held
-    if not spans:
+    # A categorical's objects, which the walk does not read (pandas' own
+    # index of them holds each too): ``d.assign(...)`` keeps ``d``'s dtype,
+    # ``d.groupby('c').sum()`` holds its objects in a new one.
+    categories = {
+        id(item) for value in group.values() for array in _object_categories(value) for item in array.tolist()
+    }
+    if not spans and not categories:
         return set()
     found: set[str] = set()
     for name, value in user_ns.items():
         if name in group or name.startswith("_") or skip(name):
+            continue
+        if categories and any(
+            not categories.isdisjoint(map(id, array.tolist())) for array in _object_categories(value)
+        ):
+            found.add(name)
             continue
         for array in _object_columns(value) or ():
             check_walk_budget()
@@ -1570,7 +1620,7 @@ def _frames_sharing_cells(
             if any(start < other_end and other_start < end for other_start, other_end in spans):
                 found.add(name)
                 break
-            if estimate >= _FEW_CELLS and not wanted.isdisjoint(map(id, array.tolist())):
+            if wanted and not wanted.isdisjoint(map(id, array.tolist())):
                 found.add(name)
                 break
     return found
@@ -1584,9 +1634,6 @@ def _span(array: Any) -> tuple[int, int]:
         return start, start + max(len(array) - 1, 0) * stride + 8
     return start + (len(array) - 1) * stride, start + 8
 
-
-#: Fewest shared cells `_frames_sharing_cells` looks for by address.
-_FEW_CELLS = 64
 
 #: Cells of a column `_frames_sharing_cells` looks for.
 _SAMPLE = 4096

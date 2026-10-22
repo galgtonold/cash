@@ -35,7 +35,7 @@ from .shared_objects import (
     library_value_types,
 )
 
-__all__ = ["FrameCellsPatch", "HolderPatch", "apply_patch", "frame_cells_patch", "holder_patches"]
+__all__ = ["FrameCellsPatch", "HolderPatch", "apply_patch", "frame_cells_patch", "holder_patches", "shares_categories"]
 
 #: One step from a container to what it holds: ``("key", k)`` for a dict
 #: value, ``("item", i)`` for a list or tuple item, ``("attr", name)`` for an
@@ -218,11 +218,29 @@ def _get(obj: Any, step: Step) -> Any:
     return getattr(obj, label) if kind == "attr" else obj[label]
 
 
+def shares_categories(holder: Any, outputs: Mapping[str, Any]) -> bool:
+    """Whether a categorical of *holder*'s frames holds one of the objects a
+    categorical of the *outputs*' frames holds. Stored whole with them, the
+    two come back apart: pandas copies a categorical's categories without
+    the copy's memo of what it already copied. A frame that is an output's
+    own (``w = mk(df)``, ``df`` and ``w`` one frame) comes back as one."""
+    from .frame_cells import frames_in
+    from .shared_objects import _object_categories
+
+    def ids(frames: list[Any]) -> set[int]:
+        return {id(item) for frame in frames for array in _object_categories(frame) for item in array.tolist()}
+
+    theirs = [frame for _path, frame in frames_in(tuple(outputs.values()))]
+    same = {id(frame) for frame in theirs}
+    mine = ids([frame for _path, frame in frames_in(holder) if id(frame) not in same])
+    return bool(mine) and not mine.isdisjoint(ids(theirs))
+
+
 def frame_cells_patch(holder: Any, outputs: Mapping[str, Any]) -> FrameCellsPatch | None:
     """A `FrameCellsPatch` for *holder*, when it is a frame or series that
     holds objects of *outputs* only as cells the outputs' frames hold too,
     and only it and they hold them; None otherwise."""
-    from .frame_cells import cell_links, frames_in, is_frame, linked_cell_ids
+    from .frame_cells import cell_links, frames_in, is_frame, linked_cell_ids, put_back_dtypes
     from .shared_objects import frames_together, holds_part_of
 
     if not is_frame(holder):
@@ -232,7 +250,9 @@ def frame_cells_patch(holder: Any, outputs: Mapping[str, Any]) -> FrameCellsPatc
         return None
     frames = itertools.chain((frame for _path, frame in frames_in(outputs)), (holder,))
     with frames_together(frames, linked_cell_ids(links)):
-        if holds_part_of(tuple(outputs.values()), [holder]):
+        # A categorical's objects too: no cell link puts them back, only a
+        # dtype one (``df.assign(...)`` keeps ``df``'s).
+        if holds_part_of(tuple(outputs.values()), [holder], True, put_back_dtypes(outputs, links[0])):
             return None
     return FrameCellsPatch((), tuple(links[0]))
 

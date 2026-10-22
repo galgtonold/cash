@@ -17,7 +17,10 @@ from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 CELLS = [
     "import time\nimport pandas as pd",
-    "items = [[1], [2], [3]]\na = pd.DataFrame({'o': items, 'n': [0, 1, 2]})\nb = pd.DataFrame({'o': items})\ndel items",
+    # Held by a closure, which is no variable: a second frame holding them
+    # is one the statement finds by its cells (`_frames_sharing_cells`).
+    "items = [[1], [2], [3]]\na = pd.DataFrame({'o': items, 'n': [0, 1, 2]})\n"
+    "keep = (lambda held: lambda: held)(list(items))\ndel items",
     f"time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\ndf2 = a[a.n >= 0]",
 ]
 

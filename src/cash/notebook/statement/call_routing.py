@@ -244,6 +244,12 @@ class CallRouting:
         """Whether a loop iteration's body is running."""
         return bool(self._loop_vars)
 
+    def settle_cells_shared(self, stored: bool) -> None:
+        """The statement is done, *stored* or not
+        (`CallUnit.settle_cells_shared`)."""
+        if self._call_cache is not None:
+            self._call_cache.settle_cells_shared(stored)
+
     def held_call_results(self) -> list[tuple]:
         """The entries by which the call cache holds this cell's call results,
         to refer to them (`with_call_refs`): references of cash's own, not
