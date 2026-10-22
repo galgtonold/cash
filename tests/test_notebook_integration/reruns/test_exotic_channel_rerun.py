@@ -42,6 +42,33 @@ def test_with_factory_binding(nb_runner):
     )
 
 
+#: What hands a ``with`` its manager, the manager's class being the user's:
+#: a factory, a local it builds, a global it returns, a factory two calls
+#: deep, the class handed in, a method.
+FACTORIES = {
+    "a factory": ("def cm():\n    return Mgr()", "cm()"),
+    "a local it builds": ("def cm():\n    m = Mgr()\n    return m", "cm()"),
+    "a global it returns": ("shared = Mgr()\ndef cm():\n    return shared", "cm()"),
+    "two calls deep": ("def inner():\n    return Mgr()\ndef cm():\n    return inner()", "cm()"),
+    "the class handed in": ("def cm(kind):\n    return kind()", "cm(Mgr)"),
+    "a method": ("class Pool:\n    def lease(self):\n        return Mgr()\npool = Pool()", "pool.lease()"),
+}
+
+
+@pytest.mark.parametrize("how", list(FACTORIES))
+def test_with_factory_binding_stored(nb_runner, how):
+    # The sleep makes the statement cost enough to be stored, as a loaded
+    # machine does: served, it would skip ``__enter__``.
+    setup, call = FACTORIES[how]
+    _rerun(
+        nb_runner,
+        "import time\nhits = []\nclass Mgr:\n    def __enter__(self):\n        hits.append(1)\n"
+        "        return len(hits)\n    def __exit__(self, *a):\n        return False\n" + setup,
+        f"with {call} as x:\n    v = x\n    time.sleep(0.05)\nprint('hits', len(hits), 'v', v)",
+        "hits 1 v 1",
+    )
+
+
 def test_aliased_decorated_function(nb_runner):
     _rerun(
         nb_runner,

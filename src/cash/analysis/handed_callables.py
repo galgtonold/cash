@@ -1776,6 +1776,10 @@ class _Found:
                     target = _users_target(manager.func, namespace)
                     if target is not None and isinstance(target[0], type) and _is_users_class(target[0]):
                         self._special_methods(target[0])
+                    elif target is not None:
+                        # ``with cm() as x:`` where ``def cm(): return Mgr()``.
+                        for cls in _managers_made_by(target[0], namespace):
+                            self._special_methods(cls)
             elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
                 value = namespace.get(node.id, _MISSING)
                 if value is not _MISSING and _is_users_object(value):
@@ -2073,6 +2077,85 @@ def _generated_dataclass_init(cls: type, init: Any) -> bool:
         and is_pseudo_filename(init.__code__.co_filename)
         and _source_of(init) is None
     )
+
+
+#: How many factories deep `_managers_made_by` follows ``return other()``.
+_FACTORY_DEPTH = 3
+
+
+def _managers_made_by(fn: Any, namespace: Mapping[str, Any], depth: int = 0) -> list[type]:
+    """The classes of the user's whose objects the user's function *fn*
+    hands to a ``with`` (``def cm(): return Mgr()``): what its returns
+    construct, or name as a global or a local made from such a call.
+
+    A return read no further (a parameter, an expression) may hand over an
+    object of any class of the user's, so then every class of the user's in
+    *namespace* that defines ``__enter__`` or ``__exit__`` counts: which one
+    runs is not known. A library object handed back is the library's
+    business, and a generator's body (``@contextmanager``) is its callee's
+    own text already."""
+    if instance_of(fn, types.MethodType):
+        fn = fn.__func__
+    if not instance_of(fn, types.FunctionType) or not _is_users(fn):
+        return []
+    if fn.__code__.co_flags & (inspect.CO_GENERATOR | inspect.CO_ASYNC_GENERATOR):
+        return []
+    source = _source_of(fn)
+    node = parse_function_source(source) if source is not None else None
+    if node is None or depth > _FACTORY_DEPTH:
+        return _every_users_manager(namespace)
+    made: dict[str, list[ast.expr]] = {}
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Assign):
+            for target in sub.targets:
+                if isinstance(target, ast.Name):
+                    made.setdefault(target.id, []).append(sub.value)
+    found: list[type] = []
+    unread = False
+    params = all_param_names(node)
+
+    def read(expr: ast.expr, seen: frozenset[str]) -> None:
+        nonlocal unread
+        if isinstance(expr, ast.Constant):
+            return
+        if isinstance(expr, ast.Call) and isinstance(expr.func, (ast.Name, ast.Attribute)):
+            target = _users_target(expr.func, fn.__globals__)
+            if target is None:
+                unread = True
+            elif instance_of(target[0], type):
+                if _is_users_class(target[0]):
+                    found.append(target[0])
+            else:
+                found.extend(_managers_made_by(target[0], namespace, depth + 1))
+        elif isinstance(expr, ast.Name) and expr.id in made and expr.id not in seen:
+            for value in made[expr.id]:
+                read(value, seen | {expr.id})
+        elif isinstance(expr, ast.Name) and expr.id not in params and expr.id in fn.__globals__:
+            value = fn.__globals__[expr.id]
+            if _is_users_object(value):
+                found.append(type(value))
+        else:
+            unread = True
+
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Return) and sub.value is not None:
+            read(sub.value, frozenset())
+    return _every_users_manager(namespace) if unread else found
+
+
+def _every_users_manager(namespace: Mapping[str, Any]) -> list[type]:
+    """The classes of the user's in *namespace* that define ``__enter__``
+    or ``__exit__``."""
+    out = []
+    for value in list(namespace.values()):
+        if instance_of(value, type) and _is_users_class(value):
+            try:
+                mro = value.__mro__[:-1]
+                if any("__enter__" in vars(k) or "__exit__" in vars(k) for k in mro):
+                    out.append(value)
+            except TypeError:
+                continue
+    return out
 
 
 def _is_users(fn: types.FunctionType) -> bool:
