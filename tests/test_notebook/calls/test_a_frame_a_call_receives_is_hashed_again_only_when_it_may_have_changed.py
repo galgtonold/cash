@@ -15,6 +15,7 @@ import pytest
 
 from cash.notebook import call_effects
 from cash.notebook.call_effects import hash_args
+from tests._label_writes import label_array
 
 pd = pytest.importorskip("pandas")
 np = pytest.importorskip("numpy")
@@ -76,7 +77,7 @@ def _values_made_writable(df):
 
 
 def _index_array_write(df):
-    df.index.array[0] = -1
+    label_array(df.index)[0] = -1
 
 
 WRITES = {

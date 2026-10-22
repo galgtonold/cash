@@ -303,15 +303,56 @@ def freezable(frame: Any, *, cells_known: bool = False) -> bool:
     return all(_freezable_index(axis) for axis in axes)
 
 
+#: What the `_freeze` running on this thread has changed so far, for
+#: `_undo` to put back when it fails part way (`_Journal`).
+_JOURNAL = threading.local()
+
+
+class _Journal:
+    """The changes one `_freeze` makes, in order: arrays made read-only,
+    block values replaced, pins added, axes set. A freeze that fails part
+    way puts them all back (`_undo`): a table it did not finish is left as
+    it was, never with read-only arrays pandas does not know are shared
+    (it would write them in place, and the write would raise)."""
+
+    __slots__ = ("arrays", "axes", "pins", "values")
+
+    def __init__(self) -> None:
+        self.arrays: list[Any] = []
+        self.values: list[tuple[Any, Any]] = []
+        self.pins: list[list[Any]] = []
+        self.axes: list[tuple[str, Any]] = []
+
+
+def _undo(frame: Any, journal: _Journal) -> None:
+    """Put back what a failed `_freeze` of *frame* changed (`_Journal`)."""
+    for name, axis in reversed(journal.axes):
+        setattr(frame, name, axis)
+    for referenced in journal.pins:
+        while any(ref is _PIN for ref in referenced):
+            referenced.remove(_PIN)
+    for block, values in reversed(journal.values):
+        block.values = values
+    # Bases were made read-only after the views over them: made writable
+    # again first, as numpy requires of a view.
+    for array in reversed(journal.arrays):
+        array.flags.writeable = True
+        with _FROZEN_LOCK:
+            _FROZEN.pop(id(array), None)
+
+
 def _read_only(array: Any) -> Any:
     """*array* and every array it views made read-only; a view of it when it
     owns its memory, so no one holding the result can make it writable."""
     import numpy as np
 
+    journal = getattr(_JOURNAL, "current", None)
     link = array
     while isinstance(link, np.ndarray):
         if link.flags.writeable:
             link.flags.writeable = False
+            if journal is not None:
+                journal.arrays.append(link)
         if not isinstance(link.base, np.ndarray):
             break
         link = link.base
@@ -337,12 +378,47 @@ def _freeze_values(values: Any) -> Any:
     return values if frozen is values._ndarray else _same_dates(values, frozen)
 
 
+def array_freq(values: Any) -> Any:
+    """The ``freq`` the DatetimeArray or TimedeltaArray *values* keeps;
+    None where the array type keeps none.
+
+    Up to pandas 3.0 the array keeps it and its index reads it from there;
+    pandas 3.1 removed ``freq`` from the arrays (GH 24566), and keeps it
+    on the DatetimeIndex or TimedeltaIndex alone (`_same_index`)."""
+    return values.freq if _arrays_keep_freq(type(values)) else None
+
+
+def _arrays_keep_freq(kind: type) -> bool:
+    return isinstance(getattr(kind, "freq", None), property)
+
+
 def _same_dates(values: Any, ndarray: Any) -> Any:
     """A DatetimeArray or TimedeltaArray like *values* over *ndarray*, its
-    ``freq`` kept: ``_from_backing_data`` drops it, and a table with a
-    ``date_range`` index would come back from a hit, or from disk, without
-    it (``df.shift(1, freq=df.index.freq)`` then shifts the data)."""
-    return type(values)._simple_new(ndarray, dtype=values.dtype, freq=values.freq)
+    ``freq`` kept where the array keeps one (`array_freq`):
+    ``_from_backing_data`` drops it, and a table with a ``date_range``
+    index would come back from a hit, or from disk, without it
+    (``df.shift(1, freq=df.index.freq)`` then shifts the data)."""
+    if _arrays_keep_freq(type(values)):
+        return type(values)._simple_new(ndarray, dtype=values.dtype, freq=values.freq)
+    return type(values)._simple_new(ndarray, dtype=values.dtype)
+
+
+def _same_index(index: Any, data: Any) -> Any:
+    """An index of *index*'s type and name over *data*, its ``freq`` kept.
+
+    Where the arrays keep ``freq`` (pandas up to 3.0), *data* carries it
+    (`_same_dates`). pandas 3.1 keeps it on the index alone, in ``_freq``,
+    which its own ``copy`` and ``_view`` carry over the same way; a new
+    index made from the data has none. Set without the check the public
+    setter makes (a pass over every label): the labels are *index*'s own.
+    Raises when the freq still differs, so the table is not frozen."""
+    fresh = type(index)._simple_new(data, name=index.name)
+    freq = getattr(index, "freq", None)
+    if freq is not None and fresh.freq != freq and hasattr(type(fresh), "_freq"):
+        fresh._freq = freq
+    if getattr(fresh, "freq", None) != freq:
+        raise ValueError("an index's freq would be lost")
+    return fresh
 
 
 def _frozen_index(index: Any) -> Any:
@@ -358,10 +434,10 @@ def _frozen_index(index: Any) -> Any:
     data = index._data
     if _python_text(data):
         copied = data.copy()
-        return type(index)._simple_new(copied._from_backing_data(_read_only(copied._ndarray)), name=index.name)
+        return _same_index(index, copied._from_backing_data(_read_only(copied._ndarray)))
     if not _ndarray_parts(data):
         return index  # Arrow labels: immutable memory (`_private_axes`)
-    return type(index)._simple_new(_freeze_values(data.copy()), name=index.name)
+    return _same_index(index, _freeze_values(data.copy()))
 
 
 def frozen_already(frame: Any) -> bool:
@@ -402,36 +478,53 @@ def freeze(frame: Any, *, cells_known: bool = False) -> bool:
 
 
 def _freeze(frame: Any, *, cells_known: bool = False) -> bool:
+    journal = _Journal()
     try:
         if not freezable(frame, cells_known=cells_known):
             return False
         _install_pickling()
-        # Not consolidated: the blocks stay as the caller's table had them.
-        # One block for every float column made ``data[cols].to_numpy()`` a
-        # read-only view of it, where the caller's own table (one block per
-        # column, from ``read_csv``) gives a writable copy.
-        for blk in frame._mgr.blocks:
-            refs = blk.refs
-            sharing = [ref() for ref in refs.referenced_blocks]
-            for other in [blk, *sharing]:
-                if other is None or is_pin(other):
-                    continue
-                values = other.values
-                frozen = _freeze_values(values)
-                if frozen is not values:
-                    other.values = frozen
-            if not any(ref is _PIN for ref in refs.referenced_blocks):
-                refs.referenced_blocks.append(_PIN)
-        for name in ("index",) if frame.ndim == 1 else ("index", "columns"):
-            axis = getattr(frame, name)
-            frozen = _frozen_index(axis)
-            if frozen is not axis:
-                setattr(frame, name, frozen)
-        _private_axes(frame)
+        _JOURNAL.current = journal
+        _freeze_in_place(frame)
         return True
     except Exception:
         logger.debug("cash: could not freeze a %s", type(frame).__name__, exc_info=True)
+        try:
+            _undo(frame, journal)
+        except Exception:
+            logger.debug("cash: could not undo a part freeze", exc_info=True)
         return False
+    finally:
+        _JOURNAL.current = None
+
+
+def _freeze_in_place(frame: Any) -> None:
+    """`_freeze`'s changes, each recorded in the thread's `_Journal`."""
+    journal = _JOURNAL.current
+    # Not consolidated: the blocks stay as the caller's table had them.
+    # One block for every float column made ``data[cols].to_numpy()`` a
+    # read-only view of it, where the caller's own table (one block per
+    # column, from ``read_csv``) gives a writable copy.
+    for blk in frame._mgr.blocks:
+        refs = blk.refs
+        sharing = [ref() for ref in refs.referenced_blocks]
+        for other in [blk, *sharing]:
+            if other is None or is_pin(other):
+                continue
+            values = other.values
+            frozen = _freeze_values(values)
+            if frozen is not values:
+                journal.values.append((other, values))
+                other.values = frozen
+        if not any(ref is _PIN for ref in refs.referenced_blocks):
+            journal.pins.append(refs.referenced_blocks)
+            refs.referenced_blocks.append(_PIN)
+    for name in ("index",) if frame.ndim == 1 else ("index", "columns"):
+        axis = getattr(frame, name)
+        frozen = _frozen_index(axis)
+        if frozen is not axis:
+            journal.axes.append((name, axis))
+            setattr(frame, name, frozen)
+    _private_axes(frame)
 
 
 # ------------------------------------------------- shared with the caller, checked
