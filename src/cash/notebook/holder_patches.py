@@ -20,7 +20,7 @@ value) is stored whole, as before.
 from __future__ import annotations
 
 import itertools
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -86,14 +86,17 @@ def _steps(value: Any, value_types: tuple[type, ...]) -> tuple[list[tuple[Step, 
     return [], list(children_of(value) or ())
 
 
-def _reachable(roots: list[Any], value_types: tuple[type, ...]) -> set[int]:
-    """The ids of everything a walk reaches from *roots*."""
-    seen = _reachable_within(roots, value_types, None)
+def _reachable(roots: list[Any], value_types: tuple[type, ...], left: Collection[int] = ()) -> set[int]:
+    """The ids of everything a walk reaches from *roots*, not entering the
+    objects of *left*."""
+    seen = _reachable_within(roots, value_types, None, left)
     assert seen is not None
     return seen
 
 
-def _reachable_within(roots: list[Any], value_types: tuple[type, ...], limit: int | None) -> set[int] | None:
+def _reachable_within(
+    roots: list[Any], value_types: tuple[type, ...], limit: int | None, left: Collection[int] = ()
+) -> set[int] | None:
     """`_reachable`, or None when that is more than *limit* objects."""
     seen: set[int] = set()
     stack = list(roots)
@@ -101,7 +104,7 @@ def _reachable_within(roots: list[Any], value_types: tuple[type, ...], limit: in
         if not len(seen) & 1023:
             check_walk_budget()
         obj = stack.pop()
-        if is_value(obj, value_types) or id(obj) in seen:
+        if is_value(obj, value_types) or id(obj) in seen or id(obj) in left:
             continue
         seen.add(id(obj))
         if limit is not None and len(seen) > limit:
@@ -111,7 +114,8 @@ def _reachable_within(roots: list[Any], value_types: tuple[type, ...], limit: in
 
 
 def _paths(outputs: Mapping[str, Any], value_types: tuple[type, ...]) -> dict[int, tuple[str, Path]]:
-    """A path from an output to each object of the outputs a step can name."""
+    """A path from an output to each object of the outputs a step can name:
+    a frame's categorical's objects among them (`_category_steps`)."""
     found: dict[int, tuple[str, Path]] = {}
     for name, root in outputs.items():
         if is_value(root, value_types) or id(root) in found:
@@ -120,7 +124,7 @@ def _paths(outputs: Mapping[str, Any], value_types: tuple[type, ...]) -> dict[in
         stack: list[tuple[Any, Path]] = [(root, ())]
         while stack:
             obj, path = stack.pop()
-            for step, child in _steps(obj, value_types)[0]:
+            for step, child in _steps(obj, value_types)[0] + _category_steps(obj):
                 if is_value(child, value_types) or id(child) in found:
                     continue
                 found[id(child)] = (name, (*path, step))
@@ -134,20 +138,31 @@ def _paths(outputs: Mapping[str, Any], value_types: tuple[type, ...]) -> dict[in
 _HELD_MAX = 20_000
 
 
-def holder_patches(holders: Mapping[str, Any], outputs: Mapping[str, Any]) -> dict[str, HolderPatch] | None:
+def holder_patches(
+    holders: Mapping[str, Any], outputs: Mapping[str, Any], left: Collection[int] = ()
+) -> dict[str, HolderPatch] | None:
     """A `HolderPatch` for each of *holders*, or None when one of them holds
-    an object of the outputs where a patch cannot put it back."""
+    an object of the outputs where a patch cannot put it back.
+
+    *left*: the ids of frames a hit leaves as they are, the outputs taking
+    their cells back from them (`FrameCellsPatch`). A holder is not walked
+    into them: ``frames = {'a': df}`` holds ``df2 = flt(df)``'s cells only
+    as ``df``'s, and stays as it is too, an empty patch. Asked to place
+    them, it was stored whole with ``df``, and the restored ``df2`` held
+    copies of the cells the live ``df`` holds."""
     value_types = VALUE_TYPES + library_value_types()
     group = _tree_group(holders, outputs, value_types)
     if group is None:
         group = _paths(outputs, value_types)
-        targets = _reachable(list(outputs.values()), value_types)
+        # And the categorical's objects, which no walk of a frame reads.
+        targets = _reachable(list(outputs.values()), value_types) | set(group)
     else:
         targets = set(group)
     patches: dict[str, HolderPatch] = {}
     for name, value in holders.items():
-        places = _places(value, targets, value_types)
-        if not places or any(key not in group for _path, key in places):
+        reached: list[bool] = []
+        places = _places(value, targets, value_types, left, reached)
+        if places is None or (not places and not reached) or any(key not in group for _path, key in places):
             return None
         patches[name] = HolderPatch(tuple((path, *group[key]) for path, key in places))
     return patches
@@ -187,9 +202,17 @@ def _tree_group(
     return found
 
 
-def _places(value: Any, targets: set[int], value_types: tuple[type, ...]) -> list[tuple[Path, int]] | None:
+def _places(
+    value: Any,
+    targets: set[int],
+    value_types: tuple[type, ...],
+    left: Collection[int] = (),
+    reached: list[bool] | None = None,
+) -> list[tuple[Path, int]] | None:
     """``(path, id)`` for each place under *value* that holds one of
-    *targets*; None when one is a place no patch can set."""
+    *targets*; None when one is a place no patch can set. Not under a frame
+    of *left*, which the hit leaves as it is; *reached* gets True when one
+    is met."""
     places: list[tuple[Path, int]] = []
     seen: set[int] = set()
     stack: list[tuple[Any, Path, bool]] = [(value, (), False)]
@@ -197,6 +220,10 @@ def _places(value: Any, targets: set[int], value_types: tuple[type, ...]) -> lis
         if not len(seen) & 1023:
             check_walk_budget()
         obj, at, in_tuple = stack.pop()
+        if id(obj) in left:
+            if reached is not None:
+                reached.append(True)
+            continue
         if id(obj) in targets:
             if in_tuple:
                 # A tuple's items cannot be set.
@@ -207,14 +234,41 @@ def _places(value: Any, targets: set[int], value_types: tuple[type, ...]) -> lis
             continue
         seen.add(id(obj))
         named, unnamed = _steps(obj, value_types)
-        if unnamed and _reachable(unnamed, value_types) & targets:
+        if unnamed and _reachable(unnamed, value_types, left) & targets:
             return None
         stack.extend((child, (*at, step), isinstance(obj, tuple)) for step, child in named)
     return places
 
 
+def _category_steps(value: Any) -> list[tuple[Step, Any]]:
+    """``(("cat", (column, index)), object)`` for each object a categorical
+    of the frame or series *value* holds among its categories (column -1
+    for a series). A restore copies them apart from a list holding them
+    too (``ks``, ``df['ck'] = pd.Categorical([ks[i % 3] ...])``): the
+    holder takes the restored ones back at its own places."""
+    from .frame_cells import _categorical_columns, _pandas
+    from .shared_objects import _object_categories
+
+    pd = _pandas()
+    if pd is None or not isinstance(value, (pd.DataFrame, pd.Series)):
+        return []
+    if isinstance(value, pd.Series):
+        columns = [(-1, categories) for categories in _object_categories(value)]
+    else:
+        columns = _categorical_columns(value, pd)
+    steps: list[tuple[Step, Any]] = []
+    for position, categories in columns:
+        steps += [(("cat", (position, i)), item) for i, item in enumerate(categories.tolist())]
+    return steps
+
+
 def _get(obj: Any, step: Step) -> Any:
     kind, label = step
+    if kind == "cat":
+        from .frame_cells import _dtype_at
+
+        position, index = label
+        return _dtype_at(obj, position).categories[index]
     return getattr(obj, label) if kind == "attr" else obj[label]
 
 

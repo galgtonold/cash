@@ -152,7 +152,7 @@ from ..callee_reach import (
     module_state_writes,
     rebound_modules,
 )
-from ..holder_patches import FrameCellsPatch, frame_cells_patch, holder_patches, shares_categories
+from ..holder_patches import FrameCellsPatch, HolderPatch, frame_cells_patch, holder_patches, shares_categories
 from ..lineage_formula import (
     held_lineage,
     keep_held_lineage,
@@ -2858,7 +2858,10 @@ class StatementProcessor:
             framed = {name: frame_cells_patch(value, outputs) for name, value in holders.items()}
             framed = {name: patch for name, patch in framed.items() if patch is not None}
             rest = {name: value for name, value in holders.items() if name not in framed}
-            patches = holder_patches(rest, outputs) if rest else {}
+            # Holding the outputs' objects only through those frames
+            # (``frames = {'a': df}``), a holder stays as it is too.
+            left = {id(holders[name]) for name in framed}
+            patches = holder_patches(rest, outputs, left) if rest else {}
             if patches is not None:
                 patches.update(framed)
         # A holder stored whole comes back apart from a categorical's
@@ -3372,11 +3375,17 @@ def _open_stream(value: Any) -> bool:
 
 def _frames_left_alone(cached_data: Any) -> set[str]:
     """The variables an entry's *cached_data* takes frame cells back from
-    (`FrameCellsPatch`), which a hit leaves as they are."""
+    (`FrameCellsPatch`), or that hold the outputs' objects only through
+    those (a `HolderPatch` with no place to set): a hit leaves them as they
+    are."""
     variables = cached_data.get("variables") if isinstance(cached_data, dict) else None
     if not isinstance(variables, dict):
         return set()
-    return {name for name, value in variables.items() if isinstance(value, FrameCellsPatch)}
+    return {
+        name
+        for name, value in variables.items()
+        if isinstance(value, FrameCellsPatch) or (isinstance(value, HolderPatch) and not value.places)
+    }
 
 
 def _is_loop(tree: ast.AST | None) -> bool:

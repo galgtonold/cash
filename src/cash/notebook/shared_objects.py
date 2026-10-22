@@ -1603,7 +1603,7 @@ def _frames_sharing_cells(
     }
     if not spans and not categories:
         return set()
-    found: set[str] = set()
+    found = _holding_categories(group, user_ns, skip) if categories else set()
     for name, value in user_ns.items():
         if name in group or name.startswith("_") or skip(name):
             continue
@@ -1624,6 +1624,35 @@ def _frames_sharing_cells(
                 found.add(name)
                 break
     return found
+
+
+def _holding_categories(group: Mapping[str, Any], user_ns: Mapping[str, Any], skip: Callable[[str], bool]) -> set[str]:
+    """The variables of *user_ns* that hold an object of a categorical of
+    *group* other than as a frame's category: ``ks`` for ``df =
+    pd.DataFrame({'c': pd.Categorical([ks[i % 3] for i in range(n)])})``.
+
+    pandas holds each such object in one slot of each categories array (its
+    index of them takes no reference), so an object counted above that is
+    held by something else, which is looked for up its referrers
+    (`referring_names`). One not counted above it has no other holder: no
+    search. Raises `WalkBudgetExceeded` when the search is cut short."""
+    arrays = {_span(array): array for value in group.values() for array in _object_categories(value)}
+    items = [item for array in arrays.values() for item in array.tolist()]
+    occurs = collections.Counter(map(id, items))
+    # Each occurrence is one slot of an array and one of *items*.
+    held = [
+        item
+        for item, refs in zip(items, _refcounts(items))
+        if refs - _REFCOUNTS_OVERHEAD > 2 * occurs[id(item)] and not is_value(item, VALUE_TYPES)
+    ]
+    del items
+    if not held:
+        return set()
+    held = list({id(item): item for item in held}.values())
+    names, complete = referring_names(held, user_ns, 1.0, lambda name: name.startswith("_") or skip(name))
+    if not complete:
+        raise WalkBudgetExceeded
+    return {name for name in names if name not in group}
 
 
 def _span(array: Any) -> tuple[int, int]:
@@ -1823,6 +1852,7 @@ def _check_group(
                 inbound[id(mapping.get(key))] += 1
         if user_ns is not None:
             _count_index_data(nodes, inbound, user_ns)
+        _count_category_slots(nodes, inbound)
         counted = dict(inbound)
         excess = excess_refs(nodes, inbound, checked)
         if excess and _count_leaf_attributes(nodes, inbound):
@@ -2372,6 +2402,28 @@ def _count_index_data(nodes: dict[int, Any], inbound: dict[int, int], user_ns: M
                         inbound[id(item)] += 1
     except Exception:  # noqa: BLE001 - another layout: counted as held elsewhere
         return
+
+
+def _count_category_slots(nodes: dict[int, Any], inbound: dict[int, int]) -> None:
+    """Count in *inbound* the slot each categories array of objects of the
+    frames among *nodes* holds its objects in (`_object_categories`), once
+    per array: the walk does not read them, so ``ks`` holding the objects of
+    ``df``'s categorical counted one holder too many for each, and a
+    restore keeps them together (`holder_patches`' category places)."""
+    pd = sys.modules.get("pandas")
+    if pd is None:
+        return
+    frame_types = (pd.DataFrame, pd.Series)
+    arrays = {
+        _span(array): array
+        for value in list(nodes.values())
+        if isinstance(value, frame_types)
+        for array in _object_categories(value)
+    }
+    for array in arrays.values():
+        for item in array.tolist():
+            if id(item) in inbound:
+                inbound[id(item)] += 1
 
 
 def _held_in_pandas_slots(
