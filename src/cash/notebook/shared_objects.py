@@ -626,7 +626,9 @@ def _may_hold_bases(value: Any, np: Any, plain_leaves: Any) -> bool:
     """Whether *value* is worth walking for an array: not an array (looked
     at by `on_bases`), a module or a class (shared, never part of a value),
     nor JSON-like data."""
-    return not instance_of(value, (np.ndarray, type, types.ModuleType)) and not _plain_data.is_tree(value, plain_leaves)
+    if instance_of(value, np.ndarray):
+        return value.dtype.hasobject
+    return not instance_of(value, (type, types.ModuleType)) and not _plain_data.is_tree(value, plain_leaves)
 
 
 def _holding_bases(
@@ -662,9 +664,11 @@ def _holding_bases(
         if key in expanded:
             continue
         expanded.add(key)
-        children = children_of(obj)
+        children = _object_items(obj, np)
         if children is None:
-            children = _held_below(obj)
+            children = children_of(obj)
+            if children is None:
+                children = _held_below(obj)
         for child in children:
             if is_value(child, value_types):
                 continue
@@ -672,7 +676,9 @@ def _holding_bases(
             if ckey not in view_ids and on_bases(child, bases, views, np):
                 hits.add(key)
                 continue
-            if instance_of(child, (np.ndarray, type, types.ModuleType)):
+            if instance_of(child, (type, types.ModuleType)) or (
+                instance_of(child, np.ndarray) and not child.dtype.hasobject
+            ):
                 continue
             seen_from = parents.get(ckey)
             if seen_from is not None:
@@ -691,6 +697,28 @@ def _holding_bases(
         found.update(containers.get(key, ()))
         climb.extend(parents.get(key, ()))
     return found
+
+
+def _object_items(obj: Any, np: Any) -> list[Any] | None:
+    """What an object array holds, a view's too (``g = np.array([lambda:
+    arr], dtype=object)`` holds ``arr`` through the function), and for a
+    pandas frame or series, its attributes and the arrays of its object
+    columns, which a function in a cell may hold an array through; None
+    for anything else. The garbage collector sees neither: numpy's object
+    arrays are not tracked."""
+    if instance_of(obj, np.ndarray):
+        return list(obj.flat) if obj.dtype.hasobject else None
+    if not (_type_module(type(obj)) or "").startswith("pandas"):
+        return None
+    mgr = attribute_or(obj, "_mgr", None)
+    arrays = attribute_or(mgr, "arrays", None) if mgr is not None else None
+    if not isinstance(arrays, list):
+        return None
+    attrs = children_of(obj) or []
+    return [*attrs, *(array for array in arrays if isinstance(array, np.ndarray) and array.dtype.hasobject)]
+
+
+_type_module = type.__dict__["__module__"].__get__
 
 
 def _held_below(obj: Any) -> list[Any]:
