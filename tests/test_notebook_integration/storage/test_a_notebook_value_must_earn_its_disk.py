@@ -58,7 +58,7 @@ REPORT = ENTRY_BYTES_REPORT
 
 
 def test_a_big_value_that_rebuilds_quickly_does_not_reach_disk(nb_runner):
-    """~96 MB built in about 0.17 s: over 500 MiB per compute-second.
+    """~96 MB built in about 0.15 s: over 500 MiB per compute-second.
 
     The reported shape -- 48 MiB entries whose recorded compute was 0.00 s, 72 of
     them, 3.5 GB. Nothing this cheap is worth that much disk.
@@ -67,14 +67,17 @@ def test_a_big_value_that_rebuilds_quickly_does_not_reach_disk(nb_runner):
     refusal must name the bytes ceiling, so nothing else can be what keeps it
     off disk. The value is twice the reported size so the ceiling (128 MiB per
     compute-second) is crossed only past ~0.72 s of recorded compute, about
-    four times the ~0.17 s it takes. At 48 MB it was crossed at ~0.36 s, which
+    four times the ~0.15 s it takes. At 48 MB it was crossed at ~0.36 s, which
     a loaded machine can reach, and then the value is written for a
-    legitimate reason.
+    legitimate reason. The array is ``np.zeros``, whose memory the system
+    hands over already zeroed and untouched, so the sleep is the compute:
+    ``np.arange`` wrote 96 MB of new memory in the body, which took 0.17 to
+    0.71 s on the same machine, and past ~0.72 s the arm skipped.
     """
     nb_runner.create_notebook(
         [
             "import numpy as np\nimport time",
-            "def make_frame():\n    time.sleep(0.15)\n    return np.arange(12_000_000, dtype='float64')",
+            "def make_frame():\n    time.sleep(0.15)\n    return np.zeros(12_000_000, dtype='float64')",
             "big = make_frame()\nprint(f'shape={big.shape[0]}')",
             REPORT,
         ]
@@ -101,7 +104,7 @@ def test_a_big_value_that_is_expensive_still_reaches_disk(nb_runner):
     nb_runner.create_notebook(
         [
             "import numpy as np\nimport time",
-            "def make_frame():\n    time.sleep(2.0)\n    return np.arange(12_000_000, dtype='float64')",
+            "def make_frame():\n    time.sleep(2.0)\n    return np.zeros(12_000_000, dtype='float64')",
             "big = make_frame()\nprint(f'shape={big.shape[0]}')",
             REPORT,
         ]
