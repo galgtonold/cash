@@ -167,16 +167,25 @@ def test_a_function_in_slots_an_object_array_a_frame_column_a_partial_or_a_metho
         assert found == (["g"], True), name
 
 
-def test_plain_data_with_no_function_anywhere_is_not_walked():
+def test_plain_data_with_no_function_anywhere_is_not_walked(monkeypatch):
     """Ten million strings are typed in bulk, never remembered one by one:
-    the check finishes well inside its floor."""
-    import time
+    of what the look walks, only the containers are kept, not the strings.
+    Counted rather than timed, as a slow runner's clock says nothing of it."""
+    remembered: list[int] = []
+    fresh = closure_sharing._fresh
 
+    def counting(held, places, limit):
+        level = fresh(held, places, limit)
+        remembered.append(len(places))
+        return level
+
+    monkeypatch.setattr(closure_sharing, "_fresh", counting)
     words = " ".join(map(str, range(10_000_000))).split()
-    start = time.process_time()
-    found = closures_sharing({"words": words, "rows": [{"a": i} for i in range(100_000)]}, 1.0)
+    rows = [{"a": i} for i in range(100_000)]
+    # Held by an object, so the look walks them rather than take them as plain data.
+    found = closures_sharing({"words": Box(words), "rows": Box(rows)}, 60.0)
     assert found == ([], True)
-    assert time.process_time() - start < 1.0
+    assert max(remembered) <= len(rows) + 10
 
 
 OBJECT_HOLDERS = {
