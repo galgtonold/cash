@@ -44,8 +44,17 @@ class _Counting:
 
 @pytest.fixture
 def kernels(monkeypatch):
+    """Counts every walk: the C kernel's, and `tree_levels`, which a check
+    takes without it."""
     counting = _Counting(_plain_data._K)
     monkeypatch.setattr(_plain_data, "_K", counting)
+    levels = _plain_data.tree_levels
+
+    def counted_levels(*args, **kwargs):
+        counting.walks += 1
+        return levels(*args, **kwargs)
+
+    monkeypatch.setattr(_plain_data, "tree_levels", counted_levels)
     return counting
 
 
@@ -61,6 +70,18 @@ def test_every_check_of_a_look_answers_from_one_wider_walk(kernels):
     assert answers == [True, True, [], True]
     # The default leaves' walk (no tree: a Timestamp), then one wider walk.
     assert kernels.walks == 2
+
+
+def test_the_store_at_a_looks_end_does_not_answer_from_the_wider_walk(kernels):
+    rows = _rows(100)
+    with _plain_data.one_look({"rows": rows}):
+        assert _plain_data.is_tree(rows, tree_leaves())
+        walks = kernels.walks
+        # The store runs the user's hooks, which may change ``rows``.
+        _plain_data.forget_wider_facts()
+        rows.append({"user": "x", "session": 0, "time": object()})
+        assert not _plain_data.is_tree(rows, tree_leaves())
+    assert kernels.walks == walks + 1
 
 
 def test_the_answers_are_the_walks_without_a_look():

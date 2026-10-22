@@ -28,6 +28,7 @@ from ...value_types import BUILTIN_NAMES
 from ..cache_key import statement_source_hash
 from ..call_key import changes_its_closure
 from ..callee_reach import CWD, ENVIRON, module_state_names, module_state_writes, process_state_writes, state_holders
+from ..shared_objects import history_names
 from .control_body import is_control_body
 
 if TYPE_CHECKING:
@@ -70,6 +71,13 @@ class MutationRouting:
         """Add the receivers *run* mutates to its outputs, and skip-cache it
         where the mutation must really happen on every run."""
         mut_pre_route, draw_only, fit_only = self._classify(run)
+        # ``Out[2].set_title('x')`` changes the axes ``Out`` holds, not
+        # IPython's history: never an output, watched or evicted
+        # (`history_names`).
+        history = history_names(mut_pre_route | fit_only | run.mut_observe, self.shell.user_ns)
+        if history:
+            mut_pre_route, fit_only = mut_pre_route - history, fit_only - history
+            run.mut_observe = run.mut_observe - history
         self._route_receivers(run, effects, mut_pre_route, fit_only)
         # Deliberately the SAME treatment the inline spelling of the identical
         # mutation gets in `_route_receivers`: the statement re-executes so the

@@ -23,6 +23,7 @@ from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import CashUpstreamSyntaxWarning, ForwardReferenceError
 from .._protocols import ShellProtocol
 from ..magic_effects import is_magic_statement, magic_effects, simulation_cell
+from ..shared_objects import history_names
 from ..tracking_state import TrackingState
 
 __all__ = ["NotebookVetter"]
@@ -217,9 +218,13 @@ class NotebookVetter:
             return
 
         user_ns = self.shell.user_ns
+        candidates = set(self.tracking_state.variable_lineage) - produced
+        # IPython's ``In`` and ``Out``: no cell binds them, and nothing
+        # rebinds them once gone (`history_names`).
+        history = history_names(candidates, user_ns)
         orphaned = {
             v
-            for v in set(self.tracking_state.variable_lineage) - produced
+            for v in candidates - history
             if v in user_ns and not v.startswith("_") and not instance_of(user_ns[v], types.ModuleType)
         }
         if not orphaned:
