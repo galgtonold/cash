@@ -163,3 +163,43 @@ def test_a_frame_hashed_by_rows_is_hashed_in_chunks_the_same(monkeypatch):
     whole, _ = fingerprint(df)
     monkeypatch.setattr(row_blocks, "_ROWS_PER_CHUNK", 333)
     assert fingerprint(df)[0] == whole
+
+
+class _StallingClock:
+    """A ``perf_counter`` under which the first block hashed seems to take
+    *first* seconds (a preemption, or the GIL coming back late) and every
+    other one *rest*."""
+
+    def __init__(self, first, rest):
+        self.now, self.calls, self.first, self.rest = 0.0, 0, first, rest
+
+    def __call__(self):
+        self.calls += 1
+        if self.calls % 2 == 0:
+            self.now += self.first if self.calls == 2 else self.rest
+        return self.now
+
+
+_SHAPES = {
+    "array": lambda: _images(3000),
+    "frame of plain columns": lambda: pd.DataFrame({"v": np.arange(3000), "w": np.arange(3000.0)}),
+    "list of arrays": lambda: [np.arange(4) for _ in range(3000)],
+}
+
+
+@pytest.mark.parametrize("shape", list(_SHAPES))
+def test_one_stalled_block_does_not_give_up_on_a_quick_hash(monkeypatch, shape):
+    # A stall of 1 s in the first of 64 blocks, the rest 1 us each, against
+    # a 2 s budget: judged from the first block alone it projected 63 s.
+    monkeypatch.setattr("cash.row_blocks._perf_counter", _StallingClock(first=1.0, rest=1e-6))
+    blocks, _ = fingerprint(_SHAPES[shape](), deadline=2.0)
+    assert len(blocks.digests) == MAX_BLOCKS
+
+
+@pytest.mark.parametrize("shape", list(_SHAPES))
+def test_blocks_all_too_slow_give_up_before_hashing_the_rest(monkeypatch, shape):
+    clock = _StallingClock(first=0.1, rest=0.1)
+    monkeypatch.setattr("cash.row_blocks._perf_counter", clock)
+    with pytest.raises(HashBudgetSpent):
+        fingerprint(_SHAPES[shape](), deadline=2.0)
+    assert clock.now < 1.0
