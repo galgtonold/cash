@@ -727,15 +727,16 @@ def _argument_sharing_cells(result, args: tuple, kwargs: Mapping[str, Any], fn: 
     object column, a cell *result* holds in one too (`object_cell_ids`):
     ``flt(df)`` returning ``df[mask]``, whose rows are ``df``'s own objects.
     None when the result holds no such cell, or no argument does."""
+    handed = [*args, *kwargs.values()]
     try:
-        cells = object_cell_ids(result)
-        if not cells:
-            return None
-        sharing = [
-            index
-            for index, value in enumerate([*args, *kwargs.values()])
-            if not cells.isdisjoint(object_cell_ids(value))
-        ]
+        # The argument itself, a column a frame holds: ``mk(df['o'])``
+        # returning ``v`` (pandas 2 keeps ``df['o']`` in its item cache).
+        sharing = [index for index, value in enumerate(handed) if value is result and is_frame(value)]
+        if not sharing:
+            cells = object_cell_ids(result)
+            if not cells:
+                return None
+            sharing = [index for index, value in enumerate(handed) if not cells.isdisjoint(object_cell_ids(value))]
     except WalkBudgetExceeded:
         return None  # the refusal stands, only unexplained
     if not sharing:

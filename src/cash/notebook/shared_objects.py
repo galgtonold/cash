@@ -843,6 +843,14 @@ def _read_object_columns(value: Any, pd: Any) -> list[Any]:
         array = column.to_numpy(copy=False)
         if pd.api.types.infer_dtype(array, skipna=True) not in _VALUE_COLUMNS:
             arrays.append(array)
+    # A categorical's categories are its cells' objects: ``d['c'].iloc[1]``
+    # is one of them, and a result holding it held the frame's object.
+    dtypes = [value.dtype] if isinstance(value, pd.Series) else list(value.dtypes)
+    for dtype in {id(dtype): dtype for dtype in dtypes}.values():
+        if isinstance(dtype, pd.CategoricalDtype) and is_object_dtype(dtype.categories.dtype):
+            array = dtype.categories.to_numpy(copy=False)
+            if pd.api.types.infer_dtype(array, skipna=True) not in _VALUE_COLUMNS:
+                arrays.append(array)
     return arrays
 
 

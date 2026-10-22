@@ -1,7 +1,8 @@
 """A call that reaches something with identity and returns a library object
 too big to read, a call handed a big library object, and a call returning
-the user's object from a frame's object column, and one returning a Series
-over its argument's array inside a namespace, compared with plain Python
+the user's object from a frame's object column or one of its categorical's
+objects, one returning a Series over its argument's array inside a
+namespace, and one copying a column made for it, compared with plain Python
 across two runs and a restart. Prints every run's cell output (warnings
 included)."""
 
@@ -73,10 +74,32 @@ CASES = {
         "t = time.time()\nw = mk(df['t'])\nprint('T', round(time.time() - t, 1), len(w))",
         "df['t'].iloc[2].append(5)\nprint('SAME', w.iloc[1] is df['t'].iloc[2], w.iloc[1][-1])",
     ),
+    # a copy of a column made for the call: no name holds it for the statement
+    "copy_of_a_column": (
+        "df = pd.DataFrame({'t': [['a', str(i)] for i in range(1000)], 'n': range(1000)})",
+        "def mk(s):\n    time.sleep(1.0)\n    return s.copy()",
+        "t = time.time()\nw = mk(df['t'])\nprint('T', round(time.time() - t, 1), len(w))",
+        "df['t'].iloc[2].append(5)\nprint('SAME', w.iloc[2] is df['t'].iloc[2], w.iloc[2][-1])",
+    ),
+    # one of a categorical's objects, held outside a frame
+    "category_object_of_arg": (
+        "class K:\n    def __init__(self, v):\n        self.v = [v]\n"
+        "df = pd.DataFrame({'c': pd.Categorical([K(i) for i in range(3)] * 10), 'n': range(30)})",
+        "def pick(d):\n    time.sleep(1.0)\n    return {'first': d['c'].iloc[1]}",
+        "t = time.time()\nw = [pick(df)]\nprint('T', round(time.time() - t, 1), len(w))",
+        "df['c'].iloc[1].v.append(5)\nprint('SAME', w[0]['first'] is df['c'].iloc[1], w[0]['first'].v[-1])",
+    ),
+    "category_object_of_arg_statement": (
+        "class K:\n    def __init__(self, v):\n        self.v = [v]\n"
+        "df = pd.DataFrame({'c': pd.Categorical([K(i) for i in range(3)] * 10), 'n': range(30)})",
+        "def pick(d):\n    time.sleep(1.0)\n    return {'first': d['c'].iloc[1]}",
+        "t = time.time()\nw = pick(df)\nprint('T', round(time.time() - t, 1), len(w))",
+        "df['c'].iloc[1].v.append(5)\nprint('SAME', w['first'] is df['c'].iloc[1], w['first'].v[-1])",
+    ),
 }
 
 #: Served after the first run.
-SERVED = {"frame_filter_of_arg", "series_filter_of_arg"}
+SERVED = {"frame_filter_of_arg", "series_filter_of_arg", "copy_of_a_column"}
 
 
 @pytest.mark.parametrize("case", list(CASES))

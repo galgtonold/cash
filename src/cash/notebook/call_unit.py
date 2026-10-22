@@ -76,7 +76,7 @@ from cash.notebook.call_refs import (
     DIGEST_FIELD,
     SIZE_FIELD,
 )
-from cash.notebook.frame_cells import RELINK_FAILED, object_columns_on_both_sides, relink_cells
+from cash.notebook.frame_cells import RELINK_FAILED, is_frame, object_columns_on_both_sides, relink_cells
 from cash.notebook.held_sentinels import find_for_call, put_back_for_call
 from cash.notebook.pyplot_state import pyplot_state
 from cash.notebook.read_handles import reaches_read_handle
@@ -961,8 +961,8 @@ class CallUnit:
             # The entry says it carries captured globals and does not.
             # Treat it as absent rather than hand back a tuple where a
             # value belongs -- a miss costs a recompute, this would be
-            # a silently wrong value.
-            return call.fn(*call.args, **call.kwargs)
+            # a silently wrong value. A miss, watched, as below.
+            return self._run_miss(call)
         # The arguments' frames' own cells, where the result held them.
         value = relink_cells(value, call.args, call.kwargs, metadata.get("cell_links"))
         if value is RELINK_FAILED:
@@ -1155,17 +1155,32 @@ class CallUnit:
         restore than to compute again."""
         if elapsed < self._cost_floor_s():
             return False
-        if call.site.source == self.plain_value_source and object_columns_on_both_sides(result, call.args, call.kwargs):
-            # ``f = flt(df)``: the statement stores *result* itself, and puts
-            # back the cells it shares with ``df`` (`FrameCellsPatch`); this
-            # entry would cost the same again to store.
-            return False
         # Walking what the result and the arguments hold may take at most
         # what the statement share check of the same cost may.
         from cash.notebook.statement.processor import share_check_budget  # imports this module
 
         budget = share_check_budget(elapsed)
         explain = elapsed >= COMPUTE_FLOOR_S and _name_of(call) not in self._cells_shared_told
+        if (
+            call.site.source == self.plain_value_source
+            and object_columns_on_both_sides(result, call.args, call.kwargs)
+            and _frames_handed_by_name(call)
+        ):
+            # ``f = flt(df)``: the statement stores *result* itself, and puts
+            # back the cells it shares with ``df`` (`FrameCellsPatch`); this
+            # entry would cost the same again to store. Not for a frame made
+            # for the call (``mk(df['o'])``): no name holds it for the
+            # statement to put cells back from, and it ran every time. Cells
+            # something else holds too it refuses as this entry would: said.
+            if explain:
+                try:
+                    with walk_budget(budget):
+                        self._entries.storable(result, call.args, call.kwargs, call.fn, result_held, explain)
+                except WalkBudgetExceeded:
+                    return False
+                if self._entries.cells_shared_with is not None:
+                    self._tell_cells_shared(call, elapsed, self._entries.cells_shared_with)
+            return False
         try:
             with walk_budget(budget):
                 storable = self._entries.storable(result, call.args, call.kwargs, call.fn, result_held, explain)
@@ -1649,6 +1664,23 @@ def _left_pyplot_alone(fn: Any, unit: Any) -> bool:
     if unit is not None:
         return not unit.pyplot_ran
     return user_callee_using_pyplot(fn) is None
+
+
+def _frames_handed_by_name(call: _Call) -> bool:
+    """Is every pandas argument of *call* written as a bare name at its site?"""
+    try:
+        node = ast.parse(call.site.source, mode="eval").body
+    except SyntaxError:
+        return False
+    if not isinstance(node, ast.Call) or len(node.args) != len(call.args):
+        return False
+    written = dict(zip(range(len(node.args)), node.args))
+    written.update({keyword.arg: keyword.value for keyword in node.keywords if keyword.arg is not None})
+    handed = {**dict(enumerate(call.args)), **call.kwargs}
+    for where, value in handed.items():
+        if is_frame(value) and not isinstance(written.get(where), ast.Name):
+            return False
+    return True
 
 
 def _name_of(call: _Call) -> str:
