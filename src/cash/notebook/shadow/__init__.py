@@ -715,6 +715,33 @@ class Shadow:
             "stmt", run.cache_key, _stmt_group(run), found, run.code, getattr(backend, "peek_metadata", None)
         )
 
+    def unseen_writes(self, key: str, outputs: Any) -> bool:
+        """Whether the trace stored with the entry *key* holds a function
+        that changes something *outputs* leave out (`unseen_writes`): an
+        entry stored before that was refused, served, would drop it."""
+        from ...tracking.trace_items import namespace_of, resolve
+        from ..statement.unseen_writes import unseen_writers
+
+        trace = self.traces.get(key)
+        if not trace:
+            return False
+        nb, nbn = self.notebook or {}, self.notebook_name
+        codes: dict[Any, tuple[dict, str]] = {}
+        for item in trace.get("items") or ():
+            if not item or item[0] != "code":
+                continue
+            try:
+                code, _fn, _owner = resolve(item[1], item[2], nb, nbn)
+                globals_ = namespace_of(item[1], nb, nbn)
+            except Exception:  # noqa: BLE001 - shadow never breaks a statement
+                continue
+            if code is not None and isinstance(globals_, dict):
+                codes[code] = (globals_, item[1])
+        try:
+            return bool(codes) and bool(unseen_writers(codes, (), outputs, nb))
+        except Exception:  # noqa: BLE001 - shadow never breaks a statement
+            return False
+
     @staticmethod
     def agreed(pending: dict | None) -> bool:
         """Did the check before a lookup (`check`) find the entry's trace,

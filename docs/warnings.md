@@ -1731,6 +1731,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-SHARE-UNCHECKED](#notebook-share-unchecked) | notebook | not every variable sharing an object with a statement's outputs was found in time |
 | [NOTEBOOK-SHARED-KEPT](#notebook-shared-kept) | notebook | a value a variable below shares is kept as it is for a cell re-run on its own |
 | [NOTEBOOK-THREAD-ALIVE](#notebook-thread-alive) | notebook | a thread the cell started still runs after the cell ended |
+| [NOTEBOOK-UNSEEN-WRITES](#notebook-unseen-writes) | notebook | code of yours that ran in a statement changes something cash did not see the statement reach, so the run is not stored |
 | [NOTEBOOK-WORK-RUNNING](#notebook-work-running) | notebook | a thread or process a statement left running has not finished, so cells run rather than be served |
 
 ### NOTEBOOK-ANALYSIS-BUDGET {#notebook-analysis-budget}
@@ -2161,6 +2162,30 @@ cell that uses it.
 
 **When it is safe to ignore.** When the thread changes nothing a cell reads,
 such as a progress display or a server you query from outside the notebook.
+
+### NOTEBOOK-UNSEEN-WRITES {#notebook-unseen-writes}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_unseen_writes @dd175d1c, cash/notebook/statement/unseen_writes.py:unseen_writers @b7dd5393, cash/notebook/statement/unseen_writes.py:own_writes @6e5e52a9 -->
+**What happened.** A function of yours ran while a statement ran, on a path
+cash does not read from the statement's text, and it changes something the
+statement does not name: `Vec.__add__` appending to a global list, run by
+`s + 1` on a column of `Vec` objects, or a function changing a variable of
+the function it was made in. The message names the function and what it
+changes. Python 3.12 or newer only: cash reads which functions ran from the
+run itself. It is shown once for each function.
+
+**Why it matters.** Served from the cache, the statement would not run the
+function, so the change would not happen. Cash runs the statement every
+time instead and does not store it.
+
+**What to do.** Name what the function changes in the statement: pass it in
+and return it (`calls = add_all(s, calls)`).
+
+**When it is safe to ignore.** When the change does not matter to any cell
+(a counter for a log, a debug list): put `# @cash:assume-safe` on the
+statement, and cash stores it.
 
 ### NOTEBOOK-WORK-RUNNING {#notebook-work-running}
 

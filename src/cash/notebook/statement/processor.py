@@ -193,6 +193,7 @@ from . import hidden_generators
 from .lineage import note_own_writes
 from .observed_draws import ObservedDrawStore
 from .thread_reach import ThreadReach
+from .unseen_writes import UNSEEN_WRITES_REASON, unseen_writers
 
 __all__ = ["StatementProcessor", "is_control_body"]
 
@@ -304,6 +305,7 @@ class StatementProcessor:
         self._thread_reach = ThreadReach()
         #: The work NOTEBOOK-WORK-RUNNING was given for.
         self._work_running_warned: set[str] = set()
+        self._unseen_warned: set[str] = set()
         #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
         self._share_unchecked_warned: set[str] = set()
         #: Statements already told about NOTEBOOK-ANALYSIS-BUDGET.
@@ -937,6 +939,14 @@ class StatementProcessor:
                 # Its key does not name what a string found: only a trace
                 # checked unchanged serves it.
                 cached_data = None
+            elif (
+                cached_data
+                and not getattr(run.annotation, "assume_safe", False)
+                and _shadow.SHADOW.unseen_writes(run.cache_key, run.outputs)
+            ):
+                # Stored before code it ran was seen to change what its
+                # outputs leave out: it runs, and is not stored again.
+                cached_data = None
         elif run.needs_trace:
             cached_data = None
         if cached_data and self._live_objects_shared(run, metadata):
@@ -1034,6 +1044,34 @@ class StatementProcessor:
         run.skip_cache = True
         run.value_varies = True
         run.metrics["uncacheable_reasons"].append(run.unless_it_draws)
+
+    def _refuse_unseen_writes(self, run: StatementRun, execution: StatementExecution) -> None:
+        """Refuse *run* when a function of the user's that ran in it changes
+        something its outputs leave out (`unseen_writes`): a served entry
+        would not change it. Said once for each function."""
+        unit = run.trace_unit
+        if unit is None or run.skip_cache or not execution.result.success:
+            return
+        if getattr(run.annotation, "assume_safe", False):
+            return
+        ns = self.shell.user_ns
+        statement = [code for code, (g, _m) in unit.codes.items() if code.co_qualname == "<module>" and g is ns]
+        found = unseen_writers(unit.codes, statement, run.outputs, ns)
+        if not found:
+            return
+        fn, targets = found[0]
+        what = UNSEEN_WRITES_REASON.format(fn=fn, targets=", ".join(targets), it="it" if len(targets) == 1 else "them")
+        run.skip_cache = True
+        run.metrics["uncacheable_reasons"].append(what)
+        if fn in self._unseen_warned:
+            return
+        self._unseen_warned.add(fn)
+        fix = (
+            "name what the function changes in the statement (pass it in and return it), or put "
+            "'# @cash:assume-safe' on the statement if the change does not matter."
+        )
+        log_diagnostic(logger, "NOTEBOOK-UNSEEN-WRITES", what, fix)
+        warn_diagnostic(CashWarning, "NOTEBOOK-UNSEEN-WRITES", what, fix)
 
     @staticmethod
     def _observe_process_state(run: StatementRun) -> None:
@@ -1569,6 +1607,7 @@ class StatementProcessor:
             unshown_output(e, execution.captured, run.silent, run.stream_output)
             raise
         self._refuse_if_it_drew(run, execution)
+        self._refuse_unseen_writes(run, execution)
         if (
             figures_before is not None
             and not run.skip_cache
