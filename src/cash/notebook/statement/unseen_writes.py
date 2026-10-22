@@ -11,8 +11,9 @@ global list (``calls.append(1)``), a served entry drops the append.
 On Python 3.12+ every function of the user's that ran is recorded
 (``trace_recorder.Unit.codes``). After a run, `unseen_writers` reads each
 one's own text for what it changes outside its objects: a global it changes
-or rebinds, a variable of a closure it changes, a method it calls on a
-library object it reads by a free name (``calls.append``, ``cache.set``).
+or rebinds (``calls.append(1)``), a variable of a closure it changes. A
+method of a library object it calls (``porter.stem(w)``) is taken to leave
+the object alone, as for a function the statement calls by name.
 What it calls by name needs no reading: that ran too, and is read in turn.
 A change the statement's outputs already hold is kept by a served entry.
 Any other means the run is not stored (`UNSEEN_WRITES_REASON`), and a hit on
@@ -25,13 +26,11 @@ import ast
 import functools
 import json
 import os
-import sys
 import types
 from collections.abc import Iterable, Mapping
 from typing import Any
 
 from ...analysis.callee_effects import free_vars_mutated_in_function
-from ...analysis.mutations import KNOWN_PURE_METHODS
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS
 from ...source_reading import getsource
 
@@ -86,8 +85,6 @@ def unseen_writers(
             elif globals_ is namespace and name in kept:
                 continue
             elif name in globals_:
-                if _changes_by_method(code, name) and not _changeable(globals_[name], code, name):
-                    continue
                 targets.append(repr(name) if globals_ is namespace else f"{globals_.get('__name__')}.{name}")
         if targets:
             found.append((code.co_qualname, tuple(targets)))
@@ -99,10 +96,9 @@ def unseen_writers(
 @functools.lru_cache(maxsize=4096)
 def own_writes(code: types.CodeType) -> frozenset[str]:
     """The free names the function of *code* changes by its own text: a
-    global or closure variable it changes in place or rebinds, and an
-    object it reads by a free name and calls a method of that is not known
-    to leave it alone (``calls.append(1)``, ``cache.set(k, v)``). ``"?"``
-    when its text cannot be read."""
+    global or closure variable it changes in place (``calls.append(1)``,
+    ``d[k] = v``) or rebinds, as the statement's own analysis reads a
+    callee. ``"?"`` when its text cannot be read."""
     node = _function_node(code)
     if node is None:
         return frozenset((_UNKNOWN,))
@@ -111,44 +107,7 @@ def own_writes(code: types.CodeType) -> frozenset[str]:
     except RecursionError:
         return frozenset((_UNKNOWN,))
     changed |= _rebound(node)
-    changed |= {name for name, _attr in _methods_on_free_names(node)}
     return frozenset(changed)
-
-
-def _changes_by_method(code: types.CodeType, name: str) -> bool:
-    """*name* is in `own_writes` only for a method called on it."""
-    node = _function_node(code)
-    if node is None:
-        return False
-    try:
-        if name in free_vars_mutated_in_function(node) or name in _rebound(node):
-            return False
-    except RecursionError:
-        return False
-    return True
-
-
-def _changeable(value: Any, code: types.CodeType, name: str) -> bool:
-    """Whether a method called on *value* can change it or what it holds: not
-    a module's function (``np.sum``), a class's (whose methods ran and are
-    read in turn), an object of the user's class (the same), or a logger
-    without a handler of the user's (`_logging_callbacks`)."""
-    if isinstance(value, (types.ModuleType, type, types.BuiltinFunctionType, types.FunctionType)):
-        return False
-    from ...analysis.handed_callables import _is_users_object, _logging_callbacks
-
-    if _is_users_object(value):
-        return False
-    # A random generator's draws are the statement's randomness, which cash
-    # follows on its own (``hidden_generators``).
-    if type(value).__module__.startswith(("numpy.random", "random")):
-        return False
-    node = _function_node(code)
-    attrs = {attr for owner, attr in _methods_on_free_names(node)} if node is not None else set()
-    logging_module = sys.modules.get("logging")
-    if logging_module is not None and isinstance(value, getattr(logging_module, "Logger", ())):
-        return any(_logging_callbacks(value, attr) for attr in attrs)
-    return True
 
 
 @functools.lru_cache(maxsize=4096)
@@ -176,23 +135,6 @@ def _function_node(code: types.CodeType) -> ast.FunctionDef | ast.AsyncFunctionD
     return None
 
 
-def _locals_of(node: ast.AST) -> set[str]:
-    args = node.args  # type: ignore[attr-defined]
-    names = {a.arg for a in [*args.posonlyargs, *args.args, *args.kwonlyargs]}
-    names |= {a.arg for a in (args.vararg, args.kwarg) if a is not None}
-    declared: set[str] = set()
-    for sub in _own_nodes(node):
-        if isinstance(sub, (ast.Global, ast.Nonlocal)):
-            declared.update(sub.names)
-        elif isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)):
-            names.add(sub.id)
-        elif isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            names.add(sub.name)
-        elif isinstance(sub, ast.alias):
-            names.add((sub.asname or sub.name).split(".")[0])
-    return names - declared
-
-
 def _own_nodes(node: ast.AST) -> Iterable[ast.AST]:
     """The nodes of *node*'s body, not of functions or classes defined in it."""
     body = node.body if isinstance(node.body, list) else [node.body]  # type: ignore[attr-defined]
@@ -215,23 +157,6 @@ def _rebound(node: ast.AST) -> set[str]:
         elif isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)):
             bound.add(sub.id)
     return declared & bound
-
-
-def _methods_on_free_names(node: ast.AST) -> set[tuple[str, str]]:
-    """``(name, method)`` of each method *node* calls on a free name, not
-    one known to leave its object alone."""
-    local = _locals_of(node)
-    out: set[tuple[str, str]] = set()
-    for sub in _own_nodes(node):
-        if (
-            isinstance(sub, ast.Call)
-            and isinstance(sub.func, ast.Attribute)
-            and isinstance(sub.func.value, ast.Name)
-            and sub.func.value.id not in local
-            and sub.func.attr not in KNOWN_PURE_METHODS
-        ):
-            out.add((sub.func.value.id, sub.func.attr))
-    return out
 
 
 def _log(found: list[tuple[str, tuple[str, ...]]], statement: str) -> None:
