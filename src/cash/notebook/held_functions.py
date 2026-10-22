@@ -328,6 +328,12 @@ def module_class_objects_exist() -> bool:
 _OBJECTS_SEEN: list[Any] = [None]
 
 
+def new_code_count() -> int:
+    """A count that grows each time code starts from an ``exec`` or a
+    function is made from code: unchanged, no code of the user's ran."""
+    return _new_code()
+
+
 def users_module_classes() -> list[type]:
     """`_users_module_classes`, for other modules."""
     return _users_module_classes()

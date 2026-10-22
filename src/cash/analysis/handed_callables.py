@@ -1276,8 +1276,29 @@ def _instance_dict(owner: Any) -> dict:
 #: making, setting up and dropping it (an ``__init__`` runs on a call of the
 #: class, which is read as such).
 _NOT_RUN_BY_A_STATEMENT = frozenset(
-    {"__init__", "__new__", "__del__", "__init_subclass__", "__class_getitem__", "__set_name__", "__post_init__"}
+    {
+        "__init__",
+        "__new__",
+        "__del__",
+        "__init_subclass__",
+        "__class_getitem__",
+        "__set_name__",
+        "__post_init__",
+        # Made by Python for a class with annotations (3.14, kept as
+        # ``__annotate_func__``): run only when its annotations are asked
+        # for, and it builds a dict of them.
+        "__annotate__",
+        "__annotate_func__",
+    }
 )
+
+#: The special methods ``@dataclass`` writes from a class's fields: they
+#: compare, show, hash or set those fields and run nothing else of the
+#: user's but what the fields' own special methods run.
+_DATACLASS_MADE = frozenset(
+    {"__repr__", "__eq__", "__lt__", "__le__", "__gt__", "__ge__", "__hash__", "__setattr__", "__delattr__",
+     "__match_args__", "__replace__", "__getstate__", "__setstate__"}
+)  # fmt: skip
 
 
 def is_users_instance(value: Any) -> bool:
@@ -1309,7 +1330,16 @@ def _reaching_special_functions(cls: type) -> list[Any]:
         if same:
             return kept[1]
     out = []
+    from ..install_paths import is_user_code_file
+
     for fn in special_functions(cls):
+        if _dataclass_made(fn, cls):
+            continue
+        code = getattr(inspect.unwrap(fn), "__code__", None)
+        if code is not None and not is_user_code_file(code.co_filename):
+            # A library's function a class of the user's holds (dataclasses'
+            # ``__replace__``): it reaches no global of the user's by name.
+            continue
         facts = _call_facts(fn)
         source = _source_of(fn)
         if (
@@ -1317,7 +1347,7 @@ def _reaching_special_functions(cls: type) -> list[Any]:
             or facts is None
             or facts.global_methods
             or source_global_mutations(source)
-            or source_called_names(source)
+            or _calls_by_name(source, fn)
         ):
             out.append(fn)
     if snapshot is not None:
@@ -1325,6 +1355,45 @@ def _reaching_special_functions(cls: type) -> list[Any]:
             _SPECIAL_MEMO.clear()
         _SPECIAL_MEMO[cls] = (snapshot, out)
     return out
+
+
+def _calls_by_name(source: str, fn: Any) -> bool:
+    """*fn* calls a function by name, or hands one to a call (``map(f,
+    rows)``), other than a builtin its module does not rebind
+    (``isinstance``, ``len``): a builtin changes nothing a statement's key
+    leaves out, and nor does a class handed to one (``isinstance(o, A)``)."""
+    from .ast_util import called_names, handed_names
+    from .callee_effects import scope_locals
+
+    node = parse_function_source(source)
+    if node is None:
+        return bool(source_called_names(source))
+    globals_ = getattr(fn, "__globals__", None) or {}
+    own = scope_locals(node)
+
+    def counts(name: str) -> bool:
+        return name in globals_ or not hasattr(builtins, name)
+
+    if any(counts(name) for name in called_names(node) - own):
+        return True
+    return any(counts(name) and not isinstance(globals_.get(name), type) for name in handed_names(node) - own)
+
+
+def _dataclass_made(fn: Any, cls: type) -> bool:
+    """*fn* is a special method ``@dataclass`` wrote (`_DATACLASS_MADE`) on
+    a class of *cls*'s MRO: compiled from text of its own (``<string>``),
+    not from a file of the user's, for a class with dataclass fields."""
+    name = getattr(fn, "__name__", None)
+    if name not in _DATACLASS_MADE:
+        return False
+    code = getattr(inspect.unwrap(fn), "__code__", None)
+    if code is None or code.co_filename != "<string>":
+        return False
+    for klass in cls.__mro__:
+        held = vars(klass).get(name)
+        if held is not None and (held is fn or inspect.unwrap(held) is inspect.unwrap(fn)):
+            return "__dataclass_fields__" in vars(klass)
+    return False
 
 
 def special_functions(cls: type) -> list[Any]:
@@ -2407,7 +2476,15 @@ def _special_classes_exist(namespace: Mapping[str, Any]) -> bool:
     known = _SPECIAL_CLASSES.get(id(namespace))
     if known is not None and known[0] is namespace:
         return known[1]
-    from cash.notebook.held_functions import users_module_classes
+    from cash.notebook.held_functions import new_code_count, users_module_classes
+
+    # Classes and their methods change only when code runs: kept until
+    # then, so a Run All served from the cache walks once.
+    ran = new_code_count()
+    kept = _SPECIAL_UNTIL_CODE_RUNS.get(id(namespace))
+    if kept is not None and kept[0] is namespace and kept[1] == ran:
+        _SPECIAL_CLASSES[id(namespace)] = (namespace, kept[2])
+        return kept[2]
 
     try:
         bound = [v for v in list(namespace.values()) if isinstance(v, type) and _is_users_class(v)]
@@ -2415,7 +2492,15 @@ def _special_classes_exist(namespace: Mapping[str, Any]) -> bool:
         bound = []
     answer = _any_special(bound + users_module_classes()) or _any_special(_live_users_classes(), deep=False)
     _SPECIAL_CLASSES[id(namespace)] = (namespace, answer)
+    if len(_SPECIAL_UNTIL_CODE_RUNS) > 16:
+        _SPECIAL_UNTIL_CODE_RUNS.clear()
+    _SPECIAL_UNTIL_CODE_RUNS[id(namespace)] = (namespace, ran, answer)
     return answer
+
+
+#: ``id(namespace) -> (namespace, new_code_count(), answer)`` of
+#: `_special_classes_exist`, kept past an analysis round.
+_SPECIAL_UNTIL_CODE_RUNS: dict[int, tuple[Any, int, bool]] = {}
 
 
 def _any_special(classes: list[type], deep: bool = True) -> bool:
@@ -2487,7 +2572,11 @@ def _live_users_classes() -> list[type]:
         if not cls.__flags__ & _HEAP_TYPE:
             continue
         name = cls.__dict__.get("__module__")
-        if not isinstance(name, str):
+        if not isinstance(name, str) or name == "builtins" or name not in sys.modules:
+            # ``exec``'d code names ``builtins`` (or no module loaded):
+            # judged class by class, by the functions it defines.
+            if _is_users_class(cls):
+                found.append(cls)
             continue
         users = _USERS_MODULE_NAMES.get(name)
         if users is None:
