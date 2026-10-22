@@ -51,6 +51,7 @@ from cash.analysis.handed_callables import hands_a_state_changing_callable
 from cash.analysis.namespace_effects import user_callee_starting_workers, user_callee_using_pyplot
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, restore_kind
 from cash.cost_model import estimated_restore_time
+from cash.notebook import helper_memos
 from cash.notebook import shadow as _shadow
 from cash.notebook._trace import trace_event
 from cash.notebook.cache_key import CacheKeyContext
@@ -547,6 +548,9 @@ class CallUnit:
         #: Looks call entries up and writes them; holds the sites refused.
         self._entries = CallEntries(cash_instance, ttl_provider, persist_provider)
         self.call_log: list[dict] = []
+        #: Why a found entry was not served, per site, when a helper memo it
+        #: read does not hold what it held (`helper_memos.unfilled`).
+        self._memo_misses: dict[CallSite, str] = {}
         #: The record each plain-run (site, callee) is counted in.
         self._plain_records: dict[tuple[str, str, int], dict] = {}
         #: Per call site, how its calls went in the statement run under way
@@ -922,6 +926,13 @@ class CallUnit:
             call = _Call(fn, site, func_name, key, mutated_globals, args, kwargs)
             hit_started = _perf_counter()
             hit, value, recorded_cost, metadata = self._entries.lookup(key)
+            if hit and metadata.get("helper_memos"):
+                # Served only while the helper memos it called hold what its
+                # run left (`helper_memos.unfilled`).
+                unfilled = helper_memos.unfilled(metadata["helper_memos"], getattr(fn, "__globals__", None) or {})
+                if unfilled:
+                    self._memo_misses[site] = unfilled
+                    hit, value, recorded_cost, metadata = False, None, 0.0, {}
             self._last_key_s = _perf_counter() - key_started
             if _shadow.SHADOW is not None:
                 # False when what it ran changed since it was stored.
@@ -1024,6 +1035,9 @@ class CallUnit:
             else hash_args(call.args, call.kwargs, digest=self._digests.digest_before(ticket, call.site.source))
         )
         module_before = _module_globals(call.fn)
+        # Before the clock starts: looking for memos is cash's own work, and
+        # counted as the call's it pushed cheap calls over the floor.
+        memos_before = helper_memos.watched(getattr(call.fn, "__globals__", None) or {})
         started = _perf_counter()
         call_tracker = FileAccessTracker(
             getattr(call.fn, "__globals__", None),
@@ -1069,9 +1083,17 @@ class CallUnit:
             and self._worth_storing(call, result, elapsed, result_held)
             and not call_tracker.work_outlived_block
             and not _inputs_moved(call_tracker)
+            and not isinstance(memos := helper_memos.used(memos_before, clears=_clears(call.fn, memos_before)), tuple)
         ):
             stored = self._store_result(
-                call, result, elapsed, call_tracker, stdout_text, stderr_text, environment_digests(env_reads)
+                call,
+                result,
+                elapsed,
+                call_tracker,
+                stdout_text,
+                stderr_text,
+                environment_digests(env_reads),
+                memos,
             )
         if unit is not None:
             shadow.call_finished(call.key, call.site, unit, stored, disk=True)
@@ -1154,6 +1176,7 @@ class CallUnit:
         stdout_text: str,
         stderr_text: str,
         env_reads: dict[str, str] | None = None,
+        memos: list[dict] | None = None,
     ) -> bool:
         """Write the result with what the call read, printed and wrote to its
         globals; ``False`` when those globals cannot be captured."""
@@ -1187,6 +1210,7 @@ class CallUnit:
             code_module=getattr(call.fn, "__module__", None),
             held_refs=find_for_call(call.fn, result),
             env_reads=env_reads or None,
+            helper_memos=memos,
         )
         if held:
             self._hold(call.key, result, *held)
@@ -1248,7 +1272,7 @@ class CallUnit:
             "stored": bool(stored),
             # Why this call was not served: which part of its key moved since
             # the site was last keyed. Only on a miss, and only when known.
-            "miss_reason": None if cache_hit else self._keys.why_missed(site),
+            "miss_reason": None if cache_hit else self._memo_misses.pop(site, None) or self._keys.why_missed(site),
             # How many calls this record stands for (see above).
             "calls": 1,
         }
@@ -1576,3 +1600,9 @@ def _left_pyplot_alone(fn: Any, unit: Any) -> bool:
     if unit is not None:
         return not unit.pyplot_ran
     return user_callee_using_pyplot(fn) is None
+
+
+def _clears(fn: Any, memos_before: Any) -> bool:
+    """Whether the call can empty a memo it reaches (`helper_memos.clears`);
+    asked only when there is one."""
+    return bool(memos_before) and helper_memos.clears(None, None, fn)

@@ -64,6 +64,8 @@ __all__ = [
 # that are definitionally not data are excluded here. Linux-only in effect;
 # on Windows these prefixes never match.
 _PSEUDO_FS_PREFIXES: tuple[str, ...] = ("/proc/", "/sys/", "/dev/")
+#: The pseudo-filesystems themselves, listed (`os.listdir("/proc")`).
+_PSEUDO_FS_ROOTS = frozenset(prefix.rstrip("/") for prefix in _PSEUDO_FS_PREFIXES)
 
 
 def stat_key(st: os.stat_result) -> tuple[int, int, int]:
@@ -188,8 +190,9 @@ def is_pseudo_fs(path: str) -> bool:
     a process's children, and that listing changes whenever any process on
     the machine starts or ends.
     """
-    raw = str(path).replace("\\", "/")
-    return raw.startswith(_PSEUDO_FS_PREFIXES) or raw.rstrip("/") + "/" in _PSEUDO_FS_PREFIXES
+    path = os.fsdecode(path) if isinstance(path, bytes) else str(path)
+    path = path.replace("\\", "/")
+    return path.startswith(_PSEUDO_FS_PREFIXES) or path.rstrip("/") in _PSEUDO_FS_ROOTS
 
 
 # ---------------------------------------------------------------------------

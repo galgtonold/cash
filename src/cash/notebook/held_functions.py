@@ -296,6 +296,9 @@ def module_class_objects_exist() -> bool:
         return False
     if _objects_frozen_since_import():
         return True
+    asked = (_new_code(), tuple(map(id, classes)))
+    if _OBJECTS_SEEN[0] == asked:
+        return True
     kinds: set[type] = set()
     pending = list(classes)
     while pending:
@@ -307,7 +310,22 @@ def module_class_objects_exist() -> bool:
             pending.extend(type.__subclasses__(cls))
         except TypeError:
             pass
-    return any(type(referrer) in kinds for referrer in gc.get_referrers(*kinds))
+    found = any(type(referrer) in kinds for referrer in gc.get_referrers(*kinds))
+    if found:
+        _OBJECTS_SEEN[0] = asked
+    return found
+
+
+#: The `_new_code` count and the classes asked about when
+#: `module_class_objects_exist` last found an object. It is taken again
+#: until code runs from an ``exec`` (the next statement): a statement's keys
+#: asked it many times, each a scan of every tracked object (~17 ms per
+#: million; a test timed out after 30 s in a long run). A yes kept stale (the
+#: object collected since, or a class id reused by a class ``type()`` made
+#: without an ``exec``) can only add to a key: it lets a walk run, which
+#: finds what is there. A no is never kept: running code can make an object
+#: without new code.
+_OBJECTS_SEEN: list[Any] = [None]
 
 
 def _users_module_classes() -> list[type]:
