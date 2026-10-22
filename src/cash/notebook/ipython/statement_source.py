@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import ast
 
+from cash._user_attrs import attribute_or
+
 from ...analysis.annotations import audited_lines
 from ...analysis.code_analyzer import splitlines_like_the_parser, statement_code
 
@@ -56,7 +58,7 @@ def statement_source(raw_cell: str, node: ast.stmt) -> str | None:
     if not segment:
         return None
 
-    indent = getattr(node, "col_offset", 0) or 0
+    indent = attribute_or(node, "col_offset", 0) or 0
     if indent <= 0:
         return segment
 
@@ -113,8 +115,8 @@ def exec_source_for_node(
         if decorators:
             prefix = "".join(lines[decorators[0].lineno - 1 : node.lineno - 1])
             body = prefix + body
-        end_lineno = getattr(node, "end_lineno", None)
-        end_col = getattr(node, "end_col_offset", None)
+        end_lineno = attribute_or(node, "end_lineno", None)
+        end_col = attribute_or(node, "end_col_offset", None)
         # ...and ends at `end_col_offset`, before a comment on the last line.
         if end_lineno is not None and end_col is not None and 0 < end_lineno <= len(lines):
             rest = lines[end_lineno - 1].encode()[end_col:].decode()

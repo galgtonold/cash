@@ -19,6 +19,7 @@ import traceback
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from cash._user_attrs import attribute_or
 from cash.notebook.cache_status import ExecutionResult
 from cash.notebook.compiled_source import is_cash_filename, line_offset, register_cell_source, shifted
 from cash.notebook.statement.capture import NoCapture
@@ -196,6 +197,9 @@ class StatementRun:
     #: name -> digest of the environment variables installed code read while
     #: it ran (`env_reads.environment_digests`).
     env_reads: dict[str, str] | None = None
+    #: The ``functools`` memos of the user's it called, with what each held
+    #: after it ran (`helper_memos.used`).
+    helper_memos: list[dict] | None = None
     #: For a statement that runs a magic or a shell command: the identity of
     #: every binding in the namespace before it ran (``calls_ipython``).
     ipython_bindings: dict[str, int] | None = None
@@ -368,7 +372,7 @@ def _future_flags_of_the_cells() -> int:
 
     if not InteractiveShell.initialized():
         return 0
-    return getattr(InteractiveShell.instance().compile, "flags", 0) & _FUTURE_MASK
+    return attribute_or(InteractiveShell.instance().compile, "flags", 0) & _FUTURE_MASK
 
 
 def _remember_future_imports(tree: ast.Module | None) -> None:
@@ -379,7 +383,7 @@ def _remember_future_imports(tree: ast.Module | None) -> None:
     flags = 0
     for node in tree.body:
         if isinstance(node, ast.ImportFrom) and node.module == "__future__":
-            flags |= sum(getattr(getattr(__future__, a.name, None), "compiler_flag", 0) for a in node.names)
+            flags |= sum(attribute_or(attribute_or(__future__, a.name, None), "compiler_flag", 0) for a in node.names)
     if flags:
         from IPython.core.interactiveshell import InteractiveShell
 
@@ -472,7 +476,9 @@ class CodeRunner:
         self.execution.echo = (value,)
         captured = self.execution.captured
         self.execution.printed = bool(
-            getattr(captured, "stdout", "") or getattr(captured, "stderr", "") or getattr(captured, "outputs", None)
+            attribute_or(captured, "stdout", "")
+            or attribute_or(captured, "stderr", "")
+            or attribute_or(captured, "outputs", None)
         )
 
 

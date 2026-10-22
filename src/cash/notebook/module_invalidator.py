@@ -27,6 +27,8 @@ import sys
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
+from cash._user_attrs import attribute_or, has_attribute
+
 from ..control_markers import strip_markers
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashWarning
@@ -190,7 +192,7 @@ class ModuleInvalidator:
         module = sys.modules.get(name)
         if module is not None:
             return module
-        user_ns = getattr(self._shell, "user_ns", None)
+        user_ns = attribute_or(self._shell, "user_ns", None)
         candidate = user_ns.get(name) if isinstance(user_ns, dict) else None
         return candidate if isinstance(candidate, ModuleType) else None
 
@@ -201,7 +203,7 @@ class ModuleInvalidator:
             names.update(self._names_bound_to(mod_name))
             prefix = mod_name + "."
             for var_name, value in list(self._shell.user_ns.items()):
-                owner = getattr(value, "__module__", None)
+                owner = attribute_or(value, "__module__", None)
                 if isinstance(owner, str) and (owner == mod_name or owner.startswith(prefix)):
                     names.add(var_name)
             for var_name, src in state.from_import_sources.items():
@@ -227,7 +229,7 @@ class ModuleInvalidator:
         module = sys.modules.get(mod_name)
         if module is None:
             return names
-        user_ns = getattr(self._shell, "user_ns", None)
+        user_ns = attribute_or(self._shell, "user_ns", None)
         if not isinstance(user_ns, dict):
             return names
         names.extend(
@@ -295,7 +297,7 @@ class ModuleInvalidator:
         for var_name, var_value in list(self._shell.user_ns.items()):
             if var_name.startswith("_") or not _defined_in_a_module(var_value):
                 continue
-            value_module = getattr(var_value, "__module__", None)
+            value_module = attribute_or(var_value, "__module__", None)
             if value_module and (value_module == mod_name or value_module.startswith(mod_name + ".")):
                 if self._keep_unchanged_from_import(var_name, var_value, processor):
                     continue
@@ -331,7 +333,7 @@ class ModuleInvalidator:
             if current != recorded:
                 return False
             module = sys.modules.get(source[0])
-            if module is None or not hasattr(module, source[1]):
+            if module is None or not has_attribute(module, source[1]):
                 return False
             fresh = getattr(module, source[1])
         except Exception:  # any doubt means clear
@@ -356,7 +358,7 @@ class ModuleInvalidator:
             processor.forget_variable(var_name)
 
             actual_mod = sys.modules.get(src_mod) if src_mod != mod_name else reloaded_mod
-            if actual_mod and hasattr(actual_mod, var_name):
+            if actual_mod and has_attribute(actual_mod, var_name):
                 self._shell.user_ns[var_name] = getattr(actual_mod, var_name)
                 logger.debug(
                     "[MODULE_INVALIDATE] Refreshed from-imported constant %r (source module: %s)", var_name, src_mod
@@ -526,12 +528,12 @@ class ModuleInvalidator:
         expanded: dict[str, set[str] | None] = {}
         for mod_name_key in old_module_lineages:
             mod = self._module_named(mod_name_key)
-            real_name = getattr(mod, "__name__", mod_name_key) if mod else mod_name_key
+            real_name = attribute_or(mod, "__name__", mod_name_key) if mod else mod_name_key
             raw_syms = per_module_changed_symbols.get(mod_name_key)
             if raw_syms is None:
                 raw_syms = per_module_changed_symbols.get(real_name)
             if raw_syms is not None and len(raw_syms) > 0:
-                mod_file = getattr(mod, "__file__", None) if mod else None
+                mod_file = attribute_or(mod, "__file__", None) if mod else None
                 call_deps = ft.get_intra_module_call_deps(mod_file) if mod_file else {}
                 result = ft.expand_changed_symbols_transitively(
                     raw_syms,

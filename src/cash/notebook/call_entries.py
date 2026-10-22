@@ -19,6 +19,7 @@ import uuid
 from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
+from cash._user_attrs import attribute_or
 from cash.analysis.cacheability_decision import identity_coupled_reason
 from cash.backends._base import ttl_expired
 from cash.backends.value_policy import worth_its_bytes
@@ -109,8 +110,8 @@ def _attributes_named(owner: Any, names: set[str]) -> list[Any]:
     """The attributes of a class or module *owner* under one of *names*,
     read from the ``__dict__`` so that no descriptor or property runs."""
     found = []
-    for scope in getattr(owner, "__mro__", None) or (owner,):
-        namespace = getattr(scope, "__dict__", None)
+    for scope in attribute_or(owner, "__mro__", None) or (owner,):
+        namespace = attribute_or(scope, "__dict__", None)
         if not isinstance(namespace, Mapping) or scope is object:
             continue
         found += [namespace[name] for name in names if name in namespace]
@@ -132,13 +133,13 @@ def reached_objects(fn: Any) -> list[Any]:
     while isinstance(fn, functools.partial):
         found += [*fn.args, *fn.keywords.values()]
         fn = fn.func
-    bound_to = getattr(fn, "__self__", None)
-    fn = getattr(fn, "__func__", fn)
+    bound_to = attribute_or(fn, "__self__", None)
+    fn = attribute_or(fn, "__func__", fn)
     seen: set[int] = set()
     todo = [fn]
     while todo and len(seen) < _MAX_FUNCTIONS:
         func = todo.pop()
-        if not isinstance(func, types.FunctionType) or id(func) in seen:
+        if type(func) is not types.FunctionType or id(func) in seen:
             continue
         seen.add(id(func))
         for cell in func.__closure__ or ():
@@ -157,14 +158,14 @@ def reached_objects(fn: Any) -> list[Any]:
             value = namespace.get(name, _ABSENT)
             if value is _ABSENT:
                 continue
-            if isinstance(value, types.FunctionType) and value.__globals__ is namespace:
+            if type(value) is types.FunctionType and value.__globals__ is namespace:
                 todo.append(value)
-            elif isinstance(value, (type, types.ModuleType)):
+            elif issubclass(type(value), (type, types.ModuleType)):
                 owners.append((value, names))
             else:
                 found.append(value)
     for owner, names in owners:
-        if isinstance(owner, (type, types.ModuleType)):
+        if issubclass(type(owner), (type, types.ModuleType)):
             found += _attributes_named(owner, names)
     return found
 
@@ -562,6 +563,7 @@ class CallEntries:
         held_refs: list | None = None,
         env_reads: dict[str, str] | None = None,
         cell_links: list[dict] | None = None,
+        helper_memos: list[dict] | None = None,
     ) -> tuple[str, Any] | None:
         """Write through ``backend.set(key, value, metadata)`` -- the same
         two-positional-argument shape the statement path uses
@@ -615,6 +617,9 @@ class CallEntries:
             # What the environment variables installed code read held:
             # `lookup` checks them again.
             metadata["env_reads"] = env_reads
+        if helper_memos:
+            # What the helper memos it called held (`helper_memos.used`).
+            metadata["helper_memos"] = helper_memos
         if file_deps or remote_deps or probes:
             # The paths it only checked for (``probe_answers``) are checked as
             # the decorator checks them: still missing, or still there.

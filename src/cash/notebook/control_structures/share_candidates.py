@@ -34,6 +34,8 @@ import builtins
 from collections.abc import Mapping
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 __all__ = ["share_candidates"]
 
 #: Builtins whose call stores no reference to its arguments anywhere a
@@ -80,7 +82,7 @@ _ITEM_METHODS = frozenset({"items", "values", "keys"})
 
 def _is_builtin(name: str, user_ns: Mapping[str, Any]) -> bool:
     """Whether *name* still means the builtin of that name in *user_ns*."""
-    builtin = getattr(builtins, name, None)
+    builtin = attribute_or(builtins, name, None)
     return builtin is not None and user_ns.get(name, builtin) is builtin
 
 

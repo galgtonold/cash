@@ -19,6 +19,10 @@ import sys
 from collections.abc import Mapping
 from typing import Any
 
+from cash._user_attrs import attribute_or, instance_of
+
+from .shared_objects import history_names
+
 __all__ = ["current_figure_names", "draws_through_pyplot", "holds_artists", "pyplot_draw_names"]
 
 #: The pyplot functions that do not draw on the current axes or figure:
@@ -79,7 +83,7 @@ def _is_pyplot(node: ast.AST, namespace: Mapping[str, Any]) -> bool:
     if isinstance(node, ast.Name):
         value = namespace.get(node.id)
         if value is not None:
-            return getattr(value, "__name__", None) == "matplotlib.pyplot"
+            return attribute_or(value, "__name__", None) == "matplotlib.pyplot"
         return node.id in ("plt", "pyplot")
     return False
 
@@ -109,7 +113,8 @@ def current_figure_names(namespace: Mapping[str, Any]) -> set[str]:
     """The names of *namespace* bound to pyplot's current figure, to its
     current axes, or to a list, tuple, dict or array holding either.
     Empty when pyplot is not imported or holds no figure (asking it then
-    would make one)."""
+    would make one). IPython's history (``Out``) is not the user's data
+    (`history_names`)."""
     plt = sys.modules.get("matplotlib.pyplot")
     if plt is None:
         return set()
@@ -120,9 +125,13 @@ def current_figure_names(namespace: Mapping[str, Any]) -> set[str]:
         current = fig.gca() if fig.axes else None
     except Exception:  # noqa: BLE001 - a backend that cannot answer draws nothing we can name
         return set()
+    # IPython's output and input history: ``Out`` keeps every value a cell
+    # showed, an axes from ``sns.barplot(...)`` among them, and naming it
+    # made a drawing statement hash every frame ever shown.
+    history = history_names(namespace, namespace)
     names: set[str] = set()
     for name, value in namespace.items():
-        if name.startswith("_"):
+        if name.startswith("_") or name in history:
             continue
         if value is fig or (current is not None and value is current):
             names.add(name)
@@ -142,7 +151,7 @@ def _holds_current(value: Any, fig: Any, axes: Any) -> bool:
         items = value.values()
     else:
         np = sys.modules.get("numpy")
-        if axes is None or np is None or not isinstance(value, np.ndarray) or value.dtype != object:
+        if axes is None or np is None or not instance_of(value, np.ndarray) or value.dtype != object:
             return False
         items = value.flat
     return any(item is fig or (axes is not None and item is axes) for item in items)
@@ -160,16 +169,16 @@ def holds_artists(value: Any) -> bool:
     """Whether *value* is a matplotlib artist (a figure, an axes) or a list,
     tuple or numpy object array of them (``plt.subplots(1, 3)``'s axes)."""
     module = sys.modules.get("matplotlib.artist")
-    artist = getattr(module, "Artist", None)
+    artist = attribute_or(module, "Artist", None)
     if artist is None:
         return False
-    if isinstance(value, artist):
+    if instance_of(value, artist):
         return True
     np = sys.modules.get("numpy")
-    if np is not None and isinstance(value, np.ndarray):
+    if np is not None and instance_of(value, np.ndarray):
         # Only a numpy array: a pandas Series of objects has an object dtype
         # and a size too, but no ``.flat``.
-        return value.dtype == object and value.size <= 1024 and any(isinstance(item, artist) for item in value.flat)
-    if isinstance(value, (list, tuple)) and len(value) <= 1024:
-        return any(isinstance(item, artist) for item in value)
+        return value.dtype == object and value.size <= 1024 and any(instance_of(item, artist) for item in value.flat)
+    if instance_of(value, (list, tuple)) and len(value) <= 1024:
+        return any(instance_of(item, artist) for item in value)
     return False

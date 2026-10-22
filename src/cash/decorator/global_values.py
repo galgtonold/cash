@@ -131,7 +131,7 @@ class GlobalValues:
         if compiled is not None:
             # numba's `@njit`: the function it compiles, and its options.
             return jit_identity(self.data_callable_identity(compiled), fn)
-        if not isinstance(fn, types.FunctionType):
+        if type(fn) is not types.FunctionType:
             return hash_callable_source(fn)
         own = self._helpers.identity(fn)
 
@@ -314,7 +314,7 @@ class GlobalValues:
         the first call that moved it (one extra miss, no warning: the user
         did not write the mutation).
         """
-        if isinstance(value, (type, types.ModuleType, types.FunctionType)) or is_mock(value):
+        if issubclass(type(value), (type, types.ModuleType, types.FunctionType)) or is_mock(value):
             return None
         if jit_python_function(value) is not None:
             # Code: the helper walk keys the function it compiles and its
@@ -332,9 +332,9 @@ class GlobalValues:
                 return None
             if isinstance(value, functools.partial):
                 payload: Any = ("partial", value.func, value.args, dict(value.keywords))
-            elif isinstance(value, (types.MethodType, types.BuiltinMethodType)):
+            elif issubclass(type(value), (types.MethodType, types.BuiltinMethodType)):
                 owner = getattr(value, "__self__", None)
-                if owner is None or isinstance(owner, (type, types.ModuleType)):
+                if owner is None or issubclass(type(owner), (type, types.ModuleType)):
                     return None
                 method = getattr(value, "__name__", "")
 

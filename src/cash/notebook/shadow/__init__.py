@@ -43,6 +43,8 @@ import types
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
+from cash._user_attrs import attribute_or, instance_of
+
 __all__ = ["SHADOW", "Shadow", "disable", "enable", "requested", "status"]
 
 _ENV = "CASH_SHADOW"
@@ -59,6 +61,7 @@ UNUSABLE = frozenset(
         "process_pool",
         "generator_resumed",
         "tool_conflict",
+        "trace_failed",
         "string_lookup",
         "jit",
         "memo",
@@ -284,7 +287,7 @@ class Shadow:
         if ns is None:
             return "missing"
         if module == self.notebook_name and ns is self.notebook:
-            if isinstance(ns.get(name), (types.ModuleType, types.FunctionType, type)):
+            if instance_of(ns.get(name), (types.ModuleType, types.FunctionType, type)):
                 # By what it is: a module by name (what of it ran is
                 # checked by items of its own; its lineage moves with any
                 # edit to it, used or not), a function by its code,
@@ -408,7 +411,7 @@ class Shadow:
                     add(("environ", "", ""), _environ_digest())
                 if jit_python_function(value) is not None:
                     markers.add("jit")
-                if isinstance(value, types.ModuleType):
+                if issubclass(type(value), types.ModuleType):
                     for chain in table.chains:
                         head, _, rest = chain.partition(".")
                         if head != name:
@@ -419,7 +422,7 @@ class Shadow:
                             add(("attr", module, chain), self._attr_digest(module, chain))
         # What code looking names up by a string called: by the names that
         # hold it, where the string could have found it (`_followed`).
-        for fn, g in getattr(unit, "callees", {}).values():
+        for fn, g in attribute_or(unit, "callees", {}).values():
             for module, ns in ((nbn, nb), (g.get("__name__"), g)):
                 if not isinstance(module, str) or (ns is not nb and module == nbn):
                     continue
@@ -444,10 +447,10 @@ class Shadow:
         (``cache_key.lookups_followed``): the unit says so."""
         from ..string_lookups import code_lookups_traceable
 
-        if code not in getattr(self.recorder, "by_string", ()):
+        if code not in attribute_or(self.recorder, "by_string", ()):
             return False
         if code.co_name == "<module>":
-            return g is nb and getattr(unit, "lookups_followed", False)
+            return g is nb and attribute_or(unit, "lookups_followed", False)
         return code_lookups_traceable(code, g)
 
     def _code_items(self, code, g, module, add, add_class, user_class, ran=()) -> None:
@@ -492,7 +495,7 @@ class Shadow:
             return "missing"
         obj = ns[parts[0]]
         for p in parts[1:]:
-            if not isinstance(obj, types.ModuleType):
+            if not issubclass(type(obj), types.ModuleType):
                 break
             try:
                 obj = inspect_getattr(obj, p)
@@ -712,7 +715,7 @@ class Shadow:
             return
         backend = proc.cash_instance.backend
         run.shadow = self.check(
-            "stmt", run.cache_key, _stmt_group(run), found, run.code, getattr(backend, "peek_metadata", None)
+            "stmt", run.cache_key, _stmt_group(run), found, run.code, attribute_or(backend, "peek_metadata", None)
         )
 
     @staticmethod
@@ -769,7 +772,7 @@ class Shadow:
         import hashlib
 
         h = hashlib.blake2b(digest_size=12)
-        h.update(repr((site.source, site.occurrence_index, getattr(site, "stmt_identity", None))).encode())
+        h.update(repr((site.source, site.occurrence_index, attribute_or(site, "stmt_identity", None))).encode())
         for p in parts:
             h.update(b"|" + repr(sorted(p.items()) if isinstance(p, Mapping) else p).encode())
         self._call_groups[key] = ("call:" + h.hexdigest(), frozenset(by_content))
@@ -848,7 +851,7 @@ _UNSET = object()
 
 
 def _defaults(fn: Any, code: Any, value_digest: Callable[[Any], str]) -> str:
-    if isinstance(fn, types.FunctionType) and fn.__code__ is code and (fn.__defaults__ or fn.__kwdefaults__):
+    if type(fn) is types.FunctionType and fn.__code__ is code and (fn.__defaults__ or fn.__kwdefaults__):
         return "/" + value_digest((fn.__defaults__, fn.__kwdefaults__))
     return ""
 

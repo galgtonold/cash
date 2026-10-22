@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import _plain_data
+from .._user_attrs import instance_of
 from .shared_objects import (
     TREE_LEAVES,
     VALUE_TYPES,
@@ -85,7 +86,7 @@ def _steps(value: Any, value_types: tuple[type, ...]) -> tuple[list[tuple[Step, 
     what it holds that none can (a set's items, a dict's keys and the values
     under a key that is not a plain value, an object's insides no walk
     opens)."""
-    if isinstance(value, dict):
+    if instance_of(value, dict):
         named, unnamed = [], []
         for k, v in value.items():
             if is_value(k, value_types):
@@ -93,7 +94,7 @@ def _steps(value: Any, value_types: tuple[type, ...]) -> tuple[list[tuple[Step, 
             else:
                 unnamed += [k, v]
         return named, unnamed
-    if isinstance(value, (list, tuple)):
+    if instance_of(value, (list, tuple)):
         return [(("item", i), v) for i, v in enumerate(value)], []
     attrs = attributes_of(value)
     if attrs is not None:
@@ -333,9 +334,9 @@ def _category_steps(value: Any) -> list[tuple[Step, Any]]:
     from .shared_objects import object_categories
 
     pd = loaded_pandas()
-    if pd is None or not isinstance(value, (pd.DataFrame, pd.Series)):
+    if pd is None or not instance_of(value, (pd.DataFrame, pd.Series)):
         return []
-    if isinstance(value, pd.Series):
+    if instance_of(value, pd.Series):
         columns = [(-1, categories) for categories in object_categories(value)]
     else:
         columns = categorical_columns(value, pd)

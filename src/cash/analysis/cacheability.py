@@ -18,6 +18,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from cash._user_attrs import instance_of
+
 from .._memo import NOTEBOOK_STATEMENTS, STATEMENTS, LruMemo
 from ..effects import EffectKind
 from .aliases import bare_alias_targets, reference_alias_targets
@@ -172,7 +174,7 @@ def analyze_statement(
     """
     modules: frozenset[str] = frozenset()
     if user_ns is not None:
-        modules = frozenset(n for n in set(_IDENTIFIER.findall(code)) if isinstance(user_ns.get(n), types.ModuleType))
+        modules = frozenset(n for n in set(_IDENTIFIER.findall(code)) if instance_of(user_ns.get(n), types.ModuleType))
     if resolve_source is not None:
         return _analyze_statement(code, tree, modules, resolve_source)
     key = (code, modules)

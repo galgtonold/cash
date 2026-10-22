@@ -20,7 +20,15 @@ from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 np = pytest.importorskip("numpy")
 
 SETUP = (
-    f"import time, types\nimport numpy as np\ndef slow(x):\n    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n    return x"
+    "import time, types\n"
+    "import numpy as np\n"
+    "class Lib:\n"
+    "    def __init__(self, x):\n"
+    "        self.x = x\n"
+    "Lib.__module__ = 'somelib'\n"
+    "def slow(x):\n"
+    f"    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n"
+    "    return x"
 )
 
 #: (cell binding the holder, the view taken of the array in it, the read).
@@ -32,6 +40,9 @@ HOLDERS = {
     "attribute": ("data = types.SimpleNamespace(x=np.zeros(10))", "data.x[2:5]", "data.x"),
     "nested": ("data = {'k': [np.zeros(10)]}", "data['k'][0][2:5]", "data['k'][0]"),
     "view of a view": ("data = {'x': np.zeros(10)}", "data['x'][1:8][1:4]", "data['x']"),
+    # An object of a library's class, which the share check reads as one
+    # closed value: read down as the garbage collector sees it.
+    "library object": ("data = Lib(np.zeros(10))", "data.x[2:5]", "data.x"),
 }
 
 
@@ -78,3 +89,73 @@ def test_a_column_series_held_in_a_dict_reads_what_was_written(cash_magics, monk
         for cell in cells:
             run_cash_cell(cash_magics, cell, cells=cells)
         assert (ns["r"], ns["t"]) == (_plain(cells), 10.0 * value)
+
+
+def test_a_holder_the_statement_does_not_read_moves_too(cash_magics, monkeypatch):
+    """``cache`` got the array from a function, as a side effect: no link
+    shows it holds ``a``, and ``v = a[2:5]`` does not read it. Walking only
+    what the statement read missed it, and ``r`` was served 21 for 27."""
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    cells = [
+        "import numpy as np\ncache = {}\ndef f(x):\n    cache['k'] = x\n    return x",
+        "a = f(np.zeros(10))",
+        "v = a[2:5]",
+        "v[:] = 7",
+        "r = float(cache['k'].sum())",
+    ]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    cells[3] = "v[:] = 9"
+    for cell in cells[3:]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert cash_magics.shell.user_ns["r"] == _plain(cells) == 27.0
+
+
+def test_a_weak_value_dictionary_holding_the_array_moves_too(cash_magics, monkeypatch):
+    """The collector sees a weak reference hold nothing, yet ``reg['k']``
+    reads the array: ``r`` was served 21 for 27."""
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    cells = [
+        "import numpy as np, weakref\nreg = weakref.WeakValueDictionary()\ndef f(x):\n    reg['k'] = x\n    return x",
+        "a = f(np.zeros(10))",
+        "v = a[2:5]",
+        "v[:] = 7",
+        "r = float(reg['k'].sum())",
+    ]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    cells[3] = "v[:] = 9"
+    for cell in cells[3:]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert cash_magics.shell.user_ns["r"] == 27.0
+
+
+def test_an_object_two_variables_hold_is_walked_once(monkeypatch):
+    """Every variable is walked for the array, in one walk: what two of
+    them hold is read once."""
+    from cash.notebook import shared_objects
+
+    a = np.arange(10.0)
+    shared = [[i] for i in range(100)] + [a]
+    view = a[2:5]
+    walked = []
+    real = shared_objects.children_of
+
+    def counting(value):
+        walked.append(id(value))
+        return real(value)
+
+    monkeypatch.setattr(shared_objects, "children_of", counting)
+    ns = {"a": a, "one": {"s": shared}, "two": {"s": shared}, "view": view}
+    assert shared_objects.view_base_names([view], ns) == {"a", "one", "two", "view"}
+    assert walked.count(id(shared)) == 1
+
+
+def test_a_list_nested_deeper_than_python_recurses_is_no_error(cash_magics):
+    cell = (
+        "import numpy as np\nbig = []\ncur = big\nfor _ in range(20_000):\n"
+        "    nxt = []\n    cur.append(nxt)\n    cur = nxt\ncur.append(np.zeros(3))"
+    )
+    run_cash_cell(cash_magics, cell, cells=[cell])
+    run_cash_cell(cash_magics, "v = cur[0][1:]", cells=[cell, "v = cur[0][1:]"])
+    assert cash_magics.shell.user_ns["v"].shape == (2,)

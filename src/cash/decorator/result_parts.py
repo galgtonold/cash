@@ -159,7 +159,7 @@ def _items(value: Any, path: Any, generic: type) -> list[tuple[Any, Any]]:
         return [((path, index, "[]"), item) for index, item in enumerate(value) if type(item) not in _PLAIN]
     if isinstance(value, dict):
         return [((path, name, "[]"), item) for name, item in list(dict.items(value)) if type(item) not in _PLAIN]
-    if isinstance(value, (type, types.ModuleType, types.FunctionType, types.MethodType)):
+    if issubclass(type(value), (type, types.ModuleType, types.FunctionType, types.MethodType)):
         return []
     # An object holding both: ``Result(raw=a, series=pl.Series(a))``.
     found = []

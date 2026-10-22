@@ -126,6 +126,9 @@ class CacheMetadata:
     #: a lookup reads them again, and serves the entry only when all match.
     #: No key holds them: the analyzer does not read installed code.
     env_reads: dict[str, str] | None = None
+    #: What the result shared with an object outside the call when it was
+    #: stored (`PurityChecks.warn_shared_result`): a hit warns as the miss did.
+    shared_result: str | None = None
 
     force_persist: bool | None = None
     metadata_only: bool | None = None

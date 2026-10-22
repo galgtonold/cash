@@ -83,7 +83,7 @@ def own_source_digest(fn: object) -> str | None:
 
 def _wrapped_of(fn: object) -> object | None:
     """What a ``functools.wraps`` wrapper FUNCTION wraps, or None."""
-    if isinstance(fn, types.FunctionType):
+    if type(fn) is types.FunctionType:
         return getattr(fn, "__wrapped__", None)
     return None
 

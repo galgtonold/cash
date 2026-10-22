@@ -15,6 +15,8 @@ import ast
 from collections.abc import Callable
 from typing import NamedTuple
 
+from cash._user_attrs import attribute_or
+
 from ...analysis.cacheability import analyze_statement
 from ...value_types import BUILTIN_NAMES
 
@@ -75,8 +77,8 @@ def _caches_per_pass(stmt: ast.stmt, targets: set[str]) -> bool:
 
 def _simple_statements(stmt: ast.stmt):
     """*stmt* itself, or the simple statements a compound one holds."""
-    bodies = [getattr(stmt, f, None) for f in ("body", "orelse", "finalbody")]
-    bodies += [h.body for h in getattr(stmt, "handlers", ())] + [c.body for c in getattr(stmt, "cases", ())]
+    bodies = [attribute_or(stmt, f, None) for f in ("body", "orelse", "finalbody")]
+    bodies += [h.body for h in attribute_or(stmt, "handlers", ())] + [c.body for c in attribute_or(stmt, "cases", ())]
     if not any(isinstance(b, list) for b in bodies) or isinstance(
         stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
     ):

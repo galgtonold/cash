@@ -24,6 +24,8 @@ import pickle
 import sys
 from typing import Any
 
+from cash._user_attrs import instance_of
+
 __all__ = [
     "RELINK_FAILED",
     "addresses",
@@ -63,7 +65,7 @@ def object_columns(value: Any, pd: Any) -> list[tuple[int, Any]]:
     values pandas tells apart (`column_values_only`); position -1 for a series."""
     from cash.notebook.shared_objects import column_values_only
 
-    if isinstance(value, pd.Series):
+    if instance_of(value, pd.Series):
         columns = [(-1, value)]
     else:
         columns = [(i, value.iloc[:, i]) for i, dtype in enumerate(value.dtypes) if is_object_dtype(dtype)]
@@ -81,12 +83,12 @@ def frames_with(value: Any, pd: Any) -> list[tuple[list, Any]]:
     """``(path, frame)`` for *value* when it is a frame or series, or for
     each one in it at its top level (a tuple's, a list's or a dict's)."""
     kinds = (pd.Series, pd.DataFrame)
-    if isinstance(value, kinds):
+    if instance_of(value, kinds):
         return [([], value)]
     if type(value) in (tuple, list):
-        return [([i], item) for i, item in enumerate(value) if isinstance(item, kinds)]
+        return [([i], item) for i, item in enumerate(value) if instance_of(item, kinds)]
     if type(value) is dict:
-        return [([key], item) for key, item in value.items() if type(key) in (str, int) and isinstance(item, kinds)]
+        return [([key], item) for key, item in value.items() if type(key) in (str, int) and instance_of(item, kinds)]
     return []
 
 
@@ -99,7 +101,7 @@ def frames_in(value: Any) -> list[tuple[list, Any]]:
 def is_frame(value: Any) -> bool:
     """Whether *value* is a pandas frame or series."""
     pd = loaded_pandas()
-    return pd is not None and isinstance(value, (pd.Series, pd.DataFrame))
+    return pd is not None and instance_of(value, (pd.Series, pd.DataFrame))
 
 
 def addresses(array: Any) -> Any:
@@ -152,7 +154,7 @@ def object_columns_on_both_sides(result: Any, args: tuple, kwargs: dict) -> bool
     if not any(object_columns(frame, pd) for _path, frame in frames_with(result, pd)):
         return False
     return any(
-        isinstance(value, (pd.Series, pd.DataFrame)) and object_columns(value, pd)
+        instance_of(value, (pd.Series, pd.DataFrame)) and object_columns(value, pd)
         for value in (*args, *kwargs.values())
     )
 
@@ -173,7 +175,7 @@ def cell_links(result: Any, args: tuple, kwargs: dict) -> tuple[list[dict], dict
     sources += [(["k", name], value) for name, value in kwargs.items()]
     labels, ids, columns = [], [], []
     for place, value in sources:
-        if not isinstance(value, (pd.Series, pd.DataFrame)):
+        if not instance_of(value, (pd.Series, pd.DataFrame)):
             continue
         for position, array in object_columns(value, pd):
             labels.append((place, position, len(array)))
@@ -290,7 +292,7 @@ def categorical_columns(value: Any, pd: Any) -> list[tuple[int, Any]]:
     apart; none for a series."""
     from cash.notebook.shared_objects import VALUE_COLUMNS
 
-    if not isinstance(value, pd.DataFrame):
+    if not instance_of(value, pd.DataFrame):
         return []
     found = []
     for position, dtype in enumerate(value.dtypes):
@@ -308,10 +310,10 @@ def _same_dtype(dtype: Any, sources: list[tuple[list, Any]], pd: Any) -> tuple[l
     is, or more than one."""
     found = []
     for place, value in sources:
-        if isinstance(value, pd.Series):
+        if instance_of(value, pd.Series):
             if value.dtype is dtype:
                 found.append((place, -1))
-        elif isinstance(value, pd.DataFrame):
+        elif instance_of(value, pd.DataFrame):
             found.extend((place, i) for i, other in enumerate(value.dtypes) if other is dtype)
     return found[0] if len(found) == 1 else None
 
@@ -367,7 +369,7 @@ def _relink_dtype(frame: Any, position: int, source: Any, source_column: int, pd
     """Make the categorical column of *frame* at *position* take the dtype
     of *source*'s column, its categories the argument's own objects; False
     when the two do not line up."""
-    if not isinstance(frame, pd.DataFrame):
+    if not instance_of(frame, pd.DataFrame):
         return False
     column = frame.iloc[:, position]
     dtype = (source if source_column == -1 else source.iloc[:, source_column]).dtype
@@ -415,7 +417,7 @@ def relink_cells(value: Any, args: tuple, kwargs: dict, links: list[dict] | None
             frame = _walk(value, link["result"])
             kind, where = link["source"]
             source = args[where] if kind == "a" else kwargs[where]
-            if not isinstance(frame, (pd.Series, pd.DataFrame)) or not isinstance(source, (pd.Series, pd.DataFrame)):
+            if not instance_of(frame, (pd.Series, pd.DataFrame)) or not instance_of(source, (pd.Series, pd.DataFrame)):
                 return RELINK_FAILED
             if link.get("dtype_of"):
                 if not _relink_dtype(frame, link["column"], source, link["source_column"], pd):

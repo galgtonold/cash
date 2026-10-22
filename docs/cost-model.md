@@ -51,7 +51,7 @@ for all of them. Only a storage tier's size cap still applies.
 
 ### A statement around a cached call { #a-statement-around-a-cached-call }
 
-<!-- claim: cash/notebook/statement/store.py:StatementStore._store @7d0eab41, cash/notebook/call_unit.py:CallUnit._count_cached @48acf47c, cash/notebook/call_unit.py:CallUnit._cached @6680f15e -->
+<!-- claim: cash/notebook/statement/store.py:StatementStore._store @7d0eab41, cash/notebook/call_unit.py:CallUnit._count_cached @48acf47c, cash/notebook/call_unit.py:CallUnit._cached @bf14dba3 -->
 cash also caches the slow calls inside a statement on their own (see
 [`no-cache-calls`](annotations.md#call-level-caching-default-and-cashno-cache-calls)).
 The call's result is kept in the call's entry, so a statement around it is
@@ -69,6 +69,13 @@ after a restart, only the statement's entry would bring it back.
 The time a hit shows as saved is still the whole statement's, the call's time
 included. A statement whose own work is too cheap to store still records the
 names it bound, so the cells below it can be restored after a restart.
+
+A statement that filled a `functools.cache` memo of a helper that only
+computes from its arguments is served by calling that helper again for each
+key the memo lacks (see
+[Known limitations](known-limitations.md#a-helper-memoised-with-functoolscache)).
+That hit pays the helper's own time: one served after a restart, when the
+memo is empty, saves only the statement's work around those calls.
 
 ## What the badge shows
 

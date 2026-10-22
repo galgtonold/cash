@@ -29,6 +29,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
+from cash._user_attrs import attribute_or
 from cash.analysis.namespace_effects import code_waived_lines
 from cash.install_paths import is_user_code_file
 from cash.purity import is_pure
@@ -167,7 +168,7 @@ def _write_waived() -> bool:
             if whole or frame.f_lineno in lines:
                 return True
             func = frame.f_globals.get(code.co_name)
-            if func is not None and is_pure(func) and getattr(inspect.unwrap(func), "__code__", None) is code:
+            if func is not None and is_pure(func) and attribute_or(inspect.unwrap(func), "__code__", None) is code:
                 return True
         frame = frame.f_back
     return False
@@ -236,7 +237,8 @@ def _child_pids() -> frozenset[int]:
     try:
         import psutil
 
-        return frozenset(child.pid for child in psutil.Process().children())
+        with io_watch.own_work():
+            return frozenset(child.pid for child in psutil.Process().children())
     except Exception:  # noqa: BLE001 - none known: every child is new
         return frozenset()
 
@@ -268,7 +270,8 @@ def children_left_running(written: WrittenPaths) -> list[Any]:
     try:
         import psutil
 
-        return [child for child in psutil.Process().children() if child.pid not in before and process_runs(child)]
+        with io_watch.own_work():
+            return [child for child in psutil.Process().children() if child.pid not in before and process_runs(child)]
     except Exception:  # noqa: BLE001 - none cash can see
         return []
 
@@ -278,7 +281,8 @@ def process_runs(process: Any) -> bool:
     try:
         import psutil
 
-        return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+        with io_watch.own_work():
+            return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
     except Exception:  # noqa: BLE001 - gone
         return False
 

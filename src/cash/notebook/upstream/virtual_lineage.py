@@ -18,6 +18,7 @@ import types
 from collections import ChainMap
 from typing import TYPE_CHECKING
 
+from cash._user_attrs import attribute_or
 from cash.control_markers import strip_markers
 
 from ..._paths import resolve_file_dep_path
@@ -39,6 +40,7 @@ from ..magic_effects import (
     is_rerun_magic,
     magic_base,
     magic_effects,
+    magic_files,
     magic_output_lineage,
     magic_rng_advances,
     simulation_cell,
@@ -504,7 +506,7 @@ class VirtualLineage:
         # names only: a from-imported name's lineage is cleared on purpose.
         for name in reloaded:
             live = self.tracking_state.variable_lineage.get(name)
-            if live and isinstance(self.shell.user_ns.get(name), types.ModuleType):
+            if live and issubclass(type(self.shell.user_ns.get(name)), types.ModuleType):
                 sim.virtual_lineage[name] = live
 
         new_cache_entries = list(self.cache.entries[:first_changed_cell]) if self.cache.entries else []
@@ -601,7 +603,7 @@ class VirtualLineage:
             if name not in sim.virtual_modules and name in read
         }
         reads = {name: virtual_lineage.get(name, live.get(name)) for name in read}
-        base = magic_base(stmt_code, reads)
+        base = magic_base(stmt_code, reads, magic_files(self.tracking_state, stmt_code))
         digests = self.tracking_state.magic_values.get(base, {})
         rerun = is_rerun_magic(node)
         for name in changed:
@@ -933,12 +935,12 @@ class VirtualLineage:
     def _iter_body_nodes(node: ast.AST):
         """Yield all body statements of a control structure (recursively)."""
         for attr in ("body", "orelse", "finalbody"):
-            for child in getattr(node, attr, []) or []:
+            for child in attribute_or(node, attr, []) or []:
                 yield child
                 if is_control_structure(child):
                     yield from VirtualLineage._iter_body_nodes(child)
         # ast.Try handlers
-        for handler in getattr(node, "handlers", []) or []:
+        for handler in attribute_or(node, "handlers", []) or []:
             for child in handler.body:
                 yield child
                 if is_control_structure(child):

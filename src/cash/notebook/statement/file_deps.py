@@ -27,6 +27,8 @@ import os
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from cash._user_attrs import instance_of
+
 from ..._paths import normalize_path
 from ...remote_source import RemoteFileDataSource
 from ...tracking.file_dep_snapshot import file_content_hash, probe_state_parts, realpath_of_read_this_run
@@ -219,7 +221,7 @@ class StatementFileDeps:
         executed_file_deps = tracking_state.executed_file_deps
         # A scalar does not inherit file dependencies: a number derived from a
         # DataFrame shouldn't invalidate when the source CSV changes.
-        is_scalar = isinstance(value, IMMUTABLE_PRIMS)
+        is_scalar = instance_of(value, IMMUTABLE_PRIMS)
         if not is_scalar:
             for input_var in inputs:
                 if input_var not in executed_file_deps:

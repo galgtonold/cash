@@ -51,6 +51,8 @@ from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
+from cash._user_attrs import attribute_or
+
 from ..analysis.ast_util import copy_tree as _copy_tree
 from .call_key import global_names_reached
 from .lineage_formula import is_cash_instrumentation
@@ -266,10 +268,10 @@ def interceptable(fn) -> bool:
     log: 11 s plain, 51 s with the copy kept).
     """
     return (
-        isinstance(fn, types.FunctionType)
+        type(fn) is types.FunctionType
         and fn.__module__ != "copy"
-        and not getattr(fn, "_cash_cached", False)
-        and not getattr(fn, "_cash_stateful", False)
+        and not attribute_or(fn, "_cash_cached", False)
+        and not attribute_or(fn, "_cash_stateful", False)
         and not is_cash_instrumentation(fn)
     )
 
@@ -289,12 +291,12 @@ def _static_callee(node: ast.AST, namespace) -> object:
     if isinstance(node, ast.Name):
         if node.id in namespace:
             return namespace[node.id]
-        return getattr(builtins, node.id, _NOT_FOUND)
+        return attribute_or(builtins, node.id, _NOT_FOUND)
     if isinstance(node, ast.Attribute):
         base = _static_callee(node.value, namespace)
         try:
-            if isinstance(base, types.ModuleType):
-                return getattr(base, node.attr, _NOT_FOUND)
+            if issubclass(type(base), types.ModuleType):
+                return attribute_or(base, node.attr, _NOT_FOUND)
             if isinstance(base, type):
                 found = inspect.getattr_static(base, node.attr, _NOT_FOUND)
                 return found.__func__ if isinstance(found, staticmethod) else found
@@ -724,7 +726,7 @@ def _loop_argument_names(loop: ast.For, namespace: Mapping[str, object]) -> set[
         for value in [*node.args, *(kw.value for kw in node.keywords)]:
             for name in names_read(value):
                 bound = namespace.get(name, _NOT_FOUND)
-                if isinstance(bound, (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType)):
+                if issubclass(type(bound), (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType)):
                     continue
                 names.add(name)
     return names

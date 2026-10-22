@@ -20,6 +20,8 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
+from cash._user_attrs import attribute_or, has_attribute
+
 from ...analysis.annotations import (
     CacheAnnotation,
     get_statement_annotations,
@@ -83,7 +85,7 @@ def resolve_header_annotation(
     """
     if raw_cell is None:
         return inherited
-    lineno = getattr(node, "lineno", None)
+    lineno = attribute_or(node, "lineno", None)
     if lineno is None:
         return inherited
     header = parse_annotations_in_range(raw_cell.splitlines(), lineno, lineno)
@@ -233,9 +235,9 @@ def counts_as_cached(metrics: dict[str, Any]) -> bool:
 
 def at_line(err: BaseException, node: ast.AST, *, overwrite: bool) -> BaseException:
     """*err* marked with *node*'s cell line, for the clean traceback."""
-    if overwrite or not hasattr(err, "_cash_error_lineno"):
+    if overwrite or not has_attribute(err, "_cash_error_lineno"):
         with contextlib.suppress(AttributeError, TypeError):
-            err._cash_error_lineno = getattr(node, "lineno", None)  # type: ignore[attr-defined]
+            err._cash_error_lineno = attribute_or(node, "lineno", None)  # type: ignore[attr-defined]
     return err
 
 
@@ -251,7 +253,7 @@ def extract_cash_frame_lineno(exc: Exception) -> int | None:
     each statement compiles under its own ``<cash-{digest}>`` name so its
     source resolves in linecache.
     """
-    tb = getattr(exc, "__traceback__", None)
+    tb = attribute_or(exc, "__traceback__", None)
     while tb is not None:
         if is_cash_filename(tb.tb_frame.f_code.co_filename):
             return tb.tb_lineno
@@ -475,7 +477,7 @@ class LoopPass:
 
 def current_loop_pass(dispatcher: Any) -> LoopPass | None:
     """The innermost decomposed loop the structure being run is in, if any."""
-    passes = getattr(dispatcher, "loop_passes", None)
+    passes = attribute_or(dispatcher, "loop_passes", None)
     return passes[-1] if isinstance(passes, list) and passes else None
 
 
@@ -546,14 +548,14 @@ def collect_body_input_lineages(
 def get_body_nodes(node: ast.AST) -> list[ast.AST]:
     """Get all body nodes from a control structure."""
     body = []
-    if hasattr(node, "body"):
+    if has_attribute(node, "body"):
         body.extend(node.body)
-    if hasattr(node, "orelse"):
+    if has_attribute(node, "orelse"):
         body.extend(node.orelse)
-    if hasattr(node, "handlers"):
+    if has_attribute(node, "handlers"):
         for handler in node.handlers:
             body.extend(handler.body)
-    if hasattr(node, "finalbody"):
+    if has_attribute(node, "finalbody"):
         body.extend(node.finalbody)
     return body
 
@@ -707,7 +709,7 @@ def extract_try_stmts(node: ast.Try) -> list[str]:
     """Extract try/except/else/finally statements for badge display."""
     stmts = ["try:"]
     stmts.extend(f"  {ast.unparse(s)}" for s in node.body)
-    for handler in getattr(node, "handlers", []):
+    for handler in attribute_or(node, "handlers", []):
         if handler.type:
             hdr = f"except {ast.unparse(handler.type)}"
             if handler.name:
@@ -719,7 +721,7 @@ def extract_try_stmts(node: ast.Try) -> list[str]:
     if node.orelse:
         stmts.append("else:")
         stmts.extend(f"  {ast.unparse(s)}" for s in node.orelse)
-    if getattr(node, "finalbody", None):
+    if attribute_or(node, "finalbody", None):
         stmts.append("finally:")
         stmts.extend(f"  {ast.unparse(s)}" for s in node.finalbody)
     return stmts

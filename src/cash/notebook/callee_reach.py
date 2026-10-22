@@ -25,6 +25,8 @@ from contextlib import contextmanager
 from itertools import repeat
 from typing import Any, NamedTuple
 
+from cash._user_attrs import attribute_or, has_attribute, instance_of, is_routine
+
 from .._memo import NOTEBOOK_STATEMENTS
 from ..analysis.analysis_budget import AnalysisBudgetExceeded
 from ..analysis.ast_util import parse_cached
@@ -160,7 +162,7 @@ def _leads_nowhere(namespace: Mapping[str, Any], root: str, attrs: tuple[str, ..
     if not attrs:
         return _inert(obj)
     for attr in reversed(attrs):
-        if not isinstance(obj, types.ModuleType):
+        if not instance_of(obj, types.ModuleType):
             return True  # `_Found.chain` stops here
         if _is_local(obj):
             return False
@@ -172,14 +174,14 @@ def _leads_nowhere(namespace: Mapping[str, Any], root: str, attrs: tuple[str, ..
 
 def _inert(value: Any) -> bool:
     """`_Found.value` of *value*, found with no label, adds nothing."""
-    if isinstance(value, types.ModuleType):
+    if instance_of(value, types.ModuleType):
         return not _is_local(value)
-    if isinstance(value, (types.MethodType, types.FunctionType)):
+    if instance_of(value, (types.MethodType, types.FunctionType)):
         return False
-    if isinstance(value, type):
+    if instance_of(value, type):
         # A C type of no local module: its ``__init__`` is a slot, if any.
         return value in _FOREIGN_C_TYPES
-    return value is None or type(value) in _FOREIGN_C_TYPES or inspect.isroutine(value)
+    return value is None or type(value) in _FOREIGN_C_TYPES or is_routine(value)
 
 
 @functools.lru_cache(maxsize=NOTEBOOK_STATEMENTS)
@@ -252,9 +254,9 @@ _ENVIRON_SETTING_METHODS = frozenset({"update", "pop", "popitem", "setdefault", 
 #: how they are spelled where the namespace cannot say (after a restart).
 _PROCESS_SETTERS: tuple[tuple[Any, str], ...] = (
     (os.chdir, CWD),
-    (getattr(os, "fchdir", None), CWD),
+    (attribute_or(os, "fchdir", None), CWD),
     (os.putenv, ENVIRON),
-    (getattr(os, "unsetenv", None), ENVIRON),
+    (attribute_or(os, "unsetenv", None), ENVIRON),
 )
 _PROCESS_SPELLINGS = {"os.chdir": CWD, "os.fchdir": CWD, "os.putenv": ENVIRON, "os.unsetenv": ENVIRON}
 
@@ -286,7 +288,7 @@ def _is_environ(expr: ast.expr, namespace: Mapping[str, Any]) -> bool:
     of it, or (with nothing in the namespace to say) one spelled so."""
     value, _ = _static_value(expr, namespace)
     if value is not None:
-        return value is os.environ or value is getattr(os, "environb", None)
+        return value is os.environ or value is attribute_or(os, "environb", None)
     return dotted_name(expr) in ENVIRON_NAMES
 
 
@@ -366,8 +368,8 @@ def _state_writes(
     def followed_into(callee: Any, kind: str, receiver: Any) -> bool:
         """Follow the function *callee* into its body; whether it is the
         user's (its body, not its name, says what it changes)."""
-        users = isinstance(callee, types.FunctionType) and _is_users_function(callee, namespace)
-        if isinstance(callee, types.FunctionType) and follow:
+        users = type(callee) is types.FunctionType and _is_users_function(callee, namespace)
+        if type(callee) is types.FunctionType and follow:
             # A method handed over on each of many objects (``o.total`` for
             # each order) is one function: its body is read once.
             kept = modules_of.get(id(callee))
@@ -414,7 +416,7 @@ def _state_writes(
                     called(decorator, None)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
             # What runs at definition: the decorators and the defaults.
-            pending.extend(getattr(node, "decorator_list", ()))
+            pending.extend(attribute_or(node, "decorator_list", ()))
             pending.extend(d for d in (*node.args.defaults, *node.args.kw_defaults) if d is not None)
             continue
         pending.extend(ast.iter_child_nodes(node))
@@ -422,7 +424,7 @@ def _state_writes(
             targets = node.targets if isinstance(node, (ast.Assign, ast.Delete)) else [node.target]
             for target in targets:
                 for part in ast.walk(target):
-                    if isinstance(part, ast.expr) and isinstance(getattr(part, "ctx", None), (ast.Store, ast.Del)):
+                    if isinstance(part, ast.expr) and isinstance(attribute_or(part, "ctx", None), (ast.Store, ast.Del)):
                         rooted(part)
                         if (
                             process is not None
@@ -435,7 +437,7 @@ def _state_writes(
                 # A reload runs the module's top level again: every global it
                 # has is set anew, whatever the cells above set on it.
                 target = _static_value(node.args[0], namespace)[0]
-                if isinstance(target, types.ModuleType) and _is_local(target):
+                if issubclass(type(target), types.ModuleType) and _is_local(target):
                     found.add(target.__name__)
             called(node.func, node)
             if node.args or node.keywords:
@@ -445,7 +447,7 @@ def _state_writes(
 def _as_handed_callee(value: Any) -> tuple[Any, str, Any]:
     """``(function, kind, receiver)`` calling the handed callable *value*
     runs, as `_resolve_call` names a call target."""
-    if isinstance(value, types.MethodType):
+    if type(value) is types.MethodType:
         receiver = value.__self__
         return value.__func__, "classmethod" if isinstance(receiver, type) else "method", receiver
     if isinstance(value, type):
@@ -453,7 +455,7 @@ def _as_handed_callee(value: Any) -> tuple[Any, str, Any]:
             return inspect.getattr_static(value, "__init__"), "method", value
         except AttributeError:
             return None, "function", None
-    if isinstance(value, types.FunctionType):
+    if type(value) is types.FunctionType:
         return value, "function", None
     try:
         return inspect.getattr_static(type(value), "__call__"), "method", value
@@ -485,7 +487,7 @@ def import_state_writes(code: str, namespace: Mapping[str, Any] | None) -> froze
     imported: set[str] = set()
     for name in names:
         module = sys.modules.get(name)
-        if not isinstance(module, types.ModuleType) or not _is_local(module):
+        if not issubclass(type(module), types.ModuleType) or not _is_local(module):
             continue
         imported.add(module.__name__)
         try:
@@ -512,14 +514,14 @@ def _state_home(value: Any, namespace: Mapping[str, Any]) -> str | None:
     holds (by identity: ``from mylib import CONFIG``, ``cfg =
     mylib.CONFIG``). None for anything else -- a value of the notebook's own,
     an instance it made of the module's class."""
-    if value is None or isinstance(value, (*IMMUTABLE_PRIMS, tuple, frozenset)):
+    if value is None or instance_of(value, (*IMMUTABLE_PRIMS, tuple, frozenset)):
         return None
-    if isinstance(value, types.ModuleType):
+    if instance_of(value, types.ModuleType):
         return value.__name__ if _is_local(value) else None
-    if inspect.isroutine(value):
+    if is_routine(value):
         return None
-    if isinstance(value, type):
-        home = _loaded(getattr(value, "__module__", None))
+    if instance_of(value, type):
+        home = _loaded(attribute_or(value, "__module__", None))
         return home.__name__ if home is not None and vars(home) is not namespace and _is_local(home) else None
     # Every local module loaded but the one whose globals *namespace* is:
     # ``from mylib import CONFIG`` alone leaves no other trace of ``mylib``.
@@ -559,7 +561,7 @@ def _local_modules() -> tuple[types.ModuleType, ...]:
         entries = tuple(
             (key, module)
             for key, module in list(modules.items())
-            if isinstance(module, types.ModuleType) and _is_local(module)
+            if issubclass(type(module), types.ModuleType) and _is_local(module)
         )
         _LOCAL_MODULES[1] = entries
         _LOCAL_MODULES[2] = tuple({id(module): module for _key, module in entries}.values())
@@ -586,7 +588,7 @@ def _resolve_call(func: ast.expr, namespace: Mapping[str, Any]) -> tuple[Any, st
         return _as_callee(member, instance_of, True)
     if owner is None:
         return None, "function", None
-    if isinstance(owner, types.ModuleType):
+    if issubclass(type(owner), types.ModuleType):
         return _as_callee(vars(owner).get(func.attr), None, False)
     try:
         member = inspect.getattr_static(owner, func.attr)
@@ -603,11 +605,11 @@ def _as_callee(member: Any, owner: Any, on_instance: bool) -> tuple[Any, str, An
         return member.__func__, "classmethod", cls
     if isinstance(member, staticmethod):
         return member.__func__, "function", None
-    if isinstance(member, types.MethodType):
+    if type(member) is types.MethodType:
         receiver = member.__self__
         kind = "classmethod" if isinstance(receiver, type) else "method"
         return member.__func__, kind, receiver
-    if isinstance(member, types.FunctionType) and on_instance:
+    if type(member) is types.FunctionType and on_instance:
         return member, "method", owner
     return member, "function", None
 
@@ -627,7 +629,7 @@ def _static_value(expr: ast.expr, namespace: Mapping[str, Any]) -> tuple[Any, ty
         return None, None
     value = namespace.get(expr.id)
     for attr in reversed(attrs):
-        if isinstance(value, types.ModuleType):
+        if issubclass(type(value), types.ModuleType):
             value = vars(value).get(attr)
             continue
         if not isinstance(value, type) and not _of_a_local_class(value):
@@ -644,13 +646,13 @@ def _static_value(expr: ast.expr, namespace: Mapping[str, Any]) -> tuple[Any, ty
 def _of_a_local_class(value: Any) -> bool:
     """An instance whose class a local module defines: its attributes are
     followed (``mylib.CFG.sub.setk``)."""
-    home = _loaded(getattr(type(value), "__module__", None))
+    home = _loaded(attribute_or(type(value), "__module__", None))
     return home is not None and _is_local(home)
 
 
 def _plain_attribute(value: Any) -> bool:
     """A value held in a ``__dict__``, not a descriptor that computes one."""
-    return not hasattr(type(value), "__get__") or isinstance(value, (types.FunctionType, type))
+    return not has_attribute(type(value), "__get__") or issubclass(type(value), (types.FunctionType, type))
 
 
 def _class_state_written(fn: types.FunctionType, kind: str, receiver: Any, namespace: Mapping[str, Any]) -> set[str]:
@@ -789,7 +791,7 @@ def _notebook_function_source(
     fn = namespace.get(name)
     if fn is None:
         return def_source(name) if def_source is not None else None
-    if not isinstance(fn, types.FunctionType) or fn.__globals__ is not namespace:
+    if type(fn) is not types.FunctionType or fn.__globals__ is not namespace:
         return None
     return _code_source(fn.__code__)
 
@@ -829,7 +831,7 @@ def _function_body(fn: types.FunctionType) -> list[ast.stmt]:
         target = inspect.unwrap(fn)
     except ValueError:  # a __wrapped__ cycle
         target = fn
-    code = getattr(target, "__code__", None)
+    code = attribute_or(target, "__code__", None)
     if not isinstance(code, types.CodeType):
         return []
     return list(_code_body(code))
@@ -888,7 +890,7 @@ def module_state_names(code: str, namespace: Mapping[str, Any] | None, *, struct
 
 
 def _may_lead_to_module_state(value: Any, namespace: Mapping[str, Any]) -> bool:
-    if isinstance(value, (types.ModuleType, types.FunctionType, types.MethodType, type)):
+    if instance_of(value, (types.ModuleType, types.FunctionType, types.MethodType, type)):
         return True
     return _state_home(value, namespace) is not None or _of_a_local_class(value)
 
@@ -901,7 +903,7 @@ def state_holders(modules: Iterable[str], code: str, namespace: Mapping[str, Any
     names: set[str] = set()
     for module in modules:
         value = sys.modules.get(module)
-        if isinstance(value, types.ModuleType):
+        if issubclass(type(value), types.ModuleType):
             names |= module_holders(value, namespace)
     return frozenset(names)
 
@@ -922,7 +924,7 @@ def module_holders(module: types.ModuleType, namespace: Mapping[str, Any]) -> fr
     data_ids = {
         id(value)
         for value in list(own.values())
-        if not isinstance(value, (types.ModuleType, type, *IMMUTABLE_PRIMS, tuple, frozenset))
+        if not issubclass(type(value), (types.ModuleType, type, *IMMUTABLE_PRIMS, tuple, frozenset))
         and not inspect.isroutine(value)
     }
     names: set[str] = set()
@@ -932,11 +934,11 @@ def module_holders(module: types.ModuleType, namespace: Mapping[str, Any]) -> fr
                 names.add(name)
         elif name.startswith("_"):
             continue
-        elif isinstance(held, types.FunctionType):
+        elif type(held) is types.FunctionType:
             if held.__globals__ is own:
                 names.add(name)
         elif isinstance(held, type):
-            if getattr(held, "__module__", None) == module.__name__:
+            if attribute_or(held, "__module__", None) == module.__name__:
                 names.add(name)
         elif id(held) in data_ids:
             names.add(name)
@@ -971,7 +973,7 @@ def module_globals(code: str, namespace: Mapping[str, Any] | None) -> dict[str, 
     found: dict[str, dict[str, Any]] = {}
     for name in modules:
         module = sys.modules.get(name)
-        if isinstance(module, types.ModuleType) and vars(module) is not namespace:
+        if issubclass(type(module), types.ModuleType) and vars(module) is not namespace:
             found[name] = dict(vars(module))
     return found
 
@@ -993,7 +995,7 @@ def rebound_modules(before: Mapping[str, Mapping[str, Any]]) -> frozenset[str]:
     changed = set()
     for name, held in before.items():
         module = sys.modules.get(name)
-        if not isinstance(module, types.ModuleType):
+        if not issubclass(type(module), types.ModuleType):
             continue
         now = vars(module)
         # By identity, at C speed: *held* keeps every object it saw alive,
@@ -1036,11 +1038,11 @@ def _modules_changed_by(
         for co in _code_objects(current.__code__):
             for name in _loaded_globals(co):
                 value = home_ns.get(name)
-                if isinstance(value, types.FunctionType):
+                if type(value) is types.FunctionType:
                     pending.append(value)
-                elif isinstance(value, types.ModuleType) and _is_local(value):
+                elif issubclass(type(value), types.ModuleType) and _is_local(value):
                     attrs = vars(value)
-                    pending.extend(attrs[a] for a in co.co_names if isinstance(attrs.get(a), types.FunctionType))
+                    pending.extend(attrs[a] for a in co.co_names if (type(attrs.get(a)) is types.FunctionType))
     return found
 
 
@@ -1070,14 +1072,14 @@ class _Found:
     def value(self, value: Any, label: str | None = None) -> None:
         """Take in *value*, found at *label* (``module.name``) when it is a
         name of a local module."""
-        if isinstance(value, types.ModuleType):
+        if instance_of(value, types.ModuleType):
             if _is_local(value):
                 self.modules.add(value.__name__)
-        elif isinstance(value, types.MethodType):
+        elif instance_of(value, types.MethodType):
             self.value(value.__func__)
-        elif isinstance(value, type):
+        elif instance_of(value, type):
             self._class(value)
-        elif isinstance(value, types.FunctionType) and self._is_user(value):
+        elif instance_of(value, types.FunctionType) and self._is_user(value):
             if id(value) in self._function_ids:
                 return
             self._function_ids.add(id(value))
@@ -1095,7 +1097,7 @@ class _Found:
                 except ValueError:  # an empty cell
                     pass
             self._wrapped(value)
-        elif isinstance(value, types.FunctionType):
+        elif instance_of(value, types.FunctionType):
             # A wrapper that is not the user's code (``@cash.cache``'s): what
             # calling it runs is the function it wraps.
             self._wrapped(value)
@@ -1105,7 +1107,7 @@ class _Found:
             cls = type(value)
             if value is None or cls in _FOREIGN_C_TYPES or self._known_to_lead_nowhere(cls):
                 return
-            if not inspect.isroutine(value):
+            if not is_routine(value):
                 # An instance: its methods run when the statement calls them.
                 self._class(cls)
 
@@ -1115,7 +1117,7 @@ class _Found:
             wrapped = inspect.getattr_static(value, "__wrapped__", None)
         except Exception:  # noqa: BLE001 - an object's attribute lookup
             return
-        if isinstance(wrapped, types.FunctionType):
+        if type(wrapped) is types.FunctionType:
             self.value(wrapped)
 
     def _class(self, cls: type) -> None:
@@ -1153,7 +1155,7 @@ class _Found:
         if id(cls) in self._function_ids:
             return
         self._function_ids.add(id(cls))
-        home = _loaded(getattr(cls, "__module__", None))
+        home = _loaded(attribute_or(cls, "__module__", None))
         if home is not None and _is_local(home):
             self.modules.add(home.__name__)
             for attr, attr_value in list(vars(cls).items()):
@@ -1179,7 +1181,7 @@ class _Found:
         return known
 
     def _decide_users_class(self, cls: type) -> bool:
-        home = _loaded(getattr(cls, "__module__", None))
+        home = _loaded(attribute_or(cls, "__module__", None))
         if home is not None and _is_local(home):
             return True
         if _is_c_type(cls):
@@ -1210,7 +1212,7 @@ class _Found:
         local module on the way, and what it ends at."""
         obj = self.namespace.get(root)
         for attr in reversed(attrs):
-            if not isinstance(obj, types.ModuleType):
+            if not instance_of(obj, types.ModuleType):
                 return
             label = f"{obj.__name__}.{attr}" if _is_local(obj) else None
             obj = vars(obj).get(attr)
@@ -1228,7 +1230,7 @@ class _Found:
             for name in co.co_names:
                 value = self.namespace.get(name)
                 self.value(value)
-                if isinstance(value, types.ModuleType) and _is_local(value):
+                if issubclass(type(value), types.ModuleType) and _is_local(value):
                     self._module_attributes(value, co.co_names)
 
     def _module_body_reads(self, fn: types.FunctionType) -> None:
@@ -1244,7 +1246,7 @@ class _Found:
                     continue
                 value = home[name]
                 self.value(value, f"{home_name}.{name}")
-                if isinstance(value, types.ModuleType) and _is_local(value):
+                if issubclass(type(value), types.ModuleType) and _is_local(value):
                     self._module_attributes(value, co.co_names)
 
     def _module_attributes(self, module: types.ModuleType, names: Iterable[str]) -> None:
@@ -1290,7 +1292,7 @@ def _is_c_type(cls: type) -> bool:
     """Was *cls* made by C code rather than a ``class`` statement? A static
     type, or a heap type an extension created immutable; Python cannot make
     either, nor give one a method."""
-    flags = getattr(cls, "__flags__", 0)
+    flags = attribute_or(cls, "__flags__", 0)
     return not flags & _HEAPTYPE or bool(flags & _IMMUTABLETYPE)
 
 
@@ -1301,7 +1303,7 @@ def _class_member_functions(member: Any) -> Iterable[Any]:
         yield member.__func__
     elif isinstance(member, property):
         yield from (f for f in (member.fget, member.fset, member.fdel) if f is not None)
-    elif isinstance(member, types.FunctionType):
+    elif type(member) is types.FunctionType:
         yield member
 
 
@@ -1314,10 +1316,10 @@ def _is_data(value: Any) -> bool:
     process."""
     return not (
         value is None
-        or isinstance(value, (types.ModuleType, type, sqlite3.Connection, sqlite3.Cursor))
+        or issubclass(type(value), (types.ModuleType, type, sqlite3.Connection, sqlite3.Cursor))
         or inspect.isroutine(value)
         or is_runtime_machinery(value)
-        or getattr(value, "_is_file_tracker_patch", False) is True
+        or attribute_or(value, "_is_file_tracker_patch", False) is True
     )
 
 
@@ -1362,12 +1364,12 @@ def _is_local(module: types.ModuleType) -> bool:
 
 def _local_homes(value: Any) -> Iterable[str]:
     """The local module *value* is, or was defined in."""
-    if isinstance(value, types.ModuleType):
+    if issubclass(type(value), types.ModuleType):
         if _is_local(value):
             yield value.__name__
         return
-    if isinstance(value, (types.FunctionType, type)):
-        home = value.__globals__.get("__name__") if isinstance(value, types.FunctionType) else value.__module__
+    if issubclass(type(value), (types.FunctionType, type)):
+        home = value.__globals__.get("__name__") if type(value) is types.FunctionType else value.__module__
         module = _loaded(home)
         if module is not None and _is_local(module):
             yield module.__name__

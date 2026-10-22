@@ -158,7 +158,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 | [CACHE-NOT-WORTH-BYTES](#cache-not-worth-bytes) | notebook | a big, cheap value was not written to disk |
 | [CACHE-PER-ITEM-RERUN](#cache-per-item-rerun) | notebook | a slow step ran again over a whole collection, though most of it is unchanged |
 | [CACHE-RETURNS-AWAITABLE](#cache-returns-awaitable) | decorator | a sync function returned a coroutine, which is not stored |
-| [CACHE-RESULT-SHARED](#cache-result-shared) | decorator | the result shares state with the caller's object |
+| [CACHE-RESULT-SHARED](#cache-result-shared) | decorator | the result shares state with an object outside the call |
 | [CACHE-THRASH](#cache-thrash) | both | the cache is full and evicts what it just stored |
 | [CACHE-VALUE-TOO-BIG](#cache-value-too-big) | both | a value is bigger than the disk cap |
 | [CACHE-WRITE-ABANDONED](#cache-write-abandoned) | both | the process exited before its writes finished |
@@ -587,14 +587,66 @@ large frame of text columns hashes at about 0.2 s per million rows.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @8c38fe43, cash/decorator/purity_checks.py:PurityChecks._shared_with @edceb490 -->
-**What happened.** The result shares state with an object the caller still
-holds: it is an argument, holds one, is a view of an array argument, or is a
-module global. On the first run, a write through one shows in the other. A
-cache hit returns a separate copy, so from then on it does not. A module
-global the function names and whose type compares by identity (a plain class
-without `__eq__`, such as a sentinel) is not reported: a hit hands back that
-global itself.
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @692eb80f, cash/decorator/purity_checks.py:PurityChecks.warn_shared_on_hit @cdd6af30, cash/decorator/purity_checks.py:PurityChecks._shared_with @ee10af47 -->
+**What happened.** The result shares state with an object outside the
+call: an argument, or something the function reaches by name. On the first
+run, a write through one shows in the other. A cache hit returns a separate
+copy, so from then on it does not. The warning is stored with the entry,
+so a process that only ever gets the hit (after a restart) shows it too.
+cash looks at every result it stores, and says the warning once per
+function; each entry carries the words of what it shares, so a later
+process is told about the one it gets. cash looks two levels into the result, at the
+first 256 values of each dict of any kind, list, tuple, set, deque, object's
+attributes and object array, for:
+
+- an argument, an attribute of an argument that is an object of your class
+  (`return self.rows`, `{"rows": t.rows}`), or memory shared with an array
+  argument;
+- a closure variable, a module global the body names, a default argument,
+  or an attribute of the function itself;
+- an attribute of a class or a module of yours the body names
+  (`Holder.ROWS`), or of an object of your class it names
+  (`REGISTRY.entries`);
+- one of the first 256 items of any of those containers (`CONFIG["sub"]`,
+  `Holder.CFG["sub"]`, a list inside a global tuple);
+- memory shared with any of those arrays, at the top of the result or
+  inside it (`return ARR[1:4]`, `{"train": X[:8], "test": X[8:]}`), or,
+  without pandas copy-on-write (pandas 2 by default), with most columns of
+  one of those frames (`return DF["a"]`, a view of the frame there): numpy
+  columns, pandas' own `Int64`, `boolean`, `category`, time-zone
+  datetime, period and Python-string columns, and a column holding the very
+  interval, sparse or Arrow-backed array of the frame's;
+- the array of a column of one of those frames, or of a frame the call
+  is handed (`DF["c"].array` of a numpy, object or extension column, or
+  `.values` of an `Int64`, time-zone or category column), with
+  copy-on-write too: it is the frame's own, or one over its memory, and a
+  write through it reaches the frame.
+
+Not reported: a value nothing can be written through (a number, a string,
+an enum member, a frozen dataclass of immutable fields, a view of an array
+that is read-only all the way down), and a global whose type compares by
+identity (a plain class without `__eq__`, such as a sentinel), since a hit
+hands back that global itself, and a pandas column under copy-on-write
+(the pandas 3 default), where a write through it copies first and never
+reaches the frame. Nor are pandas' `Timestamp`, `Timedelta`, `Period` and
+`NaT`, its dtypes (`Int64Dtype()`, `CategoricalDtype([...])`), or an
+object, yours or a library's, that a hit hands back as itself, with what
+it holds: one pickle rebuilds by its name, or by a call on plain values
+with no state applied after, to `logging.getLogger` (a `logging.Logger`,
+`getLogger('app')`, already made) or a function that only returns a module
+global (`def get_registry(): return REGISTRY`). To find out, cash asks the
+object for its pickle recipe (its own `__reduce__`) and calls nothing that
+recipe names: it looks the logger up and reads the function. Any other
+call, a `functools.partial` of a class included, is reported. One rebuilt by calling its class is
+reported, a singleton too: a hit runs its `__init__` again on the live
+object. So is one whose pickle carries a state: a hit would write that
+state over the live object. Not seen: sharing deeper than
+two levels or past the 256th value of a container (`BIG_LIST[300]`), an
+item of an attribute of an object (`REGISTRY.entries["a"]`), what an enum
+member holds (`Color.RED.value`), an attribute of a library module or of a
+library object (`LOG.filters`), and memory two arrays share without one
+viewing the other or both viewing the same object (two arrays made from
+separate `memoryview`s of one buffer).
 
 **Why it matters.** A caller that writes through the result, such as filling
 a preallocated array, works on the first run and silently stops working on
@@ -2007,8 +2059,9 @@ not affected.
 <!-- claim: cash/notebook/upstream/simulator.py:NotebookSimulator._warn_stale_magic @777a3665 -->
 **What happened.** The cell reads a name that a shell command or a line magic
 above binds or changes (`files = !ls`, `res["out"] = !cmd`, `%sx cmd`), and
-that command has not run since something it reads changed, or the name is not
-in memory at all (after a restart). The message names the variable and quotes
+that command has not run since something it reads changed (a name, or a file
+or folder its line read in Python: `!wc -l {max(glob.glob('logs/*.log'))}`),
+or the name is not in memory at all (after a restart). The message names the variable and quotes
 the command's line. A `%time`, `%timeit` or `%prun` line is not one of them:
 it runs Python, and cash runs it again with the Python above it, as a run from
 the top does.
@@ -2472,6 +2525,8 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 | [STORE-LOCK-FAILED](#store-lock-failed) | decorator | the per-key lock failed; ran without it |
 | [STORE-METADATA-INVALID](#store-metadata-invalid) | decorator | a stored entry's metadata is unreadable |
 | [STORE-PARTS-SHARED](#store-parts-shared) | decorator | two parts of the result share memory a hit would split; not stored |
+| [STORE-PARTS-UNCHECKED](#store-parts-unchecked) | both | the result was too big to look through in time for a function sharing a part of it; not stored |
+| [STORE-REF-UNSUPPORTED](#store-ref-unsupported) | notebook | the value holds a variable's object in a form cash cannot keep as a reference (a bound method); not stored |
 | [STORE-RESULT-WRITTEN](#store-result-written) | both | a table kept uncopied was written past pandas after its store; entry dropped |
 | [STORE-STATE-CHANGED](#store-state-changed) | decorator | a global the key read changed during the call; not stored |
 | [STORE-WORK-RUNNING](#store-work-running) | both | work it handed to a thread or thread pool still ran when it returned; not stored |
@@ -2634,7 +2689,7 @@ interrupted write.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/result_parts.py:split_by_a_hit @0ed503f3 -->
+<!-- claim: cash/decorator/result_parts.py:split_by_a_hit @0ed503f3, cash/closure_sharing.py:closures_sharing @a604358a -->
 **What happened.** The result holds two parts over the same memory: two
 numpy arrays whose data overlap, such as `return a, a[2:5]`, a numpy
 array and a polars or pandas frame made over it, such as
@@ -2647,6 +2702,9 @@ Arrays that share a base but no element, such as
 returned twice. So is a pair no one can write through: two read-only
 arrays, or a read-only array from a frame that never writes it, such as
 `return df, df["y"].to_numpy()` under polars or pandas copy-on-write.
+The same holds for a result holding a function whose closure holds another
+part of it, `return arr, lambda: arr`: the function cannot be pickled, so a
+hit keeps it as it is and copies `arr`.
 
 **Why it matters.** On the first run a write to one part, `a[2] = -1`,
 shows in the other too. A cache hit hands the two back as separate copies,
@@ -2659,6 +2717,54 @@ function cannot be served from the cache.
 
 **When it is safe to ignore.** When the function is cheap: it runs every
 time, which is what the code means.
+
+### STORE-PARTS-UNCHECKED {#store-parts-unchecked}
+
+<span class="md-tag cash-warning-path">both</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
+
+<!-- claim: cash/closure_sharing.py:closures_sharing @cc3436aa, cash/closure_sharing.py:closure_check_budget @f0cbe2b2 -->
+**What happened.** Before storing a result, cash looks through it for a
+function whose closure holds another part of it, `return arr, lambda: arr`
+(see [STORE-PARTS-SHARED](#store-parts-shared)). The look takes at most
+twice what the function, call or statement took, and at least a second. It
+ran out of time before it had seen the whole result, so the result was not
+stored. The message names the time it had.
+
+**Why it matters.** A function past where the look stopped could close over
+another part of the result. A cache hit would copy that part and keep the
+function as it is, so the two would no longer share it. Not storing keeps
+the run exactly as it is.
+
+**What to do.** Nothing, if the work is cheap: it runs every time. To have
+it cached, return a smaller result, or its data without the objects that
+hold functions; in a notebook, bind the large data and the objects holding
+functions in separate statements.
+
+**When it is safe to ignore.** When the work is cheap enough to run every
+time.
+
+### STORE-REF-UNSUPPORTED {#store-ref-unsupported}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
+
+<!-- claim: cash/notebook/statement/store.py:_warn_not_stored @75647304 -->
+**What happened.** A statement's value holds the object of another
+variable, and cash keeps such a value with a reference to that variable in
+its place, so a hit holds the variable's object as it is then and not a
+copy. Here the value holds it in a form that cannot be rebuilt around a
+reference: a bound method, `hooks = {'add': results.append}`, is rebuilt
+as `getattr(results, 'append')`. The message names the variable it could
+not be rebuilt around. A value whose own pickling fails is STORE-FAILED, as
+it is without such a variable. The statement ran but was not stored.
+
+**Why it matters.** Your result is correct. The statement runs again every
+time.
+
+**What to do.** Nothing, for a correct result. To have it cached, hold the
+variable itself (`hooks = {'target': results}`, called as
+`hooks['target'].append(5)`) rather than its method.
+
+**When it is safe to ignore.** When the statement is cheap.
 
 ### STORE-RESULT-WRITTEN {#store-result-written}
 

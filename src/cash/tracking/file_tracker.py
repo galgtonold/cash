@@ -665,7 +665,7 @@ class FileAccessTracker:
         catching an edit to the target itself.
         """
         try:
-            raw = str(path)
+            raw = os.fsdecode(path)
             if raw and not os.path.isabs(raw):
                 rel = normalize_path(raw)
                 return rel if rel != abs_path else None
