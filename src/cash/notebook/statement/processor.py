@@ -192,6 +192,7 @@ from ..shared_objects import (
     ViewBasesCutShort,
     WalkBudgetExceeded,
     anchors_held,
+    frames_sharing_cells,
     history_names,
     is_value,
     library_value_types,
@@ -2518,6 +2519,8 @@ class StatementProcessor:
         bases, bases_complete = self._view_bases_of(outputs, captured_vars, cost, run.inputs)
         links += bases
         complete = complete and bases_complete
+        if not complete:
+            links += self._cells_shared(outputs, captured_vars)
         for owners, names in links:
             record_shared_object_edges(self.tracking_state.derivation_edges, owners, names)
         if not complete:
@@ -2710,7 +2713,23 @@ class StatementProcessor:
             skip_name=lambda name: foreign(name) or name in names,
             ignore=[captured_vars, run.metrics, echo, *cash_held],
         )
-        return [(outputs, found_names)], complete
+        # The search up does not climb from a list's items through a
+        # frame's slots to the frame, finished or not.
+        return [(outputs, found_names), *self._cells_shared(names, captured_vars)], complete
+
+    def _cells_shared(self, outputs: list[str], captured_vars: dict[str, Any]) -> list[tuple[Iterable[str], set[str]]]:
+        """Each of *outputs* with the variables sharing a frame's object
+        cells with it (`frames_sharing_cells`): read by address, which takes
+        no walk, for when the share check was cut short. ``L =
+        list(df['o'])`` over 100,000 rows ran out of its budget some runs
+        and not others, and ``L[3]['z'] = 2`` moved ``df`` only in the runs
+        whose check finished."""
+        hidden = attribute_or(self.shell, "user_ns_hidden", None) or {}
+        return frames_sharing_cells(
+            {name: captured_vars[name] for name in outputs},
+            self.shell.user_ns,
+            lambda name: name in hidden or is_history_name(name),
+        )
 
     def _fallback_seconds(self, run: StatementRun, fallback_floor: float) -> float:
         """How long the search from the outputs up (`referring_names`) may

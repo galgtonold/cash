@@ -64,6 +64,7 @@ __all__ = [
     "anchors_held",
     "attrs_copied_apart",
     "column_values_only",
+    "frames_sharing_cells",
     "history_names",
     "holds_part_of",
     "output_history",
@@ -2829,6 +2830,65 @@ def _count_category_slots(nodes: dict[int, Any], inbound: dict[int, int]) -> Non
         for item in array.tolist():
             if id(item) in inbound:
                 inbound[id(item)] += 1
+
+
+def frames_sharing_cells(
+    outputs: Mapping[str, Any], user_ns: Mapping[str, Any], skip_name: Callable[[str], bool]
+) -> list[tuple[list[str], set[str]]]:
+    """Each of *outputs* with the variables of *user_ns* sharing a frame's
+    object cells with it, by address: a list, tuple, set or dict holding a
+    frame's cells at its top level, a variable bound to one cell, or a frame
+    holding them. For when the share check gave up: ``L = list(df['o'])``
+    over 100,000 rows ran out of its budget some runs and not others, and
+    unlinked, ``L[3]['z'] = 2`` left ``df`` at its lineage from before and
+    a statement reading ``df['o']`` was served what it read then. A read of
+    each frame's slots and of each container's top level, not a walk."""
+    np = sys.modules.get("numpy")
+    if np is None or "pandas" not in sys.modules:
+        return []
+    value_types = set(VALUE_TYPES)
+    cells: dict[str, Any] = {}
+    tops: dict[str, Any] = {}
+
+    def cells_of(name: str, value: Any) -> Any:
+        if name not in cells:
+            columns = object_columns_of(value)
+            cells[name] = sorted_unique(np.concatenate([addresses(c) for c in columns])) if columns else None
+        return cells[name]
+
+    def top_of(name: str, value: Any) -> Any:
+        if name not in tops:
+            kind = type(value)
+            items: Iterable[Any] = ()
+            if kind in (list, tuple, set, frozenset):
+                items = value
+            elif kind is dict:
+                items = value.values()
+            elif kind in value_types:
+                tops[name] = None
+                return None
+            ids = [id(value), *(id(item) for item in items if type(item) not in value_types)]
+            tops[name] = np.array(ids, dtype=np.int64)
+        return tops[name]
+
+    others = [(name, value) for name, value in user_ns.items() if name not in outputs and not skip_name(name)]
+    links: list[tuple[list[str], set[str]]] = []
+    for name, value in outputs.items():
+        mine, held = cells_of(name, value), top_of(name, value)
+        found: set[str] = set()
+        for other, theirs in others:
+            if held is not None and held.size and (their_cells := cells_of(other, theirs)) is not None:
+                if in_sorted(held, their_cells).any():
+                    found.add(other)
+                    continue
+            if mine is not None and mine.size:
+                if (their_cells := cells_of(other, theirs)) is not None and in_sorted(their_cells, mine).any():
+                    found.add(other)
+                elif (their_top := top_of(other, theirs)) is not None and in_sorted(their_top, mine).any():
+                    found.add(other)
+        if found:
+            links.append(([name], found))
+    return links
 
 
 def _pandas_slot_holders(
