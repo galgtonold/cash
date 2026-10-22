@@ -614,7 +614,11 @@ def _refill(memo: Any, calls: list[list[str]]) -> bool:
     import ast
 
     held = set(_item_digests(memo) or ())
-    for digest, text in calls:
+    for call in calls:
+        # A record an earlier layout wrote (``[text]``): not read, refused.
+        if not (isinstance(call, (list, tuple)) and len(call) == 2 and all(isinstance(p, str) for p in call)):
+            return False
+        digest, text = call
         if digest in held:
             continue
         try:
@@ -650,7 +654,9 @@ def unfilled(records: list[dict] | None, ns: Mapping[str, Any], *, refill: bool 
     every key and answer it held when the statement ran. *refill*: False
     only checks (the forward probe, before the statement's place, where
     what the helper reads may still change): a pure memo lacking a key is
-    left to the lookup at the statement's place."""
+    refused there, as the lookup at the statement's place may refuse it
+    once a cell above has run, and a variable the probe had left to the
+    entry would then not be rebuilt."""
     if not records:
         return None
     for record in records:
@@ -669,7 +675,7 @@ def unfilled(records: list[dict] | None, ns: Mapping[str, Any], *, refill: bool 
             continue
         if record.get("pure") and record.get("calls") is not None and _pure(memo):
             if not refill:
-                continue
+                return f"the helper memo {label} lacks answers the statement read"
             # Fill it now as the run did, while what the helper reads is
             # what it read then: a later cell can still shadow a builtin
             # it calls, and an empty memo would then compute otherwise.
@@ -728,6 +734,31 @@ def _names_clear(fn: Any) -> bool:
     return any(_is_clear(globals_.get(name)) for scope in iter_code_scopes(code) for name in scope.co_names)
 
 
+def _text_names_counters(code: str) -> bool:
+    """The statement's *code* names ``cache_clear`` or ``cache_info``, as an
+    attribute or a name, or holds a string with one or starting with
+    ``cache_`` (``getattr(f, "cache_" + "info")``), as `_names_clear` asks
+    of a function. Not a name that only contains one (``cache_info_rows``).
+    Text that does not parse is taken by its letters."""
+    import ast
+
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError, RecursionError):
+        return any(name in code for name in _COUNTER_NAMES)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            if node.attr in _COUNTER_NAMES:
+                return True
+        elif isinstance(node, ast.Name):
+            if node.id in _COUNTER_NAMES:
+                return True
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if node.value.startswith("cache_") or any(name in node.value for name in _COUNTER_NAMES):
+                return True
+    return False
+
+
 def clears(code: str | None, ns: Mapping[str, Any] | None, fn: Any = None) -> bool:
     """Whether a statement's *code* (or the call of *fn*) can empty a memo
     or read its counters: it, or a function of the user's it reaches, names
@@ -750,7 +781,7 @@ def clears(code: str | None, ns: Mapping[str, Any] | None, fn: Any = None) -> bo
             return False
         code, ns = name, globals_
     elif code is not None:
-        if any(name in code for name in _COUNTER_NAMES):
+        if _text_names_counters(code):
             return True
         try:
             if ns is not None and any(not attrs and _is_clear(ns.get(root)) for root, attrs in names_read(code)):
