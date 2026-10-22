@@ -130,3 +130,32 @@ def test_assume_safe_stores_it(cash_magics):
     assert not _codes(cash_magics, statement + "  # @cash:assume-safe")
     run_cash_cell(cash_magics, statement + "  # @cash:assume-safe")
     assert _status(cash_magics) == ["RESTORED"]
+
+
+def test_a_generator_expression_is_read_with_the_function_it_is_made_in(cash_magics):
+    """``sum(i * i for i in r)`` inside a function that ran: its text is
+    the function's, which changes nothing outside."""
+    run_cash_cell(cash_magics, "import time\ndef total(n):\n    return sum(i * i for i in range(n))")
+    statement = f"w = (total(5), {SLEEP})"
+    assert not _codes(cash_magics, statement)
+    run_cash_cell(cash_magics, statement)
+    assert _status(cash_magics) == ["RESTORED"]
+
+
+def test_a_generator_expression_run_on_its_own_is_read_from_its_line(tmp_path, monkeypatch):
+    """Made in a function that has returned (``mk()`` hands it out), it
+    runs without that function: read from its own line."""
+    import importlib
+    import types
+
+    from cash.notebook.statement.unseen_writes import own_writes
+
+    (tmp_path / "gx_made.py").write_text(
+        "calls = []\ndef mk():\n    a = sum(i for i in range(3))\n    return a, (calls.append(1) for _ in [0])\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    module = importlib.import_module("gx_made")
+    monkeypatch.delitem(sys.modules, "gx_made")
+    made = [c for c in module.mk.__code__.co_consts if isinstance(c, types.CodeType)]
+    assert sorted(own_writes(c) for c in made) == [frozenset(), frozenset({"calls"})]

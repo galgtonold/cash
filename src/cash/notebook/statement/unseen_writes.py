@@ -69,9 +69,12 @@ def unseen_writers(
         own.add(code)
         pending.extend(c for c in code.co_consts if isinstance(c, types.CodeType))
     kept = set(outputs)
+    # A generator expression, a lambda or a function made inside one that
+    # ran is part of its text, read with it (``sum(i * i for i in r)``).
+    inside = {c for code in codes for c in code.co_consts if isinstance(c, types.CodeType)}
     found: list[tuple[str, tuple[str, ...]]] = []
     for code, (globals_, _module) in list(codes.items()):
-        if code in own or code.co_qualname == "<module>":
+        if code in own or code in inside or code.co_qualname == "<module>":
             continue
         writes = own_writes(code)
         if not writes:
@@ -113,6 +116,9 @@ def own_writes(code: types.CodeType) -> frozenset[str]:
 @functools.lru_cache(maxsize=4096)
 def _function_node(code: types.CodeType) -> ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda | None:
     """The definition of *code*'s function, from its file, or None."""
+    comprehension = _COMPREHENSIONS.get(code.co_name)
+    if comprehension is not None:
+        return _comprehension_node(code, comprehension)
     try:
         source = getsource(code)
     except SOURCE_RETRIEVAL_ERRORS:
@@ -133,6 +139,36 @@ def _function_node(code: types.CodeType) -> ast.FunctionDef | ast.AsyncFunctionD
         if isinstance(node, kinds) and (isinstance(node, ast.Lambda) or node.name == code.co_name):
             return node
     return None
+
+
+_COMPREHENSIONS = {
+    "<genexpr>": ast.GeneratorExp,
+    "<listcomp>": ast.ListComp,
+    "<setcomp>": ast.SetComp,
+    "<dictcomp>": ast.DictComp,
+}
+
+_NO_ARGUMENTS = ast.arguments(posonlyargs=[], args=[], vararg=None, kwonlyargs=[], kw_defaults=[], kwarg=None, defaults=[])
+
+
+def _comprehension_node(code: types.CodeType, kind: type) -> ast.Lambda | None:
+    """A generator expression (or, before 3.12, a comprehension) that ran
+    apart from the function it was made in, as a function whose body it is:
+    the one of its kind on its first line of its file (all of them, when
+    the line has several). None if the file no longer has one there."""
+    import linecache
+
+    text = "".join(linecache.getlines(code.co_filename))
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return None
+    found = [node for node in ast.walk(tree) if isinstance(node, kind) and node.lineno == code.co_firstlineno]
+    if not found:
+        return None
+    # Several on the line: what any of them changes.
+    body = found[0] if len(found) == 1 else ast.Tuple(elts=found, ctx=ast.Load())
+    return ast.Lambda(args=_NO_ARGUMENTS, body=body)
 
 
 def _own_nodes(node: ast.AST) -> Iterable[ast.AST]:
