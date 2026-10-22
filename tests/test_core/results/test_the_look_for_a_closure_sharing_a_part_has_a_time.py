@@ -17,6 +17,7 @@ import warnings
 from typing import NamedTuple
 
 import numpy as np
+import pytest
 
 from cash import Cash, closure_sharing
 from cash.backends.persistence_policy import PersistencePolicy
@@ -230,3 +231,28 @@ def test_a_function_in_a_frame_column_is_found_after_the_frames_dtypes_are_read(
     frame = pd.DataFrame({"f": [lambda: arr, None]})
     _ = frame.dtypes, frame["f"].dtype
     assert closures_sharing({"a": arr, "g": frame}, 5.0) == (["g"], True)
+
+
+def _column_and_getter(extra_column):
+    import pandas as pd
+
+    held = {"k": [1]}
+    columns = {"o": [held, {"b": 2}], **({"x": [1, 2]} if extra_column else {})}
+    frame = pd.DataFrame(columns)
+    _ = frame.dtypes
+    return frame, lambda: held["k"]
+
+
+@pytest.mark.parametrize("extra_column", [False, True])
+def test_a_column_of_plain_cells_is_read_once_a_function_is_found(extra_column, monkeypatch):
+    """A frame's column of dicts holds no function, and is read cell by
+    cell only once a function is found elsewhere: here one reaching a
+    cell, kept by reference apart from the copied frame."""
+    frame, getter = _column_and_getter(extra_column)
+    assert closures_sharing({"f": frame, "h": getter}, 5.0) == (["h"], True)
+    assert closures_sharing({"one": {"f": frame, "h": getter}}, 5.0) == (["one"], True)
+    read = []
+    real = closure_sharing._object_parts
+    monkeypatch.setattr(closure_sharing, "_object_parts", lambda item, kind: read.append(item) or real(item, kind))
+    assert closures_sharing({"f": frame}, 5.0) == ([], True)
+    assert not [item for item in read if type(item) is np.ndarray and item.dtype.hasobject]

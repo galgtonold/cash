@@ -89,13 +89,14 @@ def closures_sharing(captured_vars: Mapping[str, Any], seconds: float) -> Closur
             plain.add(name)
     places: set[int] = set()
     functions: list[tuple[str, types.FunctionType]] = []
+    deferred: list[tuple[str, Any]] = []  # (name, what a deferred array hands pickle)
     for name, value in captured_vars.items():
-        if name not in plain and not _walk(name, value, places, functions, limit):
+        if name not in plain and not _walk(name, value, places, functions, limit, deferred):
             return ClosureCheck([], finished=False)
     if not functions:
         return ClosureCheck([])
-    for name in plain:
-        if not _walk(name, captured_vars[name], places, functions, limit):
+    for name, value in [*((name, captured_vars[name]) for name in plain), *deferred]:
+        if not _walk(name, value() if callable(value) else value, places, functions, limit):
             return ClosureCheck([], finished=False)
     names: set[str] = set()
     for name, fn in functions:
@@ -126,11 +127,20 @@ def _plain(value: Any, limit: CpuLimit) -> bool | None:
     return True
 
 
-def _walk(name: str, value: Any, places: set[int], functions: list, limit: CpuLimit) -> bool:
+def _walk(
+    name: str, value: Any, places: set[int], functions: list, limit: CpuLimit, deferred: list | None = None
+) -> bool:
     """Add to *places* the id of every object *value* holds, and to
     *functions* each function with a closure among them, with *name*;
     False when *limit* ran out first. A level's builtin containers are read
-    in bulk; an atom is neither a place nor looked into."""
+    in bulk; an atom is neither a place nor looked into.
+
+    With *deferred*, an object array holding JSON-like data only (a frame's
+    column of dicts, `_plain_cells`) holds no function and is added to it
+    unread, with *name*, as a call giving its parts: its cells are places
+    only if a function is found.
+    Fifty views of a frame of 100,000 dicts were each read cell by cell,
+    with no function anywhere."""
     level: list | None = _fresh([[value]], places, limit)
     if level is None:
         return False
@@ -150,12 +160,36 @@ def _walk(name: str, value: Any, places: set[int], functions: list, limit: CpuLi
                 for done, item in enumerate(group, 1):
                     if done % _CLOCK_EVERY == 0 and limit.passed():
                         return False
+                    if deferred is not None and _object_array(kind, item):
+                        plain = _plain_cells(item, limit)
+                        if plain is None:
+                            return False
+                        if plain:  # the array is a place already: its parts are walked
+                            deferred.append((name, lambda item=item, kind=kind: _object_parts(item, kind)))
+                            continue
                     held.append(_object_parts(item, kind))
         if limit.passed():
             return False
         level = _fresh(held, places, limit)
         if level is None:
             return False
+    return True
+
+
+def _object_array(kind: type, item: Any) -> bool:
+    """Is *item*, of *kind*, a numpy array of objects?"""
+    return kind.__name__ == "ndarray" and kind.__module__ == "numpy" and item.dtype.hasobject
+
+
+def _plain_cells(array: Any, limit: CpuLimit) -> bool | None:
+    """Does the object *array* hold JSON-like data only (`tree_levels`)?
+    None when *limit* ran out first."""
+    try:
+        for _level in tree_levels(array.tolist()):
+            if limit.passed():
+                return None
+    except Exception:  # noqa: BLE001 - not plain (an object, an unhashable key): walked
+        return False
     return True
 
 
