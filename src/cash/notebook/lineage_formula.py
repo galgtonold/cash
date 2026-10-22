@@ -34,7 +34,7 @@ from ..effects import ENVIRONMENT_TEXT_MARKERS, environment_component, environme
 from ..source_norm import unparse_without_docstrings
 from ..tracking.module_symbols import closure_digest, static_attribute_reads
 from ..tracking.randomness import hidden_lineage_reads, observed_rng_reads
-from ..value_hash import compute_hash, is_identity_fallback_hash
+from ..value_hash import budgeted_hash, compute_hash, is_identity_fallback_hash
 from .callee_reach import Reach, reached_user_code
 from .held_code import held_code_digest
 from .read_handles import read_handle_digest
@@ -394,12 +394,17 @@ def no_cache_value_digest(value: Any) -> str:
     in-place change, and a new object can reuse an old one's address. A file
     open for reading is named by its file and position instead
     (:func:`read_handle_digest`), so what is read from it can be cached.
+
+    The digest has the budget of a check whether a value changed
+    (`budgeted_hash`): a value of many objects can take seconds to read,
+    several times what bound it, on every run. Past it the value gets a
+    digest of its own, and its readers recompute.
     """
     handle = read_handle_digest(value)
     if handle is not None:
         return handle
-    digest = compute_hash(value)
-    if is_identity_fallback_hash(value, digest):
+    digest = budgeted_hash(value)
+    if digest is None or is_identity_fallback_hash(value, digest):
         return "fresh:" + secrets.token_hex(16)
     return digest
 

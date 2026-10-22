@@ -133,6 +133,15 @@ class StatementRun:
     #: every time because its key does not hold all it read, so the same
     #: lineage could stand for a new value and serve a reader below stale.
     value_pinned: bool = False
+    #: It reads what no lineage of its inputs follows (a function a string
+    #: names, an iterator it draws from): its outputs are keyed by value even
+    #: when another reason that refuses it pins them.
+    reads_outside_lineage: bool = False
+    #: The names it binds to a new object and does not change in place
+    #: (`CodeAnalyzer.reassigned_names`): only these are keyed by value. A
+    #: name changed in place, by the statement or a function it calls, keeps
+    #: the lineage the change gives it (`MutationRouting.route`).
+    bound: frozenset[str] = frozenset()
     allow_random: bool = False
     unseeded_calls: list = field(default_factory=list)
     inputs: set[str] = field(default_factory=set)

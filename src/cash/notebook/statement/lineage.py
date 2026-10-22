@@ -27,7 +27,7 @@ import ast
 import logging
 import os
 import types
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from typing import TYPE_CHECKING, Any
 
 from cash._user_attrs import attribute_or, instance_of
@@ -205,6 +205,7 @@ class StatementLineageBuilder:
         tree: ast.Module | None = None,
         accessed_remote: set[str] | None = None,
         no_cache: bool = False,
+        value_kept: Collection[str] = (),
         replay_bumps: bool = True,
         lineage_reads: frozenset[str] = frozenset(),
         probes: dict[str, str] | None = None,
@@ -231,7 +232,8 @@ class StatementLineageBuilder:
 
         *no_cache* marks a ``# @cash:no-cache`` statement: each output's
         lineage then also carries a digest of its value
-        (:func:`no_cache_value_digest`).
+        (:func:`no_cache_value_digest`), but those in *value_kept*: names it
+        changed in place, whose lineage moves on with the change.
 
         *accessed_remote* holds object-storage URLs the statement read. They
         join the same lineage component as local files, contributing the store's
@@ -319,7 +321,7 @@ class StatementLineageBuilder:
                 func_component,
                 self._compute_module_lineage_component(tracking_state, value, var_name, code, tree),
                 changed_module_environment(var_name, value, code, environment),
-                self._no_cache_value(value_digests, var_name, value) if no_cache else "",
+                self._no_cache_value(value_digests, var_name, value) if no_cache and var_name not in value_kept else "",
             )
             # A module set by a setting that is the same when run again
             # (``pd.set_option('display.width', 120)``) keeps one run's

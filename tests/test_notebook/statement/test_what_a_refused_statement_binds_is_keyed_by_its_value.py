@@ -19,6 +19,7 @@ import pytest
 
 import cash.analysis.handed_callables as hc
 import cash.notebook.shadow as shadow
+import cash.value_hash as value_hash
 from cash.backends.persistence_policy import PersistencePolicy
 from tests._cell_driver import run_cash_cell
 
@@ -74,10 +75,100 @@ def test_a_reader_of_an_unchanged_value_is_still_served(cash_magics, monkeypatch
     ns = cash_magics.shell.user_ns
     for cell in cells:
         run_cash_cell(cash_magics, cell, cells=cells)
+    lineage = cash_magics.tracking_state.variable_lineage
+    before = lineage["v"]
     run_cash_cell(cash_magics, cells[1], cells=cells)
+    # The value's digest is the same run to run: the reader is not only
+    # served through the same-value cutoff.
+    assert lineage["v"] == before, "the same value was keyed apart"
     run_cash_cell(cash_magics, cells[2], cells=cells)
     assert ns["RUNS"] == [1], "the reader ran again over the same value"
     assert ns["w"] == [1, 1]
+
+
+#: name: (setup, the statement's expression, a change to what it reads made
+#: outside cash's view, whether the tracer is off). Each is refused for a
+#: reason that alone would pin what it binds -- an in-place change, a file
+#: write, an alias -- or that does not pin it although it once did: a call
+#: to a process. What else it reads keys its outputs by value all the same.
+PINNED_ELSEWHERE = {
+    "an append beside a string lookup": (
+        "def g():\n    return 1\nL = []",
+        "(L.append(0), globals()['g']())[1]",
+        "def g():\n    return 2",
+        True,
+    ),
+    "an append beside a string lookup, traced": (
+        "def g():\n    return 1\nL = []",
+        "(L.append(0), globals()['g']())[1]",
+        "def g():\n    return 2",
+        False,
+    ),
+    "a setdefault beside a string lookup": (
+        "def g():\n    return 1\nD = {}",
+        "D.setdefault('k', 0) + globals()['g']()",
+        "def g():\n    return 2",
+        True,
+    ),
+    "an append beside an iterator": (
+        "it = iter(range(100))\nL = []",
+        "(L.append(0), next(it))[1]",
+        "_ = next(it)",
+        False,
+    ),
+    "a process's output": (
+        "import os, subprocess, sys, tempfile\np = os.path.join(tempfile.mkdtemp(), 'f.txt')\n"
+        "open(p, 'w').write('1')\nCAT = [sys.executable, '-c', 'import sys; print(open(sys.argv[1]).read())']",
+        "subprocess.check_output(CAT + [p]).decode().strip()",
+        "open(p, 'w').write('2')",
+        False,
+    ),
+    "a file write beside a string lookup": (
+        "import os, tempfile\np = os.path.join(tempfile.mkdtemp(), 'f.txt')\ndef g():\n    return 1",
+        "(open(p, 'w').write('x'), globals()['g']())[1]",
+        "def g():\n    return 2",
+        True,
+    ),
+    "a name read through the namespace": ("k = 1\nNS = globals()", "NS['k']", "k = 2", False),
+}
+
+
+@pytest.mark.parametrize("case", list(PINNED_ELSEWHERE))
+def test_a_reason_that_pins_does_not_hide_one_that_does_not(cash_magics, monkeypatch, case):
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    setup, expr, change, tracer_off = PINNED_ELSEWHERE[case]
+    if tracer_off:
+        monkeypatch.setattr(shadow, "SHADOW", None)
+    cells = [setup, f"v = {expr}", READER]
+    ns = cash_magics.shell.user_ns
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    first = ns["v"]
+    exec(change, ns)
+
+    for cell in cells[1:]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert ns["v"] != first, "the change did not reach the statement"
+    assert ns["w"] == [ns["v"], "read"], f"the reader was served what {first!r} gave"
+
+
+def test_a_value_too_costly_to_digest_gets_a_lineage_of_its_own(cash_magics, monkeypatch):
+    """The value digest has a change check's budget: past it, the value is
+    keyed apart each run and its readers recompute, rather than every run
+    pay seconds for a value of many objects."""
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    monkeypatch.setattr(shadow, "SHADOW", None)
+    monkeypatch.setattr(value_hash, "CHANGE_CHECK_BUDGET_S", 0.0)
+    setup = (
+        "class Box:\n    def __init__(self, i):\n        self.i = i\ndef g():\n    return [Box(i) for i in range(300)]"
+    )
+    cells = [setup, "v = globals()['g']()"]
+    lineage = cash_magics.tracking_state.variable_lineage
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    before = lineage["v"]
+    run_cash_cell(cash_magics, cells[1], cells=cells)
+    assert lineage["v"] != before
 
 
 #: name: (setup, the statement's expression, a change to what the code it

@@ -909,6 +909,7 @@ class StatementProcessor:
         # Computed once: used by the cacheability decision and (on the
         # cache-miss path) by _post_execute for in-place-mutation tracking.
         run.analysis = analyze_statement(run.code, run.tree, self.shell.user_ns)
+        run.bound = frozenset(CodeAnalyzer.reassigned_names(run.code, run.tree))
         self._within_budget(run, lambda: self._mutation_routing.route(run, effects))
         try:
             with analysis_budget(run.analysis_budget):
@@ -1183,31 +1184,55 @@ class StatementProcessor:
         return effects, analysis_time, hash_time
 
     def _decide_cacheability(self, run: StatementRun) -> None:
-        """Skip-cache *run* when the static cacheability decision refuses it."""
-        if run.skip_cache:
-            return
-        cacheable, reasons, varies, unless_it_draws = cacheability_verdict(
-            code=run.code,
-            tree=run.tree,
-            inputs=run.inputs,
-            outputs=run.outputs,
-            annotation=run.annotation,
-            analysis=run.analysis,
-            user_ns=self.shell.user_ns,
-            variable_lineage=self.tracking_state.variable_lineage,
-            is_stateful_call=self._check_callable_stateful,
-            scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
-            # What it runs is recorded (``Unit.pyplot_ran``): a helper that
-            # can draw refuses it only when it did (`_refuse_if_it_drew`).
-            pyplot_seen_as_it_runs=_shadow.SHADOW is not None,
-        )
-        if not cacheable:
-            run.metrics["uncacheable_reasons"].extend(reasons)
-            run.skip_cache = True
-            run.value_varies = varies
-            run.value_pinned = not varies
-            return
-        run.unless_it_draws = unless_it_draws
+        """Skip-cache *run* when the static cacheability decision refuses it.
+
+        A statement refused already, or refused here for a reason that pins
+        what it binds, is still looked at for what it reads that no lineage
+        of its inputs follows (`_refuse_reads_outside_lineage`): such a read
+        keys its outputs by value whatever else refused it."""
+        if not run.skip_cache:
+            cacheable, reasons, varies, unless_it_draws = cacheability_verdict(
+                code=run.code,
+                tree=run.tree,
+                inputs=run.inputs,
+                outputs=run.outputs,
+                annotation=run.annotation,
+                analysis=run.analysis,
+                user_ns=self.shell.user_ns,
+                variable_lineage=self.tracking_state.variable_lineage,
+                is_stateful_call=self._check_callable_stateful,
+                scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
+                # What it runs is recorded (``Unit.pyplot_ran``): a helper that
+                # can draw refuses it only when it did (`_refuse_if_it_drew`).
+                pyplot_seen_as_it_runs=_shadow.SHADOW is not None,
+            )
+            if not cacheable:
+                run.metrics["uncacheable_reasons"].extend(reasons)
+                run.skip_cache = True
+                run.value_varies = varies
+                run.value_pinned = not varies
+                if varies:
+                    return
+            else:
+                run.unless_it_draws = unless_it_draws
+        self._refuse_reads_outside_lineage(run)
+
+    def _refuse_reads_outside_lineage(self, run: StatementRun) -> None:
+        """Refuse *run* for a read no lineage of its inputs follows: a
+        function a string names, one held where cash does not walk, a module
+        whose file cannot be read, an iterator or an open file it draws from.
+
+        What it binds is keyed by its value whatever pins it
+        (``StatementRun.reads_outside_lineage``); refused already, it gets no
+        second reason."""
+        refused = run.skip_cache
+
+        def refuse(reason: str) -> None:
+            run.reads_outside_lineage = True
+            if not refused:
+                run.metrics["uncacheable_reasons"].append(reason)
+                run.skip_cache = True
+
         unfollowed, by_string, unkeyed_modules, followed = unkeyed_reach(
             run.code, run.inputs, self.shell.user_ns, self.tracking_state.variable_lineage
         )
@@ -1215,66 +1240,59 @@ class StatementProcessor:
             # Its key cannot name what the notebook functions held in them
             # read (``held_functions``): served, it could be stale.
             names = ", ".join(repr(n) for n in sorted(unfollowed))
-            run.metrics["uncacheable_reasons"].append(
+            return refuse(
                 f"Reads {names}, which holds more objects than cash walks to find the notebook functions in it: "
                 f"what those functions read cannot be keyed, so the statement runs every time"
             )
-            run.skip_cache = True
-            return
-        if by_string and followed and _shadow.SHADOW is not None:
+        if by_string and followed and _shadow.SHADOW is not None and not refused:
             # What the string found is recorded as it runs, and its trace is
             # checked before a hit is served (``cache_key.lookups_followed``).
             run.needs_trace = True
         elif by_string:
             # Its key cannot name the function a string spells at run time
-            # (``string_lookups``): served, it could be stale.
+            # (``string_lookups``): served, it could be stale. Refused for
+            # another reason, it is not traced either.
             who = "The statement" if THE_STATEMENT in by_string else ", ".join(repr(n) for n in sorted(by_string))
-            run.metrics["uncacheable_reasons"].append(
+            return refuse(
                 f"{who} looks names up by a string (globals(), eval, vars(), getattr on a module): "
                 f"which function that reaches, and what it reads, is known only when it runs, "
                 f"so the statement runs every time"
             )
-            run.skip_cache = True
-            return
         if unkeyed_modules:
             # Its key names the code of the modules whose objects it calls
             # into (``held_modules``), and the file of these cannot be read:
             # served, it could be stale.
             names = ", ".join(repr(n) for n in sorted(unkeyed_modules))
-            run.metrics["uncacheable_reasons"].append(
+            return refuse(
                 f"Reads objects of classes from your module {names}, whose file cannot be read: "
                 f"what their methods run cannot be keyed, so the statement runs every time"
             )
-            run.skip_cache = True
-            return
         drawn = drawn_stream_inputs(run.tree, run.inputs, run.outputs, self.shell.user_ns)
         if drawn:
-            run.metrics["uncacheable_reasons"].append(
+            refuse(
                 f"Reads from {', '.join(repr(n) for n in drawn)}, an iterator or stream: "
                 f"a cache hit would not advance it, so the statement runs every time"
             )
-            run.skip_cache = True
-            run.drew_from_stream = any(isinstance(self.shell.user_ns.get(name), io.IOBase) for name in drawn)
+            if not refused:
+                run.drew_from_stream = any(isinstance(self.shell.user_ns.get(name), io.IOBase) for name in drawn)
             return
         held = held_stream_paths(run.tree, self.shell.user_ns)
         if held:
-            run.metrics["uncacheable_reasons"].append(
+            return refuse(
                 f"Can draw from {', '.join(held)}, an iterator no name it reads holds: "
                 f"a cache hit would not advance it, so the statement runs every time"
             )
-            run.skip_cache = True
-            return
         looked_at = reads_open_handle(run.inputs - run.outputs, self.shell.user_ns)
         if looked_at:
             # The handle's lineage names where it stood when it was opened,
             # not where it stands now: ``pos = fh.tell()`` after a read must
             # not be served the position an earlier run saw before it.
-            run.metrics["uncacheable_reasons"].append(
+            refuse(
                 f"Reads {', '.join(repr(n) for n in looked_at)}, an open file: "
                 f"where it stands changes as it is read, so the statement runs every time"
             )
-            run.skip_cache = True
-            run.drew_from_stream = True
+            if not refused:
+                run.drew_from_stream = True
 
     def _binds_the_namespace(self, run: StatementRun) -> bool:
         """Whether all *run* binds is the notebook's namespace (``NS = globals()``).
@@ -2230,12 +2248,18 @@ class StatementProcessor:
                     probes=execution.probes,
                     no_cache=(run.annotation is not None and run.annotation.no_cache)
                     or run.value_varies
-                    or (run.skip_cache and not run.value_pinned and not self._binds_the_namespace(run))
+                    or (
+                        run.skip_cache
+                        and (not run.value_pinned or run.reads_outside_lineage)
+                        and not self._binds_the_namespace(run)
+                    )
                     or run.needs_trace
                     or run.trace_refused
                     or run.past_budget
                     or inputs_moved
                     or self._binds_a_stream(run),
+                    # What it changed in place keeps the lineage the change gives it.
+                    value_kept=run.outputs - run.bound,
                     replay_bumps=False,
                     lineage_reads=run.pyplot_drawn,
                     settled=run.settled_digests,
