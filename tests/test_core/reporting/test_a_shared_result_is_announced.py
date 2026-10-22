@@ -142,6 +142,7 @@ NESTED_T = ([1, 2],)
 
 class _Holder:
     ROWS: list = [1, 2]
+    CFG: dict = {"sub": {"a": 1}}
 
 
 @pytest.mark.parametrize(
@@ -150,6 +151,7 @@ class _Holder:
         ("an item of a global dict", "return CONFIG_TREE['sub']", "CONFIG_TREE['sub']"),
         ("a list inside a global tuple", "return NESTED_T", "NESTED_T[0]"),
         ("a class attribute", "return {'r': _Holder.ROWS}", "_Holder.ROWS"),
+        ("an item of a class attribute", "return _Holder.CFG['sub']", "_Holder.CFG['sub']"),
         ("a global in a deque", "return collections.deque([ROWS])", "ROWS"),
         ("a global in an OrderedDict", "return collections.OrderedDict(a=ROWS)", "ROWS"),
     ],
@@ -226,3 +228,91 @@ def test_a_column_of_a_global_frame_is_announced_without_copy_on_write(cash_inst
     exec("def column(n):\n    return DF['a']\n", ns)
     said = _warnings_of(cash_instance.cache(ns["column"]), 1)
     assert bool(said) is (not cow), said
+
+
+@pytest.mark.parametrize(
+    ("label", "frame", "body"),
+    [
+        ("a column past the 64th", "pd.DataFrame({f'c{i}': [1.0, 2.0] for i in range(70)})", "DF['c69']"),
+        ("an Int64 column", "pd.DataFrame({'a': pd.array([1, 2], dtype='Int64'), 'f': [1.0, 2.0]})", "DF['a']"),
+        ("a row slice", "pd.DataFrame({'a': [1.0, 2.0, 3.0]})", "DF.iloc[:2]"),
+    ],
+)
+def test_every_block_of_a_global_frame_is_looked_at(cash_instance, monkeypatch, label, frame, body):
+    pd = pytest.importorskip("pandas")
+    from cash.decorator import purity_checks
+
+    monkeypatch.setattr(purity_checks, "is_cow_pandas", lambda value: False)
+    ns = {"pd": pd}
+    exec(f"DF = {frame}\ndef part(n):\n    return {body}\n", ns)
+    if not purity_checks.shares_memory(ns["part"](1), ns["DF"]):
+        pytest.skip(f"this pandas copies {label}")
+    assert _warnings_of(cash_instance.cache(ns["part"]), 1), f"no warning for {label}"
+
+
+def test_a_view_of_a_read_only_global_array_says_nothing(cash_instance):
+    np = pytest.importorskip("numpy")
+    frozen = np.arange(10.0)
+    frozen.flags.writeable = False
+    ns = {"RO": frozen, "RW": np.arange(10.0)}
+    exec("def ro(n):\n    return RO[1:4]\ndef rw(n):\n    return RW[1:4]\n", ns)
+    assert not _warnings_of(cash_instance.cache(ns["ro"]), 1)
+    assert _warnings_of(cash_instance.cache(ns["rw"]), 1)
+
+
+def test_an_enum_whose_member_holds_a_list_says_nothing(cash_instance):
+    import enum
+
+    class Box(enum.Enum):
+        A = [1]
+
+    ns = {"Box": Box}
+    exec("def boxed(n):\n    return [Box.A]\n", ns)
+    assert not _warnings_of(cash_instance.cache(ns["boxed"]), 1)
+
+
+def test_the_result_is_looked_into_as_far_as_its_first_items(cash_instance):
+    from cash.decorator.purity_checks import SHARED_ITEMS
+
+    ns = {"ROWS": [1, 2], "SHARED_ITEMS": SHARED_ITEMS}
+    exec(
+        "def early(n):\n    return [ROWS] + [None] * SHARED_ITEMS\n"
+        "def late(n):\n    return [None] * SHARED_ITEMS + [ROWS]\n",
+        ns,
+    )
+    assert _warnings_of(cash_instance.cache(ns["early"]), 1)
+    assert not _warnings_of(cash_instance.cache(ns["late"]), 1)
+
+
+def test_once_a_function_has_warned_its_later_stores_skip_the_check(cash_instance, monkeypatch):
+    from cash.decorator.purity_checks import PurityChecks
+
+    looks = []
+    real = PurityChecks._shared_with
+    monkeypatch.setattr(PurityChecks, "_shared_with", lambda *a: looks.append(1) or real(*a))
+    ns = {"ROWS": [1, 2]}
+    exec("def rows(n):\n    return ROWS\n", ns)
+    rows = cash_instance.cache(ns["rows"])
+    for n in range(4):
+        _warnings_of(rows, n)
+    assert len(looks) == 1, looks
+
+
+def test_a_hit_in_a_process_that_never_ran_the_call_says_it_too(tmp_path):
+    # After a restart the hit is the first value the caller gets, already a
+    # separate copy: a process that only ever hits is told as the miss was.
+    from cash import Cash
+
+    ns = {"ROWS": [1, 2]}
+    exec("def wrap(n):\n    return {'rows': ROWS}\n", ns)
+    first = Cash(cache_dir=str(tmp_path), register_magic=False)
+    assert _warnings_of(first.cache(ns["wrap"]), 1)
+    from cash.backends._writes import all_pending_writes
+
+    for queue in all_pending_writes():
+        queue.wait_all()
+    later = Cash(cache_dir=str(tmp_path), register_magic=False)
+    wrapped = later.cache(ns["wrap"])
+    said = _warnings_of(wrapped, 1)
+    assert wrapped.cache_info()["hits"] == 1, wrapped.cache_info()
+    assert said and "the module global 'ROWS'" in said[0], said

@@ -1018,6 +1018,9 @@ class CallRunner:
             self._store.attach_lineage(cached_data, cache_key, metadata.auto_file_deps, ttl=ttl, func_name=func_name)
             self._store.carry_digest(metadata, cached_data)
             replay_rng_state(metadata)
+            if metadata.shared_result:
+                # Never silent: a process that only ever hits is told too.
+                self._purity.warn_shared_on_hit(func_name, metadata.shared_result)
             self._registry.cached[func_name].last_key = cache_key
             self._calls.log(
                 func_name,
@@ -1518,7 +1521,7 @@ class CallRunner:
         auto_file_deps = snapshot_tracked_deps(run.tracker, func.__module__)
         execution_time = _perf_counter() - call.call_start
 
-        self._purity.warn_shared_result(func, func_name, res, args, kwargs)
+        shared = self._purity.warn_shared_result(func, func_name, res, args, kwargs)
         # The stream comparison above, read for a draw no seed stands behind:
         # one the source scan could not see (a library a helper calls).
         self._rng.warn_observed_draw(func_name, run.rng_drew, res)
@@ -1569,6 +1572,7 @@ class CallRunner:
                     # What the environment variables an installed package
                     # read held: a lookup checks them again (`env_reads`).
                     env_reads=environment_digests(run.env_reads) if run.env_reads else None,
+                    shared_result=shared,
                 ),
                 res,
             )

@@ -587,13 +587,16 @@ large frame of text columns hashes at about 0.2 s per million rows.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @1910bd9c, cash/decorator/purity_checks.py:PurityChecks._shared_with @a01dbd99 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @a25fc541, cash/decorator/purity_checks.py:PurityChecks.warn_shared_on_hit @cdd6af30, cash/decorator/purity_checks.py:PurityChecks._shared_with @4bd243b0 -->
 **What happened.** The result shares state with an object outside the
 call: an argument, or something the function reaches by name. On the first
 run, a write through one shows in the other. A cache hit returns a separate
-copy, so from then on it does not. cash looks, two levels into the result
-(dicts of any kind, lists, tuples, sets, deques, object attributes, and the
-first 256 members of an object array), for:
+copy, so from then on it does not. The warning is stored with the entry,
+so a process that only ever gets the hit (after a restart) shows it too.
+Once a function has warned, cash stops looking for its later results and
+marks them the same way. cash looks two levels into the result, at the
+first 256 values of each dict of any kind, list, tuple, set, deque, object's
+attributes and object array, for:
 
 - an argument, or memory shared with an array argument;
 - a closure variable, a module global the body names, a default argument,
@@ -601,18 +604,23 @@ first 256 members of an object array), for:
 - an attribute of a class or a module of yours the body names
   (`Holder.ROWS`);
 - one of the first 256 items of any of those containers (`CONFIG["sub"]`,
-  a list inside a global tuple);
+  `Holder.CFG["sub"]`, a list inside a global tuple);
 - memory shared with any of those arrays (`return ARR[1:4]`), or, without
-  pandas copy-on-write (pandas 2 by default), with one of those frames
-  (`return DF["a"]`, a view of the frame there).
+  pandas copy-on-write (pandas 2 by default), with any column of one of
+  those frames, extension columns such as `Int64` included (`return
+  DF["a"]`, a view of the frame there).
 
 Not reported: a value nothing can be written through (a number, a string,
-an enum member, a frozen dataclass), and a global whose type compares by
+an enum member, a frozen dataclass of immutable fields, a view of an array
+that is read-only all the way down), and a global whose type compares by
 identity (a plain class without `__eq__`, such as a sentinel), since a hit
 hands back that global itself, and a pandas column under copy-on-write
 (the pandas 3 default), where a write through it copies first and never
-reaches the frame. Not seen: sharing deeper than two levels, and an
-attribute of a library module. A library object a hit hands back as
+reaches the frame. Not seen: sharing deeper than two levels or past the
+256th value of a container (`BIG_LIST[300]`), an attribute of a library
+module, and memory two arrays share without one viewing the other or both
+viewing the same object (two arrays made from separate `memoryview`s of
+one buffer). A library object a hit hands back as
 itself, such as a `logging.Logger`, is still reported.
 
 **Why it matters.** A caller that writes through the result, such as filling

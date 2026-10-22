@@ -947,6 +947,7 @@ class HitMemo:
             or metadata.rng_replay
             or metadata.read_only
             or metadata.env_reads
+            or metadata.shared_result
         ):
             return None
         ledger = call.ledger or {}
