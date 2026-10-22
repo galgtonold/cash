@@ -10,12 +10,24 @@ since it lets a walk run, which finds what is there. A no is asked afresh.
 from __future__ import annotations
 
 import gc
+import sys
+import types
 
 from cash.notebook import held_functions
 
 
 class _OfAUsersModule:
     pass
+
+
+def _asked_about(monkeypatch, cls):
+    """Ask about *cls* as a class of a user's module, kept by that module
+    alone (a closure over it would hold it as a value does)."""
+    module = types.ModuleType("_a_users_module")
+    name = cls.__name__
+    setattr(module, name, cls)
+    monkeypatch.setitem(sys.modules, "_a_users_module", module)
+    monkeypatch.setattr(held_functions, "_users_module_classes", lambda: [getattr(module, name)])
 
 
 def test_objects_of_a_users_module_class_are_looked_for_once_until_code_runs(monkeypatch):
@@ -28,7 +40,8 @@ def test_objects_of_a_users_module_class_are_looked_for_once_until_code_runs(mon
 
     def counting(*objects):
         scans.append(len(objects))
-        return real(*objects)
+        # Not the arguments tuple this wrapper made, which holds the classes.
+        return [referrer for referrer in real(*objects) if referrer is not objects]
 
     monkeypatch.setattr(held_functions, "_users_module_classes", lambda: [_OfAUsersModule])
     monkeypatch.setattr(held_functions.gc, "get_referrers", counting)
@@ -48,15 +61,89 @@ def test_no_object_is_looked_for_again_each_time(monkeypatch):
 
     def counting(*objects):
         scans.append(len(objects))
-        return real(*objects)
+        # Not the arguments tuple this wrapper made, which holds the classes.
+        return [referrer for referrer in real(*objects) if referrer is not objects]
 
     class Fresh:
         pass
 
-    monkeypatch.setattr(held_functions, "_users_module_classes", lambda: [Fresh])
+    _asked_about(monkeypatch, Fresh)
     monkeypatch.setattr(held_functions.gc, "get_referrers", counting)
     assert not held_functions.module_class_objects_exist()
     made = Fresh()
     assert held_functions.module_class_objects_exist()
     assert len(scans) == 2, scans
     del made
+
+
+def test_a_class_held_without_an_object_of_it_counts(monkeypatch):
+    # ``[mylib.Order] + rows`` holds the class and no object of it: answered
+    # no, a walk of a big value stopped before it met the class, and the key
+    # left the module out.
+    class Held:
+        pass
+
+    _asked_about(monkeypatch, Held)
+    rows = [Held, 1, 2]
+    assert held_functions.module_class_objects_exist()
+    del rows
+    by_name = {"cls": Held}
+    assert held_functions.module_class_objects_exist()
+    del by_name
+
+
+def test_what_every_class_has_does_not_count(monkeypatch):
+    # Its module's globals, a subclass, its ``__mro__`` and ``__bases__``, its
+    # slot and ``__dict__`` descriptors, and the ``__class__`` cell of a
+    # method calling ``super()``.
+    class Base:
+        __slots__ = ("a",)
+
+        def m(self):
+            return super().__repr__()
+
+    class Derived(Base):
+        def m(self):
+            return super().m()
+
+    _asked_about(monkeypatch, Base)
+    from cash.analysis import handed_callables
+
+    handed_callables._is_users_class(Base)  # cash's own memo of it does not count
+    assert not held_functions.module_class_objects_exist()
+    assert Derived.__mro__[1] is Base
+
+
+def test_with_the_trace_on_a_class_held_without_an_object_still_counts(monkeypatch):
+    # The trace checks only its own statement's hit: not a cell built from
+    # it, a call cached inside one, or a restore after a restart. A walk
+    # it stopped short left the module out of all of those keys.
+    from cash.notebook import shadow
+
+    class Held:
+        pass
+
+    monkeypatch.setattr(shadow, "requested", lambda: True)
+    _asked_about(monkeypatch, Held)
+    rows = [Held, 1, 2]
+    assert held_functions.module_class_objects_exist()
+    del rows
+
+
+def test_a_closure_over_the_class_counts_and_an_odd_name_does_not_raise(monkeypatch):
+    class Held:
+        pass
+
+    _asked_about(monkeypatch, Held)
+
+    def factory():
+        k = Held
+        return lambda: k
+
+    made = factory()
+    assert held_functions.module_class_objects_exist()
+    del made
+    held_functions._OBJECTS_SEEN[0] = None
+    record = {"__name__": ["x"], "kind": Held}  # a parsed JSON record
+    assert held_functions.module_class_objects_exist()
+    del record

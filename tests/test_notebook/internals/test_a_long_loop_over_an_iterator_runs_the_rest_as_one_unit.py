@@ -9,6 +9,7 @@ Pins the work, not the behaviour: a refactor may expect this to fail.
 
 from __future__ import annotations
 
+from cash.notebook.control_structures import single_unit_policy
 from cash.notebook.statement import StatementProcessor
 from tests._cell_driver import run_cash_cell
 from tests._work_counts import method_calls
@@ -43,11 +44,16 @@ def test_a_loop_over_map_or_filter_in_its_header_is_sized(cash_magics):
         assert cash_magics.shell.user_ns["name"] == "u4999"
 
 
-def test_a_short_loop_over_an_iterator_stays_per_pass(cash_magics):
+def test_a_short_loop_over_an_iterator_stays_per_pass(cash_magics, monkeypatch):
     """Below the count, every pass whose work is real keeps its own entries,
     as before. Passes measured cheap hand the rest to the unit after a few
-    (test_a_loop_over_an_iterator_with_cheap_passes_stops_early)."""
-    run_cash_cell(cash_magics, "import time\ndata = [('u%d' % i, [1] * (i % 3)) for i in range(40)]")
+    (test_a_loop_over_an_iterator_with_cheap_passes_stops_early). That
+    measure is wall time, and on a busy machine cash's own share of a 10 ms
+    pass grew until the passes read as cheap: it is held at "real work"
+    here, so only the count decides."""
+    monkeypatch.setattr(single_unit_policy, "passes_were_cheap", lambda work_shares: False)
+    run_cash_cell(cash_magics, "data = [('u%d' % i, [1] * (i % 3)) for i in range(40)]")
     with method_calls(StatementProcessor, "process_statement") as statements:
-        run_cash_cell(cash_magics, "it = filter(lambda x: True, data)\n" + LOOP + "\n    time.sleep(0.01)")
+        run_cash_cell(cash_magics, "it = filter(lambda x: True, data)\n" + LOOP)
     assert statements.calls >= 40  # `m = len(act)`, once a pass
+    assert cash_magics.shell.user_ns["name"] == "u39"
