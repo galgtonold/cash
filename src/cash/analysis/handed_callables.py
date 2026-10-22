@@ -2390,13 +2390,13 @@ def _special_classes_exist(namespace: Mapping[str, Any]) -> bool:
     known = _SPECIAL_CLASSES.get(id(namespace))
     if known is not None and known[0] is namespace:
         return known[1]
-    from cash.notebook.held_functions import _users_module_classes
+    from cash.notebook.held_functions import users_module_classes
 
     try:
         bound = [v for v in list(namespace.values()) if isinstance(v, type) and _is_users_class(v)]
     except Exception:  # noqa: BLE001 - changed while read
         bound = []
-    pending = bound + _users_module_classes()
+    pending = bound + users_module_classes()
     seen: set[type] = set()
     answer = False
     while pending and not answer:

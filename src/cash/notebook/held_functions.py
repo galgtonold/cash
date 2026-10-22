@@ -310,6 +310,11 @@ def module_class_objects_exist() -> bool:
     return any(type(referrer) in kinds for referrer in gc.get_referrers(*kinds))
 
 
+def users_module_classes() -> list[type]:
+    """`_users_module_classes`, for other modules."""
+    return _users_module_classes()
+
+
 def _users_module_classes() -> list[type]:
     """The classes defined at the top of the user's loaded modules."""
     found: list[type] = []
