@@ -24,7 +24,7 @@ import weakref
 from typing import Any
 
 from . import _native, _plain_data
-from ._user_attrs import instance_of, own_dict
+from ._user_attrs import attribute_or, instance_of, own_dict
 from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS, library_scalar_types
 
 logger = logging.getLogger(__name__)
@@ -446,10 +446,10 @@ def _data_size(obj: Any) -> int | None:
         return _est_sparse_csr_csc(obj)
     if type_name in _SPARSE_COO_TYPES:
         return _est_sparse_coo(obj)
-    try:
-        nbytes = getattr(obj, "nbytes", None)
-    except Exception:  # noqa: BLE001 - a property of someone else's class: any failure means "does not say"
-        return None
+    # Through Python's generic lookup where the class has a lookup of its
+    # own: a ``__getattribute__`` of the user's was run for every value a
+    # store sized. Any failure means "does not say".
+    nbytes = attribute_or(obj, "nbytes", None)
     if isinstance(nbytes, int) or type(nbytes).__name__.startswith(("int", "uint")):
         try:
             return int(nbytes)
@@ -477,7 +477,9 @@ def estimate_object_size(obj: Any, _depth: int = 0) -> int:
         size = _data_size(obj)
         if size is not None:
             return size
-        if dataclasses.is_dataclass(obj) and not instance_of(obj, type):
+        # By its type: ``is_dataclass(obj)`` asks the object for its
+        # ``__class__`` (``isinstance``), which a lookup of the user's answers.
+        if not instance_of(obj, type) and dataclasses.is_dataclass(type(obj)):
             base = sys.getsizeof(obj)
             return base + sum(estimate_object_size(getattr(obj, f.name), _depth + 1) for f in dataclasses.fields(obj))
         if instance_of(obj, tuple) and hasattr(obj, "_fields"):  # namedtuple

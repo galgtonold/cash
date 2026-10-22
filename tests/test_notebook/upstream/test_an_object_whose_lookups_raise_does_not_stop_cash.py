@@ -191,17 +191,23 @@ def test_an_object_raising_for_every_lookup_runs_as_plain_python(cash_magics, mo
         assert ns["w"] == plain["w"]
 
 
+#: Only what is asked of the user's own object counts: the store's copy of
+#: it is rebuilt by pickle (``copyreg.__newobj__``, no ``__init__``), which
+#: asks the copy for ``__setstate__`` and ``__dict__``.
 COUNTED = """
 import traceback
 CALLS = {}
 ASKED_CLASS = []
+MADE = set()
 class Counted:
     def __init__(self, v):
+        MADE.add(id(self))
         object.__setattr__(self, 'v', v)
     def __getattribute__(self, k):
-        CALLS[k] = CALLS.get(k, 0) + 1
-        if k == '__class__':
-            ASKED_CLASS.append(''.join(traceback.format_stack(limit=8)[:-1]))
+        if id(self) in MADE:
+            CALLS[k] = CALLS.get(k, 0) + 1
+            if k == '__class__':
+                ASKED_CLASS.append(''.join(traceback.format_stack(limit=8)[:-1]))
         return object.__getattribute__(self, k)
 """
 
@@ -213,12 +219,16 @@ def test_cash_asks_such_an_object_nothing_but_to_pickle_it(cash_magics, tmp_path
     its real type and Python's generic lookup instead. Storing it pickles
     it, and pickle asks. Also where values are walked before they are
     pickled (`kept_state.FLAT_FIRST`, Python 3.10 on Windows), with numpy
-    loaded, whose array check asked it twice more."""
+    loaded, whose array check asked it twice more. Each statement is stored,
+    however cheap: sizing it for the store asked the object for ``nbytes``
+    where a fast machine never stored it (a statement past the floor on a
+    slow or loaded one)."""
     import numpy  # noqa: F401 - `kept_state._flat_array` looks only once numpy is loaded
 
     from cash import kept_state
 
     monkeypatch.setattr(kept_state, "FLAT_FIRST", flat_first)
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
     module = f"counted_mod_{flat_first}"  # one per case: an imported module is kept
     (tmp_path / f"{module}.py").write_text(COUNTED, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -235,4 +245,6 @@ def test_cash_asks_such_an_object_nothing_but_to_pickle_it(cash_magics, tmp_path
     asked = {name: n for name, n in cash_magics.shell.user_ns["CALLS"].items() if name not in pickling | {"v"}}
     assert asked == {}
     asked_class = cash_magics.shell.user_ns["ASKED_CLASS"]
-    assert len(asked_class) <= 1, "\n----\n".join(asked_class)  # the store's one pickle
+    # The key's pickle of ``c`` (read by the statements below it) and the
+    # store's copy of it.
+    assert len(asked_class) <= 2, "\n----\n".join(asked_class)
