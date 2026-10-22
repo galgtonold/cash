@@ -1056,7 +1056,7 @@ class StatementProcessor:
             return
         ns = self.shell.user_ns
         statement = [code for code, (g, _m) in unit.codes.items() if code.co_qualname == "<module>" and g is ns]
-        found = unseen_writers(unit.codes, statement, run.outputs, ns)
+        found = unseen_writers(unit.codes, statement, run.outputs, ns, run.code)
         if not found:
             return
         fn, targets = found[0]

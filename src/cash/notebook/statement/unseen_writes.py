@@ -54,6 +54,7 @@ def unseen_writers(
     statement_codes: Iterable[types.CodeType],
     outputs: Iterable[str],
     namespace: Mapping[str, Any],
+    statement: str = "",
 ) -> list[tuple[str, tuple[str, ...]]]:
     """``(function, what it changes)`` for each function of *codes* (code ->
     its globals and module, as the trace records them) that changes
@@ -91,7 +92,7 @@ def unseen_writers(
         if targets:
             found.append((code.co_qualname, tuple(targets)))
     if found:
-        _log(found)
+        _log(found, statement)
     return found
 
 
@@ -233,13 +234,14 @@ def _methods_on_free_names(node: ast.AST) -> set[tuple[str, str]]:
     return out
 
 
-def _log(found: list[tuple[str, tuple[str, ...]]]) -> None:
+def _log(found: list[tuple[str, tuple[str, ...]]], statement: str) -> None:
     path = os.environ.get(_LOG_ENV)
     if not path:
         return
     try:
         with open(path, "a", encoding="utf-8") as fh:  # @cash:assume-safe
             for fn, targets in found:
-                fh.write(json.dumps({"fn": fn, "targets": list(targets)}) + "\n")
+                row = {"fn": fn, "targets": list(targets), "stmt": statement[:200], "pid": os.getpid()}
+                fh.write(json.dumps(row) + "\n")
     except OSError:
         pass
