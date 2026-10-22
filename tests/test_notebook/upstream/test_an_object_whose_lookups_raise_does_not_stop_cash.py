@@ -192,12 +192,16 @@ def test_an_object_raising_for_every_lookup_runs_as_plain_python(cash_magics, mo
 
 
 COUNTED = """
+import traceback
 CALLS = {}
+ASKED_CLASS = []
 class Counted:
     def __init__(self, v):
         object.__setattr__(self, 'v', v)
     def __getattribute__(self, k):
         CALLS[k] = CALLS.get(k, 0) + 1
+        if k == '__class__':
+            ASKED_CLASS.append(''.join(traceback.format_stack(limit=8)[:-1]))
         return object.__getattribute__(self, k)
 """
 
@@ -209,10 +213,17 @@ def test_cash_asks_such_an_object_nothing_but_to_pickle_it(cash_magics, tmp_path
     it, and pickle asks."""
     (tmp_path / "counted_mod.py").write_text(COUNTED, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
-    cells = ["from counted_mod import Counted, CALLS", "w = 0", "c = Counted(5)", "w = c.v + 1", "w2 = c.v"]
+    cells = [
+        "from counted_mod import Counted, CALLS, ASKED_CLASS",
+        "w = 0",
+        "c = Counted(5)",
+        "w = c.v + 1",
+        "w2 = c.v",
+    ]
     for cell in cells:
         run_cash_cell(cash_magics, cell, cells=cells)
     pickling = {"__class__", "__reduce_ex__", "__reduce__", "__getstate__"}
     asked = {name: n for name, n in cash_magics.shell.user_ns["CALLS"].items() if name not in pickling | {"v"}}
     assert asked == {}
-    assert cash_magics.shell.user_ns["CALLS"].get("__class__", 0) <= 1  # the store's one pickle
+    asked_class = cash_magics.shell.user_ns["ASKED_CLASS"]
+    assert len(asked_class) <= 1, "\n----\n".join(asked_class)  # the store's one pickle
