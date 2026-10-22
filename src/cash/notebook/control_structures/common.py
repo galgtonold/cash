@@ -11,6 +11,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from ...analysis.ast_util import fix_locations
 from ...value_hash import compute_hash
 from ...value_types import IMMUTABLE_PRIMS
 
@@ -170,7 +171,7 @@ def _bind_by_assignment(target: ast.AST, value: Any, user_ns: dict[str, Any]) ->
     so ``for a, *rest, z in rows`` unpacks, and fails, as Python does."""
     scratch = "__cash_loop_value__"
     assign = ast.Assign(targets=[target], value=ast.Name(id=scratch, ctx=ast.Load()))
-    module = ast.fix_missing_locations(ast.Module(body=[assign], type_ignores=[]))
+    module = fix_locations(ast.Module(body=[assign], type_ignores=[]))
     user_ns[scratch] = value
     try:
         exec(compile(module, "<cash: loop target>", "exec", dont_inherit=True), user_ns)

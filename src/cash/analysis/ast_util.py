@@ -20,8 +20,8 @@ import functools
 import inspect
 import sys
 import types
-from collections.abc import Mapping
-from typing import Any, Literal
+from collections.abc import Iterator, Mapping
+from typing import Any, Literal, TypeVar
 
 __all__ = [
     "CallScope",
@@ -30,11 +30,14 @@ __all__ = [
     "called_dotted_names",
     "called_names",
     "copy_tree",
+    "fix_locations",
     "handed_names",
     "parse_cached",
     "resolve_callee",
     "resolve_dotted_name",
 ]
+
+_Node = TypeVar("_Node", bound=ast.AST)
 
 #: Descriptors implemented in C that bind a method and run nothing else.
 _C_METHOD_DESCRIPTORS = (
@@ -84,6 +87,45 @@ def copy_tree(node: ast.AST) -> Any:
         elif isinstance(value, ast.AST):
             fields[name] = copy_tree(value)
     return new
+
+
+def fix_locations(node: _Node) -> _Node:
+    """``ast.fix_missing_locations`` without the garbage it leaves.
+
+    The stdlib walks with a closure that calls itself, so every call leaves a
+    function and its cell in a cycle that only the collector frees. Freeing
+    them ends a value's open one-read window (``value_hash._on_collection``
+    cannot tell cash's garbage from the user's), so a statement that ran
+    nothing between two reads read its argument twice. Same result, walked
+    with a stack: a node missing a position takes its parent's.
+    """
+    stack: list[tuple[ast.AST, int, int, int, int]] = [(node, 1, 0, 1, 0)]
+    while stack:
+        item, lineno, col, end_lineno, end_col = stack.pop()
+        attributes = item._attributes
+        if "lineno" in attributes:
+            if not hasattr(item, "lineno"):
+                item.lineno = lineno
+            else:
+                lineno = item.lineno
+        if "end_lineno" in attributes:
+            if getattr(item, "end_lineno", None) is None:
+                item.end_lineno = end_lineno
+            else:
+                end_lineno = item.end_lineno
+        if "col_offset" in attributes:
+            if not hasattr(item, "col_offset"):
+                item.col_offset = col
+            else:
+                col = item.col_offset
+        if "end_col_offset" in attributes:
+            if getattr(item, "end_col_offset", None) is None:
+                item.end_col_offset = end_col
+            else:
+                end_col = item.end_col_offset
+        for child in ast.iter_child_nodes(item):
+            stack.append((child, lineno, col, end_lineno, end_col))
+    return node
 
 
 def resolve_callee(
@@ -239,24 +281,7 @@ def nodes_in(tree: ast.AST | None, scope: CallScope = "all") -> list[ast.AST]:
         return []
     if scope == "all":
         return list(ast.walk(tree))
-    out: list[ast.AST] = []
-
-    def visit(node: ast.AST, top: bool) -> None:
-        out.append(node)
-        for field, value in ast.iter_fields(node):
-            if scope == "no_control_bodies" and isinstance(node, _CONTROL_STATEMENTS) and field in _CONTROL_BODY_FIELDS:
-                continue
-            for child in value if isinstance(value, list) else (value,):
-                if not isinstance(child, ast.AST):
-                    continue
-                if scope == "top_level" and top and isinstance(child, _DEFINITIONS):
-                    continue
-                if scope == "eager" and isinstance(child, _DEFERRED):
-                    continue
-                visit(child, False)
-
-    visit(tree, True)
-    return out
+    return list(_scoped_nodes(tree, scope))
 
 
 def _call_names(tree: ast.AST | None, scope: CallScope, pick) -> frozenset[str]:
@@ -265,11 +290,19 @@ def _call_names(tree: ast.AST | None, scope: CallScope, pick) -> frozenset[str]:
         return frozenset()
     if scope == "all":
         return frozenset(name for n in ast.walk(tree) if isinstance(n, ast.Call) for name in pick(n))
-    out: set[str] = set()
+    return frozenset(name for n in _scoped_nodes(tree, scope) if isinstance(n, ast.Call) for name in pick(n))
 
-    def visit(node: ast.AST, top: bool) -> None:
-        if isinstance(node, ast.Call):
-            out.update(pick(node))
+
+def _scoped_nodes(tree: ast.AST, scope: CallScope) -> Iterator[ast.AST]:
+    """*tree*'s nodes within *scope*, depth first in source order. A stack,
+    not a nested function that calls itself: that one is a cycle (it holds
+    its own cell), garbage only the collector frees, and a collection ends
+    every open `value_hash.watch`."""
+    stack: list[tuple[ast.AST, bool]] = [(tree, True)]
+    while stack:
+        node, top = stack.pop()
+        yield node
+        children: list[tuple[ast.AST, bool]] = []
         for field, value in ast.iter_fields(node):
             if scope == "no_control_bodies" and isinstance(node, _CONTROL_STATEMENTS) and field in _CONTROL_BODY_FIELDS:
                 continue
@@ -280,10 +313,8 @@ def _call_names(tree: ast.AST | None, scope: CallScope, pick) -> frozenset[str]:
                     continue
                 if scope == "eager" and isinstance(child, _DEFERRED):
                     continue
-                visit(child, False)
-
-    visit(tree, True)
-    return frozenset(out)
+                children.append((child, False))
+        stack.extend(reversed(children))
 
 
 def _called_name(call: ast.Call) -> tuple[str, ...]:

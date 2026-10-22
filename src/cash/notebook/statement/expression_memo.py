@@ -36,7 +36,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from cash.analysis.ast_util import copy_tree
+from cash.analysis.ast_util import copy_tree, fix_locations
 
 from ..shared_objects import output_history
 
@@ -310,5 +310,5 @@ class ExpressionMemo:
         bound, saved = put.bound, put.saved
         if not bound:
             return None
-        ast.fix_missing_locations(new_tree)
+        fix_locations(new_tree)
         return new_tree, bound, saved

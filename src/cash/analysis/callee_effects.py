@@ -273,17 +273,22 @@ def statement_calls(tree: ast.AST | None, *, control_bodies: bool = True) -> lis
     if tree is None:
         return out
 
-    def visit(node: ast.AST) -> None:
+    # Depth first, in source order, with a stack rather than a nested
+    # function calling itself: that is a cycle (it holds its own cell) only
+    # the collector frees, and a collection ends every `value_hash.watch`.
+    stack: list[ast.AST] = [tree]
+    while stack:
+        node = stack.pop()
         if isinstance(node, ast.Call):
             out.append(node)
+        children: list[ast.AST] = []
         for field, value in ast.iter_fields(node):
             if not control_bodies and isinstance(node, _CONTROL_NODES) and field in _CONTROL_BODIES:
                 continue
             for child in value if isinstance(value, list) else (value,):
                 if isinstance(child, ast.AST) and not isinstance(child, _DEFERRED_SCOPES):
-                    visit(child)
-
-    visit(tree)
+                    children.append(child)
+        stack.extend(reversed(children))
     return out
 
 

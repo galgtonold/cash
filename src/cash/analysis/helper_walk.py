@@ -44,7 +44,7 @@ from ..purity import is_pure, is_stateful
 from ..source_reading import getsourcelines, own_source
 from .ambient_reads import log_helper_names, log_only_ambient_reads, method_namespace
 from .annotations import assume_safe_block_lines, audited_lines
-from .ast_util import bytecode_global_refs, resolve_callee
+from .ast_util import bytecode_global_refs, fix_locations, resolve_callee
 from .callee_effects import scope_locals, source_global_mutations
 from .helper_bindings import (
     binding_path,
@@ -981,7 +981,7 @@ def _lambda_as_def(func: types.FunctionType, tree: ast.AST, dedented_by: int = 0
         type_comment=None,
         type_params=[],
     )
-    return ast.fix_missing_locations(ast.copy_location(func_def, best))
+    return fix_locations(ast.copy_location(func_def, best))
 
 
 def _lambda_node(code: types.CodeType, tree: ast.AST, offset: int, dedented_by: int) -> ast.Lambda | None:
@@ -1047,7 +1047,7 @@ def _const_shape(const: object) -> object:
 def _compiles_to_shape_of(node: ast.Lambda, code: types.CodeType) -> bool:
     """Whether *node*, compiled on its own, has the shape of *code*."""
     try:
-        compiled = compile(ast.fix_missing_locations(ast.Expression(body=node)), "<lambda>", "eval")
+        compiled = compile(fix_locations(ast.Expression(body=node)), "<lambda>", "eval")
     except (SyntaxError, ValueError, TypeError):
         return False
     own = [c for c in compiled.co_consts if isinstance(c, types.CodeType) and c.co_name == "<lambda>"]

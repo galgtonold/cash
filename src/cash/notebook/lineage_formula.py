@@ -24,7 +24,7 @@ from collections.abc import Mapping
 from typing import Any, Callable, Iterable
 
 from .._memo import CODE_OBJECTS, LruMemo
-from ..analysis.ast_util import parse_cached
+from ..analysis.ast_util import fix_locations, parse_cached
 from ..analysis.mutations import repeatable_setting_receiver
 from ..analysis.purity_analyzer import get_analyzer
 from ..code_digest import module_identity
@@ -242,7 +242,7 @@ def binding_source_hash(source_hash: str, code: str, name: str) -> str:
                 clause = ast.ImportFrom(module=node.module, names=[alias], level=node.level)
     if clause is None:
         return source_hash
-    narrowed = ast.unparse(ast.fix_missing_locations(ast.Module(body=[clause], type_ignores=[])))
+    narrowed = ast.unparse(fix_locations(ast.Module(body=[clause], type_ignores=[])))
     return hashlib.sha256(unparse_without_docstrings(narrowed).encode("utf-8")).hexdigest()
 
 

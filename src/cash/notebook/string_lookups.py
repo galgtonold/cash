@@ -49,6 +49,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any, NamedTuple
 
 from .._memo import CODE_OBJECTS, NOTEBOOK_STATEMENTS, LruMemo
+from ..analysis.ast_util import fix_locations
 from ..analysis.bytecode import instructions
 from ..analysis.code_analyzer import exec_literal
 
@@ -186,7 +187,7 @@ def _statement_codes(code: str) -> tuple[types.CodeType, ...] | None:
         definition = tree.body[0]
         tree.body = [ast.Expr(value=d) for d in definition.decorator_list]
     literals = _ExecLiterals()
-    tree = ast.fix_missing_locations(literals.visit(tree))
+    tree = fix_locations(literals.visit(tree))
     try:
         codes = [compile(tree, "<cash-statement>", "exec", dont_inherit=True)]
     except (SyntaxError, ValueError, TypeError):

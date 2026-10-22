@@ -40,6 +40,14 @@ from .value_types import LEAF_TYPES
 logger = logging.getLogger(__name__)
 
 
+def _pyarrow() -> Any:
+    """``pyarrow``, imported the first time without ending a watch: cash
+    imports it itself, inside the reads of a polars frame (`import_unwatched`)."""
+    from .value_hash import import_unwatched
+
+    return import_unwatched("pyarrow")
+
+
 def builtin_hash_family(type_: type) -> str | None:
     """Name the built-in content hasher that claims *type_*, or ``None``.
 
@@ -620,7 +628,8 @@ def fold_arrow_column(h: Any, column: Any) -> None:
     equal columns can differ in them, and only hash apart, never alike.
     """
     import numpy as np
-    import pyarrow as pa
+
+    pa = _pyarrow()
 
     chunks = column.chunks if isinstance(column, pa.ChunkedArray) else [column]
     if pa.types.is_dictionary(column.type):
@@ -695,7 +704,7 @@ def _arrow_layout(arrow_type: Any) -> tuple[str | None, int]:
     """How `fold_arrow_column` reads values of *arrow_type*: ``("fixed",
     bytes per value)``, ``("bool", 1)``, ``("offsets", bytes per offset)``,
     or ``(None, 0)`` for the IPC stream."""
-    import pyarrow as pa
+    pa = _pyarrow()
 
     t = pa.types
     if t.is_boolean(arrow_type):
@@ -721,7 +730,7 @@ def _arrow_layout(arrow_type: Any) -> tuple[str | None, int]:
 def _fold_arrow_ipc(h: Any, column: Any) -> None:
     """Fold a pyarrow column into *h* as an Arrow IPC stream: the validity
     bitmap and the values as they are, in every type."""
-    import pyarrow as pa
+    pa = _pyarrow()
 
     table = pa.table({"v": column})
     h.update(b"|ipc|")
@@ -1139,7 +1148,7 @@ def _newest_arrow_columns(frame: Any, pl: Any) -> list:
     ``to_arrow`` first cuts every column at the same rows, in the frame
     itself, and a list, struct or decimal column exported after that is
     keyed by those chunks (`_fold_arrow_ipc`)."""
-    import pyarrow as pa
+    pa = _pyarrow()
 
     if hasattr(pl.Series, "__arrow_c_stream__"):
         columns = [pa.chunked_array(series) for series in frame.get_columns()]
@@ -1277,7 +1286,7 @@ class _ArrowColumn:
     def folds_digests(self) -> bool:
         """Whether `fold` hands *h* digests, not the column's bytes: not a
         list, struct or decimal, which go in as an IPC stream."""
-        import pyarrow as pa
+        pa = _pyarrow()
 
         kind = self.column.type
         if pa.types.is_dictionary(kind):
@@ -1319,7 +1328,7 @@ def _polars_arrow_columns(frame: Any, pl: Any) -> list[tuple[str, Any]]:
     from ._native import kernels
 
     compat = getattr(pl, "CompatLevel", None)
-    import pyarrow as pa
+    pa = _pyarrow()
 
     if (
         compat is None
@@ -1372,7 +1381,8 @@ def fold_view_column(h: Any, column: Any, large: str) -> None:
     chunks of ~2,900 rows, and a call per chunk handed the interpreter lock
     back so often that its columns could not be read side by side."""
     import numpy as np
-    import pyarrow as pa
+
+    pa = _pyarrow()
 
     from ._native import kernels
 
@@ -1495,7 +1505,7 @@ def hash_pyarrow(value: Any) -> str | None:
     alike too; its values are read.
     """
     try:
-        import pyarrow as pa
+        pa = _pyarrow()
 
         if isinstance(value, (pa.Table, pa.RecordBatch)):
             h = hashlib.sha256(f"{type(value).__name__}:{value.num_rows}:".encode())

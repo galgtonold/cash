@@ -19,6 +19,7 @@ import traceback
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from cash.analysis.ast_util import fix_locations
 from cash.notebook.cache_status import ExecutionResult
 from cash.notebook.compiled_source import is_cash_filename, line_offset, register_cell_source, shifted
 from cash.notebook.statement.capture import NoCapture
@@ -76,7 +77,7 @@ def over_the_handed_iterable(source: str) -> tuple[str, ast.Module]:
     if not isinstance(loop, ast.For):
         raise ValueError("a handed-over loop iterable needs a single for statement")
     loop.iter = ast.copy_location(ast.Name(id=LOOP_ITERABLE_NAME, ctx=ast.Load()), loop.iter)
-    ast.fix_missing_locations(tree)
+    fix_locations(tree)
     text = ast.unparse(tree)
     return text, ast.parse(text)
 
@@ -437,7 +438,7 @@ class CodeRunner:
                 )
             )
         expression = ast.Expression(body=tree.body[-1].value)
-        ast.fix_missing_locations(expression)
+        fix_locations(expression)
         units.append(compile(expression, filename, "eval", flags=flags, dont_inherit=True))
         units = [shifted(unit, lines) for unit in units]
         self._echo = echoes(self.code, tree, self.is_last)

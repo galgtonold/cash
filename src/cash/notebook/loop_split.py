@@ -40,6 +40,7 @@ import ast
 
 from cash.backends.cache_dir import LOOP_SPLIT_FILENAME
 
+from ..analysis.ast_util import fix_locations
 from .cache_key import statement_source_hash
 from .versioned_json_store import StoreRegistry, VersionedJsonStore
 
@@ -102,7 +103,7 @@ def split_nodes(node: ast.For, k: int) -> tuple[ast.For, ast.For]:
             orelse=[],
             type_comment=None,
         )
-        return ast.fix_missing_locations(ast.copy_location(half, node))
+        return fix_locations(ast.copy_location(half, node))
 
     return _half(None, k), _half(k, None)
 

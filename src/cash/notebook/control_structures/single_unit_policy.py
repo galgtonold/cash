@@ -29,6 +29,7 @@ import types
 from collections.abc import Sequence
 from typing import Any
 
+from ...analysis.ast_util import fix_locations
 from ...analysis.cacheability import statement_writes_files
 
 logger = logging.getLogger(__name__)
@@ -630,7 +631,7 @@ def sizing_header(iter_code: str) -> tuple[str, tuple[str, ...]] | None:
     tree.body = _wrap_sized(tree.body, wrap)
     if not texts:
         return None
-    ast.fix_missing_locations(tree)
+    fix_locations(tree)
     return ast.unparse(tree), tuple(texts)
 
 

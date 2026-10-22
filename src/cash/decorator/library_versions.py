@@ -559,9 +559,38 @@ def library_tops(functions: Iterable[Callable], own_pkg: str | None) -> set[str]
 def library_versions(functions: Iterable[Callable], own_pkg: str | None) -> list[tuple[str, str]]:
     """``(distribution, version)`` for each installed library *functions*
     reach, sorted; empty when they reach none."""
+    tops = library_tops(functions, own_pkg)
+    if _all_known(tops):
+        return _versions_of(tops)
+    from ..value_hash import own_garbage
+
+    with own_garbage():
+        return _versions_of(tops)
+
+
+def _all_known(tops: set[str]) -> bool:
+    """Has every lookup `_versions_of` makes for *tops* been made before?
+    Then it reads only cash's own tables, and leaves no garbage."""
+    if _DISTS_BY_TOP is None:
+        return False
+    for top in tops:
+        names = _PROVIDERS.get(top)
+        if names is None:
+            return False
+        for dist in names:
+            closure = _CLOSURES.get(dist)
+            if closure is None:
+                return False
+            for name in closure:
+                if name not in _VERSIONS or (_VERSIONS[name] is not None and name not in _DIGESTS):
+                    return False
+    return True
+
+
+def _versions_of(tops: set[str]) -> list[tuple[str, str]]:
     found: set[tuple[str, str]] = set()
     saved: dict | None = None
-    for top in library_tops(functions, own_pkg):
+    for top in tops:
         for dist in _dists_for(top):
             for name in _closure(dist):
                 version = _version(name)

@@ -52,6 +52,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from ..analysis.ast_util import copy_tree as _copy_tree
+from ..analysis.ast_util import fix_locations
 from .call_key import global_names_reached
 from .lineage_formula import is_cash_instrumentation
 
@@ -432,7 +433,7 @@ def wrap_eligible_calls(
             )
             call.func = _routed(call.func, slot_for(sites[-1]) if slot_for is not None else len(sites) - 1)
     if sites:
-        ast.fix_missing_locations(new_tree)
+        fix_locations(new_tree)
     return new_tree, sites
 
 
