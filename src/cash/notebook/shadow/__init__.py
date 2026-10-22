@@ -165,11 +165,13 @@ class Shadow:
             self.recorder.reclassify()
         self.lineage = lineage
         if self.dir is None:
-            base = None
-            try:
-                base = backend.local_dir()
-            except Exception:  # noqa: BLE001 - no local folder: shadow keeps its log elsewhere
-                base = None
+            # A property on the backends, a method on the decorator's slot.
+            # Called as a method, the property raised a TypeError that was
+            # taken for "no local folder": every notebook's traces went to
+            # one folder under the system temp dir, and the traces kept per
+            # statement were counted across them.
+            local = getattr(backend, "local_dir", None)
+            base = local() if callable(local) else local
             if not base:
                 base = os.environ.get("CASH_CACHE_DIR") or tempfile.gettempdir()
             self.dir = os.path.join(base, "shadow")
