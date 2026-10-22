@@ -9,6 +9,7 @@ key stands for two different contents.
 
 from __future__ import annotations
 
+import threading
 import warnings
 
 import numpy as np
@@ -295,9 +296,14 @@ def test_the_check_thread_ends_once_idle_and_starts_again(c, monkeypatch):
         return float(store.data.sum())
 
     check = c._args.key_check
+    # The thread is caught as it starts: read from ``check._thread`` after the
+    # call, a loaded machine let it idle out first (None).
+    started = []
+    run = check._run
+    monkeypatch.setattr(check, "_run", lambda: (started.append(threading.current_thread()), run()))
     assert "KEY-STALE-CASH-KEY" not in _run_checked(c, total, Store(1, [1, 2]))
-    thread = check._thread
-    assert thread is not None
+    assert len(started) == 1
+    thread = started[0]
     thread.join(timeout=5)
     assert not thread.is_alive() and check._thread is None
     codes = _run_checked(c, total, Store(1, [3, 4]))
