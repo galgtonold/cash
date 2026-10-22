@@ -491,6 +491,7 @@ class CallEntries:
         code_module: str | None = None,
         held_refs: list | None = None,
         env_reads: dict[str, str] | None = None,
+        helper_memos: list[dict] | None = None,
     ) -> tuple[str, Any] | None:
         """Write through ``backend.set(key, value, metadata)`` -- the same
         two-positional-argument shape the statement path uses
@@ -544,6 +545,9 @@ class CallEntries:
             # What the environment variables installed code read held:
             # `lookup` checks them again.
             metadata["env_reads"] = env_reads
+        if helper_memos:
+            # What the helper memos it called held (`helper_memos.used`).
+            metadata["helper_memos"] = helper_memos
         if file_deps or remote_deps or probes:
             # The paths it only checked for (``probe_answers``) are checked as
             # the decorator checks them: still missing, or still there.

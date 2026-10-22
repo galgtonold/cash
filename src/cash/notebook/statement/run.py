@@ -196,6 +196,9 @@ class StatementRun:
     #: name -> digest of the environment variables installed code read while
     #: it ran (`env_reads.environment_digests`).
     env_reads: dict[str, str] | None = None
+    #: The ``functools`` memos of the user's it called, with what each held
+    #: after it ran (`helper_memos.used`).
+    helper_memos: list[dict] | None = None
     #: For a statement that runs a magic or a shell command: the identity of
     #: every binding in the namespace before it ran (``calls_ipython``).
     ipython_bindings: dict[str, int] | None = None
