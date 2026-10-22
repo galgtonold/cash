@@ -52,6 +52,7 @@ from typing import Any
 
 from cash import _native, _plain_data
 from cash._clock import CpuLimit
+from cash._type_memo import TypeMemo
 from cash._user_attrs import attribute_or, builtin_items, has_attribute, instance_of
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
@@ -284,7 +285,7 @@ def is_value(value: Any, value_types: tuple[type, ...]) -> bool:
         return issubclass(type(value), value_types)
 
 
-_ESTIMATOR_CLASSES: dict[type, bool] = {}
+_ESTIMATOR_CLASSES: TypeMemo[bool] = TypeMemo()
 
 
 def _is_estimator_class(cls: type) -> bool:
@@ -301,7 +302,7 @@ def _is_estimator_class(cls: type) -> bool:
     return known
 
 
-_LOCAL_MODULE_CLASSES: dict[type, bool] = {}
+_LOCAL_MODULE_CLASSES: TypeMemo[bool] = TypeMemo()
 
 
 def _is_local_module_class(cls: type) -> bool:
@@ -356,7 +357,9 @@ def attributes_of(value: Any) -> dict[str, Any] | None:
     return found
 
 
-_SLOT_MEMBERS: dict[type, tuple[tuple[str, Any], ...]] = {}
+#: Per class, ``(name, index in its MRO)`` of each slot: not the member
+#: descriptors themselves, which refer to their class and would keep it alive.
+_SLOT_MEMBERS: TypeMemo[tuple[tuple[str, int], ...]] = TypeMemo()
 
 
 def _slot_members(cls: type) -> tuple[tuple[str, Any], ...]:
@@ -365,13 +368,17 @@ def _slot_members(cls: type) -> tuple[tuple[str, Any], ...]:
     under its mangled name)."""
     known = _SLOT_MEMBERS.get(cls)
     if known is None:
-        found: list[tuple[str, Any]] = []
-        for klass in cls.__mro__:
+        found: list[tuple[str, int]] = []
+        for at, klass in enumerate(cls.__mro__):
             for name, member in vars(klass).items():
                 if instance_of(member, types.MemberDescriptorType) and "__slots__" in vars(klass):
-                    found.append((name, member))
-        known = _SLOT_MEMBERS[cls] = tuple(found)
-    return known
+                    found.append((name, at))
+        known = tuple(found)
+        _SLOT_MEMBERS[cls] = known
+    if not known:
+        return ()
+    mro = cls.__mro__
+    return tuple((name, vars(mro[at])[name]) for name, at in known)
 
 
 def _values_only(value: Any, exact: frozenset[type]) -> bool:

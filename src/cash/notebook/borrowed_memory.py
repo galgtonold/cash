@@ -35,6 +35,7 @@ from itertools import chain
 from typing import Any
 
 from cash import _plain_data
+from cash._type_memo import TypeMemo
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 
 from .shared_objects import (
@@ -75,7 +76,7 @@ def _family(value: Any) -> str | None:
 
 #: `_family_of_type` by type: a library's type only exists once it is
 #: imported, so the answer never changes.
-_FAMILIES: dict[type, str | None] = {}
+_FAMILIES: TypeMemo[str | None] = TypeMemo()
 
 
 def _family_of_type(kind: type) -> str | None:

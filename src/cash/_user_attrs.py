@@ -6,6 +6,8 @@ import collections
 import types
 from typing import Any
 
+from ._type_memo import TypeMemo
+
 
 def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
     """``getattr(obj, name, default)``, with any error the lookup raises taken
@@ -35,10 +37,9 @@ def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
     return found
 
 
-#: Per type, `_own_lookup`'s answer. Dropped whole past `_OWN_LOOKUP_MAX`
-#: types: a class made per call (``df.itertuples()``) is not kept alive.
-_OWN_LOOKUP: dict[type, bool] = {}
-_OWN_LOOKUP_MAX = 4096
+#: Per type, `_own_lookup`'s answer, held weakly: a class made per call
+#: (``df.itertuples()``) is not kept alive.
+_OWN_LOOKUP: TypeMemo[bool] = TypeMemo()
 
 
 def _own_lookup(kind: type) -> bool:
@@ -49,9 +50,8 @@ def _own_lookup(kind: type) -> bool:
     they are answered by Python's generic lookup and the real type."""
     own = _OWN_LOOKUP.get(kind)
     if own is None:
-        if len(_OWN_LOOKUP) >= _OWN_LOOKUP_MAX:
-            _OWN_LOOKUP.clear()
-        own = _OWN_LOOKUP[kind] = type(kind.__getattribute__) is types.FunctionType
+        own = type(kind.__getattribute__) is types.FunctionType
+        _OWN_LOOKUP[kind] = own
     return own
 
 
