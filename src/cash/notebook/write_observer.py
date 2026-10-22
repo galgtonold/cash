@@ -34,7 +34,6 @@ from cash.install_paths import is_user_code_file
 from cash.purity import is_pure
 from cash.tracking import io_watch
 from cash.tracking.read_classification import is_runtime_cache_path
-from cash.tracking.tracker_context import untracked
 
 __all__ = ["WrittenPaths", "children_left_running", "kept_writes", "observe_writes", "process_runs"]
 
@@ -240,7 +239,7 @@ def _child_pids() -> frozenset[int]:
     try:
         import psutil
 
-        with untracked():
+        with io_watch.own_work():
             return frozenset(child.pid for child in psutil.Process().children())
     except Exception:  # noqa: BLE001 - none known: every child is new
         return frozenset()
