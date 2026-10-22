@@ -949,10 +949,12 @@ class StatementProcessor:
             if cached_data and _shadow.SHADOW.stale(run.shadow):
                 # Code it ran changed since it was stored: it runs again.
                 cached_data = None
+                run.trace_refused = True
             elif cached_data and run.needs_trace and not _shadow.SHADOW.agreed(run.shadow):
                 # Its key does not name what a string found: only a trace
                 # checked unchanged serves it.
                 cached_data = None
+                run.trace_refused = True
         elif run.needs_trace:
             cached_data = None
         if cached_data and self._live_objects_shared(run, metadata):
@@ -2230,6 +2232,7 @@ class StatementProcessor:
                     or run.value_varies
                     or (run.skip_cache and not run.value_pinned and not self._binds_the_namespace(run))
                     or run.needs_trace
+                    or run.trace_refused
                     or run.past_budget
                     or inputs_moved
                     or self._binds_a_stream(run),

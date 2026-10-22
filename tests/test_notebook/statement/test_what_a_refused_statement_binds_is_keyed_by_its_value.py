@@ -78,3 +78,41 @@ def test_a_reader_of_an_unchanged_value_is_still_served(cash_magics, monkeypatch
     run_cash_cell(cash_magics, cells[2], cells=cells)
     assert ns["RUNS"] == [1], "the reader ran again over the same value"
     assert ns["w"] == [1, 1]
+
+
+#: name: (setup, the statement's expression, a change to what the code it
+#: runs reads, which its key does not hold)
+TRACE_REFUSED = {
+    "the code it ran changed": (
+        "def inner(x):\n    return x * 2",
+        "inner(3)",
+        "inner.__code__ = (lambda x: x * 10).__code__",
+    ),
+    "a function a string names changed": (
+        "cfg = 1\nname = 'make'\ndef make(x):\n    return x + cfg * 1",
+        "globals()[name](3)",
+        "def make(x):\n    return x + cfg * 5",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(TRACE_REFUSED))
+def test_a_hit_its_trace_refuses_gives_a_reader_below_the_new_value(cash_magics, monkeypatch, case):
+    """An entry found under its key and refused by its trace runs again with
+    the same key: the reader below, keyed on the same lineage, was served
+    what the old value gave (``u = t + 1`` served 7 where 31 is right)."""
+    if shadow.SHADOW is None:
+        pytest.skip("traces are recorded on Python 3.12+ only")
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    setup, expr, change = TRACE_REFUSED[case]
+    cells = [setup, f"v = {expr}", READER]
+    ns = cash_magics.shell.user_ns
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    first = ns["v"]
+    exec(change, ns)
+
+    for cell in cells[1:]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert ns["v"] != first, "the change did not reach the statement"
+    assert ns["w"] == [ns["v"], "read"], f"the reader was served what {first!r} gave"
