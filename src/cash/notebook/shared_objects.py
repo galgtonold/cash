@@ -2925,7 +2925,7 @@ def frames_sharing_cells(
 ) -> list[tuple[list[str], set[str]]]:
     """Each of *outputs* with the variables of *user_ns* bound to a frame
     holding, in an object column, an object the output is or holds at its
-    top level, by address: a list, tuple, set or dict holding a frame's
+    top level or a level below, by address: a list, tuple, set or dict holding a frame's
     cells, or a variable bound to one cell. For when the share check gave
     up: ``L = list(df['o'])`` over 100,000 rows ran out of its budget some
     runs and not others, and unlinked, ``L[3]['z'] = 2`` left ``df`` at its
@@ -2939,17 +2939,22 @@ def frames_sharing_cells(
     value_types = set(VALUE_TYPES)
     held: dict[str, Any] = {}
     for name, value in outputs.items():
-        kind = type(value)
-        if kind in value_types:
+        if type(value) in value_types:
             continue
-        items: Iterable[Any] = ()
-        if kind in (list, tuple, set, frozenset):
-            items = value
-        elif kind is dict:
-            items = value.values()
-        held[name] = np.array(
-            [id(value), *(id(item) for item in items if type(item) not in value_types)], dtype=np.int64
-        )
+        ids = [id(value)]
+        level = _container_items(value, value_types)
+        ids += map(id, level)
+        # And a level down, within a bound: ``H = {'L': list(df['o'])}``,
+        # ``[list(df['o'])]``, a list of records.
+        budget = _NESTED_READ
+        for item in level:
+            if budget <= 0:
+                break
+            inner = _container_items(item, value_types)
+            budget -= len(inner)
+            ids += map(id, inner)
+        del level
+        held[name] = np.array(ids, dtype=np.int64)
     if not held:
         return []
     found: dict[str, set[str]] = {name: set() for name in held}
@@ -2965,6 +2970,23 @@ def frames_sharing_cells(
                 if other not in found[name] and in_sorted(ids, cells).any():
                     found[name].add(other)
     return [([name], names) for name, names in found.items() if names]
+
+
+#: Most items `frames_sharing_cells` reads a level below an output's own.
+_NESTED_READ = 4_000_000
+
+
+def _container_items(value: Any, value_types: set[type]) -> list[Any]:
+    """The items of the builtin list, tuple, set or dict *value* (a dict's
+    values) that are not values; none for anything else."""
+    kind = type(value)
+    if kind in (list, tuple, set, frozenset):
+        items: Iterable[Any] = value
+    elif kind is dict:
+        items = value.values()
+    else:
+        return []
+    return [item for item in items if type(item) not in value_types]
 
 
 def _pandas_slot_holders(

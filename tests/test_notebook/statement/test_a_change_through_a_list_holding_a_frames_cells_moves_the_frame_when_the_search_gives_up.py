@@ -4,7 +4,8 @@ even when the search for the variables sharing the list's objects gives up.
 ``L = list(df['o'])`` over 100,000 rows: the search ran out of its budget
 some runs and not others, and when it did, ``L[3]['z'] = 2`` left ``df`` at
 its lineage from before, and a statement reading ``df['o']`` was served what
-it read when ``z`` was 1, with no warning.
+it read when ``z`` was 1, with no warning. So did a holder holding them a
+level down (``H = {'L': list(df['o'])}``, a list of records).
 """
 
 from __future__ import annotations
@@ -23,8 +24,13 @@ CHANGES = {
     "tolist": ("L = df['o'].tolist()", "L[3]['z'] = {z}"),
     "dict": ("D = {'k': df['o'].iloc[3]}", "D['k']['z'] = {z}"),
     "cell": ("c3 = df['o'].iloc[3]", "c3['z'] = {z}"),
+    # A level down: the read by address looks one level into what the
+    # holder holds.
+    "dict_of_list": ("H = {'L': list(df['o'])}", "H['L'][3]['z'] = {z}"),
+    "list_of_list": ("LL = [list(df['o'])]", "LL[0][3]['z'] = {z}"),
+    "records": ("Rr = [{'o': c} for c in df['o']]", "Rr[3]['o']['z'] = {z}"),
 }
-HOLDERS = {"L", "D", "c3"}
+HOLDERS = {"L", "D", "c3", "H", "LL", "Rr"}
 
 
 @pytest.fixture
