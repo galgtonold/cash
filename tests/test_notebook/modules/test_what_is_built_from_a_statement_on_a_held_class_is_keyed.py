@@ -37,7 +37,7 @@ SHOP = (
     "    return big[0](3).total(log)\n"
     "def price_pooled(big, log):\n"
     "    import multiprocessing\n"
-    "    with multiprocessing.get_context('fork').Pool(1) as p:\n"
+    "    with multiprocessing.get_context('fork' if 'fork' in multiprocessing.get_all_start_methods() else None).Pool(1) as p:\n"
     "        p.map(abs, [1])\n"
     "    return big[0](3).total(log)\n"
 )
@@ -96,20 +96,20 @@ def test_call_hit_with_dropped_trace(cash_magics, mock_shell, shop, size, varian
         run_cash_cell(cash_magics, c, cells=cells)
 
     run(cells[0])
-    (tmp_path / "m.txt").write_text("0")
+    (tmp_path / "m.txt").write_text("0", encoding="utf-8")
     run(cells[2])
     for v in range(variants):
-        (tmp_path / "n.txt").write_text(str(v))
+        (tmp_path / "n.txt").write_text(str(v), encoding="utf-8")
         run(cells[1])
         run(cells[3])
         run(cells[4])
     assert mock_shell.user_ns["t"] == 6
     if edit:
         run(cells[5])
-    (tmp_path / "n.txt").write_text("0")
+    (tmp_path / "n.txt").write_text("0", encoding="utf-8")
     run(cells[1])
     run(cells[3])
-    (tmp_path / "m.txt").write_text("1")
+    (tmp_path / "m.txt").write_text("1", encoding="utf-8")
     run(cells[2])
     before = open(log, encoding="utf-8").read()
     run(cells[4])
@@ -142,7 +142,7 @@ def test_call_hit_after_traces_lost(cash_magics, mock_shell, shop, size, call, e
     def run(c):
         run_cash_cell(cash_magics, c, cells=cells)
 
-    (tmp_path / "m.txt").write_text("0")
+    (tmp_path / "m.txt").write_text("0", encoding="utf-8")
     for c in cells[:4]:
         run(c)
     assert mock_shell.user_ns["t"] == 6
@@ -150,7 +150,7 @@ def test_call_hit_after_traces_lost(cash_magics, mock_shell, shop, size, call, e
     shadow.SHADOW.groups.clear()
     if edit:
         run(cells[4])
-    (tmp_path / "m.txt").write_text("1")
+    (tmp_path / "m.txt").write_text("1", encoding="utf-8")
     run(cells[1])
     before = open(log, encoding="utf-8").read()
     run(cells[3])
@@ -173,7 +173,7 @@ HELPERS = (
     "    return 1\n"
     "def pooled():\n"
     "    import multiprocessing\n"
-    "    with multiprocessing.get_context('fork').Pool(2) as p:\n"
+    "    with multiprocessing.get_context('fork' if 'fork' in multiprocessing.get_all_start_methods() else None).Pool(2) as p:\n"
     "        return sum(p.map(abs, range(4)))\n"
 )
 
@@ -238,13 +238,13 @@ def test_call_hit_with_unusable_trace(cash_magics, mock_shell, shop, size, edit)
     def run(c):
         run_cash_cell(cash_magics, c, cells=cells)
 
-    (tmp_path / "m.txt").write_text("0")
+    (tmp_path / "m.txt").write_text("0", encoding="utf-8")
     for c in cells[:4]:
         run(c)
     assert mock_shell.user_ns["t"] == 6
     if edit:
         run(cells[4])
-    (tmp_path / "m.txt").write_text("1")
+    (tmp_path / "m.txt").write_text("1", encoding="utf-8")
     run(cells[1])
     before = open(log, encoding="utf-8").read()
     run(cells[3])
