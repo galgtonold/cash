@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections
 import types
 from typing import Any
 
@@ -135,3 +136,22 @@ def own_dict(obj: Any) -> dict | None:
     except Exception:  # noqa: BLE001 - the object's own slot, not cash's error
         return None
     return attributes if type(attributes) is dict else None
+
+
+#: The builtin containers a class of the user's can derive from.
+_BUILTIN_CONTAINERS = (dict, list, tuple, set, frozenset, collections.deque)
+
+
+def builtin_items(value: Any) -> list[Any]:
+    """What the builtin container *value* is or derives from holds: a dict's
+    keys then values, the items of a list, tuple, set, frozenset or deque.
+
+    Read through the builtin type's own methods, not the class's: a dict
+    subclass whose ``values()`` raises, or a list subclass whose
+    ``__iter__`` does, failed cash's look into it, and the cell with it,
+    where plain Python never asked."""
+    kind = type(value)
+    base = kind if kind in _BUILTIN_CONTAINERS else next(c for c in kind.__mro__ if c in _BUILTIN_CONTAINERS)
+    if base is dict:
+        return [*dict.keys(value), *dict.values(value)]
+    return list(base.__iter__(value))

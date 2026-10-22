@@ -36,7 +36,7 @@ import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any, NamedTuple
 
-from cash._user_attrs import attribute_or, instance_of
+from cash._user_attrs import attribute_or, builtin_items, instance_of
 
 from .. import _native
 from .._memo import CODE_OBJECTS, LruMemo
@@ -648,7 +648,8 @@ def _visit_group(
         elif kind in _SEQUENCES and _K.seq_children(group, _leaves(), children) is not NotImplemented:
             return
     if issubclass(kind, dict):
-        keys = list(itertools.chain.from_iterable(group))
+        # By dict's own methods: a subclass's may raise.
+        keys = list(itertools.chain.from_iterable(map(dict.keys, group)))
         key_kinds = set(map(type, keys))
         # Keys that are tuples of plain values (an openpyxl sheet's cells by
         # ``(row, column)``) lead nowhere: one pass says so, as for a list.
@@ -663,9 +664,11 @@ def _visit_group(
             return
     elif issubclass(kind, _SEQUENCES):
         # A list of numbers or strings leads nowhere: one pass at C speed
-        # says so, and adds none of its items.
-        if not set(map(type, itertools.chain.from_iterable(group))) <= _leaves():
-            children.extend(itertools.chain.from_iterable(group))
+        # says so, and adds none of its items. A subclass is read by its
+        # builtin type's own iteration: its ``__iter__`` may raise.
+        items = group if kind in _SEQUENCES else list(map(builtin_items, group))
+        if not set(map(type, itertools.chain.from_iterable(items))) <= _leaves():
+            children.extend(itertools.chain.from_iterable(items))
         if kind in _SEQUENCES:
             return
     elif kind is types.FunctionType:

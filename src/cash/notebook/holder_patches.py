@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import _plain_data
-from .._user_attrs import instance_of
+from .._user_attrs import builtin_items, instance_of
 from .shared_objects import (
     TREE_LEAVES,
     VALUE_TYPES,
@@ -60,14 +60,15 @@ def _steps(value: Any, value_types: tuple[type, ...]) -> tuple[list[tuple[Step, 
     opens)."""
     if instance_of(value, dict):
         named, unnamed = [], []
-        for k, v in value.items():
+        for k, v in dict.items(value):
             if is_value(k, value_types):
                 named.append((("key", k), v))
             else:
                 unnamed += [k, v]
         return named, unnamed
     if instance_of(value, (list, tuple)):
-        return [(("item", i), v) for i, v in enumerate(value)], []
+        items = value if type(value) is list or type(value) is tuple else builtin_items(value)
+        return [(("item", i), v) for i, v in enumerate(items)], []
     attrs = attributes_of(value)
     if attrs is not None:
         return [(("attr", k), v) for k, v in attrs.items()], []

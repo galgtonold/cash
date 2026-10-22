@@ -52,7 +52,7 @@ from typing import Any
 
 from cash import _native, _plain_data
 from cash._clock import CpuLimit
-from cash._user_attrs import attribute_or, has_attribute, instance_of
+from cash._user_attrs import attribute_or, builtin_items, has_attribute, instance_of
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
 
@@ -389,9 +389,9 @@ def _values_only(value: Any, exact: frozenset[type]) -> bool:
 def children_of(value: Any) -> Iterable[Any] | None:
     """What *value* holds that a restore copies with it, or None for a leaf."""
     if instance_of(value, dict):
-        return [*value.keys(), *value.values()]
+        return builtin_items(value)
     if instance_of(value, _CONTAINERS):
-        return list(value)
+        return builtin_items(value)
     if instance_of(value, _CALLABLE_TYPES):
         return _bound_objects(value)
     if instance_of(value, types.CellType):

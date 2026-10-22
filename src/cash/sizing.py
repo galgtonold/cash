@@ -359,10 +359,13 @@ def _instance_estimate(value: Any, seen: set[int]) -> int:
                 # scikit-learn's ``Bunch`` (``fetch_lfw_people``) keeps its
                 # arrays as items. Read as 0, its RAM copy took the array
                 # copies over the pickle its digest had made (2 x 150 MB).
+                # By the builtin type's own methods: the class's may raise.
                 if instance_of(obj, dict):
-                    held = [*itertools.islice(obj.values(), _INSTANCE_OBJECTS), *held]
-                elif instance_of(obj, (list, tuple)) and len(obj) <= _INSTANCE_OBJECTS:
-                    held = [*obj, *held]
+                    held = [*itertools.islice(dict.values(obj), _INSTANCE_OBJECTS), *held]
+                elif instance_of(obj, (list, tuple)):
+                    base = list if instance_of(obj, list) else tuple
+                    if base.__len__(obj) <= _INSTANCE_OBJECTS:
+                        held = [*base.__iter__(obj), *held]
             for item in held:
                 kind = type(item)
                 if kind in _FLAT_CELLS or id(item) in walked:
