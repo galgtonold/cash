@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import contextlib
 import sys
-import time
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -21,22 +20,15 @@ __all__ = ["StreamTaken", "TeeWriter"]
 class TeeWriter:
     """A writer that sends output to both a real stream and a list buffer.
 
-    Output is forwarded to the real stream (e.g. Jupyter's IOPub) in batches
-    controlled by a time-based flush policy.  This avoids the O(n²) behaviour
-    of flushing after every single ``write()`` call — which, in Jupyter, sends
-    one ZMQ message per flush, causing extreme slowdown for tight loops with
-    many print calls.
-
-    Instead we:
-    * Always call ``self._real.write(s)`` so the data enters the kernel's
-      output buffer immediately.
-    * Only call ``self._real.flush()`` if ≥ ``_FLUSH_INTERVAL_S`` seconds
-      have elapsed since the last flush, and at the end of a line.  Jupyter's
-      own ``OutStream`` uses a similar strategy (~200 ms batching).
-      ``print('x')`` writes ``'x'`` and ``'\n'`` apart: a flush between them
-      sent the notebook two outputs for one line where plain Python sends
-      one (a statement whose first print came 100 ms in).
-    * Accumulate text in a plain Python list (O(1) append) and join once at
+    * Every ``write(s)`` goes to ``self._real`` at once, and the real stream
+      sends it when it sends its own: in a kernel, ipykernel's ``OutStream``
+      batches what was written and flushes it on its own timer, as it does
+      for plain Python. The tee does not flush on its own: flushing on a
+      timer of its own split what plain Python sends as one output
+      (``print('a'); print('b')`` 100 ms into a statement came as two, and
+      a print's text apart from its newline) and showed stderr ahead of
+      stdout written before it.
+    * Text is kept in a plain Python list (O(1) append) and joined once at
       the end for the metrics/cache record.
 
     ``writelines`` is recorded too: left to ``__getattr__``, it went straight
@@ -50,20 +42,13 @@ class TeeWriter:
     nearly every library use) are the channels this class covers.
     """
 
-    _FLUSH_INTERVAL_S = 0.1  # seconds – matches ipykernel's default batch interval
-
     def __init__(self, real_stream: Any, chunks: list[str] | None = None) -> None:
         self._real = real_stream
         self._chunks: list[str] = chunks if chunks is not None else []
-        self._last_flush = time.monotonic()
 
     def write(self, s: str) -> int:
         self._real.write(s)
         self._chunks.append(s)
-        now = time.monotonic()
-        if s.endswith("\n") and now - self._last_flush >= self._FLUSH_INTERVAL_S:
-            self._real.flush()
-            self._last_flush = now
         return len(s)
 
     def writelines(self, lines: Iterable[str]) -> None:
@@ -72,7 +57,6 @@ class TeeWriter:
 
     def flush(self) -> None:
         self._real.flush()
-        self._last_flush = time.monotonic()
 
     def getvalue(self) -> str:
         """Return all accumulated text."""

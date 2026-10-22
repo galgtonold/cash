@@ -26,8 +26,11 @@ IN_ONE_CELL = [
     "sys.stdout = old\nprint(repr(buf.getvalue()))",
     "import io, sys\nerr = io.StringIO()\nold_err = sys.stderr\nsys.stderr = err\nprint('warned', file=sys.stderr)\n"
     "sys.stderr = old_err\nprint(repr(err.getvalue()))",
-    # A print that comes 150 ms into its statement is one output all the same.
+    # Output 150 ms into a statement: one line, two lines in a row, and
+    # stderr after stdout, as plain Python sends them.
     "import time\nprint(time.sleep(0.15) or 'late')",
+    "def two():\n    time.sleep(0.15)\n    print('a')\n    print('b')\ntwo()",
+    "def both():\n    print('out')\n    time.sleep(0.15)\n    print('err', file=sys.stderr)\nboth()",
 ]
 ACROSS_CELLS = [
     "import io, sys\nbuf = io.StringIO()\nold = sys.stdout\nsys.stdout = buf\nprint('same cell')",
@@ -49,10 +52,18 @@ def _run(cells, tmp_path):
 
 
 def _saved(cell):
-    return [
-        ("stream", o.name, o.text) if o.output_type == "stream" else (o.output_type, dict(o.get("data", {})))
-        for o in cell.outputs
-    ]
+    """The cell's outputs, a stream's consecutive pieces as one: where the
+    kernel cuts a stream into messages is its timer's business (plain
+    Python is cut between a print's text and its newline now and then)."""
+    saved: list = []
+    for o in cell.outputs:
+        if o.output_type != "stream":
+            saved.append((o.output_type, dict(o.get("data", {}))))
+        elif saved and saved[-1][:2] == ("stream", o.name):
+            saved[-1] = ("stream", o.name, saved[-1][2] + o.text)
+        else:
+            saved.append(("stream", o.name, o.text))
+    return saved
 
 
 @pytest.mark.parametrize("cells", [IN_ONE_CELL, ACROSS_CELLS], ids=["in-one-cell", "across-cells"])
@@ -67,6 +78,8 @@ def test_what_the_notebook_shows_matches_plain(tmp_path, cells):
             [("stream", "stdout", "'hello\\n'\n")],
             [("stream", "stdout", "'warned\\n'\n")],
             [("stream", "stdout", "late\n")],
+            [("stream", "stdout", "a\nb\n")],
+            [("stream", "stdout", "out\n"), ("stream", "stderr", "err\n")],
         ]
     else:
         assert plain[3] == [("stream", "stdout", "'same cell\\nnext cell\\n'\n")]
