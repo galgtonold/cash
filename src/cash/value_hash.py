@@ -423,8 +423,10 @@ class Watch:
 
     def close(self) -> None:
         self.open = False
-        with contextlib.suppress(ValueError):
-            OPEN_WATCHES.remove(self)
+        with _COLLECTOR_LOCK:
+            with contextlib.suppress(ValueError):
+                OPEN_WATCHES.remove(self)
+            _restore_threshold()
 
 
 class _Window(Watch):
@@ -448,6 +450,59 @@ _one_read = _OneRead()
 #: The watches open now, on any thread: `user_code_ran` ends them.
 OPEN_WATCHES: list[Watch] = []
 
+#: Guards `OPEN_WATCHES` going from empty to not and back, and the
+#: collector's threshold with it. Re-entrant: a collection run while it is
+#: held ends the watches from its callback (`_on_collection`).
+_COLLECTOR_LOCK = threading.RLock()
+
+#: The youngest generation's threshold while a watch is open, and the one
+#: it replaced (None: not raised).
+_WATCHED_THRESHOLD = 200_000
+_raised_from: tuple[int, ...] | None = None
+
+
+def _raise_threshold() -> None:
+    """The first watch opens: the collector waits for 100 times more new
+    objects than it does by default before a collection.
+
+    A collection that frees something ends every watch (`_on_collection`),
+    and cash's own work between two checks leaves cyclic garbage of its own
+    (recursive closures of its syntax-tree walks, an import): 3 cached calls
+    in 10 lost the digest their statement handed them that way, for a second
+    full read of the argument. Raised, not turned off: a watch stays open
+    through a library's code (``model = fit(X)`` runs none of the user's),
+    which may run long and leave garbage of its own, and the collection it
+    then triggers ends the watch as before."""
+    global _raised_from
+    if OPEN_WATCHES or _raised_from is not None or not gc.isenabled():
+        return
+    now = gc.get_threshold()
+    if now[0] and now[0] < _WATCHED_THRESHOLD:
+        gc.set_threshold(_WATCHED_THRESHOLD, *now[1:])
+        _raised_from = now
+
+
+def _restore_threshold() -> None:
+    """The last watch closed: the threshold it found, unless something set
+    another meanwhile."""
+    global _raised_from
+    if OPEN_WATCHES or _raised_from is None:
+        return
+    was, _raised_from = _raised_from, None
+    now = gc.get_threshold()
+    if now[0] == _WATCHED_THRESHOLD and now[1:] == was[1:]:
+        gc.set_threshold(*was)
+
+
+def end_watches() -> None:
+    """End every watch still open: a cell's statements are done, and
+    nothing taken in one cell is handed on to the next, and the
+    collector's threshold is back to its own (`_raise_threshold`)."""
+    for w in list(OPEN_WATCHES):
+        w.close()
+        if isinstance(w, _Window):
+            w.digests = {}
+
 
 def _open(w: Watch) -> Watch:
     """*w*, watched from now on. Where nothing would see code of the user's
@@ -458,7 +513,9 @@ def _open(w: Watch) -> Watch:
     from .decorator import code_trace
 
     if code_trace.watching_user_code():
-        OPEN_WATCHES.append(w)
+        with _COLLECTOR_LOCK:
+            _raise_threshold()
+            OPEN_WATCHES.append(w)
     else:
         w.open = False
     return w
@@ -494,7 +551,8 @@ def _on_collection(phase: str, info: dict) -> None:
     it ran may be the user's code handed to C (``weakref.ref(obj,
     rows.append)``, ``weakref.finalize(obj, arr.fill, 0)``, a C type's
     ``tp_finalize``), which starts no Python code for the recorder to see.
-    So every watch ends, as when code of the user's runs.
+    So every watch ends, as when code of the user's runs. Fewer run while
+    one is open (`_raise_threshold`).
 
     At its end, and only when it freed something: those run only for the
     objects it finds unreachable, and most collections free nothing (a

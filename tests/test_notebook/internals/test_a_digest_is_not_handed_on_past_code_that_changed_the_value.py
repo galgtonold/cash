@@ -172,3 +172,28 @@ def test_a_cell_started_on_another_thread_ends_the_watch(user):
         assert not w.open
     finally:
         w.close()
+
+
+def test_cashs_own_garbage_waits_while_a_watch_is_open():
+    """A collection that frees only cash's own leftovers would end the watch
+    as surely as a finalizer: fewer run while one is open, and the
+    threshold is the collector's own again once it closes."""
+    own = gc.get_threshold()
+    w = value_hash.watch()
+    try:
+        assert gc.get_threshold()[0] > own[0]
+        for _ in range(5000):  # cyclic garbage, as cash's syntax-tree walks leave
+            a = []
+            a.append(a)
+        assert w.open
+    finally:
+        w.close()
+    assert gc.get_threshold() == own
+
+
+def test_a_cells_end_ends_every_watch_left_open():
+    own = gc.get_threshold()
+    w = value_hash.watch()
+    value_hash.end_watches()
+    assert not w.open
+    assert gc.get_threshold() == own

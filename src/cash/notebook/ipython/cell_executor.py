@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from IPython.core.inputtransformer2 import leading_indent
 
+from ... import value_hash
 from ..._clock import perf_counter as _perf_counter
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.ast_util import resolve_callee
@@ -672,6 +673,9 @@ class CellExecutor:
             with _measured_validation(sink=cell.timing_breakdown):
                 yield
         finally:
+            # Nothing a statement took is handed past its cell, and the
+            # collector's threshold a watch raised is back.
+            value_hash.end_watches()
             self._warn_threads_left_running(cell)
         t_persist = _perf_counter()
         self._statement_processor.end_cell_persistence()
