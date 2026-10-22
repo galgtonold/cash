@@ -78,6 +78,7 @@ class Unit:
     __slots__ = (
         "cells",
         "codes",
+        "counters_read",
         "extra",
         "kind",
         "markers",
@@ -99,6 +100,10 @@ class Unit:
         self.cells: dict[types.CodeType, tuple] = {}
         self.markers: set[str] = set()
         self.notes: set[str] = set()
+        #: It called a memo's ``cache_info`` or ``cache_clear``, however it
+        #: came by it (`code_trace.reads_counters`): what it read or emptied
+        #: is a memo's state, which a served result does not put back.
+        self.counters_read = False
         #: Item lists of cached calls served inside the unit (they did not run).
         self.extra: list[tuple] = []
         #: Code of ``matplotlib.pyplot`` ran in it: it read or changed
@@ -119,6 +124,7 @@ class Unit:
         self.markers |= inner.markers
         self.notes |= inner.notes
         self.pyplot_ran = self.pyplot_ran or inner.pyplot_ran
+        self.counters_read = self.counters_read or inner.counters_read
         self.extra.extend(inner.extra)
 
 

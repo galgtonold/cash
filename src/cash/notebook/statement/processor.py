@@ -789,6 +789,10 @@ class StatementProcessor:
         run.trace_unit = unit
         if unit is not None and run.needs_trace:
             unit.lookups_followed = True
+        if unit is not None and run.memos_about:
+            # A memo of the user's is about: a call of its counters is looked
+            # for, however the statement came by it.
+            unit.counters_watched = True
         return unit
 
     @staticmethod
@@ -1502,6 +1506,7 @@ class StatementProcessor:
         env_reads: set[str] = set()
         helper_memos.new_statement()
         memos_before = None if run.skip_cache else helper_memos.watched(self.shell.user_ns)
+        run.memos_about = bool(memos_before)
         try:
             with (
                 self.watching_reads(run.code),
@@ -1589,7 +1594,11 @@ class StatementProcessor:
             # What the helper memos it called held: a lookup checks them
             # again. One it made compute is changed, as a list appended to.
             user_ns = self.shell.user_ns
-            clears = bool(memos_before) and helper_memos.clears(run.code, user_ns)
+            # Its trace saw a counter called, however the statement named it,
+            # or its text names one.
+            clears = bool(memos_before) and (
+                (run.trace_unit is not None and run.trace_unit.counters_read) or helper_memos.clears(run.code, user_ns)
+            )
             memos = helper_memos.used(memos_before, clears=clears, ns=user_ns)
             if isinstance(memos, tuple):
                 # What it returns can differ run to run with the memo's

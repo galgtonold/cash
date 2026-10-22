@@ -289,6 +289,8 @@ class StatementRun:
     unless_it_draws: str | None = None
     #: What shadow mode recorded of its run (``Shadow.begin``), or None.
     trace_unit: Any = None
+    #: A memo of the user's was about as it began (``helper_memos.watched``).
+    memos_about: bool = False
     #: It ran with a kept value standing in for part of it (``ExpressionMemo``).
     memo_used: bool = False
     #: It ran over a loop header cash evaluated before it (``loop_iterable``).

@@ -1046,6 +1046,8 @@ class CallUnit:
         self._running += 1
         shadow = _shadow.SHADOW
         unit = shadow.begin("call") if shadow is not None else None
+        if unit is not None and memos_before:
+            unit.counters_watched = True
         try:
             with call_tracker, observe_writes() as written, recording_env_reads() as env_reads:
                 result, stdout_text, stderr_text, displayed = call_capturing_output(call.fn, call.args, call.kwargs)
@@ -1083,7 +1085,9 @@ class CallUnit:
             and self._worth_storing(call, result, elapsed, result_held)
             and not call_tracker.work_outlived_block
             and not _inputs_moved(call_tracker)
-            and not isinstance(memos := helper_memos.used(memos_before, clears=_clears(call.fn, memos_before)), tuple)
+            and not isinstance(
+                memos := helper_memos.used(memos_before, clears=_clears(call.fn, memos_before, unit)), tuple
+            )
         ):
             stored = self._store_result(
                 call,
@@ -1601,7 +1605,8 @@ def _left_pyplot_alone(fn: Any, unit: Any) -> bool:
     return user_callee_using_pyplot(fn) is None
 
 
-def _clears(fn: Any, memos_before: Any) -> bool:
-    """Whether the call can empty a memo it reaches (`helper_memos.clears`);
-    asked only when there is one."""
-    return bool(memos_before) and helper_memos.clears(None, None, fn)
+def _clears(fn: Any, memos_before: Any, unit: Any = None) -> bool:
+    """Whether the call can empty a memo it reaches or read its counters:
+    its trace saw it call one (*unit*), or what it names does
+    (`helper_memos.clears`); asked only when there is one."""
+    return bool(memos_before) and ((unit is not None and unit.counters_read) or helper_memos.clears(None, None, fn))

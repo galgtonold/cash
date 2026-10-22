@@ -50,8 +50,10 @@ from __future__ import annotations
 import atexit
 import builtins
 import dis
+import functools
 import hashlib
 import importlib
+import operator
 import os
 import sys
 import threading
@@ -160,7 +162,7 @@ def _unit_class() -> type:
         """What one traced call saw: `Unit`'s fields, its lookups by name
         and the items of what was served inside it."""
 
-        __slots__ = ("cached_codes", "callees", "lookups", "lookups_followed")
+        __slots__ = ("cached_codes", "callees", "counters_watched", "lookups", "lookups_followed")
 
         def __init__(self, kind: str) -> None:
             super().__init__(kind)
@@ -175,6 +177,9 @@ def _unit_class() -> type:
             #: A notebook statement's: its own lookups by a string are ones
             #: its trace follows (``cache_key.lookups_followed``).
             self.lookups_followed = False
+            #: A notebook unit with a memo of the user's about: its calls of
+            #: one's counters are looked for (`_Recorder._on_call`).
+            self.counters_watched = False
 
         def absorb(self, inner: Any) -> None:
             super().absorb(inner)
@@ -192,6 +197,10 @@ def _recorder_class() -> type:
     from ..tracking import trace_recorder as rec
 
     DISABLE = sys.monitoring.DISABLE
+    FUNCTION, LRU, STR, BUILTIN, PARTIAL = types.FunctionType, _LRU, str, _BUILTIN, functools.partial
+    DESCRIPTORS = frozenset(_DESCRIPTORS)
+    SITES_get = _SITES.get
+    TAKERS = _TAKERS
     _POOL_QUALNAMES = frozenset(qualname for _, qualname in rec.POOL_STARTS)
     _PYPLOT_FILES = ("matplotlib/pyplot.py", "matplotlib\\pyplot.py")
 
@@ -239,6 +248,8 @@ def _recorder_class() -> type:
             #: globals (`string_lookups`): what it calls is recorded for a
             #: notebook unit, the callable a string found among it.
             self.by_string: weakref.WeakSet[types.CodeType] = weakref.WeakSet()
+            #: The user's code that names getattr or an import function.
+            self.lookup_codes: weakref.WeakSet[types.CodeType] = weakref.WeakSet()
             free = [tool for tool in self.tool_ids if mon.get_tool(tool) is None]
             if len(free) < 2:
                 held = {t: mon.get_tool(t) for t in self.tool_ids}
@@ -336,11 +347,15 @@ def _recorder_class() -> type:
                 return DISABLE
             mon = sys.monitoring
             events = mon.events.PY_START | mon.events.PY_RESUME
-            if not pool and _LOOKUP_NAMES.intersection(code.co_names):
+            if not pool:
+                # Every call the user's code makes is seen once a unit, and
+                # again at each site that may read a memo's counters
+                # (`_on_call`).
                 events |= mon.events.CALL
+                if _LOOKUP_NAMES.intersection(code.co_names):
+                    self.lookup_codes.add(code)
             if not pool and self._looks_up_by_string(code, g):
                 self.by_string.add(code)
-                events |= mon.events.CALL
             self.user_codes[code] = events
             mon.set_local_events(self.tool, code, events)
             if self.active or self.stack:
@@ -383,6 +398,8 @@ def _recorder_class() -> type:
             if kind != "decorator":
                 # A notebook unit: the innermost one of its thread sees what
                 # runs, and hands it to the one around it when it ends.
+                if self.stack:
+                    unit.counters_watched = self.stack[-1].counters_watched
                 self.stack.append(unit)
                 return unit
             with self._lock:
@@ -514,35 +531,220 @@ def _recorder_class() -> type:
         def _on_call(self, code: types.CodeType, offset: int, fn: Any, arg0: Any) -> Any:
             units = self.active
             stack = self.stack
+            if not units and stack and stack[-1].counters_watched:
+                # The common call at a site kept seen (a loop calling a
+                # function a variable holds): a Python function or a memo,
+                # handed no counter nor a counter's name, at a site kept as
+                # it was. `_plain_call` written out: it runs on every call.
+                t = type(fn)
+                if (
+                    t is FUNCTION
+                    or t is LRU
+                    or (t is BUILTIN and type(fn.__self__) is not LRU and id(fn) not in TAKERS)
+                ):
+                    t = type(arg0)
+                    if t is not STR and t is not BUILTIN and t is not PARTIAL and t not in DESCRIPTORS:
+                        sites = SITES_get(id(code))
+                        if sites is not None and sites[1].get(offset, True):
+                            return None
+            if not units and not stack:
+                self.rearm.add(code)
+                return DISABLE
+            # Code that may look a name up keeps every call seen: one that
+            # called something else first may call getattr next.
+            keep = bool(units) and code in self.lookup_codes
             if stack and code in self.by_string:
+                keep = True
                 callees = stack[-1].callees
                 if id(fn) not in callees:
                     callees[id(fn)] = (fn, sys._getframe(1).f_globals)
-            if not units:
-                if stack and code in self.by_string:
-                    return None
-                self.rearm.add(code)
-                return DISABLE
-            try:
-                if fn is getattr:
-                    if arg0 is sys.monitoring.MISSING:
-                        return None
-                    name = _last_argument(code, offset, sys._getframe(1))
-                    entry = ("getattr", arg0, name)
-                    slot = ("getattr", id(arg0), name)
-                elif fn is self._import_module or fn is builtins.__import__:
-                    entry = ("import", None, arg0 if isinstance(arg0, str) else None)
-                    slot = ("import", 0, entry[2])
-                else:
-                    return None
-                for unit in units:
-                    unit.lookups.setdefault(slot, entry)
-            except Exception:  # noqa: BLE001 - a lookup that cannot be read leaves the trace unusable
-                for unit in units:
-                    unit.markers.add("lookup_unread")
-            return None
+            if stack and stack[-1].counters_watched:
+                try:
+                    if reads_counters(fn, arg0):
+                        stack[-1].counters_read = True
+                        keep = True
+                    elif not harmless(fn) or callee_varies(code, offset):
+                        # What it calls next may be a counter: seen every time.
+                        keep = True
+                except Exception:  # noqa: BLE001 - a call that cannot be judged stays seen
+                    keep = True
+            if units:
+                try:
+                    if fn is getattr:
+                        if arg0 is not sys.monitoring.MISSING:
+                            name = _last_argument(code, offset, sys._getframe(1))
+                            for unit in units:
+                                unit.lookups.setdefault(("getattr", id(arg0), name), ("getattr", arg0, name))
+                        keep = True
+                    elif fn is self._import_module or fn is builtins.__import__:
+                        name = arg0 if isinstance(arg0, str) else None
+                        for unit in units:
+                            unit.lookups.setdefault(("import", 0, name), ("import", None, name))
+                        keep = True
+                except Exception:  # noqa: BLE001 - a lookup that cannot be read leaves the trace unusable
+                    for unit in units:
+                        unit.markers.add("lookup_unread")
+                    keep = True
+            if keep:
+                return None
+            self.rearm.add(code)
+            return DISABLE
 
     return _Recorder
+
+
+# -- a memo's counters ------------------------------------------------------
+#: What reads or empties a memo's counters.
+_COUNTERS = frozenset({"cache_info", "cache_clear"})
+_LRU: Any = type(functools.lru_cache(None)(lambda: None))
+_BUILTIN = types.BuiltinFunctionType
+_DESCRIPTORS = (
+    types.MethodDescriptorType,
+    types.WrapperDescriptorType,
+    types.MethodWrapperType,
+    types.ClassMethodDescriptorType,
+)
+#: Builtins that call or look up what they are handed: a site calling one
+#: is seen every time, whatever it was handed first.
+_TAKERS: frozenset[int] = frozenset(
+    id(fn)
+    for fn in (
+        getattr,
+        map,
+        filter,
+        sorted,
+        min,
+        max,
+        iter,
+        functools.reduce,
+        functools.partial,
+        operator.methodcaller,
+        operator.attrgetter,
+        getattr(operator, "call", None),
+        object.__getattribute__,
+        type.__getattribute__,
+    )
+    if fn is not None
+)
+
+
+def _counter_method(obj: Any) -> bool:
+    """Is *obj* a memo's ``cache_info`` or ``cache_clear``, bound or not?"""
+    t = type(obj)
+    if t is _BUILTIN:
+        return type(obj.__self__) is _LRU and obj.__name__ in _COUNTERS
+    if t in _DESCRIPTORS:
+        return obj.__objclass__ is _LRU and obj.__name__ in _COUNTERS
+    return False
+
+
+def reads_counters(fn: Any, arg0: Any) -> bool:
+    """Does the call of *fn* with first argument *arg0* read or empty a
+    memo's counters: *fn* is one, or *arg0* is one handed on (``map``,
+    ``operator.call``), or a counter's name (``methodcaller``), or *fn* is a
+    ``methodcaller``, ``attrgetter`` or ``partial`` made for one."""
+    if _counter_method(fn) or _counter_method(arg0):
+        return True
+    if type(arg0) is str and arg0 in _COUNTERS:
+        return True
+    t = type(fn)
+    if t is functools.partial:
+        return _counter_method(fn.func) or any(type(a) is str and a in _COUNTERS for a in fn.args)
+    if t is operator.methodcaller or t is operator.attrgetter:
+        made = fn.__reduce__()
+        args = made[1] if len(made) > 1 and type(made[1]) is tuple else ()
+        if made[0] is functools.partial and args:
+            # A methodcaller with keywords: ``partial(methodcaller, name, ...)``.
+            args = args[1:]
+        return any(type(a) is str and (a in _COUNTERS or a.rsplit(".", 1)[-1] in _COUNTERS) for a in args)
+    return False
+
+
+def harmless(fn: Any) -> bool:
+    """Is *fn* a callable that cannot reach a memo's counters other than by
+    code of its own the trace sees: a Python function or method, a class, a
+    memo, a builtin that does not call or look up what it is handed, a
+    method of a builtin type other than a memo's, a numpy ufunc."""
+    if id(fn) in _TAKERS:
+        return False
+    t = type(fn)
+    if t is types.FunctionType or t is _LRU or isinstance(fn, type):
+        # A memo's own call runs the user's code or none.
+        return True
+    if t is types.MethodType:
+        return type(fn.__func__) is types.FunctionType
+    if t is _BUILTIN:
+        return type(fn.__self__) is not _LRU
+    if t in _DESCRIPTORS:
+        return fn.__objclass__ is not _LRU
+    return t.__name__ == "ufunc" and t.__module__ == "numpy"
+
+
+#: id(code) -> (a weak reference to it, {offset of a call: does the
+#: callable it calls vary run to run}); by id, as `_on_call` reads it on
+#: every call at a site it keeps seen. The reference takes the entry out as
+#: the code goes, before its id can be another's: a notebook compiles each
+#: statement into code of its own, which nothing here keeps alive.
+_SITES: dict[int, tuple[Any, dict[int, bool]]] = {}
+#: file name -> (its source, {end of each call in it: its callee's node}).
+_CALL_ENDS: dict[str, tuple[str, dict[tuple[int, int], Any]]] = {}
+
+
+def callee_varies(code: types.CodeType, offset: int) -> bool:
+    """May the call at *offset* in *code* call something else next time?
+    Its callee is a name *code* binds itself (a loop's variable: ``for g in
+    [len, f.cache_info]: g()``), an argument or local, an item, a call's
+    result: anything but a name *code* never binds (a global, a builtin, a
+    closure's) or an attribute (``obj.method()``). Read from the source;
+    a call it cannot place varies."""
+    key = id(code)
+    known = _SITES.get(key)
+    if known is None:
+        known = _SITES[key] = (
+            weakref.ref(code, lambda _, key=key, sites=_SITES: sites.pop(key, None)),
+            _varying_calls(code),
+        )
+    return known[1].get(offset, True)
+
+
+def _varying_calls(code: types.CodeType) -> dict[int, bool]:
+    import ast
+    import linecache
+
+    filename = code.co_filename
+    source = "".join(linecache.getlines(filename))
+    if not source:
+        return {}
+    known = _CALL_ENDS.get(filename)
+    if known is None or known[0] != source:
+        ends: dict[tuple[int, int], Any] = {}
+        try:
+            tree = ast.parse(source)
+        except (SyntaxError, ValueError):
+            tree = None
+        if tree is not None:
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and node.end_lineno is not None:
+                    ends[(node.end_lineno, node.end_col_offset or 0)] = node.func
+        if len(_CALL_ENDS) > 256:
+            _CALL_ENDS.clear()
+        known = _CALL_ENDS[filename] = (source, ends)
+    ends = known[1]
+    bound = set(code.co_varnames) | set(code.co_cellvars)
+    for ins in dis.get_instructions(code):
+        if ins.opname.startswith(("STORE_", "DELETE_")):
+            bound.update(ins.argval if isinstance(ins.argval, tuple) else (ins.argval,))
+    sites: dict[int, bool] = {}
+    for ins in dis.get_instructions(code):
+        if ins.opname not in ("CALL", "CALL_KW", "CALL_FUNCTION_EX"):
+            continue
+        pos = ins.positions
+        func = ends.get((pos.end_lineno, pos.end_col_offset)) if pos is not None else None
+        if isinstance(func, ast.Name):
+            sites[ins.offset] = func.id in bound
+        elif isinstance(func, ast.Attribute):
+            sites[ins.offset] = func.attr in _COUNTERS
+    return sites
 
 
 _RECORDER: Any = None

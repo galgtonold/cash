@@ -726,12 +726,55 @@ def _names_clear(fn: Any) -> bool:
             pass
     if found:
         return True
+    # A counter's name held in what it reads: a default (``k='cache_info'``),
+    # a closure's cell, a global (``K = 'cache_info'``, ``CFG['stat']``).
+    held: list[Any] = [
+        *(getattr(fn, "__defaults__", None) or ()),
+        *(getattr(fn, "__kwdefaults__", None) or {}).values(),
+    ]
+    for cell in getattr(fn, "__closure__", None) or ():
+        try:
+            held.append(cell.cell_contents)
+        except ValueError:
+            continue
+    if any(isinstance(value, str) and value in _COUNTER_NAMES for value in held):
+        return True
     globals_ = getattr(fn, "__globals__", None)
     if not isinstance(globals_, dict):
         return False
     from cash.decorator.closure_fold import iter_code_scopes
 
-    return any(_is_clear(globals_.get(name)) for scope in iter_code_scopes(code) for name in scope.co_names)
+    for scope in iter_code_scopes(code):
+        for name in scope.co_names:
+            value = globals_.get(name)
+            if _is_clear(value) or (isinstance(value, str) and value in _COUNTER_NAMES) or _holds_a_counter_name(value):
+                return True
+    return False
+
+
+#: How many items `_holds_a_counter_name` looks at in one value.
+_HELD_NAMES_AT = 256
+
+
+def _holds_a_counter_name(value: Any) -> bool:
+    """*value*, a list, tuple, set or dict (its keys and values), or a
+    module's, a class's or a namespace's own attributes, holds the string
+    ``cache_info`` or ``cache_clear`` one step down."""
+    from itertools import chain, islice
+
+    try:
+        if type(value) in (list, tuple, set, frozenset):
+            items: Any = islice(value, _HELD_NAMES_AT)
+        elif type(value) is dict:
+            items = islice(chain.from_iterable(value.items()), 2 * _HELD_NAMES_AT)
+        elif isinstance(value, (types.ModuleType, type, types.SimpleNamespace)):
+            # A module's own globals can be many; each is only a type test.
+            items = vars(value).values()
+        else:
+            return False
+        return any(type(v) is str and v in _COUNTER_NAMES for v in items)
+    except Exception:  # noqa: BLE001 - changed while read, or no vars()
+        return False
 
 
 def _text_names_counters(code: str, ns: Mapping[str, Any] | None = None) -> bool:
@@ -757,6 +800,17 @@ def _text_names_counters(code: str, ns: Mapping[str, Any] | None = None) -> bool
     def names_one(node: ast.AST) -> bool:
         return isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in _COUNTER_NAMES
 
+    def word_with_one(node: ast.AST) -> bool:
+        # A word a name can be built from however the statement goes on
+        # (``''.join(['cache_', 'info'])``, ``'cache_info_'[:-1]``): not a
+        # path or a sentence (``'cache_dir/rows.csv'``, ``'see cache_info'``).
+        return (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node.value.isidentifier()
+            and (node.value.startswith("cache_") or any(name in node.value for name in _COUNTER_NAMES))
+        )
+
     def builds_one(node: ast.AST) -> bool:
         # A piece of a name built by ``+``, ``%``, ``.format`` or an f-string:
         # a word, not a path or a sentence (``'cache_dir/'``).
@@ -780,7 +834,10 @@ def _text_names_counters(code: str, ns: Mapping[str, Any] | None = None) -> bool
                 held = ns.get(node.id)
                 if isinstance(held, str) and held in _COUNTER_NAMES:
                     return True
-        elif names_one(node) and id(node) not in keys:
+                if _holds_a_counter_name(held):
+                    # ``names[0]``, ``NAMES['i']``, ``cfg.k``, ``m.K``.
+                    return True
+        elif (names_one(node) or word_with_one(node)) and id(node) not in keys:
             return True
         elif isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
             if builds_one(node.left) or builds_one(node.right):
