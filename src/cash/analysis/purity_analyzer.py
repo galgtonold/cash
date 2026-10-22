@@ -66,7 +66,7 @@ class PurityAnalyzer:
         that emptied on every call, and without reading its source again.
         An entry goes with its function."""
         target = getattr(func, "__func__", func)
-        if not isinstance(target, types.FunctionType):
+        if type(target) is not types.FunctionType:
             return self.analyze(func)
         entry = self._reached.get(target)
         if entry is not None and entry[0] is target.__code__ and not bindings_changed(entry[1]):
@@ -216,7 +216,7 @@ def _code_memo_key(target: Any) -> tuple[str | None, Any]:
     except ValueError:  # a cycle of __wrapped__
         return None, None
     code = getattr(inner, "__code__", None)
-    if not isinstance(inner, types.FunctionType) or not is_pseudo_filename(code.co_filename):
+    if type(inner) is not types.FunctionType or not is_pseudo_filename(code.co_filename):
         return None, None
     if linecache.getlines(code.co_filename):
         return None, None  # a source that went away, not code without one

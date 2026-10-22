@@ -212,7 +212,7 @@ class GlobalsFold:
         purity analyzer / dependency graph), and classes are excluded; unhashable
         data globals warn once and are skipped.
         """
-        if not extra_names and isinstance(func, types.FunctionType) and not self._reads.may_read_data(func):
+        if not extra_names and type(func) is types.FunctionType and not self._reads.may_read_data(func):
             # A function that reads no data (most methods, every one a
             # dataclass generates, a cached function that works on its
             # arguments alone): the fold would find nothing. Asked of the
@@ -360,7 +360,7 @@ class GlobalsFold:
                 fold.classes.append(v)
             self._code_ref_part(fold, name, v)
             return
-        if isinstance(v, types.ModuleType):
+        if issubclass(type(v), types.ModuleType):
             return
         if callable(v) and not isinstance(v, (dict, list, tuple, set)):
             carried = self._values.carried_global_hash(v, getattr(fold.func, "__module__", None))

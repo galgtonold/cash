@@ -12,23 +12,24 @@ from __future__ import annotations
 
 import ast
 import hashlib
-import inspect
 import logging
 import pickle
 import time
 import types
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from cash import cost_model, handed_digests, kept_state, stored_pickle
 from cash._clock import perf_counter as _perf_counter
 from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
+from cash._user_attrs import attribute_or, instance_of
 from cash.backends import memory_backend
 from cash.backends.persistence_policy import PersistencePolicy, restore_kind
 from cash.backends.store_notices import DECORATED_CALLS_FIELD
+from cash.closure_sharing import closure_check_budget, closures_sharing
 from cash.diagnostics import log_diagnostic, warn_diagnostic
 from cash.exceptions import CashCacheStoreFailedWarning
-from cash.notebook.anchors import with_anchor_refs
+from cash.notebook.anchors import AnchorUnrebuilt, with_anchor_refs
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.capture import replay_record
 from cash.notebook.statement.carrier_advances import PAYLOAD_FIELD as CARRIERS_FIELD
@@ -149,21 +150,66 @@ def _is_only_definitions(code: str) -> bool:
 
 class _AnchorsUnstorable(Exception):
     """The value of a statement with anchors could not be pickled with them
-    (`with_anchor_refs`): it is not stored."""
+    (`with_anchor_refs`): it is not stored. *names*: the anchor the copy
+    could not be rebuilt around (`AnchorUnrebuilt`); none when the value's
+    own pickling raised, as it would without anchors."""
+
+    def __init__(self, message: str, names: Iterable[str]) -> None:
+        super().__init__(message)
+        self.names = sorted(names)
+
+
+def _warn_closures_unchecked(outputs: Iterable[str], seconds: float) -> None:
+    """Say that a statement's outputs were too big to look through for a
+    function whose closure holds another of their parts in *seconds*, so
+    they were not stored (STORE-PARTS-UNCHECKED)."""
+    listed = ", ".join(f"'{name}'" for name in sorted(outputs))
+    warn_diagnostic(
+        CashCacheStoreFailedWarning,
+        "STORE-PARTS-UNCHECKED",
+        f"cash did not store this statement's result: it could not look through {listed} within "
+        f"{seconds:.1f}s for a function whose closure holds another part of them, which a restore would "
+        "hand back apart. It ran, and runs again next time.",
+        "nothing, if the statement is cheap. To have it cached, bind the large data and the objects "
+        "holding functions in separate statements.",
+    )
 
 
 def _warn_not_stored(exc: BaseException) -> None:
-    """Say that a statement's result was not stored, and why: STORE-FAILED
-    when running cells again would let it store, else only in the log. A
+    """Say that a statement's result was not stored, and why: STORE-FAILED,
+    unless no pickle takes the value, which goes to the log only. A
     statement binding a logging handler or a tqdm bar holds a lock or a
-    stream no pickle takes, and a warning on each would have no fix."""
-    if not isinstance(exc, kept_state.DefinedAgain):
+    stream no pickle takes, and a warning on each would have no fix. Any
+    other failure -- the backend refusing the write (a full disk, a store
+    that raised) -- is warned: the statement runs again every time."""
+    if isinstance(exc, _AnchorsUnstorable) and exc.names and not _unpicklable(exc):
+        # Cash's own step, not the backend: the copy that puts a reference to
+        # each held variable in its place cannot rebuild the value around
+        # one (``results.append`` is rebuilt as ``getattr(results,
+        # 'append')``, and a reference has no ``append``).
+        name = exc.names[0]
+        warn_diagnostic(
+            CashCacheStoreFailedWarning,
+            "STORE-REF-UNSUPPORTED",
+            f"cash did not store this statement's result: it holds the object of '{name}' in a form cash "
+            f"cannot keep as a reference to that variable, such as a method bound to it ({exc}); "
+            "it ran, and runs again next time.",
+            f"nothing, for a correct result. To have it cached, hold '{name}' itself in the value "
+            "rather than a method bound to it.",
+        )
+        return
+    if isinstance(exc, _AnchorsUnstorable) and exc.__cause__ is not None:
+        exc = exc.__cause__  # the value's own pickling raised, as it would without anchors
+    if isinstance(exc, kept_state.DefinedAgain):
+        fix = (
+            "run the cells that build the value again after the cell that defines the function, "
+            "so it holds the function defined now."
+        )
+    elif _unpicklable(exc):
         logger.warning("[CACHE] Failed to write to cache backend: %s", exc)
         return
-    fix = (
-        "run the cells that build the value again after the cell that defines the function, "
-        "so it holds the function defined now."
-    )
+    else:
+        fix = "read the exception: a full disk, a cache_dir you cannot write to, or a value whose own copy or pickle code raised."
     warn_diagnostic(
         CashCacheStoreFailedWarning,
         "STORE-FAILED",
@@ -171,6 +217,24 @@ def _warn_not_stored(exc: BaseException) -> None:
         "it ran, and runs again next time.",
         fix,
     )
+
+
+def _unpicklable(exc: BaseException) -> bool:
+    """Whether *exc*, or an exception it was raised from, says a value takes
+    no pickle (``cannot pickle '_thread.RLock' object``)."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, pickle.PicklingError):
+            return True
+        text = str(current).lower()
+        if isinstance(current, (TypeError, AttributeError)) and ("pickle" in text or "local object" in text):
+            # ``Can't get local object 'make.<locals>.<lambda>'``: a function
+            # defined inside another, which pickle finds by name only.
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 class StatementStore:
@@ -262,7 +326,7 @@ class StatementStore:
         *seed_epochs* is the seeding regime each RNG was last seeded under
         (``StatementRandomness.seed_epochs``), stored with the RNG state.
         """
-        if getattr(execution.result, "skipped", False):
+        if attribute_or(execution.result, "skipped", False):
             return None
         if self.inputs_moved(run, execution):
             return None
@@ -351,7 +415,7 @@ class StatementStore:
         """The file snapshots *var_name*'s producing statement stored, or {}:
         the entry *key* when given (`StatementRun.entry_sources`)."""
         key = key or self.tracking_state.variable_sources.get(var_name)
-        backend = getattr(self.cash_instance, "backend", None) if self.cash_instance else None
+        backend = attribute_or(self.cash_instance, "backend", None) if self.cash_instance else None
         if not key or backend is None:
             return {}
 
@@ -373,7 +437,7 @@ class StatementStore:
     def policy(self) -> PersistencePolicy:
         """The persistence policy under the current config, read per statement
         so ``cash.configure`` takes effect on the next one."""
-        config = getattr(self.cash_instance, "config", None)
+        config = attribute_or(self.cash_instance, "config", None)
         return PersistencePolicy.from_config(config) if config is not None else PersistencePolicy()
 
     def should_skip_large_object_caching(
@@ -404,7 +468,7 @@ class StatementStore:
             sees the same family attribution whichever gate decided.
         """
         policy = self.policy()
-        backend_kind = restore_kind(getattr(self.cash_instance, "backend", None))
+        backend_kind = restore_kind(attribute_or(self.cash_instance, "backend", None))
 
         largest_prediction: dict[str, Any] | None = None
         # Only the FIRST refused var decides; every var is predicted.
@@ -507,7 +571,7 @@ class StatementStore:
         """Every captured variable but a module, a closed file as its name and
         mode (`closed_stream`). Whether a value pickles is the backend's to
         find out when it stores it."""
-        return {k: stored_form(v) for k, v in captured_vars.items() if not isinstance(v, types.ModuleType)}
+        return {k: stored_form(v) for k, v in captured_vars.items() if not instance_of(v, types.ModuleType)}
 
     def _store(
         self,
@@ -538,14 +602,14 @@ class StatementStore:
             payload, referenced = self._payload(run, execution, captured_vars, seed_epochs)
         except _AnchorsUnstorable as exc:
             reason = f"its value holds variables' objects by reference, and it cannot be stored so ({exc})"
-            _warn_not_stored(exc.__cause__ or exc)
+            _warn_not_stored(exc)
             return self._store_metadata_only(run, execution, reason, {})
         if not referenced and self._too_cheap_to_store(run, execution, file_dependencies, execution.store_cost):
             # Its own work is not worth an entry: the calls inside it are what
             # was, and the cache holds them. The metadata still records its
             # output lineages, which a restart needs.
             return self._store_metadata_only(run, execution, None, {})
-        by_reference = {name for name, value in payload["variables"].items() if isinstance(value, CallRef)}
+        by_reference = {name for name, value in payload["variables"].items() if instance_of(value, CallRef)}
         should_skip, skip_reason, prediction = self._refusal(
             run, execution, captured_vars, miss_guarded, by_reference=by_reference
         )
@@ -574,7 +638,7 @@ class StatementStore:
                 inherited_snapshots,
                 execution.file_tracker.known_reads() if execution.file_tracker is not None else None,
                 execution.probes,
-                getattr(execution.file_tracker, "take_checked_stats", dict)(),
+                attribute_or(execution.file_tracker, "take_checked_stats", dict)(),
             ),
             force_persist=run.force_persist,
             output_lineages=self._lineage_builder.build_output_lineages(self.tracking_state, run.outputs),
@@ -687,7 +751,7 @@ class StatementStore:
         later = self.written_later_in_cell
         if run.force_persist or self._calls.in_loop or not run.outputs or not later or not set(run.outputs) <= later:
             return None
-        if restore_kind(getattr(self.cash_instance, "backend", None)) != "ram":
+        if restore_kind(attribute_or(self.cash_instance, "backend", None)) != "ram":
             return None
         copy = 0.0
         for value in variables.values():
@@ -756,7 +820,7 @@ class StatementStore:
             _unrestorable = sorted(
                 _name
                 for _name, _v in captured_vars.items()
-                if (inspect.isfunction(_v) or inspect.isclass(_v)) and getattr(_v, "__module__", None) == "__main__"
+                if instance_of(_v, (types.FunctionType, type)) and attribute_or(_v, "__module__", None) == "__main__"
             )
             if _unrestorable:
                 should_skip = True
@@ -791,6 +855,27 @@ class StatementStore:
                 skip_reason = (
                     f"output(s) {', '.join(_too_many)} hold too many objects to check for a function "
                     f"or memo that keeps state; not stored, statement re-executes (lineage persists)"
+                )
+        # A function kept by reference whose closure holds an object the
+        # other outputs hold: ``a, getter = mk()`` with ``mk`` imported. The
+        # restore gives ``a`` back as a copy and ``getter`` as the live
+        # function, so they no longer share the array, and a write through
+        # ``a`` did not reach ``getter()`` (21 for 27).
+        if not should_skip:
+            _budget = closure_check_budget(execution.cost)
+            _closures = closures_sharing(captured_vars, _budget)
+            _sharing = _closures.names
+            if not _closures.finished:
+                should_skip = True
+                skip_reason = (
+                    "cash could not look through the outputs in time; statement re-executes (lineage persists)"
+                )
+                _warn_closures_unchecked(run.outputs, _budget)
+            elif _sharing:
+                should_skip = True
+                skip_reason = (
+                    f"output(s) {', '.join(_sharing)} hold a function whose closure shares an object "
+                    f"with the other outputs; statement re-executes (lineage persists)"
                 )
         # Perpetual-miss guard. After the gates above so it can override their
         # exemptions: ``has_file_dependencies`` waives the whole size-aware
@@ -906,8 +991,11 @@ class StatementStore:
             held = {"variables": variables, ECHO_FIELD: payload.get(ECHO_FIELD)}
             try:
                 held = with_anchor_refs(held, {name: user_ns[name] for name in run.anchors})
-            except Exception as exc:
-                raise _AnchorsUnstorable(str(exc)) from exc
+            except AnchorUnrebuilt as exc:
+                cause = exc.__cause__ or exc
+                raise _AnchorsUnstorable(f"{type(cause).__name__}: {cause}", [exc.name] if exc.name else ()) from cause
+            except Exception as exc:  # the value's own pickling: STORE-FAILED, as without anchors
+                raise _AnchorsUnstorable(f"{type(exc).__name__}: {exc}", ()) from exc
             payload["variables"] = held["variables"]
             if ECHO_FIELD in payload:
                 payload[ECHO_FIELD] = held[ECHO_FIELD]
@@ -992,7 +1080,7 @@ class StatementStore:
             stored_pickle.nest(payload, *nestable)
         try:
             self.cash_instance.backend.set(cache_key, payload, wire)
-        except (OSError, TypeError, ValueError, pickle.PicklingError, RuntimeError) as e:
+        except Exception as e:  # noqa: BLE001 - copying runs the value's own code (``__deepcopy__``, ``__reduce__``)
             _warn_not_stored(e)
         else:
             # Charge this write to its statement's amplification budget, now

@@ -33,6 +33,8 @@ from dataclasses import dataclass
 from importlib import resources
 from typing import Any
 
+from cash._user_attrs import attribute_or
+
 from .. import theme
 from .._headline import mixed_headline
 from .._reasons import stale_export_text
@@ -880,7 +882,7 @@ def _for_loop_group_html(g: ForLoopGroup, rp: _RenderPass) -> str:
         trips=iters_per_stmt,
     )
     head_rid = _uid("rx")
-    if getattr(g, "suppress_head", False):
+    if attribute_or(g, "suppress_head", False):
         # This for-loop is the head-suppressed inner copy under a hoisted
         # outer wrapper (see view_builder._hoist_outer_for_loop). The outer
         # already drew the loop header; here we only emit body stmt rows
@@ -946,7 +948,7 @@ def _for_loop_group_html(g: ForLoopGroup, rp: _RenderPass) -> str:
     # (head at L0, body at L1; deeper nesting falls to L2 via the inner
     # for-loop/control's own wrapper).
     inner = "".join(body_pieces)
-    if inner and not getattr(g, "suppress_head", False):
+    if inner and not attribute_or(g, "suppress_head", False):
         inner = f'<div class="c3-ctrl-body">{inner}</div>'
     return head_row + inner
 

@@ -904,10 +904,10 @@ class PurityVisitor(ast.NodeVisitor):
             return False
         obj: Any = self._namespace[chain[0]]
         for attr in chain[1:]:
-            if not isinstance(obj, types.ModuleType):
+            if not issubclass(type(obj), types.ModuleType):
                 return False
             obj = getattr(obj, attr, None)
-        return isinstance(obj, types.ModuleType)
+        return issubclass(type(obj), types.ModuleType)
 
     # --- discarded-call detection on Expr statements ---
 
@@ -923,7 +923,7 @@ class PurityVisitor(ast.NodeVisitor):
             return False
         obj: Any = self._namespace[chain[0]]
         for attr in chain[1:]:
-            if not isinstance(obj, (types.ModuleType, type)):
+            if not issubclass(type(obj), (types.ModuleType, type)):
                 return False
             obj = getattr(obj, attr, None)
         return obj is time.sleep

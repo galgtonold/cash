@@ -995,7 +995,7 @@ def _canonical_names(chain: list[str], namespace: Mapping[str, Any]) -> list[str
     candidates: list[str] = []
     for i in range(len(chain)):
         if i:
-            if not isinstance(obj, (types.ModuleType, type)):
+            if not issubclass(type(obj), (types.ModuleType, type)):
                 break
             try:
                 obj = getattr(obj, chain[i])
@@ -1004,7 +1004,7 @@ def _canonical_names(chain: list[str], namespace: Mapping[str, Any]) -> list[str
         hit = roots.get(id(obj))
         if hit is not None and hit[0] is obj:
             candidates.append(".".join((hit[1], *chain[i + 1 :])))
-        elif i == len(chain) - 1 and isinstance(obj, (types.MethodType, types.BuiltinMethodType)):
+        elif i == len(chain) - 1 and issubclass(type(obj), (types.MethodType, types.BuiltinMethodType)):
             # `now = datetime.now` bound in an earlier cell: a method of a
             # known class, whose bound object is new on every read.
             owner = roots.get(id(getattr(obj, "__self__", None)))

@@ -683,7 +683,7 @@ def watch_array_handles() -> None:
         (pd.Index, "__array__", _READ_ONLY_VIEW),
     ):
         original = cls.__dict__.get(name)
-        if isinstance(original, types.FunctionType):  # a method: wrapped as it is
+        if type(original) is types.FunctionType:  # a method: wrapped as it is
             setattr(cls, name, _noting(original, outside_only))
             continue
         if isinstance(original, property) and original.fget is not None:
@@ -827,7 +827,7 @@ def _watch_callback_handouts() -> None:
         pass
     for cls, name, raw_at in targets:
         original = cls.__dict__.get(name)
-        if isinstance(original, types.FunctionType):
+        if type(original) is types.FunctionType:
             setattr(cls, name, _handing_out(original, raw_at))
 
 

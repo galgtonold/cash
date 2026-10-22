@@ -29,6 +29,8 @@ import weakref
 from collections.abc import Callable, Iterator
 from typing import Any
 
+from ._user_attrs import instance_of
+
 __all__ = [
     "DefinedAgain",
     "FlatValue",
@@ -961,7 +963,10 @@ def _flat_array(obj: Any) -> bool:
     if "numpy" not in sys.modules:
         return False
     ndarray = sys.modules["numpy"].ndarray
-    return isinstance(obj, ndarray) and not obj.dtype.hasobject
+    # ``isinstance`` asks an object that is not an array for its
+    # ``__class__``, which runs a ``__getattribute__`` of its own:
+    # `instance_of` answers such an object by its real type.
+    return instance_of(obj, ndarray) and not obj.dtype.hasobject
 
 
 def reducers(protocol: int = pickle.DEFAULT_PROTOCOL, extra: dict | None = None) -> dict:
@@ -1811,7 +1816,7 @@ def named_now(obj: Any) -> Any:
         return None
     if isinstance(obj, type) and isinstance(current, type):
         return current
-    if isinstance(obj, types.FunctionType) and isinstance(current, types.FunctionType):
+    if type(obj) is types.FunctionType and type(current) is types.FunctionType:
         return current
     return None
 

@@ -22,6 +22,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
+from .._user_attrs import instance_of
 from ..code_digest import unwrap_partials
 from ..effects import Action, classify_call
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -663,7 +664,7 @@ def static_attribute(obj: Any, name: str) -> Any:
     """
     try:
         value = inspect.getattr_static(obj, name, _MISSING)
-        if value is _MISSING and isinstance(obj, types.ModuleType) and "__getattr__" in vars(obj):
+        if value is _MISSING and issubclass(type(obj), types.ModuleType) and "__getattr__" in vars(obj):
             value = getattr(obj, name)
     except Exception as exc:
         raise AttributeError(name) from exc
@@ -687,7 +688,7 @@ def _dynamic_hook(obj: Any, root_module: str | None) -> Callable | None:
     """The user-written ``__getattr__`` (or ``__getattribute__``) that answers
     a name *obj*'s class does not hold, or None. A module's own
     ``__getattr__`` is not one: `static_attribute` already asks it."""
-    if isinstance(obj, types.ModuleType):
+    if issubclass(type(obj), types.ModuleType):
         return None
     cls = obj if isinstance(obj, type) else type(obj)
     owner = type(cls) if isinstance(obj, type) else cls
@@ -695,7 +696,7 @@ def _dynamic_hook(obj: Any, root_module: str | None) -> Callable | None:
         hook = inspect.getattr_static(owner, hook_name, None)
         if isinstance(hook, (staticmethod, classmethod)):
             hook = hook.__func__
-        if isinstance(hook, types.FunctionType) and is_user_code(hook, root_module):
+        if type(hook) is types.FunctionType and is_user_code(hook, root_module):
             return hook
     return None
 
@@ -728,7 +729,7 @@ def _body_targets(fn: Callable) -> list[Any]:
         obj = namespace[parts[0]]
         try:
             for part in parts[1:]:
-                if not isinstance(obj, (types.ModuleType, type)):
+                if not issubclass(type(obj), (types.ModuleType, type)):
                     obj = _MISSING
                     break
                 obj = static_attribute(obj, part)
@@ -762,7 +763,7 @@ def _chain_targets(obj: Any, rest: list[str], root_module: str | None, hops: int
             return _through_body(hook, rest[i:], root_module, hops), True
         if isinstance(value, (property, functools.cached_property)):
             fget = value.fget if isinstance(value, property) else value.func
-            if not (isinstance(fget, types.FunctionType) and is_user_code(fget, root_module)):
+            if not (type(fget) is types.FunctionType and is_user_code(fget, root_module)):
                 return [], False
             return _through_body(fget, rest[i + 1 :], root_module, hops), True
         obj = value
@@ -879,7 +880,7 @@ class CodeAnalyzer:
                     resolved_qualnames.update(same_named)
                     if not same_named and (
                         not targets
-                        or any(isinstance(t, types.FunctionType) and is_user_code(t, root_module) for t in targets)
+                        or any(type(t) is types.FunctionType and is_user_code(t, root_module) for t in targets)
                     ):
                         gaps.append(name)
 
@@ -907,7 +908,7 @@ class CodeAnalyzer:
         obj = globals_dict.get(parts[0])
         try:
             for part in parts[1:]:
-                if not isinstance(obj, (types.ModuleType, type)):
+                if not issubclass(type(obj), (types.ModuleType, type)):
                     return None
                 obj = inspect.getattr_static(obj, part, None)
             obj = unwrap_partials(obj)
@@ -1167,7 +1168,7 @@ class CodeAnalyzer:
             for node in ast.walk(tree):
                 if isinstance(node, (ast.Import, ast.ImportFrom)):
                     bound.update((a.asname or a.name).split(".")[0] for a in node.names)
-            outputs = {o for o in outputs if o in bound or not isinstance(user_ns.get(o), types.ModuleType)}
+            outputs = {o for o in outputs if o in bound or not instance_of(user_ns.get(o), types.ModuleType)}
         return inputs, outputs
 
     @staticmethod

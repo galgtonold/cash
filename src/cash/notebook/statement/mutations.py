@@ -142,7 +142,7 @@ class MutationClassifier:
         receivers: set[str] = set()
         for base, _method in standalone_method_call_receivers(tree) | assigned_method_call_receivers(tree):
             value = self.shell.user_ns.get(base)
-            if isinstance(value, types.ModuleType):
+            if issubclass(type(value), types.ModuleType):
                 continue  # ``plt.savefig()`` is a module call, not a receiver draw
             if receiver_is_identity_coupled(value):
                 receivers.add(base)

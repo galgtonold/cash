@@ -231,7 +231,7 @@ def reaches_namespace_by_name(scopes: tuple, module_globals: dict[str, Any]) -> 
             for member in members:
                 member = getattr(member, "__func__", member)
                 member = getattr(member, "__wrapped__", member)  # a cached helper
-                if isinstance(member, types.FunctionType) and member.__globals__ is module_globals:
+                if type(member) is types.FunctionType and member.__globals__ is module_globals:
                     stack.append(member.__code__)
     if known_no is not None:
         # Held with the code and its namespace, so neither id is reused while remembered.
@@ -430,7 +430,7 @@ class GlobalReads:
         ):
             for value in container:
                 if (
-                    isinstance(value, types.FunctionType)
+                    type(value) is types.FunctionType
                     and value is not func
                     and own_code_is_user(value, getattr(func, "__module__", None))
                 ):
@@ -544,10 +544,10 @@ class GlobalReads:
                         break
                     pairs.add((path, attr))
                     path = f"{path}.{attr}"
-                    value = getattr(value, attr, None) if isinstance(value, types.ModuleType) else None
+                    value = getattr(value, attr, None) if issubclass(type(value), types.ModuleType) else None
                     j += 1
                 else:
-                    if isinstance(value, types.ModuleType):
+                    if issubclass(type(value), types.ModuleType):
                         whole.add(path)
         for path in whole:
             pairs.update((path, n) for n in names if not n.startswith("__"))

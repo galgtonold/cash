@@ -17,6 +17,8 @@ from collections import ChainMap
 from collections.abc import Callable, Container, Mapping
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from cash._user_attrs import attribute_or, instance_of
+
 from ..._clock import perf_counter as _perf_counter
 from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
@@ -75,6 +77,7 @@ from ..loop_watch import branch_changes, loop_watch_hash, watch_candidates
 from ..pyplot_draws import pyplot_draw_names
 from ..restored_var import present_holders
 from ..run_memo import file_component_this_run, file_state_this_run, stats_this_run
+from ..shared_objects import history_names
 from ..stateful_carriers import carrier_kind_from_producer
 from ..statement import is_control_body
 from ..statement.carrier_advances import reachable_generators
@@ -138,6 +141,9 @@ class _CacheLookup(NamedTuple):
     #: The generators the entry says the statement drew from
     #: (``StatementCacheMetadata.carriers_advanced``); None when it does not say.
     carriers: list[str] | None = None
+    #: Those of ``bumped`` stored with the outputs the entry left as they
+    #: were (`keep_held_lineage`).
+    kept: frozenset[str] = frozenset()
 
 
 class StatementLineage:
@@ -460,6 +466,9 @@ class StatementLineage:
             drawn = self.pyplot_draw_outputs(stmt_code, tree)
             outputs |= drawn
             inputs |= drawn
+        # Nor IPython's history it does not bind, as the runtime takes it
+        # (`history_names`).
+        outputs -= history_names(outputs - set(effects.outputs), self.shell.user_ns)
         return effects, inputs, outputs
 
     def _inputs_moved(self, inputs: set[str], virtual_lineage: Mapping[str, str], stmt_code: str = "") -> bool:
@@ -566,7 +575,7 @@ class StatementLineage:
     def _as_run(self, cell: str) -> str:
         """*cell*'s statements as the runtime writes them, or "" when it does
         not parse."""
-        transform = getattr(self.shell, "transform_cell", None)
+        transform = attribute_or(self.shell, "transform_cell", None)
         try:
             text = transform(cell) if callable(transform) else clean_cell_source(cell)
             return ast.unparse(ast.parse(text))
@@ -771,7 +780,7 @@ class StatementLineage:
 
         def is_module(out: str) -> bool:
             if out in user_ns:
-                return isinstance(user_ns[out], types.ModuleType)
+                return instance_of(user_ns[out], types.ModuleType)
             if out in recorded:
                 return bool(recorded[out].get("module"))
             return True
@@ -817,6 +826,7 @@ class StatementLineage:
         is_import: bool,
         output_lineages: dict[str, str],
         moved: set[str] | frozenset[str] = frozenset(),
+        kept: set[str] | frozenset[str] = frozenset(),
     ) -> set[str]:
         """Take a valid cache entry's *output_lineages* into *virtual_lineage*,
         and return the aliases the write bumps. The variables in *moved* are
@@ -838,6 +848,7 @@ class StatementLineage:
             record=lambda t, h: virtual_lineage.__setitem__(t, h),
             present=lambda t: True,
             skip=moved,
+            kept=kept,
             code=stmt_code,
         )
         if is_import:
@@ -866,9 +877,12 @@ class StatementLineage:
         recorded = self.tracking_state.variable_lineage
         return all(virtual_lineage.get(name, recorded.get(name)) == before for name, before in holders.items())
 
-    def _move_holders(self, holders: Mapping[str, str], cache_key: str, virtual_lineage: dict[str, str]) -> set[str]:
+    def _move_holders(
+        self, holders: Mapping[str, str], cache_key: str, virtual_lineage: dict[str, str], kept: set[str]
+    ) -> set[str]:
         """Move on the lineage of each of *holders* from where it is now
-        (``held_lineage``), as the runtime does; the names moved."""
+        (``held_lineage``), as the runtime does; the names moved. Those the
+        statement leaves as they were (`keep_held_lineage`) go in *kept*."""
         moved = set()
         recorded = self.tracking_state.variable_lineage
         for name in holders:
@@ -876,6 +890,8 @@ class StatementLineage:
             if before is not None:
                 virtual_lineage[name] = held_lineage(before, cache_key)
                 moved.add(name)
+                if virtual_lineage[name] == before:
+                    kept.add(name)
         return moved
 
     def _lookup_cached_lineages(
@@ -901,6 +917,7 @@ class StatementLineage:
         stmt_file_deps: dict[str, tuple[int, int, int]] = {}
         files_to_check: set[str] = set()
         held: set[str] = set()
+        kept: set[str] = set()
 
         if not self.probe.cash_instance:
             return _CacheLookup(False, lookup_time, files_stale, stmt_file_deps, files_to_check, set())
@@ -941,9 +958,9 @@ class StatementLineage:
                     # runtime moves them (`apply_held_var`), from where they
                     # were before the statement; then what changed through an
                     # alias, past them, as the runtime's hit does.
-                    held = self._move_holders(moved, cache_key, virtual_lineage)
+                    held = self._move_holders(moved, cache_key, virtual_lineage, kept)
                     bumped = self._take_cached_lineages(
-                        stmt_code, outputs, inputs, virtual_lineage, is_import, output_lineages, held
+                        stmt_code, outputs, inputs, virtual_lineage, is_import, output_lineages, held, kept
                     )
                     bumped |= held
                     hit_file_deps = CacheProbe.stat_file_deps(hist_files)
@@ -955,7 +972,7 @@ class StatementLineage:
                     # A holder changed: the runtime runs the statement, which
                     # finds the same holders and moves them on from where
                     # they are now.
-                    held |= self._move_holders(moved, cache_key, virtual_lineage)
+                    held |= self._move_holders(moved, cache_key, virtual_lineage, kept)
 
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(
@@ -975,11 +992,13 @@ class StatementLineage:
             elif session_held:
                 # An entry it cannot see (evicted) whose run or hit moved the
                 # variables stored with its outputs on this session.
-                held |= self._move_holders(session_held, cache_key, virtual_lineage)
+                held |= self._move_holders(session_held, cache_key, virtual_lineage, kept)
         except (KeyError, TypeError, OSError, ValueError) as e:
             logger.debug("[UPSTREAM] Virtual lookup failed: %s", e)
 
-        return _CacheLookup(False, lookup_time, files_stale, stmt_file_deps, files_to_check, held, carriers)
+        return _CacheLookup(
+            False, lookup_time, files_stale, stmt_file_deps, files_to_check, held, carriers, frozenset(kept)
+        )
 
     def _entry_metadata(self, cache_key: str) -> dict | None | object:
         """The metadata of *cache_key*'s entry, read once for the statement
@@ -1253,6 +1272,7 @@ class StatementLineage:
             record=lambda t, h: virtual_lineage.__setitem__(t, h),
             present=lambda t: True,
             skip=lookup.bumped,
+            kept=lookup.kept,
             code=stmt_code,
         )
         outputs = outputs | bumped

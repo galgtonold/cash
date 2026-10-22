@@ -162,7 +162,7 @@ def _with_wrapped_chain(func: Any) -> set[int]:
     which `source_digest` already folds in."""
     ids: set[int] = set()
     current = func
-    while isinstance(current, types.FunctionType) and id(current) not in ids:
+    while type(current) is types.FunctionType and id(current) not in ids:
         ids.add(id(current))
         current = getattr(current, "__wrapped__", None)
     return ids
@@ -288,7 +288,7 @@ class FunctionTracker:
             return None
 
         # Skip built-in functions, C extensions, and special objects
-        if isinstance(func, types.BuiltinFunctionType):
+        if type(func) is types.BuiltinFunctionType:
             return None
         if isinstance(func, type) and func.__module__ == "builtins":
             return None

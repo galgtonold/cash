@@ -201,9 +201,7 @@ def hash_callable_source(fn: Callable) -> str:
     if compiled is not None:
         return jit_identity(hash_callable_source(compiled), fn)
     memo_owner: Any = getattr(fn, "__code__", None)
-    if (memo_owner is None and isinstance(fn, type)) or (
-        isinstance(fn, types.FunctionType) and hasattr(fn, "__wrapped__")
-    ):
+    if (memo_owner is None and isinstance(fn, type)) or (type(fn) is types.FunctionType and hasattr(fn, "__wrapped__")):
         # A class has no code object; a `functools.wraps` wrapper shares
         # its code with every function its decorator wraps, and its
         # identity includes the one it wraps -- so it is memoized as itself.

@@ -18,6 +18,8 @@ import types
 from collections.abc import Callable, Iterator
 from typing import Any
 
+from cash._user_attrs import instance_of
+
 from .._paths import MAIN_MODULE_NAMES, is_pseudo_filename, resolve_main_module
 from ..install_paths import in_own_package, top_package
 from ..jit_functions import jit_python_function
@@ -34,7 +36,7 @@ def _defining_module(obj: Any) -> Any:
     JIT-compiled function's code is the function it compiles.
     """
     obj = jit_python_function(obj) or obj
-    if isinstance(obj, types.FunctionType):
+    if type(obj) is types.FunctionType:
         name = obj.__globals__.get("__name__")
         module = sys.modules.get(name) if isinstance(name, str) else None
         if module is not None:
@@ -88,7 +90,7 @@ def _class_is_exec_built(cls: type) -> bool:
 
 def _function_is_exec_built(obj: Any) -> bool:
     fn = getattr(obj, "__func__", obj)
-    if not isinstance(fn, types.FunctionType) or "__name__" in fn.__globals__:
+    if type(fn) is not types.FunctionType or "__name__" in fn.__globals__:
         return False
     filename = fn.__code__.co_filename
     if not (is_pseudo_filename(filename) and filename.endswith(">")) or linecache.getlines(filename):
@@ -132,16 +134,16 @@ class UnwalkableLayers(Exception):
 
 
 def _function_like(value: Any) -> bool:
-    return isinstance(value, (types.FunctionType, types.MethodType, functools.partial)) or (
+    return issubclass(type(value), (types.FunctionType, types.MethodType, functools.partial)) or (
         callable(value)
-        and not isinstance(value, (type, types.ModuleType, types.BuiltinFunctionType))
+        and not issubclass(type(value), (type, types.ModuleType, types.BuiltinFunctionType))
         and hasattr(value, "__wrapped__")
     )
 
 
 def _layer_candidates(value: Any) -> Iterator[Any]:
     """The objects *value* holds that it may run, in the order it holds them."""
-    if isinstance(value, types.MethodType):
+    if type(value) is types.MethodType:
         yield value.__func__
         return
     if isinstance(value, functools.partial):
@@ -155,7 +157,7 @@ def _layer_candidates(value: Any) -> Iterator[Any]:
     wrapper = getattr(value, "_self_wrapper", None) if not isinstance(value, type) else None
     if wrapper is not None:
         yield wrapper
-    if isinstance(value, types.FunctionType):
+    if type(value) is types.FunctionType:
         for cell in value.__closure__ or ():
             try:
                 inner = cell.cell_contents
@@ -165,9 +167,9 @@ def _layer_candidates(value: Any) -> Iterator[Any]:
                 yield inner
         attrs = getattr(value, "__dict__", None) or {}
     else:
-        if callable(value) and not isinstance(value, (type, types.ModuleType)):
+        if callable(value) and not issubclass(type(value), (type, types.ModuleType)):
             call = getattr(type(value), "__call__", None)
-            if isinstance(call, types.FunctionType):
+            if type(call) is types.FunctionType:
                 yield call
         try:
             attrs = dict(vars(value))
@@ -254,7 +256,7 @@ def callable_layers(obj: Any) -> list[Any]:
                 f"the functions {qualname_of(obj)} runs do not end (over {_LAYER_LIMIT} wrappers; "
                 "an object that makes a new wrapper on every read can cause this)"
             )
-        if isinstance(value, types.FunctionType):
+        if type(value) is types.FunctionType:
             found.append(value)
         elif jit_python_function(value) is not None:
             # Code, keyed as the function it compiles and its options; what
@@ -303,13 +305,13 @@ def is_mock(obj: Any) -> bool:
     module = sys.modules.get("unittest.mock")
     if module is None:
         return False
-    if isinstance(obj, module.NonCallableMock):
+    if instance_of(obj, module.NonCallableMock):
         return True
     # `create_autospec` / `patch(..., autospec=True)` on a function makes a
     # real function that carries its mock. Walked as code, it led into the
     # TEST's side_effect, analysed as production code -- an `__import__` in a
     # fake raised CashImpureFunctionError out of the test.
-    return isinstance(obj, types.FunctionType) and isinstance(obj.__dict__.get("mock"), module.NonCallableMock)
+    return type(obj) is types.FunctionType and isinstance(obj.__dict__.get("mock"), module.NonCallableMock)
 
 
 def renamed(obj: Any) -> str:
@@ -339,7 +341,7 @@ def qualname_of(func: Callable[..., Any]) -> str:
     """
     module = getattr(func, "__module__", None) or "<unknown>"
     qualname = getattr(func, "__qualname__", None) or getattr(func, "__name__", "<callable>")
-    if isinstance(func, types.FunctionType) and hasattr(func, "__wrapped__"):
+    if type(func) is types.FunctionType and hasattr(func, "__wrapped__"):
         # `functools.wraps` copied the wrapped function's names onto this one,
         # so both halves of a decorated helper answered to the same name and
         # the walk, which visits each name once, followed only one of them.
