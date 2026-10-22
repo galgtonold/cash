@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import functools
 import time
+import types
 
 from cash.notebook.call_interception import CallSite
 from cash.notebook.call_key import holds_a_closure_with_state
@@ -94,3 +95,69 @@ def test_a_memo_a_call_made_is_not_served_already_filled(call_unit_harness):
     memo = unit.wrap(make_memo, site)()
 
     assert memo.cache_info().currsize == 0, "the memo the last run filled was served again"
+
+
+class _Box:
+    pass
+
+
+class _Holder:
+    def __init__(self):
+        self.memo = functools.cache(_double)
+
+    def read(self, n):
+        return self.memo(n)
+
+
+def _boxed_memo():
+    box = _Box()
+    box.memo = functools.cache(_double)
+    return box
+
+
+def _wrapped_memo():
+    memo = functools.cache(_double)
+
+    def fast(n):
+        return memo(n)
+
+    return fast
+
+
+def _class_with_a_memo():
+    class Scores:
+        @classmethod
+        @functools.cache
+        def of(cls, n):
+            return n * 2
+
+    return Scores
+
+
+def test_a_memo_or_counter_held_past_a_container_is_seen():
+    # A deep copy of these still holds the same memo: a function, a partial's
+    # function and a class copy as themselves.
+    assert holds_a_closure_with_state(types.SimpleNamespace(f=functools.cache(_double)))
+    assert holds_a_closure_with_state(_boxed_memo())
+    assert holds_a_closure_with_state(_wrapped_memo())
+    assert holds_a_closure_with_state(functools.partial(functools.cache(_double)))
+    assert holds_a_closure_with_state(_class_with_a_memo())
+    assert holds_a_closure_with_state(types.SimpleNamespace(c=make_counter()))
+    assert holds_a_closure_with_state(_Holder().read)  # the memo is on the method's object
+    assert not holds_a_closure_with_state(types.SimpleNamespace(f=_double, box=_Box()))
+
+
+def test_a_memo_on_an_object_a_call_made_is_not_served_already_filled(call_unit_harness):
+    def make_box():
+        time.sleep(0.05)  # above the call cost floor, so a miss is stored
+        return _boxed_memo()
+
+    unit = call_unit_harness(lineage={"make_box": "hash-make-box"}, user_ns={})
+    site = CallSite(source="make_box()", free_names=frozenset({"make_box"}), occurrence_index=0)
+
+    unit.begin_statement()
+    unit.wrap(make_box, site)().memo(1)
+    unit.begin_statement()
+    box = unit.wrap(make_box, site)()
+
+    assert box.memo.cache_info().currsize == 0, "the memo the last run filled was served again"

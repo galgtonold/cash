@@ -10,6 +10,7 @@ statement it sits in.
 
 from __future__ import annotations
 
+import builtins
 import dataclasses
 import datetime as _dt
 import decimal as _decimal
@@ -26,12 +27,12 @@ from typing import TYPE_CHECKING, Any
 
 from cash import _plain_data
 from cash._memo import CODE_OBJECTS, LruMemo
-from cash._paths import is_pseudo_filename
+from cash._paths import MAIN_MODULE_NAMES, is_pseudo_filename
 from cash.analysis.bytecode import NAME_LOADS, argvals
 from cash.analysis.callee_effects import source_global_mutations
 from cash.analysis.namespace_effects import capturable_globals
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
-from cash.install_paths import is_user_path
+from cash.install_paths import is_user_code_module, is_user_path
 from cash.notebook import shadow as _shadow
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_effects import closure_cells, rebinds_its_closure
@@ -214,13 +215,81 @@ _ATOMS = (int, float, complex, str, bytes, bool, type(None))
 _EXACT_ATOMS = frozenset({*_ATOMS, _dt.datetime, _dt.date, _dt.time, _dt.timedelta})
 
 #: ``functools.cache`` / ``lru_cache``'s wrapper: a memo that fills as it is called.
+#: A type where the C ``_functools`` is there; otherwise a function, and unused.
 _MEMO_WRAPPER = getattr(functools, "_lru_cache_wrapper", None)
+if not isinstance(_MEMO_WRAPPER, type):
+    _MEMO_WRAPPER = None
+
+#: How many functions, partials, methods, objects and classes the walk looks
+#: into before it stops (answering as it did before it looked past containers).
+_HOLDERS_LOOKED_INTO = 10_000
+
+#: ``type -> whether it is a class of the user's`` (its module is user code).
+_USERS_TYPES: dict[type, bool] = {}
+
+
+def _users_type(kind: type) -> bool:
+    known = _USERS_TYPES.get(kind)
+    if known is None:
+        try:
+            # A class made in a notebook cell: `__main__`, which under a
+            # test runner is the runner's own module; or made by `exec` in a
+            # namespace with no `__name__`, which names it `builtins`.
+            module = kind.__module__
+            known = (
+                module in MAIN_MODULE_NAMES
+                or (module == "builtins" and getattr(builtins, kind.__name__, None) is not kind)
+                or is_user_code_module(sys.modules.get(module))
+            )
+        except Exception:  # noqa: BLE001 - not known to be the user's: not looked into
+            known = False
+        if len(_USERS_TYPES) < 4096:
+            _USERS_TYPES[kind] = known
+    return known
+
+
+def _held_by(item) -> list | None:
+    """What a holder that is not a container keeps a function or a memo in:
+    a function's closure and attributes, a ``partial``'s function and
+    arguments, a bound method's function and object, a ``SimpleNamespace``'s
+    or a user's object's attributes, a user's class's members. None for
+    anything else: a library object is not looked into."""
+    if isinstance(item, _types.FunctionType):
+        parts = [cell.cell_contents for cell in item.__closure__ or () if _filled(cell)]
+        return parts + list(getattr(item, "__dict__", {}).values())
+    if isinstance(item, functools.partial):
+        return [item.func, *item.args, *item.keywords.values()]
+    if isinstance(item, _types.MethodType):
+        return [item.__func__, item.__self__]
+    if isinstance(item, (classmethod, staticmethod)):
+        return [item.__func__]
+    if isinstance(item, type):
+        return list(vars(item).values()) if _users_type(item) else None
+    kind = type(item)
+    if kind is _types.SimpleNamespace or _users_type(kind):
+        held = list(getattr(item, "__dict__", {}).values())
+        for slot in getattr(kind, "__slots__", ()):
+            if isinstance(slot, str) and hasattr(item, slot):
+                held.append(getattr(item, slot))
+        return held
+    return None
+
+
+def _filled(cell) -> bool:
+    try:
+        cell.cell_contents  # an empty cell raises
+    except ValueError:
+        return False
+    return True
 
 
 def holds_a_closure_with_state(value) -> bool:
-    """Whether *value* is, or holds in its tuples, lists, sets and dicts
-    however deeply nested, a function that changes what its closure holds
-    when called: a counter or a log a factory returned.
+    """Whether *value* is, or holds however deeply nested, a function that
+    changes what its closure holds when called (a counter or a log a factory
+    returned), or a ``functools.cache`` memo. Looked for in tuples, lists,
+    sets and dicts, and in what a function, a ``partial``, a bound method, a
+    ``SimpleNamespace``, a user's object or a user's class holds
+    (`_held_by`); a library object is not looked into.
 
     Such a value cannot be served from the cache. The store keeps a function
     by reference, so a hit hands back the closure the last run made, with
@@ -228,7 +297,10 @@ def holds_a_closure_with_state(value) -> bool:
     make_counter(0)`` run again gave a counter that went on from 2. A
     ``functools.cache`` memo is one too: ``functools.cache(g)`` stored, then
     filled later in the statement, came back already filled after a restart,
-    and ``g`` did not run (or print) where plain Python ran it. Only two
+    and ``g`` did not run (or print) where plain Python ran it; held on an
+    object (``SimpleNamespace(f=cache(g))``), in a wrapper's closure or in a
+    ``partial``, a deep copy of the result still holds the same memo, as a
+    function or a class copies as itself. Only two
     levels of containers were looked into, so ``{"on": {"click":
     [counter]}}`` was served; a seen set now ends a container that holds
     itself.
@@ -240,43 +312,53 @@ def holds_a_closure_with_state(value) -> bool:
         return False
     stack = [value]
     seen: set[int] = set()
+    looked_into = 0
     atoms = _EXACT_ATOMS
     while stack:
         item = stack.pop()
         kind = type(item)
         if kind in atoms or isinstance(item, _ATOMS):
             continue
-        if isinstance(item, _types.FunctionType):
+        if kind is _types.FunctionType:
             if changes_its_closure(item):
                 return True
-            continue
+            if item.__closure__ is None and not item.__dict__:
+                continue  # holds nothing of its own: most functions
         if _MEMO_WRAPPER is not None and isinstance(item, _MEMO_WRAPPER):
             return True
-        if isinstance(item, (tuple, list, set, frozenset, dict)):
-            if id(item) in seen:
+        if not isinstance(item, (tuple, list, set, frozenset, dict)):
+            if id(item) in seen or looked_into >= _HOLDERS_LOOKED_INTO:
                 continue
-            children = item.values() if isinstance(item, dict) else item
-            # Only atoms, by exact type: asked at C speed, where the loop
-            # below took a Python step per item (22 ms for 200,000 ints).
-            if atoms.issuperset(map(type, children)):
+            held = _held_by(item)
+            if held:
+                seen.add(id(item))
+                looked_into += 1
+                stack.extend(part for part in held if type(part) not in atoms)
+            continue
+        if id(item) in seen:
+            continue
+        children = item.values() if isinstance(item, dict) else item
+        # Only atoms, by exact type: asked at C speed, where the loop
+        # below took a Python step per item (22 ms for 200,000 ints).
+        if atoms.issuperset(map(type, children)):
+            continue
+        # A container holding only atoms (a million small tuples of a
+        # record list) has nothing to look into and is not remembered.
+        pushed = False
+        for child in children:
+            ctype = type(child)
+            if ctype in atoms:
                 continue
-            # A container holding only atoms (a million small tuples of a
-            # record list) has nothing to look into and is not remembered.
-            pushed = False
-            for child in children:
-                ctype = type(child)
-                if ctype in atoms:
+            if ctype is tuple:
+                for part in child:
+                    if type(part) not in atoms:
+                        break
+                else:
                     continue
-                if ctype is tuple:
-                    for part in child:
-                        if type(part) not in atoms:
-                            break
-                    else:
-                        continue
-                stack.append(child)
-                pushed = True
-            if pushed:
-                seen.add(id(item))  # the containers stay alive inside *value*
+            stack.append(child)
+            pushed = True
+        if pushed:
+            seen.add(id(item))  # the containers stay alive inside *value*
     return False
 
 
