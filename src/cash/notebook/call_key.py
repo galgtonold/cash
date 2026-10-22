@@ -312,6 +312,9 @@ def changes_what_its_closure_holds(fn) -> bool:
     return False
 
 
+#: The type of ``functools.cache`` and ``functools.lru_cache`` wrappers.
+_MEMO = type(functools.lru_cache(maxsize=None)(len))
+
 #: Values with nothing inside them to look at: skipped without a call.
 _ATOMS = (int, float, complex, str, bytes, bool, type(None))
 
@@ -323,7 +326,7 @@ def holds_a_closure_with_state(value) -> bool:
     """Whether *value* is, or holds in its tuples, lists, sets and dicts
     however deeply nested, a function that changes what its closure holds
     when called: a counter or a log a factory returned; or a default it
-    holds (`changes_its_defaults`).
+    holds (`changes_its_defaults`); or a ``functools.cache`` memo.
 
     Such a value cannot be served from the cache. The store keeps a function
     by reference, so a hit hands back the closure the last run made, with
@@ -346,6 +349,11 @@ def holds_a_closure_with_state(value) -> bool:
         kind = type(item)
         if kind in atoms or instance_of(item, _ATOMS):
             continue
+        if kind is _MEMO:
+            # ``functools.cache(g)``: kept by reference, a hit hands back the
+            # memo the last run filled, and ``g``'s body no longer runs for
+            # what it holds.
+            return True
         if instance_of(item, _types.FunctionType):
             if changes_its_closure(item) or changes_its_defaults(item) or changes_what_its_closure_holds(item):
                 return True

@@ -186,3 +186,18 @@ def test_module_function_made_a_memo_and_filled_in_one_statement(cash_magics, ca
         sys.modules.pop("mf4_mod", None)
     print("STATUSES", first, seen, "out", out, "plain", plain_out)
     assert [_clean(o) for o in out] == plain_out, f"{seen}"
+
+
+def test_module_function_made_a_memo_on_a_slow_machine(cash_magics, capsys, tmp_path, monkeypatch):
+    """On a busy machine the call ``functools.cache(mf4_mod.g)`` timed past
+    the call floor and was stored. A memo is kept by reference, so after the
+    restart the call handed back the one the first run filled, and ``BODY``
+    was not printed. A memo is never served."""
+    import time
+
+    from cash import _clock
+
+    real = time.perf_counter
+    start = real()
+    monkeypatch.setattr(_clock, "_REAL", (lambda: start + (real() - start) * 100,))
+    test_module_function_made_a_memo_and_filled_in_one_statement(cash_magics, capsys, tmp_path, monkeypatch)
