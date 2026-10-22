@@ -534,7 +534,7 @@ def used(
         if why is not None:
             continue  # already told; the rest only remember their answers
         if clears:
-            why = f"It may empty the helper memo {label} (cache_clear)"
+            why = f"It may empty the helper memo {label} or read its counters (cache_clear, cache_info)"
         elif info.misses < misses or info.hits < hits:
             why = f"It emptied the helper memo {label}"
         elif items is None or len(items) > MAX_KEYED:
@@ -562,10 +562,11 @@ def used(
     return out or None
 
 
-def _calls_of(memo: Any, items: list[tuple[Any, Any]]) -> list[str] | None:
+def _calls_of(memo: Any, items: list[tuple[Any, Any]]) -> list[list[str]] | None:
     """The calls that fill *memo* with the keys of *items* again, each as
-    the text of ``(args, kwargs)``, or None when one cannot be written so
-    (a ``typed=True`` memo, a key of a type text does not give back)."""
+    ``[digest of the item, text of (args, kwargs)]``, or None when one
+    cannot be written so (a ``typed=True`` memo, a key of a type text does
+    not give back, or whose text Python refuses: an int of 5000 digits)."""
     import ast
 
     try:
@@ -574,7 +575,7 @@ def _calls_of(memo: Any, items: list[tuple[Any, Any]]) -> list[str] | None:
     except Exception:  # noqa: BLE001 - a wrapper without its parameters
         return None
     calls = []
-    for key, _ in items:
+    for key, answer in items:
         if not isinstance(key, tuple):
             call: tuple = ((key,), {})
         else:
@@ -586,14 +587,13 @@ def _calls_of(memo: Any, items: list[tuple[Any, Any]]) -> list[str] | None:
                 if len(pairs) % 2 or not all(isinstance(k, str) for k in pairs[0::2]):
                     return None
                 call = (key[:mark], dict(zip(pairs[0::2], pairs[1::2])))
-        text = repr(call)
         try:
-            back = ast.literal_eval(text)
-        except (ValueError, SyntaxError, MemoryError, RecursionError):
+            text = repr(call)
+            if not _same(ast.literal_eval(text), call):
+                return None
+            calls.append([f"{_key_digest(key)}:{compute_hash(answer)}", text])
+        except Exception:  # noqa: BLE001 - no text, or none that gives it back
             return None
-        if not _same(back, call):
-            return None
-        calls.append(text)
     return calls
 
 
@@ -608,12 +608,15 @@ def _same(a: Any, b: Any) -> bool:
     return a == b
 
 
-def _refill(memo: Any, calls: list[str]) -> bool:
-    """Call *memo* for each of *calls* it does not hold the answer of, as the
+def _refill(memo: Any, calls: list[list[str]]) -> bool:
+    """Call *memo* for each of *calls* whose answer it does not hold, as the
     run that filled it did; False when one fails."""
     import ast
 
-    for text in calls:
+    held = set(_item_digests(memo) or ())
+    for digest, text in calls:
+        if digest in held:
+            continue
         try:
             args, kwargs = ast.literal_eval(text)
             memo(*args, **kwargs)
@@ -640,11 +643,14 @@ def _resolve(where: list[str], ns: Mapping[str, Any]) -> Any:
     return value
 
 
-def unfilled(records: list[dict] | None, ns: Mapping[str, Any]) -> str | None:
+def unfilled(records: list[dict] | None, ns: Mapping[str, Any], *, refill: bool = True) -> str | None:
     """Why an entry cannot be served over the memos it read, or None. A memo
     of a pure function must not hold another answer for a key it read (one
     it lacks, a run would compute again, the same); any other must hold
-    every key and answer it held when the statement ran."""
+    every key and answer it held when the statement ran. *refill*: False
+    only checks (the forward probe, before the statement's place, where
+    what the helper reads may still change): a pure memo lacking a key is
+    left to the lookup at the statement's place."""
     if not records:
         return None
     for record in records:
@@ -659,29 +665,38 @@ def unfilled(records: list[dict] | None, ns: Mapping[str, Any]) -> str | None:
         recorded = set(record.get("items") or ())
         if now is None:
             return f"the helper memo {label} does not hold the answers the statement read"
+        if recorded <= set(now):
+            continue
         if record.get("pure") and record.get("calls") is not None and _pure(memo):
+            if not refill:
+                continue
             # Fill it now as the run did, while what the helper reads is
             # what it read then: a later cell can still shadow a builtin
             # it calls, and an empty memo would then compute otherwise.
             if not _refill(memo, record["calls"]) or not recorded <= set(_item_digests(memo) or ()):
                 return f"the helper memo {label} holds another answer than the statement read"
-        elif not recorded <= set(now):
+        else:
             return f"the helper memo {label} does not hold the answers the statement read"
     return None
 
 
-#: ``code -> whether it or a function it calls names cache_clear``.
+#: What a statement naming them reads or changes of a memo beyond its
+#: answers: its counters, which an entry served does not give back.
+_COUNTER_NAMES = ("cache_clear", "cache_info")
+
+#: ``code -> whether it or a function it calls names cache_clear or cache_info``.
 _clearing_code: weakref.WeakKeyDictionary[Any, bool] = weakref.WeakKeyDictionary()
 
 
 def _is_clear(value: Any) -> bool:
-    """*value* is a memo's own ``cache_clear``, under any name."""
-    return getattr(value, "__name__", None) == "cache_clear" and type(getattr(value, "__self__", None)) is _LRU_WRAPPER
+    """*value* is a memo's own ``cache_clear`` or ``cache_info``, under any
+    name."""
+    return getattr(value, "__name__", None) in _COUNTER_NAMES and type(getattr(value, "__self__", None)) is _LRU_WRAPPER
 
 
 def _names_clear(fn: Any) -> bool:
-    """*fn* names ``cache_clear`` (an attribute, or a string it builds a
-    name from), or a global it names is a memo's ``cache_clear``."""
+    """*fn* names ``cache_clear`` or ``cache_info`` (an attribute, or a
+    string it builds a name from), or a global it names is a memo's."""
     code = getattr(fn, "__code__", None)
     if code is None:
         return False
@@ -692,8 +707,11 @@ def _names_clear(fn: Any) -> bool:
 
         scopes = list(iter_code_scopes(code))
         found = any(
-            "cache_clear" in scope.co_names
-            or any(isinstance(c, str) and ("cache_clear" in c or c.startswith("cache_")) for c in scope.co_consts)
+            any(name in scope.co_names for name in _COUNTER_NAMES)
+            or any(
+                isinstance(c, str) and (any(name in c for name in _COUNTER_NAMES) or c.startswith("cache_"))
+                for c in scope.co_consts
+            )
             for scope in scopes
         )
         try:
@@ -711,11 +729,13 @@ def _names_clear(fn: Any) -> bool:
 
 
 def clears(code: str | None, ns: Mapping[str, Any] | None, fn: Any = None) -> bool:
-    """Whether a statement's *code* (or the call of *fn*) can empty a memo:
-    it, or a function of the user's it reaches, names ``cache_clear``, a
-    string with it (``getattr(f, "cache_" + "clear")``), or a name bound to
-    a memo's ``cache_clear``. ``cache_clear()`` resets the counters `used`
-    compares; one reached some other way is caught by the keys it leaves
+    """Whether a statement's *code* (or the call of *fn*) can empty a memo
+    or read its counters: it, or a function of the user's it reaches, names
+    ``cache_clear`` or ``cache_info``, a string with one
+    (``getattr(f, "cache_" + "clear")``), or a name bound to a memo's.
+    ``cache_info()`` reads counters a served entry leaves as they were (an
+    upstream cell filling another key); ``cache_clear()`` resets the
+    counters `used` compares; one reached some other way is caught by the keys it leaves
     (`_held`, which compares the very key and answer objects held before,
     kept alive for that) unless it fills the memo again with those same
     objects."""
@@ -730,7 +750,7 @@ def clears(code: str | None, ns: Mapping[str, Any] | None, fn: Any = None) -> bo
             return False
         code, ns = name, globals_
     elif code is not None:
-        if "cache_clear" in code:
+        if any(name in code for name in _COUNTER_NAMES):
             return True
         try:
             if ns is not None and any(not attrs and _is_clear(ns.get(root)) for root, attrs in names_read(code)):

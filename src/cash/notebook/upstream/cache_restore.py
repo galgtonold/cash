@@ -513,7 +513,7 @@ class CacheRestorer:
             if name in user_ns and lineage.get(name) != before:
                 return True
         recorded = StatementCacheMetadata.from_dict(metadata)
-        if recorded.helper_memos and memos_unfilled(recorded.helper_memos, user_ns):
+        if recorded.helper_memos and memos_unfilled(recorded.helper_memos, user_ns, refill=False):
             return True
         env_reads = recorded.env_reads
         return bool(env_reads) and not environment_unchanged(env_reads)

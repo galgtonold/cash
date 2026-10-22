@@ -256,7 +256,7 @@ in and return it.
 
 ### A helper memoised with `functools.cache`
 
-<!-- claim: cash/notebook/helper_memos.py:unfilled @689e6e67, cash/notebook/helper_memos.py:used @c7de2ae9, cash/notebook/helper_memos.py:clears @6e8c7317, cash/notebook/helper_memos.py:MAX_KEYED == 256 -->
+<!-- claim: cash/notebook/helper_memos.py:unfilled @36d01050, cash/notebook/helper_memos.py:used @815bf2d3, cash/notebook/helper_memos.py:clears @c8fd014e, cash/notebook/helper_memos.py:MAX_KEYED == 256 -->
 A statement served from the cache does not run, so a `@functools.cache` or
 `@functools.lru_cache` helper it calls keeps what it held. A run leaves the
 answers in it, and a later call of the helper uses them without running its
@@ -271,12 +271,13 @@ body. So cash follows these rules:
   (`return n * n`, `return sum(range(n))`). A call of another function of
   yours does not qualify, since a later cell can redefine it. A statement
   that fills or reads such a memo is cached as usual; served, cash calls
-  the helper for each key the run filled, before the statement's place,
-  so the memo holds what a run leaves even if a later cell shadows a
-  builtin it reads. It is not served while the memo holds a different
-  answer for a key the statement read. One thing still differs:
-  `h.cache_info()` counts those calls as a run counts them, but not the
-  hits the statement made.
+  the helper for each key the run filled that the memo lacks, at the
+  statement's place, so the memo holds what a run leaves even if a later
+  cell shadows a builtin it reads. It is not served while the memo holds
+  a different answer for a key the statement read. One thing still
+  differs: `h.cache_info()` counts only those calls, not the hits the
+  statement made, so a statement that names `cache_info` (or
+  `cache_clear`) reruns every time.
 - Any other helper: a statement (or a call cash caches) whose run made the
   memo compute an answer, emptied it (`cache_clear` under any name the
   statement or a function of yours it calls uses, or seen from the keys

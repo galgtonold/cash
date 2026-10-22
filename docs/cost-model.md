@@ -70,6 +70,13 @@ The time a hit shows as saved is still the whole statement's, the call's time
 included. A statement whose own work is too cheap to store still records the
 names it bound, so the cells below it can be restored after a restart.
 
+A statement that filled a `functools.cache` memo of a helper that only
+computes from its arguments is served by calling that helper again for each
+key the memo lacks (see
+[Known limitations](known-limitations.md#a-helper-memoised-with-functoolscache)).
+That hit pays the helper's own time: one served after a restart, when the
+memo is empty, saves only the statement's work around those calls.
+
 ## What the badge shows
 
 A statement under 10 ms shows as a plain `EXECUTED` row with no reason: nothing

@@ -243,3 +243,63 @@ def test_a_helper_is_pure_only_when_its_answer_comes_from_its_arguments_alone(bo
         ns,
     )
     assert helper_memos._pure(ns["h"]) is pure
+
+
+def _filled(code="x = [f(i) for i in range(3)]"):
+    ns: dict = {}
+    exec("import functools\n@functools.cache\ndef f(n):\n    return n * 2", ns)
+    helper_memos.new_statement()
+    before = helper_memos.watched(ns)
+    exec(code, ns)
+    records = helper_memos.used(before, ns=ns)
+    assert records and records[0]["pure"], records
+    return ns, records
+
+
+def test_a_served_pure_fill_calls_the_helper_only_for_the_keys_the_memo_lacks():
+    ns, records = _filled()
+    f = ns["f"]
+    info = f.cache_info()
+    assert helper_memos.unfilled(records, ns) is None
+    assert f.cache_info() == info  # it holds them all: nothing is called
+    f.cache_clear()
+    f(1)
+    assert helper_memos.unfilled(records, ns) is None
+    assert (f.cache_info().misses, f.cache_info().hits) == (3, 0)  # f(0) and f(2) only
+
+
+def test_a_memo_recorded_under_two_names_is_filled_once():
+    ns, records = _filled("g = f\nx = [g(i) for i in range(3)]")
+    if len(records) == 1:
+        records = records + [{**records[0], "where": ["ns", "g"]}]
+    ns["f"].cache_clear()
+    assert helper_memos.unfilled(records, ns) is None
+    assert (ns["f"].cache_info().misses, ns["f"].cache_info().hits) == (3, 0)
+
+
+def test_the_forward_probe_only_checks_and_leaves_the_memo_empty():
+    ns, records = _filled()
+    ns["f"].cache_clear()
+    assert helper_memos.unfilled(records, ns, refill=False) is None
+    assert ns["f"].cache_info().currsize == 0
+
+
+def test_a_key_python_cannot_write_as_text_leaves_the_fill_unserved():
+    """An int of 5000 digits has no ``repr`` (``ValueError``): the fill is
+    not served, and the statement that made it does not fail."""
+    ns: dict = {}
+    exec("import functools\n@functools.cache\ndef f(n):\n    return n % 7", ns)
+    helper_memos.new_statement()
+    before = helper_memos.watched(ns)
+    exec("a = f(10**5000)", ns)
+    assert helper_memos.used(before, ns=ns)[0] == helper_memos.FILLED
+
+
+@pytest.mark.parametrize(
+    "code", ["n = (f(1), f.cache_info().currsize)", "n = getattr(f, 'cache_info')()", "info = f.cache_info\nn = f(1)"]
+)
+def test_a_statement_reading_a_memos_counters_reruns(code):
+    ns: dict = {}
+    exec("import functools\n@functools.cache\ndef f(n):\n    return n * 2", ns)
+    ns["f"](1)
+    assert helper_memos.clears(code, ns)
