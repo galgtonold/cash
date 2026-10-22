@@ -29,6 +29,7 @@ from cash.install_paths import (
     site_roots,
     sys_path_dir,
 )
+from cash.tracking.env_reads import environ_get
 
 __all__ = [
     "SCRATCH_MEMMAP",
@@ -171,7 +172,7 @@ def is_runtime_cache_path(path: str) -> bool:
     as_dir = normed.rstrip("/") + "/"
     if RUNTIME_CACHE_SEGMENT in as_dir:
         return True
-    setting = os.environ.get("NUMBA_CACHE_DIR")
+    setting = environ_get("NUMBA_CACHE_DIR")
     return bool(setting) and as_dir.startswith(_numba_cache_dirs(setting))
 
 

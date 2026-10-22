@@ -110,6 +110,16 @@ def _iter(self):
     return _ORIGINAL_ITER(self)
 
 
+def environ_get(name: str) -> str | None:
+    """``os.environ.get(name)`` for cash's own lookups: not a read of the
+    user's, and without walking the stack to learn that (every ``open`` asks
+    for ``NUMBA_CACHE_DIR``, `read_classification.is_runtime_cache_path`)."""
+    try:
+        return _ORIGINAL(os.environ, name)
+    except KeyError:
+        return None
+
+
 def _install() -> None:
     _ENVIRON.__getitem__ = _getitem
     _ENVIRON.__iter__ = _iter
