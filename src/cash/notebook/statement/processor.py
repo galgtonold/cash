@@ -1345,7 +1345,9 @@ class StatementProcessor:
             names,
             keep,
             user_ns,
-            cash_held=self._calls.held_call_results(),
+            # The digests the statement's fingerprint took before it ran are
+            # held with their values to hand to its call: cash's own.
+            cash_held=[*self._calls.held_call_results(), *self._mutations.digests.held()],
             shell=self.shell,
         )
         if reason is None:
