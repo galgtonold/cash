@@ -462,8 +462,9 @@ edit above `model = M(k)` and `%time model.fit()`, or a restart, the cell
 below gets the model fitted on the new `k`. A `%timeit` rebuilt this way times
 its statement again. In a loop or `if` body, such a line reads and changes
 what its statement does: `for i in r: %time acc.append(i * k)` changes `acc`. A shell command or any other magic is never run for you:
-after an edit to a cell it reads, or a restart, cash keeps the value the name
-has (or leaves it undefined) and warns
+after an edit to a cell it reads, a change to a file or folder its line read
+in Python (`!wc -l {max(glob.glob('logs/*.log'))}`), or a restart, cash keeps
+the value the name has (or leaves it undefined) and warns
 ([NOTEBOOK-MAGIC-STALE](warnings.md#notebook-magic-stale)). A name another
 magic binds (`%run`, `%store -r`, `%%capture out`, `%%bash --out o`) has no
 producer cash knows of: a statement that reads it runs uncached. The body of a

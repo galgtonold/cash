@@ -269,7 +269,8 @@ def children_left_running(written: WrittenPaths) -> list[Any]:
     try:
         import psutil
 
-        return [child for child in psutil.Process().children() if child.pid not in before and process_runs(child)]
+        with io_watch.own_work():
+            return [child for child in psutil.Process().children() if child.pid not in before and process_runs(child)]
     except Exception:  # noqa: BLE001 - none cash can see
         return []
 
@@ -279,7 +280,8 @@ def process_runs(process: Any) -> bool:
     try:
         import psutil
 
-        return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+        with io_watch.own_work():
+            return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
     except Exception:  # noqa: BLE001 - gone
         return False
 
