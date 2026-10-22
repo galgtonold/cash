@@ -41,6 +41,7 @@ __all__ = [
     "magic_call_arguments",
     "magic_cell_of",
     "magic_effects",
+    "magic_files",
     "magic_output_lineage",
     "simulation_cell",
 ]
@@ -201,11 +202,28 @@ def magic_call_arguments(node: ast.stmt, user_ns: Mapping[str, Any]) -> tuple[fr
     return frozenset(watched), frozenset(bare & watched)
 
 
-def magic_base(code: str, read_lineages: Mapping[str, str | None]) -> str:
-    """What the magic statement *code* depends on: its text and the lineage of
-    each name it reads (none for a name without one)."""
+def magic_base(code: str, read_lineages: Mapping[str, str | None], files: str = "") -> str:
+    """What the magic statement *code* depends on: its text, the lineage of
+    each name it reads (none for a name without one) and the state of the
+    files it read (*files*, ``compute_file_hash_component``; ``!echo
+    {len(os.listdir('d'))}``): changed, the names it bound are stale, kept
+    and said so, never rebuilt from the Python above it."""
     reads = ";".join(f"{name}={read_lineages[name] or ''}" for name in sorted(read_lineages))
-    return hashlib.sha256(f"magic:{code}:{reads}".encode("utf-8")).hexdigest()
+    files = f":files{files}" if files else ""
+    return hashlib.sha256(f"magic:{code}:{reads}{files}".encode("utf-8")).hexdigest()
+
+
+def magic_files(tracking_state: Any, code: str) -> str:
+    """The state now of the files the magic statement *code* read on its last
+    run (``TrackingState.magic_file_reads``), for `magic_base`; empty when it
+    read none."""
+    reads = tracking_state.magic_file_reads.get(code)
+    if not reads or not any(reads):
+        return ""
+    from .run_memo import file_component_this_run
+
+    files, remote, probes = reads
+    return file_component_this_run(set(files), set(remote), probes)
 
 
 def magic_output_lineage(base: str, digest: str) -> str:
