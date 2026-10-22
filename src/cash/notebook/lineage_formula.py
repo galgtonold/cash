@@ -434,7 +434,7 @@ def _length(value: Any) -> int | None:
     """The length of a container, read without running the user's code."""
     if type(value) in (list, tuple, dict, set, frozenset, str, bytes, bytearray):
         return len(value)
-    shape = getattr(type(value), "shape", None)
+    shape = attribute_or(type(value), "shape")
     if shape is not None and not callable(shape):
         try:
             return int(len(value))

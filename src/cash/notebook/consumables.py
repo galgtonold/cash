@@ -409,7 +409,7 @@ def _owned(obj: Any) -> bool:
 
 def _users_generator(obj: Any) -> bool:
     """Whether *obj* is a generator the user's code made."""
-    code = getattr(obj, "gi_code", None) or getattr(obj, "ag_code", None)
+    code = attribute_or(obj, "gi_code") or attribute_or(obj, "ag_code")
     return code is not None and is_user_code_file(code.co_filename)
 
 
@@ -469,7 +469,7 @@ def _items(owner: Any) -> list[tuple[str, Any]] | None:
     if instance_of(owner, _CONTAINERS):
         return [(f"[{i}]", v) for i, v in enumerate(itertools.islice(owner, _HELD_WIDTH))]
     module = type(owner).__module__ or ""
-    if module.startswith("numpy") and getattr(getattr(owner, "dtype", None), "kind", None) == "O":
+    if module.startswith("numpy") and attribute_or(attribute_or(owner, "dtype"), "kind") == "O":
         return [(f"[{i}]", v) for i, v in enumerate(itertools.islice(owner.flat, _HELD_WIDTH))]
     if module.split(".")[0] == "pandas":
         name = type(owner).__name__
@@ -496,10 +496,10 @@ def _users_class(cls: type) -> bool:
         return False
     for value in list(attrs.values())[:_HELD_WIDTH]:
         if instance_of(value, (types.FunctionType, classmethod, staticmethod)):
-            code = getattr(_unwrapped(value), "__code__", None)
+            code = attribute_or(_unwrapped(value), "__code__")
             if code is not None:
                 return is_user_code_file(code.co_filename)
-    name = getattr(cls, "__module__", None) or ""
+    name = attribute_or(cls, "__module__") or ""
     if name == "builtins":
         # A class ``exec``'d without a module of its own; the interpreter's
         # are static types.
