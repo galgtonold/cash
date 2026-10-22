@@ -1035,12 +1035,14 @@ class CallUnit:
             else hash_args(call.args, call.kwargs, digest=self._digests.digest_before(ticket, call.site.source))
         )
         module_before = _module_globals(call.fn)
+        # Before the clock starts: looking for memos is cash's own work, and
+        # counted as the call's it pushed cheap calls over the floor.
+        memos_before = helper_memos.watched(getattr(call.fn, "__globals__", None) or {})
         started = _perf_counter()
         call_tracker = FileAccessTracker(
             getattr(call.fn, "__globals__", None),
             propagate_to_parent=True,
         )
-        memos_before = helper_memos.watched(getattr(call.fn, "__globals__", None) or {})
         self._running += 1
         shadow = _shadow.SHADOW
         unit = shadow.begin("call") if shadow is not None else None

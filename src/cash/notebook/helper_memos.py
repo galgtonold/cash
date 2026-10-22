@@ -234,9 +234,11 @@ def new_statement() -> None:
     _statement += 1
 
 
-def _where(ns: Mapping[str, Any]) -> list[tuple[list[str], Any]]:
+def _where(ns: Mapping[str, Any], *, fresh: bool = False) -> list[tuple[list[str], Any]]:
     """``(where, memo)`` for every memo of the user's a statement can reach:
-    ``["ns", name, *steps]`` or ``["module", module, name, *steps]``."""
+    ``["ns", name, *steps]`` or ``["module", module, name, *steps]``.
+    *fresh*: look through the modules again, for a memo bound in one by the
+    statement that just ran (``mod.f = functools.cache(g)``)."""
     global _modules_reached
     holders = _holders(ns)
     known = _ns_reached.get(id(ns))
@@ -247,7 +249,8 @@ def _where(ns: Mapping[str, Any]) -> list[tuple[list[str], Any]]:
         _ns_reached[id(ns)] = known
     modules = _modules_of_user()
     if (
-        _modules_reached[0] != _statement
+        fresh
+        or _modules_reached[0] != _statement
         or _modules_reached[1] is not modules
         # one rebound since (``mod.f = cache(g)`` in this statement)
         or any(_resolve(where, ns) is not memo for where, memo in _modules_reached[2])
@@ -379,31 +382,29 @@ def _pure(memo: Any) -> bool:
     its arguments alone and does nothing else, so running its body where a
     run would have found the answer kept differs in nothing.
 
-    Narrow by design: the function and every function of the user's it
-    calls (followed by the globals they name) read no attribute, no global
-    but such a function or a builtin of `_PURE_BUILTINS`, no closure
-    variable, and write no global. ``return n * n`` and
-    ``return sum(range(n))`` qualify; a print, a random draw, a read of a
-    global, the environment or a file, a method call, a module's function
-    do not. Asked afresh each time, as a callee can be rebound."""
-    return _pure_function(getattr(memo, "__wrapped__", None), set(), 0)
-
-
-def _pure_function(fn: Any, seen: set[int], depth: int) -> bool:
-    import builtins
+    Narrow by design: the function reads no attribute, no closure variable
+    and no global but a builtin of `_PURE_BUILTINS` (still the builtin, not
+    shadowed by a global of that name) or the memo itself (``fib`` calling
+    ``fib``), writes no global, and has no default argument but a fixed
+    value (`_fixed`). ``return n * n`` and ``return sum(range(n))``
+    qualify; a print, a random draw, a read of a global, the environment or
+    a file, a method call, a call of another function of the user's (which
+    a later cell can redefine), a default ``out=print`` or ``acc=[]`` do
+    not. Asked afresh each time, as a builtin can be shadowed later."""
     import dis
 
     from cash.decorator.closure_fold import iter_code_scopes
 
-    if id(fn) in seen:
-        return True
+    fn = getattr(memo, "__wrapped__", None)
     code = getattr(fn, "__code__", None)
     globals_ = getattr(fn, "__globals__", None)
-    if code is None or not isinstance(globals_, dict) or depth > 8 or code.co_freevars:
+    if code is None or not isinstance(globals_, dict) or code.co_freevars:
         return False
     if not is_user_code_file(code.co_filename):
         return False
-    seen.add(id(fn))
+    defaults = (*(getattr(fn, "__defaults__", None) or ()), *(getattr(fn, "__kwdefaults__", None) or {}).values())
+    if not all(_fixed(value) for value in defaults):
+        return False
     try:
         for scope in iter_code_scopes(code):
             for instr in dis.get_instructions(scope):
@@ -413,15 +414,33 @@ def _pure_function(fn: Any, seen: set[int], depth: int) -> bool:
                     continue
                 name = instr.argval
                 if name in globals_:
-                    value = globals_[name]
-                    inner = value.__wrapped__ if _is_user_memo(value) else value
-                    if not (inspect.isfunction(inner) and _pure_function(inner, seen, depth + 1)):
+                    if globals_[name] is not memo:
                         return False
-                elif not (name in _PURE_BUILTINS and name in vars(builtins)):
+                elif name not in _BUILTINS or _BUILTINS[name] is not _builtin(name, globals_):
                     return False
     except Exception:  # noqa: BLE001 - code this cannot read: not known to be pure
         return False
     return True
+
+
+_UNSET = object()
+
+
+def _builtin_table() -> dict[str, Any]:
+    import builtins
+
+    return {name: vars(builtins)[name] for name in _PURE_BUILTINS if name in vars(builtins)}
+
+
+#: Each pure builtin as the interpreter started with it.
+_BUILTINS = _builtin_table()
+
+
+def _builtin(name: str, globals_: dict) -> Any:
+    """What *name* resolves to as a builtin from *globals_* now."""
+    table = globals_.get("__builtins__")
+    table = vars(table) if isinstance(table, types.ModuleType) else table
+    return table.get(name, _UNSET) if isinstance(table, dict) else _UNSET
 
 
 def _changed_in_place(memo: Any, items: list[tuple[Any, Any]]) -> bool | None:
@@ -450,14 +469,15 @@ def _changed_in_place(memo: Any, items: list[tuple[Any, Any]]) -> bool | None:
     return verdict
 
 
-def _held(memo: Any) -> frozenset[tuple[int, int]] | None:
+def _held(memo: Any) -> tuple[frozenset[tuple[int, int]], list[tuple[Any, Any]]] | None:
     """Which key and answer objects *memo* holds, or None past `MAX_KEYED`:
     a run that empties it (``cache_clear`` by any name) and fills it again
-    can leave its counters as they were, not these."""
+    can leave its counters as they were, not these. The objects are kept
+    with their ids, so a refill cannot put a new key at a freed address."""
     items = _items(memo)
     if items is None or len(items) > MAX_KEYED:
         return None
-    return frozenset((id(key), id(answer)) for key, answer in items)
+    return frozenset((id(key), id(answer)) for key, answer in items), items
 
 
 def _label(where: list[str]) -> str:
@@ -482,7 +502,7 @@ def used(
     before = list(before or ())
     if ns is not None and _LRU_WRAPPER is not None:
         known = {id(memo) for _, memo, *_ in before}
-        fresh = [(where, memo) for where, memo in _where(ns) if id(memo) not in known]
+        fresh = [(where, memo) for where, memo in _where(ns, fresh=True) if id(memo) not in known]
         # A memo rebound in the run where cash looked before it (a module's,
         # by a reload in the same statement): the one bound now, from empty.
         for where, *_ in before:
@@ -493,7 +513,7 @@ def used(
         for where, memo in fresh:
             if id(memo) not in seen_now:
                 seen_now.add(id(memo))
-                before.append((where, memo, 0, 0, 0, frozenset()))
+                before.append((where, memo, 0, 0, 0, (frozenset(), [])))
     if not before:
         return None
     out: list[dict] = []
@@ -504,7 +524,8 @@ def used(
         except Exception:  # noqa: BLE001 - a wrapper whose counters raise
             continue
         if (info.hits, info.misses, info.currsize) == (hits, misses, size) and not clears:
-            if held is None or _held(memo) == held:
+            now = _held(memo)
+            if held is None or (now is not None and now[0] == held[0]):
                 continue
             clears = True  # emptied and filled again to the same counts
         label = _label(where)
@@ -521,8 +542,9 @@ def used(
         elif moved:
             why = f"It changed an answer the helper memo {label} holds in place"
         elif info.misses != misses:
-            if all(_fixed(key, key=True) and _fixed(answer) for key, answer in items) and _pure(memo):
-                out.append({"where": where, "items": _item_digests(memo), "pure": True})
+            calls = _calls_of(memo, items)
+            if calls is not None and all(_fixed(answer) for _, answer in items) and _pure(memo):
+                out.append({"where": where, "items": _item_digests(memo), "pure": True, "calls": calls})
                 continue
             why = f"It filled the helper memo {label}: served, the memo would stay as it was"
         elif moved is None:
@@ -532,11 +554,72 @@ def used(
             if digests is None:
                 why = f"It read the helper memo {label}, whose answers cash cannot digest"
             else:
-                pure = all(_fixed(key, key=True) and _fixed(answer) for key, answer in items) and _pure(memo)
-                out.append({"where": where, "items": digests, "pure": pure})
+                calls = _calls_of(memo, items)
+                pure = calls is not None and all(_fixed(answer) for _, answer in items) and _pure(memo)
+                out.append({"where": where, "items": digests, "pure": pure, "calls": calls if pure else None})
     if why is not None:
         return FILLED, f"{why} (statement re-executes)"
     return out or None
+
+
+def _calls_of(memo: Any, items: list[tuple[Any, Any]]) -> list[str] | None:
+    """The calls that fill *memo* with the keys of *items* again, each as
+    the text of ``(args, kwargs)``, or None when one cannot be written so
+    (a ``typed=True`` memo, a key of a type text does not give back)."""
+    import ast
+
+    try:
+        if memo.cache_parameters().get("typed"):
+            return None
+    except Exception:  # noqa: BLE001 - a wrapper without its parameters
+        return None
+    calls = []
+    for key, _ in items:
+        if not isinstance(key, tuple):
+            call: tuple = ((key,), {})
+        else:
+            mark = next((i for i, part in enumerate(key) if type(part) is object), None)
+            if mark is None:
+                call = (key, {})
+            else:
+                pairs = key[mark + 1 :]
+                if len(pairs) % 2 or not all(isinstance(k, str) for k in pairs[0::2]):
+                    return None
+                call = (key[:mark], dict(zip(pairs[0::2], pairs[1::2])))
+        text = repr(call)
+        try:
+            back = ast.literal_eval(text)
+        except (ValueError, SyntaxError, MemoryError, RecursionError):
+            return None
+        if not _same(back, call):
+            return None
+        calls.append(text)
+    return calls
+
+
+def _same(a: Any, b: Any) -> bool:
+    """Equal, and of the same types all the way down (``1`` is not ``1.0``)."""
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, (tuple, list)):
+        return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
+    if isinstance(a, dict):
+        return a.keys() == b.keys() and all(_same(a[k], b[k]) for k in a)
+    return a == b
+
+
+def _refill(memo: Any, calls: list[str]) -> bool:
+    """Call *memo* for each of *calls* it does not hold the answer of, as the
+    run that filled it did; False when one fails."""
+    import ast
+
+    for text in calls:
+        try:
+            args, kwargs = ast.literal_eval(text)
+            memo(*args, **kwargs)
+        except Exception:  # noqa: BLE001 - it did not answer as the run's did
+            return False
+    return True
 
 
 def _resolve(where: list[str], ns: Mapping[str, Any]) -> Any:
@@ -576,9 +659,11 @@ def unfilled(records: list[dict] | None, ns: Mapping[str, Any]) -> str | None:
         recorded = set(record.get("items") or ())
         if now is None:
             return f"the helper memo {label} does not hold the answers the statement read"
-        if record.get("pure") and _pure(memo):
-            held = dict(item.split(":", 1) for item in now)
-            if any(held.get(key, answer) != answer for key, answer in (item.split(":", 1) for item in recorded)):
+        if record.get("pure") and record.get("calls") is not None and _pure(memo):
+            # Fill it now as the run did, while what the helper reads is
+            # what it read then: a later cell can still shadow a builtin
+            # it calls, and an empty memo would then compute otherwise.
+            if not _refill(memo, record["calls"]) or not recorded <= set(_item_digests(memo) or ()):
                 return f"the helper memo {label} holds another answer than the statement read"
         elif not recorded <= set(now):
             return f"the helper memo {label} does not hold the answers the statement read"
@@ -631,7 +716,9 @@ def clears(code: str | None, ns: Mapping[str, Any] | None, fn: Any = None) -> bo
     string with it (``getattr(f, "cache_" + "clear")``), or a name bound to
     a memo's ``cache_clear``. ``cache_clear()`` resets the counters `used`
     compares; one reached some other way is caught by the keys it leaves
-    (`_held`) unless it fills the memo again with the very same objects."""
+    (`_held`, which compares the very key and answer objects held before,
+    kept alive for that) unless it fills the memo again with those same
+    objects."""
     from cash.notebook.callee_reach import names_read, reached_user_code
 
     if fn is not None:

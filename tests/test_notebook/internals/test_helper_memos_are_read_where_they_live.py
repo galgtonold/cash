@@ -213,27 +213,33 @@ def test_a_memo_made_and_filled_in_the_same_statement_is_said_to_fill_it():
 
 
 @pytest.mark.parametrize(
-    ("body", "pure"),
+    ("body", "pure", "params", "later"),
     [
-        ("return n * n", True),
-        ("return sum(range(n)) + len(str(n))", True),
-        ("return g(n) * 2", True),
-        ("print(n)\n    return n", False),
-        ("return SCALE * n", False),
-        ("return g_prints(n)", False),
-        ("return os.environ.get('X', n)", False),
-        ("return random.random()", False),
-        ("return next(COUNTER)", False),
-        ("return open(n).read()", False),
-        ("return n.upper()", False),
+        ("return n * n", True, "n", ""),
+        ("return sum(range(n)) + len(str(n))", True, "n", ""),
+        ("return 1 if n < 2 else n * h(n - 1)", True, "n", ""),
+        ("return g(n) * 2", False, "n", ""),  # a later cell can redefine g
+        ("return n * k", True, "n, k=2", ""),
+        ("out(n)\n    return n", False, "n, out=print", ""),
+        ("acc.append(n)\n    return len(acc)", False, "n, acc=[]", ""),
+        ("return n", False, "n, *, out=print", ""),
+        ("return abs(n)", False, "n", "def abs(v):\n    return 99\n"),
+        ("print(n)\n    return n", False, "n", ""),
+        ("return SCALE * n", False, "n", ""),
+        ("return g_prints(n)", False, "n", ""),
+        ("return os.environ.get('X', n)", False, "n", ""),
+        ("return random.random()", False, "n", ""),
+        ("return next(COUNTER)", False, "n", ""),
+        ("return open(n).read()", False, "n", ""),
+        ("return n.upper()", False, "n", ""),
     ],
 )
-def test_a_helper_is_pure_only_when_its_answer_comes_from_its_arguments_alone(body, pure):
+def test_a_helper_is_pure_only_when_its_answer_comes_from_its_arguments_alone(body, pure, params, later):
     ns: dict = {}
     exec(
         "import functools, itertools, os, random\nSCALE = 2\nCOUNTER = itertools.count()\n"
         "def g(n):\n    return n + 1\ndef g_prints(n):\n    print(n)\n    return n\n"
-        f"@functools.cache\ndef h(n):\n    {body}\n",
+        f"@functools.cache\ndef h({params}):\n    {body}\n{later}",
         ns,
     )
     assert helper_memos._pure(ns["h"]) is pure
