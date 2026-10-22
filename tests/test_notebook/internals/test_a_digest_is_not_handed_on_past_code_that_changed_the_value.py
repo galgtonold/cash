@@ -64,7 +64,7 @@ def parked_callback(parked, release, target):
 @pytest.fixture
 def user(tmp_path, monkeypatch):
     path = tmp_path / "users_own_code.py"
-    path.write_text(USER_MODULE)
+    path.write_text(USER_MODULE, encoding="utf-8")
     spec = importlib.util.spec_from_file_location("users_own_code", path)
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, module)  # its values pickle

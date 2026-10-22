@@ -50,7 +50,7 @@ def _written(tmp_path, count):
     paths = []
     for i in range(count):
         path = tmp_path / f"{i}.txt"
-        path.write_text("x")
+        path.write_text("x", encoding="utf-8")
         paths.append(str(path))
     return frozenset(paths)
 
