@@ -126,6 +126,12 @@ class StatementRun:
     #: Refused because what it binds can differ between two runs with the
     #: same key (``CacheabilityVerdict.varies``): the clock, a fresh id.
     value_varies: bool = False
+    #: Its entry was found under its key and not served, because what the
+    #: key cannot name (code a string found, code changed in place) may have
+    #: changed: run again, it can bind a new value under the same key, so its
+    #: outputs are keyed by value, and what is built on them misses when the
+    #: value changed.
+    key_blind: bool = False
     allow_random: bool = False
     unseeded_calls: list = field(default_factory=list)
     inputs: set[str] = field(default_factory=set)

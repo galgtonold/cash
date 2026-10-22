@@ -938,12 +938,15 @@ class StatementProcessor:
             if cached_data and _shadow.SHADOW.stale(run.shadow):
                 # Code it ran changed since it was stored: it runs again.
                 cached_data = None
+                run.key_blind = True
             elif cached_data and run.needs_trace and not _shadow.SHADOW.agreed(run.shadow):
                 # Its key does not name what a string found: only a trace
                 # checked unchanged serves it.
                 cached_data = None
+                run.key_blind = True
         elif run.needs_trace:
             cached_data = None
+            run.key_blind = True
         if cached_data and self._live_objects_shared(run, metadata):
             cached_data = None
         if cached_data and not import_needs_reexecution(run.tree, self.shell.user_ns):
@@ -1206,6 +1209,7 @@ class StatementProcessor:
                 f"what those functions read cannot be keyed, so the statement runs every time"
             )
             run.skip_cache = True
+            run.value_varies = True
             return
         if by_string and followed and _shadow.SHADOW is not None:
             # What the string found is recorded as it runs, and its trace is
@@ -1221,6 +1225,7 @@ class StatementProcessor:
                 f"so the statement runs every time"
             )
             run.skip_cache = True
+            run.value_varies = True
             return
         if unkeyed_modules:
             # Its key names the code of the modules whose objects it calls
@@ -1232,6 +1237,7 @@ class StatementProcessor:
                 f"what their methods run cannot be keyed, so the statement runs every time"
             )
             run.skip_cache = True
+            run.value_varies = True
             return
         drawn = drawn_stream_inputs(run.tree, run.inputs, run.outputs, self.shell.user_ns)
         if drawn:
@@ -1240,6 +1246,7 @@ class StatementProcessor:
                 f"a cache hit would not advance it, so the statement runs every time"
             )
             run.skip_cache = True
+            run.value_varies = True
             run.drew_from_stream = any(isinstance(self.shell.user_ns.get(name), io.IOBase) for name in drawn)
             return
         looked_at = reads_open_handle(run.inputs - run.outputs, self.shell.user_ns)
@@ -2190,6 +2197,7 @@ class StatementProcessor:
                     probes=execution.probes,
                     no_cache=(run.annotation is not None and run.annotation.no_cache)
                     or run.value_varies
+                    or run.key_blind
                     or run.past_budget
                     or inputs_moved
                     or self._binds_a_stream(run),

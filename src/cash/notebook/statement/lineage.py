@@ -110,6 +110,14 @@ def _record_file_reads(
     return file_hash_component
 
 
+def _a_namespace(value: Any, user_ns: Mapping[str, Any]) -> bool:
+    """Is *value* a namespace -- the notebook's globals (``NS = globals()``)
+    or a module? Its lineage is the formula's: a digest of its value would
+    be of everything it holds, new each run, and what reads names from it
+    is keyed or traced by the names it reads."""
+    return value is user_ns or instance_of(value, types.ModuleType)
+
+
 def note_own_writes(tracking_state: "TrackingState", paths) -> None:
     """Record that the notebook wrote *paths* just now, with each file's
     `stat_key` after the write (`TrackingState.own_file_writes`)."""
@@ -319,7 +327,9 @@ class StatementLineageBuilder:
                 func_component,
                 self._compute_module_lineage_component(tracking_state, value, var_name, code, tree),
                 changed_module_environment(var_name, value, code, environment),
-                self._no_cache_value(value_digests, var_name, value) if no_cache else "",
+                self._no_cache_value(value_digests, var_name, value)
+                if no_cache and not _a_namespace(value, user_ns)
+                else "",
             )
             # A module set by a setting that is the same when run again
             # (``pd.set_option('display.width', 120)``) keeps one run's
