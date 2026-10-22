@@ -1592,10 +1592,12 @@ class _Found:
         if too_big and not _special_classes_exist(fn.__globals__):
             too_big = []
         for name in too_big:
-            self.unreadable.append(
+            what = (
                 f"{fn.__qualname__}() reads {name}, which holds more than {ITEM_TYPES_AT:,} items to look "
                 "through for objects of your classes"
             )
+            self.unreadable.append(what)
+            _warn_too_big(what)
         return kinds
 
     def _closed_over(self, fn: types.FunctionType) -> None:
@@ -1903,10 +1905,12 @@ class _Found:
         if kinds is None:
             if not _special_classes_exist(self.namespace):
                 return
-            self.unreadable.append(
+            what = (
                 f"an item of {label} is read by an index cash cannot tell, and {label} holds more than "
                 f"{ITEM_TYPES_AT:,} items to look through for objects of your classes"
             )
+            self.unreadable.append(what)
+            _warn_too_big(what)
             return
         for kind in kinds:
             if _users_instance_type(kind):
@@ -2390,10 +2394,16 @@ _SPECIAL_CLASSES: dict[int, tuple[Any, bool]] = {}
 
 def _special_classes_exist(namespace: Mapping[str, Any]) -> bool:
     """Whether a class of the user's has a special method that can change
-    something outside its objects (`_reaching_special_functions`): a class
-    the notebook binds, one at the top of a module of the user's, or one
-    derived from either. With none, an item of a container too big to look
-    through runs nothing that matters when an operator meets it."""
+    something outside its objects (`_reaching_special_functions`). With
+    none, an item of a container too big to look through runs nothing that
+    matters when an operator meets it.
+
+    First the classes the notebook binds and those at the top of a module
+    of the user's, with what derives from them; then, when none of those
+    has one, every class alive (`_live_users_classes`): one made inside a
+    function, deleted from the namespace after its objects were made, or
+    held only in a dict is alive while its objects are. Asked only of a
+    statement reading such a container."""
     known = _SPECIAL_CLASSES.get(id(namespace))
     if known is not None and known[0] is namespace:
         return known[1]
@@ -2403,21 +2413,92 @@ def _special_classes_exist(namespace: Mapping[str, Any]) -> bool:
         bound = [v for v in list(namespace.values()) if isinstance(v, type) and _is_users_class(v)]
     except Exception:  # noqa: BLE001 - changed while read
         bound = []
-    pending = bound + users_module_classes()
+    answer = _any_special(bound + users_module_classes()) or _any_special(_live_users_classes(), deep=False)
+    _SPECIAL_CLASSES[id(namespace)] = (namespace, answer)
+    return answer
+
+
+def _any_special(classes: list[type], deep: bool = True) -> bool:
+    """Whether one of *classes* (and, *deep*, what derives from them) has a
+    special method `_reaching_special_functions` finds."""
+    pending = list(classes)
     seen: set[type] = set()
-    answer = False
-    while pending and not answer:
+    while pending:
         cls = pending.pop()
         if cls in seen:
             continue
         seen.add(cls)
-        answer = bool(_reaching_special_functions(cls))
+        if _reaching_special_functions(cls):
+            return True
+        if deep:
+            try:
+                pending.extend(type.__subclasses__(cls))
+            except TypeError:
+                pass
+    return False
+
+
+#: What `_warn_too_big` has said, once each.
+_TOO_BIG_SAID: set[str] = set()
+
+
+def _warn_too_big(what: str) -> None:
+    """NOTEBOOK-ITEMS-UNREAD, once for each container: the statement runs
+    every time, where a badge alone may not be seen."""
+    if what in _TOO_BIG_SAID:
+        return
+    _TOO_BIG_SAID.add(what)
+    import logging
+
+    from ..diagnostics import log_diagnostic, warn_diagnostic
+    from ..exceptions import CashWarning
+
+    what = (
+        f"{what}, while a class of yours has a special method that changes something outside its objects: "
+        "the statement runs every time rather than be served from the cache"
+    )
+    fix = (
+        "read the item by a constant index or key, keep such objects in a smaller container, or put "
+        "'# @cash:assume-safe' on the statement if the special methods it may run do not matter."
+    )
+    log_diagnostic(logging.getLogger(__name__), "NOTEBOOK-ITEMS-UNREAD", what, fix)
+    warn_diagnostic(CashWarning, "NOTEBOOK-ITEMS-UNREAD", what, fix)
+
+
+#: Module name -> whether it is one of the user's, for `_live_users_classes`.
+_USERS_MODULE_NAMES: dict[str, bool] = {}
+
+
+def _live_users_classes() -> list[type]:
+    """Every class alive whose module is the notebook or one of the user's,
+    found by walking ``object.__subclasses__()`` (~10 ms for 5,000 classes)."""
+    found: list[type] = []
+    pending = type.__subclasses__(object)
+    seen: set[int] = set()
+    while pending:
+        cls = pending.pop()
+        if id(cls) in seen:
+            continue
+        seen.add(id(cls))
         try:
             pending.extend(type.__subclasses__(cls))
         except TypeError:
             pass
-    _SPECIAL_CLASSES[id(namespace)] = (namespace, answer)
-    return answer
+        if not cls.__flags__ & _HEAP_TYPE:
+            continue
+        name = cls.__dict__.get("__module__")
+        if not isinstance(name, str):
+            continue
+        users = _USERS_MODULE_NAMES.get(name)
+        if users is None:
+            users = _USERS_MODULE_NAMES[name] = _is_users_class(cls)
+        if users:
+            found.append(cls)
+    return found
+
+
+#: ``type.__flags__`` of a class made by a ``class`` statement or ``type()``.
+_HEAP_TYPE = 1 << 9
 
 
 def _attribute_types(owner: Any) -> set[type]:
