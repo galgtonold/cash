@@ -32,7 +32,10 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(240)]
 
 def _on_disk(nb_runner) -> tuple[int, float]:
     """``(bytes, seconds)`` of the biggest entry once its writes are on disk:
-    what it holds, with its chunks, and the compute it recorded keeping saves.
+    what it holds, with its chunks, and the seconds it was judged by: the
+    longest rebuild time any entry records (a call's result is written on
+    the decision of the statement holding it, by that statement's rebuild
+    time), else the compute it recorded.
 
     A cell does not wait for its writes, so the report cell runs after
     `settle_writes`; on a loaded machine it would otherwise see a write still
@@ -45,7 +48,8 @@ def _on_disk(nb_runner) -> tuple[int, float]:
     assert "MAX_DATA_BYTES=" in report, report
     size = int(report.split("MAX_DATA_BYTES=")[1].split()[0])
     seconds = float(report.split("MAX_DATA_SECONDS=")[1].split()[0])
-    return size, seconds
+    rebuild = float(report.split("MAX_DATA_REBUILD=")[1].split()[0])
+    return size, max(seconds, rebuild)
 
 
 # An entry with its chunks: the array's data lives in the chunk store, not
@@ -81,12 +85,12 @@ def test_a_big_value_that_rebuilds_quickly_does_not_reach_disk(nb_runner):
     assert "shape=12000000" in nb_runner.get_output(3)
     raw = nb_runner.get_raw_output(3)
     if size >= 1_000_000:
-        # Written: right only if the compute it recorded pays for it, which a
+        # Written: right only if the time it rebuilds in pays for it, which a
         # machine loaded enough to stretch the 0.15 s past ~0.72 s makes true.
         assert worth_its_bytes(size, seconds), (
-            f"a 96 MB value whose compute was recorded as {seconds:.3f} s was written to disk anyway:\n{raw}"
+            f"a 96 MB value that rebuilds in {seconds:.3f} s was written to disk anyway:\n{raw}"
         )
-        pytest.skip(f"compute recorded as {seconds:.3f} s on a loaded machine: the value earned its disk")
+        pytest.skip(f"rebuilds in {seconds:.3f} s on a loaded machine: the value earned its disk")
     assert "CACHE-NOT-WORTH-BYTES" in raw, f"kept off disk, but not by the bytes ceiling:\n{raw}"
 
 

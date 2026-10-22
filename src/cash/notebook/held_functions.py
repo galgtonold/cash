@@ -25,6 +25,7 @@ through ``mylib``. The key names that code (``cache_key``).
 from __future__ import annotations
 
 import collections
+import dataclasses
 import functools
 import gc
 import itertools
@@ -125,8 +126,9 @@ _NOTHING = Held(())
 
 
 class _NoNotebookFunctions(Exception):
-    """A walk stopped early: no notebook function, and no object of a
-    class of the user's modules, exists to be found."""
+    """A walk stopped early: no notebook function, and no class of the
+    user's modules (an object of one, or the class held), exists to be
+    found."""
 
 
 #: What `_MEMO` keeps for a walk that stopped because no notebook function
@@ -286,12 +288,34 @@ def _anything_to_find(namespace: Mapping[str, Any]) -> bool:
 
 def module_class_objects_exist() -> bool:
     """Whether any object of a class defined at the top of one of the
-    user's loaded modules, or of a class derived from one, exists.
+    user's loaded modules, or of a class derived from one, exists, or
+    anything else that holds such a class.
 
     An object refers to its class, so ``gc.get_referrers`` of the classes
     finds them all, in one pass at C speed. With no module of the user's
     loaded there is nothing to ask. Objects ``gc.freeze`` moved out of the
     collector's view are not searched, so then the answer is yes.
+
+    A value can hold the class itself and no object of it
+    (``[mylib.Order] + rows``): a statement calling it runs the module's
+    code. Answered no, a walk of a big value stopped before it met the class
+    and the key left the module out, where a small value's kept it: a cell's
+    ``mylib.K = 14`` served the old result. Whatever else refers to a class
+    counts too (`_holds_the_class`), but not what every class has: its module's globals, its subclasses, the
+    ``__mro__`` and ``__bases__`` of the classes asked about, its own
+    descriptors and ``__class__`` cells, a dataclass field, and cash's own
+    memos. Annotations, registries and library machinery still count, so
+    most notebooks using their own modules walk big values to the end
+    (~0.2 s per 400k objects with the C extension, ~0.5 s without). The
+    what-ran trace (3.12+) is not leaned on to stop sooner: it checks only
+    its own statement's hit, not a cell built from that statement, a call
+    cached inside one, or a restore after a restart, and a trace that was
+    dropped or cannot be used checks nothing. Still not seen: a class
+    reached through a module's ``__dict__`` held in a value
+    (``SimpleNamespace(d=vars(mylib))``). One reached only through the
+    ``__class__`` cell of its own method (``[mylib.C.helper] + rows`` with
+    ``super()`` in ``helper``) is seen, though not by design: the walk's
+    own memo (`Held.module_classes`) refers to the class, and counts.
     """
     classes = _users_module_classes()
     if not classes:
@@ -312,10 +336,86 @@ def module_class_objects_exist() -> bool:
             pending.extend(type.__subclasses__(cls))
         except TypeError:
             pass
-    found = any(type(referrer) in kinds for referrer in gc.get_referrers(*kinds))
+    # A tuple passes through ``*`` as it is: the call's arguments are then
+    # one of the asker's own.
+    asked_of = tuple(kinds)
+    own = {id(classes), id(pending), id(kinds), id(asked_of)}
+    for cls in kinds:
+        own.add(id(cls))
+        own.add(id(cls.__mro__))
+        own.add(id(cls.__bases__))
+    own |= _cash_memos()
+    for cls in kinds:
+        own |= _class_cells(cls)
+    found = any(type(referrer) in kinds or _holds_the_class(referrer, own) for referrer in gc.get_referrers(*asked_of))
     if found:
         _OBJECTS_SEEN[0] = asked
     return found
+
+
+#: What refers to every class, not to one a value holds: a slot's or
+#: ``__dict__``'s descriptor, the ``__class__`` cell of a method calling
+#: ``super()``, and the frame asking.
+_CLASS_MACHINERY = (types.GetSetDescriptorType, types.MemberDescriptorType, types.FrameType, dataclasses.Field)
+
+
+def _class_cells(cls: type) -> set[int]:
+    """The ids of the ``__class__`` cells of *cls*'s own methods (``super()``),
+    which refer to it in every class that calls ``super()``."""
+    found: set[int] = set()
+    for member in list(vars(cls).values()):
+        for fn in (member, getattr(member, "__func__", None), getattr(member, "fget", None)):
+            code = getattr(fn, "__code__", None)
+            if code is None or "__class__" not in code.co_freevars:
+                continue
+            cells = getattr(fn, "__closure__", None) or ()
+            for name, cell in zip(code.co_freevars, cells):
+                if name == "__class__":
+                    found.add(id(cell))
+    return found
+
+
+#: ``(module count, ids)`` of `_cash_memos`.
+_CASH_MEMOS: list[Any] = [None]
+
+
+def _cash_memos() -> set[int]:
+    """The ids of the dicts cash's own modules keep at their top, an
+    `LruMemo`'s included: memos keyed by class (``_USERS_CLASSES``,
+    ``UNTAGGABLE_TYPES``) hold a class no value does."""
+    count = len(sys.modules)
+    held = _CASH_MEMOS[0]
+    if held is not None and held[0] == count:
+        return held[1]
+    from .._memo import LruMemo
+
+    ids: set[int] = set()
+    for name, module in list(sys.modules.items()):
+        if not (name == "cash" or name.startswith("cash.")):
+            continue
+        for value in list(getattr(module, "__dict__", {}).values()):
+            if isinstance(value, dict):
+                ids.add(id(value))
+            elif isinstance(value, LruMemo):
+                ids.add(id(value._data))
+    _CASH_MEMOS[0] = (count, ids)
+    return ids
+
+
+def _holds_the_class(referrer: Any, own: set[int]) -> bool:
+    """Whether *referrer*, which refers to a class of the user's modules,
+    may be part of a value: not one of *own* (the classes asked about, a
+    subclass refers to its base, their ``__mro__`` and ``__bases__``, and the
+    asker's own lists),
+    not `_CLASS_MACHINERY`, and not a module's globals."""
+    if id(referrer) in own or isinstance(referrer, _CLASS_MACHINERY):
+        return False
+    if type(referrer) is dict:
+        name = referrer.get("__name__")
+        module = sys.modules.get(name) if isinstance(name, str) else None
+        if module is not None and getattr(module, "__dict__", None) is referrer:
+            return False
+    return True
 
 
 #: The `_new_code` count and the classes asked about when
