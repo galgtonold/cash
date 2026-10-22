@@ -24,6 +24,7 @@ dict references, so there is nothing to re-wire when the state is replaced.
 from __future__ import annotations
 
 import ast
+import contextlib
 import logging
 import os
 import types
@@ -35,9 +36,11 @@ from cash._user_attrs import attribute_or, instance_of
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutations import assigned_method_call_receivers, standalone_method_call_receivers
 from ...analysis.namespace_effects import fits_its_receiver
+from ...kept_state import packing_once
 from ...tracking.file_dep_snapshot import realpath_of_read_this_run
 from ...tracking.module_symbols import static_attribute_reads
 from ...tracking.read_classification import regular_file_stat
+from ...tracking.trace_recorder import other_thread_alive
 from ...value_hash import budgeted_hash, compute_hash, costly_after
 from ..cache_key import statement_source_hash
 from ..lineage_formula import (
@@ -424,9 +427,14 @@ class StatementLineageBuilder:
             kept=kept,
             code=code,
         )
-        for target, lineage_hash in moved.items():
-            if target in tracking_state.current_session_hashes:
-                self._update_variable_content_hashes(tracking_state, target, user_ns.get(target), lineage_hash)
+        # Nothing runs between these reads either: a fitted forest several of
+        # them hold is packed once for all of them (`packing_once`), unless
+        # another thread is alive and could change it in between.
+        alone = not other_thread_alive(user_ns)
+        with packing_once() if alone else contextlib.nullcontext():
+            for target, lineage_hash in moved.items():
+                if target in tracking_state.current_session_hashes:
+                    self._update_variable_content_hashes(tracking_state, target, user_ns.get(target), lineage_hash)
         return bumped
 
     def _record_output(
