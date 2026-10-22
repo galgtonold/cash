@@ -734,18 +734,36 @@ def _names_clear(fn: Any) -> bool:
     return any(_is_clear(globals_.get(name)) for scope in iter_code_scopes(code) for name in scope.co_names)
 
 
-def _text_names_counters(code: str) -> bool:
-    """The statement's *code* names ``cache_clear`` or ``cache_info``, as an
-    attribute or a name, or holds a string with one or starting with
-    ``cache_`` (``getattr(f, "cache_" + "info")``), as `_names_clear` asks
-    of a function. Not a name that only contains one (``cache_info_rows``).
-    Text that does not parse is taken by its letters."""
+def _text_names_counters(code: str, ns: Mapping[str, Any] | None = None) -> bool:
+    """The statement's *code* names ``cache_clear`` or ``cache_info``: as an
+    attribute or a name; as a string that is one, or that a name is built
+    from (``getattr(f, "cache_" + "info")``, an f-string), or that
+    ``getattr``, ``methodcaller`` or ``attrgetter`` is handed; or by a
+    ``getattr`` of a memo of *ns* whose name is not written out
+    (``getattr(f, n)``, *n* bound in another statement). Not a name or a
+    string that only contains one (``cache_info_rows``, ``'cache_dir/x.csv'``,
+    a dict key ``'cache_info'``). Text that does not parse is taken by its
+    letters."""
     import ast
 
     try:
         tree = ast.parse(code)
     except (SyntaxError, ValueError, RecursionError):
         return any(name in code for name in _COUNTER_NAMES)
+
+    def names_one(node: ast.AST) -> bool:
+        return isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in _COUNTER_NAMES
+
+    def builds_one(node: ast.AST) -> bool:
+        # A piece of a name built by ``+``, ``%``, ``.format`` or an f-string:
+        # a word, not a path or a sentence (``'cache_dir/'``).
+        if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+            return False
+        text = node.value.replace("{}", "").replace("%s", "")
+        return text.isidentifier() and (
+            text.startswith("cache") or text.endswith(("info", "clear")) or text in _COUNTER_NAMES
+        )
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute):
             if node.attr in _COUNTER_NAMES:
@@ -753,9 +771,36 @@ def _text_names_counters(code: str) -> bool:
         elif isinstance(node, ast.Name):
             if node.id in _COUNTER_NAMES:
                 return True
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if node.value.startswith("cache_") or any(name in node.value for name in _COUNTER_NAMES):
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
+            if builds_one(node.left) or builds_one(node.right):
                 return True
+        elif isinstance(node, ast.JoinedStr):
+            if (
+                builds_one(node.values[0])
+                and any(isinstance(part, ast.FormattedValue) for part in node.values)
+                and all(builds_one(part) for part in node.values if isinstance(part, ast.Constant))
+            ):
+                return True
+        elif isinstance(node, ast.Call):
+            func = node.func
+            called = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else None
+            if called == "format" and isinstance(func, ast.Attribute) and builds_one(func.value):
+                return True
+            if called in ("getattr", "methodcaller", "attrgetter"):
+                named = node.args[1] if called == "getattr" and len(node.args) > 1 else None
+                if called != "getattr":
+                    if any(names_one(arg) or builds_one(arg) for arg in node.args):
+                        return True
+                elif named is not None and (names_one(named) or builds_one(named)):
+                    return True
+                elif (
+                    named is not None
+                    and not isinstance(named, ast.Constant)
+                    and ns is not None
+                    and isinstance(node.args[0], ast.Name)
+                    and _is_user_memo(ns.get(node.args[0].id))
+                ):
+                    return True
     return False
 
 
@@ -781,7 +826,7 @@ def clears(code: str | None, ns: Mapping[str, Any] | None, fn: Any = None) -> bo
             return False
         code, ns = name, globals_
     elif code is not None:
-        if _text_names_counters(code):
+        if _text_names_counters(code, ns):
             return True
         try:
             if ns is not None and any(not attrs and _is_clear(ns.get(root)) for root, attrs in names_read(code)):
