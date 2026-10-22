@@ -365,6 +365,21 @@ class StatementStore:
             seed_epochs=seed_epochs,
         )
 
+    def gets_no_entry(self, run: StatementRun, execution: StatementExecution) -> bool:
+        """Whether `save` will write *run* no entry at all, for its cost under
+        the floor (`_too_cheap_to_store`): the checks of whether its value
+        could be stored are then not asked. Fifty ``w = df[df.x > k]`` of a
+        frame of 100,000 dicts, 1-3 ms each, took the share check of a
+        stored statement each, 0.1 s apiece, for nothing stored."""
+        if attribute_or(execution.result, "skipped", False):
+            return True
+        files = set(execution.accessed_files or ())
+        for input_var in run.inputs:
+            files.update(self.tracking_state.executed_file_deps.get(input_var) or ())
+        if not self._too_cheap_to_store(run, execution, files, execution.cost):
+            return False
+        return not (run.outputs and not self._calls.in_loop and replay_record(execution.captured) is not None)
+
     def inputs_moved(self, run: StatementRun, execution: StatementExecution, reuse_end_stats: bool = False) -> bool:
         """Did a file the statement read change after it read it, or a
         folder it listed gain or lose an entry from outside?

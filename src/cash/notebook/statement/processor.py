@@ -2223,7 +2223,7 @@ class StatementProcessor:
             with _plain_data.one_look(captured_vars):
                 holders = None
                 with outputs_with_frames(captured_vars, self.shell.user_ns):
-                    if not run.skip_cache:
+                    if not run.skip_cache and not self._store.gets_no_entry(run, execution):
                         holders = self._refuse_unrestorable_outputs(run, captured_vars, execution.echo, execution.cost)
                     with logging_edges() as shared:
                         self._record_shared_object_edges(run, captured_vars, holders, execution.echo, execution.cost)

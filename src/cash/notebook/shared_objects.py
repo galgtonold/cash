@@ -54,7 +54,7 @@ from typing import Any
 from cash import _native, _plain_data
 from cash._clock import CpuLimit
 from cash._user_attrs import attribute_or, has_attribute, instance_of
-from cash.notebook.frame_cells import addresses, in_sorted, is_object_dtype, sorted_unique
+from cash.notebook.frame_cells import addresses, in_sorted, is_object_dtype, sorted_cells, sorted_unique
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
 
@@ -1990,6 +1990,8 @@ def _read_frames_sharing_cells(
     categories = {id(item) for value in group.values() for array in object_categories(value) for item in array.tolist()}
     if not spans and not categories:
         return set()
+    np = sys.modules.get("numpy")
+    looked_for = np.array(sorted(wanted), dtype=np.int64) if wanted and np is not None else None
     found = _holding_categories(group, user_ns, skip) if categories else set()
     for name, value in user_ns.items():
         if name in group or name.startswith("_") or skip(name):
@@ -2005,7 +2007,7 @@ def _read_frames_sharing_cells(
             if any(start < other_end and other_start < end for other_start, other_end in spans):
                 found.add(name)
                 break
-            if wanted and not wanted.isdisjoint(map(id, array.tolist())):
+            if looked_for is not None and in_sorted(looked_for, sorted_cells(array)).any():
                 found.add(name)
                 break
     return found
@@ -2835,60 +2837,48 @@ def _count_category_slots(nodes: dict[int, Any], inbound: dict[int, int]) -> Non
 def frames_sharing_cells(
     outputs: Mapping[str, Any], user_ns: Mapping[str, Any], skip_name: Callable[[str], bool]
 ) -> list[tuple[list[str], set[str]]]:
-    """Each of *outputs* with the variables of *user_ns* sharing a frame's
-    object cells with it, by address: a list, tuple, set or dict holding a
-    frame's cells at its top level, a variable bound to one cell, or a frame
-    holding them. For when the share check gave up: ``L = list(df['o'])``
-    over 100,000 rows ran out of its budget some runs and not others, and
-    unlinked, ``L[3]['z'] = 2`` left ``df`` at its lineage from before and
-    a statement reading ``df['o']`` was served what it read then. A read of
-    each frame's slots and of each container's top level, not a walk."""
+    """Each of *outputs* with the variables of *user_ns* bound to a frame
+    holding, in an object column, an object the output is or holds at its
+    top level, by address: a list, tuple, set or dict holding a frame's
+    cells, or a variable bound to one cell. For when the share check gave
+    up: ``L = list(df['o'])`` over 100,000 rows ran out of its budget some
+    runs and not others, and unlinked, ``L[3]['z'] = 2`` left ``df`` at its
+    lineage from before and a statement reading ``df['o']`` was served what
+    it read then. A read of each frame's slots (`sorted_cells`) and of each
+    output's top level, not a walk. A frame among the outputs sharing cells
+    with another frame is the share check's own case (`cell_links`)."""
     np = sys.modules.get("numpy")
     if np is None or "pandas" not in sys.modules:
         return []
     value_types = set(VALUE_TYPES)
-    cells: dict[str, Any] = {}
-    tops: dict[str, Any] = {}
-
-    def cells_of(name: str, value: Any) -> Any:
-        if name not in cells:
-            columns = object_columns_of(value)
-            cells[name] = sorted_unique(np.concatenate([addresses(c) for c in columns])) if columns else None
-        return cells[name]
-
-    def top_of(name: str, value: Any) -> Any:
-        if name not in tops:
-            kind = type(value)
-            items: Iterable[Any] = ()
-            if kind in (list, tuple, set, frozenset):
-                items = value
-            elif kind is dict:
-                items = value.values()
-            elif kind in value_types:
-                tops[name] = None
-                return None
-            ids = [id(value), *(id(item) for item in items if type(item) not in value_types)]
-            tops[name] = np.array(ids, dtype=np.int64)
-        return tops[name]
-
-    others = [(name, value) for name, value in user_ns.items() if name not in outputs and not skip_name(name)]
-    links: list[tuple[list[str], set[str]]] = []
+    held: dict[str, Any] = {}
     for name, value in outputs.items():
-        mine, held = cells_of(name, value), top_of(name, value)
-        found: set[str] = set()
-        for other, theirs in others:
-            if held is not None and held.size and (their_cells := cells_of(other, theirs)) is not None:
-                if in_sorted(held, their_cells).any():
-                    found.add(other)
-                    continue
-            if mine is not None and mine.size:
-                if (their_cells := cells_of(other, theirs)) is not None and in_sorted(their_cells, mine).any():
-                    found.add(other)
-                elif (their_top := top_of(other, theirs)) is not None and in_sorted(their_top, mine).any():
-                    found.add(other)
-        if found:
-            links.append(([name], found))
-    return links
+        kind = type(value)
+        if kind in value_types:
+            continue
+        items: Iterable[Any] = ()
+        if kind in (list, tuple, set, frozenset):
+            items = value
+        elif kind is dict:
+            items = value.values()
+        held[name] = np.array(
+            [id(value), *(id(item) for item in items if type(item) not in value_types)], dtype=np.int64
+        )
+    if not held:
+        return []
+    found: dict[str, set[str]] = {name: set() for name in held}
+    for other, value in user_ns.items():
+        if other in outputs or skip_name(other):
+            continue
+        columns = object_columns_of(value)
+        if not columns:
+            continue
+        for array in columns:
+            cells = sorted_cells(array)
+            for name, ids in held.items():
+                if other not in found[name] and in_sorted(ids, cells).any():
+                    found[name].add(other)
+    return [([name], names) for name, names in found.items() if names]
 
 
 def _pandas_slot_holders(

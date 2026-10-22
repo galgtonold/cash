@@ -37,6 +37,7 @@ __all__ = [
     "linked_cell_ids",
     "object_columns_on_both_sides",
     "relink_cells",
+    "sorted_cells",
     "sorted_unique",
 ]
 
@@ -130,6 +131,50 @@ def sorted_unique(values: Any) -> Any:
     if len(ordered) < 2:
         return ordered
     return ordered[np.concatenate(([True], ordered[1:] != ordered[:-1]))]
+
+
+#: `sorted_cells` by the memory a column's slots take: what they held, by
+#: digest, and their addresses sorted. Kept within `_SORTED_CELLS_MAX`
+#: addresses, the oldest let go first.
+_SORTED_CELLS: dict[tuple[int, int, int], tuple[bytes, Any]] = {}
+_SORTED_CELLS_MAX = 8_000_000
+
+
+def sorted_cells(array: Any) -> Any:
+    """The addresses of the objects in the slots of the object *array*,
+    sorted and each once (`sorted_unique` of `addresses`).
+
+    Read again for each statement, as the share check is: fifty filters of
+    one frame each checked against all the frames before them sorted the
+    same hundred thousand addresses 1,250 times. The sort is kept by the
+    memory the slots take, and served while the slots hold what they held
+    then, by a digest of them: a cell put in another's place, or another
+    column at the same memory, is read and sorted anew."""
+    raw = addresses(array)
+    if len(raw) < 1024:
+        return sorted_unique(raw)
+    digest = _slots_digest(raw)
+    key = (array.__array_interface__["data"][0], len(array), array.strides[0])
+    kept = _SORTED_CELLS.pop(key, None)
+    if kept is None or kept[0] != digest:
+        kept = (digest, sorted_unique(raw))
+    _SORTED_CELLS[key] = kept
+    held = sum(len(ordered) for _digest, ordered in _SORTED_CELLS.values())
+    while held > _SORTED_CELLS_MAX and len(_SORTED_CELLS) > 1:
+        oldest = next(iter(_SORTED_CELLS))
+        held -= len(_SORTED_CELLS.pop(oldest)[1])
+    return kept[1]
+
+
+def _slots_digest(raw: Any) -> bytes:
+    """A digest of the addresses *raw*: BLAKE3 when it is there."""
+    try:
+        from blake3 import blake3
+    except ImportError:
+        import hashlib
+
+        return hashlib.blake2b(raw.view("uint8"), digest_size=16).digest()
+    return blake3(raw.view("uint8")).digest()
 
 
 def in_sorted(values: Any, ordered: Any) -> Any:
