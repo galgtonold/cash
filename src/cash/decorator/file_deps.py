@@ -32,6 +32,7 @@ from ..tracking.file_dep_snapshot import (
     snapshot_is_fresh,
     walk_dataset_dir,
 )
+from ..tracking.file_tracker import unrecorded_reads
 from ..tracking.read_credit import credited_reads
 from ..tracking.tracker_context import active_tracker
 from .cache_metadata import CacheMetadata
@@ -457,6 +458,22 @@ class FileDeps:
             fix="depend on fewer or smaller files -- cache a summary rather than "
             "every input -- or split the function so the expensive inputs are "
             "read by a callee whose deps the aggregates do not inherit.",
+        )
+
+    def warn_unrecorded_reads(self, func_name: str, tracker: Any) -> None:
+        """KEY-READ-UNRECORDED when cash failed to record a read the body
+        made: the entry holds it as never fresh, so every call runs again."""
+        what = unrecorded_reads(tracker)
+        if what is None:
+            return
+        self._notices.warn_once(
+            CashCacheIneffectiveWarning,
+            func_name,
+            "read_unrecorded",
+            f"@cash.cache on {func_name}: cash failed to record {what}, so the result is never "
+            f"served from the cache and the call runs again every time.",
+            code="KEY-READ-UNRECORDED",
+            fix="nothing to change in your code; please report the error so cash can record that read.",
         )
 
     def credit_remembered_reads(self, func_name: str, tracker: Any, args: tuple, kwargs: dict) -> None:

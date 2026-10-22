@@ -91,6 +91,23 @@ def _same_reader(last: tuple, reader: tuple) -> bool:
     )
 
 
+#: How many failed events a tracker names (`note_tracking_failed`).
+_FAILURES_KEPT = 8
+
+
+def unrecorded_reads(tracker: Any) -> str | None:
+    """What *tracker*'s block read that cash failed to record, as a phrase
+    for KEY-READ-UNRECORDED (``the read of /data/in.csv (KeyError: 'x')``),
+    or None when it recorded everything."""
+    failed = getattr(tracker, "tracking_failed", None)
+    if not failed:
+        return None
+    event, path, error = failed[0]
+    what = f"the read of {path}" if path is not None else f"what a {event!r} event read"
+    more = f" and {len(failed) - 1} more" if len(failed) > 1 else ""
+    return f"{what} ({error}){more}"
+
+
 class FileAccessTracker:
     """Context manager that intercepts file I/O to record which files a
     statement reads.
@@ -157,9 +174,10 @@ class FileAccessTracker:
         # that is never fresh: dropped, the entry would have no dependency on
         # the file at all, and every edit to it would be served stale.
         self.unresolved_files: set[str] = set()
-        # The audit events cash failed to record inside the block (a consumer
-        # raised, `note_tracking_failed`): what they read is unknown.
-        self.tracking_failed: list[str] = []
+        # ``(event, path or None, error)`` for each audit event cash failed
+        # to record inside the block (a consumer raised, `note_tracking_failed`):
+        # what it read is unknown.
+        self.tracking_failed: list[tuple[str, str | None, str]] = []
         # Paths this block looked for and FOUND without reading them -- a flag
         # file, an output folder -- and what they were (``file``, ``dir`` or
         # ``any``). See ``track_present``.
@@ -707,16 +725,18 @@ class FileAccessTracker:
         logger.debug("[TRACKER] %r was read but %r cannot be stat'ed; never fresh", raw_path, abs_path)
         self.add_tracked_unresolved(abs_path)
 
-    def note_tracking_failed(self, event: str, path: str | None) -> None:
-        """cash failed to record an *event* inside the block, here and on the
-        parents: its read (*path*, when it names one) is stored as never
-        fresh, so the call runs again rather than be served after the file
-        changed, and a notebook statement is not stored."""
+    def note_tracking_failed(self, event: str, path: str | None, error: str) -> None:
+        """cash failed to record an *event* inside the block, raising *error*,
+        here and on the parents: its read (*path*, when it names one) is
+        stored as never fresh, so the call runs again rather than be served
+        after the file changed, and a notebook statement is not stored. Both
+        warn (KEY-READ-UNRECORDED, `unrecorded_reads`)."""
         name = path if path is not None else f"<{event}: not recorded>"
+        failure = (event, path, error)
         for tracker in self._self_and_parents():
             tracker.unresolved_files.add(name)
-            if event not in tracker.tracking_failed:
-                tracker.tracking_failed.append(event)
+            if failure not in tracker.tracking_failed and len(tracker.tracking_failed) < _FAILURES_KEPT:
+                tracker.tracking_failed.append(failure)
 
     def add_tracked_unresolved(self, path: str) -> None:
         """Record a read that cannot be checked, here and on the parents."""

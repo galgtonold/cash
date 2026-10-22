@@ -316,7 +316,7 @@ def _glob_base_dir(pattern: Any) -> str | None:
     return "/".join(base) or "."
 
 
-def _on_failure(event: str, args: tuple) -> None:
+def _on_failure(event: str, args: tuple, error: Exception) -> None:
     """A consumer raised on *event*: the active block's read is not known."""
     note = getattr(active_tracker.get(), "note_tracking_failed", None)
     if note is None:
@@ -327,7 +327,7 @@ def _on_failure(event: str, args: tuple) -> None:
             path = os.path.abspath(os.fsdecode(args[0]))
         except (TypeError, ValueError):
             path = None
-    note(event, path)
+    note(event, path, f"{type(error).__name__}: {error}")
 
 
 io_watch.on_consumer_error(_on_failure)

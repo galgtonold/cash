@@ -87,16 +87,16 @@ def _hook(event: str, args: tuple) -> None:
     for consumer in consumers:
         try:
             consumer(args)
-        except Exception:  # noqa: BLE001 - an exception here would fail the user's own call
-            _failed(event, args)
+        except Exception as error:  # noqa: BLE001 - an exception here would fail the user's own call
+            _failed(event, args, error)
 
 
 #: Told when a consumer raised on an event (`on_consumer_error`).
-_failure_handlers: list[Callable[[str, tuple], None]] = []
+_failure_handlers: list[Callable[[str, tuple, Exception], None]] = []
 
 
-def on_consumer_error(handler: Callable[[str, tuple], None]) -> None:
-    """Call *handler(event, args)* whenever a consumer raises on an event.
+def on_consumer_error(handler: Callable[[str, tuple, Exception], None]) -> None:
+    """Call *handler(event, args, error)* whenever a consumer raises on an event.
 
     The exception never reaches the user's call, but what the consumer was
     to record (a read, a write) is then missing: dropped in silence, a
@@ -105,10 +105,10 @@ def on_consumer_error(handler: Callable[[str, tuple], None]) -> None:
     _failure_handlers.append(handler)
 
 
-def _failed(event: str, args: tuple) -> None:
+def _failed(event: str, args: tuple, error: Exception) -> None:
     for handler in _failure_handlers:
         try:
-            handler(event, args)
+            handler(event, args, error)
         except Exception:  # noqa: BLE001 - the same: never the user's call
             pass
 

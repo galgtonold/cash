@@ -83,7 +83,7 @@ its warning class.
 | [Caching](#cache-codes) | `CACHE-` | 19 | Caching happened, or refused to, and it is worth saying. |
 | [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
 | [Side effects](#impure-codes) | `IMPURE-` | 4 | The function does something a cache hit will not repeat. |
-| [Cache keys](#key-codes) | `KEY-` | 26 | Something the result depends on may not be in the cache key. |
+| [Cache keys](#key-codes) | `KEY-` | 27 | Something the result depends on may not be in the cache key. |
 | [Notebook](#notebook-codes) | `NOTEBOOK-` | 16 | Notebook-wide machinery rather than one statement. |
 | [Randomness](#random-codes) | `RANDOM-` | 4 | A cached value that randomness makes non-reproducible. |
 | [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
@@ -978,6 +978,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-LOOP-VAR-CHANGED](#key-loop-var-changed) | notebook | a loop body changes its loop variable before work cached for each pass |
 | [KEY-NETWORK-READ](#key-network-read) | decorator | the body reads from a server or database |
 | [KEY-OPAQUE-CALLABLE](#key-opaque-callable) | decorator | a callable's code cannot be hashed |
+| [KEY-READ-UNRECORDED](#key-read-unrecorded) | both | cash failed to record a read; the call or statement runs every time |
 | [KEY-SOURCE-CHANGED](#key-source-changed) | decorator | a code file changed after import |
 | [KEY-STALE-CASH-KEY](#key-stale-cash-key) | decorator | one `__cash_key__` stands for two different contents |
 | [KEY-UNHASHABLE-ARG](#key-unhashable-arg) | decorator | an argument cannot be hashed; not cached |
@@ -1454,6 +1455,26 @@ under you, as with a builtin such as `abs`.
 `with cash.assume_safe():` or `assume_safe=True`. `cash.opaque(TheType)`
 does. See [Silencing one
 code](#silencing-one-code).
+
+### KEY-READ-UNRECORDED {#key-read-unrecorded}
+
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/tracking/io_watch.py:_failed @f0b3769c, cash/tracking/file_tracker.py:FileAccessTracker.note_tracking_failed @b3112b5d -->
+**What happened.** Your code read a file, and cash's own code that records
+the read raised an error. The message names the file, or the event when
+there is no file, and the error. A cached function keeps the result, but it
+is never served: the call runs again every time. A notebook statement is not
+stored, and it runs again every time.
+
+**Why it matters.** The function or statement gets no speed-up from cash.
+Nothing stale is served: with the read missing from the entry, a hit could
+have handed back the old result after the file changed.
+
+**What to do.** Nothing in your code. Please report the error, with the
+message, so cash can record that read.
+
+**When it is safe to ignore.** When the call or statement is cheap.
 
 ### KEY-SOURCE-CHANGED {#key-source-changed}
 
