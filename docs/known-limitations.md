@@ -513,7 +513,9 @@ below gets the model fitted on the new `k`. A `%timeit` rebuilt this way times
 its statement again. In a loop or `if` body, such a line reads and changes
 what its statement does: `for i in r: %time acc.append(i * k)` changes `acc`. A shell command or any other magic is never run for you:
 after an edit to a cell it reads, a change to a file or folder its line read
-in Python (`!wc -l {max(glob.glob('logs/*.log'))}`), or a restart, cash keeps
+in Python (`!wc -l {max(glob.glob('logs/*.log'))}`, in a cell that also holds
+Python: a cell of magics alone IPython runs without cash, which then does not
+see what it read), or a restart, cash keeps
 the value the name has (or leaves it undefined) and warns
 ([NOTEBOOK-MAGIC-STALE](warnings.md#notebook-magic-stale)). A name another
 magic binds (`%run`, `%store -r`, `%%capture out`, `%%bash --out o`) has no

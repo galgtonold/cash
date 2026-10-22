@@ -668,6 +668,20 @@ class VirtualLineage:
 
         if is_magic_statement(node):
             self._simulate_magic(sim, node, stmt_code)
+            # The files its line read on its last run: a change of one makes
+            # the next simulation redo the cell, where `magic_base` sees it
+            # (NOTEBOOK-MAGIC-STALE), even when only a cell below is run.
+            reads = self.tracking_state.magic_file_reads.get(stmt_code)
+            for path in reads[0] if reads else ():
+                if path in cell_file_deps:
+                    continue
+                resolved = resolve_file_dep_path(path)
+                if resolved is None:
+                    continue
+                try:
+                    cell_file_deps[path] = stat_key(os.stat(resolved))
+                except OSError:
+                    continue
             return
 
         occ = cell_stmt_occurrence_counts.get(stmt_code, 0)

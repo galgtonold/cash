@@ -1976,7 +1976,8 @@ not affected.
 **What happened.** The cell reads a name that a shell command or a line magic
 above binds or changes (`files = !ls`, `res["out"] = !cmd`, `%sx cmd`), and
 that command has not run since something it reads changed (a name, or a file
-or folder its line read in Python: `!wc -l {max(glob.glob('logs/*.log'))}`),
+or folder its line read in Python: `!wc -l {max(glob.glob('logs/*.log'))}`,
+when the cell also holds Python; a cell of magics alone runs without cash),
 or the name is not in memory at all (after a restart). The message names the variable and quotes
 the command's line. A `%time`, `%timeit` or `%prun` line is not one of them:
 it runs Python, and cash runs it again with the Python above it, as a run from
