@@ -316,3 +316,22 @@ def test_a_hit_in_a_process_that_never_ran_the_call_says_it_too(tmp_path):
     said = _warnings_of(wrapped, 1)
     assert wrapped.cache_info()["hits"] == 1, wrapped.cache_info()
     assert said and "the module global 'ROWS'" in said[0], said
+
+
+def test_an_entry_not_looked_at_carries_no_warning(tmp_path):
+    # pick(True) is ROWS and warns; pick(False), stored after, is a fresh list.
+    # Its entry was not looked at, so a process that only hits it says nothing.
+    from cash import Cash
+    from cash.backends._writes import all_pending_writes
+
+    ns = {"ROWS": [1, 2]}
+    exec("def pick(flag):\n    return ROWS if flag else [0]\n", ns)
+    first = Cash(cache_dir=str(tmp_path), register_magic=False)
+    picked = first.cache(ns["pick"])
+    assert _warnings_of(picked, True)
+    assert not _warnings_of(picked, False)
+    for queue in all_pending_writes():
+        queue.wait_all()
+    later = Cash(cache_dir=str(tmp_path), register_magic=False).cache(ns["pick"])
+    assert not _warnings_of(later, False)
+    assert later.cache_info()["hits"] == 1, later.cache_info()

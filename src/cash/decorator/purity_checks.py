@@ -301,9 +301,7 @@ def _buffers(value) -> list:
                 found.append(data)
                 continue
             for part in ("_ndarray", "_data", "_mask"):
-                held = getattr(data, part, None)
-                if type(held).__name__ == "ndarray":
-                    found.append(held)
+                found.extend(_array_slot(data, part))
         return found
     except Exception:  # noqa: BLE001 - a frame that cannot be read: nothing said
         return []
@@ -321,6 +319,19 @@ def _root(array):
     while type(array).__name__ == "ndarray" and array.base is not None:
         array = array.base
     return array
+
+
+def _array_slot(data: Any, part: str) -> list:
+    """The ndarray an extension array keeps in *part*, as a plain attribute
+    or a slot of its own; never through a property (``_data`` of
+    ``ArrowStringArray`` is a deprecated one that warns)."""
+    held = inspect.getattr_static(data, part, None)
+    if type(held).__name__ == "ndarray":
+        return [held]
+    if isinstance(held, (types.GetSetDescriptorType, types.MemberDescriptorType)):
+        held = getattr(data, part, None)
+        return [held] if type(held).__name__ == "ndarray" else []
+    return []
 
 
 def _read_only(arrays: list) -> bool:
@@ -576,16 +587,18 @@ class PurityChecks:
         names what will differ rather than refusing to cache; ``assume_safe``
         waives it. Detection is cheap and evidence-only (`_shared_with`): the
         result being, holding or sharing memory with an argument, a module
-        global, or an object the function reaches by name. Once a function
-        has warned, its later stores skip the check and return the same
-        words, which the entry keeps for a hit in another process.
+        global, or an object the function reaches by name. The words are
+        returned for the entry to keep, so a hit in another process says
+        them too. Once a function has warned, its later stores skip the
+        check and mark nothing: an entry is marked only when it was looked
+        at and found sharing.
         """
         if self._registry.purity_mode(func_name) == "silent":
             return None
         code = getattr(func, "__code__", None)
         known = self._shared_said.get(func_name)
         if known is not None and known[0] is code:
-            return known[1]
+            return None
         try:
             shared = self._shared_with(result, args, kwargs, func)
         except Exception:  # noqa: BLE001 - a diagnostic must never break a call

@@ -587,14 +587,15 @@ large frame of text columns hashes at about 0.2 s per million rows.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @a25fc541, cash/decorator/purity_checks.py:PurityChecks.warn_shared_on_hit @cdd6af30, cash/decorator/purity_checks.py:PurityChecks._shared_with @4bd243b0 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.warn_shared_result @ca302950, cash/decorator/purity_checks.py:PurityChecks.warn_shared_on_hit @cdd6af30, cash/decorator/purity_checks.py:PurityChecks._shared_with @4bd243b0 -->
 **What happened.** The result shares state with an object outside the
 call: an argument, or something the function reaches by name. On the first
 run, a write through one shows in the other. A cache hit returns a separate
 copy, so from then on it does not. The warning is stored with the entry,
 so a process that only ever gets the hit (after a restart) shows it too.
-Once a function has warned, cash stops looking for its later results and
-marks them the same way. cash looks two levels into the result, at the
+Once a function has warned, cash stops looking at its later results; only
+an entry it looked at and found sharing carries the warning to a later
+process. cash looks two levels into the result, at the
 first 256 values of each dict of any kind, list, tuple, set, deque, object's
 attributes and object array, for:
 
@@ -606,9 +607,11 @@ attributes and object array, for:
 - one of the first 256 items of any of those containers (`CONFIG["sub"]`,
   `Holder.CFG["sub"]`, a list inside a global tuple);
 - memory shared with any of those arrays (`return ARR[1:4]`), or, without
-  pandas copy-on-write (pandas 2 by default), with any column of one of
-  those frames, extension columns such as `Int64` included (`return
-  DF["a"]`, a view of the frame there).
+  pandas copy-on-write (pandas 2 by default), with most columns of one of
+  those frames (`return DF["a"]`, a view of the frame there): numpy
+  columns and pandas' own `Int64`, `boolean`, `category`, time-zone
+  datetime, period and Python-string columns. Sparse, interval and
+  Arrow-backed columns are not looked at.
 
 Not reported: a value nothing can be written through (a number, a string,
 an enum member, a frozen dataclass of immutable fields, a view of an array
