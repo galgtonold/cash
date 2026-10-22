@@ -14,6 +14,7 @@ so it says what will differ and lets the user waive it (``assume_safe=True``).
 
 from __future__ import annotations
 
+import functools
 import sys
 import warnings
 
@@ -453,6 +454,66 @@ def test_an_object_rebuilt_by_name_says_nothing_nor_does_what_it_holds(cash_inst
     assert not _warnings_of(cash_instance.cache(ns["whole"]), 1)
     said = _warnings_of(cash_instance.cache(ns["entries"]), 1)
     assert said and "REGISTRY.entries" in said[0], said
+
+
+def test_a_class_rebuilt_through_a_partial_is_announced_and_never_built_by_the_check(cash_instance, monkeypatch):
+    # `functools.partial` reports `functools` as its module whatever it
+    # wraps: the check called it, and `Client.__init__` ran on every store.
+    ns: dict = {"__name__": __name__, "functools": functools, "BUILT": []}
+    exec(
+        "class Client:\n"
+        "    def __init__(self, url, timeout=1):\n"
+        "        BUILT.append(url)\n"
+        "        self.url, self.timeout = url, timeout\n"
+        "    def __reduce__(self):\n"
+        "        return (functools.partial(Client, timeout=self.timeout), (self.url,))\n"
+        "    def __eq__(self, other):\n"
+        "        return isinstance(other, Client) and other.url == self.url\n"
+        "    __hash__ = None\n"
+        "CLIENT = Client('db://x', timeout=9)\n"
+        "def connect():\n"
+        "    BUILT.append('connect')\n"
+        "    return CLIENT\n"
+        "class Conn:\n"
+        "    def __reduce__(self):\n"
+        "        return (functools.partial(connect), ())\n"
+        "CONN = Conn()\n",
+        ns,
+    )
+    monkeypatch.setattr(sys.modules[__name__], "Client", ns["Client"], raising=False)
+    from cash.decorator import purity_checks
+
+    ns["BUILT"].clear()
+    assert not purity_checks._comes_back_as_itself(ns["CLIENT"])
+    assert not purity_checks._comes_back_as_itself(ns["CONN"])
+    assert ns["BUILT"] == [], "the check ran the user's code"
+
+
+def test_the_check_never_calls_a_library_function_a_reduce_names(tmp_path):
+    from cash.decorator import purity_checks
+
+    path = tmp_path / "sink.txt"
+    path.write_text("kept", encoding="utf-8")
+
+    class Sink:
+        def __reduce__(self):
+            return (open, (str(path), "w"))
+
+    assert not purity_checks._comes_back_as_itself(Sink())
+    assert path.read_text(encoding="utf-8") == "kept", "the check opened the file for writing"
+
+
+def test_a_logger_is_looked_up_and_none_is_made():
+    import logging
+
+    from cash.decorator import purity_checks
+
+    made = logging.getLogger("app.shared-result.made")
+    assert purity_checks._comes_back_as_itself(made)
+    assert purity_checks._comes_back_as_itself(logging.getLogger())
+    loose = logging.Logger("app.shared-result.never-registered")
+    assert not purity_checks._comes_back_as_itself(loose)
+    assert "app.shared-result.never-registered" not in logging.Logger.manager.loggerDict
 
 
 def test_a_global_not_in_the_result_is_never_asked_its_reduce(cash_instance, monkeypatch):

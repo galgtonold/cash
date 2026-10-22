@@ -156,6 +156,10 @@ def _comes_back_as_itself(value) -> bool:
         )
     ):
         return False
+    if isinstance(value, logging.Logger):
+        # Its own reduce calls `getLogger(name)`, which makes and registers
+        # a logger for a name none has: looked up instead.
+        return _known_logger((value.name,)) is value
     try:
         rv = value.__reduce_ex__(5)
         if isinstance(rv, str):
@@ -180,29 +184,34 @@ _NOT_CALLED = object()
 
 
 def _rebuilt_by(maker, args):
-    """What a hit's ``maker(*args)`` gives back, found without running
-    the user's code: a library function (``logging.getLogger``) is called;
-    a user function only read, and only when its body is a bare ``return
-    NAME`` of a module global. A class is never called: its ``__init__``
-    would run here on each store (opening what it opens), and runs again on
-    each hit, re-initialising even a singleton ``__new__`` hands back, so it
-    is not handed back as it was. Anything else: `_NOT_CALLED`."""
-    import copyreg
-
-    if isinstance(maker, type) or maker is copyreg.__newobj__ or maker is getattr(copyreg, "__newobj_ex__", None):
-        return _NOT_CALLED
-    func = getattr(maker, "__func__", maker)
-    owner = getattr(maker, "__self__", None)
-    if owner is not None and not isinstance(owner, types.ModuleType):
-        return _NOT_CALLED  # a method of an object: its code is the object's
-    module = sys.modules.get(getattr(func, "__module__", None) or "")
-    if module is not None and not is_user_code_module(module):
-        return maker(*args)
-    if isinstance(func, types.FunctionType) and not args:
-        name = _bare_global_return(func.__code__)
-        if name is not None and name in func.__globals__:
-            return func.__globals__[name]
+    """What a hit's ``maker(*args)`` gives back, found without running any
+    code: ``logging.getLogger(name)`` is looked up among the loggers already
+    made, and a function is only read, and only when its body is a bare
+    ``return NAME`` of a module global. Nothing is called. A class
+    would run its ``__init__`` here on each store (opening what it opens),
+    and again on each hit; a ``functools.partial`` or another library
+    wrapper reports a library module whatever it wraps (``partial(Client,
+    timeout=9)``); and a library function can do anything (``open(path,
+    'w')`` empties the file). Anything else: `_NOT_CALLED`."""
+    if maker is logging.getLogger:
+        return _known_logger(args)
+    if isinstance(maker, types.FunctionType) and not args:
+        name = _bare_global_return(maker.__code__)
+        if name is not None and name in maker.__globals__:
+            return maker.__globals__[name]
     return _NOT_CALLED
+
+
+def _known_logger(args):
+    """The logger ``logging.getLogger(*args)`` would hand back, when it is
+    already made; looked up rather than called, which would make and
+    register a new one for a name no logger has yet."""
+    if not args or args[0] is None or args[0] == logging.root.name:
+        return logging.root
+    if len(args) != 1:
+        return _NOT_CALLED
+    found = logging.Logger.manager.loggerDict.get(args[0])
+    return found if isinstance(found, logging.Logger) else _NOT_CALLED
 
 
 def _bare_global_return(code) -> str | None:

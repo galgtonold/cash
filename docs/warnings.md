@@ -632,10 +632,11 @@ reaches the frame. Nor are pandas' `Timestamp`, `Timedelta`, `Period` and
 `NaT`, its dtypes (`Int64Dtype()`, `CategoricalDtype([...])`), or an
 object, yours or a library's, that a hit hands back as itself, with what
 it holds: one pickle rebuilds by its name, or by a call on plain values
-with no state applied after, to a library function (a `logging.Logger`,
-`getLogger('app')`) or a function of yours that only returns a module
-global (`def get_registry(): return REGISTRY`). Cash never calls a class
-or other code of yours to find out. One rebuilt by calling its class is
+with no state applied after, to `logging.getLogger` (a `logging.Logger`,
+`getLogger('app')`, already made) or a function that only returns a module
+global (`def get_registry(): return REGISTRY`). Cash calls nothing to find
+out: it looks the logger up and reads the function. Any other call, a
+`functools.partial` of a class included, is reported. One rebuilt by calling its class is
 reported, a singleton too: a hit runs its `__init__` again on the live
 object. So is one whose pickle carries a state: a hit would write that
 state over the live object. Not seen: sharing deeper than
