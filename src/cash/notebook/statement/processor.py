@@ -198,7 +198,7 @@ from . import hidden_generators
 from .lineage import note_own_writes
 from .observed_draws import ObservedDrawStore
 from .thread_reach import ThreadReach
-from .unseen_writes import UNSEEN_WRITES_REASON, unseen_writers, writers_without_a_trace
+from .unseen_writes import SET_LATER, SET_LATER_REASON, UNSEEN_WRITES_REASON, unseen_writers, writers_without_a_trace
 
 __all__ = ["StatementProcessor", "is_control_body"]
 
@@ -1070,7 +1070,12 @@ class StatementProcessor:
         if not found:
             return
         fn, targets = found[0]
-        what = UNSEEN_WRITES_REASON.format(fn=fn, targets=", ".join(targets), it="it" if len(targets) == 1 else "them")
+        if targets == (SET_LATER,):
+            what = SET_LATER_REASON.format(fn=fn)
+        else:
+            what = UNSEEN_WRITES_REASON.format(
+                fn=fn, targets=", ".join(targets), it="it" if len(targets) == 1 else "them"
+            )
         run.skip_cache = True
         run.metrics["uncacheable_reasons"].append(what)
         # Read from the objects, a statement only near the method (one

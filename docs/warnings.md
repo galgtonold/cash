@@ -2250,8 +2250,19 @@ cash does not read from the statement's text, and it changes something the
 statement does not name: `Vec.__add__` appending to a global list, run by
 `s + 1` on a column of `Vec` objects, or a function changing a variable of
 the function it was made in. The message names the function and what it
-changes. Python 3.12 or newer only: cash reads which functions ran from the
-run itself. It is shown once for each function.
+changes.
+
+On Python 3.12 or newer, cash reads which functions ran from the run itself,
+and the warning is shown once for each function. Without that record
+(Python 3.10 and 3.11, `CASH_TRACE=0`, or a debugger holding
+`sys.monitoring`), cash reads the special methods of your classes whose
+objects the statement reaches, and the warning is shown once for each
+statement. That reading sees what a special method's own text changes and
+what it changes through a method of a global; it does not follow the
+functions it calls (see [known limitations](known-limitations.md)). A special
+method set on a class after the class was made (`Vec.__add__ = lambda ...`)
+gets its own message without a record: cash cannot see an edit to it, so
+the statement runs every time.
 
 **Why it matters.** Served from the cache, the statement would not run the
 function, so the change would not happen. Cash runs the statement every

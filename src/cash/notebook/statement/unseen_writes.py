@@ -27,11 +27,12 @@ import dis
 import functools
 import json
 import os
+import sys
 import types
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from ..._user_attrs import attribute_or, has_attribute, instance_of
+from ..._user_attrs import attribute_or, instance_of, own_dict
 from ...analysis.callee_effects import free_vars_mutated_in_function, scope_locals
 from ...analysis.mutations import MUTATING_METHODS
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -44,6 +45,14 @@ __all__ = ["UNSEEN_WRITES_REASON", "library_made", "own_writes", "unseen_writers
 UNSEEN_WRITES_REASON = (
     "{fn}() ran in this statement and changes {targets}, which the statement's own text does not reach; "
     "a stored result would not change {it}"
+)
+#: What `writers_without_a_trace` gives for a special method set on a class
+#: after it was made, and the reason said for it: what it does is not the
+#: point, an edit to it cannot be seen.
+SET_LATER = "<set on the class later>"
+SET_LATER_REASON = (
+    "{fn}() may run in this statement and was set on its class after the class was made, so cash cannot "
+    "see an edit to it without a record of what ran; the statement runs every time"
 )
 
 #: ``CASH_UNSEEN_LOG=<path>``: each function found, one JSON line, to count them.
@@ -105,6 +114,8 @@ def unseen_writers(
 #: special method anywhere counts), and how many steps down it goes.
 _OPEN_AT = 20_000
 _DEPTH = 6
+#: How many items of containers it reads in all.
+_SCAN_AT = 1_000_000
 
 
 def writers_without_a_trace(
@@ -138,6 +149,7 @@ def writers_without_a_trace(
     seen: set[int] = set()
     classes: dict[type, None] = {}
     over = False
+    steps = scanned = 0
     while todo:
         value, depth = todo.pop()
         if value is _OVER:
@@ -147,13 +159,23 @@ def writers_without_a_trace(
             # Deeper than an operator reaches from what the statement
             # names in one expression (``d[k][0].items[1] + 1``).
             continue
+        # Every value taken counts, seen before or not: a grid of the same
+        # few ints is many steps and few new objects.
+        steps += 1
+        if steps > _OPEN_AT:
+            over = True
+            break
         if id(value) in seen:
             continue
         seen.add(id(value))
-        if len(seen) > _OPEN_AT:
-            over = True
-            break
         kind = type(value)
+        if kind in hc._OPENED:
+            # The items a container hands over are looked at too: a grid
+            # of numbers is a few thousand values and millions of items.
+            scanned += len(value)
+            if scanned > _SCAN_AT:
+                over = True
+                break
         if kind not in classes and _users_special(kind, hc):
             classes[kind] = None
         todo.extend((item, depth + 1) for item in _held(value, kind, hc))
@@ -169,7 +191,7 @@ def writers_without_a_trace(
                 # Set on the class after it was made (``Vec.__add__ =
                 # lambda self, o: 10``): no key reads it, so an edit to it
                 # would go unseen.
-                found.append((f"{cls.__qualname__}.{fn.__name__}", ("the class it was set on later",)))
+                found.append((f"{cls.__qualname__}.{fn.__name__}", (SET_LATER,)))
                 continue
             writes = own_writes(fn_code) | set(_method_writes(fn_code, fn.__globals__))
             if fn.__globals__ is namespace:
@@ -185,14 +207,36 @@ _MISSING = object()
 _LOADS = frozenset({"LOAD_NAME", "LOAD_GLOBAL", "LOAD_FROM_DICT_OR_GLOBALS"})
 
 
+#: Values no special method of the user's runs on: not taken from a container.
+_PLAIN = frozenset({int, float, complex, str, bytes, bool, type(None)})
+
+
+def _not_plain(items: Iterable[Any]) -> list[Any]:
+    if _PLAIN.issuperset(map(type, items)):
+        return []
+    return [item for item in items if type(item) not in _PLAIN]
+
+
+def _module_of(kind: type) -> str:
+    """*kind*'s module, read from the class itself: a metaclass's own
+    lookup is not asked."""
+    found = type.__dict__["__module__"].__get__(kind)
+    return found if isinstance(found, str) else ""
+
+
 def _held(value: Any, kind: type, hc: Any) -> Iterable[Any]:
-    """What `writers_without_a_trace` looks at inside *value*."""
+    """What `writers_without_a_trace` looks at inside *value*. Read by type
+    and Python's own slots: no property, ``__getattr__`` or method of the
+    user's runs (``dtype``, ``columns``, ``to_numpy``), and plain values
+    are not taken."""
     try:
         if kind in hc._OPENED:
             held = value.data if instance_of(value, hc._HELD_IN_DATA) else value
             if len(held) > hc.ITEM_TYPES_AT:
                 return [_OVER]
-            return list(held.values()) + list(held) if isinstance(held, dict) else list(held)
+            if isinstance(held, dict):
+                return _not_plain(held.values()) + _not_plain(held)
+            return _not_plain(held)
         if instance_of(value, types.FunctionType):
             if not is_user_code_file(value.__code__.co_filename) or library_made(value.__code__, value.__globals__):
                 return []
@@ -204,28 +248,35 @@ def _held(value: Any, kind: type, hc: Any) -> Iterable[Any]:
             return [value.__func__, attribute_or(value, "__self__", None)]
         if instance_of(value, functools.partial):
             return [value.func, *value.args, *value.keywords.values()]
-        dtype = attribute_or(value, "dtype", None)
-        if attribute_or(dtype, "kind", None) == "O" and (
-            has_attribute(value, "to_numpy") or has_attribute(value, "ravel")
-        ):
-            # An object-dtype array or column: ``arr + 1`` runs each item's
-            # ``__add__``.
-            flat = (value.to_numpy() if has_attribute(value, "to_numpy") else value).ravel()
-            if len(flat) > hc.ITEM_TYPES_AT:
-                return [_OVER]
-            return list(flat)
-        dtypes = attribute_or(value, "dtypes", None)
-        if dtypes is not None and has_attribute(value, "columns") and kind.__module__.startswith("pandas"):
-            return [value[c] for c, d in zip(value.columns, dtypes) if attribute_or(d, "kind", None) == "O"]
-        if (
-            (instance_of(value, type) and (hc._is_users_class(value) or _holds_users_code(value)))
-            or hc._users_instance_type(kind)
-            or instance_of(value, types.SimpleNamespace)
-        ):
-            return list(vars(value).values())
+        module = _module_of(kind)
+        if module.startswith(("numpy", "pandas")):
+            return _array_items(value, kind, module, hc)
+        if instance_of(value, type):
+            if hc._is_users_class(value) or _holds_users_code(value):
+                return _not_plain(type.__dict__["__dict__"].__get__(value).values())
+            return []
+        if hc._users_instance_type(kind) or kind is types.SimpleNamespace:
+            attributes = own_dict(value)
+            return _not_plain(attributes.values()) if attributes else []
     except Exception:  # noqa: BLE001 - a value that cannot be looked into
         return []
     return []
+
+
+def _array_items(value: Any, kind: type, module: str, hc: Any) -> list[Any]:
+    """The items of a numpy array or a pandas Series of object dtype
+    (``arr + 1`` runs each item's ``__add__``), or a DataFrame's object
+    columns; nothing for one of plain values."""
+    if module.startswith("pandas") and kind.__name__ == "DataFrame":
+        return [value[c] for c, d in zip(value.columns, value.dtypes) if d.kind == "O"]
+    if kind.__name__ not in ("ndarray", "Series", "Index"):
+        return []
+    if value.dtype.kind != "O":
+        return []  # numbers, dates, strings of a fixed width: no object's method runs
+    flat = (value.to_numpy() if kind.__name__ != "ndarray" else value).ravel()
+    if len(flat) > hc.ITEM_TYPES_AT:
+        return [_OVER]
+    return _not_plain(flat)
 
 
 #: Stands for what a container too big to open holds.
@@ -459,6 +510,9 @@ def _function_node(code: types.CodeType) -> ast.FunctionDef | ast.AsyncFunctionD
     import textwrap
 
     text = textwrap.dedent(source)
+    lines = source.splitlines() or [""]
+    shift = len(lines[0]) - len((text.splitlines() or [""])[0])
+    first_line_moved = 0
     try:
         tree = ast.parse(text)
     except SyntaxError:
@@ -467,9 +521,32 @@ def _function_node(code: types.CodeType) -> ast.FunctionDef | ast.AsyncFunctionD
             tree = ast.parse("(" + text.strip().rstrip(",").rstrip("\\") + ")")
         except SyntaxError:
             return None
-    kinds = (ast.Lambda,) if code.co_name == "<lambda>" else (ast.FunctionDef, ast.AsyncFunctionDef)
-    for node in ast.walk(tree):
-        if isinstance(node, kinds) and (isinstance(node, ast.Lambda) or node.name == code.co_name):
+        first_line_moved = 1 - (len(text) - len(text.lstrip()))
+    if code.co_name != "<lambda>":
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == code.co_name:
+                return node
+        return None
+    lambdas = [node for node in ast.walk(tree) if isinstance(node, ast.Lambda)]
+    if len(lambdas) < 2:
+        return lambdas[0] if lambdas else None
+    if sys.version_info < (3, 11):
+        return None  # no positions to tell them apart by
+    # Several on its lines (``{'g': lambda o: 1, 'f': lambda o: calls.append(1)}``):
+    # the one whose body starts where *code*'s first instruction of its own
+    # does; none found, its text is not known.
+    starts = [
+        (line, col)
+        for line, _, col, end in code.co_positions()
+        if line is not None and col is not None and not (col == 0 and end == 0)
+    ]
+    if not starts:
+        return None
+    want = min(starts)
+    for node in lambdas:
+        line = code.co_firstlineno + node.body.lineno - 1
+        col = node.body.col_offset + shift - (first_line_moved if node.body.lineno == 1 else 0)
+        if (line, col) == want:
             return node
     return None
 

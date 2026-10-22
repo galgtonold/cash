@@ -562,6 +562,31 @@ a name bound through the namespace, `eval`, `exec` of a computed string and
 `sys.modules` still run every time.
 **Fix:** call the function by its name, or pass it in as an argument.
 
+### A special method that changes state outside its object
+
+<!-- claim: cash/notebook/statement/unseen_writes.py:writers_without_a_trace @fb58b1ed, cash/notebook/statement/unseen_writes.py:own_writes @bb4fc316 -->
+`s + 1` on objects of yours runs their `__add__`, which the statement's text
+does not name. When such a method changes something outside its object
+(appends to a global list), cash runs the statement every time and says so:
+[NOTEBOOK-UNSEEN-WRITES](warnings.md#notebook-unseen-writes). On Python 3.12
+and newer cash reads what ran from the run itself. Without that record
+(Python 3.10 and 3.11, `CASH_TRACE=0`) it reads the special methods' own
+text instead, and misses a change made:
+
+- by a function the method calls (`note(1)`, `self.log()`, a lambda held in
+  a dict);
+- by `__init__`, `__post_init__`, a `default_factory` or an attrs hook;
+- by an object held in a slot, a namedtuple, a list or dict subclass, a
+  default argument, a `ChainMap` or a property.
+
+A served result then leaves out that change. With or without the record, a
+writer the stored run did not call (a `functools.cached_property` already
+filled, a tuple's hash Python 3.14 kept) is served after a restart, and a
+cell that reads what the method changed keeps its earlier value in the same
+session.
+**Fix:** pass what the method changes in and return it, or put
+`# @cash:no-cache` on the statement.
+
 ### Background threads
 
 A thread that changes data after its cell has finished is outside cash's view.
