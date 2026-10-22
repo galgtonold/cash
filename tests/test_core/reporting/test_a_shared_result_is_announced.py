@@ -488,6 +488,19 @@ def test_a_class_rebuilt_through_a_partial_is_announced_and_never_built_by_the_c
     assert not purity_checks._comes_back_as_itself(ns["CONN"])
     assert ns["BUILT"] == [], "the check ran the user's code"
 
+    # Through a real store: announced, and built no more often than the
+    # store's own copy builds it with the check never calling anything.
+    exec(
+        "def current(n):\n    return {'client': CLIENT, 'n': n}\ndef again(n):\n    return {'client': CLIENT, 'n': n}\n",
+        ns,
+    )
+    assert _warnings_of(cash_instance.cache(ns["current"]), 1)
+    with_check = len(ns["BUILT"])
+    monkeypatch.setattr(purity_checks, "_rebuilt_by", lambda maker, args: purity_checks._NOT_CALLED)
+    ns["BUILT"].clear()
+    assert _warnings_of(cash_instance.cache(ns["again"]), 1)
+    assert with_check == len(ns["BUILT"]), "the check built the client on the store"
+
 
 def test_the_check_never_calls_a_library_function_a_reduce_names(tmp_path):
     from cash.decorator import purity_checks
