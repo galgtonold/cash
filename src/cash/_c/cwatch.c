@@ -1458,9 +1458,13 @@ static int verify(Root *R) {
             break;
         case R_TUPLE:
             if (Py_TYPE(o) != &PyTuple_Type || (size_t)PyTuple_GET_SIZE(o) != n) return 0;
-            for (size_t i = 0; i < n; i++) {
-                PyObject *x = ((PyTupleObject *)o)->ob_item[i];
-                if ((uintptr_t)x != s[2 + i] || (prints && !print_same(R, &c, x))) return 0;
+            if (!prints) {
+                if (n && memcmp(((PyTupleObject *)o)->ob_item, &s[2], n * sizeof(PyObject *)) != 0) return 0;
+            } else {
+                for (size_t i = 0; i < n; i++) {
+                    PyObject *x = ((PyTupleObject *)o)->ob_item[i];
+                    if ((uintptr_t)x != s[2 + i] || !print_same(R, &c, x)) return 0;
+                }
             }
             s += 2 + n;
             break;
