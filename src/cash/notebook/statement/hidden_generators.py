@@ -36,7 +36,7 @@ _LEAVES = (str, bytes, bytearray, int, float, complex, bool, type(None), type)
 _MODULE_WIDTH = 256
 
 
-def _children(obj: Any) -> Iterable[tuple[str, Any]]:
+def children(obj: Any) -> Iterable[tuple[str, Any]]:
     if instance_of(obj, types.ModuleType):
         # A library's generators are its own business (`np.random`'s global
         # stream has its own watch); a module of the user's is walked.
@@ -102,7 +102,7 @@ def positions(roots: Mapping[str, Any], followed: Iterable[Any] = ()) -> dict[in
         if depth >= _DEPTH:
             continue
         try:
-            for label, child in _children(obj):
+            for label, child in children(obj):
                 frontier.append(
                     (f"{path}{label}" if label.startswith(("[", ".")) else f"{path}.{label}", child, depth + 1)
                 )

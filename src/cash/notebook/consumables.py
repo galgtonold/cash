@@ -327,7 +327,7 @@ def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> li
     the same key, would not be what a run gives. An open file is left to the
     file checks, which see what is read from it.
     """
-    from .statement.hidden_generators import _children
+    from .statement.hidden_generators import children
 
     if tree is None:
         return []
@@ -356,7 +356,7 @@ def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> li
         if depth >= _HELD_DEPTH:
             continue
         try:
-            for label, child in _children(obj):
+            for label, child in children(obj):
                 frontier.append(
                     (f"{path}{label}" if label.startswith(("[", ".")) else f"{path}.{label}", child, depth + 1)
                 )
