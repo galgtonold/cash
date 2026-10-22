@@ -75,6 +75,7 @@ from ..loop_watch import branch_changes, loop_watch_hash, watch_candidates
 from ..pyplot_draws import pyplot_draw_names
 from ..restored_var import present_holders
 from ..run_memo import file_component_this_run, file_state_this_run, stats_this_run
+from ..shared_objects import history_names
 from ..stateful_carriers import carrier_kind_from_producer
 from ..statement import is_control_body
 from ..statement.carrier_advances import reachable_generators
@@ -460,6 +461,8 @@ class StatementLineage:
             drawn = self.pyplot_draw_outputs(stmt_code, tree)
             outputs |= drawn
             inputs |= drawn
+        # Nor IPython's history, as the runtime takes it (`history_names`).
+        outputs -= history_names(outputs, self.shell.user_ns)
         return effects, inputs, outputs
 
     def _inputs_moved(self, inputs: set[str], virtual_lineage: Mapping[str, str], stmt_code: str = "") -> bool:

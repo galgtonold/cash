@@ -19,6 +19,8 @@ import sys
 from collections.abc import Mapping
 from typing import Any
 
+from .shared_objects import history_names
+
 __all__ = ["current_figure_names", "draws_through_pyplot", "holds_artists", "pyplot_draw_names"]
 
 #: The pyplot functions that do not draw on the current axes or figure:
@@ -105,17 +107,12 @@ def draws_through_pyplot(tree: ast.AST | None, namespace: Mapping[str, Any]) -> 
     return False
 
 
-#: IPython's output and input history: ``Out`` keeps every value a cell
-#: showed, an axes from ``sns.barplot(...)`` among them, and naming it made a
-#: drawing statement hash every frame ever shown.
-_HISTORY_NAMES = frozenset({"In", "Out"})
-
-
 def current_figure_names(namespace: Mapping[str, Any]) -> set[str]:
     """The names of *namespace* bound to pyplot's current figure, to its
     current axes, or to a list, tuple, dict or array holding either.
     Empty when pyplot is not imported or holds no figure (asking it then
-    would make one). IPython's history (``Out``) is not the user's data."""
+    would make one). IPython's history (``Out``) is not the user's data
+    (`history_names`)."""
     plt = sys.modules.get("matplotlib.pyplot")
     if plt is None:
         return set()
@@ -126,9 +123,13 @@ def current_figure_names(namespace: Mapping[str, Any]) -> set[str]:
         current = fig.gca() if fig.axes else None
     except Exception:  # noqa: BLE001 - a backend that cannot answer draws nothing we can name
         return set()
+    # IPython's output and input history: ``Out`` keeps every value a cell
+    # showed, an axes from ``sns.barplot(...)`` among them, and naming it
+    # made a drawing statement hash every frame ever shown.
+    history = history_names(namespace, namespace)
     names: set[str] = set()
     for name, value in namespace.items():
-        if name.startswith("_") or name in _HISTORY_NAMES:
+        if name.startswith("_") or name in history:
             continue
         if value is fig or (current is not None and value is current):
             names.add(name)

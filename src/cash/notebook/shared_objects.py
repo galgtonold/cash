@@ -59,6 +59,7 @@ __all__ = [
     "Leaves",
     "anchors_held",
     "attrs_copied_apart",
+    "history_names",
     "holds_part_of",
     "output_history",
     "referring_names",
@@ -796,6 +797,19 @@ def _calibrate() -> int:
 
 
 _OVERHEAD = _calibrate()
+
+
+def history_names(names: Iterable[str], user_ns: Mapping[str, Any]) -> set[str]:
+    """The names among *names* bound to IPython's own input or output
+    history: the list ``_ih`` and the dict ``_oh`` (``In`` and ``Out``), told
+    by identity, so a user's own dict named ``Out`` is not one. Neither is
+    the user's data: ``Out[2].set_title('x')`` changes what ``Out[2]`` holds,
+    not ``Out``, which cash neither restores nor evicts."""
+    own = [user_ns.get("_ih"), user_ns.get("_oh")]
+    own = [value for value in own if type(value) in (list, dict)]
+    if not own:
+        return set()
+    return {name for name in names if any(user_ns.get(name) is value for value in own)}
 
 
 def output_history(
