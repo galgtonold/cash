@@ -336,6 +336,22 @@ class TestTheIntegrationSuiteRuns:
         for narrowing in ("--ignore", "--deselect", " -k ", " -m ", "::"):
             assert narrowing not in pytest_args, f"the nightly run is narrowed by {narrowing.strip()!r}: {run}"
 
+    def test_the_integration_tests_also_run_on_pandas_2(self):
+        """Without copy-on-write frames share more with what is built from
+        them; the core set gets pandas 2 only on Python 3.10, so a frame
+        served as a copy in a kernel went unseen. Every push runs the tests
+        named for frames on pandas 2, and every night the whole folder."""
+        push = _job(CI_YML.read_text(encoding="utf-8"), "pandas-2-integration")
+        assert '"pandas>=2.2,<3"' in push, push
+        assert re.search(r"pytest\s+" + INTEGRATION + r"\s", push), push
+        nightly = _job(NIGHTLY_YML.read_text(encoding="utf-8"), "integration-pandas-2")
+        assert '"pandas>=2.2,<3"' in nightly, nightly
+        run = _step_run(nightly, "Run integration shard on pandas 2")
+        assert re.search(r"pytest\s+" + INTEGRATION + r"\s", run), run
+        assert "--shard=${{ matrix.shard }}/${{ strategy.job-total }}" in run
+        shards = re.search(r"shard:\s*\[([^\]]+)\]", nightly).group(1).split(",")
+        assert [int(v) for v in shards] == list(range(1, len(shards) + 1)), shards
+
     def test_the_nightly_matrix_is_the_shard_numbers_one_to_n(self):
         """N is the job count, so any other matrix axis would skip shards."""
         text = NIGHTLY_YML.read_text(encoding="utf-8")

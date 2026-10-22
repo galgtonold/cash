@@ -45,6 +45,38 @@ jobs:
           --shard=${{ matrix.shard }}/${{ strategy.job-total }}
           -n auto --tb=short -q
 
+  # The whole folder once more on pandas 2 (Python 3.13): without
+  # copy-on-write frames share more with what is built from them, and the
+  # shards above get pandas 3.
+  integration-pandas-2:
+    name: Integration shard ${{ matrix.shard }} on pandas 2
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" "pandas>=2.2,<3"
+
+      - name: Run integration shard on pandas 2
+        run: >-
+          python -m pytest tests/test_notebook_integration
+          -p tools.test_selection.shard
+          --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+          -n auto --tb=short -q
+
   # The wheel gate (scripts/wheel_gate.py): builds the wheel, installs it into
   # a fresh venv and drives a real Jupyter server through kernel restarts. The
   # unit and integration suites run the editable install through nbclient, so

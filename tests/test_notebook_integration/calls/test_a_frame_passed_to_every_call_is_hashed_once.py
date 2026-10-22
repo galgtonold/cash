@@ -11,6 +11,12 @@ import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
+pd = pytest.importorskip("pandas")
+#: Without copy-on-write (pandas 2's default) nothing proves the frame
+#: unchanged, so it is hashed before and after every call: the results are
+#: still right.
+COPY_ON_WRITE = int(pd.__version__.split(".")[0]) >= 3
+
 SETUP = "import cash\n%load_ext cash\n%cash_badge print\n%cash_on"
 DEFS = (
     "import time\nimport numpy as np, pandas as pd\n"
@@ -31,6 +37,7 @@ COUNT = (
 HASHED = "len(__import__('cash.notebook.call_effects').notebook.call_effects.frame_hashes)"
 
 
+@pytest.mark.skipif(not COPY_ON_WRITE, reason="needs pandas copy-on-write (pandas 3)")
 def test_a_comprehension_and_a_loop_hash_the_frame_once_each(nb_runner):
     nb_runner.create_notebook(
         [
