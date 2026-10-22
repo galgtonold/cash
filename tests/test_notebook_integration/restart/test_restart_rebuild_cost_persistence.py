@@ -60,3 +60,30 @@ def test_a_cheap_value_over_a_costly_input_is_restored_after_a_restart(nb_runner
     assert f"LATEST {3 * (READS - 1)}" in nb_runner.get_output(len(CELLS))
     # Measured before the fix: 'True' -- the folder read again to rebuild it.
     assert nb_runner.peek("'parts' in globals()") == "False", "the folder was read again"
+
+
+#: The same, with the concat in a function of the notebook's: the call gets
+#: an entry of its own, in RAM (0.05 s, under the floor), and the statement's
+#: entry refers to it rather than holding a second copy. The end of the cell
+#: wrote the statement's entry to disk and not the call's, so after a restart
+#: the statement missed and the folder was read again. Under load, plain
+#: ``pd.concat`` took long enough to get such an entry and the test above
+#: failed the same way.
+SLOW_CONCAT = SETUP + "\ndef slow_concat(parts):\n    time.sleep(0.05)\n    return pd.concat(parts, ignore_index=True)"
+CELLS_SLOW_CONCAT = [CELLS[0], SLOW_CONCAT, LOAD.replace("pd.concat(parts, ignore_index=True)", "slow_concat(parts)"), LATEST, SHOW]
+
+
+def test_a_value_over_a_call_result_kept_in_ram_is_restored_after_a_restart(nb_runner):
+    _exports(Path(nb_runner.work_dir))
+    nb_runner.create_notebook(CELLS_SLOW_CONCAT)
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert f"LATEST {3 * (READS - 1)}" in nb_runner.get_output(len(CELLS_SLOW_CONCAT))
+
+    nb_runner.restart()
+    nb_runner._inject_notebook_path()
+    nb_runner.run_cell(1)
+    nb_runner.run_cell(len(CELLS_SLOW_CONCAT))
+
+    assert f"LATEST {3 * (READS - 1)}" in nb_runner.get_output(len(CELLS_SLOW_CONCAT))
+    assert nb_runner.peek("'parts' in globals()") == "False", "the folder was read again"
