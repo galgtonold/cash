@@ -1690,6 +1690,10 @@ class StatementProcessor:
             reached = self._thread_reach.reached(names)
             if reached:
                 run.skip_cache = True
+                # The same code over the same lineages binds what the thread
+                # left there by now: its outputs are keyed by value, so what
+                # reads them is served only while they are the same.
+                run.value_varies = True
                 shown = ", ".join(f"'{name}' (by {fn})" for name, fn in reached[:3])
                 run.metrics["uncacheable_reasons"].append(
                     f"it reads {shown}, which work left running in a thread can change outside cash's view, "
