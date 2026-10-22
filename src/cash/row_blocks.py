@@ -62,6 +62,11 @@ _SHA256_SCHEME = "cash-bulk-sha256-tree-1"
 _DIGEST_CHARS = 16
 
 
+#: How many blocks are hashed one by one before the rest are judged
+#: against the deadline (`_all_blocks`).
+_SAMPLE_BLOCKS = 4
+
+
 class HashBudgetSpent(Exception):
     """Hashing the blocks would take longer than the caller allows."""
 
@@ -194,23 +199,52 @@ def _columns_fingerprint(
 
     count = math.ceil(rows / block)
     spans = [(i * block, min((i + 1) * block, rows)) for i in range(count)]
-    started = _perf_counter()
-    first = digest(*spans[0])
     nbytes = sum(column.nbytes for column in columns)
     threads = hashing_threads() if nbytes >= PARALLEL_MIN_BYTES else 1
-    if deadline is not None:
-        now = _perf_counter()
-        if now + (now - started) * (count - 1) / threads > deadline:
-            raise HashBudgetSpent
-    if threads > 1 and count > 2:
-        with ThreadPoolExecutor(max_workers=threads) as pool:
-            rest = list(pool.map(lambda span: digest(*span), spans[1:]))
-    else:
-        rest = [digest(*span) for span in spans[1:]]
+    digests = _all_blocks(digest, spans, threads, deadline)
     cut = None
     if like is not None and like.rows % block and rows > like.rows:
         cut = digest(like.rows // block * block, like.rows)
-    return RowBlocks("pandas", rows, block, (first, *rest)), cut
+    return RowBlocks("pandas", rows, block, digests), cut
+
+
+def _all_blocks(
+    digest: Callable[[int, int], str], spans: list[tuple[int, int]], threads: int, deadline: float | None
+) -> tuple[str, ...]:
+    """The digest of each span: the first few one by one, the rest on
+    *threads* threads. Raises :class:`HashBudgetSpent` once *deadline* has
+    passed, or when the quickest of those first blocks says the rest would
+    not finish by then. The quickest, not the first: one block's time
+    takes any stall in it (a preemption, the GIL coming back late after
+    hashlib let it go) times the number of blocks, and gave up on arrays
+    well inside the budget."""
+    sample: list[str] = []
+    quickest = math.inf
+    now = 0.0
+    for span in spans[:_SAMPLE_BLOCKS] if deadline is not None else ():
+        started = _perf_counter()
+        sample.append(digest(*span))
+        now = _perf_counter()
+        quickest = min(quickest, now - started)
+        if len(sample) == len(spans):
+            break  # done: a hash that finished is kept, however late
+        if now > deadline:
+            raise HashBudgetSpent
+        if now + quickest * (len(spans) - len(sample)) / threads <= deadline:
+            break  # the rest fit: no need to time more one by one
+    todo = spans[len(sample) :]
+    if deadline is not None and todo and now + quickest * len(todo) / threads > deadline:
+        raise HashBudgetSpent
+    if threads > 1 and len(todo) > 1:
+        with ThreadPoolExecutor(max_workers=threads) as pool:
+            return (*sample, *pool.map(lambda span: digest(*span), todo))
+    rest = []
+    for span in todo:
+        # Before a block, not after: a hash that finished is kept.
+        if rest and deadline is not None and _perf_counter() > deadline:
+            raise HashBudgetSpent
+        rest.append(digest(*span))
+    return (*sample, *rest)
 
 
 def _block_digest(kind: str, part: Any) -> str:
@@ -292,7 +326,7 @@ def fingerprint(
     the digest of the rows that were *like*'s last, partial block, when the
     value has more rows now (else None). Raises :class:`HashBudgetSpent` once
     *deadline* (a ``perf_counter`` time) has passed, or as soon as the first
-    block says the whole would not finish by then.
+    few blocks say the whole would not finish by then.
     """
     shape = row_count(value)
     if shape is None:
@@ -323,12 +357,15 @@ def fingerprint(
             deadline = None
         else:
             part, digest_kind = _slicer(kind, value), kind
+        quickest = math.inf
         for i in range(count):
             started = _perf_counter()
             digests.append(_block_digest(digest_kind, part(i * block, min((i + 1) * block, rows))))
-            if deadline is not None:
+            if deadline is not None and i < count - 1:
                 now = _perf_counter()
-                if now > deadline or (i == 0 and now + (now - started) * (count - 1) > deadline):
+                quickest = min(quickest, now - started)
+                # Judged from the quickest of the first blocks (`_all_blocks`).
+                if now > deadline or (i == _SAMPLE_BLOCKS - 1 and now + quickest * (count - 1 - i) > deadline):
                     raise HashBudgetSpent
         cut = None
         if like is not None and like.rows % block and rows > like.rows:
@@ -363,22 +400,12 @@ def _array_fingerprint(
 
     count = math.ceil(rows / block)
     spans = [(i * block, min((i + 1) * block, rows)) for i in range(count)]
-    started = _perf_counter()
-    first = digest(*spans[0])
     threads = hashing_threads() if len(data) >= PARALLEL_MIN_BYTES else 1
-    if deadline is not None:
-        now = _perf_counter()
-        if now + (now - started) * (count - 1) / threads > deadline:
-            raise HashBudgetSpent
-    if threads > 1 and count > 2:
-        with ThreadPoolExecutor(max_workers=threads) as pool:
-            rest = list(pool.map(lambda span: digest(*span), spans[1:]))
-    else:
-        rest = [digest(*span) for span in spans[1:]]
+    digests = _all_blocks(digest, spans, threads, deadline)
     cut = None
     if like is not None and like.rows % block and rows > like.rows:
         cut = digest(like.rows // block * block, like.rows)
-    return RowBlocks("ndarray", rows, block, (first, *rest)), cut
+    return RowBlocks("ndarray", rows, block, digests), cut
 
 
 def compare(old: RowBlocks, new: RowBlocks, cut: str | None = None) -> RowChange | None:
