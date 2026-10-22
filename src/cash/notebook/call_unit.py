@@ -966,7 +966,10 @@ class CallUnit:
         # The arguments' frames' own cells, where the result held them.
         value = relink_cells(value, call.args, call.kwargs, metadata.get("cell_links"))
         if value is RELINK_FAILED:
-            return call.fn(*call.args, **call.kwargs)
+            # A miss, watched and stored as one: run bare, its result reached
+            # the statement as the statement's own work, stored without the
+            # argument's cells (a copy after a restart).
+            return self._run_miss(call)
         # Replay the ORIGINAL execution's observations into the
         # statement's ambient capture (FileAccessTracker, live
         # stdout/stderr). The call itself does not run on a hit, so

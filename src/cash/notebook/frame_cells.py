@@ -20,6 +20,7 @@ holds too stays where the share check sees it, and the call is not stored.
 from __future__ import annotations
 
 import ctypes
+import pickle
 import sys
 from typing import Any
 
@@ -281,11 +282,26 @@ def _relink_dtype(frame: Any, position: int, source: Any, source_column: int, pd
     dtype = (source if source_column == -1 else source.iloc[:, source_column]).dtype
     if not isinstance(column.dtype, pd.CategoricalDtype) or not isinstance(dtype, pd.CategoricalDtype):
         return False
-    if len(column.dtype.categories) != len(dtype.categories) or column.dtype.ordered != dtype.ordered:
+    if column.dtype.ordered != dtype.ordered or not _same_categories(column.dtype.categories, dtype.categories):
         return False
     codes = column.cat.codes.to_numpy()
     frame.isetitem(position, pd.Categorical.from_codes(codes, dtype=dtype))
-    return frame.dtypes.iloc[position] is dtype
+    # pandas 2 makes an equal dtype of its own around the same categories.
+    return frame.dtypes.iloc[position].categories is dtype.categories
+
+
+def _same_categories(served: Any, own: Any) -> bool:
+    """Are *served*, the stored result's categories, *own*, the argument's,
+    position by position? Pickled the same, as the key reads them: ``==``
+    is the user's, and a class without ``__eq__`` calls its copies unequal.
+    A code points at a position, so the argument's categories in another
+    order would give other cells."""
+    if len(served) != len(own):
+        return False
+    try:
+        return pickle.dumps(served.tolist(), 5) == pickle.dumps(own.tolist(), 5)
+    except Exception:  # noqa: BLE001 - a category that does not pickle: not shown the same
+        return False
 
 
 def _walk(value: Any, path: list) -> Any:
