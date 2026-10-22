@@ -16,6 +16,7 @@ the fingerprint after a call whose body ran.
 
 from __future__ import annotations
 
+import gc
 import os
 import sys
 
@@ -79,6 +80,10 @@ def _frame(cash_magics, lib):
 @pytest.mark.usefixtures("user_code_watched")
 def test_a_miss_reads_the_argument_twice(cash_magics, lib, reads_of_raw):
     _frame(cash_magics, lib)
+    # What earlier tests left: from 3.14 a young collection also frees part
+    # of the old generation, and a collection that frees something ends the
+    # window (`value_hash._on_collection`): safe, but a read more.
+    gc.collect()
     reads_of_raw.clear()
     run_cash_cell(cash_magics, f"df = {lib}.clean(raw, 3)")
     assert len(reads_of_raw) == 2, f"raw was hashed {len(reads_of_raw)} times"
