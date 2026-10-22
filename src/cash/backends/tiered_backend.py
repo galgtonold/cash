@@ -350,13 +350,19 @@ class TieredBackend(CacheBackend):
                 continue
             if metadata is not None and i > 0:
                 restore_s = time.perf_counter() - started
-                # Not judged when the read imported modules (the first
-                # statsmodels result after a restart imports statsmodels):
-                # that is not what the next restore takes.
-                if len(sys.modules) == modules and memory_backend.restore_too_slow(value, metadata, restore_s):
-                    # One stalled read is not enough: read again, the faster kept.
-                    restore_s = min(restore_s, self._read_seconds(backend, key))
-                if len(sys.modules) == modules and memory_backend.restored_no_faster(value, metadata, restore_s):
+                # A read during which modules were imported is not what the
+                # next restore takes: the first statsmodels result after a
+                # restart imports statsmodels, and an import on another
+                # thread counts too, since sys.modules is the process's.
+                imported = len(sys.modules) != modules
+                if memory_backend.restore_too_slow(value, metadata, restore_s):
+                    # One stalled read is not enough: read again, the faster
+                    # kept; after one that imported, the second alone.
+                    modules = len(sys.modules)
+                    again = self._read_seconds(backend, key)
+                    restore_s = again if imported else min(restore_s, again)
+                    imported = len(sys.modules) != modules
+                if not imported and memory_backend.restored_no_faster(value, metadata, restore_s):
                     # It proved no faster than computing it again: not
                     # restored from here again. Handed out this once.
                     try:

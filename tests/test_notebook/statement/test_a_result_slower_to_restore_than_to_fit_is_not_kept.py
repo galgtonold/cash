@@ -27,7 +27,10 @@ kept.
 
 from __future__ import annotations
 
+import sys
+import threading
 import time
+import types
 
 import numpy as np
 import pytest
@@ -40,11 +43,16 @@ from tests._cell_driver import run_cash_cell
 COMPUTE_S = 0.3
 SLOW_LOAD_S = 0.9
 
+#: What the tests import while a restore runs.
+_IMPORTED = "_cash_test_imported_during_a_restore_"
+
 #: ``__setstate__`` calls, by the test's own clock.
 LOADS: list[float] = []
 LOAD_S = [0.0]
 #: One-off stalls, each taken by the next ``__setstate__`` in place of ``LOAD_S``.
 STALLS: list[float] = []
+#: Imports, each done by the next ``__setstate__``: ``(name, on another thread)``.
+IMPORTS: list[tuple[str, bool]] = []
 
 
 class Fit:
@@ -57,9 +65,26 @@ class Fit:
 
     def __setstate__(self, state: dict) -> None:
         seconds = STALLS.pop(0) if STALLS else LOAD_S[0]
+        if IMPORTS:
+            _import(*IMPORTS.pop(0))
         time.sleep(seconds)
         LOADS.append(seconds)
         self.__dict__.update(state)
+
+
+def _import(name: str, elsewhere: bool) -> None:
+    """A module imported while a restore runs: by the restore itself, or by
+    another thread, done before the restore ends."""
+
+    def load() -> None:
+        sys.modules[name] = types.ModuleType(name)
+
+    if not elsewhere:
+        load()
+        return
+    other = threading.Thread(target=load)
+    other.start()
+    other.join()
 
 
 SETUP = f"""
@@ -80,6 +105,7 @@ def tiers(cash_magics, cash_instance, mock_shell, tmp_path):
     rates.clear()
     LOADS.clear()
     STALLS.clear()
+    IMPORTS.clear()
     ram, disk = InMemoryBackend(), FileBackend(str(tmp_path / "nbcache"), flush_interval=0)
     cash_instance.backend = TieredBackend([ram, disk])
     mock_shell.user_ns["Fit"] = Fit
@@ -91,6 +117,9 @@ def tiers(cash_magics, cash_instance, mock_shell, tmp_path):
     rates.update(saved)
     LOAD_S[0] = 0.0
     STALLS.clear()
+    IMPORTS.clear()
+    for name in [name for name in sys.modules if name.startswith(_IMPORTED)]:
+        del sys.modules[name]
 
 
 def _disk_bytes(disk) -> int:
@@ -179,3 +208,33 @@ def test_one_stalled_load_does_not_take_a_result_off_disk(tiers, cash_instance, 
     assert _rerun_restores(magics)
     assert SLOW_LOAD_S in LOADS, "the stall was not taken: the test measures nothing"
     assert _disk_bytes(disk) >= Fit(1 << 17).model["exog"].nbytes, "one stalled restore took the result off disk"
+
+
+@pytest.mark.parametrize("elsewhere", [False, True], ids=["by the restore", "on another thread"])
+def test_a_slow_restore_that_imported_is_judged_on_its_second_read(tiers, cash_instance, tmp_path, elsewhere):
+    """A module imported during the first restore (the first statsmodels
+    result after a restart imports statsmodels; any thread's import shows
+    in sys.modules) leaves that reading unjudged. Read again, the second
+    reading imports nothing and is the one judged: slower than the fit,
+    the result leaves disk. Before, it was never judged and stayed."""
+    magics, _ram, disk = tiers
+    LOAD_S[0] = SLOW_LOAD_S
+    run_cash_cell(magics, "fit = fit_model()")
+    disk = _restart(cash_instance, disk, tmp_path)
+    IMPORTS.append((_IMPORTED + "first", elsewhere))
+    assert _rerun_restores(magics), "the first restore did not come from disk: the test checks nothing"
+    assert len(LOADS) == 2, "a slow restore that imported was not read again"
+    assert _disk_bytes(disk) < 1 << 20, "a result restoring slower than its fit stayed on disk"
+
+
+def test_a_restore_importing_on_both_reads_is_not_judged(tiers, cash_instance, tmp_path):
+    """Imports during both readings leave neither judged: the result
+    stays on disk, as a restore that imported always did."""
+    magics, _ram, disk = tiers
+    LOAD_S[0] = SLOW_LOAD_S
+    run_cash_cell(magics, "fit = fit_model()")
+    disk = _restart(cash_instance, disk, tmp_path)
+    IMPORTS.extend([(_IMPORTED + "first", True), (_IMPORTED + "second", True)])
+    assert _rerun_restores(magics)
+    assert len(LOADS) == 2
+    assert _disk_bytes(disk) >= Fit(1 << 17).model["exog"].nbytes, "a reading that imported was judged"
