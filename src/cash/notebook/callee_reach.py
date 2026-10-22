@@ -210,7 +210,33 @@ def names_read(code: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
                 root = root.value
             if isinstance(root, ast.Name):
                 steps.append((root.id, tuple(attrs)))
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and 2 <= len(node.args) <= 3
+            and isinstance(node.args[0], ast.Name)
+        ):
+            # ``getattr(mylib, 'K')`` reads ``mylib.K``; with a name made
+            # when it runs (``'val_' + name``), any of the module's names.
+            name = node.args[1]
+            attr = name.value if isinstance(name, ast.Constant) and isinstance(name.value, str) else _ANY_NAME
+            steps.append((node.args[0].id, (attr,)))
     return tuple(steps)
+
+
+def _attributes_read(module: types.ModuleType, code: types.CodeType) -> Iterable[str]:
+    """The names of the local *module* that *code* may read: those it
+    spells, or, where it calls ``getattr`` (by a name it may make when it
+    runs), all of the module's."""
+    if "getattr" in code.co_names:
+        return [name for name in list(vars(module)) if not name.startswith("__")]
+    return code.co_names
+
+
+#: The attribute of a step that ``getattr`` reads by a name made when it
+#: runs: every name of a local module (`_Found.chain`).
+_ANY_NAME = "*"
 
 
 def module_state_writes(code: str, namespace: Mapping[str, Any] | None) -> frozenset[str]:
@@ -1214,6 +1240,11 @@ class _Found:
         for attr in reversed(attrs):
             if not instance_of(obj, types.ModuleType):
                 return
+            if attr == _ANY_NAME:
+                if _is_local(obj):
+                    names = [name for name in list(vars(obj)) if not name.startswith("__")]
+                    self._module_attributes(obj, names)
+                return
             label = f"{obj.__name__}.{attr}" if _is_local(obj) else None
             obj = vars(obj).get(attr)
             self.value(obj, label)
@@ -1231,7 +1262,7 @@ class _Found:
                 value = self.namespace.get(name)
                 self.value(value)
                 if issubclass(type(value), types.ModuleType) and _is_local(value):
-                    self._module_attributes(value, co.co_names)
+                    self._module_attributes(value, _attributes_read(value, co))
 
     def _module_body_reads(self, fn: types.FunctionType) -> None:
         """What a function of a local module reads when it is called: the
@@ -1247,7 +1278,7 @@ class _Found:
                 value = home[name]
                 self.value(value, f"{home_name}.{name}")
                 if issubclass(type(value), types.ModuleType) and _is_local(value):
-                    self._module_attributes(value, co.co_names)
+                    self._module_attributes(value, _attributes_read(value, co))
 
     def _module_attributes(self, module: types.ModuleType, names: Iterable[str]) -> None:
         """``module.attr`` for each of *names* the local *module* has."""
