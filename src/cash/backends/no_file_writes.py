@@ -214,16 +214,41 @@ def _bytecode_temp(value: object) -> bool:
 
 def _by_importlib(function: str, depth: int | None = 12) -> bool:
     """Is ``importlib``'s own *function* running, within *depth* frames of
-    the event (any depth for None)?"""
+    the event (any depth for None)? For the steps that write a ``.pyc``,
+    only as part of an import's: below ``SourceLoader.get_code`` caching
+    the module's bytecode. The value's own call of ``_write_atomic``, or of
+    a function of that name in another file, is not."""
+    names = {function, "_cache_bytecode", "get_code"} if function in _BYTECODE_STEPS else {function}
     frame = sys._getframe(1)
-    while frame is not None and (depth is None or depth > 0):
+    while frame is not None and (depth is None or depth > 0) and names:
         code = frame.f_code
-        if code.co_name == function and "importlib" in code.co_filename:
-            return True
+        if code.co_filename in _IMPORTLIB_FILES:
+            names.discard(code.co_name)
         frame = frame.f_back
         if depth is not None:
             depth -= 1
-    return False
+    return not names
+
+
+#: The steps of an import's write of a module's ``.pyc``: let through only
+#: below ``get_code`` and ``_cache_bytecode``.
+_BYTECODE_STEPS = frozenset(("_write_atomic", "set_data"))
+
+
+def _importlib_files() -> frozenset[str]:
+    """The file names ``importlib``'s bootstrap code runs under: frozen, or
+    from its source where the interpreter was built without it frozen."""
+    found = set()
+    for name in ("_bootstrap", "_bootstrap_external"):
+        found.add(f"<frozen importlib.{name}>")
+        module = sys.modules.get(f"importlib.{name}")
+        path = getattr(module, "__file__", None)
+        if isinstance(path, str):
+            found.add(path)
+    return frozenset(found)
+
+
+_IMPORTLIB_FILES = _importlib_files()
 
 
 def _bytecode_folder(value: object) -> bool:
@@ -298,25 +323,33 @@ def import_what_it_imported(check: NoFileWrites) -> bool:
 
 
 def _a_library(name: str) -> bool:
-    """Is the module *name* not the user's, judged by where its top package
-    is found, without importing anything?"""
+    """Is the module *name* not the user's, judged by where it is found,
+    without importing anything? Found part by part, each in the folders of
+    the package above it: a namespace package's portions can sit in a
+    library's folder and in the user's (an installed ``acmex.core``, the
+    user's ``src/acmex/mine``), so a package is a library's only when all
+    of its folders are."""
     from ..install_paths import is_user_path
 
-    top = name.partition(".")[0]
+    spec = None
+    path = None
+    parts = name.split(".")
     try:
-        spec = sys.modules[top].__spec__ if top in sys.modules else importlib.machinery.PathFinder.find_spec(top)
+        for at in range(len(parts)):
+            part = ".".join(parts[: at + 1])
+            module = sys.modules.get(part)
+            spec = getattr(module, "__spec__", None) if module is not None else None
+            if spec is None:
+                spec = importlib.machinery.PathFinder.find_spec(part, path)
+            if spec is None:
+                return False
+            path = list(getattr(module, "__path__", None) or spec.submodule_search_locations or ())
     except Exception:  # noqa: BLE001 - an odd finder or module: not known to be a library
         return False
-    if spec is None:
-        return False
-    origin = (
-        spec.origin
-        if spec.origin not in (None, "namespace")
-        else next(iter(spec.submodule_search_locations or ()), None)
-    )
-    if origin in ("built-in", "frozen"):
+    if spec.origin in ("built-in", "frozen"):
         return True
-    return origin is not None and not is_user_path(origin)
+    places = [spec.origin] if spec.origin not in (None, "namespace") else list(spec.submodule_search_locations or ())
+    return bool(places) and all(isinstance(place, str) and not is_user_path(place) for place in places)
 
 
 def would_write_a_file(exc: BaseException | None) -> bool:

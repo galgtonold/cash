@@ -17,6 +17,14 @@ neither hangs nor changes what the rest of the process does.
   ``__pycache__/*.pyc`` went through from the value's own code too; and
   imported outside the check for that retry, a module of the user's wrote
   what its import writes, where the program never imported it.
+- The ``.pyc`` steps were let through for any function of their name in a
+  file whose path held "importlib": the value's own call of
+  ``importlib._bootstrap_external._write_atomic``, or of a ``_write_atomic``
+  of its own, overwrote a ``.pyc`` that was there. Only an import's write,
+  below ``get_code`` caching the bytecode, goes through now.
+- A user's portion of a namespace package was judged by the package's first
+  folder: with an installed portion earlier on ``sys.path``, the user's
+  ``acmex.mine`` counted as a library and was imported for the retry.
 """
 
 from __future__ import annotations
@@ -222,6 +230,8 @@ class _Clobbers:
     way ``importlib`` makes its own."""
 
     how = ""
+    #: A ``_write_atomic`` of the user's, in a folder named like importlib's.
+    fake = None
 
     def __init__(self, path):
         self.path = path
@@ -238,10 +248,35 @@ class _Clobbers:
             with open(temporary, "x", encoding="utf-8") as f:
                 f.write("clobbered")
             os.replace(temporary, self.path)
+        elif _Clobbers.how == "write_atomic":
+            import importlib._bootstrap_external as bootstrap
+
+            bootstrap._write_atomic(self.path, b"clobbered")
+        elif _Clobbers.how == "a_function_of_that_name":
+            _Clobbers.fake(self.path, b"clobbered")
 
 
-@pytest.mark.parametrize("how", ["remove", "replace"])
-def test_a_pyc_that_was_there_is_left_alone(tmp_path, how):
+@pytest.mark.parametrize("how", ["remove", "replace", "write_atomic", "a_function_of_that_name"])
+def test_a_pyc_that_was_there_is_left_alone(tmp_path, how, monkeypatch):
+    tools = tmp_path / "myimportlib_tools"
+    tools.mkdir()
+    (tools / "fake_atomic.py").write_text(
+        textwrap.dedent(
+            """
+            import os
+            def _write_atomic(path, data):
+                temporary = f"{path}.{id(path)}"
+                with open(temporary, "xb") as f:
+                    f.write(data)
+                os.replace(temporary, path)
+            """
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tools))
+    import fake_atomic
+
+    monkeypatch.setattr(_Clobbers, "fake", staticmethod(fake_atomic._write_atomic))
     folder = tmp_path / "pkg" / "__pycache__"
     folder.mkdir(parents=True)
     kept = folder / "keep.cpython-312.pyc"
@@ -299,3 +334,55 @@ def test_a_users_module_whose_import_writes_is_not_imported_for_a_retry(tmp_path
     assert first.stdout.split() == ["1", "True", "orig"]
     second = run_python("-c", textwrap.dedent(script), "second", cwd=tmp_path)
     assert second.stdout.split() == ["1", "False", "orig"]
+
+
+def test_a_users_portion_of_a_namespace_package_is_not_imported_for_a_retry(tmp_path):
+    """``acmex``'s installed portion comes first on ``sys.path``; the user's
+    ``src/acmex/mine``, appended as notebooks often do, writes on import."""
+    side = tmp_path / "side.txt"
+    installed = tmp_path / "venvlike" / "site-packages"
+    (installed / "acmex" / "core").mkdir(parents=True)
+    (installed / "acmex" / "core" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "src" / "acmex" / "mine").mkdir(parents=True)
+    (tmp_path / "src" / "acmex" / "mine" / "__init__.py").write_text(
+        f"open({str(side)!r}, 'w').write('side ran')\n", encoding="utf-8"
+    )
+    (tmp_path / "sink.py").write_text(
+        textwrap.dedent(
+            """
+            class Sink:
+                def __init__(self, module):
+                    self.module = module
+                def __getstate__(self):
+                    return {"module": self.module}
+                def __setstate__(self, state):
+                    self.module = state["module"]
+                    __import__(self.module)
+            """
+        ),
+        encoding="utf-8",
+    )
+    script = f"""
+        import site, sys, time
+        sys.dont_write_bytecode = True
+        sys.path.insert(0, {str(tmp_path)!r})
+        sys.path.insert(1, {str(installed)!r})
+        sys.path.append({str(tmp_path / "src")!r})
+        if sys.argv[1] == "first":
+            import acmex.mine
+        open({str(side)!r}, "w").write("orig")
+        import cash, sink
+        c = cash.Cash(cache_dir={str(tmp_path / "cache")!r}, register_magic=False)
+        ran = []
+        @c.cache
+        def build(n):
+            ran.append(n)  # @cash:assume-safe
+            time.sleep(1.0)
+            return {{"s": sink.Sink("acmex.mine"), "n": n}}
+        build(1)
+        print(len(ran), "acmex.mine" in sys.modules, open({str(side)!r}).read())
+        """
+    first = run_python("-c", textwrap.dedent(script), "first", cwd=tmp_path)
+    assert first.stdout.split() == ["1", "True", "orig"], first.stderr[-2000:]
+    second = run_python("-c", textwrap.dedent(script), "second", cwd=tmp_path)
+    assert second.stdout.split() == ["1", "False", "orig"], second.stderr[-2000:]
