@@ -72,6 +72,7 @@ from ..lineage_formula import (
     recorded_reads_lineage_component,
     setting_output_lineage,
     statement_environment_component,
+    value_digests_key,
 )
 from ..loop_watch import branch_changes, loop_watch_hash, watch_candidates
 from ..pyplot_draws import pyplot_draw_names
@@ -1238,7 +1239,9 @@ class StatementLineage:
             stmt_code,
             tree,
             virtual_lineage,
-            no_cache_values=self.tracking_state.no_cache_values.get(cache_key),
+            no_cache_values=self.tracking_state.no_cache_values.get(
+                value_digests_key(source_hash, input_lineage_map, occurrence_index)
+            ),
             recorded_reads=recorded_reads_lineage_component(
                 self.tracking_state, cache_key, stmt_code, self.shell.user_ns, outputs, as_last_run=True
             ),

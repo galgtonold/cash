@@ -281,6 +281,12 @@ HINT_ERROR_LEVEL = logging.DEBUG
 _ABSENT = object()
 
 
+def _entry_values(cached_data: Any) -> dict[str, Any] | None:
+    """The values a stored entry held, by name; None when it says none."""
+    variables = cached_data.get("variables") if isinstance(cached_data, dict) else None
+    return variables if isinstance(variables, dict) else None
+
+
 class StatementProcessor:
     """
     Processes and caches individual Python statements.
@@ -967,15 +973,20 @@ class StatementProcessor:
             _shadow.SHADOW.statement_lookup(self, run, bool(cached_data))
             if cached_data and _shadow.SHADOW.stale(run.shadow):
                 # Code it ran changed since it was stored: it runs again.
+                run.key_blind = True
+                self._note_refused_entry(run, metadata, cached_data)
                 cached_data = None
                 run.trace_refused = True
             elif cached_data and run.needs_trace and not _shadow.SHADOW.agreed(run.shadow):
                 # Its key does not name what a string found: only a trace
                 # checked unchanged serves it.
+                run.key_blind = True
+                self._note_refused_entry(run, metadata, cached_data)
                 cached_data = None
                 run.trace_refused = True
         elif run.needs_trace:
             cached_data = None
+            run.key_blind = True
         if cached_data and self._live_objects_shared(run, metadata):
             cached_data = None
         if cached_data and not import_needs_reexecution(run.tree, self.shell.user_ns):
@@ -1201,6 +1212,89 @@ class StatementProcessor:
         run.metrics["cache_key"] = run.cache_key
         return effects, analysis_time, hash_time
 
+    def _value_keyed(self, run: StatementRun) -> frozenset[str]:
+        """The outputs of *run* keyed by value (`_drawn_names`,
+        `_changed_from_refused_entry`), noted for its entry to keep.
+
+        In a control structure's body too: the simulation takes what the
+        structure bound from the outcome its run recorded, filed for that
+        copy of it in the cell (`outcome_key`), value-keyed lineages
+        included. Left out there, a draw in an ``if`` handed its reader in
+        the next cell the value built on the first draw on every run."""
+        keyed = self._drawn_names(run) | self._changed_from_refused_entry(run)
+        if run.needs_trace and run.skip_cache:
+            # Its key does not name what a string found, and it is not
+            # stored, so no entry is refused to say it ran again: refused as
+            # it ran (it wrote a file), it runs every time under the same
+            # key, and can bind a new value each time.
+            keyed |= frozenset(run.outputs)
+        run.value_keyed_outputs = keyed
+        return keyed
+
+    @staticmethod
+    def _note_refused_entry(run: StatementRun, metadata: Any, cached_data: Any) -> None:
+        """What `_changed_from_refused_entry` compares with: the entry's digests
+        of its outputs, its values for the outputs it has none of, and which
+        it had keyed by value."""
+        run.refused_value_keyed = frozenset(attribute_or(metadata, "value_keyed", None) or ())
+        run.refused_digests = dict(attribute_or(metadata, "rerun_digests", None) or {})
+        if not set(run.refused_digests) >= set(attribute_or(metadata, "outputs", None) or ()):
+            run.refused_values = _entry_values(cached_data)
+
+    def _changed_from_refused_entry(self, run: StatementRun) -> frozenset[str]:
+        """The outputs of *run* keyed by value after a rerun under the same
+        key (`StatementRun.key_blind`).
+
+        Run again under the same key, a statement can bind a new value: those
+        outputs are keyed by value, so what is built on them misses. One
+        that came out as the entry held it keeps the formula's lineage: a
+        statement the trace refuses on every run (code it ran is rebuilt
+        each time) would otherwise move every reader below once, and on, a
+        level per session. But only while the entry holds what was built on
+        the formula's lineage: one a rerun stored after keying an output by
+        value holds that rerun's value, so the output is keyed by value
+        again, and an equal value finds what was built on it. A value that
+        cannot be compared within the budget of a change check counts as
+        changed."""
+        if not run.key_blind:
+            return frozenset()
+        stored = run.refused_values
+        run.refused_values = None
+        ns = self.shell.user_ns
+        changed = set(run.refused_value_keyed & run.outputs)
+        for name in run.outputs:
+            if name not in ns:
+                changed.add(name)
+                continue
+            after = value_hash.budgeted_hash(ns[name], self.compute_hash)
+            if after is None or value_hash.is_identity_fallback_hash(ns[name], after):
+                changed.add(name)
+                continue
+            run.rerun_digests[name] = after
+            if name in changed:
+                continue
+            before = run.refused_digests.get(name)
+            if before is None and stored is not None and name in stored:
+                before = value_hash.budgeted_hash(stored[name], self.compute_hash)
+            if before is None or before != after:
+                changed.add(name)
+        return frozenset(changed)
+
+    @staticmethod
+    def _drawn_names(run: StatementRun) -> frozenset[str]:
+        """The names *run* bound afresh when it runs every time because it
+        changed what it read in place: ``t = Q.popleft()``, ``t =
+        OBJ.draw()``, ``t = G.send(None)``. Each run can bind a new value
+        under the same key, so they are keyed by value, as a no-cache
+        statement's outputs are; the objects it changed are left as they
+        are (`capture_and_track_variables`)."""
+        if not run.skip_cache:
+            return frozenset()
+        changed = run.in_place | (run.outputs & run.inputs)
+        if not changed:
+            return frozenset()
+        return frozenset(run.outputs - run.inputs - changed)
+
     def _decide_cacheability(self, run: StatementRun) -> None:
         """Skip-cache *run* when the static cacheability decision refuses it.
 
@@ -1227,9 +1321,13 @@ class StatementProcessor:
             if not cacheable:
                 run.metrics["uncacheable_reasons"].extend(reasons)
                 run.skip_cache = True
-                run.value_varies = varies
-                run.value_pinned = not varies
-                if varies:
+                # Refused for another reason first (a name with no lineage), a
+                # draw (``t = next(G)``) still binds a new value each run.
+                run.value_varies = varies or bool(
+                    drawn_stream_inputs(run.tree, run.inputs, run.outputs, self.shell.user_ns)
+                )
+                run.value_pinned = not run.value_varies
+                if run.value_varies:
                     return
             else:
                 run.unless_it_draws = unless_it_draws
@@ -1255,6 +1353,7 @@ class StatementProcessor:
             if not refused:
                 run.metrics["uncacheable_reasons"].append(reason)
                 run.skip_cache = True
+                run.value_varies = True
 
         unfollowed, by_string, unkeyed_modules, followed = unkeyed_reach(
             run.code, run.inputs, self.shell.user_ns, self.tracking_state.variable_lineage
@@ -2380,6 +2479,8 @@ class StatementProcessor:
                     or run.past_budget
                     or inputs_moved
                     or self._binds_a_stream(run),
+                    value_keyed=self._value_keyed(run),
+                    occurrence_index=run.occurrence_index,
                     # What it changed in place keeps the lineage the change gives
                     # it, unless what it put there came from outside the lineage.
                     value_kept=(
@@ -3363,6 +3464,7 @@ class StatementProcessor:
                     run.source_hash,
                     run.cache_key,
                     tree=tree,
+                    occurrence_index=run.occurrence_index,
                 )
                 return run.metrics
 
@@ -3417,6 +3519,7 @@ class StatementProcessor:
         source_hash: str,
         cache_key: str,
         tree: ast.Module | None = None,
+        occurrence_index: int = 0,
     ) -> None:
         """Update lineage and variable tracking."""
         self.lineage_builder.capture_and_track_variables(
@@ -3428,6 +3531,7 @@ class StatementProcessor:
             cache_key=cache_key,
             accessed_files=accessed_files,
             tree=tree,
+            occurrence_index=occurrence_index,
         )
 
     def _analyze_and_hash(

@@ -392,7 +392,8 @@ def no_cache_value_digest(
     Such a statement runs every run and can bind a new value with the same
     source and inputs, so its output's lineage carries the value: a reader
     below misses when the value changed and still hits when it did not. A
-    value whose content cannot be hashed gets a digest of its own each run, so
+    value whose content cannot be hashed, or not within the budget of a
+    change check (`budgeted_hash`), gets a digest of its own each run, so
     its readers always recompute: the identity fallback stays the same under
     in-place change, and a new object can reuse an old one's address. A file
     open for reading is named by its file and position instead
@@ -442,6 +443,31 @@ def _length(value: Any) -> int | None:
         except Exception:  # noqa: BLE001 - a length is a hint only
             return None
     return None
+
+
+def value_digests_key(source_hash: str, input_lineages: Mapping[str, str], occurrence_index: int = 0) -> str:
+    """What the value digests of a statement's run are filed under
+    (``TrackingState.no_cache_values``): its source, the lineages of its
+    inputs and which copy of the statement in its cell it is, as the runtime
+    and the simulation both build them. Two copies in one cell
+    (``start = time.time()`` before and after the work) share source and
+    inputs: filed together, the second's digest stood for the first's, and
+    the work between them ran again for the reader below.
+
+    Not its cache key: a key that cannot name what the code reaches carries
+    a token of its own each time, one that reads a name no cell bound hashes
+    its value (an iterator made before cash was on moves as it is read), and
+    one that binds a name holding a module reads it as it was. Filed under
+    such a key, the simulation did not find the digests, gave the output
+    another lineage than the run did, and the statement ran a second time
+    for each reader below: ``t = globals()[name](3)`` ran twice per Run All,
+    and a draw in it drew twice."""
+    parts = [
+        source_hash,
+        str(occurrence_index),
+        *(f"{name}={lineage}" for name, lineage in sorted(input_lineages.items())),
+    ]
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
 def no_cache_value_component(digests: Mapping[str, str] | None, name: str) -> str:
