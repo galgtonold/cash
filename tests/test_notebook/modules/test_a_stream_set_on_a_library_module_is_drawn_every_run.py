@@ -37,6 +37,22 @@ SHAPES = {
     "an_iterator_in_a_list": ("textwrap.cnt = [itertools.count()]", "next(textwrap.cnt[0])", ""),
     "a_numpy_generator": ("textwrap.cnt = np.random.default_rng(0)", "int(textwrap.cnt.integers(1000))", ""),
     "a_random_generator": ("textwrap.cnt = random.Random(0)", "textwrap.cnt.random()", ""),
+    "an_iterator_after_many_numbers": ("textwrap.cnt = [0] * 1500 + [itertools.count()]", "next(textwrap.cnt[-1])", ""),
+    "an_iterator_after_many_lists": (
+        "textwrap.cnt = [[0] for _ in range(6000)] + [itertools.count()]",
+        "next(textwrap.cnt[-1])",
+        "",
+    ),
+    "an_iterator_six_lists_deep": (
+        "textwrap.cnt = [[[[[[itertools.count()]]]]]]",
+        "next(textwrap.cnt[0][0][0][0][0][0])",
+        "",
+    ),
+    "an_iterator_past_the_walk": (
+        "textwrap.cnt = Nest(40, itertools.count())",
+        "next(textwrap.cnt.it)",
+        "class Nest:\n    def __init__(self, n, it):\n        self.inner = Nest(n - 1, it) if n else None\n        self.it = it",
+    ),
     "a_notebook_function_drawing": (
         "textwrap.cnt = itertools.count()",
         "d()",
@@ -141,3 +157,35 @@ def test_each_spelling_of_a_read_is_a_draw(monkeypatch, code):
     monkeypatch.setattr(textwrap, "cnt", itertools.count(), raising=False)
     ns = {"textwrap": textwrap, "sys": sys, "importlib": importlib}
     assert callee_reach.library_streams_read(code, ns) == ["textwrap.cnt"]
+
+
+@pytest.mark.parametrize(
+    ("value", "held", "warned"),
+    [
+        ("[0] * 1500 + [itertools.count()]", True, False),
+        ("[[[[[[itertools.count()]]]]]]", True, False),
+        ("[[i, i + 1] for i in range(1500)]", False, False),
+        ("[[0] for _ in range(6000)] + [itertools.count()]", True, True),
+        ("[list(range(3)) for _ in range(6000)]", True, True),
+        ("functools.reduce(lambda inner, _: [inner], range(40), [0])", True, True),
+    ],
+)
+def test_a_value_the_walk_cannot_finish_is_read_as_a_draw_with_a_warning(monkeypatch, value, held, warned):
+    """``[0] * 1500 + [count()]`` or a ``count()`` six lists deep: past its
+    bound the walk answered "no draw", the value was keyed by its state, and
+    the draws came out wrong with nothing said. Past the bound it now
+    answers "may draw", and says so once."""
+    import functools
+    import itertools
+    import textwrap
+    import warnings
+
+    monkeypatch.setattr(callee_reach, "_SET_ON_LIBRARIES", {"textwrap": {"cnt"}})
+    monkeypatch.setattr(callee_reach, "_UNCHECKED_WARNED", set())
+    monkeypatch.setattr(textwrap, "cnt", eval(value, {"itertools": itertools, "functools": functools}), raising=False)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert callee_reach.library_draw_source("textwrap.cnt", textwrap.cnt) is held
+        callee_reach.library_draw_source("textwrap.cnt", textwrap.cnt)
+    codes = [getattr(w.message, "code", None) for w in caught]
+    assert codes == (["KEY-LIBRARY-VALUE-UNCHECKED"] if warned else []), codes

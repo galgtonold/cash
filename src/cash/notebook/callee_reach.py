@@ -23,7 +23,7 @@ import textwrap
 import types
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
-from itertools import repeat
+from itertools import islice, repeat
 from typing import Any, NamedTuple
 
 from cash._user_attrs import attribute_or, has_attribute, instance_of, is_routine
@@ -36,8 +36,9 @@ from ..analysis.callee_effects import source_global_mutations
 from ..analysis.handed_callables import handed_callable_values
 from ..analysis.helper_code import own_code_is_user
 from ..analysis.mutations import MUTATING_METHODS
+from ..diagnostics import warn_diagnostic
 from ..effects import ENVIRON_NAMES, dotted_name
-from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..source_reading import getsource
 from ..tracking.function_tracker import is_local_module
 from ..tracking.randomness import get_seeding_rng_modules
@@ -742,39 +743,83 @@ def library_draw_source(label: str, value: Any) -> bool:
     module = sys.modules.get(module_name)
     if module is None or not _set_on_by_the_notebook(module, attr):
         return False
-    return _holds_a_draw(value, 0, set())
+    held = _holds_a_draw(value, 0, set())
+    if held is None:
+        _warn_unchecked(label)
+        return True
+    return held
 
 
 #: How far `_holds_a_draw` looks: containers and objects nested this deep,
-#: and this many items of each.
-_DRAW_DEPTH = 4
-_DRAW_ITEMS = 1000
+#: this many of them in all (plain numbers and strings are not counted), and
+#: this many items in one. Past any of them it cannot say "no draw".
+_DRAW_DEPTH = 32
+_DRAW_NODES = 5000
+_DRAW_SCAN = 1_000_000
 
 
-def _holds_a_draw(value: Any, depth: int, seen: set[int]) -> bool:
+def _holds_a_draw(value: Any, depth: int, seen: set[int]) -> bool | None:
+    """Whether *value* holds something a read moves; None when the walk
+    stopped at its bound before it could tell. Taken as "no", the value was
+    keyed by its state, and a read restored without drawing left the next
+    one drawing what plain Python had drawn already."""
     from .consumables import is_stream
 
     kind = type(value)
-    if kind in IMMUTABLE_PRIMS or value is None or id(value) in seen:
+    if kind in IMMUTABLE_PRIMS or id(value) in seen:
         return False
+    if len(seen) >= _DRAW_NODES or depth > _DRAW_DEPTH:
+        return None
     seen.add(id(value))
     if instance_of(value, random.Random) or attribute_or(kind, "__module__", "").startswith("numpy.random"):
         return True
     if is_stream(value):
         return True
-    if depth >= _DRAW_DEPTH or issubclass(kind, (types.ModuleType, type)) or inspect.isroutine(value):
+    if issubclass(kind, (types.ModuleType, type)) or inspect.isroutine(value):
         return False
     if issubclass(kind, dict):
-        items: Iterable[Any] = list(dict.values(value))[:_DRAW_ITEMS]
+        parts: Iterable[Any] = dict.values(value)
     elif issubclass(kind, (list, tuple, set, frozenset)):
-        items = list(value)[:_DRAW_ITEMS]
+        parts = value
     else:
         try:
             own = object.__getattribute__(value, "__dict__")
         except (AttributeError, TypeError):
             own = None
-        items = list(own.values())[:_DRAW_ITEMS] if type(own) is dict else []
-    return any(_holds_a_draw(item, depth + 1, seen) for item in items)
+        parts = dict.values(own) if type(own) is dict else ()
+    scanned = list(islice(parts, _DRAW_SCAN + 1))
+    if len(scanned) > _DRAW_SCAN:
+        return None
+    if set(map(type, scanned)).issubset(IMMUTABLE_PRIMS):
+        return False
+    unsure = False
+    for item in scanned:
+        if type(item) in IMMUTABLE_PRIMS:
+            continue
+        held = _holds_a_draw(item, depth + 1, seen)
+        if held:
+            return True
+        unsure = unsure or held is None
+    return None if unsure else False
+
+
+#: The values `_warn_unchecked` warned about, once each.
+_UNCHECKED_WARNED: set[str] = set()
+
+
+def _warn_unchecked(label: str) -> None:
+    """Say once that *label*, set on a library's module, is read as a draw
+    because `_holds_a_draw` could not look through all of it."""
+    if label in _UNCHECKED_WARNED:
+        return
+    _UNCHECKED_WARNED.add(label)
+    warn_diagnostic(
+        CashCacheIneffectiveWarning,
+        "KEY-LIBRARY-VALUE-UNCHECKED",
+        f"{label} is too big or too deeply nested for cash to tell whether it holds an iterator or a "
+        "random generator, so code reading it runs every time.",
+        f"keep iterators and random generators out of {label}, or set a smaller value there.",
+    )
 
 
 def _note_set_on_a_library(module_name: str, name: Any) -> None:

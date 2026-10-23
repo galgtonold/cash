@@ -1026,6 +1026,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-HELPERS-UNWALKABLE](#key-helpers-unwalkable) | both | the code a function runs cannot all be found; not cached |
 | [KEY-INSTANCE-STATE](#key-instance-state) | decorator | a bound method's instance cannot be hashed |
 | [KEY-ITERATOR-CONSUMED](#key-iterator-consumed) | decorator | a registered hasher read an iterator argument; the call ran uncached |
+| [KEY-LIBRARY-VALUE-UNCHECKED](#key-library-value-unchecked) | both | a value set on a library's module is too big to look through for an iterator; code reading it runs every time |
 | [KEY-MEMO-BEFORE-IMPORT](#key-memo-before-import) | both | a `functools` memo already held results when cash was imported |
 | [KEY-LOOP-VAR-CHANGED](#key-loop-var-changed) | notebook | a loop body changes its loop variable before work cached for each pass |
 | [KEY-NETWORK-READ](#key-network-read) | decorator | the body reads from a server or database |
@@ -1387,6 +1388,29 @@ key, a list of the same rows included.
 **When it is safe to ignore.** When the message says the iterator *may* have
 been read and you know the key did not read it. When it says it was read,
 the result of that call came from an emptied iterator.
+
+### KEY-LIBRARY-VALUE-UNCHECKED {#key-library-value-unchecked}
+
+<span class="md-tag cash-warning-path">both</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/notebook/callee_reach.py:_holds_a_draw @ea5bb6f2 -->
+**What happened.** Your code set a value on a library's module
+(`textwrap.rows = ...`), and code you run reads it. Cash looks inside such a
+value for an iterator, an open file or a random generator, because reading
+one moves it and a cached result would not. This value was too big or too
+deeply nested to look through: more than 5,000 containers and objects in
+all (plain numbers and strings do not count), nested more than 32 deep, or
+more than a million items in one. Cash cannot say it holds no iterator, so it treats it as one:
+code reading it runs every time instead of being served from the cache.
+
+**Why it matters.** Nothing is wrong with the results. The code that reads
+the value is not cached, so it costs its full time on every run.
+
+**What to do.** Keep iterators and random generators out of values you set
+on a library's module, and keep such values small, or hold the value in a
+variable of your own instead.
+
+**When it is safe to ignore.** When the code reading the value is quick.
 
 ### KEY-MEMO-BEFORE-IMPORT {#key-memo-before-import}
 
