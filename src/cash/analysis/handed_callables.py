@@ -1254,12 +1254,26 @@ def _held_weakly(values: Iterable[Any]) -> tuple:
     return tuple(refs)
 
 
+def _with_parts(values: Iterable[Any]) -> Iterator[Any]:
+    """*values*, each followed by the functions it runs (a property's,
+    a ``staticmethod``'s): a property takes no weak reference, so a new one
+    at a freed one's address is told apart by its functions."""
+    for value in values:
+        yield value
+        if instance_of(value, property):
+            yield value.fget
+            yield value.fset
+            yield value.fdel
+        elif instance_of(value, (staticmethod, classmethod)):
+            yield value.__func__
+
+
 def _reaching_special_functions(cls: type) -> list[Any]:
     """`special_functions` of *cls* whose text changes a global, calls a
     function by name or calls a method of a global object: the others
     change nothing outside their objects, whatever their globals hold."""
     try:
-        held = [tuple(vars(k).values()) for k in cls.__mro__ if k is not object]
+        held = [tuple(_with_parts(vars(k).values())) for k in cls.__mro__ if k is not object]
         snapshot = tuple(tuple(map(id, values)) for values in held)
     except TypeError:
         held, snapshot = [], None

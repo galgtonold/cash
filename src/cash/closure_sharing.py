@@ -25,7 +25,7 @@ from typing import Any, NamedTuple
 
 from cash._clock import CpuLimit
 from cash._plain_data import TREE_NODES, in_a_look, tree_facts, tree_levels
-from cash._type_memo import TypeMemo, type_key
+from cash._type_memo import MroMemo, TypeMemo, type_key
 from cash._user_attrs import own_dict
 from cash.install_paths import is_user_code_module
 from cash.value_types import IMMUTABLE_LEAF_TYPES
@@ -182,7 +182,7 @@ def _fresh(held: list[Iterable[Any]], places: set[int], limit: CpuLimit) -> list
 
 #: Per class, held weakly: ``(index in its MRO, name)`` of each slot, not
 #: the member descriptors, which refer to their class and would keep it alive.
-_SLOTS: TypeMemo[tuple[tuple[int, str], ...]] = TypeMemo()
+_SLOTS: MroMemo = MroMemo()
 _USERS: TypeMemo[bool] = TypeMemo()
 _MODULE_OF = type.__dict__["__module__"].__get__
 
@@ -190,7 +190,7 @@ _MODULE_OF = type.__dict__["__module__"].__get__
 def _slot_readers(kind: type) -> tuple:
     """The member descriptor of each ``__slots__`` entry along *kind*'s
     MRO: how pickle reads a slotted object, read without running its code."""
-    found = _SLOTS.get(type_key(kind))
+    found = _SLOTS.get_for(kind)
     if found is None:
         places = []
         for at, klass in enumerate(kind.__mro__):

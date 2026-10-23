@@ -6,7 +6,9 @@ import collections
 import types
 from typing import Any
 
-from ._type_memo import TypeMemo, type_key
+from ._type_memo import mro_of, TypeMemo, type_key
+
+_address = object.__hash__
 
 
 def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
@@ -157,7 +159,22 @@ def builtin_base(value: Any) -> type | None:
         return kind
     if not issubclass(kind, _BUILTIN_CONTAINERS):
         return None
-    return next(c for c in kind.__mro__ if c in _BUILTIN_CONTAINERS)
+    found = _DERIVED_BASE.get(type_key(kind))
+    if found is not None and found[0] == _address(mro_of(kind)):
+        return found[1]
+    return _derived_base(kind)
+
+
+#: Per subclass, ``(its MRO's address, the builtin container it derives
+#: from)``: read along its MRO once, not at every object a walk meets.
+_DERIVED_BASE: TypeMemo[tuple[int, type]] = TypeMemo()
+
+
+def _derived_base(kind: type) -> type:
+    mro = mro_of(kind)
+    base = next(c for c in mro if c in _BUILTIN_CONTAINERS)
+    _DERIVED_BASE.put(kind, (_address(mro), base))
+    return base
 
 
 def builtin_items(value: Any) -> list[Any] | None:
@@ -169,9 +186,11 @@ def builtin_items(value: Any) -> list[Any] | None:
     subclass whose ``values()`` raises, or a list subclass whose
     ``__iter__`` does, failed cash's look into it, and the cell with it,
     where plain Python never asked."""
-    base = builtin_base(value)
-    if base is None:
-        return None
+    base = type(value)
+    if base not in _BUILTIN_CONTAINERS:
+        base = builtin_base(value)
+        if base is None:
+            return None
     if base is dict:
         return [*dict.keys(value), *dict.values(value)]
     return list(base.__iter__(value))

@@ -192,3 +192,64 @@ def test_a_statement_run_does_not_keep_the_class_alive(statement_processor, mock
 def test_slots_are_still_read():
     obj = _make("slots")
     assert shared_objects.attributes_of(obj) == {"rows": list(range(1000))}
+
+
+def test_a_class_given_new_bases_is_read_by_its_new_mro():
+    """Its slots were remembered by place along its MRO: after
+    ``B.__bases__ = (M, A)`` the place named another class, and reading an
+    object of it raised ``KeyError``."""
+    from cash import closure_sharing
+    from cash.notebook import held_functions
+
+    class A:
+        __slots__ = ("x",)
+
+    class M:
+        __slots__ = ()
+
+    class B(A):
+        __slots__ = ("y",)
+
+    b = B()
+    b.x, b.y = 1, 2
+    readers = (
+        lambda: shared_objects.attributes_of(b),
+        lambda: sorted(m.__get__(b) for m in closure_sharing._slot_readers(B)),
+        lambda: held_functions._slot_getter(B, "x")(b),
+    )
+    before = [read() for read in readers]
+    B.__bases__ = (M, A)
+    assert [read() for read in readers] == before
+
+
+def helper_a(v):
+    return v
+
+
+def test_a_property_put_where_a_freed_one_was_is_read_afresh():
+    """A property takes no weak reference: remembered by address, a new
+    one at a freed one's address was read as the old one."""
+    from cash.analysis import handed_callables
+
+    def calls_a(self):
+        return helper_a(self.a)
+
+    def plain(self):
+        return self.a
+
+    class C:
+        pass
+
+    C.total = property(calls_a)
+    assert handed_callables._reaching_special_functions(C) == [calls_a]
+    for _ in range(50):
+        old = id(vars(C)["total"])
+        del C.total
+        C.total = property(plain)
+        assert handed_callables._reaching_special_functions(C) == []
+        if id(vars(C)["total"]) == old:
+            break
+        C.total = property(calls_a)
+        assert handed_callables._reaching_special_functions(C) == [calls_a]
+    else:
+        pytest.skip("no property was made at the freed address")

@@ -40,7 +40,7 @@ from cash._user_attrs import attribute_or, builtin_items, instance_of
 
 from .. import _native
 from .._memo import CODE_OBJECTS, LruMemo
-from .._type_memo import per_type
+from .._type_memo import per_mro, per_type
 from ..install_paths import is_user_code_module
 from ..tracking.function_tracker import is_local_module
 from ..value_types import LEAF_TYPES, library_scalar_types
@@ -859,7 +859,7 @@ def _identity_keys(objects: list[Any], kinds: set[type]) -> Iterable[Any]:
     return [obj if type(obj) in by_identity else id(obj) for obj in objects]
 
 
-@per_type
+@per_mro
 def _identity_hashed(kind: type) -> bool:
     """Whether an object of *kind* hashes and compares as ``object`` does:
     by its address, with no code of its class run. Two distinct live
@@ -939,7 +939,7 @@ def _inert(kind: type) -> bool:
     return not _may_have_dict(kind) and not _slot_names(kind)
 
 
-@per_type
+@per_mro
 def _may_have_dict(kind: type) -> bool:
     """Can ``object.__getattribute__(obj, "__dict__")`` find anything on an
     object of *kind*: it has an instance dict, or a class along its MRO
@@ -961,7 +961,7 @@ def _slot_getter(kind: type, name: str) -> Callable[[Any], Any] | None:
     return None if at is None else vars(kind.__mro__[at])[name].__get__
 
 
-@per_type
+@per_mro
 def _slot_places(kind: type) -> dict[str, int | None]:
     """For each of `_slot_names`, where along *kind*'s MRO its plain slot
     descriptor is (None when what is found first is not one): the place,
@@ -993,7 +993,7 @@ def _cell_contents(cells: tuple[Any, ...] | None) -> list[Any]:
     return found
 
 
-@per_type
+@per_mro
 def _slot_names(kind: type) -> tuple[str, ...]:
     """The slots *kind* and its bases declare, but ``__dict__`` and ``__weakref__``."""
     names: list[str] = []

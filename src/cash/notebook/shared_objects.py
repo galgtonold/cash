@@ -52,7 +52,7 @@ from typing import Any
 
 from cash import _native, _plain_data
 from cash._clock import CpuLimit
-from cash._type_memo import TypeMemo, type_key
+from cash._type_memo import MroMemo, TypeMemo, type_key
 from cash._user_attrs import attribute_or, builtin_items, has_attribute, instance_of
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
@@ -359,14 +359,14 @@ def attributes_of(value: Any) -> dict[str, Any] | None:
 
 #: Per class, ``(name, index in its MRO)`` of each slot: not the member
 #: descriptors themselves, which refer to their class and would keep it alive.
-_SLOT_MEMBERS: TypeMemo[tuple[tuple[str, int], ...]] = TypeMemo()
+_SLOT_MEMBERS: MroMemo = MroMemo()
 
 
 def _slot_members(cls: type) -> tuple[tuple[str, Any], ...]:
     """``(name, member descriptor)`` for each ``__slots__`` entry along
     *cls*'s MRO, read from each class's own ``__dict__`` (a private slot
     under its mangled name)."""
-    known = _SLOT_MEMBERS.get(type_key(cls))
+    known = _SLOT_MEMBERS.get_for(cls)
     if known is None:
         found: list[tuple[str, int]] = []
         for at, klass in enumerate(cls.__mro__):

@@ -90,3 +90,44 @@ def per_type(fn: Callable[[type], V]) -> Callable[[type], V]:
 
     remembered.memo = memo  # type: ignore[attr-defined]
     return remembered
+
+
+#: The ``__mro__`` of a class as ``type`` reads it: no metaclass of the
+#: user's runs.
+mro_of: Callable[[type], tuple] = type.__dict__["__mro__"].__get__
+_address: Callable[[object], int] = object.__hash__
+
+
+class MroMemo(TypeMemo):
+    """A `TypeMemo` for an answer read along a class's MRO: a class keeps its
+    address when its ``__bases__`` are assigned, and its MRO changes. Read
+    with `get_for`; an answer for another MRO is not found."""
+
+    __slots__ = ()
+
+    def get_for(self, cls: type, default: Any = None) -> Any:
+        found = dict.get(self, type_key(cls))
+        if found is None or found[0] != _address(mro_of(cls)):
+            return default
+        return found[1]
+
+    def put(self, cls: type, value: V) -> V:  # type: ignore[override]
+        # The MRO by its address: the tuple refers to the class.
+        TypeMemo.put(self, cls, (_address(mro_of(cls)), value))
+        return value
+
+
+def per_mro(fn: Callable[[type], V]) -> Callable[[type], V]:
+    """`per_type` for a function reading the class's MRO (`MroMemo`)."""
+    memo: MroMemo = MroMemo()
+    get, put = memo.get_for, memo.put
+
+    @functools.wraps(fn)
+    def remembered(kind: type) -> V:
+        found = get(kind, _ABSENT)
+        if found is _ABSENT:
+            found = put(kind, fn(kind))
+        return found
+
+    remembered.memo = memo  # type: ignore[attr-defined]
+    return remembered
