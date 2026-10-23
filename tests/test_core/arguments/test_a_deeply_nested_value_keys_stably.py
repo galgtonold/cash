@@ -270,3 +270,30 @@ def test_a_set_far_below_the_recursion_limit_is_still_sorted():
     bottom_b, depth_b = _bottom(stable_key_repr(b, BUILTIN_CONTENT))
     assert depth_a == depth_b == levels + 1
     assert bottom_a == bottom_b == ("__cash_type__", "set", ("x", "y", "z"))
+
+
+def test_an_error_from_the_bottom_of_a_deep_value_keeps_a_short_traceback():
+    """The walk keeps a step per level; an error thrown up through them
+    (a timeout's) carried a frame for each, and a traceback of a hundred
+    thousand frames took pytest minutes to print."""
+    from cash.canonical_form import NOT_HOOKED
+
+    class Stop(Exception):
+        pass
+
+    bottom = object()
+
+    def hook(value):
+        if value is bottom:
+            raise Stop
+        return NOT_HOOKED
+
+    value: list = [bottom]
+    for _ in range(5000):
+        value = [value]
+    with pytest.raises(Stop) as raised:
+        stable_key_repr(value, BUILTIN_CONTENT, hook=hook)
+    frames, tb = 0, raised.value.__traceback__
+    while tb is not None:
+        frames, tb = frames + 1, tb.tb_next
+    assert frames < 50

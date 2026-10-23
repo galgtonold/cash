@@ -676,8 +676,10 @@ def helper_ambient_reads(
 
     if reach is None:
         reach = reached_user_code(code, user_ns)
-    found: list[tuple[Any, Any]] = []
-    seen: set[tuple[str, str]] = set()
+    # One entry per read, named by the function that makes it: the analysis
+    # of a caller follows its helpers, so ``label`` calling ``stamp`` finds
+    # ``stamp``'s read too, and the order of *reach* decided which came first.
+    found: dict[tuple[str, str], tuple[Any, Any]] = {}
     for fn in reach.functions:
         if is_cash_wrapper(fn):
             continue
@@ -690,10 +692,17 @@ def helper_ambient_reads(
             mark = (issue.where, issue.description)
             if issue.kind != ISSUE_AMBIENT_READ or issue.description.startswith(_DURATION_CLOCKS):
                 continue
-            if mark not in seen:
-                seen.add(mark)
-                found.append((fn, issue))
-    return found
+            if mark not in found or _makes_the_read(fn, issue.where):
+                found[mark] = (fn, issue)
+    return list(found.values())
+
+
+def _makes_the_read(fn: Any, where: str) -> bool:
+    """Is *fn* the function the analysis says reads (``where`` is
+    ``module.qualname``)? By both: a ``stamp`` of the notebook is not
+    ``Clock.stamp``."""
+    module, qualname = attribute_or(fn, "__module__", None), attribute_or(fn, "__qualname__", None)
+    return isinstance(qualname, str) and where in (f"{module}.{qualname}", qualname)
 
 
 def module_data_component(reach: Reach) -> str:

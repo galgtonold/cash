@@ -24,10 +24,11 @@ from __future__ import annotations
 import atexit
 import logging
 import os
-import sys
 import threading
 import time
 import weakref
+
+from . import io_watch
 
 logger = logging.getLogger(__name__)
 
@@ -101,12 +102,16 @@ _STARTS = frozenset(
 )
 
 
-def _on_audit(event: str, _args: tuple) -> None:
-    if event in _STARTS:
-        flush_all()
+def _flush_before_start(_args: tuple) -> None:
+    flush_all()
 
 
 atexit.register(flush_all)
-sys.addaudithook(_on_audit)
+# Through io_watch's one hook: under the C extension's (``caudit.c``) it is
+# called for these events only. An audit hook of its own was called by
+# Python for every audited event in the process, an ``id()`` included
+# (~0.17 us each, most of them ids cash's own walks asked for).
+for _event in sorted(_STARTS):
+    io_watch.subscribe_always(_event, _flush_before_start)
 if hasattr(os, "register_at_fork"):
     os.register_at_fork(before=flush_all)
