@@ -8,6 +8,8 @@ time and KEY-AMBIENT-READ says why, once.
 
 from __future__ import annotations
 
+import sys
+import types
 import warnings
 
 import pytest
@@ -52,6 +54,25 @@ def test_a_helper_reading_a_uuid_runs_every_time(full_warning_text, cash_magics,
     assert len(found) == 1, found
     assert names in found[0]
     assert "uuid.uuid4()" in found[0]
+
+
+@pytest.fixture
+def main_namespace(mock_shell, monkeypatch):
+    """The notebook's namespace is ``__main__``'s, as in IPython: the
+    analysis of ``label`` then follows it into ``stamp``."""
+    main = types.ModuleType("__main__")
+    main.__dict__.update(mock_shell.user_ns)
+    mock_shell.user_ns = mock_shell.user_global_ns = main.__dict__
+    monkeypatch.setitem(sys.modules, "__main__", main)
+
+
+def test_through_a_helper_the_read_is_named_once_by_its_reader(full_warning_text, main_namespace, cash_magics):
+    """``label`` and ``stamp`` both reach the read: it was named once for
+    each, in whichever order the two were found, on runs that followed."""
+    values, found = _run_twice(cash_magics, [_STAMP, _OUTER], "s = label(1)")
+    assert values[0] != values[1]
+    assert len(found) == 1, found
+    assert "runs stamp()" in found[0]
 
 
 def test_a_clock_read_only_logged_is_cached(full_warning_text, cash_magics):

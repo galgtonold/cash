@@ -1275,11 +1275,8 @@ def _attribute(owner: Any, attr: str) -> Any:
 
 
 def _instance_dict(owner: Any) -> dict:
-    try:
-        own = object.__getattribute__(owner, "__dict__")
-    except (AttributeError, TypeError):
-        return {}
-    return own if instance_of(own, dict) else {}
+    own = own_dict(owner, subclasses=True)
+    return {} if own is None else own if type(own) is dict else dict(dict.items(own))
 
 
 #: Special methods a statement naming an object does not run through it:
@@ -3180,11 +3177,8 @@ def _items(container: Any) -> Iterable[Any]:
             items = base.__iter__(container)  # type: ignore[attr-defined]
         return chain(items, _attributes_of(container))
     # `_attributes_of`, inlined: this runs once for each object a walk opens.
-    try:
-        own = object.__getattribute__(container, "__dict__")
-    except (AttributeError, TypeError):
-        own = None
-    values = list(own.values()) if instance_of(own, dict) else []
+    own = own_dict(container, subclasses=True)
+    values = [] if own is None else list(dict.values(own))
     for member, cls in _slot_members(type(container)):
         try:
             values.append(member.__get__(container, cls))
