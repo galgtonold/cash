@@ -5,16 +5,19 @@ import builtins
 import logging
 import sys
 import textwrap
+import types
 from typing import TYPE_CHECKING
 
 from cash._user_attrs import has_attribute
 from cash.control_markers import iteration_digest
 
+from ...analysis.ast_util import parse_cached
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutations import consumed_input_names
 from .._trace import trace_event
 from ..cache_key import statement_source_hash
+from ..consumables import function_reaches_a_stream, is_stream
 from ..stateful_carriers import carrier_kind_from_producer, stateful_carrier_kind
 from ._types import ClassificationResult, ReexecutionPlan, SimulationResult, latest_producer
 from .carrier_fills import fills_carrier
@@ -787,7 +790,8 @@ class ReexecutionPlanner:
         while changed:
             changed = False
             for i in sorted(scheduled):
-                for v in simulation_trace[i].inputs:
+                drawn = _drawn_streams(simulation_trace[i].stmt_code, user_ns)
+                for v in (*simulation_trace[i].inputs, *sorted(drawn - set(simulation_trace[i].inputs))):
                     try:
                         kind = stateful_carrier_kind(user_ns.get(v))
                     except (TypeError, ValueError, AttributeError, RecursionError):
@@ -797,6 +801,15 @@ class ReexecutionPlanner:
                         # No live object after a restart: recognise the carrier
                         # by the code that makes it.
                         kind = carrier_kind_from_producer(simulation_trace[p].stmt_code)
+                    stream = kind is None and p is not None and v in drawn
+                    if stream:
+                        # A reader that draws from an iterator, itself or
+                        # through a function of the user's (``v = a()``,
+                        # ``def a(): return next(c)``), drew on from wherever
+                        # earlier runs left it: the iterator is rebuilt first,
+                        # as the documented rule says, and every draw before
+                        # this one runs again with it.
+                        kind = "stream"
                     if kind is None or p is None:
                         continue
                     pending = set()
@@ -812,6 +825,9 @@ class ReexecutionPlanner:
                         # the figure is rebuilt from a subset of its history
                         # .
                         entry = simulation_trace[j]
+                        if stream and v in _drawn_streams(entry.stmt_code, user_ns):
+                            pending.add(j)
+                            continue
                         if not fills_carrier(entry, sibling_names):
                             continue
                         # A second savefig is not a fill; the write gates decide
@@ -1003,6 +1019,38 @@ class ReexecutionPlanner:
                 additional_indices.append(i)
 
         return stmts_to_run_indices + additional_indices
+
+
+def _drawn_streams(stmt_code: str, user_ns: dict) -> set[str]:
+    """The live iterators and generators (`is_stream`) the statement
+    *stmt_code* draws from: read itself (``next(c)``, ``for x in c``), or
+    named by a function of the user's it calls that can draw from what it
+    reaches (`function_reaches_a_stream`)."""
+    try:
+        tree = parse_cached(stmt_code)
+    except (SyntaxError, ValueError, TypeError):
+        return set()
+    found = {name for name in consumed_input_names(tree) if is_stream(user_ns.get(name))}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        fn = user_ns.get(node.func.id)
+        if type(fn) is not types.FunctionType:
+            continue
+        names = {name for name in _global_names(fn.__code__) if is_stream(fn.__globals__.get(name))}
+        if names and function_reaches_a_stream(fn):
+            found |= names
+    return found
+
+
+def _global_names(code: types.CodeType) -> set[str]:
+    names: set[str] = set()
+    stack = [code]
+    while stack:
+        co = stack.pop()
+        names.update(co.co_names)
+        stack.extend(c for c in co.co_consts if isinstance(c, types.CodeType))
+    return names
 
 
 def _rebuilds_of_what_it_changes(simulation_trace: list, index: int, consumables: set[str]) -> set[int] | None:
