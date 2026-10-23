@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import functools
 
+import pytest
+
 from cash.notebook import helper_memos
 
 
@@ -79,3 +81,32 @@ def test_no_memo_is_named_when_none_moved():
     assert isinstance(verdict, tuple), verdict
     assert "It may empty a helper memo or read" in verdict[1], verdict[1]
     assert "first" not in verdict[1], verdict[1]
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "second(1); third.cache_clear(); third(1); third(2)",
+        "first(1); third.cache_clear(); third(1); third(1)",
+    ],
+)
+def test_the_memo_whose_clear_the_code_names_is_named_when_it_only_grew(code):
+    """Cleared and filled again with the same keys and more, the memo's
+    counters only grew, as a memo only hit did: the one whose
+    ``cache_clear`` the code names is named."""
+    ns = _three()
+    before = helper_memos.watched(ns)
+    exec(code, ns)
+    verdict = helper_memos.used(before, clears=True, ns=ns, site=(code, None))
+    assert isinstance(verdict, tuple), verdict
+    assert "helper memo third " in verdict[1], verdict[1]
+
+
+def test_no_memo_is_named_when_several_only_grew_and_none_is_named():
+    ns = _three()
+    before = helper_memos.watched(ns)
+    ns["first"](2)
+    ns["second"](2)
+    verdict = helper_memos.used(before, clears=True)
+    assert isinstance(verdict, tuple), verdict
+    assert "It may empty a helper memo or read" in verdict[1], verdict[1]
