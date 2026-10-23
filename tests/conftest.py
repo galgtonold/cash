@@ -13,6 +13,7 @@ import shutil
 import sys
 import tempfile
 import time
+import types
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -385,7 +386,10 @@ class MockShell(Configurable):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.user_ns = {}
+        # A module's namespace, as IPython's: the ``mock_shell`` fixture puts
+        # it in ``sys.modules["__main__"]``, as IPython does its user module.
+        self.user_module = types.ModuleType("__main__")
+        self.user_ns = self.user_module.__dict__
         self.user_global_ns = self.user_ns
         self.user_ns["_ih"] = []  # Input history
         self.events = MagicMock()
@@ -400,13 +404,15 @@ class MockShell(Configurable):
     def reset(self):
         """Reset shell state."""
         self.user_ns.clear()
+        self.user_ns["__name__"] = "__main__"
         self.user_ns["_ih"] = []
 
 
 @pytest.fixture
-def mock_shell():
-    """Provide a mock IPython shell."""
+def mock_shell(monkeypatch):
+    """Provide a mock IPython shell, its namespace ``__main__``'s."""
     shell = MockShell()
+    monkeypatch.setitem(sys.modules, "__main__", shell.user_module)
 
     # Configure run_cell to execute code in user_ns
     def run_cell_impl(cell):

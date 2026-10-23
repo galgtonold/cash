@@ -36,12 +36,13 @@ import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any, NamedTuple
 
-from cash._user_attrs import attribute_or, builtin_items, instance_of
+from cash._user_attrs import attribute_or, builtin_items, instance_of, own_dict
 
 from .. import _native
 from .._memo import CODE_OBJECTS, LruMemo
 from .._type_memo import per_mro, per_type
 from ..install_paths import is_user_code_module
+from ..tracking import io_watch
 from ..tracking.function_tracker import is_local_module
 from ..value_types import LEAF_TYPES, library_scalar_types
 from .compiled_source import is_cash_filename
@@ -576,20 +577,15 @@ _NO_FUNCTIONS: dict[frozenset[int], int] = {}
 _NEW_CODE_EVENTS = frozenset(("exec", "function.__new__"))
 #: How many times code started running from an ``exec`` or a function was
 #: made from code (``types.FunctionType``) in this process: counted by the C
-#: extension's audit hook (``caudit.c``) when it is in, else by a Python one,
-#: which Python calls for every audited event (an ``id()`` included).
-_counted = [0]
+#: extension's audit hook (``caudit.c``) when it is in, else by io_watch's
+#: Python one, shared, since Python calls every hook installed for every
+#: audited event (an ``id()`` included).
+_counted = io_watch.count_events(_NEW_CODE_EVENTS)
 
-
-def _note_new_code(event: str, _args: tuple) -> None:
-    if event in _NEW_CODE_EVENTS:
-        _counted[0] += 1
-
-
-if _K is not None and _K.audit_hook_install():
+if _counted is None and _K is not None and _K.audit_hook_install():
     _new_code = _K.audit_new_code
 else:
-    sys.addaudithook(_note_new_code)
+    _counted = _counted if _counted is not None else [0]
 
     def _new_code() -> int:
         return _counted[0]
@@ -799,12 +795,9 @@ def _visit_group(
     children.append(kind)
     if _may_have_dict(kind):
         for obj in group:
-            try:
-                attrs = object.__getattribute__(obj, "__dict__")
-            except (AttributeError, TypeError):
-                attrs = None
-            if isinstance(attrs, dict):
-                children.extend(attrs.values())
+            attrs = own_dict(obj, subclasses=True)
+            if attrs is not None:
+                children.extend(dict.values(attrs))
     for name in _slot_names(kind):
         getter = _slot_getter(kind, name)
         if getter is not None:

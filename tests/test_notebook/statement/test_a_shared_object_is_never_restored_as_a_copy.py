@@ -97,15 +97,24 @@ def test_an_object_made_in_the_same_statement_is_stored(cash_magics, statement_p
     assert _stored(metrics), metrics.get("uncacheable_reasons")
 
 
-def test_a_shared_output_says_why_it_runs_again(cash_magics, statement_processor):
-    """A closure holds the model: no restore can rebind it. (A notebook
-    variable holding it is stored with the outputs instead, see
-    test_an_alias_between_variables_is_restored_with_it.)"""
+#: The statement pays for itself: ``slow('v1')`` is a call of the
+#: notebook's, kept on its own, and leaves the statement too cheap to store.
+OWN_COST_MODELS = f"models = {{'m': m, 'tag': (time.sleep({ABOVE_PERSISTENCE_FLOOR_S}), 'v1')[1]}}"
+
+
+def test_a_closure_holding_an_unchanged_input_keeps_it_on_a_hit(cash_magics, statement_processor, mock_shell):
+    """A closure holds the model the statement left as it was: ``m`` is the
+    anchor a restore binds again, so the served ``models`` holds the very
+    model the closure holds. (A notebook variable holding it is stored with
+    the outputs instead, see test_an_alias_between_variables_is_restored_with_it;
+    a statement that changes what a closure holds refuses, see
+    test_a_closure_holding_a_changed_object_is_named.)"""
     run_cash_cell(cash_magics, MODEL)
     run_cash_cell(cash_magics, "m = Model()\nkeep = (lambda held: lambda: held)(m)")
-    metrics = statement_processor.process_statement("models = {'m': m, 'tag': slow('v1')}")
-    reasons = " ".join(metrics.get("uncacheable_reasons") or [])
-    assert "'models' holds an object another variable or container also holds" in reasons, reasons
+    assert statement_processor.process_statement(OWN_COST_MODELS)["uncacheable_reasons"] == []
+    assert statement_processor.process_statement(OWN_COST_MODELS)["status"] == CacheStatus.RESTORED
+    ns = mock_shell.user_ns
+    assert ns["models"]["m"] is ns["m"] is ns["keep"]()
 
 
 def test_a_library_module_holding_the_object_still_refuses(cash_magics, statement_processor):
@@ -271,11 +280,14 @@ def test_a_part_held_from_outside_of_an_object_the_statement_changes_still_runs(
     assert statement_processor.process_statement(statement)["status"] != CacheStatus.RESTORED
 
 
-def test_a_variable_holding_a_part_is_still_named(cash_magics, statement_processor):
-    """Control: a closure holding the very object is still the reason."""
+def test_a_closure_holding_a_changed_object_is_named(cash_magics, statement_processor):
+    """Control: the statement fits the model a closure holds, so ``m``
+    cannot be an anchor, and the reason is the model, not its own parts."""
     run_cash_cell(cash_magics, MODEL)
     run_cash_cell(cash_magics, "m = Model()\nkeep = (lambda held: lambda: held)(m)")
-    metrics = statement_processor.process_statement("models = {'m': m, 'tag': slow('v1')}")
+    statement = "models = {'m': m, 'tag': (m.fit(), 'v1')[1]}"
+    metrics = statement_processor.process_statement(statement)
     reasons = " ".join(metrics.get("uncacheable_reasons") or [])
-    assert "'models' holds an object another variable or container also holds" in reasons, reasons
+    assert reasons, "a statement changing the held model was stored"
     assert "own parts" not in reasons, reasons
+    assert statement_processor.process_statement(statement)["status"] != CacheStatus.RESTORED

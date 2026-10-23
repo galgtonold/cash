@@ -53,7 +53,7 @@ from typing import Any
 from cash import _native, _plain_data
 from cash._clock import CpuLimit
 from cash._type_memo import MroMemo, TypeMemo, type_key
-from cash._user_attrs import attribute_or, builtin_items, has_attribute, instance_of
+from cash._user_attrs import attribute_or, builtin_items, has_attribute, instance_of, own_dict
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
 
@@ -335,12 +335,7 @@ def attributes_of(value: Any) -> dict[str, Any] | None:
         or _is_local_module_class(cls)
     ):
         return None
-    try:
-        own = object.__getattribute__(value, "__dict__")
-    except (AttributeError, TypeError):
-        own = None
-    if own is not None and type(own) is not dict:
-        return None
+    own = own_dict(value)
     slots = _slot_members(cls)
     if not slots:
         return own
@@ -432,11 +427,8 @@ def _library_children(value: Any) -> list[Any] | None:
     if kind is _DEQUE:
         return list(value)
     if kind is _WRAPPING:
-        try:
-            own = object.__getattribute__(value, "__dict__")
-        except (AttributeError, TypeError):
-            return None
-        return list(own.values()) if type(own) is dict else None
+        own = own_dict(value)
+        return None if own is None else list(own.values())
     if kind is _ARRAY:
         if value.dtype.kind == "O" and value.base is None:
             return list(value.flat)
@@ -1966,11 +1958,8 @@ def _attributes_in(value: Any, nodes: dict[int, Any], containers: frozenset[type
     """The ids of the nodes a leaf *value*'s own attributes are bound to."""
     if type(value) in containers or children_of(value) is not None:
         return []
-    try:
-        own = object.__getattribute__(value, "__dict__")
-    except (AttributeError, TypeError):
-        return []
-    if type(own) is not dict:
+    own = own_dict(value)
+    if own is None:
         return []
     return [id(attr) for attr in own.values() if id(attr) in nodes]
 
