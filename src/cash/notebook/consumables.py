@@ -556,7 +556,7 @@ def _column_holds_objects(series: Any) -> bool:
         return False
     if type(dtype).__name__ == "CategoricalDtype":
         return not _only_inert(dtype.categories)
-    return not _only_inert(series.array)
+    return not _only_inert(series.values)
 
 
 #: Value types that hold nothing a statement could draw from, tested by
@@ -873,11 +873,11 @@ def _items_up_to(owner: Any, width: int) -> list[tuple[str, Any]] | None:
     if module.split(".")[0] == "pandas":
         name = type(owner).__name__
         if name == "Series" and owner.dtype.kind == "O":
-            return _not_inert(".iloc[{}]", owner.array, width)
+            return _not_inert(".iloc[{}]", owner.values, width)
         if name == "DataFrame":
             found = []
             for col in [c for c, dtype in owner.dtypes.items() if dtype.kind == "O"]:
-                found.extend(_not_inert(f"[{col!r}].iloc[{{}}]", owner[col].array, width - len(found)))
+                found.extend(_not_inert(f"[{col!r}].iloc[{{}}]", owner[col].values, width - len(found)))
                 if len(found) >= width:
                     break
             return found
