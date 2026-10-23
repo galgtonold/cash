@@ -272,6 +272,10 @@ def test_a_module_in_a_folder_with_no_init_is_keyed_by_its_source(tmp_path, spel
         "import builtins\nif False:\n    getattr = 1\n"
         "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
         "K = int(max(map(getattr, [E], ['environ']))['K'])",
+        "import builtins\n"
+        "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
+        "K = int(max(map(getattr, [E], ['environ']))['K'])\n"
+        "getattr = abs",
     ],
     ids=[
         "eval_handed_to_map",
@@ -283,6 +287,7 @@ def test_a_module_in_a_folder_with_no_init_is_keyed_by_its_source(tmp_path, spel
         "a_methodcaller_of_a_dunder",
         "getattr_an_except_handler_names",
         "getattr_bound_on_a_path_that_does_not_run",
+        "getattr_bound_below_its_use",
     ],
 )
 def test_a_value_read_outside_the_source_without_a_call_runs_with_a_warning(tmp_path, top_level):
@@ -293,7 +298,7 @@ def test_a_value_read_outside_the_source_without_a_call_runs_with_a_warning(tmp_
     (allowed as ``object`` was), and ``getattr`` at the top level, which a
     parameter of another function in the module was taken to rebind, an
     ``except ... as getattr`` unbinds as its handler ends, or an ``if False:``
-    never binds; and ``operator.attrgetter`` or ``methodcaller`` given
+    never binds, or ``getattr = abs`` below the use; and ``operator.attrgetter`` or ``methodcaller`` given
     ``'__import__'``, ``getattr`` by another name."""
     _write(tmp_path, "helpmod.py", f"import sys\n\n{top_level}\n\ndef scale(x):\n    return x * K\n")
     _write(

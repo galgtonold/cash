@@ -309,10 +309,10 @@ class _SourceOnly:
         #: names the top level defines with ``def`` or ``class``.
         self.defined: set[str] = set()
         #: names the top level binds in its own scope (``for input in ...``).
-        self.bound: set[str] = set()
+        self.bound: dict[str, int] = {}
         #: names the class or function body being read binds in its own
         #: scope (a parameter ``id``), innermost last.
-        self.scopes: list[set[str]] = []
+        self.scopes: list[dict[str, int]] = []
         #: the top level's functions, by name.
         self.functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
         #: user functions asked about (`_vouches`), and the answers.
@@ -470,7 +470,7 @@ class _SourceOnly:
                 and name.startswith("builtins.")
                 and name not in _BUILTIN_VALUES
                 and not _plain_method(name)
-                and not self._binds(_head(node))
+                and not self._binds(_head(node), node)
             ):
                 # A builtin handed on as a value (``map(eval, ...)``) is
                 # called all the same: only those `_SOURCE_ONLY_CALLS` lists,
@@ -561,12 +561,15 @@ class _SourceOnly:
         finally:
             self.scopes.pop()
 
-    def _binds(self, name: str | None) -> bool:
-        """Does the scope being read bind *name*, so that it is not the
-        builtin: its own body, or the top level? Not a function elsewhere
-        in the module: ``def _u(getattr)`` leaves a top-level ``getattr``
-        the builtin."""
-        return name in self.bound or bool(self.scopes) and name in self.scopes[-1]
+    def _binds(self, name: str | None, node: ast.AST) -> bool:
+        """Does the scope being read bind *name* by the time *node* runs, so
+        that it is not the builtin: its own body, or the top level? Not a
+        function elsewhere in the module: ``def _u(getattr)`` leaves a
+        top-level ``getattr`` the builtin; nor a binding below the use
+        (``getattr(...)`` then ``getattr = x``)."""
+        line = getattr(node, "lineno", 0)
+        scopes = [self.bound, *self.scopes[-1:]]
+        return name is not None and any(name in scope and scope[name] < line for scope in scopes)
 
 
 _BUILTIN_NAMES = frozenset(dir(builtins))
@@ -617,9 +620,10 @@ def _public_names_only(name: str, call: ast.Call) -> bool:
     )
 
 
-def _scope_names(node: ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+def _scope_names(node: ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, int]:
     """The names *node* binds in its own scope, so that a use of one there
-    never reaches the builtin of that name.
+    never reaches the builtin of that name, each with the line a use must
+    come after (0 for any).
 
     In a function, any binding does: a parameter, an assignment's, a loop's
     or an ``except ... as`` target, a ``def`` or a ``class`` make the name
@@ -628,8 +632,9 @@ def _scope_names(node: ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFu
     a statement of its own body that always binds the name counts: an
     assignment, an import, a ``def`` or a ``class``; not one under an
     ``if``, a ``try`` or a loop (``if False: getattr = 1``), nor an ``except
-    ... as`` name, which the handler's end unbinds. Not the names a
-    function, class, lambda or comprehension inside binds."""
+    ... as`` name, which the handler's end unbinds; and only for a use on a
+    line below that statement. Not the names a function, class, lambda or
+    comprehension inside binds."""
     if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return _always_bound(node.body)
     args = node.args
@@ -647,15 +652,17 @@ def _scope_names(node: ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFu
         elif isinstance(child, ast.ExceptHandler) and child.name:
             names.add(child.name)
         pending.extend(ast.iter_child_nodes(child))
-    return names
+    return dict.fromkeys(names, 0)
 
 
-def _always_bound(body: list[ast.stmt]) -> set[str]:
+def _always_bound(body: list[ast.stmt]) -> dict[str, int]:
     """The names the statements of *body* itself always bind, and that no
-    statement of it deletes."""
-    names: set[str] = set()
+    statement of it deletes, each with the last line of the first statement
+    that binds it."""
+    first: dict[str, int] = {}
     deleted: set[str] = set()
     for stmt in body:
+        names: set[str] = set()
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             names.add(stmt.name)
         elif isinstance(stmt, (ast.Import, ast.ImportFrom)):
@@ -676,7 +683,9 @@ def _always_bound(body: list[ast.stmt]) -> set[str]:
                 for n in ast.walk(t)
                 if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Del)
             }
-    return names - deleted
+        for name in names:
+            first.setdefault(name, stmt.end_lineno or stmt.lineno)
+    return {name: line for name, line in first.items() if name not in deleted}
 
 
 def _head(node: ast.expr) -> str | None:
