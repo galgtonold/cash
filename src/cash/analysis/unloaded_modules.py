@@ -470,12 +470,14 @@ class _SourceOnly:
                 and name.startswith("builtins.")
                 and name not in _BUILTIN_VALUES
                 and not _plain_method(name)
-                and not self._binds(_head(node), node)
+                and not (_head(node) not in self.aliases and self._binds(_head(node), node))
             ):
                 # A builtin handed on as a value (``map(eval, ...)``) is
                 # called all the same: only those `_SOURCE_ONLY_CALLS` lists,
                 # by its whole name (``object.__getattribute__`` is not
-                # ``object``).
+                # ``object``). A name an import bound is no rebinding away
+                # from it: ``import builtins`` or ``from builtins import
+                # getattr`` names the builtin, which *name* already says.
                 return False
             if isinstance(node, ast.Attribute):
                 return name is not None or self._expr(node.value)
