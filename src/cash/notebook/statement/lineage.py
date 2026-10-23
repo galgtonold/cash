@@ -132,6 +132,14 @@ def note_own_writes(tracking_state: "TrackingState", paths) -> None:
             tracking_state.own_file_writes[where] = (tracking_state.file_event_seq, st)
 
 
+def rewritten_by_the_notebook_after(tracking_state: "TrackingState", seq: int, path: str) -> bool:
+    """*path* is as the notebook's own write left it, and that write came
+    after event *seq* (`TrackingState.file_event_seq`)."""
+    where = realpath_of_read_this_run(path)[0]
+    own = tracking_state.own_file_writes.get(where)
+    return own is not None and own[0] > seq and regular_file_stat(where) == own[1]
+
+
 def rewritten_by_the_notebook_since(tracking_state: "TrackingState", cache_key: str, paths) -> bool:
     """Every one of *paths* is as the notebook's own write left it, and that
     write came after the statement under *cache_key* last read its files.

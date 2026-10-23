@@ -33,6 +33,11 @@ CELLS = {
         "w = (u, v)",
     ],
     "cells": ["open(P, 'w').write('1')\n" + LOOP + "u = t", "open(P, 'w').write('2')\n" + LOOP + "v = t", "w = (u, v)"],
+    "cells, a plain read below": [
+        "open(P, 'w').write('1')\n" + LOOP + "u = t",
+        "open(P, 'w').write('2')\nv = int(open(P).read())",
+        "w = (u, v)",
+    ],
 }
 
 WANT = {"a loop": "1"}
