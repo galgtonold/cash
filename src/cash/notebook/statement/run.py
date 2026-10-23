@@ -187,6 +187,9 @@ class StatementRun:
     #: unit: the names it changes in place that are not its outputs. It
     #: runs every time for them, and the loop it is in owns their lineage.
     in_place: set[str] = field(default_factory=set)
+    #: Before it ran: the state of each class with state its method calls
+    #: reach (``_class_states_around``), None when it calls none.
+    class_state_before: dict[str, tuple | None] | None = None
     #: It decides a verdict as it runs, so it must run rather than be
     #: restored (an entry would leave what it changes unseen).
     must_run: bool = False
