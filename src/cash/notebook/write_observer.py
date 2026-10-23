@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextvars
 import inspect
 import os
+import stat
 import sys
 import types
 from collections.abc import Iterator
@@ -34,7 +35,7 @@ from cash.analysis.namespace_effects import code_waived_lines
 from cash.install_paths import is_user_code_file
 from cash.purity import is_pure
 from cash.tracking import io_watch
-from cash.tracking.read_classification import is_runtime_cache_path
+from cash.tracking.read_classification import is_runtime_cache_path, own_lstat, own_stat
 
 __all__ = ["WrittenPaths", "children_left_running", "kept_writes", "observe_writes", "process_runs"]
 
@@ -178,9 +179,10 @@ def _names_a_folder(path: object) -> bool:
     """Is the *path* being opened to write a folder already? Then it is an
     ``O_TMPFILE`` open (``tempfile.TemporaryFile``): a file with no name,
     which nothing after the block can find. A folder that only appears later
-    (moved into place) is kept."""
+    (moved into place) is kept. Asked past cash's own wrapper of ``os.stat``
+    (`own_stat`): the question is cash's, not a probe of the user's."""
     try:
-        return isinstance(path, (str, bytes, os.PathLike)) and os.path.isdir(path)
+        return isinstance(path, (str, bytes, os.PathLike)) and stat.S_ISDIR(own_stat(path).st_mode)
     except (OSError, ValueError, TypeError):
         return False
 
@@ -333,5 +335,14 @@ def kept_writes(
         and not (root and os.path.normcase(p).startswith(root))
         # A folder is kept: one moved into place (``tmp.rename(dest)``) is
         # what the block published.
-        and os.path.lexists(p)
+        and _lexists(p)
     )
+
+
+def _lexists(path: str) -> bool:
+    """``os.path.lexists`` past cash's own wrapper of ``os.lstat``."""
+    try:
+        own_lstat(path)
+    except (OSError, ValueError):
+        return False
+    return True

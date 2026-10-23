@@ -66,6 +66,26 @@ def test_a_module_table_is_not_hashed_again_before_an_unrelated_cell(cash_magics
     assert unrelated.bytes <= 64 * KB
 
 
+def test_cheap_calls_over_a_filled_memo_do_not_digest_its_answer(cash_magics, tmp_path, monkeypatch):
+    # ``f(i)`` reads a 16 MB answer of a ``functools.cache`` helper. A call
+    # below the cost floor is never stored, so what its memos hold is not
+    # read: each read digests the answer (~80 MB in all; 560 MB when every
+    # cheap call read the memos).
+    (tmp_path / "wc_memo.py").write_text(
+        "import functools\nimport numpy as np\n\n\n@functools.cache\ndef table():\n"
+        "    return np.arange(2_000_000, dtype=float)\n\n\ndef f(i):\n    return float(table()[i])\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, "wc_memo", raising=False)
+    table_bytes = 2_000_000 * 8
+    cells = ["import wc_memo\nwc_memo.table()", "vals = [wc_memo.f(i) for i in range(200)]"]
+    run_cash_cell(cash_magics, cells[0], cells=cells)
+    with hashed_bytes() as calls:
+        run_cash_cell(cash_magics, cells[1], cells=cells)
+    assert calls.bytes <= 12 * table_bytes
+
+
 def test_a_comprehension_keys_a_bounded_number_of_calls(cash_magics, cash_instance):
     # No call is stored, however slow the machine: a call stalled past the
     # 3 ms floor in the first comprehension was stored and served in the

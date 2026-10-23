@@ -79,10 +79,14 @@ def test_patches_exist_only_while_a_scope_is_open():
         assert current() == before
         assert never_wrapped() == plain
         assert _shared_import_hook not in sys.meta_path
+        from cash.tracking import log_lines
+
         # Importing cash watches opens outside calls (a memo filled while the
-        # app's modules import, before anything is decorated) and files mapped
-        # to write (`written_in_place`), and nothing else.
-        assert set(io_watch._active) == {"open", "mmap.__new__"}, io_watch._active
+        # app's modules import, before anything is decorated), files mapped
+        # to write (`written_in_place`) and a process starting another (the
+        # logs' waiting lines are written first), and nothing else.
+        watched = {"open", "mmap.__new__", *log_lines._STARTS}
+        assert set(io_watch._active) == watched, io_watch._active
 
         @cash.cache
         def f():
@@ -90,7 +94,7 @@ def test_patches_exist_only_while_a_scope_is_open():
 
         # A decorated function watches opens outside calls (a memo filled
         # before the first call), and nothing else.
-        assert set(io_watch._active) == {"open", "mmap.__new__"}, io_watch._active
+        assert set(io_watch._active) == watched, io_watch._active
         assert current() == before
         """
     )

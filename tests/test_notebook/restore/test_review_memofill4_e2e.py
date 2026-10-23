@@ -159,13 +159,15 @@ def test_unnamed_clear_refill_other_key_reuses_tuple_id(cash_magics, capsys):
 
 
 def test_module_function_made_a_memo_and_filled_in_one_statement(cash_magics, capsys, tmp_path, monkeypatch):
-    # Fails ~3 in 8 runs at e0575c53, never at cf62039 (8/8 pass). Cause: the
-    # call `functools.cache(mf4_mod.g)` is stored by the call unit because
-    # call_unit._run_miss times `helper_memos.watched()` (~2 ms the first time
-    # in a statement) inside `elapsed`, pushing it over the 3 ms call floor;
-    # after the restart that call is served (held memo object, already filled)
-    # and BODY is not printed. Also: `_where` re-reads modules once per
-    # statement, so the memo bound and filled here is not seen by `used`.
+    # The call ``functools.cache(mf4_mod.g)`` was stored once it took past
+    # the call floor: on a busy machine cash's own work around it, timed as
+    # the call's, got it there (red on macOS CI). After the restart it was
+    # served -- the memo the first run filled -- and BODY was not printed.
+    # A memo is never stored now, and only the call is timed. The floor is
+    # put at zero here so the store does not wait on a busy machine.
+    from cash.notebook.call_unit import CallUnit
+
+    monkeypatch.setattr(CallUnit, "_cost_floor_s", lambda self: 0.0)
     (tmp_path / "mf4_mod.py").write_text("def g(n):\n    print('BODY', n)\n    return n * 2\nf = g\n", encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     cells = [
