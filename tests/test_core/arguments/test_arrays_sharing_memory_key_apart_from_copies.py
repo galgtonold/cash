@@ -23,6 +23,7 @@ pytestmark = pytest.mark.filterwarnings("ignore::cash.exceptions.CashWarning")
 
 BASE = np.arange(10.0)
 FRAME = pd.DataFrame({"a": np.arange(3.0), "b": np.arange(3.0)})
+PAIRS = np.arange(20.0).reshape(10, 2)
 
 
 def _shares(a, b):
@@ -99,6 +100,7 @@ def test_the_shared_call_is_reused_after_a_restart(tmp_path):
         (FRAME, FRAME.copy()),
         (FRAME, FRAME["a"].copy()),
         (FRAME, pd.Index([1, 2, 3])),
+        (PAIRS[:, 0], PAIRS[:, 1]),
     ],
     ids=[
         "two arrays",
@@ -106,10 +108,13 @@ def test_the_shared_call_is_reused_after_a_restart(tmp_path):
         "a frame and its copy",
         "a frame and a copied column",
         "a frame and an index",
+        "two columns of one array",
     ],
 )
 def test_nothing_is_added_to_the_key_when_no_memory_is_shared(values):
     """One object twice is marked as one object (`shared_across`); a copied
-    column keeps its frame's index, which is never written in place."""
+    column keeps its frame's index, which is never written in place; the
+    columns of one array interleave without sharing an element, as the
+    copies a restore gives them share none."""
     keyed = [object() for _ in values]
     assert shared_memory_across(list(values), keyed, []) == ()

@@ -237,17 +237,58 @@ def shared_memory_across(values: list, keyed: list, met: list) -> tuple:
         else:
             groups.append([span])
             reach = span[1]
-    shared = [group for group in groups if len({span[2] for span in group}) > 1]
+    objects = [value for _where, value in found.values()]
+    shared = []
+    for group in groups:
+        confirmed = _sharing_owners(group, objects, np)
+        if len(confirmed) > 1:
+            shared.append([span for span in group if span[2] in confirmed])
     if not shared:
         return ()
     # Numbered by who holds them, not by address, which differs by process.
     shared.sort(key=lambda group: min((span[2], span[4]) for span in group))
     layout = []
     for g, group in enumerate(shared):
-        low = group[0][0]
+        low = min(span[0] for span in group)
         layout.extend((span[3], span[4], g, span[0] - low, span[1] - low, span[5]) for span in group)
     layout.sort(key=lambda entry: (repr(entry[0]), entry[1]))
     return tuple(layout)
+
+
+#: How hard `np.shares_memory` may look before two arrays whose bounds
+#: overlap are taken as sharing memory.
+_SHARES_MEMORY_WORK = 100_000
+
+
+def _sharing_owners(group: list, objects: list, np: Any) -> set[int]:
+    """The owners of the spans in *group* that share memory with another
+    owner's. Overlapping bounds are not enough for two arrays: the columns
+    of one ``(n, 2)`` array interleave without sharing an element, and
+    the copies a restore gives them do not overlap at all."""
+    owners = sorted({span[2] for span in group})
+    if len(owners) < 2:
+        return set()
+    confirmed: set[int] = set()
+    for i, a in enumerate(owners):
+        for b in owners[i + 1 :]:
+            if (a in confirmed and b in confirmed) or not _overlap(group, a, b):
+                continue
+            first, second = objects[a], objects[b]
+            if np is not None and isinstance(first, np.ndarray) and isinstance(second, np.ndarray):
+                too_hard = getattr(getattr(np, "exceptions", np), "TooHardError", ArithmeticError)
+                try:
+                    if not np.shares_memory(first, second, max_work=_SHARES_MEMORY_WORK):
+                        continue
+                except too_hard:
+                    pass  # past the work allowed: taken as shared
+            confirmed.update((a, b))
+    return confirmed
+
+
+def _overlap(group: list, a: int, b: int) -> bool:
+    """Does a span of owner *a* in *group* overlap one of owner *b*?"""
+    mine = [span for span in group if span[2] == a]
+    return any(s[0] < m[1] and m[0] < s[1] for s in group if s[2] == b for m in mine)
 
 
 #: Values whose identity is code plus what it captures. A hasher registered for
