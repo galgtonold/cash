@@ -153,3 +153,67 @@ def test_every_fast_hit_builds_the_key_the_ordinary_path_builds(tmp_path, watchi
     points[0].y = 5
     assert warm(f, points) == _expected(points)
     assert hit_memo.VERIFIED[0] >= verified + 2
+
+
+# -- a miss with the same list: the in-place-change check ------------------
+
+
+def scaled(points, k):
+    RUNS["n"] += 1
+    return sum(p.x for p in points) * k
+
+
+def moves_one(points, k):
+    RUNS["n"] += 1
+    points[0].x += k
+    return k
+
+
+def writes_back(points, k):
+    RUNS["n"] += 1
+    points[0].x = points[0].x
+    return k
+
+
+def test_a_miss_with_an_unchanged_list_skips_hashing_it_again(c, watching, monkeypatch):
+    from cash.decorator import purity_checks
+
+    f = c.cache(scaled)
+    watching["points"] = points = _points()
+    warm(f, points, 1)
+    after = []
+    original = purity_checks.PurityChecks.checked_arguments_hash
+    monkeypatch.setattr(
+        purity_checks.PurityChecks,
+        "checked_arguments_hash",
+        lambda self, *a: after.append(a[0]) or original(self, *a),
+    )
+    assert f(points, 2) == 2 * sum(range(500))
+    assert after == [], "the watchers prove the list unchanged: no hash after the body"
+    assert f.cache_info()["misses"] == 2
+    assert served_fast(f, points, 2)[0] == 2 * sum(range(500))
+
+
+def test_a_body_that_changes_an_item_is_still_caught(c, watching):
+    f = c.cache(moves_one)
+    watching["points"] = points = _points()
+    for _ in range(3):
+        f(points, 0)
+    runs = RUNS["n"]
+    f(points, 5)
+    assert points[0].x == 5
+    f(points, 5)
+    assert RUNS["n"] == runs + 2, "a call that changes its argument is not stored"
+    assert points[0].x == 10
+
+
+def test_a_body_that_writes_back_what_was_there_is_still_stored(c, watching):
+    """The watchers see the write; the hash after the body says nothing changed."""
+    f = c.cache(writes_back)
+    watching["points"] = points = _points()
+    for _ in range(3):
+        f(points, 0)
+    runs = RUNS["n"]
+    f(points, 1)
+    f(points, 1)
+    assert RUNS["n"] == runs + 1

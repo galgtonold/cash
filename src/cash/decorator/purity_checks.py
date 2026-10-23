@@ -17,7 +17,7 @@ import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from .. import _plain_data, identity_refs
+from .. import _plain_data, identity_refs, value_watch
 from .._clock import perf_counter as _perf_counter
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..analysis.bytecode import GLOBAL_WRITES, argvals
@@ -760,6 +760,17 @@ class LearnedMutations:
 _UNCHANGEABLE_TYPES = (str, int, float, bool, type(None), bytes, complex)
 
 
+class _Watched:
+    """An argument's identity snapshot when the watchers watch it instead:
+    the token its key build gave it (`value_watch.tag`), current while they
+    prove it unchanged."""
+
+    __slots__ = ("token",)
+
+    def __init__(self, token: Any) -> None:
+        self.token = token
+
+
 def _cannot_change(value: Any) -> bool:
     """Whether *value* can never change in place: an exact immutable
     primitive, or an exact tuple or frozenset of such values."""
@@ -1278,6 +1289,9 @@ class PurityChecks:
         when no identity at any level moved, nothing in it did, and
         `PurityChecks.check_argument_mutation` needs no hash after the body:
         on a list of ten million ints that hash was a second of a 3.5 s miss.
+        A list of records, which has no identity snapshot, counts as covered
+        while the watchers prove it unchanged since its key was built (its
+        `value_watch.tag` token); the hash runs when they saw any write.
         """
         try:
             canon_args, canon_kwargs = self._checked_arguments(func_name, args, kwargs)
@@ -1290,7 +1304,11 @@ class PurityChecks:
             if type(value) is list or type(value) is tuple:
                 snapshot = _plain_data.identity_snapshot(value)
                 if snapshot is None:
-                    covers_all = False
+                    token = value_watch.peek(value, value_watch.KIND_WALKED) if value_watch.WATCHING else None
+                    if token is None:
+                        covers_all = False
+                    else:
+                        found[name] = (value, _Watched(token))
                 elif any(level is not None for level in snapshot):
                     found[name] = (value, snapshot)
             elif not _cannot_change(value):
@@ -1338,10 +1356,18 @@ class PurityChecks:
         if args_hash is None:
             return
         identities = observer.arg_identities
+        watched_moved = False
         if identities:
-            moved = [
-                name for name, (value, snapshot) in identities.items() if _plain_data.identity_changed(value, snapshot)
-            ]
+            moved = []
+            for name, (value, snapshot) in identities.items():
+                if type(snapshot) is _Watched:
+                    # The watchers saw a write, which may have put back what
+                    # was there: the hash below tells.
+                    watched_moved = (
+                        watched_moved or value_watch.peek(value, value_watch.KIND_WALKED) is not snapshot.token
+                    )
+                elif _plain_data.identity_changed(value, snapshot):
+                    moved.append(name)
             if moved:
                 for name in moved:
                     self._frozen.forget_container(identities[name][0])
@@ -1352,9 +1378,10 @@ class PurityChecks:
                     f"the result was not stored, so this call runs every time",
                 )
                 return
-        if observer.arg_identities_cover_all:
-            # Every argument is plain data whose identities did not move, or
-            # cannot change at all: nothing in them changed.
+        if observer.arg_identities_cover_all and not watched_moved:
+            # Every argument is plain data whose identities did not move, a
+            # list the watchers prove unchanged since its key was built, or
+            # a value that cannot change at all: nothing in them changed.
             return
         try:
             after = self.checked_arguments_hash(func_name, args, kwargs)
