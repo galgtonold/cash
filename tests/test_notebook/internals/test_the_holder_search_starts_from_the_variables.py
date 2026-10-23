@@ -23,13 +23,16 @@ from cash.notebook.shared_objects import share_group
 
 @pytest.fixture
 def referrer_calls():
-    """Counts the calls of ``gc.get_referrers`` by a profile hook: a wrapper
-    taking ``*objs`` would add a tuple holding the very objects searched."""
+    """Counts the calls of ``gc.get_referrers``, and of the heap read that
+    stands in for it on 3.12.0-3.12.5 (`shared_objects._referrers_of`), by a
+    profile hook: a wrapper taking ``*objs`` would add a tuple holding the
+    very objects searched."""
     calls = []
     real = gc.get_referrers
+    heap_read = shared_objects._referrers_of.__code__
 
     def hook(frame, event, arg):
-        if event == "c_call" and arg is real:
+        if (event == "c_call" and arg is real) or (event == "call" and frame.f_code is heap_read):
             calls.append(1)
 
     sys.setprofile(hook)
