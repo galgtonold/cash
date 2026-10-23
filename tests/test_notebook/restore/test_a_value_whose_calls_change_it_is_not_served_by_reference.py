@@ -110,8 +110,9 @@ def test_each_run_and_a_restart_match_plain(cash_magics, floors_at_zero, case):
 
 def test_a_class_without_state_is_still_served(cash_magics, floors_at_zero):
     """Ordinary notebooks keep their hits: a class whose calls change
-    nothing, and one whose memo is empty, are served."""
+    nothing is served. A call that makes a ``functools`` memo is never
+    stored, even an empty one, so ``Cases`` runs each time."""
     cell = "import vbr_helpers\nPlain = vbr_helpers.make_plain()\nCases = vbr_helpers.make_cases()"
     run_cash_cell(cash_magics, cell)
     run_cash_cell(cash_magics, cell)
-    assert "COMPUTED" not in _statuses(cash_magics)[1:]
+    assert _statuses(cash_magics)[1:] == ["MIXED", "COMPUTED"]
