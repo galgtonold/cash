@@ -16,6 +16,7 @@ import importlib
 import inspect
 import operator
 import os
+import random
 import sqlite3
 import sys
 import textwrap
@@ -242,7 +243,7 @@ def module_state_writes(code: str, namespace: Mapping[str, Any] | None) -> froze
     if tree is None:
         return frozenset()
     found: set[str] = set()
-    _state_writes(tree.body, namespace, found, set())
+    _state_writes(tree.body, namespace, found, set(), aliases=_module_aliases(tree.body, namespace))
     return frozenset(found)
 
 
@@ -316,12 +317,14 @@ def _state_writes(
     process: set[str] | None = None,
     *,
     follow: bool = True,
+    aliases: Mapping[str, types.ModuleType] | None = None,
 ) -> None:
     """Add to *found* (unless None) the local modules *statements* set state
     on, run with *namespace* as their globals; *followed* are the notebook
     functions already walked. With *process*, add to it what of the process
     they change (`process_state_writes`). Without *follow*, a call is judged by
-    what it calls, not followed into a body.
+    what it calls, not followed into a body. *aliases*: the names *statements*
+    themselves bind to a module (`_module_aliases`).
 
     This is the one walk that follows a statement into the notebook
     functions it calls: whatever else a statement's helpers can change is
@@ -335,7 +338,7 @@ def _state_writes(
         if found is None or not isinstance(node, (ast.Attribute, ast.Subscript)):
             return
         if isinstance(node, ast.Attribute):
-            home = _set_on_a_module(node.value, namespace)
+            home = _set_on_a_module(node.value, namespace, aliases)
             if home is not None:
                 _note_set_on_a_library(home, node.attr)
                 found.add(home)
@@ -343,7 +346,7 @@ def _state_writes(
         else:
             # ``vars(textwrap)["rv"] = v``, ``textwrap.__dict__["rv"] = v``.
             owner = _module_dict_of(node.value)
-            home = _set_on_a_module(owner, namespace) if owner is not None else None
+            home = _set_on_a_module(owner, namespace, aliases) if owner is not None else None
             if home is not None:
                 key = node.slice
                 _note_set_on_a_library(home, key.value if isinstance(key, ast.Constant) else _ANY_NAME)
@@ -378,7 +381,7 @@ def _state_writes(
             return
         if isinstance(func, ast.Name) and func.id in ("setattr", "delattr") and node.args:
             target = namespace.get(node.args[0].id) if isinstance(node.args[0], ast.Name) else None
-            home = _set_on_a_module(node.args[0], namespace)
+            home = _set_on_a_module(node.args[0], namespace, aliases)
             if home is not None:
                 name = node.args[1] if len(node.args) > 1 else None
                 _note_set_on_a_library(home, name.value if isinstance(name, ast.Constant) else _ANY_NAME)
@@ -387,7 +390,21 @@ def _state_writes(
             if home is not None:
                 found.add(home)
         elif isinstance(func, ast.Attribute) and func.attr in MUTATING_METHODS:
-            changed_in_place(func.value)
+            # ``vars(textwrap).update(rv=v)``, ``textwrap.__dict__.setdefault("rv", v)``.
+            owner = _module_dict_of(func.value)
+            home = _set_on_a_module(owner, namespace, aliases) if owner is not None else None
+            if home is None:
+                changed_in_place(func.value)
+                return
+            names = [kw.arg for kw in node.keywords if kw.arg is not None]
+            first = node.args[0] if node.args else None
+            if func.attr in ("setdefault", "pop") and isinstance(first, ast.Constant):
+                names.append(first.value)
+            elif node.args or len(names) < len(node.keywords) or not names:
+                names.append(_ANY_NAME)
+            for name in names:
+                _note_set_on_a_library(home, name)
+            found.add(home)
 
     def followed_into(callee: Any, kind: str, receiver: Any) -> bool:
         """Follow the function *callee* into its body; whether it is the
@@ -532,25 +549,48 @@ def _is_users_function(fn: types.FunctionType, namespace: Mapping[str, Any]) -> 
     return home is not None and _is_local(home)
 
 
-def _set_on_a_module(owner: ast.expr, namespace: Mapping[str, Any]) -> str | None:
+def _set_on_a_module(
+    owner: ast.expr, namespace: Mapping[str, Any], aliases: Mapping[str, types.ModuleType] | None = None
+) -> str | None:
     """The module, a library's too, that *owner* names, when a name is set
     on it right there: ``textwrap.rv = v``, ``setattr(textwrap, "rv", v)``.
     Not one of the notebook's own globals. A library's module is state of
     the process as a local one is: with every statement stored, ``print(
     textwrap.rv)`` below such a statement was keyed on the import alone, and
     printed the value from before an edit."""
-    module = _module_named(owner, namespace)
+    module = _module_named(owner, namespace, aliases)
     if not instance_of(module, types.ModuleType) or vars(module) is namespace:
         return None
     name = attribute_or(module, "__name__", None)
     return name if isinstance(name, str) and sys.modules.get(name) is module else None
 
 
-def _module_named(owner: ast.expr, namespace: Mapping[str, Any]) -> Any:
-    """What *owner* names: a global, or ``sys.modules["textwrap"]`` with
-    ``sys`` the notebook's."""
+def _module_named(
+    owner: ast.expr, namespace: Mapping[str, Any], aliases: Mapping[str, types.ModuleType] | None = None
+) -> Any:
+    """What *owner* names: a global, a name the code itself bound to a
+    module (*aliases*), ``sys.modules["textwrap"]`` with ``sys`` the
+    notebook's, or ``importlib.import_module("textwrap")`` and
+    ``__import__("textwrap")`` of a module already loaded."""
     if isinstance(owner, ast.Name):
+        if aliases and owner.id in aliases:
+            return aliases[owner.id]
         return namespace.get(owner.id)
+    if isinstance(owner, ast.Call) and len(owner.args) == 1 and not owner.keywords:
+        name = owner.args[0]
+        if not (isinstance(name, ast.Constant) and isinstance(name.value, str)):
+            return None
+        func = owner.func
+        if isinstance(func, ast.Name) and func.id == "__import__" and "__import__" not in namespace:
+            return sys.modules.get(name.value.partition(".")[0])
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "import_module"
+            and isinstance(func.value, ast.Name)
+            and namespace.get(func.value.id) is importlib
+        ) or (isinstance(func, ast.Name) and namespace.get(func.id) is importlib.import_module):
+            return sys.modules.get(name.value)
+        return None
     if (
         isinstance(owner, ast.Subscript)
         and isinstance(owner.slice, ast.Constant)
@@ -562,6 +602,26 @@ def _module_named(owner: ast.expr, namespace: Mapping[str, Any]) -> Any:
     ):
         return sys.modules.get(owner.slice.value)
     return None
+
+
+def _module_aliases(statements: Iterable[ast.stmt], namespace: Mapping[str, Any]) -> dict[str, types.ModuleType]:
+    """The names *statements* bind to a module already loaded, for a store
+    through one later in them: ``m = sys.modules["textwrap"]; m.k = v``,
+    ``import textwrap as m; m.k = v`` in one statement's text."""
+    aliases: dict[str, types.ModuleType] = {}
+    for node in statements:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                module = sys.modules.get(alias.name if alias.asname else alias.name.partition(".")[0])
+                if module is not None:
+                    aliases[alias.asname or alias.name.partition(".")[0]] = module
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            module = _module_named(node.value, namespace, aliases)
+            if instance_of(module, types.ModuleType):
+                aliases[node.targets[0].id] = module
+            else:
+                aliases.pop(node.targets[0].id, None)
+    return aliases
 
 
 def _module_dict_of(node: ast.expr) -> ast.expr | None:
@@ -597,8 +657,10 @@ def _taken_from_libraries(code: str, namespace: Mapping[str, Any]) -> list[tuple
     that the notebook set on a library's module: ``from textwrap import
     rv`` after ``tw.rv = v`` holds the value set, under a name bound
     afresh, as ``getattr(textwrap, "rv")`` reads it (every name set on the
-    module, for a name spelled at run time)."""
-    if not _SET_ON_LIBRARIES or ("import" not in code and "getattr" not in code):
+    module, for a name spelled at run time), and as ``sys.modules["textwrap"].
+    rv``, ``importlib.import_module("textwrap").rv``, ``vars(textwrap)["rv"]``
+    and ``textwrap.__dict__["rv"]`` read it."""
+    if not _SET_ON_LIBRARIES or not any(word in code for word in _TAKEN_BY):
         return []
     tree = parse_cached(code)
     if tree is None:
@@ -628,36 +690,91 @@ def _taken_from_libraries(code: str, namespace: Mapping[str, Any]) -> list[tuple
                     taken.append((module, key.value))
             else:
                 taken.extend((module, name) for name in sorted(names) if name != _ANY_NAME)
+        elif isinstance(node, ast.Attribute) and not isinstance(node.value, ast.Name):
+            module = _module_named(node.value, namespace)
+            if instance_of(module, types.ModuleType) and _set_on_by_the_notebook(module, node.attr):
+                taken.append((module, node.attr))
+        elif isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load):
+            owner = _module_dict_of(node.value)
+            module = _module_named(owner, namespace) if owner is not None else None
+            if not instance_of(module, types.ModuleType):
+                continue
+            key = node.slice
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                if _set_on_by_the_notebook(module, key.value):
+                    taken.append((module, key.value))
+            else:
+                names = _SET_ON_LIBRARIES.get(attribute_or(module, "__name__", None)) or ()
+                taken.extend((module, name) for name in sorted(names) if name != _ANY_NAME)
     return taken
 
 
+#: Words without one of which a statement takes nothing set on a library's
+#: module but as ``module.name`` (`_taken_from_libraries`).
+_TAKEN_BY = ("import", "getattr", "modules", "vars", "__dict__")
+
+
 def library_streams_read(code: str, namespace: Mapping[str, Any] | None) -> list[str]:
-    """``module.name`` for each name *code* reads that the notebook set on a
-    library's module to an iterator or another stream: ``next(textwrap.cnt)``
-    after ``textwrap.cnt = itertools.count()``. A hit would not move it, and
-    its value, folded into the key, was the one the run before left: a draw
-    restored without drawing left the next draw keyed as the first and
-    drawing what plain Python had drawn already. Read as a draw, as one
-    from a variable is (`drawn_stream_inputs`)."""
+    """``module.name`` for each name *code* reads, itself or through the
+    user's functions it calls, that the notebook set on a library's module
+    to something a read can move (`library_draw_source`): ``next(textwrap.
+    cnt)`` after ``textwrap.cnt = itertools.count()``, ``textwrap.rng.
+    random()``, ``next(textwrap.box.it)``, ``d()`` with ``d`` drawing. A hit
+    would not move it, and its value, folded into the key, was the one the
+    run before left: a draw restored without drawing left the next draw keyed
+    as the first and drawing what plain Python had drawn already. Read as a
+    draw, as one from a variable is (`drawn_stream_inputs`)."""
     if not _SET_ON_LIBRARIES or not code or not namespace:
         return []
+    return sorted(
+        label for label, value in reached_user_code(code, namespace).data if library_draw_source(label, value)
+    )
+
+
+def library_draw_source(label: str, value: Any) -> bool:
+    """Whether *value*, at *label* (``module.name``), is a name the notebook
+    set on a library's module (`_SET_ON_LIBRARIES`) that holds, anywhere
+    inside, something a read moves: an iterator, generator or file
+    (`is_stream`), or a random generator (``random.Random``, numpy's). Its
+    state is not data a result is computed from but what the next draw
+    takes, so it is keyed by which object it is (`module_data_digest`)."""
+    module_name, _, attr = label.rpartition(".")
+    module = sys.modules.get(module_name)
+    if module is None or not _set_on_by_the_notebook(module, attr):
+        return False
+    return _holds_a_draw(value, 0, set())
+
+
+#: How far `_holds_a_draw` looks: containers and objects nested this deep,
+#: and this many items of each.
+_DRAW_DEPTH = 4
+_DRAW_ITEMS = 1000
+
+
+def _holds_a_draw(value: Any, depth: int, seen: set[int]) -> bool:
     from .consumables import is_stream
 
-    found: list[str] = []
-    for module, attr in _taken_from_libraries(code, namespace):
-        if is_stream(vars(module).get(attr)):
-            found.append(f"{module.__name__}.{attr}")
-    for root, attrs in names_read(code):
-        obj = namespace.get(root)
-        for attr in reversed(attrs):
-            if not instance_of(obj, types.ModuleType):
-                break
-            value = vars(obj).get(attr)
-            if _set_on_by_the_notebook(obj, attr) and is_stream(value):
-                found.append(f"{obj.__name__}.{attr}")
-                break
-            obj = value
-    return sorted(set(found))
+    kind = type(value)
+    if kind in IMMUTABLE_PRIMS or value is None or id(value) in seen:
+        return False
+    seen.add(id(value))
+    if instance_of(value, random.Random) or attribute_or(kind, "__module__", "").startswith("numpy.random"):
+        return True
+    if is_stream(value):
+        return True
+    if depth >= _DRAW_DEPTH or issubclass(kind, (types.ModuleType, type)) or inspect.isroutine(value):
+        return False
+    if issubclass(kind, dict):
+        items: Iterable[Any] = list(dict.values(value))[:_DRAW_ITEMS]
+    elif issubclass(kind, (list, tuple, set, frozenset)):
+        items = list(value)[:_DRAW_ITEMS]
+    else:
+        try:
+            own = object.__getattribute__(value, "__dict__")
+        except (AttributeError, TypeError):
+            own = None
+        items = list(own.values())[:_DRAW_ITEMS] if type(own) is dict else []
+    return any(_holds_a_draw(item, depth + 1, seen) for item in items)
 
 
 def _note_set_on_a_library(module_name: str, name: Any) -> None:

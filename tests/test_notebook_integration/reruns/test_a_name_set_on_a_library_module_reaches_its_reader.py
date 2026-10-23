@@ -57,7 +57,17 @@ SHAPES = {
     "set_through_sys_modules": (
         "import sys, textwrap",
         "sys.modules['textwrap'].rv = (time.sleep(0.3), Z)[1]",
-        "print('R', textwrap.rv)",
+        "y = (time.sleep(0.3), textwrap.rv)[1]\nprint('R', y)",
+    ),
+    "set_through_import_module": (
+        "import importlib, textwrap",
+        "importlib.import_module('textwrap').rv = (time.sleep(0.3), Z)[1]",
+        "y = (time.sleep(0.3), textwrap.rv)[1]\nprint('R', y)",
+    ),
+    "set_through_a_name_bound_in_the_cell": (
+        "import sys, textwrap",
+        "m = sys.modules['textwrap']; m.rv = (time.sleep(0.3), Z)[1]",
+        "y = (time.sleep(0.3), textwrap.rv)[1]\nprint('R', y)",
     ),
     "set_through_vars": (
         "import textwrap",

@@ -699,8 +699,18 @@ def module_data_digest(label: str, value: Any) -> str:
     """The digest of *value*, the module data at *label*: its value hash,
     with the code of the functions and of the user's objects it holds
     (`held_code_digest`). The value hash pickles a function by its name, so
-    a registry holding a function edited since keyed as it did."""
+    a registry holding a function edited since keyed as it did.
+
+    A stream or random generator set on a library's module
+    (`library_draw_source`) is keyed by which object it is: each read draws
+    from it, so its state after a draw differs from the state the draw was
+    keyed on, and a cell reading what the draw bound found it moved on and
+    drew again to rebuild it. The cell setting it makes a new one."""
+    from .callee_reach import library_draw_source
+
     try:
+        if library_draw_source(label, value):
+            return f"drawn:{type(value).__qualname__}:{id(value)}"
         digest = compute_hash(value)
         code = held_code_digest(value)
         if code:
