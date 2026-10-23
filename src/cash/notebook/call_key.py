@@ -758,6 +758,7 @@ def call_cache_key(
     by_content: bool = False,
     name_digests: Mapping[str, str] | None = None,
     code_names: frozenset[str] = frozenset(),
+    shared_memory: tuple = (),
 ) -> str | None:
     """The cache key for one intercepted call, or ``None`` to refuse caching it.
 
@@ -802,6 +803,11 @@ def call_cache_key(
     call keeps its spelled source, so a module read is narrowed to the
     functions the call names (``fit_ets`` among them) and an edit to one
     moves the key. A function's pickled bytes are its name, not its code.
+
+    *shared_memory* is where the arguments that keep their data in the same
+    memory sit in it (`shared_memory_across`): under content keying,
+    ``f(base, base[2:])`` and ``f(base, base[2:].copy())`` hash the same.
+    Empty, the key is as without it.
     """
     free_names = set(site.free_names)
     source, occurrence = site.source, site.occurrence_index
@@ -851,6 +857,8 @@ def call_cache_key(
         parts.extend(f"n:{name}={digest}" for name, digest in sorted((name_digests or {}).items()))
         # Marked, so a key without the statement can never equal one with it.
         parts.append("by=content")
+        if shared_memory:
+            parts.append("mem=" + hashlib.sha256(repr(shared_memory).encode("utf-8")).hexdigest())
     elif site.stmt_identity:
         # Hashed, so the statement's own text cannot break the delimiting.
         parts.append("stmt=" + hashlib.sha256(site.stmt_identity.encode("utf-8")).hexdigest())
@@ -1165,6 +1173,18 @@ def _keys_by_content(
     return _callee_state_is_plain(fn, set(), budget)
 
 
+def _shared_memory(values: tuple) -> tuple:
+    """`shared_memory_across` for a call's received arguments, each keyed by
+    its own content hash."""
+    from ..decorator.arg_hashing import shared_memory_across
+
+    return shared_memory_across(list(values), [_KEYED_APART] * len(values), [])
+
+
+#: What `_shared_memory` says each argument is keyed as: not itself.
+_KEYED_APART = object()
+
+
 def global_digests(fn, names: tuple[str, ...]) -> dict[str, str]:
     """PRE-call content hashes of the globals *fn* writes, for the key.
 
@@ -1288,6 +1308,7 @@ class CallKeys:
                 by_content=by_content,
                 name_digests=name_digests,
                 code_names=code_names,
+                shared_memory=_shared_memory((*args, *kwargs.values())) if by_content else (),
             )
             self._note_key_parts(site, key, ctx, arg_digests, global_digests)
             if _shadow.SHADOW is not None and key is not None:
@@ -1336,6 +1357,7 @@ class CallKeys:
                 loop_vars=loop_vars,
                 loop_var_digests=self._current_loop_var_digests(),
                 by_content=True,
+                shared_memory=_shared_memory((*args, *kwargs.values())),
             )
         except Exception:  # noqa: BLE001 - never let keying break the call
             logger.debug("call unit: key build failed for %s", site.source)

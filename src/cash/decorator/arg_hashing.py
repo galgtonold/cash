@@ -195,6 +195,61 @@ def shared_across(values: list, keyed: list, walked: dict) -> tuple:
     return tuple(found)
 
 
+def shared_memory_across(values: list, keyed: list, met: list) -> tuple:
+    """Where two arrays or frames in the key keep their data in the same
+    memory without being one object: ``f(base, base[2:])``, ``f(df,
+    df['a'])``. Each is keyed by its content, as an equal copy is, but a
+    write through one shows through the other, and a read of where they
+    sit (``np.shares_memory``) tells them apart.
+
+    ``(where, span, group, start, end, strides)`` per span of memory such an
+    object shares with another: *where* is an argument, as `shared_across`
+    locates it, or ``("met", n)`` for the n-th value the canonical walk keyed
+    by its content (*met*, `canonical_bytes`'s *data*), *start* and *end* from the
+    lowest address of the overlapping spans, so that the same layout keys
+    the same in any process. Empty when nothing overlaps, and then the key
+    is unchanged. One object held twice is `shared_across`'s.
+    """
+    from ..notebook.borrowed_memory import data_spans, memory_family
+
+    found: dict[int, tuple] = {}
+    for i, (value, digest) in enumerate(zip(values, keyed)):
+        if digest is not value and memory_family(value) is not None:
+            found.setdefault(id(value), ((i, -2, 0), value))
+    for n, value in enumerate(met):
+        if memory_family(value) is not None:
+            found.setdefault(id(value), (("met", n), value))
+    if len(found) < 2:
+        return ()
+    np = sys.modules.get("numpy")
+    spans = []
+    for owner, (where, value) in enumerate(found.values()):
+        strides = tuple(value.strides) if np is not None and isinstance(value, np.ndarray) else None
+        for k, (start, end) in enumerate(data_spans(value)):
+            spans.append((start, end, owner, where, k, strides))
+    spans.sort(key=lambda span: span[:2])
+    groups: list[list] = []
+    reach = -1
+    for span in spans:
+        if span[0] < reach:
+            groups[-1].append(span)
+            reach = max(reach, span[1])
+        else:
+            groups.append([span])
+            reach = span[1]
+    shared = [group for group in groups if len({span[2] for span in group}) > 1]
+    if not shared:
+        return ()
+    # Numbered by who holds them, not by address, which differs by process.
+    shared.sort(key=lambda group: min((span[2], span[4]) for span in group))
+    layout = []
+    for g, group in enumerate(shared):
+        low = group[0][0]
+        layout.extend((span[3], span[4], g, span[0] - low, span[1] - low, span[5]) for span in group)
+    layout.sort(key=lambda entry: (repr(entry[0]), entry[1]))
+    return tuple(layout)
+
+
 #: Values whose identity is code plus what it captures. A hasher registered for
 #: one of these types covers every such value in the process, and the obvious
 #: one -- by name -- gives every closure one factory makes the same identity.
@@ -1722,10 +1777,16 @@ class ArgHasher:
                         spots[id(arg)] = (i, -2, 0)
                 return spots
 
-            args_bytes = canonical_bytes(form, self._content, hook=self._nested_hasher, seen=walked, outside=outside)
+            met: list = []
+            args_bytes = canonical_bytes(
+                form, self._content, hook=self._nested_hasher, seen=walked, outside=outside, data=met
+            )
             shared = shared_across([*args, *kwargs.values()], [*hashed_args, *hashed_kwargs.values()], walked)
             if shared:
                 args_bytes += pickle.dumps(("__cash_shared__", shared), protocol=4)
+            memory = shared_memory_across([*args, *kwargs.values()], [*hashed_args, *hashed_kwargs.values()], met)
+            if memory:
+                args_bytes += pickle.dumps(("__cash_shared_memory__", memory), protocol=4)
         except BaseException as exc:
             _raise_panic_as_unhashable(exc)
             raise

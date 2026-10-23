@@ -50,7 +50,15 @@ from .shared_objects import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["borrowed_memory_names", "borrows_from", "holds_a_borrower", "lazy_frame_sources", "memory_spans"]
+__all__ = [
+    "borrowed_memory_names",
+    "borrows_from",
+    "data_spans",
+    "holds_a_borrower",
+    "lazy_frame_sources",
+    "memory_family",
+    "memory_spans",
+]
 
 _NUMPY, _PANDAS, _POLARS, _ARROW = "numpy", "pandas", "polars", "arrow"
 
@@ -71,6 +79,9 @@ _Span = tuple[int, int]
 def _family(value: Any) -> str | None:
     """The library *value* keeps its data with, or None (`_family_of_type`)."""
     return _family_of_type(type(value))
+
+
+memory_family = _family
 
 
 #: `_family_of_type` by type: a library's type only exists once it is
@@ -144,6 +155,15 @@ def memory_spans(value: Any) -> list[_Span]:
             )
         return [_EVERYWHERE]
     return []
+
+
+def data_spans(value: Any) -> list[_Span]:
+    """`memory_spans` without a pandas object's axes: where the values a
+    write in place reaches sit. An index is never written in place, and a
+    copied Series keeps its frame's index."""
+    if _family(value) == _PANDAS:
+        return _pandas_block_spans(value)
+    return memory_spans(value)
 
 
 def _ndarray_spans(array: Any) -> list[_Span]:

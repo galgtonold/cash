@@ -135,6 +135,7 @@ def stable_key_repr(
     hook: Callable[[Any], Any] | None = None,
     left: list | None = None,
     fielded: list | None = None,
+    data: list | None = None,
 ) -> Any:
     """The form a cache key hashes *value* in: equal values pickle to equal
     bytes, in any process.
@@ -183,9 +184,11 @@ def stable_key_repr(
     *fielded*, when given, lets an object of a plain class be keyed by its
     fields (`_fields_form`) and gets the id of each one that is; the caller
     must then check that none of them is held twice (`canonical_bytes`).
+    *data*, when given, gets each value a content hasher keyed, in the order
+    met.
     """
     try:
-        return _walk(value, _Walk(content, {} if seen is None else seen, hook, left, fielded))
+        return _walk(value, _Walk(content, {} if seen is None else seen, hook, left, fielded, data))
     except RecursionError:
         raise TooDeepValueError(_too_deep(value)) from None
 
@@ -207,7 +210,7 @@ class _Walk:
     containers met so far (*seen*), and the caller's *content*, *hook* and
     *left* (see `stable_key_repr`)."""
 
-    __slots__ = ("clean", "content", "fielded", "holds_set", "hook", "left", "seen", "stack", "whole")
+    __slots__ = ("clean", "content", "data", "fielded", "holds_set", "hook", "left", "seen", "stack", "whole")
 
     def __init__(
         self,
@@ -216,8 +219,11 @@ class _Walk:
         hook: Callable[[Any], Any] | None,
         left: list | None,
         fielded: list | None = None,
+        data: list | None = None,
     ) -> None:
         self.content = content
+        #: The values keyed by their content, when the caller asks for them.
+        self.data = data
         self.seen = seen
         self.hook = hook
         self.left = left
@@ -336,6 +342,8 @@ def _enter(value: Any, walk: _Walk) -> Any:
         if digest is not None:
             if family in _WRITABLE_FAMILIES:
                 seen[id(value)] = (len(seen), value)
+            if walk.data is not None:
+                walk.data.append(value)
             return ("__cash_content__", family, digest)
     whole = walk.whole.get(id(value))
     if whole is not None:
@@ -378,6 +386,7 @@ def canonical_bytes(
     hook: Callable[[Any], Any] | None = None,
     seen: dict | None = None,
     outside: Callable[[], dict[int, Any]] | None = None,
+    data: list | None = None,
 ) -> bytes:
     """*value*'s canonical form (`stable_key_repr`), pickled: equal values give
     equal bytes, in any process, however they were built.
@@ -396,12 +405,13 @@ def canonical_bytes(
     keyed apart from *value*, kept by the caller and asked for only here),
     has it marked as held there (`kept_state.key_aliases`): ``f(a,
     Rec(a))`` and ``f([a, Rec(a)])`` keyed like the calls with an equal
-    copy of ``a``, and the second was served the first's result.
+    copy of ``a``, and the second was served the first's result. *data*,
+    when given, gets the values keyed by their content (`stable_key_repr`).
     """
     left: list = []
     fielded: list = []
     walked: dict = {} if seen is None else seen
-    form = stable_key_repr(value, content, seen=walked, hook=hook, left=left, fielded=fielded)
+    form = stable_key_repr(value, content, seen=walked, hook=hook, left=left, fielded=fielded, data=data)
     if fielded and (
         left
         or len(set(fielded)) != len(fielded)
@@ -416,7 +426,9 @@ def canonical_bytes(
         del form
         left = []
         walked.clear()
-        form = stable_key_repr(value, content, seen=walked, hook=hook, left=left)
+        if data is not None:
+            data.clear()
+        form = stable_key_repr(value, content, seen=walked, hook=hook, left=left, data=data)
     try:
         if left:
             return b"m" + _plain_data.key_dumps(form, _held_elsewhere(walked, left, outside))
