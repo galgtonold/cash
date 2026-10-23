@@ -204,6 +204,8 @@ from .unseen_writes import (
     COULD_RUN_TOO_BIG_REASON,
     SET_LATER,
     SET_LATER_REASON,
+    UNREADABLE,
+    UNREADABLE_REASON,
     UNSEEN_WRITES_REASON,
     live_writers,
     unseen_writers,
@@ -1076,7 +1078,11 @@ class StatementProcessor:
             # No record of what ran: what the statement's objects could
             # run instead (`writers_without_a_trace`).
             too_big: set[str] = set()
-            found = writers_without_a_trace(run.code, ns, run.outputs, too_big)
+            try:
+                found = writers_without_a_trace(run.code, ns, run.outputs, too_big)
+            except Exception:
+                logger.debug("unseen writer walk failed", exc_info=True)
+                found = [("?", (UNREADABLE,))]
         else:
             statement = [code for code, (g, _m) in unit.codes.items() if code.co_qualname == "<module>" and g is ns]
             found = unseen_writers(unit.codes, statement, run.outputs, ns, run.code)
@@ -1089,6 +1095,8 @@ class StatementProcessor:
         fn, targets = found[0]
         if targets == (SET_LATER,):
             what = SET_LATER_REASON.format(fn=fn)
+        elif targets == (UNREADABLE,):
+            what = UNREADABLE_REASON
         else:
             if unit is not None:
                 reason = UNSEEN_WRITES_REASON

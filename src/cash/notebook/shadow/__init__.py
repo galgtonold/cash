@@ -33,6 +33,8 @@ import atexit
 import collections
 import contextlib
 import contextvars
+import dataclasses
+import functools
 import json
 import os
 import sys
@@ -945,39 +947,83 @@ def _environ_digest() -> str:
 _IN_A_VALUE_AT = 5_000
 
 
+#: How deep `_in_a_value` looks: ``pipe.steps[0][1].func`` of a pipeline
+#: in a global is five steps down.
+_IN_A_VALUE_DEPTH = 6
+
+
 def _in_a_value(code: types.CodeType, spaces: Iterable[Mapping[str, Any]]) -> bool:
-    """Whether a function of *code* is an item of a list, tuple or dict, or
-    an attribute of an object (not a class), that a global of *spaces*
-    holds, one or two steps down."""
+    """Whether a function of *code* is held by a global of *spaces*, some
+    steps down: an item of a list, tuple or dict, an attribute of an object,
+    a member of a class of the user's (a ``cached_property``'s function, a
+    ``default_factory``), a default or a closure cell of a function (a
+    decorator's wrapper without ``functools.wraps``), or what a method
+    holder or ``partial`` wraps. The global's digest holds it."""
+    from ...tracking.trace_items import _is_user_type
+
     looked = 0
+    seen: set[int] = set()
     pending: list[tuple[Any, int]] = []
+    modules: set[Any] = set()
+
+    def users(cls: type) -> bool:
+        # A class made in one of *spaces*, or in a module of the user's.
+        return type.__dict__["__module__"].__get__(cls) in modules or _is_user_type(cls)
+
     for ns in spaces:
+        modules.add(attribute_or(ns, "get", dict().get)("__name__"))
         try:
             pending.extend((v, 0) for k, v in list(ns.items()) if isinstance(k, str) and not k.startswith("_"))
         except Exception:  # noqa: BLE001 - a namespace that cannot be listed
             continue
     while pending and looked < _IN_A_VALUE_AT:
         value, depth = pending.pop()
-        looked += 1
-        if instance_of(value, types.FunctionType):
-            if value.__code__ is code and depth:
-                return True
+        if id(value) in seen:
             continue
-        if depth >= 2 or instance_of(value, (type, types.ModuleType, str, bytes)):
+        seen.add(id(value))
+        looked += 1
+        kind = type(value)
+        if kind is types.FunctionType and value.__code__ is code and depth:
+            return True
+        if depth >= _IN_A_VALUE_DEPTH or kind in (str, bytes) or issubclass(kind, types.ModuleType):
             continue
         try:
-            if type(value) in (list, tuple):
-                items = list(value[:1000])
-            elif type(value) is dict:
-                items = list(value.values())[:1000]
-            else:
-                # Not ``value.__dict__``: no ``__getattr__`` of the user's runs.
-                own = object.__getattribute__(value, "__dict__")
-                items = list(own.values())[:1000] if type(own) is dict else []
+            items = _held_parts(value, kind, users)
         except Exception:  # noqa: BLE001 - a value that cannot be looked into
             continue
-        pending.extend((item, depth + 1) for item in items)
+        pending.extend((item, depth + 1) for item in items[:1000])
     return False
+
+
+def _held_parts(value: Any, kind: type, users: Callable[[type], bool]) -> list:
+    """What *value* holds that `_in_a_value` looks at, read without asking
+    it (no ``__getattr__`` or property of the user's runs)."""
+    if kind is types.FunctionType:
+        parts = [*(value.__defaults__ or ()), *(value.__kwdefaults__ or {}).values()]
+        for cell in value.__closure__ or ():
+            with contextlib.suppress(ValueError):
+                parts.append(cell.cell_contents)
+        return parts + list(value.__dict__.values())
+    if kind is list or kind is tuple:
+        return list(value[:1000])
+    if kind is dict:
+        return list(value.values())[:1000]
+    if kind is staticmethod or kind is classmethod:
+        return [value.__func__]
+    if kind is property:
+        return [value.fget, value.fset, value.fdel]
+    if kind is functools.partial:
+        return [value.func, *value.args, *value.keywords.values()]
+    if kind is dataclasses.Field:
+        return [value.default, value.default_factory]
+    if issubclass(kind, type):
+        if not users(value):
+            return []
+        return list(type.__dict__["__dict__"].__get__(value).values())
+    # Not ``value.__dict__``: no ``__getattr__`` of the user's runs. A
+    # ``cached_property`` holds its function there too.
+    own = object.__getattribute__(value, "__dict__")
+    return list(own.values())[:1000] if type(own) is dict else []
 
 
 def _held_digest(ns: Mapping[str, Any], name: str, value_digest: Callable[[Any], str]) -> str:

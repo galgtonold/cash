@@ -43,7 +43,75 @@ def test_a_method_reached_could_run(no_trace, cash_magics, statement_processor):
 
 
 def test_a_value_too_big_to_look_through_says_so(no_trace, cash_magics, statement_processor):
-    run_cash_cell(cash_magics, HEAD + "v = Vec()\nbig = [types.SimpleNamespace(i=i) for i in range(300_000)]")
+    # One object many times: a cell making 300,000 took cash 11-21 s.
+    run_cash_cell(cash_magics, HEAD + "v = Vec()\nbig = [types.SimpleNamespace()] * 100_001")
     reasons = _reasons(statement_processor, f"w = (len(big), time.sleep({F}))[0]")
     assert "Vec.__add__() could run in this statement: a value it reads is too big to look through" in reasons, reasons
     assert "ran in this statement" not in reasons
+
+
+#: Values with nothing of the user's in them, past the bounds by count: a
+#: numeric array or frame (items not read), plain items however many (read
+#: at C speed), and rows of plain fields (one looked at per class).
+BIG_BUT_PLAIN = {
+    "floats": "np.zeros((110_000, 10))",
+    "frame": "pd.DataFrame(np.zeros((200_000, 10)))",
+    "ints": "list(range(1_100_000))",
+    "strings": "pd.Series([str(i) for i in range(120_000)], dtype=object)",
+    "rows": "[Row(i, str(i)) for i in range(25_000)]",
+}
+
+
+@pytest.mark.parametrize("value", list(BIG_BUT_PLAIN))
+def test_a_big_value_of_plain_items_is_looked_through(no_trace, cash_magics, statement_processor, value):
+    # Counted as too big, any class alive with a writing method refused
+    # every statement reading it, the method never used (a timer's
+    # ``__exit__`` in a helper module).
+    run_cash_cell(
+        cash_magics,
+        HEAD + "import dataclasses\nimport numpy as np\nimport pandas as pd\n"
+        "@dataclasses.dataclass\nclass Row:\n    i: int\n    s: str",
+    )
+    run_cash_cell(cash_magics, f"big = {BIG_BUT_PLAIN[value]}")
+    reasons = _reasons(statement_processor, f"w = (len(big), time.sleep({F}))[0]")
+    assert "Vec.__add__" not in reasons, reasons
+
+
+def test_a_users_array_is_not_asked_its_length(no_trace, cash_magics):
+    # Its ``__len__`` ran, and an error in it failed the cell after it ran.
+    run_cash_cell(
+        cash_magics,
+        HEAD + "import pandas as pd\nclass MyArr(pd.api.extensions.ExtensionArray):\n"
+        "    def __init__(self, n):\n        self.n = n\n        self.boom = False\n"
+        "    def __len__(self):\n        if self.boom:\n            raise RuntimeError('boom')\n        return self.n\n"
+        "bad = MyArr(3)",
+    )
+    run_cash_cell(cash_magics, "bad.boom = True")
+    run_cash_cell(cash_magics, f"w = (bad.n, time.sleep({F}))[0]")
+    assert cash_magics.shell.user_ns["w"] == 3
+
+
+def test_a_walk_that_fails_runs_the_statement_and_says_so(no_trace, cash_magics, statement_processor, monkeypatch):
+    from cash.notebook.statement import processor
+
+    def broken(*_args):
+        raise RuntimeError("a bug of cash's")
+
+    monkeypatch.setattr(processor, "writers_without_a_trace", broken)
+    run_cash_cell(cash_magics, HEAD + "import numpy as np\narr = np.empty(1, dtype=object)\narr[0] = Vec()")
+    reasons = _reasons(statement_processor, f"w = (len(arr), time.sleep({F}))[0]")
+    assert "could not look through what this statement reads" in reasons, reasons
+
+
+def test_a_method_set_on_a_class_later_is_named_by_it(cash_magics, statement_processor):
+    from cash.decorator import code_trace
+
+    if not code_trace.on():
+        pytest.skip("reads the trace of the run (3.12+)")
+    run_cash_cell(
+        cash_magics,
+        "import time\ncalls = []\ndef _add(self, o):\n    calls.append(1)\n    return 1\n"
+        "class Vec:\n    pass\nVec.__add__ = _add\nd = {'a': [Vec()]}\nk = 'a'",
+    )
+    reasons = _reasons(statement_processor, f"w = (d[k][0] + 1, time.sleep({F}))[0]")
+    assert "Vec.__add__() ran in this statement" in reasons, reasons

@@ -2288,6 +2288,16 @@ made by `exec`, or in a `%%time` cell, whose text IPython does not keep) is
 said to change "what its unreadable text changes", and the statement runs
 every time; define it in a cell or a module of its own.
 
+Without that record, a value too big to look through (more than 20,000
+objects to open, or two million items of lists, dicts and arrays of objects)
+could hold an object of any of your classes: then every class of yours that
+is alive and has such a special method counts, and the message says the
+value was too big. Numbers, strings and arrays or tables of numbers are not
+looked into, however many there are, and nor are rows that hold only them
+after the first of each class. Should cash fail to look through what a
+statement reads at all, the statement runs every time and the message says
+that instead.
+
 Once a statement was not stored for a function, a later run of it that did
 not call that function (a `functools.cached_property` it filled the first
 time, a hash Python 3.14 keeps in a tuple) is not stored either, while the

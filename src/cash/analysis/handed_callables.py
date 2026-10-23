@@ -1025,17 +1025,24 @@ def _is_users_callable(value: Any) -> bool:
 _USERS_CLASSES: LruMemo[type, bool] = LruMemo(CODE_OBJECTS)
 
 
+#: Read through ``type``'s own descriptors: a metaclass's
+#: ``__getattribute__`` is not asked.
+_CLASS_DICT = type.__dict__["__dict__"].__get__
+_CLASS_MRO = type.__dict__["__mro__"].__get__
+_CLASS_MODULE = type.__dict__["__module__"].__get__
+
+
 def is_users_class(cls: type) -> bool:
     """A class defined in a cell or in a local module: by its module, or by
     the functions it defines (a class made by ``exec`` names no module)."""
     known = _USERS_CLASSES.get(cls)
     if known is None:
-        name = getattr(cls, "__module__", None)
         try:
+            name = _CLASS_MODULE(cls)
             module = sys.modules.get(name) if isinstance(name, str) else None
             known = name == "__main__" or (module is not None and is_local_module(module))
             if not known and (module is None or name == "builtins"):
-                own = vars(cls).values()
+                own = _CLASS_DICT(cls).values()
                 known = any(instance_of(v, types.FunctionType) and _is_users(v) for v in own)
         except (TypeError, AttributeError):
             known = False
@@ -1319,7 +1326,7 @@ def reaching_special_functions(cls: type) -> list[Any]:
     function by name or calls a method of a global object: the others
     change nothing outside their objects, whatever their globals hold."""
     try:
-        snapshot = tuple(tuple(vars(k).values()) for k in cls.__mro__ if k is not object)
+        snapshot = tuple(tuple(_CLASS_DICT(k).values()) for k in _CLASS_MRO(cls) if k is not object)
     except TypeError:
         snapshot = None
     kept = _SPECIAL_MEMO.get(cls)
@@ -1392,10 +1399,10 @@ def dataclass_made(fn: Any, cls: type) -> bool:
     code = getattr(inspect.unwrap(fn), "__code__", None)
     if code is None or code.co_filename != "<string>":
         return False
-    for klass in cls.__mro__:
-        held = vars(klass).get(name)
+    for klass in _CLASS_MRO(cls):
+        held = _CLASS_DICT(klass).get(name)
         if held is not None and (held is fn or inspect.unwrap(held) is inspect.unwrap(fn)):
-            return "__dataclass_fields__" in vars(klass)
+            return "__dataclass_fields__" in _CLASS_DICT(klass)
     return False
 
 
@@ -1405,10 +1412,10 @@ def special_functions(cls: type) -> list[Any]:
     ...) and its properties' getters, setters and deleters, from the
     classes of the user's in its MRO."""
     out: list[Any] = []
-    for klass in cls.__mro__:
+    for klass in _CLASS_MRO(cls):
         if klass is object or not is_users_class(klass):
             continue
-        for name, member in list(vars(klass).items()):
+        for name, member in list(_CLASS_DICT(klass).items()):
             if instance_of(member, property):
                 out.extend(fn for fn in (member.fget, member.fset, member.fdel) if fn is not None)
                 continue

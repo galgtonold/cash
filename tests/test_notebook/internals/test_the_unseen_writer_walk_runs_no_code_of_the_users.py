@@ -94,13 +94,14 @@ class Plain:
     pass
 
 
-def test_each_value_taken_counts_toward_the_limit(monkeypatch):
-    """The same object a million times: one new object, a million steps."""
+def test_the_same_object_many_times_is_looked_at_once(monkeypatch):
+    """The same object a million times: a million steps, then past the
+    limit. Looked at once per list, nothing is found: it holds nothing."""
     one = Plain()
     work, values, items = _counted(monkeypatch)
     found = writers_without_a_trace("w = g[0][0]", {"g": [[one] * 1000 for _ in range(1000)]})
-    assert work["values"] <= values and work["items"] <= items, work
-    assert any(fn.startswith("Lazy.") for fn, _ in found), found
+    assert work["values"] <= 2 * 1000 + 1 and work["items"] <= items, work
+    assert found == []
 
 
 def test_the_items_of_arrays_count_toward_the_limit(monkeypatch):
@@ -234,3 +235,30 @@ def test_a_method_set_later_is_named_as_the_class_holds_it():
     Vec.__add__ = _add
     found = writers_without_a_trace("w = v + 1", {"v": Vec()})
     assert [fn for fn, _ in found] == ["test_a_method_set_later_is_named_as_the_class_holds_it.<locals>.Vec.__add__"]
+
+
+class PassesFor:
+    """A proxy: its ``__class__`` says what it wraps."""
+
+    @property
+    def __class__(self):
+        RAN.append("__class__")
+        return dict
+
+
+class Watching(type):
+    def __getattribute__(cls, name):
+        RAN.append(name)
+        return super().__getattribute__(name)
+
+
+class Kept(metaclass=Watching):
+    def __add__(self, o):
+        calls.append(1)
+        return 0
+
+
+def test_a_class_property_or_a_metaclass_hook_does_not_run():
+    RAN.clear()
+    found = writers_without_a_trace("w = (p, k + 1, K)", {"p": PassesFor(), "k": Kept(), "K": Kept})
+    assert RAN == [] and "Kept.__add__" in [fn for fn, _ in found], (RAN, found)

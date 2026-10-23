@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import builtins
 import contextlib
+import dataclasses
 import dis
 import functools
 import hashlib
@@ -335,6 +336,17 @@ class _Digester:
             h.update(b"prop")
             for f in (v.fget, v.fset, v.fdel):
                 self.feed(f)
+            return
+        if t is functools.cached_property:
+            # Pickled, its function is looked up by a name that finds the
+            # property: by its code instead.
+            h.update(b"cprop")
+            self.feed(v.func)
+            return
+        if t is dataclasses.Field:
+            h.update(b"field")
+            self.feed(v.default)
+            self.feed(v.default_factory)
             return
         from ..jit_functions import jit_python_function
 
