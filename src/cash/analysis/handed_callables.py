@@ -52,6 +52,7 @@ from itertools import chain, compress, repeat
 from typing import Any, NamedTuple
 
 from .. import _plain_data
+from .._inspect_cache import forget_static_lookups
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import is_pseudo_filename
 from .._type_memo import TypeMemo, type_key
@@ -3149,6 +3150,8 @@ def answers_shared() -> Iterator[None]:
     finally:
         _SHARED_ROUND[0] = outer
         _ANSWERED_THIS_ROUND.clear()
+        # Nor in the standard library's cache, where it held each class.
+        forget_static_lookups()
 
 
 def stop_sharing_answers() -> None:
