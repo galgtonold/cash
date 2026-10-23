@@ -1286,7 +1286,7 @@ class StatementProcessor:
             if not refused:
                 run.drew_from_stream = any(isinstance(self.shell.user_ns.get(name), io.IOBase) for name in drawn)
             return
-        held = held_stream_paths(run.tree, self.shell.user_ns)
+        held = held_stream_paths(run.tree, self.shell.user_ns, self.tracking_state.variable_lineage)
         if held.paths:
             return refuse(
                 f"Can draw from {', '.join(held.paths)}, an iterator no name it reads holds: "
