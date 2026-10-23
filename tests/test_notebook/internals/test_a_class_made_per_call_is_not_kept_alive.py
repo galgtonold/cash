@@ -266,15 +266,15 @@ def test_a_property_put_where_a_freed_one_was_is_read_afresh():
         pass
 
     C.total = property(calls_a)
-    assert handed_callables._reaching_special_functions(C) == [calls_a]
+    assert handed_callables.reaching_special_functions(C) == [calls_a]
     for _ in range(50):
         old = id(vars(C)["total"])
         del C.total
         C.total = property(plain)
-        assert handed_callables._reaching_special_functions(C) == []
+        assert handed_callables.reaching_special_functions(C) == []
         if id(vars(C)["total"]) == old:
             break
         C.total = property(calls_a)
-        assert handed_callables._reaching_special_functions(C) == [calls_a]
+        assert handed_callables.reaching_special_functions(C) == [calls_a]
     else:
         pytest.skip("no property was made at the freed address")

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..._clock import perf_counter as _perf_counter
 from ..._paths import resolve_file_dep_path
+from ..._user_attrs import instance_of
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
@@ -265,7 +266,7 @@ class CacheRestorer:
             patched = {
                 var: apply_patch(self.shell.user_ns[var], val, variables_to_restore)
                 for var, val in variables_to_restore.items()
-                if isinstance(val, HolderPatch)
+                if instance_of(val, HolderPatch)
             }
         except KeyError as e:
             logger.debug("[UPSTREAM] Restore failed: a variable stored with the outputs lost its place (%s)", e)

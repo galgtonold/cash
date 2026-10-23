@@ -151,7 +151,10 @@ def _container_items(value: Any) -> Any:
         # A subclass's own methods may raise: what the builtin type holds.
         # By the real type: a proxy that only claims to be one is not opened.
         return builtin_items(value)
-    if type(value).__module__ == "numpy" and getattr(getattr(value, "dtype", None), "kind", "") == "O":
+    if (
+        getattr(type(value), "__module__", None) == "numpy"
+        and getattr(getattr(value, "dtype", None), "kind", "") == "O"
+    ):
         return value.flat
     return None
 

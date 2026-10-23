@@ -200,13 +200,18 @@ def _places(value: Any, targets: set[int], value_types: tuple[type, ...]) -> lis
         named, unnamed = _steps(obj, value_types)
         if unnamed and _reachable(unnamed, value_types) & targets:
             return None
-        stack.extend((child, (*at, step), isinstance(obj, tuple)) for step, child in named)
+        stack.extend((child, (*at, step), issubclass(type(obj), tuple)) for step, child in named)
     return places
 
 
 def _get(obj: Any, step: Step) -> Any:
     kind, label = step
-    return getattr(obj, label) if kind == "attr" else obj[label]
+    if kind != "attr":
+        return obj[label]
+    # Where the walk read it (`_steps`): never through the object's own
+    # ``__getattribute__``, which is the user's code.
+    attrs = attributes_of(obj)
+    return attrs[label] if attrs is not None and label in attrs else getattr(obj, label)
 
 
 def apply_patch(live: Any, patch: HolderPatch, restored: Mapping[str, Any]) -> Any:

@@ -50,7 +50,7 @@ _BUMP = (
     "m._test_n.setdefault(getattr(m, 'HASH_EPOCH', None), [0, 0]).__setitem__({i}, "
     "m._test_n[getattr(m, 'HASH_EPOCH', None)][{i}] + 1)"
 )
-COUNTER = (
+_COUNTER = (
     "(lambda m, types: (lambda s: (setattr(m, '_test_saved', s), setattr(m, '_test_n', {}),"
     " setattr(m, '_HASH_MEMO_TTL_SECONDS', 0.0),"
     " setattr(m, 'BulkHasher', (lambda f: (lambda *a: "
@@ -60,6 +60,11 @@ COUNTER = (
     "(getattr(m, '_test_saved', None) or (m.BulkHasher, m.file_content_hash, m._HASH_MEMO_TTL_SECONDS)))"
     f"({_M}, __import__('types'))"
 )
+#: Made in the counted module's globals, not the cell's: the counter writes
+#: to that module, and a function of the user's that does so while a
+#: statement runs makes the statement run every time (`unseen_writes`),
+#: which is not what is counted here.
+COUNTER = f"eval({_COUNTER!r}, vars({_M}))"
 UNINSTALL = (
     "(lambda m: (lambda s: s and (setattr(m, 'BulkHasher', s[0]), setattr(m, 'file_content_hash', s[1]),"
     " setattr(m, '_HASH_MEMO_TTL_SECONDS', s[2]), delattr(m, '_test_saved')))"
