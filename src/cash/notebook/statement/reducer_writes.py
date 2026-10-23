@@ -513,6 +513,10 @@ def _handed_to_libraries(function: Any, body: ast.AST) -> set[str]:
         n.id for n in ast.walk(body) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
     }
     found: set[str] = set()
+    # What an import inside the body binds (``import copy``) is read as the
+    # module, or the module's function, it names.
+    imported = _imported_in(body)
+    g = {**g, **imported} if imported else g
     for node in ast.walk(body):
         if not isinstance(node, ast.Call):
             continue
@@ -542,6 +546,29 @@ def _handed_to_libraries(function: Any, body: ast.AST) -> set[str]:
             if isinstance(arg, ast.Name) and arg.id not in local and arg.id in g and not _never_changed(g[arg.id]):
                 found.add(arg.id)
     return found
+
+
+def _imported_in(body: ast.AST) -> dict[str, Any]:
+    """The names an ``import`` in *body* binds, to the loaded module or the
+    module's attribute they name; one not loaded yet is left out."""
+    bound: dict[str, Any] = {}
+    for node in ast.walk(body):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    module = sys.modules.get(alias.name)
+                    if module is not None:
+                        bound[alias.asname] = module
+                else:
+                    top = alias.name.partition(".")[0]
+                    if (module := sys.modules.get(top)) is not None:
+                        bound[top] = module
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            module = sys.modules.get(node.module)
+            for alias in node.names:
+                if module is not None and (value := attribute_or(module, alias.name, None)) is not None:
+                    bound[alias.asname or alias.name] = value
+    return bound
 
 
 def _only_reads(callee: Any) -> bool:

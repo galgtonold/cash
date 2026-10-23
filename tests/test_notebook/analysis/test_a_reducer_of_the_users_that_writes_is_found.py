@@ -302,15 +302,16 @@ class WritesAGlobalDict:
         return (WritesAGlobalDict, ())
 
 
-def test_a_cached_function_returning_one_is_not_stored_and_the_reducer_does_not_run(tmp_path):
+def test_a_cached_function_returning_one_is_not_stored_and_the_reducer_does_not_run(disk_cash):
+    """With the default backend, RAM and disk tiers alike."""
     import warnings
 
-    import cash
+    from cash.backends.tiered_backend import TieredBackend
     from cash.decorator.store import REDUCER_NOT_RUN_FIX
 
     calls = []
 
-    @cash.cache(cache_dir=str(tmp_path))
+    @disk_cash.cache
     def make(i):
         calls.append(i)
         return WritesAGlobalDict()
@@ -323,6 +324,7 @@ def test_a_cached_function_returning_one_is_not_stored_and_the_reducer_does_not_
             make(1)
     finally:
         reducer_writes.unwatch()
+    assert isinstance(disk_cash.backend, TieredBackend)
     assert CFG == {"k": 1}
     assert calls == [1, 1]
     assert any(REDUCER_NOT_RUN_FIX.split(":")[0] in str(w.message) for w in seen)

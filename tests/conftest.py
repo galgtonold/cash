@@ -514,6 +514,19 @@ _MAIN = sys.modules["__main__"]
 
 
 @pytest.fixture(autouse=True)
+def _reducer_veto_put_back():
+    """Disarm the reducer veto a test's ``%cash_on`` left armed.
+
+    ``reducer_writes.watch`` stays armed until ``%cash_off``; a later test's
+    ``@cash.cache`` then refused to store any result whose reducer cash
+    cannot read (a class made by ``exec``), as in a cash-on notebook."""
+    yield
+    from cash.kept_state import set_reducer_veto
+
+    set_reducer_veto(None)
+
+
+@pytest.fixture(autouse=True)
 def _process_seeds_put_back():
     """Forget which global RNG streams a test seeded.
 
