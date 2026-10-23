@@ -20,6 +20,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
+# OpenMP threads (scikit-learn's, LightGBM's) spin between parallel regions by
+# default. With a test worker on every core, a spinning thread holds a core the
+# working one needs: a HistGradientBoosting fit of 20,000 rows took 100 s
+# instead of 0.1 s, and its test ran past its timeout. Read when the OpenMP
+# library loads, so set before any test imports one; workers and kernels
+# inherit it.
+os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
+
 # ---------------------------------------------------------------------------
 # Crash visibility (ALL workers): dump a C-level traceback when a worker dies
 # silently. This lives in the ROOT conftest so every xdist worker enables it at
