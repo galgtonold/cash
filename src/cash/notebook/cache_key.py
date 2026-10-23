@@ -725,6 +725,9 @@ def _held_codes(
     if code_obj is not None:
         found.append(code_obj)
     lineage = variable_lineage.get(name) if variable_lineage is not None else None
+    from . import held_functions as _hf
+
+    _hf.WALKED_NAME[0] = name
     try:
         held = held_notebook_code(value, user_ns, lineage)
     except Exception:  # an object that cannot be walked is not followed

@@ -30,6 +30,7 @@ import functools
 import gc
 import itertools
 import operator
+import os
 import sys
 import types
 import weakref
@@ -549,6 +550,7 @@ def _walk(
         visited += sum(len(group) for _kind, group in level)
         if check_at is not None and visited > check_at:
             check_at = None
+            _log_past_check(value, visited, [kind for kind, _group in level])
             if not _anything_to_find(namespace):
                 raise _NoNotebookFunctions
         if visited > WALK_LIMIT:
@@ -564,10 +566,45 @@ def _walk(
             # Asked before the next level is sorted: a sheet's 400,000
             # cells cost more to dedup than the question does.
             check_at = None
+            _log_past_check(value, visited + len(children), list(map(type, children[:2000])))
             if not _anything_to_find(namespace):
                 raise _NoNotebookFunctions
         level = _next_level(children, seen)
     return tuple(functions.values()), tuple(classes.values()), True
+
+
+#: Scratch diagnostic (claude/walk-past-check-log): the name being walked.
+WALKED_NAME: list[str | None] = [None]
+
+
+def _log_past_check(value: Any, visited: int, kinds: list[type]) -> None:
+    """Append one line to ``$CASH_LOG_WALKS`` for a walk that passed
+    `EXISTENCE_CHECK_AT`: the test, the name, the root type, how many it
+    visited, the commonest types at that level, and the time the existence
+    check took."""
+    path = os.environ.get("CASH_LOG_WALKS")
+    if not path:
+        return
+    import time
+
+    started = time.perf_counter()
+    exists = _anything_to_find_unlogged()
+    took = time.perf_counter() - started
+    common = collections.Counter(f"{k.__module__}.{k.__qualname__}" for k in kinds).most_common(5)
+    line = (
+        f"{os.environ.get('PYTEST_CURRENT_TEST', '?')}\tname={WALKED_NAME[0]}\troot={type(value).__module__}."
+        f"{type(value).__qualname__}\tvisited={visited}\tcommon={common}\texists={exists}\tcheck_s={took:.3f}"
+        f"\tclasses={len(_users_module_classes())}\tobjects={len(gc.get_objects())}\n"
+    )
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(line)
+
+
+def _anything_to_find_unlogged() -> bool:
+    try:
+        return module_class_objects_exist()
+    except Exception as exc:  # noqa: BLE001 - a diagnostic only
+        return f"error {exc!r}"  # type: ignore[return-value]
 
 
 def _next_level(children: list[Any], seen: set[Any]) -> list[tuple[type, list[Any]]]:
