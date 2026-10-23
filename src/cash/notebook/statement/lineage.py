@@ -104,6 +104,7 @@ def _record_file_reads(
         if accessed_files:
             tracking_state.file_event_seq += 1
             tracking_state.file_read_seq[cache_key] = tracking_state.file_event_seq
+            tracking_state.file_read_cell[cache_key] = tracking_state.running_cell
         if probes:
             tracking_state.statement_probes[cache_key] = dict(probes)
         else:
@@ -121,7 +122,8 @@ def _a_namespace(value: Any, user_ns: Mapping[str, Any]) -> bool:
 
 def note_own_writes(tracking_state: "TrackingState", paths) -> None:
     """Record that the notebook wrote *paths* just now, with each file's
-    `stat_key` after the write (`TrackingState.own_file_writes`)."""
+    `stat_key` after the write and the cell that wrote them
+    (`TrackingState.own_file_writes`)."""
     tracking_state.file_event_seq += 1
     for path in paths:
         where = realpath_of_read_this_run(path)[0]  # once per folder in a run, not per file
@@ -129,27 +131,48 @@ def note_own_writes(tracking_state: "TrackingState", paths) -> None:
         if st is None:
             tracking_state.own_file_writes.pop(where, None)
         else:
-            tracking_state.own_file_writes[where] = (tracking_state.file_event_seq, st)
+            tracking_state.own_file_writes[where] = (tracking_state.file_event_seq, st, tracking_state.running_cell)
+
+
+def rewritten_by_the_notebook_after(tracking_state: "TrackingState", seq: int, path: str, cell: int) -> bool:
+    """*path* is as the notebook's own write left it, that write came after
+    event *seq* (`TrackingState.file_event_seq`), and the cell at *cell* or
+    one below it made it."""
+    where = realpath_of_read_this_run(path)[0]
+    return _written_below(tracking_state.own_file_writes.get(where), seq, cell, where)
 
 
 def rewritten_by_the_notebook_since(tracking_state: "TrackingState", cache_key: str, paths) -> bool:
     """Every one of *paths* is as the notebook's own write left it, and that
-    write came after the statement under *cache_key* last read its files.
+    write came after the statement under *cache_key* last read its files,
+    from the reading cell or one below it.
 
     ``n = int(open(P).read())`` then ``open(P, 'w').write(str(n + 1))``:
     the file the read recorded has changed, but by the notebook, after the
     read, as in a top-to-bottom run. Re-running the read to catch up would
-    re-run the write after it as well. A change from outside, or a write
-    before the read, still counts."""
+    re-run the write after it as well. A change from outside, a write
+    before the read, or one by a cell above the reader (run again on its
+    own: Run All would have the reader read what it wrote) still counts."""
     read_at = tracking_state.file_read_seq.get(cache_key)
-    if read_at is None or not paths:
+    cell = tracking_state.file_read_cell.get(cache_key)
+    if read_at is None or cell is None or not paths:
         return False
     for path in paths:
         where = realpath_of_read_this_run(path)[0]
-        own = tracking_state.own_file_writes.get(where)
-        if own is None or own[0] <= read_at or regular_file_stat(where) != own[1]:
+        if not _written_below(tracking_state.own_file_writes.get(where), read_at, cell, where):
             return False
     return True
+
+
+def _written_below(own: tuple | None, seq: int, cell: int | None, where: str) -> bool:
+    return (
+        own is not None
+        and own[0] > seq
+        and cell is not None
+        and own[2] is not None
+        and own[2] >= cell
+        and regular_file_stat(where) == own[1]
+    )
 
 
 def clear_rebound_edges(
