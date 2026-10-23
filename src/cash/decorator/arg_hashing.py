@@ -8,6 +8,7 @@ import functools
 import hashlib
 import inspect
 import logging
+import operator
 import pickle
 import sys
 import threading
@@ -27,6 +28,7 @@ from ..canonical_form import (
     canonical_bytes,
     canonical_call_bytes,
     canonical_marker_bytes,
+    field_rows_only,
     stable_key_repr,
 )
 from ..content_hashers import (
@@ -1701,18 +1703,49 @@ class ArgHasher:
         arguments share is marked here (`shared_across`).
         """
         try:
+            keyed = KEYED_PARTS.get()
+            # What each plain list or tuple holds, as identities, before its
+            # walk: the check after the body compares with these, so a write
+            # by another thread from here on shows, whichever threads are
+            # alive by then (`PurityChecks.argument_identities`).
+            before = (
+                {
+                    id(v): _plain_data.identity_snapshot(v)
+                    for v in (*hashed_args, *hashed_kwargs.values())
+                    if type(v) is list or type(v) is tuple
+                }
+                if keyed is not None
+                else None
+            )
             # A list, not ``map``: a StopIteration raised inside ``map`` ends
             # it early, and the arguments after it would leave the key.
             parts = [plain_key_part(a) for a in hashed_args]
             kwarg_parts = {k: plain_key_part(v) for k, v in hashed_kwargs.items()}
             form: tuple = (tuple(parts), kwarg_parts)
-            keyed = KEYED_PARTS.get()
             pairs = list(zip([*parts, *kwarg_parts.values()], [*hashed_args, *hashed_kwargs.values()]))
             walked_from = (
                 {id(v): value_watch.gen(v) for p, v in pairs if p is v and type(v) in _plain_data.TREE_NODES}
                 if keyed is not None and value_watch.WATCHING
                 else None
             )
+            # A list of records is walked as a copy taken here, when it is the
+            # one argument that can hold a container: what the walk reads is
+            # then one content, which its token is filed for only if the list
+            # still holds it after the tag. Walking the list itself, another
+            # thread could swap an item in and back during the walk, and the
+            # token went to a key of content the list never held after.
+            rows: dict[int, list] = {}
+            if walked_from is not None and sum(type(v) not in IMMUTABLE_PRIMS for _, v in pairs) < 2:
+                for p, v in pairs:
+                    if p is v and type(v) is list and v:
+                        copy = list(v)
+                        if field_rows_only(copy):
+                            rows[id(v)] = copy
+            if rows:
+                form = (
+                    tuple(rows.get(id(p), p) for p in parts),
+                    {k: rows.get(id(p), p) for k, p in kwarg_parts.items()},
+                )
             walked: dict = {}
             args_bytes = canonical_bytes(form, self._content, hook=self._nested_hasher, seen=walked)
             shared = shared_across([*args, *kwargs.values()], [*hashed_args, *hashed_kwargs.values()], walked)
@@ -1737,12 +1770,18 @@ class ArgHasher:
                         # content this key may not hold.
                         armed = walked_from.get(id(value))
                         token = value_watch.peek(value, value_watch.KIND_WALKED)
-                        if armed is not None and token is not None and value_watch.gen(value) == armed:
+                        copy = rows.get(id(value))
+                        if (
+                            armed is not None
+                            and token is not None
+                            and value_watch.gen(value) == armed
+                            and (copy is None or (len(copy) == len(value) and all(map(operator.is_, value, copy))))
+                        ):
                             keyed[id(value)] = (value, value_watch.KIND_WALKED, token)
         if keyed is not None:
             for part, value in pairs:
                 if part is not value and type(value) in _plain_data.TREE_NODES:
-                    keyed[id(value)] = (value, value_watch.KIND_PLAIN_KEY, part)
+                    keyed[id(value)] = (value, value_watch.KIND_PLAIN_KEY, part, before.get(id(value)))
         return args_bytes
 
     def arg_hash(self, arg: Any) -> Any:

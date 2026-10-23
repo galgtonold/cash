@@ -8,10 +8,10 @@ their leaves cannot change in place, so when no identity moved and every
 other argument cannot change at all, the second hash proves nothing more.
 
 That holds for the content the key was built from, and another thread can
-change the list between the key build and the snapshot: the snapshot
-counts while the watchers still give the key's digest, or while no other
-thread runs. The tests below run as a process with no other thread; the
-test run's own watchdog thread is not one the race is about.
+change the list between the key build and the body: the snapshot is taken
+before the key's walk, so such a write shows as a moved identity. The tests
+run with the test run's own threads alive, and cash's writer threads, as in
+any process with a disk cache.
 """
 
 from __future__ import annotations
@@ -31,11 +31,6 @@ class Tagged(int):
     """An int that can carry attributes."""
 
 
-@pytest.fixture
-def one_thread(monkeypatch):
-    monkeypatch.setattr(threading, "active_count", lambda: 1)
-
-
 @pytest.mark.parametrize(
     "build",
     [
@@ -46,7 +41,7 @@ def one_thread(monkeypatch):
     ],
     ids=["list of ints", "tuple of ints", "list of tuples", "list of lists"],
 )
-def test_a_miss_on_plain_data_does_not_hash_it_again_after_the_body(disk_cash, one_thread, build):
+def test_a_miss_on_plain_data_does_not_hash_it_again_after_the_body(disk_cash, build):
     rows = build()  # built here: a parameter's value is held for the whole run
     f = disk_cash.cache(lambda rows, scale=1: len(rows) * scale)
     with method_calls(PurityChecks, "checked_arguments_hash") as rehash:
@@ -54,7 +49,7 @@ def test_a_miss_on_plain_data_does_not_hash_it_again_after_the_body(disk_cash, o
     assert rehash.calls == 0
 
 
-def test_a_miss_hashes_a_big_plain_list_about_once(disk_cash, one_thread):
+def test_a_miss_hashes_a_big_plain_list_about_once(disk_cash):
     rows = list(range(300_000))
     f = disk_cash.cache(lambda rows: len(rows))
     f([1])  # set-up work of a first call, not of this argument
@@ -70,7 +65,7 @@ def test_a_miss_hashes_a_big_plain_list_about_once(disk_cash, one_thread):
     [{"a": [1, 2]}, bytearray(b"abc"), [bytearray(b"abc")], [{"a": 1}]],
     ids=["dict", "bytearray", "list of bytearrays", "list of dicts"],
 )
-def test_an_argument_identities_cannot_vouch_for_is_hashed_again(disk_cash, one_thread, arg):
+def test_an_argument_identities_cannot_vouch_for_is_hashed_again(disk_cash, arg):
     """Control: a dict or a bytearray can change with every identity in place."""
     f = disk_cash.cache(lambda x: 1)
     with method_calls(PurityChecks, "checked_arguments_hash") as rehash:
@@ -78,7 +73,7 @@ def test_an_argument_identities_cannot_vouch_for_is_hashed_again(disk_cash, one_
     assert rehash.calls == 1
 
 
-def test_an_int_subclass_beside_a_plain_list_is_hashed_again(disk_cash, one_thread):
+def test_an_int_subclass_beside_a_plain_list_is_hashed_again(disk_cash):
     """Control: a subclass of int can carry state that changes."""
     f = disk_cash.cache(lambda rows, n: len(rows) + n)
     with method_calls(PurityChecks, "checked_arguments_hash") as rehash:
@@ -86,9 +81,9 @@ def test_an_int_subclass_beside_a_plain_list_is_hashed_again(disk_cash, one_thre
     assert rehash.calls == 1
 
 
-def test_with_another_thread_an_unwatched_list_is_hashed_again(disk_cash):
-    """With another thread alive and no watcher on the list, nothing shows
-    the snapshot is of the content the key holds: the hash runs."""
+def test_with_another_thread_an_unwatched_list_is_hashed_once(disk_cash):
+    """Another thread alive does not cost a second hash: the snapshot taken
+    before the key's walk is of the content the key holds, whoever runs."""
     rows = list(range(200_000))
     stop = threading.Event()
     other = threading.Thread(target=stop.wait, daemon=True)
@@ -100,7 +95,7 @@ def test_with_another_thread_an_unwatched_list_is_hashed_again(disk_cash):
     finally:
         stop.set()
         other.join(10)
-    assert rehash.calls == 1
+    assert rehash.calls == 0
 
 
 def test_with_another_thread_a_watched_list_is_not_hashed_again(disk_cash, monkeypatch):

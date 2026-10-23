@@ -901,10 +901,11 @@ class HitMemo:
         if keyed is None or _cw.keyed(args, kwargs) != keyed:
             return  # not watched before the key build, or armed again since
         key = keyed[0]
-        if type(key[0]) is bytes and (b"[" in key[0] or b"{" in key[0]) and threading.active_count() > 1:
+        if type(key[0]) is bytes and (b"[" in key[0] or b"{" in key[0]):
             # A small list or dict is in the key by value, and no arm
             # numbers its content: another thread may have changed it while
-            # the ordinary key was built and put it back since.
+            # the ordinary key was built and put it back since, and may have
+            # ended by now. Once per entry remembered, not per hit.
             key = self._key_of_a_copy(call, args, kwargs, keyed[1])
             if key is None:
                 return

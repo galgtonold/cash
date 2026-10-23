@@ -2284,7 +2284,27 @@ static PyObject *py_world_info(PyObject *self, PyObject *noargs) {
 }
 
 /* -- the memo key: the call's arguments as a typed, hashable tuple ------- */
-typedef struct { PyObject *vals; char *sig; size_t n, cap; int watched; uint64_t wgen; Py_ssize_t budget; } KeyB;
+typedef struct {
+    PyObject *vals; char *sig; size_t n, cap; int watched; uint64_t wgen; Py_ssize_t budget;
+    PyObject **met; size_t nmet, metcap;   /* the lists and dicts keyed by value so far */
+} KeyB;
+
+/* 1: o is a list or dict this key met before; 0: not, and now met; -1: error.
+ * The ordinary key marks a container two places share (`shared_across`):
+ * `same(a, a)` and `same(a, [1, 2, 3])` key apart there, and a by-value
+ * key cannot say so, so it is not made. */
+static int kb_met(KeyB *k, PyObject *o) {
+    for (size_t i = 0; i < k->nmet; i++)
+        if (k->met[i] == o) return 1;
+    if (k->nmet == k->metcap) {
+        size_t nc = k->metcap ? k->metcap * 2 : 16;
+        PyObject **p = realloc(k->met, nc * sizeof *p);
+        if (!p) { PyErr_NoMemory(); return -1; }
+        k->met = p; k->metcap = nc;
+    }
+    k->met[k->nmet++] = o;
+    return 0;
+}
 
 /* Items of small lists and dicts keyed by value, over all arguments: past
  * it a container is keyed only when the watchers vouch for it. */
@@ -2341,6 +2361,8 @@ static int kb_atom(KeyB *k, PyObject *o, int depth) {
         if (depth > 32) return 0;
         Py_ssize_t n = PyList_GET_SIZE(o);
         if ((k->budget -= n + 1) < 0) return 0;
+        int met = kb_met(k, o);
+        if (met != 0) return met < 0 ? -1 : 0;
         if (kb_sig(k, '[') < 0) return -1;
         for (Py_ssize_t i = 0; i < PyList_GET_SIZE(o); i++) {
             int r = kb_atom(k, PyList_GET_ITEM(o, i), depth + 1);
@@ -2351,6 +2373,8 @@ static int kb_atom(KeyB *k, PyObject *o, int depth) {
     if (t == &PyDict_Type) {
         if (depth > 32) return 0;
         if ((k->budget -= 2 * PyDict_GET_SIZE(o) + 1) < 0) return 0;
+        int met = kb_met(k, o);
+        if (met != 0) return met < 0 ? -1 : 0;
         if (kb_sig(k, '{') < 0) return -1;
         Py_ssize_t pos = 0; PyObject *key, *val;
         while (PyDict_Next(o, &pos, &key, &val)) {
@@ -2431,6 +2455,7 @@ static PyObject *memo_key_gen(PyObject *args, PyObject *kwargs, uint64_t *gen) {
         }
     }
     free(k.sig);
+    free(k.met);
     Py_DECREF(k.vals);
     if (gen) *gen = k.wgen;
     return res;

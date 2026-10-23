@@ -731,6 +731,23 @@ def _records_by_fields(value: list | tuple, walk: _Walk) -> Any:
     return ("__cash_type__", _BUILTIN_CONTAINER_TAGS[type(value)], (_fields_form("records", t, digest),))
 
 
+def field_rows_only(items: list) -> bool:
+    """Whether *items* are records of one plain class (`fields_class`)
+    whose ``__dict__`` holds values alone under string names: then nothing
+    in them reaches the list that holds them, and a copy of that list walks
+    to the same form as the list itself (`ArgHasher._payload_bytes`)."""
+    kinds = set(map(type, items))
+    if len(kinds) != 1:
+        return False
+    t = kinds.pop()
+    if not fields_class(t):
+        return False
+    states = list(map(_STATE_OF, items))
+    if set(map(type, states)) != {dict} or not _STR_ONLY.issuperset(map(type, chain.from_iterable(states))):
+        return False
+    return _FIELD_LEAVES.issuperset(map(type, chain.from_iterable(map(dict.values, states))))
+
+
 def _object_by_fields(value: Any, walk: _Walk) -> Any:
     """The form of one object keyed by its fields, or None to key it as
     before: an object of a plain class (`fields_class`) whose ``__dict__``

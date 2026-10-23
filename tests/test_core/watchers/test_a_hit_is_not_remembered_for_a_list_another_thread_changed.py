@@ -194,3 +194,56 @@ def test_a_hit_keyed_while_the_list_was_changed_and_put_back(tmp_path, watching,
 
     assert f(lst) == truth(lst)
     assert f(lst) == truth(lst)
+
+
+@pytest.mark.parametrize("kind", KINDS.values(), ids=KINDS.keys())
+def test_a_hit_keyed_while_short_threads_changed_and_put_back_the_list(watching, monkeypatch, kind):
+    """As above with the call in this thread, a memory cache (no thread of
+    cash's own) and each write made by a thread that has ended by the
+    offer, which the count of threads is made to show: the copy check runs
+    whoever is alive."""
+    make, set_item, truth = kind
+
+    def total(lst):
+        return truth(lst)
+
+    real_epochs, real_entry = hit_memo.epochs, hit_memo.HitMemo._entry
+    armed: list = []
+    lst = make()
+
+    def write(value):
+        writer = threading.Thread(target=set_item, args=(lst, value))
+        writer.start()
+        writer.join(10)
+
+    def epochs(spec, args, kwargs):
+        found = real_epochs(spec, args, kwargs)
+        if armed == ["epochs"]:
+            armed[:] = ["entry"]
+            write(9)  # the key is built from this content
+        return found
+
+    def entry(self, call, hit):
+        if armed == ["entry"]:
+            armed.clear()
+            write(5)  # and put back before the offer
+        return real_entry(self, call, hit)
+
+    monkeypatch.setattr(hit_memo, "epochs", epochs)
+    monkeypatch.setattr(hit_memo.HitMemo, "_entry", entry)
+    monkeypatch.setattr(threading, "active_count", lambda: 1)
+    f = Cash(backend="memory", register_magic=False).cache(total)
+    watching["lst"] = lst
+    changed = make()
+    set_item(changed, 9)
+    f(changed)
+    f(changed)
+    for _ in range(8):
+        f(lst)
+    hit_memo.bump()
+
+    armed.append("epochs")
+    assert f(lst) == truth(changed)  # served for the content it was keyed by
+    assert not armed
+    assert f(lst) == truth(lst)
+    assert f(lst) == truth(lst)

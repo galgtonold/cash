@@ -13,7 +13,6 @@ import itertools
 import logging
 import sys
 import textwrap
-import threading
 import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -772,18 +771,6 @@ class _Watched:
         self.token = token
 
 
-def _snapshot_is_of_key(value: Any, held: tuple | None) -> bool:
-    """Is the identity snapshot just taken of *value* one of the content its
-    key was built from (*held*, from `arg_hashing.KEYED_PARTS`)? When the
-    watchers still give the key's digest, no write came since it was taken
-    (or what was written was put back); with no other thread alive, nothing
-    ran in between but cash."""
-    if held is not None and held[1] == value_watch.KIND_PLAIN_KEY and value_watch.WATCHING:
-        if value_watch.peek(value, value_watch.KIND_PLAIN_KEY) == held[2]:
-            return True
-    return threading.active_count() == 1
-
-
 def _cannot_change(value: Any) -> bool:
     """Whether *value* can never change in place: an exact immutable
     primitive, or an exact tuple or frozenset of such values."""
@@ -1309,10 +1296,10 @@ class PurityChecks:
         Both stand for the content the key was built from only when nothing
         changed it in between, and another thread can, between the key build
         and here. *keyed* is what the key build saw (`arg_hashing.KEYED_PARTS`):
-        a list of records counts with the token taken there, and a list of
-        plain values once its snapshot is shown to be of the content the key
-        holds -- the watchers still give the key's digest after it is taken,
-        or no other thread runs.
+        a list of plain values counts with the snapshot taken before its key
+        walk, so a write since shows as a moved identity, whichever threads
+        are alive now; a list of records with the token taken there, while
+        the watchers still give it. Any other is hashed again after the body.
         """
         try:
             canon_args, canon_kwargs = self._checked_arguments(func_name, args, kwargs)
@@ -1326,15 +1313,20 @@ class PurityChecks:
                 held = keyed.get(id(value)) if keyed else None
                 if held is not None and held[0] is not value:
                     held = None
-                snapshot = _plain_data.identity_snapshot(value)
+                taken_before = held is not None and held[1] == value_watch.KIND_PLAIN_KEY and held[3] is not None
+                snapshot = held[3] if taken_before else _plain_data.identity_snapshot(value)
                 if snapshot is None:
-                    if held is None or held[1] != value_watch.KIND_WALKED:
+                    if (
+                        held is None
+                        or held[1] != value_watch.KIND_WALKED
+                        or value_watch.peek(value, value_watch.KIND_WALKED) != held[2]
+                    ):
                         covers_all = False
                     else:
                         found[name] = (value, _Watched(held[2]))
                 elif any(level is not None for level in snapshot):
                     found[name] = (value, snapshot)
-                    if covers_all and not _snapshot_is_of_key(value, held):
+                    if not taken_before:
                         covers_all = False
             elif not _cannot_change(value):
                 covers_all = False
