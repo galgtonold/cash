@@ -571,14 +571,29 @@ class MismatchClassifier:
         )
         m.broken_vars.add(m.var_name)
         # Rebuilt, it loses an in-place change a cell below made: say so.
-        warn_changed_below(
-            m.var_name,
-            self.tracking_state.executed_cell_codes.get(m.var_name),
-            m.check.notebook_cells,
-            m.check.current_cell_idx,
-            self._warned_changed_below,
-        )
+        codes = self.tracking_state.executed_cell_codes
+        cells, idx, warned = m.check.notebook_cells, m.check.current_cell_idx, self._warned_changed_below
+        if not warn_changed_below(m.var_name, codes.get(m.var_name), cells, idx, warned):
+            # Changed through what it holds: ``BIG.append(...)`` below, read
+            # here through ``draw``'s default ``rows=BIG``.
+            for held in sorted(self._held_by(m.var_name)):
+                warn_changed_below(held, codes.get(held), cells, idx, warned, through=m.var_name)
         return True
+
+    def _held_by(self, name: str) -> set[str]:
+        """The variables sharing an object with *name* (``derivation_edges``):
+        a function holding ``BIG`` as its default, a frame holding a column."""
+        edges = self.tracking_state.derivation_edges
+        if not edges:
+            return set()
+        found: set[str] = set()
+        todo = [name]
+        while todo:
+            for partner in shared_object_partners(edges, todo.pop()):
+                if partner != name and partner not in found:
+                    found.add(partner)
+                    todo.append(partner)
+        return found
 
     def _rebuild_after_a_gone_change(self, m: _Mismatch) -> bool:
         """A required input the cell also writes, last changed by a statement
