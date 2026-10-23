@@ -468,7 +468,9 @@ def frame_cells_patch(holder: Any, outputs: Mapping[str, Any]) -> FrameCellsPatc
     return FrameCellsPatch((), tuple(links[0]))
 
 
-def frame_cells_patches(holders: Mapping[str, Any], outputs: Mapping[str, Any]) -> dict[str, FrameCellsPatch]:
+def frame_cells_patches(
+    holders: Mapping[str, Any], outputs: Mapping[str, Any], taken: set[int] | None = None
+) -> dict[str, FrameCellsPatch]:
     """`frame_cells_patch` for each of *holders*, those it gives one, in one
     pass: the outputs' identities are read once, and the frames are read
     together once.
@@ -486,7 +488,11 @@ def frame_cells_patches(holders: Mapping[str, Any], outputs: Mapping[str, Any]) 
     `CellsNotLinked` when a holder frame holds cells of the outputs' frames
     that `cell_links` cannot place: ``f = flt(df)`` over four million rows
     of lists was stored with copies of them, and a change made through
-    ``df`` did not reach the ``f`` a hit gave back."""
+    ``df`` did not reach the ``f`` a hit gave back.
+
+    *taken*, when given, receives the ids of the cells the patches take
+    back and of what those hold (`_taken_back`): a hit gives the outputs
+    the live ones, so a holder of them holds what the outputs do already."""
     from .frame_cells import addresses, cell_links, frames_in, is_frame, put_back_dtypes, sorted_unique
     from .frame_cells import object_columns as frame_object_columns
     from .shared_objects import (
@@ -565,16 +571,48 @@ def frame_cells_patches(holders: Mapping[str, Any], outputs: Mapping[str, Any]) 
     }
     frames = itertools.chain((frame for _path, frame in out_frames), (framed[name] for name in found))
     patches: dict[str, FrameCellsPatch] = {}
+    inside: set[int] | None = None
     with frames_together(frames, joined):
         own = set(identities(tuple(outputs.values()), value_types, True, put_back))
         for name in found:
             check_walk_budget()
             # Nor the holder's categoricals with a dtype the outputs take
             # back: its objects are the ones the restored outputs hold.
-            if own and any(key in own for key in identities(framed[name], value_types, True, put_back)):
-                continue
+            shared = [key for key in identities(framed[name], value_types, True, put_back) if key in own] if own else []
+            if shared:
+                # Nor what the cells taken back hold: a hit hands the outputs
+                # the live cells, and all they hold with them. ``recs`` holds
+                # the records too, so `frames_together` still lists them:
+                # ``df2 = df[mask]`` over ``df = pd.DataFrame({'rec': recs})``
+                # was stored with ``df`` whole, which came back holding its
+                # own copies of the records.
+                if inside is None:
+                    inside = _taken_back(out_frames, joined, value_types, put_back)
+                if any(key not in inside for key in shared):
+                    continue
             patches[name] = FrameCellsPatch((), tuple(found[name]))
+    if taken is not None and patches:
+        taken |= inside if inside is not None else _taken_back(out_frames, joined, value_types, put_back)
     return patches
+
+
+def _taken_back(out_frames: list, joined: Mapping[int, Any], value_types: tuple[type, ...], put_back: Any) -> set[int]:
+    """The ids of the cells of *out_frames* a frame patch takes back (by
+    address, *joined*), and of all they hold."""
+    from .frame_cells import addresses
+    from .shared_objects import identities, object_columns_of
+
+    np = __import__("sys").modules["numpy"]
+    cells: list[Any] = []
+    for _path, frame in out_frames:
+        ids = joined.get(id(frame))
+        if ids is None or not len(ids):
+            continue
+        for array in object_columns_of(frame) or ():
+            cells.extend(array[np.isin(addresses(array), ids)].tolist())
+    found = set(identities(cells, value_types, True, put_back))
+    found.discard(id(cells))
+    return found
 
 
 def _not_in(ids: Any, parts: Iterable[Any], np: Any) -> Any:

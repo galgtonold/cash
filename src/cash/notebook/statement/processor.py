@@ -2966,8 +2966,9 @@ class StatementProcessor:
             # takes back every cell, and its other views need no links. Then
             # the longest frames, which more likely do.
             ordered = sorted(holders, key=lambda name: (name not in run.inputs, -_frame_rows(holders[name])))
+            taken: set[int] = set()
             try:
-                framed = frame_cells_patches({name: holders[name] for name in ordered}, outputs)
+                framed = frame_cells_patches({name: holders[name] for name in ordered}, outputs, taken)
             except CellsNotLinked as unlinked:
                 run.holders, run.moves_holders, run.holders_unchanged = {}, False, set()
                 return _tell_cells_not_linked(run.outputs, unlinked.names, cost)
@@ -2991,6 +2992,10 @@ class StatementProcessor:
             # And a categorical's objects a frame patch takes back with its
             # dtype: ``ks`` holding them holds the live ones already.
             left |= put_back_objects(outputs, framed.values())
+            # And the cells those frames give back, with all they hold:
+            # ``recs`` holding the records ``df`` and ``df2 = df[mask]``
+            # hold holds the live ones already.
+            left |= taken
             patches = holder_patches(rest, outputs, left) if rest else {}
             if patches is not None:
                 patches.update(framed)
