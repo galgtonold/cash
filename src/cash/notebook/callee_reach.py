@@ -330,6 +330,11 @@ def _state_writes(
         CONFIG``, ``cfg["k"]`` after ``cfg = mylib.CONFIG``, ``Cfg.k``)."""
         if found is None or not isinstance(node, (ast.Attribute, ast.Subscript)):
             return
+        if isinstance(node, ast.Attribute):
+            home = _set_on_a_module(node.value, namespace)
+            if home is not None:
+                found.add(home)
+                return
         changed_in_place(node.value)
 
     def changed_in_place(root: ast.expr) -> None:
@@ -359,7 +364,7 @@ def _state_writes(
             return
         if isinstance(func, ast.Name) and func.id in ("setattr", "delattr") and node.args:
             target = namespace.get(node.args[0].id) if isinstance(node.args[0], ast.Name) else None
-            home = _state_home(target, namespace)
+            home = _set_on_a_module(node.args[0], namespace) or _state_home(target, namespace)
             if home is not None:
                 found.add(home)
         elif isinstance(func, ast.Attribute) and func.attr in MUTATING_METHODS:
@@ -506,6 +511,22 @@ def _is_users_function(fn: types.FunctionType, namespace: Mapping[str, Any]) -> 
         return True
     home = _loaded(fn.__globals__.get("__name__"))
     return home is not None and _is_local(home)
+
+
+def _set_on_a_module(owner: ast.expr, namespace: Mapping[str, Any]) -> str | None:
+    """The module, a library's too, that *owner* names, when a name is set
+    on it right there: ``textwrap.rv = v``, ``setattr(textwrap, "rv", v)``.
+    Not one of the notebook's own globals. A library's module is state of
+    the process as a local one is: with every statement stored, ``print(
+    textwrap.rv)`` below such a statement was keyed on the import alone, and
+    printed the value from before an edit."""
+    if not isinstance(owner, ast.Name):
+        return None
+    module = namespace.get(owner.id)
+    if not instance_of(module, types.ModuleType) or vars(module) is namespace:
+        return None
+    name = attribute_or(module, "__name__", None)
+    return name if isinstance(name, str) and sys.modules.get(name) is module else None
 
 
 def _state_home(value: Any, namespace: Mapping[str, Any]) -> str | None:
