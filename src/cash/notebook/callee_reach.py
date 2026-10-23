@@ -121,9 +121,12 @@ def reached_user_code(code: str, namespace: Mapping[str, Any] | None, *, close: 
     if not code or not namespace:
         return _EMPTY
     steps = names_read(code)
-    if not steps or all(_leads_nowhere(namespace, root, attrs) for root, attrs in steps):
+    taken = _taken_from_libraries(code)
+    if not taken and (not steps or all(_leads_nowhere(namespace, root, attrs) for root, attrs in steps)):
         return _EMPTY
     found = _Found(namespace)
+    for module, attr in taken:
+        found.value(vars(module).get(attr), f"{module.__name__}.{attr}")
     for root, attrs in steps:
         if attrs:
             found.chain(root, attrs)
@@ -164,7 +167,7 @@ def _leads_nowhere(namespace: Mapping[str, Any], root: str, attrs: tuple[str, ..
     for attr in reversed(attrs):
         if not instance_of(obj, types.ModuleType):
             return True  # `_Found.chain` stops here
-        if _is_local(obj):
+        if _is_local(obj) or _set_on_by_the_notebook(obj, attr):
             return False
         obj = vars(obj).get(attr)
         if not _inert(obj):
@@ -333,6 +336,7 @@ def _state_writes(
         if isinstance(node, ast.Attribute):
             home = _set_on_a_module(node.value, namespace)
             if home is not None:
+                _note_set_on_a_library(home, node.attr)
                 found.add(home)
                 return
         changed_in_place(node.value)
@@ -364,7 +368,12 @@ def _state_writes(
             return
         if isinstance(func, ast.Name) and func.id in ("setattr", "delattr") and node.args:
             target = namespace.get(node.args[0].id) if isinstance(node.args[0], ast.Name) else None
-            home = _set_on_a_module(node.args[0], namespace) or _state_home(target, namespace)
+            home = _set_on_a_module(node.args[0], namespace)
+            if home is not None:
+                name = node.args[1] if len(node.args) > 1 else None
+                _note_set_on_a_library(home, name.value if isinstance(name, ast.Constant) else _ANY_NAME)
+            else:
+                home = _state_home(target, namespace)
             if home is not None:
                 found.add(home)
         elif isinstance(func, ast.Attribute) and func.attr in MUTATING_METHODS:
@@ -527,6 +536,54 @@ def _set_on_a_module(owner: ast.expr, namespace: Mapping[str, Any]) -> str | Non
         return None
     name = attribute_or(module, "__name__", None)
     return name if isinstance(name, str) and sys.modules.get(name) is module else None
+
+
+#: ``module -> names`` the notebook's statements set on a library's module
+#: in this process (`_set_on_a_module`), `_ANY_NAME` for a name spelled at
+#: run time. Read as the data of a local module is read (`_Found`): ``import
+#: textwrap as tw; tw.rv = v`` moved ``tw`` only, and ``import textwrap;
+#: print(textwrap.rv)`` below it, under a name bound afresh, was keyed on its
+#: import alone. Its value is folded instead, whatever name it is read by.
+_SET_ON_LIBRARIES: dict[str, set[str]] = {}
+_ANY_NAME = "*"
+
+
+def _taken_from_libraries(code: str) -> list[tuple[types.ModuleType, str]]:
+    """``(module, name)`` for each name ``from module import name`` in *code*
+    takes that the notebook set on a library's module: ``from textwrap
+    import rv`` after ``tw.rv = v`` holds the value set, under a name bound
+    afresh."""
+    if not _SET_ON_LIBRARIES or "import" not in code:
+        return []
+    tree = parse_cached(code)
+    if tree is None:
+        return []
+    taken = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and not node.level and node.module in _SET_ON_LIBRARIES:
+            module = sys.modules.get(node.module)
+            taken.extend(
+                (module, alias.name)
+                for alias in node.names
+                if module is not None and _set_on_by_the_notebook(module, alias.name)
+            )
+    return taken
+
+
+def _note_set_on_a_library(module_name: str, name: Any) -> None:
+    module = sys.modules.get(module_name)
+    if module is None or _is_local(module) or not isinstance(name, str):
+        return
+    _SET_ON_LIBRARIES.setdefault(module_name, set()).add(name)
+
+
+def _set_on_by_the_notebook(module: Any, attr: str) -> bool:
+    """Whether a statement of the notebook set *attr* on the library
+    *module* (`_SET_ON_LIBRARIES`)."""
+    if not _SET_ON_LIBRARIES:
+        return False
+    names = _SET_ON_LIBRARIES.get(attribute_or(module, "__name__", None))
+    return bool(names) and (attr in names or _ANY_NAME in names) and not attr.startswith("__")
 
 
 def _state_home(value: Any, namespace: Mapping[str, Any]) -> str | None:
@@ -1235,7 +1292,7 @@ class _Found:
         for attr in reversed(attrs):
             if not instance_of(obj, types.ModuleType):
                 return
-            label = f"{obj.__name__}.{attr}" if _is_local(obj) else None
+            label = f"{obj.__name__}.{attr}" if _is_local(obj) or _set_on_by_the_notebook(obj, attr) else None
             obj = vars(obj).get(attr)
             self.value(obj, label)
 
@@ -1251,7 +1308,7 @@ class _Found:
             for name in co.co_names:
                 value = self.namespace.get(name)
                 self.value(value)
-                if issubclass(type(value), types.ModuleType) and _is_local(value):
+                if issubclass(type(value), types.ModuleType):
                     self._module_attributes(value, co.co_names)
 
     def _module_body_reads(self, fn: types.FunctionType) -> None:
@@ -1267,14 +1324,18 @@ class _Found:
                     continue
                 value = home[name]
                 self.value(value, f"{home_name}.{name}")
-                if issubclass(type(value), types.ModuleType) and _is_local(value):
+                if issubclass(type(value), types.ModuleType):
                     self._module_attributes(value, co.co_names)
 
     def _module_attributes(self, module: types.ModuleType, names: Iterable[str]) -> None:
-        """``module.attr`` for each of *names* the local *module* has."""
+        """``module.attr`` for each of *names* the local *module* has, or
+        that the notebook set on a library's *module*."""
+        local = _is_local(module)
+        if not local and not _SET_ON_LIBRARIES:
+            return
         namespace = vars(module)
         for attr in names:
-            if attr in namespace and not attr.startswith("__"):
+            if attr in namespace and not attr.startswith("__") and (local or _set_on_by_the_notebook(module, attr)):
                 self.value(namespace[attr], f"{module.__name__}.{attr}")
 
     def close_modules(self) -> None:
