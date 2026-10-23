@@ -479,12 +479,15 @@ def estimate_object_size(obj: Any, _depth: int = 0) -> int:
             return size
         # By its type: ``is_dataclass(obj)`` asks the object for its
         # ``__class__`` (``isinstance``), which a lookup of the user's answers.
+        # Its fields read as pickle reads them, from its ``__dict__`` and
+        # slots, never through its own ``__getattribute__``.
         if not instance_of(obj, type) and dataclasses.is_dataclass(type(obj)):
             base = sys.getsizeof(obj)
-            return base + sum(estimate_object_size(getattr(obj, f.name), _depth + 1) for f in dataclasses.fields(obj))
-        if instance_of(obj, tuple) and hasattr(obj, "_fields"):  # namedtuple
+            held = _field_values(obj, [f.name for f in dataclasses.fields(type(obj))])
+            return base + sum(estimate_object_size(value, _depth + 1) for value in held)
+        if instance_of(obj, tuple) and attribute_or(type(obj), "_fields", None) is not None:  # namedtuple
             base = sys.getsizeof(obj)
-            return base + sum(estimate_object_size(getattr(obj, name), _depth + 1) for name in obj._fields)
+            return base + sum(estimate_object_size(value, _depth + 1) for value in tuple.__iter__(obj))
         if type_name in ("bytes", "bytearray"):
             return len(obj)
         if instance_of(obj, (list, tuple)):
@@ -606,7 +609,7 @@ def _own_footprint(obj: Any, seen: set[int], stack: list) -> int:
                 size += sampled
         elif not instance_of(obj, _HELD_BY_NAME):
             size += _attrs_footprint(obj, seen, held)
-    except (TypeError, RecursionError, ValueError):
+    except Exception:
         logger.debug("Could not estimate size of %s object", type(obj).__name__, exc_info=True)
         return 0
     held.reverse()  # the first popped first
@@ -658,10 +661,43 @@ def _attr_values(obj: Any) -> list:
     attrs = own_dict(obj)
     values = list(attrs.values()) if attrs is not None else []
     for name in _slot_names(type(obj)):
-        value = getattr(obj, name, None)
+        value = _slot_value(obj, name)
         if value is not None:
             values.append(value)
     return values
+
+
+def _slot_value(obj: Any, name: str, missing: Any = None) -> Any:
+    """*obj*'s slot *name*, read through the slot's own descriptor as pickle
+    reads it (never the object's ``__getattribute__``); *missing* when unset
+    or not a slot."""
+    for klass in type(obj).__mro__:
+        found = klass.__dict__.get(name)
+        if found is not None:
+            if type(found) is not types.MemberDescriptorType:
+                return missing
+            try:
+                return found.__get__(obj, type(obj))
+            except AttributeError:
+                return missing
+    return missing
+
+
+def _field_values(obj: Any, names: list[str]) -> list:
+    """The values of *obj*'s fields *names*, from its ``__dict__`` or slots;
+    one in neither (a property) is looked up as before."""
+    attrs = own_dict(obj) or {}
+    values = []
+    for name in names:
+        if name in attrs:
+            values.append(attrs[name])
+            continue
+        value = _slot_value(obj, name, _UNSET)
+        values.append(getattr(obj, name) if value is _UNSET else value)
+    return values
+
+
+_UNSET = object()
 
 
 def _attrs_footprint(obj: Any, seen: set[int], held: list) -> int:
@@ -686,7 +722,7 @@ def _attrs_footprint(obj: Any, seen: set[int], held: list) -> int:
             else:
                 held.append(value)
     for name in _slot_names(type(obj)):
-        value = getattr(obj, name, None)
+        value = _slot_value(obj, name)
         if value is not None:
             if type(value) in _FLAT_CELLS:
                 size += sys.getsizeof(value)

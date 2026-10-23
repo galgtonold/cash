@@ -52,7 +52,7 @@ from typing import Any
 
 from cash import _native, _plain_data
 from cash._clock import CpuLimit
-from cash._user_attrs import attribute_or, has_attribute, instance_of
+from cash._user_attrs import attribute_or, has_attribute, instance_of, own_dict
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
 
@@ -334,10 +334,8 @@ def attributes_of(value: Any) -> dict[str, Any] | None:
         or _is_local_module_class(cls)
     ):
         return None
-    try:
-        own = object.__getattribute__(value, "__dict__")
-    except (AttributeError, TypeError):
-        own = None
+    # The dict Python keeps, never a ``__dict__`` property of the class's.
+    own = own_dict(value)
     if own is not None and type(own) is not dict:
         return None
     slots = _slot_members(cls)

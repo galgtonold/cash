@@ -248,3 +248,139 @@ def test_cash_asks_such_an_object_nothing_but_to_pickle_it(cash_magics, tmp_path
     # The key's pickle of ``c`` (read by the statements below it) and the
     # store's copy of it.
     assert len(asked_class) <= 2, "\n----\n".join(asked_class)
+
+
+#: Classes whose instances raise for ``__class__``, as a property and from
+#: their own ``__getattribute__``: stored, then served from the cache.
+HIDDEN = """
+class ClassProp:
+    def __init__(self, v):
+        self.v = v
+    @property
+    def __class__(self):
+        raise RuntimeError("no class")
+class ClassAsk:
+    def __init__(self, v):
+        object.__setattr__(self, "v", v)
+    def __getattribute__(self, k):
+        if k == "__class__":
+            raise RuntimeError("no class")
+        return object.__getattribute__(self, k)
+"""
+
+
+@pytest.mark.parametrize("cls", ["ClassProp", "ClassAsk"])
+def test_such_an_object_served_from_the_cache_is_the_one_its_statement_binds(cash_magics, tmp_path, monkeypatch, cls):
+    """Stored, ``c = C(5)`` is served the third time it runs: the restore
+    asked the served copy for its class (``isinstance``), its error stopped
+    the cell, and ``c`` kept the ``C(6)`` bound before it."""
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    (tmp_path / "hidden_mod.py").write_text(HIDDEN, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    cells = [f"from hidden_mod import {cls} as C", "c = C(5)", "c = C(6)", "c = C(5)  # again"]
+    statuses = []
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+        statuses.append(str(cash_magics._last_cell_metrics["statements"][-1]["status"]))
+    assert object.__getattribute__(cash_magics.shell.user_ns["c"], "v") == 5
+    assert statuses[-1] == "RESTORED", statuses
+
+
+#: Counting what is asked of every instance, the served copies too, for each
+#: shape the store sizes apart: a plain instance, a dataclass, a namedtuple
+#: and one with ``__slots__``. The cells read ``v`` past the hook. What a
+#: pickle asks from inside cash's pickler is pickle's (it reads a slot by
+#: ``getattr``), and is not counted.
+SHAPED = """
+import collections, dataclasses, sys
+CALLS = {}
+_PICKLING = ("kept_state.py", "copyreg.py", "pickle.py")
+def _count(self, k):
+    if not sys._getframe(1).f_code.co_filename.endswith(_PICKLING):
+        CALLS[k] = CALLS.get(k, 0) + 1
+    return object.__getattribute__(self, k)
+class Plain:
+    def __init__(self, v):
+        self.v = v
+    __getattribute__ = _count
+@dataclasses.dataclass
+class Data:
+    v: int
+    __getattribute__ = _count
+class Named(collections.namedtuple("Named", "v")):
+    __slots__ = ()
+    __getattribute__ = _count
+class Slots:
+    __slots__ = ("v",)
+    def __init__(self, v):
+        self.v = v
+    __getattribute__ = _count
+"""
+
+#: What pickling an instance and rebuilding it asks: pickle's own questions.
+PICKLE_ASKS = {
+    "__class__",
+    "__reduce_ex__",
+    "__reduce__",
+    "__getstate__",
+    "__getnewargs__",
+    "__getnewargs_ex__",
+    "__setstate__",
+    "__dict__",
+}
+
+
+@pytest.mark.parametrize("shape", ["Plain", "Data", "Named", "Slots"])
+def test_cash_asks_such_an_object_nothing_but_to_pickle_it_stored_or_served(cash_magics, tmp_path, monkeypatch, shape):
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    module = f"shaped_mod_{shape.lower()}"
+    (tmp_path / f"{module}.py").write_text(SHAPED, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    read = "object.__getattribute__(c, 'v')" if shape != "Named" else "tuple.__getitem__(c, 0)"
+    cells = [
+        f"from {module} import {shape} as C, CALLS",
+        "c = C(5)",
+        "c = C(6)",
+        "c = C(5)  # again",
+        f"w = {read} + 1",
+    ]
+    statuses = []
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+        statuses.append(str(cash_magics._last_cell_metrics["statements"][-1]["status"]))
+    ns = cash_magics.shell.user_ns
+    assert statuses[3] == "RESTORED", statuses
+    assert ns["w"] == 6
+    asked = {name: n for name, n in ns["CALLS"].items() if name not in PICKLE_ASKS}
+    assert asked == {}
+
+
+#: An object answering every lookup it lacks with ``0`` (``__code__`` too),
+#: and one whose ``__dict__`` is a property that raises: cash read the
+#: first's "code" for the code objects nested in it, and the second's
+#: ``__dict__`` through the property, and the cell failed.
+ODD = """
+class Zero:
+    def __init__(self, v):
+        self.v = v
+    def __getattr__(self, k):
+        return 0
+class NoDict:
+    def __init__(self, v):
+        object.__setattr__(self, "v", v)
+    @property
+    def __dict__(self):
+        raise RuntimeError("no __dict__")
+"""
+
+
+@pytest.mark.parametrize("cls", ["Zero", "NoDict"])
+def test_an_object_with_odd_lookups_runs_as_plain_python(cash_magics, tmp_path, monkeypatch, cls):
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    (tmp_path / "odd_mod.py").write_text(ODD, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    cells = [f"from odd_mod import {cls} as C", "c = C(5)", "w = object.__getattribute__(c, 'v') + 1"]
+    for _ in range(2):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        assert cash_magics.shell.user_ns["w"] == _plain(cells)["w"] == 6
