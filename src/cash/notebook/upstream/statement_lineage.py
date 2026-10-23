@@ -84,9 +84,9 @@ from ..statement import is_control_body
 from ..statement.carrier_advances import reachable_generators
 from ..statement.derivation_edges import (
     apply_share_record,
-    assigned_names,
     bump_derived_lineages,
     own_share_edges,
+    rebound_outputs,
     static_share_edges,
 )
 from ..statement.lineage import rewritten_by_the_notebook_since
@@ -1086,6 +1086,10 @@ class StatementLineage:
             )
 
             if not outputs:
+                # A bare call can still keep what it is handed on a class
+                # (``boxes[0].hold(d)``): the edges its run linked, as there
+                # (`StatementProcessor._link_inputs_kept_by`).
+                self.relink(stmt_code, tree, set(), ChainMap(virtual_lineage, self.shell.user_ns), own=own_edges)
                 # A bare call can still draw from a generator it is handed
                 # (`print(draw(0, rng))`), which moves the generator's lineage.
                 advanced = self._advance_carriers_without_outputs(
@@ -1097,7 +1101,7 @@ class StatementLineage:
             # Its outputs are bound when its edges are linked, as after a
             # hit's restore (`_apply_writes`).
             bound = ChainMap(dict.fromkeys(outputs), virtual_lineage, self.shell.user_ns)
-            rebound = (outputs - inputs) | (assigned_names(tree) & outputs)
+            rebound = rebound_outputs(outputs, inputs, tree, self.shell.user_ns)
 
             outcome = self._apply_writes(
                 stmt_code,

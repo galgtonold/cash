@@ -6,6 +6,11 @@ class method's ``cls``. The holder link looked only at the classes a
 statement read by name, which ``sbox.hold`` does not, and a class method's
 change through ``cls`` was not seen as a change to the class at all: a cell
 reading ``data`` after an edit to the bump was served the value from before.
+
+So it was when the class the list is on was one the statement names nowhere:
+a base class, a metaclass, or the class of an object reached through a list;
+and when the bump is a method of the object (``type(self).held``) or of the
+metaclass (``K.bump(7)``).
 """
 
 from __future__ import annotations
@@ -35,6 +40,59 @@ SHAPES = {
         DATA,
         "Pt.hold(data['meta'])",
         "Pt.bump(5)",
+        READ,
+    ],
+    "a method of the object": [
+        "class SBox:\n    held = []\n    def hold(self, d):\n        type(self).held.append(d)\n"
+        "    def bump(self, n):\n        type(self).held[-1]['n'] += n",
+        "sbox = SBox()",
+        DATA,
+        "sbox.hold(data['meta'])",
+        "sbox.bump(5)",
+        READ,
+    ],
+    "class methods called on the object": [
+        "class SBox:\n    held = []\n    @classmethod\n    def hold(cls, d):\n        cls.held.append(d)\n"
+        "    @classmethod\n    def bump(cls, n):\n        cls.held[-1]['n'] += n",
+        "sbox = SBox()",
+        DATA,
+        "sbox.hold(data['meta'])",
+        "sbox.bump(5)",
+        READ,
+    ],
+    "on the base class": [
+        "class Base:\n    held = []\n    def hold(self, d):\n        type(self).held.append(d)\nclass Sub(Base):\n    pass",
+        "s = Sub()",
+        DATA,
+        "s.hold(data['meta'])",
+        "Base.held[-1]['n'] += 5",
+        READ,
+    ],
+    "on the metaclass": [
+        "class Meta(type):\n    reg = []\nclass K(metaclass=Meta):\n    def hold(self, d):\n"
+        "        type(type(self)).reg.append(d)\ndef bump(n):\n    Meta.reg[-1]['n'] += n",
+        "k = K()",
+        DATA,
+        "k.hold(data['meta'])",
+        "bump(5)",
+        READ,
+    ],
+    "a metaclass method": [
+        "class Meta(type):\n    reg = []\n    def bump(cls, n):\n        cls.reg[-1]['n'] += n\n"
+        "class K(metaclass=Meta):\n    def hold(self, d):\n        type(self).reg.append(d)",
+        "k = K()",
+        DATA,
+        "k.hold(data['meta'])",
+        "K.bump(5)",
+        READ,
+    ],
+    "an object in a list": [
+        "class SBox:\n    held = []\n    def hold(self, d):\n        type(self).held.append(d)\n"
+        "    @classmethod\n    def bump(cls, n):\n        cls.held[-1]['n'] += n",
+        "boxes = [SBox()]",
+        DATA,
+        "boxes[0].hold(data['meta'])",
+        "SBox.bump(5)",
         READ,
     ],
 }

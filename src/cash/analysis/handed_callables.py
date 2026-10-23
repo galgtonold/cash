@@ -1256,8 +1256,13 @@ def _attribute(owner: Any, attr: str) -> Any:
     if instance_of(member, classmethod):
         return types.MethodType(member.__func__, owner if instance_of(owner, type) else type(owner))
     if instance_of(member, types.FunctionType):
-        in_instance = not instance_of(owner, type) and attr in _instance_dict(owner)
-        return member if instance_of(owner, type) or in_instance else types.MethodType(member, owner)
+        if instance_of(owner, type):
+            # A method of the metaclass (``K.bump(5)``, ``def bump(cls, n)``
+            # on ``Meta``): bound to the class, as Python binds it.
+            on_class = any(attr in vars(klass) for klass in owner.__mro__)
+            return member if on_class else types.MethodType(member, owner)
+        in_instance = attr in _instance_dict(owner)
+        return member if in_instance else types.MethodType(member, owner)
     if instance_of(member, (types.MethodDescriptorType, types.WrapperDescriptorType)) and not instance_of(owner, type):
         # ``results.append`` handed over: the builtin method, bound.
         try:

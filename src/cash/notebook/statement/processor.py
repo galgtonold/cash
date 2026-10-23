@@ -6,6 +6,7 @@ import ast
 import contextlib
 import functools
 import io
+import itertools
 import logging
 import os
 import secrets
@@ -57,6 +58,7 @@ from cash.notebook.statement.carrier_advances import (
 from cash.notebook.statement.control_body import is_control_body
 from cash.notebook.statement.derivation_edges import (
     apply_share_record,
+    bound_names,
     logging_edges,
     own_share_edges,
     record_shared_object_edges,
@@ -291,20 +293,73 @@ def _entry_values(cached_data: Any) -> dict[str, Any] | None:
     return variables if isinstance(variables, dict) else None
 
 
-def _bound_names(tree: ast.AST | None) -> set[str] | None:
-    """The names *tree* binds: assigned, defined, imported; None when there
-    is no tree to read them from."""
-    if tree is None:
-        return None
-    found: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
-            found.add(node.id)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            found.add(node.name)
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            found.update((a.asname or a.name).split(".")[0] for a in node.names)
+#: Most items of a list, tuple or dict input whose classes
+#: `_classes_with_state` asks: ``boxes[0].hold(d)`` reaches its object
+#: through one.
+_ITEMS_ASKED = 64
+
+
+def _calls_a_method(tree: ast.AST | None) -> bool:
+    """Whether *tree* calls an attribute (``boxes[0].hold(d)``)."""
+    return tree is not None and any(
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) for node in ast.walk(tree)
+    )
+
+
+def _classes_with_state(
+    values: list[Any], user_ns: Mapping[str, Any], value_types: tuple[type, ...]
+) -> dict[str, set[str]]:
+    """The notebook's classes with state of their own (an attribute that
+    is no value, function or class) around *values*: a class among them,
+    its bases and its metaclass's, and for any other value the same of its
+    class, or of the classes of a list's, tuple's or dict's first items.
+    Each by its name, with the names of the classes of *values* it came
+    from (`_link_inputs_kept_by`)."""
+    named = {id(value): name for name, value in user_ns.items() if instance_of(value, type)}
+    if not named:
+        return {}
+    found: dict[str, set[str]] = {}
+    for value in values:
+        if instance_of(value, (types.ModuleType, types.FunctionType)) or is_value(value, value_types):
+            continue
+        if instance_of(value, type):
+            classes = [value]
+        else:
+            classes = [type(value)]
+            if type(value) in (list, tuple):
+                classes += [type(item) for item in value[:_ITEMS_ASKED]]
+            elif type(value) is dict:
+                classes += [type(item) for item in itertools.islice(value.values(), _ITEMS_ASKED)]
+        for cls in classes:
+            origin = named.get(id(cls))
+            for related in (*cls.__mro__, *type(cls).__mro__):
+                name = named.get(id(related))
+                if name is not None and _has_class_state(related, value_types):
+                    found.setdefault(name, set()).update({origin} if origin else ())
     return found
+
+
+def _has_class_state(cls: type, value_types: tuple[type, ...]) -> bool:
+    """Whether *cls* has an attribute of its own a value can be kept in (a
+    list, a dict, an object), not a method, a property or a number."""
+    return any(
+        not (key.startswith("__") and key.endswith("__"))
+        and not is_value(member, value_types)
+        and not instance_of(member, _NO_STATE)
+        for key, member in list(vars(cls).items())
+    )
+
+
+#: What a class attribute that keeps no value is.
+_NO_STATE = (
+    types.FunctionType,
+    staticmethod,
+    classmethod,
+    property,
+    type,
+    types.MemberDescriptorType,
+    types.GetSetDescriptorType,
+)
 
 
 class StatementProcessor:
@@ -2796,6 +2851,15 @@ class StatementProcessor:
         an alias does (`bump_derived_lineages`). Only a holder the statement
         changed is linked: one that read ``data`` and kept nothing links
         nothing.
+
+        The class the list is on can be one the statement names nowhere: a
+        base class (``Sub().hold`` appending to ``Base.held``), a metaclass
+        (``type(type(self)).reg``), or the class of an object it reaches
+        through a list (``boxes[0].hold``). So a class with state of its own
+        that the changed classes, or the objects the statement calls a
+        method through, derive from is asked too (`_classes_with_state`),
+        and the class the statement changed is linked beside the one that
+        holds the value: a change through either reaches it.
         """
         if is_control_body(run.code):
             return
@@ -2805,7 +2869,7 @@ class StatementProcessor:
         # Changed in place, not bound: a class a method changed through its
         # object (``type(self).held.append(d)`` in ``sbox.hold(d)``) is an
         # output the statement does not read by name.
-        bound = _bound_names(run.tree)
+        bound = bound_names(run.tree)
         changed = {
             name
             for name in run.outputs
@@ -2813,9 +2877,15 @@ class StatementProcessor:
             and name in user_ns
             and instance_of(user_ns[name], (type, types.ModuleType))
         }
-        if not changed:
-            return
         value_types = VALUE_TYPES + library_value_types()
+        around = _classes_with_state(
+            [user_ns[name] for name in changed if instance_of(user_ns[name], type)]
+            + ([user_ns[name] for name in run.inputs if name in user_ns] if _calls_a_method(run.tree) else []),
+            user_ns,
+            value_types,
+        )
+        if not changed and not around:
+            return
         handed = [
             name
             for name in sorted(run.inputs - run.outputs)
@@ -2844,9 +2914,19 @@ class StatementProcessor:
             pass  # what was found by then is linked; the rest stays unlinked
         edges = self.tracking_state.derivation_edges
         for owners, holders in gave_up.links:
-            kept_by = set(holders) & changed
+            kept_by = set(holders) & (changed | set(around))
             if kept_by:
+                unnamed = sorted(kept_by - run.outputs)
+                kept_by |= {origin for name in kept_by for origin in around.get(name, ()) if origin in changed}
                 record_shared_object_edges(edges, set(owners) & set(handed), kept_by)
+                if unnamed and not run.skip_cache:
+                    # A hit restores the outputs and nothing else: what it
+                    # put on a class it does not name would be missing.
+                    run.skip_cache = True
+                    run.metrics["uncacheable_reasons"].append(
+                        f"Keeps a value on the class {', '.join(unnamed)}, which it changes without naming it "
+                        "(statement re-executes)"
+                    )
         if gave_up.modules & run.state_modules:
             # A global of a module the statement set state on holds it: the
             # names through which it did (``Pt`` of ``Pt.hold(...)``) stand
