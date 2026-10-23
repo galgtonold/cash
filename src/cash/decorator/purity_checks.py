@@ -30,6 +30,7 @@ from ..analysis.purity_report import (
     ISSUE_MUTABLE_GLOBAL,
     ISSUE_NETWORK_READ,
     ISSUE_UNTRACKABLE_DEP,
+    UNREAD_MODULE,
     PurityIssue,
     PurityReport,
     describe_untrackable,
@@ -1668,6 +1669,12 @@ class PurityChecks:
                 fix = (
                     "on Python 3.12 and newer cash checks what the call ran instead; "
                     "`# @cash:assume-safe` on that line caches anyway."
+                )
+            elif all(UNREAD_MODULE in i.description for i in untrackable):
+                what = f"it imports a module cash cannot key before it is loaded ({describe_untrackable(untrackable)})"
+                fix = (
+                    "compute the value in a function instead of at the module's top level, or import the "
+                    "module at the top of the file; `# @cash:assume-safe` on that line caches anyway."
                 )
             else:
                 what = f"it picks code by a run-time name ({describe_untrackable(untrackable)})"

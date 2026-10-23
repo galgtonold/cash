@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import ast
 import dataclasses
-import importlib
 import importlib.util
 import operator
 import sys
@@ -21,9 +20,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
-from ..install_paths import in_own_package, top_package
 from ..loaded_code import code_objects_of
-from ..tracking.function_tracker import is_local_module
 from .purity_report import PurityReport
 
 
@@ -68,42 +65,17 @@ def local_import_map(func_def: ast.AST, func: Any) -> dict[str, tuple[str, tuple
     return found
 
 
-def _module_is_user_code(module_name: str, root_module: str | None) -> bool:
-    """Is *module_name* user code, decided WITHOUT importing it?
+def resolve_local_import(module_name: str, prefix: tuple[str, ...]) -> Any:
+    """The object a function-body import binds, if its module is loaded.
 
-    The top-level package is checked first, with a spec lookup that imports
-    nothing, so a library imported inside a function to defer its cost
-    (``import torch``) is never imported early on its behalf.
-    """
-    if in_own_package(module_name, top_package(root_module)):
-        return True
-    top = top_package(module_name)
-    if top is None:
-        return False
-    try:
-        spec = importlib.util.find_spec(top)
-    except (ImportError, ValueError):
-        return False
-    origin = getattr(spec, "origin", None) if spec is not None else None
-    if not origin or origin in ("built-in", "frozen"):
-        return False
-    return is_local_module(types.SimpleNamespace(__file__=origin))
-
-
-def resolve_local_import(module_name: str, prefix: tuple[str, ...], root_module: str | None) -> Any:
-    """The object a function-body import binds, importing a USER module if the
-    body has not run yet. That import is the one the body is about to make;
-    doing it now is what lets the first call's key see the helper. A library
-    module is only read if it is already loaded."""
-    module = sys.modules.get(module_name)
-    if module is None:
-        if not _module_is_user_code(module_name, root_module):
-            return None
-        try:
-            module = importlib.import_module(module_name)
-        except Exception:  # noqa: BLE001 - the body will raise it, not the analysis
-            return None
-    obj: Any = module
+    Nothing is imported: importing runs the module's code, which the body
+    may never get to (a ``__setstate__`` only a rebuild runs, a branch not
+    taken), and that code may write files or change state the call would
+    not have. A user module the body has not imported yet is keyed by its
+    source (`unloaded_modules`)."""
+    obj: Any = sys.modules.get(module_name)
+    if obj is None:
+        return None
     for attr in prefix:
         obj = getattr(obj, attr, None)
         if obj is None:
@@ -178,7 +150,8 @@ def resolve_binding(module_name: str, chain: tuple[str, ...]) -> Any:
 def bindings_changed(report: PurityReport) -> bool:
     """Does any call-site binding the report followed hold a different object
     now, has the module bound a name a call site found unbound, or does a
-    walked function or class run other code than when it was walked?
+    walked function or class run other code than when it was walked, or
+    has a user module a body imports been loaded since?
 
     A module that has left ``sys.modules`` proves nothing either way and is
     skipped. Identity, not equality: a re-created function with the same
@@ -194,6 +167,8 @@ def bindings_changed(report: PurityReport) -> bool:
         module = sys.modules.get(module_name)
         if module is not None and name in (getattr(module, "__dict__", None) or ()):
             return True
+    if any(name in sys.modules for name in report.unloaded_modules):
+        return True
     for ref, codes in report.walked_code:
         walked = ref()
         if walked is None:

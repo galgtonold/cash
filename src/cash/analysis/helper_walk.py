@@ -74,11 +74,13 @@ from .purity_report import (
     ISSUE_AMBIENT_READ,
     ISSUE_IMPURE_CALL,
     ISSUE_UNTRACKABLE_DEP,
+    UNREAD_MODULE,
     PurityIssue,
     PurityReport,
 )
 from .purity_visitor import PurityVisitor
 from .static_dispatch import MODULE_NAME_PREFIX, spell_static_dispatch
+from .unloaded_modules import source_digest, unloaded_import
 
 #: ``(module_name, attribute chain)``: where a binding is looked up again.
 BindingPath = tuple[str, tuple[str, ...]]
@@ -151,6 +153,8 @@ class HelperWalk:
         self._seen_bindings: set[BindingPath] = set()
         self._unbound: dict[tuple[str, str], None] = {}
         self._unkeyable: list[str] = []
+        self._unloaded: dict[str, None] = {}
+        self._unvouched: dict[str, str] = {}
         #: id(callee) -> the first call-site binding that reached it
         self._caller_paths: dict[int, BindingPath] = {}
         self._waived_paths: set[BindingPath] = set()
@@ -434,6 +438,8 @@ class HelperWalk:
         # Reads of module globals that are reassigned or mutated somewhere in
         # the module: the cached result won't change when the global does.
         issues += mutable_global_reads(func, func_def, qualname, visitor.read_names)
+        if self._unvouched:
+            issues += self._unvouched_import_issues(func_def, qualname)
 
         # Drop what THIS function's source says it has already audited.
         # Filtered per function, against that function's own source, so a
@@ -466,11 +472,44 @@ class HelperWalk:
         """
         namespace = build_namespace(func)
         local_imports = local_import_map(func_def, func)
+        self._unvouched = {}
         for local, (module_name, prefix) in local_imports.items():
-            obj = resolve_local_import(module_name, prefix, self._root_module)
+            obj = resolve_local_import(module_name, prefix)
             if obj is not None:
                 namespace[local] = obj
+            else:
+                unloaded = unloaded_import(module_name, prefix, self._root_module)
+                if unloaded is not None:
+                    # Walked once it is loaded (`bindings_changed`); keyed by
+                    # its source until then (`ModuleAttrFold.local_binding_parts`).
+                    self._unloaded.setdefault(unloaded, None)
+                    if source_digest(unloaded, self._root_module) is None:
+                        self._unvouched.setdefault(local, unloaded)
         return namespace, local_imports
+
+    def _unvouched_import_issues(self, func_def: ast.AST, qualname: str) -> list[PurityIssue]:
+        """An import in the body of a user module not loaded yet whose source
+        cannot vouch for what it binds (`unloaded_modules.source_digest`):
+        the walk does not import it, as that would run its code, so the key
+        cannot capture its helpers or values and the call runs uncached."""
+        issues = []
+        for node in ast.walk(func_def):
+            if not isinstance(node, (ast.Import, ast.ImportFrom)):
+                continue
+            for alias in node.names:
+                local = alias.asname or (alias.name.split(".")[0] if isinstance(node, ast.Import) else alias.name)
+                module = self._unvouched.get(local)
+                if module is not None:
+                    issues.append(
+                        PurityIssue(
+                            kind=ISSUE_UNTRACKABLE_DEP,
+                            description=f"import {module} - {UNREAD_MODULE}",
+                            where=qualname,
+                            line=node.lineno,
+                        )
+                    )
+                    break
+        return issues
 
     # --- queueing what a body reaches ---
 
@@ -826,6 +865,7 @@ class HelperWalk:
             opaque_callees=tuple(sorted(set(self._opaque))),
             helper_bindings=tuple(self._bindings),
             unbound_names=tuple(self._unbound),
+            unloaded_modules=tuple(self._unloaded),
             waived_bindings=frozenset(self._waived_paths - self._unwaived_paths),
             unkeyable=tuple(self._unkeyable),
             walked_code=tuple(self._walked_code),
