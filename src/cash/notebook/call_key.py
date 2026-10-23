@@ -251,7 +251,7 @@ def holds_a_stream(cells: Mapping[str, _types.CellType]) -> bool:
         elif kind is dict:
             children = [*dict.keys(item), *dict.values(item)]
         else:
-            children = _held_by(item)
+            children = held_by(item)
             if not children:
                 continue
         if _EXACT_ATOMS.issuperset(map(type, children)):
@@ -321,7 +321,7 @@ _MEMBER_HOLDERS = (
 )
 
 #: The containers read item by item; a user's subclass of one is read as the
-#: user's object (`_held_by`), without asking it for its items.
+#: user's object (`held_by`), without asking it for its items.
 _CONTAINERS = (tuple, list, set, frozenset, dict)
 _EXACT_CONTAINERS = frozenset(_CONTAINERS)
 
@@ -601,7 +601,7 @@ def _users_type(kind: type) -> bool:
     return known
 
 
-def _held_by(item) -> list | None:
+def held_by(item) -> list | None:
     """What a holder that is not a container keeps a function or a memo in:
     a function's closure, defaults and attributes, a ``partial``'s function
     and arguments, a bound method's function and object, what a
@@ -654,7 +654,7 @@ def holds_a_closure_with_state(
     returned), or a ``functools.cache`` memo. Looked for in tuples, lists,
     sets and dicts, and in what a function, a ``partial``, a bound method, a
     ``SimpleNamespace``, a user's object or a user's class holds
-    (`_held_by`); a library object is not looked into.
+    (`held_by`); a library object is not looked into.
 
     Such a value cannot be served from the cache. The store keeps a function
     by reference, so a hit hands back the closure the last run made, with
@@ -739,7 +739,7 @@ def holds_a_closure_with_state(
                     return True
                 if _named(item):
                     continue
-            held = gc.get_referents(item) if reading == _REFERENTS else _held_by(item)
+            held = gc.get_referents(item) if reading == _REFERENTS else held_by(item)
             if held:
                 pushed = False
                 for part in held:

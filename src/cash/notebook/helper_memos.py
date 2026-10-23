@@ -132,13 +132,13 @@ def holds_a_filled_memo(value: Any) -> bool:
     restart with ``make(3)`` answered, so the seed was skipped and every
     draw below differed from plain Python. Looked for in tuples, lists,
     sets and dicts, in an object of the user's (its class included), and in
-    what a function, a ``partial`` or a method holds (`call_key._held_by`):
+    what a function, a ``partial`` or a method holds (`call_key.held_by`):
     ``((Cases, n), m)`` and an instance of ``Cases`` were served.
 
     One its module names (a module-level class or function) is left out:
     run again, plain Python hands back that very one, memo and all. Past
     `_MEMO_WALK_AT` holders, not known: taken as holding one."""
-    from .call_key import _held_by
+    from .call_key import held_by
 
     stack = [value]
     seen: set[int] = set()
@@ -159,7 +159,7 @@ def holds_a_filled_memo(value: Any) -> bool:
             ):
                 if _fills(item):
                     return True
-            children = _held_by(item)
+            children = held_by(item)
             if not children:
                 continue
         if _ATOMS.issuperset(map(type, children)):
