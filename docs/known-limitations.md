@@ -892,6 +892,13 @@ default argument or base class does. **Fix:** move the binding above this cell.
   the same way, without its own methods, but storing the object still
   pickles it, which calls the subclass's `items` and `__reduce_ex__`: if
   those raise, the statement is not cached and re-runs each time.
+- **Python 3.12.0 to 3.12.5 without the C extension: more statements re-run.**
+  On those versions, asking Python what the `_asyncio` module holds can loop
+  for ever (fixed in 3.12.6), and Jupyter loads that module. cash's C
+  extension reads around it. Without the extension, cash cannot tell which
+  variables share an object with a statement's outputs, so such a statement
+  re-runs with a warning instead of being restored. Upgrade to 3.12.6 or
+  later, or install a build with the C extension.
 
 ## Reporting something not on this page
 

@@ -1118,6 +1118,50 @@ static int visit_referent(PyObject *o, void *arg) {
     return 0;
 }
 
+/*
+ * The _asyncio module's own traverse on 3.12.0-3.12.5 can loop for ever:
+ * after the module's state it walks the free list of FutureIter objects,
+ * visiting each one's type, and that list can come back on itself (fixed in
+ * 3.12.6). Only the module's state comes before the list, and the list's
+ * visits are FutureIter's type, which the state visits first; the module's
+ * dict comes after the traverse. So the walk stops after FREE_LIST_BOUND
+ * visits -- the state is ~40 and the list holds 255 at most -- and the dict
+ * is looked at here: the same references, none lost.
+ */
+#define FREE_LIST_BOUND 4096
+#define STOPPED_SHORT 2
+
+typedef struct {
+    RefCtx *cx;
+    long left;
+} BoundCtx;
+
+static int visit_bounded(PyObject *o, void *arg) {
+    BoundCtx *b = (BoundCtx *)arg;
+    if (b->left-- <= 0) return STOPPED_SHORT;
+    return visit_referent(o, b->cx);
+}
+
+static int loops_on_traverse(PyObject *o) {
+#if PY_VERSION_HEX >= 0x030C0000 && PY_VERSION_HEX < 0x030D0000
+    /* 3.12.6 on too: the same answer there, so the stop is tested on every 3.12 */
+    if (!PyModule_Check(o)) return 0;
+    PyModuleDef *def = PyModule_GetDef(o);
+    return def && def->m_name && strcmp(def->m_name, "_asyncio") == 0;
+#else
+    (void)o;
+    return 0;
+#endif
+}
+
+static void traverse_bounded(PyObject *o, traverseproc traverse, RefCtx *cx) {
+    BoundCtx b = {cx, FREE_LIST_BOUND};
+    if (traverse(o, visit_bounded, &b) == STOPPED_SHORT && !cx->found) {
+        PyObject *dict = PyModule_GetDict(o);
+        if (dict) visit_referent(dict, cx);
+    }
+}
+
 static PyObject *py_referrers_in(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     if (nargs != 2 || !PyList_CheckExact(args[0]) || !PyAnySet_Check(args[1])) {
         PyErr_SetString(PyExc_TypeError, "referrers_in(list, set)");
@@ -1169,7 +1213,10 @@ static PyObject *py_referrers_in(PyObject *self, PyObject *const *args, Py_ssize
         if (!traverse) continue;
         cx.found = 0;
         Py_INCREF(o);
-        traverse(o, visit_referent, &cx);
+        if (loops_on_traverse(o))
+            traverse_bounded(o, traverse, &cx);
+        else
+            traverse(o, visit_referent, &cx);
         if (cx.found && PyList_Append(out, o) < 0) err = 1;
         Py_DECREF(o);
         if (err) break;

@@ -1900,6 +1900,10 @@ def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
             # object heap is ~0.3 s, checked once it is read.
             check_walk_budget()
             return found
+    if _TRAVERSE_LOOPS and sys.modules.get("_asyncio") is not None:
+        # Its module's own read can loop for ever (`_TRAVERSE_LOOPS`), and
+        # Python cannot cut it short: not known, as if out of time.
+        raise WalkBudgetExceeded
     found = []
     referents, misses = gc.get_referents, ids.isdisjoint
     # A block of the heap is read in one call, and only a block holding one
@@ -1916,6 +1920,13 @@ def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
 
 #: Heap objects `_referrers_of` reads in one `gc.get_referents` call.
 _REFERRERS_BLOCK = 256
+
+#: Whether the ``_asyncio`` module's own traverse can loop for ever, as it
+#: does on 3.12.0-3.12.5 once its free list of future iterators comes back on
+#: itself (``gc.get_referents(sys.modules["_asyncio"])`` never returns). The
+#: C kernel stops it short and loses nothing (``cwalk.c``); the Python loop
+#: cannot.
+_TRAVERSE_LOOPS = sys.version_info[:2] == (3, 12) and sys.version_info < (3, 12, 6)
 
 #: The C kernel `_referrers_of` reads the heap with (``cwalk.c``), answering
 #: as its Python loop does; None without the kernels, or in a build from
