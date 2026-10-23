@@ -7,7 +7,8 @@ updating it ran again after every restart. Plain Python, after a restart and a
 Run All, has a bar writing to the stream the process has then, and a lock no
 one holds. So a stream that is ``sys.stdout`` or ``sys.stderr`` as it is
 stored is stored as that name, and a lock no one holds as a new lock of its
-kind (`live_state`). Any other file, and a held lock, stay unstorable.
+kind (`live_state`), in what is stored only: a key still refuses a lock.
+Any other file, and a held lock, stay unstorable.
 
 Only what ``pickle`` refuses is stored this way: what could be stored before
 is pickled, and keyed, to the same bytes.
@@ -71,6 +72,14 @@ def test_a_free_lock_restores_as_a_new_free_lock_of_its_kind(kind):
     assert restored.lock.acquire(blocking=False)
     restored.lock.release()
     assert restored.items == [1, 2]
+
+
+@pytest.mark.parametrize("kind", [threading.Lock, threading.RLock])
+def test_a_free_lock_is_not_keyed(kind):
+    """Every free lock would key alike: a key would lose which lock it was,
+    so a key still refuses one, as before."""
+    with pytest.raises((TypeError, pickle.PicklingError)):
+        kept_state.dumps(Guarded(kind()), keyed=True)
 
 
 @pytest.mark.parametrize("kind", [threading.Lock, threading.RLock])

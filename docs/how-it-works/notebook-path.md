@@ -187,12 +187,13 @@ inside another container; when a function it calls writes a module it imports;
 when it is a `while` loop; and when it last ran in less than 0.1 s, where
 storing it costs more than a restore saves. A loop not measured yet is stored.
 
-<!-- claim: cash/live_state.py:live_reduce @e5b888fb, cash/kept_state.py:_or_live @00eb457c -->
+<!-- claim: cash/live_state.py:live_reduce @e5b888fb, cash/kept_state.py:_or_live @4004f659 -->
 A progress bar made with `stream=sys.stdout` holds the output stream, which
 cannot be saved as such. A stream that is `sys.stdout` or `sys.stderr` when
 it is stored is stored as that name, and a restored bar writes to the output
 of the kernel it is restored in, as a bar made there would. A lock an object
-keeps for itself is stored as a new free lock when no one holds it. A bar on
+keeps for itself is stored as a new free lock when no one holds it (a key
+still refuses one, as before). A bar on
 any other file, a held lock, and a bar whose parts hold the bar itself (tqdm's)
 are not stored, and the loop runs again, with the reason in the badge.
 

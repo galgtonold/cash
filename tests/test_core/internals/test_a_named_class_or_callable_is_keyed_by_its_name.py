@@ -65,7 +65,6 @@ class _NoState:
 class _Unpicklable:
     def __init__(self):
         self.lock = __import__("threading").Lock()
-        self.lock.acquire()
 
     def __call__(self, x):
         return x

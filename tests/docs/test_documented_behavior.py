@@ -254,10 +254,8 @@ def test_unhashable_arg_warns_but_returns_correct_value(tmp_path):
     def f(lock):
         return "computed"
 
-    held = threading.Lock()
-    held.acquire()
     with pytest.warns(CashCacheIneffectiveWarning):
-        result = f(held)
+        result = f(threading.Lock())
     assert result == "computed"
 
 

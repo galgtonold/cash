@@ -11,7 +11,8 @@ now (`current_stream`). Any other file object stays unstorable.
 
 A lock an object holds for its own use is stored as a fresh unlocked lock of
 the same kind, when it is not held as it is stored; a held one stays
-unstorable.
+unstorable. A key still refuses a lock (`kept_state._KeepDict`): every free
+lock would key alike, and the key would not say which lock it was.
 
 Only what ``pickle`` refuses is stored this way (`live_reduce`), so nothing
 that could be stored before is stored, or keyed, differently.

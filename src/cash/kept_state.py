@@ -1003,10 +1003,11 @@ def reducers(protocol: int = pickle.DEFAULT_PROTOCOL, extra: dict | None = None)
 _LOCK_TYPES = frozenset({type(threading.Lock()), type(threading.RLock())})
 
 
-def _or_live(obj: Any, reducer: Any) -> Any:
+def _or_live(obj: Any, reducer: Any, watch: list | None = None) -> Any:
     """*reducer*'s reduce of *obj*; for one pickle refuses, a standard stream
     or a free lock, the stand-in `live_state.live_reduce` gives. What pickled
-    before pickles as it did.
+    before pickles as it did. A lock is given one in the stored bytes only,
+    which *watch* (`_KeepDict`) is told of: its keyed bytes still refuse it.
 
     A standard stream's own reduce may succeed and its state fail later
     (ipykernel's ``OutStream`` holds the session's HMAC): one is asked whether
@@ -1019,6 +1020,8 @@ def _or_live(obj: Any, reducer: Any) -> Any:
         live = live_reduce(obj)
         if live is None:
             raise
+        if watch is not None:
+            watch.append(True)
         return live
 
 
@@ -1057,8 +1060,12 @@ class _KeepDict(dict):
             reducer = _names_apart(self._reducer(t), self._names)
             if _holds_dtype(t):
                 reducer = _dtypes_apart(reducer, self._dtypes)
-        if issubclass(t, io.IOBase) or t in _LOCK_TYPES:
+        if issubclass(t, io.IOBase):
             reducer = functools.partial(_or_live, reducer=reducer)
+        elif t in _LOCK_TYPES and not self._keyed:
+            # Stored as a new free lock, never keyed as one: every free lock
+            # would key alike, and a key would lose which lock it was.
+            reducer = functools.partial(_or_live, reducer=reducer, watch=self._watch)
         self[t] = reducer
         return reducer
 

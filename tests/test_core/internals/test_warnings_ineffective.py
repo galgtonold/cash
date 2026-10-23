@@ -69,11 +69,10 @@ def test_warn_once_blames_the_nearest_frame_outside_cash(tmp_path):
 
 
 class _Unpicklable:
-    """Holds a held threading.Lock, which is not picklable."""
+    """Holds a threading.Lock, which is not picklable."""
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._lock.acquire()
 
 
 def test_unpicklable_arg_emits_ineffective_warning(full_warning_text, tmp_path):

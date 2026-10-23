@@ -189,7 +189,6 @@ CASES: dict[str, tuple[str, str]] = {
         import threading
 
         LOCK = threading.Lock()
-        LOCK.acquire()
 
         @c.cache{DEC}
         def f(x):
