@@ -1022,6 +1022,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-FROZEN-MUTATED](#key-frozen-mutated) | decorator | a `frozen=True` result was modified |
 | [KEY-FROZEN-NO-EFFECT](#key-frozen-no-effect) | decorator | `frozen=True` cannot mark this result |
 | [KEY-FUNCTION-IMPURE](#key-function-impure) | decorator | the `key=` function reads something besides its arguments |
+| [KEY-FUNCTION-REACH-UNCHECKED](#key-function-reach-unchecked) | notebook | a function a statement calls reaches too far to check for an iterator; the statement runs every time |
 | [KEY-FUNCTION-RAISED](#key-function-raised) | decorator | the `key=` function raised; the call ran uncached |
 | [KEY-HELPERS-UNWALKABLE](#key-helpers-unwalkable) | both | the code a function runs cannot all be found; not cached |
 | [KEY-INSTANCE-STATE](#key-instance-state) | decorator | a bound method's instance cannot be hashed |
@@ -1294,6 +1295,29 @@ the cache is in use.
 **Silencing it.** Whole function: `@cash.cache(assume_safe=True)`.
 `strict=True` raises `CashImpureFunctionError` instead. See [Silencing one
 code](#silencing-one-code).
+
+### KEY-FUNCTION-REACH-UNCHECKED {#key-function-reach-unchecked}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/notebook/consumables.py:reaches_a_stream @f1a804af -->
+**What happened.** A statement calls a function of yours, and cash looks
+through what that function reads (its globals, closure, defaults, and the
+attributes and items it names, and the functions of yours those reach) for
+an iterator, a generator or an open file the notebook holds. A call reading
+one moves it, and a stored result would not. This function reaches more
+than cash looks through: more than 64 functions, or objects more than four
+levels down. Cash cannot say it draws from nothing, so it treats the call as
+a draw: the statement runs every time instead of being served from the
+cache.
+
+**Why it matters.** Nothing is wrong with the results. The statement is
+not cached, so it costs its full time on every run.
+
+**What to do.** Pass the iterator to the function as an argument, so the
+statement names it, or keep what the function reads closer to it.
+
+**When it is safe to ignore.** When the statement is quick.
 
 ### KEY-FUNCTION-RAISED {#key-function-raised}
 

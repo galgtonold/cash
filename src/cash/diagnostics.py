@@ -266,6 +266,9 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "KEY-DYNAMIC-DEP-FAILED",  # a dynamic_depends_on resolver raised
         "KEY-FUNCTION-IMPURE",  # the key= function reads something besides its
         # arguments (a file, the clock, a random draw)
+        "KEY-FUNCTION-REACH-UNCHECKED",  # a function a statement calls reaches
+        # more than cash looks through for an iterator it could draw from, so
+        # the statement runs every time
         "KEY-FUNCTION-RAISED",  # the key= function raised; the call ran uncached
         "KEY-FROZEN-MUTATED",  # a result declared frozen=True was modified
         "KEY-FROZEN-NO-EFFECT",  # frozen=True on a function whose result it cannot mark

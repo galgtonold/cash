@@ -69,3 +69,64 @@ def test_a_call_drawing_from_a_held_iterator_draws_each_time(cash_magics, shape)
         _run_all(cash_magics, cells, 1)
         ns = cash_magics.shell.user_ns
         assert (ns["y1"], ns["y2"]) == (100, 101), "a stored call result left the iterator where it was"
+
+
+def _reach(source: str, name: str):
+    import warnings
+
+    from cash.notebook import consumables
+
+    ns: dict = {"__name__": "__main__"}
+    exec(compile(source, "<cell>", "exec"), ns)
+    consumables._UNCHECKED_REACH.discard(name)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        found = consumables.reaches_a_stream(ns[name])
+    return found, [getattr(w.message, "code", None) for w in caught]
+
+
+DEEP = (
+    "class N:\n    pass\n"
+    + "".join(f"n{i} = N()\n" for i in range(7))
+    + "".join(f"n{i}.n = n{i + 1}\n" for i in range(6))
+)
+
+
+@pytest.mark.parametrize(
+    ("source", "found", "codes"),
+    [
+        (
+            DEEP + "n6.it = iter(range(5))\ndef f():\n    return next(n0.n.n.n.n.n.n.it)\n",
+            True,
+            ["KEY-FUNCTION-REACH-UNCHECKED"],
+        ),
+        (DEEP + "n6.it = 5\ndef f():\n    return n0.n.n.n.n.n.n.it\n", True, ["KEY-FUNCTION-REACH-UNCHECKED"]),
+        (
+            "it = iter(range(5))\ndef g0():\n    return next(it)\n"
+            + "".join(f"def g{i}():\n    return g{i - 1}()\n" for i in range(1, 80))
+            + "def f():\n    return g79()\n",
+            True,
+            ["KEY-FUNCTION-REACH-UNCHECKED"],
+        ),
+        ("table = {i: [i] for i in range(10_000)}\ndef f(k):\n    return table[k]\n", False, []),
+        ("import json\ndumps = json.dumps\ndef f(x):\n    return dumps(x)\n", False, []),
+        (
+            "class B:\n    pass\nb = B()\nb.c = B()\nb.c.it = iter(range(3))\ndef f():\n    return next(b.c.it)\n",
+            True,
+            [],
+        ),
+    ],
+    ids=[
+        "a-stream-past-the-depth",
+        "plain-data-past-the-depth",
+        "past-64-functions",
+        "a-table",
+        "a-library-function",
+        "within-reach",
+    ],
+)
+def test_past_its_bounds_the_reach_walk_answers_may_draw_and_says_so(source, found, codes):
+    """Past four objects down or 64 functions the walk answered "no draw",
+    and a call drawing from an iterator there was served from the call
+    cache. It now answers "may draw", and warns once."""
+    assert _reach(source, "f") == (found, codes)

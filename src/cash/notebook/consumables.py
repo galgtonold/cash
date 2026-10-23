@@ -51,6 +51,9 @@ from cash._user_attrs import attribute_or, has_attribute, instance_of, own_dict
 
 from ..analysis.mutation_effects import captured_call_receivers
 from ..analysis.mutations import consumed_input_names
+from ..diagnostics import warn_diagnostic
+from ..exceptions import CashCacheIneffectiveWarning
+from ..install_paths import is_user_code_file
 
 logger = logging.getLogger(__name__)
 
@@ -365,12 +368,16 @@ def reaches_a_stream(fn: Any) -> bool:
     """
     seen_fns: set[int] = set()
     stack = [fn]
-    while stack and len(seen_fns) < _REACH_FUNCTIONS:
+    unsure = False
+    while stack:
         f = stack.pop()
         f = attribute_or(f, "__func__", f)
         code = attribute_or(f, "__code__", None)
         if not instance_of(code, types.CodeType) or id(f) in seen_fns:
             continue
+        if len(seen_fns) >= _REACH_FUNCTIONS:
+            unsure = True
+            break
         seen_fns.add(id(f))
         names: set[str] = set()
         keys: set[Any] = set()
@@ -389,25 +396,53 @@ def reaches_a_stream(fn: Any) -> bool:
         values.extend(attribute_or(f, "__defaults__", None) or ())
         values.extend((attribute_or(f, "__kwdefaults__", None) or {}).values())
         seen: set[int] = set()
-        if any(_holds_a_stream(v, names, keys, _REACH_DEPTH, seen, stack) for v in values):
-            return True
+        for value in values:
+            held = _holds_a_stream(value, names, keys, _REACH_DEPTH, seen, stack)
+            if held:
+                return True
+            unsure = unsure or held is None
+    if unsure:
+        # Past its bounds the walk cannot say "no draw": taken as one, the
+        # call runs every time, and says why once.
+        _warn_unchecked_reach(fn)
+        return True
     return False
 
 
-def _holds_a_stream(value: Any, names: set[str], keys: set[Any], depth: int, seen: set[int], fns: list) -> bool:
+#: The functions `_warn_unchecked_reach` warned about, once each.
+_UNCHECKED_REACH: set[str] = set()
+
+
+def _warn_unchecked_reach(fn: Any) -> None:
+    name = attribute_or(fn, "__qualname__", None) or attribute_or(fn, "__name__", None) or "a function"
+    if not isinstance(name, str) or name in _UNCHECKED_REACH:
+        return
+    _UNCHECKED_REACH.add(name)
+    warn_diagnostic(
+        CashCacheIneffectiveWarning,
+        "KEY-FUNCTION-REACH-UNCHECKED",
+        f"{name}() reaches more objects or functions than cash looks through for an iterator or stream it "
+        "could draw from, so a statement calling it runs every time.",
+        f"pass the iterator {name}() draws from as an argument, so the statement names it.",
+    )
+
+
+def _holds_a_stream(value: Any, names: set[str], keys: set[Any], depth: int, seen: set[int], fns: list) -> bool | None:
+    """Whether *value*, read along *names* and *keys*, holds a stream; None
+    when the walk stopped *depth* levels down with more left to read."""
     if value is None or id(value) in seen:
         return False
     seen.add(id(value))
     if instance_of(value, (str, bytes, int, float, bool, types.ModuleType)):
         return False
     if instance_of(value, types.FunctionType):
-        # Followed as code: the names its own body reads.
-        fns.append(value)
+        # Followed as code, the names its own body reads, when it is the
+        # user's: a library's function holds no stream of the notebook's.
+        if is_user_code_file(attribute_or(attribute_or(value, "__code__", None), "co_filename", None)):
+            fns.append(value)
         return False
     if is_stream(value):
         return True
-    if depth <= 0:
-        return False
     children: list[Any] = []
     try:
         if type(value) is dict:
@@ -419,8 +454,29 @@ def _holds_a_stream(value: Any, names: set[str], keys: set[Any], depth: int, see
             if child is not _ABSENT:
                 children.append(child)
     except (TypeError, ValueError, RecursionError):
+        return None
+    children = [child for child in children if child is not None and type(child) not in (str, bytes, int, float, bool)]
+    if not children:
         return False
-    return any(_holds_a_stream(child, names, keys, depth - 1, seen, fns) for child in children)
+    if depth <= 0:
+        # The last level: a stream or a function is still told; anything
+        # else would need a level more.
+        unsure = False
+        for child in children:
+            if instance_of(child, types.FunctionType):
+                _holds_a_stream(child, names, keys, 0, seen, fns)
+            elif is_stream(child):
+                return True
+            elif not instance_of(child, types.ModuleType):
+                unsure = True
+        return None if unsure else False
+    unsure = False
+    for child in children:
+        held = _holds_a_stream(child, names, keys, depth - 1, seen, fns)
+        if held:
+            return True
+        unsure = unsure or held is None
+    return None if unsure else False
 
 
 def _static_attr(obj: Any, name: str) -> Any:
