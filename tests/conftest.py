@@ -540,6 +540,27 @@ def _process_seeds_put_back():
 
 
 @pytest.fixture(autouse=True)
+def _lineage_aliases_put_back():
+    """Leave the process's lineage aliases (`lineage_formula.record_lineage_alias`)
+    as the test found them.
+
+    A real lineage is a digest no other value has, but a test names its own
+    (``"L1"``, ``"L2"``): an alias one test recorded, ``L2 -> L1`` in the
+    outputs-keep-their-lineage test, stood in the next test's way in the
+    same worker, and the read-only array test's ``L2`` came out ``L1`` in a
+    folder run and passed alone.
+    """
+    from cash.notebook import lineage_formula
+
+    aliases = dict(lineage_formula._LINEAGE_ALIASES)
+    store = lineage_formula._ALIAS_STORE
+    yield
+    lineage_formula._LINEAGE_ALIASES.clear()
+    lineage_formula._LINEAGE_ALIASES.update(aliases)
+    lineage_formula._ALIAS_STORE = store
+
+
+@pytest.fixture(autouse=True)
 def _main_module_put_back():
     """Put the process's ``__main__`` back after every test.
 
