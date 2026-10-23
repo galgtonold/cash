@@ -13,12 +13,15 @@ neither hangs nor changes what the rest of the process does.
   the program set meanwhile was put back to ``False``.
 - A module whose first import writes its own cache (matplotlib's font list)
   was imported inside the check, refused, and a disk hit became a miss.
+- Allowed for ``importlib``'s ``.pyc``, a remove or a rename onto any
+  ``__pycache__/*.pyc`` went through from the value's own code too; and
+  imported outside the check for that retry, a module of the user's wrote
+  what its import writes, where the program never imported it.
 """
 
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import textwrap
 import threading
@@ -27,8 +30,7 @@ import pytest
 
 import cash
 from cash.backends.memory_backend import InMemoryBackend
-
-SRC = os.path.join(os.path.dirname(cash.__file__), os.pardir)
+from tests._scripts import run_python
 
 
 @pytest.fixture
@@ -104,14 +106,8 @@ def test_a_hit_whose_copy_would_write_is_a_miss(sink, writes_later):
     assert backend.get("k") == (None, None)  # dropped, not copied the same way again
 
 
-def _run(code: str, env: dict | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(code)],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env={**os.environ, "PYTHONPATH": os.path.abspath(SRC), **(env or {})},
-    )
+def _run(code: str, cwd, env: dict | None = None):
+    return run_python("-c", textwrap.dedent(code), cwd=cwd, env=env, timeout=60, check=False)
 
 
 @pytest.mark.parametrize("make", ["tempfile.mkdtemp()", "os.mkdir(os.path.join(os.getcwd(), 'made'))"])
@@ -132,6 +128,7 @@ def test_a_refused_or_scratch_change_does_not_hang_without_a_temp_folder_set(tmp
         except Exception as exc:
             print("refused", type(exc).__name__)
         """,
+        cwd=tmp_path,
         env={"TMPDIR": str(tmp_path)},
     )
     assert done.returncode == 0, done.stderr
@@ -213,12 +210,92 @@ def test_a_module_whose_first_import_writes_its_cache_is_served_from_disk(tmp_pa
         """
     caches = tmp_path / "caches"
     caches.mkdir()
-    env = {**os.environ, "PYTHONPATH": os.path.abspath(SRC), "CACHES_AT": str(caches)}
     for expected in (["ran", "1", "3", "False"], ["ran", "0", "3", "False"]):
         (caches / "fonts.json").unlink(missing_ok=True)  # as a fresh MPLCONFIGDIR
-        done = subprocess.run(
-            [sys.executable, "-c", textwrap.dedent(script)], capture_output=True, text=True, timeout=120, env=env
-        )
-        assert done.returncode == 0, done.stderr
+        done = run_python("-c", textwrap.dedent(script), cwd=tmp_path, env={"CACHES_AT": str(caches)})
         assert done.stdout.split() == expected
         assert (caches / "fonts.json").exists()
+
+
+class _Clobbers:
+    """Rebuilt with a change to a ``.pyc`` that was there before, made the
+    way ``importlib`` makes its own."""
+
+    how = ""
+
+    def __init__(self, path):
+        self.path = path
+
+    def __getstate__(self):
+        return {"path": self.path}
+
+    def __setstate__(self, state):
+        self.path = state["path"]
+        if _Clobbers.how == "remove":
+            os.remove(self.path)
+        elif _Clobbers.how == "replace":
+            temporary = f"{self.path}.{id(self)}"
+            with open(temporary, "x", encoding="utf-8") as f:
+                f.write("clobbered")
+            os.replace(temporary, self.path)
+
+
+@pytest.mark.parametrize("how", ["remove", "replace"])
+def test_a_pyc_that_was_there_is_left_alone(tmp_path, how):
+    folder = tmp_path / "pkg" / "__pycache__"
+    folder.mkdir(parents=True)
+    kept = folder / "keep.cpython-312.pyc"
+    kept.write_text("user data", encoding="utf-8")
+    backend = InMemoryBackend()
+    _Clobbers.how = how
+    try:
+        backend.set("k", {"v": _Clobbers(str(kept))}, metadata={"copy_required": True})
+    except Exception:
+        pass
+    finally:
+        _Clobbers.how = ""
+    assert kept.read_text(encoding="utf-8") == "user data"
+    assert backend.get("k") == (None, None)
+
+
+def test_a_users_module_whose_import_writes_is_not_imported_for_a_retry(tmp_path):
+    """The first process imports the module itself and stores the value;
+    the second, which never imports it, rebuilds the value from disk."""
+    side = tmp_path / "side.txt"
+    (tmp_path / "writes_on_import.py").write_text(f"open({str(side)!r}, 'w').write('side ran')\n", encoding="utf-8")
+    (tmp_path / "sink.py").write_text(
+        textwrap.dedent(
+            """
+            class Sink:
+                def __init__(self, module):
+                    self.module = module
+                def __getstate__(self):
+                    return {"module": self.module}
+                def __setstate__(self, state):
+                    self.module = state["module"]
+                    __import__(self.module)
+            """
+        ),
+        encoding="utf-8",
+    )
+    script = f"""
+        import sys, time
+        sys.path.insert(0, {str(tmp_path)!r})
+        if sys.argv[1] == "first":
+            import writes_on_import
+            open({str(side)!r}, "w").write("orig")
+        import cash, sink
+        c = cash.Cash(cache_dir={str(tmp_path / "cache")!r}, register_magic=False)
+        ran = []
+        @c.cache
+        def build(n):
+            ran.append(n)  # @cash:assume-safe
+            time.sleep(1.0)
+            return {{"s": sink.Sink("writes_on_import"), "n": n}}
+        build(1)
+        print(len(ran), "writes_on_import" in sys.modules, open({str(side)!r}).read())
+        """
+    first = run_python("-c", textwrap.dedent(script), "first", cwd=tmp_path)
+    assert first.stdout.split() == ["1", "True", "orig"]
+    second = run_python("-c", textwrap.dedent(script), "second", cwd=tmp_path)
+    assert second.stdout.split() == ["1", "False", "orig"]

@@ -18,15 +18,24 @@ seen.
 What it lets through is a scratch file or folder of the rebuild's own:
 made new in the temp folder (an exclusive create, a ``mkdir``) and written,
 renamed or removed there. Nothing that was there before changes. Python's
-own cache of a module the rebuild imports (``__pycache__/*.pyc``, written
-under a new name and renamed into place) is let through too, so the import
-succeeds as it would outside: a process-wide ``sys.dont_write_bytecode``
-cost another thread's import its ``.pyc``, and reset the user's own.
+own cache of a module the rebuild imports is let through too, while
+``importlib`` itself writes it: its ``__pycache__`` folder made, its
+``x.pyc.<id>`` created new and renamed onto ``x.pyc`` (or removed when the
+write failed). So the import succeeds as it would outside: a process-wide
+``sys.dont_write_bytecode`` cost another thread's import its ``.pyc``, and
+reset the user's own. The same steps from the value's own code are refused.
+
+A library's first import may write its own caches (matplotlib's font
+list): refused inside the rebuild, the library is then imported as the
+program would import it, outside the check, and the rebuild is tried again
+(`import_what_it_imported`). A module of the user's is not: its import
+writes what the program never wrote.
 """
 
 from __future__ import annotations
 
 import importlib
+import importlib.machinery
 import logging
 import os
 import pickle
@@ -79,7 +88,7 @@ class NoFileWrites:
     """The audit check of one rebuild: a change to a file fails, and is
     remembered, so a rebuild that catches the error still fails."""
 
-    __slots__ = ("imported", "made", "refused", "tempdir")
+    __slots__ = ("bytecode", "imported", "in_import", "made", "refused", "tempdir")
 
     def __init__(self, tempdir: str) -> None:
         self.refused: str | None = None
@@ -87,6 +96,11 @@ class NoFileWrites:
         self.made: list[str] = []
         #: The modules the rebuild started to import.
         self.imported: list[str] = []
+        #: Whether the refused change was asked for while a module was
+        #: being imported.
+        self.in_import = False
+        #: The ``x.pyc.<id>`` files ``importlib`` made new in this rebuild.
+        self.bytecode: list[str] = []
         #: The temp folder, resolved before the check is installed: asked
         #: from inside it, ``tempfile.gettempdir()`` waits on the lock its
         #: own first probe of the folder holds, and the process hung.
@@ -104,8 +118,12 @@ class NoFileWrites:
             if isinstance(flags, int):
                 if not flags & _WRITES or (_TMPFILE and flags & _TMPFILE == _TMPFILE):
                     return  # a read, or a file with no name (``TemporaryFile``)
-                if flags & os.O_CREAT and flags & os.O_EXCL and (self._scratch(path, made=True) or _bytecode(path)):
-                    return
+                if flags & os.O_CREAT and flags & os.O_EXCL:
+                    if self._scratch(path, made=True):
+                        return
+                    if _bytecode_temp(path) and _by_importlib("_write_atomic"):
+                        self.bytecode.append(_path(path))  # type: ignore[arg-type]
+                        return
             if self._own(path) or os.path.isdir(path):
                 # A folder is not written by opening it: ``NamedTemporaryFile``
                 # opens the temp folder with its mode and an opener, whose own
@@ -113,7 +131,9 @@ class NoFileWrites:
                 return
             self._refuse(f"open({path!r}, {mode!r})")
         elif event == "os.mkdir":
-            if _no_dir_fd(args[2]) and (self._scratch(args[0], made=True) or _bytecode_folder(args[0])):
+            if _no_dir_fd(args[2]) and (
+                self._scratch(args[0], made=True) or (_bytecode_folder(args[0]) and _by_importlib("set_data"))
+            ):
                 return
             self._refuse(f"os.mkdir({args[0]!r})")
         elif event == "sqlite3.connect":
@@ -125,7 +145,7 @@ class NoFileWrites:
             src, dst = args[0], args[1]
             if self._own(dst) and (event == "os.symlink" or self._own(src)):
                 return
-            if event == "os.rename" and _bytecode(src) and _bytecode(dst):
+            if event == "os.rename" and self._own_bytecode(src, dst) and _by_importlib("_write_atomic"):
                 return  # ``importlib``'s ``.pyc``, renamed into place
             self._refuse(f"{event}({src!r}, {dst!r})")
         else:  # os.truncate, os.remove, os.rmdir
@@ -137,7 +157,7 @@ class NoFileWrites:
                 # How ``shutil.rmtree`` empties a folder, its files named
                 # inside it: a scratch folder being removed.
                 return
-            if event == "os.remove" and not in_dir and _bytecode(path):
+            if event == "os.remove" and not in_dir and _path(path) in self.bytecode and _by_importlib("_write_atomic"):
                 return  # ``importlib``'s ``.pyc`` that failed to be written
             self._refuse(f"{event}({path!r})")
 
@@ -155,6 +175,12 @@ class NoFileWrites:
             self.made.append(path)
         return True
 
+    def _own_bytecode(self, src: object, dst: object) -> bool:
+        """Is *src* a ``x.pyc.<id>`` this rebuild's ``importlib`` made, and
+        *dst* the ``x.pyc`` it was made for?"""
+        src_path, dst_path = _path(src), _path(dst)
+        return src_path in self.bytecode and dst_path is not None and src_path.rpartition(".")[0] == dst_path
+
     def _own(self, value: object) -> bool:
         path = _path(value)
         return path is not None and any(_under(path, made) for made in self.made)
@@ -166,6 +192,7 @@ class NoFileWrites:
 
     def _refuse(self, what: str) -> None:
         self.refused = what
+        self.in_import = _by_importlib("_find_and_load", depth=None)
         raise WouldWriteAFile(f"rebuilding it would {what}")
 
     def check(self) -> None:
@@ -174,14 +201,29 @@ class NoFileWrites:
             raise WouldWriteAFile(f"rebuilding it would {self.refused}")
 
 
-def _bytecode(value: object) -> bool:
-    """Is *value* a ``.pyc`` in a ``__pycache__`` folder, or the name
-    ``importlib`` writes one under before renaming it (``x.pyc.<id>``)?"""
+def _bytecode_temp(value: object) -> bool:
+    """Is *value* the name ``importlib`` writes a ``.pyc`` under before
+    renaming it into place: ``__pycache__/x.pyc.<id>``?"""
     path = _path(value)
     if path is None:
         return False
     folder, name = os.path.split(path)
-    return os.path.basename(folder) == "__pycache__" and (name.endswith(".pyc") or ".pyc." in name)
+    stem, _, number = name.rpartition(".")
+    return os.path.basename(folder) == "__pycache__" and stem.endswith(".pyc") and number.isdigit()
+
+
+def _by_importlib(function: str, depth: int | None = 12) -> bool:
+    """Is ``importlib``'s own *function* running, within *depth* frames of
+    the event (any depth for None)?"""
+    frame = sys._getframe(1)
+    while frame is not None and (depth is None or depth > 0):
+        code = frame.f_code
+        if code.co_name == function and "importlib" in code.co_filename:
+            return True
+        frame = frame.f_back
+        if depth is not None:
+            depth -= 1
+    return False
 
 
 def _bytecode_folder(value: object) -> bool:
@@ -230,24 +272,51 @@ def refused_now() -> str | None:
 
 
 def import_what_it_imported(check: NoFileWrites) -> bool:
-    """Import, outside any check, the modules a refused rebuild started to
-    import; whether there were any.
+    """Import, outside any check, the libraries a rebuild started to import
+    when what it refused was asked for during an import; whether any was
+    imported.
 
-    A module's own first import may write its caches (matplotlib's font
+    A library's own first import may write its caches (matplotlib's font
     list under an empty ``MPLCONFIGDIR``): refused inside the rebuild, the
     import failed and a disk hit became a miss, where plain Python's import
     wrote them once. Imported here as the program would import them, the
-    rebuild is tried again; one that still changes a file fails then."""
-    if check.refused is None or not check.imported:
+    rebuild is tried again; one that still changes a file fails then. A
+    module of the user's is not imported: its import-time write is one the
+    program, which never imported it, did not make."""
+    if check.refused is None or not check.in_import:
         return False
+    imported = False
     for name in dict.fromkeys(check.imported):
-        if name in sys.modules:
+        if name in sys.modules or not _a_library(name):
             continue
         try:
             importlib.import_module(name)
         except Exception:
             logger.debug("could not import %s for a rebuild", name, exc_info=True)
-    return True
+        imported = imported or name in sys.modules
+    return imported
+
+
+def _a_library(name: str) -> bool:
+    """Is the module *name* not the user's, judged by where its top package
+    is found, without importing anything?"""
+    from ..install_paths import is_user_path
+
+    top = name.partition(".")[0]
+    try:
+        spec = sys.modules[top].__spec__ if top in sys.modules else importlib.machinery.PathFinder.find_spec(top)
+    except Exception:  # noqa: BLE001 - an odd finder or module: not known to be a library
+        return False
+    if spec is None:
+        return False
+    origin = (
+        spec.origin
+        if spec.origin not in (None, "namespace")
+        else next(iter(spec.submodule_search_locations or ()), None)
+    )
+    if origin in ("built-in", "frozen"):
+        return True
+    return origin is not None and not is_user_path(origin)
 
 
 def would_write_a_file(exc: BaseException | None) -> bool:
