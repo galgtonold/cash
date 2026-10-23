@@ -24,7 +24,7 @@ from collections.abc import Callable, Iterator
 from time import perf_counter
 from typing import Any
 
-from . import value_watch
+from . import kept_state, value_watch
 from ._user_attrs import instance_of
 from .content_hashers import builtin_hash, builtin_hash_family, is_native_panic
 from .sizing import pandas_nbytes
@@ -387,6 +387,11 @@ def compute_hash(obj: Any) -> str:
     F-ordered array holding equal values hash apart.
     """
     window = _one_read.memo
+    if window is not None and _one_read.since != kept_state.user_state_runs():
+        # A pickle of cash's ran code of the user's (a ``__reduce__``),
+        # which may have changed what was read: read again, once.
+        window.clear()
+        _one_read.since = kept_state.user_state_runs()
     if window is not None and type(obj) not in _ATOMS:
         found = window.get(id(obj))
         if found is not None and found[0]() is obj:
@@ -407,6 +412,8 @@ class _OneRead(threading.local):
     """`one_read`'s digests, on the thread that opened it only."""
 
     memo: dict[int, tuple[weakref.ref, str]] | None = None
+    #: `kept_state.user_state_runs` when `memo` was last emptied.
+    since = 0
 
 
 _one_read = _OneRead()
@@ -430,12 +437,15 @@ def one_read() -> Iterator[None]:
     reference held here would count as a holder to the checks that tell a
     value shared (`_plain_data`), and a list's digest follows those. A
     plain list, dict or tuple is read each time, as before. The identity
-    tier's digest is never kept. Nested, the outer one holds.
+    tier's digest is never kept. Nested, the outer one holds. A pickle of
+    cash's that runs code of the user's inside (a ``__reduce__`` of theirs,
+    `kept_state.user_state_runs`) empties it: what follows reads again.
     """
     if _one_read.memo is not None:
         yield
         return
     _one_read.memo = {}
+    _one_read.since = kept_state.user_state_runs()
     try:
         yield
     finally:

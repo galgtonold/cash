@@ -1006,6 +1006,14 @@ class _KeepDict(dict):
         return reducer
 
     def _reducer(self, t: type) -> Any:
+        reducer = self._chosen_reducer(t)
+        if runs_users_state(t):
+            # Counted each time it runs: what it runs is the user's code,
+            # which may change what cash read before it (`user_state_runs`).
+            return functools.partial(_counted, reducer=reducer)
+        return reducer
+
+    def _chosen_reducer(self, t: type) -> Any:
         if issubclass(t, type):
             raise KeyError(t)  # a class: pickled by name, as pickle does
         registered = copyreg.dispatch_table.get(t)
@@ -1527,6 +1535,66 @@ def _reduce_with_dict(obj: Any, protocol: int) -> Any:
     rest += [None] * (4 - len(rest))
     state, listitems, dictitems, setter = rest[:4]
     return rebuild, args, (state, setter, dict(attrs)), listitems, dictitems, restore_with_dict
+
+
+#: How many times a pickle of cash's has run a reducer of the user's.
+_USER_STATE_RUNS = [0]
+
+
+def user_state_runs() -> int:
+    """How many times cash's pickles have run a ``__reduce__``,
+    ``__reduce_ex__``, ``__getstate__`` or ``__getnewargs__`` of the user's,
+    or a reducer of theirs registered with ``copyreg``: code that may have
+    changed what cash read of other objects before it pickled."""
+    return _USER_STATE_RUNS[0]
+
+
+def _counted(obj: Any, reducer: Any) -> Any:
+    _USER_STATE_RUNS[0] += 1
+    return reducer(obj)
+
+
+def reduce_counted(obj: Any, protocol: int) -> Any:
+    """``obj.__reduce_ex__(protocol)``, counted in `user_state_runs` when it
+    runs code of the user's (`runs_users_state`): for reduces cash calls
+    itself, outside its picklers."""
+    if runs_users_state(type(obj)):
+        _USER_STATE_RUNS[0] += 1
+    return obj.__reduce_ex__(protocol)
+
+
+def runs_users_state(t: type) -> bool:
+    """Does pickling an instance of *t* run code of the user's: their own
+    ``__getstate__``, ``__reduce__``, ``__reduce_ex__``, ``__getnewargs__``
+    or ``__getnewargs_ex__``, or a reducer of theirs registered with
+    ``copyreg``? Remembered per type."""
+    try:
+        return _RUNS_USERS_STATE[t]
+    except KeyError:
+        pass
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return _decide_runs_users_state(t)
+    found = _RUNS_USERS_STATE[t] = _decide_runs_users_state(t)
+    return found
+
+
+def _decide_runs_users_state(t: type) -> bool:
+    from .install_paths import is_user_code_module
+
+    registered = copyreg.dispatch_table.get(t)
+    if registered is not None:
+        return is_user_code_module(sys.modules.get(getattr(registered, "__module__", None) or ""))
+    return any(
+        any(isinstance(klass.__dict__.get(name), _PYTHON_METHODS) for name in (*_STATE_METHODS, *_NEWARGS_METHODS))
+        and is_user_code_module(sys.modules.get(klass.__module__))
+        for klass in t.__mro__
+        if klass is not object
+    )
+
+
+_NEWARGS_METHODS = ("__getnewargs__", "__getnewargs_ex__")
+
+_RUNS_USERS_STATE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
 def chooses_its_state(t: type) -> bool:

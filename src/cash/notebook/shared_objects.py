@@ -54,7 +54,18 @@ from typing import Any
 from cash import _native, _plain_data
 from cash._clock import CpuLimit
 from cash._user_attrs import attribute_or, has_attribute, instance_of
-from cash.notebook.frame_cells import addresses, in_sorted, is_object_dtype, sorted_cells, sorted_unique
+from cash.notebook.frame_cells import (
+    addresses,
+    in_sorted,
+    is_object_dtype,
+    memory_owner,
+    read_once,
+    reading_once,
+    slots_digest,
+    sorted_cells,
+    sorted_unique,
+    when_read_again,
+)
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
 
@@ -987,6 +998,7 @@ def object_columns_of(value: Any) -> list[Any] | None:
         return None
     if not instance_of(value, (pd.Series, pd.DataFrame)):
         return None
+    read_once()
     if _COLUMNS is not None:
         if id(value) not in _COLUMNS:
             _COLUMNS[id(value)] = _read_object_columns(value, pd)
@@ -1012,25 +1024,63 @@ def _columns_kept() -> Iterator[None]:
     _VALUES_READ = {}
     _SHARING_READ = {}
     try:
-        yield
+        with reading_once():
+            yield
     finally:
         _COLUMNS = None
         _VALUES_READ = None
         _SHARING_READ = None
 
 
+def _read_again() -> None:
+    """Forget what `_columns_kept` read: code of the user's ran in a pickle
+    of cash's and may have written into the frames
+    (`frame_cells.reading_once`)."""
+    for kept in (_COLUMNS, _VALUES_READ, _SHARING_READ):
+        if kept is not None:
+            kept.clear()
+
+
+when_read_again(_read_again)
+
+
 def _read_object_columns(value: Any, pd: Any) -> list[Any]:
+    return [array for array in _object_column_arrays(value, pd) if not column_values_only(array, pd)]
+
+
+def _object_column_arrays(value: Any, pd: Any) -> list[Any]:
+    """The arrays of the object-dtype columns of the pandas frame or series
+    *value*, in column order. A frame's are read off its blocks, each
+    column's row of its block (the memory ``iloc[:, i].to_numpy()`` gives):
+    a column taken through ``iloc`` and its dtypes listed took a third of a
+    millisecond a frame, for each of a hundred frames on every statement."""
     if instance_of(value, pd.Series):
-        columns = [value]
-    elif instance_of(value, pd.DataFrame):
-        columns = [value.iloc[:, i] for i, dtype in enumerate(value.dtypes) if is_object_dtype(dtype)]
+        return [value.to_numpy(copy=False)] if is_object_dtype(value.dtype) else []
+    arrays = _block_object_columns(value)
+    if arrays is not None:
+        return arrays
+    columns = [value.iloc[:, i] for i, dtype in enumerate(value.dtypes) if is_object_dtype(dtype)]
+    return [column.to_numpy(copy=False) for column in columns if is_object_dtype(column.dtype)]
+
+
+def _block_object_columns(frame: Any) -> list[Any] | None:
+    """`_object_column_arrays` of *frame* from its block manager; None
+    where an object column is not held in a two-dimensional numpy array."""
+    np = sys.modules["numpy"]
+    try:
+        manager = vars(frame)["_mgr"]
+        blocks = manager.blocks
+        numbers, places = manager.blknos, manager.blklocs
+    except (KeyError, AttributeError, TypeError):
+        return None
     arrays = []
-    for column in columns:
-        if not is_object_dtype(column.dtype):
-            continue
-        array = column.to_numpy(copy=False)
-        if not column_values_only(array, pd):
-            arrays.append(array)
+    for number, place in zip(numbers.tolist(), places.tolist()):
+        values = blocks[number].values
+        if type(values) is np.ndarray and values.ndim == 2:
+            if values.dtype == object:
+                arrays.append(values[place])
+        elif is_object_dtype(attribute_or(values, "dtype", None)):
+            return None
     return arrays
 
 
@@ -1050,14 +1100,47 @@ def column_values_only(array: Any, pd: Any) -> bool:
     memory of an array found otherwise is read as holding more, unread
     too: its own few rows may be values only, and are then checked as
     though they were not."""
+    read_once()
     span = _span(array)
     if _VALUES_READ is not None and span is not None:
         for (start, end), values in _VALUES_READ.items():
             if start <= span[0] and span[1] <= end:
                 return values
-    values = pd.api.types.infer_dtype(array, skipna=True) in VALUE_COLUMNS
+    values = _kept_values_only(array, pd)
     if _VALUES_READ is not None and span is not None:
         _VALUES_READ[span] = values
+    return values
+
+
+#: `column_values_only` across statements, by the memory a long column's
+#: slots take: a digest of what they held, the answer, and a weak
+#: reference to the array owning the memory. At most `_VALUES_KEPT_MAX`.
+_VALUES_KEPT: dict[tuple[int, int, int], tuple[bytes, bool, Any]] = {}
+_VALUES_KEPT_MAX = 4096
+
+
+def _kept_values_only(array: Any, pd: Any) -> bool:
+    """``infer_dtype`` of the object *array* among `VALUE_COLUMNS`, kept
+    while its slots hold the same objects (their digest): the same objects
+    are of the same types. Each of a hundred frames of a hundred thousand
+    rows was read anew on every statement, at a millisecond each, where its
+    digest takes a quarter of one."""
+    if len(array) < 1024 or array.ndim != 1:
+        return pd.api.types.infer_dtype(array, skipna=True) in VALUE_COLUMNS
+    digest = slots_digest(array)
+    key = (array.__array_interface__["data"][0], len(array), array.strides[0])
+    kept = _VALUES_KEPT.get(key)
+    if kept is not None and kept[0] == digest:
+        return kept[1]
+    values = pd.api.types.infer_dtype(array, skipna=True) in VALUE_COLUMNS
+    if len(_VALUES_KEPT) >= _VALUES_KEPT_MAX:
+        for gone in [k for k, entry in _VALUES_KEPT.items() if entry[2]() is None]:
+            del _VALUES_KEPT[gone]
+    if len(_VALUES_KEPT) < _VALUES_KEPT_MAX or key in _VALUES_KEPT:
+        try:
+            _VALUES_KEPT[key] = (digest, values, weakref.ref(memory_owner(array)))
+        except TypeError:
+            pass
     return values
 
 
@@ -2058,6 +2141,7 @@ def _frames_sharing_cells(
     no code runs in between."""
     if _SHARING_READ is None:
         return _read_frames_sharing_cells(group, user_ns, skip)
+    read_once()
     key = tuple(sorted((name, id(value)) for name, value in group.items()))
     found = _SHARING_READ.get(key)
     if found is None:
@@ -2163,11 +2247,7 @@ def _object_dtype_arrays(value: Any) -> list[Any]:
         return []
     if _COLUMNS is not None and id(value) in _COLUMNS:
         return _COLUMNS[id(value)] or []
-    if instance_of(value, pd.Series):
-        columns = [value]
-    else:
-        columns = [value.iloc[:, i] for i, dtype in enumerate(value.dtypes) if is_object_dtype(dtype)]
-    return [column.to_numpy(copy=False) for column in columns if is_object_dtype(column.dtype)]
+    return _object_column_arrays(value, pd)
 
 
 def _holding_categories(group: Mapping[str, Any], user_ns: Mapping[str, Any], skip: Callable[[str], bool]) -> set[str]:

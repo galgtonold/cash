@@ -58,7 +58,7 @@ MODULE = textwrap.dedent(
 
 @pytest.fixture
 def spies(tmp_path, monkeypatch):
-    (tmp_path / "handed_spies.py").write_text(MODULE)
+    (tmp_path / "handed_spies.py").write_text(MODULE, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     module = importlib.import_module("handed_spies")
     yield module

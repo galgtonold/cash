@@ -19,12 +19,16 @@ holds too stays where the share check sees it, and the call is not stored.
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import pickle
 import sys
+import weakref
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from cash._user_attrs import instance_of
+from cash.kept_state import user_state_runs
 
 __all__ = [
     "RELINK_FAILED",
@@ -105,9 +109,71 @@ def is_frame(value: Any) -> bool:
     return pd is not None and instance_of(value, (pd.Series, pd.DataFrame))
 
 
+#: Within `reading_once`: `addresses` and `slots_digest` by the id of the
+#: array read, each with the array (kept alive, so no other takes its id).
+_READ_ONCE: dict[tuple[str, int], tuple[Any, Any]] | None = None
+#: `kept_state.user_state_runs` when `_READ_ONCE` was last emptied.
+_READ_SINCE = 0
+#: Called when `_READ_ONCE` is emptied for code of the user's that ran.
+_ON_REREAD: list[Callable[[], None]] = []
+
+
+@contextlib.contextmanager
+def reading_once() -> Iterator[None]:
+    """Within it, each array's slots are read once (`addresses`,
+    `slots_digest`): a statement over a hundred frames sharing one frame's
+    cells read each of their slots five times over. Unless a pickle of
+    cash's runs code of the user's in between (a ``__reduce__`` that may
+    write into a frame's slots, `kept_state.user_state_runs`): what was read
+    is then read again, once."""
+    global _READ_ONCE, _READ_SINCE
+    if _READ_ONCE is not None:
+        yield
+        return
+    _READ_ONCE = {}
+    _READ_SINCE = user_state_runs()
+    try:
+        yield
+    finally:
+        _READ_ONCE = None
+
+
+def when_read_again(forget: Callable[[], None]) -> None:
+    """Have *forget* called each time `read_once` empties what was read:
+    for reads kept elsewhere within `reading_once`."""
+    _ON_REREAD.append(forget)
+
+
+def read_once() -> dict[tuple[str, int], tuple[Any, Any]] | None:
+    """`_READ_ONCE`, emptied first (with whatever `_ON_REREAD` empties)
+    when code of the user's ran since. Called before any read kept within
+    `reading_once` is used."""
+    global _READ_SINCE
+    memo = _READ_ONCE
+    if memo is not None:
+        runs = user_state_runs()
+        if runs != _READ_SINCE:
+            _READ_SINCE = runs
+            memo.clear()
+            for reread in _ON_REREAD:
+                reread()
+    return memo
+
+
 def addresses(array: Any) -> Any:
     """The addresses of the objects in the slots of the object *array*, as
-    an int64 array: read from its memory, where the slots hold them."""
+    an int64 array: read from its memory, where the slots hold them. Within
+    `reading_once`, read once for each array."""
+    memo = read_once()
+    if memo is None:
+        return _addresses(array)
+    kept = memo.get(("a", id(array)))
+    if kept is None or kept[0] is not array:
+        kept = memo[("a", id(array))] = (array, _addresses(array))
+    return kept[1]
+
+
+def _addresses(array: Any) -> Any:
     np = sys.modules["numpy"]
     n = len(array)
     if not n:
@@ -134,9 +200,9 @@ def sorted_unique(values: Any) -> Any:
 
 
 #: `sorted_cells` by the memory a column's slots take: what they held, by
-#: digest, and their addresses sorted. Kept within `_SORTED_CELLS_MAX`
-#: addresses, the oldest let go first.
-_SORTED_CELLS: dict[tuple[int, int, int], tuple[bytes, Any]] = {}
+#: digest, their addresses sorted, and a weak reference to the array that
+#: owns the memory. Kept within `_SORTED_CELLS_MAX` addresses.
+_SORTED_CELLS: dict[tuple[int, int, int], tuple[bytes, Any, Any]] = {}
 _SORTED_CELLS_MAX = 8_000_000
 
 
@@ -149,21 +215,58 @@ def sorted_cells(array: Any) -> Any:
     same hundred thousand addresses 1,250 times. The sort is kept by the
     memory the slots take, and served while the slots hold what they held
     then, by a digest of them: a cell put in another's place, or another
-    column at the same memory, is read and sorted anew."""
+    column at the same memory, is read and sorted anew.
+
+    Past the bound, the sorts of memory no longer held are let go, and a
+    new one is not kept while the bound is still spent: the frames read on
+    each statement are read in the same order every time, and letting the
+    oldest go to keep the newest kept none of them once there were more
+    than the bound holds (a hundred frames of a hundred thousand rows each
+    sorted anew, on every statement)."""
     raw = addresses(array)
     if len(raw) < 1024:
         return sorted_unique(raw)
-    digest = _slots_digest(raw)
+    digest = slots_digest(array)
     key = (array.__array_interface__["data"][0], len(array), array.strides[0])
-    kept = _SORTED_CELLS.pop(key, None)
-    if kept is None or kept[0] != digest:
-        kept = (digest, sorted_unique(raw))
-    _SORTED_CELLS[key] = kept
-    held = sum(len(ordered) for _digest, ordered in _SORTED_CELLS.values())
-    while held > _SORTED_CELLS_MAX and len(_SORTED_CELLS) > 1:
-        oldest = next(iter(_SORTED_CELLS))
-        held -= len(_SORTED_CELLS.pop(oldest)[1])
+    kept = _SORTED_CELLS.get(key)
+    if kept is not None and kept[0] == digest:
+        return kept[1]
+    ordered = sorted_unique(raw)
+    owner = memory_owner(array)
+    held = sum(len(entry[1]) for entry in _SORTED_CELLS.values()) - (len(kept[1]) if kept is not None else 0)
+    if held + len(ordered) > _SORTED_CELLS_MAX:
+        for gone in [k for k, entry in _SORTED_CELLS.items() if entry[2]() is None]:
+            held -= len(_SORTED_CELLS.pop(gone)[1])
+    if held + len(ordered) <= _SORTED_CELLS_MAX:
+        try:
+            ref = weakref.ref(owner)
+        except TypeError:
+            return ordered
+        _SORTED_CELLS[key] = (digest, ordered, ref)
+    elif kept is not None:
+        del _SORTED_CELLS[key]
+    return ordered
+
+
+def slots_digest(array: Any) -> bytes:
+    """A digest of the addresses the slots of the object *array* hold.
+    Within `reading_once`, taken once for each array."""
+    memo = read_once()
+    if memo is None:
+        return _slots_digest(addresses(array))
+    kept = memo.get(("d", id(array)))
+    if kept is None or kept[0] is not array:
+        kept = memo[("d", id(array))] = (array, _slots_digest(addresses(array)))
     return kept[1]
+
+
+def memory_owner(array: Any) -> Any:
+    """The array at the end of *array*'s chain of bases: the one holding
+    its memory, alive while any view of it is."""
+    np = sys.modules["numpy"]
+    while isinstance(array.base, np.ndarray):
+        array = array.base
+    return array
 
 
 def _slots_digest(raw: Any) -> bytes:
