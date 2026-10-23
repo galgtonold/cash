@@ -147,12 +147,17 @@ p = Point(3, 4)
         metrics = statement_processor.process_statement(code, annotation=_PERSIST)
         assert metrics["status"] == CacheStatus.COMPUTED
 
-        # Clear and re-run — should be RESTORED from cache
+        # Clear and re-run. The ``self.x = y`` inside is no reason to run
+        # again; the class is: in ``__main__``, as in IPython, a class the
+        # statement defines is pickled by name, so it runs again.
         mock_shell.user_ns.pop("Point", None)
         mock_shell.user_ns.pop("p", None)
 
         metrics2 = statement_processor.process_statement(code, annotation=_PERSIST)
-        assert metrics2["status"] == CacheStatus.RESTORED
+        assert metrics2["status"] == CacheStatus.COMPUTED
+        assert metrics2["uncacheable_reasons"] == []
+        assert "unrestorable by value" in (metrics2.get("skipped_reason") or "")
+        assert mock_shell.user_ns["p"].x == 3
 
     def test_augmented_assign_as_output(self, statement_processor, mock_shell):
         """Augmented assignment on output variable (x += 1 where x is output) is cacheable."""
@@ -188,6 +193,10 @@ def transform(lst):
         metrics = statement_processor.process_statement(code, annotation=_PERSIST)
         assert metrics["status"] == CacheStatus.COMPUTED
 
+        # ``lst.sort()`` inside is no reason to run again; the definition
+        # is: in ``__main__``, as in IPython, it is pickled by name.
         mock_shell.user_ns.pop("transform", None)
         metrics2 = statement_processor.process_statement(code, annotation=_PERSIST)
-        assert metrics2["status"] == CacheStatus.RESTORED
+        assert metrics2["status"] == CacheStatus.COMPUTED
+        assert metrics2["uncacheable_reasons"] == []
+        assert mock_shell.user_ns["transform"]([3, 1]) == 1

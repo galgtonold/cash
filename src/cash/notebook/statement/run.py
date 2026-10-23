@@ -200,6 +200,8 @@ class StatementRun:
     #: The ``functools`` memos of the user's it called, with what each held
     #: after it ran (`helper_memos.used`).
     helper_memos: list[dict] | None = None
+    #: ``id(memo) -> its miss count`` before it ran (`helper_memos.misses_before`).
+    memo_misses_before: dict[int, int] | None = None
     #: For a statement that runs a magic or a shell command: the identity of
     #: every binding in the namespace before it ran (``calls_ipython``).
     ipython_bindings: dict[str, int] | None = None
