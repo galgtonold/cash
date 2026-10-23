@@ -189,7 +189,10 @@ def shared_across(values: list, keyed: list, walked: dict) -> tuple:
                 found.append((where, earlier))
                 continue
             first[oid] = where
-            met = walked.get(oid) if census is not None else None
+            # Keyed apart from the walk -- by its census, or by a digest of
+            # its own (an array, a frame) -- an argument the walk met
+            # inside another (``f(arr, Rec(arr))``) is held by both.
+            met = walked.get(oid) if census is not None or digest is not value else None
             if met is not None:
                 found.append((where, ("walked", met[0])))
     return tuple(found)
@@ -1782,9 +1785,28 @@ class ArgHasher:
                         if field_rows_only(copy):
                             rows[id(v)] = (v, copy)
             walked: dict = {}
+
+            def outside() -> dict[int, tuple]:
+                # The plain arguments, keyed by their own digests, and the
+                # containers inside them, as `shared_across` locates them;
+                # and the arrays and frames keyed by their content.
+                spots: dict[int, tuple] = {}
+                parts = [*form[0], *form[1].values()]
+                family = self._content.family
+                hashed = [*hashed_args, *hashed_kwargs.values()]
+                for i, (p, v, arg) in enumerate(zip(parts, hashed, [*args, *kwargs.values()])):
+                    if type(v) in _plain_data.TREE_NODES:
+                        census = plain_census(v) if p is not v else None
+                        if census is not None:
+                            spots[id(v)] = (i, -2, 0)
+                            spots.update((oid, (i, *where)) for oid, where in census[2].items())
+                    elif v is not arg and family(type(arg)) is not None:
+                        spots[id(arg)] = (i, -2, 0)
+                return spots
+
             if rows:
                 args_bytes = canonical_bytes(
-                    _with_copies(form, rows), self._content, hook=self._nested_hasher, seen=walked
+                    _with_copies(form, rows), self._content, hook=self._nested_hasher, seen=walked, outside=outside
                 )
                 if any(id(v) in walked for v, _copy in rows.values()):
                     # The list itself met elsewhere in the key (``f(rows,
@@ -1793,7 +1815,9 @@ class ArgHasher:
                     walked.clear()
                     walked_from = {key: gen for key, gen in walked_from.items() if key not in rows}
                     rows = {}
-                    args_bytes = canonical_bytes(form, self._content, hook=self._nested_hasher, seen=walked)
+                    args_bytes = canonical_bytes(
+                        form, self._content, hook=self._nested_hasher, seen=walked, outside=outside
+                    )
                 else:
                     for v, copy in rows.values():
                         met = walked.pop(id(copy), None)
@@ -1801,7 +1825,9 @@ class ArgHasher:
                             # Where the walk met the list, for `shared_across`.
                             walked[id(v)] = (met[0], v)
             else:
-                args_bytes = canonical_bytes(form, self._content, hook=self._nested_hasher, seen=walked)
+                args_bytes = canonical_bytes(
+                    form, self._content, hook=self._nested_hasher, seen=walked, outside=outside
+                )
             shared = shared_across([*args, *kwargs.values()], [*hashed_args, *hashed_kwargs.values()], walked)
             if shared:
                 args_bytes += pickle.dumps(("__cash_shared__", shared), protocol=4)
