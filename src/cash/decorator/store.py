@@ -938,6 +938,7 @@ class ResultStore:
             )
         self._purity.report_observed_effects(func_name, observer)
         self._files.credit_remembered_reads(func_name, tracker, call.args, call.kwargs)
+        self._files.warn_unrecorded_reads(func_name, tracker)
         auto_file_deps = snapshot_tracked_deps(tracker, spec.func.__module__)
 
         if chunks.written == 0:

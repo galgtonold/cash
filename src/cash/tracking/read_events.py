@@ -316,6 +316,23 @@ def _glob_base_dir(pattern: Any) -> str | None:
     return "/".join(base) or "."
 
 
+def _on_failure(event: str, args: tuple, error: Exception) -> None:
+    """A consumer raised on *event*: the active block's read is not known."""
+    note = getattr(active_tracker.get(), "note_tracking_failed", None)
+    if note is None:
+        return
+    path = None
+    if args and isinstance(args[0], (str, bytes, os.PathLike)):
+        try:
+            path = os.path.abspath(os.fsdecode(args[0]))
+        except (TypeError, ValueError):
+            path = None
+    note(event, path, f"{type(error).__name__}: {error}")
+
+
+io_watch.on_consumer_error(_on_failure)
+
+
 def subscribe_read_events() -> None:
     """Route the audit events of Python-level opens and listings to the tracker."""
     io_watch.subscribe("open", _on_open, outside_scopes=True)
