@@ -23,6 +23,8 @@ every ``id()``, and each audit hook written in Python runs for it.
 from __future__ import annotations
 
 import functools
+import itertools
+import operator
 import weakref
 from collections.abc import Callable
 from typing import Any, Generic, TypeVar
@@ -95,7 +97,6 @@ def per_type(fn: Callable[[type], V]) -> Callable[[type], V]:
 #: The ``__mro__`` of a class as ``type`` reads it: no metaclass of the
 #: user's runs.
 mro_of: Callable[[type], tuple] = type.__dict__["__mro__"].__get__
-_address: Callable[[object], int] = object.__hash__
 
 
 class MroMemo(TypeMemo):
@@ -107,14 +108,31 @@ class MroMemo(TypeMemo):
 
     def get_for(self, cls: type, default: Any = None) -> Any:
         found = dict.get(self, type_key(cls))
-        if found is None or found[0] != _address(mro_of(cls)):
+        if found is None or not same_mro(found[0], cls):
             return default
         return found[1]
 
     def put(self, cls: type, value: V) -> V:  # type: ignore[override]
-        # The MRO by its address: the tuple refers to the class.
-        TypeMemo.put(self, cls, (_address(mro_of(cls)), value))
+        TypeMemo.put(self, cls, (mro_mark(cls), value))
         return value
+
+
+def mro_mark(cls: type) -> tuple:
+    """What `same_mro` tells *cls*'s MRO by: its classes after *cls*.
+
+    Not the MRO tuple itself, which refers to the class, and not its
+    address: three ``__bases__`` assignments in a row gave the new MRO the
+    first one's address (the tuple's memory reused), and a memo answered for
+    bases the class no longer had. The bases are held only while the class's
+    entry is."""
+    return mro_of(cls)[1:]
+
+
+def same_mro(mark: tuple, cls: type) -> bool:
+    """Is *cls*'s MRO still the one *mark* (`mro_mark`) was taken of? By
+    identity: no metaclass ``__eq__`` of the user's runs."""
+    mro = mro_of(cls)
+    return len(mark) == len(mro) - 1 and all(map(operator.is_, mark, itertools.islice(mro, 1, None)))
 
 
 def per_mro(fn: Callable[[type], V]) -> Callable[[type], V]:

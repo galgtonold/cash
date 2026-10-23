@@ -222,6 +222,31 @@ def test_a_class_given_new_bases_is_read_by_its_new_mro():
     assert [read() for read in readers] == before
 
 
+@pytest.mark.parametrize("changes", [1, 2, 3, 4])
+def test_an_answer_for_an_mro_given_up_is_not_found(changes):
+    """Remembered by the MRO tuple's address: three ``__bases__``
+    assignments in a row gave the new MRO the first one's memory, and the
+    memo answered for bases the class no longer had."""
+    from cash.notebook import held_functions
+
+    class Compares:
+        def __eq__(self, other):
+            return True
+
+        def __hash__(self):
+            return 0
+
+    wrong = 0
+    for _ in range(50):
+        bases = [type(f"B{i}", (), {}) for i in range(changes - 1)] + [Compares]
+        kind = type("K", (type("A", (), {}),), {})
+        assert held_functions._identity_hashed(kind)
+        for base in bases:
+            kind.__bases__ = (base,)
+        wrong += held_functions._identity_hashed(kind) != held_functions._identity_hashed.__wrapped__(kind)
+    assert wrong == 0
+
+
 def helper_a(v):
     return v
 
