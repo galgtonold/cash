@@ -88,13 +88,13 @@ class ReopensInSetstate:
 
     def __setstate__(self, state):
         self.path = state["path"]
-        self.handle = open(self.path, "w")  # noqa: SIM115
+        self.handle = open(self.path, "w", encoding="utf-8")
 
 
 class OpensInInit:
     def __init__(self, path):
         self.path = path
-        open(path, "w").close()  # noqa: SIM115
+        open(path, "w", encoding="utf-8").close()
 
     def __reduce__(self):
         return (OpensInInit, (self.path,))
@@ -110,8 +110,8 @@ class SwallowsTheError:
     def __setstate__(self, state):
         self.path = state["path"]
         try:
-            open(self.path, "w").close()  # noqa: SIM115
-        except Exception:  # noqa: BLE001 - what a careless rebuild does
+            open(self.path, "w", encoding="utf-8").close()
+        except Exception:
             pass
 
 
