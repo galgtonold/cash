@@ -116,8 +116,10 @@ def test_cashs_own_checks_of_written_paths_are_not_the_statements_probes(tmp_pat
     assert write_observer._names_a_folder(str(folder))
     assert not write_observer._names_a_folder(str(file))
     assert not write_observer._names_a_folder(str(missing))
-    assert write_observer._lexists(str(file))
-    assert not write_observer._lexists(str(missing))
+    assert write_observer.written_lstat(str(file)) is not None
+    assert write_observer.written_lstat(str(missing)) is None
     if dangling is not None:
-        assert write_observer._lexists(str(dangling)), "a dangling link is there, as os.path.lexists says"
+        assert write_observer.written_lstat(str(dangling)) is not None, (
+            "a dangling link is there, as os.path.lexists says"
+        )
     assert not asked, "went through the wrapped os.stat"

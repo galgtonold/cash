@@ -310,7 +310,11 @@ def observe_writes() -> Iterator[WrittenPaths]:
 
 
 def kept_writes(
-    written: "set[str] | frozenset[str]", storage_root: object = None, appended=frozenset(), waived=frozenset()
+    written: "set[str] | frozenset[str]",
+    storage_root: object = None,
+    appended=frozenset(),
+    waived=frozenset(),
+    lstats: "dict[str, os.stat_result | None] | None" = None,
 ) -> list[str]:
     """The paths of *written* still there, outside cash's own storage
     (*storage_root*) and not in *appended*, sorted. A file written and
@@ -321,7 +325,10 @@ def kept_writes(
     which reads ``to_csv(mode='a')`` in the user's code: an append seen in a
     library's code is a log handler's, as often as not. One the user's own
     code opened (``open(p, mode)`` in a helper) is never in *appended*.
-    Nor is a file the user said a hit may skip (*waived*, `WrittenPaths.waived`)."""
+    Nor is a file the user said a hit may skip (*waived*, `WrittenPaths.waived`).
+
+    *lstats* holds each path's `written_lstat` once the block returned, so
+    every check after it asks the disk once a file (`StatementExecution`)."""
     if not written:
         return []
     root = None
@@ -335,14 +342,19 @@ def kept_writes(
         and not (root and os.path.normcase(p).startswith(root))
         # A folder is kept: one moved into place (``tmp.rename(dest)``) is
         # what the block published.
-        and _lexists(p)
+        and written_lstat(p, lstats) is not None
     )
 
 
-def _lexists(path: str) -> bool:
-    """``os.path.lexists`` past cash's own wrapper of ``os.lstat``."""
+def written_lstat(path: str, lstats: "dict[str, os.stat_result | None] | None" = None) -> os.stat_result | None:
+    """``os.lstat(path)`` past cash's own wrapper of it, None when nothing is
+    there; kept in *lstats*, and taken from it when it is there already."""
+    if lstats is not None and path in lstats:
+        return lstats[path]
     try:
-        own_lstat(path)
+        st = own_lstat(path)
     except (OSError, ValueError):
-        return False
-    return True
+        st = None
+    if lstats is not None:
+        lstats[path] = st
+    return st

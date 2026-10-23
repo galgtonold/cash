@@ -26,6 +26,7 @@ from __future__ import annotations
 import ast
 import logging
 import os
+import stat
 import types
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
@@ -37,7 +38,7 @@ from ...analysis.mutations import assigned_method_call_receivers, standalone_met
 from ...analysis.namespace_effects import fits_its_receiver
 from ...tracking.file_dep_snapshot import realpath_of_read_this_run
 from ...tracking.module_symbols import static_attribute_reads
-from ...tracking.read_classification import regular_file_stat
+from ...tracking.read_classification import regular_file_stat, stat_key
 from ...value_hash import budgeted_hash, compute_hash, costly_after
 from ..cache_key import statement_source_hash
 from ..lineage_formula import (
@@ -58,6 +59,7 @@ from ..lineage_formula import (
     statement_environment_component,
 )
 from ..restored_var import hashed_by_lineage
+from ..write_observer import written_lstat
 from .derivation_edges import (
     assigned_names,
     bump_derived_lineages,
@@ -110,17 +112,33 @@ def _record_file_reads(
     return file_hash_component
 
 
-def note_own_writes(tracking_state: "TrackingState", paths) -> None:
+def note_own_writes(tracking_state: "TrackingState", paths, lstats=None) -> None:
     """Record that the notebook wrote *paths* just now, with each file's
-    `stat_key` after the write (`TrackingState.own_file_writes`)."""
+    `stat_key` after the write (`TrackingState.own_file_writes`). *lstats*
+    are what the statement's other checks found at *paths*
+    (`StatementExecution.written_lstats`): a path that is no link needs
+    no second look."""
     tracking_state.file_event_seq += 1
     for path in paths:
         where = realpath_of_read_this_run(path)[0]  # once per folder in a run, not per file
-        st = regular_file_stat(where)
+        st = _own_write_stat(path, where, lstats)
         if st is None:
             tracking_state.own_file_writes.pop(where, None)
         else:
             tracking_state.own_file_writes[where] = (tracking_state.file_event_seq, st)
+
+
+def _own_write_stat(path: str, where: str, lstats) -> tuple[int, int, int] | None:
+    """`regular_file_stat` of *where*, the real path of *path*, from what
+    `written_lstat` found at *path* when that is no link: the same file."""
+    if lstats is None:
+        return regular_file_stat(where)
+    st = written_lstat(path, lstats)
+    if st is None:
+        return None
+    if stat.S_ISLNK(st.st_mode):
+        return regular_file_stat(where)
+    return stat_key(st) if stat.S_ISREG(st.st_mode) else None
 
 
 def rewritten_by_the_notebook_since(tracking_state: "TrackingState", cache_key: str, paths) -> bool:

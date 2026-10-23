@@ -332,6 +332,10 @@ class StatementExecution:
     children_running: list[Any] = field(default_factory=list)
     #: Those of ``written_paths`` written only from a line the user waived.
     waived_paths: frozenset[str] = frozenset()
+    #: What is at each of ``written_paths`` once the statement returned
+    #: (`write_observer.written_lstat`), taken by the first check that asks:
+    #: each written file is asked of the disk once, not by every check.
+    written_lstats: dict[str, Any] = field(default_factory=dict)
     #: The `FileAccessTracker` of the run, for the store: which files moved
     #: since the statement read them, and their digests as it read them.
     file_tracker: Any = None
