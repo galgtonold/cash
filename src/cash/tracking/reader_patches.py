@@ -501,6 +501,11 @@ def _patch_pathlib_stat() -> None:
     def make(original):
         @functools.wraps(original)
         def tracked_path_stat(self, *args, **kwargs):
+            if active_tracker.get() is None:
+                # The wrapper stays installed once a scope has opened: with
+                # no tracker it costs every ``Path.stat`` of the process
+                # one lookup, not a frame and a call.
+                return original(self, *args, **kwargs)
             try:
                 result = original(self, *args, **kwargs)
             except (FileNotFoundError, NotADirectoryError):
@@ -1790,7 +1795,9 @@ def install_patches() -> None:
 
 
 def remove_patches() -> None:
-    """Put the originals back; run when the last tracker closes."""
+    """Put the originals back on modules; run when the last tracker closes.
+    A replacement on a class stays (`io_watch.Patches.restore`) and does
+    nothing with no tracker open."""
     with _install_lock:
         try:
             sys.meta_path.remove(_shared_import_hook)

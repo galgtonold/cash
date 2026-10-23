@@ -254,7 +254,9 @@ def _hook_mock_calls() -> None:
     that it did: every call on one goes through
     ``CallableMixin._increment_mock_call``. Never imports ``unittest.mock``
     itself -- a program that has not imported it has no mocks. Installed
-    while an observer is open, like the rest of cash's I/O watch.
+    when an observer first opens and left on the class after it closes,
+    like cash's other class replacements (`io_watch.Patches.restore`): it
+    counts nothing with no observer open.
     """
     module = sys.modules.get("unittest.mock")
     real = getattr(getattr(module, "CallableMixin", None), "_increment_mock_call", None)

@@ -8,6 +8,9 @@ back as it closed: some 500 scopes in, a call site CPython had specialised,
 ``Mapping.get`` reading ``os.environ[...]``, kept calling the original. An
 installed package's ``os.environ.get("TENANT")`` went unseen, and the first
 tenant's result was served to every other.
+
+Only 3.13 had the bug: on 3.12 and 3.14 the first test passes on the code
+before the fix too, so it guards through CI's 3.13 runs.
 """
 
 from __future__ import annotations
@@ -69,3 +72,43 @@ def test_a_replacement_on_a_class_stays_when_its_scope_closes_and_a_modules_goes
     assert patches.reinstall()
     assert Reader().read() == "wrapped" and module.read() == "wrapped"
     assert sorted(owner is Reader for owner, *_ in patches.installed()) == [False, True]
+
+
+def test_a_kept_class_replacement_something_else_displaced_is_not_set_back_by_the_cheap_path():
+    class Reader:
+        def read(self):
+            return "original"
+
+    patches = io_watch.Patches()
+    patches.replace(Reader, "read", lambda self: "wrapped")
+    patches.restore()
+    Reader.read = lambda self: "theirs"
+    assert not patches.reinstall()
+
+
+def test_a_pool_submit_replaced_after_a_scope_is_wrapped_in_the_next():
+    """``mock.patch.object(ThreadPoolExecutor, "submit", ...)`` after cash's
+    first scope: the next scope wraps the newcomer, as it wraps the
+    original, instead of leaving work handed to the pool unseen."""
+    from concurrent.futures import ThreadPoolExecutor
+    from unittest import mock
+
+    io_watch.hold()
+    io_watch.release()
+    calls = []
+
+    def theirs(self, fn, /, *args, **kwargs):
+        calls.append(fn)
+        return original(self, fn, *args, **kwargs)
+
+    original = ThreadPoolExecutor.submit
+    with mock.patch.object(ThreadPoolExecutor, "submit", theirs):
+        io_watch.hold()
+        try:
+            installed = ThreadPoolExecutor.__dict__["submit"]
+            with ThreadPoolExecutor(1) as pool:
+                assert pool.submit(len, "ab").result() == 2
+        finally:
+            io_watch.release()
+    assert installed is not theirs, "cash's wrapper was not put around the replacement"
+    assert calls == [len]

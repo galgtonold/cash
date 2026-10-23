@@ -20,9 +20,11 @@ other audited event in the process.
 **Monkeypatches only where no event exists**: readers that open files in
 C, existence probes, metadata calls such as ``os.stat`` and the pool
 ``submit`` methods, listed in :mod:`cash.tracking.reader_patches`. Those are
-installed when the first observation scope opens and the originals are put
-back when the last one closes; ``%cash_on`` holds a scope for as long as it is
-on, so a notebook does not reinstall them for every statement.
+installed when the first observation scope opens. When the last one closes,
+the originals are put back on modules; a replacement on a class stays for
+the rest of the process, even after ``%cash_off``, and does nothing with no
+scope open (`Patches.restore` says why). ``%cash_on`` holds a scope for as
+long as it is on, so a notebook does not reinstall them for every statement.
 """
 
 from __future__ import annotations
@@ -256,7 +258,8 @@ _ABSENT = object()
 
 
 class Patches:
-    """Attribute replacements that can all be undone.
+    """Attribute replacements that can be undone: those on modules are,
+    those on classes stay once set (`restore`).
 
     A replacement is put back only while it is still the one installed: if
     something wrapped it since (``mock.patch``, another tool), the wrapper
@@ -327,9 +330,11 @@ class Patches:
         CPython gives a class (1000 on 3.13); once they are used up, a call
         site it specialised before, ``Mapping.get`` reading
         ``os.environ[...]``, keeps calling the function it saw there, and a
-        replacement set after that is skipped. Some 500 statements into a
-        session, an installed package's environment read went unseen and the
-        first tenant's rows were served to every other.
+        replacement set after that is skipped. On 3.13, after about 500
+        ``@cash.cache`` misses made without ``%cash_on``, or 500
+        ``%cash_off``/``%cash_on`` toggles, an installed package's
+        environment read went unseen and the first tenant's rows were served
+        to every other.
         """
         installed, self._installed = self._installed, []
         self.version += 1
@@ -361,6 +366,11 @@ class Patches:
         """
         last = self._last
         if not last or any(_current(owner, name) is not old for owner, name, _new, old in last):
+            return False
+        # A kept class replacement something else displaced since
+        # (``mock.patch.object(Path, "stat", ...)``) is wrapped again only by
+        # the full install.
+        if any(_current(owner, name) is not new for owner, name, new, _old in self._installed):
             return False
         try:
             for owner, name, new, _old in last:
