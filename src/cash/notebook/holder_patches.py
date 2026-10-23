@@ -153,8 +153,45 @@ def _reachable_within(
         seen.add(id(obj))
         if limit is not None and len(seen) > limit:
             return None
-        stack.extend(children_of(obj) or ())
+        children = children_of(obj) or ()
+        if len(children) > _TREE_AT_ONCE:
+            inside = _tree_containers(list(children))
+            if inside is not None:
+                # Records parsed from JSON, in a list or a frame's column,
+                # read a level at a time: 5,000 of them took a Python step
+                # per dict and list, 0.2 s.
+                seen.update(inside)
+                if limit is not None and len(seen) > limit:
+                    return None
+                continue
+        stack.extend(children)
     return seen
+
+
+#: From how many children `_reachable_within` reads them a level at a time,
+#: and the containers such a read may hold.
+_TREE_AT_ONCE = 64
+_TREE_ROOTS = (list, dict)
+#: The leaves of such a read: plain values, each one the walk passes over.
+_TREE_LEAVES = (str, int, float, bool, type(None))
+
+
+def _tree_containers(value: list[Any]) -> list[int] | None:
+    """The ids of the dicts and lists in and below *value*, a list of
+    JSON-like data of dicts and lists over plain values
+    (`_plain_data.tree_levels`); None for anything else, a tuple too (the
+    walk may take one for a value)."""
+    found: list[int] = []
+    try:
+        for flat, types in _plain_data.tree_levels(value, _TREE_LEAVES):
+            check_walk_budget()
+            if tuple in types:
+                return None
+            if dict in types or list in types:
+                found.extend(id(item) for item in flat if type(item) in _TREE_ROOTS)
+    except (_plain_data._NotPlain, TypeError):
+        return None
+    return found
 
 
 def _reaches_any(outputs: Mapping[str, Any], held: set[int], value_types: tuple[type, ...]) -> bool:

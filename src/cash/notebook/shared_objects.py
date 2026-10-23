@@ -2564,7 +2564,13 @@ def _copies_keep_old_objects(group: Mapping[str, Any], leaves: Leaves | None = N
         seen.add(id(obj))
         if instance_of(obj, (types.FunctionType, types.BuiltinFunctionType)):
             return True
-        stack.extend(children_of(obj) or ())
+        children = children_of(obj) or ()
+        if len(children) > 1 and _plain_data.is_tree(list(children), plain_leaves):
+            # A frame's object column of records, asked as one list: 5,000
+            # parsed records took a Python step each, 0.4 s past the check's
+            # budget, and the frame built from them was never stored.
+            continue
+        stack.extend(children)
     return False
 
 
@@ -2594,6 +2600,7 @@ def _check_group(
             group, bindings, value_types, keep_identity, fast=fast, memo=memo, leaves=leaves
         )
         _count_memo(memo, nodes, inbound)
+        _count_together(nodes, inbound)
         if not excess_refs(nodes, inbound, checked):
             # Every reference is the group's own already. What cash holds
             # itself only adds to the counts, so it cannot leave one over:
@@ -2622,6 +2629,8 @@ def _check_group(
         named = {id(mapping) for mapping, _key in named_held if mapping is not user_ns}
         internal |= {id(group), id(bindings), id(cash_held), id(named_held), id(nodes), *nodes, *named}
         internal |= {id(memo), *(id(listed) for listed in memo.values() if listed is not None)}
+        if _TOGETHER is not None:
+            internal |= {id(_TOGETHER), *map(id, _TOGETHER.values())}
         internal |= {id(m) for m in bindings if m is not user_ns}
         discounted = {key for mapping, key in named_held if mapping is user_ns}
         # Held in a pandas object's own slots: the search up would stop at
@@ -2634,7 +2643,11 @@ def _check_group(
             if gave_up is not None:
                 gave_up.names |= in_frames[0]
             if not in_frames[1]:
-                return shared, None
+                # Those frames are what holds them: they join, as a frame
+                # sharing a frame's cells does (`_frames_sharing_cells`).
+                # ``flat = pd.json_normalize(recs)`` holds the tags of the
+                # records ``recs`` holds, and ``df`` holds the records.
+                return shared, set(in_frames[0])
             excess = in_frames[1]
         partial = GaveUp() if gave_up is not None else None
         found = _find_holders([nodes[k] for k in excess], internal, user_ns, set(group) | discounted, partial)
@@ -2805,6 +2818,9 @@ def _inside_library_objects(
 def _reads_inside(node: Any, value_types: tuple[type, ...]) -> bool:
     """Whether *node* is a library's own object the walk does not read: not
     a value, nor pandas or numpy data (read by their own rules)."""
+    if type(node) in _READ_BY_THE_WALK:
+        # Asked of every node: 15,000 parts of 5,000 records took 0.2 s.
+        return False
     try:
         if is_value(node, value_types) or issubclass(type(node), _NOT_WITHIN) or children_of(node) is not None:
             return False
@@ -2812,6 +2828,10 @@ def _reads_inside(node: Any, value_types: tuple[type, ...]) -> bool:
         return False
     kind = _LIBRARY_KINDS.get(type(node))
     return (kind or _library_kind(type(node))) is _LEAF
+
+
+#: Exact types the walk reads itself (`children_of` is never None for them).
+_READ_BY_THE_WALK = frozenset({dict, list, tuple, set, frozenset})
 
 
 def reads_down(obj: Any, value_types: tuple[type, ...]) -> bool | None:
@@ -3125,6 +3145,35 @@ def _count_memo(memo: dict[int, list | None], nodes: dict[int, Any], inbound: di
                 inbound[key] += 1
 
 
+def _count_together(nodes: dict[int, Any], inbound: dict[int, int]) -> None:
+    """Add to *inbound* the reference each object-column slot of the frames
+    `frames_together` read, among *nodes*, makes to the cell it holds, once
+    per slot: the walk counts each such frame's reference to the cell
+    through the list that read keeps (`_object_cells`), which holds it too,
+    and numpy tells no count of the slot. Two frames on the same memory
+    (``df2 = df[mask]`` that kept every row) hold a cell in one slot.
+    Without it, ``flat = pd.json_normalize(recs)`` read with ``df``, which
+    holds the records, was refused as shared once ``recs`` joined."""
+    if _LISTED_FROM is None:
+        return
+    np = sys.modules["numpy"]
+    slots: set[int] = set()
+    for frame, reads in _LISTED_FROM.items():
+        if frame not in nodes:
+            continue
+        for array, keep in reads:
+            start = array.__array_interface__["data"][0]
+            places = (np.flatnonzero(keep) * array.strides[0] + start).tolist()
+            for place, cell in zip(places, array[keep].tolist()):
+                if place in slots:
+                    continue
+                slots.add(place)
+                key = id(cell)
+                if key in nodes:
+                    inbound[key] += 1
+            cell = None  # the loop's own reference, out of the counts read after
+
+
 def _count_index_data(nodes: dict[int, Any], inbound: dict[int, int], user_ns: Mapping[str, Any]) -> None:
     """Count in *inbound* what the indexes of the frames in *user_ns* hold
     of *nodes*: an index's data and its engine's values.
@@ -3384,16 +3433,25 @@ _FLAT_WIDEST = 1_000_000
 def _flat_holders(targets: list[Any], internal: set[int], user_ns: Mapping[str, Any], known: set[str]) -> set[str]:
     """The variables of *user_ns* not in *known* bound to a list, tuple or
     dict holding one of *targets* as an item, or in an item that is itself
-    one (a record's ``tags``): ``recs``, the 5,000 records a frame's object
+    one (a record's ``tags``), or to a frame holding one in an object column
+    (`holds_any_of`): ``recs``, the 5,000 records a frame's object
     column, or ``pd.json_normalize(recs)``'s, was built from, too wide for
     the search down (`_holders_from_names`) and too many objects for the
     search up, which gave up and refused the frame. Read by identity, at
     most `_FLAT_WIDEST` items a variable."""
     wanted = {id(obj) for obj in targets}
+    np = sys.modules.get("numpy")
+    ordered = np.array(sorted(wanted), dtype=np.int64) if np is not None else None
     found: set[str] = set()
     for name, value in list(user_ns.items()):
         kind = type(value)
-        if name in known or id(value) in internal or kind not in _FLAT_KINDS:
+        if name in known or id(value) in internal:
+            continue
+        if kind not in _FLAT_KINDS:
+            # A frame's object column holding them: ``df`` for the records
+            # ``flat = pd.json_normalize(recs)`` and ``recs`` share.
+            if ordered is not None and any(holds_any_of(array, ordered) for array in _object_dtype_arrays(value)):
+                found.add(name)
             continue
         items = dict.values(value) if kind is dict else value
         if len(items) > _FLAT_WIDEST:
