@@ -47,7 +47,7 @@ from .callee_effects import (
     positional_param_names,
 )
 from .handed_callables import function_source
-from .mutations import MUTATING_METHODS
+from .mutations import KNOWN_PURE_METHODS, MUTATING_METHODS, NEW_OBJECT_CHAIN_METHODS
 
 __all__ = ["OBSERVE", "callable_changes_parameters", "lambda_changes_parameters"]
 
@@ -125,6 +125,10 @@ _PURE_METHODS = frozenset(
     for name in dir(kind)
     if not name.startswith("_") and name not in MUTATING_METHODS and name != "partition"
 )
+
+#: Methods of the frame libraries that build a new object and leave their
+#: receiver alone (``x.mean()``, ``s.reset_index()``): not watched.
+_NEW_OBJECT = KNOWN_PURE_METHODS | NEW_OBJECT_CHAIN_METHODS
 
 #: The unbound methods of a type: ``dict.update``, ``np.ndarray.fill``.
 _UNBOUND = (types.MethodDescriptorType, types.WrapperDescriptorType)
@@ -262,10 +266,9 @@ class _Reader:
         #: Whether a parameter was handed to a library's code, which may
         #: change it (`OBSERVE`).
         self.observed = False
-        #: The ids of the calls whose result the body being read drops
-        #: (``v.partition(0)`` as a statement of its own): made for what
-        #: they do.
-        self._for_effect: set[int] = set()
+        #: The ids of the calls another method or a subscript is applied to
+        #: (``x.rolling(5).mean()``): they returned an object.
+        self._chained: set[int] = set()
 
     # -- callables -------------------------------------------------------
 
@@ -361,7 +364,11 @@ class _Reader:
         if _written_through_calls(fdef, reach):
             # ``np.frombuffer(p)[0:1] = z``: a library's view of a parameter.
             self.observed = True
-        self._for_effect |= {id(node.value) for node in ast.walk(fdef) if isinstance(node, ast.Expr)}
+        self._chained |= {
+            id(node.value)
+            for node in ast.walk(fdef)
+            if isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(node.value, ast.Call)
+        }
         for node in ast.walk(fdef):
             if not isinstance(node, ast.Call):
                 continue
@@ -407,10 +414,13 @@ class _Reader:
                 # everywhere in cash. A callable of the user's handed to it
                 # with the parameter (``frame['o'].apply(upd)``) is read.
                 # What it does to the parameter itself is not read from its
-                # name either, when its result is dropped: made for what it
-                # does, past the builtins' that change nothing. One whose
-                # result is used (``x.rolling(5).mean()``) is read for it.
-                if id(call) in self._for_effect and method not in _PURE_METHODS:
+                # name: the run is watched, whether the result is dropped or
+                # used (``return v.partition(0)`` sorts ``v`` and returns
+                # None). Not for the builtins' methods that change nothing,
+                # the frame libraries' that build a new object, nor one whose
+                # result has methods of its own called (``x.rolling(5).mean()``):
+                # the in-place forms return None.
+                if method not in _PURE_METHODS and method not in _NEW_OBJECT and id(call) not in self._chained:
                     self.observed = True
                 return self._library_call(call, passed, everything) | self._handed_callables(call, reach, scope, depth)
             if (

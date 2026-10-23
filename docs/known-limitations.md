@@ -870,6 +870,14 @@ default argument or base class does. **Fix:** move the binding above this cell.
   restore would hand the result back holding copies of them, apart from the
   ones in `df`'s cells, so such a statement runs each time, as in plain
   Python.
+<!-- claim: cash/analysis/parameter_changes.py:_Reader._call_changes @dea5fce0 -->
+- **A method that changes its receiver in place and returns it, chained on,
+  is not seen.** A helper handed to `.apply` that calls a library method on
+  what it is handed (`v.partition(0)`, `v.byteswap(True)`) is watched while
+  it runs, whatever it does with the result. One whose result has a method of
+  its own called (`v.rolling(5).mean()`) is read as building a new object, as
+  pandas' and NumPy's in-place forms return None; `v.byteswap(True).sum()`
+  changes `v` all the same, and a reader below is served the old cells.
 - **An empty cached value** (an empty list or frame) may be computed again
   instead of restored.
 - **A pandas table from the cache is read-only past pandas.** Under

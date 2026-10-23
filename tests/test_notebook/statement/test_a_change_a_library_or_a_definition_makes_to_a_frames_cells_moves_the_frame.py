@@ -12,7 +12,11 @@ a positional ``out`` slot, ``copy=False``, an unbound method
 changes it as ``out=`` does. A call handed a parameter is watched around
 the run instead, so a pure one (``queue.Queue().put(v)``) is still
 served. So is a method called on the parameter itself whose name no
-builtin's changing nothing tells (``v.partition(0)``, ``v.byteswap(True)``)."""
+builtin's changing nothing tells (``v.partition(0)``, ``v.byteswap(True)``),
+whether its result is dropped, returned, assigned or passed on.
+
+One whose result has a method of its own called (``x.rolling(5).mean()``)
+is read as building a new object and is not watched."""
 
 import pytest
 
@@ -72,6 +76,19 @@ CASES = {
         "def upd(v):\n    if Z == 2:\n        v.byteswap(True)",
         "Z = {z}\n_ = df['v'].apply(upd)",
     ),
+    "a_partition_returned": (
+        "def upd(n):\n    if Z == 2:\n        return n.partition(0)",
+        "Z = {z}\n_ = df['n'].apply(upd)",
+    ),
+    "a_byteswap_assigned": (
+        "def upd(v):\n    if Z == 2:\n        x = v.byteswap(True)",
+        "Z = {z}\n_ = df['v'].apply(upd)",
+    ),
+    "a_partition_in_a_lambda": ("", "Z = {z}\n_ = df['n'].apply(lambda n: n.partition(0) if Z == 2 else None)"),
+    "a_partition_passed_on": (
+        "def upd(n):\n    if Z == 2:\n        return str(n.partition(0))",
+        "Z = {z}\n_ = df['n'].apply(upd)",
+    ),
     "control_a_plain_apply": (SETZ, "Z = {z}\n_ = df['o'].apply(setz)"),
 }
 SHOWN = (
@@ -120,3 +137,17 @@ def test_a_library_call_that_leaves_its_argument_alone_is_served(cash_magics):
             run_cash_cell(cash_magics, cell, cells=cells)
         statuses.append([str(s["status"]) for s in cash_magics._last_cell_metrics["statements"]])
     assert statuses[-1] == ["RESTORED"], statuses
+
+
+def test_a_method_whose_result_is_chained_on_is_served(cash_magics):
+    """``v.rolling(2).mean()``: the in-place forms return None, so a
+    method whose result has methods called built a new object."""
+    cells = [
+        "import time\nimport numpy as np, pandas as pd",
+        f"{FRAME}\ns = pd.Series(range(20), index=[i % 2 for i in range(20)])",
+        f"_ = ({SLOW}, s.groupby(level=0).transform(lambda v: v.rolling(2).mean()))[1]",
+    ]
+    for _ in range(3):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+    assert [str(s["status"]) for s in cash_magics._last_cell_metrics["statements"]] == ["RESTORED"]
