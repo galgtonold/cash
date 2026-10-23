@@ -39,23 +39,28 @@ from __future__ import annotations
 
 import ast
 import collections
+import enum
 import functools
 import inspect
 import io
 import itertools
 import logging
+import operator
 import queue
 import sys
 import types
 import weakref
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any, NamedTuple
 
+from cash import _plain_data
+from cash._memo import LruMemo
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 
 from ..analysis.mutation_effects import captured_call_receivers
 from ..analysis.mutations import consumed_input_names
 from ..install_paths import is_user_code_file, is_user_code_module
+from ..value_types import IMMUTABLE_VALUE_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -330,11 +335,6 @@ _HELD_WIDTH = 64
 _CONTAINERS = (list, tuple, set, frozenset, collections.deque)
 #: Values that hold nothing: a container of only these is read for free.
 _LEAVES = frozenset({str, bytes, bytearray, int, float, complex, bool, type(None)})
-#: Containers whose items `_only_values` reads at C speed.
-_PLAIN = frozenset({list, tuple, set, frozenset})
-#: How many levels of plain containers `_only_values` reads through: a list
-#: of rows (tuples) of values is two.
-_PLAIN_LEVELS = 3
 #: pandas' indexers: ``s.iloc[i]`` reads an item of ``s``.
 _INDEXERS = frozenset({"iloc", "loc", "iat", "at"})
 #: ``Py_TPFLAGS_HEAP_TYPE``: a class made by a ``class`` statement.
@@ -357,13 +357,20 @@ class _Look:
         self.objects = _HELD_BUDGET
         self.items = _HELD_ITEMS
         self.stopped: str | None = None
+        #: Names the statement binds itself, a comprehension's, a lambda's,
+        #: a loop's: what one holds when it runs is not what the notebook's
+        #: variable of that name holds now (`_plain_index`).
+        self.bound: frozenset[str] = frozenset()
+        self.lineage_of: Callable[[Any], str | None] = _no_lineage
 
     def stop(self, why: str) -> None:
         if self.stopped is None:
             self.stopped = why
 
 
-def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> HeldStreams:
+def held_stream_paths(
+    tree: ast.Module | None, user_ns: Mapping[str, Any], lineages: Mapping[str, str] | None = None
+) -> HeldStreams:
     """The iterators and generators a statement can draw from that no name
     it reads holds itself, as paths (``m.g``, ``f.gen``).
 
@@ -385,10 +392,16 @@ def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> He
     (matplotlib's callback ids). A look that runs out of objects, items or
     depth on the user's objects says where it stopped (``stopped``), so the
     statement runs rather than be served unlooked.
+
+    With *lineages*, the notebook's, a big container a variable holds is
+    read once per lineage (`_holds_nothing_at`): 250,000 records cost
+    0.6 s a look, paid on every hit.
     """
     if tree is None:
         return HeldStreams([])
     look = _Look()
+    look.lineage_of = _lineage_finder(user_ns, lineages)
+    look.bound = _bound_inside(tree)
     found: list[str] = []
     # (path, object, depth, whether what it holds is the user's, whether its
     # holder is the user's: a stream the user's object holds is the user's to
@@ -425,10 +438,13 @@ def _walk(frontier: list[tuple[str, Any, int, bool, bool]], look: _Look) -> list
     seen: set[int] = set()
     while frontier:
         path, obj, depth, owned, held_by_user = frontier.pop()
-        if type(obj) in _LEAVES or id(obj) in seen or instance_of(obj, (str, bytes, int, float, complex)):
+        if _inert(type(obj)) or id(obj) in seen or instance_of(obj, (str, bytes, int, float, complex)):
             continue
         seen.add(id(obj))
-        if _only_values(obj):
+        residue = _residue_at(obj, look.lineage_of) if depth > 0 else None
+        if residue is not None:
+            # Data, or records of data: only their classes can reach code.
+            frontier.extend((f"{path}[...]", cls, depth + 1, owned and _owned(cls), owned) for cls in residue)
             continue
         if depth > 0 and _held_stream(obj):
             if held_by_user or _users_generator(obj):
@@ -438,14 +454,14 @@ def _walk(frontier: list[tuple[str, Any, int, bool, bool]], look: _Look) -> list
             if owned:
                 look.stop(f"{path}, deeper than {_HELD_DEPTH} steps")
             continue
-        if type(obj) not in _CONTAINERS and type(obj) is not dict:
+        if type(obj) not in _CONTAINERS and type(obj) is not dict and not _plain_record(obj):
             look.objects -= 1
             if look.objects < 0:
                 look.stop(f"{path}, past {_HELD_BUDGET} objects")
                 break
         try:
             for label, child in _reached(obj, owned, look, path):
-                if type(child) in _LEAVES:
+                if _inert(type(child)):
                     continue
                 frontier.append(
                     (
@@ -463,28 +479,245 @@ def _walk(frontier: list[tuple[str, Any, int, bool, bool]], look: _Look) -> list
     return found
 
 
-def _only_values(obj: Any) -> bool:
-    """Whether *obj* is a plain list, tuple, set or dict that holds only
-    values holding nothing (`_LEAVES`), through up to `_PLAIN_LEVELS` levels
-    of such containers (rows of numbers). Read with ``map(type, ...)``, at C
-    speed: a list of millions of numbers a function reads costs a fraction
-    of a second, not the look's budget."""
-    level = [obj.values()] if type(obj) is dict else [obj] if type(obj) in _PLAIN else None
-    if level is None:
-        return False
-    for _ in range(_PLAIN_LEVELS):
-        kinds = set(map(type, itertools.chain.from_iterable(level)))
-        if kinds <= _LEAVES:
-            return True
-        if not kinds <= _PLAIN | _LEAVES | {dict}:
+def held_consumable_path(name: str, value: Any, lineage: str | None = None) -> str | None:
+    """Where inside *value* a generator, iterator or queue sits that a store
+    could not copy (`is_consumable_unrestorable`), as a path (``s.iloc[70]``,
+    ``reg['last'].g``); None when there is none.
+
+    A statement binding such a container (``s = pd.Series([..., gen])``, a
+    dict of the user's objects one of which holds a generator) was served:
+    the restored value held the generator the earlier runs had already
+    drawn from, and a reader below drew on from there. Read are every item
+    of the user's containers, every attribute of the user's objects, and the
+    items of a numpy or pandas object container, whose types are read at C
+    speed; a library's own objects are not looked into. With *lineage*,
+    *value*'s, a big one found to hold nothing is not read again."""
+    if _inert(type(value)) or _residue_at(value, lambda obj: lineage if obj is value else None) is not None:
+        return None
+    stack: list[tuple[str, Any]] = [(name, value)]
+    seen: set[int] = set()
+    while stack:
+        path, obj = stack.pop()
+        if id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        if obj is not value and is_consumable_unrestorable(obj):
+            return path
+        if obj is not value and _holds_nothing(obj):
+            continue
+        for label, child in _stored_children(obj):
+            if not _inert(type(child)):
+                stack.append((f"{path}{label}", child))
+    return None
+
+
+def _stored_children(obj: Any) -> list[tuple[str, Any]]:
+    """What a store of *obj* stores with it, for `held_consumable_path`."""
+    if type(obj) is dict or type(obj) in _CONTAINERS:
+        items = dict.values(obj) if type(obj) is dict else obj
+        if all(map(_inert, set(map(type, items)))):
+            return []
+        return _items_up_to(obj, sys.maxsize) or []
+    if instance_of(obj, (types.FunctionType, types.MethodType, types.ModuleType, type)):
+        return []
+    found = _items_up_to(obj, sys.maxsize) if _object_container(obj) else None
+    if found is not None:
+        return found
+    if instance_of(obj, (dict, *_CONTAINERS)) or _users_class(type(obj)):
+        children = _items_up_to(obj, sys.maxsize) or []
+        try:
+            attrs = object.__getattribute__(obj, "__dict__")
+        except (AttributeError, TypeError):
+            attrs = None
+        if isinstance(attrs, dict):
+            children.extend((f".{k}", v) for k, v in list(attrs.items()))
+        return children
+    return []
+
+
+def _object_container(obj: Any) -> bool:
+    """A numpy array or pandas object holding Python objects, whose items
+    are read at C speed: True only when one of them is not a leaf."""
+    module = (type(obj).__module__ or "").split(".")[0]
+    if module == "numpy":
+        if attribute_or(attribute_or(obj, "dtype"), "kind") != "O":
             return False
-        level = [
-            item.values() if type(item) is dict else item
-            for items in level
-            for item in items
-            if type(item) not in _LEAVES
-        ]
+        return not _only_inert(obj.flat)
+    if module != "pandas":
+        return False
+    name = type(obj).__name__
+    if name == "Series":
+        return obj.dtype.kind == "O" and not _only_inert(obj.array)
+    if name == "DataFrame":
+        return any(dtype.kind == "O" and not _only_inert(obj[col].array) for col, dtype in obj.dtypes.items())
     return False
+
+
+#: Value types that hold nothing a statement could draw from, tested by
+#: subclass: dates, decimals, fractions, paths, UUIDs. An ``Enum`` member
+#: is left out: its class is the user's and can hold anything.
+_VALUE_TYPES = tuple(t for t in IMMUTABLE_VALUE_TYPES if t is not enum.Enum)
+
+_INERT: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
+
+
+def _inert(kind: type) -> bool:
+    """Whether a value of *kind* holds nothing: a str or a number, a date,
+    a ``Decimal``, a numpy scalar. Such a value costs a look nothing, where
+    2,500 dates had run it out of objects and the statement ran every
+    time. Answered once per type."""
+    if kind in _LEAVES:
+        return True
+    try:
+        return _INERT[kind]
+    except (KeyError, TypeError):
+        pass
+    numpy = sys.modules.get("numpy")
+    try:
+        answer = issubclass(kind, _VALUE_TYPES) or (numpy is not None and issubclass(kind, numpy.generic))
+    except TypeError:
+        answer = False
+    try:
+        _INERT[kind] = answer
+    except TypeError:
+        pass
+    return answer
+
+
+def _only_inert(values: Iterable[Any]) -> bool:
+    """Whether every one of *values* is `_inert`, its types read at C speed."""
+    return all(map(_inert, set(map(type, values))))
+
+
+def _holds_nothing(obj: Any) -> bool:
+    """Whether *obj* is data with nothing inside to draw from: JSON-like
+    data, a builtin container of inert values or of tuples of them (a set of
+    300,000 pairs), a numpy array or pandas object of no Python objects but
+    inert ones. Read at C speed, a level at a time, never an item at a time:
+    a look over 250,000 records took 1.4 s and then gave up."""
+    kind = type(obj)
+    if kind in (list, dict, tuple) and _plain_data.is_tree(obj):
+        return True
+    if kind in _CONTAINERS or kind is dict:
+        items = list(dict.values(obj)) if kind is dict else obj
+        kinds = set(map(type, items))
+        rows = {k for k in kinds if not _inert(k)}
+        if not rows:
+            return True
+        if not all(issubclass(k, tuple) and k.__iter__ is tuple.__iter__ for k in rows):
+            return False
+        if rows == kinds:
+            return _only_inert(itertools.chain.from_iterable(items))
+        return _only_inert(itertools.chain.from_iterable(item for item in items if type(item) in rows))
+    module = (kind.__module__ or "").split(".")[0]
+    if module == "numpy":
+        return attribute_or(obj, "dtype") is not None and not _object_container(obj)
+    if module == "pandas" and kind.__name__ in ("Series", "DataFrame"):
+        return not _object_container(obj)
+    return False
+
+
+#: What `_residue` found of a container, by its identity and the lineage
+#: of the variable holding it: the same object under the same lineage was
+#: not changed by any statement since.
+_RESIDUES: LruMemo[tuple[int, str], tuple[type, ...] | None] = LruMemo(256)
+#: A container this long is read once per lineage.
+_BIG = 256
+_UNREAD = object()
+
+
+def _residue_at(obj: Any, lineage_of: Callable[[Any], str | None]) -> tuple[type, ...] | None:
+    """`_residue`, remembered for a container a variable of the notebook
+    holds (`_RESIDUES`)."""
+    try:
+        big = type(obj) in _MEMO_KINDS and len(obj) >= _BIG
+    except TypeError:
+        big = False
+    lineage = lineage_of(obj) if big else None
+    if lineage is None:
+        return _residue(obj)
+    key = (id(obj), lineage)
+    answer = _RESIDUES.get(key, _UNREAD)
+    if answer is _UNREAD:
+        answer = _RESIDUES[key] = _residue(obj)
+    return answer  # type: ignore[return-value]
+
+
+def _residue(obj: Any) -> tuple[type, ...] | None:
+    """What of *obj* a look must still read: nothing (``()``) when it
+    `_holds_nothing`; the classes of its items when they are records of
+    inert values (`_plain_record`), whose methods may reach a stream; None
+    when it is to be looked into as usual."""
+    if _holds_nothing(obj):
+        return ()
+    kind = type(obj)
+    if kind not in _CONTAINERS and kind is not dict:
+        return None
+    classes: dict[type, None] = {}
+    for item in dict.values(obj) if kind is dict else obj:
+        item_kind = type(item)
+        if _inert(item_kind) or item_kind in classes:
+            if item_kind in classes and not _plain_record(item):
+                return None
+            continue
+        if not _plain_record(item):
+            return None
+        classes[item_kind] = None
+    return tuple(classes)
+
+
+_MEMO_KINDS = frozenset({list, dict, tuple, set, frozenset, collections.deque})
+
+
+def _no_lineage(_obj: Any) -> str | None:
+    return None
+
+
+def _lineage_finder(user_ns: Mapping[str, Any], lineages: Mapping[str, str] | None) -> Callable[[Any], str | None]:
+    """The lineage of the variable holding an object, by the object; the
+    map is built the first time one is asked for."""
+    if not lineages:
+        return _no_lineage
+    by_id: dict[int, str] | None = None
+
+    def lineage_of(obj: Any) -> str | None:
+        nonlocal by_id
+        if by_id is None:
+            by_id = {}
+            for name, lineage in list(lineages.items()):
+                value = user_ns.get(name)
+                if type(value) in _MEMO_KINDS:
+                    by_id[id(value)] = lineage
+        return by_id.get(id(obj))
+
+    return lineage_of
+
+
+def _plain_record(obj: Any) -> bool:
+    """Whether *obj* is an object whose attributes are all `_inert` (a
+    dataclass point, a record): it costs the look no object, so 3,000 of
+    them do not run it out. Its class is still looked into."""
+    if instance_of(obj, (type, types.FunctionType, types.MethodType, types.ModuleType)):
+        return False
+    try:
+        attrs = object.__getattribute__(obj, "__dict__")
+    except (AttributeError, TypeError):
+        attrs = None
+    if attrs is not None and not (isinstance(attrs, dict) and attrs and _only_inert(attrs.values())):
+        return False
+    read = attrs is not None
+    for cls in type(obj).__mro__:
+        for slot in attribute_or(cls, "__slots__", ()) or ():
+            if not isinstance(slot, str) or slot in ("__dict__", "__weakref__"):
+                continue
+            try:
+                value = object.__getattribute__(obj, slot)
+            except (AttributeError, TypeError):
+                continue
+            if not _inert(type(value)):
+                return False
+            read = True
+    return read
 
 
 def _callable(value: Any) -> bool:
@@ -614,19 +847,24 @@ def _all_children(obj: Any) -> Iterable[tuple[str, Any]]:
 
 
 def _items(owner: Any, look: _Look | None = None, path: str | None = None) -> list[tuple[str, Any]] | None:
-    """The items of a container, read without running the user's code: a
-    list, tuple, set, deque or dict of any kind; a pandas object column or a
-    numpy array of objects. ``None`` for anything else. With *path* (an
-    object of the user's) all of them, counted against *look*'s items; past
-    them the look stops there. Without, up to `_HELD_WIDTH`."""
-    width = _HELD_WIDTH if path is None or look is None else max(look.items, 0) + 1
+    """The items of a container that can hold something, read without
+    running the user's code: of a list, tuple, set, deque or dict of any
+    kind; a pandas object column or a numpy array of objects. ``None`` for
+    anything else. With *path* (an object of the user's), and for a numpy or
+    pandas object container wherever it is (where the user's data lives),
+    all of them, counted against *look*'s items; past them the look stops
+    there. A library's other containers, up to `_HELD_WIDTH`."""
+    whole = (path is not None and look is not None) or _object_container(owner)
+    width = max(look.items, 0) + 1 if whole and look is not None else sys.maxsize if whole else _HELD_WIDTH
     found = _items_up_to(owner, width)
-    if found is None or path is None or look is None:
-        return found
-    look.items -= len(found)
-    if look.items < 0:
-        look.stop(f"{path}, past {_HELD_ITEMS} items")
-    return [(label, value) for label, value in found if type(value) not in _LEAVES]
+    if found is None:
+        return None
+    found = [(label, value) for label, value in found if not _inert(type(value))]
+    if whole and look is not None:
+        look.items -= len(found)
+        if look.items < 0:
+            look.stop(f"{path or 'an object container'}, past {_HELD_ITEMS} items")
+    return found
 
 
 def _items_up_to(owner: Any, width: int) -> list[tuple[str, Any]] | None:
@@ -636,19 +874,28 @@ def _items_up_to(owner: Any, width: int) -> list[tuple[str, Any]] | None:
         return [(f"[{i}]", v) for i, v in enumerate(itertools.islice(owner, width))]
     module = type(owner).__module__ or ""
     if module.startswith("numpy") and attribute_or(attribute_or(owner, "dtype"), "kind") == "O":
-        return [(f"[{i}]", v) for i, v in enumerate(itertools.islice(owner.flat, width))]
+        return _not_inert("[{}]", owner.flat, width)
     if module.split(".")[0] == "pandas":
         name = type(owner).__name__
         if name == "Series" and owner.dtype.kind == "O":
-            return [(f".iloc[{i}]", v) for i, v in enumerate(itertools.islice(owner.array, width))]
+            return _not_inert(".iloc[{}]", owner.array, width)
         if name == "DataFrame":
             found = []
-            for col in [c for c, dtype in owner.dtypes.items() if dtype.kind == "O"][:width]:
-                found.extend(
-                    (f"[{col!r}].iloc[{i}]", v) for i, v in enumerate(itertools.islice(owner[col].array, width))
-                )
+            for col in [c for c, dtype in owner.dtypes.items() if dtype.kind == "O"]:
+                found.extend(_not_inert(f"[{col!r}].iloc[{{}}]", owner[col].array, width - len(found)))
+                if len(found) >= width:
+                    break
             return found
     return None
+
+
+def _not_inert(label: str, values: Iterable[Any], width: int) -> list[tuple[str, Any]]:
+    """The items of a numpy or pandas object container that can hold
+    something, up to *width*, labelled by position: picked at C speed, so a
+    column of a million strings and dates costs no Python step per item."""
+    values = list(values)
+    picked = itertools.compress(range(len(values)), map(operator.not_, map(_inert, map(type, values))))
+    return [(label.format(i), values[i]) for i in itertools.islice(picked, max(width, 0))]
 
 
 _USERS_CLASS: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
@@ -737,7 +984,7 @@ def _spelled(node: ast.expr, user_ns: Mapping[str, Any], look: _Look | None = No
         return found
     if isinstance(node, ast.Subscript):
         found = []
-        index = _plain_index(node.slice, user_ns)
+        index = _plain_index(node.slice, user_ns, look.bound if look is not None else frozenset())
         for path, owner in _spelled(node.value, user_ns, look):
             if type(owner) in (dict, list, tuple) and index is not _NO_INDEX:
                 try:
@@ -757,15 +1004,29 @@ def _spelled(node: ast.expr, user_ns: Mapping[str, Any], look: _Look | None = No
 _NO_INDEX = object()
 
 
-def _plain_index(node: ast.expr, user_ns: Mapping[str, Any]) -> Any:
+def _plain_index(node: ast.expr, user_ns: Mapping[str, Any], bound: frozenset[str] = frozenset()) -> Any:
     """The index a constant, or a name holding a plain value (``i``, ``k``),
     gives, which a lookup in a dict, list or tuple uses without running the
-    user's code; `_NO_INDEX` for any other."""
+    user's code; `_NO_INDEX` for any other. A name in *bound* is the
+    statement's own (``[next(gens[j]) for j in [1]]``): the notebook's ``j``
+    says nothing of it."""
     if isinstance(node, ast.Constant):
         return node.value
-    if isinstance(node, ast.Name) and node.id in user_ns and type(user_ns[node.id]) in _LEAVES:
+    if isinstance(node, ast.Name) and node.id not in bound and node.id in user_ns and type(user_ns[node.id]) in _LEAVES:
         return user_ns[node.id]
     return _NO_INDEX
+
+
+def _bound_inside(tree: ast.Module) -> frozenset[str]:
+    """The names *tree* binds anywhere in it: its assignments and loops,
+    and the variables of its comprehensions, lambdas and functions."""
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            names.add(node.id)
+        elif isinstance(node, ast.arg):
+            names.add(node.arg)
+    return frozenset(names)
 
 
 def _held_stream(obj: Any) -> bool:
