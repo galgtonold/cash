@@ -5,7 +5,8 @@ the Python above it.
 ``p = load()`` then ``p = !echo {len(os.listdir('d')) * 0}`` while another
 process changes ``d/``: the listing was taken as ``p``'s own file, keyed
 ``p = load()`` on it, and a cell below reading ``CALLS`` rebuilt ``p`` as
-``load()``'s list.
+``load()``'s list. A folder of the Python installation is no file of the
+user's: listed, it is no dependency, and nothing is stale.
 """
 
 from __future__ import annotations
@@ -33,8 +34,8 @@ while True:
 
 @pytest.mark.parametrize(
     "magic",
-    ["p = !echo {len(os.listdir('d')) * 0}", "p = !echo {len(os.listdir('/proc')) * 0}"],
-    ids=["a-changing-folder", "proc"],
+    ["p = !echo {len(os.listdir('d')) * 0}", "p = !echo {len(os.listdir(os.path.dirname(os.__file__))) * 0}"],
+    ids=["a-changing-folder", "an-installed-folder"],
 )
 def test_a_magic_reading_a_changing_folder_keeps_its_value(nb_runner, magic):
     d = nb_runner.work_dir / "d"
