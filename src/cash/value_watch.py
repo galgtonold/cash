@@ -290,10 +290,13 @@ _EXTRA_ANCHORS: list[dict] = []
 
 
 @contextlib.contextmanager
-def anchored(namespace: dict) -> Iterator[None]:
+def anchored(namespace: dict | None) -> Iterator[None]:
     """Inside, a value *namespace* holds under a name may be watched too: a
     local module's globals, whose data cash hashes before every statement
-    that may read it."""
+    that may read it. None adds nothing."""
+    if namespace is None:
+        yield
+        return
     _EXTRA_ANCHORS.append(namespace)
     try:
         yield

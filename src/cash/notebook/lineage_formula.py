@@ -13,7 +13,6 @@ ingredients they have; this module decides how they combine.
 from __future__ import annotations
 
 import ast
-import contextlib
 import hashlib
 import logging
 import os
@@ -734,7 +733,7 @@ def module_data_digest(label: str, value: Any) -> str:
     a registry holding a function edited since keyed as it did."""
     try:
         home = _home_namespace(label, value)
-        with value_watch.anchored(home) if home is not None else contextlib.nullcontext():
+        with value_watch.anchored(home):
             digest = compute_hash(value)
             code = value_watch.digest(value, held_code_digest, value_watch.KIND_HELD_CODE, _holds_no_code)
         if code:
