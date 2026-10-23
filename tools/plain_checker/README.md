@@ -12,7 +12,9 @@ reviewer runs the same shapes instead of writing a probe by hand.
 - **Decorator shapes:** setup code defines functions decorated with the bare
   name `@cache`. The steps run three times in one process, then twice in a
   new process that uses the same cache folder (the restart). Under cash,
-  `cache` is `cash.cache`. In plain Python it does nothing.
+  `cache` is `cash.cache`. In plain Python it does nothing. The setup is
+  written to a real module (`shape_setup.py`), so cash can read its source
+  as it reads a user's file.
 
 Each cash run is repeated in three configs:
 

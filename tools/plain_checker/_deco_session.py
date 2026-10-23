@@ -4,9 +4,12 @@ the setup, the steps and the runs; prints one JSON line of what it saw."""
 from __future__ import annotations
 
 import ast
+import builtins
 import contextlib
+import importlib
 import io
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -51,8 +54,15 @@ else:
         return cash.cache(_remember(fn), **kwargs)
 
 
-ns = {"__name__": "__main__", "cache": cache}
-exec(compile(job["setup"], "<setup>", "exec"), ns)
+# The setup is a real module, as a user's code is: cash reads a function's
+# source, which code made from a string has none of. ``cache`` reaches it as
+# a builtin, so the file holds the setup text alone.
+builtins.cache = cache
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.getcwd())
+with open("shape_setup.py", "w", encoding="utf-8") as fh:
+    fh.write(job["setup"])
+ns = importlib.import_module("shape_setup").__dict__
 seen, statuses = {}, {}
 for run_name in job["runs"]:
     out = seen.setdefault(run_name, {})
