@@ -69,3 +69,29 @@ def test_a_draw_through_another_name_runs_nothing_above_again(cash_magics, sourc
         assert (ns["first"], ns["rest"], ns["n"]) == ([0, 1], [2, 3, 4, 5], 6)
     run_cash_cell(cash_magics, cells[2], cells=cells)
     assert ns["rest"] == [2, 3, 4, 5], "re-run on its own"
+
+
+HOLDERS = {
+    "a_list": ("box = [it]", "box[0]"),
+    "a_tuple": ("box = (1, it)", "box[1]"),
+    "a_dict": ("box = {'it': it}", "box['it']"),
+    "an_attribute": ("class B:\n    pass\nbox = B()\nbox.it = it", "box.it"),
+    "a_list_in_a_dict": ("box = {'its': [it]}", "box['its'][0]"),
+}
+
+
+@pytest.mark.parametrize("holder", list(HOLDERS))
+def test_a_draw_through_the_name_moves_what_holds_it_too(cash_magics, holder):
+    """``box = [it]`` (or ``b.it = it``), a cell drawing ``it``, then ``rest =
+    list(box[0])``: the draw moved ``it``, and ``box``, which the simulation
+    moved through the edge ``box = [it]`` linked, stayed. The reader found
+    ``box`` moved and had the cells above run again inside every Run All:
+    ``log`` held 8 draws, not 6."""
+    bind, read = HOLDERS[holder]
+    setup = "log = []\ndef f(x):\n    log.append(x)\n    return x\nit = map(f, range(6))\n" + bind
+    cells = [setup, "first = [next(it) for _ in range(2)]", f"rest = list({read})\nn = len(log)"]
+    ns = cash_magics.shell.user_ns
+    for _ in range(3):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        assert (ns["first"], ns["rest"], ns["n"]) == ([0, 1], [2, 3, 4, 5], 6)

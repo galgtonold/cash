@@ -311,16 +311,57 @@ def drawn_stream_inputs(
 
 def with_other_names(names: Iterable[str], user_ns: Mapping[str, Any], known: Iterable[str]) -> set[str]:
     """*names* and the names of *known* bound to the same object as one of
-    them: ``it2 = it`` above, a draw through ``it`` moved ``it2`` as well.
-    The simulation moves ``it2`` on through the edge ``it2 = it`` linked; the
-    runtime moves it with the drawn name, so both leave it alike."""
+    them, or holding it: ``it2 = it``, ``box = [it]`` or ``b.it = it`` above,
+    a draw through ``it`` moved ``it2``, ``box`` and ``b`` as well. The
+    simulation moves them on through the edge that statement linked; the
+    runtime moves them with the drawn name, so both leave them alike."""
     held = {id(user_ns[name]): user_ns[name] for name in names if name in user_ns}
     found = set(names)
+    if not held:
+        return found
     for name in known:
         value = user_ns.get(name, held)
-        if value is not held and held.get(id(value), held) is value:
+        if value is held or name in found:
+            continue
+        if held.get(id(value), held) is value or _holds_one_of(value, held):
             found.add(name)
     return found
+
+
+# How deep, and over how many items, `with_other_names` looks into a value
+# for the stream: a list or an attribute holding it, not a dataset.
+_HOLDER_DEPTH = 3
+_HOLDER_ITEMS = 1000
+
+
+def _holds_one_of(value: Any, held: Mapping[int, Any]) -> bool:
+    """Whether *value* holds one of the objects *held* (by id) inside a plain
+    list, tuple, set or dict, or as an instance attribute, `_HOLDER_DEPTH`
+    deep. Attributes are read from ``__dict__``: no property runs."""
+    budget = [_HOLDER_ITEMS]
+
+    def walk(obj: Any, depth: int) -> bool:
+        if depth <= 0 or budget[0] <= 0 or is_stream(obj):
+            return False
+        budget[0] -= 1
+        kind = type(obj)
+        if kind is dict:
+            items = obj.values()
+        elif kind in (list, tuple, set, frozenset):
+            items = obj
+        elif instance_of(obj, (type, types.ModuleType, types.FunctionType)):
+            return False
+        else:
+            items = attribute_or(obj, "__dict__", None)
+            if type(items) is not dict:
+                return False
+            items = items.values()
+        for item in itertools.islice(items, _HOLDER_ITEMS):
+            if held.get(id(item), held) is item or walk(item, depth - 1):
+                return True
+        return False
+
+    return walk(value, _HOLDER_DEPTH)
 
 
 def is_stream(obj: Any) -> bool:
