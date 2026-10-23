@@ -260,6 +260,7 @@ class _Reader:
         """The *params* the body of *fdef* changes in place."""
         reach = _aliases(fdef, params)
         locals_ = _bound_names(fdef) - params
+        results = _library_locals(fdef, reach, locals_, scope)
 
         def back(names) -> set[str]:
             out: set[str] = set()
@@ -271,13 +272,19 @@ class _Reader:
         for node in ast.walk(fdef):
             if not isinstance(node, ast.Call):
                 continue
-            changed |= self._call_changes(node, reach, locals_, scope, depth)
+            changed |= self._call_changes(node, reach, locals_, scope, depth, results)
             if changed >= params:
                 break
         return changed & params
 
     def _call_changes(
-        self, call: ast.Call, reach: dict[str, set[str]], locals_: set[str], scope: _Scope, depth: int
+        self,
+        call: ast.Call,
+        reach: dict[str, set[str]],
+        locals_: set[str],
+        scope: _Scope,
+        depth: int,
+        results: frozenset[str] = frozenset(),
     ) -> set[str]:
         """The parameters the call *call* in a body may change."""
         passed: dict[int | str | None, set[str]] = {}
@@ -306,6 +313,14 @@ class _Reader:
                 # A method of a value cash knows nothing of: a library's, as
                 # everywhere in cash. A callable of the user's handed to it
                 # with the parameter (``frame['o'].apply(upd)``) is read.
+                return self._handed_callables(call, reach, scope, depth)
+            if (
+                func.attr not in MUTATING_METHODS
+                and func.attr not in _CHANGING_DUNDERS
+                and _library_result(func.value, reach, locals_, scope, results)
+            ):
+                # ``s.diff().rolling(w)``: a method of what a library's code
+                # returned is the library's too.
                 return self._handed_callables(call, reach, scope, depth)
         elif isinstance(func, ast.Name) and func.id in reach:
             # ``put('z', 1)`` with ``put = d.__setitem__``; a parameter called.
@@ -572,6 +587,80 @@ def _reached(node: ast.AST, reach: Mapping[str, set[str]]) -> set[str]:
         elif isinstance(current, (ast.IfExp, ast.BoolOp, ast.NamedExpr)):
             pending.extend(ast.iter_child_nodes(current))
     return out
+
+
+def _library_result(
+    node: ast.expr, reach: Mapping[str, set[str]], locals_: set[str], scope: _Scope, results: frozenset[str]
+) -> bool:
+    """Is *node* a value a library's code returned: a call of a library's
+    function (``np.float64(v)``), of a method of a parameter
+    (``s.diff()``, as `_Reader._call_changes` reads one) or of such a
+    result, a part of one, an operator over them, or a local only ever
+    bound to one (*results*)? Code of the user's builds none of them."""
+    if isinstance(node, ast.Name):
+        return node.id in results
+    if isinstance(node, (ast.Attribute, ast.Subscript)):
+        return _library_result(node.value, reach, locals_, scope, results)
+    if isinstance(node, ast.UnaryOp):
+        return _library_result(node.operand, reach, locals_, scope, results)
+    if isinstance(node, ast.BinOp):
+        return all(
+            isinstance(side, ast.Constant) or _library_result(side, reach, locals_, scope, results)
+            for side in (node.left, node.right)
+        ) and not all(isinstance(side, ast.Constant) for side in (node.left, node.right))
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        if func.attr in MUTATING_METHODS or func.attr in _CHANGING_DUNDERS:
+            return False
+        if isinstance(func.value, ast.Name) and func.value.id in reach:
+            return func.value.id not in scope.known
+        if _library_result(func.value, reach, locals_, scope, results):
+            return True
+    value = scope.resolve(func, locals_)
+    if value is _LIBRARY:
+        return True
+    if value is _UNKNOWN or value is _LOCAL or value is _MISSING:
+        return False
+    return not is_users(value) and not any(value is runs for runs in (*_RUNS_TEXT, *_BY_NAME, *_SETS_FIRST))
+
+
+def _library_locals(
+    fdef: ast.FunctionDef | ast.AsyncFunctionDef, reach: Mapping[str, set[str]], locals_: set[str], scope: _Scope
+) -> frozenset[str]:
+    """The locals of *fdef* bound only by plain assignments of a library's
+    result (``delta = close.diff()``, `_library_result`)."""
+    bound: dict[str, list[ast.expr]] = {}
+    other: set[str] = set()
+    for node in ast.walk(fdef):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            bound.setdefault(node.targets[0].id, []).append(node.value)
+            continue
+        if isinstance(node, ast.Assign):
+            other.update(n.id for t in node.targets for n in ast.walk(t) if isinstance(n, ast.Name))
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign, ast.NamedExpr, ast.For, ast.AsyncFor, ast.comprehension)):
+            other.update(n.id for n in ast.walk(node.target) if isinstance(n, ast.Name))
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if item.optional_vars is not None:
+                    other.update(n.id for n in ast.walk(item.optional_vars) if isinstance(n, ast.Name))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node is not fdef:
+            other.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal, ast.Delete, ast.ExceptHandler)):
+            other.update(_bound_names(node) if not isinstance(node, (ast.Global, ast.Nonlocal)) else node.names)
+            if isinstance(node, ast.ExceptHandler) and node.name:
+                other.add(node.name)
+    candidates = {name for name in bound if name in locals_ and name not in other and name not in reach}
+    results: frozenset[str] = frozenset()
+    grew = True
+    while grew:
+        grew = False
+        for name in sorted(candidates - results):
+            if all(_library_result(value, reach, locals_, scope, results) for value in bound[name]):
+                results = results | {name}
+                grew = True
+    return results
 
 
 def _aliases(fdef: ast.FunctionDef | ast.AsyncFunctionDef, params: frozenset[str]) -> dict[str, set[str]]:
