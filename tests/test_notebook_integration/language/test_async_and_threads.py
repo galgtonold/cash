@@ -36,8 +36,11 @@ import textwrap
 
 import pytest
 
+# Every test here boots a kernel and starts threads in it; the suite-wide
+# 30 s ran out under -n 4 in the teardown's namespace reset.
+pytestmark = pytest.mark.timeout(90)
 
-@pytest.mark.timeout(90)
+
 def test_toplevel_await_cache_hit_second_run(nb_runner):
     nb_runner.create_notebook(
         [
@@ -63,7 +66,6 @@ def test_toplevel_await_cache_hit_second_run(nb_runner):
     assert has_cache, f"top-level-await cell shows no cache activity on identical 2nd run: {raw[:500]}"
 
 
-@pytest.mark.timeout(90)
 def test_await_cell_edit_invalidates_downstream(nb_runner):
     nb_runner.create_notebook(
         [
@@ -88,7 +90,6 @@ def test_await_cell_edit_invalidates_downstream(nb_runner):
     )
 
 
-@pytest.mark.timeout(90)
 def test_threadpool_map_cache_hit_and_unrelated_edit(nb_runner):
     nb_runner.create_notebook(
         [
@@ -126,7 +127,6 @@ def test_threadpool_map_cache_hit_and_unrelated_edit(nb_runner):
     assert "[CELL_CHANGED]" not in raw, f"unrelated edit marked executor cell as changed: {raw[:500]}"
 
 
-@pytest.mark.timeout(90)
 def test_threadpool_selfmod_accumulator_isolated_rerun(nb_runner):
     nb_runner.create_notebook(
         [
@@ -152,7 +152,6 @@ def test_threadpool_selfmod_accumulator_isolated_rerun(nb_runner):
     )
 
 
-@pytest.mark.timeout(90)
 def test_background_thread_event_gated_list_isolated_rerun(nb_runner):
     nb_runner.create_notebook(
         [
@@ -196,7 +195,6 @@ def test_background_thread_event_gated_list_isolated_rerun(nb_runner):
     )
 
 
-@pytest.mark.timeout(90)
 def test_lock_unpicklable_restart_persist_graceful(nb_runner):
     nb_runner.create_notebook(
         [
@@ -232,7 +230,6 @@ def test_lock_unpicklable_restart_persist_graceful(nb_runner):
     )
 
 
-@pytest.mark.timeout(90)
 def test_future_var_crossing_cells_restart(nb_runner):
     nb_runner.create_notebook(
         [
@@ -267,7 +264,6 @@ def test_future_var_crossing_cells_restart(nb_runner):
     )
 
 
-@pytest.mark.timeout(90)
 def test_queue_drain_isolated_rerun_idempotent(nb_runner):
     nb_runner.create_notebook(
         [
