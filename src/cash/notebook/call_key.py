@@ -316,7 +316,7 @@ class _StreamWalk:
                     return _HOLDS
             skipped = {kind for kind in kinds if ways[kind] not in _WALKED}
             next_children: list[Any] = []
-            for kind, group in _by_kind(kernels, children, skipped):
+            for kind, group in _by_kind(kernels, children, skipped, kinds):
                 new = kernels.new_in(group, False, seen) if kernels is not None else _new_in(group, seen)
                 if not new:
                     continue
@@ -357,11 +357,16 @@ class _StreamWalk:
         return _CLEAN if clean else _UNSEEN
 
 
-def _by_kind(kernels: Any, children: list, skipped: set[type]) -> list[tuple[type, list]]:
-    """*children* but those of a *skipped* type, by exact type."""
+def _by_kind(kernels: Any, children: list, skipped: set[type], kinds: set[type]) -> list[tuple[type, list]]:
+    """*children* but those of a *skipped* type, by exact type; *kinds* are
+    their types."""
     groups = kernels.split_level(children, skipped, set()) if kernels is not None else NotImplemented
     if groups is not NotImplemented:
         return groups
+    if len(kinds) == 1:
+        # One type: the level as it is, with no pass over it.
+        (kind,) = kinds
+        return [] if kind in skipped else [(kind, children)]
     by_kind: dict[type, list] = {}
     for child in children:
         kind = type(child)
@@ -372,7 +377,13 @@ def _by_kind(kernels: Any, children: list, skipped: set[type]) -> list[tuple[typ
 
 def _new_in(group: list, seen: set[int]) -> list:
     """Each of *group* once, none in *seen* (by id), which this adds them to."""
-    found = dict(zip(map(id, group), group))
+    ids = list(map(id, group))
+    if seen.isdisjoint(ids):
+        unique = set(ids)
+        if len(unique) == len(ids):
+            seen |= unique
+            return group
+    found = dict(zip(ids, group))
     for key in seen & found.keys():
         del found[key]
     seen.update(found)
