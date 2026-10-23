@@ -30,7 +30,7 @@ from cash._user_attrs import attribute_or, has_attribute, instance_of, is_routin
 from .._memo import NOTEBOOK_STATEMENTS
 from ..analysis.analysis_budget import AnalysisBudgetExceeded
 from ..analysis.ast_util import parse_cached
-from ..analysis.bytecode import NAME_LOADS, argvals
+from ..analysis.bytecode import NAME_LOADS, argvals, instructions
 from ..analysis.callee_effects import source_global_mutations
 from ..analysis.handed_callables import handed_callable_values
 from ..analysis.helper_code import own_code_is_user
@@ -191,6 +191,12 @@ def names_read(code: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
     each ``root.a.b`` chain (``attrs`` innermost first); empty when *code*
     does not parse.
 
+    A name or chain used as a value, not to read an attribute of it
+    (``getattr(mylib, name)``, ``vars(mylib)``, ``get(mylib.sub)``, ``m =
+    mylib``), or whose ``__dict__`` is read, also gives ``(root, (*, ...))``:
+    should it be a local module, any of its names may be read
+    (`_ANY_NAME`).
+
     The text alone decides it, so it is found once per text. The upstream
     scan asks for every cell above on every cell: walking each cell's tree
     again was 0.14 s of a cell at the end of a 400-cell notebook.
@@ -198,11 +204,17 @@ def names_read(code: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
     tree = parse_cached(code)
     if tree is None:
         return ()
+    # The names and chains another attribute is read from (``mylib`` in
+    # ``mylib.K``), and those used as a value, found in the same walk.
+    owners: set[int] = set()
+    used: list[tuple[ast.expr, str, tuple[str, ...]]] = []
     steps: list[tuple[str, tuple[str, ...]]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             steps.append((node.id, ()))
+            used.append((node, node.id, (_ANY_NAME,)))
         elif isinstance(node, ast.Attribute):
+            owners.add(id(node.value))
             attrs: list[str] = []
             root: ast.expr = node
             while isinstance(root, ast.Attribute):
@@ -210,7 +222,79 @@ def names_read(code: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
                 root = root.value
             if isinstance(root, ast.Name):
                 steps.append((root.id, tuple(attrs)))
+                if attrs[0] == "__dict__":
+                    steps.append((root.id, (_ANY_NAME, *attrs[1:])))
+                elif isinstance(node.ctx, ast.Load):
+                    used.append((node, root.id, (_ANY_NAME, *attrs)))
+    steps.extend((root_id, attrs) for node, root_id, attrs in used if id(node) not in owners)
     return tuple(steps)
+
+
+def modules_used_whole(code: types.CodeType, namespace: Mapping[str, Any]) -> list[types.ModuleType]:
+    """The modules *code*, or code nested in it, uses as a value rather than
+    to read a name of (`_value_chains`), resolved through *namespace*: any of
+    their names may be read, by a name made when it runs (``getattr(mylib,
+    'val_' + n)``, ``vars(mylib)[k]``, ``mylib.__dict__[k]``) or by a
+    function they are handed to. ``getattr(o, 'real')`` on anything else
+    widens nothing."""
+    return [module for co in _code_objects(code) for module in _modules_used_whole(co, namespace)]
+
+
+def _modules_used_whole(code: types.CodeType, namespace: Mapping[str, Any]) -> list[types.ModuleType]:
+    """`modules_used_whole` of *code* only, not its nested code."""
+    found = []
+    for root, attrs in _value_chains(code):
+        obj = namespace.get(root)
+        for attr in attrs:
+            if not instance_of(obj, types.ModuleType):
+                break
+            obj = vars(obj).get(attr)
+        if instance_of(obj, types.ModuleType):
+            found.append(obj)
+    return found
+
+
+#: What ends a chain of attribute loads without using its value: a store or
+#: delete of an attribute (``mylib.K = 1``).
+_ATTRIBUTE_WRITES = frozenset({"STORE_ATTR", "DELETE_ATTR"})
+_ATTRIBUTE_LOADS = frozenset({"LOAD_ATTR", "LOAD_METHOD"})
+
+
+@functools.lru_cache(maxsize=4096)
+def _value_chains(code: types.CodeType) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """The global names and attribute chains over them (``mylib``,
+    ``mylib.sub``, outermost first) that *code* uses as a value: loaded and
+    not then read an attribute of, stored to, or deleted from; a chain whose
+    ``__dict__`` it reads counts as well. Read from its instructions, as its
+    source may not be at hand. *code* only, not its nested code."""
+    try:
+        ops = instructions(code)
+    except (TypeError, ValueError):
+        return tuple((name, ()) for name in code.co_names)
+    found: list[tuple[str, tuple[str, ...]]] = []
+    chain: tuple[str, list[str]] | None = None
+    for opname, argval in ops:
+        if chain is not None:
+            if opname in _ATTRIBUTE_LOADS and isinstance(argval, str):
+                if argval == "__dict__":
+                    found.append((chain[0], tuple(chain[1])))
+                    chain = None
+                else:
+                    chain[1].append(argval)
+                continue
+            if opname not in _ATTRIBUTE_WRITES:
+                found.append((chain[0], tuple(chain[1])))
+            chain = None
+        if opname in NAME_LOADS and isinstance(argval, str):
+            chain = (argval, [])
+    if chain is not None:
+        found.append((chain[0], tuple(chain[1])))
+    return tuple(found)
+
+
+#: The attribute of a step that ``getattr`` reads by a name made when it
+#: runs: every name of a local module (`_Found.chain`).
+_ANY_NAME = "*"
 
 
 def module_state_writes(code: str, namespace: Mapping[str, Any] | None) -> frozenset[str]:
@@ -1096,6 +1180,7 @@ class _Found:
                     self.value(cell.cell_contents)
                 except ValueError:  # an empty cell
                     pass
+            self._default_modules(value)
             self._wrapped(value)
         elif instance_of(value, types.FunctionType):
             # A wrapper that is not the user's code (``@cash.cache``'s): what
@@ -1214,6 +1299,11 @@ class _Found:
         for attr in reversed(attrs):
             if not instance_of(obj, types.ModuleType):
                 return
+            if attr == _ANY_NAME:
+                if _is_local(obj):
+                    names = [name for name in list(vars(obj)) if not name.startswith("__")]
+                    self._module_attributes(obj, names)
+                return
             label = f"{obj.__name__}.{attr}" if _is_local(obj) else None
             obj = vars(obj).get(attr)
             self.value(obj, label)
@@ -1232,6 +1322,7 @@ class _Found:
                 self.value(value)
                 if issubclass(type(value), types.ModuleType) and _is_local(value):
                     self._module_attributes(value, co.co_names)
+            self._modules_whole(co, self.namespace)
 
     def _module_body_reads(self, fn: types.FunctionType) -> None:
         """What a function of a local module reads when it is called: the
@@ -1248,6 +1339,24 @@ class _Found:
                 self.value(value, f"{home_name}.{name}")
                 if issubclass(type(value), types.ModuleType) and _is_local(value):
                     self._module_attributes(value, co.co_names)
+            self._modules_whole(co, home)
+
+    def _modules_whole(self, code: types.CodeType, namespace: Mapping[str, Any]) -> None:
+        """Every name of each local module *code* uses as a value
+        (`_modules_used_whole`)."""
+        for module in _modules_used_whole(code, namespace):
+            if _is_local(module):
+                self.modules.add(module.__name__)
+                self._module_attributes(module, [name for name in list(vars(module)) if not name.startswith("__")])
+
+    def _default_modules(self, fn: types.FunctionType) -> None:
+        """Every name of each local module *fn* holds as a default argument
+        (``def get(n, m=mylib)``): its body reads it as a local, by any name."""
+        defaults = (*(fn.__defaults__ or ()), *(fn.__kwdefaults__ or {}).values())
+        for module in defaults:
+            if instance_of(module, types.ModuleType) and _is_local(module):
+                self.modules.add(module.__name__)
+                self._module_attributes(module, [name for name in list(vars(module)) if not name.startswith("__")])
 
     def _module_attributes(self, module: types.ModuleType, names: Iterable[str]) -> None:
         """``module.attr`` for each of *names* the local *module* has."""

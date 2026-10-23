@@ -20,6 +20,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from cash._user_attrs import instance_of, own_dict
+from cash.decorator.user_code import is_user_class
 from cash.tracking.randomness.state import object_carrier_state, rng_carrier_kind, same_carrier_state
 from cash.tracking.trace_recorder import is_user_code
 
@@ -31,12 +32,12 @@ _DEPTH = 3
 _WIDTH = 64
 _BUDGET = 2000
 
-_LEAVES = (str, bytes, bytearray, int, float, complex, bool, type(None), type)
+_LEAVES = (str, bytes, bytearray, int, float, complex, bool, type(None))
 #: A module of the user's is walked (``tlib.MODEL.rng``) up to this many globals.
 _MODULE_WIDTH = 256
 
 
-def _children(obj: Any) -> Iterable[tuple[str, Any]]:
+def children(obj: Any) -> Iterable[tuple[str, Any]]:
     if instance_of(obj, types.ModuleType):
         # A library's generators are its own business (`np.random`'s global
         # stream has its own watch); a module of the user's is walked.
@@ -70,9 +71,26 @@ def _children(obj: Any) -> Iterable[tuple[str, Any]]:
         yield "__self__", obj.__self__
         yield "__func__", obj.__func__
         return
+    if issubclass(type(obj), type):
+        # ``C.rng``: a class of the user's holds a generator for all its
+        # objects, and no variable's lineage follows it.
+        yield from _class_attributes(obj)
+        return
     attrs = own_dict(obj, subclasses=True)
     if attrs is not None and dict.__len__(attrs) <= _WIDTH:
         yield from ((f".{k}", v) for k, v in dict.items(attrs))
+    # ``c.rng`` read through the object from its class.
+    yield from _class_attributes(type(obj))
+
+
+def _class_attributes(cls: type) -> Iterable[tuple[str, Any]]:
+    """The attributes the user's classes in *cls*'s MRO hold themselves."""
+    for klass in type.__getattribute__(cls, "__mro__"):
+        if not is_user_class(klass):
+            continue
+        attrs = type.__getattribute__(klass, "__dict__")
+        if len(attrs) <= _WIDTH:
+            yield from ((f".{k}", v) for k, v in list(attrs.items()) if not k.startswith("__"))
 
 
 def positions(roots: Mapping[str, Any], followed: Iterable[Any] = ()) -> dict[int, tuple[str, Any, Any]]:
@@ -99,7 +117,7 @@ def positions(roots: Mapping[str, Any], followed: Iterable[Any] = ()) -> dict[in
         if depth >= _DEPTH:
             continue
         try:
-            for label, child in _children(obj):
+            for label, child in children(obj):
                 frontier.append(
                     (f"{path}{label}" if label.startswith(("[", ".")) else f"{path}.{label}", child, depth + 1)
                 )

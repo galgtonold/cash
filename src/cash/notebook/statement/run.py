@@ -126,6 +126,40 @@ class StatementRun:
     #: Refused because what it binds can differ between two runs with the
     #: same key (``CacheabilityVerdict.varies``): the clock, a fresh id.
     value_varies: bool = False
+    #: Its entry was found under its key and not served, because what the
+    #: key cannot name (code a string found, code changed in place) may have
+    #: changed: run again, it can bind a new value under the same key, so its
+    #: outputs are keyed by value, and what is built on them misses when the
+    #: value changed.
+    key_blind: bool = False
+    #: The values the entry it refused held (`key_blind`), until its outputs
+    #: are recorded, for those of its outputs the entry kept no digest of:
+    #: one that came out the same keeps the formula's lineage.
+    refused_values: dict[str, Any] | None = None
+    #: What the refused entry recorded of its own outputs
+    #: (``StatementCacheMetadata.value_keyed`` and ``rerun_digests``).
+    refused_value_keyed: frozenset[str] = frozenset()
+    refused_digests: dict[str, str] = field(default_factory=dict)
+    #: Its outputs keyed by value this run, and the digest of each output a
+    #: rerun under the same key compared (`key_blind`): its entry keeps both.
+    value_keyed_outputs: frozenset[str] = frozenset()
+    rerun_digests: dict[str, str] = field(default_factory=dict)
+    #: Refused for a reason that leaves what it binds the same for the same
+    #: code over the same input lineages (an import, a write it keeps, an
+    #: in-place change whose receiver's lineage moves on). Any other refusal
+    #: keys its outputs by value (`no_cache_value_digest`): the statement runs
+    #: every time because its key does not hold all it read, so the same
+    #: lineage could stand for a new value and serve a reader below stale.
+    value_pinned: bool = False
+    #: It reads what no lineage of its inputs follows (a function a string
+    #: names, an iterator it draws from): its outputs are keyed by value even
+    #: when another reason that refuses it pins them.
+    reads_outside_lineage: bool = False
+    #: The names it binds to a new object and does not change in place
+    #: (`CodeAnalyzer.reassigned_names`): only these are keyed by value. A
+    #: name changed in place, by the statement or a function it calls, keeps
+    #: the lineage the change gives it (`MutationRouting.route`).
+    bound: frozenset[str] = frozenset()
     allow_random: bool = False
     unseeded_calls: list = field(default_factory=list)
     inputs: set[str] = field(default_factory=set)
@@ -281,6 +315,11 @@ class StatementRun:
     #: It looks names up by a string, which its trace follows
     #: (``cache_key.lookups_followed``): served only on a checked trace.
     needs_trace: bool = False
+    #: An entry was found under its key, and its trace refused it: what the
+    #: code it ran reads changed, which the key does not hold. Its outputs are
+    #: keyed by value (`no_cache_value_digest`), so a reader below, keyed on
+    #: the same lineage, is not served what the old value gave.
+    trace_refused: bool = False
     #: Seconds recording what it ran took (``Shadow.begin`` / ``end``), inside
     #: its timed run but cash's cost, not the statement's.
     record_time: float = 0.0

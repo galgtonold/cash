@@ -28,6 +28,7 @@ from cash.source_norm import exact_source_digest, unparse_without_docstrings
 from cash.tracking.function_tracker import is_local_module
 from cash.tracking.randomness import rng_carrier_kind
 
+from .consumables import is_stream
 from .held_functions import held_notebook_code
 from .held_modules import held_data_part, held_module_parts
 from .installed_code import installed_code_parts
@@ -546,11 +547,19 @@ def called_function_dependencies(
     else:
 
         def lineage(ref: str) -> str:
-            if simulated and ref in simulated and rng_carrier_kind(user_ns.get(ref)) is not None:
+            if simulated and ref in simulated and _moves_as_drawn(user_ns.get(ref)):
                 return simulated[ref]
             return as_keyed(ref, variable_lineage.get(ref, "ABSENT"))
 
     return sorted(f"{ref}:{'ABSENT' if ref in attribute_only else lineage(ref)}" for ref in referenced)
+
+
+def _moves_as_drawn(value: Any) -> bool:
+    """Whether *value*'s lineage moves on with every statement that draws
+    from it: a random generator (``carrier_advances``), or an iterator a
+    function reads (``src = itertools.count()``, ``def g(): return
+    next(src)``). Where the call stood, the simulation knows."""
+    return rng_carrier_kind(value) is not None or is_stream(value)
 
 
 def _looks_up_by_string(
@@ -803,6 +812,8 @@ def _nested_codes(code_obj: types.CodeType | None) -> list[types.CodeType]:
     stack = [code_obj] if code_obj is not None else []
     while stack:
         current = stack.pop()
+        if type(current) is not types.CodeType:
+            continue  # what an object's ``__getattr__`` gave for ``__code__``
         found.append(current)
         stack.extend(c for c in current.co_consts if isinstance(c, types.CodeType))
     return found

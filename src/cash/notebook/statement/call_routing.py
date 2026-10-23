@@ -174,6 +174,9 @@ class CallRouting:
         # dead backend.
         self._call_cache: Any | None = None
         self._call_cache_owner: Any | None = None
+        #: Whether a call of a function reads what no lineage follows, so it
+        #: runs plain (`CallUnit.outside_lineage`); set by the processor.
+        self.outside_lineage: Callable[[Any], bool] | None = None
         # The TTL in force for the statement currently being processed, read
         # at invoke time by the call units inside it. Refreshed on
         # every statement; `None` means no TTL.
@@ -597,6 +600,7 @@ class CallRouting:
                 digests=self.digests,
             )
             self._call_cache_owner = cash_instance
+            self._call_cache.call_unit.outside_lineage = self.outside_lineage
         return self._call_cache
 
     def _fold_plain_counts(self) -> None:

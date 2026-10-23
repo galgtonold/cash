@@ -21,11 +21,12 @@ import pickle
 import secrets
 import sys
 import types
-from collections.abc import Mapping
+from collections.abc import Hashable, Mapping, MutableMapping
 from typing import Any, Callable, Iterable
 
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 
+from .. import value_watch
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.ast_util import parse_cached
 from ..analysis.mutations import repeatable_setting_receiver
@@ -383,26 +384,91 @@ def _held_hash(before: str, cache_key: str) -> str:
     return hashlib.sha256(f"held:{before}:{cache_key}".encode("utf-8")).hexdigest()
 
 
-def no_cache_value_digest(value: Any) -> str:
+def no_cache_value_digest(
+    value: Any, too_costly: MutableMapping[Hashable, int | None] | None = None, key: Hashable = None
+) -> str:
     """The digest of what a ``# @cash:no-cache`` statement bound, for its
     output's lineage.
 
     Such a statement runs every run and can bind a new value with the same
     source and inputs, so its output's lineage carries the value: a reader
     below misses when the value changed and still hits when it did not. A
-    value whose content cannot be hashed gets a digest of its own each run, so
+    value whose content cannot be hashed, or not within the budget of a
+    change check (`budgeted_hash`), gets a digest of its own each run, so
     its readers always recompute: the identity fallback stays the same under
     in-place change, and a new object can reuse an old one's address. A file
     open for reading is named by its file and position instead
     (:func:`read_handle_digest`), so what is read from it can be cached.
+
+    The digest has the budget of a check whether a value changed
+    (`budgeted_hash`): a value of many objects can take seconds to read,
+    several times what bound it, on every run. Past it the value gets a
+    digest of its own, and its readers recompute. Where the caller keeps
+    *too_costly*, the output (*key*) that went past it is remembered with
+    its length, and gets a digest of its own at once from then on, until its
+    value is less than half as long: no run pays the budget again for it,
+    and a value near the budget does not switch between its digest and one
+    of its own from run to run.
     """
     handle = read_handle_digest(value)
     if handle is not None:
         return handle
-    digest = compute_hash(value)
+    size = _length(value)
+    if too_costly is not None and key in too_costly:
+        known = too_costly[key]
+        if size is None or known is None or 2 * size >= known:
+            return _fresh_digest()
+        del too_costly[key]
+    digest = budgeted_hash(value)
+    if digest is None:
+        if too_costly is not None:
+            too_costly[key] = size
+        return _fresh_digest()
     if is_identity_fallback_hash(value, digest):
-        return "fresh:" + secrets.token_hex(16)
+        return _fresh_digest()
     return digest
+
+
+def _fresh_digest() -> str:
+    return "fresh:" + secrets.token_hex(16)
+
+
+def _length(value: Any) -> int | None:
+    """The length of a container, read without running the user's code."""
+    if type(value) in (list, tuple, dict, set, frozenset, str, bytes, bytearray):
+        return len(value)
+    shape = attribute_or(type(value), "shape")
+    if shape is not None and not callable(shape):
+        try:
+            return int(len(value))
+        except Exception:  # noqa: BLE001 - a length is a hint only
+            return None
+    return None
+
+
+def value_digests_key(source_hash: str, input_lineages: Mapping[str, str], occurrence_index: int = 0) -> str:
+    """What the value digests of a statement's run are filed under
+    (``TrackingState.no_cache_values``): its source, the lineages of its
+    inputs and which copy of the statement in its cell it is, as the runtime
+    and the simulation both build them. Two copies in one cell
+    (``start = time.time()`` before and after the work) share source and
+    inputs: filed together, the second's digest stood for the first's, and
+    the work between them ran again for the reader below.
+
+    Not its cache key: a key that cannot name what the code reaches carries
+    a token of its own each time, one that reads a name no cell bound hashes
+    its value (an iterator made before cash was on moves as it is read), and
+    one that binds a name holding a module reads it as it was. Filed under
+    such a key, the simulation did not find the digests, gave the output
+    another lineage than the run did, and the statement ran a second time
+    for each reader below: ``t = globals()[name](3)`` ran twice per Run All,
+    and a draw in it drew twice."""
+    parts = [
+        source_hash,
+        str(occurrence_index),
+        *(f"{name}={lineage}" for name, lineage in sorted(input_lineages.items())),
+    ]
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
 def no_cache_value_component(digests: Mapping[str, str] | None, name: str) -> str:
@@ -702,14 +768,36 @@ def module_data_digest(label: str, value: Any) -> str:
     (`held_code_digest`). The value hash pickles a function by its name, so
     a registry holding a function edited since keyed as it did."""
     try:
-        digest = compute_hash(value)
-        code = held_code_digest(value)
+        home = _home_namespace(label, value)
+        with value_watch.anchored(home):
+            digest = compute_hash(value)
+            code = value_watch.digest(value, held_code_digest, value_watch.KIND_HELD_CODE, _holds_no_code)
         if code:
             digest = hashlib.sha256(f"{digest}:code:{code}".encode("utf-8")).hexdigest()
         return digest
     except Exception:
         logger.debug("Could not hash module data %s", label, exc_info=True)
         return UNHASHABLE + secrets.token_hex(16)
+
+
+def _home_namespace(label: str, value: Any) -> dict | None:
+    """The globals of the module that holds *value* as its name *label*
+    (``mylib.TABLE``), so its digest can be reused while it is provably
+    unchanged (`value_watch.anchored`); None for a class attribute."""
+    module_name, _, attr = label.rpartition(".")
+    module = sys.modules.get(module_name)
+    if module is None:
+        return None
+    namespace = attribute_or(module, "__dict__")
+    if type(namespace) is not dict or namespace.get(attr) is not value:
+        return None
+    return namespace
+
+
+def _holds_no_code(value: Any, digest: str) -> bool:
+    # Code it holds can change with nothing the watchers see (a function's
+    # callees); none can appear without changing the value.
+    return digest == ""
 
 
 def module_data_digests(reach: Reach) -> list[tuple[str, str]]:

@@ -32,6 +32,9 @@ BUILD = (
 )
 
 
+_COUNTED = "lambda real, calls: lambda *a, **k: calls.append(1) or real(*a, **k)"
+
+
 @pytest.fixture
 def seen(monkeypatch):
     """What each statement stored as its variables, and every pickle for a digest."""
@@ -44,10 +47,12 @@ def seen(monkeypatch):
         return out
 
     monkeypatch.setattr("cash.notebook.statement.call_routing.with_call_refs", spy_refs)
-    real_digest = call_refs.digest_of
-    monkeypatch.setattr(call_refs, "digest_of", lambda v: digests.append(1) or real_digest(v))
-    real_ds = call_entries.digest_and_size
-    monkeypatch.setattr(call_entries, "digest_and_size", lambda v, **k: digests.append(1) or real_ds(v, **k))
+    # Made in the counted modules' globals, not this one's: a function of the
+    # user's that writes a list while a statement runs makes the statement
+    # run every time (`unseen_writes`), which is not what is counted here.
+    for module, name in ((call_refs, "digest_of"), (call_entries, "digest_and_size")):
+        counted = eval(_COUNTED, vars(module))
+        monkeypatch.setattr(module, name, counted(getattr(module, name), digests))
     return stored, digests
 
 

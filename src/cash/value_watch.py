@@ -30,12 +30,13 @@ the watch table fits its budget (``CASH_CWATCH_BUDGET``, 2% of RAM).
 from __future__ import annotations
 
 import abc
+import contextlib
 import copyreg
 import os
 import sys
 import types
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from time import perf_counter
 from typing import Any
 
@@ -44,7 +45,9 @@ from ._native import REASON
 from ._native import cwatch as _cw
 
 __all__ = [
+    "KIND_HELD_CODE",
     "KIND_PLAIN_KEY",
+    "anchored",
     "KIND_VALUE",
     "add_namespace",
     "WatchMismatch",
@@ -62,6 +65,7 @@ __all__ = [
 #: the value's version it was taken at.
 KIND_VALUE = 0  # value_hash.compute_hash
 KIND_PLAIN_KEY = 1  # the decorator's key part for plain data (arg_hashing.plain_key_part)
+KIND_HELD_CODE = 2  # notebook.held_code.held_code_digest, kept only when it holds none
 
 
 class WatchMismatch(AssertionError):
@@ -281,13 +285,32 @@ def add_namespace(shell: Any) -> None:
     _SHELLS[:] = [ref, *(other for other in _SHELLS if other() is not None and other() is not shell)][:4]
 
 
+#: Namespaces `anchored` adds for the hashing done inside it.
+_EXTRA_ANCHORS: list[dict] = []
+
+
+@contextlib.contextmanager
+def anchored(namespace: dict | None) -> Iterator[None]:
+    """Inside, a value *namespace* holds under a name may be watched too: a
+    local module's globals, whose data cash hashes before every statement
+    that may read it. None adds nothing."""
+    if namespace is None:
+        yield
+        return
+    _EXTRA_ANCHORS.append(namespace)
+    try:
+        yield
+    finally:
+        _EXTRA_ANCHORS.pop()
+
+
 def _anchors() -> tuple:
     """Namespaces that may hold a value with no other proof of identity (a
     list, a set, a tuple): the notebook's (`add_namespace`, or IPython's
-    ``user_ns``) and ``__main__``'s globals. Such a value is watched only
-    while one of them holds it under a name, and stops being watched when
-    that name is rebound or deleted."""
-    found = []
+    ``user_ns``), ``__main__``'s globals, and those `anchored` adds. Such a
+    value is watched only while one of them holds it under a name, and
+    stops being watched when that name is rebound or deleted."""
+    found = list(_EXTRA_ANCHORS)
     for ref in _SHELLS:
         user_ns = getattr(ref(), "user_ns", None)
         if isinstance(user_ns, dict) and all(user_ns is not other for other in found):

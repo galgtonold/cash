@@ -164,6 +164,9 @@ class CashMagics(Magics):
             function_tracker=function_tracker,
         )
 
+        # Not restored upstream: what work left running in a thread changed.
+        self._upstream_checker.simulator.restorer.thread_changed = self._statement_processor.thread_changed
+
         self._control_structure_processor = ControlStructureProcessor(
             shell,
             self._statement_processor,

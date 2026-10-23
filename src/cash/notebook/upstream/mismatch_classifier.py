@@ -577,6 +577,7 @@ class MismatchClassifier:
             m.check.notebook_cells,
             m.check.current_cell_idx,
             self._warned_changed_below,
+            by_work=self.tracking_state.changed_by_work.get(m.var_name),
         )
         return True
 

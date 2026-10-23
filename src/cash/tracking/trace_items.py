@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import builtins
 import contextlib
+import dataclasses
 import dis
 import functools
 import hashlib
@@ -239,7 +240,7 @@ _SCALARS = (int, float, complex, bool, type(None), type(Ellipsis))
 NOTEBOOK = ["__main__"]
 
 
-def _is_user_type(t: type) -> bool:
+def is_user_type(t: type) -> bool:
     from ..install_paths import is_user_code_module
 
     if getattr(t, "__module__", None) == NOTEBOOK[0]:
@@ -336,6 +337,17 @@ class _Digester:
             for f in (v.fget, v.fset, v.fdel):
                 self.feed(f)
             return
+        if t is functools.cached_property:
+            # Pickled, its function is looked up by a name that finds the
+            # property: by its code instead.
+            h.update(b"cprop")
+            self.feed(v.func)
+            return
+        if t is dataclasses.Field:
+            h.update(b"field")
+            self.feed(v.default)
+            self.feed(v.default_factory)
+            return
         from ..jit_functions import jit_python_function
 
         jitted = jit_python_function(v)
@@ -353,7 +365,7 @@ class _Digester:
                 size *= n
             if size > VALUE_CAP:
                 raise _Opaque
-        if _is_user_type(t) and t.__reduce_ex__ is object.__reduce_ex__:
+        if is_user_type(t) and t.__reduce_ex__ is object.__reduce_ex__:
             state = getattr(v, "__dict__", None)
             if isinstance(state, dict):
                 h.update(b"o")
@@ -393,7 +405,7 @@ class _Digester:
     def _type(self, t: type) -> None:
         h = self.h
         h.update(b"t" + f"{t.__module__}.{t.__qualname__}".encode())
-        if id(t) in self.types or not _is_user_type(t):
+        if id(t) in self.types or not is_user_type(t):
             return
         self.types.add(id(t))
         h.update(class_digest(t, self).encode())
@@ -546,6 +558,9 @@ def candidates(obj: Any) -> Iterable[types.FunctionType]:
             stack.extend(f for f in (o.fget, o.fset, o.fdel) if f is not None)
         elif isinstance(o, functools.partial):
             stack.append(o.func)
+        elif issubclass(type(o), functools._lru_cache_wrapper):
+            # ``@functools.cache``: a C object, its function kept as set.
+            stack.append(o.__wrapped__)
         elif o is not None and not issubclass(type(o), (type, types.ModuleType)):
             jitted = jit_python_function(o)
             if jitted is not None:

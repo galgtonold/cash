@@ -30,7 +30,7 @@ from typing import Any
 
 from cash._user_attrs import attribute_or, instance_of
 
-__all__ = ["ThreadReach"]
+__all__ = ["ThreadReach", "reachable"]
 
 #: Values that are code or a namespace, not state a thread changes.
 _NOT_STATE = (types.ModuleType, types.FunctionType, types.BuiltinFunctionType, type)
@@ -51,6 +51,48 @@ def _function(fn: Any) -> Any:
             break
         fn = inner
     return fn
+
+
+def reachable(functions: Iterable[Any], user_ns: Mapping[str, Any]) -> dict[str, str]:
+    """The variables of *user_ns* each of *functions*, handed to a thread,
+    can change, to the function's name: the globals its code names, the
+    variables bound to what its closure holds, and the object a method
+    bound to one is of (``D.__setitem__``)."""
+    found: dict[str, str] = {}
+    by_id: dict[int, list[str]] | None = None
+
+    def holding(value: Any) -> list[str]:
+        nonlocal by_id
+        if by_id is None:
+            by_id = {}
+            for name, held in user_ns.items():
+                if not name.startswith("_") and not isinstance(held, _NOT_STATE):
+                    by_id.setdefault(id(held), []).append(name)
+        return by_id.get(id(value), [])
+
+    for fn in functions:
+        owner = attribute_or(fn, "__self__", None)
+        fn = _function(fn)
+        label = attribute_or(fn, "__qualname__", None) or repr(fn)
+        if owner is not None and not instance_of(owner, types.ModuleType):
+            for name in holding(owner):
+                found.setdefault(name, label)
+        code = attribute_or(fn, "__code__", None)
+        if code is None:
+            continue
+        if attribute_or(fn, "__globals__", None) is user_ns:
+            for c in _codes(code):
+                for name in c.co_names:
+                    if name in user_ns and not instance_of(user_ns[name], _NOT_STATE):
+                        found.setdefault(name, label)
+        for cell in attribute_or(fn, "__closure__", None) or ():
+            try:
+                value = cell.cell_contents
+            except ValueError:  # an empty cell
+                continue
+            for name in holding(value):
+                found.setdefault(name, label)
+    return found
 
 
 class ThreadReach:
@@ -75,36 +117,10 @@ class ThreadReach:
         return self._running[0][1] if self._running else None
 
     def note(self, functions: Iterable[Any], user_ns: Mapping[str, Any]) -> None:
-        """Note what each of *functions* can reach in *user_ns*: the
-        globals its code names, and the variables bound to what its closure
-        holds."""
-        by_id: dict[int, list[str]] | None = None
-        for fn in functions:
-            fn = _function(fn)
-            code = attribute_or(fn, "__code__", None)
-            if code is None:
-                continue
-            label = attribute_or(fn, "__qualname__", None) or repr(fn)
-            if attribute_or(fn, "__globals__", None) is user_ns:
-                for c in _codes(code):
-                    for name in c.co_names:
-                        if name in user_ns and not instance_of(user_ns[name], _NOT_STATE):
-                            self.names.setdefault(name, label)
-            cells = attribute_or(fn, "__closure__", None) or ()
-            if not cells:
-                continue
-            if by_id is None:
-                by_id = {}
-                for name, value in user_ns.items():
-                    if not name.startswith("_") and not isinstance(value, _NOT_STATE):
-                        by_id.setdefault(id(value), []).append(name)
-            for cell in cells:
-                try:
-                    value = cell.cell_contents
-                except ValueError:  # an empty cell
-                    continue
-                for name in by_id.get(id(value), ()):
-                    self.names.setdefault(name, label)
+        """Note what each of *functions* can reach in *user_ns*
+        (`reachable`)."""
+        for name, label in reachable(functions, user_ns).items():
+            self.names.setdefault(name, label)
 
     def reached(self, names: Iterable[str]) -> list[tuple[str, str]]:
         """Those of *names* running work can change: ``(name, its function)``."""

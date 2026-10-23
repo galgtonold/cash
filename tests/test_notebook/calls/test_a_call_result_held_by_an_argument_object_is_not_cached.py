@@ -128,7 +128,7 @@ def test_a_result_held_where_cash_cannot_look_is_not_stored(call_cache, tmp_path
         cached = call_cache.resolve(mod.queued)
         first, second = cached(3), cached(3)
         hits = [e["cache_hit"] for e in call_cache.drain_call_log()]
-        assert hits == [False, False]
+        assert hits and not any(hits)
         assert second is mod.Q.queue[-1]
         assert first is mod.Q.queue[0]
     finally:

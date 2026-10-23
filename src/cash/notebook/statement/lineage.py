@@ -27,7 +27,7 @@ import ast
 import logging
 import os
 import types
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from typing import TYPE_CHECKING, Any
 
 from cash._user_attrs import attribute_or, instance_of
@@ -56,6 +56,7 @@ from ..lineage_formula import (
     recorded_reads_lineage_component,
     setting_output_lineage,
     statement_environment_component,
+    value_digests_key,
 )
 from ..restored_var import hashed_by_lineage
 from .derivation_edges import (
@@ -108,6 +109,14 @@ def _record_file_reads(
         else:
             tracking_state.statement_probes.pop(cache_key, None)
     return file_hash_component
+
+
+def _a_namespace(value: Any, user_ns: Mapping[str, Any]) -> bool:
+    """Is *value* a namespace -- the notebook's globals (``NS = globals()``)
+    or a module? Its lineage is the formula's: a digest of its value would
+    be of everything it holds, new each run, and what reads names from it
+    is keyed or traced by the names it reads."""
+    return value is user_ns or instance_of(value, types.ModuleType)
 
 
 def note_own_writes(tracking_state: "TrackingState", paths) -> None:
@@ -188,6 +197,9 @@ class StatementLineageBuilder:
         self.function_tracker = function_tracker
         self._file_deps = file_deps
         self.compute_hash = compute_hash
+        #: The outputs whose value went past the digest's budget, with its
+        #: length (`no_cache_value_digest`).
+        self._too_costly: dict[tuple[str, str], int | None] = {}
 
     # ------------------------------------------------------------------
     # Public entries
@@ -205,6 +217,9 @@ class StatementLineageBuilder:
         tree: ast.Module | None = None,
         accessed_remote: set[str] | None = None,
         no_cache: bool = False,
+        value_keyed: frozenset[str] = frozenset(),
+        occurrence_index: int = 0,
+        value_kept: Collection[str] = (),
         replay_bumps: bool = True,
         lineage_reads: frozenset[str] = frozenset(),
         probes: dict[str, str] | None = None,
@@ -231,7 +246,12 @@ class StatementLineageBuilder:
 
         *no_cache* marks a ``# @cash:no-cache`` statement: each output's
         lineage then also carries a digest of its value
-        (:func:`no_cache_value_digest`).
+        (:func:`no_cache_value_digest`), but those in *value_kept*: names it
+        changed in place, whose lineage moves on with the change.
+
+        *value_keyed* names outputs whose lineage carries that digest too: the
+        new values a statement that changed its inputs in place bound
+        (``t = Q.popleft()``), without the inputs it changed.
 
         *accessed_remote* holds object-storage URLs the statement read. They
         join the same lineage component as local files, contributing the store's
@@ -292,8 +312,12 @@ class StatementLineageBuilder:
         # refitted to the model it was, it takes that model's lineage back
         # (`value_cutoff._refitted`).
         refitted = fitted_in_place(tree, bound)
-        rebuilt = not no_cache and not any(
-            user_ns.get(name) is value and name not in refitted for name in inputs for value in bound.values()
+        rebuilt = (
+            not no_cache
+            and not value_keyed
+            and not any(
+                user_ns.get(name) is value and name not in refitted for name in inputs for value in bound.values()
+            )
         )
         cut_off = rebuilt and len(bound) == 1
 
@@ -319,7 +343,10 @@ class StatementLineageBuilder:
                 func_component,
                 self._compute_module_lineage_component(tracking_state, value, var_name, code, tree),
                 changed_module_environment(var_name, value, code, environment),
-                self._no_cache_value(value_digests, var_name, value) if no_cache else "",
+                self._no_cache_value(value_digests, (source_hash, var_name), value)
+                if ((no_cache and var_name not in value_kept) or var_name in value_keyed)
+                and not _a_namespace(value, user_ns)
+                else "",
             )
             # A module set by a setting that is the same when run again
             # (``pd.set_option('display.width', 120)``) keeps one run's
@@ -369,11 +396,11 @@ class StatementLineageBuilder:
                 taken=taken,
             )
 
-        if cache_key:
-            if value_digests:
-                tracking_state.no_cache_values[cache_key] = value_digests
-            else:
-                tracking_state.no_cache_values.pop(cache_key, None)
+        filed = value_digests_key(source_hash, input_lineage_map, occurrence_index)
+        if value_digests:
+            tracking_state.no_cache_values[filed] = value_digests
+        else:
+            tracking_state.no_cache_values.pop(filed, None)
 
         if replay_bumps:
             self.replay_derivation_bumps(tracking_state, outputs, inputs, code=code)
@@ -494,10 +521,11 @@ class StatementLineageBuilder:
 
         return content_hash
 
-    @staticmethod
-    def _no_cache_value(digests: dict[str, str], var_name: str, value: Any) -> str:
-        """Record the digest of a no-cache output's value; return its component."""
-        digests[var_name] = no_cache_value_digest(value)
+    def _no_cache_value(self, digests: dict[str, str], output: tuple[str, str], value: Any) -> str:
+        """Record the digest of a no-cache output's value; return its component.
+        *output* is the statement's source hash and the output's name."""
+        var_name = output[1]
+        digests[var_name] = no_cache_value_digest(value, self._too_costly, output)
         return no_cache_value_component(digests, var_name)
 
     def build_output_lineages(self, tracking_state: "TrackingState", outputs: set[str]) -> dict[str, str]:

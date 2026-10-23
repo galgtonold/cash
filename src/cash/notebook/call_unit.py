@@ -79,6 +79,7 @@ from cash.notebook.call_refs import (
     DIGEST_FIELD,
     SIZE_FIELD,
 )
+from cash.notebook.consumables import function_reaches_a_stream
 from cash.notebook.held_sentinels import find_for_call, put_back_for_call
 from cash.notebook.pyplot_state import pyplot_state
 from cash.notebook.read_handles import reaches_read_handle
@@ -617,6 +618,10 @@ class CallUnit:
         #: The hashes of the frames this cell's calls received, checked
         #: rather than read again while unchanged; emptied by :meth:`begin_cell`.
         self._fingerprints = self._digests.fingerprints
+        #: Whether a call of a function reads what no lineage follows (what
+        #: work in a thread changed): such a call runs plain, as its key
+        #: cannot tell the change.
+        self.outside_lineage: Callable[[Any], bool] | None = None
 
     def _cost_floor_s(self) -> float:
         """The bar a call's own execution must clear to be stored (:func:`call_cost_floor_s`)."""
@@ -875,6 +880,10 @@ class CallUnit:
                 # `counter()` bumps a `nonlocal`: a hit would skip the bump
                 # and hand the next call the same count.
                 return fn(*args, **kwargs)
+            if self.outside_lineage is not None and self.outside_lineage(fn):
+                # `z = get()` after a thread set `D['k']`: no lineage moved,
+                # so its key is the one the old value was stored under.
+                return self._run_unkeyed(fn, args, kwargs, _perf_counter())
             checked = _perf_counter()
             hands = _hands_a_state_changing_callable(fn, args, kwargs)
             if hands:
@@ -1090,7 +1099,10 @@ class CallUnit:
             # The floor first: reading the memos digests their answers,
             # which a call below it would pay for nothing.
             and elapsed >= self._cost_floor_s()
-            and not isinstance(memos := helper_memos.used(memos_before, clears=_clears(call.fn, memos_before)), tuple)
+            and not isinstance(
+                memos := helper_memos.used(memos_before, clears=_clears(call.fn, memos_before), site=(None, call.fn)),
+                tuple,
+            )
             # With what the memos on named classes the result reaches hold:
             # served only while they hold it again (`holds_a_closure_with_state`).
             and self._worth_storing(
@@ -1165,6 +1177,11 @@ class CallUnit:
             # the uncached oracle. Replaying it properly needs a
             # sub-statement position anchor that does not exist, so the
             # site is refused instead.
+            return True
+        if function_reaches_a_stream(call.fn):
+            # An iterator it draws from (``next(src)`` on a global
+            # ``itertools.count()``) moves the same way, and holds no state
+            # to compare: a hit would leave it where it was.
             return True
         # The callee mutated a live argument in place and returned
         # something else (`df.dropna(inplace=True); return len(df)`).

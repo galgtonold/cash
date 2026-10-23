@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..._clock import perf_counter as _perf_counter
 from ..._paths import resolve_file_dep_path
+from ..._user_attrs import instance_of
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
@@ -106,6 +107,10 @@ class CacheRestorer:
         #: The cell's TTL (``ttl=`` of the run), which the statement's lookup
         #: applies to the entry the forward probe finds (`_lookup_refuses`).
         self.lookup_ttl: int | None = None
+        #: Called with a statement's inputs; True when work left running in a
+        #: thread can have changed what it reads, so its entry may hold what
+        #: it gave before (the statement processor's ``thread_changed``).
+        self.thread_changed: Callable[[set[str]], bool] | None = None
         #: What the entry the last successful `try_virtual_restore` restored
         #: showed when it ran: ``{"stdout", "stderr", "rich_outputs"}``.
         self.last_outputs: dict[str, Any] = {}
@@ -130,6 +135,9 @@ class CacheRestorer:
 
         if not self.probe.cash_instance:
             return set(), 0.0, 0.0
+        if self.thread_changed is not None and self.thread_changed(inputs):
+            logger.debug("[UPSTREAM] Not restored: work in a thread can have changed what it reads")
+            return set(), _perf_counter() - start_time, 0.0
 
         if virtual_modules is None:
             virtual_modules = set()
@@ -265,7 +273,7 @@ class CacheRestorer:
             patched = {
                 var: apply_patch(self.shell.user_ns[var], val, variables_to_restore)
                 for var, val in variables_to_restore.items()
-                if isinstance(val, HolderPatch)
+                if instance_of(val, HolderPatch)
             }
         except KeyError as e:
             logger.debug("[UPSTREAM] Restore failed: a variable stored with the outputs lost its place (%s)", e)
