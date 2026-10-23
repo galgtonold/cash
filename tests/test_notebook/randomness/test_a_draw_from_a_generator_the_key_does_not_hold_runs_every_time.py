@@ -12,13 +12,14 @@ so the draws below match a run without cash.
 
 from __future__ import annotations
 
+import dataclasses
 import sys
 import warnings
 
 import numpy as np
 import pytest
 
-from cash.notebook.call_key import changes_its_closure
+from cash.notebook.call_key import changes_its_closure, holds_a_stream
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
@@ -122,3 +123,79 @@ def test_a_closure_holding_a_generator_changes_what_it_holds():
     assert changes_its_closure(make(np.random.default_rng(0)))
     assert changes_its_closure(make(iter(range(3))))
     assert not changes_its_closure(make((1, 2)))
+
+
+def test_a_generator_or_iterator_held_as_a_default_changes_what_it_holds():
+    """``def h(it=it)`` holds it in its defaults, not its closure: the gate
+    read the closure only, and served ``y = h()`` the item ``x = h()`` got."""
+    it = iter(range(3))
+    rng = np.random.default_rng(0)
+
+    def by_default(it=it):
+        return next(it)
+
+    def by_keyword(*, g=rng):
+        return g.normal()
+
+    def in_a_dict_default(st={"g": rng}):  # noqa: B006 - the shape under test
+        return st["g"].normal()
+
+    assert holds_a_stream(by_default) and changes_its_closure(by_default)
+    assert holds_a_stream(by_keyword) and changes_its_closure(by_keyword)
+    assert holds_a_stream(in_a_dict_default)
+
+    def plain(k=3, *, scale=1.0):
+        return k * scale
+
+    assert not holds_a_stream(plain) and not changes_its_closure(plain)
+
+
+@dataclasses.dataclass
+class _Point:
+    x: int
+    y: int
+
+
+class _Steps:
+    """An iterator class: told by its methods, its ``__iter__`` never asked."""
+
+    asked = 0
+
+    def __iter__(self):
+        type(self).asked += 1
+        return self
+
+    def __next__(self):
+        return 1
+
+
+def _closing_over(held):
+    def score(k):
+        return len(held) * k
+
+    return score
+
+
+def test_plain_data_of_any_size_holds_no_stream():
+    """Objects of one class are one class looked into: 30,000 points, or
+    records holding a list, were past the walk's bound and never stored."""
+    points = [_Point(i, i * i) for i in range(30_000)]
+    records = [{"id": i, "tags": [i, i + 1]} for i in range(30_000)]
+    rows = [[i, [i]] for i in range(30_000)]
+    for held in (points, records, rows, {"pts": points}):
+        assert not holds_a_stream(_closing_over(held))
+    assert holds_a_stream(_closing_over([*points, iter(range(3))]))
+    assert holds_a_stream(_closing_over([*records, {"g": np.random.default_rng(0)}]))
+
+
+def test_an_iterator_is_told_by_its_class():
+    _Steps.asked = 0
+    assert holds_a_stream(_closing_over([_Steps()]))
+    assert _Steps.asked == 0, "the walk ran the object's __iter__"
+
+
+def test_the_module_generators_are_not_its_own():
+    import random
+
+    assert not holds_a_stream(_closing_over([random.__dict__["_inst"], np.random.mtrand._rand]))
+    assert holds_a_stream(_closing_over([random.Random(0)]))

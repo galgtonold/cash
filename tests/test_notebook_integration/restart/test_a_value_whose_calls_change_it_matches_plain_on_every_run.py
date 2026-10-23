@@ -6,7 +6,7 @@ last run made. ``Cases = make_cases()``, a module's factory, came back with
 its cached ``make(3)`` answered, so the seed inside was skipped and ``r``
 differed from plain Python. ``h = make()`` whose closure holds an iterator:
 ``x = h()`` and ``y = h()`` are the same call, and ``y`` was served the item
-``x`` got. Stored only on a busy machine: the floors are 0 here.
+``x`` got; so was one held as a default (``def h(it=it)``). Stored only on a busy machine: the floors are 0 here.
 """
 
 import sys
@@ -42,6 +42,12 @@ class ModCases:
     def make(n):
         random.seed(n)
         return tuple(random.random() for _ in range(n))
+
+def make_default():
+    it = iter(range(100))
+    def h(it=it):
+        return next(it)
+    return h
 
 def get_mod_cases(log=None):
     if log:
@@ -91,6 +97,20 @@ CASES = {
     "iterator_in_a_helper": _closure_case(
         "def make():\n    it = iter(range(100))\n    def g():\n        return next(it)\n"
         "    def h():\n        return g()\n    return h"
+    ),
+    # Held as a default, not in the closure: ``def h(it=it)``.
+    "iterator_in_a_default": _closure_case(
+        "def make():\n    it = iter(range(100))\n    def h(it=it):\n        return next(it)\n    return h"
+    ),
+    "iterator_in_a_keyword_default": _closure_case(
+        "def make():\n    it = iter(range(100))\n    def h(*, it=it):\n        return next(it)\n    return h"
+    ),
+    "generator_in_a_default": _closure_case(
+        "import random\ndef make():\n    def h(g=random.Random(0)):\n        return g.random()\n    return h"
+    ),
+    "iterator_in_a_module_default": (
+        ["import vbr_helpers", "h = vbr_helpers.make_default()", "x = h()", "y = h()"],
+        "(x, y)",
     ),
 }
 

@@ -271,15 +271,6 @@ HINT_ERROR_LEVEL = logging.DEBUG
 _ABSENT = object()
 
 
-def _hands_back_a_filled_memo(cached_data: Any) -> bool:
-    """Whether an entry would hand back a function or class whose memo
-    holds answers (`helper_memos.holds_a_filled_memo`)."""
-    variables = cached_data.get("variables") if isinstance(cached_data, dict) else None
-    if not isinstance(variables, dict):
-        return False
-    return any(helper_memos.holds_a_filled_memo(value) for value in variables.values())
-
-
 class StatementProcessor:
     """
     Processes and caches individual Python statements.
@@ -955,9 +946,6 @@ class StatementProcessor:
         elif run.needs_trace:
             cached_data = None
         if cached_data and self._live_objects_shared(run, metadata):
-            cached_data = None
-        if cached_data and _hands_back_a_filled_memo(cached_data):
-            # Run again, it makes the function or class afresh, its memo empty.
             cached_data = None
         if cached_data and not import_needs_reexecution(run.tree, self.shell.user_ns):
             hit_result = self._serve_hit(run, cached_data, metadata, unseeded_fits)

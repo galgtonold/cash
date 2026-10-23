@@ -64,7 +64,6 @@ from cash.notebook.call_effects import (
     DigestHandoff,
     call_capturing_output,
     capture_globals,
-    closure_cells,
     hash_args,
     reads_its_arguments_only,
     rebinds_its_closure,
@@ -928,23 +927,18 @@ class CallUnit:
                 # it plain -- never look it up, never store over it.
                 return self._run_unkeyed(fn, args, kwargs, key_started)
 
-            if type(fn) is types.FunctionType and fn.__closure__ and holds_a_stream(closure_cells(fn)):
-                if self._invoked_keys:
-                    self._invoked_keys[-1] = None
-                # It draws from an iterator or a generator its closure holds:
-                # each call gives the next item, where the key, which cannot
-                # hold where the stream is, would give ``y = h()`` the item
-                # ``x = h()`` got.
-                return self._run_unkeyed(fn, args, kwargs, key_started)
-
             call = _Call(fn, site, func_name, key, mutated_globals, args, kwargs)
             hit_started = _perf_counter()
             hit, value, recorded_cost, metadata = self._entries.lookup(key)
-            if hit and helper_memos.holds_a_filled_memo(value):
-                # A function or class kept by reference, its memo filled by
-                # calls since: run again, the call makes it afresh, empty
-                # (``Cases = make_cases()``, its cached ``make`` seeding).
-                hit, value, recorded_cost, metadata = False, None, 0.0, {}
+            if hit and holds_a_stream(fn):
+                if self._invoked_keys:
+                    self._invoked_keys[-1] = None
+                # It draws from an iterator or a generator its closure or
+                # defaults hold: each call gives the next item, where the
+                # key, which cannot hold where the stream is, would give
+                # ``y = h()`` the item ``x = h()`` got. Asked of a hit only:
+                # a miss runs anyway.
+                return self._run_unkeyed(fn, args, kwargs, key_started)
             if hit and metadata.get("helper_memos"):
                 # Served only while the helper memos it called hold what its
                 # run left (`helper_memos.unfilled`).

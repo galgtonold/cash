@@ -23,6 +23,7 @@ import gc
 import hashlib
 import logging
 import pathlib as _pathlib
+import random
 import reprlib
 import sys
 import types as _types
@@ -213,58 +214,171 @@ def changes_its_closure(fn) -> bool:
     if type(fn) is not _types.FunctionType:
         return False
     cells = closure_cells(fn)
-    return bool(cells) and (
-        rebinds_its_closure(fn) or any(n in cells for n in _source_mutations(fn)) or holds_a_stream(cells)
+    return (bool(cells) and (rebinds_its_closure(fn) or any(n in cells for n in _source_mutations(fn)))) or (
+        holds_a_stream(fn)
     )
 
 
-def holds_a_stream(cells: Mapping[str, _types.CellType]) -> bool:
-    """Whether a closure holds a random generator or an iterator, however
-    deeply: calling the function draws from it whatever method it calls
-    (``g.normal()``), so the function changes what it holds. Stored, a hit
-    handed back the function the last run made, its generator moved on by
-    every draw since: after a restart ``x = h()`` gave the second number,
-    not the first. Looked for in what the closure holds as
-    `holds_a_closure_with_state` looks: in tuples, lists, sets and dicts
-    (``st = {'it': iter(...)}``), in an object of the user's (``self.it``),
-    and in another function's closure (a helper ``g`` that holds it). Past
-    `_STREAM_WALK_AT` holders, not known: taken as holding one."""
-    from cash.notebook.consumables import is_stream
-    from cash.tracking.randomness.state import rng_carrier_kind
+def holds_a_stream(fn) -> bool:
+    """Whether a function holds a random generator or an iterator, however
+    deeply, in its closure, its defaults (``def h(it=it)``,
+    ``g=np.random.default_rng(0)``) or its attributes: calling it draws
+    from it whatever method it calls (``g.normal()``), so the function
+    changes what it holds. Stored, a hit handed back the function the last
+    run made, its generator moved on by every draw since: after a restart
+    ``x = h()`` gave the second number, not the first. Looked for in tuples,
+    lists, sets and dicts (``st = {'it': iter(...)}``), in an object of the
+    user's (``self.it``), and in another function's closure (a helper ``g``
+    that holds it).
 
-    stack = [cell.cell_contents for cell in cells.values() if _filled(cell)]
+    Told by type, read off the class (`_stream_type`): no ``__iter__`` of
+    the user's runs. Plain data costs no holder: a list of 30,000 objects
+    of one class is one class looked into, its objects' attributes items.
+    Past `_STREAM_HOLDERS_AT` functions and classes, or `_STREAM_ITEMS_AT`
+    items, not known: taken as holding one."""
+    if type(fn) is not _types.FunctionType:
+        return False
+    first = held_by(fn)
+    if not first or _EXACT_ATOMS.issuperset(map(type, first)):
+        return False
+    stack = [fn]
     seen: set[int] = set()
-    steps = 0
+    kinds: set[type] = set()
+    ways: dict[type, Any] = {}
+    holders = items = 0
     while stack:
         item = stack.pop()
         kind = type(item)
-        if kind in _EXACT_ATOMS or id(item) in seen:
+        way = ways.get(kind)
+        if way is None:
+            way = ways[kind] = _way_in(kind)
+        if way is _RNG:
+            if _rng_of_its_own(item):
+                return True
+            continue
+        if way is _STREAM:
+            return True
+        if way is _NOTHING or id(item) in seen:
             continue
         seen.add(id(item))
-        try:
-            if rng_carrier_kind(item) is not None or is_stream(item):
+        if way is _OBJECT:
+            # A user's object, a namespace, a ``partial``: what it holds,
+            # read without asking it. Its attributes as items, its class
+            # once; one of numbers and text is not looked at further.
+            for child in gc.get_referents(item):
+                child_kind = type(child)
+                if child_kind is dict:
+                    items += len(child)
+                    for part in (dict.values(child), dict.keys(child)):
+                        if not _EXACT_ATOMS.issuperset(map(type, part)):
+                            stack.extend(part)
+                elif child_kind not in _EXACT_ATOMS:
+                    stack.append(child)
+            if kind not in kinds:
+                kinds.add(kind)
+                holders += 1
+            if holders > _STREAM_HOLDERS_AT or items > _STREAM_ITEMS_AT:
                 return True
-        except Exception:  # noqa: BLE001 - a user's ``__iter__`` that raises: not known
-            return True
-        if kind in (tuple, list, set, frozenset):
+            continue
+        if way is _DICT:
+            items += len(item)
+            if items > _STREAM_ITEMS_AT:
+                return True
+            for part in (dict.values(item), dict.keys(item)):
+                if not _EXACT_ATOMS.issuperset(map(type, part)):
+                    stack.extend(part)
+            continue
+        if way is _SEQUENCE:
             children: Any = item
-        elif kind is dict:
-            children = [*dict.keys(item), *dict.values(item)]
-        else:
+        else:  # a function, a method or a class: `held_by`
             children = held_by(item)
             if not children:
                 continue
-        if _EXACT_ATOMS.issuperset(map(type, children)):
-            continue
-        steps += 1
-        if steps > _STREAM_WALK_AT:
+            holders += 1
+            if holders > _STREAM_HOLDERS_AT:
+                return True
+        items += len(children)
+        if items > _STREAM_ITEMS_AT:
             return True
-        stack.extend(child for child in children if type(child) not in _EXACT_ATOMS)
+        if not _EXACT_ATOMS.issuperset(map(type, children)):
+            stack.extend(children)  # atoms among them are passed over as taken
     return False
 
 
-#: How many containers and holders `holds_a_stream` looks into.
-_STREAM_WALK_AT = 10_000
+#: How many functions and classes `holds_a_stream` looks into.
+_STREAM_HOLDERS_AT = 10_000
+#: How many items, all holders together, `holds_a_stream` reads.
+_STREAM_ITEMS_AT = 2_000_000
+_RNG, _STREAM, _NOTHING, _OBJECT, _SEQUENCE, _DICT, _HELD = (object() for _ in range(7))
+#: Per type, `_stream_type`'s answer. Weak: a class a call made is not kept alive.
+_STREAM_TYPES: weakref.WeakKeyDictionary[type, Any] = weakref.WeakKeyDictionary()
+
+
+def _way_in(kind: type) -> Any:
+    """How `holds_a_stream` reads an object of *kind*: ``_RNG`` or
+    ``_STREAM`` (`_stream_type`), item by item (``_SEQUENCE``, ``_DICT``),
+    by what it holds (``_OBJECT``, ``_HELD``: `held_by`), or not at all."""
+    if kind in _EXACT_ATOMS:
+        return _NOTHING
+    try:
+        found = _STREAM_TYPES.get(kind)
+    except TypeError:  # not weakly referable
+        found = None
+    if found is None:
+        found = _stream_type(kind)
+        with contextlib.suppress(TypeError):
+            _STREAM_TYPES[kind] = found
+    if found is not _NOTHING:
+        return found
+    if kind in (tuple, list, set, frozenset):
+        return _SEQUENCE
+    if kind is dict:
+        return _DICT
+    if kind is _types.FunctionType or kind is _types.MethodType or issubclass(kind, type):
+        return _HELD
+    if issubclass(kind, (*_MEMBER_HOLDERS, *_PLAIN_HOLDERS)) or _users_type(kind):
+        return _OBJECT
+    return _NOTHING
+
+
+def _stream_type(kind: type) -> Any:
+    """``_RNG`` for a random generator's type, ``_STREAM`` for a stream's
+    (an iterator, a generator, a queue: reading it moves it), ``_NOTHING``
+    otherwise. Read off the class: a class with ``__iter__`` and
+    ``__next__`` is taken as an iterator without asking its ``__iter__``
+    whether it hands back itself, which ran the user's code at every
+    object of the walk."""
+    from cash.notebook.consumables import _GENERATOR_TYPES, _QUEUE_TYPES
+
+    if issubclass(kind, type):
+        return _NOTHING  # a class: its members are looked into, not its iteration
+    if issubclass(kind, random.Random) or _numpy_rng_type(kind):
+        return _RNG
+    if issubclass(kind, (*_GENERATOR_TYPES, *_QUEUE_TYPES)):
+        return _STREAM
+    mro = _CLASS_MRO(kind)
+    if any("__next__" in _CLASS_DICT(c) for c in mro) and any("__iter__" in _CLASS_DICT(c) for c in mro):
+        return _STREAM
+    return _NOTHING
+
+
+def _numpy_rng_type(kind: type) -> bool:
+    np_random = sys.modules.get("numpy.random")
+    if np_random is None:
+        return False
+    rng_types = tuple(
+        t for t in (np_random.__dict__.get(n) for n in ("Generator", "RandomState")) if isinstance(t, type)
+    )
+    return issubclass(kind, rng_types)
+
+
+def _rng_of_its_own(item) -> bool:
+    """A random generator that is not the module's own (``random``'s, or
+    ``np.random``'s): those the module state replays."""
+    if item is random.__dict__.get("_inst"):
+        return False
+    mtrand = sys.modules.get("numpy.random.mtrand")
+    return mtrand is None or item is not mtrand.__dict__.get("_rand")
 
 
 #: Values with nothing inside them to look at: skipped without a call.
