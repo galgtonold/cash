@@ -6,6 +6,8 @@ object it pickles writes where no reach can be read.
 
 from __future__ import annotations
 
+import pytest
+
 from cash.notebook.statement import reducer_writes
 
 LOG: list = []
@@ -365,3 +367,125 @@ def test_a_cached_result_whose_reducer_cannot_be_read_is_not_stored_and_says_why
     assert calls == [1, 1, 2]
     said = [str(w.message) for w in seen if "STORE-FAILED" in str(w.message)]
     assert len(said) == 1 and "its source cannot be read" in said[0], said
+
+
+ROWS_CFG = {"rows": []}
+MEMO: dict = {}
+ACC: list = []
+NESTED = [[1], [2]]
+
+
+class ConfigObject:
+    def __init__(self):
+        self.seen = []
+
+
+CFG_OBJECT = ConfigObject()
+
+
+class ChangesAShallowCopyOfAGlobal:
+    def __getstate__(self):
+        import copy
+
+        c = copy.copy(ROWS_CFG)
+        c["rows"].append(1)
+        return {}
+
+
+class ChangesAShallowCopyOfAGlobalObject:
+    def __getstate__(self):
+        import copy
+
+        c = copy.copy(CFG_OBJECT)
+        c.seen.append(len(c.seen))
+        return {}
+
+
+class ChangesADictOfAGlobal:
+    def __getstate__(self):
+        c = dict(ROWS_CFG)
+        c["rows"].append(1)
+        return {}
+
+
+class ChangesACopyMethodsCopyOfAGlobal:
+    def __getstate__(self):
+        rows = ROWS_CFG.copy()["rows"]
+        c = ROWS_CFG.copy()
+        c["rows"].append(len(rows))
+        return {}
+
+
+class ChangesASliceOfAGlobalsAlias:
+    def __getstate__(self):
+        alias = ACC
+        c = alias[:]
+        c.append(1)
+        return {}
+
+
+class DumpsIntoAGlobalFile:
+    def __getstate__(self):
+        import json
+
+        json.dump(self.__dict__, LOG)
+        return {}
+
+
+class FillsAGlobalMemo:
+    def __getstate__(self):
+        import copy
+
+        return copy.deepcopy(self.__dict__, MEMO)
+
+
+class ReducesIntoAGlobal:
+    def __getstate__(self):
+        import functools
+        import operator
+
+        functools.reduce(operator.iadd, [[1]], ACC)
+        return {}
+
+
+class ReducesInPlaceOverAGlobal:
+    def __getstate__(self):
+        import functools
+        import operator
+
+        return {"s": functools.reduce(operator.iadd, NESTED)}
+
+
+@pytest.mark.parametrize(
+    "cls, name",
+    [
+        (ChangesAShallowCopyOfAGlobal, "ROWS_CFG"),
+        (ChangesAShallowCopyOfAGlobalObject, "CFG_OBJECT"),
+        (ChangesADictOfAGlobal, "ROWS_CFG"),
+        (ChangesACopyMethodsCopyOfAGlobal, "ROWS_CFG"),
+        (ChangesASliceOfAGlobalsAlias, "ACC"),
+        (DumpsIntoAGlobalFile, "LOG"),
+        (FillsAGlobalMemo, "MEMO"),
+        (ReducesIntoAGlobal, "ACC"),
+        (ReducesInPlaceOverAGlobal, "NESTED"),
+    ],
+)
+def test_a_global_changed_through_a_copy_or_a_library_function_that_writes_counts(cls, name):
+    """``copy.copy`` shares what it copies, ``json.dump`` writes its file,
+    ``copy.deepcopy`` its memo, ``functools.reduce(operator.iadd, ..., ACC)``
+    its initial value: only ``json.dumps``/``loads``, ``copy.deepcopy`` with
+    no memo and a ``reduce`` of a function that changes nothing read."""
+    writer = reducer_writes._decide(cls)
+    assert writer is not None and name in writer.written | writer.handed
+
+
+class CopiesAGlobalAndChangesNothing:
+    def __getstate__(self):
+        import json
+
+        c = dict(ROWS_CFG)
+        return {"n": len(c["rows"]), "j": json.loads(json.dumps(DEFAULTS))}
+
+
+def test_a_copy_of_a_global_that_is_only_read_is_no_writer():
+    assert reducer_writes._decide(CopiesAGlobalAndChangesNothing) is None

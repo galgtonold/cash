@@ -618,7 +618,7 @@ that stops the stream, and use the copy.
 
 ### A class whose pickling changes other values
 
-<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @b090d7eb -->
+<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @b809130a, cash/notebook/statement/reducer_writes.py:_changed_through_copies @a33fedda -->
 cash pickles values to hash and store them, and pickling runs a class's own
 `__getstate__` or `__reduce__`. One that changes something else (a module's
 list, a global array, the object being pickled) would change it where plain
@@ -629,11 +629,15 @@ when cash cannot tell: the method's source cannot be read, it changes the
 object it pickles, or it hands a global the notebook holds (or a module
 holding it) to a library call, such as `np.copyto(ARR, 5)` or `np.mean(ARR)`,
 whose effect cash does not read. Builtins that only read (`len`, `map`,
-`sorted`, `iter`, ...), the functions of `itertools`, `math`, `statistics`,
-`json` and `copy`, `functools.reduce`, a method of a constant (`'-'.join`) and
-a value nothing can change (a number, a string, a class, a function) do not
-count; a list, dict or array handed to any other library function does, even
-one that only reads it, and its statement runs every time.
+`sorted`, `iter`, ...), the functions of `itertools`, `math` and
+`statistics`, `json.dumps` and `json.loads`, `copy.deepcopy` with no memo,
+`functools.reduce` of a function that changes nothing, a method of a constant
+(`'-'.join`) and a value nothing can change (a number, a string, a class, a
+function) do not count; a list, dict or array handed to any other library
+function does, even one that only reads it (`copy.copy`, `json.dump`), and
+its statement runs every time. A change made through a local bound to a
+global or to a shallow copy of one (`c = dict(CFG); c['rows'].append(1)`)
+counts as a change of the global, the copy's own top level included.
 **Fix:** have `__getstate__` / `__reduce__` only read, and change those values
 in the cell that needs them.
 

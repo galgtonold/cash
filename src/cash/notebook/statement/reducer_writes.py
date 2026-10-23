@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import copy
 import copyreg
 import functools
 import inspect
@@ -55,6 +56,7 @@ from cash.analysis.callee_effects import (
     positional_param_names,
     source_global_rebinds,
 )
+from cash.analysis.mutations import MutationVisitor
 from cash.kept_state import next_mark, set_reducer_veto, user_state_runs, user_state_types_since, users_function
 from cash.source_reading import getsourcelines
 
@@ -299,7 +301,7 @@ def _decide(t: type) -> Writer | None:
         body = _body(function)
         if body is None or (id(function) in roots and _writes_itself(body)):
             return Writer(name, None)
-        changed = free_vars_mutated_in_function(body)
+        changed = free_vars_mutated_in_function(body) | _changed_through_copies(function, body)
         to_libraries |= _handed_to_libraries(function, body) - changed
         if changed or _rebinds(function):
             written |= changed
@@ -504,8 +506,14 @@ _READS_ONLY = frozenset(
 )
 
 #: Modules whose functions read what they are handed and change none of it
-#: (``itertools.chain(LST)``, ``copy.deepcopy(D)``, ``json.dumps(D)``).
-_MODULES_THAT_READ = frozenset({"itertools", "math", "cmath", "statistics", "json", "copy", "string", "textwrap"})
+#: (``itertools.chain(LST)``, ``math.fsum(XS)``).
+_MODULES_THAT_READ = frozenset({"itertools", "math", "cmath", "statistics", "string", "textwrap"})
+
+#: Functions, by module and name, that read what they are handed, of
+#: modules with others that do not: ``json.dump(D, LOG)`` writes to ``LOG``,
+#: ``copy.copy(CFG)`` shares what ``CFG`` holds, ``copy.deepcopy(D, MEMO)``
+#: fills ``MEMO`` (`_reads_only_here`).
+_FUNCTIONS_THAT_READ = frozenset({("json", "dumps"), ("json", "loads"), ("copy", "deepcopy")})
 
 #: Values nothing can change: handing one to a library is no write.
 _NEVER_CHANGED = frozenset({str, bytes, int, float, complex, bool, type(None), range})
@@ -532,7 +540,7 @@ def _handed_to_libraries(function: Any, body: ast.AST) -> set[str]:
             if node.func.id in _READS_ONLY and node.func.id not in g:
                 continue
             callee = g.get(node.func.id)
-            if callee is not None and (_users(callee) or _only_reads(callee)):
+            if callee is not None and (_users(callee) or _only_reads(callee, node, g)):
                 continue  # the user's is read through `_users_callees`
         elif isinstance(node.func, ast.Attribute):
             if isinstance(node.func.value, ast.Constant):
@@ -543,9 +551,8 @@ def _handed_to_libraries(function: Any, body: ast.AST) -> set[str]:
                     continue
                 if node.func.value.id not in local and node.func.value.id in g and type(holder) in _NEVER_CHANGED:
                     continue  # ``SEP.join(PARTS)``: a method of a str (``list.append(LST, 1)`` is not)
-                if instance_of(holder, types.ModuleType) and (
-                    attribute_or(holder, "__name__", None) in _MODULES_THAT_READ
-                    or (attribute_or(holder, "__name__", None) == "functools" and node.func.attr == "reduce")
+                if instance_of(holder, types.ModuleType) and _only_reads(
+                    attribute_or(holder, node.func.attr, None), node, g
                 ):
                     continue
         for arg in [*node.args, *(k.value for k in node.keywords)]:
@@ -579,10 +586,134 @@ def _imported_in(body: ast.AST) -> dict[str, Any]:
     return bound
 
 
-def _only_reads(callee: Any) -> bool:
-    """A function of a module whose functions only read
-    (``from itertools import chain``), or ``functools.reduce``."""
-    return callee is functools.reduce or attribute_or(callee, "__module__", None) in _MODULES_THAT_READ
+def _only_reads(callee: Any, call: ast.Call, g: Mapping[str, Any]) -> bool:
+    """Does *call* of *callee* only read what it is handed: a function of a
+    module whose functions only read (``from itertools import chain``), one
+    of `_FUNCTIONS_THAT_READ` (``copy.deepcopy`` with no memo), or
+    ``functools.reduce`` with no initial value of the notebook's and a
+    function that does not change its first argument (``operator.iadd``
+    grows the first item, or ``ACC``)."""
+    if callee is None:
+        return False
+    module = attribute_or(callee, "__module__", None)
+    if module in _MODULES_THAT_READ:
+        return True
+    name = attribute_or(callee, "__name__", None)
+    if (module, name) in _FUNCTIONS_THAT_READ:
+        return name != "deepcopy" or (len(call.args) == 1 and not call.keywords)
+    if callee is not functools.reduce or call.keywords or not call.args or len(call.args) > 3:
+        return False
+    if len(call.args) == 3 and _of_the_notebook(call.args[2], g):
+        return False
+    return not _changes_its_first(call.args[0], g)
+
+
+def _of_the_notebook(arg: ast.expr, g: Mapping[str, Any]) -> bool:
+    """Is *arg* built from a global that something can change?"""
+    return any(isinstance(node, ast.Name) and node.id in g and not _never_changed(g[node.id]) for node in ast.walk(arg))
+
+
+def _changes_its_first(fn: ast.expr, g: Mapping[str, Any]) -> bool:
+    """Is the function *fn* names one that may change its first argument:
+    an in-place operator (``operator.iadd``), or anything but a lambda or
+    another of ``operator``'s functions?"""
+    if isinstance(fn, ast.Lambda):
+        return bool(free_vars_mutated_in_function(fn)) or _mutates_its_first(fn)
+    value: Any = None
+    if isinstance(fn, ast.Name):
+        value = g.get(fn.id)
+    elif isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name):
+        value = attribute_or(g.get(fn.value.id), fn.attr, None)
+    name = attribute_or(value, "__name__", "")
+    return attribute_or(value, "__module__", None) not in ("operator", "_operator") or name.startswith("i")
+
+
+def _mutates_its_first(fn: ast.Lambda) -> bool:
+    """Does the lambda *fn* change one of its parameters in place?"""
+    visitor = _RunningMutations()
+    visitor.visit(fn.body)
+    return any(m.variable in {a.arg for a in fn.args.args} for m in visitor.mutations)
+
+
+class _RunningMutations(MutationVisitor):
+    """The mutations code makes as it runs: not those of a ``def``,
+    ``lambda`` or ``class`` it builds."""
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return None
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        return None
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        return None
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return None
+
+
+#: Calls that copy a container one level deep: what the copy holds is what
+#: the original holds (``c = copy.copy(CFG); c['rows'].append(1)``).
+_SHALLOW_BUILDERS = frozenset({"dict", "list", "set", "tuple", "frozenset", "bytearray"})
+
+
+def _changed_through_copies(function: Any, body: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """The globals *body* changes through a local bound to one of them or
+    to a shallow copy of one (``c = CFG``, ``c = copy.copy(CFG)``,
+    ``c = dict(CFG)``, ``c = CFG.copy()``, ``c = CFG[:]``): a change made
+    through the local may change what the global holds. Any change counts,
+    the top-level one of a copy too."""
+    g = attribute_or(function, "__globals__", {})
+    params = {a.arg for a in ast.walk(body.args) if isinstance(a, ast.arg)}
+    aliases: dict[str, set[str]] = {}
+    for node in ast.walk(body):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)) or node.value is None:
+            continue
+        source = _copied_global(node.value, g, params, aliases)
+        if not source:
+            continue
+        for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
+            if isinstance(target, ast.Name):
+                aliases.setdefault(target.id, set()).update(source)
+    if not aliases:
+        return set()
+    visitor = _RunningMutations()
+    for stmt in body.body:
+        visitor.visit(stmt)
+    out: set[str] = set()
+    for mutation in visitor.mutations:
+        out |= aliases.get(mutation.variable, set())
+    return out
+
+
+def _copied_global(
+    value: ast.expr, g: Mapping[str, Any], params: set[str], aliases: Mapping[str, set[str]]
+) -> set[str]:
+    """The globals *value* is, or is a shallow copy of."""
+    if isinstance(value, ast.Name):
+        if value.id in aliases:
+            return set(aliases[value.id])
+        changeable = value.id in g and value.id not in params and not _never_changed(g[value.id])
+        return {value.id} if changeable else set()
+    if isinstance(value, ast.Subscript) and isinstance(value.slice, ast.Slice):
+        return _copied_global(value.value, g, params, aliases)
+    if not isinstance(value, ast.Call) or len(value.args) != 1 or value.keywords:
+        if isinstance(value, ast.Call) and not value.args and not value.keywords:
+            func = value.func
+            if isinstance(func, ast.Attribute) and func.attr == "copy":
+                return _copied_global(func.value, g, params, aliases)  # ``CFG.copy()``
+        return set()
+    func, (arg,) = value.func, value.args
+    if isinstance(func, ast.Name) and func.id in _SHALLOW_BUILDERS and func.id not in g:
+        return _copied_global(arg, g, params, aliases)
+    callee = None
+    if isinstance(func, ast.Name):
+        callee = g.get(func.id)
+    elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        callee = attribute_or(g.get(func.value.id), func.attr, None)
+    if callee is copy.copy:
+        return _copied_global(arg, g, params, aliases)
+    return set()
 
 
 def _never_changed(value: Any) -> bool:
