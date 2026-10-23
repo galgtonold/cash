@@ -7,7 +7,8 @@ helper holding one in its closure -- was not: the drawing statement was
 stored, so after a restart a hit served the draw and left the generator
 where it was, and the next draw below gave the number the hit stood for
 instead of the one plain Python gives. Such a run is now not stored, silently,
-so the draws below match a run without cash.
+so the draws below match a run without cash. Nor is a pair of helpers drawing
+from one generator their factory returned (`call_key.changes_its_closure`).
 """
 
 from __future__ import annotations
@@ -34,11 +35,15 @@ TLIB = (
     f"    def helper():\n        {SLEEP}\n        return float(g.normal())\n"
     "    def peek():\n        return float(g.normal())\n"
     "    return helper, peek\n"
+    f"def make_slow_helper():\n    {SLEEP}\n    return make_helper()\n"
 )
 
 CASES = {
     "an object a module built": ["import tlib", "x = tlib.MODEL.draw()", "y = float(tlib.MODEL.rng.normal())"],
     "a helper's closure": ["import tlib\nh, peek = tlib.make_helper()", "x = h()", "y = peek()"],
+    # Made slowly enough to be stored: the pair came back by reference,
+    # their generator where the first run's draws had left it.
+    "a helper's closure made slowly": ["import tlib\nh, peek = tlib.make_slow_helper()", "x = h()", "y = peek()"],
 }
 
 

@@ -209,11 +209,35 @@ def _source_mutations(fn) -> tuple[str, ...]:
 def changes_its_closure(fn) -> bool:
     """Whether calling *fn* rebinds a variable of the function it was made
     in, or changes an object one of them holds: ``nonlocal count; count +=
-    1``, ``seen.append(x)``."""
+    1``, ``seen.append(x)``, or a draw from a random generator or a stream
+    one of them holds (``g.normal()``, ``next(it)``): ``h, peek =
+    make_helper()``, both drawing from one generator, was served by
+    reference, its generator where the caller's draws had left it."""
     if type(fn) is not _types.FunctionType:
         return False
     cells = closure_cells(fn)
-    return bool(cells) and (rebinds_its_closure(fn) or any(n in cells for n in _source_mutations(fn)))
+    return bool(cells) and (
+        rebinds_its_closure(fn)
+        or any(n in cells for n in _source_mutations(fn))
+        or any(_draws_move(cell) for cell in cells.values())
+    )
+
+
+def _draws_move(cell) -> bool:
+    """Does *cell* hold a random generator or a stream, which reading moves?"""
+    from cash.notebook.consumables import is_stream
+    from cash.tracking.randomness.state import rng_carrier_kind
+
+    try:
+        value = cell.cell_contents
+    except ValueError:  # an empty cell
+        return False
+    if type(value) in _EXACT_ATOMS:
+        return False
+    try:
+        return rng_carrier_kind(value) is not None or is_stream(value)
+    except Exception:  # noqa: BLE001 - a user's object answering oddly
+        return False
 
 
 #: Values with nothing inside them to look at: skipped without a call.
