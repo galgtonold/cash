@@ -310,12 +310,22 @@ def mock_time_sleep(monkeypatch):
     """
     import time
 
+    monkeypatch.setattr(time, "sleep", _capped_sleep)
+    yield
+
+
+def _capped_sleep(seconds):
+    """`mock_time_sleep`'s stand-in, defined here at the top of the module:
+    a lambda made in the fixture runs inside a page's function and is held
+    by ``time`` alone, where cash cannot find it again, so the trace would
+    not vouch for that function's statement and the page's rerun badge
+    would read EXECUTED where a reader's says CACHED."""
     from cash.backends.persistence_policy import STORE_FLOOR_S
 
-    cap = 2 * STORE_FLOOR_S
-    real_sleep = time.sleep
-    monkeypatch.setattr(time, "sleep", lambda s: real_sleep(min(s, cap)) if s > 0 else real_sleep(0))
-    yield
+    _REAL_SLEEP(min(seconds, 2 * STORE_FLOOR_S) if seconds > 0 else 0)  # @cash:assume-safe
+
+
+_REAL_SLEEP = __import__("time").sleep
 
 
 @pytest.fixture(autouse=True)
