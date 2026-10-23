@@ -1799,6 +1799,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
 | [NOTEBOOK-NO-LIVE-READER](#notebook-no-live-reader) | notebook | cells above are read from the saved file, so an unsaved edit there is not seen |
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook's cells cannot be read; cells above the one you run are not re-checked |
+| [NOTEBOOK-REDUCE-WROTE](#notebook-reduce-wrote) | notebook | a value's own `__reduce__` or `__getstate__`, run when cash pickled it, changes other values; they count as changed, and the statement is not stored |
 | [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload or restart dropped state cells set on a module, and cash cannot rebuild it |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
 | [NOTEBOOK-SHARE-UNCHECKED](#notebook-share-unchecked) | notebook | not every variable sharing an object with a statement's outputs was found in time |
@@ -2109,6 +2110,37 @@ close and reopen the notebook.
 
 **When it is safe to ignore.** In a run that executes the notebook top to
 bottom once. It is shown once per session.
+
+### NOTEBOOK-REDUCE-WROTE {#notebook-reduce-wrote}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._move_what_reducers_wrote @6ef57de0, cash/notebook/statement/reducer_writes.py:_decide @1503044d -->
+**What happened.** cash pickles a statement's values to hash and store
+them, and pickling runs the value's own `__reduce__`, `__reduce_ex__`,
+`__getstate__` or `__getnewargs__` (or a reducer you registered with
+`copyreg`). One of yours changes other values when it runs: it writes a
+global (`df.at[3, 'o'] = ...`), hands one to a function of yours that
+changes it, changes the object being pickled, or calls a function of
+yours whose source cash cannot read. Plain Python never runs it there. The
+message names the class, and the variables its code can reach, which now
+count as changed; when that reach cannot be read, every variable does.
+The statement was not stored. A reducer whose code reaches no variable
+of the notebook (a counter in its own module) is left as it is, with no
+warning.
+
+**Why it matters.** Your results are correct: what reads those variables
+below runs again rather than be served what it read before the write, and
+a variable cash can rebuild from the cells above is rebuilt, as plain
+Python left it. The statement runs again every time, and so does what
+reads the variables it moved.
+
+**What to do.** Have the reducer only read: build the state it returns
+from the object (`state = self.__dict__.copy()`, then drop keys from
+`state`), and change other values in the statement that needs them.
+
+**When it is safe to ignore.** When the statement and its readers are
+cheap.
 
 ### NOTEBOOK-RELOAD-STATE {#notebook-reload-state}
 

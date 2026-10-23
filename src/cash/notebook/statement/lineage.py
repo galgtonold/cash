@@ -662,6 +662,11 @@ class StatementLineageBuilder:
         tracking_state.variable_hashes.setdefault(var_name, set()).add(session_hash)
         tracking_state.current_session_hashes[var_name] = session_hash
 
+    def note_content_hash(self, tracking_state: "TrackingState", var_name: str, value: Any, lineage: str) -> None:
+        """Record *var_name*'s session hash for *value*, moved on to *lineage*
+        outside a statement's outputs (`_update_variable_content_hashes`)."""
+        self._update_variable_content_hashes(tracking_state, var_name, value, lineage)
+
     def lineage_if_rerun(self, tracking_state: "TrackingState", var_name: str, value: Any, code: str) -> str:
         """The lineage *var_name* would get if *code* ran again now: the same
         formula and ingredients as :meth:`capture_and_track_variables`, without
