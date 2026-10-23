@@ -206,6 +206,29 @@ def test_a_hit_on_a_tuple_of_numbers_reads_none_of_its_items_for_a_snapshot(disk
     assert any(value is nested for value in taken)
 
 
+@pytest.mark.parametrize("inside", ["a dict", "a bytearray"])
+def test_a_tuple_holding_something_written_in_place_is_still_checked(disk_cash, inside):
+    """A dict or bytearray inside a tuple can be untracked with it, and
+    changed in place. The snapshot skipped for such a tuple compares
+    lists only; what else it holds is hashed again after the body, as it
+    was, so a write by the body is seen and a later call is not served."""
+    import gc
+
+    held = {"n": 1} if inside == "a dict" else bytearray(b"\x01")
+    pair = (0, held)
+
+    def bump(t):
+        if isinstance(t[1], dict):
+            t[1]["n"] += 1
+            return t[1]["n"]
+        t[1][0] += 1
+        return t[1][0]
+
+    f = disk_cash.cache(bump)
+    gc.collect()
+    assert [f(pair) for _ in range(3)] == [2, 3, 4]
+
+
 def test_a_miss_on_a_watched_list_is_still_hashed_once(disk_cash, watched):
     rows = list(range(200_000))
     watched["rows"] = rows
