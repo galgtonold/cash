@@ -9,6 +9,13 @@ A patch made by a factory (``statistics.mean = mk(99)``, then ``mk(77)``) has
 the same code with another closure, and was served too. The library global
 holding the function is now an item of the trace, digested with its
 defaults and closure.
+
+A factory that binds through a default (``lambda xs, b=v: b``) makes code
+with no closure that is found by its name (``mkd.<locals>.<lambda>``),
+where no function holds the defaults: its holders were not looked up, and
+``mkd(55)`` was served what ``mkd(77)`` gave. Every library global holding
+a function of that code is an item now, as is or in a ``partial``: which
+of ``mean = mk(99)`` and ``median = mk(77)`` ran, the trace does not say.
 """
 
 from __future__ import annotations
@@ -38,6 +45,7 @@ DEFAULTS = {
         "W = wrap(lambda xs, k=99: k)\nstatistics.mean = W.__closure__[0].cell_contents\n"
     ),
     "a_default": "def user(xs, f=lambda xs, k=99: k):\n    return f(xs)\nstatistics.mean = user.__defaults__[0]\n",
+    "a_factory": "def mkd():\n    return lambda xs, k=99: k\nstatistics.mean = mkd()\n",
 }
 
 MK = "def mk(v):\n    return lambda xs: v\n"
@@ -46,6 +54,27 @@ MK = "def mk(v):\n    return lambda xs: v\n"
 FACTORIES = {
     "alone": ("", "statistics.mean = mk(99)", "statistics.mean = mk(77)"),
     "kept_in_a_list": ("KEEP = [mk(1)]\n", "statistics.mean = mk(99)", "statistics.mean = mk(77)"),
+    "in_a_partial": ("", "statistics.mean = functools.partial(mk(99))", "statistics.mean = functools.partial(mk(77))"),
+    "beside_another_patch": (
+        "statistics.median = mk(5)\n",
+        "statistics.mean = mk(99)",
+        "statistics.mean = mk(77)",
+    ),
+    "bound_by_a_default": (
+        "def mk(v):\n    return lambda xs, b=v: b\n",
+        "statistics.mean = mk(99)",
+        "statistics.mean = mk(77)",
+    ),
+    "bound_by_a_keyword_default": (
+        "def mk(v):\n    return lambda xs, *, b=v: b\n",
+        "statistics.mean = mk(99)",
+        "statistics.mean = mk(77)",
+    ),
+    "a_def_bound_by_a_default": (
+        "def mk(v):\n    def inner(xs, b=v):\n        return b\n    return inner\n",
+        "statistics.mean = mk(99)",
+        "statistics.mean = mk(77)",
+    ),
 }
 
 

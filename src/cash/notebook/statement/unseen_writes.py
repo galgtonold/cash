@@ -32,7 +32,7 @@ import types
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-from ..._user_attrs import attribute_or, instance_of, own_dict
+from ..._user_attrs import attribute_or, has_attribute, instance_of, own_dict
 from ...analysis.callee_effects import free_vars_mutated_in_function, scope_locals
 from ...analysis.mutations import MUTATING_METHODS
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -499,7 +499,7 @@ def _array_kind(kind: type) -> str | None:
     if np is not None and issubclass(kind, np.ndarray):
         return "ndarray"
     pd = sys.modules.get("pandas")
-    if pd is None or not hasattr(pd, "Series"):
+    if pd is None or not has_attribute(pd, "Series"):
         return None
     if issubclass(kind, pd.DataFrame):
         return "frame"

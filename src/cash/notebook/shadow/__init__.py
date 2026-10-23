@@ -498,12 +498,20 @@ class Shadow:
         rc, fn, owner = resolve(module, qn, nb, nbn)
         found = rc is not None
         held = None
-        if not found or code.co_freevars:
-            held = self._holder(code, [(module, g), (nbn, nb)], ran) or _library_holder(code, nb)
-        if held is not None:
-            hmod, hname = held
-            hns = namespace_of(hmod, nb, nbn)
-            add(("held", hmod, hname, qn), _held_digest(hns, hname, value_digest) if hns is not None else "missing")
+        # Code found by its name but not as the function itself (nested:
+        # ``mkd.<locals>.<lambda>``) has no defaults to read there: the
+        # holders give them. ``mkd(55)`` set in place of ``mkd(77)`` binds
+        # through a default (``lambda xs, b=v: b``), and was served 77.
+        bound = type(fn) is types.FunctionType and fn.__code__ is code
+        if not found or code.co_freevars or not bound:
+            holders = [self._holder(code, [(module, g), (nbn, nb)], ran), *_library_holders(code, nb)]
+            for hmod, hname in dict.fromkeys(h for h in holders if h is not None):
+                held = hmod, hname
+                hns = namespace_of(hmod, nb, nbn)
+                add(
+                    ("held", hmod, hname, qn),
+                    _held_digest(hns, hname, value_digest) if hns is not None else "missing",
+                )
         if found:
             add(("code", module, qn), code_digest(code) + _defaults(fn, code, value_digest))
             if code.co_freevars and held is None:
@@ -1043,17 +1051,21 @@ def _held_parts(value: Any, kind: type, users: Callable[[type], bool]) -> list:
     return list(own.values())[:1000] if type(own) is dict else []
 
 
-def _library_holder(code: types.CodeType, notebook: Mapping[str, Any]) -> tuple[str, str] | None:
-    """``(module, name)`` of the library module, one the notebook imported,
-    that holds a function of *code* as a global: a patch
-    (``statistics.mean = mk(99)``, ``= user.__defaults__[0]``). Its digest
-    holds the function's defaults and closure, which the code alone does
-    not: ``mk(77)`` set in its place was served what ``mk(99)`` gave."""
+def _library_holders(code: types.CodeType, notebook: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """``(module, name)`` of each global of a library module, one the
+    notebook imported, that holds a function of *code*: a patch
+    (``statistics.mean = mk(99)``, ``= user.__defaults__[0]``), as is or in
+    a ``partial`` or method holder. Their digests hold the function's
+    defaults and closure, which the code alone does not: ``mk(77)`` set in
+    its place was served what ``mk(99)`` gave. Every one, not the first:
+    which of ``mean = mk(99)`` and ``median = mk(77)`` ran, the trace does
+    not say, and taking ``mean`` vouched for ``median``."""
     try:
         values = list(notebook.values())
     except Exception:  # noqa: BLE001 - a namespace that cannot be listed
-        return None
+        return []
     seen: set[int] = set()
+    found: list[tuple[str, str]] = []
     for module in values:
         if not issubclass(type(module), types.ModuleType) or id(module) in seen:
             continue
@@ -1065,9 +1077,20 @@ def _library_holder(code: types.CodeType, notebook: Mapping[str, Any]) -> tuple[
         if sys.modules.get(name) is not module:
             continue
         for attr, value in list(own.items()):
-            if type(value) is types.FunctionType and value.__code__ is code and isinstance(attr, str):
-                return name, attr
-    return None
+            if isinstance(attr, str) and _wraps_code(value, code):
+                found.append((name, attr))
+    return found
+
+
+def _wraps_code(value: Any, code: types.CodeType) -> bool:
+    """Is *value* a function of *code*, or a ``partial``, staticmethod or
+    classmethod of one? Read by exact type: nothing of the value's runs."""
+    kind = type(value)
+    if kind is functools.partial:
+        value = value.func
+    elif kind is staticmethod or kind is classmethod:
+        value = value.__func__
+    return type(value) is types.FunctionType and value.__code__ is code
 
 
 def _held_digest(ns: Mapping[str, Any], name: str, value_digest: Callable[[Any], str]) -> str:
