@@ -402,7 +402,11 @@ def _code_of(t: threading.Thread) -> Any:
 #: thread's class, or of its target), whenever they started: pyzmq's garbage
 #: thread, started when a message is first sent without a copy, ipykernel's
 #: iopub and pipe watchers, started again when the kernel restarts its
-#: streams, and the rest of ipykernel's and IPython's. Not their packages,
+#: streams, the rest of ipykernel's and IPython's, and tornado's selector
+#: thread, which only waits on sockets and hands what is ready back to the
+#: loop's own thread: it is alive the whole session on Windows, where the
+#: kernel's loop cannot watch sockets itself, and counted as another thread
+#: it made every statement read its arguments twice. Not their packages,
 #: and not "alive when cash was imported": IPython runs a user's background
 #: job (``jobs.new(f)``) on its own Thread subclass, and a tornado loop a
 #: user starts on a thread runs the user's callbacks, in a cell before
@@ -418,6 +422,7 @@ _KERNEL_THREADS = frozenset(
         "ipykernel.parentpoller:ParentPollerUnix",
         "ipykernel.parentpoller:ParentPollerWindows",
         "IPython.core.history:HistorySavingThread",
+        "tornado.platform.asyncio:SelectorThread._run_select",
     }
 )
 

@@ -72,6 +72,7 @@ from ..lineage_formula import (
     recorded_reads_lineage_component,
     setting_output_lineage,
     statement_environment_component,
+    value_digests_key,
 )
 from ..loop_watch import branch_changes, loop_watch_hash, watch_candidates
 from ..pyplot_draws import pyplot_draw_names
@@ -219,6 +220,12 @@ class StatementLineage:
             known.setdefault(source_hash, recorded)
             return recorded
         return static_share_edges(tree, self._function_source, self.shell.user_ns)
+
+    def share_record_at(self, stmt_code: str, entry: Mapping[str, str]) -> frozenset[tuple[str, str]] | None:
+        """The edges a run of *stmt_code* that read *entry* linked
+        (``TrackingState.share_edge_records_at``), or None."""
+        key = (statement_source_hash(stmt_code), tuple(sorted(entry.items())))
+        return self.tracking_state.share_edge_records_at.get(key)
 
     def relink(
         self,
@@ -1026,12 +1033,15 @@ class StatementLineage:
         virtual_lineage: dict[str, str],
         virtual_modules: set[str] | None = None,
         occurrence_index: int = 0,
+        own_edges: frozenset[tuple[str, str]] | None = None,
     ) -> StatementOutcome:
         """Simulate *stmt_code*: update *virtual_lineage* and *virtual_modules*
         with what it binds, and return what it wrote.
 
         *occurrence_index* is the zero-based occurrence of the same statement
-        text within its cell, which the runtime's key counts.
+        text within its cell, which the runtime's key counts. *own_edges* are
+        the edges a run with these inputs linked (`share_record_at`), when
+        no entry says.
         """
         try:
             if virtual_modules is None:
@@ -1101,6 +1111,7 @@ class StatementLineage:
                 virtual_modules,
                 occurrence_index,
                 (rebound, bound),
+                own_edges,
             )
             self._advance_rng(drawn, draw_key, virtual_lineage)
             return outcome
@@ -1160,6 +1171,7 @@ class StatementLineage:
         virtual_modules: set[str],
         occurrence_index: int,
         relinked: tuple[set[str], Container[str]] = (set(), ()),
+        own_edges: frozenset[tuple[str, str]] | None = None,
     ) -> StatementOutcome:
         """Give each of *outputs* its lineage: the cache entry's when it is
         valid, else the runtime's formula's. First the edges as its run left
@@ -1180,7 +1192,10 @@ class StatementLineage:
             virtual_lineage[var] = hidden_write_lineage(cache_key)
 
         metadata = self._entry_metadata(cache_key)
-        self.relink(stmt_code, tree, *relinked, own=own_share_edges(metadata))
+        own = own_share_edges(metadata)
+        if own is None:
+            own = own_edges if own_edges is not None else self.share_record_at(stmt_code, {"": cache_key})
+        self.relink(stmt_code, tree, *relinked, own=own)
 
         file_deps_to_check = self._session_file_deps(outputs)
         lookup = self._lookup_cached_lineages(
@@ -1238,7 +1253,9 @@ class StatementLineage:
             stmt_code,
             tree,
             virtual_lineage,
-            no_cache_values=self.tracking_state.no_cache_values.get(cache_key),
+            no_cache_values=self.tracking_state.no_cache_values.get(
+                value_digests_key(source_hash, input_lineage_map, occurrence_index)
+            ),
             recorded_reads=recorded_reads_lineage_component(
                 self.tracking_state, cache_key, stmt_code, self.shell.user_ns, outputs, as_last_run=True
             ),

@@ -480,6 +480,21 @@ class _FlowVisitor(ast.NodeVisitor):
                             self.outputs.add(parent_name)
                             self.modified_objects.add(parent_name)
                     break
+        elif (
+            isinstance(node.func, ast.Name)
+            and node.func.id in ("setattr", "delattr")
+            and node.args
+            and not self.is_defined(node.func.id)
+        ):
+            # ``setattr(points[7], "x", -3)`` changes ``points`` in place, as
+            # ``points[7].x = -3`` does (`visit_Attribute`).
+            parent_name = self._extract_base_name(node.args[0])
+            if parent_name:
+                if not self.is_defined(parent_name):
+                    self.real_inputs.add(parent_name)
+                if len(self.scopes) == 1:
+                    self.outputs.add(parent_name)
+                    self.modified_objects.add(parent_name)
         self.generic_visit(node)
 
     def visit_Import(self, node: ast.Import) -> None:
