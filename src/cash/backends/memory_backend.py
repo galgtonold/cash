@@ -21,7 +21,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
-from cash._user_attrs import own_dict
+from cash._user_attrs import instance_of, own_dict
 from cash.exceptions import CacheBackendError
 
 from .. import _native, _plain_data, cost_model, held_reads, kept_state, stored_pickle
@@ -308,7 +308,7 @@ def _at_least(value: Any, nbytes: int, nodes: int = 2048, items: int = 64) -> bo
                 found.extend(itertools.islice(obj.values(), items))
             elif kind is list or kind is tuple:
                 found.extend(obj[:items])
-            elif kind not in _ATOMS and not isinstance(obj, type):
+            elif kind not in _ATOMS and not instance_of(obj, type):
                 attrs = own_dict(obj)
                 if attrs is not None:
                     found.extend(itertools.islice(attrs.values(), items))
@@ -554,7 +554,7 @@ def _reaches_marshalled(value: Any) -> bool:
         seen.add(id(obj))
         if type(obj) is _Marshalled or type(obj) is _TableWithBytes:
             return True
-        if type(obj) in _ATOMS or isinstance(obj, stop):
+        if type(obj) in _ATOMS or instance_of(obj, stop):
             continue
         todo.extend(gc.get_referents(obj))
     return False
@@ -1001,7 +1001,8 @@ class InMemoryBackend(CacheBackend):
                 # copies it as usual.
                 memo[key] = obj
                 return key
-            if frames and isinstance(obj, frames):
+            # By its real type: an object passing for a frame by ``__class__`` is not one.
+            if frames and issubclass(obj_type, frames):
                 if _is_pandas_frame(type(obj)):
                     memo[key] = InMemoryBackend._copy_frame(obj, known_cells, record_cells, memo)
                 elif record_cells is not None:
@@ -1015,7 +1016,7 @@ class InMemoryBackend(CacheBackend):
         current_names: set[int] = set()
 
         def renamed_id(obj: Any) -> int | None:
-            if isinstance(obj, _BY_NAME) and id(obj) not in current_names and id(obj) not in memo:
+            if instance_of(obj, _BY_NAME) and id(obj) not in current_names and id(obj) not in memo:
                 current = _named_now(obj)
                 if current is None:
                     current_names.add(id(obj))  # pickled by its name, as it is
@@ -2530,7 +2531,7 @@ def _named_now(obj: Any) -> Any:
     to. A function is itself: a copy holds what the value held, as plain
     Python does, and the function named now may do something else."""
     current = kept_state.named_now(obj)
-    if current is None or isinstance(obj, type):
+    if current is None or instance_of(obj, type):
         return current
     return obj
 
@@ -2588,7 +2589,7 @@ def _round_trip(value: Any) -> Any:
             key = id(obj)
             if key in renamed:
                 return key
-            if isinstance(obj, _BY_NAME) and key not in current_names:
+            if instance_of(obj, _BY_NAME) and key not in current_names:
                 current = _named_now(obj)
                 if current is not None:
                     renamed[key] = current

@@ -510,13 +510,16 @@ def used(
     *,
     clears: bool = False,
     ns: Mapping[str, Any] | None = None,
+    site: tuple[str | None, Any] | None = None,
 ) -> tuple[str, str] | list[dict] | None:
     """After a statement ran: ``(FILLED, why)`` when what it did to a memo
     leaves it otherwise than a served entry would, else each memo it called
     with the answers it held then. *clears*: the code that ran names
     ``cache_clear``, which resets the counters this reads. *ns*: look for
     memos the run made or bound too (a ``def`` in it, a module it imported),
-    each taken as empty before it."""
+    each taken as empty before it. *site*: ``(code, fn)``, the statement's
+    text or the function called, read for the memos whose ``cache_clear``
+    it names, which the warning names first (`_changed_label`)."""
     before = list(before or ())
     if ns is not None and _LRU_WRAPPER is not None:
         known = {id(memo) for _, memo, *_ in before}
@@ -552,7 +555,10 @@ def used(
         if why is not None:
             continue  # already told; the rest only remember their answers
         if clears:
-            why = f"It may empty the helper memo {label} or read its counters (cache_clear, cache_info)"
+            named = _memos_cleared_by(site[0], ns, site[1]) if site is not None else set()
+            changed = _changed_label(before, named)
+            memo_named = f"the helper memo {changed}" if changed else "a helper memo"
+            why = f"It may empty {memo_named} or read its counters (cache_clear, cache_info)"
         elif info.misses < misses or info.hits < hits:
             why = f"It emptied the helper memo {label}"
         elif items is None or len(items) > MAX_KEYED:
@@ -578,6 +584,104 @@ def used(
     if why is not None:
         return FILLED, f"{why} (statement re-executes)"
     return out or None
+
+
+def _changed_label(
+    before: list[tuple[list[str], Any, int, int, int, Any]], named: set[int] = frozenset()
+) -> str | None:
+    """The label of the memo in *before* the statement most likely cleared,
+    for a warning about code that can clear one: first one whose counters
+    went back or that dropped a key it held; else one whose ``cache_clear``
+    the code names (*named*, ids) and that moved, or is the only one named
+    (a Run All defines the memo again, so it is empty before the clear and
+    only grows). None otherwise: a memo that only grew may be one the
+    statement filled beside a clear it made through a name cash could not
+    read, and the memo cash found first one it never touched."""
+    moved: list[tuple[int, str]] = []
+    for where, memo, hits, misses, size, held in before:
+        try:
+            info = memo.cache_info()
+        except Exception:  # noqa: BLE001 - a wrapper whose counters raise
+            continue
+        now = _held(memo)
+        went_back = info.hits < hits or info.misses < misses or info.currsize < size
+        dropped = held is not None and now is not None and bool(held[0] - now[0])
+        if went_back or dropped:
+            return _label(where)
+        if (info.hits, info.misses, info.currsize) != (hits, misses, size) or (
+            held is not None and now is not None and now[0] != held[0]
+        ):
+            moved.append((id(memo), _label(where)))
+    named_moved = [label for memo_id, label in moved if memo_id in named]
+    if len(named_moved) == 1:
+        return named_moved[0]
+    named_watched = {_label(where) for where, memo, *_ in before if id(memo) in named}
+    if len(named_watched) == 1:
+        return next(iter(named_watched))
+    return None
+
+
+def _memos_cleared_by(code: str | None, ns: Mapping[str, Any] | None, fn: Any = None) -> set[int]:
+    """The ids of the memos whose ``cache_clear`` *code* (a statement's text,
+    read with *ns*) or *fn*, or a function of the user's either reaches,
+    names as ``memo.cache_clear``, or through attributes of a global
+    (``holder.memo.cache_clear``), read without running a property."""
+    import ast
+    import dis
+    import inspect
+
+    from cash.decorator.closure_fold import iter_code_scopes
+    from cash.notebook.callee_reach import reached_user_code
+
+    found: set[int] = set()
+
+    def memo_id(value: Any, attrs: list[str] = ()) -> None:
+        for attr in attrs:
+            try:
+                value = inspect.getattr_static(value, attr)
+            except Exception:  # noqa: BLE001 - not there: no memo named
+                return
+        if type(value) is _LRU_WRAPPER:
+            found.add(id(value))
+
+    functions: list[Any] = [fn] if fn is not None else []
+    try:
+        if code is not None and ns is not None:
+            for node in ast.walk(ast.parse(code)):
+                if isinstance(node, ast.Attribute) and node.attr == "cache_clear":
+                    attrs: list[str] = []
+                    value = node.value
+                    while isinstance(value, ast.Attribute):
+                        attrs.insert(0, value.attr)
+                        value = value.value
+                    if isinstance(value, ast.Name):
+                        memo_id(ns.get(value.id), attrs)
+            functions.extend(reached_user_code(code, ns).functions)
+        elif fn is not None:
+            name, globals_ = attribute_or(fn, "__name__", None), attribute_or(fn, "__globals__", None)
+            if isinstance(name, str) and isinstance(globals_, dict) and globals_.get(name) is fn:
+                functions.extend(reached_user_code(name, globals_).functions)
+    except Exception:  # noqa: BLE001 - not read: the counters decide
+        pass
+    for function in functions:
+        code_obj = attribute_or(function, "__code__", None)
+        globals_ = attribute_or(function, "__globals__", None)
+        if code_obj is None or not isinstance(globals_, dict):
+            continue
+        for scope in iter_code_scopes(code_obj):
+            if "cache_clear" not in scope.co_names:
+                continue
+            chain: list[str] = []  # a global, then the attributes read off it
+            for ins in dis.get_instructions(scope):
+                if ins.opname in ("LOAD_ATTR", "LOAD_METHOD") and chain:
+                    if ins.argval == "cache_clear":
+                        memo_id(globals_.get(chain[0]), chain[1:])
+                        chain = []
+                    else:
+                        chain.append(ins.argval)
+                    continue
+                chain = [ins.argval] if ins.opname in ("LOAD_GLOBAL", "LOAD_NAME") else []
+    return found
 
 
 def _calls_of(memo: Any, items: list[tuple[Any, Any]]) -> list[list[str]] | None:

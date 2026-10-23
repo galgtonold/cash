@@ -47,6 +47,7 @@ from ..magic_effects import (
 )
 from ..recorded_reads import REBOUND, one_reading, outside_changes, take_known_as_read, watched_module_data
 from ..run_memo import stats_this_run
+from ..statement.lineage import rewritten_by_the_notebook_after
 from ..tracking_state import TrackingState
 from ._types import (
     IncrementalStartResult,
@@ -208,8 +209,15 @@ class VirtualLineage:
         self,
         cached_file_deps: dict[str, tuple[int, int, int]],
         idx: int,
+        simulated_at: int = 0,
     ) -> bool:
         """Return True if any file dep for the cached cell at *idx* has changed.
+
+        A file the notebook rewrote after the cell was simulated, and that is
+        still as that write left it, has not changed for the cell: a cell
+        below rewrote it after this one read it, as in a top-to-bottom run.
+        Taken as a change, the cell's loop re-ran alone and read the new text
+        (``u = t`` took the 2 a later cell wrote where plain Python has 1).
 
         Compared by the whole `stat_key` (size, mtime and inode change time,
         to the nanosecond), as the runtime's quick check is: an edit that keeps
@@ -226,7 +234,7 @@ class VirtualLineage:
             if resolved is None or st is None:
                 return True
             now = stat_key(st)
-            if now != stored:
+            if now != stored and not rewritten_by_the_notebook_after(self.tracking_state, simulated_at, fpath):
                 logger.debug(
                     "[UPSTREAM_DEBUG] File dependency changed: %s (cached stat=%s, current=%s)",
                     resolved,
@@ -342,7 +350,7 @@ class VirtualLineage:
                 # like a changed file, not like edited code.
                 break
             cached_file_deps = cached.cell_file_deps
-            if cached_file_deps and self._check_cell_file_deps(cached_file_deps, idx):
+            if cached_file_deps and self._check_cell_file_deps(cached_file_deps, idx, cached.file_event_seq):
                 # A file-dep change (or a mere mtime touch of identical content)
                 # must re-simulate FROM this cell so the reader re-populates
                 # ``vars_with_stale_files`` (its dedicated invalidation channel,
@@ -658,11 +666,15 @@ class VirtualLineage:
         raw_cell: str | None,
     ) -> None:
         try:
-            if is_control_structure(node):
-                cell_file_deps.update(self.controls.simulate(node, sim))
-                return
-
             stmt_code = statement_code(node, raw_cell)
+            if is_control_structure(node):
+                # Counted as the runtime counts it (`CellExecutor`): two
+                # copies of ``with ...: t = next(G)`` in one cell are two
+                # statements, each with its own value digests.
+                occ = cell_stmt_occurrence_counts.get(stmt_code, 0)
+                cell_stmt_occurrence_counts[stmt_code] = occ + 1
+                cell_file_deps.update(self.controls.simulate(node, sim, occurrence_index=occ))
+                return
         except (ValueError, TypeError, AttributeError) as e:
             logger.debug("[UPSTREAM] Error processing node in cell %d: %s", i, e)
             raise
@@ -873,6 +885,7 @@ class VirtualLineage:
                 share_edge_generation=len(self.tracking_state.share_edge_changes),
                 statement_hashes=frozenset(statement_source_hash(entry.stmt_code) for entry in cell_trace_segment),
                 vars_maybe_changed_by_loops=set(sim.vars_maybe_changed_by_loops),
+                file_event_seq=self.tracking_state.file_event_seq,
             )
         )
 
