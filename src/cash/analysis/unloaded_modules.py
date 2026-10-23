@@ -78,6 +78,10 @@ _SOURCE_ONLY_CALLS = frozenset(
 )
 #: Modules whose every function is a function of its arguments.
 _SOURCE_ONLY_MODULES = frozenset({"math", "operator", "string"})
+#: Functions of `_SOURCE_ONLY_MODULES` that look up an attribute by the name
+#: they are given, as ``getattr`` does: ``operator.attrgetter('__import__')``
+#: on ``builtins`` reaches ``os.environ``. Only with public names written out.
+_NAME_TAKING = frozenset({"operator.attrgetter", "operator.methodcaller", "operator.call"})
 #: Modules whose attributes describe the machine, the process or the moment.
 _AMBIENT_MODULES = frozenset(
     {
@@ -437,6 +441,8 @@ class _SourceOnly:
             return bool(self.in_body) and (node.value is None or self._expr(node.value))
         if isinstance(node, ast.Call):
             name = self._qualified(node.func)
+            if name in _NAME_TAKING and not _public_names_only(name, node):
+                return False
             if name is None or not (
                 name in _SOURCE_ONLY_CALLS
                 or name.partition(".")[0] in _SOURCE_ONLY_MODULES
@@ -448,6 +454,10 @@ class _SourceOnly:
         if isinstance(node, (ast.Attribute, ast.Name)):
             name = self._qualified(node)
             if name is not None and name.partition(".")[0] in _AMBIENT_MODULES and name not in _INTERPRETER_FACTS:
+                return False
+            if name in _NAME_TAKING:
+                # Handed on as a value (``map(operator.attrgetter, ...)``),
+                # the names it is given are not seen.
                 return False
             if (
                 name is not None
@@ -586,14 +596,38 @@ def _plain_method(name: str) -> bool:
     return len(parts) == 3 and parts[1] in _PLAIN_TYPES and not parts[2].startswith("_")
 
 
+def _public_names_only(name: str, call: ast.Call) -> bool:
+    """Does the call *name* of `_NAME_TAKING` look up only public names
+    written out in it: ``attrgetter('a', 'b.c')``, ``methodcaller('m',
+    ...)``? ``operator.call`` calls what it is given, and never is."""
+    if name == "operator.call" or call.keywords and name == "operator.attrgetter":
+        return False
+    looked_up = call.args if name == "operator.attrgetter" else call.args[:1]
+    return bool(looked_up) and all(
+        isinstance(arg, ast.Constant)
+        and isinstance(arg.value, str)
+        and all(part and not part.startswith("_") for part in arg.value.split("."))
+        for arg in looked_up
+    )
+
+
 def _scope_names(node: ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
-    """The names *node* binds in its own scope: a parameter, an assignment's
-    or a loop's target, an ``except ... as`` name, a ``def`` or a ``class``;
-    not those a function, class, lambda or comprehension inside it binds."""
-    names: set[str] = set()
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        args = node.args
-        names |= {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg) if a}
+    """The names *node* binds in its own scope, so that a use of one there
+    never reaches the builtin of that name.
+
+    In a function, any binding does: a parameter, an assignment's, a loop's
+    or an ``except ... as`` target, a ``def`` or a ``class`` make the name
+    local, and a use before it raises. A module's or a class's names are
+    looked up as the code runs and fall back to the builtins, so there only
+    a statement of its own body that always binds the name counts: an
+    assignment, an import, a ``def`` or a ``class``; not one under an
+    ``if``, a ``try`` or a loop (``if False: getattr = 1``), nor an ``except
+    ... as`` name, which the handler's end unbinds. Not the names a
+    function, class, lambda or comprehension inside binds."""
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return _always_bound(node.body)
+    args = node.args
+    names = {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg) if a}
     pending: list[ast.AST] = list(node.body)
     while pending:
         child = pending.pop()
@@ -608,6 +642,35 @@ def _scope_names(node: ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFu
             names.add(child.name)
         pending.extend(ast.iter_child_nodes(child))
     return names
+
+
+def _always_bound(body: list[ast.stmt]) -> set[str]:
+    """The names the statements of *body* itself always bind, and that no
+    statement of it deletes."""
+    names: set[str] = set()
+    deleted: set[str] = set()
+    for stmt in body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(stmt.name)
+        elif isinstance(stmt, (ast.Import, ast.ImportFrom)):
+            names |= {(alias.asname or alias.name).partition(".")[0] for alias in stmt.names if alias.name != "*"}
+        elif isinstance(stmt, ast.Assign):
+            names |= {
+                n.id
+                for t in stmt.targets
+                for n in ast.walk(t)
+                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
+            }
+        elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None and isinstance(stmt.target, ast.Name):
+            names.add(stmt.target.id)
+        elif isinstance(stmt, ast.Delete):
+            deleted |= {
+                n.id
+                for t in stmt.targets
+                for n in ast.walk(t)
+                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Del)
+            }
+    return names - deleted
 
 
 def _head(node: ast.expr) -> str | None:
