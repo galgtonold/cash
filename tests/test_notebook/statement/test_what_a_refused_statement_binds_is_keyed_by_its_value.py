@@ -39,7 +39,8 @@ CASES = {
     "callable handed over many objects": (
         "K = 1\nclass Box:\n    def __init__(self, i):\n        self.i = i\n"
         "def g():\n    return K\nholder = [Box(i) for i in range(200)] + [g]",
-        "holder[-1]()",
+        # A computed index: a constant one is read exactly (`handed_callables`).
+        "holder[len(holder) - 1]()",
         "K = 2",
     ),
     "iterator": ("it = iter(range(100))", "next(it)", "_ = next(it)"),
