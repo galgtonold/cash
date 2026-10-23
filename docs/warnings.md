@@ -2268,6 +2268,7 @@ A cached value that randomness makes non-reproducible. Every code here starts `R
 | Code | Applies to | Meaning |
 |---|---|---|
 | [RANDOM-HELD-GENERATOR](#random-held-generator) | notebook | a cell re-run on its own draws from a generator held by an object, from where it stands |
+| [RANDOM-REDRAWN](#random-redrawn) | notebook | a statement above re-run for a cell drew from a seeded stream from where it stands |
 | [RANDOM-REPLAYED](#random-replayed) | notebook | a restored value is an earlier random draw |
 | [RANDOM-SEED-NONE](#random-seed-none) | notebook | `seed(None)` cannot refresh cached values |
 | [RANDOM-UNSEEDED](#random-unseeded) | both | a draw from an unseeded source is not reproducible |
@@ -2293,6 +2294,31 @@ re-run rebuilds (`self.rng` set in `__init__`), is put back, and does not warn.
 **What to do.** Draw from such a generator in the cell that creates it, or
 hold it in a variable and draw from that. For the numbers a run from the top
 gives, run the notebook from the top.
+
+**When it is safe to ignore.** When the draw only needs to be random, not the
+same as a run from the top.
+
+### RANDOM-REDRAWN {#random-redrawn}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashRandomnessWarning</span>
+
+<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind.warn_redrawn -->
+**What happened.** You ran a cell whose inputs were out of date, and cash ran
+a statement above it again to bring them up to date. That statement draws from
+a seeded random stream (`random`, `numpy.random`), and nothing cash ran before
+it seeds that stream again: the seed was set inside a function cash could not
+re-run for it (a `functools.cache` helper whose answer was already kept, a
+function of an imported module). So the draw continues from where the stream
+stands now. The message names the cell, the statement and the stream, once per
+statement.
+
+**Why it matters.** The numbers it draws can differ from the ones a run from
+the top gives, and so can everything computed from them in this cell.
+
+**What to do.** For the numbers a run from the top gives, run the notebook from
+the top. To make the cell independent of what ran before it, seed the stream in
+the cell that draws, or draw from a generator you hold in a variable
+(`rng = np.random.default_rng(0)`).
 
 **When it is safe to ignore.** When the draw only needs to be random, not the
 same as a run from the top.

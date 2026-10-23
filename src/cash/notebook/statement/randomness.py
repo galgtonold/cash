@@ -27,12 +27,14 @@ from cash.tracking.randomness import (
     hidden_lineage_writes,
     hidden_write_lineage,
     judged_draws,
+    open_seed_window,
     process_seeded_streams,
     publish_seed_epochs,
     restore_rng_state,
     rng_modules_changed,
     rng_virtual_var,
     seed_generation,
+    seeded_before_drawing,
     stream_position,
     unseeded_streams,
     warn_observed_draw,
@@ -153,6 +155,9 @@ class StatementRandomness:
         self._ledgered_generation: dict[str, int] = {}
         #: Streams whose lineage `adopt_unseen_seeds` set.
         self._adopted: set[str] = set()
+        #: (source digest, cache key) of the statement that ran or hit last,
+        #: until `adopt_unseen_seeds` has seen what it seeded unseen.
+        self._last_statement: tuple[str, str] | None = None
         #: `seed_generation` per stream when the statement began.
         self._generation_at_start: dict[str, int] = {}
         #: Where the LAST statement left each global stream it moved or
@@ -192,6 +197,8 @@ class StatementRandomness:
         (``seed(None)`` cash did not read) takes a lineage fresh per run.
         """
         by_a_hit, self._seeded_by_a_hit = self._seeded_by_a_hit, set()
+        last, self._last_statement = self._last_statement, None
+        adopted: dict[str, str] = {}
         try:
             watch_seeds()
             seeded = process_seeded_streams() | by_a_hit
@@ -207,6 +214,7 @@ class StatementRandomness:
                         self.tracking_state.lineage.record(var, fresh)
                         self.seed_epochs[module] = fresh
                         self._adopted.discard(module)
+                        adopted[var] = fresh
                     continue
                 position = stream_position(module)
                 if position is None:
@@ -216,8 +224,26 @@ class StatementRandomness:
                 self.seed_epochs[module] = lineage
                 self.detector.mark_seeded(module)
                 self._adopted.add(module)
+                adopted[var] = lineage
         except Exception:
             logger.debug("%s could not adopt an unseen seed", _LOG_PROCESSOR, exc_info=True)
+        if last is not None:
+            # What the statement that ran last seeded unseen, for the
+            # simulation to give its streams after it (`adopted_rng_after`).
+            digest, key = last
+            if adopted:
+                self.tracking_state.adopted_rng_after[digest] = (key, adopted)
+            else:
+                self.tracking_state.adopted_rng_after.pop(digest, None)
+
+    def statement_done(self, code: str, cache_key: str) -> None:
+        """Note that the statement *code* keyed *cache_key* ran or was
+        served: a seed it set unseen is adopted before the next one and
+        recorded as its (`adopt_unseen_seeds`)."""
+        try:
+            self._last_statement = (exact_source_digest(code), cache_key)
+        except (AttributeError, UnicodeEncodeError):
+            self._last_statement = None
 
     def adopt_seeds_of_a_hit(self, reseeded: Iterable[str] | None, code: str) -> None:
         """A hit put back the streams its run seeded as it ran (*reseeded*),
@@ -291,6 +317,7 @@ class StatementRandomness:
         # set (`unseeded_streams`); a module imported since the last
         # statement is wrapped now.
         watch_seeds()
+        open_seed_window()
         self._draw_warnings_at_start = judged_draws()
         self._generation_at_start = {m: seed_generation(m) for m in ("random", "numpy.random")}
         return capture_rng_state()
@@ -723,7 +750,7 @@ class StatementRandomness:
                 self._cell_pre_lineage = self.rng_lineages()
             self._cell_changed |= changed
             self._cell_post = post
-            self._record_hidden_draws(code, self.observed_draw)
+            self._record_hidden_draws(code, self.observed_draw - seeded_before_drawing(pre_rng))
             reseeded = {m for m, g in self._generation_at_start.items() if seed_generation(m) != g}
             self.reseeded_streams = frozenset(reseeded)
             if reseeded:

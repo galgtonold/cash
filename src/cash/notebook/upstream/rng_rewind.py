@@ -15,13 +15,19 @@ import logging
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
+from ...diagnostics import warn_diagnostic
 from ...source_norm import exact_source_digest
 from ...tracking.randomness import (
+    CashRandomnessWarning,
     get_drawing_rng_modules,
     get_seeding_rng_modules,
+    hidden_lineage_reads,
+    observed_rng_reads,
     restore_rng_state,
     rng_lineage_fingerprint,
+    rng_virtual_var,
     seed_cells_not_yet_run,
+    seed_epochs,
 )
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
@@ -273,6 +279,61 @@ class RngRewind:
                 selected.add(nearest)
                 queue.append(nearest)
         return selected
+
+    def warn_redrawn(self, statements: list[str], current_cell_idx: int | None) -> None:
+        """RANDOM-REDRAWN for each statement in the plan *statements* that
+        draws from a seeded global stream no statement before it in the plan
+        seeds again (by a seed it spells or a notebook function it calls).
+
+        Such a draw continues from wherever the stream stands now, not from
+        the position a run from the top gives it: a value it makes can differ
+        from a plain run. Said, never silent; once per statement.
+        """
+        from ..callee_reach import helper_seeded_modules
+
+        try:
+            seeded = {rng_virtual_var(module) for module in seed_epochs()}
+            if not seeded:
+                return
+            ns = self.shell.user_ns
+            reset: set[str] = set()
+            for stmt in statements:
+                tree = parse_cached(stmt)
+                if tree is not None and all(
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for node in tree.body
+                ):
+                    continue  # its body seeds and draws when it is called
+                try:
+                    spelled = {rng_virtual_var(module) for module in get_seeding_rng_modules(stmt)}
+                    called = {rng_virtual_var(module) for module in helper_seeded_modules(stmt, ns)}
+                except (SyntaxError, ValueError, AttributeError, RecursionError, TypeError):
+                    spelled = called = set()
+                # A draw after a seed the statement spells reads that seed.
+                drawn = (hidden_lineage_reads(stmt) | observed_rng_reads(self.tracking_state, stmt)) & seeded
+                unset = drawn - reset - spelled
+                if unset:
+                    self._warn_redrawn(stmt, sorted(unset)[0], current_cell_idx)
+                reset |= spelled | called
+        except (AttributeError, TypeError, ValueError):  # pragma: no cover - defensive
+            return
+
+    @staticmethod
+    def _warn_redrawn(stmt: str, var: str, current_cell_idx: int | None) -> None:
+        first = stmt.strip().splitlines()[0] if stmt.strip() else stmt
+        if len(first) > 60:
+            first = first[:57] + "..."
+        module = var[len(rng_virtual_var("")) :]
+        cell = "this cell" if current_cell_idx is None else f"cell {current_cell_idx + 1}"
+        warn_diagnostic(
+            CashRandomnessWarning,
+            "RANDOM-REDRAWN",
+            f"to bring {cell}'s inputs up to date, cash ran `{first}` above it again, and it draws from "
+            f"`{module}` again from where the stream stands now, not from where a run from the top has it. "
+            "What it made can differ from a plain run.",
+            "for the numbers a run from the top gives, run the notebook from the top; or seed the stream in "
+            "the cell that draws.",
+            location=("<cash>", 1),
+        )
 
     @staticmethod
     def label_rerun_metrics(executed_metrics: list, rng_rerun: set[str]) -> None:

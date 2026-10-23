@@ -743,6 +743,7 @@ class UpstreamChecker:
                 cell_code, notebook_cells, current_cell_idx, statements_to_reexecute
             )
             self._refuse_to_undo(unsaved, self._rebuilt_names(statements_to_reexecute, restored_info))
+            self.rng.warn_redrawn(statements_to_reexecute, current_cell_idx)
 
             executed_metrics = []
             if statements_to_reexecute:

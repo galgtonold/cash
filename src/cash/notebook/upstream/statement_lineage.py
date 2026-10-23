@@ -40,6 +40,7 @@ from ...analysis.namespace_effects import (
     rewatch_exempt,
 )
 from ...control_markers import strip_markers
+from ...source_norm import exact_source_digest
 from ...tracking.file_dep_snapshot import dep_is_fresh
 from ...tracking.randomness import (
     advanced_carrier_lineage,
@@ -1063,6 +1064,9 @@ class StatementLineage:
             # the runtime uses. The runtime ALSO skip-caches such a statement;
             # that half is runtime-only.
             outputs = outputs | effects.callee_globals
+            adopted = self._adopted_after(
+                stmt_code, inputs | hidden_reads, outputs, virtual_lineage, virtual_modules, occurrence_index
+            )
 
             # The RNG streams it draws from move on once it ran, from its key
             # with the lineages before it (`StatementProcessor._advance_rng`).
@@ -1082,6 +1086,7 @@ class StatementLineage:
                     stmt_code, inputs, hidden_reads, virtual_lineage, virtual_modules, occurrence_index
                 )
                 self._advance_rng(drawn, draw_key, virtual_lineage)
+                virtual_lineage.update(adopted)
                 return StatementOutcome(advanced, 0.0, False, {})
 
             # Its outputs are bound when its edges are linked, as after a
@@ -1103,10 +1108,37 @@ class StatementLineage:
                 (rebound, bound),
             )
             self._advance_rng(drawn, draw_key, virtual_lineage)
+            virtual_lineage.update(adopted)
             return outcome
         except (KeyError, TypeError, ValueError, OSError) as e:
             logger.error("[UPSTREAM] Error simulating statement '%s...': %s", stmt_code[:20], e)
             raise
+
+    def _adopted_after(
+        self,
+        stmt_code: str,
+        inputs: set[str],
+        outputs: set[str],
+        virtual_lineage: dict[str, str],
+        virtual_modules: set[str],
+        occurrence_index: int,
+    ) -> dict[str, str]:
+        """The RNG lineages the runtime adopted after *stmt_code*'s last run
+        or hit, which seeded them where cash does not read a seed
+        (``adopted_rng_after``), when it keys the statement as that run did."""
+        recorded = self.tracking_state.adopted_rng_after
+        if not recorded:
+            return {}
+        try:
+            entry = recorded.get(exact_source_digest(stmt_code))
+        except (AttributeError, UnicodeEncodeError):
+            return {}
+        if entry is None:
+            return {}
+        key, lineages = entry
+        if self._key(stmt_code, inputs, outputs, virtual_lineage, virtual_modules, occurrence_index) != key:
+            return {}
+        return dict(lineages)
 
     def _helper_seed_writes(self, stmt_code: str, virtual_lineage: Mapping[str, str]) -> set[str]:
         """The RNG variables *stmt_code* writes by calling a notebook function

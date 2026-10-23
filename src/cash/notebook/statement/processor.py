@@ -588,6 +588,7 @@ class StatementProcessor:
         """
         if not run.cache_key or is_control_body(run.code) or run.magic_reads is not None:
             return  # a magic statement's draw moves it in record_magic
+        self._randomness.statement_done(run.code, run.cache_key)
         state = self.tracking_state
         try:
             drawn = drawn_rng_vars(key_hidden_reads(run.code, state), run.code, state.variable_lineage)

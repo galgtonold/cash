@@ -116,6 +116,46 @@ _SEED_GENERATION: dict[str, int] = {}
 _TORCH_SEEDED: set[str] = set()
 
 
+#: module -> where its global stream stood when the first watched seed since
+#: `open_seed_window` was set on it (`_ENTROPY` for ``seed()`` with no value).
+_FIRST_SEED_STATE: dict[str, object] = {}
+_ENTROPY = object()
+
+
+def open_seed_window() -> None:
+    """Forget the streams' states at their first seed: a statement begins."""
+    _FIRST_SEED_STATE.clear()
+
+
+def seeded_before_drawing(pre: Mapping[str, object]) -> set[str]:
+    """The streams a seed with a value was set on since `open_seed_window`
+    while they still stood where *pre* (`capture_rng_state` then) has them:
+    nothing drew from them before, so what they gave since comes from that
+    seed and not from where they stood."""
+    from .state import _rng_states_equal
+
+    return {
+        module
+        for module, state in _FIRST_SEED_STATE.items()
+        if state is not _ENTROPY and module in pre and _rng_states_equal(pre[module], state)
+    }
+
+
+def _note_first_seed(module: str, args: tuple, kwargs: dict) -> None:
+    if module in _FIRST_SEED_STATE or module == "torch":
+        return
+    if (args[0] if args else kwargs.get("seed", kwargs.get("a"))) is None:
+        _FIRST_SEED_STATE[module] = _ENTROPY
+        return
+    try:
+        if module == "random":
+            _FIRST_SEED_STATE[module] = sys.modules["random"].getstate()
+        else:
+            _FIRST_SEED_STATE[module] = sys.modules["numpy.random"].get_state()
+    except Exception:  # noqa: BLE001 - an unreadable stream is taken as drawn from
+        _FIRST_SEED_STATE[module] = _ENTROPY
+
+
 def _note_seed(module: str, args: tuple, kwargs: dict) -> None:
     value = args[0] if args else kwargs.get("seed", kwargs.get("a"))
     seeded = _TORCH_SEEDED if module == "torch" else _PROCESS_SEEDED
@@ -131,6 +171,7 @@ def _note_seed(module: str, args: tuple, kwargs: dict) -> None:
 
 def _seed_wrapper(module: str, original):
     def seed(*args, **kwargs):
+        _note_first_seed(module, args, kwargs)
         result = original(*args, **kwargs)
         _note_seed(module, args, kwargs)
         return result
@@ -369,8 +410,13 @@ def hidden_lineage_reads(code: str) -> set[str]:
 
     Folded into the statement's cache key AND its output lineage, so a re-seed
     upstream both re-keys the draw and propagates to everything cached
-    downstream of it.
+    downstream of it. A ``def`` or ``class`` reads none: the draws in its
+    body happen when it is called, and the simulation, finding no lineage
+    for a stream nothing above seeded, would read the one the ``def``'s own
+    seed gave it.
     """
+    if _only_defines(code):
+        return set()
     return {rng_virtual_var(m) for m in get_drawing_rng_modules(code)}
 
 

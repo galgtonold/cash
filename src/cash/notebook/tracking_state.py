@@ -163,6 +163,14 @@ class TrackingState:
     # W: StatementProcessor. R: the key and lineage builders on both engines.
     observed_rng_statement_draws: dict[str, set[str]] = field(default_factory=dict)
 
+    # exact_source_digest(statement) -> (its cache key, {RNG variable: lineage})
+    # when its last run or hit seeded a stream through code cash does not read
+    # as seeding (a seed inside a ``functools.cache`` helper), so the stream
+    # was adopted after it (`adopt_unseen_seeds`). The simulation gives the
+    # same lineages after the statement when it keys it alike.
+    # W: StatementRandomness. R: VirtualLineage.
+    adopted_rng_after: dict[str, tuple[str, dict[str, str]]] = field(default_factory=dict)
+
     # Variable -> every content hash seen for it.
     # W: StatementLineageBuilder, both restorers. R: UpstreamChecker.
     variable_hashes: dict[str, set[str]] = field(default_factory=dict)

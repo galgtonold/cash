@@ -345,6 +345,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # -- RANDOM: a cached value that randomness makes non-reproducible ------
         "RANDOM-HELD-GENERATOR",  # a cell re-run on its own draws from a generator
         # held by an object, which cash does not put back where a run from the top has it
+        "RANDOM-REDRAWN",  # a statement above re-run to repair a cell's inputs
+        # drew from a seeded stream from where it stands, not where a run from the top has it
         "RANDOM-REPLAYED",  # what you are seeing is a replay of an earlier
         # draw, not a fresh one
         "RANDOM-SEED-NONE",  # seed(None) cannot refresh cached values below
