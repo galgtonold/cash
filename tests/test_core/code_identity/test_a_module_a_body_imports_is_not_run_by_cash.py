@@ -276,6 +276,18 @@ def test_a_module_in_a_folder_with_no_init_is_keyed_by_its_source(tmp_path, spel
         "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
         "K = int(max(map(getattr, [E], ['environ']))['K'])\n"
         "getattr = abs",
+        "import builtins\n"
+        "E = max(map(max(map(builtins.getattr, [builtins], ['__import__'])), ['os']))\n"
+        "K = int(max(map(builtins.getattr, [E], ['environ']))['K'])",
+        "import builtins as b\n"
+        "E = max(map(max(map(b.getattr, [b], ['__import__'])), ['os']))\n"
+        "K = int(max(map(b.getattr, [E], ['environ']))['K'])",
+        "import builtins\nfrom builtins import getattr\n"
+        "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
+        "K = int(max(map(getattr, [E], ['environ']))['K'])",
+        "import builtins\nfrom builtins import getattr as ga\n"
+        "E = max(map(max(map(ga, [builtins], ['__import__'])), ['os']))\n"
+        "K = int(max(map(ga, [E], ['environ']))['K'])",
     ],
     ids=[
         "eval_handed_to_map",
@@ -288,6 +300,10 @@ def test_a_module_in_a_folder_with_no_init_is_keyed_by_its_source(tmp_path, spel
         "getattr_an_except_handler_names",
         "getattr_bound_on_a_path_that_does_not_run",
         "getattr_bound_below_its_use",
+        "getattr_read_from_the_builtins_module",
+        "getattr_read_from_the_builtins_module_by_another_name",
+        "getattr_imported_from_builtins",
+        "getattr_imported_from_builtins_by_another_name",
     ],
 )
 def test_a_value_read_outside_the_source_without_a_call_runs_with_a_warning(tmp_path, top_level):
@@ -298,7 +314,9 @@ def test_a_value_read_outside_the_source_without_a_call_runs_with_a_warning(tmp_
     (allowed as ``object`` was), and ``getattr`` at the top level, which a
     parameter of another function in the module was taken to rebind, an
     ``except ... as getattr`` unbinds as its handler ends, or an ``if False:``
-    never binds, or ``getattr = abs`` below the use; and ``operator.attrgetter`` or ``methodcaller`` given
+    never binds, or ``getattr = abs`` below the use, or read from the
+    ``builtins`` module an import names (``builtins.getattr``, ``from
+    builtins import getattr``), which is no rebinding; and ``operator.attrgetter`` or ``methodcaller`` given
     ``'__import__'``, ``getattr`` by another name."""
     _write(tmp_path, "helpmod.py", f"import sys\n\n{top_level}\n\ndef scale(x):\n    return x * K\n")
     _write(
