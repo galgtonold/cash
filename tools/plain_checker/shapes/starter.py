@@ -60,18 +60,6 @@ SHAPES = [
         source="reviews/rerun-new-lineage-2/review.md F1 Repro A (s_samevalue_code); __code__ swap done in cell 0",
     ),
     notebook(
-        "draw-by-string-in-helper-cell",
-        cells=[
-            "import os, sys\nsys.dont_write_bytecode = True\nif os.getcwd() not in sys.path:\n    sys.path.insert(0, os.getcwd())\nSRC_HF_BYDRAW = 'def gen():\\n    i = 0\\n    while True:\\n        yield i\\n        i += 1\\nG = gen()\\n'\nif not os.path.exists('hf_bydraw.py') or open('hf_bydraw.py').read() != SRC_HF_BYDRAW:\n    with open('hf_bydraw.py', 'w') as fh:\n        fh.write(SRC_HF_BYDRAW)\nfrom hf_bydraw import G",
-            "name = 'draw'",
-            "def draw():\n    return next(G)",
-            "t = globals()[name]()",
-            "u = t + 1",
-        ],
-        names=["t", "u"],
-        source="reviews/rerun-new-lineage-2/review.md F3 (f_byname_draw), logging write dropped",
-    ),
-    notebook(
         "call-by-string-runs-once",
         cells=[
             "import os, sys\nsys.dont_write_bytecode = True\nif os.getcwd() not in sys.path:\n    sys.path.insert(0, os.getcwd())\nSRC_HD_COUNT = 'CALLS = [0]\\n'\nif not os.path.exists('hd_count.py') or open('hd_count.py').read() != SRC_HD_COUNT:\n    with open('hd_count.py', 'w') as fh:\n        fh.write(SRC_HD_COUNT)\nimport hd_count",
@@ -347,12 +335,6 @@ SHAPES = [
         source="reviews/e-r5-reducer-r2/review.md R4 (writes_self)",
     ),
     decorator(
-        "env-var-read-by-cached-fn",
-        setup="import os\n@cache\ndef who():\n    return os.environ.get('ZZ_NB_TENANT')\n",
-        steps=["os.environ['ZZ_NB_TENANT'] = 'acme'", "who()", "os.environ['ZZ_NB_TENANT'] = 'globex'", "who()"],
-        source="reviews/class-patches-stay/review.md F1 deco mode (installed package replaced by inline fn)",
-    ),
-    decorator(
         "callable-arg-claiming-type-reads-global",
         setup="G = 10\nclass Liar:\n    @property\n    def __class__(self):\n        return type\n    def __call__(self, x):\n        return x + G\n@cache\ndef f(fn, x):\n    return fn(x)\n",
         steps=["obj = Liar()", "f(obj, 2)", "G = 20", "f(obj, 2)"],
@@ -376,12 +358,6 @@ SHAPES = [
             "h2.f.cache_info().currsize",
         ],
         source="reviews/made-memo-not-served/review.md unit-form table 'memo in a SimpleNamespace'",
-    ),
-    decorator(
-        "global-object-attr-changed",
-        setup="class Holder:\n    def __init__(self):\n        self.kept = 1\nOBJ = Holder()\n@cache\ndef f(x):\n    return OBJ.kept + x\n",
-        steps=["f(1)", "OBJ.kept = 5", "f(1)"],
-        source="reviews/label-and-own-dict/review.md B2 repro (OBJ.kept + x), property counter dropped",
     ),
     decorator(
         "iadd-side-effect-on-arg",

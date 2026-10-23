@@ -61,7 +61,7 @@ From the repository root, with an absolute `PYTHONPATH` so the kernels
 import this tree's cash:
 
 ```bash
-PYTHONPATH=$PWD/src:$PWD python -m tools.plain_checker                 # the starter shapes
+PYTHONPATH=$PWD/src:$PWD python -m tools.plain_checker                 # every shape in shapes/ but smoke.py
 PYTHONPATH=$PWD/src:$PWD python -m tools.plain_checker my_shapes.py -k memo --configs trace -j 3
 PYTHONPATH=$PWD/src:$PWD python -m tools.plain_checker --list
 ```
@@ -119,8 +119,10 @@ numbers, clock readings or addresses in the output. A cell that is slower
 than the 10 ms floor is cached in every config. A cheaper cell is cached
 only under `floors0`.
 
-`shapes/starter.py` holds repros taken from earlier reviews, and
-`shapes/smoke.py` holds two quick shapes that check the checker itself.
+`shapes/starter.py` holds repros taken from earlier reviews. The
+`*_corrected.py` files hold shapes rewritten after a triage found the first
+adaptation unfaithful. `shapes/smoke.py` holds two quick shapes that check
+the checker itself.
 
 ## Limits
 

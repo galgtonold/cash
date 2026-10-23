@@ -28,7 +28,7 @@ def _one(args: tuple[Shape, str, list[str]]):
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m tools.plain_checker", description=__doc__)
-    parser.add_argument("files", nargs="*", help="shape files (default: the starter shapes)")
+    parser.add_argument("files", nargs="*", help="shape files (default: every file in shapes/ but smoke.py)")
     parser.add_argument("-k", dest="match", help="only shapes whose name contains this")
     parser.add_argument("--configs", default=",".join(CONFIGS), help=f"comma-separated, from {', '.join(CONFIGS)}")
     parser.add_argument("-j", "--jobs", type=int, default=1, help="shapes run at once (each starts its own kernels)")
@@ -38,7 +38,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list", action="store_true", help="list the shapes and exit")
     options = parser.parse_args(argv)
 
-    files = options.files or [str(Path(__file__).parent / "shapes" / "starter.py")]
+    files = options.files or sorted(
+        str(p) for p in (Path(__file__).parent / "shapes").glob("*.py") if p.name != "smoke.py"
+    )
     shapes = [s for s in load(files) if not options.match or options.match in s.name]
     if options.list:
         for shape in shapes:
