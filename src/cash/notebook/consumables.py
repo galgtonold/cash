@@ -47,7 +47,7 @@ import types
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from cash._user_attrs import attribute_or, has_attribute, instance_of
+from cash._user_attrs import attribute_or, has_attribute, instance_of, own_dict
 
 from ..analysis.mutation_effects import captured_call_receivers
 from ..analysis.mutations import consumed_input_names
@@ -55,7 +55,9 @@ from ..analysis.mutations import consumed_input_names
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "called_stream_readers",
     "drawn_stream_inputs",
+    "reaches_a_stream",
     "is_consumable_unrestorable",
     "consumable_state",
     "has_diverged",
@@ -324,3 +326,122 @@ def watched_call_receivers(tree: ast.Module | None, user_ns: Mapping[str, Any]) 
     it as well would fingerprint an object that cannot be pickled, count it
     as changed, and re-run an inspection a hit serves correctly."""
     return frozenset(name for name in captured_call_receivers(tree, user_ns) if not is_stream(user_ns.get(name)))
+
+
+#: How many objects down from a function's globals `reaches_a_stream` looks.
+_REACH_DEPTH = 4
+#: How many functions it follows.
+_REACH_FUNCTIONS = 64
+_ABSENT = object()
+
+
+def called_stream_readers(tree: ast.Module | None, inputs: Iterable[str], user_ns: Mapping[str, Any]) -> list[str]:
+    """The functions among *inputs* the statement *tree* calls that can draw
+    from an iterator or stream the notebook holds (`reaches_a_stream`)."""
+    if tree is None:
+        return []
+    inputs = set(inputs)
+    called = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in inputs
+    }
+    return sorted(
+        name
+        for name in called
+        if instance_of(user_ns.get(name), types.FunctionType) and reaches_a_stream(user_ns[name])
+    )
+
+
+def reaches_a_stream(fn: Any) -> bool:
+    """Can a call of *fn* draw from an iterator or stream (`is_stream`) the
+    notebook holds, which a stored result could not move on?
+
+    Looked for along the names *fn*'s code reads: a global (``next(it)``), an
+    attribute of one (``next(Rec.it)``, ``next(R.it)``), an item it names by
+    a constant (``b['c'].it`` with ``b=B``), in its defaults and closure too,
+    and the same in every notebook function those reach. Attributes are read
+    from the objects' own dicts, so no property runs.
+    """
+    seen_fns: set[int] = set()
+    stack = [fn]
+    while stack and len(seen_fns) < _REACH_FUNCTIONS:
+        f = stack.pop()
+        f = attribute_or(f, "__func__", f)
+        code = attribute_or(f, "__code__", None)
+        if not instance_of(code, types.CodeType) or id(f) in seen_fns:
+            continue
+        seen_fns.add(id(f))
+        names: set[str] = set()
+        keys: set[Any] = set()
+        codes = [code]
+        while codes:
+            c = codes.pop()
+            names.update(c.co_names)
+            for const in c.co_consts:
+                if isinstance(const, types.CodeType):
+                    codes.append(const)
+                elif isinstance(const, (str, int)) and not isinstance(const, bool):
+                    keys.add(const)
+        f_globals = attribute_or(f, "__globals__", None) or {}
+        values = [f_globals[name] for name in names if isinstance(f_globals, dict) and name in f_globals]
+        values.extend(_cell_value(cell) for cell in attribute_or(f, "__closure__", None) or ())
+        values.extend(attribute_or(f, "__defaults__", None) or ())
+        values.extend((attribute_or(f, "__kwdefaults__", None) or {}).values())
+        seen: set[int] = set()
+        if any(_holds_a_stream(v, names, keys, _REACH_DEPTH, seen, stack) for v in values):
+            return True
+    return False
+
+
+def _holds_a_stream(value: Any, names: set[str], keys: set[Any], depth: int, seen: set[int], fns: list) -> bool:
+    if value is None or id(value) in seen:
+        return False
+    seen.add(id(value))
+    if instance_of(value, (str, bytes, int, float, bool, types.ModuleType)):
+        return False
+    if instance_of(value, types.FunctionType):
+        # Followed as code: the names its own body reads.
+        fns.append(value)
+        return False
+    if is_stream(value):
+        return True
+    if depth <= 0:
+        return False
+    children: list[Any] = []
+    try:
+        if type(value) is dict:
+            children.extend(dict.get(value, k) for k in keys if dict.__contains__(value, k))
+        elif type(value) in (list, tuple):
+            children.extend(value[k] for k in keys if isinstance(k, int) and -len(value) <= k < len(value))
+        for name in names:
+            child = _static_attr(value, name)
+            if child is not _ABSENT:
+                children.append(child)
+    except (TypeError, ValueError, RecursionError):
+        return False
+    return any(_holds_a_stream(child, names, keys, depth - 1, seen, fns) for child in children)
+
+
+def _static_attr(obj: Any, name: str) -> Any:
+    """``obj.name`` as its own dict or its class's holds it, or `_ABSENT`;
+    nothing of the object's runs."""
+    if instance_of(obj, type):
+        klasses = type.__dict__["__mro__"].__get__(obj)
+    else:
+        own = own_dict(obj)
+        if own is not None and dict.__contains__(own, name):
+            return dict.get(own, name)
+        klasses = type.__dict__["__mro__"].__get__(type(obj))
+    for klass in klasses:
+        found = type.__dict__["__dict__"].__get__(klass)
+        if name in found:
+            return found[name]
+    return _ABSENT
+
+
+def _cell_value(cell: Any) -> Any:
+    try:
+        return cell.cell_contents
+    except ValueError:
+        return None

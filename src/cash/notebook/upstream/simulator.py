@@ -38,6 +38,7 @@ from ..consumables import is_write_stream
 from ..lineage_store import LineageWatch
 from ..magic_effects import magic_cell_of
 from ..run_memo import forget_file_state_this_run
+from ..statement.stored_code import stored_code_changed
 from ..tracking_state import TrackingState
 from ._types import CellCheck, ClassificationResult, ReexecutionPlan, SimulationCache, SimulationResult, latest_producer
 from .cache_probe import CacheProbe
@@ -693,6 +694,20 @@ class NotebookSimulator:
                     if isinstance(position, int):
                         info["is_upstream"] = False
                         restored_by_index[position] = info
+            # One that stored a notebook function or class a ``def`` or
+            # ``class`` has made anew since (``B['c'] = Rec``): skipped, its
+            # output would keep the old object.
+            recorded = self.tracking_state.stored_code_ids
+            if recorded:
+                user_ns = self.shell.user_ns
+                run = sorted(
+                    set(run)
+                    | {
+                        i
+                        for i, entry in enumerate(trace)
+                        if stored_code_changed(recorded.get(entry.stmt_code.strip()), user_ns)
+                    }
+                )
             # What a skipped statement showed when it ran is shown again from
             # its entry; one whose output its entry could not keep runs.
             replays: dict[int, dict] = {}

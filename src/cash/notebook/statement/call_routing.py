@@ -15,7 +15,7 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, instance_of
 from cash.analysis.code_analyzer import CodeAnalyzer
 from cash.control_markers import strip_markers
 from cash.notebook.cache_key import CacheKeyContext
@@ -23,6 +23,7 @@ from cash.notebook.call_effects import DigestHandoff
 from cash.notebook.call_interception import COUNT_NAME, HELPER_NAME, PLAIN_NAME, SITE_SLOTS, wrap_eligible_calls
 from cash.notebook.call_refs import UNHASHED_PREFIX, with_call_refs
 from cash.notebook.call_unit import CallCache, call_cost_floor_s, call_site_is_cacheable
+from cash.notebook.consumables import reaches_a_stream
 from cash.tracking.file_tracker import tracking_seconds
 from cash.value_hash import digest_via_pickle
 
@@ -536,6 +537,10 @@ class CallRouting:
             # closed instead: an exception here means "don't wrap", exactly
             # like a `False` verdict, never "crash the cell".
             try:
+                if instance_of(call.func, ast.Name) and reaches_a_stream(self.shell.user_ns.get(call.func.id)):
+                    # It draws from an iterator the notebook holds: a stored
+                    # result would leave it where it was (``next(Rec.it)``).
+                    return False
                 return call_site_is_cacheable(
                     call,
                     user_ns=self.shell.user_ns,

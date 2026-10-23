@@ -41,7 +41,7 @@ from cash.notebook.cache_key import (
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.call_effects import DigestHandoff
 from cash.notebook.compiled_source import register_cell_source
-from cash.notebook.consumables import drawn_stream_inputs
+from cash.notebook.consumables import called_stream_readers, drawn_stream_inputs
 from cash.notebook.per_item_reruns import MIN_COST_S as PER_ITEM_MIN_COST_S
 from cash.notebook.read_handles import reaches_read_handle
 from cash.notebook.statement import sparse_order
@@ -198,6 +198,7 @@ from ..write_observer import children_left_running, kept_writes, observe_writes,
 from . import hidden_generators
 from .lineage import note_own_writes
 from .observed_draws import ObservedDrawStore
+from .stored_code import code_values_stored
 from .thread_reach import ThreadReach
 from .unseen_writes import (
     COULD_RUN_REASON,
@@ -1448,6 +1449,15 @@ class StatementProcessor:
             run.value_varies = True
             run.drew_from_stream = any(isinstance(self.shell.user_ns.get(name), io.IOBase) for name in drawn)
             return
+        drawing = called_stream_readers(run.tree, run.inputs, self.shell.user_ns)
+        if drawing:
+            run.metrics["uncacheable_reasons"].append(
+                f"Calls {', '.join(repr(n) for n in drawing)}, which draws from an iterator or stream the "
+                f"notebook holds: a cache hit would not advance it, so the statement runs every time"
+            )
+            run.skip_cache = True
+            run.value_varies = True
+            return
         looked_at = reads_open_handle(run.inputs - run.outputs, self.shell.user_ns)
         if looked_at:
             # The handle's lineage names where it stood when it was opened,
@@ -2393,6 +2403,13 @@ class StatementProcessor:
         # it came from recorded them (`StatementStore._producer_file_snapshots`).
         sources = self.tracking_state.variable_sources
         run.entry_sources = {name: sources[name] for name in run.inputs & run.outputs if name in sources}
+        # The notebook functions and classes it may have stored as values, as
+        # they are now: the cell run plan runs it again for new ones.
+        stored_code = code_values_stored(run.tree, run.inputs, self.shell.user_ns)
+        if stored_code:
+            self.tracking_state.stored_code_ids[run.code.strip()] = stored_code
+        else:
+            self.tracking_state.stored_code_ids.pop(run.code.strip(), None)
         with self._keeping_outputs(run, execution.echo, execution.cost or 0.0):
             # What it links, from its outputs' edges dropped to those found
             # now, is kept for the simulation (`note_share_edges`).

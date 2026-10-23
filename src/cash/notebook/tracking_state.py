@@ -416,6 +416,15 @@ class TrackingState:
     # after a restart). R: StatementLineage (simulation).
     carrier_advances: dict[str, frozenset[str]] = field(default_factory=dict)
 
+    # Statement code -> ``{variable: id(object)}`` for each notebook function
+    # or class the statement may have stored as a value (``B['c'] = Rec``)
+    # when it last ran or was restored (``stored_code.code_values_stored``).
+    # A ``class``/``def`` run again makes a new object under the same lineage,
+    # so a statement skipped as current would leave its output holding the
+    # old one: the cell plan runs it when an id differs.
+    # W: StatementProcessor. R: UpstreamSimulator (cell run plan).
+    stored_code_ids: dict[str, dict[str, int]] = field(default_factory=dict)
+
     # (cell index, variable) -> (cell source, ``consumables.consumable_state``
     # token) a consumable, unrestorable input (generator, queue, file handle)
     # held when THAT cell last started. A consumable drains in place, so this
