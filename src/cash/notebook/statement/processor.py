@@ -291,6 +291,16 @@ def _entry_values(cached_data: Any) -> dict[str, Any] | None:
     return variables if isinstance(variables, dict) else None
 
 
+def _anchors_possible(gave_up: list[GaveUp]) -> bool:
+    """Can the share check asked again with anchors (`share_group`'s
+    *anchorable*) answer otherwise than the check that refused? Not when that
+    check refused for sharing and found no variable of the notebook holding
+    an object of the outputs: an anchor is one such variable, and the first
+    round of the check asked again is the same round, which found none. The
+    check asked again would climb the same referrers to the same answer."""
+    return not gave_up or any(found.names for found in gave_up)
+
+
 class StatementProcessor:
     """
     Processes and caches individual Python statements.
@@ -2564,7 +2574,7 @@ class StatementProcessor:
                     gave_up=gave_up,
                     inputs=run.inputs,
                 )
-                if reason is not None and holders is not None:
+                if reason is not None and holders is not None and _anchors_possible(gave_up):
                     # Anchors only where holders alone refuse: an anchor binds
                     # the live object only while its digest is the one stored,
                     # which a holder restored with the outputs never needs
