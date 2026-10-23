@@ -12,8 +12,6 @@ keeps the accessor object it made on the frame, so plain Python hands the
 same ``df`` the old accessor's result too.
 """
 
-import time
-
 import pytest
 
 from tests._cell_driver import run_cash_cell
