@@ -819,18 +819,36 @@ class Shadow:
             return False
 
     def entry_stale(self, key: str) -> bool:
-        """Does the trace kept with the entry *key* name something that
-        changed since it was stored (`verify`)? What a lookup's check would
-        refuse (`stale`), asked where an entry is restored without one: the
-        check of the cells above a reader."""
+        """Does the trace kept with the entry *key* name code that changed
+        since it was stored (`verify`)? Asked where an entry is restored
+        without a lookup's check (`stale`): the check of the cells above a
+        reader. Code only, and only code defined now: the namespace is as the
+        simulation finds it, before the cells above run, so a value the trace
+        read, or a function not defined yet, can differ from what the entry
+        was built from without anything having changed."""
         try:
             self._ensure_loaded()
             trace = self.traces.get(key)
             if trace is None or not self._usable(trace):
                 return False
-            return bool(self.verify(trace, {})["changed"])
+            code = {"items": [item for item in trace.get("items") or () if item and item[0] == "code"]}
+            # Code not defined yet (after a restart, the cells above have not
+            # run) is the simulation's to follow, not a change.
+            return any(
+                change[-1] != "missing" or self._bound(change[1], change[2])
+                for change in self.verify(code, {})["changed"]
+            )
         except Exception:  # noqa: BLE001 - shadow never breaks a statement
             return False
+
+    def _bound(self, module: str, qualname: str) -> bool:
+        """Is the name *qualname* starts with bound in *module* now: code of
+        it not found is then code that changed (``f.__code__`` swapped), not
+        code not defined yet."""
+        from ...tracking.trace_items import namespace_of
+
+        ns = namespace_of(module, self.notebook or {}, self.notebook_name)
+        return isinstance(ns, dict) and qualname.split(".", 1)[0] in ns
 
     @staticmethod
     def agreed(pending: dict | None) -> bool:
