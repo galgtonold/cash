@@ -2047,7 +2047,7 @@ not affected.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/analysis/handed_callables.py:_warn_too_big @70d49368, cash/analysis/handed_callables.py:_special_classes_exist @fea8fff4, cash/analysis/handed_callables.py:ITEM_TYPES_AT == 100_000 -->
+<!-- claim: cash/analysis/handed_callables.py:_warn_too_big @70d49368, cash/analysis/handed_callables.py:special_classes_exist @fea8fff4, cash/analysis/handed_callables.py:ITEM_TYPES_AT == 100_000 -->
 **What happened.** A statement, or a function of yours it calls, reads an
 item of a list, tuple or dict by an index cash cannot tell (`lst[i] + 1`),
 and the container holds more than 100,000 items, too many to look through
