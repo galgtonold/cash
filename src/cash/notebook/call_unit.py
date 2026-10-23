@@ -72,7 +72,7 @@ from cash.notebook.call_effects import (
     restore_globals,
     unwrap_callee_globals,
 )
-from cash.notebook.call_entries import ONE_LOCAL, CallEntries, refs_beyond
+from cash.notebook.call_entries import ONE_LOCAL, TOO_MANY_WHY, CallEntries, refs_beyond
 from cash.notebook.call_interception import CallSite, SiteSlots, interceptable, names_read
 from cash.notebook.call_key import CallKeys, callee_mutated_globals, global_digests
 from cash.notebook.call_refs import (
@@ -1084,10 +1084,20 @@ class CallUnit:
             not displayed
             and pyplot_state() == figures_before
             and _left_pyplot_alone(call.fn, unit)
-            and self._worth_storing(call, result, elapsed, result_held, unit)
+            and not isinstance(memos := helper_memos.used(memos_before, clears=_clears(call.fn, memos_before)), tuple)
+            # With what the memos on named classes the result reaches hold:
+            # served only while they hold it again (`holds_a_closure_with_state`).
+            and self._worth_storing(
+                call,
+                result,
+                elapsed,
+                result_held,
+                unit,
+                memos := list(memos or ()),
+                helper_memos.misses_before(memos_before),
+            )
             and not call_tracker.work_outlived_block
             and not _inputs_moved(call_tracker)
-            and not isinstance(memos := helper_memos.used(memos_before, clears=_clears(call.fn, memos_before)), tuple)
         ):
             stored = self._store_result(
                 call,
@@ -1099,6 +1109,10 @@ class CallUnit:
                 environment_digests(env_reads),
                 memos,
             )
+        if self._entries.too_many:
+            self._entries.too_many = False
+            if not stored:
+                self._memo_misses[call.site] = TOO_MANY_WHY
         if unit is not None:
             shadow.call_finished(call.key, call.site, unit, stored, disk=True)
         if stored:
@@ -1161,14 +1175,33 @@ class CallUnit:
         self._digests.note_after(ticket, (*call.args, *call.kwargs.values()), arg_hashes_after)
         return False
 
-    def _worth_storing(self, call: _Call, result, elapsed: float, result_held: bool = True, unit: Any = None) -> bool:
+    def _worth_storing(
+        self,
+        call: _Call,
+        result,
+        elapsed: float,
+        result_held: bool = True,
+        unit: Any = None,
+        class_memos: list[dict] | None = None,
+        before: Mapping[int, int] | None = None,
+    ) -> bool:
         """Past the cost floor, safe to hand back as a copy, and cheaper to
         restore than to compute again. *unit* is the call's trace, when one
-        was recorded: what ran in it."""
+        was recorded: what ran in it. *class_memos*, what the helper memos
+        it called held (`helper_memos.used`), gets what the memos on named
+        classes the result reaches hold; *before* is the memos' miss counts
+        before the call (`helper_memos.misses_before`)."""
         return (
             elapsed >= self._cost_floor_s()
             and self._entries.storable(
-                result, call.args, call.kwargs, call.fn, result_held, ran=attribute_or(unit, "codes", None)
+                result,
+                call.args,
+                call.kwargs,
+                call.fn,
+                result_held,
+                ran=attribute_or(unit, "codes", None),
+                memos=class_memos,
+                before=before,
             )
             and self._entries.restore_pays(result, elapsed)
         )

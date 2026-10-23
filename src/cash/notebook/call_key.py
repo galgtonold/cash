@@ -348,45 +348,101 @@ def _plain_part(part: Any, ptype: type, atoms: frozenset) -> bool:
     return ptype is dict and _plain_record(part, atoms)
 
 
-def _memos_on(cls: type) -> list[tuple[Any, Any]]:
-    """``(memo, its wrapped function)`` for each ``functools.cache`` memo a
-    class body member holds: itself, or inside a ``staticmethod``,
-    ``classmethod``, ``property`` or ``partialmethod``. Read through
-    ``type``'s descriptors and the wrappers' own slots."""
+def _flat_record(item: Any, kind: type, atoms: frozenset) -> bool:
+    """Does *item*, an object of *kind*, hold only plain values (its class
+    aside): its attributes atoms, or lists, tuples or an attribute dict of
+    them (`_plain_part`)?"""
+    for part in gc.get_referents(item):
+        ptype = type(part)
+        if ptype in atoms or part is kind or _plain_part(part, ptype, atoms):
+            continue
+        return False
+    return True
+
+
+def _memos_on(cls: type) -> list[tuple[str, Any, Any, bool]]:
+    """``(name, memo, its wrapped function, reachable by name)`` for each
+    ``functools.cache`` memo a class body member holds: itself, or inside
+    a ``staticmethod`` or ``classmethod`` (reachable by its name), or a
+    ``property`` or ``partialmethod`` (not). Read through ``type``'s
+    descriptors and the wrappers' own slots, and kept per class while the
+    members it holds are the same objects."""
+    members = _CLASS_DICT(cls)
+    stamp = tuple(map(id, members.values()))
+    try:
+        known = _CLASS_MEMOS.get(cls)
+    except TypeError:  # not weakly referable
+        known = None
+    if known is not None and known[0] == stamp:
+        return known[1]
     found = []
-    for value in _CLASS_DICT(cls).values():
+    for name, value in members.items():
         kind = type(value)
+        named = True
         if kind is staticmethod or kind is classmethod:
             value = value.__func__
         elif kind is property:
-            value = value.fget
+            value, named = value.fget, False
         elif kind is functools.partialmethod:
-            value = value.func
+            value, named = value.func, False
         if _MEMO_WRAPPER is not None and type(value) is _MEMO_WRAPPER:
             wrapped = value.__dict__.get("__wrapped__")
-            found.append((value, wrapped))
+            found.append((name, value, wrapped, named))
+    with contextlib.suppress(TypeError):
+        _CLASS_MEMOS[cls] = (stamp, found)
     return found
 
 
-def _named_class_memo_changed(cls: type, ran: Any) -> bool:
-    """Did the call put a memo on a class its module names (*cls* or a base
-    of the user's), or fill one? Served, the next run finds the class's
-    memo as the first run left it, where plain Python makes it again or
-    fills it: a memo whose function is not the class body's own was set on
-    it from outside (``Holder.memo = staticmethod(cache(f))``); one holding
-    entries whose function ran in the call (*ran*, the codes its trace
-    recorded) was filled by it. With no trace, one holding entries counts:
-    an earlier fill cannot be told from this call's."""
+#: ``class -> (the ids of its members, `_memos_on`)``.
+_CLASS_MEMOS: weakref.WeakKeyDictionary[type, tuple[tuple[int, ...], list]] = weakref.WeakKeyDictionary()
+
+
+def _named_class_memo_changed(
+    cls: type, ran: Any, memos: list[dict] | None = None, before: Mapping[int, int] | None = None
+) -> bool:
+    """Is a memo on a class its module names (*cls* or a base of the
+    user's) one a served result cannot stand for? Served, the next run
+    finds the class's memo as the first run left it, where plain Python
+    makes it again or fills it. Counted:
+
+    - a memo whose function is not the class body's own: it was set on it
+      from outside (``Holder.memo = staticmethod(cache(f))``);
+    - one holding answers whose function ran in the call (*ran*, the codes
+      its trace recorded): the call filled it, and a served entry would
+      replay what that run printed where a run that finds it filled
+      prints nothing;
+    - one holding answers, with no trace, that *memos* has no record of
+      and whose miss count moved since *before* (``id(memo) -> misses``
+      before the call, `helper_memos.misses_before`), or that *before*
+      did not know: the call may have filled it;
+    - one holding answers, without *memos*: an earlier fill cannot be told
+      from this call's.
+
+    Otherwise a memo holding answers is recorded in *memos*
+    (`helper_memos.class_memo_record`): the entry is served only while it
+    holds them all again, so after a restart, with the memo empty, the
+    call runs and fills it."""
     for base in _CLASS_MRO(cls):
         if not (_users_type(base) and _named(base)):
             continue
         prefix = type.__dict__["__qualname__"].__get__(base) + "."
-        for memo, wrapped in _memos_on(base):
+        for name, memo, wrapped, named in _memos_on(base):
             if type(wrapped) is not _types.FunctionType or not wrapped.__qualname__.startswith(prefix):
                 return True
-            code = wrapped.__code__
-            if memo.cache_info().currsize and (ran is None or code in ran):
+            if not memo.cache_info().currsize:
+                continue
+            if memos is None or (ran is not None and wrapped.__code__ in ran):
                 return True
+            from cash.notebook import helper_memos
+
+            record = helper_memos.class_memo_record(base, name, memo) if named else None
+            if record is None:
+                return True
+            if any(known.get("where") == record["where"] for known in memos):
+                continue  # read, and recorded, by `helper_memos.used`
+            if ran is None and (before or {}).get(id(memo)) != memo.cache_info().misses:
+                return True
+            memos.append(record)
     return False
 
 
@@ -413,6 +469,10 @@ def _named(kind: type) -> bool:
         return False
 
 
+_TYPE_FLAGS = type.__dict__["__flags__"].__get__
+_HEAP_TYPE = 1 << 9  # Py_TPFLAGS_HEAPTYPE: made by a class statement or `type()`
+
+
 def _users_type(kind: type) -> bool:
     try:
         known = _USERS_TYPES.get(kind)
@@ -422,11 +482,18 @@ def _users_type(kind: type) -> bool:
         try:
             # A class made in a notebook cell: `__main__`, which under a
             # test runner is the runner's own module; or made by `exec` in a
-            # namespace with no `__name__`, which names it `builtins`.
+            # namespace with no `__name__`, which names it `builtins`. Not
+            # one of the interpreter's own types that ``builtins`` does not
+            # name (``module``, ``function``): looked into, every statement
+            # with an ``import`` was not stored, numpy's memos counted as its.
             module = _CLASS_MODULE(kind)
             known = (
                 module in MAIN_MODULE_NAMES
-                or (module == "builtins" and builtins.__dict__.get(_CLASS_NAME(kind)) is not kind)
+                or (
+                    module == "builtins"
+                    and _TYPE_FLAGS(kind) & _HEAP_TYPE
+                    and builtins.__dict__.get(_CLASS_NAME(kind)) is not kind
+                )
                 or (isinstance(module, str) and is_user_code_module(sys.modules.get(module)))
             )
         except Exception:  # noqa: BLE001 - not known to be the user's: not looked into
@@ -481,7 +548,9 @@ def _filled(cell) -> bool:
     return True
 
 
-def holds_a_closure_with_state(value, ran: Any = None) -> bool:
+def holds_a_closure_with_state(
+    value, ran: Any = None, memos: list[dict] | None = None, before: Mapping[int, int] | None = None
+) -> bool:
     """Whether *value* is, or holds however deeply nested, a function that
     changes what its closure holds when called (a counter or a log a factory
     returned), or a ``functools.cache`` memo. Looked for in tuples, lists,
@@ -507,8 +576,12 @@ def holds_a_closure_with_state(value, ran: Any = None) -> bool:
     the result comes back with that very class, whose memo the next run
     uses in plain Python too (a dataclass, a class with a
     ``functools.cache`` method), unless the call put the memo there or
-    filled it (`_named_class_memo_changed`; *ran* is the code the call's
-    trace recorded, None without one). A class a call made is looked into
+    filled it; one it only read is recorded in *memos* (what
+    `helper_memos.used` recorded, added to) for the entry to be served only
+    while the memo holds its answers again (`_named_class_memo_changed`;
+    *ran* is the code the call's trace recorded, None without one, and
+    *before* the memos' miss counts before it). A class
+    a call made is looked into
     whole. The standard library's guard on a dataclass's ``__repr__`` keeps
     no state between calls. Past `_HOLDERS_LOOKED_INTO` objects with
     something inside to look at, or `_STEPS_AT` values in all, it raises
@@ -525,6 +598,7 @@ def holds_a_closure_with_state(value, ran: Any = None) -> bool:
     atoms = _EXACT_ATOMS
     # How each type is read, for this walk: thousands of records share one.
     readings: dict[type, int] = {}
+    record_kinds: set[type] = set()  # classes of flat records, pushed once
     steps = 0
     while stack:
         item = stack.pop()
@@ -561,7 +635,7 @@ def holds_a_closure_with_state(value, ran: Any = None) -> bool:
             if reading == _ONE and issubclass(kind, type) and _users_type(item):
                 # Its bases its module names, and itself when it is one:
                 # their memos only (`_named_class_memo_changed`).
-                if _named_class_memo_changed(item, ran):
+                if _named_class_memo_changed(item, ran, memos, before):
                     return True
                 if _named(item):
                     continue
@@ -603,6 +677,18 @@ def holds_a_closure_with_state(value, ran: Any = None) -> bool:
                         break
                 else:
                     continue
+            reading = readings.get(ctype)
+            if reading is None:
+                reading = readings[ctype] = _reading(ctype)
+            if reading == _REFERENTS and _flat_record(child, ctype, atoms):
+                # A record of plain values (a dataclass row): looked at here,
+                # with no step of its own, so a million rows are not past
+                # the bound. Its class is looked at once, for its memos.
+                if ctype not in record_kinds:
+                    record_kinds.add(ctype)
+                    stack.append(ctype)
+                    pushed = True
+                continue
             stack.append(child)
             pushed = True
         if pushed:

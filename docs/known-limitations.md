@@ -248,11 +248,17 @@ the value it is handed. Nothing to do.
 ### Mutating global state inside a function
 
 <!-- claim: cash/analysis/callee_effects.py:callee_global_mutations @0563cfbf -->
-A function that changes a global (`LOG.append(v)`, `counter["n"] += 1`), itself
-or through a helper it calls, is handled: the statement calling it runs every time so the change really happens,
-while the call inside it is served from the cache together with its effect on
-the global. Nothing to do. If you would rather not rely on this, pass the state
-in and return it.
+A function that changes a global of your notebook (`LOG.append(v)`,
+`counter["n"] += 1`), itself or through a helper it calls, is handled: the
+statement calling it runs every time so the change really happens, while the
+call inside it is served from the cache together with its effect on the
+global. Nothing to do.
+
+A change to a variable inside one of your modules that the notebook does not
+import is not seen: a function that imports the module itself and writes to it
+(`import registry; registry.REG["n"] = 1`) is served without the write, so
+`registry.REG` keeps what it held, and is empty after a restart. Keep such
+state in the notebook, or pass it in and return it.
 
 ### A helper memoised with `functools.cache`
 

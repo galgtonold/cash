@@ -842,7 +842,14 @@ class StatementStore:
         # what it had appended.
         if not should_skip:
             _ran = attribute_or(run.trace_unit, "codes", None)
-            _found = {_name: _holds_state(_v, _ran) for _name, _v in sorted(captured_vars.items())}
+            # What the memos on named classes the outputs reach hold, with
+            # what the helper memos it called held: the entry is served only
+            # while they hold it again.
+            _class_memos: list[dict] = list(run.helper_memos or ())
+            _before = run.memo_misses_before
+            _found = {
+                _name: _holds_state(_v, _ran, _class_memos, _before) for _name, _v in sorted(captured_vars.items())
+            }
             _stateful = [_name for _name, _why in _found.items() if _why == "state"]
             _too_many = [_name for _name, _why in _found.items() if _why == "too_many"]
             if _stateful:
@@ -857,6 +864,8 @@ class StatementStore:
                     f"output(s) {', '.join(_too_many)} hold too many objects to check for a function "
                     f"or memo that keeps state; not stored, statement re-executes (lineage persists)"
                 )
+            elif _class_memos:
+                run.helper_memos = _class_memos
         # A function kept by reference whose closure holds an object the
         # other outputs hold: ``a, getter = mk()`` with ``mk`` imported. The
         # restore gives ``a`` back as a copy and ``getter`` as the live
@@ -1196,13 +1205,16 @@ def _user_decorated_calls(events: Any) -> list[str]:
     return list(names)
 
 
-def _holds_state(value: Any, ran: Any = None) -> str | None:
+def _holds_state(
+    value: Any, ran: Any = None, memos: list[dict] | None = None, before: Mapping[int, int] | None = None
+) -> str | None:
     """`holds_a_closure_with_state`: ``"state"`` when it does, or when
     looking raised (not stored is one rerun, stored unchecked may be served
     wrong); ``"too_many"`` when it holds more objects than it looks through;
-    None when it does not."""
+    None when it does not. *memos* gets what the memos on named classes it
+    reaches hold; *before* is the memos' miss counts before it ran."""
     try:
-        return "state" if holds_a_closure_with_state(value, ran) else None
+        return "state" if holds_a_closure_with_state(value, ran, memos, before) else None
     except TooMuchToLookThrough:
         return "too_many"
     except Exception:

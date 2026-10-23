@@ -492,10 +492,48 @@ def test_a_memo_on_a_named_class_counts_when_the_call_filled_it(monkeypatch):
     _Looks.lookup(1)
     ran_here = {_Looks.lookup.__wrapped__.__code__: None}
 
-    assert holds_a_closure_with_state(_Looks(), ran_here), "filled in the call"
-    assert not holds_a_closure_with_state(_Looks(), {}), "filled before the call, not in it"
-    assert holds_a_closure_with_state(_Looks()), "no trace: an earlier fill cannot be told apart"
-    assert holds_a_closure_with_state(type("Sub", (_Looks,), {})(), ran_here), "on a named base"
+    assert holds_a_closure_with_state(_Looks(), ran_here, []), "filled in the call"
+    assert holds_a_closure_with_state(type("Sub", (_Looks,), {})(), ran_here, []), "on a named base"
+    assert holds_a_closure_with_state(_Looks(), {}), "nowhere to record what it holds"
+
+
+def test_a_memo_filled_before_the_call_is_recorded_for_the_entry(monkeypatch):
+    # Refused, the second call of ``get_model("bert")`` in another cell
+    # was never stored (3 of 17 statements of a notebook without a trace).
+    # Recorded, the entry is served only while the memo holds these
+    # answers again: after a restart it is empty, and the call runs.
+    from cash.notebook import helper_memos
+
+    class _Kept:
+        @staticmethod
+        @functools.cache
+        def lookup(n):
+            return n * 2
+
+    _named_here(monkeypatch, _Kept)
+    _Kept.lookup(1)
+    memos: list[dict] = []
+    assert not holds_a_closure_with_state(_Kept(), {}, memos)
+    assert [m["where"][2:] for m in memos] == [["_Kept", ".lookup"]]
+    assert helper_memos.unfilled(memos, {}) is None
+    _Kept.lookup.cache_clear()  # what a restart leaves
+    assert helper_memos.unfilled(memos, {}) is not None
+
+
+def test_without_a_trace_the_miss_count_tells_who_filled_the_memo(monkeypatch):
+    class _Counted:
+        @staticmethod
+        @functools.cache
+        def lookup(n):
+            return n * 2
+
+    _named_here(monkeypatch, _Counted)
+    _Counted.lookup(1)
+    before = {id(_Counted.lookup): _Counted.lookup.cache_info().misses}
+    assert not holds_a_closure_with_state(_Counted(), None, [], before), "only read"
+    _Counted.lookup(2)
+    assert holds_a_closure_with_state(_Counted(), None, [], before), "filled in the call"
+    assert holds_a_closure_with_state(_Counted(), None, [], {}), "not known before"
 
 
 class _Tagged:
@@ -521,8 +559,31 @@ def test_the_walk_takes_a_bounded_number_of_values(monkeypatch):
     from cash.notebook.statement.store import _holds_state
 
     monkeypatch.setattr(call_key, "_STEPS_AT", 1000)
-    rows = [_Tagged(i) for i in range(2000)]
+    rows = [_Tagged(_Tagged(i)) for i in range(2000)]
     with pytest.raises(call_key.TooMuchToLookThrough):
         holds_a_closure_with_state(rows)
     assert _holds_state(rows) == "too_many"
-    assert not holds_a_closure_with_state(rows[:500])
+    assert not holds_a_closure_with_state(rows[:300])
+
+
+def test_a_million_plain_records_are_looked_through_within_the_bound():
+    # Each record pushed its class again: 300,000 dataclass rows went past
+    # the bound and were not stored.
+    @dataclasses.dataclass
+    class _Row:
+        a: int
+        b: str
+        c: float
+
+    rows = [_Row(i, str(i), i * 0.5) for i in range(1_000_000)]
+    assert not holds_a_closure_with_state(rows)
+
+
+def test_a_module_is_not_looked_into():
+    # ``module`` says it is from ``builtins``, which does not name it: it was
+    # taken for a class made by ``exec`` and looked into, so ``import numpy
+    # as np; arr = np.loadtxt(p)`` held numpy's memos and was never stored.
+    import fnmatch
+
+    assert not holds_a_closure_with_state(fnmatch)
+    assert not holds_a_closure_with_state({"m": [fnmatch]})

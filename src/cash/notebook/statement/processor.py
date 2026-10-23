@@ -1612,6 +1612,7 @@ class StatementProcessor:
                 run.metrics["uncacheable_reasons"].append(memos[1])
             else:
                 run.helper_memos = memos
+                run.memo_misses_before = helper_memos.misses_before(memos_before)
         if not run.skip_cache and execution.written_paths and execution.result.success:
             wrote = self._kept_writes_reason(run, execution)
             if wrote:
