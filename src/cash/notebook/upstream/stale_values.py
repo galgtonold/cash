@@ -19,7 +19,7 @@ from cash.control_markers import strip_markers
 
 from ...analysis.ast_util import parse_cached
 from ...analysis.cacheability import analyze_statement
-from ...analysis.code_analyzer import CodeAnalyzer
+from ...analysis.code_analyzer import CodeAnalyzer, statement_code
 from ...analysis.mutation_effects import CellEffects
 from ...analysis.mutations import consumed_input_names
 from ...diagnostics import log_diagnostic, warn_diagnostic
@@ -28,6 +28,7 @@ from ...value_hash import budgeted_hash
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from .._trace import trace_event
+from ..cache_key import statement_source_hash
 from ..consumables import consumable_state, has_diverged, is_consumable_unrestorable
 from ..lineage_store import statement_tag
 from ..restored_var import hashed_by_lineage
@@ -128,8 +129,9 @@ class StaleValueGuard:
 
         Builtins are skipped.
         """
-        self._mark_stateful_funcs_broken(effects.stateful_funcs, broken_vars, current_cell_idx)
-        self._keep_class_state(effects.class_state_kept, notebook_cells, current_cell_idx)
+        changed_elsewhere = self._classes_changed_elsewhere(effects.stateful_funcs, notebook_cells, current_cell_idx)
+        self._mark_stateful_funcs_broken(effects.stateful_funcs - changed_elsewhere, broken_vars, current_cell_idx)
+        self._keep_class_state(effects.class_state_kept | changed_elsewhere, notebook_cells, current_cell_idx)
         self._put_back_instead_of_rerun(broken_vars, current_cell_idx, virtual_lineage)
         self._cell_idx = current_cell_idx
         self._cells = notebook_cells
@@ -707,6 +709,37 @@ class StaleValueGuard:
             except TypeError:
                 ref = None
             self._started_from[(cell_idx, var_name)] = (id(value), ref)
+
+    def _classes_changed_elsewhere(
+        self, stateful: frozenset[str], notebook_cells: list[str] | None, current_cell_idx: int | None
+    ) -> frozenset[str]:
+        """The classes among *stateful* (the cell changes them, so their def
+        would be re-run before it) that a statement outside the cell changed
+        when it ran (``TrackingState.class_changed_by``): ``type(sbox).held
+        .append(d)``, ``super().held``, a helper's ``type(o).held``, which the
+        text of the other cells does not show as a change to the class.
+        Re-running the def would drop what that statement left on it: its
+        state is kept and put back instead (`_keep_class_state`)."""
+        changers = self.tracking_state.class_changed_by
+        if not stateful or not changers or not notebook_cells or current_cell_idx is None:
+            return frozenset()
+        if not 0 <= current_cell_idx < len(notebook_cells):
+            return frozenset()
+        cell = notebook_cells[current_cell_idx].replace("\r\n", "\n")
+        tree = parse_cached(cell)
+        if tree is None:
+            return frozenset()
+        own: set[str] = set()
+        for node in tree.body:
+            try:
+                own.add(statement_source_hash(statement_code(node, cell)))
+            except Exception:  # noqa: BLE001 - ast.unparse of a node it cannot render
+                return frozenset()
+        return frozenset(
+            name
+            for name in stateful
+            if changers.get(name, set()) - own and isinstance(self.shell.user_ns.get(name), type)
+        )
 
     def _mark_stateful_funcs_broken(
         self, stateful_funcs: frozenset[str], broken_vars: set[str], current_cell_idx: int | None

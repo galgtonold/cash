@@ -456,6 +456,13 @@ class TrackingState:
     # snapshot taken before a record of one of its statements changed is
     # simulated again.
     share_edge_changes: list[str] = field(default_factory=list)
+    # Class name -> the source hashes of the statements whose run changed
+    # the class in place or left a value on it (``sbox.hold(d)`` through
+    # ``type(self).held``): a re-run of another cell that changes the class
+    # puts its state back instead of re-running its def, which would drop
+    # what these did. Dropped when a statement binds the name afresh.
+    # W: StatementProcessor. R: StaleValueDetector.
+    class_changed_by: dict[str, set[str]] = field(default_factory=dict)
 
     # Cache key -> {variable: its lineage before} for each statement whose
     # run or hit moved on the lineages of the variables stored with its

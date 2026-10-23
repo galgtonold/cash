@@ -300,10 +300,9 @@ _ITEMS_ASKED = 64
 
 
 def _calls_a_method(tree: ast.AST | None) -> bool:
-    """Whether *tree* calls an attribute (``boxes[0].hold(d)``)."""
-    return tree is not None and any(
-        isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) for node in ast.walk(tree)
-    )
+    """Whether *tree* calls anything: a method (``boxes[0].hold(d)``), or a
+    function handed the object (``keep(sbox, d)`` doing ``type(o).held``)."""
+    return tree is not None and any(isinstance(node, ast.Call) for node in ast.walk(tree))
 
 
 def _classes_with_state(
@@ -2778,6 +2777,16 @@ class StatementProcessor:
                 f"Draws through pyplot on: {', '.join(sorted(names))} (statement re-executes)"
             )
 
+    def _note_class_changes(self, run: StatementRun, classes: set[str]) -> None:
+        """Note that *run* changed *classes* in place, and forget the
+        changers of the classes it binds afresh (``class SBox: ...``)
+        (``TrackingState.class_changed_by``)."""
+        changers = self.tracking_state.class_changed_by
+        for name in bound_names(run.tree) or ():
+            changers.pop(name, None)
+        for name in classes:
+            changers.setdefault(name, set()).add(run.source_hash)
+
     def _record_shared_object_edges(
         self,
         run: StatementRun,
@@ -2877,6 +2886,7 @@ class StatementProcessor:
             and name in user_ns
             and instance_of(user_ns[name], (type, types.ModuleType))
         }
+        self._note_class_changes(run, {name for name in changed if instance_of(user_ns[name], type)})
         value_types = VALUE_TYPES + library_value_types()
         around = _classes_with_state(
             [user_ns[name] for name in changed if instance_of(user_ns[name], type)]
@@ -2925,6 +2935,7 @@ class StatementProcessor:
                 unnamed = sorted(kept_by - run.outputs)
                 kept_by |= {origin for name in kept_by for origin in around.get(name, ()) if origin in changed}
                 record_shared_object_edges(edges, set(owners) & set(handed), kept_by)
+                self._note_class_changes(run, {name for name in kept_by if instance_of(user_ns.get(name), type)})
                 if unnamed and not run.skip_cache:
                     # A hit restores the outputs and nothing else: what it
                     # put on a class it does not name would be missing.
