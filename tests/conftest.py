@@ -119,6 +119,15 @@ class _StallWatchdog:
         # test was running 10-100x until pytest-timeout killed the worker
         # ("node down: Not properly terminated", a different test each run).
         self._tick = threading.Event()
+        self._stopped = False
+
+    def stop(self) -> None:
+        """End the thread without firing: a test's own watchdog, which left
+        running fired in a later test, its ``_fire`` then running inside that
+        test's statement (`tests/test_tooling/test_stall_watchdog.py`)."""
+        with self._lock:
+            self._stopped = True
+        self._tick.set()
 
     def poke(self, what: str | None = None) -> None:
         with self._lock:
@@ -177,6 +186,8 @@ class _StallWatchdog:
         while True:
             self._tick.wait(self.poll_interval)
             with self._lock:
+                if self._stopped:
+                    return
                 idle = _monotonic() - self._last
                 current = self._current
                 limit = self._allowance or self.timeout
