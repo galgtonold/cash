@@ -34,7 +34,7 @@ from ..value_types import BUILTIN_NAMES
 from .aliases import aliased_sources
 from .analysis_budget import ANALYSIS_BUDGET_REASON, AnalysisBudgetExceeded, no_analysis_budget
 from .annotations import extract_annotations_for_statements
-from .ast_util import called_names
+from .ast_util import called_names, nodes_in
 from .cacheability import analyze_statement
 from .cacheability_decision import analysis_failed, receiver_is_identity_coupled
 from .callee_effects import (
@@ -1666,7 +1666,10 @@ def _changed_through_lambda_parameters(
     changed = set(calls.mutation_receivers) | set(calls.changed_receivers)
     found: set[str] = set()
     builders: set[int] = set()
-    for node in ast.walk(tree):
+    # A ``def``'s body runs when it is called, not when it is defined: its
+    # calls change nothing now, and its parameter names are no variables.
+    running = nodes_in(tree, "top_level")
+    for node in running:
         if isinstance(node, ast.Subscript):
             # ``df.loc[pick]``: pandas calls a callable key with the frame.
             if namespace is not None and _handed_changes(node.slice, changed, namespace):
@@ -1694,7 +1697,7 @@ def _changed_through_lambda_parameters(
     if namespace is None:
         return found
     iterated = iterated_sources(tree)
-    for node in ast.walk(tree):
+    for node in running:
         if not isinstance(node, ast.Call):
             continue
         if isinstance(node.func, ast.Call) and id(node.func) in builders:

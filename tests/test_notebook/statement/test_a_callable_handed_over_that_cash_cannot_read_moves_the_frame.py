@@ -100,3 +100,23 @@ def test_a_callable_read_as_leaving_its_parameter_keeps_the_reader_served(cash_m
     for cell in cells[2:]:
         run_cash_cell(cash_magics, cell, cells=cells)
     assert [str(s["status"]) for s in cash_magics._last_cell_metrics["statements"]] == ["RESTORED"]
+
+
+def test_a_def_that_hands_a_changing_callable_changes_nothing_when_defined():
+    """A ``def``'s body runs when it is called: defining one that hands a
+    callable changing its parameter changes no variable, not even one that
+    shares the parameter's name (rerunning the ``def`` would move it)."""
+    import ast
+
+    import numpy as np
+    import pandas as pd
+
+    from cash.analysis.mutation_effects import classify_receivers
+
+    def bump(col):
+        col += 1.0
+
+    source = "def prep(df):\n    df.apply(bump, raw=True)\n    return len(df)"
+    namespace = {"bump": bump, "df": pd.DataFrame({"a": np.arange(3.0)})}
+    found = classify_receivers(ast.parse(source), namespace, lambda: None, arguments=())
+    assert "df" not in found.mutated
