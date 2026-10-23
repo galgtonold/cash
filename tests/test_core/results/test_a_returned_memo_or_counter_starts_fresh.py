@@ -77,3 +77,32 @@ def test_a_plain_namespace_is_still_served(cash):
     assert settings(1).n == 1
     assert settings(1).n == 1
     assert runs == [1]
+
+
+class _Row:
+    def __init__(self, i):
+        self.i = i
+        self.parts = [i, [i]]
+
+
+def test_a_result_past_what_the_check_looks_through_is_not_stored(cash, monkeypatch):
+    """Past the walk's budget cash cannot tell whether a memo is in there:
+    not stored, and the reason is kept for ``explain``."""
+    from cash.notebook import call_key
+
+    monkeypatch.setattr(call_key, "_HOLDERS_LOOKED_INTO", 10)
+    runs = []
+
+    @cash.cache
+    def rows(n):
+        runs.append(n)
+        return [_Row(i) for i in range(n)]
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rows(50)
+        rows(50)
+        why = str(rows.explain(50))
+
+    assert runs == [50, 50]
+    assert "could not look through" in why, why
