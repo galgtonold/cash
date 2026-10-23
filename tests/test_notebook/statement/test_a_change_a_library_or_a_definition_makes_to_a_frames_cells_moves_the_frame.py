@@ -4,7 +4,14 @@ frame for a slow reader below, when the change is made through a library
 body, a default argument or a decorator runs at definition time. A method
 of a library's result was read as changing nothing it was handed, and the
 statements a definition runs were skipped with the definition's body: the
-reader was served the order or value the run before made."""
+reader was served the order or value the run before made.
+
+What a library's call does to what it is handed is not read from its name:
+a positional ``out`` slot, ``copy=False``, an unbound method
+(``dict.update(d, ...)``) or a view of the parameter (``np.asarray(v)``)
+changes it as ``out=`` does. A call handed a parameter is watched around
+the run instead, so a pure one (``queue.Queue().put(v)``) is still
+served."""
 
 import pytest
 
@@ -15,7 +22,8 @@ SLOW = f"time.sleep({ABOVE_PERSISTENCE_FLOOR_S})"
 FRAME = (
     "df = pd.DataFrame({'o': [{'i': i} for i in range(10)], "
     "'l': [[i, i + 1, i + 2, i + 3, i + 4] for i in range(10)], "
-    "'v': [np.arange(5.) + i for i in range(10)]})"
+    "'v': [np.arange(5.) + i for i in range(10)], "
+    "'n': [np.array([np.nan, i]) for i in range(10)]})"
 )
 SETZ = "def setz(d):\n    if d['i'] == 3:\n        d['z'] = Z"
 CASES = {
@@ -39,9 +47,28 @@ CASES = {
     ),
     "an_add_at": ("def upd(v):\n    np.add.at(v, [0], Z)", "Z = {z}\n_ = df['v'].apply(upd)"),
     "an_out_argument": ("def upd(v):\n    np.multiply(v, Z, out=v)", "Z = {z}\n_ = df['v'].apply(upd)"),
+    "an_unbound_dict_update": ("def upd(d):\n    dict.update(d, z=Z)", "Z = {z}\n_ = df['o'].apply(upd)"),
+    "an_unbound_list_append": ("def upd(l):\n    list.append(l, Z)", "Z = {z}\n_ = df['l'].apply(upd)"),
+    "an_unbound_list_insert": ("def upd(l):\n    list.insert(l, 0, Z)", "Z = {z}\n_ = df['l'].apply(upd)"),
+    "an_unbound_array_fill": ("def upd(v):\n    np.ndarray.fill(v, Z)", "Z = {z}\n_ = df['v'].apply(upd)"),
+    "a_positional_out": ("def upd(v):\n    np.add(v, Z, v)", "Z = {z}\n_ = df['v'].apply(upd)"),
+    "a_positional_clip_out": ("def upd(v):\n    np.clip(v, -100, Z, v)", "Z = {z}\n_ = df['v'].apply(upd)"),
+    "no_copy": ("def upd(n):\n    np.nan_to_num(n, copy=False, nan=Z)", "Z = {z}\n_ = df['n'].apply(upd)"),
+    "a_fill_of_a_view": ("def upd(v):\n    np.asarray(v).fill(Z)", "Z = {z}\n_ = df['v'].apply(upd)"),
+    "a_series_over_it_clipped_in_place": (
+        "def upd(v):\n    pd.Series(v, copy=False).clip(upper=Z, inplace=True)",
+        "Z = {z}\n_ = df['v'].apply(upd)",
+    ),
+    "a_write_into_a_buffer_view": (
+        "def upd(v):\n    np.frombuffer(v, dtype=float)[0:1] = Z",
+        "Z = {z}\n_ = df['v'].apply(upd)",
+    ),
     "control_a_plain_apply": (SETZ, "Z = {z}\n_ = df['o'].apply(setz)"),
 }
-READ = f"g = ({SLOW}, (df['o'].map(str) + df['l'].map(str) + df['v'].map(lambda a: str(list(a)))).tolist())[1]"
+SHOWN = (
+    "(df['o'].map(str) + df['l'].map(str) + df['v'].map(lambda a: str(list(a))) + df['n'].map(lambda a: str(list(a))))"
+)
+READ = f"g = ({SLOW}, {SHOWN}.tolist())[1]"
 
 
 @pytest.mark.parametrize("case", list(CASES))
@@ -52,6 +79,21 @@ def test_the_reader_below_sees_the_change(cash_magics, case):
         for cell in cells:
             run_cash_cell(cash_magics, cell, cells=cells)
         ns = cash_magics.shell.user_ns
-        df = ns["df"]
-        want = (df["o"].map(str) + df["l"].map(str) + df["v"].map(lambda a: str(list(a)))).tolist()
+        want = eval(f"{SHOWN}.tolist()", {"df": ns["df"]})
         assert ns["g"] == want, f"Z = {z}"
+
+
+def test_a_library_call_that_leaves_its_argument_alone_is_served(cash_magics):
+    """``queue.Queue().put(v)`` leaves ``v`` as it was: watched, not refused
+    for its name."""
+    cells = [
+        "import time, queue\nimport numpy as np, pandas as pd",
+        f"{FRAME}\ndef upd(v):\n    q = queue.Queue()\n    q.put(v)\n    return q.qsize()",
+        f"_ = ({SLOW}, df['v'].apply(upd))[1]",
+    ]
+    statuses = []
+    for _ in range(3):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        statuses.append([str(s["status"]) for s in cash_magics._last_cell_metrics["statements"]])
+    assert statuses[-1] == ["RESTORED"], statuses

@@ -15,7 +15,15 @@ from cash._user_attrs import attribute_or
 
 from ...analysis.cacheability_decision import identity_coupled_reason
 from ..consumables import is_consumable_unrestorable
-from ..shared_objects import GaveUp, attrs_copied_apart, output_history, refers_back, share_group, shared_names
+from ..shared_objects import (
+    GaveUp,
+    WalkBudgetExceeded,
+    attrs_copied_apart,
+    output_history,
+    refers_back,
+    share_group,
+    shared_names,
+)
 from .derivation_edges import is_uncacheable_alias
 
 __all__ = ["is_history_name", "live_shared_reason", "unrestorable_output_reason"]
@@ -180,20 +188,26 @@ def shared_output_reason(
     else:
         hidden = attribute_or(shell, "user_ns_hidden", None) or {}
         partial = GaveUp()
-        found, shared = share_group(
-            names,
-            captured_vars,
-            user_ns,
-            [*cash_held, *history],
-            named,
-            foreign=lambda name: name in hidden or is_history_name(name),
-            gave_up=partial,
-            anchorable=(lambda name: name not in hidden and not is_history_name(name) and anchorable(name))
-            if anchorable is not None
-            else None,
-            anchors=anchors,
-            anchor_links=anchor_links,
-        )
+        try:
+            found, shared = share_group(
+                names,
+                captured_vars,
+                user_ns,
+                [*cash_held, *history],
+                named,
+                foreign=lambda name: name in hidden or is_history_name(name),
+                gave_up=partial,
+                anchorable=(lambda name: name not in hidden and not is_history_name(name) and anchorable(name))
+                if anchorable is not None
+                else None,
+                anchors=anchors,
+                anchor_links=anchor_links,
+            )
+        except WalkBudgetExceeded:
+            # What it found before the budget ran out stays linked.
+            if partial.links and gave_up is not None:
+                gave_up.append(partial)
+            raise
         holders.update(found)
         del found
         found_holders = partial.names

@@ -110,7 +110,9 @@ def test_a_search_up_for_many_objects_gives_up_instead_of_walking_the_heap(refer
     """``gc.get_referrers`` costs the heap times the objects asked about: a
     record per session, all shared with a second variable, never finished.
     Past `_MAX_REFERRER_TARGETS` the search gives up, so the statement is
-    refused (nothing stored) and no heap walk runs."""
+    refused (nothing stored) and no heap walk runs for that many. ``logs``,
+    found holding them by identity, joins, and what the count taken again
+    leaves is a few objects, looked up once."""
     monkeypatch.setattr(shared_objects, "_DOWN_NODES", 10)
     sessions = [("user", [1.0, float(i)]) for i in range(shared_objects._MAX_REFERRER_TARGETS * 3)]
     ns = {"logs": sessions}
@@ -120,4 +122,7 @@ def test_a_search_up_for_many_objects_gives_up_instead_of_walking_the_heap(refer
 
     assert holders == {}
     assert shared == {"kept"}
-    assert referrer_calls == [], "the holder search walked the heap for every session"
+    # One walk, for one object: once ``logs`` joins, the count finds the
+    # list itself held by this test's local ``sessions``, a frame and no
+    # variable, and looks up its holders. Never one per session.
+    assert len(referrer_calls) <= 1, "the holder search walked the heap for every session"

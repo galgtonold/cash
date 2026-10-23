@@ -11,7 +11,12 @@ as changed unless that call's callee is read whole and leaves it alone:
 - a plain function of the user's, read in turn;
 - a bound method, a partial, a static or class method, a callable object of
   the user's: the function it runs, read in turn;
-- a function or object of a library: data, as everywhere else in cash.
+- a function or object of a library: what it does to what it is handed is
+  not read from its name. Handed a parameter, or called on something built
+  from one (``np.asarray(p).fill(z)``), it may change it: the question's
+  answer is then `OBSERVE`, and the statement's frame is fingerprinted
+  around its run (`mutation_fingerprint`) instead of counted as changed or
+  as left alone.
 
 A callee cash cannot name without running code -- a closure variable that is
 not a function, an item of a container, a parameter, the result of a call,
@@ -44,7 +49,7 @@ from .callee_effects import (
 from .handed_callables import function_source
 from .mutations import MUTATING_METHODS
 
-__all__ = ["callable_changes_parameters", "lambda_changes_parameters"]
+__all__ = ["OBSERVE", "callable_changes_parameters", "lambda_changes_parameters"]
 
 #: How deep calls are followed; past it a callee counts as changing.
 _MAX_DEPTH = 6
@@ -61,30 +66,55 @@ _CHANGING_DUNDERS = frozenset(
     {"__setitem__", "__delitem__", "__setattr__", "__delattr__", "__iadd__", "__isub__", "__imul__", "__ior__"}
 )
 
-#: Library methods and functions that change an argument in place, not
-#: their receiver: ``random.Random(z).shuffle(v)``, ``rng.shuffle(v)``,
-#: ``np.add.at(v, i, 1)``, ``np.copyto(v, w)``, ``heapq.heappush(h, x)``.
-#: Any argument passed to one may change; so may one passed as ``out=``.
-_CHANGES_ARGUMENTS = frozenset(
-    {
-        "shuffle",
-        "at",
-        "copyto",
-        "place",
-        "put",
-        "putmask",
-        "put_along_axis",
-        "fill_diagonal",
-        "heapify",
-        "heappush",
-        "heappop",
-        "heapreplace",
-        "heappushpop",
-        "insort",
-        "insort_left",
-        "insort_right",
-    }
+#: Builtins that never change what they are handed: a parameter passed to
+#: one is read, not observed. Each is the builtin itself, compared by
+#: identity, not by the name the body calls it by.
+_READS_ONLY = tuple(
+    getattr(builtins, name)
+    for name in (
+        "abs",
+        "all",
+        "any",
+        "ascii",
+        "bool",
+        "bytes",
+        "callable",
+        "dict",
+        "divmod",
+        "enumerate",
+        "float",
+        "format",
+        "frozenset",
+        "hash",
+        "id",
+        "int",
+        "isinstance",
+        "issubclass",
+        "len",
+        "list",
+        "max",
+        "min",
+        "print",
+        "range",
+        "repr",
+        "reversed",
+        "round",
+        "set",
+        "sorted",
+        "str",
+        "sum",
+        "tuple",
+        "type",
+        "zip",
+    )
 )
+
+#: The methods of these builtin types that are not in `MUTATING_METHODS`
+#: change nothing: ``dict.get(d, 'k')`` reads ``d``.
+_BUILTIN_CONTAINERS = (dict, list, set, frozenset, tuple, str, bytes, int, float, complex)
+
+#: The unbound methods of a type: ``dict.update``, ``np.ndarray.fill``.
+_UNBOUND = (types.MethodDescriptorType, types.WrapperDescriptorType)
 
 #: ``operator`` functions that change their first argument.
 _SETS_FIRST = tuple(
@@ -92,6 +122,18 @@ _SETS_FIRST = tuple(
 )
 
 _MISSING = object()
+
+
+class _Observe:
+    """The answer for a callable that changes no parameter itself but hands
+    one to a library's code, which may: watched around the statement's run,
+    not guessed from the library's names."""
+
+    def __repr__(self) -> str:
+        return "OBSERVE"
+
+
+OBSERVE = _Observe()
 
 #: What a name or an attribute names, as `_Reader` sorts it.
 _UNKNOWN = "unknown"  # cannot be named without running code
@@ -204,6 +246,9 @@ class _Reader:
 
     def __init__(self) -> None:
         self._seen: dict[tuple[Any, Any], frozenset[str] | None] = {}
+        #: Whether a parameter was handed to a library's code, which may
+        #: change it (`OBSERVE`).
+        self.observed = False
 
     # -- callables -------------------------------------------------------
 
@@ -296,6 +341,9 @@ class _Reader:
             return out
 
         changed = back(body_mutations(fdef))
+        if _written_through_calls(fdef, reach):
+            # ``np.frombuffer(p)[0:1] = z``: a library's view of a parameter.
+            self.observed = True
         for node in ast.walk(fdef):
             if not isinstance(node, ast.Call):
                 continue
@@ -331,7 +379,7 @@ class _Reader:
             if owners:
                 # A method called on a parameter or on a part of it.
                 method = func.attr
-                if method in MUTATING_METHODS or method in _CHANGING_DUNDERS:
+                if method in MUTATING_METHODS or method in _CHANGING_DUNDERS or _writes_in_place(call):
                     return owners | everything
                 if isinstance(func.value, ast.Name) and func.value.id in scope.known:
                     # ``self._set(d)``: the object it is bound to is known.
@@ -346,16 +394,18 @@ class _Reader:
                 # A method of a value cash knows nothing of: a library's, as
                 # everywhere in cash. A callable of the user's handed to it
                 # with the parameter (``frame['o'].apply(upd)``) is read.
-                return _written_arguments(call, passed, everything) | self._handed_callables(call, reach, scope, depth)
+                return self._library_call(call, passed, everything) | self._handed_callables(call, reach, scope, depth)
             if (
                 func.attr not in MUTATING_METHODS
                 and func.attr not in _CHANGING_DUNDERS
                 and _library_result(func.value, reach, locals_, scope, results)
             ):
                 # ``s.diff().rolling(w)``: a method of what a library's code
-                # returned is the library's too, which changes what it is
-                # handed only as `_written_arguments` says.
-                return _written_arguments(call, passed, everything) | self._handed_callables(call, reach, scope, depth)
+                # returned is the library's too. Built from a parameter
+                # (``np.asarray(p).fill(z)``), it may be a view of it.
+                if _handed_to_calls(func.value, reach):
+                    self.observed = True
+                return self._library_call(call, passed, everything) | self._handed_callables(call, reach, scope, depth)
         elif isinstance(func, ast.Name) and func.id in reach:
             # ``put('z', 1)`` with ``put = d.__setitem__``; a parameter called.
             return reach[func.id] | everything
@@ -364,7 +414,9 @@ class _Reader:
             return _reached(func, reach) | everything
         value = scope.resolve(func, locals_)
         if value is _LIBRARY:
-            return _written_arguments(call, passed, everything) | self._handed_callables(call, reach, scope, depth)
+            if isinstance(func, ast.Attribute) and _handed_to_calls(func.value, reach):
+                self.observed = True
+            return self._library_call(call, passed, everything) | self._handed_callables(call, reach, scope, depth)
         if value is _UNKNOWN or value is _LOCAL:
             return everything
         if any(value is runs for runs in _RUNS_TEXT):
@@ -373,9 +425,33 @@ class _Reader:
             return passed.get(0, set())
         if any(value is setter for setter in _SETS_FIRST):
             return passed.get(0, set()) | self._handed_callables(call, reach, scope, depth)
+        if type(value) in _UNBOUND and passed.get(0):
+            # ``dict.update(d, z=1)``, ``np.ndarray.fill(v, 0)``: a method
+            # called on its first argument.
+            name = value.__name__
+            if name in MUTATING_METHODS or name in _CHANGING_DUNDERS:
+                return passed[0] | everything
+            if value.__objclass__ not in _BUILTIN_CONTAINERS:
+                self.observed = True
+            return self._library_call(call, passed, everything) | self._handed_callables(call, reach, scope, depth)
         if not is_users(value):
-            return _written_arguments(call, passed, everything) | self._handed_callables(call, reach, scope, depth)
+            if any(value is reads for reads in _READS_ONLY):
+                return self._handed_callables(call, reach, scope, depth)
+            return self._library_call(call, passed, everything) | self._handed_callables(call, reach, scope, depth)
         return self._handed_to(value, passed, everything, depth) | self._handed_callables(call, reach, scope, depth)
+
+    def _library_call(
+        self, call: ast.Call, passed: Mapping[int | str | None, set[str]], everything: set[str]
+    ) -> set[str]:
+        """The parameters a library's *call* changes for certain: what it is
+        handed as ``out=``. Anything else it is handed may change too, as
+        ``np.add(p, z, p)``, ``np.nan_to_num(p, copy=False)`` or
+        ``rng.shuffle(p)`` do and ``queue.Queue().put(p)`` does not: not
+        read from its name but watched (`OBSERVE`)."""
+        out = set(passed.get("out", ()))
+        if everything - out:
+            self.observed = True
+        return out
 
     def _handed_to(self, value: Any, passed, everything: set[str], depth: int) -> set[str]:
         """What handing *passed* (``slot -> names``) to *value* changes."""
@@ -643,15 +719,45 @@ def _call_name(call: ast.Call) -> str | None:
     return func.id if isinstance(func, ast.Name) else None
 
 
-def _written_arguments(call: ast.Call, passed: Mapping[int | str | None, set[str]], everything: set[str]) -> set[str]:
-    """The parameters a library's *call* may change in place though they
-    are not its receiver: all it is handed, when it is named in
-    `_CHANGES_ARGUMENTS`; else what it is handed as ``out=``."""
-    func = call.func
-    name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else None
-    if name in _CHANGES_ARGUMENTS:
-        return everything
-    return set(passed.get("out", ()))
+def _writes_in_place(call: ast.Call) -> bool:
+    """``s.clip(upper=z, inplace=True)``, ``v.clip(0, z, out=v)``: a method
+    told to write into its receiver."""
+    for keyword in call.keywords:
+        if keyword.arg == "out":
+            return True
+        if keyword.arg == "inplace" and not (isinstance(keyword.value, ast.Constant) and not keyword.value.value):
+            return True
+    return False
+
+
+def _handed_to_calls(node: ast.expr, reach: Mapping[str, set[str]]) -> set[str]:
+    """The parameters handed to a call inside the receiver *node*:
+    ``np.asarray(p)``, ``pd.Series(p, copy=False)``, ``memoryview(p)``,
+    which may be views of them."""
+    out: set[str] = set()
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Call):
+            for arg in (*inner.args, *(keyword.value for keyword in inner.keywords)):
+                out |= _reached(arg, reach)
+    return out
+
+
+def _written_through_calls(fdef: ast.AST, reach: Mapping[str, set[str]]) -> bool:
+    """Whether *fdef* assigns into, or deletes from, what a call handed a
+    parameter returned: ``np.frombuffer(p)[0:1] = z``."""
+    for node in ast.walk(fdef):
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            targets = [node.target]
+        elif isinstance(node, ast.Delete):
+            targets = node.targets
+        else:
+            continue
+        for target in targets:
+            if isinstance(target, (ast.Subscript, ast.Attribute)) and _handed_to_calls(target.value, reach):
+                return True
+    return False
 
 
 def _library_result(
@@ -787,13 +893,24 @@ def _bound_names(fdef: ast.AST) -> set[str]:
     return out
 
 
-def callable_changes_parameters(value: Any) -> bool | None:
+def callable_changes_parameters(value: Any) -> bool | None | _Observe:
     """Whether calling the user's callable *value* changes a parameter it is
-    handed in place; None when what it runs cannot be read whole."""
-    return _Reader().callable_changes(value)
+    handed in place; None when what it runs cannot be read whole; `OBSERVE`
+    when it changes none itself but hands one to a library's code, which
+    may."""
+    reader = _Reader()
+    changed = reader.callable_changes(value)
+    if changed is False and reader.observed:
+        return OBSERVE
+    return changed
 
 
-def lambda_changes_parameters(lam: ast.Lambda, namespace: Mapping[str, Any]) -> bool:
+def lambda_changes_parameters(lam: ast.Lambda, namespace: Mapping[str, Any]) -> bool | _Observe:
     """Whether *lam*, its free names read from *namespace*, changes a
-    parameter in place; one that cannot be read whole counts as changing."""
-    return _Reader().lambda_changes(lam, namespace) is not False
+    parameter in place; one that cannot be read whole counts as changing.
+    `OBSERVE` as for `callable_changes_parameters`."""
+    reader = _Reader()
+    changed = reader.lambda_changes(lam, namespace)
+    if changed is False and reader.observed:
+        return OBSERVE
+    return changed is not False

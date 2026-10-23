@@ -81,6 +81,6 @@ def test_the_frame_changes_and_no_code_of_the_users_runs(spies, statement):
     namespace = {name: getattr(spies, name) for name in ("upd", "upd2", "upd3", "upd4", "helper", "helper2")}
     namespace["df"] = None
     tree = ast.parse(statement)
-    changed = mutation_effects._changed_through_lambda_parameters(tree, top_level_calls(tree), namespace)
+    changed, _watched = mutation_effects._changed_through_lambda_parameters(tree, top_level_calls(tree), namespace)
     assert changed == {"df"}
     assert spies.CALLS == []

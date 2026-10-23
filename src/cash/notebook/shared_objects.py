@@ -2160,57 +2160,70 @@ def _share_group(
     #: The anchor tried for each object, by id; None when it can be none.
     tried: dict[int, str | None] = {}
     rounds = anchor_rounds = 0
-    framed = _frames_sharing_cells(group, user_ns, foreign)
-    while framed and rounds < _MAX_ROUNDS:
-        # Found by address, not one cell at a time up its referrers: half a
-        # million cells ``df2 = df[mask]`` shares with ``df`` took seconds.
-        # And the frames sharing cells with those: ``mg = df.merge(other)``
-        # joined for ``df``'s cells holds ``other``'s too.
-        links.append((set(group), framed))
-        joined |= framed
-        group.update((name, user_ns[name]) for name in framed)
-        holding = _holding_other_cells({name: group[name] for name in framed}, group)
-        fresh = {name: group[name] for name in framed if name in holding}
-        framed = _frames_sharing_cells(fresh, user_ns, foreign) - set(group) if fresh else set()
-        # Its own references to the frames, out of the counts taken below.
-        fresh = None
-        rounds += 1
-    rounds = 0
-    while True:
-        leaves.met.clear()
-        with frames_together(group.values()):
-            shared, found = _check_group(group, bindings, cash_held, named_held, None, user_ns, memo, partial, leaves)
-        if found and gave_up is not None:
-            gave_up.found_variables = True
-        if not shared:
-            if anchors is not None:
-                anchors.update(_met_anchors(leaves, tried, user_ns))
-            if gave_up is not None:
-                for owners, holders in links:
-                    gave_up.add(owners, holders)
-            return {name: group[name] for name in joined}, set()
-        if found and anchorable is not None and anchor_rounds < _MAX_ANCHOR_ROUNDS:
-            fresh = _anchor_candidates(found, user_ns, tried, anchorable)
-            leaves.ids.update(fresh)
-            _take_back_holding(group, leaves, fresh, tried, user_ns, memo)
-            if fresh & leaves.ids:
-                # Counted again with the new anchors left out: a holder that
-                # held only their objects is no holder any more.
-                anchor_rounds += 1
-                if anchor_links is not None:
-                    anchor_links |= found
-                continue
-        if found:
-            links.append((shared, found))
-        if not found or any(foreign(name) for name in found) or _copies_keep_old_objects(group, leaves):
-            break
-        joined |= found
-        group.update((name, user_ns[name]) for name in found)
-        rounds += 1
-        if rounds >= _MAX_ROUNDS:
-            if partial is not None:
-                partial.complete = False
-            break
+    try:
+        framed = _frames_sharing_cells(group, user_ns, foreign)
+        while framed and rounds < _MAX_ROUNDS:
+            # Found by address, not one cell at a time up its referrers: half a
+            # million cells ``df2 = df[mask]`` shares with ``df`` took seconds.
+            # And the frames sharing cells with those: ``mg = df.merge(other)``
+            # joined for ``df``'s cells holds ``other``'s too.
+            links.append((set(group), framed))
+            joined |= framed
+            group.update((name, user_ns[name]) for name in framed)
+            holding = _holding_other_cells({name: group[name] for name in framed}, group)
+            fresh = {name: group[name] for name in framed if name in holding}
+            framed = _frames_sharing_cells(fresh, user_ns, foreign) - set(group) if fresh else set()
+            # Its own references to the frames, out of the counts taken below.
+            fresh = None
+            rounds += 1
+        rounds = 0
+        while True:
+            leaves.met.clear()
+            with frames_together(group.values()):
+                shared, found = _check_group(
+                    group, bindings, cash_held, named_held, None, user_ns, memo, partial, leaves
+                )
+            if found and gave_up is not None:
+                gave_up.found_variables = True
+            if not shared:
+                if anchors is not None:
+                    anchors.update(_met_anchors(leaves, tried, user_ns))
+                if gave_up is not None:
+                    for owners, holders in links:
+                        gave_up.add(owners, holders)
+                return {name: group[name] for name in joined}, set()
+            if found and anchorable is not None and anchor_rounds < _MAX_ANCHOR_ROUNDS:
+                fresh = _anchor_candidates(found, user_ns, tried, anchorable)
+                leaves.ids.update(fresh)
+                _take_back_holding(group, leaves, fresh, tried, user_ns, memo)
+                if fresh & leaves.ids:
+                    # Counted again with the new anchors left out: a holder that
+                    # held only their objects is no holder any more.
+                    anchor_rounds += 1
+                    if anchor_links is not None:
+                        anchor_links |= found
+                    continue
+            if found:
+                links.append((shared, found))
+            if not found or any(foreign(name) for name in found) or _copies_keep_old_objects(group, leaves):
+                break
+            joined |= found
+            group.update((name, user_ns[name]) for name in found)
+            rounds += 1
+            if rounds >= _MAX_ROUNDS:
+                if partial is not None:
+                    partial.complete = False
+                break
+    except WalkBudgetExceeded:
+        # Cut short: the variables found so far share objects with the
+        # outputs all the same. Dropped, ``h.map`` holding a frame's records
+        # was no partner of theirs, and a change through the frame left a
+        # reader of ``h`` served the old records.
+        if gave_up is not None and links:
+            for owners, holders in links:
+                gave_up.add(owners, (name for name in holders if not foreign(name)))
+            gave_up.complete = False
+        raise
     if gave_up is not None and partial is not None:
         for owners, holders in links:
             gave_up.add(owners, (name for name in holders if not foreign(name)))
@@ -2551,7 +2564,13 @@ def _copies_keep_old_objects(group: Mapping[str, Any], leaves: Leaves | None = N
         seen.add(id(obj))
         if instance_of(obj, (types.FunctionType, types.BuiltinFunctionType)):
             return True
-        stack.extend(children_of(obj) or ())
+        children = children_of(obj) or ()
+        if len(children) > 1 and _plain_data.is_tree(list(children), plain_leaves):
+            # A frame's object column of records, asked as one list: 5,000
+            # parsed records took a Python step each, 0.4 s past the check's
+            # budget, and the frame built from them was never stored.
+            continue
+        stack.extend(children)
     return False
 
 
@@ -2581,6 +2600,7 @@ def _check_group(
             group, bindings, value_types, keep_identity, fast=fast, memo=memo, leaves=leaves
         )
         _count_memo(memo, nodes, inbound)
+        _count_together(nodes, inbound)
         if not excess_refs(nodes, inbound, checked):
             # Every reference is the group's own already. What cash holds
             # itself only adds to the counts, so it cannot leave one over:
@@ -2609,6 +2629,8 @@ def _check_group(
         named = {id(mapping) for mapping, _key in named_held if mapping is not user_ns}
         internal |= {id(group), id(bindings), id(cash_held), id(named_held), id(nodes), *nodes, *named}
         internal |= {id(memo), *(id(listed) for listed in memo.values() if listed is not None)}
+        if _TOGETHER is not None:
+            internal |= {id(_TOGETHER), *map(id, _TOGETHER.values())}
         internal |= {id(m) for m in bindings if m is not user_ns}
         discounted = {key for mapping, key in named_held if mapping is user_ns}
         # Held in a pandas object's own slots: the search up would stop at
@@ -2792,6 +2814,9 @@ def _inside_library_objects(
 def _reads_inside(node: Any, value_types: tuple[type, ...]) -> bool:
     """Whether *node* is a library's own object the walk does not read: not
     a value, nor pandas or numpy data (read by their own rules)."""
+    if type(node) in _READ_BY_THE_WALK:
+        # Asked of every node: 15,000 parts of 5,000 records took 0.2 s.
+        return False
     try:
         if is_value(node, value_types) or issubclass(type(node), _NOT_WITHIN) or children_of(node) is not None:
             return False
@@ -2799,6 +2824,10 @@ def _reads_inside(node: Any, value_types: tuple[type, ...]) -> bool:
         return False
     kind = _LIBRARY_KINDS.get(type(node))
     return (kind or _library_kind(type(node))) is _LEAF
+
+
+#: Exact types the walk reads itself (`children_of` is never None for them).
+_READ_BY_THE_WALK = frozenset({dict, list, tuple, set, frozenset})
 
 
 def reads_down(obj: Any, value_types: tuple[type, ...]) -> bool | None:
@@ -3112,6 +3141,35 @@ def _count_memo(memo: dict[int, list | None], nodes: dict[int, Any], inbound: di
                 inbound[key] += 1
 
 
+def _count_together(nodes: dict[int, Any], inbound: dict[int, int]) -> None:
+    """Add to *inbound* the reference each object-column slot of the frames
+    `frames_together` read, among *nodes*, makes to the cell it holds, once
+    per slot: the walk counts each such frame's reference to the cell
+    through the list that read keeps (`_object_cells`), which holds it too,
+    and numpy tells no count of the slot. Two frames on the same memory
+    (``df2 = df[mask]`` that kept every row) hold a cell in one slot.
+    Without it, ``flat = pd.json_normalize(recs)`` read with ``df``, which
+    holds the records, was refused as shared once ``recs`` joined."""
+    if _LISTED_FROM is None:
+        return
+    np = sys.modules["numpy"]
+    slots: set[int] = set()
+    for frame, reads in _LISTED_FROM.items():
+        if frame not in nodes:
+            continue
+        for array, keep in reads:
+            start = array.__array_interface__["data"][0]
+            places = (np.flatnonzero(keep) * array.strides[0] + start).tolist()
+            for place, cell in zip(places, array[keep].tolist()):
+                if place in slots:
+                    continue
+                slots.add(place)
+                key = id(cell)
+                if key in nodes:
+                    inbound[key] += 1
+            cell = None  # the loop's own reference, out of the counts read after
+
+
 def _count_index_data(nodes: dict[int, Any], inbound: dict[int, int], user_ns: Mapping[str, Any]) -> None:
     """Count in *inbound* what the indexes of the frames in *user_ns* hold
     of *nodes*: an index's data and its engine's values.
@@ -3351,12 +3409,59 @@ def _find_holders(
     per level of containers -- 0.3 s a statement next to a list of three
     million records. Down is only a first guess: the count taken again with
     the variables it found joined decides, and when that still finds a holder
-    the search up runs.
+    the search up runs. Past `_MAX_REFERRER_TARGETS` objects, where the
+    search up gives up, the flat variables are read for them by identity
+    (`_flat_holders`).
     """
     found = _holders_from_names(targets, internal, user_ns, known)
+    if not found and len(targets) > _MAX_REFERRER_TARGETS:
+        # Too many for the search up, which would give up at once.
+        found = _flat_holders(targets, internal, user_ns, known)
     if found:
         return found
     return _holders_from_referrers(targets, internal, user_ns, known, gave_up)
+
+
+#: The largest list, tuple or dict `_flat_holders` reads.
+_FLAT_WIDEST = 1_000_000
+
+
+def _flat_holders(targets: list[Any], internal: set[int], user_ns: Mapping[str, Any], known: set[str]) -> set[str]:
+    """The variables of *user_ns* not in *known* bound to a list, tuple or
+    dict holding one of *targets* as an item, or in an item that is itself
+    one (a record's ``tags``): ``recs``, the 5,000 records a frame's object
+    column, or ``pd.json_normalize(recs)``'s, was built from, too wide for
+    the search down (`_holders_from_names`) and too many objects for the
+    search up, which gave up and refused the frame. Read by identity, at
+    most `_FLAT_WIDEST` items a variable."""
+    wanted = {id(obj) for obj in targets}
+    found: set[str] = set()
+    for name, value in list(user_ns.items()):
+        kind = type(value)
+        if name in known or id(value) in internal or kind not in _FLAT_KINDS:
+            continue
+        items = dict.values(value) if kind is dict else value
+        if len(items) > _FLAT_WIDEST:
+            continue
+        if not wanted.isdisjoint(map(id, items)):
+            found.add(name)
+            continue
+        budget = _FLAT_WIDEST
+        for item in items:
+            inner = type(item)
+            if inner not in _FLAT_KINDS:
+                continue
+            parts = dict.values(item) if inner is dict else item
+            budget -= len(parts)
+            if budget < 0:
+                break
+            if not wanted.isdisjoint(map(id, parts)):
+                found.add(name)
+                break
+    return found
+
+
+_FLAT_KINDS = (list, tuple, dict)
 
 
 #: Most objects `_holders_from_referrers` looks the holders of at once.
