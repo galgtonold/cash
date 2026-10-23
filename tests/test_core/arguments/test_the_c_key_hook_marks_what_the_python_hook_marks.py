@@ -1,5 +1,7 @@
 """A key pickle's ``persistent_id`` (`kept_state.key_aliases`) at C speed
-(``cwalk.c``'s ``key_alias_id``) writes the bytes the Python one writes.
+(``cwalk.c``'s ``key_alias_id``) writes the bytes the Python one writes, and
+so does the reducer of a type whose reduce drops its ``__dict__`` (a pandas
+Timestamp, ``reduce_dict_apart``).
 
 The pickle asks it of every object a key holds: keying a column of seven
 lists of 140,000 timestamps took 3.6 s, most of it in the Python hook. The
@@ -46,6 +48,9 @@ def _values():
     yield "dates", [Rec(datetime.date(2020, 1, 2)), datetime.timedelta(3)]
     yield "functions and types", [Rec(len), Rec(Rec), Rec(sorted)]
     yield "a frame inside", [Rec(pd.DataFrame({"a": [1, 2]}))]
+    noted = pd.Timestamp("2021-03-04")
+    noted.note = "kept"
+    yield "a timestamp with an attribute", [noted, stamps[1], noted]
 
 
 def _python_hook(monkeypatch):

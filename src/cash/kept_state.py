@@ -1093,23 +1093,39 @@ def _names_apart(reducer: Any, names: dict[str, str]) -> Callable[[Any], Any]:
     restart). The names are written as objects of their own, the same
     whichever objects the value held, as loading leaves them."""
 
+    apart = _names_apart_of(names)
+
     def reduce(obj: Any) -> Any:
-        reduced = reducer(obj)
+        return apart(reducer(obj))
+
+    kernel = getattr(_native.kernels, "reduce_dict_apart", None)
+    protocol = getattr(reducer, "with_dict_protocol", None)
+    if kernel is not None and protocol is not None:
+        # The same answers at C speed: a key pickle asks it of every pandas
+        # Timestamp it writes.
+        return functools.partial(kernel, reduce, apart, protocol)
+    return reduce
+
+
+def _names_apart_of(names: dict[str, str]) -> Callable[[Any], Any]:
+    """`_names_apart`'s change to a reduce value already made."""
+
+    def apart(reduced: Any) -> Any:
         if type(reduced) is not tuple or len(reduced) < 3:
             return reduced
         state = reduced[2]
         if type(state) is dict:
             try:
-                apart = {names[key]: value for key, value in state.items()}
+                parted = {names[key]: value for key, value in state.items()}
             except (KeyError, TypeError):
-                apart = _state_apart(state, names)
+                parted = _state_apart(state, names)
         elif type(state) is tuple and len(state) == 2 and all(part is None or type(part) is dict for part in state):
-            apart = tuple(None if part is None else _state_apart(part, names) for part in state)
+            parted = tuple(None if part is None else _state_apart(part, names) for part in state)
         else:
             return reduced
-        return (reduced[0], reduced[1], apart, *reduced[3:])
+        return (reduced[0], reduced[1], parted, *reduced[3:])
 
-    return reduce
+    return apart
 
 
 def _holds_dtype(t: type) -> bool:
@@ -1554,6 +1570,7 @@ def _reducer_with_dict(protocol: int) -> Any:
             return obj.__reduce_ex__(protocol)
         return _reduce_with_dict(obj, protocol)
 
+    reduce.with_dict_protocol = protocol  # type: ignore[attr-defined]
     return reduce
 
 

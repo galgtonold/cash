@@ -1253,6 +1253,45 @@ static PyObject *py_key_alias_id(PyObject *self, PyObject *const *args, Py_ssize
     Py_RETURN_NONE;
 }
 
+/* reduce_dict_apart(full, apart, protocol, obj): kept_state's reducer of a
+ * type whose own reduce drops its instances' __dict__ (`_reducer_with_dict`
+ * under `_names_apart`), answer for answer. An instance with something in
+ * its __dict__ goes to full(obj); an empty one is obj.__reduce_ex__(protocol),
+ * a reduce with a state handed to apart(reduced). A key pickle asks it of
+ * every pandas Timestamp it writes: two Python calls each, most of keying a
+ * column of a million of them. */
+static PyObject *str_dunder_dict, *str_reduce_ex;
+
+static PyObject *py_reduce_dict_apart(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 4) {
+        PyErr_SetString(PyExc_TypeError, "reduce_dict_apart(full, apart, protocol, obj)");
+        return NULL;
+    }
+    if (!str_dunder_dict && !(str_dunder_dict = PyUnicode_InternFromString("__dict__"))) return NULL;
+    if (!str_reduce_ex && !(str_reduce_ex = PyUnicode_InternFromString("__reduce_ex__"))) return NULL;
+    PyObject *obj = args[3];
+    PyObject *attrs = PyObject_GetAttr(obj, str_dunder_dict);
+    int empty;
+    if (!attrs) {
+        if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return NULL;
+        PyErr_Clear();
+        empty = 1;
+    } else {
+        int truth = PyDict_CheckExact(attrs) ? PyDict_GET_SIZE(attrs) > 0 : PyObject_IsTrue(attrs);
+        Py_DECREF(attrs);
+        if (truth < 0) return NULL;
+        empty = !truth;
+    }
+    if (!empty) return PyObject_CallOneArg(args[0], obj);
+    PyObject *reduced = PyObject_CallMethodOneArg(obj, str_reduce_ex, args[2]);
+    if (!reduced || !PyTuple_CheckExact(reduced) || PyTuple_GET_SIZE(reduced) < 3) return reduced;
+    PyObject *state = PyTuple_GET_ITEM(reduced, 2);
+    if (!PyDict_CheckExact(state) && !PyTuple_CheckExact(state)) return reduced;
+    PyObject *apart = PyObject_CallOneArg(args[1], reduced);
+    Py_DECREF(reduced);
+    return apart;
+}
+
 static PyMethodDef cwalk_methods[] = {
     {"leaf_items", (PyCFunction)(void (*)(void))py_leaf_items, METH_FASTCALL,
      "leaf_items(group, mode, leaves) -> bool | NotImplemented"},
@@ -1275,6 +1314,8 @@ static PyMethodDef cwalk_methods[] = {
      "referrers_in(heap, ids) -> list | NotImplemented"},
     {"key_alias_id", (PyCFunction)(void (*)(void))py_key_alias_id, METH_FASTCALL,
      "key_alias_id(seen, atoms, by_name, kinds, identityless, outside, obj) -> None | mark"},
+    {"reduce_dict_apart", (PyCFunction)(void (*)(void))py_reduce_dict_apart, METH_FASTCALL,
+     "reduce_dict_apart(full, apart, protocol, obj) -> reduce value"},
     {NULL, NULL, 0, NULL}};
 
 int cwalk_add_functions(PyObject *m) { return PyModule_AddFunctions(m, cwalk_methods); }
