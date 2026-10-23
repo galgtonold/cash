@@ -67,3 +67,14 @@ def test_a_difference_a_fresh_kernel_also_gives_is_kept_apart(monkeypatch, tmp_p
     report = check(notebook("fake", ["u = next(G)"]), tmp_path, ["trace"])
     assert report.ok and report.verdict == "REBUILT", report.text()
     assert [(run, where) for _c, run, where, *_ in report.rebuilt] == [("run2", "u")]
+
+
+def test_a_plan_of_its_own_names_each_run():
+    shape = notebook("plan", ["a = 1", "b = a"], plan=["all", 1, "restart", "all", 1])
+    assert shape.runs() == [
+        ("run1", False, None),
+        ("step2", False, [1]),
+        ("restart+run1", True, None),
+        ("restart+step4", False, [1]),
+    ]
+    assert [name for name, *_ in notebook("default", ["a = 1"]).runs()] == list(plain_checker.RUNS)

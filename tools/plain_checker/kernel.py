@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 from typing import Any, Iterator
 
-from tools.plain_checker import CONFIGS, RUNS, Outcome, Shape
+from tools.plain_checker import CONFIGS, Outcome, Shape
 
 #: Run in the kernel after cash is on, in the ``floors0`` config.
 FLOORS0_SNIPPET = "# @cash:no-cache\nimport cash.notebook.call_unit as _pc_cu; _pc_cu._COST_FLOOR_S = 0; del _pc_cu"
@@ -111,7 +111,7 @@ def run_notebook(shape: Shape, work: Path, config: str | None) -> Outcome:
     names = (
         shape.names
         if shape.names is not None
-        else assigned_names([code for run in range(len(RUNS)) for code in shape.cells_for(run)])
+        else assigned_names([code for run in range(len(shape.runs())) for code in shape.cells_for(run)])
     )
     outcome = Outcome()
     runner = NotebookTestRunner(work_dir=work, timeout=300)
@@ -123,8 +123,8 @@ def run_notebook(shape: Shape, work: Path, config: str | None) -> Outcome:
         runner.client.allow_errors = True  # an error is an output to compare, not the end of the run
         if config is not None:
             _cash_on(runner, config, init=False)  # start_kernel turned cash on
-        for index, run_name in enumerate(RUNS):
-            if run_name == "restart+run1":
+        for index, (run_name, restart_first, which) in enumerate(shape.runs()):
+            if restart_first:
                 runner.restart()
                 if config is not None:
                     _cash_on(runner, config)  # a restart leaves the kernel without cash
@@ -133,7 +133,7 @@ def run_notebook(shape: Shape, work: Path, config: str | None) -> Outcome:
                 if runner.get_cell_source(number) != code:
                     runner.set_cell_source(number, code)
             seen = outcome.seen.setdefault(run_name, {})
-            for number in range(1, len(cells) + 1):
+            for number in [i + 1 for i in which] if which is not None else range(1, len(cells) + 1):
                 runner.run_cell(number)
                 seen[f"cell {number - 1} output"] = _shown(runner.get_cell(number))
                 if config is not None:

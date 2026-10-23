@@ -395,4 +395,15 @@ SHAPES = [
         steps=["f(2)", "K = 3", "f(2)"],
         source="reviews/aug-assign-dunder/review.md item 5 (global read by cached fn; adapted)",
     ),
+    notebook(
+        "thread-filled-list-read-again",
+        cells=[
+            "import threading\ndata = []\nev = threading.Event()\ndef worker():\n    ev.wait()\n    data.extend([1, 2, 3])\nt = threading.Thread(target=worker, daemon=True)\nt.start()",
+            "snap = len(data)\nprint(f'snap={snap}')",
+            "ev.set()\nt.join()\nprint(f'n={len(data)}')",
+        ],
+        names=["snap"],
+        plan=["all", 1, "restart", "all", 1],
+        source="tests/test_notebook_integration/language/test_async_and_threads.py::test_background_thread_event_gated_list_isolated_rerun",
+    ),
 ]

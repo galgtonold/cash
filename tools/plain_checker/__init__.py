@@ -13,9 +13,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-__all__ = ["CONFIGS", "RUNS", "Outcome", "Report", "Shape", "check", "decorator", "notebook"]
+__all__ = ["CONFIGS", "PLAN", "RUNS", "Outcome", "Report", "Shape", "check", "decorator", "notebook"]
 
-#: The run sequence: Run All three times, a restart, Run All twice.
+#: The default plan: Run All three times, a restart, Run All twice. A
+#: shape can give its own: "all", "restart", or a cell's index to run alone.
+PLAN: tuple[str | int, ...] = ("all", "all", "all", "restart", "all", "all")
+
+#: The default plan's runs, by name.
 RUNS: tuple[str, ...] = ("run1", "run2", "run3", "restart+run1", "restart+run2")
 
 #: Config name -> environment for the cash side. ``floors0`` also sets
@@ -37,14 +41,35 @@ class Shape:
     name: str
     kind: str
     cells: list[str] = field(default_factory=list)
-    #: Before run index -> {cell index: new source}; runs are indexed as in `RUNS`.
+    #: Before run index -> {cell index: new source}; the runs of the plan
+    #: (each step but a restart) are indexed from 0.
     edits: dict[int, dict[int, str]] = field(default_factory=dict)
+    #: The steps, as `PLAN`; None runs `PLAN`.
+    plan: list[str | int] | None = None
     #: Variables compared after each run; None compares every top-level name
     #: the cells assign (not functions, classes or modules).
     names: list[str] | None = None
     setup: str = ""
     steps: list[str] = field(default_factory=list)
     source: str = ""
+
+    def runs(self) -> list[tuple[str, bool, list[int] | None]]:
+        """Each run of the plan: its name, whether a restart comes first,
+        and the cells it runs (None: all of them)."""
+        out: list[tuple[str, bool, list[int] | None]] = []
+        restarts, alls, restart_first = 0, 0, False
+        for step in self.plan or PLAN:
+            if step == "restart":
+                restarts, alls, restart_first = restarts + 1, 0, True
+                continue
+            prefix = "" if not restarts else "restart+" if restarts == 1 else f"restart{restarts}+"
+            if step == "all":
+                alls += 1
+                out.append((f"{prefix}run{alls}", restart_first, None))
+            else:
+                out.append((f"{prefix}step{len(out) + 1}", restart_first, [int(step)]))
+            restart_first = False
+        return out
 
     def cells_for(self, run: int) -> list[str]:
         """The cells as they stand for run *run*, every earlier edit applied."""
@@ -62,9 +87,10 @@ def notebook(
     *,
     edits: dict[int, dict[int, str]] | None = None,
     names: list[str] | None = None,
+    plan: list[str | int] | None = None,
     source: str = "",
 ) -> Shape:
-    return Shape(name, "notebook", cells=list(cells), edits=dict(edits or {}), names=names, source=source)
+    return Shape(name, "notebook", cells=list(cells), edits=dict(edits or {}), names=names, plan=plan, source=source)
 
 
 def decorator(name: str, setup: str, steps: list[str], *, source: str = "") -> Shape:
@@ -144,7 +170,9 @@ def _fresh_runs(shape: Shape) -> dict[str, str]:
     """Run -> the plain run that is a fresh kernel's Run All of the same
     cells: the first, or the first after the restart. A run whose cells
     neither has (an edit in between) has none."""
-    fresh = {}
+    fresh: dict[str, str] = {}
+    if shape.plan is not None:
+        return fresh  # a plan of its own: no fresh Run All to compare with
     for index, run_name in enumerate(RUNS):
         for first in (0, RUNS.index("restart+run1")):
             if first <= index and shape.cells_for(index) == shape.cells_for(first):
@@ -176,7 +204,7 @@ def check(shape: Shape, work_dir: Any, configs: list[str] | None = None) -> Repo
             report.errors.append((config, repr(exc)))
             continue
         report.statuses[config] = got.statuses
-        for run_name in RUNS:
+        for run_name in dict.fromkeys([*plain.seen, *got.seen]):
             mine, theirs = got.seen.get(run_name, {}), plain.seen.get(run_name, {})
             first = plain.seen.get(fresh[run_name], {}) if run_name in fresh else {}
             for where in sorted(set(mine) | set(theirs), key=str):

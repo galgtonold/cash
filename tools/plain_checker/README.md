@@ -107,7 +107,11 @@ SHAPES = [
 ```
 
 Runs are numbered 0 to 4: Run All three times, then the restart, then
-twice more. Leave out `%cash_*` magics and `import cash`, because the
+twice more. A shape can give its own `plan`: a list of `"all"`,
+`"restart"` and cell indexes to run one cell alone. For example,
+`plan=["all", 1, "restart", "all", 1]` re-runs cell 1 after a Run All.
+Edits are then keyed by the plan's runs, with restarts not counted. A
+custom plan has no REBUILT verdict. Leave out `%cash_*` magics and `import cash`, because the
 checker sets cash up itself. Keep cells deterministic: no unseeded random
 numbers, clock readings or addresses in the output. A cell that is slower
 than the 10 ms floor is cached in every config. A cheaper cell is cached
