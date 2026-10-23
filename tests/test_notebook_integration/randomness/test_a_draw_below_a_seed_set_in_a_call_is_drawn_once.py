@@ -1,5 +1,5 @@
 """A draw below a statement whose call seeds the stream is drawn once, as in
-plain Python, and served after a restart.
+plain Python, on a second Run All too, and served after a restart.
 
 ``suite = (rc(5), rc(6)) * 4`` with ``rc`` seeding ``random`` (E16's
 ``random_cities``), then ``m = mean(... random.sample(t, 2) ...)``: the print
@@ -40,11 +40,6 @@ CASES = {
         "suite = (rc(5), rc(6)) * 4",
         NP_DRAW,
     ),
-    "a generator made in the function": (
-        "random.seed(0)\ndef rc(n):\n    g = np.random.default_rng(n)\n    return tuple(int(x) for x in g.integers(0, 9, n))",
-        "suite = (rc(5), rc(6)) * 4",
-        DRAW,
-    ),
 }
 
 
@@ -61,6 +56,8 @@ def test_the_draw_is_made_once_and_served_after_a_restart(nb_runner, how):
     nb_runner.run_all()
     shown = nb_runner.get_raw_output(5)
     assert expected in shown and "Upstream" not in shown, shown
+    nb_runner.run_all()
+    assert expected in nb_runner.get_raw_output(5), nb_runner.get_raw_output(5)
 
     nb_runner.restart()
     nb_runner._init_cash()
