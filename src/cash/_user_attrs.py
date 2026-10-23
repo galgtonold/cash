@@ -191,7 +191,7 @@ _SLOT_READERS = (types.GetSetDescriptorType, types.MemberDescriptorType)
 _DICT_READERS: dict[type, Any] = {}
 
 
-def own_dict(obj: Any) -> dict | None:
+def own_dict(obj: Any, subclasses: bool = False) -> dict | None:
     """The attribute dict Python keeps for *obj*, read without running code
     of the object's, or None when it has none.
 
@@ -201,6 +201,10 @@ def own_dict(obj: Any) -> dict | None:
     never ended, where plain Python never asks. The slot Python gives an
     instance is read instead; a class whose ``__dict__`` is its own, not
     that slot, has none that cash reads.
+
+    A ``dict`` subclass set as the slot (``self.__dict__ = Attrs(...)``)
+    is given only with *subclasses*: read it with ``dict``'s own methods
+    (``dict.values(own)``), so none of the subclass's runs.
     """
     kind = type(obj)
     reader = _DICT_READERS.get(kind)
@@ -218,4 +222,6 @@ def own_dict(obj: Any) -> dict | None:
         attributes = reader.__get__(obj, kind)
     except Exception:  # noqa: BLE001 - the object's own slot, not cash's error
         return None
-    return attributes if type(attributes) is dict else None
+    if type(attributes) is dict or (subclasses and isinstance(attributes, dict)):
+        return attributes
+    return None
