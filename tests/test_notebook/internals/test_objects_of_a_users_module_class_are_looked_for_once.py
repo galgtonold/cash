@@ -28,6 +28,7 @@ def _asked_about(monkeypatch, cls):
     setattr(module, name, cls)
     monkeypatch.setitem(sys.modules, "_a_users_module", module)
     monkeypatch.setattr(held_functions, "_users_module_classes", lambda: [getattr(module, name)])
+    monkeypatch.setattr(held_functions, "_users_module_functions", list)
 
 
 def test_objects_of_a_users_module_class_are_looked_for_once_until_code_runs(monkeypatch):
@@ -44,6 +45,7 @@ def test_objects_of_a_users_module_class_are_looked_for_once_until_code_runs(mon
         return [referrer for referrer in real(*objects) if referrer is not objects]
 
     monkeypatch.setattr(held_functions, "_users_module_classes", lambda: [_OfAUsersModule])
+    monkeypatch.setattr(held_functions, "_users_module_functions", list)
     monkeypatch.setattr(held_functions.gc, "get_referrers", counting)
     kept = _OfAUsersModule()
     assert all(held_functions.module_class_objects_exist() for _ in range(5))
@@ -147,3 +149,17 @@ def test_a_closure_over_the_class_counts_and_an_odd_name_does_not_raise(monkeypa
     record = {"__name__": ["x"], "kind": Held}  # a parsed JSON record
     assert held_functions.module_class_objects_exist()
     del record
+
+
+def test_a_module_function_held_in_a_value_counts(monkeypatch):
+    # ``{'fn': mylib.helper, 'rows': rows}``: the function runs the module's
+    # code, as a class held there does. Its module holding it does not count.
+    module = types.ModuleType("_a_users_module")
+    exec("def helper(v):\n    return v", vars(module))
+    monkeypatch.setitem(sys.modules, "_a_users_module", module)
+    monkeypatch.setattr(held_functions, "_users_module_classes", list)
+    monkeypatch.setattr(held_functions, "_users_module_functions", lambda: [module.helper])
+    assert not held_functions.module_class_objects_exist()
+    big = {"fn": module.helper, "rows": [1, 2]}
+    assert held_functions.module_class_objects_exist()
+    del big
