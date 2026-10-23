@@ -226,12 +226,15 @@ def _still_named(ref: Any, module: str, qualname: str, notebook: Mapping[str, An
 
 #: How many values `writers_without_a_trace` opens for one statement (past
 #: it, or a container too big to open, a class of the user's with a writing
-#: special method anywhere counts), and how many steps down it goes.
+#: special method and an object alive counts), and how many steps down it
+#: goes.
 _OPEN_AT = 20_000
 _DEPTH = 6
-#: How many items of containers and arrays of objects it reads in all (a
-#: million in 30 ms at C speed, 0.5 s when each is an object to look into).
-#: An array of numbers is not read.
+#: How many items of containers and arrays of objects it reads in all, at C
+#: speed (a million in 30 ms). An array of numbers is not read.
+_READ_AT = 10_000_000
+#: How many of those items it looks into one by one (0.5 s for a million):
+#: those that are not plain values.
 _SCAN_AT = 2_000_000
 
 
@@ -271,7 +274,8 @@ def writers_without_a_trace(
     seen: set[int] = set()
     classes: dict[type, None] = {}
     over = False
-    steps = scanned = 0
+    steps = 0
+    work = [0, 0]  # items read at C speed, items looked into one by one
     while todo:
         value, depth = todo.pop()
         if value is _OVER:
@@ -291,18 +295,21 @@ def writers_without_a_trace(
             continue
         seen.add(id(value))
         kind = type(value)
-        # The items a container or an array hands over are looked at too:
-        # a grid of numbers is a few thousand values and millions of items.
-        scanned += _item_count(value, kind, hc)
-        if scanned > _SCAN_AT:
+        # The items a container or an array hands over are read too: a
+        # grid of numbers is a few thousand values and millions of items.
+        work[0] += _item_count(value, kind, hc)
+        if work[0] > _READ_AT:
             over = True
             break
         if kind not in classes and _users_special(kind, hc):
             classes[kind] = None
-        todo.extend((item, depth + 1) for item in _held(value, kind, hc))
+        todo.extend((item, depth + 1) for item in _held(value, kind, hc, work))
+        if work[0] > _READ_AT or work[1] > _SCAN_AT:
+            over = True
+            break
     reached = set(classes)
     if over and hc.special_classes_exist(namespace):
-        classes.update(dict.fromkeys(_live_writing_classes(namespace, hc)))
+        classes.update(dict.fromkeys(_with_objects_alive(_live_writing_classes(namespace, hc))))
     found: list[tuple[str, tuple[str, ...]]] = []
     for cls in classes:
         before = len(found)
@@ -342,11 +349,12 @@ def _not_plain(items: Iterable[Any]) -> list[Any]:
     return [item for item in items if type(item) not in _PLAIN]
 
 
-def _held(value: Any, kind: type, hc: Any) -> Iterable[Any]:
+def _held(value: Any, kind: type, hc: Any, work: list[int]) -> Iterable[Any]:
     """What `writers_without_a_trace` looks at inside *value*. Read by type
     and Python's own slots: no property, ``__getattr__`` or method of the
     user's runs (``dtype``, ``columns``, ``to_numpy``), and plain values
-    are not taken."""
+    are not taken. What it reads is added to *work*: the items of the rows
+    it reads through (`_records`), and the items it looks into."""
     try:
         if kind in hc.OPENED:
             held = value.data if issubclass(kind, hc.HELD_IN_DATA) else value
@@ -356,9 +364,7 @@ def _held(value: Any, kind: type, hc: Any) -> Iterable[Any]:
                 items = held
             if _PLAIN.issuperset(map(type, items)):
                 return []  # read at C speed, a million in about 30 ms
-            if len(held) > hc.ITEM_TYPES_AT:
-                return [_OVER]
-            return _one_flat_record_per_class(_not_plain(items), hc)
+            return _records(_not_plain(items), hc, work)
         if kind is types.FunctionType:
             if not is_user_code_file(value.__code__.co_filename) or library_made(value.__code__, value.__globals__):
                 return []
@@ -372,7 +378,7 @@ def _held(value: Any, kind: type, hc: Any) -> Iterable[Any]:
             return [value.func, *value.args, *value.keywords.values()]
         array = _array_kind(kind)
         if array is not None:
-            return _array_items(value, array, hc)
+            return _array_items(value, array, hc, work)
         if issubclass(kind, type):
             if hc.is_users_class(value) or _holds_users_code(value):
                 return _not_plain(type.__dict__["__dict__"].__get__(value).values())
@@ -385,10 +391,17 @@ def _held(value: Any, kind: type, hc: Any) -> Iterable[Any]:
     return []
 
 
-def _one_flat_record_per_class(items: list[Any], hc: Any) -> list[Any]:
-    """*items* with one object per class of the user's whose attributes are
-    all plain values: the rest of them hold nothing more to look at, so
-    25,000 rows are a few values, not past `_OPEN_AT`."""
+def _records(items: list[Any], hc: Any, work: list[int]) -> list[Any]:
+    """*items* (counted into *work*) less the rows that hold nothing to
+    look at, so 25,000 rows are a few values, not past `_OPEN_AT`: a list,
+    tuple, dict or set of plain values (a JSON record, ``(i, name)``), and
+    after the first of its class an object of the user's whose attributes
+    are plain values or such containers (a dataclass with a ``list``
+    field). Past `ITEM_TYPES_AT` of them, or past what one statement
+    reads, ``[_OVER]``."""
+    work[1] += len(items)
+    if work[1] > _SCAN_AT:
+        return [_OVER]
     firsts: dict[type, Any] = {}
     checked: set[int] = set()
     out = []
@@ -397,16 +410,84 @@ def _one_flat_record_per_class(items: list[Any], hc: Any) -> list[Any]:
             continue  # the same row again: ``[row] * 1000``
         checked.add(id(item))
         kind = type(item)
+        if kind in _FLAT and _flat(item, kind, _FLAT_DEPTH, work):
+            continue
         if kind in firsts:
-            attributes = own_dict(item)
-            if attributes is not None and _PLAIN.issuperset(map(type, attributes.values())):
+            if _flat_record(item, work):
                 continue
-        elif hc.users_instance_type(kind):
-            attributes = own_dict(item)
-            if attributes is not None and _PLAIN.issuperset(map(type, attributes.values())):
-                firsts[kind] = item
+        elif hc.users_instance_type(kind) and _flat_record(item, work):
+            firsts[kind] = item
+        if work[0] > _READ_AT:
+            return [_OVER]
         out.append(item)
+        if len(out) > hc.ITEM_TYPES_AT:
+            return [_OVER]
     return out
+
+
+#: Containers whose own methods are Python's: one holding only plain values
+#: (or such containers, `_FLAT_DEPTH` down) runs nothing of the user's when
+#: an operator meets it or its items. A ``defaultdict`` is not one: its
+#: ``default_factory`` may be the user's.
+_FLAT = frozenset({list, tuple, dict, set, frozenset})
+_FLAT_DEPTH = 2
+
+
+def _flat(value: Any, kind: type, depth: int, work: list[int]) -> bool:
+    """Whether *value*, of the `_FLAT` type *kind*, holds only plain values
+    or such containers, *depth* down; its items are counted into *work*."""
+    work[0] += len(value)
+    if work[0] > _READ_AT:
+        return False
+    items = [*dict.values(value), *dict.keys(value)] if kind is dict else value
+    if _PLAIN.issuperset(map(type, items)):
+        return True
+    if depth <= 1:
+        return False
+    for item in items:
+        inner = type(item)
+        if inner not in _PLAIN and not (inner in _FLAT and _flat(item, inner, depth - 1, work)):
+            return False
+    return True
+
+
+def _flat_record(item: Any, work: list[int]) -> bool:
+    """Whether the attributes of *item* are plain values or containers of
+    them (`_flat`)."""
+    attributes = own_dict(item)
+    if attributes is None:
+        return False
+    for value in attributes.values():
+        kind = type(value)
+        if kind not in _PLAIN and not (kind in _FLAT and _flat(value, kind, _FLAT_DEPTH, work)):
+            return False
+    return True
+
+
+def _with_objects_alive(classes: list[type]) -> list[type]:
+    """Of *classes*, those an object of (or of a subclass of) may be alive:
+    a special method runs on an object, so a class with none alive cannot
+    have one inside a value too big to look through (a timer's
+    ``__exit__`` in a helper module never used). Every object of a class
+    made by a ``class`` statement is tracked by the garbage collector;
+    read once, at C speed (about 0.06 s for two million objects). Asked
+    only when a value was too big and such a class exists."""
+    import gc
+
+    from ..held_functions import _objects_frozen_since_import
+
+    if not classes or _objects_frozen_since_import():
+        return classes  # objects ``gc.freeze`` moved out of the collector's lists
+    objects = gc.get_objects()
+    kinds = dict(zip(map(id, map(type, objects)), map(type, objects)))
+    del objects
+    alive: set[int] = set()
+    for kind in kinds.values():
+        alive.update(map(id, _CLASS_MRO(kind)))
+    return [c for c in classes if id(c) in alive or not _CLASS_FLAGS(c) & _HAVE_GC]
+
+
+_HAVE_GC = 1 << 14
 
 
 def _array_kind(kind: type) -> str | None:
@@ -445,7 +526,7 @@ def _item_count(value: Any, kind: type, hc: Any) -> int:
     return 0
 
 
-def _array_items(value: Any, array: str, hc: Any) -> list[Any]:
+def _array_items(value: Any, array: str, hc: Any, work: list[int]) -> list[Any]:
     """The items of a numpy array, a pandas Series, Index or extension
     array holding objects (``arr + 1`` runs each item's ``__add__``), or an
     exact DataFrame's columns holding them; nothing for one of plain values
@@ -460,9 +541,7 @@ def _array_items(value: Any, array: str, hc: Any) -> list[Any]:
         items = np.asarray(value).ravel()
         if _PLAIN.issuperset(map(type, items)):
             return []  # strings of a pandas 2 column
-        if np.ndarray.size.__get__(value) > hc.ITEM_TYPES_AT:
-            return [_OVER]
-        return _one_flat_record_per_class(_not_plain(items), hc)
+        return _records(_not_plain(items), hc, work)
     pd = sys.modules["pandas"]
     if array == "frame":
         if type(value) is not pd.DataFrame:

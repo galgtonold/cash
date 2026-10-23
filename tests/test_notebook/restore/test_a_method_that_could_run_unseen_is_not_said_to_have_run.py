@@ -43,36 +43,53 @@ def test_a_method_reached_could_run(no_trace, cash_magics, statement_processor):
 
 
 def test_a_value_too_big_to_look_through_says_so(no_trace, cash_magics, statement_processor):
-    # One object many times: a cell making 300,000 took cash 11-21 s.
-    run_cash_cell(cash_magics, HEAD + "v = Vec()\nbig = [types.SimpleNamespace()] * 100_001")
+    # 100,001 objects to look at: a cell making 300,000 took cash 11-21 s.
+    run_cash_cell(cash_magics, HEAD + "v = Vec()\nbig = [types.SimpleNamespace() for _ in range(100_001)]")
     reasons = _reasons(statement_processor, f"w = (len(big), time.sleep({F}))[0]")
     assert "Vec.__add__() could run in this statement: a value it reads is too big to look through" in reasons, reasons
     assert "ran in this statement" not in reasons
 
 
 #: Values with nothing of the user's in them, past the bounds by count: a
-#: numeric array or frame (items not read), plain items however many (read
-#: at C speed), and rows of plain fields (one looked at per class).
+#: numeric array or frame (items not read), plain items (read at C speed),
+#: rows of plain fields or of containers of them (one looked at per class,
+#: none for a list, tuple or dict).
 BIG_BUT_PLAIN = {
     "floats": "np.zeros((110_000, 10))",
     "frame": "pd.DataFrame(np.zeros((200_000, 10)))",
-    "ints": "list(range(1_100_000))",
-    "strings": "pd.Series([str(i) for i in range(120_000)], dtype=object)",
+    "ints": "list(range(2_100_000))",
+    "strings": "pd.Series([str(i) for i in range(2_100_000)], dtype=object)",
+    "string_columns": "pd.DataFrame({c: np.array([str(i) for i in range(700_000)], dtype=object) for c in 'abc'})",
     "rows": "[Row(i, str(i)) for i in range(25_000)]",
+    "rows_with_a_list": "[Tagged(i, [1.0]) for i in range(25_000)]",
+    "json": "[{'id': i, 'city': f'c{i % 40}', 'tags': ['a', 'b'][: i % 3]} for i in range(30_000)]",
+    "tuples": "[(i, str(i)) for i in range(25_000)]",
+    "dict_of_lists": "{i: [i, i + 1] for i in range(25_000)}",
 }
 
 
 @pytest.mark.parametrize("value", list(BIG_BUT_PLAIN))
 def test_a_big_value_of_plain_items_is_looked_through(no_trace, cash_magics, statement_processor, value):
-    # Counted as too big, any class alive with a writing method refused
-    # every statement reading it, the method never used (a timer's
-    # ``__exit__`` in a helper module).
+    # Counted as too big, any class with a writing method and an object
+    # alive (``v``) refused every statement reading it, the method never
+    # used on it. A notebook's namespace is ``__main__``: a dataclass made
+    # in a cell is the user's on every Python.
+    cash_magics.shell.user_ns["__name__"] = "__main__"
     run_cash_cell(
         cash_magics,
-        HEAD + "import dataclasses\nimport numpy as np\nimport pandas as pd\n"
-        "@dataclasses.dataclass\nclass Row:\n    i: int\n    s: str",
+        HEAD + "v = Vec()\nimport dataclasses\nimport numpy as np\nimport pandas as pd\n"
+        "@dataclasses.dataclass\nclass Row:\n    i: int\n    s: str\n"
+        "@dataclasses.dataclass\nclass Tagged:\n    i: int\n    tags: list",
     )
     run_cash_cell(cash_magics, f"big = {BIG_BUT_PLAIN[value]}")
+    reasons = _reasons(statement_processor, f"w = (len(big), time.sleep({F}))[0]")
+    assert "Vec.__add__" not in reasons, reasons
+
+
+def test_a_class_with_no_object_alive_is_not_counted(no_trace, cash_magics, statement_processor):
+    # Too big to look through, and ``Vec`` has no object alive: none can
+    # be inside it.
+    run_cash_cell(cash_magics, HEAD + "big = [types.SimpleNamespace() for _ in range(100_001)]")
     reasons = _reasons(statement_processor, f"w = (len(big), time.sleep({F}))[0]")
     assert "Vec.__add__" not in reasons, reasons
 

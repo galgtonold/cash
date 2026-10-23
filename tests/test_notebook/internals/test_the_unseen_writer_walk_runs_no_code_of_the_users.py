@@ -66,9 +66,9 @@ def _counted(monkeypatch):
     work = {"values": 0, "items": 0}
     held, count = unseen_writes._held, unseen_writes._item_count
 
-    def counted_held(value, kind, hc_):
+    def counted_held(value, kind, hc_, scanned):
         work["values"] += 1
-        return held(value, kind, hc_)
+        return held(value, kind, hc_, scanned)
 
     def counted_items(value, kind, hc_):
         n = count(value, kind, hc_)
@@ -77,17 +77,20 @@ def _counted(monkeypatch):
 
     monkeypatch.setattr(unseen_writes, "_held", counted_held)
     monkeypatch.setattr(unseen_writes, "_item_count", counted_items)
-    return work, unseen_writes._OPEN_AT + 1, unseen_writes._SCAN_AT + hc.ITEM_TYPES_AT
+    return work, unseen_writes._OPEN_AT + 1, unseen_writes._READ_AT + hc.ITEM_TYPES_AT
 
 
 def test_a_grid_of_repeated_values_is_bounded(monkeypatch):
     """3.3 s when every item of a 3000 x 3000 grid was opened. Its work is
-    bounded, and the grid is taken as holding anything: a class of the
-    user's with a writing special method counts (this module's `Lazy`)."""
+    bounded, and a grid past what one statement reads is taken as holding
+    anything: a class of the user's with a writing special method and an
+    object alive counts (this module's `Lazy`)."""
+    alive = Lazy()
     work, values, items = _counted(monkeypatch)
-    found = writers_without_a_trace("w = g[0][0]", {"g": [[0] * 3000 for _ in range(3000)]})
+    found = writers_without_a_trace("w = g[0][0]", {"g": [[0] * 4000 for _ in range(4000)]})
     assert work["values"] <= values and work["items"] <= items, work
     assert any(fn.startswith("Lazy.") for fn, _ in found), found
+    del alive
 
 
 class Plain:
@@ -109,10 +112,24 @@ def test_the_items_of_arrays_count_toward_the_limit(monkeypatch):
     arrays' items did not count. They count before any is read."""
     np = pytest.importorskip("numpy")
     column = np.array(["x"] * 99_000, dtype=object)
+    alive = Lazy()
     work, values, items = _counted(monkeypatch)
     found = writers_without_a_trace("w = g[0]", {"g": [column[:] for _ in range(1000)]})
     assert work["items"] <= items, work
     assert any(fn.startswith("Lazy.") for fn, _ in found), found
+    del alive
+
+
+def test_a_class_with_no_object_alive_does_not_count(monkeypatch):
+    """A value too big to look through holds no object of a class that
+    has none alive: a timer's ``__exit__`` in a helper module, never used,
+    refused every statement reading 30,000 records."""
+    import gc
+
+    gc.collect()
+    assert not any(type(o) is Lazy for o in gc.get_objects())
+    found = writers_without_a_trace("w = g[0][0]", {"g": [[0] * 4000 for _ in range(4000)]})
+    assert not any(fn.startswith("Lazy.") for fn, _ in found), found
 
 
 ARRAY_CALLS: list = []
@@ -193,7 +210,7 @@ def test_strings_are_not_read_as_objects():
     frame = pd.DataFrame({"a": pd.Series(["x"] * 10, dtype="string"), "b": [1] * 10})
     from cash.notebook.statement import unseen_writes
 
-    assert unseen_writes._array_items(frame["a"], "series", None) == []
+    assert unseen_writes._array_items(frame["a"], "series", None, [0, 0]) == []
 
 
 calls: list = []

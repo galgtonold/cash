@@ -2289,12 +2289,14 @@ said to change "what its unreadable text changes", and the statement runs
 every time; define it in a cell or a module of its own.
 
 Without that record, a value too big to look through (more than 20,000
-objects to open, or two million items of lists, dicts and arrays of objects)
-could hold an object of any of your classes: then every class of yours that
-is alive and has such a special method counts, and the message says the
-value was too big. Numbers, strings and arrays or tables of numbers are not
-looked into, however many there are, and nor are rows that hold only them
-after the first of each class. Should cash fail to look through what a
+objects to open, two million items of lists, dicts and arrays of objects to
+look into, or ten million items in all) could hold an object of any of your
+classes: then every class of yours that has such a special method and an
+object alive counts, and the message says the value was too big. Numbers,
+strings and arrays or tables of numbers are not looked into, and nor are
+lists, tuples, dicts and sets that hold only them (a JSON record), or rows of
+one of your classes that hold only them, after the first of each class; their
+items are only counted, up to those ten million. Should cash fail to look through what a
 statement reads at all, the statement runs every time and the message says
 that instead.
 
