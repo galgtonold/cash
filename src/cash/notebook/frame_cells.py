@@ -248,6 +248,33 @@ def sorted_cells(array: Any) -> Any:
     return ordered
 
 
+def holds_any_of(array: Any, ordered: Any) -> bool:
+    """Do the slots of the object *array* hold any of the objects whose
+    addresses are the sorted int64 *ordered*? By its kept sort when it has
+    one (`sorted_cells`); else each slot is looked up in *ordered*, a few
+    thousand ids, rather than a hundred thousand addresses sorted for it:
+    past the bound on kept sorts, a hundred frames sharing one frame's
+    cells were each sorted again on every statement."""
+    if not len(ordered) or not len(array):
+        return False
+    # A frame holding them mostly holds them all along: its first slots
+    # answer, and the rest are not read.
+    if len(array) <= _FIRST_SLOTS:
+        return bool(in_sorted(addresses(array), ordered).any())
+    if in_sorted(_addresses(array[:_FIRST_SLOTS]), ordered).any():
+        return True
+    raw = addresses(array)
+    if len(raw) >= 1024:
+        kept = _SORTED_CELLS.get((array.__array_interface__["data"][0], len(array), array.strides[0]))
+        if kept is not None and kept[0] == slots_digest(array):
+            return bool(in_sorted(ordered, kept[1]).any())
+    return bool(in_sorted(raw[_FIRST_SLOTS:], ordered).any())
+
+
+#: The slots `holds_any_of` reads first.
+_FIRST_SLOTS = 2048
+
+
 def slots_digest(array: Any) -> bytes:
     """A digest of the addresses the slots of the object *array* hold.
     Within `reading_once`, taken once for each array."""

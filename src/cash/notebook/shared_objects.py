@@ -56,6 +56,7 @@ from cash._clock import CpuLimit
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 from cash.notebook.frame_cells import (
     addresses,
+    holds_any_of,
     in_sorted,
     is_object_dtype,
     memory_owner,
@@ -1347,34 +1348,66 @@ def _held_beyond_copies(arrays: list[Any]) -> set[int] | None:
     spans = sorted((start, start + len(array) * size) for array in arrays for start in [_address(array)])
     if any(end > spans[i + 1][0] for i, (_, end) in enumerate(spans[:-1])):
         return None
-    bases: list[_Base] = []
-    copies = 0
-    for array in sorted(arrays, key=len, reverse=True):
-        slots = addresses(array)
-        if any(base.run(slots, np) or base.gather(slots, np) for base in bases):
-            copies += 1
-        else:
-            bases.append(_Base(array, slots, np))
-    if not copies:
+    ordered = sorted(arrays, key=len, reverse=True)
+    proof = _copy_proof(ordered, np)
+    if proof is None:
         return None
     values = exact_value_types()
     beyond: set[int] = set()
-    for base in bases:
-        slots = base.slots(np)
-        rows = np.arange(len(slots))
-        found, first, inverse = np.unique(addresses(base.array), return_index=True, return_inverse=True)
-        if len(found) < len(rows):
-            # A cell in several rows (``df.merge(other)`` repeats each of
-            # ``other``'s): held by the slots of all of them, read once.
-            slots = np.bincount(inverse.reshape(-1), weights=slots).astype(np.int64)
-            rows = first
-        del found, first, inverse
-        for count in sorted_unique(slots).tolist():
-            cells = base.array[rows[slots == count]].tolist()
+    for at, rows_by_count in proof:
+        base = ordered[at]
+        for count, rows in rows_by_count:
+            cells = base[rows].tolist()
             # Held by its *count* slots and by *cells*, once each.
             beyond.update(id(cell) for cell in _cells_held_elsewhere(cells, count + 1, values))
             cells = None
     return beyond
+
+
+def _copy_proof(ordered: list[Any], np: Any) -> list[tuple[int, list[tuple[int, Any]]]] | None:
+    """Which of the object arrays *ordered* (longest first) are copies of
+    which (`_Base`), as each base's place in *ordered* and, for each count
+    of slots holding a cell of it, the rows of those cells; None when none
+    is a copy. Read off the addresses the slots hold alone, so kept by
+    them (`_COPY_PROOFS`): the same hundred frames proved copies of
+    ``df``'s cells again on every statement. The reference counts read
+    from the cells (`_cells_held_elsewhere`) are read each time."""
+    key = tuple((_address(array), len(array), slots_digest(array)) for array in ordered)
+    if key in _COPY_PROOFS:
+        _COPY_PROOFS[key] = _COPY_PROOFS.pop(key)  # the most recent last
+        return _COPY_PROOFS[key]
+    bases: list[tuple[int, _Base]] = []
+    copies = 0
+    for at, array in enumerate(ordered):
+        slots = addresses(array)
+        if any(base.run(slots, np) or base.gather(slots, np) for _, base in bases):
+            copies += 1
+        else:
+            bases.append((at, _Base(array, slots, np)))
+    proof: list[tuple[int, list[tuple[int, Any]]]] | None = None
+    if copies:
+        proof = []
+        for at, base in bases:
+            slots = base.slots(np)
+            rows = np.arange(len(slots))
+            found, first, inverse = np.unique(addresses(base.array), return_index=True, return_inverse=True)
+            if len(found) < len(rows):
+                # A cell in several rows (``df.merge(other)`` repeats each of
+                # ``other``'s): held by the slots of all of them, read once.
+                slots = np.bincount(inverse.reshape(-1), weights=slots).astype(np.int64)
+                rows = first
+            del found, first, inverse
+            proof.append((at, [(count, rows[slots == count]) for count in sorted_unique(slots).tolist()]))
+    _COPY_PROOFS[key] = proof
+    while len(_COPY_PROOFS) > _COPY_PROOFS_MAX:
+        del _COPY_PROOFS[next(iter(_COPY_PROOFS))]
+    return proof
+
+
+#: `_copy_proof` by the arrays it read: each one's address, length and the
+#: digest of its slots. The last `_COPY_PROOFS_MAX`, the oldest let go.
+_COPY_PROOFS: dict[tuple, Any] = {}
+_COPY_PROOFS_MAX = 8
 
 
 def _runs_of_one_memory(arrays: list[Any], np: Any) -> list[Any]:
@@ -2228,7 +2261,7 @@ def _read_frames_sharing_cells(
             if any(start < other_end and other_start < end for other_start, other_end in spans):
                 found.add(name)
                 break
-            if looked_for is not None and in_sorted(looked_for, sorted_cells(array)).any():
+            if looked_for is not None and holds_any_of(array, looked_for):
                 found.add(name)
                 break
     return found
