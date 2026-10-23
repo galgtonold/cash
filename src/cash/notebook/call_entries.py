@@ -23,7 +23,7 @@ from cash.backends._base import ttl_expired
 from cash.backends.value_policy import worth_its_bytes
 from cash.notebook._trace import trace_event
 from cash.notebook.borrowed_memory import borrows_from, holds_a_borrower
-from cash.notebook.call_key import holds_a_closure_with_state
+from cash.notebook.call_key import TooMuchToLookThrough, holds_a_closure_with_state
 from cash.notebook.call_refs import (
     DIGEST_FIELD,
     ESTIMATED_FIELD,
@@ -162,6 +162,13 @@ def reached_objects(fn: Any) -> list[Any]:
     return found
 
 
+#: Why a call whose result holds too many objects to look through is not stored.
+TOO_MANY_WHY = (
+    "its result holds too many objects to check for a function or memo that keeps state; "
+    "not stored, the call runs every time"
+)
+
+
 class CallEntries:
     """Reads and writes one notebook session's call entries.
 
@@ -198,6 +205,8 @@ class CallEntries:
         #: back from that tier (``persist_skipped``: its bytes were worth more
         #: than its compute there, say), so it is gone after a restart.
         self.last_store_kept = True
+        #: The last `storable` stopped at `TooMuchToLookThrough`.
+        self.too_many = False
 
     def persists(self) -> bool:
         """Whether the statement under way asked for its calls to reach disk."""
@@ -254,7 +263,17 @@ class CallEntries:
             "[CALL_UNIT] hit on %s took %.2fs to save %.2fs: dropped, runs plain", key[:16], hit_cost, saved or 0.0
         )
 
-    def storable(self, result, args, kwargs, fn: Any = None, root_held: bool = True) -> bool:
+    def storable(
+        self,
+        result,
+        args,
+        kwargs,
+        fn: Any = None,
+        root_held: bool = True,
+        ran: Any = None,
+        memos: list[dict] | None = None,
+        before: Mapping[int, int] | None = None,
+    ) -> bool:
         """Refuse values whose *identity* is load-bearing.
 
         Three families, all of which the statement path already refuses in its
@@ -307,9 +326,10 @@ class CallEntries:
            refuses such an output for the same reason.
 
         4. **A closure that keeps state** -- a counter or a log a factory
-           returns (:func:`~cash.notebook.call_key.holds_a_closure_with_state`).
+           returns, or a ``functools.cache`` memo
+           (:func:`~cash.notebook.call_key.holds_a_closure_with_state`).
            A function is kept by reference too, so a hit hands back the one
-           the last run made, still holding what it counted.
+           the last run made, still holding what it counted or memoised.
 
         A caching optimisation must never be why user code fails, so a check
         that raises is caught -- and answers "not storable". Refusing to store
@@ -317,6 +337,7 @@ class CallEntries:
         not: it is exactly the silent wrong answer this method exists to
         prevent, handed back on every hit.
         """
+        self.too_many = False
         try:
             sources = (*args, *kwargs.values())
             parts = library_parts_held(result)
@@ -331,8 +352,14 @@ class CallEntries:
                 and not (root_held and _has_identity(result))
                 and identity_coupled_reason("<intercepted call>", result) is None
                 and not is_consumable_unrestorable(result)
-                and not holds_a_closure_with_state(result)
+                and not holds_a_closure_with_state(result, ran, memos, before)
             )
+        except TooMuchToLookThrough:
+            # Said on the call's record (`too_many_why`), as the statement
+            # path says it on the badge: the call runs every time.
+            self.too_many = True
+            logger.info("[CALL_UNIT] %s", TOO_MANY_WHY)
+            return False
         except Exception:
             logger.debug("storability check raised; the result is not stored", exc_info=True)
             return False

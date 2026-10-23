@@ -336,8 +336,6 @@ def attributes_of(value: Any) -> dict[str, Any] | None:
         return None
     # The dict Python keeps, never a ``__dict__`` property of the class's.
     own = own_dict(value)
-    if own is not None and type(own) is not dict:
-        return None
     slots = _slot_members(cls)
     if not slots:
         return own
@@ -422,11 +420,8 @@ def _library_children(value: Any) -> list[Any] | None:
     if kind is _DEQUE:
         return list(value)
     if kind is _WRAPPING:
-        try:
-            own = object.__getattribute__(value, "__dict__")
-        except (AttributeError, TypeError):
-            return None
-        return list(own.values()) if type(own) is dict else None
+        own = own_dict(value)
+        return None if own is None else list(own.values())
     if kind is _ARRAY:
         if value.dtype.kind == "O" and value.base is None:
             return list(value.flat)
@@ -1959,11 +1954,8 @@ def _attributes_in(value: Any, nodes: dict[int, Any], containers: frozenset[type
     """The ids of the nodes a leaf *value*'s own attributes are bound to."""
     if type(value) in containers or children_of(value) is not None:
         return []
-    try:
-        own = object.__getattribute__(value, "__dict__")
-    except (AttributeError, TypeError):
-        return []
-    if type(own) is not dict:
+    own = own_dict(value)
+    if own is None:
         return []
     return [id(attr) for attr in own.values() if id(attr) in nodes]
 
