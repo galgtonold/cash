@@ -252,13 +252,30 @@ def test_a_module_in_a_folder_with_no_init_is_keyed_by_its_source(tmp_path, spel
     [
         'K = max(map(eval, [\'int(__import__("os").environ["K"])\']))',
         "def build():\n    return sys.flags.optimize * 10 + 2\n\nK = build()",
+        'K = max(map(__builtins__["eval"], [\'int(__import__("os").environ["K"])\']))',
+        "import builtins\n"
+        "F = max(map(object.__getattribute__, [builtins], ['__import__']))\n"
+        "E = max(map(F, ['os']))\n"
+        "K = int(max(map(object.__getattribute__, [E], ['environ']))['K'])",
+        "import builtins\n\ndef _unused(getattr):\n    return getattr\n\n"
+        "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
+        "K = int(max(map(getattr, [E], ['environ']))['K'])",
     ],
-    ids=["eval_handed_to_map", "attribute_read_in_a_function_called_at_import"],
+    ids=[
+        "eval_handed_to_map",
+        "attribute_read_in_a_function_called_at_import",
+        "eval_taken_from_dunder_builtins",
+        "a_method_under_an_allowed_builtin",
+        "getattr_a_parameter_elsewhere_names",
+    ],
 )
 def test_a_value_read_outside_the_source_without_a_call_runs_with_a_warning(tmp_path, top_level):
     """``map(eval, ...)`` hands ``eval`` on as a value, and a function called
     at import may read ``sys.flags`` without calling anything: both read
-    outside the source, so the module cannot be vouched for by it."""
+    outside the source, so the module cannot be vouched for by it. So does
+    ``eval`` taken from ``__builtins__``, ``object.__getattribute__``
+    (allowed as ``object`` was), and ``getattr`` at the top level, which a
+    parameter of another function in the module was taken to rebind."""
     _write(tmp_path, "helpmod.py", f"import sys\n\n{top_level}\n\ndef scale(x):\n    return x * K\n")
     _write(
         tmp_path,
@@ -315,3 +332,21 @@ def test_a_module_with_only_its_bytecode_runs_with_a_warning(tmp_path):
     assert "cannot read without running it" in err, err[-2000:]
     compiled(5)
     assert _run(tmp_path)[:2] == ("30 30", True), "the edited module was served stale"
+
+
+@pytest.mark.parametrize(
+    "top_level",
+    [
+        "K = max(map(str.upper, ['k']))",
+        "def pick(getattr):\n    return max(map(getattr, [1], ['real']))\n\nK = pick(lambda value, name: 3)",
+    ],
+    ids=["a_str_method_handed_to_map", "a_parameter_named_like_a_builtin"],
+)
+def test_a_source_only_top_level_is_still_vouched_for(tmp_path, monkeypatch, top_level):
+    """A public method of ``str`` handed on, and a parameter named
+    ``getattr`` used in its own function's body, follow from the source."""
+    from cash.analysis.unloaded_modules import source_digest
+
+    _write(tmp_path, "plainmod.py", f"{top_level}\n\ndef scale(x):\n    return x\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    assert source_digest("plainmod", None) is not None

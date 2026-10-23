@@ -298,8 +298,11 @@ class _SourceOnly:
         self.aliases: dict[str, str] = {}
         #: names the top level defines with ``def`` or ``class``.
         self.defined: set[str] = set()
-        #: names the source binds anywhere (a parameter ``id``, ``for input in ...``).
+        #: names the top level binds in its own scope (``for input in ...``).
         self.bound: set[str] = set()
+        #: names the class or function body being read binds in its own
+        #: scope (a parameter ``id``), innermost last.
+        self.scopes: list[set[str]] = []
         #: the top level's functions, by name.
         self.functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
         #: user functions asked about (`_vouches`), and the answers.
@@ -319,6 +322,9 @@ class _SourceOnly:
             if isinstance(node, ast.Name) and self._qualified(node) in _RUNS_OR_READS_UNSEEN:
                 # ``map(eval, ...)``, ``map(open, paths)``: called all the same.
                 return False
+            if isinstance(node, ast.Name) and node.id == "__builtins__":
+                # ``map(__builtins__['eval'], ...)``: every builtin, by any name.
+                return False
         return self._body(tree.body)
 
     def names(self, tree: ast.Module) -> None:
@@ -330,11 +336,7 @@ class _SourceOnly:
             n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
         }
         self.functions = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
-        self.bound = {
-            n.id if isinstance(n, ast.Name) else n.arg
-            for n in ast.walk(tree)
-            if isinstance(n, ast.arg) or isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load)
-        }
+        self.bound = _scope_names(tree)
 
     def _reads_outside(self, node: ast.Call) -> bool:
         """Does *node* read or change something outside the source (the
@@ -396,7 +398,7 @@ class _SourceOnly:
                 all(self._decorator(d) for d in node.decorator_list)
                 and all(map(self._expr, node.bases))
                 and all(self._expr(k.value) for k in node.keywords)
-                and self._body(node.body)
+                and self._in_scope(node, lambda: self._body(node.body))
             )
         if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -450,11 +452,14 @@ class _SourceOnly:
             if (
                 name is not None
                 and name.startswith("builtins.")
-                and ".".join(name.split(".")[:2]) not in _BUILTIN_VALUES
-                and _head(node) not in self.bound
+                and name not in _BUILTIN_VALUES
+                and not _plain_method(name)
+                and not self._binds(_head(node))
             ):
                 # A builtin handed on as a value (``map(eval, ...)``) is
-                # called all the same: only those `_SOURCE_ONLY_CALLS` lists.
+                # called all the same: only those `_SOURCE_ONLY_CALLS` lists,
+                # by its whole name (``object.__getattribute__`` is not
+                # ``object``).
                 return False
             if isinstance(node, ast.Attribute):
                 return name is not None or self._expr(node.value)
@@ -529,9 +534,23 @@ class _SourceOnly:
         try:
             # Every expression the body runs, not only its calls: an
             # attribute read (``sys.path[-1]``) is outside the source too.
-            return all(map(self._expr, _expressions_as_run(fn.body)))
+            return self._in_scope(fn, lambda: all(map(self._expr, _expressions_as_run(fn.body))))
         finally:
             self.in_body -= 1
+
+    def _in_scope(self, node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef, read) -> bool:
+        self.scopes.append(_scope_names(node))
+        try:
+            return read()
+        finally:
+            self.scopes.pop()
+
+    def _binds(self, name: str | None) -> bool:
+        """Does the scope being read bind *name*, so that it is not the
+        builtin: its own body, or the top level? Not a function elsewhere
+        in the module: ``def _u(getattr)`` leaves a top-level ``getattr``
+        the builtin."""
+        return name in self.bound or bool(self.scopes) and name in self.scopes[-1]
 
 
 _BUILTIN_NAMES = frozenset(dir(builtins))
@@ -554,6 +573,41 @@ _BUILTIN_VALUES = frozenset(
         "builtins.__debug__",
     }
 )
+
+
+#: Builtin types whose methods return what follows from their arguments:
+#: ``map(str.upper, names)``.
+_PLAIN_TYPES = frozenset({"str", "bytes", "int", "float", "complex", "bool", "tuple", "frozenset", "range"})
+
+
+def _plain_method(name: str) -> bool:
+    """``builtins.str.upper``: a public method of a type in `_PLAIN_TYPES`."""
+    parts = name.split(".")
+    return len(parts) == 3 and parts[1] in _PLAIN_TYPES and not parts[2].startswith("_")
+
+
+def _scope_names(node: ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """The names *node* binds in its own scope: a parameter, an assignment's
+    or a loop's target, an ``except ... as`` name, a ``def`` or a ``class``;
+    not those a function, class, lambda or comprehension inside it binds."""
+    names: set[str] = set()
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        args = node.args
+        names |= {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg) if a}
+    pending: list[ast.AST] = list(node.body)
+    while pending:
+        child = pending.pop()
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(child.name)
+            continue
+        if isinstance(child, (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            continue
+        if isinstance(child, ast.Name) and not isinstance(child.ctx, ast.Load):
+            names.add(child.id)
+        elif isinstance(child, ast.ExceptHandler) and child.name:
+            names.add(child.name)
+        pending.extend(ast.iter_child_nodes(child))
+    return names
 
 
 def _head(node: ast.expr) -> str | None:
