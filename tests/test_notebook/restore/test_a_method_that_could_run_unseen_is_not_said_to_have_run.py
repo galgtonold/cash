@@ -175,3 +175,21 @@ def test_a_class_made_again_is_not_kept_alive_by_cash(no_trace, cash_magics, sta
     _reasons(statement_processor, f"w = (c.m(), C.x, time.sleep({F}))[0]")
     gc.collect()
     assert first() is None
+
+
+def test_a_lookup_function_that_keeps_nothing_is_left_alone(monkeypatch):
+    """Where ``inspect`` has a ``_shadowed_dict_from_mro_tuple`` that is no
+    ``lru_cache``, there is nothing to empty, and nothing is asked of it."""
+    import importlib
+    import inspect
+
+    from cash import _inspect_cache
+
+    monkeypatch.setattr(inspect, "_shadowed_dict_from_mro_tuple", lambda *args: {}, raising=False)
+    try:
+        importlib.reload(_inspect_cache)
+        assert _inspect_cache._STRONG_CACHE is None
+        _inspect_cache.forget_static_lookups()
+    finally:
+        monkeypatch.undo()
+        importlib.reload(_inspect_cache)

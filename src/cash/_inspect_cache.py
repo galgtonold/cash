@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import inspect
 
-#: The strong cache, on the Pythons that have it; None elsewhere.
+#: The strong cache, on the Pythons that have it; None elsewhere, and where
+#: a function of that name is no ``lru_cache`` (nothing to empty).
 _STRONG_CACHE = getattr(inspect, "_shadowed_dict_from_mro_tuple", None)
+if not (callable(getattr(_STRONG_CACHE, "cache_info", None)) and callable(getattr(_STRONG_CACHE, "cache_clear", None))):
+    _STRONG_CACHE = None
 
 __all__ = ["forget_static_lookups"]
 
