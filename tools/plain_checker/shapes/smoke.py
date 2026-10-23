@@ -1,4 +1,4 @@
-"""Two quick shapes that check the checker itself."""
+"""Three quick shapes that check the checker itself."""
 
 from tools.plain_checker import decorator, notebook
 
@@ -13,6 +13,11 @@ SHAPES = [
         ],
         edits={3: {0: "import time\nxs = [10, 20]"}},
         source="checker smoke test",
+    ),
+    notebook(
+        "smoke-identical-cells",
+        cells=["xs = [1]", "xs.append(len(xs))\nprint(xs)", "xs.append(len(xs))\nprint(xs)"],
+        source="checker smoke test: each cell goes with its id, so two that read the same are told apart",
     ),
     decorator(
         "smoke-decorator-mutation",

@@ -91,6 +91,28 @@ def _values(runner: Any, names: list[str]) -> dict[str, str]:
     return got if isinstance(got, dict) else {name: f"<peek failed: {got}>" for name in names}
 
 
+@contextlib.contextmanager
+def _cell_id(runner: Any, cell_id: str) -> Iterator[None]:
+    """Send *cell_id* with the cell, as Jupyter does (``cellId`` in the
+    request's metadata): nbclient leaves it out, and cash, which finds the
+    cell by its id, fell back to its source and refused two cells that read
+    the same (``AmbiguousCellError``)."""
+    session = runner.client.kc.session
+    send = session.msg
+
+    def msg(msg_type: str, *args: Any, **kwargs: Any) -> Any:
+        message = send(msg_type, *args, **kwargs)
+        if msg_type == "execute_request":
+            message["metadata"]["cellId"] = cell_id
+        return message
+
+    session.msg = msg
+    try:
+        yield
+    finally:
+        del session.msg
+
+
 def _cash_on(runner: Any, config: str, *, init: bool = True) -> None:
     if init:
         runner._init_cash()
@@ -134,7 +156,8 @@ def run_notebook(shape: Shape, work: Path, config: str | None) -> Outcome:
                     runner.set_cell_source(number, code)
             seen = outcome.seen.setdefault(run_name, {})
             for number in [i + 1 for i in which] if which is not None else range(1, len(cells) + 1):
-                runner.run_cell(number)
+                with _cell_id(runner, runner.nb.cells[number - 1].id):
+                    runner.run_cell(number)
                 seen[f"cell {number - 1} output"] = _shown(runner.get_cell(number))
                 if config is not None:
                     statuses = _peek(runner, _STATUSES)
