@@ -29,6 +29,7 @@ from .._lazy_module import LazyModule
 from ..cost_model import GENERIC_FAMILY
 from ..sizing import memory_footprint, pickled_size_estimate
 from ..source_reading import read_code_file
+from ..tracking import io_watch
 from ..value_types import IMMUTABLE_PRIMS
 from . import frame_sharing, heap_blocks, iterative_copy, set_order, shared_blocks
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, gdsf_value
@@ -1028,6 +1029,7 @@ class InMemoryBackend(CacheBackend):
         # stored instance's class is the old one. A disk hit looks the class
         # up by name and gets the new one; so does the second attempt here.
         stores = record_cells is not None  # `_cash_stored_as_is` is looked for
+        no_writes = _NoFileWrites()
         for hook in (persistent_id if memo or frames or ndarray or stores else None, renamed_id):
             try:
                 buffers: list[pickle.PickleBuffer] = []
@@ -1038,25 +1040,34 @@ class InMemoryBackend(CacheBackend):
                     persistent_id=hook,
                     on_retry=buffers.clear,
                 )
-                # Stored, the copy rebuilds only what the caller already
-                # holds: a rebuild that opens a file to write would truncate
-                # or add to the user's file, once more than plain Python did.
-                unpickler = (_NoFileWrites if stores else pickle.Unpickler)(
+                unpickler = pickle.Unpickler(
                     io.BytesIO(stream),
                     buffers=[bytes(b) if memoryview(b).readonly else bytearray(b) for b in buffers],
                 )
                 unpickler.persistent_load = memo.__getitem__
                 started = time.perf_counter()
                 try:
-                    return unpickler.load()
+                    if not stores:
+                        return unpickler.load()
+                    # Stored, the copy rebuilds only what the caller already
+                    # holds: a rebuild that opens a file to write would
+                    # truncate or add to the user's file, once more than
+                    # plain Python did.
+                    with io_watch.refusing("open", no_writes):
+                        copied = unpickler.load()
+                    no_writes.check()
+                    return copied
                 finally:
                     _UNPICKLED.seconds = getattr(_UNPICKLED, "seconds", 0.0) + time.perf_counter() - started
             except pickle.PicklingError:
                 logger.debug("could not copy a %s by pickle", type(value).__name__, exc_info=True)
+                no_writes.check()
             except _WouldWriteAFile as exc:
                 # Not by deepcopy either: it rebuilds by the same recipe.
-                raise TypeError(f"copying it would call {exc} to write a file") from exc
+                raise TypeError(f"copying it would {exc} to write a file") from exc
             except Exception as exc:
+                if no_writes.refused is not None:
+                    raise TypeError(f"copying it would {no_writes.refused} to write a file") from exc
                 if kept_state.too_deep(exc):
                     # Deeper than the pickler may recurse: deepcopy recurses
                     # deeper still, so the copy keeps its own stack.
@@ -2872,57 +2883,35 @@ class _WouldWriteAFile(Exception):
     """A rebuild in a stored copy would open a file to write."""
 
 
-def _mode_writes(args: tuple, kwargs: dict) -> bool:
-    """``open(path, mode)`` and its kin: a mode that writes, truncates or
-    creates (``w``, ``a``, ``x``, ``+``)."""
-    mode = kwargs.get("mode", args[1] if len(args) > 1 else "r")
-    return not isinstance(mode, str) or any(c in mode for c in "wax+")
+class _NoFileWrites:
+    """The ``open`` audit check of a stored copy's rebuild (`io_watch.refusing`):
+    an open whose flags write, truncate, create or append fails, and is
+    remembered, so a rebuild that catches the error still fails the copy.
 
+    The mode is the one Python reports for the open itself, whoever asks for
+    it: ``open``, ``os.open``, ``pathlib.Path.open``, a compressor's open, or
+    one made inside ``__setstate__`` or a constructor a pickle names. A class
+    of the user's pickled to reopen its sink or log was rebuilt for the RAM
+    tier's copy on every store, and the file emptied."""
 
-def _flags_write(args: tuple, kwargs: dict) -> bool:
-    """``os.open(path, flags)``: flags that write, truncate or create."""
-    import os
+    __slots__ = ("refused",)
 
-    flags = kwargs.get("flags", args[1] if len(args) > 1 else 0)
-    writes = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
-    return not isinstance(flags, int) or bool(flags & writes)
+    def __init__(self) -> None:
+        self.refused: str | None = None
 
+    def __call__(self, args: tuple) -> None:
+        import os
 
-def _file_openers() -> dict[int, tuple[Any, Callable[[tuple, dict], bool]]]:
-    """``id(opener) -> (opener, does this call write)`` for the standard
-    library's file openers that are loaded."""
-    import os
+        path, mode, flags = (*args, None, None, None)[:3]
+        writes = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
+        if not isinstance(flags, int) or flags & writes:
+            self.refused = f"open({path!r}, {mode!r})"
+            raise _WouldWriteAFile(self.refused)
 
-    found: dict[int, tuple[Any, Callable[[tuple, dict], bool]]] = {}
-    for opener in (builtins.open, io.open, io.FileIO):
-        found[id(opener)] = (opener, _mode_writes)
-    found[id(os.open)] = (os.open, _flags_write)
-    for name in ("codecs", "gzip", "bz2", "lzma"):
-        module = sys.modules.get(name)
-        opener = getattr(module, "open", None)
-        if opener is not None:
-            found[id(opener)] = (opener, _mode_writes)
-    return found
-
-
-class _NoFileWrites(pickle.Unpickler):
-    """An unpickler whose rebuilds may not open a file to write: a class of
-    the user's pickled as ``(open, (path, "w"))`` -- a sink, a log -- was
-    rebuilt for the RAM tier's copy on every store, and the file emptied."""
-
-    def find_class(self, module: str, name: str) -> Any:
-        found = super().find_class(module, name)
-        known = _file_openers().get(id(found))
-        if known is None or known[0] is not found:
-            return found
-        writes = known[1]
-
-        def opener(*args: Any, **kwargs: Any) -> Any:
-            if writes(args, kwargs):
-                raise _WouldWriteAFile(f"{module}.{name}")
-            return found(*args, **kwargs)
-
-        return opener
+    def check(self) -> None:
+        """Raise if a rebuild asked for a writing open, caught or not."""
+        if self.refused is not None:
+            raise _WouldWriteAFile(self.refused)
 
 
 #: Seconds per byte unpickling the tier's copy of an object of a class took

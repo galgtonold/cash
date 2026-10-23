@@ -75,3 +75,111 @@ def test_a_rebuild_that_writes_nothing_is_still_copied(sink):
     backend.set("k", value, metadata={"copy_required": True})
     _meta, got = backend.get("k")
     assert type(got["v"]) is Reading and got["v"] is not value["v"]
+
+
+class ReopensInSetstate:
+    """A sink that reopens its file when unpickled."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def __getstate__(self):
+        return {"path": self.path}
+
+    def __setstate__(self, state):
+        self.path = state["path"]
+        self.handle = open(self.path, "w")  # noqa: SIM115
+
+
+class OpensInInit:
+    def __init__(self, path):
+        self.path = path
+        open(path, "w").close()  # noqa: SIM115
+
+    def __reduce__(self):
+        return (OpensInInit, (self.path,))
+
+
+class SwallowsTheError:
+    def __init__(self, path):
+        self.path = path
+
+    def __getstate__(self):
+        return {"path": self.path}
+
+    def __setstate__(self, state):
+        self.path = state["path"]
+        try:
+            open(self.path, "w").close()  # noqa: SIM115
+        except Exception:  # noqa: BLE001 - what a careless rebuild does
+            pass
+
+
+class ReadsInSetstate:
+    def __init__(self, path):
+        self.path = path
+
+    def __getstate__(self):
+        return {"path": self.path}
+
+    def __setstate__(self, state):
+        self.path = state["path"]
+        with open(self.path, encoding="utf-8") as f:
+            self.text = f.read()
+
+
+def _path_open(path):
+    import pathlib
+
+    class PathOpener:
+        def __reduce__(self):
+            return (pathlib.Path.open, (pathlib.Path(path), "w"))
+
+    return PathOpener()
+
+
+def _os_open(path):
+    import os
+
+    class OsOpener:
+        def __reduce__(self):
+            return (os.open, (path, os.O_WRONLY | os.O_TRUNC))
+
+    return OsOpener()
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda path: _new(ReopensInSetstate, path),
+        lambda path: _new(OpensInInit, path),
+        lambda path: _new(SwallowsTheError, path),
+        _path_open,
+        _os_open,
+    ],
+    ids=["setstate", "constructor_named_by_reduce", "error_caught_in_setstate", "pathlib_open", "os_open"],
+)
+def test_a_write_however_the_rebuild_asks_for_it_is_not_made(sink, make):
+    """Not a list of openers: the mode Python reports for the open itself,
+    from ``__setstate__``, a constructor a pickle names, or any opener."""
+    value = {"v": make(str(sink))}
+    sink.write_text("keep me", encoding="utf-8")
+    backend = InMemoryBackend()
+    with pytest.raises(cash.exceptions.CacheBackendError):
+        backend.set("k", value, metadata={"copy_required": True})
+    assert sink.read_text(encoding="utf-8") == "keep me"
+
+
+def _new(cls, path):
+    """An object of *cls* made without running its ``__init__``."""
+    obj = cls.__new__(cls)
+    obj.path = path
+    return obj
+
+
+def test_a_rebuild_that_reads_its_file_is_copied(sink):
+    backend = InMemoryBackend()
+    value = {"v": _new(ReadsInSetstate, str(sink))}
+    backend.set("k", value, metadata={"copy_required": True})
+    _meta, got = backend.get("k")
+    assert got["v"].text == "keep me"

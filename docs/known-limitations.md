@@ -878,9 +878,11 @@ default argument or base class does. **Fix:** move the binding above this cell.
   every hit is such a copy too, as a disk hit is. A class whose
   `__reduce__` rebuilds through a call with an effect (a constructor that
   connects, `logging.getLogger`, which registers a logger) has that effect
-  once when the result is stored and once per hit. One that would open a
-  file to write (`(open, (path, "w"))`) is not rebuilt: the result is not
-  cached, and the file keeps what it held.
+  once when the result is stored and once per hit. A rebuild that opens a
+  file to write, append or create, by any route (`(open, (path, "w"))`, a
+  `__setstate__` reopening its log, a constructor the recipe names), is
+  stopped at that open: the result is not cached, and the file keeps what
+  it held.
 
 ## Reporting something not on this page
 
