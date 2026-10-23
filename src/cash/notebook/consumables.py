@@ -330,6 +330,11 @@ _HELD_WIDTH = 64
 _CONTAINERS = (list, tuple, set, frozenset, collections.deque)
 #: Values that hold nothing: a container of only these is read for free.
 _LEAVES = frozenset({str, bytes, bytearray, int, float, complex, bool, type(None)})
+#: Containers whose items `_only_values` reads at C speed.
+_PLAIN = frozenset({list, tuple, set, frozenset})
+#: How many levels of plain containers `_only_values` reads through: a list
+#: of rows (tuples) of values is two.
+_PLAIN_LEVELS = 3
 #: pandas' indexers: ``s.iloc[i]`` reads an item of ``s``.
 _INDEXERS = frozenset({"iloc", "loc", "iat", "at"})
 #: ``Py_TPFLAGS_HEAP_TYPE``: a class made by a ``class`` statement.
@@ -406,6 +411,8 @@ def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> He
         if type(obj) in _LEAVES or id(obj) in seen or instance_of(obj, (str, bytes, int, float, complex)):
             continue
         seen.add(id(obj))
+        if _only_values(obj):
+            continue
         if depth > 0 and _held_stream(obj):
             if held_by_user or _users_generator(obj):
                 found.append(path)
@@ -437,6 +444,30 @@ def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> He
         if look.items < 0:
             break
     return HeldStreams(sorted(set(found)), look.stopped)
+
+
+def _only_values(obj: Any) -> bool:
+    """Whether *obj* is a plain list, tuple, set or dict that holds only
+    values holding nothing (`_LEAVES`), through up to `_PLAIN_LEVELS` levels
+    of such containers (rows of numbers). Read with ``map(type, ...)``, at C
+    speed: a list of millions of numbers a function reads costs a fraction
+    of a second, not the look's budget."""
+    level = [obj.values()] if type(obj) is dict else [obj] if type(obj) in _PLAIN else None
+    if level is None:
+        return False
+    for _ in range(_PLAIN_LEVELS):
+        kinds = set(map(type, itertools.chain.from_iterable(level)))
+        if kinds <= _LEAVES:
+            return True
+        if not kinds <= _PLAIN | _LEAVES | {dict}:
+            return False
+        level = [
+            item.values() if type(item) is dict else item
+            for items in level
+            for item in items
+            if type(item) not in _LEAVES
+        ]
+    return False
 
 
 def _callable(value: Any) -> bool:
@@ -532,6 +563,8 @@ def _all_children(obj: Any) -> Iterable[tuple[str, Any]]:
             yield from ((f".{k}", v) for k, v in list(obj.__dict__.items()) if not k.startswith("__"))
         return
     if instance_of(obj, types.FunctionType):
+        from .callee_reach import modules_used_whole
+
         code = obj.__code__
         for name, cell in zip(code.co_freevars, obj.__closure__ or (), strict=False):
             try:
@@ -539,9 +572,18 @@ def _all_children(obj: Any) -> Iterable[tuple[str, Any]]:
             except ValueError:
                 continue
         g = obj.__globals__
+        whole = modules_used_whole(code, g)
         for name in code.co_names:
-            if name in g:
-                yield name, g[name]
+            if name not in g:
+                continue
+            value = g[name]
+            if instance_of(value, types.ModuleType) and is_user_code_module(value) and value not in whole:
+                # Of a module of theirs it reads only by name (``wlib.K``),
+                # the names it spells: not every table the module holds.
+                attrs = object.__getattribute__(value, "__dict__")
+                yield from ((f"{name}.{attr}", attrs[attr]) for attr in code.co_names if attr in attrs)
+                continue
+            yield name, value
         return
     if instance_of(obj, types.MethodType):
         yield from children(obj)

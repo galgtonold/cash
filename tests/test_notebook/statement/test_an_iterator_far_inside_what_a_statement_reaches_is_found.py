@@ -22,7 +22,10 @@ _NAMES = "\n".join(f"    _ = a{j}" for j in range(70))
 _CASES = {
     "list item a variable picks": (f"gens = [{_GEN} for _ in range(65)]\ni = 64", "next(gens[i])"),
     "item of a long list": (f"gens = [{_GEN} for _ in range(1000)]\ni = 500", "next(gens[i])"),
-    "list item in a function": (f"gens = [{_GEN} for _ in range(65)]\ni = 64\ndef f():\n    return next(gens[i])", "f()"),
+    "list item in a function": (
+        f"gens = [{_GEN} for _ in range(65)]\ni = 64\ndef f():\n    return next(gens[i])",
+        "f()",
+    ),
     "dict value a variable picks": (f"d = {{f'k{{j}}': {_GEN} for j in range(65)}}\nk = 'k64'", "next(d[k])"),
     "deque item": (f"import collections\ndq = collections.deque({_GEN} for _ in range(65))\ni = 64", "next(dq[i])"),
     "attribute of a list item": (
@@ -38,14 +41,18 @@ _CASES = {
         "f()",
     ),
     "list of numbers then an iterator": (f"items = [0] * 64 + [{_GEN}]\ni = 64", "next(items[i])"),
-    "dict of numbers then an iterator": (f"d = {{f'k{{j}}': j for j in range(64)}}\nd['g'] = {_GEN}\nk = 'g'", "next(d[k])"),
+    "dict of numbers then an iterator": (
+        f"d = {{f'k{{j}}': j for j in range(64)}}\nd['g'] = {_GEN}\nk = 'g'",
+        "next(d[k])",
+    ),
     "object in a registry": (
         f"class O:\n    def __init__(self, g=None):\n        self.g = g\n    def draw(self):\n        return next(self.g)\n"
         f"reg = {{f'o{{j}}': O() for j in range(64)}}\nreg['last'] = O({_GEN})\nk = 'last'\ndef f():\n    return reg[k].draw()",
         "f()",
     ),
     "eight calls deep": (
-        f"gen = {_GEN}\ndef f0():\n    return next(gen)\n" + "".join(f"def f{j}():\n    return f{j - 1}()\n" for j in range(1, 8)),
+        f"gen = {_GEN}\ndef f0():\n    return next(gen)\n"
+        + "".join(f"def f{j}():\n    return f{j - 1}()\n" for j in range(1, 8)),
         "f7()",
     ),
 }
@@ -73,8 +80,13 @@ def test_a_list_of_numbers_a_variable_picks_from_is_served(statement_processor):
 
 
 def test_a_look_that_cannot_finish_runs_every_time_and_says_so(statement_processor, mock_shell):
-    _run(statement_processor, f"class N:\n    def __init__(self, inner):\n        self.inner = inner\nn = {_GEN}\nfor _ in range(40):\n    n = N(n)")
-    _run(statement_processor, "def f():\n    m = n\n    while isinstance(m, N):\n        m = m.inner\n    return next(m)")
+    _run(
+        statement_processor,
+        f"class N:\n    def __init__(self, inner):\n        self.inner = inner\nn = {_GEN}\nfor _ in range(40):\n    n = N(n)",
+    )
+    _run(
+        statement_processor, "def f():\n    m = n\n    while isinstance(m, N):\n        m = m.inner\n    return next(m)"
+    )
     _run(statement_processor, "v = f()")
     second = _run(statement_processor, "v = f()")
     assert second["status"] == CacheStatus.COMPUTED
@@ -82,7 +94,9 @@ def test_a_look_that_cannot_finish_runs_every_time_and_says_so(statement_process
     assert any("could not finish looking" in r for r in second["uncacheable_reasons"])
 
 
-def test_a_reader_of_a_draw_from_a_library_counter_a_function_holds_is_not_served_stale(statement_processor, mock_shell):
+def test_a_reader_of_a_draw_from_a_library_counter_a_function_holds_is_not_served_stale(
+    statement_processor, mock_shell
+):
     _run(statement_processor, "import itertools\nc = itertools.count()\ndef a():\n    return next(c)")
     _run(statement_processor, "v = a()")
     _run(statement_processor, "w = [v]")
