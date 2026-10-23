@@ -258,6 +258,16 @@ def hook():
 
 
 @pytest.fixture
+def hook_as_it_was():
+    """A test turning the hook on and off leaves it as it found it: left
+    off, a later test in the same process ran without it (an h5py write a
+    jump run in a notebook test relied on the hook to see)."""
+    was = native_reads.active()
+    yield
+    (native_reads.enable if was else native_reads.disable)()
+
+
+@pytest.fixture
 def no_hook():
     was = native_reads.active()
     native_reads.disable()
@@ -342,7 +352,7 @@ def test_a_file_a_c_library_writes_and_reads_back_is_its_own_output(disk_cash, t
     assert len(runs) == 1, "a file the block made itself became an input it can never find again"
 
 
-def test_pyarrow_open_input_file_is_seen(disk_cash, tmp_path, request):
+def test_pyarrow_open_input_file_is_seen(disk_cash, tmp_path, hook_as_it_was):
     """``LocalFileSystem.open_input_file`` is no wrapped reader: stale without
     the hook, a dependency with it."""
     pafs = pytest.importorskip("pyarrow.fs")
@@ -353,7 +363,6 @@ def test_pyarrow_open_input_file_is_seen(disk_cash, tmp_path, request):
 
     for on in (False, True):
         (native_reads.enable if on else native_reads.disable)()
-        request.addfinalizer(native_reads.disable)
         path = tmp_path / f"blob{on}.bin"
         path.write_text(f"first {on}", encoding="utf-8")
         total, runs = _cached_sum(disk_cash, read)
@@ -366,7 +375,7 @@ def test_pyarrow_open_input_file_is_seen(disk_cash, tmp_path, request):
             assert got == f"first {on}", "the gap closed without the hook: update this test and the docs"
 
 
-def test_an_attached_sqlite_database_is_seen(disk_cash, tmp_path, request):
+def test_an_attached_sqlite_database_is_seen(disk_cash, tmp_path, hook_as_it_was):
     """The ``connect`` wrapper records the main database; one ``ATTACH``-ed
     in SQL is opened by libsqlite3 itself."""
     if "_sqlite3" in sys.builtin_module_names:
@@ -393,7 +402,6 @@ def test_an_attached_sqlite_database_is_seen(disk_cash, tmp_path, request):
 
     for on in (False, True):
         (native_reads.enable if on else native_reads.disable)()
-        request.addfinalizer(native_reads.disable)
         set_rows([1, 2, 3])
         total, runs = _cached_sum(disk_cash, read)
         assert total(f"{on}") == 6
@@ -509,7 +517,7 @@ def test_no_recording_outside_a_tracker(tmp_path, clib, hook):
     assert native_reads.stats()["recorded"] == before
 
 
-def test_disable_puts_every_slot_back(tmp_path, clib):
+def test_disable_puts_every_slot_back(tmp_path, clib, hook_as_it_was):
     assert native_reads.enable()
     assert native_reads.stats()["slots"] > 0
     native_reads.disable()

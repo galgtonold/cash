@@ -248,11 +248,17 @@ the value it is handed. Nothing to do.
 ### Mutating global state inside a function
 
 <!-- claim: cash/analysis/callee_effects.py:callee_global_mutations @0563cfbf -->
-A function that changes a global (`LOG.append(v)`, `counter["n"] += 1`), itself
-or through a helper it calls, is handled: the statement calling it runs every time so the change really happens,
-while the call inside it is served from the cache together with its effect on
-the global. Nothing to do. If you would rather not rely on this, pass the state
-in and return it.
+A function that changes a global of your notebook (`LOG.append(v)`,
+`counter["n"] += 1`), itself or through a helper it calls, is handled: the
+statement calling it runs every time so the change really happens, while the
+call inside it is served from the cache together with its effect on the
+global. Nothing to do.
+
+A change to a variable inside one of your modules that the notebook does not
+import is not seen: a function that imports the module itself and writes to it
+(`import registry; registry.REG["n"] = 1`) is served without the write, so
+`registry.REG` keeps what it held, and is empty after a restart. Keep such
+state in the notebook, or pass it in and return it.
 
 ### A helper memoised with `functools.cache`
 
@@ -288,7 +294,9 @@ body. So cash follows these rules:
   holds every key and answer it read, compared by value. After a kernel
   restart it runs until the memo is filled again, and the first statement
   to read an answer that can change in place after that runs once more,
-  so cash has seen the answer as it was.
+  so cash has seen the answer as it was. As above, `cache_info()` then
+  counts fewer hits than a run would, on one of your classes too
+  (`Model.lookup.cache_info()`).
 
 Nothing to do: the results are the ones a run gives, at the cost of those
 runs. cash reads a memo's answers only when it holds at most 256 of them;
@@ -876,6 +884,17 @@ default argument or base class does. **Fix:** move the binding above this cell.
   multiprocessing do the same). Results are equal; only code that depends on
   that order sees a difference, such as the key order of a dict built by
   looping over the set. Use `sorted(s)` where the order matters.
+- **A `__dict__` your class computes may run under `@cash.cache`.** A class
+  that defines `__dict__` itself (a `@property` building it) has it read
+  when an object of it is part of a cached function's key, its arguments
+  or the globals it reads, as Python's own `vars(obj)` would. In a
+  notebook, the walks over what a statement reads and what it holds read
+  the attributes Python keeps instead, and never run it. Keep such a
+  property free of side effects, or give the function what it needs as
+  plain arguments. A `dict` subclass set as an object's `__dict__` is read
+  the same way, without its own methods, but storing the object still
+  pickles it, which calls the subclass's `items` and `__reduce_ex__`: if
+  those raise, the statement is not cached and re-runs each time.
 
 ## Reporting something not on this page
 

@@ -44,7 +44,16 @@ from cash._user_attrs import attribute_or, instance_of
 from cash.install_paths import is_user_code_file, is_user_module
 from cash.value_hash import compute_hash
 
-__all__ = ["FILLED", "MAX_KEYED", "new_statement", "unfilled", "used", "watched"]
+__all__ = [
+    "FILLED",
+    "MAX_KEYED",
+    "class_memo_record",
+    "misses_before",
+    "new_statement",
+    "unfilled",
+    "used",
+    "watched",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -272,6 +281,12 @@ def watched(ns: Mapping[str, Any]) -> list[tuple[list[str], Any, int, int, int, 
             continue
         out.append((where, memo, info.hits, info.misses, info.currsize, _held(memo)))
     return out or None
+
+
+def misses_before(before: list[tuple[list[str], Any, int, int, int, Any]] | None) -> dict[int, int]:
+    """``id(memo) -> its miss count`` in what `watched` saw before a run:
+    a memo's count unmoved since, the run did not fill it."""
+    return {id(memo): misses for _, memo, _, misses, *_ in before or ()}
 
 
 def _items(memo: Any) -> list[tuple[Any, Any]] | None:
@@ -648,6 +663,26 @@ def _resolve(where: list[str], ns: Mapping[str, Any]) -> Any:
         raw = vars(value).get(step[1:]) if instance_of(value, type) else attribute_or(value, step[1:], None)
         value = attribute_or(raw, "__func__", raw) if instance_of(raw, (staticmethod, classmethod)) else raw
     return value
+
+
+def class_memo_record(cls: type, name: str, memo: Any) -> dict | None:
+    """A record (as `used` writes one) of the answers *memo*, the memo the
+    class *cls* holds under *name*, holds now: the class reached by its
+    module and qualified name, the way a later process finds it once the
+    module is imported. None when it cannot be found that way or its
+    answers cannot be read: an entry cannot then be held against it."""
+    module = attribute_or(cls, "__module__", None)
+    qualname = attribute_or(cls, "__qualname__", None)
+    if not isinstance(module, str) or not isinstance(qualname, str):
+        return None
+    head, *rest = qualname.split(".")
+    where = ["module", module, head, *("." + part for part in rest), "." + name]
+    if _resolve(where, {}) is not memo:
+        return None
+    digests = _item_digests(memo)
+    if digests is None:
+        return None
+    return {"where": where, "items": digests, "pure": False, "calls": None}
 
 
 def unfilled(records: list[dict] | None, ns: Mapping[str, Any], *, refill: bool = True) -> str | None:
