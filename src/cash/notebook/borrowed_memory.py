@@ -35,6 +35,7 @@ from itertools import chain
 from typing import Any
 
 from cash import _plain_data
+from cash._memo import ByClass
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 
 from .shared_objects import (
@@ -74,23 +75,21 @@ def _family(value: Any) -> str | None:
 
 
 #: `_family_of_type` by type: a library's type only exists once it is
-#: imported, so the answer never changes.
-_FAMILIES: dict[type, str | None] = {}
+#: imported, so the answer never changes. Gone with the type (`ByClass`).
+_FAMILIES = ByClass()
+_FAMILY_OF = _FAMILIES.data
 
 
 def _family_of_type(kind: type) -> str | None:
     """`_family` by type alone, for the types numpy's, pandas', polars' and
     Arrow's modules define (None for the rest)."""
     try:
-        return _FAMILIES[kind]
+        return _FAMILY_OF[id(kind)]
     except KeyError:
         pass
-    except TypeError:  # an unhashable metaclass
-        return None
     module = str(attribute_or(kind, "__module__", "")).partition(".")[0]
     family = _library_family(kind) if module in ("numpy", "pandas", "polars", "pyarrow") else None
-    _FAMILIES[kind] = family
-    return family
+    return _FAMILIES.put(kind, family)
 
 
 def _library_family(kind: type) -> str | None:

@@ -5,6 +5,8 @@ from __future__ import annotations
 import types
 from typing import Any
 
+from ._memo import ByClass
+
 
 def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
     """``getattr(obj, name, default)``, with any error the lookup raises taken
@@ -17,7 +19,7 @@ def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
     asks. The question is cash's, so the answer is: not there.
     """
     kind = type(obj)
-    own = _OWN_LOOKUP.get(kind)
+    own = _OWN_KNOWN.get(id(kind))
     if own is None:
         own = _own_lookup(kind)
     try:
@@ -28,9 +30,10 @@ def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
         return default
 
 
-#: Per type, `_own_lookup`'s answer. Dropped whole past `_OWN_LOOKUP_MAX`
-#: types: a class made per call (``df.itertuples()``) is not kept alive.
-_OWN_LOOKUP: dict[type, bool] = {}
+#: Per type, `_own_lookup`'s answer, gone with the type. Dropped whole
+#: past `_OWN_LOOKUP_MAX` types as well.
+_OWN_LOOKUP = ByClass()
+_OWN_KNOWN = _OWN_LOOKUP.data
 _OWN_LOOKUP_MAX = 4096
 
 
@@ -40,11 +43,11 @@ def _own_lookup(kind: type) -> bool:
     (``fit``, ``__code__``, the ``__class__`` an ``isinstance`` asks for
     when the type does not match) ran it, where plain Python never asks:
     they are answered by Python's generic lookup and the real type."""
-    own = _OWN_LOOKUP.get(kind)
+    own = _OWN_KNOWN.get(id(kind))
     if own is None:
         if len(_OWN_LOOKUP) >= _OWN_LOOKUP_MAX:
             _OWN_LOOKUP.clear()
-        own = _OWN_LOOKUP[kind] = type(kind.__getattribute__) is types.FunctionType
+        own = _OWN_LOOKUP.put(kind, type(kind.__getattribute__) is types.FunctionType)
     return own
 
 
@@ -70,7 +73,7 @@ def instance_of(obj: Any, kinds: type | tuple[type, ...]) -> bool:
     way passes for itself.
     """
     kind = type(obj)
-    own = _OWN_LOOKUP.get(kind)
+    own = _OWN_KNOWN.get(id(kind))
     if own is None:
         own = _own_lookup(kind)
     if own:
@@ -97,8 +100,11 @@ def is_routine(obj: Any) -> bool:
 
 #: What Python's own ``__dict__`` slot is, on a class or a module.
 _SLOT_READERS = (types.GetSetDescriptorType, types.MemberDescriptorType)
-#: Per type, how to read an instance's own attribute dict (`own_dict`).
-_DICT_READERS: dict[type, Any] = {}
+#: Per type, whether an instance's own attribute dict is the slot Python
+#: gives it (`own_dict`). Not the slot's descriptor: it refers to its class,
+#: which would never go.
+_DICT_READERS = ByClass()
+_DICT_SLOTS = _DICT_READERS.data
 
 
 def own_dict(obj: Any, subclasses: bool = False) -> dict | None:
@@ -117,20 +123,22 @@ def own_dict(obj: Any, subclasses: bool = False) -> dict | None:
     (``dict.values(own)``), so none of the subclass's runs.
     """
     kind = type(obj)
-    reader = _DICT_READERS.get(kind)
-    if reader is None:
-        reader = False
+    slot = _DICT_SLOTS.get(id(kind))
+    if slot is None:
+        slot = False
         # Through ``type``'s own descriptors: a metaclass's hook is not asked.
         for klass in type.__dict__["__mro__"].__get__(kind):
             found = type.__dict__["__dict__"].__get__(klass).get("__dict__")
             if found is not None:
-                reader = found if type(found) in _SLOT_READERS else False
+                slot = type(found) in _SLOT_READERS
                 break
-        _DICT_READERS[kind] = reader
-    if reader is False:
+        _DICT_READERS.put(kind, slot)
+    if not slot:
         return None
     try:
-        attributes = reader.__get__(obj, kind)
+        # The type's first ``__dict__`` is that slot, a data descriptor:
+        # the generic lookup calls it and nothing of the object's.
+        attributes = object.__getattribute__(obj, "__dict__")
     except Exception:  # noqa: BLE001 - the object's own slot, not cash's error
         return None
     if type(attributes) is dict or (subclasses and isinstance(attributes, dict)):

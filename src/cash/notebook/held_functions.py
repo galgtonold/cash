@@ -39,7 +39,7 @@ from typing import Any, NamedTuple
 from cash._user_attrs import attribute_or, instance_of, own_dict
 
 from .. import _native
-from .._memo import CODE_OBJECTS, LruMemo
+from .._memo import CODE_OBJECTS, LruMemo, by_class
 from ..install_paths import is_user_code_module
 from ..tracking import io_watch
 from ..tracking.function_tracker import is_local_module
@@ -812,7 +812,7 @@ def _identity_keys(objects: list[Any], kinds: set[type]) -> Iterable[Any]:
     return [obj if type(obj) in by_identity else id(obj) for obj in objects]
 
 
-@functools.lru_cache(maxsize=1024)
+@by_class
 def _identity_hashed(kind: type) -> bool:
     """Whether an object of *kind* hashes and compares as ``object`` does:
     by its address, with no code of its class run. Two distinct live
@@ -892,7 +892,7 @@ def _inert(kind: type) -> bool:
     return not _may_have_dict(kind) and not _slot_names(kind)
 
 
-@functools.lru_cache(maxsize=1024)
+@by_class
 def _may_have_dict(kind: type) -> bool:
     """Can ``object.__getattribute__(obj, "__dict__")`` find anything on an
     object of *kind*: it has an instance dict, or a class along its MRO
@@ -934,7 +934,7 @@ def _cell_contents(cells: tuple[Any, ...] | None) -> list[Any]:
     return found
 
 
-@functools.lru_cache(maxsize=1024)
+@by_class
 def _slot_names(kind: type) -> tuple[str, ...]:
     """The slots *kind* and its bases declare, but ``__dict__`` and ``__weakref__``."""
     names: list[str] = []

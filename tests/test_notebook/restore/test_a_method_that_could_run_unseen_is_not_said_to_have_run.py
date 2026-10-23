@@ -102,14 +102,11 @@ def test_a_big_value_of_plain_items_is_looked_through(
 def test_a_class_with_no_object_alive_is_not_counted(
     no_trace, earlier_classes_collected, cash_magics, statement_processor
 ):
-    # Too big to look through, and ``Lonely`` has no object alive: none can
-    # be inside it. Named so that no class an earlier test left alive, with
-    # an object of it (a ``Vec`` held by a class another test made), is
-    # taken for it.
-    head = HEAD.replace("Vec", "Lonely")
-    run_cash_cell(cash_magics, head + "big = [types.SimpleNamespace() for _ in range(100_001)]")
+    # Too big to look through, and ``Vec`` has no object alive: none can
+    # be inside it.
+    run_cash_cell(cash_magics, HEAD + "big = [types.SimpleNamespace() for _ in range(100_001)]")
     reasons = _reasons(statement_processor, f"w = (len(big), time.sleep({F}))[0]")
-    assert "Lonely.__add__" not in reasons, reasons
+    assert "Vec.__add__" not in reasons, reasons
 
 
 def test_a_users_array_is_not_asked_its_length(no_trace, cash_magics):
@@ -162,5 +159,19 @@ def test_a_class_dropped_is_not_kept_alive_by_cash(cash_magics):
     first = weakref.ref(cash_magics.shell.user_ns["C"])
     for name in ("C", "Vec", "via_class", "w"):
         del cash_magics.shell.user_ns[name]
+    gc.collect()
+    assert first() is None
+
+
+def test_a_class_made_again_is_not_kept_alive_by_cash(no_trace, cash_magics, statement_processor):
+    # Read per class on every walk (its attribute lookup, its dict slot,
+    # its slots, its hashing family), each class a statement met stayed in
+    # those caches for good.
+    make = HEAD + "class C:\n    x = Vec()\n    def m(self):\n        return 1\nc = C()"
+    run_cash_cell(cash_magics, make)
+    _reasons(statement_processor, f"w = (c.m(), C.x, time.sleep({F}))[0]")
+    first = weakref.ref(cash_magics.shell.user_ns["C"])
+    run_cash_cell(cash_magics, make)
+    _reasons(statement_processor, f"w = (c.m(), C.x, time.sleep({F}))[0]")
     gc.collect()
     assert first() is None

@@ -30,7 +30,7 @@ from collections.abc import Callable
 from typing import Any
 
 from . import _plain_data
-from ._memo import ARROW_VALUES, LruMemo
+from ._memo import ARROW_VALUES, ByClass, LruMemo
 from .bulk_digest import DIRECT_MAX_BYTES, LEAF_BYTES, BulkHasher, fold_buffer, hashing_threads
 from .canonical_form import ContentHashing, canonical_bytes
 from .kept_state import packed_records
@@ -73,15 +73,14 @@ def builtin_family_of(type_: type) -> str | None:
     """`builtin_hash_family`, remembered per type: asked of every value a
     key walks."""
     try:
-        return _FAMILIES[type_]
+        return _FAMILY_OF[id(type_)]
     except KeyError:
-        family = _FAMILIES[type_] = builtin_hash_family(type_)
-        return family
-    except TypeError:  # a class whose metaclass makes it unhashable
-        return builtin_hash_family(type_)
+        return _FAMILIES.put(type_, builtin_hash_family(type_))
 
 
-_FAMILIES: dict[type, str | None] = {}
+#: Gone with its type (`ByClass`).
+_FAMILIES = ByClass()
+_FAMILY_OF = _FAMILIES.data
 
 
 def builtin_hash(value: Any) -> str | None:

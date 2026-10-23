@@ -52,6 +52,7 @@ from typing import Any
 
 from cash import _native, _plain_data
 from cash._clock import CpuLimit
+from cash._memo import ByClass
 from cash._user_attrs import attribute_or, has_attribute, instance_of, own_dict
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
@@ -351,22 +352,39 @@ def attributes_of(value: Any) -> dict[str, Any] | None:
     return found
 
 
-_SLOT_MEMBERS: dict[type, tuple[tuple[str, Any], ...]] = {}
+#: Per class, ``(position in its MRO, name)`` of each slot (`_slot_members`),
+#: gone with the class. Not the member descriptors: each refers to its
+#: class, which would never go.
+_SLOT_MEMBERS = ByClass()
 
 
 def _slot_members(cls: type) -> tuple[tuple[str, Any], ...]:
     """``(name, member descriptor)`` for each ``__slots__`` entry along
     *cls*'s MRO, read from each class's own ``__dict__`` (a private slot
     under its mangled name)."""
-    known = _SLOT_MEMBERS.get(cls)
+    last = _LAST_SLOTS
+    if last[0] is cls:
+        return last[1]
+    known = _SLOT_MEMBERS.data.get(id(cls))
     if known is None:
-        found: list[tuple[str, Any]] = []
-        for klass in cls.__mro__:
+        found: list[tuple[int, str]] = []
+        for position, klass in enumerate(cls.__mro__):
             for name, member in vars(klass).items():
                 if instance_of(member, types.MemberDescriptorType) and "__slots__" in vars(klass):
-                    found.append((name, member))
-        known = _SLOT_MEMBERS[cls] = tuple(found)
-    return known
+                    found.append((position, name))
+        known = _SLOT_MEMBERS.put(cls, tuple(found))
+    if not known:
+        return ()
+    mro = cls.__mro__
+    members = ((name, vars(mro[position]).get(name)) for position, name in known)
+    last[:] = cls, tuple((name, member) for name, member in members if member is not None)
+    return last[1]
+
+
+#: The last class with slots `_slot_members` was asked about, and its
+#: answer: the objects of a walk are mostly of one class. At most that one
+#: class is kept alive.
+_LAST_SLOTS: list[Any] = [None, ()]
 
 
 def _values_only(value: Any, exact: frozenset[type]) -> bool:

@@ -1329,22 +1329,66 @@ _TYPE_DESCRIPTORS = (types.GetSetDescriptorType, types.MemberDescriptorType)
 
 
 def _kept(value: Any) -> Any:
-    """*value* as `_SPECIAL_MEMO` keeps it: by a weak reference where it
-    takes one, a descriptor of its class by its name."""
-    if type(value) in _TYPE_DESCRIPTORS:
+    """*value* as `_SPECIAL_MEMO` keeps it, referring to nothing that could
+    refer back to its class: by a weak reference where it takes one; a
+    descriptor of its class by its name; a ``classmethod``,
+    ``staticmethod`` or ``property`` by its address and weak references to
+    the functions it holds; text, numbers and ``None`` as they are; anything
+    else by its type and address, safe while the class holds it."""
+    kind = type(value)
+    if kind in _TYPE_DESCRIPTORS:
         return (_TYPE_DESCRIPTORS, value.__name__)
+    if kind in _KEPT_AS_IS:
+        return value
     try:
         return weakref.ref(value)
     except TypeError:
-        return value
+        pass
+    parts = _WRAPPED_PARTS.get(kind)
+    if parts is not None:
+        functions = []
+        for part in parts:
+            inner = getattr(value, part, None)
+            try:
+                functions.append(weakref.ref(inner) if inner is not None else None)
+            except TypeError:
+                functions.append(id(inner))
+        return (_KEPT_BY_ADDRESS, kind, id(value), tuple(functions))
+    return (_KEPT_BY_ADDRESS, kind, id(value), ())
 
 
 def _is_kept(value: Any, kept: Any) -> bool:
     if type(kept) is weakref.ReferenceType:
         return kept() is value
-    if type(value) in _TYPE_DESCRIPTORS:
+    kind = type(value)
+    if kind in _TYPE_DESCRIPTORS:
         return type(kept) is tuple and kept == (_TYPE_DESCRIPTORS, value.__name__)
+    if type(kept) is tuple and len(kept) == 4 and kept[0] is _KEPT_BY_ADDRESS:
+        if kept[1] is not kind or kept[2] != id(value):
+            return False
+        for part, function in zip(_WRAPPED_PARTS.get(kind, ()), kept[3]):
+            inner = getattr(value, part, None)
+            if function is None:
+                same = inner is None
+            elif type(function) is weakref.ReferenceType:
+                same = function() is inner
+            else:
+                same = inner is not None and function == id(inner)
+            if not same:
+                return False
+        return True
     return kept is value
+
+
+_KEPT_BY_ADDRESS = object()
+_KEPT_AS_IS = frozenset((str, int, float, bool, bytes, type(None)))
+#: What a class member that takes no weak reference wraps, read to tell a
+#: new one at a freed address from the one kept.
+_WRAPPED_PARTS = {
+    classmethod: ("__func__",),
+    staticmethod: ("__func__",),
+    property: ("fget", "fset", "fdel"),
+}
 
 
 def reaching_special_functions(cls: type) -> list[Any]:

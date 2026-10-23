@@ -12,8 +12,11 @@ rest; dropping the least recently used keeps what the session is working with.
 
 from __future__ import annotations
 
+import functools
+import weakref
 from collections import OrderedDict
-from typing import Generic, TypeVar
+from collections.abc import Callable
+from typing import Any, Generic, TypeVar
 
 __all__ = [
     "ARGUMENTS",
@@ -41,7 +44,9 @@ __all__ = [
     "TABLES",
     "STATE_LEDGERS",
     "USER_CALLEES",
+    "ByClass",
     "LruMemo",
+    "by_class",
 ]
 
 K = TypeVar("K")
@@ -224,3 +229,61 @@ PRODUCER_SNAPSHOTS = 64
 
 #: One source digest per function the notebook's cells reference.
 NOTEBOOK_FUNCTIONS = 500
+
+
+class ByClass:
+    """A per-class answer that does not keep the class alive: ``data`` maps
+    ``id(cls)`` to the answer, read on a hot path as
+    ``table.data.get(id(cls))``, and an entry goes when its class does. A
+    class the notebook made again stayed alive in a plain dict keyed by it,
+    with what its class attributes hold.
+
+    An answer must not refer to its class (a descriptor of it does): the
+    class would never go."""
+
+    __slots__ = ("_refs", "data")
+
+    def __init__(self) -> None:
+        self.data: dict[int, Any] = {}
+        self._refs: dict[int, weakref.ref] = {}
+
+    def put(self, cls: type, answer: Any) -> Any:
+        """Keep *answer* for *cls*, and hand it back."""
+        key = id(cls)
+        if key not in self._refs:
+            data, refs = self.data, self._refs
+
+            def gone(_ref: weakref.ref, key: int = key) -> None:
+                data.pop(key, None)
+                refs.pop(key, None)
+
+            try:
+                refs[key] = weakref.ref(cls, gone)
+            except TypeError:
+                return answer  # takes no weak reference: not kept
+        self.data[key] = answer
+        return answer
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+    def clear(self) -> None:
+        self.data.clear()
+        self._refs.clear()
+
+
+def by_class(fn: Callable[[type], Any]) -> Callable[[type], Any]:
+    """``functools.cache`` for a function of a class alone, whose answers
+    go with their class (`ByClass`); ``cache_clear`` drops them all."""
+    table = ByClass()
+    known = table.data
+
+    @functools.wraps(fn)
+    def answer(kind: type) -> Any:
+        try:
+            return known[id(kind)]
+        except KeyError:
+            return table.put(kind, fn(kind))
+
+    answer.cache_clear = table.clear  # type: ignore[attr-defined]
+    return answer
