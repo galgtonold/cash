@@ -1435,12 +1435,25 @@ def packed_records(array: Any) -> Any:
     dtype = array.dtype
     if dtype.fields is None and dtype.subdtype is None:
         return array
+    # The scalar type too: ``np.dtype((np.record, D))`` equals ``D`` and
+    # hashes alike, but numpy packs it keeping its record type.
+    packed = _packed_dtype(dtype.type, dtype)
+    if packed is None:
+        return array
+    return array.astype(packed)
+
+
+@functools.lru_cache(maxsize=256)
+def _packed_dtype(scalar_type: type, dtype: Any) -> Any:
+    """*dtype*, of *scalar_type*, packed (`packed_records`), or None when it
+    has no padding.
+    Once per dtype: a forest's trees share one node dtype, and repacking it
+    for each of their 14,000 arrays took about 0.15 s a read of a voting
+    classifier's four models."""
     from numpy.lib import recfunctions
 
     packed = recfunctions.repack_fields(dtype, recurse=True)
-    if packed.itemsize == dtype.itemsize:
-        return array
-    return array.astype(packed)
+    return None if packed.itemsize == dtype.itemsize else packed
 
 
 def _reduce_array_for_key(array: Any, protocol: int) -> Any:

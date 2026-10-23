@@ -10,7 +10,10 @@ notebook again handed back a counter that went on from where it was.
 
 from __future__ import annotations
 
+import functools
 import time
+
+import pytest
 
 from cash.notebook.call_interception import CallSite
 from cash.notebook.call_key import holds_a_closure_with_state
@@ -63,3 +66,23 @@ def test_a_factory_returning_nested_handlers_is_not_served_the_last_run_s(call_u
     handlers = unit.wrap(make_handlers, site)()
 
     assert handlers["on"]["click"][0]() == 1, "the counter the last run made was served again"
+
+
+def _double(n):
+    return n * 2
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        lambda m: m,
+        lambda m: (m, 1),
+        lambda m: {"lookup": [m]},
+    ],
+    ids=["itself", "in_a_tuple", "in_a_dict_of_lists"],
+)
+def test_a_memo_is_state(shape):
+    # Served, ``f = functools.cache(g)`` handed back the memo the last run
+    # filled: ``f(1)`` then did not run ``g`` where plain Python runs it.
+    assert holds_a_closure_with_state(shape(functools.cache(_double)))
+    assert holds_a_closure_with_state(shape(functools.lru_cache(maxsize=4)(_double)))

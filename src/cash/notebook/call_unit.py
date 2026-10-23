@@ -1057,7 +1057,6 @@ class CallUnit:
         # Before the clock starts: looking for memos is cash's own work, and
         # counted as the call's it pushed cheap calls over the floor.
         memos_before = helper_memos.watched(attribute_or(call.fn, "__globals__", None) or {})
-        started = _perf_counter()
         call_tracker = FileAccessTracker(
             attribute_or(call.fn, "__globals__", None),
             propagate_to_parent=True,
@@ -1067,12 +1066,16 @@ class CallUnit:
         unit = shadow.begin("call") if shadow is not None else None
         try:
             with call_tracker, observe_writes() as written, recording_env_reads() as env_reads:
+                # Only the call is timed: cash's own work around it, counted
+                # as the call's, pushed cheap calls over the floor on a busy
+                # machine (a ``functools.cache(g)`` stored and served filled).
+                started = _perf_counter()
                 result, stdout_text, stderr_text, displayed = call_capturing_output(call.fn, call.args, call.kwargs)
+                elapsed = _perf_counter() - started
         finally:
             if unit is not None:
                 shadow.end(unit)
             self._running -= 1
-        elapsed = _perf_counter() - started
         # Read while `result` is this frame's only reference of its own.
         result_held = refs_beyond([result]) > ONE_LOCAL
         stored = False

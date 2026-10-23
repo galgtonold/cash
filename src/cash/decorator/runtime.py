@@ -1518,6 +1518,7 @@ class CallRunner:
             )
         self._purity.report_observed_effects(func_name, run.observer)
         self._files.credit_remembered_reads(func_name, run.tracker, args, kwargs)
+        self._files.warn_unrecorded_reads(func_name, run.tracker)
         auto_file_deps = snapshot_tracked_deps(run.tracker, func.__module__)
         execution_time = _perf_counter() - call.call_start
 
