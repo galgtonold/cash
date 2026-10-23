@@ -337,6 +337,12 @@ class _Reader:
                     # ``self._set(d)``: the object it is bound to is known.
                     value = _attribute_of(scope.known[func.value.id], method)
                     return self._handed_to(value, passed, everything, depth)
+                if owners & everything:
+                    # ``p.absorb(p)``: the object handed to its own method,
+                    # whose code cash cannot name here (what is in a
+                    # column, a method of the user's class) and which may
+                    # change what it is handed.
+                    return owners | everything
                 # A method of a value cash knows nothing of: a library's, as
                 # everywhere in cash. A callable of the user's handed to it
                 # with the parameter (``frame['o'].apply(upd)``) is read.
@@ -609,9 +615,32 @@ def _reached(node: ast.AST, reach: Mapping[str, set[str]]) -> set[str]:
         ):
             # ``getattr(d, '__setitem__')``, ``vars(o).update(...)``.
             pending.extend(current.args[:1])
+        elif isinstance(current, ast.Call) and _call_name(current) in _VIEWS:
+            # ``ChainMap(d)`` writes into ``d``: ``.update(...)``,
+            # ``[k] = v``, ``.maps[0]``.
+            pending.extend(current.args)
+        elif isinstance(current, ast.Call) and _call_name(current) in _VIEW_METHODS:
+            # ``cm.new_child()`` still holds ``d``, in ``.parents``.
+            pending.append(current.func.value)  # type: ignore[union-attr]
         elif isinstance(current, (ast.IfExp, ast.BoolOp, ast.NamedExpr)):
             pending.extend(ast.iter_child_nodes(current))
     return out
+
+
+#: Library calls that make a view over what they are handed: a write to it
+#: is a write to that.
+_VIEWS = frozenset({"ChainMap"})
+#: Methods of such a view that return a view over the same objects.
+_VIEW_METHODS = frozenset({"new_child"})
+
+
+def _call_name(call: ast.Call) -> str | None:
+    """``ChainMap`` for ``ChainMap(d)`` and ``collections.ChainMap(d)``;
+    ``new_child`` for ``cm.new_child()``."""
+    func = call.func
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return func.id if isinstance(func, ast.Name) else None
 
 
 def _written_arguments(call: ast.Call, passed: Mapping[int | str | None, set[str]], everything: set[str]) -> set[str]:
