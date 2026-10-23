@@ -1,16 +1,20 @@
-"""A write through a ``ChainMap`` over a dict a frame's column holds reaches
-the reader below.
+"""A write into the objects or dicts of a frame's column reaches the
+reader below.
 
 Each notebook edits ``Z = 1`` to ``Z = 2`` after the first Run All. The
-statement after it applies ``upd`` to the dicts of ``df['o']``, and ``upd``
-writes ``Z`` into each through a ``ChainMap`` made over it (``update``,
-``__setitem__``, ``maps[0]``, the parents of ``new_child()``). The
-``ChainMap`` was read as a library's result, so the statement wrote
-nothing, and the slow reader below printed the value from before the edit.
-A plain ``d['z'] = Z`` is the control.
+statement after it applies ``upd`` to a column of ``df``, and the slow
+reader below printed the value from before the edit:
 
-Each is checked over Run All x3 (edited after the first), a restart, and Run
-All x2.
+- ``upd`` calls ``p.absorb(p)``, a method of the user's class, on each
+  object of ``df['p']``; ``absorb`` reads ``Z``, but the key held only
+  ``upd``'s code, so the statement was served after the edit;
+- ``upd`` writes ``Z`` into each dict of ``df['o']`` through a ``ChainMap``
+  made over it (``update``, ``__setitem__``, ``maps[0]``, the parents of
+  ``new_child()``); the ``ChainMap`` was read as a library's result, so the
+  statement wrote nothing.
+
+A plain ``d['z'] = Z`` is the control. Each is checked over Run All x3
+(edited after the first), a restart, and Run All x2.
 """
 
 from __future__ import annotations
@@ -37,6 +41,7 @@ READER = "g = (time.sleep(0.3), str(df['o'][3]) + repr(df['p'][3]))[1]\nprint('R
 #: for the dicts.
 WRITERS = {
     "plain_setitem": ("o", "def upd(d):\n    d['z'] = Z"),
+    "absorb_itself": ("p", "def upd(p):\n    p.absorb(p)"),
     "chainmap_update": ("o", "def upd(d):\n    collections.ChainMap(d).update(z=Z)"),
     "chainmap_setitem": ("o", "def upd(d):\n    cm = collections.ChainMap(d)\n    cm.__setitem__('z', Z)"),
     "chainmap_first_map": ("o", "def upd(d):\n    collections.ChainMap(d).maps[0].update(z=Z)"),

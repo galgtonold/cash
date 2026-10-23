@@ -705,6 +705,10 @@ def _visit_group(
     # Any other object: its class (a notebook class's methods run on it),
     # its attributes and its slots.
     children.append(kind)
+    cells = _object_cells(kind)
+    if cells is not None:
+        for obj in group:
+            children.extend(cells(obj))
     if _may_have_dict(kind):
         for obj in group:
             attrs = own_dict(obj, subclasses=True)
@@ -727,6 +731,45 @@ def _visit_group(
                 children.append(object.__getattribute__(obj, name))
             except (AttributeError, TypeError):
                 pass
+
+
+@functools.lru_cache(maxsize=1024)
+def _object_cells(kind: type) -> Callable[[Any], list[Any]] | None:
+    """What reads the cells of the object columns of a pandas frame or
+    series of type *kind*, or None for any other type.
+
+    A frame keeps its columns in a block manager the walk does not enter: a
+    column of the user's objects was never seen, and a function handed
+    them (``df['p'].apply(lambda p: p.absorb(p))``) ran their methods with
+    nothing of those methods in the key. Columns of numbers hold no
+    function and are not read; plain values in an object column are
+    dropped by the next level at C speed."""
+    pandas = sys.modules.get("pandas")
+    if pandas is None:
+        return None
+    if issubclass(kind, pandas.DataFrame):
+        return _frame_object_cells
+    if issubclass(kind, pandas.Series):
+        return _series_object_cells
+    return None
+
+
+def _series_object_cells(series: Any) -> list[Any]:
+    try:
+        return series.tolist() if str(series.dtype) == "object" else []
+    except Exception:  # noqa: BLE001 - a broken subclass: nothing read
+        return []
+
+
+def _frame_object_cells(frame: Any) -> list[Any]:
+    cells: list[Any] = []
+    try:
+        for i, dtype in enumerate(frame.dtypes):
+            if str(dtype) == "object":
+                cells.extend(frame.iloc[:, i].tolist())
+    except Exception:  # noqa: BLE001 - a broken subclass: what was read
+        pass
+    return cells
 
 
 def _add_column(column: list[Any], children: list[Any]) -> None:
