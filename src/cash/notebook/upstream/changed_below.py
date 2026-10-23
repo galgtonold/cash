@@ -25,7 +25,7 @@ from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
 from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import CashWarning
 
-__all__ = ["holds_object", "warn_changed_below"]
+__all__ = ["held_objects", "warn_changed_below"]
 
 logger = logging.getLogger(__name__)
 
@@ -76,46 +76,59 @@ def _cell_below_holding(code: str, cells: list[str], cell_idx: int) -> tuple[int
     return below[0] if len(below) == 1 else None
 
 
-#: How deep, and over how many items, `holds_object` looks.
+#: How deep, and over how many objects, `held_objects` looks: a default
+#: list of 20,000 records is walked whole, in about 15 ms.
 _HOLD_DEPTH = 4
-_HOLD_ITEMS = 1000
+_HOLD_ITEMS = 50_000
+
+_ATOMS = (str, bytes, int, float, complex, bool, type(None), types.ModuleType)
 
 
-def holds_object(holder: object, target: object) -> bool:
-    """Does *holder* hold *target* itself: as a default, a closure cell, an
-    attribute, a ``partial`` argument, or inside a container one of those
-    is, `_HOLD_DEPTH` deep? By identity: a list that only shares elements
-    with *target* does not hold it."""
+def held_objects(holder: object) -> tuple[set[int], bool]:
+    """The ids of the objects *holder* holds itself: as a default, a closure
+    cell, an attribute, a ``partial`` argument, or inside a container one of
+    those is, `_HOLD_DEPTH` deep and `_HOLD_ITEMS` objects at most. By
+    identity: a list that only shares elements with ``BIG`` does not hold
+    it. The flag says whether the walk saw everything; cut short by a
+    limit, or by an object that cannot say what it holds, it may have
+    missed one."""
     seen: set[int] = set()
     budget = [_HOLD_ITEMS]
+    complete = [True]
 
-    def walk(obj: object, depth: int) -> bool:
-        if obj is target:
-            return True
-        if depth <= 0 or id(obj) in seen or budget[0] <= 0:
-            return False
-        seen.add(id(obj))
-        budget[0] -= 1
-        if instance_of(obj, (str, bytes, int, float, complex, bool, type(None), types.ModuleType)):
+    def walk(obj: object, depth: int) -> None:
+        if id(obj) in seen or instance_of(obj, _ATOMS):
             # A module holds every global: ``__self__`` of ``math.sqrt``.
-            return False
+            return
+        seen.add(id(obj))
+        if depth <= 0 or budget[0] <= 0:
+            complete[0] = False
+            return
+        budget[0] -= 1
         try:
-            children = _held_directly(obj)
-        except Exception:  # noqa: BLE001 - a user object that cannot say holds nothing we can see
-            return False
-        return any(walk(child, depth - 1) for child in children)
+            children, whole = _held_directly(obj)
+        except Exception:  # noqa: BLE001 - a user object that cannot say what it holds
+            complete[0] = False
+            return
+        if not whole:
+            complete[0] = False
+        for child in children:
+            walk(child, depth - 1)
 
-    return walk(holder, _HOLD_DEPTH + 1)
+    walk(holder, _HOLD_DEPTH + 1)
+    seen.discard(id(holder))
+    return seen, complete[0]
 
 
-def _held_directly(obj: object) -> list:
-    """What *obj* holds one step down, `_HOLD_ITEMS` at most."""
+def _held_directly(obj: object) -> tuple[list, bool]:
+    """What *obj* holds one step down, `_HOLD_ITEMS` at most, and whether
+    that is all of it."""
     if instance_of(obj, dict):
-        return list(itertools.islice(obj.values(), _HOLD_ITEMS))
+        return _first_items(obj.values(), len(obj))
     if instance_of(obj, (list, tuple, set, frozenset)):
-        return list(itertools.islice(obj, _HOLD_ITEMS))
+        return _first_items(obj, len(obj))
     if instance_of(obj, functools.partial):
-        return [obj.func, *obj.args, *obj.keywords.values()]
+        return [obj.func, *obj.args, *obj.keywords.values()], True
     children = [
         *(attribute_or(obj, "__defaults__") or ()),
         *(attribute_or(obj, "__kwdefaults__") or {}).values(),
@@ -124,9 +137,14 @@ def _held_directly(obj: object) -> list:
         attribute_or(obj, "__func__"),
     ]
     attrs = attribute_or(obj, "__dict__")
-    if isinstance(attrs, dict):
-        children.extend(itertools.islice(attrs.values(), _HOLD_ITEMS))
-    return children
+    if not isinstance(attrs, dict):
+        return children, True
+    items, whole = _first_items(attrs.values(), len(attrs))
+    return children + items, whole
+
+
+def _first_items(items, size: int) -> tuple[list, bool]:
+    return list(itertools.islice(items, _HOLD_ITEMS)), size <= _HOLD_ITEMS
 
 
 def _cell_contents(cell: object) -> object:
@@ -143,14 +161,16 @@ def warn_changed_below(
     cell_idx: int,
     warned: set[tuple[int, str, str]],
     through: str | None = None,
+    maybe: bool = False,
 ) -> bool:
     """Warn NOTEBOOK-CHANGED-BELOW when *name*, an input of cell *cell_idx*
     that is about to be rebuilt as the cells above leave it, was last changed
     in place by *last_code*, a statement of a cell below. *through*: the
     input the cell reads, when *name* is a variable whose object that input
     holds (``def draw(k, rows=BIG)`` holds ``BIG``, which ``BIG.append(...)``
-    changes). Once per cell, name and statement (*warned*). Returns whether
-    it warned."""
+    changes); *maybe*: the walk over *through* was cut short, so it may
+    hold *name*. Once per cell, name and statement (*warned*). Returns
+    whether it warned."""
     if not last_code or not 0 <= cell_idx < len(cells):
         return False
     code = strip_markers(last_code).strip()
@@ -160,7 +180,8 @@ def warn_changed_below(
     if found is None or not _changes_in_place(code, name):
         return False
     below, written = found
-    reads = f"'{name}'" if through is None else f"'{through}', which holds '{name}'"
+    holds = "may hold" if maybe else "holds"
+    reads = f"'{name}'" if through is None else f"'{through}', which {holds} '{name}'"
     key = (cell_idx, name, code)
     if key in warned:
         return False

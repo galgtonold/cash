@@ -34,7 +34,7 @@ from ._types import (
     normalize_stmt,
 )
 from .cache_restore import CacheRestorer
-from .changed_below import holds_object, warn_changed_below
+from .changed_below import held_objects, warn_changed_below
 from .library_rules import self_call_resets_lineage
 from .loop_rules import LoopRules
 from .simulated_callables import SimulatedCallables
@@ -576,18 +576,28 @@ class MismatchClassifier:
         if not warn_changed_below(m.var_name, codes.get(m.var_name), cells, idx, warned):
             # Changed through what it holds: ``BIG.append(...)`` below, read
             # here through ``draw``'s default ``rows=BIG``.
-            for held in sorted(self._held_by(m.var_name)):
-                warn_changed_below(held, codes.get(held), cells, idx, warned, through=m.var_name)
+            held, maybe = self._held_by(m.var_name)
+            for name in sorted(held | maybe):
+                warn_changed_below(
+                    name, codes.get(name), cells, idx, warned, through=m.var_name, maybe=name not in held
+                )
         return True
 
-    def _held_by(self, name: str) -> set[str]:
-        """The variables whose object *name*'s object holds: a function
-        holding ``BIG`` as its default. Asked of the variables sharing an
-        object with it (``derivation_edges``), and checked by identity: a
-        result sharing only elements with ``BIG`` is not held."""
+    def _held_by(self, name: str) -> tuple[set[str], set[str]]:
+        """The variables whose object *name*'s object holds, by identity (a
+        function holding ``BIG`` as its default, or in a closure cell a call
+        rebound to it), and those it may hold: when the walk over it was cut
+        short, the variables sharing an object with it (``derivation_edges``)
+        that the walk did not find. A result sharing only elements with
+        ``BIG`` is not held."""
+        user_ns = self.shell.user_ns
+        if name not in user_ns:
+            return set(), set()
+        ids, complete = held_objects(user_ns[name])
+        held = {other for other, value in list(user_ns.items()) if other != name and id(value) in ids}
+        if complete or not self.tracking_state.derivation_edges:
+            return held, set()
         edges = self.tracking_state.derivation_edges
-        if not edges:
-            return set()
         found: set[str] = set()
         todo = [name]
         while todo:
@@ -595,9 +605,7 @@ class MismatchClassifier:
                 if partner != name and partner not in found:
                     found.add(partner)
                     todo.append(partner)
-        user_ns = self.shell.user_ns
-        holder = user_ns.get(name)
-        return {held for held in found if held in user_ns and holds_object(holder, user_ns[held])}
+        return held, {other for other in found - held if other in user_ns}
 
     def _rebuild_after_a_gone_change(self, m: _Mismatch) -> bool:
         """A required input the cell also writes, last changed by a statement
@@ -832,12 +840,39 @@ class MismatchClassifier:
         )
         self._repair_upstream_rerun_bindings(required_inputs, sim.trace, result.broken_vars)
         self._rebuild_what_shares_a_rebuilt_object(result.broken_vars, sim.trace, check)
+        self._warn_held_changed_below(vars_to_check - result.broken_vars, check)
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("[UPSTREAM_DEBUG] Broken vars: %s", result.broken_vars)
             if not result.broken_vars:
                 logger.debug("[UPSTREAM_DEBUG] No broken vars, nothing to re-execute")
         return result
+
+    def _warn_held_changed_below(self, kept: set[str], check: CellCheck) -> None:
+        """Say NOTEBOOK-CHANGED-BELOW for a function the cell reads and keeps
+        that holds a variable a cell below changed in place, where nothing
+        links the two: ``rebind(BIG)`` set the ``nonlocal rows`` that
+        ``draw`` reads, so ``BIG.append(...)`` below moved no lineage of
+        ``draw``. The cell is served as a run from the top leaves it,
+        without the change; this only says so. By identity, and only when
+        a variable was last changed by a statement of a cell below."""
+        cells, idx = check.notebook_cells, check.current_cell_idx
+        if not cells or not 0 <= idx < len(cells) - 1:
+            return
+        below = "\n".join(cells[idx + 1 :])
+        codes = self.tracking_state.executed_cell_codes
+        changed = {name for name, code in codes.items() if code and strip_markers(code).strip() in below}
+        user_ns = self.shell.user_ns
+        changed = {name for name in changed if name in user_ns}
+        if not changed:
+            return
+        for name in sorted(kept):
+            value = user_ns.get(name)
+            if not instance_of(value, (types.FunctionType, functools.partial)):
+                continue
+            ids, _ = held_objects(value)
+            for held in sorted(other for other in changed if other != name and id(user_ns[other]) in ids):
+                warn_changed_below(held, codes.get(held), cells, idx, self._warned_changed_below, through=name)
 
     def _rebuild_what_shares_a_rebuilt_object(
         self, broken_vars: set[str], simulation_trace: list, check: CellCheck | None = None

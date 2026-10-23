@@ -446,7 +446,7 @@ out = summarize(s)  # cell 2: re-run this alone...
 s.iloc[0] = 1e9     # cell 3: ...and it does not see this
 ```
 
-<!-- claim: cash/notebook/upstream/changed_below.py:warn_changed_below @bbf25145 -->
+<!-- claim: cash/notebook/upstream/changed_below.py:warn_changed_below @8bd3d1a3 -->
 cash answers cell 2 as a top-to-bottom run would: it rebuilds `s` as cell 1
 leaves it, so cell 2 computes with `0.0`, and `s` holds `0.0` until cell 3 runs
 again. cash warns [NOTEBOOK-CHANGED-BELOW](warnings.md#notebook-changed-below)
