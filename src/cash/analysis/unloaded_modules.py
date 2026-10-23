@@ -113,7 +113,15 @@ def is_user_code(module_name: str, root_module: str | None) -> bool:
     """Is *module_name* user code, decided WITHOUT importing it or its parents?"""
     if in_own_package(module_name, top_package(root_module)):
         return True
-    origin = _origin(module_name)
+    return _users_file(_origin(module_name))
+
+
+def _users_file(origin: str | None) -> bool:
+    """Is *origin* a file of the user's code? Bytecode with no source beside
+    it is judged by where it is, so that `source_digest`, which has no source
+    to read, leaves it unvouched rather than taking it for a library."""
+    if origin and origin.endswith((".pyc", ".pyo")):
+        origin = origin[:-1]
     return bool(origin) and is_local_module(types.SimpleNamespace(__file__=origin))
 
 
@@ -183,7 +191,7 @@ def _source_digest(module_name: str, own_pkg: str | None) -> tuple[str | None, t
                 # Not on disk to import: a name `from pkg import name` reads off
                 # the package, or a module the body's import would fail on.
                 break
-            if not (in_own_package(prefix, own_pkg) or is_local_module(types.SimpleNamespace(__file__=origin))):
+            if not (in_own_package(prefix, own_pkg) or _users_file(origin)):
                 # A library: followed no further, as the helper walk does not.
                 break
             if not origin.endswith(".py") or len(files) >= _MAX_FILES:
@@ -200,6 +208,9 @@ def _source_digest(module_name: str, own_pkg: str | None) -> tuple[str | None, t
                 return None, tuple(looked)
             files[prefix] = hashlib.blake2b(source, digest_size=16).hexdigest()
             todo.extend(reader.imported)
+    if module_name not in files:
+        # The module itself was not read: its source cannot stand for it.
+        return None, tuple(looked)
     blob = "\n".join(f"{name}={digest}" for name, digest in sorted(files.items()))
     return hashlib.blake2b(blob.encode(), digest_size=16).hexdigest(), tuple(looked)
 

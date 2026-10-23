@@ -281,3 +281,37 @@ def test_a_value_read_outside_the_source_without_a_call_runs_with_a_warning(tmp_
     assert "cannot read without running it" in err, err[-2000:]
     out, ran, _ = _run(tmp_path, env={"K": "12", "PYTHONOPTIMIZE": "1"})
     assert (out, ran) == ("72", True), "a value read outside the source was served stale"
+
+
+def test_a_module_with_only_its_bytecode_runs_with_a_warning(tmp_path):
+    """A ``.pyc`` with no ``.py`` beside it has no source to stand for it: it
+    was taken for a library and not keyed at all, so an edit was served
+    stale: before the body imported it, and after."""
+    import py_compile
+
+    def compiled(factor):
+        _write(tmp_path, "src/pycmod.py", f"def scale(x):\n    return x * {factor}\n")
+        py_compile.compile(str(tmp_path / "src/pycmod.py"), cfile=str(tmp_path / "pycmod.pyc"), doraise=True)
+
+    compiled(2)
+    _write(
+        tmp_path,
+        "job.py",
+        """
+        import sys
+        import cash
+
+        @cash.cache
+        def total(values):
+            print("[RUN]", file=sys.stderr)  # @cash:assume-safe
+            from pycmod import scale
+            return sum(scale(v) for v in values)
+
+        print(total([1, 2, 3]), total([1, 2, 3]))
+        """,
+    )
+    out, ran, err = _run(tmp_path)
+    assert (out, ran) == ("12 12", True)
+    assert "cannot read without running it" in err, err[-2000:]
+    compiled(5)
+    assert _run(tmp_path)[:2] == ("30 30", True), "the edited module was served stale"
