@@ -3353,10 +3353,52 @@ def _find_holders(
     the variables it found joined decides, and when that still finds a holder
     the search up runs.
     """
-    found = _holders_from_names(targets, internal, user_ns, known)
+    found = _holders_from_names(targets, internal, user_ns, known) or _flat_holders(targets, internal, user_ns, known)
     if found:
         return found
     return _holders_from_referrers(targets, internal, user_ns, known, gave_up)
+
+
+#: The largest list, tuple or dict `_flat_holders` reads.
+_FLAT_WIDEST = 1_000_000
+
+
+def _flat_holders(targets: list[Any], internal: set[int], user_ns: Mapping[str, Any], known: set[str]) -> set[str]:
+    """The variables of *user_ns* not in *known* bound to a list, tuple or
+    dict holding one of *targets* as an item, or in an item that is itself
+    one (a record's ``tags``): ``recs``, the 5,000 records a frame's object
+    column, or ``pd.json_normalize(recs)``'s, was built from, too wide for
+    the search down (`_holders_from_names`) and too many objects for the
+    search up, which gave up and refused the frame. Read by identity, at
+    most `_FLAT_WIDEST` items a variable."""
+    wanted = {id(obj) for obj in targets}
+    found: set[str] = set()
+    for name, value in list(user_ns.items()):
+        kind = type(value)
+        if name in known or id(value) in internal or kind not in _FLAT_KINDS:
+            continue
+        items = dict.values(value) if kind is dict else value
+        if len(items) > _FLAT_WIDEST:
+            continue
+        if not wanted.isdisjoint(map(id, items)):
+            found.add(name)
+            continue
+        budget = _FLAT_WIDEST
+        for item in items:
+            inner = type(item)
+            if inner not in _FLAT_KINDS:
+                continue
+            parts = dict.values(item) if inner is dict else item
+            budget -= len(parts)
+            if budget < 0:
+                break
+            if not wanted.isdisjoint(map(id, parts)):
+                found.add(name)
+                break
+    return found
+
+
+_FLAT_KINDS = (list, tuple, dict)
 
 
 #: Most objects `_holders_from_referrers` looks the holders of at once.
