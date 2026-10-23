@@ -10,11 +10,13 @@ from typing import TYPE_CHECKING
 from cash._user_attrs import has_attribute
 from cash.control_markers import iteration_digest
 
+from ...analysis.ast_util import parse_cached
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutations import consumed_input_names
 from .._trace import trace_event
 from ..cache_key import statement_source_hash
+from ..call_key import TooMuchToLookThrough, holds_a_closure_with_state
 from ..stateful_carriers import carrier_kind_from_producer, stateful_carrier_kind
 from ._types import ClassificationResult, ReexecutionPlan, SimulationResult, latest_producer
 from .carrier_fills import fills_carrier
@@ -213,6 +215,10 @@ class ReexecutionPlanner:
                 virtual_modules,
             )
             stmts_to_run_indices = self.complete_later_producers(
+                stmts_to_run_indices,
+                simulation_trace,
+            )
+            stmts_to_run_indices = self.complete_later_closure_calls(
                 stmts_to_run_indices,
                 simulation_trace,
             )
@@ -702,6 +708,49 @@ class ReexecutionPlanner:
                     )
         return sorted(scheduled)
 
+    def complete_later_closure_calls(self, stmts_to_run_indices: list[int], simulation_trace: list) -> list[int]:
+        """Every later call of a function a re-run statement binds re-runs
+        too, when the function changes what its closure holds.
+
+        ``draw, rebind = make(BIG)`` re-run gives closures that hold ``BIG``
+        again; ``rebind([0])`` below it, which points them at ``[0]``,
+        binds nothing, so no pass took it for a producer. The rebuilt
+        ``draw`` read all of ``BIG`` where a Run All gives ``len([0])``. A
+        call of a function whose closure keeps nothing (`holds_a_closure_with_state`)
+        changes nothing a re-run undoes and is left alone.
+        """
+        scheduled = set(stmts_to_run_indices)
+        user_ns = self._user_ns()
+        stateful: dict[str, bool] = {}
+
+        def with_state(name: str) -> bool:
+            if name not in stateful:
+                try:
+                    stateful[name] = holds_a_closure_with_state(user_ns.get(name))
+                except TooMuchToLookThrough:
+                    stateful[name] = True
+            return stateful[name]
+
+        pending = sorted(scheduled)
+        while pending:
+            i = pending.pop(0)
+            for v in sorted(simulation_trace[i].outputs):
+                for p in range(i + 1, len(simulation_trace)):
+                    entry = simulation_trace[p]
+                    if p in scheduled or v not in entry.inputs or v not in _called_names(entry.stmt_code):
+                        continue
+                    if not with_state(v):
+                        break
+                    scheduled.add(p)
+                    pending.append(p)
+                    trace_event(
+                        "later_closure_call_completion",
+                        stmt=entry.stmt_code[:80],
+                        var=v,
+                        after=simulation_trace[i].stmt_code[:80],
+                    )
+        return sorted(scheduled)
+
     @staticmethod
     def _complete_import_path_setup(stmts_to_run_indices: list[int], simulation_trace: list) -> list[int]:
         """Before a re-run import of a module that is not loaded, the notebook's
@@ -1027,3 +1076,13 @@ def _rebuilds_of_what_it_changes(simulation_trace: list, index: int, consumables
             return None
         rebuilds.update(writers)
     return rebuilds
+
+
+def _called_names(code: str) -> frozenset[str]:
+    """The names *code* calls directly (``rebind([0])``, ``x = f(1)``)."""
+    tree = parse_cached(code)
+    if tree is None:
+        return frozenset()
+    return frozenset(
+        node.func.id for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    )
