@@ -48,7 +48,7 @@ import queue
 import sys
 import types
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import Any, NamedTuple
 
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 
@@ -315,21 +315,49 @@ def drawn_stream_inputs(
 
 #: How far the look for an iterator held out of sight goes: below what the
 #: statement calls, through functions' globals, closure cells and defaults,
-#: an instance's or class's attributes, items; and how many objects it looks
-#: at in all.
-_HELD_DEPTH = 6
+#: an instance's or class's attributes, items; how many objects that can hold
+#: something it looks into; and how many items of the user's containers it
+#: reads in all. Past any of them on the user's objects, the look did not
+#: finish, and the statement runs (`HeldStreams.stopped`).
+_HELD_DEPTH = 16
 _HELD_BUDGET = 2000
-#: A container a variable indexes is looked through up to this many items.
+_HELD_ITEMS = 200_000
+#: Inside a library's object, only this many of its items or attributes are
+#: looked at: only a generator of the user's counts there.
 _HELD_WIDTH = 64
 #: Containers whose items are read in order.
 _CONTAINERS = (list, tuple, set, frozenset, collections.deque)
+#: Values that hold nothing: a container of only these is read for free.
+_LEAVES = frozenset({str, bytes, bytearray, int, float, complex, bool, type(None)})
 #: pandas' indexers: ``s.iloc[i]`` reads an item of ``s``.
 _INDEXERS = frozenset({"iloc", "loc", "iat", "at"})
-#: ``Py_TPFLAGS_HEAPTYPE``: a class made by a ``class`` statement.
+#: ``Py_TPFLAGS_HEAP_TYPE``: a class made by a ``class`` statement.
 _HEAP_TYPE = 1 << 9
 
 
-def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> list[str]:
+class HeldStreams(NamedTuple):
+    """What `held_stream_paths` found: the paths of the iterators a
+    statement can draw from that no name it reads holds, and, when the look
+    could not finish, where it stopped and why."""
+
+    paths: list[str]
+    stopped: str | None = None
+
+
+class _Look:
+    """The budgets of one look (`held_stream_paths`)."""
+
+    def __init__(self) -> None:
+        self.objects = _HELD_BUDGET
+        self.items = _HELD_ITEMS
+        self.stopped: str | None = None
+
+    def stop(self, why: str) -> None:
+        if self.stopped is None:
+            self.stopped = why
+
+
+def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> HeldStreams:
     """The iterators and generators a statement can draw from that no name
     it reads holds itself, as paths (``m.g``, ``f.gen``).
 
@@ -342,38 +370,51 @@ def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> li
     under the same key, would not be what a run gives. An open file is left
     to the file checks, which see what is read from it.
 
-    Inside a library's objects and functions only a generator of the user's
-    counts: a library keeps its own counters (matplotlib's callback ids). A
-    look that runs out of objects before it is done gives the path it
-    stopped at, so the statement runs rather than be served unlooked.
+    Every item of the user's containers and every attribute of the user's
+    objects is looked at; a value that holds nothing (an ``int``, a ``str``)
+    costs no budget. Inside a library's objects and functions only a
+    generator of the user's counts: a library keeps its own counters
+    (matplotlib's callback ids). A look that runs out of objects, items or
+    depth on the user's objects says where it stopped (``stopped``), so the
+    statement runs rather than be served unlooked.
     """
     if tree is None:
-        return []
+        return HeldStreams([])
+    look = _Look()
     found: list[str] = []
     frontier: list[tuple[str, Any, int, bool]] = []
     for node in ast.walk(tree):
         if isinstance(node, (ast.Attribute, ast.Subscript)) and not isinstance(node.ctx, ast.Store):
-            found.extend(path for path, value in _spelled(node, user_ns) if _held_stream(value))
+            found.extend(path for path, value in _spelled(node, user_ns, look) if _held_stream(value))
         if isinstance(node, ast.Call):
-            frontier.extend((path, callee, 0, _owned(callee)) for path, callee in _callees(node.func, user_ns))
+            frontier.extend((path, callee, 0, _owned(callee)) for path, callee in _callees(node.func, user_ns, look))
             for arg in [*node.args, *(k.value for k in node.keywords)]:
-                frontier.extend((path, value, 0, True) for path, value in _spelled(arg, user_ns) if _callable(value))
+                frontier.extend(
+                    (path, value, 0, True) for path, value in _spelled(arg, user_ns, look) if _callable(value)
+                )
     seen: set[int] = set()
-    budget = _HELD_BUDGET
-    while frontier and budget > 0:
+    while frontier:
         path, obj, depth, owned = frontier.pop()
-        if id(obj) in seen or instance_of(obj, (str, bytes, int, float, complex, bool, type(None))):
+        if type(obj) in _LEAVES or id(obj) in seen or instance_of(obj, (str, bytes, int, float, complex)):
             continue
         seen.add(id(obj))
-        budget -= 1
         if depth > 0 and _held_stream(obj):
             if owned or _users_generator(obj):
                 found.append(path)
             continue
         if depth >= _HELD_DEPTH:
+            if owned:
+                look.stop(f"{path}, deeper than {_HELD_DEPTH} steps")
             continue
+        if type(obj) not in _CONTAINERS and type(obj) is not dict:
+            look.objects -= 1
+            if look.objects < 0:
+                look.stop(f"{path}, past {_HELD_BUDGET} objects")
+                break
         try:
-            for label, child in _reached(obj):
+            for label, child in _reached(obj, owned, look, path):
+                if type(child) in _LEAVES:
+                    continue
                 frontier.append(
                     (
                         f"{path}{label}" if label.startswith(("[", ".")) else f"{path}.{label}",
@@ -384,9 +425,9 @@ def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> li
                 )
         except Exception:  # noqa: BLE001 - a look into arbitrary objects must not break the statement
             continue
-    if frontier and budget <= 0:
-        found.append(f"{frontier[-1][0]} (the look stopped after {_HELD_BUDGET} objects)")
-    return sorted(set(found))
+        if look.items < 0:
+            break
+    return HeldStreams(sorted(set(found)), look.stopped)
 
 
 def _callable(value: Any) -> bool:
@@ -398,7 +439,7 @@ def _owned(obj: Any) -> bool:
     library's object or function."""
     if instance_of(obj, types.FunctionType):
         return is_user_code_file(obj.__code__.co_filename)
-    if instance_of(obj, (types.MethodType, functools.partial, classmethod, staticmethod, *_CONTAINERS)):
+    if instance_of(obj, (types.MethodType, functools.partial, classmethod, staticmethod, dict, *_CONTAINERS)):
         return True
     if instance_of(obj, (types.SimpleNamespace, types.ModuleType)):
         return True
@@ -413,12 +454,13 @@ def _users_generator(obj: Any) -> bool:
     return code is not None and is_user_code_file(code.co_filename)
 
 
-def _reached(obj: Any) -> Iterable[tuple[str, Any]]:
+def _reached(obj: Any, owned: bool, look: _Look, path: str) -> Iterable[tuple[str, Any]]:
     """What calling or reading *obj* can reach: `hidden_generators.children`,
     and a function's defaults, a ``partial``'s function and arguments, a
     builtin method's object, a class of the user's and its attributes, an
     instance's class, the items of a container a library makes (a deque, a
-    pandas object column)."""
+    pandas object column). All of an *owned* object's items, attributes and
+    globals; a library's up to `_HELD_WIDTH`."""
     from .statement.hidden_generators import children
 
     if instance_of(obj, type):
@@ -432,9 +474,9 @@ def _reached(obj: Any) -> Iterable[tuple[str, Any]]:
         return
     if instance_of(obj, functools.partial):
         yield "func", obj.func
-        for i, arg in enumerate(obj.args[:_HELD_WIDTH]):
+        for i, arg in enumerate(obj.args):
             yield f"args[{i}]", arg
-        for key, arg in list(obj.keywords.items())[:_HELD_WIDTH]:
+        for key, arg in list(obj.keywords.items()):
             yield f"keywords[{key!r}]", arg
         return
     if instance_of(obj, (types.BuiltinMethodType, types.MethodWrapperType)):
@@ -442,12 +484,23 @@ def _reached(obj: Any) -> Iterable[tuple[str, Any]]:
         if not instance_of(owner, types.ModuleType):
             yield "__self__", owner
         return
-    items = _items(obj)
+    items = _items(obj, look, path if owned else None)
     if items is not None:
         yield from items
-        if not instance_of(obj, (dict, list, tuple)):
+        if type(obj) is dict or type(obj) in _CONTAINERS or not instance_of(obj, (dict, *_CONTAINERS)):
             return
-    yield from children(obj)
+        # A subclass of the user's: its attributes too.
+        try:
+            attrs = object.__getattribute__(obj, "__dict__")
+        except (AttributeError, TypeError):
+            return
+        if isinstance(attrs, dict):
+            yield from ((f".{k}", v) for k, v in list(attrs.items()))
+        return
+    if owned:
+        yield from _all_children(obj)
+    else:
+        yield from children(obj)
     if instance_of(obj, types.FunctionType):
         for i, value in enumerate(obj.__defaults__ or ()):
             yield f"__defaults__[{i}]", value
@@ -459,27 +512,72 @@ def _reached(obj: Any) -> Iterable[tuple[str, Any]]:
         yield "__class__", cls
 
 
-def _items(owner: Any) -> list[tuple[str, Any]] | None:
-    """The items of a container, up to `_HELD_WIDTH` of them, read without
-    running the user's code: a list, tuple, deque or dict of any kind; a
-    pandas object column or a numpy array of objects. ``None`` for anything
-    else."""
+def _all_children(obj: Any) -> Iterable[tuple[str, Any]]:
+    """`hidden_generators.children` of a user's object, with no width: every
+    global a function of theirs names, every attribute of their instance,
+    every name of their module."""
+    from .statement.hidden_generators import children
+
+    if instance_of(obj, types.ModuleType):
+        if is_user_code_module(obj):
+            yield from ((f".{k}", v) for k, v in list(obj.__dict__.items()) if not k.startswith("__"))
+        return
+    if instance_of(obj, types.FunctionType):
+        code = obj.__code__
+        for name, cell in zip(code.co_freevars, obj.__closure__ or (), strict=False):
+            try:
+                yield name, cell.cell_contents
+            except ValueError:
+                continue
+        g = obj.__globals__
+        for name in code.co_names:
+            if name in g:
+                yield name, g[name]
+        return
+    if instance_of(obj, types.MethodType):
+        yield from children(obj)
+        return
+    try:
+        attrs = object.__getattribute__(obj, "__dict__")
+    except (AttributeError, TypeError):
+        return
+    if isinstance(attrs, dict):
+        yield from ((f".{k}", v) for k, v in list(attrs.items()))
+
+
+def _items(owner: Any, look: _Look | None = None, path: str | None = None) -> list[tuple[str, Any]] | None:
+    """The items of a container, read without running the user's code: a
+    list, tuple, set, deque or dict of any kind; a pandas object column or a
+    numpy array of objects. ``None`` for anything else. With *path* (an
+    object of the user's) all of them, counted against *look*'s items; past
+    them the look stops there. Without, up to `_HELD_WIDTH`."""
+    width = _HELD_WIDTH if path is None or look is None else max(look.items, 0) + 1
+    found = _items_up_to(owner, width)
+    if found is None or path is None or look is None:
+        return found
+    look.items -= len(found)
+    if look.items < 0:
+        look.stop(f"{path}, past {_HELD_ITEMS} items")
+    return [(label, value) for label, value in found if type(value) not in _LEAVES]
+
+
+def _items_up_to(owner: Any, width: int) -> list[tuple[str, Any]] | None:
     if instance_of(owner, dict):
-        return [(f"[{k!r}]", v) for k, v in itertools.islice(dict.items(owner), _HELD_WIDTH)]
+        return [(f"[{k!r}]", v) for k, v in itertools.islice(dict.items(owner), width)]
     if instance_of(owner, _CONTAINERS):
-        return [(f"[{i}]", v) for i, v in enumerate(itertools.islice(owner, _HELD_WIDTH))]
+        return [(f"[{i}]", v) for i, v in enumerate(itertools.islice(owner, width))]
     module = type(owner).__module__ or ""
     if module.startswith("numpy") and attribute_or(attribute_or(owner, "dtype"), "kind") == "O":
-        return [(f"[{i}]", v) for i, v in enumerate(itertools.islice(owner.flat, _HELD_WIDTH))]
+        return [(f"[{i}]", v) for i, v in enumerate(itertools.islice(owner.flat, width))]
     if module.split(".")[0] == "pandas":
         name = type(owner).__name__
         if name == "Series" and owner.dtype.kind == "O":
-            return [(f".iloc[{i}]", v) for i, v in enumerate(itertools.islice(owner.array, _HELD_WIDTH))]
+            return [(f".iloc[{i}]", v) for i, v in enumerate(itertools.islice(owner.array, width))]
         if name == "DataFrame":
             found = []
-            for col in [c for c, dtype in owner.dtypes.items() if dtype.kind == "O"][:_HELD_WIDTH]:
+            for col in [c for c, dtype in owner.dtypes.items() if dtype.kind == "O"][:width]:
                 found.extend(
-                    (f"[{col!r}].iloc[{i}]", v) for i, v in enumerate(itertools.islice(owner[col].array, _HELD_WIDTH))
+                    (f"[{col!r}].iloc[{i}]", v) for i, v in enumerate(itertools.islice(owner[col].array, width))
                 )
             return found
     return None
@@ -512,13 +610,13 @@ def _unwrapped(value: Any) -> Any:
     return value.__func__ if instance_of(value, (classmethod, staticmethod)) else value
 
 
-def _callees(func: ast.expr, user_ns: Mapping[str, Any]) -> list[tuple[str, Any]]:
+def _callees(func: ast.expr, user_ns: Mapping[str, Any], look: _Look | None = None) -> list[tuple[str, Any]]:
     """What the call ``func(...)`` runs, with what it runs on: the function a
     name, an item or an attribute holds; a method with its instance (or
     class); read statically, so nothing of the objects' runs."""
     if isinstance(func, ast.Attribute):
         found = []
-        for path, owner in _spelled(func.value, user_ns):
+        for path, owner in _spelled(func.value, user_ns, look):
             try:
                 attr = inspect.getattr_static(owner, func.attr)
             except (AttributeError, TypeError):
@@ -527,19 +625,20 @@ def _callees(func: ast.expr, user_ns: Mapping[str, Any]) -> list[tuple[str, Any]
             if instance_of(attr, (types.FunctionType, classmethod)):
                 found.append((path, owner))
         return found
-    return _spelled(func, user_ns)
+    return _spelled(func, user_ns, look)
 
 
-def _spelled(node: ast.expr, user_ns: Mapping[str, Any]) -> list[tuple[str, Any]]:
+def _spelled(node: ast.expr, user_ns: Mapping[str, Any], look: _Look | None = None) -> list[tuple[str, Any]]:
     """The paths and values of an attribute or item chain over a name
-    (``m.g``, ``d['g']``, ``gens[i]``: an item a variable picks stands for
-    each item of a small list, tuple or dict), read from the objects' own
-    dicts so nothing of theirs runs; empty when it cannot be read so."""
+    (``m.g``, ``d['g']``, ``gens[i]``: an item a variable of a plain value
+    picks is that item; one picked otherwise stands for every item), read
+    from the objects' own dicts so nothing of theirs runs; empty when it
+    cannot be read so."""
     if isinstance(node, ast.Name):
         return [(node.id, user_ns[node.id])] if node.id in user_ns else []
     if isinstance(node, ast.Attribute):
         found = []
-        for path, owner in _spelled(node.value, user_ns):
+        for path, owner in _spelled(node.value, user_ns, look):
             if node.attr in _INDEXERS and (type(owner).__module__ or "").split(".")[0] == "pandas":
                 # ``s.iloc[0]``: the accessor indexes the object itself.
                 found.append((f"{path}.{node.attr}", owner))
@@ -553,20 +652,35 @@ def _spelled(node: ast.expr, user_ns: Mapping[str, Any]) -> list[tuple[str, Any]
         return found
     if isinstance(node, ast.Subscript):
         found = []
-        for path, owner in _spelled(node.value, user_ns):
-            if type(owner) in (dict, list, tuple) and isinstance(node.slice, ast.Constant):
+        index = _plain_index(node.slice, user_ns)
+        for path, owner in _spelled(node.value, user_ns, look):
+            if type(owner) in (dict, list, tuple) and index is not _NO_INDEX:
                 try:
-                    found.append((f"{path}[{node.slice.value!r}]", owner[node.slice.value]))
+                    found.append((f"{path}[{index!r}]", owner[index]))
                 except (KeyError, IndexError, TypeError):
                     pass
                 continue
-            # An item a variable picks, or one of a container whose lookup
+            # An item an expression picks, or one of a container whose lookup
             # runs its own code: any item it holds.
-            items = _items(owner)
+            items = _items(owner, look, path)
             if items is not None:
                 found.extend((f"{path}{label}", item) for label, item in items)
         return found
     return []
+
+
+_NO_INDEX = object()
+
+
+def _plain_index(node: ast.expr, user_ns: Mapping[str, Any]) -> Any:
+    """The index a constant, or a name holding a plain value (``i``, ``k``),
+    gives, which a lookup in a dict, list or tuple uses without running the
+    user's code; `_NO_INDEX` for any other."""
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name) and node.id in user_ns and type(user_ns[node.id]) in _LEAVES:
+        return user_ns[node.id]
+    return _NO_INDEX
 
 
 def _held_stream(obj: Any) -> bool:
