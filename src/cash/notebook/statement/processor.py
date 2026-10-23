@@ -1182,7 +1182,17 @@ class StatementProcessor:
 
     def _value_keyed(self, run: StatementRun) -> frozenset[str]:
         """The outputs of *run* keyed by value (`_drawn_names`,
-        `_changed_from_refused_entry`), noted for its entry to keep."""
+        `_changed_from_refused_entry`), noted for its entry to keep.
+
+        None in a statement of a control structure's body: the simulation
+        models the structure as one statement and cannot find digests filed
+        for its body (`ControlSimulation`), so a value-keyed lineage there
+        was one the simulation never gave. Two copies of ``t = next(G)`` in
+        separate ``if`` blocks then reran both draws and their readers for
+        the next cell, and the first reader got the third draw."""
+        if is_control_body(run.code):
+            run.value_keyed_outputs = frozenset()
+            return run.value_keyed_outputs
         keyed = self._drawn_names(run) | self._changed_from_refused_entry(run)
         if run.needs_trace and run.skip_cache:
             # Its key does not name what a string found, and it is not
@@ -3264,6 +3274,7 @@ class StatementProcessor:
                     run.source_hash,
                     run.cache_key,
                     tree=tree,
+                    occurrence_index=run.occurrence_index,
                 )
                 return run.metrics
 
@@ -3318,6 +3329,7 @@ class StatementProcessor:
         source_hash: str,
         cache_key: str,
         tree: ast.Module | None = None,
+        occurrence_index: int = 0,
     ) -> None:
         """Update lineage and variable tracking."""
         self.lineage_builder.capture_and_track_variables(
@@ -3329,6 +3341,7 @@ class StatementProcessor:
             cache_key=cache_key,
             accessed_files=accessed_files,
             tree=tree,
+            occurrence_index=occurrence_index,
         )
 
     def _analyze_and_hash(
