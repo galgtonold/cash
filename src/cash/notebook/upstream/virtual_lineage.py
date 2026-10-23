@@ -659,7 +659,7 @@ class VirtualLineage:
     ) -> None:
         try:
             if is_control_structure(node):
-                self.controls.simulate(node, sim)
+                cell_file_deps.update(self.controls.simulate(node, sim))
                 return
 
             stmt_code = statement_code(node, raw_cell)

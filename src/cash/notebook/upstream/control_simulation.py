@@ -11,16 +11,19 @@ from __future__ import annotations
 import ast
 import builtins
 import logging
+import os
 from collections import ChainMap
 from collections.abc import Callable, Mapping
 
 from cash._user_attrs import has_attribute
 
+from ..._paths import resolve_file_dep_path
 from ...analysis.ast_util import called_names
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import control_structure_mutations, is_module_name
 from ...source_norm import exact_source_digest
+from ...tracking.read_classification import stat_key
 from ..cache_key import statement_source_hash
 from ..callee_reach import module_state_names
 from ..control_structures import extract_target_names, get_control_structure_type
@@ -145,9 +148,10 @@ class ControlSimulation:
             )
         return extra_outputs
 
-    def simulate(self, node: ast.AST, sim: SimulationResult) -> None:
+    def simulate(self, node: ast.AST, sim: SimulationResult) -> dict[str, tuple[int, int, int]]:
         """
-        Simulate execution of a control structure as a single unit.
+        Simulate execution of a control structure as a single unit; the files
+        it read, each with its stat now, for the cell's snapshot.
 
         The entire control structure is treated as one statement for
         simulation purposes: ``stmt_code = ast.unparse(node)``, one key, one
@@ -208,13 +212,14 @@ class ControlSimulation:
                 halves = ()
             if halves:
                 logger.debug("[UPSTREAM_DEBUG] loop split at k=%d -> simulating head and tail separately", split_k)
+                files: dict[str, tuple[int, int, int]] = {}
                 for half in halves:
-                    self._simulate_unit(half, sim)
-                return
+                    files.update(self._simulate_unit(half, sim))
+                return files
 
-        self._simulate_unit(node, sim)
+        return self._simulate_unit(node, sim)
 
-    def _simulate_unit(self, node: ast.AST, sim: SimulationResult) -> None:
+    def _simulate_unit(self, node: ast.AST, sim: SimulationResult) -> dict[str, tuple[int, int, int]]:
         """Simulate ONE control structure as a single statement.
 
         Split out of :meth:`simulate` so a split loop can
@@ -226,7 +231,10 @@ class ControlSimulation:
 
         inputs, input_hashes = self._input_hashes(stmt_code, virtual_lineage)
 
-        outputs, lookup_time, files_stale, _ = self.statements.apply(stmt_code, virtual_lineage, sim.virtual_modules)
+        outputs, lookup_time, files_stale, files = self.statements.apply(
+            stmt_code, virtual_lineage, sim.virtual_modules
+        )
+        files = dict(files or {})
 
         mutated_vars = self.collect_mutations(
             node,
@@ -255,6 +263,10 @@ class ControlSimulation:
         # lineages it produced.
         recorded = self._recorded_outcome(stmt_code, virtual_lineage)
         if recorded is not None:
+            # The cell's snapshot must know these files, or the next check
+            # reuses it after one changed and never asks the record again: a
+            # loop reading a file per name kept serving the old text.
+            files.update(_stats_of(recorded[2], files))
             if file_component_this_run(recorded[2]) != recorded[3]:
                 # A file behind its outputs moved: the one change the entry
                 # lineages cannot show, because a `Path` does not change when
@@ -310,6 +322,7 @@ class ControlSimulation:
             # ``PACK.mkdir()`` without it.
             # The same rule simple statements follow in simulate_one_node.
             sim.trace.append(TraceEntry(stmt_code, set(), inputs, input_hashes, {}, files_stale))
+        return files
 
     def _input_hashes(self, stmt_code: str, virtual_lineage: dict[str, str]) -> tuple[set[str], dict[str, str]]:
         """What *stmt_code* reads, and the lineage each of those names has here."""
@@ -369,3 +382,20 @@ class ControlSimulation:
         if statement_writes_files(stmt_code):
             return True
         return any(not has_attribute(builtins, name) for name in called_names(node))
+
+
+def _stats_of(paths: set[str], known: Mapping[str, tuple[int, int, int]]) -> dict[str, tuple[int, int, int]]:
+    """Each of *paths* not in *known*, with its stat key now; a path that
+    cannot be resolved or stat'ed is left out."""
+    out: dict[str, tuple[int, int, int]] = {}
+    for path in paths or ():
+        if path in known:
+            continue
+        resolved = resolve_file_dep_path(path)
+        if resolved is None:
+            continue
+        try:
+            out[path] = stat_key(os.stat(resolved))
+        except OSError:
+            continue
+    return out
