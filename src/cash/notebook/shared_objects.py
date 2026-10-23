@@ -517,6 +517,13 @@ def _identities(value: Any, value_types: tuple[type, ...]) -> Iterable[int]:
     """The ids of the objects *value* is and holds, as `_walk` goes through
     them, that have an identity of their own: not values, nor tuples and
     frozensets (their contents are yielded)."""
+    for key, _obj in _held_identities(value, value_types):
+        yield key
+
+
+def _held_identities(value: Any, value_types: tuple[type, ...]) -> Iterable[tuple[int, Any]]:
+    """`_identities`, each id with its object: a view's bases (`view_bases`)
+    with None."""
     seen: set[int] = set()
     stack = [value]
     while stack:
@@ -525,8 +532,9 @@ def _identities(value: Any, value_types: tuple[type, ...]) -> Iterable[int]:
             continue
         seen.add(id(obj))
         if not instance_of(obj, _IMMUTABLE_CONTAINERS):
-            yield id(obj)
-            yield from view_bases(obj)
+            yield id(obj), obj
+            for base in view_bases(obj):
+                yield base, None
         kind = type(obj)
         if (
             (kind is dict or kind is list)
@@ -1048,6 +1056,9 @@ def check_walk_budget() -> None:
 _REFERRER_DEPTH = 8
 _REFERRER_OBJECTS = 200_000
 
+#: Up to how many objects `referring_names` asks `gc.get_referrers` of at once.
+_FEW_REFERRERS = 64
+
 
 def referring_names(
     roots: Iterable[Any],
@@ -1079,21 +1090,29 @@ def referring_names(
         if not skip_name(name) and not is_value(value, value_types):
             by_id.setdefault(id(value), []).append(name)
     names: set[str] = set()
-    # Down: what the roots hold.
+    # Down: what the roots hold. What they hold is climbed from as well: a
+    # record of ``head = points[:40]`` is held by ``points``, which holds
+    # no part of ``head`` itself.
+    held: dict[int, Any] = {}
     try:
         with walk_budget(seconds):
             for root in roots:
-                for key in _identities(root, value_types):
+                for key, obj in _held_identities(root, value_types):
                     names.update(by_id.get(key, ()))
+                    if obj is not None:
+                        held[key] = obj
                     check_walk_budget()
     except WalkBudgetExceeded:
         return names, False
-    # Up: what holds the roots.
-    stop = {id(user_ns), id(roots)}
+    if len(held) > _REFERRER_OBJECTS:
+        return names, False
+    # Up: what holds the roots, or anything in them.
+    stop = {id(user_ns), id(roots), id(held)}
     stop.update(id(obj) for obj in ignore)
     stop.update(id(vars(module)) for module in list(sys.modules.values()) if module is not None)
-    seen = {id(root) for root in roots}
-    frontier = list(roots)
+    seen = set(held)
+    frontier = list(held.values())
+    del held
     stop.add(id(frontier))
     taken = 0
     for _level in range(_REFERRER_DEPTH):
@@ -1104,7 +1123,9 @@ def referring_names(
         # One tuple, passed on as the call's own arguments, so it is known.
         args = tuple(frontier)
         stop.add(id(args))
-        referrers = gc.get_referrers(*args)
+        # Many objects: one read of the heap for them all, where
+        # `gc.get_referrers` looks each referent up in *args* one by one.
+        referrers = _referrers_of(args, stop) if len(args) > _FEW_REFERRERS else gc.get_referrers(*args)
         stop.add(id(referrers))
         following: list[Any] = []
         stop.add(id(following))

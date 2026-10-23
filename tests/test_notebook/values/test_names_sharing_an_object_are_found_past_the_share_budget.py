@@ -3,7 +3,8 @@
 The share check after a statement stops at a time budget (twice the
 statement's cost, at least a second); past it the statement re-runs each
 time. Which other variables hold its outputs is then not known from that
-check, so they are looked for from the outputs up their referrers instead,
+check, so they are looked for from the outputs, and what they hold, up their
+referrers instead,
 and a later change through either name still moves the other. When even
 that is cut short, NOTEBOOK-SHARE-UNCHECKED says so.
 """
@@ -41,11 +42,24 @@ def no_budget(monkeypatch):
         ("config = {'deep': {'features': raw}}", "raw.append(4)", "config"),
         ("config = {'deep': {'features': raw}}", "config['deep']['features'].append(4)", "raw"),
         ("item = rows[1]", "item.append(4)", "rows"),
+        ("head = rows[:1]", "head[0].append(4)", "rows"),
+        ("head = recs[:1]", "head[0].x = 4", "recs"),
     ],
-    ids=["alias", "held deep in a dict", "changed deep through the dict", "taken out of a list"],
+    ids=[
+        "alias",
+        "held deep in a dict",
+        "changed deep through the dict",
+        "taken out of a list",
+        "a slice copy",
+        "a slice copy of records",
+    ],
 )
 def test_a_change_moves_the_other_name_past_the_budget(cash_magics, no_budget, link, change, other):
-    cells = ["raw = [1]\nrows = [[1], [2]]", link, change]
+    cells = [
+        "import argparse\nraw = [1]\nrows = [[1], [2]]\nrecs = [argparse.Namespace(x=i) for i in range(3)]",
+        link,
+        change,
+    ]
     cash_magics.cash_on("")
     cash_magics.badges.mode = "off"
     with warnings.catch_warnings(record=True) as caught:
@@ -65,6 +79,16 @@ def test_the_climb_finds_a_holder_and_what_the_root_holds():
     names, complete = shared_objects.referring_names([root], ns, 5.0, skip_name=lambda n: n == "root")
     assert complete
     assert names == {"inner", "outer"}
+
+
+def test_the_climb_finds_a_holder_of_what_the_root_holds():
+    """``head = points[:2]``: nothing holds the new list, but ``points``
+    holds its items."""
+    points = [[i] for i in range(10)]
+    head = points[:2]
+    names, complete = shared_objects.referring_names([head], {"points": points, "head": head}, 5.0)
+    assert complete
+    assert "points" in names
 
 
 def test_a_spent_budget_is_reported_incomplete():
