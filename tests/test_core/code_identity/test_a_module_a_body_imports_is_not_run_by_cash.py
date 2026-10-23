@@ -209,3 +209,75 @@ def test_a_decorator_of_the_users_that_reads_the_environment_runs_with_a_warning
     assert "cannot read without running it" in err, err[-2000:]
     out, ran, _ = _run(tmp_path, env={"DOUBLE": None})
     assert (out, ran) == ("6", True), "what the decorator picked by the environment was served stale"
+
+
+@pytest.mark.parametrize(
+    "spelled",
+    [
+        "from nsp.mod import scale",
+        "from nsp import mod\nscale = mod.scale",
+        "import nsp.mod\nscale = nsp.mod.scale",
+    ],
+    ids=["from_the_module", "from_the_folder", "import_the_module"],
+)
+def test_a_module_in_a_folder_with_no_init_is_keyed_by_its_source(tmp_path, spelled):
+    """A folder with no ``__init__.py`` (a namespace package) has no file of
+    its own: the reading stopped there, and the module in it was keyed by
+    the digest of nothing, so an edit to it was served stale."""
+    _write(tmp_path, "nsp/mod.py", "def scale(x):\n    return x * 2\n")
+    _write(
+        tmp_path,
+        "job.py",
+        f"""
+        import sys
+        import cash
+
+        @cash.cache
+        def total(values):
+            print("[RUN]", file=sys.stderr)  # @cash:assume-safe
+            {spelled.replace(chr(10), chr(10) + " " * 12)}
+            return sum(scale(v) for v in values)
+
+        print(total([1, 2, 3]))
+        """,
+    )
+    assert _run(tmp_path)[:2] == ("12", True)
+    assert _run(tmp_path)[:2] == ("12", False), "an unedited second run did not hit"
+    _write(tmp_path, "nsp/mod.py", "def scale(x):\n    return x * 5\n")
+    assert _run(tmp_path)[:2] == ("30", True), "the edited module was served stale"
+
+
+@pytest.mark.parametrize(
+    "top_level",
+    [
+        'K = max(map(eval, [\'int(__import__("os").environ["K"])\']))',
+        "def build():\n    return sys.flags.optimize * 10 + 2\n\nK = build()",
+    ],
+    ids=["eval_handed_to_map", "attribute_read_in_a_function_called_at_import"],
+)
+def test_a_value_read_outside_the_source_without_a_call_runs_with_a_warning(tmp_path, top_level):
+    """``map(eval, ...)`` hands ``eval`` on as a value, and a function called
+    at import may read ``sys.flags`` without calling anything: both read
+    outside the source, so the module cannot be vouched for by it."""
+    _write(tmp_path, "helpmod.py", f"import sys\n\n{top_level}\n\ndef scale(x):\n    return x * K\n")
+    _write(
+        tmp_path,
+        "job.py",
+        """
+        import sys
+        import cash
+
+        @cash.cache
+        def total(values):
+            print("[RUN]", file=sys.stderr)  # @cash:assume-safe
+            from helpmod import scale
+            return sum(scale(v) for v in values)
+
+        print(total([1, 2, 3]))
+        """,
+    )
+    out, ran, err = _run(tmp_path, env={"K": "2", "PYTHONOPTIMIZE": None})
+    assert (out, ran) == ("12", True)
+    assert "cannot read without running it" in err, err[-2000:]
+    out, ran, _ = _run(tmp_path, env={"K": "12", "PYTHONOPTIMIZE": "1"})
+    assert (out, ran) == ("72", True), "a value read outside the source was served stale"

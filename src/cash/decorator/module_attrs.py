@@ -15,10 +15,10 @@ from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.bytecode import instructions
-from ..analysis.helper_bindings import resolve_local_import
+from ..analysis.helper_bindings import resolve_local_import, unloaded_local_imports
 from ..analysis.helper_code import renamed
 from ..analysis.mutations import MUTATING_METHODS
-from ..analysis.unloaded_modules import source_digest, unloaded_import
+from ..analysis.unloaded_modules import source_digest
 from ..install_paths import is_user_module
 from ..jit_functions import jit_python_function
 from ..value_types import CODELESS_PRIMS
@@ -279,13 +279,13 @@ class ModuleAttrFold:
         the cached function's code, for the drift guard). A module is read
         only if it is already loaded: importing it would run its code. A user
         module the body has not imported yet is the helper walk's to report
-        (`helper_bindings.unloaded_local_import`).
+        (`helper_bindings.unloaded_local_imports`).
         """
         plan = self._reads.local_binding_plan(func)
         if not plan:
             return []
 
-        imports, attr_reads, bare_reads = plan
+        imports, attr_reads, bare_reads, dotted = plan
         own_pkg = own_package(func)
         root_module = getattr(func, "__module__", None)
         code = func.__code__
@@ -324,14 +324,11 @@ class ModuleAttrFold:
             if name not in attr_reads and name not in bare_reads:
                 continue
             module_name, prefix = imports[name]
-            if resolve_local_import(module_name, prefix) is not None:
-                continue
-            unloaded = unloaded_import(module_name, prefix, root_module)
-            if unloaded is not None:
+            for unloaded in unloaded_local_imports(module_name, prefix, dotted.get(name, ()), root_module):
                 # Not imported yet, and not imported here: that would run its
                 # code. Its source stands for what it binds; one it cannot
                 # vouch for is the helper walk's to warn about.
-                parts.append((f"local:{name}#source", source_digest(unloaded, root_module) or "unvouched"))
+                parts.append((f"local:{name}#source:{unloaded}", source_digest(unloaded, root_module) or "unvouched"))
         for name, attrs in attr_reads.items():
             obj = resolve(name)
             if not issubclass(type(obj), types.ModuleType) or not is_user_module(obj, own_pkg):

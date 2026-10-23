@@ -22,6 +22,7 @@ from typing import Any
 
 from ..loaded_code import code_objects_of
 from .purity_report import PurityReport
+from .unloaded_modules import unloaded_import
 
 
 def local_import_map(func_def: ast.AST, func: Any) -> dict[str, tuple[str, tuple[str, ...]]]:
@@ -62,6 +63,38 @@ def local_import_map(func_def: ast.AST, func: Any) -> dict[str, tuple[str, tuple
             for alias in node.names:
                 if alias.name != "*":
                     found[alias.asname or alias.name] = (module, (alias.name,))
+    return found
+
+
+def dotted_imports(func_def: ast.AST) -> dict[str, tuple[str, ...]]:
+    """``import pkg.sub`` in the body: it binds ``pkg`` (`local_import_map`)
+    but loads ``pkg.sub`` too. Local name -> the dotted modules so loaded."""
+    found: dict[str, tuple[str, ...]] = {}
+    for node in ast.walk(func_def):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if not alias.asname and "." in alias.name:
+                    top = alias.name.split(".")[0]
+                    found[top] = (*found.get(top, ()), alias.name)
+    return found
+
+
+def unloaded_local_imports(
+    module_name: str, prefix: tuple[str, ...], dotted: tuple[str, ...], root_module: str | None
+) -> list[str]:
+    """The user modules a body import of *module_name* (*prefix*, *dotted*
+    as `local_import_map` and `dotted_imports` give them) loads that are not
+    loaded yet: what `unloaded_modules.source_digest` keys it by."""
+    found = []
+    if resolve_local_import(module_name, prefix) is None:
+        first = unloaded_import(module_name, prefix, root_module)
+        if first is not None:
+            found.append(first)
+    for full in dotted:
+        if full not in sys.modules:
+            sub = unloaded_import(full, (), root_module)
+            if sub is not None and sub not in found:
+                found.append(sub)
     return found
 
 

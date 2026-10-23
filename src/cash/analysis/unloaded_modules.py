@@ -123,6 +123,11 @@ def unloaded_import(module_name: str, prefix: tuple[str, ...], root_module: str 
     submodule ``pkg.sub`` when ``pkg`` is loaded without it."""
     module = sys.modules.get(module_name)
     if module is None:
+        if prefix and _namespace_package(module_name):
+            # ``from nsp import mod`` with ``nsp`` a folder with no
+            # ``__init__.py``: the module the import loads is ``nsp.mod``.
+            sub = f"{module_name}.{prefix[0]}"
+            return sub if _origin(sub) is not None and is_user_code(sub, root_module) else None
         return module_name if is_user_code(module_name, root_module) else None
     if not prefix or hasattr(module, prefix[0]):
         return None
@@ -171,6 +176,10 @@ def _source_digest(module_name: str, own_pkg: str | None) -> tuple[str | None, t
             if origin is None:
                 if prefix == module_name:
                     return None, tuple(looked)
+                if _namespace_package(prefix):
+                    # A folder with no ``__init__.py``: no code of its own to
+                    # read; the modules in it are read as the parts below.
+                    continue
                 # Not on disk to import: a name `from pkg import name` reads off
                 # the package, or a module the body's import would fail on.
                 break
@@ -210,6 +219,18 @@ def _origin(name: str) -> str | None:
     running any module: a loaded parent's ``__path__``, else the finders'
     spec for each part in turn. ``importlib.util.find_spec`` would import
     the parents of a dotted name, running their ``__init__``."""
+    return _locate(name)[0]
+
+
+def _namespace_package(name: str) -> bool:
+    """Is *name* a namespace package: found, with a search path but no file?"""
+    origin, path = _locate(name)
+    return origin is None and path is not None
+
+
+def _locate(name: str) -> tuple[str | None, object]:
+    """``(file, search path)`` of module *name*, as `_origin` finds them;
+    ``(None, None)`` when it is not found."""
     path = None
     parts = name.split(".")
     for i in range(1, len(parts) + 1):
@@ -218,18 +239,19 @@ def _origin(name: str) -> str | None:
         if mod is not None:
             if i == len(parts):
                 origin = getattr(mod, "__file__", None)
-                return origin if isinstance(origin, str) else None
+                return (origin if isinstance(origin, str) else None), getattr(mod, "__path__", None)
             path = getattr(mod, "__path__", None)
         else:
             spec = _find_spec(full, path)
             if spec is None:
-                return None
+                return None, None
             if i == len(parts):
-                return spec.origin if spec.has_location and isinstance(spec.origin, str) else None
+                origin = spec.origin if spec.has_location and isinstance(spec.origin, str) else None
+                return origin, spec.submodule_search_locations
             path = spec.submodule_search_locations
         if path is None:
-            return None
-    return None
+            return None, None
+    return None, None
 
 
 def _find_spec(name: str, path) -> importlib.machinery.ModuleSpec | None:
@@ -265,10 +287,14 @@ class _SourceOnly:
         self.aliases: dict[str, str] = {}
         #: names the top level defines with ``def`` or ``class``.
         self.defined: set[str] = set()
+        #: names the source binds anywhere (a parameter ``id``, ``for input in ...``).
+        self.bound: set[str] = set()
         #: the top level's functions, by name.
         self.functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
         #: user functions asked about (`_vouches`), and the answers.
         self.vouched: dict[str, bool] = {}
+        #: inside the body of a user function called at import (`_runs_source_only`).
+        self.in_body = 0
 
     def module(self, tree: ast.Module) -> bool:
         """Does *tree*, a module's source, bind only what follows from it,
@@ -278,6 +304,9 @@ class _SourceOnly:
             if isinstance(node, ast.Call) and (_calls_an_importer(node) or self._reads_outside(node)):
                 return False
             if isinstance(node, (ast.Name, ast.Attribute)) and self._qualified(node) in _OUTSIDE_VALUES:
+                return False
+            if isinstance(node, ast.Name) and self._qualified(node) in _RUNS_OR_READS_UNSEEN:
+                # ``map(eval, ...)``, ``map(open, paths)``: called all the same.
                 return False
         return self._body(tree.body)
 
@@ -290,6 +319,11 @@ class _SourceOnly:
             n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
         }
         self.functions = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        self.bound = {
+            n.id if isinstance(n, ast.Name) else n.arg
+            for n in ast.walk(tree)
+            if isinstance(n, ast.arg) or isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load)
+        }
 
     def _reads_outside(self, node: ast.Call) -> bool:
         """Does *node* read or change something outside the source (the
@@ -385,7 +419,9 @@ class _SourceOnly:
             # Runs only when called; its code is in the source.
             return all(map(self._expr, [*node.args.defaults, *(d for d in node.args.kw_defaults if d is not None)]))
         if isinstance(node, (ast.NamedExpr, ast.Await, ast.Yield, ast.YieldFrom)):
-            return False
+            # In the body of a function called at import these run as its
+            # other expressions do; at the top level they are not followed.
+            return bool(self.in_body) and (node.value is None or self._expr(node.value))
         if isinstance(node, ast.Call):
             name = self._qualified(node.func)
             if name is None or not (
@@ -399,6 +435,15 @@ class _SourceOnly:
         if isinstance(node, (ast.Attribute, ast.Name)):
             name = self._qualified(node)
             if name is not None and name.partition(".")[0] in _AMBIENT_MODULES and name not in _INTERPRETER_FACTS:
+                return False
+            if (
+                name is not None
+                and name.startswith("builtins.")
+                and ".".join(name.split(".")[:2]) not in _BUILTIN_VALUES
+                and _head(node) not in self.bound
+            ):
+                # A builtin handed on as a value (``map(eval, ...)``) is
+                # called all the same: only those `_SOURCE_ONLY_CALLS` lists.
                 return False
             if isinstance(node, ast.Attribute):
                 return name is not None or self._expr(node.value)
@@ -469,7 +514,13 @@ class _SourceOnly:
         defaults = [*args.defaults, *(d for d in args.kw_defaults if d is not None)]
         if not all(self._decorator(d) for d in fn.decorator_list) or not all(map(self._expr, defaults)):
             return False
-        return all(self._expr(call) for call in _calls_as_run(fn.body))
+        self.in_body += 1
+        try:
+            # Every expression the body runs, not only its calls: an
+            # attribute read (``sys.path[-1]``) is outside the source too.
+            return all(map(self._expr, _expressions_as_run(fn.body)))
+        finally:
+            self.in_body -= 1
 
 
 _BUILTIN_NAMES = frozenset(dir(builtins))
@@ -477,6 +528,28 @@ _BUILTIN_NAMES = frozenset(dir(builtins))
 _MAX_DEPTH = 8
 #: Values read from outside the source wherever a module names them.
 _OUTSIDE_VALUES = frozenset({"os.environ", "os.environb", "sys.argv", "sys.stdin", "sys.stdin.buffer"})
+#: Builtins that run code the source does not show, or read outside it,
+#: wherever a module names them -- called or handed on as a value.
+_RUNS_OR_READS_UNSEEN = frozenset(f"builtins.{n}" for n in ("eval", "exec", "__import__", "open", "breakpoint"))
+#: Builtins a top level may hand on as a value: those it may call, the
+#: exception classes, and constants.
+_BUILTIN_VALUES = frozenset(
+    {
+        *(n for n in _SOURCE_ONLY_CALLS if n.startswith("builtins.")),
+        *(f"builtins.{n}" for n, v in vars(builtins).items() if isinstance(v, type) and issubclass(v, BaseException)),
+        "builtins.Ellipsis",
+        "builtins.NotImplemented",
+        "builtins.__name__",
+        "builtins.__debug__",
+    }
+)
+
+
+def _head(node: ast.expr) -> str | None:
+    """The name ``a.b.c`` starts with, or None."""
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
 
 
 def _spelled(node: ast.expr) -> str | None:
@@ -488,10 +561,10 @@ def _spelled(node: ast.expr) -> str | None:
     return ".".join([node.id, *reversed(chain)]) if isinstance(node, ast.Name) else None
 
 
-def _calls_as_run(body: list[ast.stmt]) -> list[ast.Call]:
-    """The calls *body* makes as it runs: not those in a function, lambda or
-    class it defines, which run when that is called."""
-    found: list[ast.Call] = []
+def _expressions_as_run(body: list[ast.stmt]) -> list[ast.expr]:
+    """The outermost expressions *body* runs: not those inside a function or
+    lambda it defines, which run when that is called."""
+    found: list[ast.expr] = []
     todo: list[ast.AST] = list(body)
     while todo:
         node = todo.pop()
@@ -500,11 +573,9 @@ def _calls_as_run(body: list[ast.stmt]) -> list[ast.Call]:
             todo.extend([*args.defaults, *(d for d in args.kw_defaults if d is not None)])
             todo.extend(getattr(node, "decorator_list", ()))
             continue
-        if isinstance(node, ast.ClassDef):
-            todo.extend([*node.decorator_list, *node.bases])
-            continue
-        if isinstance(node, ast.Call):
+        if isinstance(node, ast.expr):
             found.append(node)
+            continue
         todo.extend(ast.iter_child_nodes(node))
     return found
 

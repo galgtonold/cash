@@ -51,12 +51,14 @@ from .helper_bindings import (
     build_namespace,
     called_names_in_tree,
     callee_chain,
+    dotted_imports,
     held_ref,
     local_import_map,
     resolve_binding,
     resolve_callee_chain,
     resolve_in_class_namespaces,
     resolve_local_import,
+    unloaded_local_imports,
 )
 from .helper_code import (
     UnwalkableLayers,
@@ -80,7 +82,7 @@ from .purity_report import (
 )
 from .purity_visitor import PurityVisitor
 from .static_dispatch import MODULE_NAME_PREFIX, spell_static_dispatch
-from .unloaded_modules import source_digest, unloaded_import
+from .unloaded_modules import source_digest
 
 #: ``(module_name, attribute chain)``: where a binding is looked up again.
 BindingPath = tuple[str, tuple[str, ...]]
@@ -472,19 +474,18 @@ class HelperWalk:
         """
         namespace = build_namespace(func)
         local_imports = local_import_map(func_def, func)
+        dotted = dotted_imports(func_def)
         self._unvouched = {}
         for local, (module_name, prefix) in local_imports.items():
             obj = resolve_local_import(module_name, prefix)
             if obj is not None:
                 namespace[local] = obj
-            else:
-                unloaded = unloaded_import(module_name, prefix, self._root_module)
-                if unloaded is not None:
-                    # Walked once it is loaded (`bindings_changed`); keyed by
-                    # its source until then (`ModuleAttrFold.local_binding_parts`).
-                    self._unloaded.setdefault(unloaded, None)
-                    if source_digest(unloaded, self._root_module) is None:
-                        self._unvouched.setdefault(local, unloaded)
+            for unloaded in unloaded_local_imports(module_name, prefix, dotted.get(local, ()), self._root_module):
+                # Walked once it is loaded (`bindings_changed`); keyed by
+                # its source until then (`ModuleAttrFold.local_binding_parts`).
+                self._unloaded.setdefault(unloaded, None)
+                if source_digest(unloaded, self._root_module) is None:
+                    self._unvouched.setdefault(local, unloaded)
         return namespace, local_imports
 
     def _unvouched_import_issues(self, func_def: ast.AST, qualname: str) -> list[PurityIssue]:
