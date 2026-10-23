@@ -225,6 +225,12 @@ def _stat(path: str | None) -> tuple | None:
     return (st.st_mtime_ns, st.st_size, st.st_ino)
 
 
+def module_file(name: str) -> str | None:
+    """The file module *name* is, or would be, loaded from, found without
+    running any module (`_origin`)."""
+    return _origin(name)
+
+
 def _origin(name: str) -> str | None:
     """The file module *name* is (or would be) loaded from, found without
     running any module: a loaded parent's ``__path__``, else the finders'
