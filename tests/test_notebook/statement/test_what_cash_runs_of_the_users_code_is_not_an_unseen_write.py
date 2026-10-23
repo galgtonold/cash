@@ -74,19 +74,58 @@ def test_the_users_own_pickling_still_counts(magics):
     assert _status(magics) != CacheStatus.RESTORED, "a write the statement made itself was not seen"
 
 
-@pytest.mark.parametrize(
-    ("body", "refused"),
-    [("x * 10", False), ("LOG.append(x) or x * 10", True)],
-    ids=["changes nothing", "changes a global in place"],
+_GLOBALS = (
+    "import bisect, builtins, collections, itertools, operator\n"
+    "LOG = []\nD = {}\nDQ = collections.deque()\nIT = iter(range(100))\n"
+    "class NS:\n    pass\nPUSH = LOG.append\n"
+    "def helper(y):\n    LOG.append(y)\n    return y\n"
+    "def inner(x):\n    return x * 2"
 )
-def test_code_whose_text_cannot_be_read(magics, body, refused):
-    run_cash_cell(magics, "LOG = []\ndef inner(x):\n    return x * 2")
+_REFUSED = {
+    "a global changed in place": ("LOG.append(x) or x * 10", "len(LOG)"),
+    "a method got by getattr": ("getattr(LOG, 'append')(x) or x * 10", "len(LOG)"),
+    "a bound method held in a global": ("PUSH(x) or x * 10", "len(LOG)"),
+    "a deque method": ("DQ.appendleft(x) or x * 10", "len(DQ)"),
+    "a library function": ("bisect.insort(LOG, x) or x * 10", "len(LOG)"),
+    "operator.iadd": ("operator.iadd(LOG, [x]) and x * 10", "len(LOG)"),
+    "operator.setitem": ("operator.setitem(D, len(D), x) or x * 10", "len(D)"),
+    "a methodcaller": ("operator.methodcaller('append', x)(LOG) or x * 10", "len(LOG)"),
+    "builtins.setattr": ("builtins.setattr(NS, 'n', getattr(NS, 'n', 0) + 1) or x * 10", "NS.n"),
+    "a slice of a global iterator": ("list(itertools.islice(IT, 1))[0] * 0 + x * 10", "IT.__length_hint__()"),
+    "a comprehension over a global iterator": (
+        "[i for i, _ in zip(range(1), IT)][0] * 0 + x * 10",
+        "IT.__length_hint__()",
+    ),
+    "a helper": ("helper(x) * 10", "len(LOG)"),
+    "a helper in a lambda": ("(lambda y: helper(y))(x) * 10", "len(LOG)"),
+}
+
+
+def _swap_and_run(magics, body):
+    run_cash_cell(magics, _GLOBALS)
     run_cash_cell(magics, "v = inner(3)")
     ns = magics.shell.user_ns
     swapped = eval(compile(f"lambda x: {body}", "<variant>", "eval"), ns)
     ns["inner"].__code__ = swapped.__code__
     run_cash_cell(magics, "v = inner(3)")
     assert ns["v"] == 30
+    return ns
+
+
+def test_code_whose_text_cannot_be_read_and_changes_nothing_is_served(magics):
+    _swap_and_run(magics, "len(str(x)) * 0 + x * 10")
+    run_cash_cell(magics, "v = inner(3)")
+    assert _status(magics) == CacheStatus.RESTORED
+
+
+@pytest.mark.parametrize("case", list(_REFUSED), ids=list(_REFUSED))
+def test_code_whose_text_cannot_be_read_and_may_change_state_runs(magics, case):
+    """Its bytecode is taken as plain only where it calls nothing but known
+    pure builtins on its own values; anything else may change state."""
+    body, read = _REFUSED[case]
+    ns = _swap_and_run(magics, body)
+    before = eval(read, ns)
     run_cash_cell(magics, "v = inner(3)")
     assert ns["v"] == 30
-    assert (_status(magics) != CacheStatus.RESTORED) is refused
+    assert _status(magics) != CacheStatus.RESTORED
+    assert eval(read, ns) != before, "the change the code makes was not made"

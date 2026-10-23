@@ -702,20 +702,39 @@ def own_writes(code: types.CodeType) -> frozenset[str]:
     return frozenset(changed)
 
 
-#: Builtins that change an object or a namespace a name of theirs gives.
-_CHANGERS_BY_NAME = frozenset({"setattr", "delattr", "globals", "vars", "exec", "eval", "__import__", "locals"})
+#: Builtins that neither change what they are given nor reach anything else:
+#: the only calls code read off its bytecode may make. Any other name is a
+#: global or a closure variable, which may hold a stream that ``list`` or a
+#: ``for`` draws from.
+_PURE_BUILTINS = frozenset(
+    {
+        "abs", "all", "any", "ascii", "bin", "bool", "bytes", "callable", "chr", "complex", "dict", "divmod",
+        "enumerate", "filter", "float", "format", "frozenset", "hash", "hex", "id", "int", "isinstance",
+        "issubclass", "iter", "len", "list", "map", "max", "min", "oct", "ord", "pow", "range", "repr",
+        "reversed", "round", "set", "slice", "sorted", "str", "sum", "tuple", "type", "zip",
+    }
+)  # fmt: skip
 _STORES = frozenset({"STORE_GLOBAL", "DELETE_GLOBAL", "STORE_DEREF", "DELETE_DEREF"})
 #: An object changed in place: on which object, the bytecode alone does not
 #: say plainly.
-_IN_PLACE = frozenset({"STORE_ATTR", "DELETE_ATTR", "STORE_SUBSCR", "DELETE_SUBSCR", "STORE_SLICE"})
+_IN_PLACE = frozenset({"STORE_ATTR", "DELETE_ATTR", "STORE_SUBSCR", "DELETE_SUBSCR", "STORE_SLICE", "DELETE_SLICE"})
+_NAME_LOADS = frozenset({"LOAD_GLOBAL", "LOAD_NAME", "LOAD_DEREF", "LOAD_CLASSDEREF", "LOAD_FROM_DICT_OR_DEREF"})
+#: What calls or draws: a call, or an iteration (``for``, ``list(it)``'s
+#: inlined comprehension, ``yield from``).
+_CALLS_OR_DRAWS = ("CALL", "GET_ITER", "FOR_ITER", "GET_AITER", "SEND", "YIELD_FROM")
 
 
 def _bytecode_writes(code: types.CodeType) -> frozenset[str] | None:
     """The free names *code* (and the code made inside it) rebinds, read off
-    its bytecode; None when it may change an object in place (an attribute
-    or item set, a mutating method, a function that changes its argument),
-    which the text tells apart and the bytecode does not."""
+    its bytecode; None when it may change anything else. What the bytecode
+    shows is taken as plain only where it calls nothing but the builtins of
+    `_PURE_BUILTINS` on values that are not globals or closure variables:
+    a method, a function held in a name, an attribute set or an item set
+    may change an object, which the text tells apart and the bytecode does
+    not."""
     out: set[str] = set()
+    names: set[str] = set()
+    calls = attributes = False
     pending = [code]
     seen: set[types.CodeType] = set()
     while pending:
@@ -723,22 +742,45 @@ def _bytecode_writes(code: types.CodeType) -> frozenset[str] | None:
         if c in seen:
             continue
         seen.add(c)
-        for ins in dis.get_instructions(c):
+        instructions = list(dis.get_instructions(c))
+        for i, ins in enumerate(instructions):
             op = ins.opname
+            if op == "PUSH_NULL" and not _made_or_builtin(_pushed_beside_null(instructions, i)):
+                # A value called (``f(1)`` on an argument, ``getattr(...)(x)``).
+                return None
             if op in _STORES:
                 if op.endswith("_DEREF") and ins.argval not in c.co_freevars:
                     continue
                 out.add(ins.argval)
-            elif op in _IN_PLACE:
+            elif op in _IN_PLACE or op.startswith("IMPORT_"):
                 return None
-            elif op in ("LOAD_ATTR", "LOAD_METHOD") and (ins.argval in MUTATING_METHODS or ins.argval.startswith("__")):
-                return None
-            elif op in ("LOAD_GLOBAL", "LOAD_NAME", "LOAD_DEREF") and (
-                ins.argval in _FIRST_ARG_CHANGERS or ins.argval in _FIRST_ARG_MODULES or ins.argval in _CHANGERS_BY_NAME
-            ):
-                return None
+            elif op in _NAME_LOADS:
+                names.add(ins.argval)
+            elif op in ("LOAD_ATTR", "LOAD_METHOD", "LOAD_SUPER_ATTR"):
+                attributes = True
+            elif op.startswith(_CALLS_OR_DRAWS):
+                calls = True
         pending.extend(k for k in c.co_consts if isinstance(k, types.CodeType))
+    if calls and (attributes or not names <= _PURE_BUILTINS or sys.version_info < (3, 12)):
+        return None
     return frozenset(out)
+
+
+def _pushed_beside_null(instructions: list[dis.Instruction], i: int) -> dis.Instruction | None:
+    """The instruction that pushes what the ``PUSH_NULL`` at *i* is pushed
+    beside to be called: after it on 3.12, before it from 3.13 on."""
+    j = i + 1 if sys.version_info < (3, 13) else i - 1
+    return instructions[j] if 0 <= j < len(instructions) else None
+
+
+def _made_or_builtin(ins: dis.Instruction | None) -> bool:
+    """A function made right there (its code is read too) or a builtin of
+    `_PURE_BUILTINS` loaded by name."""
+    if ins is None:
+        return False
+    if ins.opname in ("MAKE_FUNCTION", "SET_FUNCTION_ATTRIBUTE"):
+        return True
+    return ins.opname in ("LOAD_GLOBAL", "LOAD_NAME") and ins.argval in _PURE_BUILTINS
 
 
 #: Functions that change their first argument: ``next(GEN)`` moves it on.
