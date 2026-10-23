@@ -43,11 +43,32 @@ WRITERS = {
 }
 
 
+@pytest.fixture(params=["native hook", "no native hook"])
+def native_hook(request):
+    """The native file hook as the C build has it, or off, as in the pure
+    Python fallback: there no hook sees libhdf5 write, and the writer check
+    alone takes an h5py write for none; the plan looking again keeps it right."""
+    from cash.tracking import native_reads
+
+    was = native_reads.active()
+    if request.param == "native hook" and not was:
+        pytest.skip("the native file hook is not on here")
+    if request.param == "no native hook":
+        native_reads.disable()
+    yield request.param
+    if was:
+        native_reads.enable()
+
+
 @pytest.mark.parametrize("plan_looks_again", [True, False], ids=["both guards", "writer check alone"])
 @pytest.mark.parametrize("writer", sorted(WRITERS))
 def test_the_plan_sees_the_file_the_cell_just_rewrote(
-    cash_magics, mock_shell, tmp_path, monkeypatch, writer, plan_looks_again
+    cash_magics, mock_shell, tmp_path, monkeypatch, writer, plan_looks_again, native_hook, request
 ):
+    if writer == "h5py" and not plan_looks_again and native_hook == "no native hook":
+        request.applymarker(
+            pytest.mark.xfail(strict=True, reason="no hook sees libhdf5 write; the plan looking again covers it")
+        )
     if writer == "h5py":
         pytest.importorskip("h5py")
     if writer == "ctypes" and sys.platform == "win32":
