@@ -722,8 +722,12 @@ def _held_codes(
     value = user_ns.get(name)
     found: list[types.CodeType] = []
     code_obj = attribute_or(value, "__code__")
-    if code_obj is not None:
+    if type(code_obj) is types.CodeType:
         found.append(code_obj)
+    else:
+        # A proxy's (``@wrapt.decorator``'s): what the call runs is the
+        # code the value holds, found below.
+        code_obj = None
     lineage = variable_lineage.get(name) if variable_lineage is not None else None
     try:
         held = held_notebook_code(value, user_ns, lineage)
