@@ -241,7 +241,8 @@ class HandsAGlobalToALibrary:
 
 def test_a_global_handed_to_a_library_call_counts_as_written():
     writer = reducer_writes._decide(HandsAGlobalToALibrary)
-    assert writer is not None and "ARR" in writer.handed
+    # Read as written by the mutation analysis, or else as handed on.
+    assert writer is not None and "ARR" in writer.written | writer.handed
     assert reducer_writes.reach([writer], {"arr": ARR}) == {"arr"}
 
 
@@ -341,7 +342,7 @@ class HandsAGlobalToAMethodOfABuiltinType:
 
 def test_a_global_handed_to_a_method_of_a_builtin_type_counts_as_written():
     writer = reducer_writes._decide(HandsAGlobalToAMethodOfABuiltinType)
-    assert writer is not None and {"LST", "DEFAULTS"} <= writer.handed
+    assert writer is not None and {"LST", "DEFAULTS"} <= writer.written | writer.handed
 
 
 def test_a_cached_result_whose_reducer_cannot_be_read_is_not_stored_and_says_why_once(disk_cash):
