@@ -2708,12 +2708,15 @@ class StatementProcessor:
             return name in hidden or is_history_name(name)
 
         budget = share_check_budget(cost)
-        if run.share_gave_up is not None:
+        if run.share_gave_up is not None and not run.share_unchecked:
             return list(run.share_gave_up.links), run.share_gave_up.complete
-        timed_out = run.share_unchecked
-        if not timed_out:
+        # What a check cut short found before its budget ran out: the search
+        # up below does not look down from the outputs, so it never finds a
+        # variable sharing their parts (`share_group`).
+        partial = [] if run.share_gave_up is None else list(run.share_gave_up.links)
+        if not run.share_unchecked:
+            gave_up = GaveUp()
             try:
-                gave_up = GaveUp()
                 with walk_budget(budget):
                     _found, shared = share_group(
                         names, captured_vars, user_ns, cash_held, named, foreign=foreign, gave_up=gave_up
@@ -2728,7 +2731,7 @@ class StatementProcessor:
                 # through the library until its budget ran out.
                 return list(gave_up.links), gave_up.complete
             except WalkBudgetExceeded:
-                timed_out = True
+                partial += gave_up.links
         found_names, complete = referring_names(
             [captured_vars[name] for name in names],
             user_ns,
@@ -2738,7 +2741,7 @@ class StatementProcessor:
         )
         # The search up does not climb from a list's items through a
         # frame's slots to the frame, finished or not.
-        return [(outputs, found_names), *self._cells_shared(names, captured_vars)], complete
+        return [*partial, (outputs, found_names), *self._cells_shared(names, captured_vars)], complete and not partial
 
     def _cells_shared(self, outputs: list[str], captured_vars: dict[str, Any]) -> list[tuple[Iterable[str], set[str]]]:
         """Each of *outputs* with the variables sharing a frame's object

@@ -2160,57 +2160,70 @@ def _share_group(
     #: The anchor tried for each object, by id; None when it can be none.
     tried: dict[int, str | None] = {}
     rounds = anchor_rounds = 0
-    framed = _frames_sharing_cells(group, user_ns, foreign)
-    while framed and rounds < _MAX_ROUNDS:
-        # Found by address, not one cell at a time up its referrers: half a
-        # million cells ``df2 = df[mask]`` shares with ``df`` took seconds.
-        # And the frames sharing cells with those: ``mg = df.merge(other)``
-        # joined for ``df``'s cells holds ``other``'s too.
-        links.append((set(group), framed))
-        joined |= framed
-        group.update((name, user_ns[name]) for name in framed)
-        holding = _holding_other_cells({name: group[name] for name in framed}, group)
-        fresh = {name: group[name] for name in framed if name in holding}
-        framed = _frames_sharing_cells(fresh, user_ns, foreign) - set(group) if fresh else set()
-        # Its own references to the frames, out of the counts taken below.
-        fresh = None
-        rounds += 1
-    rounds = 0
-    while True:
-        leaves.met.clear()
-        with frames_together(group.values()):
-            shared, found = _check_group(group, bindings, cash_held, named_held, None, user_ns, memo, partial, leaves)
-        if found and gave_up is not None:
-            gave_up.found_variables = True
-        if not shared:
-            if anchors is not None:
-                anchors.update(_met_anchors(leaves, tried, user_ns))
-            if gave_up is not None:
-                for owners, holders in links:
-                    gave_up.add(owners, holders)
-            return {name: group[name] for name in joined}, set()
-        if found and anchorable is not None and anchor_rounds < _MAX_ANCHOR_ROUNDS:
-            fresh = _anchor_candidates(found, user_ns, tried, anchorable)
-            leaves.ids.update(fresh)
-            _take_back_holding(group, leaves, fresh, tried, user_ns, memo)
-            if fresh & leaves.ids:
-                # Counted again with the new anchors left out: a holder that
-                # held only their objects is no holder any more.
-                anchor_rounds += 1
-                if anchor_links is not None:
-                    anchor_links |= found
-                continue
-        if found:
-            links.append((shared, found))
-        if not found or any(foreign(name) for name in found) or _copies_keep_old_objects(group, leaves):
-            break
-        joined |= found
-        group.update((name, user_ns[name]) for name in found)
-        rounds += 1
-        if rounds >= _MAX_ROUNDS:
-            if partial is not None:
-                partial.complete = False
-            break
+    try:
+        framed = _frames_sharing_cells(group, user_ns, foreign)
+        while framed and rounds < _MAX_ROUNDS:
+            # Found by address, not one cell at a time up its referrers: half a
+            # million cells ``df2 = df[mask]`` shares with ``df`` took seconds.
+            # And the frames sharing cells with those: ``mg = df.merge(other)``
+            # joined for ``df``'s cells holds ``other``'s too.
+            links.append((set(group), framed))
+            joined |= framed
+            group.update((name, user_ns[name]) for name in framed)
+            holding = _holding_other_cells({name: group[name] for name in framed}, group)
+            fresh = {name: group[name] for name in framed if name in holding}
+            framed = _frames_sharing_cells(fresh, user_ns, foreign) - set(group) if fresh else set()
+            # Its own references to the frames, out of the counts taken below.
+            fresh = None
+            rounds += 1
+        rounds = 0
+        while True:
+            leaves.met.clear()
+            with frames_together(group.values()):
+                shared, found = _check_group(
+                    group, bindings, cash_held, named_held, None, user_ns, memo, partial, leaves
+                )
+            if found and gave_up is not None:
+                gave_up.found_variables = True
+            if not shared:
+                if anchors is not None:
+                    anchors.update(_met_anchors(leaves, tried, user_ns))
+                if gave_up is not None:
+                    for owners, holders in links:
+                        gave_up.add(owners, holders)
+                return {name: group[name] for name in joined}, set()
+            if found and anchorable is not None and anchor_rounds < _MAX_ANCHOR_ROUNDS:
+                fresh = _anchor_candidates(found, user_ns, tried, anchorable)
+                leaves.ids.update(fresh)
+                _take_back_holding(group, leaves, fresh, tried, user_ns, memo)
+                if fresh & leaves.ids:
+                    # Counted again with the new anchors left out: a holder that
+                    # held only their objects is no holder any more.
+                    anchor_rounds += 1
+                    if anchor_links is not None:
+                        anchor_links |= found
+                    continue
+            if found:
+                links.append((shared, found))
+            if not found or any(foreign(name) for name in found) or _copies_keep_old_objects(group, leaves):
+                break
+            joined |= found
+            group.update((name, user_ns[name]) for name in found)
+            rounds += 1
+            if rounds >= _MAX_ROUNDS:
+                if partial is not None:
+                    partial.complete = False
+                break
+    except WalkBudgetExceeded:
+        # Cut short: the variables found so far share objects with the
+        # outputs all the same. Dropped, ``h.map`` holding a frame's records
+        # was no partner of theirs, and a change through the frame left a
+        # reader of ``h`` served the old records.
+        if gave_up is not None and links:
+            for owners, holders in links:
+                gave_up.add(owners, (name for name in holders if not foreign(name)))
+            gave_up.complete = False
+        raise
     if gave_up is not None and partial is not None:
         for owners, holders in links:
             gave_up.add(owners, (name for name in holders if not foreign(name)))
