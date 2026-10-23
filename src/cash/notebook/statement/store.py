@@ -660,6 +660,8 @@ class StatementStore:
             output_lineages=self._lineage_builder.build_output_lineages(self.tracking_state, run.outputs),
             output_digests=self._lineage_builder.build_output_digests(self.tracking_state, run.outputs) or None,
             output_sizes=_output_sizes(captured_vars, run.outputs),
+            value_keyed=sorted(run.value_keyed_outputs) or None,
+            rerun_digests=run.rerun_digests or None,
             input_lineages=self._lineage_builder.build_input_lineages(
                 self.tracking_state, run.inputs, self.tracking_state.statement_entry_lineages.get(run.code)
             ),

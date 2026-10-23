@@ -361,7 +361,7 @@ def _places(
         named, unnamed = _steps(obj, value_types)
         if unnamed and _reachable(unnamed, value_types, left) & targets:
             return None
-        stack.extend((child, (*at, step), isinstance(obj, tuple)) for step, child in named)
+        stack.extend((child, (*at, step), instance_of(obj, tuple)) for step, child in named)
     return places
 
 
@@ -423,7 +423,12 @@ def _get(obj: Any, step: Step) -> Any:
 
         position, index = label
         return dtype_at(obj, position).categories[index]
-    return getattr(obj, label) if kind == "attr" else obj[label]
+    if kind != "attr":
+        return obj[label]
+    # Where the walk read it (`_steps`): never through the object's own
+    # ``__getattribute__``, which is the user's code.
+    attrs = attributes_of(obj)
+    return attrs[label] if attrs is not None and label in attrs else getattr(obj, label)
 
 
 def shares_categories(holder: Any, outputs: Mapping[str, Any]) -> bool:

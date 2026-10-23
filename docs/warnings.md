@@ -1797,6 +1797,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-FILE-ROUNDTRIP](#notebook-file-roundtrip) | notebook | a file written in this session is read back, so the read reruns after every write |
 | [NOTEBOOK-FORWARD-READ](#notebook-forward-read) | notebook | the cell reads a name only a cell below binds, so it runs uncached |
 | [NOTEBOOK-INPUT-UNBUILT](#notebook-input-unbuilt) | notebook | an input the cell's own cache entry was to rebuild was not, so the statement ran on the old value, unstored |
+| [NOTEBOOK-ITEMS-UNREAD](#notebook-items-unread) | notebook | an item of a container too big to look through is read by an index cash cannot tell, while a class of yours has a special method with effects: the statement runs every time |
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
 | [NOTEBOOK-NO-LIVE-READER](#notebook-no-live-reader) | notebook | cells above are read from the saved file, so an unsaved edit there is not seen |
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook's cells cannot be read; cells above the one you run are not re-checked |
@@ -1805,6 +1806,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-SHARE-UNCHECKED](#notebook-share-unchecked) | notebook | not every variable sharing an object with a statement's outputs was found in time |
 | [NOTEBOOK-SHARED-KEPT](#notebook-shared-kept) | notebook | a value a variable below shares is kept as it is for a cell re-run on its own |
 | [NOTEBOOK-THREAD-ALIVE](#notebook-thread-alive) | notebook | a thread the cell started still runs after the cell ended |
+| [NOTEBOOK-UNSEEN-WRITES](#notebook-unseen-writes) | notebook | code of yours that ran in a statement changes something cash did not see the statement reach, so the run is not stored |
 | [NOTEBOOK-WORK-RUNNING](#notebook-work-running) | notebook | a thread or process a statement left running has not finished, so cells run rather than be served |
 
 ### NOTEBOOK-ANALYSIS-BUDGET {#notebook-analysis-budget}
@@ -2080,6 +2082,29 @@ applied twice). cash does not store it, so nothing wrong is served later.
 **When it is safe to ignore.** Never for the value it computed; the cache is
 not affected.
 
+### NOTEBOOK-ITEMS-UNREAD {#notebook-items-unread}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/analysis/handed_callables.py:_warn_too_big @70d49368, cash/analysis/handed_callables.py:special_classes_exist @fea8fff4, cash/analysis/handed_callables.py:ITEM_TYPES_AT == 100_000 -->
+**What happened.** A statement, or a function of yours it calls, reads an
+item of a list, tuple or dict by an index cash cannot tell (`lst[i] + 1`),
+and the container holds more than 100,000 items, too many to look through
+for objects of your classes. A class of yours has a special method that
+changes something outside its objects (`__add__` appending to a global
+list), so the operator may run it. The message names the container. It is
+shown once for each.
+
+**Why it matters.** Served from the cache, the special method would not
+run, and what it changes would not change. Cash runs the statement every
+time instead and does not store it.
+
+**What to do.** Read the item by a constant index or key, or keep objects
+of such classes in a smaller container.
+
+**When it is safe to ignore.** When what the special methods change does
+not matter to any cell: put `# @cash:assume-safe` on the statement.
+
 ### NOTEBOOK-MAGIC-STALE {#notebook-magic-stale}
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
@@ -2274,6 +2299,61 @@ cell that uses it.
 
 **When it is safe to ignore.** When the thread changes nothing a cell reads,
 such as a progress display or a server you query from outside the notebook.
+
+### NOTEBOOK-UNSEEN-WRITES {#notebook-unseen-writes}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_unseen_writes @dd175d1c, cash/notebook/statement/unseen_writes.py:unseen_writers @b7dd5393, cash/notebook/statement/unseen_writes.py:own_writes @6e5e52a9 -->
+**What happened.** A function of yours ran while a statement ran, on a path
+cash does not read from the statement's text, and it changes something the
+statement does not name: `Vec.__add__` appending to a global list, run by
+`s + 1` on a column of `Vec` objects, or a function changing a variable of
+the function it was made in. The message names the function and what it
+changes.
+
+On Python 3.12 or newer, cash reads which functions ran from the run itself,
+and the warning is shown once for each function. Without that record
+(Python 3.10 and 3.11, `CASH_TRACE=0`, or a debugger holding
+`sys.monitoring`), cash reads the special methods of your classes whose
+objects the statement reaches, and the warning is shown once for each
+statement. That reading sees what a special method's own text changes and
+what it changes through a method of a global; it does not follow the
+functions it calls (see [known limitations](known-limitations.md)). A special
+method set on a class after the class was made (`Vec.__add__ = lambda ...`)
+gets its own message without a record: cash cannot see an edit to it, so
+the statement runs every time. A function whose text cash cannot read (one
+made by `exec`, or in a `%%time` cell, whose text IPython does not keep) is
+said to change "what its unreadable text changes", and the statement runs
+every time; define it in a cell or a module of its own.
+
+Without that record, a value too big to look through (more than 20,000
+objects to open, two million items of lists, dicts and arrays of objects to
+look into, or ten million items in all) could hold an object of any of your
+classes: then every class of yours that has such a special method and an
+object alive counts, and the message says the value was too big. Numbers,
+strings and arrays or tables of numbers are not looked into, and nor are
+lists, tuples, dicts and sets that hold only them (a JSON record), or rows of
+one of your classes that hold only them, after the first of each class; their
+items are only counted, up to those ten million. Should cash fail to look through what a
+statement reads at all, the statement runs every time and the message says
+that instead.
+
+Once a statement was not stored for a function, a later run of it that did
+not call that function (a `functools.cached_property` it filled the first
+time, a hash Python 3.14 keeps in a tuple) is not stored either, while the
+function is still defined: after a restart it would run again.
+
+**Why it matters.** Served from the cache, the statement would not run the
+function, so the change would not happen. Cash runs the statement every
+time instead and does not store it.
+
+**What to do.** Name what the function changes in the statement: pass it in
+and return it (`calls = add_all(s, calls)`).
+
+**When it is safe to ignore.** When the change does not matter to any cell
+(a counter for a log, a debug list): put `# @cash:assume-safe` on the
+statement, and cash stores it.
 
 ### NOTEBOOK-WORK-RUNNING {#notebook-work-running}
 

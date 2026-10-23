@@ -85,9 +85,8 @@ def _is_c_type(cls: type) -> bool:
 
 
 #: What a type an extension builds holds besides its C methods and slots.
-#: ``__slotnames__`` is what ``copyreg`` keeps on any class it is asked to
-#: copy or pickle an object of: one ``copy.copy(frame._df)``, even a failed
-#: one, made polars' ``PyDataFrame`` user code for the rest of the process.
+#: ``__slotnames__`` is copyreg's, cached on any type an object of which was
+#: pickled or copied.
 _C_TYPE_NAMES = frozenset({"__doc__", "__module__", "__text_signature__", "__dict__", "__weakref__", "__slotnames__"})
 _C_MEMBERS = (
     types.BuiltinFunctionType,

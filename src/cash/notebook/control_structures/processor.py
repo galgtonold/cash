@@ -47,7 +47,6 @@ from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.handed_callables import handed_callables, users_object_attributes
 from ...analysis.namespace_effects import statement_calls_user_writer
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS
-from ...source_norm import exact_source_digest
 from ...source_reading import own_source
 from ...tracking.randomness import (
     capture_rng_state,
@@ -67,6 +66,7 @@ from ..statement.carrier_advances import carrier_candidates
 from ..statement.derivation_edges import apply_share_record, logging_edges
 from ..statement.file_deps import compute_file_hash_component
 from ..statement.run import NO_LOOP_ITERABLE
+from ..tracking_state import outcome_key
 from ..write_observer import observe_writes
 from . import helpers as _helpers
 from .common import (
@@ -151,6 +151,8 @@ class ControlStructureProcessor:
         # The top-level structure running now, with what `process` saw
         # before it ran (`_unit_digest`).
         self._unit_frame: tuple | None = None
+        #: The top-level structure being run and which copy in its cell it is.
+        self._unit_occurrence: tuple[ast.AST, int] | None = None
         # Per-strategy handlers — constructed once.  Each owns the
         # strategy-specific logic; the orchestrator stays thin.
         self._for_handler = ForLoopHandler(shell, statement_processor, dispatcher=self)
@@ -166,6 +168,7 @@ class ControlStructureProcessor:
         raw_cell: str | None = None,
         inherited_annotation: "CacheAnnotation | None" = None,
         prior_nodes: Sequence[ast.stmt] = (),
+        occurrence_index: int = 0,
     ) -> ControlStructureResult:
         """
         Process a control structure node.
@@ -183,6 +186,10 @@ class ControlStructureProcessor:
                 comments). ``None`` disables them.
             inherited_annotation: Directives from enclosing structures, already
                 resolved, to merge into everything within this one.
+            occurrence_index: Which copy of this structure in its cell it is
+                (the second ``with ...: t = next(G)``), as for a statement:
+                run as one unit, it keys and files its value digests by it,
+                as the simulation does (`ControlSimulation.simulate`).
             prior_nodes: The top-level statements before this one in the
                 cell, in order. A for loop run as one unit needs the empty
                 seeds of the containers it fills there to compute
@@ -209,6 +216,7 @@ class ControlStructureProcessor:
         entries_before = dict(state.entry_file_states)
         rng_before = capture_rng_state() if isinstance(node, ast.For) else None
         self._unit_frame = (node, reads, before, rng_before, reads_before, entries_before)
+        self._unit_occurrence = (node, occurrence_index)
         # Where each generator it can draw from stands, so a draw in the body
         # moves the variable on (`carrier_advances`).
         positions = carrier_positions(
@@ -223,6 +231,7 @@ class ControlStructureProcessor:
                 result = self._dispatch(node, ttl, silent, parent_context, raw_cell, inherited_annotation, prior_nodes)
         finally:
             self._unit_frame = None
+            self._unit_occurrence = None
             # A structure that failed part way leaves no watch open.
             sp.in_loop.drop_watches()
             if positions:
@@ -249,7 +258,7 @@ class ControlStructureProcessor:
                 recorded = sp.recorded_share_edges(code) or frozenset()
                 apply_share_record(state.derivation_edges, (), recorded)
                 linked = linked | recorded
-            sp.note_share_edges(code, linked)
+            sp.note_share_edges(code, linked, entry)
             left = {v: h for v, h in lineage.items() if before.get(v) != h or v in writes}
             # Where a draw left an RNG variable depends on the seed above,
             # which the entry lineages do not hold: the simulation moves it on
@@ -267,7 +276,11 @@ class ControlStructureProcessor:
                     files.update(local)
 
             outcome = (entry, left, frozenset(files), compute_file_hash_component(files))
-            state.control_outcomes[exact_source_digest(code)] = outcome
+            state.control_outcomes[outcome_key(code, occurrence_index)] = outcome
+            # When it read them, for a write of the notebook's after it
+            # (`rewritten_by_the_notebook_since`).
+            state.file_event_seq += 1
+            state.file_read_seq[outcome_key(code, occurrence_index)] = state.file_event_seq
             # Judged only on a run that restored nothing: a restored statement
             # puts back the RNG state it was stored with, so a loop that draws
             # nothing still moves the generators when it hits in a new kernel.
@@ -637,11 +650,13 @@ class ControlStructureProcessor:
                 node,
                 inherited_annotation,
             )
+            top = self._unit_occurrence
             metrics = self.statement_processor.process_statement(
                 code,
                 ttl,
                 silent,
                 annotation=annotation,
+                occurrence_index=top[1] if top is not None and top[0] is node else 0,
                 stream_output=True,
                 force_outputs=force_outputs,
                 loop_iterable=header_value,

@@ -13,6 +13,7 @@ kernel ``logging.basicConfig()`` alone was enough.
 from __future__ import annotations
 
 import _io
+import copyreg
 import importlib.machinery
 import io
 import logging
@@ -160,19 +161,15 @@ def test_an_extensions_heap_type_is_not_user_code():
         assert not is_user_code_object(native)
 
 
-def test_an_extensions_heap_type_stays_c_code_once_copy_was_asked_for_one():
-    """``copy.copy`` or ``pickle`` of a ``PyDataFrame`` fails, but leaves
-    ``copyreg``'s ``__slotnames__`` on its class: in a suite, a test earlier
-    on the worker made every polars frame argument walk its frame's
-    methods as user code."""
-    import copy
-
+def test_an_extensions_heap_type_stays_c_code_once_its_objects_were_copied():
+    """Pickling or copying an object caches ``__slotnames__`` on its type
+    (copyreg), a list that is no C code: a polars frame copied by an earlier
+    statement in the process made ``PyDataFrame`` user code from then on."""
     pl = pytest.importorskip("polars")
-    native = pl.DataFrame({"a": [1]})._df
-    with pytest.raises(TypeError):
-        copy.copy(native)
-    assert "__slotnames__" in vars(type(native))
-    assert not is_user_code_object(type(native))
+    for native in (type(pl.DataFrame({"a": [1]})._df), type(pl.Series([1])._s)):
+        copyreg._slotnames(native)
+        assert "__slotnames__" in vars(native)
+        assert not is_user_code_object(native)
 
 
 @pytest.mark.parametrize(

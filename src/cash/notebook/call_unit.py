@@ -1108,7 +1108,10 @@ class CallUnit:
             # The floor first: reading the memos digests their answers,
             # which a call below it would pay for nothing.
             and elapsed >= self._cost_floor_s()
-            and not isinstance(memos := helper_memos.used(memos_before, clears=_clears(call.fn, memos_before)), tuple)
+            and not isinstance(
+                memos := helper_memos.used(memos_before, clears=_clears(call.fn, memos_before), site=(None, call.fn)),
+                tuple,
+            )
             # With what the memos on named classes the result reaches hold:
             # served only while they hold it again (`holds_a_closure_with_state`).
             and self._worth_storing(
