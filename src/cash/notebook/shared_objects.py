@@ -3351,9 +3351,14 @@ def _find_holders(
     per level of containers -- 0.3 s a statement next to a list of three
     million records. Down is only a first guess: the count taken again with
     the variables it found joined decides, and when that still finds a holder
-    the search up runs.
+    the search up runs. Past `_MAX_REFERRER_TARGETS` objects, where the
+    search up gives up, the flat variables are read for them by identity
+    (`_flat_holders`).
     """
-    found = _holders_from_names(targets, internal, user_ns, known) or _flat_holders(targets, internal, user_ns, known)
+    found = _holders_from_names(targets, internal, user_ns, known)
+    if not found and len(targets) > _MAX_REFERRER_TARGETS:
+        # Too many for the search up, which would give up at once.
+        found = _flat_holders(targets, internal, user_ns, known)
     if found:
         return found
     return _holders_from_referrers(targets, internal, user_ns, known, gave_up)
