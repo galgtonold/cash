@@ -103,3 +103,90 @@ def test_the_same_value_drawn_again_is_still_served_below(trace_default, stateme
         statuses.append(_run(statement_processor, "u = t + 1")["status"])
     assert statuses[1:] == [CacheStatus.RESTORED, CacheStatus.RESTORED]
     assert mock_shell.user_ns["u"] == 6
+
+
+DRAWS = (
+    "import collections\n"
+    "Q = collections.deque(range(100))\n"
+    "def _gen():\n"
+    "    i = 0\n"
+    "    while True:\n"
+    "        yield i\n"
+    "        i += 1\n"
+    "G = _gen()\n"
+    "class Obj:\n"
+    "    def __init__(self):\n"
+    "        self.g = _gen()\n"
+    "    def draw(self):\n"
+    "        return next(self.g)\n"
+    "OBJ = Obj()\n"
+)
+
+
+@pytest.mark.parametrize(
+    "names, draw",
+    [("Q", "t = Q.popleft()"), ("G", "t = G.send(None)"), ("OBJ", "t = OBJ.draw()")],
+    ids=["a deque changed in place", "a generator sent to", "a generator's method"],
+)
+def test_a_draw_an_earlier_refusal_caught_reaches_what_reads_it(
+    trace_default, statement_processor, mock_shell, tmp_path, names, draw
+):
+    """Refused first as a change in place or a side effect, the draw kept
+    its formula's lineage, and u was served 1 on every Run All."""
+    _, name = trace_default
+    (tmp_path / f"{name}_draws.py").write_text(DRAWS, encoding="utf-8")
+    ns = mock_shell.user_ns
+    seen = []
+    try:
+        for _ in range(3):
+            for code in (f"from {name}_draws import {names}", draw, "u = t + 1"):
+                _run(statement_processor, code)
+            seen.append((ns["t"], ns["u"]))
+    finally:
+        sys.modules.pop(f"{name}_draws", None)
+    assert seen == [(0, 1), (1, 2), (2, 3)]
+
+
+def test_a_draw_from_an_iterator_no_cell_made_reaches_what_reads_it(trace_default, statement_processor, mock_shell):
+    """``G`` bound before cash was on has no lineage: refused for that
+    first, ``t = next(G)`` of arrays kept its formula's lineage."""
+    import numpy as np
+
+    mock_shell.user_ns["G"] = (np.full(10, i) for i in range(1, 100))
+    seen = []
+    for _ in range(3):
+        _run(statement_processor, "t = next(G)")
+        _run(statement_processor, "u = int(t[-1])")
+        seen.append(mock_shell.user_ns["u"])
+    assert seen == [1, 2, 3]
+
+
+def test_a_value_past_the_hash_budget_is_new_each_time(monkeypatch):
+    """A list of 8 million tuples was hashed in full on every run (8 s);
+    past the budget of a change check, the value is taken as new."""
+    from cash.notebook import lineage_formula
+
+    monkeypatch.setattr(lineage_formula, "budgeted_hash", lambda value: None)
+    value = [(1, 2)] * 10
+    first = lineage_formula.no_cache_value_digest(value)
+    assert first.startswith("fresh:")
+    assert lineage_formula.no_cache_value_digest(value) != first
+
+
+@pytest.mark.skipif(not TRACED, reason="the trace that sees code changed in place runs on 3.12+")
+def test_a_rerun_the_trace_forced_that_came_out_the_same_keeps_what_reads_it(
+    trace_default, statement_processor, mock_shell
+):
+    """New code that gives the same value: t runs again and comes out as
+    its entry held it, so u is still served. Keyed by value instead, every
+    reader below missed once, a level per session."""
+    _run(statement_processor, "def inner(x):\n    return x * 2")
+    for code in ("t = inner(3)", "u = t + 1"):
+        _run(statement_processor, code)
+    lineage = statement_processor.tracking_state.variable_lineage["t"]
+    mock_shell.user_ns["inner"].__code__ = (lambda x: x + x).__code__
+
+    assert _run(statement_processor, "t = inner(3)")["status"] == CacheStatus.COMPUTED
+    assert statement_processor.tracking_state.variable_lineage["t"] == lineage
+    assert _run(statement_processor, "u = t + 1")["status"] == CacheStatus.RESTORED
+    assert mock_shell.user_ns["u"] == 7

@@ -270,6 +270,12 @@ HINT_ERROR_LEVEL = logging.DEBUG
 _ABSENT = object()
 
 
+def _entry_values(cached_data: Any) -> dict[str, Any] | None:
+    """The values a stored entry held, by name; None when it says none."""
+    variables = cached_data.get("variables") if isinstance(cached_data, dict) else None
+    return variables if isinstance(variables, dict) else None
+
+
 class StatementProcessor:
     """
     Processes and caches individual Python statements.
@@ -937,13 +943,15 @@ class StatementProcessor:
             _shadow.SHADOW.statement_lookup(self, run, bool(cached_data))
             if cached_data and _shadow.SHADOW.stale(run.shadow):
                 # Code it ran changed since it was stored: it runs again.
-                cached_data = None
                 run.key_blind = True
+                run.refused_values = _entry_values(cached_data)
+                cached_data = None
             elif cached_data and run.needs_trace and not _shadow.SHADOW.agreed(run.shadow):
                 # Its key does not name what a string found: only a trace
                 # checked unchanged serves it.
-                cached_data = None
                 run.key_blind = True
+                run.refused_values = _entry_values(cached_data)
+                cached_data = None
         elif run.needs_trace:
             cached_data = None
             run.key_blind = True
@@ -1172,6 +1180,50 @@ class StatementProcessor:
         run.metrics["cache_key"] = run.cache_key
         return effects, analysis_time, hash_time
 
+    def _changed_from_refused_entry(self, run: StatementRun) -> frozenset[str]:
+        """The outputs of *run* whose value is not the one its refused entry
+        held (`StatementRun.key_blind`).
+
+        Run again under the same key, a statement can bind a new value: those
+        outputs are keyed by value, so what is built on them misses. One
+        that came out as the entry held it keeps the formula's lineage: a
+        statement the trace refuses on every run (code it ran is rebuilt
+        each time) would otherwise move every reader below once, and on, a
+        level per session. A value that cannot be compared within the
+        budget of a change check counts as changed."""
+        if not run.key_blind:
+            return frozenset()
+        stored = run.refused_values
+        run.refused_values = None
+        ns = self.shell.user_ns
+        if stored is None:
+            return frozenset(run.outputs)
+        changed = set()
+        for name in run.outputs:
+            if name not in stored or name not in ns:
+                changed.add(name)
+                continue
+            before = value_hash.budgeted_hash(stored[name], self.compute_hash)
+            after = value_hash.budgeted_hash(ns[name], self.compute_hash)
+            if before is None or before != after or value_hash.is_identity_fallback_hash(ns[name], after):
+                changed.add(name)
+        return frozenset(changed)
+
+    @staticmethod
+    def _drawn_names(run: StatementRun) -> frozenset[str]:
+        """The names *run* bound afresh when it runs every time because it
+        changed what it read in place: ``t = Q.popleft()``, ``t =
+        OBJ.draw()``, ``t = G.send(None)``. Each run can bind a new value
+        under the same key, so they are keyed by value, as a no-cache
+        statement's outputs are; the objects it changed are left as they
+        are (`capture_and_track_variables`)."""
+        if not run.skip_cache:
+            return frozenset()
+        changed = run.in_place | (run.outputs & run.inputs)
+        if not changed:
+            return frozenset()
+        return frozenset(run.outputs - run.inputs - changed)
+
     def _decide_cacheability(self, run: StatementRun) -> None:
         """Skip-cache *run* when the static cacheability decision refuses it."""
         if run.skip_cache:
@@ -1194,7 +1246,11 @@ class StatementProcessor:
         if not cacheable:
             run.metrics["uncacheable_reasons"].extend(reasons)
             run.skip_cache = True
-            run.value_varies = varies
+            # Refused for another reason first (a name with no lineage), a
+            # draw (``t = next(G)``) still binds a new value each run.
+            run.value_varies = varies or bool(
+                drawn_stream_inputs(run.tree, run.inputs, run.outputs, self.shell.user_ns)
+            )
             return
         run.unless_it_draws = unless_it_draws
         unfollowed, by_string, unkeyed_modules, followed = unkeyed_reach(
@@ -2197,10 +2253,10 @@ class StatementProcessor:
                     probes=execution.probes,
                     no_cache=(run.annotation is not None and run.annotation.no_cache)
                     or run.value_varies
-                    or run.key_blind
                     or run.past_budget
                     or inputs_moved
                     or self._binds_a_stream(run),
+                    value_keyed=self._drawn_names(run) | self._changed_from_refused_entry(run),
                     replay_bumps=False,
                     lineage_reads=run.pyplot_drawn,
                     settled=run.settled_digests,

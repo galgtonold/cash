@@ -132,6 +132,9 @@ class StatementRun:
     #: outputs are keyed by value, and what is built on them misses when the
     #: value changed.
     key_blind: bool = False
+    #: The values the entry it refused held (`key_blind`), until its outputs
+    #: are recorded: one that came out the same keeps the formula's lineage.
+    refused_values: dict[str, Any] | None = None
     allow_random: bool = False
     unseeded_calls: list = field(default_factory=list)
     inputs: set[str] = field(default_factory=set)

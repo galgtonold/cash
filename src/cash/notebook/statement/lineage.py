@@ -56,6 +56,7 @@ from ..lineage_formula import (
     recorded_reads_lineage_component,
     setting_output_lineage,
     statement_environment_component,
+    value_digests_key,
 )
 from ..restored_var import hashed_by_lineage
 from .derivation_edges import (
@@ -213,6 +214,7 @@ class StatementLineageBuilder:
         tree: ast.Module | None = None,
         accessed_remote: set[str] | None = None,
         no_cache: bool = False,
+        value_keyed: frozenset[str] = frozenset(),
         replay_bumps: bool = True,
         lineage_reads: frozenset[str] = frozenset(),
         probes: dict[str, str] | None = None,
@@ -240,6 +242,10 @@ class StatementLineageBuilder:
         *no_cache* marks a ``# @cash:no-cache`` statement: each output's
         lineage then also carries a digest of its value
         (:func:`no_cache_value_digest`).
+
+        *value_keyed* names outputs whose lineage carries that digest too: the
+        new values a statement that changed its inputs in place bound
+        (``t = Q.popleft()``), without the inputs it changed.
 
         *accessed_remote* holds object-storage URLs the statement read. They
         join the same lineage component as local files, contributing the store's
@@ -300,8 +306,12 @@ class StatementLineageBuilder:
         # refitted to the model it was, it takes that model's lineage back
         # (`value_cutoff._refitted`).
         refitted = fitted_in_place(tree, bound)
-        rebuilt = not no_cache and not any(
-            user_ns.get(name) is value and name not in refitted for name in inputs for value in bound.values()
+        rebuilt = (
+            not no_cache
+            and not value_keyed
+            and not any(
+                user_ns.get(name) is value and name not in refitted for name in inputs for value in bound.values()
+            )
         )
         cut_off = rebuilt and len(bound) == 1
 
@@ -328,7 +338,7 @@ class StatementLineageBuilder:
                 self._compute_module_lineage_component(tracking_state, value, var_name, code, tree),
                 changed_module_environment(var_name, value, code, environment),
                 self._no_cache_value(value_digests, var_name, value)
-                if no_cache and not _a_namespace(value, user_ns)
+                if (no_cache or var_name in value_keyed) and not _a_namespace(value, user_ns)
                 else "",
             )
             # A module set by a setting that is the same when run again
@@ -379,11 +389,11 @@ class StatementLineageBuilder:
                 taken=taken,
             )
 
-        if cache_key:
-            if value_digests:
-                tracking_state.no_cache_values[cache_key] = value_digests
-            else:
-                tracking_state.no_cache_values.pop(cache_key, None)
+        filed = value_digests_key(source_hash, input_lineage_map)
+        if value_digests:
+            tracking_state.no_cache_values[filed] = value_digests
+        else:
+            tracking_state.no_cache_values.pop(filed, None)
 
         if replay_bumps:
             self.replay_derivation_bumps(tracking_state, outputs, inputs, code=code)
