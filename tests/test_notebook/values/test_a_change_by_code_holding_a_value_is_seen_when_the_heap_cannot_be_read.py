@@ -134,3 +134,22 @@ def test_whether_functions_or_objects_exist_is_a_yes_when_the_heap_cannot_be_rea
     monkeypatch.setattr(gc, "get_referrers", looped)
     monkeypatch.setattr(held_functions, "_NO_FUNCTIONS", {})
     assert held_functions.notebook_functions_exist({"x": 1}) is True
+
+
+class _NoObjectMade:
+    pass
+
+
+def test_whether_an_object_of_a_users_class_exists_is_a_yes_when_the_heap_cannot_be_read(monkeypatch):
+    from cash.notebook import held_functions
+
+    monkeypatch.setattr(held_functions, "_users_module_classes", lambda: [_NoObjectMade])
+    monkeypatch.setattr(held_functions, "_OBJECTS_SEEN", [None])
+    assert held_functions.module_class_objects_exist() is False  # none made, read as it is
+    _unreadable(monkeypatch)
+
+    def looped(*objs):
+        raise AssertionError("gc.get_referrers read the heap")
+
+    monkeypatch.setattr(gc, "get_referrers", looped)
+    assert held_functions.module_class_objects_exist() is True
