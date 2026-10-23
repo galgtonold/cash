@@ -408,10 +408,14 @@ def no_cache_value_digest(value: Any) -> str:
     return digest
 
 
-def value_digests_key(source_hash: str, input_lineages: Mapping[str, str]) -> str:
+def value_digests_key(source_hash: str, input_lineages: Mapping[str, str], occurrence_index: int = 0) -> str:
     """What the value digests of a statement's run are filed under
-    (``TrackingState.no_cache_values``): its source and the lineages of its
-    inputs, as the runtime and the simulation both build them.
+    (``TrackingState.no_cache_values``): its source, the lineages of its
+    inputs and which copy of the statement in its cell it is, as the runtime
+    and the simulation both build them. Two copies in one cell
+    (``start = time.time()`` before and after the work) share source and
+    inputs: filed together, the second's digest stood for the first's, and
+    the work between them ran again for the reader below.
 
     Not its cache key: a key that cannot name what the code reaches carries
     a token of its own each time, one that reads a name no cell bound hashes
@@ -421,7 +425,11 @@ def value_digests_key(source_hash: str, input_lineages: Mapping[str, str]) -> st
     another lineage than the run did, and the statement ran a second time
     for each reader below: ``t = globals()[name](3)`` ran twice per Run All,
     and a draw in it drew twice."""
-    parts = [source_hash, *(f"{name}={lineage}" for name, lineage in sorted(input_lineages.items()))]
+    parts = [
+        source_hash,
+        str(occurrence_index),
+        *(f"{name}={lineage}" for name, lineage in sorted(input_lineages.items())),
+    ]
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 

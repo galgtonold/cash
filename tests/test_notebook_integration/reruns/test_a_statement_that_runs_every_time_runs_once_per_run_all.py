@@ -30,7 +30,11 @@ def test_each_statement_runs_once_and_hands_its_value_on(nb_runner):
         [
             "import cash\n%cash_on",
             "import os\nname = 'make'\nfrom rerun_helpers import Q, NSS",
-            f"def make(x):\n    with open({calls!r}, 'a') as f:\n        f.write('x')\n    return x + 1",
+            "def make(x):\n"
+            f"    fd = os.open({calls!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
+            "    os.write(fd, b'x')\n"
+            "    os.close(fd)\n"
+            "    return x + 1",
             "# @cash:no-cache\nt = globals()[name](3)",
             "u = t + 0",
             "NS = next(NSS)(globals())",
@@ -43,7 +47,7 @@ def test_each_statement_runs_once_and_hands_its_value_on(nb_runner):
     def run_all():
         nb_runner.run_all()
         return (
-            len((nb_runner.work_dir / "calls.log").read_text(encoding="utf-8")),
+            len((nb_runner.work_dir / "calls.log").read_bytes()),
             nb_runner.peek("u"),
             nb_runner.peek("v"),
             nb_runner.peek("w"),

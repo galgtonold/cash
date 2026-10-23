@@ -944,13 +944,13 @@ class StatementProcessor:
             if cached_data and _shadow.SHADOW.stale(run.shadow):
                 # Code it ran changed since it was stored: it runs again.
                 run.key_blind = True
-                run.refused_values = _entry_values(cached_data)
+                self._note_refused_entry(run, metadata, cached_data)
                 cached_data = None
             elif cached_data and run.needs_trace and not _shadow.SHADOW.agreed(run.shadow):
                 # Its key does not name what a string found: only a trace
                 # checked unchanged serves it.
                 run.key_blind = True
-                run.refused_values = _entry_values(cached_data)
+                self._note_refused_entry(run, metadata, cached_data)
                 cached_data = None
         elif run.needs_trace:
             cached_data = None
@@ -1180,32 +1180,65 @@ class StatementProcessor:
         run.metrics["cache_key"] = run.cache_key
         return effects, analysis_time, hash_time
 
+    def _value_keyed(self, run: StatementRun) -> frozenset[str]:
+        """The outputs of *run* keyed by value (`_drawn_names`,
+        `_changed_from_refused_entry`), noted for its entry to keep."""
+        keyed = self._drawn_names(run) | self._changed_from_refused_entry(run)
+        if run.needs_trace and run.skip_cache:
+            # Its key does not name what a string found, and it is not
+            # stored, so no entry is refused to say it ran again: refused as
+            # it ran (it wrote a file), it runs every time under the same
+            # key, and can bind a new value each time.
+            keyed |= frozenset(run.outputs)
+        run.value_keyed_outputs = keyed
+        return keyed
+
+    @staticmethod
+    def _note_refused_entry(run: StatementRun, metadata: Any, cached_data: Any) -> None:
+        """What `_changed_from_refused_entry` compares with: the entry's digests
+        of its outputs, its values for the outputs it has none of, and which
+        it had keyed by value."""
+        run.refused_value_keyed = frozenset(attribute_or(metadata, "value_keyed", None) or ())
+        run.refused_digests = dict(attribute_or(metadata, "rerun_digests", None) or {})
+        if not set(run.refused_digests) >= set(attribute_or(metadata, "outputs", None) or ()):
+            run.refused_values = _entry_values(cached_data)
+
     def _changed_from_refused_entry(self, run: StatementRun) -> frozenset[str]:
-        """The outputs of *run* whose value is not the one its refused entry
-        held (`StatementRun.key_blind`).
+        """The outputs of *run* keyed by value after a rerun under the same
+        key (`StatementRun.key_blind`).
 
         Run again under the same key, a statement can bind a new value: those
         outputs are keyed by value, so what is built on them misses. One
         that came out as the entry held it keeps the formula's lineage: a
         statement the trace refuses on every run (code it ran is rebuilt
         each time) would otherwise move every reader below once, and on, a
-        level per session. A value that cannot be compared within the
-        budget of a change check counts as changed."""
+        level per session. But only while the entry holds what was built on
+        the formula's lineage: one a rerun stored after keying an output by
+        value holds that rerun's value, so the output is keyed by value
+        again, and an equal value finds what was built on it. A value that
+        cannot be compared within the budget of a change check counts as
+        changed."""
         if not run.key_blind:
             return frozenset()
         stored = run.refused_values
         run.refused_values = None
         ns = self.shell.user_ns
-        if stored is None:
-            return frozenset(run.outputs)
-        changed = set()
+        changed = set(run.refused_value_keyed & run.outputs)
         for name in run.outputs:
-            if name not in stored or name not in ns:
+            if name not in ns:
                 changed.add(name)
                 continue
-            before = value_hash.budgeted_hash(stored[name], self.compute_hash)
             after = value_hash.budgeted_hash(ns[name], self.compute_hash)
-            if before is None or before != after or value_hash.is_identity_fallback_hash(ns[name], after):
+            if after is None or value_hash.is_identity_fallback_hash(ns[name], after):
+                changed.add(name)
+                continue
+            run.rerun_digests[name] = after
+            if name in changed:
+                continue
+            before = run.refused_digests.get(name)
+            if before is None and stored is not None and name in stored:
+                before = value_hash.budgeted_hash(stored[name], self.compute_hash)
+            if before is None or before != after:
                 changed.add(name)
         return frozenset(changed)
 
@@ -2256,7 +2289,8 @@ class StatementProcessor:
                     or run.past_budget
                     or inputs_moved
                     or self._binds_a_stream(run),
-                    value_keyed=self._drawn_names(run) | self._changed_from_refused_entry(run),
+                    value_keyed=self._value_keyed(run),
+                    occurrence_index=run.occurrence_index,
                     replay_bumps=False,
                     lineage_reads=run.pyplot_drawn,
                     settled=run.settled_digests,

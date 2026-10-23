@@ -215,6 +215,7 @@ class StatementLineageBuilder:
         accessed_remote: set[str] | None = None,
         no_cache: bool = False,
         value_keyed: frozenset[str] = frozenset(),
+        occurrence_index: int = 0,
         replay_bumps: bool = True,
         lineage_reads: frozenset[str] = frozenset(),
         probes: dict[str, str] | None = None,
@@ -389,7 +390,7 @@ class StatementLineageBuilder:
                 taken=taken,
             )
 
-        filed = value_digests_key(source_hash, input_lineage_map)
+        filed = value_digests_key(source_hash, input_lineage_map, occurrence_index)
         if value_digests:
             tracking_state.no_cache_values[filed] = value_digests
         else:

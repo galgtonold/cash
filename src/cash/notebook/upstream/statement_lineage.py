@@ -1239,7 +1239,9 @@ class StatementLineage:
             stmt_code,
             tree,
             virtual_lineage,
-            no_cache_values=self.tracking_state.no_cache_values.get(value_digests_key(source_hash, input_lineage_map)),
+            no_cache_values=self.tracking_state.no_cache_values.get(
+                value_digests_key(source_hash, input_lineage_map, occurrence_index)
+            ),
             recorded_reads=recorded_reads_lineage_component(
                 self.tracking_state, cache_key, stmt_code, self.shell.user_ns, outputs, as_last_run=True
             ),

@@ -133,8 +133,17 @@ class StatementRun:
     #: value changed.
     key_blind: bool = False
     #: The values the entry it refused held (`key_blind`), until its outputs
-    #: are recorded: one that came out the same keeps the formula's lineage.
+    #: are recorded, for those of its outputs the entry kept no digest of:
+    #: one that came out the same keeps the formula's lineage.
     refused_values: dict[str, Any] | None = None
+    #: What the refused entry recorded of its own outputs
+    #: (``StatementCacheMetadata.value_keyed`` and ``rerun_digests``).
+    refused_value_keyed: frozenset[str] = frozenset()
+    refused_digests: dict[str, str] = field(default_factory=dict)
+    #: Its outputs keyed by value this run, and the digest of each output a
+    #: rerun under the same key compared (`key_blind`): its entry keeps both.
+    value_keyed_outputs: frozenset[str] = frozenset()
+    rerun_digests: dict[str, str] = field(default_factory=dict)
     allow_random: bool = False
     unseeded_calls: list = field(default_factory=list)
     inputs: set[str] = field(default_factory=set)

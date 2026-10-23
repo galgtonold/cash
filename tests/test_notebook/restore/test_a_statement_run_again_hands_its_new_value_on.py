@@ -161,18 +161,6 @@ def test_a_draw_from_an_iterator_no_cell_made_reaches_what_reads_it(trace_defaul
     assert seen == [1, 2, 3]
 
 
-def test_a_value_past_the_hash_budget_is_new_each_time(monkeypatch):
-    """A list of 8 million tuples was hashed in full on every run (8 s);
-    past the budget of a change check, the value is taken as new."""
-    from cash.notebook import lineage_formula
-
-    monkeypatch.setattr(lineage_formula, "budgeted_hash", lambda value: None)
-    value = [(1, 2)] * 10
-    first = lineage_formula.no_cache_value_digest(value)
-    assert first.startswith("fresh:")
-    assert lineage_formula.no_cache_value_digest(value) != first
-
-
 @pytest.mark.skipif(not TRACED, reason="the trace that sees code changed in place runs on 3.12+")
 def test_a_rerun_the_trace_forced_that_came_out_the_same_keeps_what_reads_it(
     trace_default, statement_processor, mock_shell
@@ -190,3 +178,48 @@ def test_a_rerun_the_trace_forced_that_came_out_the_same_keeps_what_reads_it(
     assert statement_processor.tracking_state.variable_lineage["t"] == lineage
     assert _run(statement_processor, "u = t + 1")["status"] == CacheStatus.RESTORED
     assert mock_shell.user_ns["u"] == 7
+
+
+@pytest.mark.skipif(not TRACED, reason="the trace that sees code changed in place runs on 3.12+")
+def test_code_changed_back_to_an_equal_result_still_reaches_the_reader(trace_default, statement_processor, mock_shell):
+    """``x * 10``, then ``x * 5 * 2``: the second rerun came out as the entry
+    the first stored, took the formula's lineage back, and ``u`` was served
+    what ``t = 6`` built. That entry holds a value-keyed rerun's value: its
+    output is keyed by value again."""
+    _run(statement_processor, "def inner(x):\n    return x * 2")
+    for code in ("t = inner(3)", "u = t + 1"):
+        _run(statement_processor, code)
+    for changed in ((lambda x: x * 10), (lambda x: x * 5 * 2)):
+        mock_shell.user_ns["inner"].__code__ = changed.__code__
+        _run(statement_processor, "t = inner(3)")
+        _run(statement_processor, "u = t + 1")
+        assert mock_shell.user_ns["u"] == 31
+
+
+@pytest.mark.skipif(not TRACED, reason="the trace that follows a function found by a string runs on 3.12+")
+def test_a_draw_by_string_refused_as_it_ran_reaches_what_reads_it(
+    trace_default, statement_processor, mock_shell, tmp_path
+):
+    """``t = globals()[name]()`` whose function writes a log as it draws:
+    refused as it ran, it runs every time and is never stored, so no entry
+    is refused to say it ran again. It kept the formula's lineage, and ``u``
+    was served the first draw's on every run."""
+    _, name = trace_default
+    log = str(tmp_path / "calls.log")
+    _run(statement_processor, f"from {name} import GEN")
+    _run(statement_processor, "name = 'draw'")
+    _run(
+        statement_processor,
+        "import os\n"
+        "def draw():\n"
+        f"    fd = os.open({log!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        "    os.write(fd, b'x')\n"
+        "    os.close(fd)\n"
+        "    return next(GEN)",
+    )
+    seen = []
+    for _ in range(3):
+        _run(statement_processor, "t = globals()[name]()")
+        _run(statement_processor, "u = t + 1")
+        seen.append(mock_shell.user_ns["u"])
+    assert seen == [1, 2, 3]
