@@ -118,3 +118,19 @@ def test_the_warning_names_the_python_not_a_time(watched_notebook, monkeypatch):
 
     why = processor._cut_short_why("finding what keeps the variables it hands to code", 2.0)
     assert "cannot be done on Python" in why and "longer than" not in why, why
+
+
+def test_whether_functions_or_objects_exist_is_a_yes_when_the_heap_cannot_be_read(monkeypatch):
+    """The checks for a notebook function, or an object of a class of the
+    user's, read ``gc.get_referrers`` too: not known, their answer is yes,
+    as for a heap ``gc.freeze`` hid."""
+    from cash.notebook import held_functions
+
+    _unreadable(monkeypatch)
+
+    def looped(*objs):
+        raise AssertionError("gc.get_referrers read the heap")
+
+    monkeypatch.setattr(gc, "get_referrers", looped)
+    monkeypatch.setattr(held_functions, "_NO_FUNCTIONS", {})
+    assert held_functions.notebook_functions_exist({"x": 1}) is True
