@@ -327,7 +327,7 @@ def attributes_of(value: Any) -> dict[str, Any] | None:
     ``None`` for anything else (a leaf)."""
     cls = type(value)
     if not (
-        cls.__module__ == "__main__"
+        attribute_or(cls, "__module__", None) == "__main__"
         or cls is types.SimpleNamespace
         or dataclasses.is_dataclass(cls)
         or _is_estimator_class(cls)
