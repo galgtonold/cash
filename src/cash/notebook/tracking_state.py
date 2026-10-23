@@ -16,7 +16,19 @@ from cash.notebook.value_cutoff import ValueCutoff
 if TYPE_CHECKING:
     from cash.notebook.restored_var import HeldObject
 
-__all__ = ["TrackingState"]
+__all__ = ["TrackingState", "outcome_key"]
+
+
+def outcome_key(code: str, occurrence_index: int = 0) -> str:
+    """Where `TrackingState.control_outcomes` files the structure *code*: by
+    its text, and for a second copy in its cell also by which copy it is.
+    Filed by text alone, the second ``with ...: t = next(G)`` left its
+    lineages for the first, and the next cell's check reran the first
+    copy's reader with the second draw."""
+    from cash.source_norm import exact_source_digest
+
+    digest = exact_source_digest(code)
+    return digest if not occurrence_index else f"{digest}:{occurrence_index}"
 
 
 @dataclass
@@ -352,7 +364,8 @@ class TrackingState:
     # W: MutationRouting. R: ReexecutionPlanner.
     process_state_ran: set[str] = field(default_factory=set)
 
-    # sha256(``ast.unparse`` of a top-level if/for/while/with/try) ->
+    # `outcome_key` (sha256 of ``ast.unparse`` of a top-level
+    # if/for/while/with/try, and which copy in its cell it is) ->
     # ({input: lineage at entry}, {var: lineage it left behind}, files behind
     # those, their file-hash component). The runtime derives a control
     # structure's output lineages from values, which the simulation cannot
