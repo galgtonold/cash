@@ -200,6 +200,8 @@ from .lineage import note_own_writes
 from .observed_draws import ObservedDrawStore
 from .thread_reach import ThreadReach
 from .unseen_writes import (
+    COULD_RUN_REASON,
+    COULD_RUN_TOO_BIG_REASON,
     SET_LATER,
     SET_LATER_REASON,
     UNSEEN_WRITES_REASON,
@@ -1073,7 +1075,8 @@ class StatementProcessor:
         if unit is None:
             # No record of what ran: what the statement's objects could
             # run instead (`writers_without_a_trace`).
-            found = writers_without_a_trace(run.code, ns, run.outputs)
+            too_big: set[str] = set()
+            found = writers_without_a_trace(run.code, ns, run.outputs, too_big)
         else:
             statement = [code for code, (g, _m) in unit.codes.items() if code.co_qualname == "<module>" and g is ns]
             found = unseen_writers(unit.codes, statement, run.outputs, ns, run.code)
@@ -1087,9 +1090,11 @@ class StatementProcessor:
         if targets == (SET_LATER,):
             what = SET_LATER_REASON.format(fn=fn)
         else:
-            what = UNSEEN_WRITES_REASON.format(
-                fn=fn, targets=", ".join(targets), it="it" if len(targets) == 1 else "them"
-            )
+            if unit is not None:
+                reason = UNSEEN_WRITES_REASON
+            else:
+                reason = COULD_RUN_TOO_BIG_REASON if fn in too_big else COULD_RUN_REASON
+            what = reason.format(fn=fn, targets=", ".join(targets), it="it" if len(targets) == 1 else "them")
         run.skip_cache = True
         run.metrics["uncacheable_reasons"].append(what)
         if unit is not None:

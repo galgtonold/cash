@@ -41,6 +41,8 @@ from ...source_reading import getsource
 
 __all__ = [
     "UNSEEN_WRITES_REASON",
+    "COULD_RUN_REASON",
+    "COULD_RUN_TOO_BIG_REASON",
     "library_made",
     "live_writers",
     "own_writes",
@@ -52,6 +54,20 @@ __all__ = [
 UNSEEN_WRITES_REASON = (
     "{fn}() ran in this statement and changes {targets}, which the statement's own text does not reach; "
     "a stored result would not change {it}"
+)
+#: The same without a record of what ran (`writers_without_a_trace`): the
+#: method may run, nothing says it did.
+COULD_RUN_REASON = (
+    "{fn}() could run in this statement (no record of what runs is kept here: Python before 3.12, "
+    "CASH_TRACE=0, or a debugger holding sys.monitoring) and changes {targets}, which the statement's own "
+    "text does not reach; a stored result would not change {it}"
+)
+#: And when a value the statement reads was too big to look through: every
+#: class of the user's alive with such a method counts.
+COULD_RUN_TOO_BIG_REASON = (
+    "{fn}() could run in this statement: a value it reads is too big to look through, and no record of what "
+    "runs is kept here (Python before 3.12, CASH_TRACE=0, or a debugger holding sys.monitoring); it changes "
+    "{targets}, which the statement's own text does not reach, and a stored result would not change {it}"
 )
 #: What `writers_without_a_trace` gives for a special method set on a class
 #: after it was made, and the reason said for it: what it does is not the
@@ -191,7 +207,10 @@ _SCAN_AT = 1_000_000
 
 
 def writers_without_a_trace(
-    statement: str, namespace: Mapping[str, Any], outputs: Iterable[str] = ()
+    statement: str,
+    namespace: Mapping[str, Any],
+    outputs: Iterable[str] = (),
+    too_big: set[str] | None = None,
 ) -> list[tuple[str, tuple[str, ...]]]:
     """What `unseen_writers` would find, read from the objects instead of a
     trace (none on Python 3.10 and 3.11, with ``CASH_TRACE=0``, or while a
@@ -199,7 +218,9 @@ def writers_without_a_trace(
     user's whose objects *statement* reaches through what it reads (an item
     of a container, ``d[k][0]``; an attribute; an object-dtype array or
     column; a function's closure or the globals it names) that changes
-    something outside its objects. Any of them may run unseen."""
+    something outside its objects. Any of them may run unseen. *too_big*,
+    when given, gets the ones looked at only because a value was too big
+    to look through (every class alive with one)."""
     from ...analysis import handed_callables as hc
 
     try:
@@ -250,10 +271,12 @@ def writers_without_a_trace(
         if kind not in classes and _users_special(kind, hc):
             classes[kind] = None
         todo.extend((item, depth + 1) for item in _held(value, kind, hc))
+    reached = set(classes)
     if over and hc.special_classes_exist(namespace):
         classes.update(dict.fromkeys(_live_writing_classes(namespace, hc)))
     found: list[tuple[str, tuple[str, ...]]] = []
     for cls in classes:
+        before = len(found)
         for attr, fn in _users_special(cls, hc):
             fn_code = attribute_or(fn, "__code__", None)
             if fn_code is None or library_made(fn_code, fn.__globals__) or hc.dataclass_made(fn, cls):
@@ -270,6 +293,8 @@ def writers_without_a_trace(
             if writes:
                 what = ("what its unreadable text changes" if w == _UNKNOWN else repr(w) for w in sorted(writes))
                 found.append((fn.__qualname__, tuple(what)))
+        if too_big is not None and cls not in reached:
+            too_big.update(fn for fn, _ in found[before:])
     return found
 
 
