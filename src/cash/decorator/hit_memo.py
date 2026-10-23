@@ -31,7 +31,8 @@ How a call gets here (`HitMemo.offer`, after an ordinary hit):
   and setting change.
 
 A later call with arguments of the same kind (atoms, tuples of atoms, or
-one big plain value the watchers already prove unchanged) is served from
+one big plain value or list of records the watchers already prove
+unchanged, keyed by its marker or its token, `value_watch.tag`) is served from
 the memo while both epochs, every remembered cell and every class tag are
 what they were and the RAM tier still holds that very entry. A ttl'd entry
 is checked against the clock and an entry that read files has them checked

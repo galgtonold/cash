@@ -1695,10 +1695,9 @@ class ArgHasher:
         try:
             # A list, not ``map``: a StopIteration raised inside ``map`` ends
             # it early, and the arguments after it would leave the key.
-            form: tuple = (
-                tuple([plain_key_part(a) for a in hashed_args]),
-                {k: plain_key_part(v) for k, v in hashed_kwargs.items()},
-            )
+            parts = [plain_key_part(a) for a in hashed_args]
+            kwarg_parts = {k: plain_key_part(v) for k, v in hashed_kwargs.items()}
+            form: tuple = (tuple(parts), kwarg_parts)
             walked: dict = {}
             args_bytes = canonical_bytes(form, self._content, hook=self._nested_hasher, seen=walked)
             shared = shared_across([*args, *kwargs.values()], [*hashed_args, *hashed_kwargs.values()], walked)
@@ -1707,6 +1706,14 @@ class ArgHasher:
         except BaseException as exc:
             _raise_panic_as_unhashable(exc)
             raise
+        if value_watch.WATCHING and not (self.override_hashers or self.type_hashers):
+            # A list of records walked into the key as it is: a token of its
+            # own, so the fast hit path can serve the next call with it
+            # while the watchers prove it unchanged. Not with a registered
+            # hasher, whose code the walk ran and no watcher sees.
+            for part, value in zip([*parts, *kwarg_parts.values()], [*hashed_args, *hashed_kwargs.values()]):
+                if part is value and type(value) in _plain_data.TREE_NODES:
+                    value_watch.tag(value)
         return args_bytes
 
     def arg_hash(self, arg: Any) -> Any:

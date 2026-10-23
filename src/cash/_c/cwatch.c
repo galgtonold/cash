@@ -2359,7 +2359,9 @@ static int kb_atom(KeyB *k, PyObject *o, int depth) {
 }
 
 /* a top-level argument the watchers prove unchanged: its plain-data key
- * part (value_watch.KIND_PLAIN_KEY), as `peek` hands it out */
+ * part (value_watch.KIND_PLAIN_KEY), as `peek` hands it out, or else the
+ * token the decorator gave it after walking it into a key
+ * (value_watch.KIND_WALKED) */
 static PyObject *watched_digest(PyObject *o) {
     if (!enabled || busy) return NULL;
     long r = rht_find((uintptr_t)o);
@@ -2367,11 +2369,12 @@ static PyObject *watched_digest(PyObject *o) {
     busy = 1;
     Root *R = &roots[r];
     PyObject *res = NULL;
-    if (!R->dirty && same_object(R, o) && R->dg[1] && R->dgver[1] == R->version) {
+    int kind = (R->dg[1] && R->dgver[1] == R->version) ? 1 : 2;
+    if (!R->dirty && same_object(R, o) && R->dg[kind] && R->dgver[kind] == R->version) {
         int v = verify(R);
         if (v < 0) { busy = 0; PyErr_Clear(); return NULL; }
         R = &roots[r];
-        if (v == 1) { res = R->dg[1]; R->last_used = tick; R->reuses++; }
+        if (v == 1) { res = R->dg[kind]; R->last_used = tick; R->reuses++; }
         else { mark_dirty((uint32_t)r); c_verify_fail++; }
     }
     busy = 0;
