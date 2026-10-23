@@ -19,6 +19,7 @@ import sys
 
 import pytest
 
+from cash.analysis import handed_callables
 from cash.notebook import held_functions, shadow
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
@@ -50,6 +51,12 @@ def shop(tmp_path, monkeypatch):
     # a user module's, with objects alive: in a notebook only the shop's are.
     users = held_functions._users_module_classes
     monkeypatch.setattr(held_functions, "_users_module_classes", lambda: [c for c in users() if c.__module__ == name])
+    # So do the classes of the tests that ran before in this process: a walk
+    # of 30,000 objects stops early and looks at every class alive with a
+    # special method that writes (a test's ``Graph.__getstate__`` filling a
+    # list), which refused the reader in a full run.
+    alive = handed_callables.live_users_classes
+    monkeypatch.setattr(handed_callables, "live_users_classes", lambda: [c for c in alive() if c.__module__ == name])
     yield name, tmp_path
     sys.modules.pop(name, None)
 

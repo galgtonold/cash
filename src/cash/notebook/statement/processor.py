@@ -199,6 +199,18 @@ from . import hidden_generators
 from .lineage import note_own_writes
 from .observed_draws import ObservedDrawStore
 from .thread_reach import ThreadReach
+from .unseen_writes import (
+    COULD_RUN_REASON,
+    COULD_RUN_TOO_BIG_REASON,
+    SET_LATER,
+    SET_LATER_REASON,
+    UNREADABLE,
+    UNREADABLE_REASON,
+    UNSEEN_WRITES_REASON,
+    live_writers,
+    unseen_writers,
+    writers_without_a_trace,
+)
 
 __all__ = ["StatementProcessor", "is_control_body"]
 
@@ -218,6 +230,8 @@ SHARE_FALLBACK_FLOOR_S = 1.0
 #: The packages of the kernel's own objects, left out of the share check
 #: (`StatementProcessor._kernel_object`).
 _KERNEL_PACKAGES = frozenset({"IPython", "ipykernel"})
+#: How many statements refused for an unseen writer are remembered.
+_UNSEEN_REFUSED_KEPT = 1024
 
 
 def _may_hold_memory(value: Any) -> bool:
@@ -310,6 +324,7 @@ class StatementProcessor:
         self._thread_reach = ThreadReach()
         #: The work NOTEBOOK-WORK-RUNNING was given for.
         self._work_running_warned: set[str] = set()
+        self._unseen_warned: set[str] = set()
         #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
         self._share_unchecked_warned: set[str] = set()
         #: Statements already told about NOTEBOOK-ANALYSIS-BUDGET.
@@ -943,6 +958,14 @@ class StatementProcessor:
                 # Its key does not name what a string found: only a trace
                 # checked unchanged serves it.
                 cached_data = None
+            elif (
+                cached_data
+                and not attribute_or(run.annotation, "assume_safe", False)
+                and _shadow.SHADOW.unseen_writes(run.cache_key, run.outputs)
+            ):
+                # Stored before code it ran was seen to change what its
+                # outputs leave out: it runs, and is not stored again.
+                cached_data = None
         elif run.needs_trace:
             cached_data = None
         if cached_data and self._live_objects_shared(run, metadata):
@@ -1040,6 +1063,83 @@ class StatementProcessor:
         run.skip_cache = True
         run.value_varies = True
         run.metrics["uncacheable_reasons"].append(run.unless_it_draws)
+
+    def _refuse_unseen_writes(self, run: StatementRun, execution: StatementExecution) -> None:
+        """Refuse *run* when a function of the user's that ran in it changes
+        something its outputs leave out (`unseen_writes`): a served entry
+        would not change it. Said once for each function."""
+        unit = run.trace_unit
+        if run.skip_cache or not execution.result.success:
+            return
+        if attribute_or(run.annotation, "assume_safe", False):
+            return
+        ns = self.shell.user_ns
+        if unit is None:
+            # No record of what ran: what the statement's objects could
+            # run instead (`writers_without_a_trace`).
+            too_big: set[str] = set()
+            try:
+                found = writers_without_a_trace(run.code, ns, run.outputs, too_big)
+            except Exception:
+                logger.debug("unseen writer walk failed", exc_info=True)
+                found = [("?", (UNREADABLE,))]
+        else:
+            statement = [code for code, (g, _m) in unit.codes.items() if code.co_qualname == "<module>" and g is ns]
+            found = unseen_writers(unit.codes, statement, run.outputs, ns, run.code)
+        refused = self.tracking_state.unseen_refused
+        place = f"{run.source_hash}:{run.occurrence_index}"
+        if not found:
+            if unit is not None:
+                self._still_refused_for_unseen_writes(run, place)
+            return
+        fn, targets = found[0]
+        if targets == (SET_LATER,):
+            what = SET_LATER_REASON.format(fn=fn)
+        elif targets == (UNREADABLE,):
+            what = UNREADABLE_REASON
+        else:
+            if unit is not None:
+                reason = UNSEEN_WRITES_REASON
+            else:
+                reason = COULD_RUN_TOO_BIG_REASON if fn in too_big else COULD_RUN_REASON
+            what = reason.format(fn=fn, targets=", ".join(targets), it="it" if len(targets) == 1 else "them")
+        run.skip_cache = True
+        run.metrics["uncacheable_reasons"].append(what)
+        if unit is not None:
+            # A later run need not reach the writer (a ``cached_property``
+            # filled, a hash a tuple kept): its trace would not hold it, and
+            # stored, it would be served after a restart, where the writer
+            # runs again.
+            refused.pop(place, None)
+            refused[place] = (what, live_writers(unit.codes, found, ns, _shadow.SHADOW.notebook_name))
+            while len(refused) > _UNSEEN_REFUSED_KEPT:
+                del refused[next(iter(refused))]
+        # Read from the objects, a statement only near the method (one
+        # filling the list) counts too: said for each statement.
+        said = fn if unit is not None else f"{fn}\n{run.code}"
+        if said in self._unseen_warned:
+            return
+        self._unseen_warned.add(said)
+        fix = (
+            "name what the function changes in the statement (pass it in and return it), or put "
+            "'# @cash:assume-safe' on the statement if the change does not matter."
+        )
+        log_diagnostic(logger, "NOTEBOOK-UNSEEN-WRITES", what, fix)
+        warn_diagnostic(CashWarning, "NOTEBOOK-UNSEEN-WRITES", what, fix)
+
+    def _still_refused_for_unseen_writes(self, run: StatementRun, place: str) -> None:
+        """Refuse *run*, whose trace holds no writer, when its statement was
+        refused for one this session and that writer is still alive."""
+        refused = self.tracking_state.unseen_refused
+        entry = refused.get(place)
+        if entry is None:
+            return
+        what, writers = entry
+        if not any(there() for there in writers):
+            del refused[place]
+            return
+        run.skip_cache = True
+        run.metrics["uncacheable_reasons"].append(what)
 
     @staticmethod
     def _observe_process_state(run: StatementRun) -> None:
@@ -1587,6 +1687,7 @@ class StatementProcessor:
             unshown_output(e, execution.captured, run.silent, run.stream_output)
             raise
         self._refuse_if_it_drew(run, execution)
+        self._refuse_unseen_writes(run, execution)
         if (
             figures_before is not None
             and not run.skip_cache

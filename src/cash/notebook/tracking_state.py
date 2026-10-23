@@ -451,6 +451,13 @@ class TrackingState:
     # R: StatementLineageBuilder, StatementStore (the digests an entry keeps).
     value_cutoff: ValueCutoff = field(default_factory=ValueCutoff)
 
+    # The writers a statement was refused for this session (NOTEBOOK-UNSEEN-
+    # WRITES), by its text and place: a later run that did not reach them (a
+    # ``cached_property`` filled, a hash a tuple kept) is not stored while
+    # one is still alive.
+    # W/R: StatementProcessor._refuse_unseen_writes.
+    unseen_refused: dict[str, tuple[str, list[Any]]] = field(default_factory=dict)
+
     def __post_init__(self) -> None:
         if not isinstance(self.executed_input_lineages, InputLineages):
             self.executed_input_lineages = self.lineage.input_lineages(self.executed_input_lineages)

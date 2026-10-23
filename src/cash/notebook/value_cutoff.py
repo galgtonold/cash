@@ -73,7 +73,7 @@ _GRAPHS = frozenset(name for module, name in _COMPARED if module == "networkx")
 
 def _compared(value: Any) -> bool:
     t = type(value)
-    if ((t.__module__ or "").split(".", 1)[0], t.__name__) not in _COMPARED:
+    if ((attribute_or(t, "__module__", None) or "").split(".", 1)[0], t.__name__) not in _COMPARED:
         return False
     if t.__name__ in _GRAPHS:
         return True

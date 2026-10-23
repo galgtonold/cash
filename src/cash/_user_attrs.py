@@ -210,8 +210,9 @@ def own_dict(obj: Any, subclasses: bool = False) -> dict | None:
     reader = _DICT_READERS.get(kind)
     if reader is None:
         reader = False
-        for klass in kind.__mro__:
-            found = klass.__dict__.get("__dict__")
+        # Through ``type``'s own descriptors: a metaclass's hook is not asked.
+        for klass in type.__dict__["__mro__"].__get__(kind):
+            found = type.__dict__["__dict__"].__get__(klass).get("__dict__")
             if found is not None:
                 reader = found if type(found) in _SLOT_READERS else False
                 break
