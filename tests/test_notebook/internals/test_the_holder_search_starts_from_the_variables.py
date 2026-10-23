@@ -122,4 +122,7 @@ def test_a_search_up_for_many_objects_gives_up_instead_of_walking_the_heap(refer
 
     assert holders == {}
     assert shared == {"kept"}
+    # One walk, for one object: once ``logs`` joins, the count finds the
+    # list itself held by this test's local ``sessions``, a frame and no
+    # variable, and looks up its holders. Never one per session.
     assert len(referrer_calls) <= 1, "the holder search walked the heap for every session"
