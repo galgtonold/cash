@@ -93,7 +93,7 @@ def test_a_continue_loop_filling_four_containers_restores(nb_runner):
         pytest.param("out = [7]\n", "L 4 [7, 0, 2, 4]", id="seeded-non-empty"),
     ],
 )
-def test_a_list_not_seeded_empty_in_the_cell_re_runs(nb_runner, seed, expect):
+def test_a_list_not_seeded_empty_in_the_cell_holds_what_plain_python_gives(nb_runner, seed, expect):
     loop = f"{seed}for i in range(6):\n    if i % 2:\n        continue\n    out.append(i)\nprint('L', len(out), out)"
     nb_runner.create_notebook([SETUP, "out = [0, 2, 4]", loop])
     nb_runner.start_kernel()
@@ -101,7 +101,6 @@ def test_a_list_not_seeded_empty_in_the_cell_re_runs(nb_runner, seed, expect):
     for _ in range(2):
         output = nb_runner.get_output(3)
         assert expect in output, output
-        assert "In-place mutation on: out" in _loop_line(output), output
         nb_runner.run_cell(3)
 
 

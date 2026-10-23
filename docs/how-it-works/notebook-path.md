@@ -171,6 +171,14 @@ the loop runs again. The loop's own working variables (`parts` in
 `for f in files: parts.append(read(f))`) are not stored; a cell that reads
 them runs the loop.
 
+<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting._route_unit @c37af3da, cash/notebook/statement/processor.py:StatementProcessor._keep_stored_in_place @8c285af2 -->
+A long `for` loop that cash runs as one step stores the objects it changes in
+place, such as a progress counter it calls `update()` on or a list from an
+earlier cell it appends to, when the loop passes the same checks. A restore
+puts them back, and other names or containers that hold the same object see
+the restored one, as after a plain run. When an object cannot be stored, or
+something else holds it that cash cannot restore with it, the loop runs again.
+
 <!-- claim: cash/analysis/mutations.py:module_setting_receivers @977421aa, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @6775632d -->
 A setting kept inside a library, such as `plt.style.use("ggplot")`,
 `plt.rcParams.update(...)`, `pd.set_option(...)` or

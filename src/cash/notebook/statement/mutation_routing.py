@@ -13,6 +13,7 @@ changing.
 from __future__ import annotations
 
 import ast
+import types
 from typing import TYPE_CHECKING
 
 from ...analysis.ast_util import called_names
@@ -224,6 +225,7 @@ class MutationRouting:
         changes in place a name it does not store, as the same calls do at
         cell level (``st.push(v)``, ``push(st, v)``, ``tag(df, i)`` in its
         body); the structure's own lineage update moves those names. A loop
+        stores those names instead, while it may (``stored_in_place``). A loop
         that hands names to code whose effect is unknown is watched as it
         runs (``loop_watch``), and must run while its verdict is learned."""
         tree = run.tree
@@ -261,7 +263,21 @@ class MutationRouting:
         # An estimator fitted in the body (`with warnings.catch_warnings():
         # gs.fit(X, y)`) is stored as the fit at cell level is
         # (`_route_receivers`).
-        run.in_place = set(changed) - run.outputs - run.est_fit
+        changed = set(changed) - run.outputs - run.est_fit
+        if isinstance(node, ast.For | ast.While):
+            # A loop run as one unit stores what it changed in place, as an
+            # estimator it fits is stored: the names join its outputs, a hit
+            # restores them, and the share check stores and restores the
+            # variables that hold them too. ``pbar.update()`` in a loop over
+            # 10,000 files sent the whole loop back to run after a restart.
+            # One that cannot be stored refuses the store, and the loop runs.
+            stored = {name for name in changed if _storable_name(name, user_ns)}
+            if stored:
+                run.outputs = run.outputs | stored
+                run.est_fit = run.est_fit | stored
+                run.metrics["stored_in_place"] = sorted(stored)
+                changed -= stored
+        run.in_place = changed
         if run.in_place:
             _skip(
                 run,
@@ -517,6 +533,16 @@ class MutationRouting:
 
 
 _PROCESS_WORDS = {ENVIRON: "environment", CWD: "working directory"}
+
+
+def _storable_name(name: str, user_ns: dict) -> bool:
+    """Whether a loop's in-place change of *name* can be stored as its
+    output: a variable of the notebook holding a value, not a module, a
+    class or a function, whose state the loop's store does not keep."""
+    if name not in user_ns:
+        return False
+    value = user_ns[name]
+    return not isinstance(value, type | types.ModuleType | types.FunctionType | types.BuiltinFunctionType)
 
 
 def _is_structure(tree: ast.Module | None) -> bool:

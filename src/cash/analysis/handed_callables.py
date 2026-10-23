@@ -76,6 +76,7 @@ from .mutations import MUTATING_METHODS, chain_is_pure
 __all__ = [
     "HandedCallables",
     "answers_shared",
+    "forget_held_answers",
     "handed_callable_values",
     "handed_callables",
     "handed_values",
@@ -3152,6 +3153,16 @@ def answers_shared() -> Iterator[None]:
         _ANSWERED_THIS_ROUND.clear()
         # Nor in the standard library's cache, where it held each class.
         forget_static_lookups()
+
+
+def forget_held_answers() -> None:
+    """Drop what this round's memos hold of the user's objects, keeping the
+    round open: the share check a hit asks before it restores
+    (`live_shared_reason`) counts every reference, and an answer kept for
+    ``p.update()`` (``(p, P.update)``) read as another holder of ``p``."""
+    _ANSWERED_THIS_ROUND.clear()
+    _REACHED_THIS_ROUND.clear()
+    _STEPS_THIS_ROUND.clear()
 
 
 def stop_sharing_answers() -> None:

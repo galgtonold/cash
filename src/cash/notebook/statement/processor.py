@@ -117,7 +117,7 @@ from ...analysis.cacheability_decision import (
     identity_coupled_reason,
 )
 from ...analysis.code_analyzer import CodeAnalyzer, calls_ipython, statement_code
-from ...analysis.handed_callables import answers_shared, new_analysis_round, stop_sharing_answers
+from ...analysis.handed_callables import answers_shared, forget_held_answers, new_analysis_round, stop_sharing_answers
 from ...analysis.mutation_effects import (
     StatementEffects,
     live_function_source,
@@ -328,6 +328,9 @@ class StatementProcessor:
         self._amplification = AmplificationGuard()
         #: The variables work a statement left running can change (`thread_reach`).
         self._thread_reach = ThreadReach()
+        #: Whether the loop run as one unit with this text did nothing but
+        #: leave its outcome; set by the control-structure processor.
+        self.unit_outcome_trusted: Callable[[str], bool] | None = None
         #: The work NOTEBOOK-WORK-RUNNING was given for.
         self._work_running_warned: set[str] = set()
         self._unseen_warned: set[str] = set()
@@ -1565,6 +1568,28 @@ class StatementProcessor:
         )
         return hit_result
 
+    def _keep_stored_in_place(self, run: StatementRun) -> None:
+        """Store what a loop run as one unit changed in place only when it is
+        stored and its outcome is all it did (`unit_outcome_trusted`); else
+        it runs every time, as before, and the structure's lineage update
+        names those objects by their values."""
+        trusted = self.unit_outcome_trusted
+        if not run.skip_cache and trusted is not None and trusted(run.code):
+            return
+        names = set(run.metrics.pop("stored_in_place"))
+        run.est_fit = run.est_fit - names
+        run.in_place = run.in_place | names
+        run.outputs = run.outputs - names
+        if run.skip_cache:
+            # It runs every time for another reason: named by its key, what
+            # it changed would keep the lineage of the run that stored it.
+            return
+        run.skip_cache = True
+        run.metrics["uncacheable_reasons"].append(
+            f"In-place mutation on: {', '.join(sorted(names))} (it reads a clock, draws a value or "
+            "changes what its key does not name; statement re-executes)"
+        )
+
     def _live_objects_shared(self, run: StatementRun, metadata: StatementCacheMetadata | None) -> bool:
         """Whether a hit of *run* must not restore over the objects its names
         are bound to now (`live_shared_reason`), with the miss reason set.
@@ -1577,6 +1602,9 @@ class StatementProcessor:
         """
         held = set((metadata.holders or {}) if metadata is not None else ())
         mutated = set(run.analysis.all_mutated_vars) & run.outputs if run.analysis is not None else set()
+        # What the analyses of this statement kept of its objects is cash's
+        # reference, not a holder of the user's.
+        forget_held_answers()
         user_ns = self.shell.user_ns
         names = {name for name in run.outputs | held if user_ns.get(name) is not FORWARD_PROBE_PLACEHOLDER}
         keep = (held | mutated) & names
@@ -2375,6 +2403,10 @@ class StatementProcessor:
         self._observe_process_state(run)
         self._mutation_routing.observe(run)
         self._mutation_routing.note_module_state(run)
+        if run.metrics.get("stored_in_place"):
+            # Before its outputs are captured: what it will not store is
+            # left out of them, as before it ran.
+            self._keep_stored_in_place(run)
         if run.carriers_advanced is not None:
             # A generator the statement rebinds or was seen changing in place
             # is an output, with an output's lineage.
@@ -2481,6 +2513,8 @@ class StatementProcessor:
                 # may change an output another check walked; it never reads
                 # the facts over wider leaves those checks took.
                 _plain_data.forget_wider_facts()
+                if run.metrics.get("stored_in_place"):
+                    self._keep_stored_in_place(run)
                 if not run.skip_cache:
                     saved_metadata = self._store.save(
                         run,
