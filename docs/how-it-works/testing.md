@@ -15,13 +15,13 @@ yourself. Figures on this page are derived from the repository by
 
 ## The suites
 
-**<!-- docnum:tests_total -->~22,600<!-- /docnum --> tests** in
+**<!-- docnum:tests_total -->~22,550<!-- /docnum --> tests** in
 <!-- docnum:test_files -->~2,170<!-- /docnum --> files:
 
 | Suite | Size | What it covers |
 |---|---|---|
 | Unit | <!-- docnum:tests_unit -->~17,160<!-- /docnum --> | keys, lineage, hashing, backends, the decorator, the notebook engine with a real IPython shell |
-| Notebook integration | <!-- docnum:tests_integration -->~4,790<!-- /docnum --> | real kernels running real notebooks, one folder per feature |
+| Notebook integration | <!-- docnum:tests_integration -->~4,780<!-- /docnum --> | real kernels running real notebooks, one folder per feature |
 | Docs | <!-- docnum:tests_docs -->~630<!-- /docnum --> | the documentation's examples and claims ([below](#the-docs-are-tested-too)) |
 
 ## What runs where
