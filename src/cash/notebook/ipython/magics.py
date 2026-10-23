@@ -1318,6 +1318,9 @@ class CashMagics(Magics):
             if m.get("skipped_reason"):
                 # Why its value was not kept: computed again on the next run.
                 row["skipped_reason"] = m["skipped_reason"]
+            if m.get("uncacheable_reasons"):
+                # Why it was not cached at all, as its badge says.
+                row["uncacheable_reasons"] = list(m["uncacheable_reasons"])
             statements.append(row)
         self._last_cell_metrics = {
             "statements": statements,
