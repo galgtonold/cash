@@ -66,7 +66,7 @@ def test_a_module_table_is_not_hashed_again_before_an_unrelated_cell(cash_magics
     assert unrelated.bytes <= 64 * KB
 
 
-def test_cheap_calls_over_a_filled_memo_do_not_digest_its_answer(cash_magics, tmp_path, monkeypatch):
+def test_cheap_calls_over_a_filled_memo_do_not_digest_its_answer(cash_magics, tmp_path, monkeypatch, request):
     # ``f(i)`` reads a 16 MB answer of a ``functools.cache`` helper. A call
     # below the cost floor is never stored, so what its memos hold is not
     # read: each read digests the answer (~80 MB in all; 560 MB when every
@@ -78,6 +78,9 @@ def test_cheap_calls_over_a_filled_memo_do_not_digest_its_answer(cash_magics, tm
     )
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.delitem(sys.modules, "wc_memo", raising=False)
+    # Gone again after the test: left imported, its filled memo was found
+    # by the helper-memo tests run after it in the same worker.
+    request.addfinalizer(lambda: sys.modules.pop("wc_memo", None))
     table_bytes = 2_000_000 * 8
     cells = ["import wc_memo\nwc_memo.table()", "vals = [wc_memo.f(i) for i in range(200)]"]
     run_cash_cell(cash_magics, cells[0], cells=cells)

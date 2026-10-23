@@ -9,9 +9,14 @@ While a body runs on a miss, every read of ``os.environ`` (``[...]``,
 The entry keeps a digest of each value (`environment_digests`), and a lookup
 serves it only while they all match (`environment_unchanged`).
 
-``os.environ.__getitem__`` is replaced once observation first starts
-(`io_watch.add_patcher`) and stays, and costs one ContextVar read per
-lookup when no body is being recorded.
+``os.environ.__getitem__`` is replaced when observation first starts
+(`io_watch.add_patcher`), and stays replaced: outside a recording it costs one ContextVar read per
+lookup. It was put on and taken off around every observed body, and on
+Python 3.13 a class changed that often stops telling its callers: after
+about a thousand changes ``Mapping.get``'s ``self[key]`` kept calling the
+``__getitem__`` it had first seen, the replacement was never called, and a
+package's ``os.environ.get("TENANT")`` went unnoticed for the rest of the
+session.
 """
 
 from __future__ import annotations
@@ -128,23 +133,21 @@ def environ_get(name: str) -> str | None:
         return None
 
 
+_installed = False
+_install_lock = threading.Lock()
+
+
 def _install() -> None:
-    # Set once and left in place: each set on the class takes one of the
-    # type versions CPython gives it, and once they are used up a call site
-    # it specialised (``Mapping.get``) keeps calling the original
-    # (`io_watch.Patches.restore`). With no body recorded it is one
-    # ContextVar read.
-    if _ENVIRON.__dict__.get("__getitem__") is not _getitem:
-        _ENVIRON.__getitem__ = _getitem
-    if _ENVIRON.__dict__.get("__iter__") is not _iter:
-        _ENVIRON.__iter__ = _iter
+    global _installed
+    with _install_lock:
+        if not _installed:
+            _ENVIRON.__getitem__ = _getitem
+            _ENVIRON.__iter__ = _iter
+            _installed = True
 
 
-def _remove() -> None:
-    """Nothing: the lookups stay patched (see `_install`)."""
-
-
-io_watch.add_patcher(_install, _remove)
+# Installed when observation first starts, and never taken off (see above).
+io_watch.add_patcher(_install, lambda: None)
 
 
 @contextlib.contextmanager
