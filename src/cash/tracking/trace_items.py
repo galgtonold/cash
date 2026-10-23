@@ -240,7 +240,7 @@ _SCALARS = (int, float, complex, bool, type(None), type(Ellipsis))
 NOTEBOOK = ["__main__"]
 
 
-def _is_user_type(t: type) -> bool:
+def is_user_type(t: type) -> bool:
     from ..install_paths import is_user_code_module
 
     if getattr(t, "__module__", None) == NOTEBOOK[0]:
@@ -365,7 +365,7 @@ class _Digester:
                 size *= n
             if size > VALUE_CAP:
                 raise _Opaque
-        if _is_user_type(t) and t.__reduce_ex__ is object.__reduce_ex__:
+        if is_user_type(t) and t.__reduce_ex__ is object.__reduce_ex__:
             state = getattr(v, "__dict__", None)
             if isinstance(state, dict):
                 h.update(b"o")
@@ -405,7 +405,7 @@ class _Digester:
     def _type(self, t: type) -> None:
         h = self.h
         h.update(b"t" + f"{t.__module__}.{t.__qualname__}".encode())
-        if id(t) in self.types or not _is_user_type(t):
+        if id(t) in self.types or not is_user_type(t):
             return
         self.types.add(id(t))
         h.update(class_digest(t, self).encode())

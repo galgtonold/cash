@@ -101,7 +101,7 @@ _K = _native.kernels
 _FROZEN_AT_IMPORT = gc.get_freeze_count()
 
 
-def _objects_frozen_since_import() -> bool:
+def objects_frozen_since_import() -> bool:
     """Has ``gc.freeze`` hidden objects the collector's view no longer
     shows, beyond the interpreter's own?"""
     return gc.get_freeze_count() > _FROZEN_AT_IMPORT
@@ -248,7 +248,7 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
     which may define a lambda after the question). A statement's checks
     asked it up to 13 times, 0.035-0.07 s each beside a big graph.
     """
-    if _objects_frozen_since_import():
+    if objects_frozen_since_import():
         return True
     maps = attribute_or(namespace, "maps", None)
     dicts = list(maps) if isinstance(maps, list) else [namespace]
@@ -320,7 +320,7 @@ def module_class_objects_exist() -> bool:
     classes = _users_module_classes()
     if not classes:
         return False
-    if _objects_frozen_since_import():
+    if objects_frozen_since_import():
         return True
     asked = (_new_code(), tuple(map(id, classes)))
     if _OBJECTS_SEEN[0] == asked:

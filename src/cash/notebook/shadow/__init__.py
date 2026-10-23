@@ -959,7 +959,7 @@ def _in_a_value(code: types.CodeType, spaces: Iterable[Mapping[str, Any]]) -> bo
     ``default_factory``), a default or a closure cell of a function (a
     decorator's wrapper without ``functools.wraps``), or what a method
     holder or ``partial`` wraps. The global's digest holds it."""
-    from ...tracking.trace_items import _is_user_type
+    from ...tracking.trace_items import is_user_type
 
     looked = 0
     seen: set[int] = set()
@@ -968,7 +968,7 @@ def _in_a_value(code: types.CodeType, spaces: Iterable[Mapping[str, Any]]) -> bo
 
     def users(cls: type) -> bool:
         # A class made in one of *spaces*, or in a module of the user's.
-        return type.__dict__["__module__"].__get__(cls) in modules or _is_user_type(cls)
+        return type.__dict__["__module__"].__get__(cls) in modules or is_user_type(cls)
 
     for ns in spaces:
         modules.add(attribute_or(ns, "get", dict().get)("__name__"))

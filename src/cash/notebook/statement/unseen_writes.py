@@ -474,9 +474,9 @@ def _with_objects_alive(classes: list[type]) -> list[type]:
     only when a value was too big and such a class exists."""
     import gc
 
-    from ..held_functions import _objects_frozen_since_import
+    from ..held_functions import objects_frozen_since_import
 
-    if not classes or _objects_frozen_since_import():
+    if not classes or objects_frozen_since_import():
         return classes  # objects ``gc.freeze`` moved out of the collector's lists
     objects = gc.get_objects()
     kinds = dict(zip(map(id, map(type, objects)), map(type, objects)))
@@ -546,7 +546,14 @@ def _array_items(value: Any, array: str, hc: Any, work: list[int]) -> list[Any]:
     if array == "frame":
         if type(value) is not pd.DataFrame:
             return []  # a subclass's columns come through its own constructors
-        return [value[c] for c, d in zip(value.columns, value.dtypes) if d == np.dtype(object)]
+        # The column arrays themselves: a column taken as a Series
+        # (``value[c]``) is a view copy-on-write counts, so the frame's
+        # kept digest no longer vouched for it, and every pass of a grid
+        # loop over the frame read its text columns again.
+        arrays = vars(pd.DataFrame).get("_iter_column_arrays")
+        if arrays is None:
+            return [value[c] for c, d in zip(value.columns, value.dtypes) if d == np.dtype(object)]
+        return [a for a in arrays(value) if type(a) is np.ndarray and a.dtype == np.dtype(object)]
     if array == "series":
         base = pd.Series if issubclass(type(value), pd.Series) else pd.Index
         held = _object_array(vars(base)["array"].__get__(value, base), pd, np)
