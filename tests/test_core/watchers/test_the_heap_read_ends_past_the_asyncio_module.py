@@ -23,6 +23,7 @@ import pytest
 
 from cash import _native
 from cash.notebook import shared_objects
+from tests._cell_driver import run_cash_cell
 
 _GATHERS = textwrap.dedent(
     """
@@ -123,6 +124,15 @@ def test_the_python_read_is_not_known_where_the_module_s_read_can_loop(monkeypat
     monkeypatch.setattr(shared_objects, "_TRAVERSE_LOOPS", True)
     with pytest.raises(shared_objects.WalkBudgetExceeded):
         shared_objects._referrers_of(([1],), set())
+    assert shared_objects.heap_unreadable()
+
+
+def test_a_later_statement_does_not_inherit_a_read_that_could_not_be_done(cash_magics, monkeypatch):
+    """A later search cut short for lack of time is not said to be one this
+    Python cannot do."""
+    monkeypatch.setattr(shared_objects, "_UNREADABLE", [True])
+    run_cash_cell(cash_magics, "x = 1")
+    assert not shared_objects.heap_unreadable()
 
 
 def test_the_python_read_answers_where_the_module_s_read_ends(monkeypatch):

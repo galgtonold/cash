@@ -21,18 +21,47 @@ from tests._cell_driver import run_cash_cell
 pytest.importorskip("sklearn")
 
 
-def test_a_boosting_fit_is_stored_without_reading_the_heap(cash_magics, monkeypatch):
-    reads = []
-    real = shared_objects._referrers_of
-    monkeypatch.setattr(shared_objects, "_referrers_of", lambda objs, stop: reads.append(len(objs)) or real(objs, stop))
+def test_a_boosting_fit_is_stored_without_searching_what_only_the_library_holds(cash_magics, monkeypatch):
+    """The model's loss holds sklearn's ``Interval``, which a variable could
+    hold too: its referrers are read, up to the link classes, and the climb
+    ends there. ``()`` is never looked for. Every read of what refers to an
+    object is watched (`shared_objects._referrers`: `gc.get_referrers`, or on
+    3.12.0-3.12.5 with asyncio loaded the heap read `_referrers_of`)."""
+    # What is looked for, as (how many, whether ``()`` is among them): a
+    # list or a new tuple holding the objects would be one more referrer of
+    # them to climb.
+    looked_for = []
+    empty = tuple()
+
+    def watched(real):
+        def read(objs, stop):
+            looked_for.append((len(objs), any(obj is empty for obj in objs)))
+            return real(objs, stop)
+
+        return read
+
+    climbs = []
+    real_climb = shared_objects._variables_holding
+
+    def climb(*args, **kwargs):
+        climbs.append(real_climb(*args, **kwargs))
+        return climbs[-1]
+
+    monkeypatch.setattr(shared_objects, "_referrers", watched(shared_objects._referrers))
+    monkeypatch.setattr(shared_objects, "_referrers_of", watched(shared_objects._referrers_of))
+    monkeypatch.setattr(shared_objects, "_variables_holding", climb)
     run_cash_cell(cash_magics, "import numpy as np\nfrom sklearn.ensemble import HistGradientBoostingRegressor")
     run_cash_cell(
         cash_magics,
         "rng = np.random.default_rng(0)\nX = rng.normal(size=(20_000, 4))\ny = X[:, 0] + rng.normal(size=20_000)",
     )
+    looked_for.clear()
+    climbs.clear()
     run_cash_cell(cash_magics, "m = HistGradientBoostingRegressor(max_iter=20, random_state=0).fit(X, y)")
 
-    assert reads == [], reads  # the heap was read for objects only the library holds
+    assert not any(has_empty for _n, has_empty in looked_for), "() was looked for up its referrers"
+    assert climbs and None not in climbs, "a climb from what the library holds did not end"
+    assert looked_for and all(n <= 4 for n, _ in looked_for), looked_for
     row = cash_magics._last_cell_metrics["statements"][-1]
     assert str(row["status"]) == "COMPUTED"
     assert not row.get("uncacheable_reasons"), row.get("uncacheable_reasons")

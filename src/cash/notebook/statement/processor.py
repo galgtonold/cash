@@ -184,6 +184,7 @@ from ..shared_objects import (
     ViewBasesCutShort,
     WalkBudgetExceeded,
     anchors_held,
+    forget_heap_unreadable,
     heap_unreadable,
     history_names,
     is_value,
@@ -752,6 +753,7 @@ class StatementProcessor:
             'saved_time', 'restored_vars', 'code', plus optional keys depending
             on cache status.
         """
+        forget_heap_unreadable()
         run = StatementRun(
             code,
             ttl=ttl,

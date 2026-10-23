@@ -1888,16 +1888,23 @@ def _is_library_class(cls: type) -> bool:
     return instance_of(module, str) and module != "__main__" and not _is_local_module_class(cls)
 
 
-#: Set once a read of what refers to an object was not known here
-#: (`_referrers_of`): this Python, with ``_asyncio`` loaded and no C read,
-#: answers no such read again in this process.
+#: Set when a read of what refers to an object was not known here
+#: (`_referrers_of`): this Python, with ``_asyncio`` loaded and no C read.
+#: Cleared for each statement (`forget_heap_unreadable`): a later search
+#: cut short for lack of time is not this one.
 _UNREADABLE = [False]
 
 
 def heap_unreadable() -> bool:
-    """Was a search cut short because what refers to an object cannot be
-    read here at all (`_TRAVERSE_LOOPS`), not for lack of time?"""
+    """Was a search of this statement cut short because what refers to an
+    object cannot be read here at all (`_TRAVERSE_LOOPS`), not for lack of
+    time?"""
     return _UNREADABLE[0]
+
+
+def forget_heap_unreadable() -> None:
+    """A new statement's searches: none was cut short yet (`heap_unreadable`)."""
+    _UNREADABLE[0] = False
 
 
 def _referrers(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
