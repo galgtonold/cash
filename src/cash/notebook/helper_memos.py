@@ -537,8 +537,9 @@ def used(
         if why is not None:
             continue  # already told; the rest only remember their answers
         if clears:
-            label = _changed_label(before) or label
-            why = f"It may empty the helper memo {label} or read its counters (cache_clear, cache_info)"
+            changed = _changed_label(before)
+            memo_named = f"the helper memo {changed}" if changed else "a helper memo"
+            why = f"It may empty {memo_named} or read its counters (cache_clear, cache_info)"
         elif info.misses < misses or info.hits < hits:
             why = f"It emptied the helper memo {label}"
         elif items is None or len(items) > MAX_KEYED:
@@ -567,20 +568,29 @@ def used(
 
 
 def _changed_label(before: list[tuple[list[str], Any, int, int, int, Any]]) -> str | None:
-    """The label of the first memo in *before* whose counters or held keys
-    and answers moved, for a warning about code that can clear one: the
-    memo it found first may be one the statement never touched."""
+    """The label of the memo in *before* the statement most likely cleared,
+    for a warning about code that can clear one: first one whose counters
+    went back or that dropped a key it held (``cache_clear``), else the
+    first whose counters or held keys and answers moved at all. None when
+    none moved: the memo cash found first may be one the statement never
+    touched, so it names none."""
+    grew: str | None = None
     for where, memo, hits, misses, size, held in before:
         try:
             info = memo.cache_info()
         except Exception:  # noqa: BLE001 - a wrapper whose counters raise
             continue
         now = _held(memo)
-        if (info.hits, info.misses, info.currsize) != (hits, misses, size) or (
-            held is not None and now is not None and now[0] != held[0]
-        ):
+        went_back = info.hits < hits or info.misses < misses or info.currsize < size
+        dropped = held is not None and now is not None and bool(held[0] - now[0])
+        if went_back or dropped:
             return _label(where)
-    return None
+        if grew is None and (
+            (info.hits, info.misses, info.currsize) != (hits, misses, size)
+            or (held is not None and now is not None and now[0] != held[0])
+        ):
+            grew = _label(where)
+    return grew
 
 
 def _calls_of(memo: Any, items: list[tuple[Any, Any]]) -> list[list[str]] | None:
