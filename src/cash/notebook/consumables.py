@@ -538,10 +538,25 @@ def _object_container(obj: Any) -> bool:
         return False
     name = type(obj).__name__
     if name == "Series":
-        return obj.dtype.kind == "O" and not _only_inert(obj.array)
+        return _column_holds_objects(obj)
     if name == "DataFrame":
-        return any(dtype.kind == "O" and not _only_inert(obj[col].array) for col, dtype in obj.dtypes.items())
+        return any(_column_holds_objects(obj[col]) for col, dtype in obj.dtypes.items() if dtype.kind == "O")
     return False
+
+
+#: pandas dtypes of kind "O" that hold no Python objects: strings, and
+#: values kept by Arrow. A str column of 2,000,000 rows took 2 s to read
+#: item by item.
+_PANDAS_NO_OBJECTS = frozenset({"StringDtype", "ArrowDtype"})
+
+
+def _column_holds_objects(series: Any) -> bool:
+    dtype = series.dtype
+    if dtype.kind != "O" or type(dtype).__name__ in _PANDAS_NO_OBJECTS:
+        return False
+    if type(dtype).__name__ == "CategoricalDtype":
+        return not _only_inert(dtype.categories)
+    return not _only_inert(series.array)
 
 
 #: Value types that hold nothing a statement could draw from, tested by
