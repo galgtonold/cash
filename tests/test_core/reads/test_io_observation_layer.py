@@ -41,7 +41,9 @@ def _run_fresh(script: str) -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_patches_exist_only_while_a_scope_is_open():
+def test_a_modules_patches_exist_only_while_a_scope_is_open_and_a_classs_stay():
+    """A class's replacement stays once set (`io_watch.Patches.restore`): each
+    set on a class uses up one of the versions CPython gives it."""
     _run_fresh(
         """
         import builtins, concurrent.futures, json, os, pathlib, socket, sqlite3, subprocess, sys
@@ -76,7 +78,12 @@ def test_patches_exist_only_while_a_scope_is_open():
             assert _shared_import_hook in sys.meta_path
             assert never_wrapped() == plain
 
-        assert current() == before
+        on_classes = {"stat", "submit"}
+        after = current()
+        assert {k: after[k] for k in before if k not in on_classes} == {
+            k: before[k] for k in before if k not in on_classes
+        }
+        assert all(after[k] is during[k] for k in on_classes), after
         assert never_wrapped() == plain
         assert _shared_import_hook not in sys.meta_path
         # Importing cash watches opens outside calls (a memo filled while the
@@ -91,7 +98,7 @@ def test_patches_exist_only_while_a_scope_is_open():
         # A decorated function watches opens outside calls (a memo filled
         # before the first call), and nothing else.
         assert set(io_watch._active) == {"open", "mmap.__new__"}, io_watch._active
-        assert current() == before
+        assert current() == after
         """
     )
 

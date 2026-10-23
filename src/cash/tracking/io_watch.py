@@ -320,7 +320,17 @@ class Patches:
         return list(self._installed)
 
     def restore(self) -> None:
-        """Put back every original that is still covered by cash's replacement."""
+        """Put back every original that is still covered by cash's replacement.
+
+        Not a class's: a replacement on a class stays (it does nothing with
+        no scope open). Each set on a class takes one of the type versions
+        CPython gives a class (1000 on 3.13); once they are used up, a call
+        site it specialised before, ``Mapping.get`` reading
+        ``os.environ[...]``, keeps calling the function it saw there, and a
+        replacement set after that is skipped. Some 500 statements into a
+        session, an installed package's environment read went unseen and the
+        first tenant's rows were served to every other.
+        """
         installed, self._installed = self._installed, []
         self.version += 1
         restored = []
@@ -328,6 +338,9 @@ class Patches:
             owner, name, new, old = entry
             try:
                 if _current(owner, name) is not new:
+                    continue
+                if isinstance(owner, type):
+                    self._installed.append(entry)
                     continue
                 if old is _ABSENT:
                     self._delete(owner, name)
@@ -354,7 +367,7 @@ class Patches:
                 self._set(owner, name, new)
         except (AttributeError, TypeError):
             return False
-        self._installed = list(last)
+        self._installed = self._installed + list(last)
         self.version += 1
         return True
 
