@@ -947,6 +947,8 @@ class StatementProcessor:
         if effects.unanalysed:
             run.metrics["uncacheable_reasons"].extend(effects.unanalysed)
             run.skip_cache = True
+        if effects.unrooted is not None:
+            self._tell_unrooted_write(run, effects.unrooted)
         if run.tree is not None and calls_ipython(run.tree):
             run.metrics["uncacheable_reasons"].append(_IPYTHON_REASON)
             run.skip_cache = True
@@ -1184,6 +1186,22 @@ class StatementProcessor:
             "name what the function changes in the statement (pass it in and return it), or put "
             "'# @cash:assume-safe' on the statement if the change does not matter."
         )
+        log_diagnostic(logger, "NOTEBOOK-UNSEEN-WRITES", what, fix)
+        warn_diagnostic(CashWarning, "NOTEBOOK-UNSEEN-WRITES", what, fix)
+
+    def _tell_unrooted_write(self, run: StatementRun, what: str) -> None:
+        """Warn, once per statement, that it writes into an object no name
+        in its text roots (`unrooted_write`): it runs every time, and what
+        reads any variable after it runs again."""
+        said = f"unrooted\n{run.code}"
+        if said in self._unseen_warned:
+            return
+        self._unseen_warned.add(said)
+        fix = (
+            "write into the variable by its name (`points[7].x = -3`, `setattr(points[7], 'x', -3)`), "
+            "or put '# @cash:assume-safe' on the statement if the change does not matter."
+        )
+        what = f"{what}, so the statement runs every time and every variable is taken as changed by it"
         log_diagnostic(logger, "NOTEBOOK-UNSEEN-WRITES", what, fix)
         warn_diagnostic(CashWarning, "NOTEBOOK-UNSEEN-WRITES", what, fix)
 
