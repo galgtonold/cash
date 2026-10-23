@@ -258,7 +258,7 @@ class ControlStructureProcessor:
                 recorded = sp.recorded_share_edges(code) or frozenset()
                 apply_share_record(state.derivation_edges, (), recorded)
                 linked = linked | recorded
-            sp.note_share_edges(code, linked)
+            sp.note_share_edges(code, linked, entry)
             left = {v: h for v, h in lineage.items() if before.get(v) != h or v in writes}
             # Where a draw left an RNG variable depends on the seed above,
             # which the entry lineages do not hold: the simulation moves it on
@@ -277,6 +277,10 @@ class ControlStructureProcessor:
 
             outcome = (entry, left, frozenset(files), compute_file_hash_component(files))
             state.control_outcomes[outcome_key(code, occurrence_index)] = outcome
+            # When it read them, for a write of the notebook's after it
+            # (`rewritten_by_the_notebook_since`).
+            state.file_event_seq += 1
+            state.file_read_seq[outcome_key(code, occurrence_index)] = state.file_event_seq
             # Judged only on a run that restored nothing: a restored statement
             # puts back the RNG state it was stored with, so a loop that draws
             # nothing still moves the generators when it hits in a new kernel.

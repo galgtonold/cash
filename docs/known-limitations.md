@@ -312,7 +312,7 @@ the very same key and answer objects again (cash keeps the ones it saw, so
 it compares objects, not addresses). A memo you fill yourself in
 a dict (`_cache[k] = v`) is a global the function changes, covered above.
 
-<!-- claim: cash/analysis/handed_callables.py:handed_callables @c55bd405, cash/analysis/handed_callables.py:hands_a_state_changing_callable @4c3c2d42 -->
+<!-- claim: cash/analysis/handed_callables.py:handed_callables @c55bd405, cash/analysis/handed_callables.py:hands_a_state_changing_callable @4c3c2d42, cash/analysis/handed_callables.py:ITEM_TYPES_AT == 100_000 -->
 ### A function handed to a call
 
 A function you hand to another call counts as called. One that only reads
@@ -345,7 +345,16 @@ The same holds for code of yours that the statement runs without naming it:
   class method, a hook reached through `super()`), a property, or a context
   manager's `__enter__` and `__exit__` (`with timer("fit"):`);
 - the special methods of an object of your class the statement names
-  (`bag["k"]`, `len(bag)`, `bag + 1`, `f"{bag}"`, iterating it);
+  (`bag["k"]`, `len(bag)`, `bag + 1`, `f"{bag}"`, iterating it), reads
+  from a list, tuple or dict (`d["k"] += 1`, `lst[i] + 1`; by an index
+  cash cannot read, any of its items), from a class or a library's
+  namespace (`C.x + 1`, `ns.x += 1`), or that a function of yours it calls
+  reads by name or one step into such a value (`return v + 1`,
+  `return d["k"] + 1`, `return C.x + 1`). A container of more than 100,000
+  items read by an index cash cannot read, while a class of yours has such
+  a method (any class alive, one made inside a function included), runs
+  each time with a warning
+  ([NOTEBOOK-ITEMS-UNREAD](warnings.md#notebook-items-unread));
 - the function that a wrapper made without `functools.wraps`, or a
   `compose(f, g)` closure, calls; a `functools.partial`, `np.vectorize` or
   `operator.methodcaller` called by its own name; a `functools.singledispatch`
@@ -560,6 +569,33 @@ by a string and used as data (`globals()[name] + 1`, `f = globals()[name]`),
 a name bound through the namespace, `eval`, `exec` of a computed string and
 `sys.modules` still run every time.
 **Fix:** call the function by its name, or pass it in as an argument.
+
+### A special method that changes state outside its object
+
+<!-- claim: cash/notebook/statement/unseen_writes.py:writers_without_a_trace @fb58b1ed, cash/notebook/statement/unseen_writes.py:own_writes @bb4fc316 -->
+`s + 1` on objects of yours runs their `__add__`, which the statement's text
+does not name. When such a method changes something outside its object
+(appends to a global list), cash runs the statement every time and says so:
+[NOTEBOOK-UNSEEN-WRITES](warnings.md#notebook-unseen-writes). On Python 3.12
+and newer cash reads what ran from the run itself. Without that record
+(Python 3.10 and 3.11, `CASH_TRACE=0`) it reads the special methods' own
+text instead, and misses a change made:
+
+- by a function the method calls (`note(1)`, `self.log()`, a lambda held in
+  a dict);
+- by `__init__`, `__post_init__`, a `default_factory` or an attrs hook;
+- by an object held in a slot, a namedtuple, a list or dict subclass, a
+  default argument, a `ChainMap`, a property, or a column of a subclass of
+  `DataFrame`.
+
+A served result then leaves out that change. Without the record, a writer
+the stored run did not call (a `functools.cached_property` already filled,
+a tuple's hash Python 3.14 kept) is served after a restart; with it, a
+statement refused once for a writer is not stored again in that session
+while the writer is still defined. Either way a cell that reads what the
+method changed keeps its earlier value in the same session.
+**Fix:** pass what the method changes in and return it, or put
+`# @cash:no-cache` on the statement.
 
 ### Background threads
 
