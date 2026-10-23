@@ -191,42 +191,46 @@ def test_an_object_raising_for_every_lookup_runs_as_plain_python(cash_magics, mo
         assert ns["w"] == plain["w"]
 
 
+#: Only what is asked of the user's own object counts: the store's copy of
+#: it is rebuilt by pickle (``copyreg.__newobj__``, no ``__init__``), which
+#: asks the copy for ``__setstate__`` and ``__dict__``.
 COUNTED = """
 import traceback
 CALLS = {}
 ASKED_CLASS = []
+MADE = set()
 class Counted:
     def __init__(self, v):
+        MADE.add(id(self))
         object.__setattr__(self, 'v', v)
     def __getattribute__(self, k):
-        CALLS[k] = CALLS.get(k, 0) + 1
-        if k == '__class__':
-            ASKED_CLASS.append(''.join(traceback.format_stack(limit=8)[:-1]))
+        if id(self) in MADE:
+            CALLS[k] = CALLS.get(k, 0) + 1
+            if k == '__class__':
+                ASKED_CLASS.append(''.join(traceback.format_stack(limit=8)[:-1]))
         return object.__getattribute__(self, k)
 """
 
 
-@pytest.mark.parametrize("floors", ["default", "zero"])
 @pytest.mark.parametrize("flat_first", [False, True], ids=["pickled", "walked-first"])
-def test_cash_asks_such_an_object_nothing_but_to_pickle_it(cash_magics, tmp_path, monkeypatch, flat_first, floors):
+def test_cash_asks_such_an_object_nothing_but_to_pickle_it(cash_magics, tmp_path, monkeypatch, flat_first):
     """Its ``__getattribute__`` is the user's code: cash's own questions
     (``isinstance`` asking for ``__class__``, ``fit``, ``__code__``) read
     its real type and Python's generic lookup instead. Storing it pickles
     it, and pickle asks. Also where values are walked before they are
     pickled (`kept_state.FLAT_FIRST`, Python 3.10 on Windows), with numpy
-    loaded, whose array check asked it twice more. With the store floor
-    at zero, as a loaded machine makes it for these quick statements, the
-    store sized ``c`` by asking it for ``nbytes``; copying it asks what
-    unpickling does."""
+    loaded, whose array check asked it twice more. Each statement is stored,
+    however cheap: sizing it for the store asked the object for ``nbytes``
+    where a fast machine never stored it (a statement past the floor on a
+    slow or loaded one)."""
     import numpy  # noqa: F401 - `kept_state._flat_array` looks only once numpy is loaded
     import pandas  # noqa: F401 - the RAM tier's copy looks for frames only once pandas is loaded
 
     from cash import kept_state
 
     monkeypatch.setattr(kept_state, "FLAT_FIRST", flat_first)
-    if floors == "zero":
-        monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
-    module = f"counted_mod_{flat_first}_{floors}"  # one per case: an imported module is kept
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    module = f"counted_mod_{flat_first}"  # one per case: an imported module is kept
     (tmp_path / f"{module}.py").write_text(COUNTED, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     cells = [
@@ -242,7 +246,166 @@ def test_cash_asks_such_an_object_nothing_but_to_pickle_it(cash_magics, tmp_path
     asked = {name: n for name, n in cash_magics.shell.user_ns["CALLS"].items() if name not in pickling | {"v"}}
     assert asked == {}
     asked_class = cash_magics.shell.user_ns["ASKED_CLASS"]
-    if floors == "default":
-        assert len(asked_class) <= 1, "\n----\n".join(asked_class)  # the store's one pickle
-    # Stored, it is pickled to be digested and to be copied: pickle asks.
+    # The key's pickle of ``c`` (read by the statements below it) and the
+    # store's copy of it.
+    assert len(asked_class) <= 2, "\n----\n".join(asked_class)
     assert all("pickle" in stack for stack in asked_class), "\n----\n".join(asked_class)
+
+
+#: Classes whose instances raise for ``__class__``, as a property and from
+#: their own ``__getattribute__``: stored, then served from the cache.
+HIDDEN = """
+class ClassProp:
+    def __init__(self, v):
+        self.v = v
+    @property
+    def __class__(self):
+        raise RuntimeError("no class")
+class ClassAsk:
+    def __init__(self, v):
+        object.__setattr__(self, "v", v)
+    def __getattribute__(self, k):
+        if k == "__class__":
+            raise RuntimeError("no class")
+        return object.__getattribute__(self, k)
+"""
+
+
+@pytest.mark.parametrize("cls", ["ClassProp", "ClassAsk"])
+def test_such_an_object_served_from_the_cache_is_the_one_its_statement_binds(cash_magics, tmp_path, monkeypatch, cls):
+    """Stored, ``c = C(5)`` is served the third time it runs: the restore
+    asked the served copy for its class (``isinstance``), its error stopped
+    the cell, and ``c`` kept the ``C(6)`` bound before it."""
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    (tmp_path / "hidden_mod.py").write_text(HIDDEN, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    cells = [f"from hidden_mod import {cls} as C", "c = C(5)", "c = C(6)", "c = C(5)  # again"]
+    statuses = []
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+        statuses.append(str(cash_magics._last_cell_metrics["statements"][-1]["status"]))
+    assert object.__getattribute__(cash_magics.shell.user_ns["c"], "v") == 5
+    assert statuses[-1] == "RESTORED", statuses
+
+
+@pytest.mark.parametrize("cls", ["ClassProp", "ClassAsk"])
+def test_such_an_object_restored_for_a_cell_below_is_the_one_above_it_binds(cash_magics, tmp_path, monkeypatch, cls):
+    """Run All, ``c = C(6)`` run again, then the cell reading ``c``: the
+    upstream check restores the ``c = C(5)`` below it from the cache, and
+    asked that copy for its class (``isinstance``) as the statement's own
+    restore did; its error stopped the cell."""
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    (tmp_path / "hidden_up.py").write_text(HIDDEN, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    cells = [
+        f"from hidden_up import {cls} as C",
+        "c = C(5)",
+        "c = C(6)",
+        "c = C(5)  # again",
+        "r = object.__getattribute__(c, 'v')",
+    ]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    run_cash_cell(cash_magics, cells[2], cells=cells)
+    run_cash_cell(cash_magics, cells[4], cells=cells)
+    assert cash_magics.shell.user_ns["r"] == 5
+
+
+#: Counting what is asked of every instance, the served copies too, for each
+#: shape the store sizes apart: a plain instance, a dataclass, a namedtuple
+#: and one with ``__slots__``. The cells read ``v`` past the hook. What a
+#: pickle asks from inside cash's pickler is pickle's (it reads a slot by
+#: ``getattr``), and is not counted.
+SHAPED = """
+import collections, dataclasses, sys
+CALLS = {}
+_PICKLING = ("kept_state.py", "copyreg.py", "pickle.py")
+def _count(self, k):
+    if not sys._getframe(1).f_code.co_filename.endswith(_PICKLING):
+        CALLS[k] = CALLS.get(k, 0) + 1
+    return object.__getattribute__(self, k)
+class Plain:
+    def __init__(self, v):
+        self.v = v
+    __getattribute__ = _count
+@dataclasses.dataclass
+class Data:
+    v: int
+    __getattribute__ = _count
+class Named(collections.namedtuple("Named", "v")):
+    __slots__ = ()
+    __getattribute__ = _count
+class Slots:
+    __slots__ = ("v",)
+    def __init__(self, v):
+        self.v = v
+    __getattribute__ = _count
+"""
+
+#: What pickling an instance and rebuilding it asks: pickle's own questions.
+PICKLE_ASKS = {
+    "__class__",
+    "__reduce_ex__",
+    "__reduce__",
+    "__getstate__",
+    "__getnewargs__",
+    "__getnewargs_ex__",
+    "__setstate__",
+    "__dict__",
+}
+
+
+@pytest.mark.parametrize("shape", ["Plain", "Data", "Named", "Slots"])
+def test_cash_asks_such_an_object_nothing_but_to_pickle_it_stored_or_served(cash_magics, tmp_path, monkeypatch, shape):
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    module = f"shaped_mod_{shape.lower()}"
+    (tmp_path / f"{module}.py").write_text(SHAPED, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    read = "object.__getattribute__(c, 'v')" if shape != "Named" else "tuple.__getitem__(c, 0)"
+    cells = [
+        f"from {module} import {shape} as C, CALLS",
+        "c = C(5)",
+        "c = C(6)",
+        "c = C(5)  # again",
+        f"w = {read} + 1",
+    ]
+    statuses = []
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+        statuses.append(str(cash_magics._last_cell_metrics["statements"][-1]["status"]))
+    ns = cash_magics.shell.user_ns
+    assert statuses[3] == "RESTORED", statuses
+    assert ns["w"] == 6
+    asked = {name: n for name, n in ns["CALLS"].items() if name not in PICKLE_ASKS}
+    assert asked == {}
+
+
+#: An object answering every lookup it lacks with ``0`` (``__code__`` too),
+#: and one whose ``__dict__`` is a property that raises: cash read the
+#: first's "code" for the code objects nested in it, and the second's
+#: ``__dict__`` through the property, and the cell failed.
+ODD = """
+class Zero:
+    def __init__(self, v):
+        self.v = v
+    def __getattr__(self, k):
+        return 0
+class NoDict:
+    def __init__(self, v):
+        object.__setattr__(self, "v", v)
+    @property
+    def __dict__(self):
+        raise RuntimeError("no __dict__")
+"""
+
+
+@pytest.mark.parametrize("cls", ["Zero", "NoDict"])
+def test_an_object_with_odd_lookups_runs_as_plain_python(cash_magics, tmp_path, monkeypatch, cls):
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    (tmp_path / "odd_mod.py").write_text(ODD, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    cells = [f"from odd_mod import {cls} as C", "c = C(5)", "w = object.__getattribute__(c, 'v') + 1"]
+    for _ in range(2):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        assert cash_magics.shell.user_ns["w"] == _plain(cells)["w"] == 6

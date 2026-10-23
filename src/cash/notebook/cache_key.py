@@ -803,6 +803,8 @@ def _nested_codes(code_obj: types.CodeType | None) -> list[types.CodeType]:
     stack = [code_obj] if code_obj is not None else []
     while stack:
         current = stack.pop()
+        if type(current) is not types.CodeType:
+            continue  # what an object's ``__getattr__`` gave for ``__code__``
         found.append(current)
         stack.extend(c for c in current.co_consts if isinstance(c, types.CodeType))
     return found

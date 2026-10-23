@@ -334,6 +334,7 @@ def attributes_of(value: Any) -> dict[str, Any] | None:
         or _is_local_module_class(cls)
     ):
         return None
+    # The dict Python keeps, never a ``__dict__`` property of the class's.
     own = own_dict(value)
     slots = _slot_members(cls)
     if not slots:
