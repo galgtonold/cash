@@ -49,7 +49,7 @@ def test_a_default_changed_below_is_said_to_be_dropped(cash_magics, size, change
     said = _rerun_after(cash_magics, [setup, reader, CHANGES[change]], reader, CHANGES[change])
     assert cash_magics.shell.user_ns["y"] == size, "not the value a run from the top gives"
     assert said, "the change below was dropped without a word"
-    assert "'draw', which holds 'BIG'" in said[0]
+    assert "reads 'draw', which holds 'BIG', which cell 3 below changed in place" in said[0], said[0]
 
 
 def test_an_object_a_default_holds_changed_below_is_said_to_be_dropped(cash_magics):
@@ -58,3 +58,15 @@ def test_an_object_a_default_holds_changed_below_is_said_to_be_dropped(cash_magi
     said = _rerun_after(cash_magics, [setup, reader, "B.n = 2"], reader, "B.n = 2")
     assert cash_magics.shell.user_ns["y"] == 1, "not the value a run from the top gives"
     assert said, "the change below was dropped without a word"
+
+
+def test_a_result_sharing_elements_with_a_default_is_not_said_to_be_held(cash_magics):
+    """``z = draw(2)`` below is a new list of ``BIG``'s own items, so it
+    shares objects with ``BIG``; ``z.append(9)`` changes only ``z``, which
+    ``draw`` does not hold, and nothing the calling cell reads is dropped."""
+    setup = SETUP.replace("{N}", "3").replace("return len(rows)", "return list(rows[:2])")
+    reader = "y = draw(1)"
+    change = "z = draw(2)\nz.append(9)"
+    said = _rerun_after(cash_magics, [setup, reader, change], reader, change)
+    assert cash_magics.shell.user_ns["y"] == [{"id": 0}, {"id": 1}]
+    assert not said, said

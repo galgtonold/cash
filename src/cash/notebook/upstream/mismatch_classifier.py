@@ -34,7 +34,7 @@ from ._types import (
     normalize_stmt,
 )
 from .cache_restore import CacheRestorer
-from .changed_below import warn_changed_below
+from .changed_below import holds_object, warn_changed_below
 from .library_rules import self_call_resets_lineage
 from .loop_rules import LoopRules
 from .simulated_callables import SimulatedCallables
@@ -581,8 +581,10 @@ class MismatchClassifier:
         return True
 
     def _held_by(self, name: str) -> set[str]:
-        """The variables sharing an object with *name* (``derivation_edges``):
-        a function holding ``BIG`` as its default, a frame holding a column."""
+        """The variables whose object *name*'s object holds: a function
+        holding ``BIG`` as its default. Asked of the variables sharing an
+        object with it (``derivation_edges``), and checked by identity: a
+        result sharing only elements with ``BIG`` is not held."""
         edges = self.tracking_state.derivation_edges
         if not edges:
             return set()
@@ -593,7 +595,9 @@ class MismatchClassifier:
                 if partner != name and partner not in found:
                     found.add(partner)
                     todo.append(partner)
-        return found
+        user_ns = self.shell.user_ns
+        holder = user_ns.get(name)
+        return {held for held in found if held in user_ns and holds_object(holder, user_ns[held])}
 
     def _rebuild_after_a_gone_change(self, m: _Mismatch) -> bool:
         """A required input the cell also writes, last changed by a statement

@@ -12,17 +12,20 @@ from __future__ import annotations
 
 import ast
 import functools
+import itertools
 import logging
+import types
 
 from cash.control_markers import strip_markers
 
+from ..._user_attrs import attribute_or, instance_of
 from ...analysis.ast_util import parse_cached
 from ...analysis.cacheability import analyze_statement
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
 from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import CashWarning
 
-__all__ = ["warn_changed_below"]
+__all__ = ["holds_object", "warn_changed_below"]
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +76,66 @@ def _cell_below_holding(code: str, cells: list[str], cell_idx: int) -> tuple[int
     return below[0] if len(below) == 1 else None
 
 
+#: How deep, and over how many items, `holds_object` looks.
+_HOLD_DEPTH = 4
+_HOLD_ITEMS = 1000
+
+
+def holds_object(holder: object, target: object) -> bool:
+    """Does *holder* hold *target* itself: as a default, a closure cell, an
+    attribute, a ``partial`` argument, or inside a container one of those
+    is, `_HOLD_DEPTH` deep? By identity: a list that only shares elements
+    with *target* does not hold it."""
+    seen: set[int] = set()
+    budget = [_HOLD_ITEMS]
+
+    def walk(obj: object, depth: int) -> bool:
+        if obj is target:
+            return True
+        if depth <= 0 or id(obj) in seen or budget[0] <= 0:
+            return False
+        seen.add(id(obj))
+        budget[0] -= 1
+        if instance_of(obj, (str, bytes, int, float, complex, bool, type(None), types.ModuleType)):
+            # A module holds every global: ``__self__`` of ``math.sqrt``.
+            return False
+        try:
+            children = _held_directly(obj)
+        except Exception:  # noqa: BLE001 - a user object that cannot say holds nothing we can see
+            return False
+        return any(walk(child, depth - 1) for child in children)
+
+    return walk(holder, _HOLD_DEPTH + 1)
+
+
+def _held_directly(obj: object) -> list:
+    """What *obj* holds one step down, `_HOLD_ITEMS` at most."""
+    if instance_of(obj, dict):
+        return list(itertools.islice(obj.values(), _HOLD_ITEMS))
+    if instance_of(obj, (list, tuple, set, frozenset)):
+        return list(itertools.islice(obj, _HOLD_ITEMS))
+    if instance_of(obj, functools.partial):
+        return [obj.func, *obj.args, *obj.keywords.values()]
+    children = [
+        *(attribute_or(obj, "__defaults__") or ()),
+        *(attribute_or(obj, "__kwdefaults__") or {}).values(),
+        *(_cell_contents(c) for c in attribute_or(obj, "__closure__") or ()),
+        attribute_or(obj, "__self__"),
+        attribute_or(obj, "__func__"),
+    ]
+    attrs = attribute_or(obj, "__dict__")
+    if isinstance(attrs, dict):
+        children.extend(itertools.islice(attrs.values(), _HOLD_ITEMS))
+    return children
+
+
+def _cell_contents(cell: object) -> object:
+    try:
+        return cell.cell_contents  # type: ignore[attr-defined]
+    except ValueError:
+        return None
+
+
 def warn_changed_below(
     name: str,
     last_code: str | None,
@@ -97,7 +160,7 @@ def warn_changed_below(
     if found is None or not _changes_in_place(code, name):
         return False
     below, written = found
-    reads = f"'{name}'" if through is None else f"'{through}', which holds '{name}',"
+    reads = f"'{name}'" if through is None else f"'{through}', which holds '{name}'"
     key = (cell_idx, name, code)
     if key in warned:
         return False
