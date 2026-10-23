@@ -157,7 +157,7 @@ def _dumps_value(
     # attempt that failed are taken back first.
     if on_retry is not None:
         on_retry()
-    flat = flatten(value, _KeepDict(protocol, extra, keyed), _persistent_leaf(persistent_id))
+    flat = flatten(value, _KeepDict(protocol, extra, keyed), _held_leaf(_persistent_leaf(persistent_id), aliases))
     return _dumps(flat, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases)
 
 
@@ -249,7 +249,7 @@ def _dumps_walked_first(
     (`_SAFE_DEPTH`). Deeper, it is pickled flat; for a key, as deep as
     pickle follows elsewhere, and past that it raises RecursionError as the
     pickler raises on other Pythons."""
-    reducers, leaf = _KeepDict(protocol, extra, keyed), _flat_leaf(persistent_id)
+    reducers, leaf = _KeepDict(protocol, extra, keyed), _held_leaf(_flat_leaf(persistent_id), aliases)
     walk = _Walk(getattr(sink, "walked", None), reducer_override)
     if _at_most_deep(value, _SAFE_DEPTH, reducers, leaf, walk):
         override = walk.override() if walk.reduced else reducer_override
@@ -469,6 +469,17 @@ FLAT_FIRST = sys.version_info < (3, 11) and sys.platform == "win32"
 def _persistent_leaf(persistent_id: Any) -> Any:
     """What `flatten` pickles whole: what *persistent_id* takes."""
     return None if persistent_id is None else (lambda obj: persistent_id(obj) is not None)
+
+
+def _held_leaf(leaf: Any, aliases: bool | dict) -> Any:
+    """*leaf*, and a container the rest of a key holds (`key_aliases`'s
+    *outside*): kept as itself in the flat steps, the key pickle marks it
+    as held there, where a step of its own would key it like a copy."""
+    if type(aliases) is not dict:
+        return leaf
+    if leaf is None:
+        return lambda obj: id(obj) in aliases
+    return lambda obj: id(obj) in aliases or leaf(obj)
 
 
 def _flat_leaf(persistent_id: Any) -> Any:

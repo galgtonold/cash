@@ -63,3 +63,26 @@ def test_the_call_with_a_copy_is_not_served_the_shared_ones_result(tmp_path, bac
     for _ in range(8):
         assert f(*apart) is False
     assert f(*shared) is True
+
+
+@pytest.mark.parametrize("shape", [_two, _in_list], ids=["two arguments", "one list"])
+def test_an_object_pickled_flat_marks_the_list_too(tmp_path, monkeypatch, shape):
+    """Where the pickler would run out of C stack first (Windows on 3.10),
+    a deep object is pickled as a flat list of steps (`kept_state.flatten`):
+    a list held elsewhere in the key is kept a leaf there, so the key
+    pickle marks it as held, as it does for an object pickled as it is."""
+    from cash import kept_state
+
+    monkeypatch.setattr(kept_state, "FLAT_FIRST", True)
+    monkeypatch.setattr(kept_state, "_SAFE_DEPTH", 0)
+    cash = Cash(backend="memory", register_magic=False)
+    a = [1, 2, 3]
+    r = Rec(a)
+    shared, test = shape(a, r)
+    apart, _ = shape([1, 2, 3], r)
+    f = cash.cache(lambda *args: test(args))
+    for _ in range(8):
+        assert f(*shared) is True
+    for _ in range(8):
+        assert f(*apart) is False
+    assert f(*shared) is True
