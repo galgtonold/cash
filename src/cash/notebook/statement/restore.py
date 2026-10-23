@@ -30,6 +30,7 @@ from ..holder_patches import HolderPatch, apply_patch
 from ..lineage_formula import held_lineage
 from ..restored_var import apply_held_var, apply_restored_var
 from .capture import replay_outputs
+from .in_place import restore_into
 
 if TYPE_CHECKING:
     from .._protocols import ShellProtocol
@@ -140,7 +141,15 @@ class StatementRestorer:
                 for name, value in restored_vars.items()
                 if instance_of(value, HolderPatch)
             }
+            # What a loop changed in place goes into the live object, which
+            # keeps its identity; a name bound to the copy is bound to it.
+            live_for: dict[int, Any] = {}
+            for var_name in (metadata.restored_into or ()) if metadata is not None else ():
+                live = self.shell.user_ns[var_name]
+                restore_into(live, restored_vars[var_name])
+                live_for[id(restored_vars[var_name])] = live
             for var_name, value in restored_vars.items():
+                value = live_for.get(id(value), value)
                 if var_name in holders:
                     value = patched.get(var_name, value)
                     self.shell.user_ns[var_name] = value

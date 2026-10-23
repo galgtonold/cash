@@ -156,7 +156,7 @@ cells: in a headless run
 ([`NOTEBOOK-NOT-FOUND`](../warnings.md#notebook-not-found)), run the cells
 from the top, and each one is restored from the cache as it comes.
 
-<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @7a89a67f -->
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @447a65b1 -->
 A value built by a `for` loop can be restored too. cash records what the loop
 produced when it ran, and trusts that record after a restart only while
 everything the loop and its functions read is unchanged, and only if the loop
@@ -171,13 +171,21 @@ the loop runs again. The loop's own working variables (`parts` in
 `for f in files: parts.append(read(f))`) are not stored; a cell that reads
 them runs the loop.
 
-<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting._route_unit @c37af3da, cash/notebook/statement/processor.py:StatementProcessor._keep_stored_in_place @8c285af2 -->
+<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting._route_unit @a2badde5, cash/notebook/statement/processor.py:StatementProcessor._keep_stored_in_place @b8c0edcd -->
 A long `for` loop that cash runs as one step stores the objects it changes in
 place, such as a progress counter it calls `update()` on or a list from an
 earlier cell it appends to, when the loop passes the same checks. A restore
-puts them back, and other names or containers that hold the same object see
-the restored one, as after a plain run. When an object cannot be stored, or
-something else holds it that cash cannot restore with it, the loop runs again.
+puts the stored state back into the object itself, so other names for it, a
+`weakref` to it and a dict keyed by its `id()` still find it, as after a
+plain run.
+
+<!-- claim: cash/notebook/statement/in_place.py:refusal @dcd706ad, cash/notebook/statement/processor.py:StatementProcessor._cheap_to_rerun @1a1db567 -->
+Only a list, a dict, a set, or an object of your own class pickled the default
+way is restored into. The loop runs again when the object is of another kind,
+defines its own pickling (`__getstate__`, `__reduce__`), holds itself, or sits
+inside another container; when a function it calls writes a module it imports;
+when it is a `while` loop; and when it last ran in less than 0.1 s, where
+storing it costs more than a restore saves. A loop not measured yet is stored.
 
 <!-- claim: cash/analysis/mutations.py:module_setting_receivers @977421aa, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @6775632d -->
 A setting kept inside a library, such as `plt.style.use("ggplot")`,

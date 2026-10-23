@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING, Any
 from cash._user_attrs import attribute_or, instance_of
 
 from ...analysis.cacheability import statement_writes_files
-from ...analysis.callee_effects import callee_global_mutations
+from ...analysis.callee_effects import callee_global_mutations, writes_a_module_it_imports
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.handed_callables import handed_callables, users_object_attributes
 from ...analysis.namespace_effects import statement_calls_user_writer
@@ -550,6 +550,7 @@ class ControlStructureProcessor:
                 or CodeAnalyzer.scan_function_bodies_for_forbidden_functions(source, namespace)
                 or mints_unseeded_generator(source)
                 or statement_environment_reads(source, namespace)
+                or writes_a_module_it_imports(source)
             ):
                 return None
         if (

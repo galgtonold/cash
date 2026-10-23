@@ -657,6 +657,7 @@ class StatementStore:
             holders=run.holders or None,
             holders_moved=True if run.holders and run.moves_holders else None,
             anchors=run.anchors or None,
+            restored_into=sorted(run.restored_into & run.outputs) or None,
             anchor_links=sorted(run.anchor_links) if run.anchors else None,
             anchor_holds=run.anchor_holds or None,
             share_edges=sorted([src, dst] for src, dst in run.linked_edges) if run.linked_edges is not None else None,
