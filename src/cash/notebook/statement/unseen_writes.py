@@ -25,6 +25,7 @@ from __future__ import annotations
 import ast
 import dis
 import functools
+import inspect
 import json
 import os
 import sys
@@ -45,6 +46,7 @@ __all__ = [
     "COULD_RUN_TOO_BIG_REASON",
     "library_made",
     "live_writers",
+    "called_methods",
     "own_writes",
     "unseen_writers",
     "writers_without_a_trace",
@@ -697,7 +699,7 @@ def unreadable_changers(names: Iterable[str], namespace: Mapping[str, Any]) -> l
     pending = [(name, namespace) for name in sorted(names)]
     while pending and len(seen) < _CALLEES_FOLLOWED:
         name, scope = pending.pop()
-        fn = scope.get(name) if isinstance(scope, Mapping) else None
+        fn = _method_named(name, scope) if "." in name else scope.get(name) if isinstance(scope, Mapping) else None
         code = attribute_or(fn, "__code__", None) if isinstance(fn, types.FunctionType) else None
         if code is None or id(code) in seen:
             continue
@@ -710,6 +712,37 @@ def unreadable_changers(names: Iterable[str], namespace: Mapping[str, Any]) -> l
             continue
         pending.extend((callee, fn.__globals__) for callee in code.co_names)
     return found
+
+
+def _method_named(path: str, scope: Mapping[str, Any]) -> Any:
+    """The function ``obj.method`` names (``k.go`` for a ``k`` of a class an
+    ``exec`` defined), read as stored: from the object's class or the class
+    itself, a static or class method unwrapped. None for anything else."""
+    base, _, attr = path.partition(".")
+    value = scope.get(base, _MISSING) if isinstance(scope, Mapping) else _MISSING
+    if value is _MISSING or instance_of(value, types.ModuleType):
+        return None
+    try:
+        member = inspect.getattr_static(value, attr)
+    except AttributeError:
+        return None
+    if instance_of(member, (staticmethod, classmethod)):
+        member = member.__func__
+    if type(member) is not types.FunctionType or library_made(member.__code__, member.__globals__):
+        return None
+    return member
+
+
+def called_methods(tree: ast.AST | None) -> frozenset[str]:
+    """``name.attr`` for each call ``name.attr(...)`` in *tree*: the methods
+    a statement calls on what it names, for `unreadable_changers`."""
+    if tree is None:
+        return frozenset()
+    return frozenset(
+        f"{node.func.value.id}.{node.func.attr}"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+    )
 
 
 @functools.lru_cache(maxsize=4096)

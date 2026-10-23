@@ -48,3 +48,34 @@ def test_a_readable_one_that_changes_nothing_is_served(statement_processor):
     """Control."""
     second = _second_run(statement_processor, "def inner(x):\n    return x * 10")
     assert second["status"] == CacheStatus.RESTORED
+
+
+def _second_method_run(processor, define, call):
+    _run(processor, "import time\nLOG = []")
+    _run(processor, define)
+    _run(processor, call)
+    return _run(processor, call)
+
+
+EXEC_CLASS = (
+    "exec('class K:\\n    def go(self, x):\\n        LOG.append(x)\\n        return x * 10\\n"
+    "    @staticmethod\\n    def st(x):\\n        LOG.append(x)\\n        return x\\n"
+    "    @classmethod\\n    def cm(cls, x):\\n        LOG.append(x)\\n        return x')\nk = K()"
+)
+
+
+@pytest.mark.parametrize("call", ["v = k.go(3)", "v = K.st(3)", "v = K.cm(3)", "v = k.cm(3)"])
+def test_a_method_of_a_class_an_exec_defined_runs_every_time(statement_processor, call):
+    """``k.go(3)`` on an object of a class ``exec`` defined: only names bound
+    to a function were followed, and the method's write was served away."""
+    second = _second_method_run(statement_processor, EXEC_CLASS, call)
+    assert second["status"] != CacheStatus.RESTORED
+    assert any("text cannot be read" in r for r in second["uncacheable_reasons"])
+
+
+def test_a_method_of_a_readable_class_is_served(statement_processor):
+    """Control: a method whose text is read is the statement's analysis's."""
+    second = _second_method_run(
+        statement_processor, "class K:\n    def go(self, x):\n        return x * 10\nk = K()", "v = k.go(3)"
+    )
+    assert second["status"] == CacheStatus.RESTORED

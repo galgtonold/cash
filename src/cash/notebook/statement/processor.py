@@ -207,6 +207,7 @@ from .unseen_writes import (
     UNREADABLE,
     UNREADABLE_REASON,
     UNSEEN_WRITES_REASON,
+    called_methods,
     live_writers,
     unreadable_changers,
     unseen_writers,
@@ -1464,7 +1465,9 @@ class StatementProcessor:
             run.skip_cache = True
             run.value_varies = True
             return
-        unreadable = unreadable_changers(called_names(run.tree) | handed_names(run.tree), self.shell.user_ns)
+        unreadable = unreadable_changers(
+            called_names(run.tree) | handed_names(run.tree) | called_methods(run.tree), self.shell.user_ns
+        )
         if unreadable:
             names = ", ".join(repr(n) for n in unreadable)
             run.metrics["uncacheable_reasons"].append(
