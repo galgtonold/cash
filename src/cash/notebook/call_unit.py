@@ -74,7 +74,7 @@ from cash.notebook.call_effects import (
 )
 from cash.notebook.call_entries import ONE_LOCAL, TOO_MANY_WHY, CallEntries, refs_beyond
 from cash.notebook.call_interception import CallSite, SiteSlots, interceptable, names_read
-from cash.notebook.call_key import CallKeys, callee_mutated_globals, global_digests
+from cash.notebook.call_key import CallKeys, callee_mutated_globals, global_digests, globals_it_draws_from
 from cash.notebook.call_refs import (
     DIGEST_FIELD,
     SIZE_FIELD,
@@ -926,6 +926,19 @@ class CallUnit:
                 # cannot be replayed (argument mutation or an RNG draw). Run
                 # it plain -- never look it up, never store over it.
                 return self._run_unkeyed(fn, args, kwargs, key_started)
+
+            if type(fn) is types.FunctionType and globals_it_draws_from(fn):
+                if self._invoked_keys:
+                    self._invoked_keys[-1] = None
+                # It draws from an iterator one of its globals holds
+                # (``return next(G)``): each call gives the next item, where
+                # the key, which cannot hold where the stream is, would give
+                # every call the item the first one got. Logged as a miss
+                # that was not stored, so the badge still counts the call.
+                started = _perf_counter()
+                result = self._run_unkeyed(fn, args, kwargs, key_started)
+                self._record(func_name, site, key, cache_hit=False, elapsed=_perf_counter() - started, stored=False)
+                return result
 
             call = _Call(fn, site, func_name, key, mutated_globals, args, kwargs)
             hit_started = _perf_counter()

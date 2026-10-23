@@ -11,6 +11,7 @@ statement it sits in.
 from __future__ import annotations
 
 import argparse
+import ast
 import builtins
 import collections
 import contextlib
@@ -25,6 +26,7 @@ import logging
 import pathlib as _pathlib
 import reprlib
 import sys
+import textwrap
 import types as _types
 import weakref
 from collections.abc import Callable, Mapping
@@ -37,6 +39,7 @@ from cash._paths import MAIN_MODULE_NAMES, is_pseudo_filename
 from cash._user_attrs import attribute_or, has_attribute
 from cash.analysis.bytecode import NAME_LOADS, argvals
 from cash.analysis.callee_effects import source_global_mutations
+from cash.analysis.mutations import consumed_input_names
 from cash.analysis.namespace_effects import capturable_globals
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
 from cash.install_paths import is_user_code_module, is_user_path
@@ -204,6 +207,53 @@ def _source_mutations(fn) -> tuple[str, ...]:
         if memo_key is not None:
             _GLOBAL_MUTATION_CACHE[memo_key] = cached
     return cached
+
+
+def globals_it_draws_from(fn) -> tuple[str, ...]:
+    """The globals of *fn* holding an iterator, a generator or another
+    stream that calling *fn* draws from (``next(G)``, ``for x in G``,
+    ``G.send(...)``), in its own body or in a function it reaches in the
+    same namespace, sorted.
+
+    A statement calling it (``t = d()``) changes where the stream stands,
+    which its key, made of ``d``'s source and ``G``'s lineage, does not
+    hold: served, ``t`` was the item the last run drew, every time, where
+    plain Python draws the next. Never raises: a function whose source
+    cannot be read draws nothing cash sees."""
+    from cash.notebook.consumables import is_stream
+
+    found: set[str] = set()
+    for layer in wrapper_layers(fn):
+        layer_globals = attribute_or(layer, "__globals__", None)
+        if not isinstance(layer_globals, dict):
+            continue
+        for reached in _functions_reached_in(layer_globals, layer):
+            for name in _source_draws(reached):
+                if is_stream(layer_globals.get(name)):
+                    found.add(name)
+    return tuple(sorted(found))
+
+
+def _source_draws(fn) -> tuple[str, ...]:
+    """The global names *fn*'s own source draws from (`consumed_input_names`),
+    memoised on its code."""
+    code = attribute_or(fn, "__code__", None)
+    if code is None:
+        return ()
+    cached = _DRAWS_CACHE.get(code)
+    if cached is None:
+        names = _CODE_NAMES.get(code)
+        if names is None:
+            names = _CODE_NAMES[code] = _code_names(code)
+        try:
+            tree = ast.parse(textwrap.dedent(own_source(fn)))
+        except (*SOURCE_RETRIEVAL_ERRORS, SyntaxError, ValueError):
+            tree = None
+        cached = _DRAWS_CACHE[code] = tuple(sorted(consumed_input_names(tree) & names))
+    return cached
+
+
+_DRAWS_CACHE: LruMemo[Any, tuple[str, ...]] = LruMemo(CODE_OBJECTS)
 
 
 def changes_its_closure(fn) -> bool:

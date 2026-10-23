@@ -41,7 +41,7 @@ from cash.notebook.cache_key import (
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.call_effects import DigestHandoff
 from cash.notebook.compiled_source import register_cell_source
-from cash.notebook.consumables import drawn_stream_inputs
+from cash.notebook.consumables import callees_drawing, drawn_stream_inputs, draws_from_a_stream
 from cash.notebook.per_item_reruns import MIN_COST_S as PER_ITEM_MIN_COST_S
 from cash.notebook.read_handles import reaches_read_handle
 from cash.notebook.statement import sparse_order
@@ -1288,9 +1288,7 @@ class StatementProcessor:
             run.skip_cache = True
             # Refused for another reason first (a name with no lineage), a
             # draw (``t = next(G)``) still binds a new value each run.
-            run.value_varies = varies or bool(
-                drawn_stream_inputs(run.tree, run.inputs, run.outputs, self.shell.user_ns)
-            )
+            run.value_varies = varies or draws_from_a_stream(run.tree, run.inputs, run.outputs, self.shell.user_ns)
             return
         run.unless_it_draws = unless_it_draws
         unfollowed, by_string, unkeyed_modules, followed = unkeyed_reach(
@@ -1344,6 +1342,16 @@ class StatementProcessor:
             run.skip_cache = True
             run.value_varies = True
             run.drew_from_stream = any(isinstance(self.shell.user_ns.get(name), io.IOBase) for name in drawn)
+            return
+        drawing = callees_drawing(run.inputs - run.outputs, self.shell.user_ns)
+        if drawing:
+            who = ", ".join(f"{fn!r} draws from {', '.join(map(repr, held))}" for fn, held in drawing.items())
+            run.metrics["uncacheable_reasons"].append(
+                f"Calls a function that reads from an iterator or stream ({who}): "
+                f"a cache hit would not advance it, so the statement runs every time"
+            )
+            run.skip_cache = True
+            run.value_varies = True
             return
         looked_at = reads_open_handle(run.inputs - run.outputs, self.shell.user_ns)
         if looked_at:

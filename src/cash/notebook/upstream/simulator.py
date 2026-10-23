@@ -34,7 +34,7 @@ from ...tracking.function_tracker import FunctionTracker, is_local_module
 from .._protocols import CashInstanceProtocol, ShellProtocol
 from .._trace import is_tracing, trace_event
 from ..cache_status import CacheStatus
-from ..consumables import is_write_stream
+from ..consumables import draws_from_a_stream, is_write_stream
 from ..lineage_store import LineageWatch
 from ..magic_effects import magic_cell_of
 from ..run_memo import forget_file_state_this_run
@@ -666,6 +666,15 @@ class NotebookSimulator:
                     return None
             if any(entry.files_stale for entry in trace):
                 return None  # a file it reads changed: run it
+            user_ns = self.shell.user_ns
+            if any(
+                draws_from_a_stream(ast.Module(body=[node], type_ignores=[]), entry.inputs, entry.outputs, user_ns)
+                for node, entry in zip(nodes, trace)
+            ):
+                # It draws from an iterator (``t = next(G)``): what it
+                # binds is the next item, which no lineage names. Skipped,
+                # the cell kept the items the first run drew, every run.
+                return None
             final: dict[str, str] = {}
             for entry in trace:
                 final.update(entry.produced_lineages)

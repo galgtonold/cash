@@ -55,6 +55,8 @@ from ..analysis.mutations import consumed_input_names
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "callees_drawing",
+    "draws_from_a_stream",
     "drawn_stream_inputs",
     "is_consumable_unrestorable",
     "consumable_state",
@@ -306,6 +308,33 @@ def drawn_stream_inputs(
         if is_stream(value):
             found.append(name)
     return found
+
+
+def callees_drawing(names: Iterable[str], user_ns: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
+    """Of the functions *names* hold, those that draw from a stream one of
+    their globals holds (``def d(): return next(G)``), with those globals
+    (`call_key.globals_it_draws_from`). ``t = d()`` moves ``G`` as surely
+    as ``t = next(G)``: a hit would leave it where it was."""
+    from .call_key import globals_it_draws_from
+
+    found: dict[str, tuple[str, ...]] = {}
+    for name in sorted(names):
+        value = user_ns.get(name)
+        if type(value) is not types.FunctionType:
+            continue
+        drawn = globals_it_draws_from(value)
+        if drawn:
+            found[name] = drawn
+    return found
+
+
+def draws_from_a_stream(
+    tree: ast.Module | None, inputs: Iterable[str], outputs: Iterable[str], user_ns: Mapping[str, Any]
+) -> bool:
+    """Does a statement draw from a stream, itself (`drawn_stream_inputs`)
+    or through a function it calls (`callees_drawing`)?"""
+    names = set(inputs) - set(outputs)
+    return bool(drawn_stream_inputs(tree, names, (), user_ns) or callees_drawing(names, user_ns))
 
 
 def is_stream(obj: Any) -> bool:
