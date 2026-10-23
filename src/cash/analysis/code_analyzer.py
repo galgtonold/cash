@@ -22,7 +22,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
-from .._user_attrs import instance_of
+from .._user_attrs import instance_of, own_dict
 from ..code_digest import unwrap_partials
 from ..effects import Action, classify_call
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -784,6 +784,39 @@ def _through_body(fn: Callable, rest: list[str], root_module: str | None, hops: 
     return reached
 
 
+def _attribute_set_roots(tree: ast.AST) -> set[str]:
+    """The names *tree* sets or deletes an attribute on: ``m`` in
+    ``m.f = f``, ``m.cfg.k += 1``, ``del m.f``."""
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.Delete)):
+            targets = node.targets
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            targets = [node.target]
+        else:
+            continue
+        for target in targets:
+            for part in ast.walk(target):
+                if isinstance(part, ast.Attribute):
+                    root = part.value
+                    while isinstance(root, (ast.Attribute, ast.Subscript)):
+                        root = root.value
+                    if isinstance(root, ast.Name):
+                        found.add(root.id)
+    return found
+
+
+def _imported_module(value: Any) -> bool:
+    """Is *value* a module an import made: the one ``sys.modules`` holds
+    under its name? Its name is read from its own dict, so no lookup of a
+    module subclass's runs."""
+    if not instance_of(value, types.ModuleType):
+        return False
+    held = own_dict(value)
+    name = held.get("__name__") if held is not None else None
+    return type(name) is str and sys.modules.get(name) is value
+
+
 class CodeAnalyzer:
     """Analyzes function code to determine dependencies and compute hashes."""
 
@@ -1162,13 +1195,23 @@ class CodeAnalyzer:
             # so every statement reading `sc` missed. What the
             # call really changes, `adata`, is observed at runtime instead. Module
             # SETTINGS (`plt.rcParams.update(...)`) are routed separately.
+            # A module the notebook built itself (``m = types.ModuleType('m');
+            # m.f = f``) is an object it holds like any other: setting an
+            # attribute on it changes it.
             bound = {
                 n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))
             }
             for node in ast.walk(tree):
                 if isinstance(node, (ast.Import, ast.ImportFrom)):
                     bound.update((a.asname or a.name).split(".")[0] for a in node.names)
-            outputs = {o for o in outputs if o in bound or not instance_of(user_ns.get(o), types.ModuleType)}
+            set_on = _attribute_set_roots(tree)
+            outputs = {
+                o
+                for o in outputs
+                if o in bound
+                or not instance_of(user_ns.get(o), types.ModuleType)
+                or (o in set_on and not _imported_module(user_ns.get(o)))
+            }
         return inputs, outputs
 
     @staticmethod
