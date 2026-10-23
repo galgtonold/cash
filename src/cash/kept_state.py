@@ -100,7 +100,7 @@ def _dumps_value(
     persistent_id: Any = None,
     keyed: bool = False,
     on_retry: Any = None,
-    aliases: bool = False,
+    aliases: bool | dict = False,
     sink: Any = None,
     reducer_override: Any = None,
 ) -> bytes:
@@ -157,7 +157,7 @@ def _dumps_value(
     # attempt that failed are taken back first.
     if on_retry is not None:
         on_retry()
-    flat = flatten(value, _KeepDict(protocol, extra, keyed), _persistent_leaf(persistent_id))
+    flat = flatten(value, _KeepDict(protocol, extra, keyed), _held_leaf(_persistent_leaf(persistent_id), aliases))
     return _dumps(flat, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases)
 
 
@@ -239,7 +239,7 @@ def _dumps_walked_first(
     extra: dict | None,
     persistent_id: Any,
     keyed: bool,
-    aliases: bool = False,
+    aliases: bool | dict = False,
     sink: Any = None,
     reducer_override: Any = None,
 ) -> bytes:
@@ -249,7 +249,7 @@ def _dumps_walked_first(
     (`_SAFE_DEPTH`). Deeper, it is pickled flat; for a key, as deep as
     pickle follows elsewhere, and past that it raises RecursionError as the
     pickler raises on other Pythons."""
-    reducers, leaf = _KeepDict(protocol, extra, keyed), _flat_leaf(persistent_id)
+    reducers, leaf = _KeepDict(protocol, extra, keyed), _held_leaf(_flat_leaf(persistent_id), aliases)
     walk = _Walk(getattr(sink, "walked", None), reducer_override)
     if _at_most_deep(value, _SAFE_DEPTH, reducers, leaf, walk):
         override = walk.override() if walk.reduced else reducer_override
@@ -471,6 +471,17 @@ def _persistent_leaf(persistent_id: Any) -> Any:
     return None if persistent_id is None else (lambda obj: persistent_id(obj) is not None)
 
 
+def _held_leaf(leaf: Any, aliases: bool | dict) -> Any:
+    """*leaf*, and a container the rest of a key holds (`key_aliases`'s
+    *outside*): kept as itself in the flat steps, the key pickle marks it
+    as held there, where a step of its own would key it like a copy."""
+    if type(aliases) is not dict:
+        return leaf
+    if leaf is None:
+        return lambda obj: id(obj) in aliases
+    return lambda obj: id(obj) in aliases or leaf(obj)
+
+
 def _flat_leaf(persistent_id: Any) -> Any:
     """What `flatten` pickles whole on `FLAT_FIRST` Pythons: what
     *persistent_id* takes, and a library's objects (`_library_type`)."""
@@ -518,7 +529,7 @@ def _dumps(
     extra: dict | None,
     persistent_id: Any,
     keyed: bool,
-    aliases: bool = False,
+    aliases: bool | dict = False,
     sink: Any = None,
     table: _KeepDict | None = None,
     override: Any = None,
@@ -537,7 +548,7 @@ def _dumps(
         # Key bytes: sharing marked for the objects whose sharing means
         # something, never through pickle's memo (`key_aliases`).
         pickler.fast = True
-        pickler.persistent_id = key_aliases()
+        pickler.persistent_id = key_aliases(aliases if type(aliases) is dict else None)
     pickler.dispatch_table = _KeepDict(protocol, extra, keyed) if table is None else table
     pickler.dump(value)
     if after is not None:
@@ -604,7 +615,7 @@ class _Overriding(pickle.Pickler):
         return self.override(obj)
 
 
-def key_aliases() -> Callable[[Any], Any]:
+def key_aliases(outside: dict[int, Any] | None = None) -> Callable[[Any], Any]:
     """A key pickle's ``persistent_id`` (`dumps` with *aliases*): an object
     that can change met a second time is written as a mark naming its first
     appearance; anything else is written in full every time.
@@ -623,6 +634,13 @@ def key_aliases() -> Callable[[Any], Any]:
 
     Every object it marks is kept for the dump: a temporary a reduce made
     and dropped must not hand its id to the next.
+
+    *outside*, ``id(obj) -> where``, are the containers the rest of the key
+    holds, each kept by the caller: one of them met here is written as a
+    mark of where, its content keyed there. An object the key walk left to
+    pickle whole holding a list the walk keyed too, or a plain argument
+    keyed by its own digest, keyed like an equal copy before
+    (`canonical_form.canonical_bytes`).
     """
     seen: dict[int, tuple[int, Any]] = {}
     atoms = _ATOMS
@@ -635,6 +653,10 @@ def key_aliases() -> Callable[[Any], Any]:
         found = seen.get(id(obj))
         if found is not None:
             return ("__cash_alias__", found[0])
+        if outside is not None:
+            where = outside.get(id(obj))
+            if where is not None:
+                return ("__cash_held__", where)
         seen[id(obj)] = (len(seen), obj)
         return None
 
