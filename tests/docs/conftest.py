@@ -322,7 +322,7 @@ def _capped_sleep(seconds):
     would read EXECUTED where a reader's says CACHED."""
     from cash.backends.persistence_policy import STORE_FLOOR_S
 
-    _REAL_SLEEP(min(seconds, 2 * STORE_FLOOR_S) if seconds > 0 else 0)
+    _REAL_SLEEP(min(seconds, 2 * STORE_FLOOR_S) if seconds > 0 else 0)  # @cash:assume-safe
 
 
 _REAL_SLEEP = __import__("time").sleep
