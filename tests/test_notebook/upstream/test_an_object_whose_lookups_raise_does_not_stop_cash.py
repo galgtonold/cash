@@ -286,6 +286,29 @@ def test_such_an_object_served_from_the_cache_is_the_one_its_statement_binds(cas
     assert statuses[-1] == "RESTORED", statuses
 
 
+@pytest.mark.parametrize("cls", ["ClassProp", "ClassAsk"])
+def test_such_an_object_restored_for_a_cell_below_is_the_one_above_it_binds(cash_magics, tmp_path, monkeypatch, cls):
+    """Run All, ``c = C(6)`` run again, then the cell reading ``c``: the
+    upstream check restores the ``c = C(5)`` below it from the cache, and
+    asked that copy for its class (``isinstance``) as the statement's own
+    restore did; its error stopped the cell."""
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    (tmp_path / "hidden_up.py").write_text(HIDDEN, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    cells = [
+        f"from hidden_up import {cls} as C",
+        "c = C(5)",
+        "c = C(6)",
+        "c = C(5)  # again",
+        "r = object.__getattribute__(c, 'v')",
+    ]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    run_cash_cell(cash_magics, cells[2], cells=cells)
+    run_cash_cell(cash_magics, cells[4], cells=cells)
+    assert cash_magics.shell.user_ns["r"] == 5
+
+
 #: Counting what is asked of every instance, the served copies too, for each
 #: shape the store sizes apart: a plain instance, a dataclass, a namedtuple
 #: and one with ``__slots__``. The cells read ``v`` past the hook. What a
