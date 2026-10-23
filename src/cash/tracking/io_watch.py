@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import sys
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
@@ -40,6 +40,7 @@ from .. import _native
 __all__ = [
     "Patches",
     "add_patcher",
+    "count_events",
     "hold",
     "on_consumer_error",
     "holding",
@@ -79,10 +80,18 @@ _idle_table: dict[str, tuple[Consumer, ...]] = {}
 _C_HOOK = _native.kernels
 
 
+#: event -> [count], for `count_events`: counted by the Python hook, scope
+#: or no scope and in cash's own work too.
+_counts: dict[str, list[int]] = {}
+
+
 def _hook(event: str, args: tuple) -> None:
     # Runs for every audited event in the process (every `id()`, every import,
     # every unpickled class): one dict lookup unless a consumer wants it.
     # Under the C hook, only for the events a table names (`_C_HOOK`).
+    counted = _counts.get(event)
+    if counted is not None:
+        counted[0] += 1
     consumers = _active.get(event)
     if consumers is None or getattr(_own, "work", False):
         return
@@ -178,6 +187,21 @@ def subscribe_always(event: str, consumer: Consumer) -> None:
         _ensure_hook()
         _always.setdefault(event, []).append(consumer)
         _rebuild()
+
+
+def count_events(events: Iterable[str]) -> list[int] | None:
+    """A counter of *events* (``[n]``) kept by the Python hook, or None
+    under the C hook, which counts what it is asked to itself. One hook
+    for every listener: Python calls each hook installed for every audited
+    event in the process, an ``id()`` included."""
+    with _lock:
+        _ensure_hook()
+        if _C_HOOK is not None:
+            return None
+        counter = [0]
+        for event in events:
+            _counts[event] = counter
+        return counter
 
 
 def add_patcher(install: Callable[[], None], remove: Callable[[], None]) -> None:
