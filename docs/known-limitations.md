@@ -558,7 +558,10 @@ a name bound through the namespace, `eval`, `exec` of a computed string and
 A thread that changes data after its cell has finished is outside cash's view.
 cash does not store the statement that left it running, nor one that reads a
 variable the thread's function can reach, so those run every time. An earlier
-cell re-run can still see the changed data.
+cell re-run can still see the changed data. Once the thread has been joined, a
+statement that reads such a variable is keyed by the values it reads. When one
+of them is the thread itself, or an `Event` or lock it shared, the statement runs
+again after a kernel restart: those values are new in every kernel.
 
 <!-- claim: cash/notebook/background_threads.py:BackgroundThreads.cell_ends @35f8017f -->
 cash names a cell that ends while a thread it started, running your code, is
