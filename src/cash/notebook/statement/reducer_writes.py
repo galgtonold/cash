@@ -40,11 +40,13 @@ import copy
 import copyreg
 import functools
 import inspect
+import json
+import pickle
 import sys
 import textwrap
 import types
 import weakref
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 from cash._user_attrs import attribute_or, instance_of
@@ -218,7 +220,18 @@ def reach(found: list[Writer], user_ns: Mapping[str, Any]) -> set[str] | None:
             if not isinstance(g, dict):
                 return None
             changes_module = False
-            for chain in bytecode_global_refs(function):
+            refs = list(bytecode_global_refs(function))
+            named = {chain[0] for chain in refs}
+            # Written but not named by its code: a parameter's default
+            # (``_c=CFG``) stands for the global.
+            refs += [(n,) for n in sorted((writer.written | writer.handed) - named) if n in g]
+            for cell_name, value in _cells(function).items():
+                if cell_name in writer.written and type(value) not in _ATOMS:
+                    # A closure's cell (``acc.append(1)``): the notebook may
+                    # hold its object (``ACC``).
+                    written.add(id(value))
+                    reached[id(value)] = value
+            for chain in refs:
                 value = g.get(chain[0], _ABSENT)
                 if value is _ABSENT:
                     continue
@@ -256,6 +269,20 @@ def reach(found: list[Writer], user_ns: Mapping[str, Any]) -> set[str] | None:
         elif id(value) in reached and (id(value) in written or type(value) not in _CODE_TYPES):
             found_names.add(name)
     return found_names
+
+
+def _cells(function: Any) -> dict[str, Any]:
+    """*function*'s closure, name to what each cell holds (an empty one left out)."""
+    code = attribute_or(function, "__code__", None)
+    out: dict[str, Any] = {}
+    for cell_name, cell in zip(
+        attribute_or(code, "co_freevars", ()), attribute_or(function, "__closure__", None) or ()
+    ):
+        try:
+            out[cell_name] = cell.cell_contents
+        except ValueError:
+            continue
+    return out
 
 
 _CODE_TYPES = (types.ModuleType, types.FunctionType, types.BuiltinFunctionType, type)
@@ -300,6 +327,10 @@ def _decide(t: type) -> Writer | None:
         seen[id(function)] = function
         body = _body(function)
         if body is None or (id(function) in roots and _writes_itself(body)):
+            return Writer(name, None)
+        if _reads_a_namespace(body, attribute_or(function, "__globals__", {})):
+            # ``globals()['CFG']['rows'].append(1)``, ``vars(OBJ)['seen']``:
+            # what it changes is reached by a string.
             return Writer(name, None)
         changed = free_vars_mutated_in_function(body) | _changed_through_copies(function, body)
         to_libraries |= _handed_to_libraries(function, body) - changed
@@ -652,29 +683,42 @@ class _RunningMutations(MutationVisitor):
         return None
 
 
-#: Calls that copy a container one level deep: what the copy holds is what
-#: the original holds (``c = copy.copy(CFG); c['rows'].append(1)``).
-_SHALLOW_BUILDERS = frozenset({"dict", "list", "set", "tuple", "frozenset", "bytearray"})
-
-
 def _changed_through_copies(function: Any, body: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
-    """The globals *body* changes through a local bound to one of them or
-    to a shallow copy of one (``c = CFG``, ``c = copy.copy(CFG)``,
-    ``c = dict(CFG)``, ``c = CFG.copy()``, ``c = CFG[:]``): a change made
-    through the local may change what the global holds. Any change counts,
-    the top-level one of a copy too."""
+    """The globals *body* changes through a local bound from an expression
+    that reads one of them (``c = CFG``, ``c = CFG['rows']``, ``c =
+    copy.copy(CFG)``, ``c = OBJ.seen``, ``for c in [CFG]``, ``c, k = CFG,
+    1``, ``len(c := CFG['rows'])``, ``with nullcontext(CFG) as c``) or from
+    a parameter whose default is one (``_c=CFG``): a change made through the
+    local may change what the global holds. Fails closed: any expression
+    reading the global counts but a deep copy and a few calls whose result
+    holds nothing of it (`_HOLDS_NOTHING_OF_IT`). Any change counts, the
+    top-level one of a copy too."""
     g = attribute_or(function, "__globals__", {})
     params = {a.arg for a in ast.walk(body.args) if isinstance(a, ast.arg)}
     aliases: dict[str, set[str]] = {}
-    for node in ast.walk(body):
-        if not isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)) or node.value is None:
-            continue
-        source = _copied_global(node.value, g, params, aliases)
-        if not source:
-            continue
-        for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
-            if isinstance(target, ast.Name):
-                aliases.setdefault(target.id, set()).update(source)
+    arguments = body.args
+    positional = [*arguments.posonlyargs, *arguments.args]
+    defaulted = [
+        *zip(positional[len(positional) - len(arguments.defaults) :], arguments.defaults),
+        *((a, d) for a, d in zip(arguments.kwonlyargs, arguments.kw_defaults) if d is not None),
+    ]
+    for arg, default in defaulted:
+        source = _globals_read(default, g, set(), aliases)
+        if source:
+            aliases[arg.arg] = source
+    bindings = list(_bindings(body))
+    grown = True
+    while grown:
+        grown = False
+        for targets, value in bindings:
+            source = _globals_read(value, g, params, aliases)
+            if not source:
+                continue
+            for target in targets:
+                known = aliases.setdefault(target, set())
+                if not source <= known:
+                    known |= source
+                    grown = True
     if not aliases:
         return set()
     visitor = _RunningMutations()
@@ -686,34 +730,76 @@ def _changed_through_copies(function: Any, body: ast.FunctionDef | ast.AsyncFunc
     return out
 
 
-def _copied_global(
-    value: ast.expr, g: Mapping[str, Any], params: set[str], aliases: Mapping[str, set[str]]
-) -> set[str]:
-    """The globals *value* is, or is a shallow copy of."""
-    if isinstance(value, ast.Name):
-        if value.id in aliases:
-            return set(aliases[value.id])
-        changeable = value.id in g and value.id not in params and not _never_changed(g[value.id])
-        return {value.id} if changeable else set()
-    if isinstance(value, ast.Subscript) and isinstance(value.slice, ast.Slice):
-        return _copied_global(value.value, g, params, aliases)
-    if not isinstance(value, ast.Call) or len(value.args) != 1 or value.keywords:
-        if isinstance(value, ast.Call) and not value.args and not value.keywords:
-            func = value.func
-            if isinstance(func, ast.Attribute) and func.attr == "copy":
-                return _copied_global(func.value, g, params, aliases)  # ``CFG.copy()``
-        return set()
-    func, (arg,) = value.func, value.args
-    if isinstance(func, ast.Name) and func.id in _SHALLOW_BUILDERS and func.id not in g:
-        return _copied_global(arg, g, params, aliases)
-    callee = None
-    if isinstance(func, ast.Name):
-        callee = g.get(func.id)
-    elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-        callee = attribute_or(g.get(func.value.id), func.attr, None)
-    if callee is copy.copy:
-        return _copied_global(arg, g, params, aliases)
-    return set()
+def _reads_a_namespace(body: ast.AST, g: Mapping[str, Any]) -> bool:
+    """Does *body* call ``globals()``, ``vars()`` or ``locals()``, the builtins?"""
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in ("globals", "vars", "locals")
+        and node.func.id not in g
+        for node in ast.walk(body)
+    )
+
+
+def _bindings(body: ast.AST) -> Iterator[tuple[list[str], ast.expr]]:
+    """``(names, value)`` for each binding *body* makes of local names from
+    a value: an assignment (each name of an unpacked target), a walrus, a
+    loop's or a comprehension's target from what it iterates, a ``with``'s
+    ``as`` from its context manager."""
+    for node in ast.walk(body):
+        if isinstance(node, ast.Assign):
+            yield [n for t in node.targets for n in _names(t)], node.value
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and node.value is not None:
+            yield _names(node.target), node.value
+        elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+            yield _names(node.target), node.iter
+        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
+            yield _names(node.optional_vars), node.context_expr
+
+
+def _names(target: ast.AST) -> list[str]:
+    return [n.id for n in ast.walk(target) if isinstance(n, ast.Name)]
+
+
+#: Calls whose result holds nothing of what they are handed.
+_HOLDS_NOTHING_OF_IT = frozenset(
+    {"len", "str", "int", "float", "bool", "repr", "hash", "id", "abs", "round", "format", "isinstance", "callable"}
+)
+
+
+def _globals_read(value: ast.expr, g: Mapping[str, Any], params: set[str], aliases: Mapping[str, set[str]]) -> set[str]:
+    """The changeable globals, directly or through *aliases*, an object
+    *value* gives may hold or be: every one it reads, but through a deep
+    copy or a call in `_HOLDS_NOTHING_OF_IT`."""
+    if isinstance(value, ast.Call):
+        func = value.func
+        callee = None
+        if isinstance(func, ast.Name):
+            if func.id in _HOLDS_NOTHING_OF_IT and func.id not in g:
+                return set()
+            callee = g.get(func.id)
+        elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+            callee = attribute_or(g.get(func.value.id), func.attr, None)
+        if callee is copy.deepcopy or any(callee is fresh for fresh in _FRESH_FROM_TEXT):
+            return set()
+    found: set[str] = set()
+    for node in ast.walk(value):
+        if not isinstance(node, ast.Name) or not isinstance(node.ctx, ast.Load):
+            continue
+        if node.id in aliases:
+            found |= aliases[node.id]
+        elif (
+            node.id in g
+            and node.id not in params
+            and not _never_changed(g[node.id])
+            and not instance_of(g[node.id], types.ModuleType)
+        ):
+            found.add(node.id)
+    return found
+
+
+#: Calls that build a new object from text: ``pickle.loads(pickle.dumps(CFG))``.
+_FRESH_FROM_TEXT = (pickle.loads, json.loads)
 
 
 def _never_changed(value: Any) -> bool:

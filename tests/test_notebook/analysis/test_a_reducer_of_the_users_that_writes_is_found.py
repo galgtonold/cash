@@ -489,3 +489,82 @@ class CopiesAGlobalAndChangesNothing:
 
 def test_a_copy_of_a_global_that_is_only_read_is_no_writer():
     assert reducer_writes._decide(CopiesAGlobalAndChangesNothing) is None
+
+
+_BODIES = {
+    "an_item": "c = ALIASED['rows']\nc.append(1)",
+    "get": "c = ALIASED.get('rows')\nc.append(1)",
+    "an_attribute": "c = ALIASED_OBJECT.seen\nc.append(1)",
+    "getattr": "c = getattr(ALIASED_OBJECT, 'seen')\nc.append(1)",
+    "a_walrus": "len(c := ALIASED['rows'])\nc.append(1)",
+    "a_dict_unpacked": "c = {**ALIASED}\nc['rows'].append(1)",
+    "a_list_of_values": "c = list(ALIASED.values())\nc[0].append(1)",
+    "a_loop_target": "for c in [ALIASED]:\n    c['rows'].append(1)",
+    "an_unpacked_target": "c, k = ALIASED, 1\nc['rows'].append(1)",
+    "a_with_target": "import contextlib\nwith contextlib.nullcontext(ALIASED) as c:\n    c['rows'].append(1)",
+    "next_of_iter": "c = next(iter([ALIASED]))\nc['rows'].append(1)",
+    "a_conditional": "c = ALIASED if self else None\nc['rows'].append(1)",
+}
+
+
+@pytest.mark.parametrize("body", list(_BODIES))
+def test_a_change_through_any_local_bound_from_a_global_counts(tmp_path, monkeypatch, body):
+    """``c = CFG['rows']; c.append(1)``, ``for c in [CFG]``, ``c, k = CFG,
+    1``: only a local bound to the global or to a recognised copy of it was
+    followed, and the reducer, run on every pickle, appended where plain
+    Python never pickles."""
+    module = _module_with(tmp_path, monkeypatch, _BODIES[body])
+    writer = reducer_writes._decide(module.Made)
+    assert writer is not None, "not a writer"
+    holder = module.ALIASED_OBJECT if "ALIASED_OBJECT" in _BODIES[body] else module.ALIASED
+    assert reducer_writes.reach([writer], {"cfg": holder}) == {"cfg"}
+
+
+def test_a_default_bound_to_a_global_counts(tmp_path, monkeypatch):
+    module = _module_with(tmp_path, monkeypatch, "_c['rows'].append(1)", params=", _c=ALIASED")
+    writer = reducer_writes._decide(module.Made)
+    assert writer is not None and reducer_writes.reach([writer], {"cfg": module.ALIASED}) == {"cfg"}
+
+
+@pytest.mark.parametrize("body", ["globals()['ALIASED']['rows'].append(1)", "vars(ALIASED_OBJECT)['seen'].append(1)"])
+def test_one_reading_a_namespace_reaches_every_variable(tmp_path, monkeypatch, body):
+    module = _module_with(tmp_path, monkeypatch, body)
+    writer = reducer_writes._decide(module.Made)
+    assert writer is not None and reducer_writes.reach([writer], {"x": 1}) is None
+
+
+def test_a_closure_cell_the_notebook_holds_is_reached(tmp_path, monkeypatch):
+    module = _module_with(tmp_path, monkeypatch, "acc.append(1)", closure=True)
+    writer = reducer_writes._decide(module.Made)
+    assert writer is not None and reducer_writes.reach([writer], {"held": module.ACC}) == {"held"}
+
+
+@pytest.mark.parametrize("body", ["c = copy.deepcopy(ALIASED)\nc['rows'].append(1)", "c = len(ALIASED)\nc += 1"])
+def test_a_local_holding_nothing_of_a_global_is_no_writer(tmp_path, monkeypatch, body):
+    module = _module_with(tmp_path, monkeypatch, body)
+    assert reducer_writes._decide(module.Made) is None
+
+
+def _module_with(tmp_path, monkeypatch, body: str, params: str = "", closure: bool = False):
+    """A module file whose class ``Made`` has a ``__getstate__`` running
+    *body*: its source is read from the file, as a module of the user's is."""
+    import importlib
+    import sys
+    import textwrap
+
+    name = f"_reducer_alias_{abs(hash((body, params, closure)))}"
+    method = f"    def __getstate__(self{params}):\n" + textwrap.indent(body, " " * 8) + "\n        return {}\n"
+    if closure:
+        source = (
+            "ACC = []\n"
+            "def _make(acc):\n"
+            "    class Made:\n" + textwrap.indent(method, "    ") + "    return Made\n"
+            "Made = _make(ACC)\n"
+        )
+    else:
+        source = "import copy\nclass Cfg:\n    def __init__(self):\n        self.seen = []\n"
+        source += "ALIASED = {'rows': []}\nALIASED_OBJECT = Cfg()\nclass Made:\n" + method
+    (tmp_path / f"{name}.py").write_text(source, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, name, raising=False)
+    return importlib.import_module(name)
