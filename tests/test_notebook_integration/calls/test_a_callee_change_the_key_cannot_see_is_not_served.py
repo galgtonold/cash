@@ -8,19 +8,26 @@ them as a write, and on the second Run All served the call and left ``LOG``
 empty. What the callee hands to code whose effect cannot be read, or loads
 when its text cannot be read, is now hashed before and after a miss, as its
 arguments are, and a call that changed it is not stored.
+
+The same holds for what a global holds and hands on rather than names:
+``PUSHP = functools.partial(list.append, LOG)``, a class's method handed
+its object first (``collections.deque.append(DQ, x)``), and a default
+(``def inner(x, L=LOG)``), with and without a record of what ran.
 """
 
 from __future__ import annotations
 
 import pytest
 
+from cash.notebook import shadow
 from tests._cell_driver import run_cash_cell
 
 SETUP = (
-    "import operator, bisect, collections, time\n"
+    "import operator, bisect, collections, functools, time\n"
     "LOG = []\nD = {}\nDQ = collections.deque()\nOD = collections.OrderedDict(a=1, b=2)\n"
     "class NS: pass\n"
     "PUSH = LOG.append\n"
+    "PUSHP = functools.partial(list.append, LOG)\n"
 )
 
 BODIES = {
@@ -33,6 +40,9 @@ BODIES = {
     "od_move_to_end": ("OD.move_to_end('a')", "n = list(OD)", ["b", "a"]),
     "operator_iadd": ("operator.iadd(LOG, [x])", "n = len(LOG)", 1),
     "methodcaller": ("operator.methodcaller('append', x)(LOG)", "n = len(LOG)", 1),
+    "partial_of_append": ("PUSHP(x)", "n = len(LOG)", 1),
+    "class_method_of_a_module": ("collections.deque.append(DQ, x)", "n = len(DQ)", 1),
+    "builtin_class_method": ("list.append(LOG, x)", "n = len(LOG)", 1),
 }
 
 
@@ -54,3 +64,37 @@ def test_each_run_all_makes_the_change_again(cash_magics, shape, spelled):
         for cell in cells:
             run_cash_cell(cash_magics, cell, cells=cells)
         assert (ns["v"], ns["n"]) == (30, expected), f"Run All {run + 1}"
+
+
+@pytest.fixture(params=["trace", "no_trace"])
+def record(request, monkeypatch):
+    if request.param == "no_trace":
+        monkeypatch.setenv("CASH_TRACE", "0")
+        monkeypatch.setattr(shadow, "SHADOW", None)
+    return request.param
+
+
+HOLDERS = {
+    "partial_of_append": "PUSHP(x)",
+    "class_method_of_a_module": "collections.deque.append(DQ, x)",
+    "builtin_class_method": "list.append(DQ, x)",
+    "default_argument": None,
+}
+
+
+@pytest.mark.parametrize("shape", list(HOLDERS))
+def test_a_change_through_what_a_global_holds_is_made_again(cash_magics, record, shape):
+    body = HOLDERS[shape]
+    if body is None:
+        fn = "def inner(x, L=DQ):\n    time.sleep(0.05)\n    L.append(x)\n    return x * 10"
+    else:
+        fn = _readable(body)
+    setup = SETUP.replace(
+        "DQ = collections.deque()", "DQ = []" if "list." in (body or "") else "DQ = collections.deque()"
+    )
+    cells = [setup + fn, "v = inner(3)", "n = len(LOG)" if shape == "partial_of_append" else "n = len(DQ)"]
+    ns = cash_magics.shell.user_ns
+    for run in range(3):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        assert (ns["v"], ns["n"]) == (30, 1), f"Run All {run + 1}"

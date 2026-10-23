@@ -250,9 +250,29 @@ def _watched_names(fn, globals_dict: dict) -> set[str]:
     if fdef is None:
         # Nothing to read what it does with them from: every global it loads.
         return set(loads)
-    handed = function_handoffs(fdef, globals_dict, functools.partial(_user_source, globals_dict))[1]
+    params, handed = function_handoffs(fdef, globals_dict, functools.partial(_user_source, globals_dict))
     bound = {name for name in loads if bound_to_state(globals_dict.get(name))}
-    return {*handed, *bound, *(name for name in _source_mutations(fn) if instance_of(globals_dict.get(name), type))}
+    return {
+        *handed,
+        *bound,
+        *_default_holders(fn, params, globals_dict),
+        *(name for name in _source_mutations(fn) if instance_of(globals_dict.get(name), type)),
+    }
+
+
+def _default_holders(fn, params: frozenset[str], globals_dict: dict) -> set[str]:
+    """The globals holding an object *fn* got as a default of a parameter
+    it changes (*params*): ``def f(x, L=LOG): L.append(x)`` changes ``LOG``
+    when called without ``L``, and no argument names it."""
+    code = fn.__code__
+    names = code.co_varnames[: code.co_argcount + code.co_kwonlyargcount]
+    positional = names[: code.co_argcount]
+    defaults = dict(zip(positional[len(positional) - len(fn.__defaults__ or ()) :], fn.__defaults__ or ()))
+    defaults.update(fn.__kwdefaults__ or {})
+    held = [value for name, value in defaults.items() if name in params and type(value) not in _EXACT_ATOMS]
+    if not held:
+        return set()
+    return {name for name, value in list(globals_dict.items()) if any(value is item for item in held)}
 
 
 #: ``code object -> its function's parsed def``, or None when its text cannot be read.
