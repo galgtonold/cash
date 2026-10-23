@@ -518,10 +518,18 @@ def _stored_children(obj: Any) -> list[tuple[str, Any]]:
     return []
 
 
+def _module_of(kind: type) -> str:
+    """The module a class says it comes from, or "". A metaclass that keeps
+    ``__module__`` as a descriptor for its own classes (Cython's) answers
+    with the descriptor when asked about itself."""
+    name = attribute_or(kind, "__module__")
+    return name if isinstance(name, str) else ""
+
+
 def _object_container(obj: Any) -> bool:
     """A numpy array or pandas object holding Python objects, whose items
     are read at C speed: True only when one of them is not a leaf."""
-    module = (type(obj).__module__ or "").split(".")[0]
+    module = _module_of(type(obj)).split(".")[0]
     if module == "numpy":
         if attribute_or(attribute_or(obj, "dtype"), "kind") != "O":
             return False
@@ -592,7 +600,7 @@ def _holds_nothing(obj: Any) -> bool:
         if rows == kinds:
             return _only_inert(itertools.chain.from_iterable(items))
         return _only_inert(itertools.chain.from_iterable(item for item in items if type(item) in rows))
-    module = (kind.__module__ or "").split(".")[0]
+    module = _module_of(kind).split(".")[0]
     if module == "numpy":
         return attribute_or(obj, "dtype") is not None and not _object_container(obj)
     if module == "pandas" and kind.__name__ in ("Series", "DataFrame"):
@@ -844,7 +852,7 @@ def _items_up_to(owner: Any, width: int) -> list[tuple[str, Any]] | None:
         return [(f"[{k!r}]", v) for k, v in itertools.islice(dict.items(owner), width)]
     if instance_of(owner, _CONTAINERS):
         return [(f"[{i}]", v) for i, v in enumerate(itertools.islice(owner, width))]
-    module = type(owner).__module__ or ""
+    module = _module_of(type(owner))
     if module.startswith("numpy") and attribute_or(attribute_or(owner, "dtype"), "kind") == "O":
         return _not_inert("[{}]", owner.flat, width)
     if module.split(".")[0] == "pandas":
@@ -901,7 +909,7 @@ def _decide_users_class(cls: type) -> bool:
             code = attribute_or(_unwrapped(value), "__code__")
             if code is not None:
                 return is_user_code_file(code.co_filename)
-    name = attribute_or(cls, "__module__") or ""
+    name = _module_of(cls)
     if name == "builtins":
         # A class ``exec``'d without a module of its own; the interpreter's
         # are static types.
@@ -943,7 +951,7 @@ def _spelled(node: ast.expr, user_ns: Mapping[str, Any], look: _Look | None = No
     if isinstance(node, ast.Attribute):
         found = []
         for path, owner in _spelled(node.value, user_ns, look):
-            if node.attr in _INDEXERS and (type(owner).__module__ or "").split(".")[0] == "pandas":
+            if node.attr in _INDEXERS and _module_of(type(owner)).split(".")[0] == "pandas":
                 # ``s.iloc[0]``: the accessor indexes the object itself.
                 found.append((f"{path}.{node.attr}", owner))
                 continue
