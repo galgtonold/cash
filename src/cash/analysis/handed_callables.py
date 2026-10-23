@@ -45,14 +45,17 @@ import inspect
 import operator
 import sys
 import types
+import weakref
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from itertools import chain, compress, repeat
 from typing import Any, NamedTuple
 
 from .. import _plain_data
+from .._inspect_cache import forget_static_lookups
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import is_pseudo_filename
+from .._type_memo import TypeMemo, type_key
 from .._user_attrs import instance_of, own_dict
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import own_source, wrapper_layers
@@ -1021,8 +1024,8 @@ def _is_users_callable(value: Any) -> bool:
     return _is_users_object(value) and callable(value)
 
 
-#: ``class -> whether it is the user's`` (`is_users_class`).
-_USERS_CLASSES: LruMemo[type, bool] = LruMemo(CODE_OBJECTS)
+#: ``class -> whether it is the user's`` (`is_users_class`), held weakly.
+_USERS_CLASSES: TypeMemo[bool] = TypeMemo()
 
 
 #: Read through ``type``'s own descriptors: a metaclass's
@@ -1035,7 +1038,7 @@ _CLASS_MODULE = type.__dict__["__module__"].__get__
 def is_users_class(cls: type) -> bool:
     """A class defined in a cell or in a local module: by its module, or by
     the functions it defines (a class made by ``exec`` names no module)."""
-    known = _USERS_CLASSES.get(cls)
+    known = _USERS_CLASSES.get(type_key(cls))
     if known is None:
         try:
             name = _CLASS_MODULE(cls)
@@ -1046,7 +1049,7 @@ def is_users_class(cls: type) -> bool:
                 known = any(instance_of(v, types.FunctionType) and _is_users(v) for v in own)
         except (TypeError, AttributeError):
             known = False
-        _USERS_CLASSES[cls] = known
+        _USERS_CLASSES.put(cls, known)
     return known
 
 
@@ -1194,10 +1197,10 @@ def _item(container: Any, index: ast.expr) -> Any:
     if instance_of(container, HELD_IN_DATA):
         container = container.data
     try:
-        if instance_of(container, dict):
+        if issubclass(type(container), dict):
             # ``dict.get``: a defaultdict's factory does not run.
             return dict.get(container, key, _MISSING)
-        if instance_of(container, (list, tuple, collections.deque)):
+        if issubclass(type(container), (list, tuple, collections.deque)):
             return container[key]
     except (IndexError, TypeError):
         pass
@@ -1313,9 +1316,38 @@ def is_users_instance(value: Any) -> bool:
     return _is_users_object(value)
 
 
-#: ``class -> (what its classes hold, `reaching_special_functions`)``: read
-#: again only when a class of its MRO holds something else.
-_SPECIAL_MEMO: dict[type, tuple[tuple, list[Any]]] = {}
+#: ``id(class) -> (ids of what its classes hold, weak references to those
+#: that take one, `reaching_special_functions` held weakly)``, held weakly:
+#: read again only when a class of its MRO holds something else. Nothing in
+#: it refers to the class (its ``__dict__`` slot and methods using
+#: ``super()`` do), so a class made per call is not kept alive.
+_SPECIAL_MEMO: TypeMemo[tuple[tuple, tuple, list]] = TypeMemo()
+
+
+def _held_weakly(values: Iterable[Any]) -> tuple:
+    """A weak reference to each of *values* that takes one: one gone means
+    its id may be another object's now."""
+    refs = []
+    for value in values:
+        try:
+            refs.append(weakref.ref(value))
+        except TypeError:
+            continue
+    return tuple(refs)
+
+
+def _with_parts(values: Iterable[Any]) -> Iterator[Any]:
+    """*values*, each followed by the functions it runs (a property's,
+    a ``staticmethod``'s): a property takes no weak reference, so a new one
+    at a freed one's address is told apart by its functions."""
+    for value in values:
+        yield value
+        if instance_of(value, property):
+            yield value.fget
+            yield value.fset
+            yield value.fdel
+        elif instance_of(value, (staticmethod, classmethod)):
+            yield value.__func__
 
 
 def reaching_special_functions(cls: type) -> list[Any]:
@@ -1323,19 +1355,15 @@ def reaching_special_functions(cls: type) -> list[Any]:
     function by name or calls a method of a global object: the others
     change nothing outside their objects, whatever their globals hold."""
     try:
-        snapshot = tuple(tuple(_CLASS_DICT(k).values()) for k in _CLASS_MRO(cls) if k is not object)
+        held = [tuple(_with_parts(_CLASS_DICT(k).values())) for k in _CLASS_MRO(cls) if k is not object]
+        snapshot = tuple(tuple(map(id, values)) for values in held)
     except TypeError:
-        snapshot = None
-    kept = _SPECIAL_MEMO.get(cls)
-    if kept is not None and snapshot is not None:
-        try:
-            same = len(kept[0]) == len(snapshot) and all(
-                len(a) == len(b) and all(map(operator.is_, a, b)) for a, b in zip(kept[0], snapshot)
-            )
-        except Exception:  # noqa: BLE001 - a class attribute's comparison
-            same = False
-        if same:
-            return kept[1]
+        held, snapshot = [], None
+    kept = _SPECIAL_MEMO.get(type_key(cls))
+    if kept is not None and snapshot is not None and kept[0] == snapshot:
+        found = [ref() for ref in kept[2]]
+        if all(ref() is not None for ref in kept[1]) and None not in found:
+            return found
     out = []
     from ..install_paths import is_user_code_file
 
@@ -1358,9 +1386,9 @@ def reaching_special_functions(cls: type) -> list[Any]:
         ):
             out.append(fn)
     if snapshot is not None:
-        if len(_SPECIAL_MEMO) > 512:
-            _SPECIAL_MEMO.clear()
-        _SPECIAL_MEMO[cls] = (snapshot, out)
+        refs = _held_weakly(out)
+        if len(refs) == len(out):
+            _SPECIAL_MEMO.put(cls, (snapshot, _held_weakly(chain.from_iterable(held)), list(refs)))
     return out
 
 
@@ -3122,6 +3150,8 @@ def answers_shared() -> Iterator[None]:
     finally:
         _SHARED_ROUND[0] = outer
         _ANSWERED_THIS_ROUND.clear()
+        # Nor in the standard library's cache, where it held each class.
+        forget_static_lookups()
 
 
 def stop_sharing_answers() -> None:
@@ -3163,14 +3193,14 @@ def _items(container: Any) -> Iterable[Any]:
     if type(container) in OPENED:
         if instance_of(container, HELD_IN_DATA):
             container = container.data
-        if instance_of(container, dict):
+        if issubclass(type(container), dict):
             return chain(dict.keys(container), dict.values(container))
         return container
-    if instance_of(container, _CONTAINERS):
+    if issubclass(type(container), _CONTAINERS):
         # A namedtuple, a subclass of the user's of a list or dict: its
         # items, read through the builtin's own slots so no ``__iter__`` of
         # theirs runs, and its attributes.
-        if instance_of(container, dict):
+        if issubclass(type(container), dict):
             items: Iterable[Any] = chain(dict.keys(container), dict.values(container))
         else:
             base = next(kind for kind in _CONTAINERS if instance_of(container, kind))

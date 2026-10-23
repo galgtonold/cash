@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from .. import _cash_views, _plain_data, value_watch
 from .._clock import perf_counter as _perf_counter
 from .._memo import ARGUMENTS, FRAMES, LruMemo
+from .._type_memo import TypeMemo, type_key
 from ..backends.frame_sharing import is_pin
 from ..canonical_form import (
     NOT_HOOKED,
@@ -278,26 +279,20 @@ def unhashable_arg_fix(value: Any, type_name: str) -> str:
 _PASS = "pass"
 _KEYED = "keyed"
 _JIT = "jit"
-_HOOK_KINDS: dict[type, str] = {}
+_HOOK_KINDS: TypeMemo[str] = TypeMemo()
 
 
 def _hook_kind(t: type) -> str:
-    try:
-        return _HOOK_KINDS[t]
-    except KeyError:
-        pass
-    except TypeError:  # a class whose metaclass makes it unhashable
-        return _PASS
+    kind = _HOOK_KINDS.get(type_key(t))
+    if kind is not None:
+        return kind
     if t in BUILTIN_CONTAINERS or issubclass(t, (type, types.ModuleType, *CODE_VALUE_TYPES)):
         kind = _PASS
     elif is_jit_type(t):
         kind = _JIT
     else:
         kind = _KEYED if cash_key_method_of_type(t) is not None else _PASS
-    if len(_HOOK_KINDS) >= 4096:
-        _HOOK_KINDS.clear()
-    _HOOK_KINDS[t] = kind
-    return kind
+    return _HOOK_KINDS.put(t, kind)
 
 
 #: How deep ``__cash_key__`` may nest (a key naming an object with its own

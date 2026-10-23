@@ -925,6 +925,24 @@ default argument or base class does. **Fix:** move the binding above this cell.
   changes with every Python process. So after a kernel restart that call
   runs once more instead of being served; later runs are served as usual.
   Results are right. A list, a tuple, or a set of numbers is not affected.
+- **An object's own pickle recipe runs when cash copies it.** The memory
+  tier keeps its own copy of a result, made the way pickle rebuilds it, and
+  every hit is such a copy too, as a disk hit is. A class whose
+  `__reduce__` rebuilds through a call with an effect (a constructor that
+  connects, `logging.getLogger`, which registers a logger) has that effect
+  once when the result is stored and once per hit. A rebuild that would
+  change a file, by any route (`(open, (path, "w"))`, a `__setstate__`
+  reopening its log, a constructor the recipe names, `os.remove`,
+  `os.truncate`, `os.rename`, `os.mkdir`, a `sqlite3.connect` that creates
+  its file), is stopped there: the result is not cached, in memory or on
+  disk, an entry stored before is not served, and the file keeps what it
+  held. A scratch file or folder the rebuild makes new in the temp folder
+  is allowed, and so is Python's own `.pyc` for a module the rebuild
+  imports. A library whose first import writes its own cache (matplotlib's
+  font list) is imported as your program would import it, and the rebuild
+  tried again. A write through a file already open (one the object held)
+  is not seen, and neither are `os.chmod` and `os.mkfifo`.
+
 - **A `__dict__` your class computes may run under `@cash.cache`.** A class
   that defines `__dict__` itself (a `@property` building it) has it read
   when an object of it is part of a cached function's key, its arguments
