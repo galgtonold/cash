@@ -20,6 +20,7 @@ import hashlib
 import logging
 import pathlib as _pathlib
 import sys
+import textwrap
 import types as _types
 from collections.abc import Callable, Mapping
 from types import ModuleType as _ModuleType
@@ -31,6 +32,7 @@ from cash._paths import is_pseudo_filename
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 from cash.analysis.bytecode import NAME_LOADS, argvals
 from cash.analysis.callee_effects import (
+    free_vars_mutated_in_function,
     mutable_default_params,
     params_mutated_in_function,
     parse_function_def,
@@ -192,27 +194,77 @@ def _functions_reached_in(globals_dict: dict, fn) -> list:
 def _source_mutations(fn) -> tuple[str, ...]:
     """The free names *fn*'s own source mutates in place, sorted, memoised
     on its code: a ``functools.wraps`` wrapper's own body, not the wrapped
-    function's (`own_source`)."""
+    function's (`own_source`). A lambda is read out of the line it is on."""
+    found = _read_mutations(fn)
+    return () if found is None else found
+
+
+def _read_mutations(fn) -> tuple[str, ...] | None:
+    """`_source_mutations`, None when *fn*'s source cannot be read: a
+    lambda whose line holds no one lambda of its parameters."""
     memo_key = attribute_or(fn, "__code__", None)
-    cached = _GLOBAL_MUTATION_CACHE.get(memo_key) if memo_key is not None else None
-    if cached is None:
+    cached = _GLOBAL_MUTATION_CACHE.get(memo_key, _UNREAD) if memo_key is not None else _UNREAD
+    if cached is _UNREAD:
         try:
-            cached = tuple(sorted(source_global_mutations(own_source(fn))))
+            source = own_source(fn)
+            if attribute_or(fn, "__name__", None) == "<lambda>":
+                fdef = _lambda_def(source, memo_key)
+                cached = None if fdef is None else tuple(sorted(free_vars_mutated_in_function(fdef)))
+            else:
+                cached = tuple(sorted(source_global_mutations(source)))
         except SOURCE_RETRIEVAL_ERRORS:
             cached = ()
+        except RecursionError:
+            cached = None
         if memo_key is not None:
             _GLOBAL_MUTATION_CACHE[memo_key] = cached
     return cached
 
 
+def _lambda_def(source: str, code: Any) -> ast.FunctionDef | None:
+    """The lambda of *code* in *source*, the line or lines it is on, as a
+    ``def`` returning its body; None unless exactly one lambda there takes
+    its parameters."""
+    text = textwrap.dedent(source)
+    tree = None
+    # ``return lambda v: ...`` parses only inside a function.
+    for attempt in (text, "def _():\n" + textwrap.indent(text, "    ")):
+        try:
+            tree = ast.parse(attempt)
+            break
+        except SyntaxError:
+            continue
+    if tree is None or not isinstance(code, _types.CodeType):
+        return None
+    params = code.co_varnames[: code.co_argcount + code.co_kwonlyargcount]
+    lambdas = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Lambda)
+        and tuple(a.arg for a in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)) == params
+    ]
+    if len(lambdas) != 1:
+        return None
+    fdef = ast.parse("def _lambda():\n    pass").body[0]
+    fdef.args = lambdas[0].args
+    fdef.body = [ast.Return(lambdas[0].body)]
+    return ast.fix_missing_locations(fdef)
+
+
 def changes_its_closure(fn) -> bool:
     """Whether calling *fn* rebinds a variable of the function it was made
     in, or changes an object one of them holds: ``nonlocal count; count +=
-    1``, ``seen.append(x)``."""
+    1``, ``seen.append(x)``. A lambda whose source cannot be read is taken
+    to change it."""
     if type(fn) is not _types.FunctionType:
         return False
     cells = closure_cells(fn)
-    return bool(cells) and (rebinds_its_closure(fn) or any(n in cells for n in _source_mutations(fn)))
+    if not cells:
+        return False
+    if rebinds_its_closure(fn):
+        return True
+    found = _read_mutations(fn)
+    return found is None or any(n in cells for n in found)
 
 
 #: ``code object -> whether the function changes a default it holds``.

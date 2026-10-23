@@ -15,7 +15,8 @@ from __future__ import annotations
 import ast
 from typing import TYPE_CHECKING
 
-from ...analysis.ast_util import called_names
+from ..._user_attrs import attribute_or, own_dict
+from ...analysis.ast_util import called_names, calls_in
 from ...analysis.mutation_effects import (
     control_structure_mutations,
     is_module_name,
@@ -23,6 +24,7 @@ from ...analysis.mutation_effects import (
     statement_watch_candidates,
 )
 from ...control_markers import strip_markers
+from ...install_paths import is_user_code_file
 from ...value_hash import costly_after
 from ...value_types import BUILTIN_NAMES
 from ..cache_key import statement_source_hash
@@ -340,10 +342,20 @@ class MutationRouting:
         return f" -- assumed changed, its change check gave up as too costly to read: {', '.join(said)}"
 
     def _callees_changing_their_closure(self, tree: ast.AST | None) -> set[str]:
-        """The functions *tree* calls by name, outside loop and branch bodies,
-        that change their closure (:func:`changes_its_closure`)."""
+        """The functions *tree* calls, outside loop and branch bodies, that
+        change their closure (:func:`changes_its_closure`): by name, or taken
+        out of a dict, list or object the notebook holds (``hooks['f'](5)``,
+        ``h.f(5)``), read without running code of the user's."""
         user_ns = self.shell.user_ns
-        return {name for name in called_names(tree, "no_control_bodies") if changes_its_closure(user_ns.get(name))}
+        found = {name for name in called_names(tree, "no_control_bodies") if changes_its_closure(user_ns.get(name))}
+        for call in calls_in(tree, "no_control_bodies"):
+            if isinstance(call.func, (ast.Subscript, ast.Attribute)):
+                fn = _held_callable(call.func, user_ns)
+                # Of the user's: cash's own ``@cash.cache`` wrapper counts its calls.
+                code = attribute_or(fn, "__code__", None)
+                if code is not None and is_user_code_file(code.co_filename) and changes_its_closure(fn):
+                    found.add(ast.unparse(call.func))
+        return found
 
     # ------------------------------------------------------------------
     # After execution
@@ -530,3 +542,32 @@ def _skip(run: StatementRun, reason: str) -> None:
     """Skip-cache *run*, giving *reason*."""
     run.skip_cache = True
     run.metrics["uncacheable_reasons"].append(reason)
+
+
+_MISSING = object()
+
+
+def _held_callable(expr: ast.expr, user_ns) -> object | None:
+    """What *expr* -- a variable, then constant items of plain dicts, lists
+    and tuples and attributes from objects' own dicts or modules -- is
+    bound to now, or None. Read without running code of the user's."""
+    if isinstance(expr, ast.Name):
+        return user_ns.get(expr.id)
+    if isinstance(expr, ast.Subscript):
+        holder = _held_callable(expr.value, user_ns)
+        key = expr.slice
+        if holder is None or not isinstance(key, ast.Constant):
+            return None
+        if type(holder) is dict:
+            return holder.get(key.value)
+        if type(holder) in (list, tuple) and type(key.value) is int and -len(holder) <= key.value < len(holder):
+            return holder[key.value]
+        return None
+    if isinstance(expr, ast.Attribute):
+        holder = _held_callable(expr.value, user_ns)
+        if holder is None:
+            return None
+        attrs = own_dict(holder)
+        value = attrs.get(expr.attr, _MISSING) if attrs is not None else _MISSING
+        return None if value is _MISSING else value
+    return None
