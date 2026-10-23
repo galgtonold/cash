@@ -18,6 +18,7 @@ import pytest
 from cash import content_hashers
 from cash.content_hashers import builtin_hash
 from cash.value_hash import compute_hash
+from tests._label_writes import label_values
 
 pd = pytest.importorskip("pandas")
 np = pytest.importorskip("numpy")
@@ -102,7 +103,7 @@ def _through_array(df):
 
 
 def _through_index_values(df):
-    df.index.values[0] = "ZZ"
+    label_values(df.index)[0] = "ZZ"
 
 
 def _through_a_kept_handle(df):

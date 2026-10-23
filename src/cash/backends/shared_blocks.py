@@ -87,8 +87,10 @@ def _layout(values: Any) -> tuple | None:
         array = values
         extra: Any = None
     elif kind in (pd.arrays.DatetimeArray, pd.arrays.TimedeltaArray):
+        from .frame_sharing import array_freq
+
         array = values._ndarray
-        extra = repr(values.freq)
+        extra = repr(array_freq(values))  # none on the array from pandas 3.1
     elif kind is pd.arrays.StringArray:
         array = values._ndarray
         extra = None

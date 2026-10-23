@@ -28,6 +28,7 @@ from cash.backends import frame_sharing
 from cash.backends.file_backend import FileBackend
 from cash.backends.memory_backend import InMemoryBackend
 from cash.backends.tiered_backend import TieredBackend
+from tests._label_writes import label_array
 from tests.test_backends.test_a_miss_hands_the_disk_write_the_ram_copy import _KEEP, _NOTEBOOK, _tiers
 
 
@@ -113,7 +114,7 @@ def test_a_table_the_ram_tier_copies_in_full_goes_to_disk_as_that_copy(name):
     column = value.columns[0]
     value[column].array[0] = value[column].iloc[2]  # writes in place
     if not isinstance(value.index, pd.RangeIndex):
-        value.index.array[0] = "edited"  # a deep pandas copy would keep these labels
+        label_array(value.index)[0] = "edited"  # a deep pandas copy would keep these labels
     pd.testing.assert_frame_equal(written, COPIED_IN_FULL[name]())
 
 

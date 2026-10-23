@@ -16,6 +16,7 @@ pd = pytest.importorskip("pandas")
 
 from cash import Cash
 from cash.backends import InMemoryBackend
+from tests._label_writes import label_array
 
 
 def _frame() -> pd.DataFrame:
@@ -37,7 +38,7 @@ def _write_through_handles(df: pd.DataFrame) -> None:
     df["x"].array[0] = -1.0
     column.array[1] = -2.0
     df["when"].array[0] = pd.Timestamp("1999-01-01")
-    df.index.array[0] = -4
+    label_array(df.index)[0] = -4
     assert df["x"].iloc[0] == -1.0 and df["x"].iloc[1] == -2.0 and df.index[0] == -4
 
 
