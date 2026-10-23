@@ -256,7 +256,12 @@ def holds_a_stream(fn) -> bool:
             # What a lookup table or a list of records holds is read once:
             # while the watchers prove it unchanged since (no item, key or
             # attribute of it set), it holds no stream still.
-            found = value_watch.digest(part, walk.part, value_watch.KIND_NO_STREAM, _kept_as_clean)
+            # Walked with a seen set of its own: a function another part
+            # met first is met here too, so the verdict kept is this
+            # part's alone.
+            found = value_watch.digest(
+                part, lambda value: walk.part(value, {id(fn)}), value_watch.KIND_NO_STREAM, _kept_as_clean
+            )
         else:
             found = walk.part(part)
         if found is _HOLDS:
@@ -265,7 +270,8 @@ def holds_a_stream(fn) -> bool:
 
 
 #: `_StreamWalk.part`'s answers: a stream found; none, and nothing the
-#: watchers cannot see met (`_kept_as_clean`); none, past such a thing.
+#: watchers cannot see met (`_kept_as_clean`); none, past a function, a
+#: method or a class.
 _HOLDS, _CLEAN, _UNSEEN = object(), object(), object()
 
 
@@ -285,13 +291,17 @@ class _StreamWalk:
         self.object_kinds: set[type] = set()
         self.holders = self.items = 0
 
-    def part(self, part: Any) -> Any:
+    def part(self, part: Any, seen: set[int] | None = None) -> Any:
         """``_HOLDS``, ``_CLEAN`` or ``_UNSEEN`` for *part* and what it
-        holds. ``_UNSEEN`` once a function, a method or a class with members
-        was met: the watchers see neither a closure cell set nor a
-        function's attributes."""
+        holds. ``_UNSEEN`` once a function, a method or a class was met,
+        whatever it holds now: the watchers see neither a closure cell set
+        nor an attribute set on a function or a class (``X.it = iter(...)``).
+        *seen*: the objects met already, the function's shared set if not
+        given."""
         kernels = _native.kernels
-        ways, seen = self.ways, self.seen
+        ways = self.ways
+        if seen is None:
+            seen = self.seen
         children = [part]
         clean = True
         while children:
@@ -314,10 +324,10 @@ class _StreamWalk:
                 way = ways[kind]
                 if way is _HELD:  # a function, a method or a class: `held_by`
                     self.holders += len(new)
+                    clean = False
                     for item in new:
                         held = held_by(item)
                         if held:
-                            clean = False
                             next_children.extend(held)
                 elif way is _OBJECT:
                     # A user's object, a namespace, a ``partial``: what it

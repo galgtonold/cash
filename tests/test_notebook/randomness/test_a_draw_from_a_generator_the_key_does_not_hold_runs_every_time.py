@@ -256,3 +256,41 @@ def test_a_stream_in_a_librarys_dict_is_found():
     assert holds_a_stream(_closing_over(collections.OrderedDict(it=iter(range(3)))))
     assert holds_a_stream(_closing_over(collections.defaultdict(list, it=iter(range(3)))))
     assert not holds_a_stream(_closing_over(collections.OrderedDict(a=[1, 2])))
+
+
+def test_a_stream_set_on_a_function_in_a_kept_table_is_found(cash_magics):
+    """A table that holds a function is not kept as holding no stream: an
+    attribute set on it (``helper.it = iter(...)``) is one the watchers do
+    not see, however little the function held before."""
+    run_cash_cell(
+        cash_magics,
+        "def helper():\n    return next(helper.it) if hasattr(helper, 'it') else 0\n"
+        "table = {i: {'id': i} for i in range(20_000)}\n"
+        "table['f'] = helper\n"
+        "def look(k, table=table):\n    return table['f']()",
+    )
+    ns = cash_magics.shell.user_ns
+    for _ in range(3):
+        assert not holds_a_stream(ns["look"])
+    exec("helper.it = iter(range(100, 200))", ns)
+    assert holds_a_stream(ns["look"])
+
+
+def test_a_function_two_parts_hold_is_looked_into_for_each(cash_magics):
+    """``f(k, a=A, b=B)`` with ``A = (X,)`` and ``B`` holding ``X``: the walk
+    of ``A`` met ``X`` first, and ``B``'s verdict, kept and reused by a
+    function holding only ``B``, still counts it."""
+    run_cash_cell(
+        cash_magics,
+        "def X():\n    return next(X.box) if hasattr(X, 'box') else 0\n"
+        "X.tag = 1\n"
+        "A = (X,)\nB = {i: {'id': i} for i in range(20_000)}\nB['f'] = X\n"
+        "def f(k, a=A, b=B):\n    return b['f']()\n"
+        "def g(k, b=B):\n    return b['f']()",
+    )
+    ns = cash_magics.shell.user_ns
+    for _ in range(3):
+        assert not holds_a_stream(ns["f"])
+    exec("X.box = iter(range(100, 200))", ns)
+    assert holds_a_stream(ns["g"])
+    assert holds_a_stream(ns["f"])
