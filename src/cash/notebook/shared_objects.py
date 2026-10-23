@@ -1077,7 +1077,6 @@ def referring_names(
     *complete* is False when the climb or the walk was cut short -- by
     *seconds*, depth or size -- so names may be missing.
     """
-    import gc
 
     limit = CpuLimit(seconds)
     value_types = VALUE_TYPES + library_value_types()
@@ -1112,7 +1111,10 @@ def referring_names(
         # One tuple, passed on as the call's own arguments, so it is known.
         args = tuple(frontier)
         stop.add(id(args))
-        referrers = gc.get_referrers(*args)
+        try:
+            referrers = _referrers(args, stop)
+        except WalkBudgetExceeded:
+            return names, False
         stop.add(id(referrers))
         following: list[Any] = []
         stop.add(id(following))
@@ -1831,7 +1833,7 @@ def _variables_holding(
             # The answer the read of the heap below would give, when a module
             # holds one of them: E18's seaborn grid read it twice (1.9 s).
             return None
-        referrers = gc.get_referrers(*args) if len(args) <= _REFERRERS_BY_CALL else _referrers_of(args, stop)
+        referrers = _referrers(args, stop) if len(args) <= _REFERRERS_BY_CALL else _referrers_of(args, stop)
         stop.add(id(referrers))
         following: list[Any] = []
         stop.add(id(following))
@@ -1894,6 +1896,34 @@ def _is_library_class(cls: type) -> bool:
     return instance_of(module, str) and module != "__main__" and not _is_local_module_class(cls)
 
 
+#: Set when a read of what refers to an object was not known here
+#: (`_referrers_of`): this Python, with ``_asyncio`` loaded and no C read.
+#: Cleared for each statement (`forget_heap_unreadable`): a later search
+#: cut short for lack of time is not this one.
+_UNREADABLE = [False]
+
+
+def heap_unreadable() -> bool:
+    """Was a search of this statement cut short because what refers to an
+    object cannot be read here at all (`_TRAVERSE_LOOPS`), not for lack of
+    time?"""
+    return _UNREADABLE[0]
+
+
+def forget_heap_unreadable() -> None:
+    """A new statement's searches: none was cut short yet (`heap_unreadable`)."""
+    _UNREADABLE[0] = False
+
+
+def _referrers(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
+    """`gc.get_referrers` of *objs*; where the ``_asyncio`` module's own
+    read can loop for ever (`_TRAVERSE_LOOPS`), as gc's would, the read of
+    `_referrers_of`, which the C kernel ends."""
+    if _TRAVERSE_LOOPS:
+        return _referrers_of(objs, stop)
+    return gc.get_referrers(*objs)
+
+
 def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
     """`gc.get_referrers` of *objs*, in one read of the heap whatever their
     number. The heap's list goes in *stop*."""
@@ -1908,6 +1938,11 @@ def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
             # object heap is ~0.3 s, checked once it is read.
             check_walk_budget()
             return found
+    if _TRAVERSE_LOOPS and sys.modules.get("_asyncio") is not None:
+        # Its module's own read can loop for ever (`_TRAVERSE_LOOPS`), and
+        # Python cannot cut it short: not known, as if out of time.
+        _UNREADABLE[0] = True
+        raise WalkBudgetExceeded
     found = []
     referents, misses = gc.get_referents, ids.isdisjoint
     # A block of the heap is read in one call, and only a block holding one
@@ -1924,6 +1959,13 @@ def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
 
 #: Heap objects `_referrers_of` reads in one `gc.get_referents` call.
 _REFERRERS_BLOCK = 256
+
+#: Whether the ``_asyncio`` module's own traverse can loop for ever, as it
+#: can on 3.12.0-3.12.5 once its free list of future iterators comes back on
+#: itself (``gc.get_referents(sys.modules["_asyncio"])`` never returns). The
+#: C kernel stops it short and loses nothing (``cwalk.c``); the Python loop
+#: cannot.
+_TRAVERSE_LOOPS = sys.version_info[:2] == (3, 12) and sys.version_info < (3, 12, 6)
 
 #: The C kernel `_referrers_of` reads the heap with (``cwalk.c``), answering
 #: as its Python loop does; None without the kernels, or in a build from
@@ -2238,7 +2280,9 @@ def _holders_from_referrers(
         args = tuple(level)
         seen.update((id(level), id(args)))
         level_ids = {id(obj) for obj in level}
-        referrers = gc.get_referrers(*args)
+        # Not known here (`_referrers`) raises as out of time does: the
+        # caller's check of the statement gives up, and it re-runs warned.
+        referrers = _referrers(args, seen)
         seen.add(id(referrers))
         upper = []
         for holder in referrers:
