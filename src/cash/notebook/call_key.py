@@ -43,6 +43,7 @@ from cash.install_paths import is_user_code_module, is_user_path
 from cash.notebook import shadow as _shadow
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_effects import closure_cells, rebinds_its_closure
+from cash.notebook.consumables import _QUEUE_TYPES, is_consumable_unrestorable
 from cash.sizing import pandas_nbytes
 from cash.source_reading import own_source, wrapper_layers
 from cash.value_hash import compute_hash
@@ -311,7 +312,7 @@ def _plain_record(attrs: dict, atoms: frozenset) -> bool:
 
 #: How the walk reads a type (`_reading`): skipped, item by item, by its
 #: referents, or one at a time (functions, methods, classes, memos).
-_SKIP, _ITEMS, _REFERENTS, _ONE = range(4)
+_SKIP, _ITEMS, _REFERENTS, _ONE, _STREAM = range(5)
 
 
 def _reading(kind: type) -> int:
@@ -328,6 +329,8 @@ def _reading(kind: type) -> int:
         return _ITEMS
     if users or issubclass(kind, (*_MEMBER_HOLDERS, *_PLAIN_HOLDERS)):
         return _REFERENTS
+    if has_attribute(kind, "__next__") or issubclass(kind, _QUEUE_TYPES):
+        return _STREAM  # an iterator or a queue: is it drawn from in place?
     return _SKIP  # a library object: not looked into
 
 
@@ -603,7 +606,11 @@ def holds_a_closure_with_state(
     returned), or a ``functools.cache`` memo. Looked for in tuples, lists,
     sets and dicts, and in what a function, a ``partial``, a bound method, a
     ``SimpleNamespace``, a user's object or a user's class holds
-    (`_held_by`); a library object is not looked into.
+    (`_held_by`); a library object is not looked into. A generator or an
+    iterator held there is state too (`is_consumable_unrestorable`): a
+    function ``make()`` returned with ``g=gen()`` as its default came back
+    on a hit with the generator the last run had drawn from, where plain
+    Python made a new one.
 
     Such a value cannot be served from the cache. The store keeps a function
     by reference, so a hit hands back the closure the last run made, with
@@ -661,6 +668,10 @@ def holds_a_closure_with_state(
         if reading is None:
             reading = readings[kind] = _reading(kind)
         if reading == _SKIP:
+            continue
+        if reading == _STREAM:
+            if is_consumable_unrestorable(item):
+                return True
             continue
         if reading == _ONE:
             if kind is _types.FunctionType:
