@@ -81,16 +81,14 @@ def test_a_global_the_installed_code_reads_is_keyed(cash_magics, mock_shell):
     assert mock_shell.user_ns["res"].a.tolist() == [0.0, 3.0, 6.0, 9.0, 12.0]
 
 
-def test_the_statement_is_still_served_while_the_code_is_the_same(cash_magics, mock_shell, monkeypatch):
+def test_the_statement_is_still_served_while_the_code_is_the_same(cash_magics, mock_shell):
     """Positive control: running the accessor cell again unchanged keeps
-    the statement's entry. Counted by the accessor's sleeps, not by the
-    clock: a busy machine took longer than the sleep for a hit."""
-    sleeps = []
-    sleep = time.sleep
-    monkeypatch.setattr(time, "sleep", lambda seconds: sleeps.append(seconds) or sleep(seconds))
+    the statement's entry. Read from the statement's status, not the clock:
+    a busy machine took longer than the sleep for a hit. (A counting
+    ``time.sleep`` would be a function writing outside the statement, which
+    cash rightly runs every time.)"""
     cells = [DATA, ACCESSOR.format(k=2, tag="same"), "res = df.fx_same.slow()"]
     _run(cash_magics, cells)
-    assert sleeps == [SLOW]
     _run(cash_magics, cells, start=1)
-    assert sleeps == [SLOW]
+    assert str(cash_magics._last_cell_metrics["statements"][-1]["status"]) == "RESTORED"
     assert mock_shell.user_ns["res"].a.tolist() == [0.0, 2.0, 4.0, 6.0, 8.0]
