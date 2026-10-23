@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 from cash import _plain_data
 from cash._memo import CODE_OBJECTS, LruMemo
 from cash._paths import is_pseudo_filename
-from cash._user_attrs import attribute_or, has_attribute, instance_of
+from cash._user_attrs import attribute_or, has_attribute, instance_of, own_dict
 from cash.analysis.bytecode import NAME_LOADS, argvals
 from cash.analysis.callee_effects import (
     free_vars_mutated_in_function,
@@ -436,7 +436,29 @@ def holds_a_closure_with_state(value) -> bool:
                 pushed = True
             if pushed:
                 seen.add(id(item))  # the containers stay alive inside *value*
+            continue
+        # An object of a class of the user's, by the attributes it holds:
+        # ``h.f = make(store)`` was served, and ``h.f`` was the function the
+        # last run made, appending to the list that run's ``store`` was.
+        attrs = own_dict(item) if id(item) not in seen and _users_class(kind) else None
+        if attrs:
+            seen.add(id(item))
+            stack.extend(child for child in attrs.values() if type(child) not in atoms)
     return False
+
+
+def _users_class(kind: type) -> bool:
+    """Is *kind* a class a ``class`` statement of the user's made: of a
+    module of theirs (`is_user_code_module`), or of one with no file, as a
+    class of a cell is wherever the shell runs cells?"""
+    if not attribute_or(kind, "__flags__", 0) & _HEAPTYPE:
+        return False
+    module = sys.modules.get(attribute_or(kind, "__module__", None) or "")
+    return module is None or attribute_or(module, "__file__", None) is None or is_user_code_module(module)
+
+
+#: ``Py_TPFLAGS_HEAPTYPE``: a class a ``class`` statement made, not C.
+_HEAPTYPE = 1 << 9
 
 
 def call_cache_key(
