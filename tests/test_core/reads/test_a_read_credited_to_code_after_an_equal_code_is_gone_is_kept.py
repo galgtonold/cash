@@ -34,3 +34,24 @@ def test_a_read_credited_again_goes_into_the_codes_entry():
     for i in range(3):
         read_credit._record_read(code, f"/data/{i}.csv", (i,))
     assert read_credit.credited_reads(code) == {f"/data/{i}.csv": (i,) for i in range(3)}
+
+
+def test_a_new_code_on_a_gone_codes_id_gets_its_own_entry():
+    """Code equal to a live code is credited, then goes; a new, unequal code
+    takes its id. Its reads are its own, not the live code's entry."""
+    reused = 0
+    for i in range(300):
+        source = f"k = {i}\n"
+        kept = compile(source, "<kept>", "exec")
+        read_credit._record_read(kept, "/data/kept.csv", ("kept",))
+        equal = compile(source, "<kept>", "exec")
+        read_credit._record_read(equal, "/data/equal.csv", ("equal",))
+        gone = id(equal)
+        del equal
+        new = compile(f"other = {i} * 2\n", "<new>", "exec")
+        reused += id(new) == gone
+        read_credit._record_read(new, "/data/new.csv", ("new",))
+        assert read_credit.credited_reads(new) == {"/data/new.csv": ("new",)}
+        assert "/data/new.csv" not in read_credit.credited_reads(kept)
+        del kept, new
+    assert reused, "no new code took a gone code's id: the case is not reached"
