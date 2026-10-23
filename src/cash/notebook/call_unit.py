@@ -79,6 +79,7 @@ from cash.notebook.call_refs import (
     DIGEST_FIELD,
     SIZE_FIELD,
 )
+from cash.notebook.consumables import function_reaches_a_stream
 from cash.notebook.held_sentinels import find_for_call, put_back_for_call
 from cash.notebook.pyplot_state import pyplot_state
 from cash.notebook.read_handles import reaches_read_handle
@@ -1145,6 +1146,11 @@ class CallUnit:
             # the uncached oracle. Replaying it properly needs a
             # sub-statement position anchor that does not exist, so the
             # site is refused instead.
+            return True
+        if function_reaches_a_stream(call.fn):
+            # An iterator it draws from (``next(src)`` on a global
+            # ``itertools.count()``) moves the same way, and holds no state
+            # to compare: a hit would leave it where it was.
             return True
         # The callee mutated a live argument in place and returned
         # something else (`df.dropna(inplace=True); return len(df)`).

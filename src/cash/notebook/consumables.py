@@ -405,6 +405,23 @@ def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> He
                 frontier.extend(
                     (path, value, 0, True, True) for path, value in _spelled(arg, user_ns, look) if _callable(value)
                 )
+    found.extend(_walk(frontier, look))
+    return HeldStreams(sorted(set(found)), look.stopped)
+
+
+def function_reaches_a_stream(fn: Any) -> bool:
+    """Whether calling *fn* can draw from an iterator or generator it holds
+    or reaches (its globals, closure, defaults, the functions it calls), as
+    `held_stream_paths` looks; True too where the look cannot finish. A
+    stored call of it would leave the iterator where it was on a hit."""
+    look = _Look()
+    return bool(_walk([("", fn, 0, _owned(fn), True)], look)) or look.stopped is not None
+
+
+def _walk(frontier: list[tuple[str, Any, int, bool, bool]], look: _Look) -> list[str]:
+    """The paths to the streams the look finds from *frontier*
+    (`held_stream_paths`)."""
+    found: list[str] = []
     seen: set[int] = set()
     while frontier:
         path, obj, depth, owned, held_by_user = frontier.pop()
@@ -443,7 +460,7 @@ def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> He
             continue
         if look.items < 0:
             break
-    return HeldStreams(sorted(set(found)), look.stopped)
+    return found
 
 
 def _only_values(obj: Any) -> bool:

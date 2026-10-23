@@ -38,7 +38,7 @@ CHANGES = {"getattr on a submodule": "mylib.sub.val_a = 2"}
 
 def _modules(monkeypatch, tmp_path, **files):
     for name, text in files.items():
-        (tmp_path / f"{name}.py").write_text(text)
+        (tmp_path / f"{name}.py").write_text(text, encoding="utf-8")
         monkeypatch.delitem(__import__("sys").modules, name, raising=False)
     monkeypatch.syspath_prepend(str(tmp_path))
 
