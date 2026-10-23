@@ -309,14 +309,6 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
     return False
 
 
-def _holds_a_function(children: list[Any]) -> bool:
-    """Whether *children* holds a function: one of the user's modules'
-    (``[mylib.helper] + rows``) is noted wherever it is held, as no question
-    about what exists can tell beforehand."""
-    kinds = _K.type_set(children) if _K is not None else set(map(type, children))
-    return types.FunctionType in kinds
-
-
 def _anything_to_find(namespace: Mapping[str, Any]) -> bool:
     """Whether a walk could find anything: a notebook function, or an
     object of a class of the user's modules (`module_class_objects_exist`)."""
@@ -326,7 +318,7 @@ def _anything_to_find(namespace: Mapping[str, Any]) -> bool:
 def module_class_objects_exist() -> bool:
     """Whether any object of a class defined at the top of one of the
     user's loaded modules, or of a class derived from one, exists, or
-    anything else that holds such a class.
+    anything else that holds such a class or such a module's function.
 
     An object refers to its class, so ``gc.get_referrers`` of the classes
     finds them all, in one pass at C speed. With no module of the user's
@@ -349,17 +341,21 @@ def module_class_objects_exist() -> bool:
     cached inside one, or a restore after a restart, and a trace that was
     dropped or cannot be used checks nothing. Still not seen: a class
     reached through a module's ``__dict__`` held in a value
-    (``SimpleNamespace(d=vars(mylib))``). One reached only through the
-    ``__class__`` cell of its own method (``[mylib.C.helper] + rows`` with
-    ``super()`` in ``helper``) is seen, though not by design: the walk's
-    own memo (`Held.module_classes`) refers to the class, and counts.
+    (``SimpleNamespace(d=vars(mylib))``), and a method of such a class held
+    below where the walk asks (``[SimpleNamespace(f=mylib.C.helper)] +
+    rows``): a class's methods are referred to by the class itself.
+
+    A function defined at the top of such a module is asked about as a class
+    is (`_users_module_functions`): held in a value (``{'fn': mylib.helper,
+    'rows': rows}``), it runs the module's code.
     """
     classes = _users_module_classes()
-    if not classes:
+    module_functions = _users_module_functions()
+    if not classes and not module_functions:
         return False
     if _objects_frozen_since_import():
         return True
-    asked = (_new_code(), tuple(map(id, classes)))
+    asked = (_new_code(), tuple(map(id, classes)), tuple(map(id, module_functions)))
     if _OBJECTS_SEEN[0] == asked:
         return True
     kinds: set[type] = set()
@@ -375,8 +371,8 @@ def module_class_objects_exist() -> bool:
             pass
     # A tuple passes through ``*`` as it is: the call's arguments are then
     # one of the asker's own.
-    asked_of = tuple(kinds)
-    own = {id(classes), id(pending), id(kinds), id(asked_of)}
+    asked_of = (*kinds, *module_functions)
+    own = {id(classes), id(module_functions), id(pending), id(kinds), id(asked_of)}
     for cls in kinds:
         own.add(id(cls))
         own.add(id(cls.__mro__))
@@ -465,6 +461,21 @@ def _holds_the_class(referrer: Any, own: set[int]) -> bool:
 #: finds what is there. A no is never kept: running code can make an object
 #: without new code.
 _OBJECTS_SEEN: list[Any] = [None]
+
+
+def _users_module_functions() -> list[types.FunctionType]:
+    """The functions defined at the top of the user's loaded modules: one
+    held in a value (``{'fn': mylib.helper, 'rows': rows}``) runs the
+    module's code, as a class held there does."""
+    found: list[types.FunctionType] = []
+    for module in list(sys.modules.values()):
+        if not _users_module(module):
+            continue
+        name = module.__name__
+        for value in list(vars(module).values()):
+            if type(value) is types.FunctionType and value.__module__ == name:
+                found.append(value)
+    return found
 
 
 def _users_module_classes() -> list[type]:
@@ -601,7 +612,7 @@ def _walk(
         visited += sum(len(group) for _kind, group in level)
         if check_at is not None and visited > check_at:
             check_at = None
-            if not _anything_to_find(namespace) and all(kind is not types.FunctionType for kind, _group in level):
+            if not (functions or classes or _anything_to_find(namespace)):
                 raise _NoNotebookFunctions
         if visited > WALK_LIMIT:
             return tuple(functions.values()), tuple(classes.values()), False
@@ -616,7 +627,7 @@ def _walk(
             # Asked before the next level is sorted: a sheet's 400,000
             # cells cost more to dedup than the question does.
             check_at = None
-            if not _anything_to_find(namespace) and not _holds_a_function(children):
+            if not (functions or classes or _anything_to_find(namespace)):
                 raise _NoNotebookFunctions
         level = _next_level(children, seen)
     return tuple(functions.values()), tuple(classes.values()), True

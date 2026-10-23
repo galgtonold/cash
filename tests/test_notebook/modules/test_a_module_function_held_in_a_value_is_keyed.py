@@ -30,7 +30,26 @@ SHOP = (
     "def helper(v, log):\n"
     "    _log(log)\n"
     "    return v * K\n"
+    "class Base:\n"
+    "    def helper(self, v, log):\n"
+    "        _log(log)\n"
+    "        return v * K\n"
+    "class C(Base):\n"
+    "    def helper(self, v, log):\n"
+    "        return super().helper(v, log)\n"
 )
+
+#: Where the function sits in the big value, and how a cell calls it. The
+#: walk stops early in a value of no notebook function once it has met
+#: 20,000 objects: it must not drop a function it already met, nor stop
+#: when one sits a level below where it asks.
+SHAPES = {
+    "list_head": ("[{m}.helper] + {rows}", "big[0]"),
+    "dict": ("{{'fn': {m}.helper, 'rows': {rows}}}", "big['fn']"),
+    "tuple": ("({m}.helper, {rows})", "big[0]"),
+    "namespace_head": ("[types.SimpleNamespace(f={m}.helper)] + {rows}", "big[0].f"),
+    "method_using_super": ("[{m}.C.helper] + {rows}", "(lambda v, log: big[0]({m}.C(), v, log))"),
+}
 
 
 @pytest.fixture(params=["0", "1"], ids=["trace_off", "trace_on"])
@@ -47,13 +66,16 @@ def shop(request, tmp_path, monkeypatch):
     sys.modules.pop(name, None)
 
 
+@pytest.mark.parametrize("shape", list(SHAPES))
 @pytest.mark.parametrize("size", [10, 30_000])
-def test_a_setting_of_its_module_reruns_the_call(cash_magics, mock_shell, shop, size):
+def test_a_setting_of_its_module_reruns_the_call(cash_magics, mock_shell, shop, size, shape):
     name, tmp_path = shop
     log = str(tmp_path / "runs.log")
+    value, call = SHAPES[shape]
+    rows = f"[types.SimpleNamespace(i=i) for i in range({size})]"
     cells = [
-        f"import types, {name}\nbig = [{name}.helper] + [types.SimpleNamespace(i=i) for i in range({size})]",
-        f"t = big[0](3, {log!r})",
+        f"import types, {name}\nbig = " + value.format(m=name, rows=rows),
+        f"t = {call.format(m=name)}(3, {log!r})",
         f"{name}.K = 14",
     ]
     for cell in cells[:2]:
