@@ -110,7 +110,7 @@ from ...analysis.analysis_budget import (
     no_analysis_budget,
 )
 from ...analysis.annotations import CacheAnnotation
-from ...analysis.ast_util import resolve_dotted_name
+from ...analysis.ast_util import called_names, handed_names, resolve_dotted_name
 from ...analysis.cacheability import analyze_statement, statement_writes_files
 from ...analysis.cacheability_decision import (
     cacheability_verdict,
@@ -208,6 +208,7 @@ from .unseen_writes import (
     UNREADABLE_REASON,
     UNSEEN_WRITES_REASON,
     live_writers,
+    unreadable_changers,
     unseen_writers,
     writers_without_a_trace,
 )
@@ -1459,6 +1460,16 @@ class StatementProcessor:
             run.metrics["uncacheable_reasons"].append(
                 f"Reads objects of classes from your module {names}, whose file cannot be read: "
                 f"what their methods run cannot be keyed, so the statement runs every time"
+            )
+            run.skip_cache = True
+            run.value_varies = True
+            return
+        unreadable = unreadable_changers(called_names(run.tree) | handed_names(run.tree), self.shell.user_ns)
+        if unreadable:
+            names = ", ".join(repr(n) for n in unreadable)
+            run.metrics["uncacheable_reasons"].append(
+                f"Calls {names}, whose text cannot be read (defined through exec, or compiled from a string): "
+                f"what it changes cannot be told, so the statement runs every time"
             )
             run.skip_cache = True
             run.value_varies = True
