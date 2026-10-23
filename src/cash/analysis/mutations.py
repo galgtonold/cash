@@ -323,12 +323,35 @@ def extract_base_name(node: ast.AST) -> str | None:
             # ``type(self).n += 1`` changes the class of ``self``, as
             # ``self.__class__.n += 1`` does: rooted at ``self``.
             return extract_base_name(node.args[0])
+        if is_vars_of(node):
+            # ``vars(p)['x'] = 3`` writes ``p.__dict__``: rooted at ``p``.
+            return extract_base_name(node.args[0])
         # For chained calls like obj.method1().method2(), walk through the Call
         # to find the root variable.
         if isinstance(node.func, ast.Attribute):
             return extract_base_name(node.func.value)
         if isinstance(node.func, ast.Name):
             return node.func.id
+    return None
+
+
+def is_vars_of(node: ast.Call) -> bool:
+    """``vars(x)``: the one-argument call of the name ``vars``, which hands
+    back ``x.__dict__`` itself."""
+    return isinstance(node.func, ast.Name) and node.func.id == "vars" and len(node.args) == 1 and not node.keywords
+
+
+def attribute_writer(func: ast.expr) -> str | None:
+    """``"setattr"`` or ``"delattr"`` when a call of *func* sets or deletes an
+    attribute of its first argument: ``setattr``, ``builtins.setattr``,
+    ``object.__setattr__`` and their ``delattr`` twins. None otherwise."""
+    if isinstance(func, ast.Name):
+        return func.id if func.id in ("setattr", "delattr") else None
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        if func.value.id == "builtins" and func.attr in ("setattr", "delattr"):
+            return func.attr
+        if func.value.id == "object" and func.attr in ("__setattr__", "__delattr__"):
+            return func.attr.strip("_")
     return None
 
 
@@ -369,6 +392,9 @@ def _extract_receiver_base_name(node: ast.AST) -> str | None:
         return _extract_receiver_base_name(node.value)
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
         return _extract_receiver_base_name(node.func.value)
+    if isinstance(node, ast.Call) and is_vars_of(node):
+        # ``vars(p).update(x=3)``: the receiver is ``p.__dict__`` itself.
+        return _extract_receiver_base_name(node.args[0])
     if isinstance(node, ast.Call) and _is_type_of(node):
         # ``type(self).registry.append(x)``: the class of ``self``.
         return _extract_receiver_base_name(node.args[0])
@@ -468,15 +494,17 @@ class MutationVisitor(ast.NodeVisitor):
         any Call (result captured or not). For multi-output ufuncs ``out`` is a
         tuple: ``out=(q, r)``."""
         self._record_method_mutation(node, node.lineno)
-        if isinstance(node.func, ast.Name) and node.func.id in ("setattr", "delattr") and node.args:
+        writer = attribute_writer(node.func) if node.args else None
+        if writer:
             # ``setattr(points[7], "x", -3)`` changes what ``points`` holds
-            # as ``points[7].x = -3`` does.
+            # as ``points[7].x = -3`` does; so do ``object.__setattr__`` and
+            # ``builtins.setattr``.
             base = extract_base_name(node.args[0])
             if base:
                 self.mutations.append(
                     MutationInfo(
                         variable=base,
-                        method="__setattr__" if node.func.id == "setattr" else "__delattr__",
+                        method=f"__{writer}__",
                         kind="attribute_assign",
                         line=node.lineno,
                     )

@@ -33,6 +33,7 @@ from .callee_effects import callee_global_mutations
 from .file_effects import NOTEBOOK_POLICY, SCANNED_KINDS
 from .handed_callables import handed_callables
 from .helper_code import is_user_code
+from .mutations import attribute_writer, is_vars_of
 from .namespace_effects import capturable_globals, notebook_global_rebinds
 
 __all__ = [
@@ -480,14 +481,14 @@ class _FlowVisitor(ast.NodeVisitor):
                             self.outputs.add(parent_name)
                             self.modified_objects.add(parent_name)
                     break
-        elif (
-            isinstance(node.func, ast.Name)
-            and node.func.id in ("setattr", "delattr")
-            and node.args
-            and not self.is_defined(node.func.id)
+        if (
+            node.args
+            and attribute_writer(node.func)
+            and not (isinstance(node.func, ast.Name) and self.is_defined(node.func.id))
         ):
             # ``setattr(points[7], "x", -3)`` changes ``points`` in place, as
-            # ``points[7].x = -3`` does (`visit_Attribute`).
+            # ``points[7].x = -3`` does (`visit_Attribute`); so do
+            # ``object.__setattr__`` and ``builtins.setattr``.
             parent_name = self._extract_base_name(node.args[0])
             if parent_name:
                 if not self.is_defined(parent_name):
@@ -512,6 +513,9 @@ class _FlowVisitor(ast.NodeVisitor):
             return node.id
         if isinstance(node, (ast.Subscript, ast.Attribute)):
             return self._extract_base_name(node.value)
+        if isinstance(node, ast.Call) and is_vars_of(node) and not self.is_defined("vars"):
+            # ``vars(p)['x'] = 3`` writes ``p.__dict__``, as ``p.x = 3`` does.
+            return self._extract_base_name(node.args[0])
         return None
 
 
