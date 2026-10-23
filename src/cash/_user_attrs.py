@@ -142,16 +142,34 @@ def own_dict(obj: Any) -> dict | None:
 _BUILTIN_CONTAINERS = (dict, list, tuple, set, frozenset, collections.deque)
 
 
-def builtin_items(value: Any) -> list[Any]:
+def builtin_base(value: Any) -> type | None:
+    """The builtin container *value*'s real type is or derives from, or None.
+
+    Decided by the real type, not by ``isinstance``: a proxy
+    (``wrapt.ObjectProxy({...})``, ``MagicMock(spec=dict)``, a class whose
+    ``__class__`` says ``dict``) passes ``isinstance`` for what it claims to
+    be but holds no storage of that type. cash does not open it as one; it
+    is read as what it really is."""
+    kind = type(value)
+    if kind in _BUILTIN_CONTAINERS:
+        return kind
+    if not issubclass(kind, _BUILTIN_CONTAINERS):
+        return None
+    return next(c for c in kind.__mro__ if c in _BUILTIN_CONTAINERS)
+
+
+def builtin_items(value: Any) -> list[Any] | None:
     """What the builtin container *value* is or derives from holds: a dict's
-    keys then values, the items of a list, tuple, set, frozenset or deque.
+    keys then values, the items of a list, tuple, set, frozenset or deque;
+    None when its real type derives from none of them (`builtin_base`).
 
     Read through the builtin type's own methods, not the class's: a dict
     subclass whose ``values()`` raises, or a list subclass whose
     ``__iter__`` does, failed cash's look into it, and the cell with it,
     where plain Python never asked."""
-    kind = type(value)
-    base = kind if kind in _BUILTIN_CONTAINERS else next(c for c in kind.__mro__ if c in _BUILTIN_CONTAINERS)
+    base = builtin_base(value)
+    if base is None:
+        return None
     if base is dict:
         return [*dict.keys(value), *dict.values(value)]
     return list(base.__iter__(value))

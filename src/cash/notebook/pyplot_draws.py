@@ -179,8 +179,9 @@ def holds_artists(value: Any) -> bool:
         # Only a numpy array: a pandas Series of objects has an object dtype
         # and a size too, but no ``.flat``.
         return value.dtype == object and value.size <= 1024 and any(instance_of(item, artist) for item in value.flat)
-    if instance_of(value, (list, tuple)):
-        # A subclass's own ``__iter__`` or ``__len__`` may raise.
+    if issubclass(type(value), (list, tuple)):
+        # A subclass's own ``__iter__`` or ``__len__`` may raise; a proxy
+        # that only claims to be one is not opened.
         items = value if type(value) is list or type(value) is tuple else builtin_items(value)
         return len(items) <= 1024 and any(instance_of(item, artist) for item in items)
     return False

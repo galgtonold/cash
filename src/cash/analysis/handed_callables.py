@@ -1133,10 +1133,10 @@ def _item(container: Any, index: ast.expr) -> Any:
     if instance_of(container, _HELD_IN_DATA):
         container = container.data
     try:
-        if instance_of(container, dict):
+        if issubclass(type(container), dict):
             # ``dict.get``: a defaultdict's factory does not run.
             return dict.get(container, index.value, _MISSING)
-        if instance_of(container, (list, tuple, collections.deque)):
+        if issubclass(type(container), (list, tuple, collections.deque)):
             return container[index.value]
     except (IndexError, TypeError):
         pass
@@ -1216,7 +1216,7 @@ def _instance_dict(owner: Any) -> dict:
         own = object.__getattribute__(owner, "__dict__")
     except (AttributeError, TypeError):
         return {}
-    return own if instance_of(own, dict) else {}
+    return own if issubclass(type(own), dict) else {}
 
 
 #: Special methods a statement naming an object does not run through it:
@@ -2788,14 +2788,14 @@ def _items(container: Any) -> Iterable[Any]:
     if type(container) in _OPENED:
         if instance_of(container, _HELD_IN_DATA):
             container = container.data
-        if instance_of(container, dict):
+        if issubclass(type(container), dict):
             return chain(dict.keys(container), dict.values(container))
         return container
-    if instance_of(container, _CONTAINERS):
+    if issubclass(type(container), _CONTAINERS):
         # A namedtuple, a subclass of the user's of a list or dict: its
         # items, read through the builtin's own slots so no ``__iter__`` of
         # theirs runs, and its attributes.
-        if instance_of(container, dict):
+        if issubclass(type(container), dict):
             items: Iterable[Any] = chain(dict.keys(container), dict.values(container))
         else:
             base = next(kind for kind in _CONTAINERS if instance_of(container, kind))
@@ -2806,7 +2806,7 @@ def _items(container: Any) -> Iterable[Any]:
         own = object.__getattribute__(container, "__dict__")
     except (AttributeError, TypeError):
         own = None
-    values = list(own.values()) if instance_of(own, dict) else []
+    values = list(own.values()) if issubclass(type(own), dict) else []
     for member, cls in _slot_members(type(container)):
         try:
             values.append(member.__get__(container, cls))

@@ -44,12 +44,12 @@ def _children(obj: Any) -> Iterable[tuple[str, Any]]:
         if len(attrs) <= _MODULE_WIDTH and is_user_code(obj):
             yield from ((f".{k}", v) for k, v in list(attrs.items()) if not k.startswith("__"))
         return
-    if instance_of(obj, (list, tuple, set, frozenset)):
+    if issubclass(type(obj), (list, tuple, set, frozenset)):
         if len(obj) <= _WIDTH:
             for i, item in enumerate(obj):
                 yield f"[{i}]", item
         return
-    if instance_of(obj, dict):
+    if issubclass(type(obj), dict):
         if len(obj) <= _WIDTH:
             for k, v in obj.items():
                 yield f"[{k!r}]", v

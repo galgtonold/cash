@@ -360,10 +360,12 @@ def _instance_estimate(value: Any, seen: set[int]) -> int:
                 # arrays as items. Read as 0, its RAM copy took the array
                 # copies over the pickle its digest had made (2 x 150 MB).
                 # By the builtin type's own methods: the class's may raise.
-                if instance_of(obj, dict):
+                # By the real type: a proxy that only claims to be one holds
+                # no storage of it.
+                if issubclass(type(obj), dict):
                     held = [*itertools.islice(dict.values(obj), _INSTANCE_OBJECTS), *held]
-                elif instance_of(obj, (list, tuple)):
-                    base = list if instance_of(obj, list) else tuple
+                elif issubclass(type(obj), (list, tuple)):
+                    base = list if issubclass(type(obj), list) else tuple
                     if base.__len__(obj) <= _INSTANCE_OBJECTS:
                         held = [*base.__iter__(obj), *held]
             for item in held:
@@ -483,16 +485,16 @@ def estimate_object_size(obj: Any, _depth: int = 0) -> int:
         if dataclasses.is_dataclass(obj) and not instance_of(obj, type):
             base = sys.getsizeof(obj)
             return base + sum(estimate_object_size(getattr(obj, f.name), _depth + 1) for f in dataclasses.fields(obj))
-        if instance_of(obj, tuple) and hasattr(obj, "_fields"):  # namedtuple
+        if issubclass(type(obj), tuple) and hasattr(obj, "_fields"):  # namedtuple
             base = sys.getsizeof(obj)
             return base + sum(estimate_object_size(getattr(obj, name), _depth + 1) for name in obj._fields)
         if type_name in ("bytes", "bytearray"):
             return len(obj)
-        if instance_of(obj, (list, tuple)):
+        if issubclass(type(obj), (list, tuple)):
             return _estimate_indexable(obj, _depth)
-        if instance_of(obj, dict):
+        if issubclass(type(obj), dict):
             return _estimate_dict(obj, _depth)
-        if instance_of(obj, (set, frozenset)):
+        if issubclass(type(obj), (set, frozenset)):
             return _estimate_set(obj, _depth)
         return sys.getsizeof(obj)
     except Exception:  # noqa: BLE001 - an object's own lookups (``__class__`` raising) are not cash's error
@@ -596,10 +598,10 @@ def _own_footprint(obj: Any, seen: set[int], stack: list) -> int:
             return size
         size = sys.getsizeof(obj)
         held: list = []
-        if instance_of(obj, dict):
+        if issubclass(type(obj), dict):
             held += obj.values()
             held += obj
-        elif instance_of(obj, (list, tuple, set, frozenset)):
+        elif issubclass(type(obj), (list, tuple, set, frozenset)):
             sampled = _sampled_instances(obj, seen) if len(obj) > _plain_data.SIZE_EXACT_UP_TO else None
             if sampled is None:
                 held += obj

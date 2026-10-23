@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import _plain_data
-from .._user_attrs import builtin_items, instance_of
+from .._user_attrs import builtin_items
 from .shared_objects import (
     TREE_LEAVES,
     VALUE_TYPES,
@@ -58,7 +58,9 @@ def _steps(value: Any, value_types: tuple[type, ...]) -> tuple[list[tuple[Step, 
     what it holds that none can (a set's items, a dict's keys and the values
     under a key that is not a plain value, an object's insides no walk
     opens)."""
-    if instance_of(value, dict):
+    # By the real type: a proxy that only claims to be a dict or list holds
+    # no storage of one, and is read as what it really is.
+    if issubclass(type(value), dict):
         named, unnamed = [], []
         for k, v in dict.items(value):
             if is_value(k, value_types):
@@ -66,7 +68,7 @@ def _steps(value: Any, value_types: tuple[type, ...]) -> tuple[list[tuple[Step, 
             else:
                 unnamed += [k, v]
         return named, unnamed
-    if instance_of(value, (list, tuple)):
+    if issubclass(type(value), (list, tuple)):
         items = value if type(value) is list or type(value) is tuple else builtin_items(value)
         return [(("item", i), v) for i, v in enumerate(items)], []
     attrs = attributes_of(value)

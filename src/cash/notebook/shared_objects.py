@@ -395,10 +395,11 @@ def _values_only(value: Any, exact: frozenset[type]) -> bool:
 
 def children_of(value: Any) -> Iterable[Any] | None:
     """What *value* holds that a restore copies with it, or None for a leaf."""
-    if instance_of(value, dict):
-        return builtin_items(value)
-    if instance_of(value, _CONTAINERS):
-        return builtin_items(value)
+    # By the real type: a proxy that only claims to be a dict or list is
+    # read as what it really is.
+    items = builtin_items(value) if issubclass(type(value), _CONTAINERS) else None
+    if items is not None:
+        return items
     if instance_of(value, _CALLABLE_TYPES):
         return _bound_objects(value)
     if instance_of(value, types.CellType):
@@ -966,7 +967,7 @@ def output_history(
     named += [f"_{k}" for k, v in out.items() if v is not None and user_ns.get(f"_{k}") is v]
     held = [(user_ns, n) for n in named]
     hidden = attribute_or(shell, "user_ns_hidden", None)
-    if instance_of(hidden, dict):
+    if issubclass(type(hidden), dict):
         held += [(hidden, n) for n in named if hidden.get(n) is user_ns.get(n)]
     hook_attrs = attribute_or(attribute_or(shell, "displayhook", None), "__dict__", None)
     if hook_attrs is not None:
@@ -2146,7 +2147,7 @@ def _holders_from_names(
     for _depth in range(_DOWN_DEPTH):
         below = []
         for obj in level:
-            if not instance_of(obj, _CONTAINERS):
+            if not issubclass(type(obj), _CONTAINERS):
                 attrs = attributes_of(obj)
                 if attrs is None:
                     continue
@@ -2245,7 +2246,7 @@ def _holders_from_referrers(
             if holder is user_ns:
                 found.update(name for name, value in user_ns.items() if id(value) in level_ids and name not in known)
                 continue
-            if not (instance_of(holder, _CONTAINERS) or attributes_of(holder) is not None) or _is_module_namespace(
+            if not (issubclass(type(holder), _CONTAINERS) or attributes_of(holder) is not None) or _is_module_namespace(
                 holder
             ):
                 # A frame, a closure cell, a function, a module or its

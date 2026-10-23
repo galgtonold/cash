@@ -245,10 +245,10 @@ def holds_a_closure_with_state(value) -> bool:
             if changes_its_closure(item):
                 return True
             continue
-        if instance_of(item, (tuple, list, set, frozenset, dict)):
+        if issubclass(type(item), (tuple, list, set, frozenset, dict)):
             if id(item) in seen:
                 continue
-            children = item.values() if instance_of(item, dict) else item
+            children = item.values() if issubclass(type(item), dict) else item
             # Only atoms, by exact type: asked at C speed, where the loop
             # below took a Python step per item (22 ms for 200,000 ints).
             if atoms.issuperset(map(type, children)):
