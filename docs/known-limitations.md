@@ -859,6 +859,17 @@ default argument or base class does. **Fix:** move the binding above this cell.
 
 ## Others
 
+<!-- claim: cash/notebook/shared_objects.py:_check_group @0bf0c198 -->
+- **A result holding what a frame's cells hold runs every time.** After
+  `df = pd.DataFrame({"rec": recs})`, the frame holds the records `recs`
+  holds, in its cells. `df` itself is served, still holding them, and so are
+  frames built from it (`df[mask]`, `df.copy()`, `df.iloc[:]`). A statement
+  whose result holds what the records hold is not
+  (`flat = pd.json_normalize(recs)` holds each record's `tags` list), nor is
+  one that changes `df` in place (`df["k"] = df["rec"].apply(...)`). A
+  restore would hand the result back holding copies of them, apart from the
+  ones in `df`'s cells, so such a statement runs each time, as in plain
+  Python.
 - **An empty cached value** (an empty list or frame) may be computed again
   instead of restored.
 - **A pandas table from the cache is read-only past pandas.** Under
