@@ -1790,7 +1790,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-ANALYSIS-FAILED](#notebook-analysis-failed) | notebook | a safety check raised; the statement ran uncached |
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
-| [NOTEBOOK-CHANGED-BELOW](#notebook-changed-below) | notebook | a cell re-run on its own reads a value rebuilt without the change a cell below made in place or through what it calls |
+| [NOTEBOOK-CHANGED-BELOW](#notebook-changed-below) | notebook | a cell re-run on its own reads a value rebuilt without the change a cell below made in place, through what it calls or through a thread |
 | [NOTEBOOK-CLASS-KEPT](#notebook-class-kept) | notebook | a class's own state a cell changes could not be put back for a re-run, and another cell changes it too |
 | [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
 | [NOTEBOOK-FILE-ROUNDTRIP](#notebook-file-roundtrip) | notebook | a file written in this session is read back, so the read reruns after every write |
@@ -1895,8 +1895,9 @@ If it is not code, delete it or make it a markdown cell.
 <!-- claim: cash/notebook/upstream/mismatch_classifier.py:MismatchClassifier._reject_read_only_input @d536a0ab, cash/notebook/upstream/changed_below.py:warn_changed_below @bbf25145 -->
 **What happened.** You re-ran a cell on its own, and a cell below it had
 changed one of its inputs in place (`s.iloc[0] = 1e9`, `rows.append(r)`), or
-through what it calls (`fill()` changing `D`, a function setting a `global`, a
-thread it started and joined).
+through what it calls (`fill()` changing `D`, a function setting a `global`),
+or through work it handed to a thread (a thread it started and joined, a
+thread pool's `submit`).
 cash gives the re-run the input as the cells above leave it, as a run from the
 top does: it rebuilt the value, so the cell computed without the change below,
 and the variable no longer holds that change. The message names the variable,

@@ -36,6 +36,12 @@ class TrackingState:
     # R: UpstreamChecker (simulated vs executed code), ModuleInvalidator, %cash_status.
     executed_cell_codes: dict[str, str] = field(default_factory=dict)
 
+    # Variable -> the code of the statement last to hand work that can change
+    # it to a thread (a Timer, a pool, a Thread started and joined), until a
+    # statement binds it again: what NOTEBOOK-CHANGED-BELOW names.
+    # W: StatementProcessor (`_left_work_running`). R: MismatchClassifier.
+    changed_by_work: dict[str, str] = field(default_factory=dict)
+
     # Variable -> sha256 of every statement that defined it this session (a set:
     # a re-run cell, a loop body and a restore can each define it).
     # W: StatementLineageBuilder, both restorers, the simulator's restore drain.

@@ -200,6 +200,7 @@ from . import hidden_generators
 from .lineage import note_own_writes
 from .observed_draws import ObservedDrawStore
 from .thread_reach import ThreadReach
+from .thread_reach import reachable as reachable_by_work
 
 __all__ = ["StatementProcessor", "is_control_body"]
 
@@ -1753,6 +1754,12 @@ class StatementProcessor:
         refuses a call that does (STORE-WORK-RUNNING)."""
         tracker = execution.file_tracker
         user_ns = self.shell.user_ns
+        changed_by_work = self.tracking_state.changed_by_work
+        for name in run.outputs or ():
+            changed_by_work.pop(name, None)
+        if tracker is not None and tracker.work_functions:
+            for name in reachable_by_work(tracker.work_functions, user_ns):
+                changed_by_work[name] = run.code
         # ``# @cash:assume-safe`` on the statement: the user's word that the
         # work writes nothing the cells after it read, so they are served.
         waived = attribute_or(run.annotation, "assume_safe", False)

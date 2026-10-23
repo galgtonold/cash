@@ -51,15 +51,9 @@ def test_a_cell_below_that_binds_a_new_value_is_quiet(cash_magics):
     assert _run(cash_magics, [0, 1, 2, 1])
 
 
-#: A cell below that changes the input through what it calls: a thread it
-#: starts and joins, a function setting a ``global``, a function changing
-#: it in place.
+#: A cell below that changes the input through what it calls: a function
+#: setting a ``global``, a function changing it in place.
 THROUGH_CALLS = {
-    "a joined thread": [
-        "import threading\nD = {'k': 1}",
-        "v = D['k']",
-        "def fill():\n    D['k'] = 2\nth = threading.Thread(target=fill)\nth.start()\nth.join()",
-    ],
     "a global set by a function": ["k = 1\ndef setk(x):\n    global k\n    k = x", "v = k + 0", "setk(2)"],
     "a function changing it in place": ["D = {'k': 1}\ndef fill():\n    D['k'] = 2", "v = D['k']", "fill()"],
 }
@@ -72,3 +66,34 @@ def test_a_change_made_through_a_call_below_warns(cash_magics, how):
     found = _run(cash_magics, [1], cells)
     assert len(found) == 1, found
     assert "cell 3 below changed through what it calls" in found[0]
+
+
+#: A cell below that changes the input through work it hands to a thread,
+#: with the statement that handed it off.
+THROUGH_THREADS = {
+    "a joined thread": (
+        [
+            "import threading\nD = {'k': 1}",
+            "v = D['k']",
+            "def fill():\n    D['k'] = 2\nth = threading.Thread(target=fill)\nth.start()\nth.join()",
+        ],
+        "th.start()",
+    ),
+    "a thread pool": (
+        [
+            "from concurrent.futures import ThreadPoolExecutor\nD = {'k': 1}",
+            "v = D['k']",
+            "with ThreadPoolExecutor(1) as ex:\n    ex.submit(D.__setitem__, 'k', 2).result()",
+        ],
+        "with ThreadPoolExecutor(1) as ex:",
+    ),
+}
+
+
+@pytest.mark.parametrize("how", list(THROUGH_THREADS))
+def test_a_change_made_by_a_thread_below_warns_and_names_what_started_it(cash_magics, how):
+    cells, statement = THROUGH_THREADS[how]
+    _run(cash_magics, [0, 1, 2], cells)
+    found = _run(cash_magics, [1], cells)
+    assert len(found) == 1, found
+    assert f"cell 3 below changed through work it handed to a thread (`{statement}`)" in found[0]

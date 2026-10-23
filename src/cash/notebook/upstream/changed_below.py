@@ -93,19 +93,26 @@ def warn_changed_below(
     cells: list[str],
     cell_idx: int,
     warned: set[tuple[int, str, str]],
+    by_work: str | None = None,
 ) -> bool:
     """Warn NOTEBOOK-CHANGED-BELOW when *name*, an input of cell *cell_idx*
     that is about to be rebuilt as the cells above leave it, was last changed
     in place, or through what it calls, by *last_code*, a statement of a
-    cell below. Once per cell,
-    name and statement (*warned*). Returns whether it warned."""
-    if not last_code or not 0 <= cell_idx < len(cells):
+    cell below; or by work in a thread *by_work*, a statement of a cell
+    below, handed off (a Timer started, a pool's ``submit``, a Thread
+    started), which is the statement named when both are below. Once per
+    cell, name and statement (*warned*). Returns whether it warned."""
+    if not 0 <= cell_idx < len(cells):
         return False
-    code = strip_markers(last_code).strip()
-    if not code:
-        return False
-    found = _cell_below_holding(code, cells, cell_idx)
-    how = _how_changed(code, name) if found is not None else None
+    found = how = None
+    for candidate, judge in ((by_work, False), (last_code, True)):
+        code = strip_markers(candidate or "").strip()
+        if not code:
+            continue
+        found = _cell_below_holding(code, cells, cell_idx)
+        how = (_how_changed(code, name) if judge else "through work it handed to a thread") if found else None
+        if found is not None and how is not None:
+            break
     if found is None or how is None:
         return False
     below, written = found
