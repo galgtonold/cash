@@ -169,3 +169,43 @@ def test_a_submodule_imported_from_a_loaded_package_is_keyed(tmp_path):
     assert _run(tmp_path)[:2] == ("12", False), "an unedited second run did not hit"
     _write(tmp_path, "pkg/sub.py", "def scale(x):\n    return x * 3\n")
     assert _run(tmp_path)[:2] == ("18", True), "the edited submodule was served stale"
+
+
+def test_a_decorator_of_the_users_that_reads_the_environment_runs_with_a_warning(tmp_path):
+    """A user function called as the module is imported (a decorator here)
+    vouches for what it returns only when its own body does."""
+    _write(
+        tmp_path,
+        "helpmod.py",
+        """
+        import os
+
+        def pick(fn):
+            return fn if os.environ.get("DOUBLE") else (lambda x: x)
+
+        @pick
+        def scale(x):
+            return x * 2
+        """,
+    )
+    _write(
+        tmp_path,
+        "job.py",
+        """
+        import sys
+        import cash
+
+        @cash.cache
+        def total(values):
+            print("[RUN]", file=sys.stderr)  # @cash:assume-safe
+            from helpmod import scale
+            return sum(scale(v) for v in values)
+
+        print(total([1, 2, 3]))
+        """,
+    )
+    out, ran, err = _run(tmp_path, env={"DOUBLE": "1"})
+    assert (out, ran) == ("12", True)
+    assert "cannot read without running it" in err, err[-2000:]
+    out, ran, _ = _run(tmp_path, env={"DOUBLE": None})
+    assert (out, ran) == ("6", True), "what the decorator picked by the environment was served stale"

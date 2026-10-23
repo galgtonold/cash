@@ -257,24 +257,57 @@ class _SourceOnly:
     collects the modules the source imports, anywhere in it.
     """
 
-    def __init__(self, package: str) -> None:
+    def __init__(self, package: str, depth: int = 0) -> None:
         self.package = package
+        self.depth = depth
         self.imported: list[str] = []
-        #: local name -> qualified name, from the top level's imports.
+        #: local name -> qualified name, from the source's imports.
         self.aliases: dict[str, str] = {}
         #: names the top level defines with ``def`` or ``class``.
         self.defined: set[str] = set()
+        #: the top level's functions, by name.
+        self.functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+        #: user functions asked about (`_vouches`), and the answers.
+        self.vouched: dict[str, bool] = {}
 
     def module(self, tree: ast.Module) -> bool:
+        """Does *tree*, a module's source, bind only what follows from it,
+        and read nothing from outside it anywhere, a function body included?"""
+        self.names(tree)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and (_calls_an_importer(node) or self._reads_outside(node)):
+                return False
+            if isinstance(node, (ast.Name, ast.Attribute)) and self._qualified(node) in _OUTSIDE_VALUES:
+                return False
+        return self._body(tree.body)
+
+    def names(self, tree: ast.Module) -> None:
+        """What the names of *tree* are bound to by its imports and its top level."""
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 self._note_import(node)
-            elif isinstance(node, ast.Call) and _calls_an_importer(node):
-                return False
         self.defined = {
             n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
         }
-        return self._body(tree.body)
+        self.functions = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+    def _reads_outside(self, node: ast.Call) -> bool:
+        """Does *node* read or change something outside the source (the
+        clock, the environment, a file, the network), as `classify_call`
+        judges a function body's calls -- by the name its imports give it?"""
+        from ..effects import EffectKind, classify_call
+
+        effect = classify_call(node, None)
+        if effect is None:
+            name = self._qualified(node.func)
+            if name is None or name.startswith(("own:", "builtins.")) or name == _spelled(node.func):
+                return False
+            try:
+                spelled = ast.parse(name, mode="eval").body
+            except SyntaxError:
+                return False
+            effect = classify_call(ast.Call(func=spelled, args=node.args, keywords=node.keywords), None)
+        return effect is not None and effect.kind is not EffectKind.CONSOLE
 
     def _note_import(self, node: ast.Import | ast.ImportFrom) -> None:
         if isinstance(node, ast.Import):
@@ -345,8 +378,7 @@ class _SourceOnly:
             return False
         if isinstance(node, ast.Call) and not all(map(self._expr, [*node.args, *(k.value for k in node.keywords)])):
             return False
-        # The user's own decorator: its code is in the source read.
-        return name in _SOURCE_ONLY_CALLS or name.startswith("own:") or self._is_users(name)
+        return name in _SOURCE_ONLY_CALLS or self._vouches(name)
 
     def _expr(self, node: ast.expr) -> bool:
         if isinstance(node, ast.Lambda):
@@ -357,7 +389,10 @@ class _SourceOnly:
         if isinstance(node, ast.Call):
             name = self._qualified(node.func)
             if name is None or not (
-                name in _SOURCE_ONLY_CALLS or name.partition(".")[0] in _SOURCE_ONLY_MODULES and "." in name
+                name in _SOURCE_ONLY_CALLS
+                or name.partition(".")[0] in _SOURCE_ONLY_MODULES
+                and "." in name
+                or self._vouches(name)
             ):
                 return False
             return all(map(self._expr, [*node.args, *(k.value for k in node.keywords)]))
@@ -396,17 +431,82 @@ class _SourceOnly:
             return None
         return ".".join([root, *reversed(chain)])
 
-    def _is_users(self, name: str) -> bool:
-        module = name.rpartition(".")[0]
-        while module:
-            origin = _origin(module)
-            if origin is not None:
-                return is_local_module(types.SimpleNamespace(__file__=origin))
-            module = module.rpartition(".")[0]
-        return False
+    def _vouches(self, name: str) -> bool:
+        """Does the user function *name* (``own:f``, ``pkg.util.timed``),
+        called at import (a decorator, ``TABLE = build()``), return what
+        follows from its arguments and the source alone? So when what its
+        body runs as it is called -- not the functions it defines, which run
+        later -- calls only what `_expr` accepts, `_MAX_DEPTH` calls deep."""
+        known = self.vouched.get(name)
+        if known is not None:
+            return known
+        self.vouched[name] = False  # a function that calls itself is not followed round
+        if name.startswith("own:"):
+            reader, fn = self, self.functions.get(name[4:])
+        else:
+            reader, fn = self._users_function(name)
+        known = fn is not None and self.depth < _MAX_DEPTH and reader._runs_source_only(fn)
+        self.vouched[name] = known
+        return known
+
+    def _users_function(self, name: str) -> tuple[_SourceOnly, ast.FunctionDef | ast.AsyncFunctionDef | None]:
+        module, _, attr = name.rpartition(".")
+        origin = _origin(module) if module else None
+        if origin is None or not origin.endswith(".py") or not is_local_module(types.SimpleNamespace(__file__=origin)):
+            return self, None
+        try:
+            with open(origin, "rb") as fh:
+                tree = ast.parse(fh.read())
+        except (OSError, SyntaxError, ValueError):
+            return self, None
+        is_package = os.path.basename(origin) == "__init__.py"
+        reader = _SourceOnly(module if is_package else module.rpartition(".")[0], self.depth + 1)
+        reader.names(tree)
+        return reader, reader.functions.get(attr)
+
+    def _runs_source_only(self, fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+        args = fn.args
+        defaults = [*args.defaults, *(d for d in args.kw_defaults if d is not None)]
+        if not all(self._decorator(d) for d in fn.decorator_list) or not all(map(self._expr, defaults)):
+            return False
+        return all(self._expr(call) for call in _calls_as_run(fn.body))
 
 
 _BUILTIN_NAMES = frozenset(dir(builtins))
+#: How many user functions deep a call at import is followed (`_SourceOnly._vouches`).
+_MAX_DEPTH = 8
+#: Values read from outside the source wherever a module names them.
+_OUTSIDE_VALUES = frozenset({"os.environ", "os.environb", "sys.argv", "sys.stdin", "sys.stdin.buffer"})
+
+
+def _spelled(node: ast.expr) -> str | None:
+    """``a.b.c`` as written, or None."""
+    chain: list[str] = []
+    while isinstance(node, ast.Attribute):
+        chain.append(node.attr)
+        node = node.value
+    return ".".join([node.id, *reversed(chain)]) if isinstance(node, ast.Name) else None
+
+
+def _calls_as_run(body: list[ast.stmt]) -> list[ast.Call]:
+    """The calls *body* makes as it runs: not those in a function, lambda or
+    class it defines, which run when that is called."""
+    found: list[ast.Call] = []
+    todo: list[ast.AST] = list(body)
+    while todo:
+        node = todo.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            args = node.args
+            todo.extend([*args.defaults, *(d for d in args.kw_defaults if d is not None)])
+            todo.extend(getattr(node, "decorator_list", ()))
+            continue
+        if isinstance(node, ast.ClassDef):
+            todo.extend([*node.decorator_list, *node.bases])
+            continue
+        if isinstance(node, ast.Call):
+            found.append(node)
+        todo.extend(ast.iter_child_nodes(node))
+    return found
 
 
 def _calls_an_importer(node: ast.Call) -> bool:
