@@ -23,7 +23,7 @@ from cash.backends._base import ttl_expired
 from cash.backends.value_policy import worth_its_bytes
 from cash.notebook._trace import trace_event
 from cash.notebook.borrowed_memory import borrows_from, holds_a_borrower
-from cash.notebook.call_key import TooMuchToLookThrough, holds_a_closure_with_state
+from cash.notebook.call_key import TooMuchToLookThrough, _filled, holds_a_closure_with_state
 from cash.notebook.call_refs import (
     DIGEST_FIELD,
     ESTIMATED_FIELD,
@@ -344,6 +344,7 @@ class CallEntries:
             reached = self._reached(result, fn, root_held or parts != {})
             return (
                 not holds_part_of(result, (*sources, *reached))
+                and not _closes_over_part_of(result, (*sources, *reached))
                 and not (parts != {} and self._shares_library_parts(result, parts, (*sources, *reached)))
                 and not self._borrows(result, sources, reached, fn)
                 # Held by something else (*root_held*), and that holder is
@@ -676,6 +677,39 @@ class CallEntries:
             return None
         trace_event("call_digest_skipped", bytes_estimated=estimate, seconds=round(elapsed, 3))
         return estimate
+
+
+def _closes_over_part_of(result: Any, sources: tuple[Any, ...]) -> bool:
+    """Whether *result* is a function that keeps one of *sources*, or part of
+    one, in its closure, its defaults or its ``__dict__``
+    (``functools.wraps``' ``__wrapped__``), or a function that does.
+
+    ``wrapped = mk(base)`` was served the closure the first call made, over
+    the ``base`` of that run, after ``base`` had been defined again and the
+    old one's ``__code__`` swapped: plain Python gives a closure over the
+    new ``base``. A function is kept by reference, so a hit hands back what
+    it closes over, which `holds_part_of` does not look into.
+    """
+    if not isinstance(result, types.FunctionType):
+        return False
+    held: list[Any] = []
+    seen: set[int] = set()
+    stack = [result]
+    while stack:
+        fn = stack.pop()
+        if id(fn) in seen:
+            continue
+        seen.add(id(fn))
+        captured = [cell.cell_contents for cell in fn.__closure__ or () if _filled(cell)]
+        captured.extend(fn.__defaults__ or ())
+        captured.extend((fn.__kwdefaults__ or {}).values())
+        captured.extend(vars(fn).values())
+        held.extend(captured)
+        stack.extend(obj for obj in captured if isinstance(obj, types.FunctionType))
+    if not held:
+        return False
+    ids = {id(source) for source in sources}
+    return any(id(obj) in ids for obj in held) or holds_part_of(held, sources)
 
 
 def _has_identity(value: Any) -> bool:
