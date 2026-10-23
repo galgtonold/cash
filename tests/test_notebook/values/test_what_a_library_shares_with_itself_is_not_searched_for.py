@@ -60,8 +60,12 @@ def test_a_boosting_fit_is_stored_without_searching_what_only_the_library_holds(
     run_cash_cell(cash_magics, "m = HistGradientBoostingRegressor(max_iter=20, random_state=0).fit(X, y)")
 
     assert not any(has_empty for _n, has_empty in looked_for), "() was looked for up its referrers"
-    assert climbs and None not in climbs, "a climb from what the library holds did not end"
-    assert looked_for and all(n <= 4 for n, _ in looked_for), looked_for
+    # No climb at all where the walk reads the loss's objects as one (the
+    # pure-Python read): nothing to look for is right too.
+    assert None not in climbs, "a climb from what the library holds did not end"
+    assert all(n <= 4 for n, _ in looked_for), looked_for
+    # Up to the link classes and back, for the check and its anchor retry.
+    assert len(looked_for) <= 2 * shared_objects._REFERRER_DEPTH, looked_for
     row = cash_magics._last_cell_metrics["statements"][-1]
     assert str(row["status"]) == "COMPUTED"
     assert not row.get("uncacheable_reasons"), row.get("uncacheable_reasons")
