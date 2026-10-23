@@ -77,6 +77,17 @@ HOLDERS = {
     "a_dict": ("box = {'it': it}", "box['it']"),
     "an_attribute": ("class B:\n    pass\nbox = B()\nbox.it = it", "box.it"),
     "a_list_in_a_dict": ("box = {'its': [it]}", "box['its'][0]"),
+    # What no look at the value finds: the edge of the statement that made
+    # the holder moves it, at run time as in the simulation.
+    "a_deque": ("import collections\nbox = collections.deque([it])", "box[0]"),
+    "a_namedtuple": ("import collections\nBox = collections.namedtuple('Box', 'it')\nbox = Box(it)", "box.it"),
+    "a_slots_class": (
+        "class B:\n    __slots__ = ('it',)\n    def __init__(self, it):\n        self.it = it\nbox = B(it)",
+        "box.it",
+    ),
+    "a_dict_subclass": ("class D(dict):\n    pass\nbox = D(it=it)", "box['it']"),
+    "four_deep": ("box = {'a': {'b': {'c': {'d': it}}}}", "box['a']['b']['c']['d']"),
+    "a_long_list": ("box = [0] * 1500 + [it]", "box[-1]"),
 }
 
 
@@ -90,6 +101,19 @@ def test_a_draw_through_the_name_moves_what_holds_it_too(cash_magics, holder):
     bind, read = HOLDERS[holder]
     setup = "log = []\ndef f(x):\n    log.append(x)\n    return x\nit = map(f, range(6))\n" + bind
     cells = [setup, "first = [next(it) for _ in range(2)]", f"rest = list({read})\nn = len(log)"]
+    ns = cash_magics.shell.user_ns
+    for _ in range(3):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        assert (ns["first"], ns["rest"], ns["n"]) == ([0, 1], [2, 3, 4, 5], 6)
+
+
+def test_a_holder_emptied_after_the_draw_runs_nothing_above_again(cash_magics):
+    """``box = [it]``, a draw, then ``box.pop()``: the runtime found ``it`` in
+    ``box`` no more, the simulation still moved ``box`` through its edge, and
+    the reader ran the cells above again."""
+    setup = "log = []\ndef f(x):\n    log.append(x)\n    return x\nit = map(f, range(6))\nbox = [it]"
+    cells = [setup, "first = [next(it) for _ in range(2)]", "box.pop()", "rest = list(it)\nn = len(log)"]
     ns = cash_magics.shell.user_ns
     for _ in range(3):
         for cell in cells:

@@ -1520,12 +1520,17 @@ class StatementProcessor:
                 recorded = self._records.recorded_share_edges(run.source_hash)
             if recorded:
                 apply_share_record(self.tracking_state.derivation_edges, (), recorded, self.shell.user_ns)
-        self.lineage_builder.replay_derivation_bumps(
+        bumped = self.lineage_builder.replay_derivation_bumps(
             self.tracking_state, run.outputs, run.inputs, skip=moved, code=run.code, kept=kept
         )
         # The restore put the generators where the run left them; their
-        # lineages follow, as the run's did.
+        # lineages follow, as the run's did, and move what holds them
+        # through their edges, as the simulation's hit moves them.
         self._advance_carriers(run.source_hash, advanced, run.cache_key, run.code)
+        if advanced:
+            self.lineage_builder.replay_derivation_bumps(
+                self.tracking_state, set(advanced), run.inputs, skip=moved | bumped, code=run.code
+            )
         self.analytics_manager.record_event(
             status="HIT",
             execution_time=hit_result["total_time"],
@@ -2421,6 +2426,7 @@ class StatementProcessor:
                     or inputs_moved
                     or self._binds_a_stream(run),
                     value_keyed=self._value_keyed(run),
+                    drawn=frozenset(run.carriers_advanced or ()) - run.outputs,
                     occurrence_index=run.occurrence_index,
                     replay_bumps=False,
                     lineage_reads=run.pyplot_drawn,
@@ -2474,15 +2480,22 @@ class StatementProcessor:
                 else:
                     logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
         moved = self._move_holders(run, saved_metadata)
-        # After the holders moved: a variable the entry stores moves as a hit
-        # of it moves it (`held_lineage`), not through its edges, so a hit,
-        # a run and the simulation leave it alike.
-        self.lineage_builder.replay_derivation_bumps(
-            self.tracking_state, run.outputs, run.inputs, skip=moved, code=run.code, kept=run.holders_unchanged & moved
-        )
         # After the save: the entry records each input's lineage as the
         # statement read it, before its draw moved it on.
         self._advance_carriers(run.source_hash, run.carriers_advanced, run.cache_key, run.code)
+        # After the holders moved: a variable the entry stores moves as a hit
+        # of it moves it (`held_lineage`), not through its edges, so a hit,
+        # a run and the simulation leave it alike. The generators it drew
+        # from move what holds them through their edges, as the simulation
+        # moves them (``box = deque([it])``, then ``next(it)``).
+        self.lineage_builder.replay_derivation_bumps(
+            self.tracking_state,
+            run.outputs | (run.carriers_advanced or set()),
+            run.inputs,
+            skip=moved,
+            code=run.code,
+            kept=run.holders_unchanged & moved,
+        )
         self._report_saved(run, saved_metadata)
         self._tell_past_budget(run, execution.cost or execution.wall_time or 0.0)
         storage = (saved_metadata.storage if saved_metadata else None) or ()

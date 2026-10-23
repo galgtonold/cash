@@ -73,6 +73,7 @@ from ..lineage_formula import (
     setting_output_lineage,
     statement_environment_component,
     value_digests_key,
+    without_drawn,
 )
 from ..loop_watch import branch_changes, loop_watch_hash, watch_candidates
 from ..pyplot_draws import pyplot_draw_names
@@ -1226,7 +1227,23 @@ class StatementLineage:
             # Union derivation-bumped vars so this cached mutation statement
             # is still recorded as a producer of the aliased base.
             self._note_made_generators(stmt_code, outputs, virtual_lineage)
-            outputs = outputs | lookup.bumped | advanced
+            # What holds a generator it drew from moves through its edges,
+            # past what the hit moved already, as the runtime's hit moves it.
+            carried = (
+                bump_derived_lineages(
+                    self.edges,
+                    virtual_lineage,
+                    advanced,
+                    inputs,
+                    record=lambda t, h: virtual_lineage.__setitem__(t, h),
+                    present=lambda t: True,
+                    skip=lookup.bumped,
+                    code=stmt_code,
+                )
+                if advanced
+                else set()
+            )
+            outputs = outputs | lookup.bumped | advanced | carried
             self._register_callables(stmt_code, tree, virtual_lineage, is_import)
             return StatementOutcome(outputs, lookup.lookup_time, False, lookup.file_deps)
 
@@ -1244,18 +1261,20 @@ class StatementLineage:
             )
 
         source_hash = statement_source_hash(stmt_code)
+        no_cache_values = self.tracking_state.no_cache_values.get(
+            value_digests_key(source_hash, input_lineage_map, occurrence_index)
+        )
         lineage_by_out = self.output_lineages(
             source_hash,
-            input_lineages_all,
+            # Less the streams its run drew from, as the runtime left them out.
+            without_drawn(input_lineage_map, no_cache_values),
             file_hash_component,
             inputs,
             outputs,
             stmt_code,
             tree,
             virtual_lineage,
-            no_cache_values=self.tracking_state.no_cache_values.get(
-                value_digests_key(source_hash, input_lineage_map, occurrence_index)
-            ),
+            no_cache_values=no_cache_values,
             recorded_reads=recorded_reads_lineage_component(
                 self.tracking_state, cache_key, stmt_code, self.shell.user_ns, outputs, as_last_run=True
             ),
