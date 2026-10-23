@@ -203,6 +203,7 @@ def _handed_callables(
             # the statement iterates.
             target = _resolve_argument(call.func, namespace, bound)
             found.methodcaller_called(call, namespace, bound)
+            found.partial_called(call, namespace, bound)
             for value, root in target.values:
                 found.add(value, root, False)
             for value, root in target.any_of:
@@ -1748,6 +1749,33 @@ class _Found:
         if target is not None and target[0] is operator.methodcaller:
             self._methods_named(maker.args[0].value, call, namespace, bound)
 
+    def partial_called(
+        self, call: ast.Call, namespace: Mapping[str, Any], bound: Mapping[str, tuple[ast.expr, ...]]
+    ) -> None:
+        """``functools.partial(add, bucket)(x)``: the partial it builds,
+        called, as one bound to a name is (`wrapping_object_called`). Built
+        again here from what its arguments name, which runs nothing of the
+        user's; an argument that names no one object is handed as None."""
+        maker = call.func
+        if not (isinstance(maker, ast.Call) and isinstance(maker.func, (ast.Name, ast.Attribute)) and maker.args):
+            return
+        target = _users_target(maker.func, namespace)
+        if target is None or target[0] is not functools.partial:
+            return
+        if any(isinstance(arg, ast.Starred) for arg in maker.args) or any(k.arg is None for k in maker.keywords):
+            return
+        parts = []
+        for arg in maker.args:
+            values = _resolve_argument(arg, namespace, bound).values
+            parts.append(values[0][0] if len(values) == 1 else None)
+        if not callable(parts[0]):
+            return
+        keywords = {}
+        for keyword in maker.keywords:
+            values = _resolve_argument(keyword.value, namespace, bound).values
+            keywords[keyword.arg] = values[0][0] if len(values) == 1 else None
+        self.add(functools.partial(parts[0], *parts[1:], **keywords), None, False)
+
     def _methods_named(
         self, name: str, call: ast.Call, namespace: Mapping[str, Any], bound: Mapping[str, tuple[ast.expr, ...]]
     ) -> None:
@@ -1969,6 +1997,10 @@ class _Found:
         while instance_of(func, functools.partial) and id(func) not in seen:
             seen.add(id(func))
             func, args, keywords = func.func, func.args + args, {**func.keywords, **keywords}
+        if type(func) is types.MethodType:
+            # ``partial(a.add, bucket)``: the method's function, handed its
+            # object first.
+            func, args = func.__func__, (func.__self__, *args)
         if instance_of(func, types.FunctionType):
             source = _source_of(func) if self._users(func) else None
             node = parse_function_source(source) if source is not None else None
