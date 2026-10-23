@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import functools
+import gc
 import hashlib
 import inspect
 import logging
@@ -748,6 +749,16 @@ class WatchedSince:
 
 #: A tuple of these alone has nothing a call could change (`identity_snapshot`).
 _PRIM_SET = frozenset(IMMUTABLE_PRIMS)
+
+
+def _may_hold_a_list(value: tuple) -> bool:
+    """Can *value* hold a list, at any depth below tuples (what an identity
+    snapshot of it compares, `_plain_data.identity_snapshot`)? Not when the
+    collector stopped tracking it: CPython untracks a tuple once it holds
+    only objects it does not track, and it always tracks a list. Asked of
+    every key build, hits included, so a tuple of a million numbers is not
+    read item by item each time (25 ms) once a collection has seen it."""
+    return gc.is_tracked(value) and not _PRIM_SET.issuperset(map(type, value))
 
 
 def _with_copies(form: tuple, rows: dict[int, tuple[list, list]]) -> tuple:
@@ -1743,7 +1754,7 @@ class ArgHasher:
             if keyed is not None:
                 before = {}
                 for v in (*hashed_args, *hashed_kwargs.values()):
-                    if type(v) is list or (type(v) is tuple and not _PRIM_SET.issuperset(map(type, v))):
+                    if type(v) is list or (type(v) is tuple and _may_hold_a_list(v)):
                         armed = value_watch.gen(v) if value_watch.WATCHING else None
                         before[id(v)] = WatchedSince(armed) if armed is not None else _plain_data.identity_snapshot(v)
             # A list, not ``map``: a StopIteration raised inside ``map`` ends
