@@ -23,6 +23,7 @@ import gc
 import hashlib
 import itertools
 import logging
+import operator
 import pathlib as _pathlib
 import random
 import reprlib
@@ -247,7 +248,7 @@ def holds_a_stream(fn) -> bool:
         return False
     from cash import value_watch
 
-    walk = _StreamWalk(id(fn))
+    walk = _StreamWalk(fn)
     for part in parts:
         kind = type(part)
         if kind in _EXACT_ATOMS:
@@ -262,14 +263,14 @@ def holds_a_stream(fn) -> bool:
             walked = []
             found = value_watch.digest(
                 part,
-                lambda value: walked.append(value) or walk.part(value, {id(fn)}),
+                lambda value: walked.append(value) or walk.part(value, walk.fresh_seen()),
                 value_watch.KIND_NO_STREAM,
                 _kept_as_clean,
             )
             if type(found) is _HoldersMet and not walked:
                 # The table is as it was; the functions and classes it
                 # holds may not be: what they hold is read again.
-                found = walk.holders_now(found.holders, id(fn))
+                found = walk.holders_now(found.holders)
         else:
             found = walk.part(part)
         if found is _HOLDS:
@@ -314,13 +315,21 @@ class _StreamWalk:
     """`holds_a_stream`'s walk, one held part at a time, its bounds and the
     objects it met shared by the parts of one function."""
 
-    __slots__ = ("holders", "items", "object_kinds", "seen", "ways")
+    __slots__ = ("fn_id", "holders", "items", "kernels", "object_kinds", "seen", "ways")
 
-    def __init__(self, fn_id: int) -> None:
-        self.seen: set[int] = {fn_id}
+    def __init__(self, fn: Any) -> None:
+        self.kernels = _native.kernels
+        # Without the kernels an object is met by its address over the
+        # least size of an object (`_new_in`), with them by its address.
+        self.fn_id = id(fn) if self.kernels is not None else id(fn) >> _ID_SHIFT
+        self.seen: set[int] = self.fresh_seen()
         self.ways: dict[type, Any] = {}
         self.object_kinds: set[type] = set()
         self.holders = self.items = 0
+
+    def fresh_seen(self) -> set[int]:
+        """A set of the objects met, the function alone in it."""
+        return {self.fn_id}
 
     def part(self, part: Any, seen: set[int] | None = None) -> Any:
         """``_HOLDS``, ``_CLEAN``, ``_HoldersMet`` or ``_UNSEEN`` for *part*
@@ -330,15 +339,20 @@ class _StreamWalk:
         iter(...)``). ``_UNSEEN`` once a random generator held elsewhere
         was met. *seen*: the objects met already, the function's shared set
         if not given."""
-        kernels = _native.kernels
+        kernels = self.kernels
         ways = self.ways
         if seen is None:
             seen = self.seen
         children = [part]
+        types: list[type] = []
         clean = True
         holders: list[Any] = []
         while children:
-            kinds = kernels.type_set(children) if kernels is not None else set(map(type, children))
+            if kernels is not None:
+                kinds = kernels.type_set(children)
+            else:
+                types = list(map(type, children))
+                kinds = set(types)
             for kind in kinds - ways.keys():
                 way = ways[kind] = _way_in(kind)
                 if way is _STREAM:
@@ -349,7 +363,7 @@ class _StreamWalk:
                     return _HOLDS
             skipped = {kind for kind in kinds if ways[kind] not in _WALKED}
             next_children: list[Any] = []
-            for kind, group in _by_kind(kernels, children, skipped, kinds):
+            for kind, group in _by_kind(kernels, children, skipped, kinds, types):
                 new = kernels.new_in(group, False, seen) if kernels is not None else _new_in(group, seen)
                 if not new:
                     continue
@@ -383,7 +397,12 @@ class _StreamWalk:
                         )
                     else:
                         items = itertools.chain.from_iterable(new)
-                    next_children.extend(item for item in items if type(item) not in _EXACT_ATOMS)
+                    items = list(items)
+                    # Told apart at C speed: 100,000 records are hundreds of
+                    # thousands of items, a Python test each most of a hit.
+                    next_children.extend(
+                        itertools.compress(items, map(operator.not_, map(_EXACT_ATOMS.__contains__, map(type, items))))
+                    )
                 if self.holders + len(self.object_kinds) > _STREAM_HOLDERS_AT or self.items > _STREAM_ITEMS_AT:
                     return _HOLDS
             children = next_children
@@ -391,19 +410,21 @@ class _StreamWalk:
             return _UNSEEN
         return _HoldersMet(tuple(holders)) if holders else _CLEAN
 
-    def holders_now(self, holders: tuple, fn_id: int) -> Any:
+    def holders_now(self, holders: tuple) -> Any:
         """``_HOLDS`` when one of *holders*, met in a part kept as holding no
         stream, holds one now."""
-        seen = {fn_id}
+        seen = self.fresh_seen()
         for holder in holders:
             if self.part(holder, seen) is _HOLDS:
                 return _HOLDS
         return _CLEAN
 
 
-def _by_kind(kernels: Any, children: list, skipped: set[type], kinds: set[type]) -> list[tuple[type, list]]:
+def _by_kind(
+    kernels: Any, children: list, skipped: set[type], kinds: set[type], types: list[type]
+) -> list[tuple[type, list]]:
     """*children* but those of a *skipped* type, by exact type; *kinds* are
-    their types."""
+    their types, *types* the type of each without the kernels."""
     groups = kernels.split_level(children, skipped, set()) if kernels is not None else NotImplemented
     if groups is not NotImplemented:
         return groups
@@ -411,27 +432,46 @@ def _by_kind(kernels: Any, children: list, skipped: set[type], kinds: set[type])
         # One type: the level as it is, with no pass over it.
         (kind,) = kinds
         return [] if kind in skipped else [(kind, children)]
-    by_kind: dict[type, list] = {}
-    for child in children:
-        kind = type(child)
-        if kind not in skipped:
-            by_kind.setdefault(kind, []).append(child)
-    return list(by_kind.items())
+    # A pass at C speed per type, not a Python step per child: the types of
+    # a level are a few. In the order they are first met, as before.
+    return [
+        (kind, list(itertools.compress(children, map(operator.is_, types, itertools.repeat(kind)))))
+        for kind in dict.fromkeys(types)
+        if kind not in skipped
+    ]
 
 
 def _new_in(group: list, seen: set[int]) -> list:
-    """Each of *group* once, none in *seen* (by id), which this adds them to."""
-    ids = list(map(id, group))
+    """Each of *group* once, none in *seen*, which this adds them to. An
+    object is met by its address over the least size of an object (16
+    bytes): no two objects share it, and a set of addresses, all multiples
+    of 16, took three times as long to fill."""
+    if group and type(group[0]) in _BY_IDENTITY:
+        # Classes and functions, hashed by identity: a list of 100,000
+        # objects meets their one class 100,000 times, told apart here
+        # without an id made for each.
+        group = list(dict.fromkeys(group))
+    ids = list(map(operator.rshift, map(id, group), itertools.repeat(_ID_SHIFT)))
     if seen.isdisjoint(ids):
-        unique = set(ids)
-        if len(unique) == len(ids):
-            seen |= unique
+        before = len(seen)
+        seen.update(ids)
+        if len(seen) - before == len(ids):
             return group
+        # None met before, some twice in *group*.
+        return list(dict(zip(ids, group)).values())
     found = dict(zip(ids, group))
     for key in seen & found.keys():
         del found[key]
     seen.update(found)
     return list(found.values())
+
+
+#: An object's address over the least size of an object, as a shift: two
+#: objects alive at once never share it.
+_ID_SHIFT = object.__basicsize__.bit_length() - 1
+#: Types whose objects hash by identity, whatever they hold: their groups
+#: are told apart by the objects themselves.
+_BY_IDENTITY = frozenset((type, _types.FunctionType))
 
 
 #: How many functions and classes `holds_a_stream` looks into.
