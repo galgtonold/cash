@@ -343,7 +343,7 @@ class StatementLineageBuilder:
                 func_component,
                 self._compute_module_lineage_component(tracking_state, value, var_name, code, tree),
                 changed_module_environment(var_name, value, code, environment),
-                self._no_cache_value(value_digests, (source_hash, var_name), value)
+                self._no_cache_value(value_digests, (source_hash, var_name), value, taken)
                 if ((no_cache and var_name not in value_kept) or var_name in value_keyed)
                 and not _a_namespace(value, user_ns)
                 else "",
@@ -521,11 +521,29 @@ class StatementLineageBuilder:
 
         return content_hash
 
-    def _no_cache_value(self, digests: dict[str, str], output: tuple[str, str], value: Any) -> str:
+    def _no_cache_value(
+        self, digests: dict[str, str], output: tuple[str, str], value: Any, taken: dict[int, tuple[Any, str]]
+    ) -> str:
         """Record the digest of a no-cache output's value; return its component.
-        *output* is the statement's source hash and the output's name."""
+        *output* is the statement's source hash and the output's name.
+
+        *taken* holds the content digests already read of the outputs (a
+        call's store pickled ``G = build()``'s graph, `DigestHandoff`), shared
+        with the session hash below: the value is read once, not once for
+        each, where the session hash takes `compute_hash` too."""
+        shared = (self.compute_hash or compute_hash) is compute_hash
+
+        def digest_of(value: Any) -> str | None:
+            found = taken.get(id(value)) if shared else None
+            if found is not None and found[0] is value:
+                return found[1]
+            digest = budgeted_hash(value)
+            if digest is not None and shared:
+                taken[id(value)] = (value, digest)
+            return digest
+
         var_name = output[1]
-        digests[var_name] = no_cache_value_digest(value, self._too_costly, output)
+        digests[var_name] = no_cache_value_digest(value, self._too_costly, output, digest_of)
         return no_cache_value_component(digests, var_name)
 
     def build_output_lineages(self, tracking_state: "TrackingState", outputs: set[str]) -> dict[str, str]:

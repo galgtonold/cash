@@ -385,7 +385,10 @@ def _held_hash(before: str, cache_key: str) -> str:
 
 
 def no_cache_value_digest(
-    value: Any, too_costly: MutableMapping[Hashable, int | None] | None = None, key: Hashable = None
+    value: Any,
+    too_costly: MutableMapping[Hashable, int | None] | None = None,
+    key: Hashable = None,
+    digest_of: Callable[[Any], str | None] = budgeted_hash,
 ) -> str:
     """The digest of what a ``# @cash:no-cache`` statement bound, for its
     output's lineage.
@@ -408,7 +411,9 @@ def no_cache_value_digest(
     its length, and gets a digest of its own at once from then on, until its
     value is less than half as long: no run pays the budget again for it,
     and a value near the budget does not switch between its digest and one
-    of its own from run to run.
+    of its own from run to run. *digest_of* takes the digest; a caller that
+    already read the value (a call's store just pickled it) hands over that
+    digest rather than read it again.
     """
     handle = read_handle_digest(value)
     if handle is not None:
@@ -419,7 +424,7 @@ def no_cache_value_digest(
         if size is None or known is None or 2 * size >= known:
             return _fresh_digest()
         del too_costly[key]
-    digest = budgeted_hash(value)
+    digest = digest_of(value)
     if digest is None:
         if too_costly is not None:
             too_costly[key] = size
