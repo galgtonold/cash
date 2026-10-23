@@ -1281,10 +1281,15 @@ class StatementProcessor:
                 run.drew_from_stream = any(isinstance(self.shell.user_ns.get(name), io.IOBase) for name in drawn)
             return
         held = held_stream_paths(run.tree, self.shell.user_ns)
-        if held:
+        if held.paths:
             return refuse(
-                f"Can draw from {', '.join(held)}, an iterator no name it reads holds: "
+                f"Can draw from {', '.join(held.paths)}, an iterator no name it reads holds: "
                 f"a cache hit would not advance it, so the statement runs every time"
+            )
+        if held.stopped:
+            return refuse(
+                f"cash could not finish looking for an iterator in what it reaches (stopped at {held.stopped}): "
+                f"one there would not be advanced by a cache hit, so the statement runs every time"
             )
         looked_at = reads_open_handle(run.inputs - run.outputs, self.shell.user_ns)
         if looked_at:
