@@ -3259,7 +3259,7 @@ class StatementProcessor:
             sorted(
                 name
                 for name, value in holders.items()
-                if not isinstance((patches or {}).get(name), FrameCellsPatch) and shares_categories(value, outputs)
+                if not instance_of((patches or {}).get(name), FrameCellsPatch) and shares_categories(value, outputs)
             )
             if not _is_loop(run.tree)
             else []
@@ -3769,13 +3769,13 @@ def _frames_left_alone(cached_data: Any) -> set[str]:
     (`FrameCellsPatch`), or that hold the outputs' objects only through
     those (a `HolderPatch` with no place to set): a hit leaves them as they
     are."""
-    variables = cached_data.get("variables") if isinstance(cached_data, dict) else None
-    if not isinstance(variables, dict):
+    variables = cached_data.get("variables") if instance_of(cached_data, dict) else None
+    if not instance_of(variables, dict):
         return set()
     return {
         name
         for name, value in variables.items()
-        if isinstance(value, FrameCellsPatch) or (isinstance(value, HolderPatch) and not value.places)
+        if instance_of(value, FrameCellsPatch) or (instance_of(value, HolderPatch) and not value.places)
     }
 
 

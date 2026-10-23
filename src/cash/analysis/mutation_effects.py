@@ -79,7 +79,7 @@ from .namespace_effects import (
     users_callee,
 )
 from .object_protocol import ObjectProtocolResets, changed_through_their_objects, object_protocol_mutations
-from .parameter_changes import OBSERVE, callable_changes_parameters, lambda_changes_parameters
+from .parameter_changes import OBSERVE, callable_changes_parameters, lambda_changes_parameters, makes_plain_objects
 from .parameter_changes import is_users as parameter_is_users
 
 __all__ = [
@@ -1793,7 +1793,7 @@ def _handed_callable_changes(given: ast.expr, namespace: Mapping[str, Any]) -> A
     if isinstance(given, ast.Call):
         callee = _static_callee(given.func, namespace)
         if callee is not None and parameter_is_users(callee):
-            return True
+            return not makes_plain_objects(callee)
         return _strongest(
             _handed_callable_changes(argument, namespace)
             for argument in (*given.args, *(keyword.value for keyword in given.keywords))

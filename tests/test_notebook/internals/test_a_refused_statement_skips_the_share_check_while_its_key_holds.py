@@ -15,6 +15,7 @@ import types
 
 from cash.notebook.statement import processor as processor_module
 from cash.notebook.statement.processor import StatementProcessor
+from cash.notebook.statement.store import StatementStore
 from tests._cell_driver import run_cash_cell
 
 
@@ -90,6 +91,9 @@ def test_a_loop_over_records_reruns_right_and_checks_less(cash_magics, monkeypat
         return real(outputs, *args, **kwargs)
 
     monkeypatch.setattr(processor_module, "unrestorable_output_reason", spy)
+    # The loop takes a few milliseconds: too cheap to store, it would never
+    # reach the check (`gets_no_entry`).
+    monkeypatch.setattr(StatementStore, "_too_cheap_to_store", lambda *a, **k: False)
     run_cash_cell(m, "class P:\n    def __init__(s, i):\n        s.x = i\n")
     run_cash_cell(m, "points = [P(i) for i in range(3000)]")
     for _ in range(8):

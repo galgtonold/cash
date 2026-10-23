@@ -38,6 +38,15 @@ CHANGES = {
         "class U:\n    def __call__(self, d):\n        if d['i'] == 3:\n            d['z'] = self.z\nu = U()",
         "u.z = {z}\n_ = df['o'].apply(u)",
     ),
+    "callable_object_inline": (
+        "class U:\n    def __init__(self, z):\n        self.z = z\n"
+        "    def __call__(self, d):\n        if d['i'] == 3:\n            d['z'] = self.z",
+        "_ = df['o'].apply(U({z}))",
+    ),
+    "lambda_in_dict": (
+        "",
+        "F = {{'u': lambda d: d.update(z={z}) if d['i'] == 3 else None}}\n_ = df['o'].apply(F['u'])",
+    ),
     "def_in_dict": (UPD + "\nF = {'u': upd}", "Z = {z}\n_ = df['o'].apply(F['u'])"),
     "def_in_list": (UPD + "\nFS = [upd]", "Z = {z}\n_ = df['o'].apply(FS[0])"),
     "builtin_map": (UPD, "Z = {z}\n_ = list(map(upd, df['o']))"),
@@ -86,6 +95,11 @@ READS = {
         "_ = df['o'].apply(functools.partial(times, k=2))",
     ),
     "def_in_dict": ("def two(d):\n    return d['i'] * 2\nF = {'t': two}", "_ = df['o'].apply(F['t'])"),
+    "lambda_in_dict": ("F = {'t': lambda d: d['i'] * 2}", "_ = df['o'].apply(F['t'])"),
+    "lambda_in_dict_over_lines": (
+        "F = {\n    'u': lambda d: d['i'],\n    't': lambda d: d['i'] * 2,\n}",
+        "_ = df['o'].apply(F['t'])",
+    ),
     "builtin_map": ("def two(d):\n    return d['i'] * 2", "_ = list(map(two, df['o']))"),
     "pipe": ("def size(frame):\n    return len(frame)", "_ = df.pipe(size)"),
 }

@@ -2288,7 +2288,7 @@ def _is_users(fn: types.FunctionType) -> bool:
     # Through ``dict``'s own ``get``: ``exec(src, SpyDict())`` gives a
     # function globals whose ``get`` is the user's.
     held = fn.__globals__
-    name = dict.get(held, "__name__") if isinstance(held, dict) else None
+    name = dict.get(held, "__name__") if instance_of(held, dict) else None
     if name is None or name == "__main__":
         return True
     module = sys.modules.get(name) if isinstance(name, str) else None
@@ -2653,7 +2653,7 @@ def _is_cashs(fn: types.FunctionType) -> bool:
     # Through ``dict``'s own ``get``: ``exec(src, SpyDict())`` gives a
     # function globals whose ``get`` is the user's.
     held = fn.__globals__
-    name = dict.get(held, "__name__") if isinstance(held, dict) else None
+    name = dict.get(held, "__name__") if instance_of(held, dict) else None
     return isinstance(name, str) and (name == "cash" or name.startswith("cash."))
 
 

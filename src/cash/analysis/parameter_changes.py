@@ -196,6 +196,17 @@ def _class_attribute(cls: type, name: str) -> Any:
     return _MISSING
 
 
+def makes_plain_objects(cls: Any) -> bool:
+    """Whether calling the class *cls* gives an object that cannot be
+    called: no metaclass, ``__new__`` or ``__call__`` of its own anywhere
+    in its MRO. ``sum(xs, Vec())`` hands ``sum`` no code to run on ``xs``."""
+    return (
+        type(cls) is type
+        and _class_attribute(cls, "__new__") is _MISSING
+        and _class_attribute(cls, "__call__") is _MISSING
+    )
+
+
 def _answers_attributes(cls: type) -> bool:
     """Whether *cls* (a plain class) computes attributes itself."""
     return _own_lookup(cls, "__getattr__") or _own_lookup(cls, "__getattribute__")
@@ -320,8 +331,7 @@ class _Reader:
             # read where it was first met.
             return self._seen[key] or frozenset()
         self._seen[key] = frozenset()
-        source = function_source(fn)
-        fdef = parse_function_def(source) if source else None
+        fdef = _definition(fn)
         if fdef is None:
             self._seen[key] = None
             return None
@@ -493,8 +503,7 @@ class _Reader:
                 return everything
             if not changed:
                 return set()
-            source = function_source(value)
-            fdef = parse_function_def(source) if source else None
+            fdef = _definition(value)
             if fdef is None:
                 return everything
             ordered = positional_param_names(fdef)
@@ -908,6 +917,26 @@ def callable_changes_parameters(value: Any) -> bool | None | _Observe:
     if changed is False and reader.observed:
         return OBSERVE
     return changed
+
+
+def _definition(fn: types.FunctionType) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    """*fn*'s ``def``, read from its source. A lambda's source is the line
+    it is on (``KEYS = {'k': lambda r: r[1]}``), not a ``def``: its node is
+    found in that line or, for one in a literal over several lines, in the
+    whole cell (`unseen_writes._function_node`), and read as a ``def``
+    returning its body."""
+    source = function_source(fn)
+    fdef = parse_function_def(source) if source else None
+    if fdef is not None or fn.__code__.co_name != "<lambda>":
+        return fdef
+    from ..notebook.statement.unseen_writes import _function_node
+
+    node = _function_node(fn.__code__)
+    if not isinstance(node, ast.Lambda):
+        return None
+    body = ast.copy_location(ast.Return(value=node.body), node.body)
+    as_def = ast.FunctionDef(name="<lambda>", args=node.args, body=[body], decorator_list=[], returns=None)
+    return ast.copy_location(as_def, node)
 
 
 def lambda_changes_parameters(lam: ast.Lambda, namespace: Mapping[str, Any]) -> bool | _Observe:
