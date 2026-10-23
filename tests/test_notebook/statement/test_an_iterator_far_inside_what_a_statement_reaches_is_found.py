@@ -231,6 +231,10 @@ def test_an_index_the_statement_binds_itself_is_not_the_notebooks(statement_proc
 
 _LIBRARY_HOLDERS = {
     "a pandas Series": (f"import pandas as pd\ns = pd.Series([0] * 70 + [{_GEN}], dtype=object)", "next(s.iloc[70])"),
+    "a categorical Series": (
+        f"import pandas as pd\ns = pd.Series(pd.Categorical([0] * 70 + [{_GEN}]))",
+        "next(s.iloc[70])",
+    ),
     "a numpy object array": (
         f"import numpy as np\na = np.empty(71, dtype=object)\na[:70] = 0\na[70] = {_GEN}",
         "next(a[70])",
@@ -264,6 +268,7 @@ _DATA = {
     "objects of the user's": "class O:\n    def __init__(self, i):\n        self.i = i\nxs = {i: O(i) for i in range(3000)}",
     "nested records": "xs = [{'id': i, 'tags': [{'k': 'a', 'v': [i, 1]}]} for i in range(60_000)]",
     "a set of pairs": "xs = {(i, i + 1) for i in range(300_000)}",
+    "a frame with a str column": "import pandas as pd\nxs = pd.DataFrame({'s': ['a', 'b'] * 50_000, 'n': range(100_000)})",
 }
 
 
