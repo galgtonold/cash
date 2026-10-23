@@ -82,12 +82,31 @@ class Outcome:
     seen: dict[str, dict[str, str]] = field(default_factory=dict)
     statuses: dict[str, dict[int, list[str]]] = field(default_factory=dict)
 
+    def without_paths(self, work: Any) -> Outcome:
+        """Each side runs in its own folder: its path, as a module's or a
+        file's repr shows it, reads ``<work>``."""
+        import os
+
+        paths = sorted({str(work), os.path.realpath(work)}, key=len, reverse=True)
+
+        def clean(text: str) -> str:
+            for path in paths:
+                text = text.replace(path, "<work>")
+            return text
+
+        self.seen = {run: {where: clean(v) for where, v in seen.items()} for run, seen in self.seen.items()}
+        return self
+
 
 @dataclass
 class Report:
     shape: str
     #: (config, run, where, cash, plain): each place cash and plain differ.
     mismatches: list[tuple[str, str, str, str, str]] = field(default_factory=list)
+    #: The same, where cash's value is what a fresh kernel's Run All of the
+    #: same cells gives: allowed where cash rebuilds what the cells hold
+    #: (a generator, a module's state) rather than drawing on it further.
+    rebuilt: list[tuple[str, str, str, str, str]] = field(default_factory=list)
     #: config -> run -> cell index -> statuses of its statements.
     statuses: dict[str, dict[str, dict[int, list[str]]]] = field(default_factory=dict)
     #: (config, error): a side that could not run at all.
@@ -95,14 +114,21 @@ class Report:
 
     @property
     def ok(self) -> bool:
+        """Nothing differs, or only as a fresh kernel's Run All would."""
         return not self.mismatches and not self.errors
 
+    @property
+    def verdict(self) -> str:
+        return "BAD" if not self.ok else "REBUILT" if self.rebuilt else "OK"
+
     def text(self, show_statuses: bool = False) -> str:
-        lines = [f"{'OK ' if self.ok else 'BAD'} {self.shape}"]
+        lines = [f"{self.verdict:7} {self.shape}"]
         for config, error in self.errors:
             lines.append(f"    [{config}] could not run: {error}")
         for config, run, where, cash, plain in self.mismatches:
             lines.append(f"    [{config}] {run} {where}: cash={cash!r} plain={plain!r}")
+        for config, run, where, cash, plain in self.rebuilt:
+            lines.append(f"    [{config}] {run} {where}: cash={cash!r} plain={plain!r} (as a fresh kernel)")
         if show_statuses or not self.ok:
             for config, runs in self.statuses.items():
                 for run, cells in runs.items():
@@ -110,8 +136,20 @@ class Report:
                     lines.append(f"    [{config}] {run} statuses  {shown}")
         return "\n".join(lines)
 
-    def assert_ok(self) -> None:
-        assert self.ok, self.text()
+    def assert_ok(self, *, allow_rebuilt: bool = True) -> None:
+        assert self.ok and (allow_rebuilt or not self.rebuilt), self.text()
+
+
+def _fresh_runs(shape: Shape) -> dict[str, str]:
+    """Run -> the plain run that is a fresh kernel's Run All of the same
+    cells: the first, or the first after the restart. A run whose cells
+    neither has (an edit in between) has none."""
+    fresh = {}
+    for index, run_name in enumerate(RUNS):
+        for first in (0, RUNS.index("restart+run1")):
+            if first <= index and shape.cells_for(index) == shape.cells_for(first):
+                fresh[run_name] = RUNS[first]
+    return fresh
 
 
 def check(shape: Shape, work_dir: Any, configs: list[str] | None = None) -> Report:
@@ -130,6 +168,7 @@ def check(shape: Shape, work_dir: Any, configs: list[str] | None = None) -> Repo
     except Exception as exc:
         report.errors.append(("plain", repr(exc)))
         return report
+    fresh = _fresh_runs(shape)
     for config in configs or list(CONFIGS):
         try:
             got = run(shape, work / config, config)
@@ -139,7 +178,13 @@ def check(shape: Shape, work_dir: Any, configs: list[str] | None = None) -> Repo
         report.statuses[config] = got.statuses
         for run_name in RUNS:
             mine, theirs = got.seen.get(run_name, {}), plain.seen.get(run_name, {})
+            first = plain.seen.get(fresh[run_name], {}) if run_name in fresh else {}
             for where in sorted(set(mine) | set(theirs), key=str):
-                if mine.get(where) != theirs.get(where):
-                    report.mismatches.append((config, run_name, where, str(mine.get(where)), str(theirs.get(where))))
+                if mine.get(where) == theirs.get(where):
+                    continue
+                found = (config, run_name, where, str(mine.get(where)), str(theirs.get(where)))
+                if where in first and mine.get(where) == first[where]:
+                    report.rebuilt.append(found)
+                else:
+                    report.mismatches.append(found)
     return report

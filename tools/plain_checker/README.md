@@ -35,6 +35,20 @@ Each cash run is repeated in three configs:
 Arrays and frames are compared by content. Other values are compared by
 `repr`, with object addresses removed.
 
+Each shape gets a verdict:
+
+- **OK** means nothing differs.
+- **BAD** means a value or output differs from plain Python. The exit
+  status is then 1.
+- **REBUILT** means it differs from the same kernel's plain run, but
+  every difference equals what a fresh kernel's Run All of the same cells
+  gives. Cash rebuilds a generator or a module's state rather than drawing
+  on it further (see "Randomness" in docs/known-limitations.md), so this can
+  be by design. A stale result looks the same, though, so read these
+  against that rule.
+
+An error in a cell is compared as output, and the run goes on.
+
 The report also lists cash's status for every statement, per run and
 config. For a decorator step, the status is `ran` when a decorated
 function's body ran, else `-`.
@@ -63,9 +77,10 @@ From pytest:
 ```python
 from tools.plain_checker import check, decorator, notebook
 
+
 def test_my_shape(tmp_path):
     shape = notebook("my-shape", ["xs = [1, 2]", "total = sum(xs)", "xs.append(3)"])
-    check(shape, tmp_path).assert_ok()   # or check(shape, tmp_path, ["trace"])
+    check(shape, tmp_path).assert_ok()  # or check(shape, tmp_path, ["trace"])
 ```
 
 ## Writing shapes
@@ -79,8 +94,8 @@ SHAPES = [
     notebook(
         "list-append",
         cells=["xs = [1, 2, 3]", "total = sum(xs)", "xs.append(4)"],
-        names=["total"],                    # optional
-        edits={3: {0: "xs = [10, 20]"}},    # optional: before run 3 (the first after the restart), cell 0 changes
+        names=["total"],  # optional
+        edits={3: {0: "xs = [10, 20]"}},  # optional: before run 3 (the first after the restart), cell 0 changes
         source="where the repro came from",
     ),
     decorator(

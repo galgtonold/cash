@@ -120,6 +120,7 @@ def run_notebook(shape: Shape, work: Path, config: str | None) -> Outcome:
     try:
         with _environment(CONFIGS[config] if config is not None else {}):
             runner.start_kernel(with_cash=config is not None)
+        runner.client.allow_errors = True  # an error is an output to compare, not the end of the run
         if config is not None:
             _cash_on(runner, config, init=False)  # start_kernel turned cash on
         for index, run_name in enumerate(RUNS):
@@ -144,4 +145,4 @@ def run_notebook(shape: Shape, work: Path, config: str | None) -> Outcome:
                 seen[f"{name}"] = value
     finally:
         runner.shutdown()
-    return outcome
+    return outcome.without_paths(work)

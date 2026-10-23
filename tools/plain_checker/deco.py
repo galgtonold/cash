@@ -38,4 +38,4 @@ def run_decorator(shape: Shape, work: Path, config: str | None) -> Outcome:
         outcome.seen.update(got["seen"])
         for run_name, statuses in got["statuses"].items():
             outcome.statuses[run_name] = {int(k): v for k, v in statuses.items()}
-    return outcome
+    return outcome.without_paths(work)

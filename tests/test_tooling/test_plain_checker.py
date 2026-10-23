@@ -53,3 +53,17 @@ def test_the_smoke_shapes_match_plain_python(tmp_path):
         report = check(shape, tmp_path / shape.name, ["trace"])
         report.assert_ok()
         assert report.statuses["trace"]["run1"], report.text(True)
+
+
+def test_a_difference_a_fresh_kernel_also_gives_is_kept_apart(monkeypatch, tmp_path):
+    """Plain draws on through Run All (1, 3); cash gives the fresh kernel's
+    first answer again (1, 1): REBUILT, not BAD."""
+
+    def fake(shape, work, config):
+        second = "3" if config is None else "1"
+        return Outcome(seen={"run1": {"u": "1"}, "run2": {"u": second}})
+
+    monkeypatch.setattr("tools.plain_checker.kernel.run_notebook", fake)
+    report = check(notebook("fake", ["u = next(G)"]), tmp_path, ["trace"])
+    assert report.ok and report.verdict == "REBUILT", report.text()
+    assert [(run, where) for _c, run, where, *_ in report.rebuilt] == [("run2", "u")]
