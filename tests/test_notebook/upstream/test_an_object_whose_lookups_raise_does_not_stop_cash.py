@@ -219,6 +219,7 @@ def test_cash_asks_such_an_object_nothing_but_to_pickle_it(cash_magics, tmp_path
     store sized ``c`` by asking it for ``nbytes``; copying it asks what
     unpickling does."""
     import numpy  # noqa: F401 - `kept_state._flat_array` looks only once numpy is loaded
+    import pandas  # noqa: F401 - the RAM tier's copy looks for frames only once pandas is loaded
 
     from cash import kept_state
 
