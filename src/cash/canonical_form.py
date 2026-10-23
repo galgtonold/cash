@@ -373,7 +373,11 @@ _BY_NAME = (type, types.FunctionType, types.BuiltinFunctionType, types.ModuleTyp
 
 
 def canonical_bytes(
-    value: Any, content: ContentHashing, hook: Callable[[Any], Any] | None = None, seen: dict | None = None
+    value: Any,
+    content: ContentHashing,
+    hook: Callable[[Any], Any] | None = None,
+    seen: dict | None = None,
+    outside: Callable[[], dict[int, Any]] | None = None,
 ) -> bytes:
     """*value*'s canonical form (`stable_key_repr`), pickled: equal values give
     equal bytes, in any process, however they were built.
@@ -386,6 +390,13 @@ def canonical_bytes(
     in the form. Only when an object is left to pickle whole, which may
     share state inside, is the memo kept. *seen*, when given, is filled with
     the writable containers the walk met (`stable_key_repr`'s *seen*).
+
+    An object left to pickle whole that holds one of those containers, or
+    one of the *outside* ones (``id -> where``, the containers of values
+    keyed apart from *value*, kept by the caller and asked for only here),
+    has it marked as held there (`kept_state.key_aliases`): ``f(a,
+    Rec(a))`` and ``f([a, Rec(a)])`` keyed like the calls with an equal
+    copy of ``a``, and the second was served the first's result.
     """
     left: list = []
     fielded: list = []
@@ -403,11 +414,23 @@ def canonical_bytes(
         form = stable_key_repr(value, content, seen=walked, hook=hook, left=left)
     try:
         if left:
-            return b"m" + _plain_data.key_dumps(form)
+            return b"m" + _plain_data.key_dumps(form, _held_elsewhere(walked, left, outside))
         return b"u" + _plain_data.content_dumps(form)
     except RecursionError:
         # An object left to pickle whole can be deeper than pickle follows.
         raise TooDeepValueError(_too_deep(value)) from None
+
+
+def _held_elsewhere(walked: dict, left: list, outside: Callable[[], dict[int, Any]] | None) -> dict[int, Any]:
+    """``id -> where`` of the containers the key holds besides the objects
+    *left* to pickle whole: the ones the walk met (*walked*, as `_enter`
+    numbered them), then the *outside* ones. Not the left objects
+    themselves, which are keyed by that pickle alone."""
+    held: dict[int, Any] = dict(outside()) if outside is not None else {}
+    held.update((oid, ("walked", met[0])) for oid, met in walked.items())
+    for obj in left:
+        held.pop(id(obj), None)
+    return held
 
 
 #: Exact types `canonical_call_bytes` writes straight into the form: each is

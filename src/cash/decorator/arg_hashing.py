@@ -1700,7 +1700,20 @@ class ArgHasher:
                 {k: plain_key_part(v) for k, v in hashed_kwargs.items()},
             )
             walked: dict = {}
-            args_bytes = canonical_bytes(form, self._content, hook=self._nested_hasher, seen=walked)
+
+            def outside() -> dict[int, tuple]:
+                # The plain arguments, keyed by their own digests, and the
+                # containers inside them, as `shared_across` locates them.
+                spots: dict[int, tuple] = {}
+                parts = [*form[0], *form[1].values()]
+                for i, (p, v) in enumerate(zip(parts, [*hashed_args, *hashed_kwargs.values()])):
+                    census = plain_census(v) if p is not v and type(v) in _plain_data.TREE_NODES else None
+                    if census is not None:
+                        spots[id(v)] = (i, -2, 0)
+                        spots.update((oid, (i, *where)) for oid, where in census[2].items())
+                return spots
+
+            args_bytes = canonical_bytes(form, self._content, hook=self._nested_hasher, seen=walked, outside=outside)
             shared = shared_across([*args, *kwargs.values()], [*hashed_args, *hashed_kwargs.values()], walked)
             if shared:
                 args_bytes += pickle.dumps(("__cash_shared__", shared), protocol=4)
