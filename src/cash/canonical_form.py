@@ -402,12 +402,17 @@ def canonical_bytes(
     fielded: list = []
     walked: dict = {} if seen is None else seen
     form = stable_key_repr(value, content, seen=walked, hook=hook, left=left, fielded=fielded)
-    if fielded and (left or len(set(fielded)) != len(fielded) or not walked.keys().isdisjoint(fielded)):
+    if fielded and (
+        left
+        or len(set(fielded)) != len(fielded)
+        or not walked.keys().isdisjoint(fielded)
+        or (outside is not None and not outside().keys().isdisjoint(fielded))
+    ):
         # An object keyed by its fields, or a list or dict inside one that
         # something else holds too, is one pickle's memo no longer sees:
         # met again -- in another argument, inside an object left to
-        # pickle, walked -- it would key like an equal copy. Keyed the old
-        # way.
+        # pickle, walked, keyed apart by the caller (*outside*) -- it would
+        # key like an equal copy. Keyed the old way.
         del form
         left = []
         walked.clear()

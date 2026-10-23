@@ -6,13 +6,18 @@ whose marks for an object met twice saw only that pickle: ``a`` beside
 equal copy of ``a`` beside it, and after the shared call ``f([1, 2, 3],
 r)`` was served its result. The key pickle now marks a container the rest
 of the key holds as held there: the list the key walk met, or a plain
-argument keyed by its own digest.
+argument keyed by its own digest. So does an object keyed by its fields
+(a list of 8 items or more in it), and an array or frame keyed by its
+content.
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from cash import Cash
@@ -43,20 +48,40 @@ def _many(a, r):
     return (a, rows), lambda args: args[0] is args[1][0].x
 
 
+class Slots:
+    __slots__ = ("x",)
+
+    def __init__(self, x):
+        self.x = x
+
+
+VALUES = {
+    "three items": lambda: [1, 2, 3],
+    "100 items": lambda: list(range(100)),
+    "a dict of 3000": lambda: {i: i for i in range(3000)},
+    "an array": lambda: np.arange(3),
+    "a big array": lambda: np.arange(300_000),
+    "a frame": lambda: pd.DataFrame({"a": [1, 2]}),
+}
+
+HOLDERS = {"an object": Rec, "a namespace": lambda a: argparse.Namespace(x=a), "a slots object": Slots}
+
+
 @pytest.mark.parametrize("backend", ["disk", "memory"])
-@pytest.mark.parametrize("holder", [Rec, lambda a: argparse.Namespace(x=a)], ids=["an object", "a namespace"])
+@pytest.mark.parametrize("holder", list(HOLDERS.values()), ids=list(HOLDERS))
 @pytest.mark.parametrize(
     "shape", [_two, _in_list, _in_dict, _many], ids=["two arguments", "one list", "one dict", "a list of records"]
 )
-def test_the_call_with_a_copy_is_not_served_the_shared_ones_result(tmp_path, backend, holder, shape):
+@pytest.mark.parametrize("value", list(VALUES.values()), ids=list(VALUES))
+def test_the_call_with_a_copy_is_not_served_the_shared_ones_result(tmp_path, backend, holder, shape, value):
     if backend == "memory":
         cash = Cash(backend="memory", register_magic=False)
     else:
         cash = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
-    a = [1, 2, 3]
+    a = value()
     r = holder(a)
     shared, test = shape(a, r)
-    apart, _ = shape([1, 2, 3], r)
+    apart, _ = shape(copy.deepcopy(a), r)
     f = cash.cache(lambda *args: test(args))
     for _ in range(8):
         assert f(*shared) is True
