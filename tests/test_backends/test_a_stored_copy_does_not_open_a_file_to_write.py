@@ -183,3 +183,131 @@ def test_a_rebuild_that_reads_its_file_is_copied(sink):
     backend.set("k", value, metadata={"copy_required": True})
     _meta, got = backend.get("k")
     assert got["v"].text == "keep me"
+
+
+def test_a_result_whose_rebuild_writes_is_not_stored_on_disk_either(tmp_path, sink):
+    """Refused in RAM, it was still written to disk, and every later hit
+    unpickled it and emptied the file: ``'keep me'``, then ``''``."""
+
+    @cash.Cash(cache_dir=str(tmp_path / "cache"), register_magic=False).cache
+    def with_sink(n):
+        return {"sink": _new(ReopensInSetstate, str(sink)), "n": n}
+
+    for _ in range(3):
+        sink.write_text("keep me", encoding="utf-8")
+        with_sink(1)
+        assert sink.read_text(encoding="utf-8") == "keep me"
+
+    @cash.Cash(cache_dir=str(tmp_path / "cache"), register_magic=False).cache
+    def with_sink(n):
+        return {"sink": _new(ReopensInSetstate, str(sink)), "n": n}
+
+    with_sink(1)
+    assert sink.read_text(encoding="utf-8") == "keep me"
+
+
+def test_a_disk_entry_whose_rebuild_writes_is_a_miss(tmp_path, sink):
+    """Written before (by an older cash, or to disk alone as a big value):
+    the hit is not served, and the file is not touched."""
+    from cash.backends.file_backend import FileBackend
+
+    backend = FileBackend(str(tmp_path / "cache"))
+    backend.set("k", {"v": _new(ReopensInSetstate, str(sink))}, {})
+    sink.write_text("keep me", encoding="utf-8")
+    assert FileBackend(str(tmp_path / "cache")).get("k") == (None, None)
+    assert sink.read_text(encoding="utf-8") == "keep me"
+
+
+class _Changes:
+    def __init__(self, path, change):
+        self.path, self.change = path, change
+
+    def __getstate__(self):
+        return {"path": self.path, "change": self.change}
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        _CHANGES[self.change](self.path)
+
+
+def _sqlite(path):
+    import sqlite3
+
+    sqlite3.connect(path + ".db").close()
+
+
+_CHANGES = {
+    "truncate": lambda path: __import__("os").truncate(path, 0),
+    "remove": lambda path: __import__("os").remove(path),
+    "rename": lambda path: __import__("os").rename(path, path + ".old"),
+    "mkdir": lambda path: __import__("os").mkdir(path + ".d"),
+    "sqlite": _sqlite,
+}
+
+
+@pytest.mark.parametrize("change", list(_CHANGES))
+def test_a_change_to_a_file_other_than_an_open_is_not_made(sink, change):
+    """Writes not made through ``open``: the file was emptied, removed or
+    renamed, a folder or database made, by the RAM tier's copy."""
+    import os
+
+    backend = InMemoryBackend()
+    with pytest.raises(cash.exceptions.CacheBackendError):
+        backend.set("k", {"v": _Changes(str(sink), change)}, metadata={"copy_required": True})
+    assert sink.read_text(encoding="utf-8") == "keep me"
+    assert sorted(os.listdir(sink.parent)) == ["sink.txt"]
+
+
+class _ImportsLazily:
+    def __getstate__(self):
+        return {}
+
+    def __setstate__(self, state):
+        import lazily_imported  # noqa: F401 - imported on first rebuild
+
+        self.imported = True
+
+
+def test_a_module_imported_in_a_rebuild_is_imported(tmp_path, monkeypatch):
+    """Python's own ``.pyc`` write for it counted as a writing open: the
+    import was aborted, and every store refused."""
+    import sys
+
+    (tmp_path / "lazily_imported.py").write_text("X = 1\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, "lazily_imported", raising=False)
+    monkeypatch.setattr(sys, "dont_write_bytecode", False)
+    backend = InMemoryBackend()
+    for i in range(2):
+        backend.set(f"k{i}", {"v": _ImportsLazily()}, metadata={"copy_required": True})
+    assert "lazily_imported" in sys.modules
+    assert sys.dont_write_bytecode is False
+
+
+class _UsesScratch:
+    def __getstate__(self):
+        return {}
+
+    def __setstate__(self, state):
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            with open(os.path.join(folder, "model.bin"), "wb") as f:
+                f.write(b"x")
+            os.mkdir(os.path.join(folder, "parts"))
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as f:
+            f.write("x")
+        fd, path = tempfile.mkstemp()
+        os.close(fd)
+        os.remove(path)
+        self.loaded = True
+
+
+def test_a_rebuild_using_scratch_files_of_its_own_is_copied():
+    """A library that loads through a temporary file or folder changes
+    nothing that was there before."""
+    backend = InMemoryBackend()
+    backend.set("k", {"v": _UsesScratch()}, metadata={"copy_required": True})
+    _meta, got = backend.get("k")
+    assert got["v"].loaded

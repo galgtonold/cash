@@ -29,11 +29,11 @@ from .._lazy_module import LazyModule
 from ..cost_model import GENERIC_FAMILY
 from ..sizing import memory_footprint, pickled_size_estimate
 from ..source_reading import read_code_file
-from ..tracking import io_watch
 from ..value_types import IMMUTABLE_PRIMS
 from . import frame_sharing, heap_blocks, iterative_copy, set_order, shared_blocks
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, gdsf_value
 from .entry_format import SplitPayload
+from .no_file_writes import WouldWriteAFile, no_file_writes
 from .serialization import Serializer
 
 psutil = LazyModule("psutil")  # imported on first use: ~11 ms off `import cash`
@@ -1029,7 +1029,7 @@ class InMemoryBackend(CacheBackend):
         # stored instance's class is the old one. A disk hit looks the class
         # up by name and gets the new one; so does the second attempt here.
         stores = record_cells is not None  # `_cash_stored_as_is` is looked for
-        no_writes = _NoFileWrites()
+        refused: str | None = None
         for hook in (persistent_id if memo or frames or ndarray or stores else None, renamed_id):
             try:
                 buffers: list[pickle.PickleBuffer] = []
@@ -1053,21 +1053,25 @@ class InMemoryBackend(CacheBackend):
                     # holds: a rebuild that opens a file to write would
                     # truncate or add to the user's file, once more than
                     # plain Python did.
-                    with io_watch.refusing("open", no_writes):
-                        copied = unpickler.load()
+                    with no_file_writes() as no_writes:
+                        try:
+                            copied = unpickler.load()
+                        finally:
+                            refused = no_writes.refused
                     no_writes.check()
                     return copied
                 finally:
                     _UNPICKLED.seconds = getattr(_UNPICKLED, "seconds", 0.0) + time.perf_counter() - started
-            except pickle.PicklingError:
-                logger.debug("could not copy a %s by pickle", type(value).__name__, exc_info=True)
-                no_writes.check()
-            except _WouldWriteAFile as exc:
+            except WouldWriteAFile as exc:
                 # Not by deepcopy either: it rebuilds by the same recipe.
-                raise TypeError(f"copying it would {exc} to write a file") from exc
+                raise TypeError(f"copying it would {exc.args[0].removeprefix('rebuilding it would ')}") from exc
+            except pickle.PicklingError:
+                if refused is not None:
+                    raise TypeError(f"copying it would {refused}") from WouldWriteAFile(refused)
+                logger.debug("could not copy a %s by pickle", type(value).__name__, exc_info=True)
             except Exception as exc:
-                if no_writes.refused is not None:
-                    raise TypeError(f"copying it would {no_writes.refused} to write a file") from exc
+                if refused is not None:
+                    raise TypeError(f"copying it would {refused}") from WouldWriteAFile(refused)
                 if kept_state.too_deep(exc):
                     # Deeper than the pickler may recurse: deepcopy recurses
                     # deeper still, so the copy keeps its own stack.
@@ -2877,41 +2881,6 @@ def hit_seconds(value: Any, size_bytes: int) -> float | None:
 #: Seconds the RAM tier's copies on this thread spent unpickling, since the
 #: store in progress began (`InMemoryBackend.set`).
 _UNPICKLED = threading.local()
-
-
-class _WouldWriteAFile(Exception):
-    """A rebuild in a stored copy would open a file to write."""
-
-
-class _NoFileWrites:
-    """The ``open`` audit check of a stored copy's rebuild (`io_watch.refusing`):
-    an open whose flags write, truncate, create or append fails, and is
-    remembered, so a rebuild that catches the error still fails the copy.
-
-    The mode is the one Python reports for the open itself, whoever asks for
-    it: ``open``, ``os.open``, ``pathlib.Path.open``, a compressor's open, or
-    one made inside ``__setstate__`` or a constructor a pickle names. A class
-    of the user's pickled to reopen its sink or log was rebuilt for the RAM
-    tier's copy on every store, and the file emptied."""
-
-    __slots__ = ("refused",)
-
-    def __init__(self) -> None:
-        self.refused: str | None = None
-
-    def __call__(self, args: tuple) -> None:
-        import os
-
-        path, mode, flags = (*args, None, None, None)[:3]
-        writes = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
-        if not isinstance(flags, int) or flags & writes:
-            self.refused = f"open({path!r}, {mode!r})"
-            raise _WouldWriteAFile(self.refused)
-
-    def check(self) -> None:
-        """Raise if a rebuild asked for a writing open, caught or not."""
-        if self.refused is not None:
-            raise _WouldWriteAFile(self.refused)
 
 
 #: Seconds per byte unpickling the tier's copy of an object of a class took

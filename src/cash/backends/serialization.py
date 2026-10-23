@@ -14,6 +14,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .. import _cash_views, kept_state
+from .no_file_writes import no_file_writes
 
 logger = logging.getLogger(__name__)
 
@@ -129,13 +130,22 @@ def rebuild(load: Callable[..., Any], *args: Any) -> Any:
     CUDA tensor read on a machine without a GPU, a library's own error class,
     ``RecursionError``. Such an entry cannot be restored HERE, which is a miss
     like a damaged one, not a crash of every call that reads it.
+
+    Nor may that code change a file (`no_file_writes`): a sink reopened with
+    ``"w"`` in ``__setstate__`` emptied the user's file on every hit, where
+    plain Python opened it once. Such an entry is a miss too.
     """
-    try:
-        return load(*args)
-    except RESTORE_ERRORS:
-        raise
-    except Exception as exc:
-        raise pickle.UnpicklingError(f"rebuilding the stored value raised {type(exc).__name__}: {exc}") from exc
+    with no_file_writes() as check:
+        try:
+            value = load(*args)
+        except RESTORE_ERRORS:
+            check.check()
+            raise
+        except Exception as exc:
+            check.check()
+            raise pickle.UnpicklingError(f"rebuilding the stored value raised {type(exc).__name__}: {exc}") from exc
+    check.check()
+    return value
 
 
 def stored_reducers(*, for_write: bool = False) -> dict | None:

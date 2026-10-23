@@ -85,8 +85,8 @@ def _hook(event: str, args: tuple) -> None:
     if consumers is None:
         return
     check = getattr(_own, "refuse", None)
-    if check is not None and check[0] == event:
-        check[1](args)  # may raise: the audited call fails (`refusing`)
+    if check is not None and event in check[0]:
+        check[1](event, args)  # may raise: the audited call fails (`refusing`)
     if getattr(_own, "work", False):
         return
     for consumer in consumers:
@@ -237,20 +237,20 @@ _refused: set[str] = set()
 
 
 @contextmanager
-def refusing(event: str, check: Consumer) -> Iterator[None]:
-    """While inside, on this thread, *check* sees each *event* as Python
-    raises it, cash's own work included, and an exception it raises fails
-    the audited call itself: the RAM tier's copy refuses an ``open`` that
-    writes, whichever code asks for it (``__setstate__``, a constructor a
-    pickle names, ``pathlib.Path.open``)."""
-    if event not in _refused:
+def refusing(events: tuple[str, ...], check: Callable[[str, tuple], None]) -> Iterator[None]:
+    """While inside, on this thread, *check* sees each of *events* as Python
+    raises it, cash's own work included, as ``check(event, args)``, and an
+    exception it raises fails the audited call itself: a stored value's
+    rebuild refuses an ``open`` that writes, whichever code asks for it
+    (``__setstate__``, a constructor a pickle names, ``pathlib.Path.open``)."""
+    if not _refused.issuperset(events):
         with _lock:
             _ensure_hook()
-            if event not in _refused:
-                _refused.add(event)
+            if not _refused.issuperset(events):
+                _refused.update(events)
                 _rebuild()
     before = getattr(_own, "refuse", None)
-    _own.refuse = (event, check)
+    _own.refuse = (frozenset(events), check)
     try:
         yield
     finally:
