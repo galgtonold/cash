@@ -259,9 +259,17 @@ def holds_a_stream(fn) -> bool:
             # Walked with a seen set of its own: a function another part
             # met first is met here too, so the verdict kept is this
             # part's alone.
+            walked = []
             found = value_watch.digest(
-                part, lambda value: walk.part(value, {id(fn)}), value_watch.KIND_NO_STREAM, _kept_as_clean
+                part,
+                lambda value: walked.append(value) or walk.part(value, {id(fn)}),
+                value_watch.KIND_NO_STREAM,
+                _kept_as_clean,
             )
+            if type(found) is _HoldersMet and not walked:
+                # The table is as it was; the functions and classes it
+                # holds may not be: what they hold is read again.
+                found = walk.holders_now(found.holders, id(fn))
         else:
             found = walk.part(part)
         if found is _HOLDS:
@@ -275,8 +283,31 @@ def holds_a_stream(fn) -> bool:
 _HOLDS, _CLEAN, _UNSEEN = object(), object(), object()
 
 
+class _HoldersMet:
+    """`_StreamWalk.part`'s answer for a part holding no stream, which met
+    *holders*: functions, methods and classes, a list of objects of the
+    user's reaching their class. The watchers see no attribute set on them,
+    so a kept answer reads them again (`_StreamWalk.holders_now`) and the
+    rest of the part not. Kept as ``_UNSEEN`` was, every call walked a list
+    of 100,000 objects again for their one class."""
+
+    __slots__ = ("holders",)
+
+    def __init__(self, holders: tuple) -> None:
+        self.holders = holders
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            type(other) is _HoldersMet
+            and len(other.holders) == len(self.holders)
+            and all(a is b for a, b in zip(self.holders, other.holders))
+        )
+
+    __hash__ = None  # type: ignore[assignment]
+
+
 def _kept_as_clean(_value: Any, found: Any) -> bool:
-    return found is _CLEAN
+    return found is _CLEAN or type(found) is _HoldersMet
 
 
 class _StreamWalk:
@@ -292,18 +323,20 @@ class _StreamWalk:
         self.holders = self.items = 0
 
     def part(self, part: Any, seen: set[int] | None = None) -> Any:
-        """``_HOLDS``, ``_CLEAN`` or ``_UNSEEN`` for *part* and what it
-        holds. ``_UNSEEN`` once a function, a method or a class was met,
-        whatever it holds now: the watchers see neither a closure cell set
-        nor an attribute set on a function or a class (``X.it = iter(...)``).
-        *seen*: the objects met already, the function's shared set if not
-        given."""
+        """``_HOLDS``, ``_CLEAN``, ``_HoldersMet`` or ``_UNSEEN`` for *part*
+        and what it holds. ``_HoldersMet`` once a function, a method or a
+        class was met, with them: the watchers see neither a closure cell
+        set nor an attribute set on a function or a class (``X.it =
+        iter(...)``). ``_UNSEEN`` once a random generator held elsewhere
+        was met. *seen*: the objects met already, the function's shared set
+        if not given."""
         kernels = _native.kernels
         ways = self.ways
         if seen is None:
             seen = self.seen
         children = [part]
         clean = True
+        holders: list[Any] = []
         while children:
             kinds = kernels.type_set(children) if kernels is not None else set(map(type, children))
             for kind in kinds - ways.keys():
@@ -324,7 +357,7 @@ class _StreamWalk:
                 way = ways[kind]
                 if way is _HELD:  # a function, a method or a class: `held_by`
                     self.holders += len(new)
-                    clean = False
+                    holders.extend(new)
                     for item in new:
                         held = held_by(item)
                         if held:
@@ -354,7 +387,18 @@ class _StreamWalk:
                 if self.holders + len(self.object_kinds) > _STREAM_HOLDERS_AT or self.items > _STREAM_ITEMS_AT:
                     return _HOLDS
             children = next_children
-        return _CLEAN if clean else _UNSEEN
+        if not clean:
+            return _UNSEEN
+        return _HoldersMet(tuple(holders)) if holders else _CLEAN
+
+    def holders_now(self, holders: tuple, fn_id: int) -> Any:
+        """``_HOLDS`` when one of *holders*, met in a part kept as holding no
+        stream, holds one now."""
+        seen = {fn_id}
+        for holder in holders:
+            if self.part(holder, seen) is _HOLDS:
+                return _HOLDS
+        return _CLEAN
 
 
 def _by_kind(kernels: Any, children: list, skipped: set[type], kinds: set[type]) -> list[tuple[type, list]]:

@@ -294,3 +294,53 @@ def test_a_function_two_parts_hold_is_looked_into_for_each(cash_magics):
     exec("X.box = iter(range(100, 200))", ns)
     assert holds_a_stream(ns["g"])
     assert holds_a_stream(ns["f"])
+
+
+def test_a_stream_set_on_a_function_kept_objects_hold_is_found(cash_magics):
+    """A list of the user's objects, each holding the function ``helper``:
+    kept as holding no stream, the verdict reads the functions and classes
+    the walk met again, and ``helper.it = iter(...)`` set after it is
+    found."""
+    run_cash_cell(
+        cash_magics,
+        "def helper():\n    return next(helper.it) if hasattr(helper, 'it') else 0\n"
+        "class Q:\n    def __init__(self, i):\n        self.i = i\n        self.f = helper\n"
+        "rows = [Q(i) for i in range(20_000)]\n"
+        "def look(i, rows=rows):\n    return rows[i].f()",
+    )
+    ns = cash_magics.shell.user_ns
+    for _ in range(3):
+        assert not holds_a_stream(ns["look"])
+    exec("helper.it = iter(range(100, 200))", ns)
+    assert holds_a_stream(ns["look"])
+
+
+def test_a_kept_list_of_objects_is_not_walked_again(cash_magics, monkeypatch):
+    """Kept as holding no stream, a list of 100,000 objects of one class
+    is not read again on each call, only their class is: each call walked
+    the whole list for it, 70-100 ms where a kept verdict takes 2."""
+    from cash import value_watch
+    from cash.notebook import call_key
+
+    if not value_watch.WATCHING:
+        pytest.skip("the watchers are off in this build")
+    run_cash_cell(
+        cash_magics,
+        "class P:\n    def __init__(self, i):\n        self.i = i\n"
+        "points = [P(i) for i in range(20_000)]\n"
+        "def look(i, points=points):\n    return points[i].i",
+    )
+    ns = cash_magics.shell.user_ns
+    for _ in range(3):
+        assert not holds_a_stream(ns["look"])
+    walked = []
+    part = call_key._StreamWalk.part
+
+    def counted(self, value, seen=None):
+        walked.append(type(value))
+        return part(self, value, seen)
+
+    monkeypatch.setattr(call_key._StreamWalk, "part", counted)
+    assert not holds_a_stream(ns["look"])
+    assert list not in walked, walked
+    assert type in walked, walked
