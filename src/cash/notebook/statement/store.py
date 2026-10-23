@@ -14,6 +14,7 @@ import ast
 import hashlib
 import logging
 import pickle
+import sys
 import time
 import types
 from collections.abc import Iterable, Mapping
@@ -850,6 +851,22 @@ class StatementStore:
                     # file-loaded data got here past the too-cheap floor and
                     # its badge row said NOT CACHED.
                     skip_reason = None
+        # A module the notebook built itself (``m = types.ModuleType('m')``):
+        # a module is not stored but bound again by its name on a hit, and
+        # no import gives this one back. Restored, the name stayed unbound
+        # and the statements after it failed.
+        if not should_skip:
+            _built = sorted(
+                _name
+                for _name, _v in captured_vars.items()
+                if instance_of(_v, types.ModuleType) and sys.modules.get(attribute_or(_v, "__name__", None)) is not _v
+            )
+            if _built:
+                should_skip = True
+                skip_reason = (
+                    f"module output(s) {', '.join(_built)} are not importable by name; "
+                    f"statement re-executes (lineage persists)"
+                )
         # The same route for a value holding a closure that keeps state --
         # `add = make_log()` with the factory imported from a module, so the
         # rule above does not see it. A function is kept by reference, so the
