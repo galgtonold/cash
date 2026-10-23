@@ -56,6 +56,7 @@ from cash import _native, _plain_data
 from cash._clock import CpuLimit
 from cash._type_memo import MroMemo, TypeMemo, type_key
 from cash._user_attrs import attribute_or, builtin_items, has_attribute, instance_of, own_dict, own_lookup
+from cash.live_state import is_live_stream
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
 
@@ -249,7 +250,7 @@ def _bound_objects(value: Any) -> list[Any] | None:
     if instance_of(value, types.FunctionType):
         return list(value.__closure__) if value.__closure__ and not _found_by_name(value) else None
     owner = attribute_or(value, "__self__", None)
-    if owner is None or instance_of(owner, (types.ModuleType, type)):
+    if owner is None or instance_of(owner, (types.ModuleType, type)) or is_live_stream(owner):
         return None
     return [owner]
 
@@ -280,7 +281,7 @@ def is_value(value: Any, value_types: tuple[type, ...]) -> bool:
     ``BagObj``, ``np.load(...).f``), makes an ``isinstance`` against an ABC
     raise: it is read by its type alone."""
     try:
-        if instance_of(value, value_types):
+        if instance_of(value, value_types) or is_live_stream(value):
             return True
         return instance_of(value, _CALLABLE_TYPES) and _bound_objects(value) is None
     except Exception:  # noqa: BLE001 - see above

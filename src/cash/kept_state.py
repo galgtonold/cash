@@ -30,6 +30,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from ._user_attrs import instance_of
+from .live_state import is_live_stream, live_reduce
 
 __all__ = [
     "DefinedAgain",
@@ -998,6 +999,38 @@ def reducers(protocol: int = pickle.DEFAULT_PROTOCOL, extra: dict | None = None)
     return _KeepDict(protocol, extra)
 
 
+#: Lock types a value may hold for its own use (`live_state.live_reduce`).
+_LOCK_TYPES = frozenset({type(threading.Lock()), type(threading.RLock())})
+
+
+def _or_live(obj: Any, reducer: Any) -> Any:
+    """*reducer*'s reduce of *obj*; for one pickle refuses, a standard stream
+    or a free lock, the stand-in `live_state.live_reduce` gives. What pickled
+    before pickles as it did.
+
+    A standard stream's own reduce may succeed and its state fail later
+    (ipykernel's ``OutStream`` holds the session's HMAC): one is asked whether
+    it pickles whole, which only the few streams bound in ``sys`` are."""
+    if is_live_stream(obj) and not _pickles(obj):
+        return live_reduce(obj)
+    try:
+        return reducer(obj)
+    except (TypeError, pickle.PicklingError):
+        live = live_reduce(obj)
+        if live is None:
+            raise
+        return live
+
+
+def _pickles(obj: Any) -> bool:
+    """Whether ``pickle`` takes *obj* whole."""
+    try:
+        pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
+    except Exception:  # noqa: BLE001 - whatever its own reduce raises
+        return False
+    return True
+
+
 class _KeepDict(dict):
     """A pickler's ``dispatch_table``: each type's reducer, decided at its
     first instance. The ordinary ``__reduce_ex__`` for most, so the stream
@@ -1024,6 +1057,8 @@ class _KeepDict(dict):
             reducer = _names_apart(self._reducer(t), self._names)
             if _holds_dtype(t):
                 reducer = _dtypes_apart(reducer, self._dtypes)
+        if issubclass(t, io.IOBase) or t in _LOCK_TYPES:
+            reducer = functools.partial(_or_live, reducer=reducer)
         self[t] = reducer
         return reducer
 

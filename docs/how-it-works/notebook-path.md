@@ -179,6 +179,15 @@ puts them back, and other names or containers that hold the same object see
 the restored one, as after a plain run. When an object cannot be stored, or
 something else holds it that cash cannot restore with it, the loop runs again.
 
+<!-- claim: cash/live_state.py:live_reduce @e5b888fb, cash/kept_state.py:_or_live @00eb457c -->
+A progress bar made with `stream=sys.stdout` holds the output stream, which
+cannot be saved as such. A stream that is `sys.stdout` or `sys.stderr` when
+it is stored is stored as that name, and a restored bar writes to the output
+of the kernel it is restored in, as a bar made there would. A lock an object
+keeps for itself is stored as a new free lock when no one holds it. A bar on
+any other file, a held lock, and a bar whose parts hold the bar itself (tqdm's)
+are not stored, and the loop runs again, with the reason in the badge.
+
 <!-- claim: cash/analysis/mutations.py:module_setting_receivers @977421aa, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @6775632d -->
 A setting kept inside a library, such as `plt.style.use("ggplot")`,
 `plt.rcParams.update(...)`, `pd.set_option(...)` or

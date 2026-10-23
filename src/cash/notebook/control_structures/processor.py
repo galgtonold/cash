@@ -47,6 +47,7 @@ from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.handed_callables import handed_callables, users_object_attributes
 from ...analysis.namespace_effects import statement_calls_user_writer
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS
+from ...live_state import is_live_stream
 from ...source_reading import own_source
 from ...tracking.randomness import (
     capture_rng_state,
@@ -443,18 +444,29 @@ class ControlStructureProcessor:
         entry = self.statement_processor.tracking_state.statement_entry_lineages.get(code, {})
         return {name: entry[name] for name in names if name in entry}
 
-    def _unit_outcome_trusted(self, code: str) -> bool:
-        """Whether the top-level loop running now as one unit, *code*, did
-        nothing but leave its outcome (`_persistable_callees`): only then are
-        the objects it changed in place stored with it. One that drew from a
-        global counter or read the clock in a helper would be restored with
-        the values of the run that stored it."""
+    def _unit_outcome_trusted(self, code: str, inputs: Iterable[str]) -> bool:
+        """Whether the loop running now as one unit, *code*, did nothing but
+        leave its outcome (`_persistable_callees`): only then are the objects
+        it changed in place stored with it. One that drew from a global
+        counter or read the clock in a helper would be restored with the
+        values of the run that stored it.
+
+        A loop run as one unit inside a loop run pass by pass is asked about
+        with what it read (*inputs*), and with where the global generators
+        stood when the outer structure began: one moved since is no trusted
+        outcome either."""
         frame = self._unit_frame
         if frame is None:
             return False
-        node, reads, before, rng_before = frame[:4]
+        top, reads, before, rng_before = frame[:4]
         try:
-            if ast.unparse(node) != code or any(is_stream(self.shell.user_ns.get(name)) for name in reads):
+            if ast.unparse(top) == code:
+                node = top
+            else:
+                node = ast.parse(code).body[0]
+                reads = set(inputs)
+                before = dict(self.statement_processor.tracking_state.statement_entry_lineages.get(code, {}))
+            if any(is_stream(self.shell.user_ns.get(name)) for name in reads):
                 return False
             return self._persistable_callees(node, code, reads, before, rng_before) is not None
         except Exception:  # never let bookkeeping break the user's loop; it runs again
@@ -503,15 +515,16 @@ class ControlStructureProcessor:
         for name in reads:
             # ``idgen.next(i)`` drawing ``next(self.c)``: a method draws on
             # what its object holds, as a function draws on a global.
+            # ``sys.stdout`` a progress bar holds is written to, never drawn
+            # from: a restore hands back the stream of the process.
             held = users_object_attributes(user_ns.get(name))
-            if any(is_stream(value) or rng_carrier_kind(value) is not None for value in held):
+            if any(_drawn_from(value) for value in held):
                 return None
         callee_names = called_function_globals(
             reads, user_ns, variable_lineage=self.statement_processor.tracking_state.variable_lineage
         )
         for name in callee_names:
-            value = user_ns.get(name)
-            if is_stream(value) or rng_carrier_kind(value) is not None:
+            if _drawn_from(user_ns.get(name)):
                 return None  # drawn from by a callee: where it stands is not in the key
         resolve = self.statement_processor.resolve_live_function_source
         tree = ast.parse(code)
@@ -809,6 +822,12 @@ class ControlStructureProcessor:
             cached_iterations=1 if metrics.get("status") == CacheStatus.RESTORED else 0,
             computed_iterations=1 if metrics.get("status") == CacheStatus.COMPUTED else 0,
         )
+
+
+def _drawn_from(value: Any) -> bool:
+    """Whether a loop reaching *value* may draw from it: a stream other than
+    ``sys.stdout`` or ``sys.stderr``, or a random generator."""
+    return (is_stream(value) and not is_live_stream(value)) or rng_carrier_kind(value) is not None
 
 
 def _drawn_rng_vars_left(left: dict[str, str], code: str, namespace) -> list[str]:

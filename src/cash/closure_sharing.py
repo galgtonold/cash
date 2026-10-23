@@ -16,6 +16,7 @@ seen.
 
 from __future__ import annotations
 
+import io
 import pickle
 import sys
 import types
@@ -28,6 +29,7 @@ from cash._plain_data import TREE_NODES, in_a_look, tree_facts, tree_levels
 from cash._type_memo import MroMemo, TypeMemo, type_key
 from cash._user_attrs import own_dict
 from cash.install_paths import is_user_code_module
+from cash.live_state import is_live_stream
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 __all__ = ["ClosureCheck", "closure_check_budget", "closures_sharing"]
@@ -223,6 +225,8 @@ def _object_parts(item: Any, kind: type) -> list:
     class runs."""
     if kind is types.MethodType:  # read by the type's own members, as pickle reads it
         return [item.__func__, item.__self__]
+    if (issubclass(kind, io.IOBase) or hasattr(kind, "_cash_wrapped_stream")) and is_live_stream(item):
+        return []  # pickled as the name it is bound to (`live_state`)
     parts: list = []
     attributes = own_dict(item)
     if attributes:
