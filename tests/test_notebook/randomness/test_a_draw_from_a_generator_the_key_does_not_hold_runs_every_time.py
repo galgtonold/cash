@@ -137,7 +137,7 @@ def test_a_generator_or_iterator_held_as_a_default_changes_what_it_holds():
     def by_keyword(*, g=rng):
         return g.normal()
 
-    def in_a_dict_default(st={"g": rng}):  # noqa: B006 - the shape under test
+    def in_a_dict_default(st={"g": rng}):
         return st["g"].normal()
 
     assert holds_a_stream(by_default) and changes_its_closure(by_default)
@@ -199,3 +199,60 @@ def test_the_module_generators_are_not_its_own():
 
     assert not holds_a_stream(_closing_over([random.__dict__["_inst"], np.random.mtrand._rand]))
     assert holds_a_stream(_closing_over([random.Random(0)]))
+
+
+def test_a_lookup_table_of_millions_of_plain_items_holds_no_stream():
+    # Counted toward the walk's bound, a table past 2,000,000 numbers or
+    # strings was taken as holding a stream: never served.
+    for held in (list(range(2_100_000)), {i: i for i in range(2_100_000)}, [str(i) for i in range(2_100_000)]):
+        assert not holds_a_stream(_closing_over(held))
+
+
+def test_a_class_given_next_later_is_a_stream_from_then_on():
+    class Steps:
+        def __iter__(self):
+            return self
+
+    fn = _closing_over([Steps()])
+    assert not holds_a_stream(fn)
+    Steps.__next__ = lambda self: 1
+    assert holds_a_stream(fn)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "table['it'] = iter(range(3))",
+        "rows[7] = iter(range(3))",
+        "rows[3]['tags'].append(iter(range(3)))",
+        "rows.append(np.random.default_rng(0))",
+    ],
+)
+def test_a_stream_put_in_a_table_read_before_is_found(cash_magics, change):
+    """What a held table was found to hold is kept while the watchers prove
+    the table unchanged: a stream put in it since is found."""
+    from cash import value_watch
+
+    run_cash_cell(
+        cash_magics,
+        "import numpy as np\n"
+        "rows = [{'id': i, 'tags': ['a']} for i in range(30_000)]\n"
+        "table = {i: [i] for i in range(30_000)}\n"
+        "def look(k, rows=rows, table=table):\n    return rows[k]['id'] + table[k][0]",
+    )
+    ns = cash_magics.shell.user_ns
+    for _ in range(3):  # watched from the second time asked
+        assert not holds_a_stream(ns["look"])
+    if value_watch.WATCHING:
+        for name in ("table", "rows"):
+            assert value_watch.peek(ns[name], value_watch.KIND_NO_STREAM) is not None, f"control: kept for {name}"
+    exec(change, ns)
+    assert holds_a_stream(ns["look"])
+
+
+def test_a_stream_in_a_librarys_dict_is_found():
+    import collections
+
+    assert holds_a_stream(_closing_over(collections.OrderedDict(it=iter(range(3)))))
+    assert holds_a_stream(_closing_over(collections.defaultdict(list, it=iter(range(3)))))
+    assert not holds_a_stream(_closing_over(collections.OrderedDict(a=[1, 2])))

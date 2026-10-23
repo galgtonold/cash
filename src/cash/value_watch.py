@@ -44,6 +44,7 @@ from ._native import REASON
 from ._native import cwatch as _cw
 
 __all__ = [
+    "KIND_NO_STREAM",
     "KIND_PLAIN_KEY",
     "KIND_VALUE",
     "add_namespace",
@@ -62,6 +63,7 @@ __all__ = [
 #: the value's version it was taken at.
 KIND_VALUE = 0  # value_hash.compute_hash
 KIND_PLAIN_KEY = 1  # the decorator's key part for plain data (arg_hashing.plain_key_part)
+KIND_NO_STREAM = 2  # "holds no stream" for what a function holds (call_key.holds_a_stream)
 
 
 class WatchMismatch(AssertionError):

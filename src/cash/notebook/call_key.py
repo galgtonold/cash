@@ -21,6 +21,7 @@ import fractions as _fractions
 import functools
 import gc
 import hashlib
+import itertools
 import logging
 import pathlib as _pathlib
 import random
@@ -32,7 +33,7 @@ from collections.abc import Callable, Mapping
 from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING, Any
 
-from cash import _plain_data
+from cash import _native, _plain_data
 from cash._memo import CODE_OBJECTS, LruMemo
 from cash._paths import MAIN_MODULE_NAMES, is_pseudo_filename
 from cash._user_attrs import attribute_or, has_attribute
@@ -232,86 +233,148 @@ def holds_a_stream(fn) -> bool:
     that holds it).
 
     Told by type, read off the class (`_stream_type`): no ``__iter__`` of
-    the user's runs. Plain data costs no holder: a list of 30,000 objects
-    of one class is one class looked into, its objects' attributes items.
-    Past `_STREAM_HOLDERS_AT` functions and classes, or `_STREAM_ITEMS_AT`
-    items, not known: taken as holding one."""
+    the user's runs. Read a level at a time, each level's objects in one
+    ``gc.get_referents`` call and told apart by type: a closure over 100,000
+    records took a quarter of a second object by object, ten times the call
+    it guarded. Numbers, text and dates are passed over uncounted: a lookup
+    table of millions of them is not a holder. Past `_STREAM_HOLDERS_AT`
+    functions and classes, or `_STREAM_ITEMS_AT` other objects, not known:
+    taken as holding one."""
     if type(fn) is not _types.FunctionType:
         return False
-    first = held_by(fn)
-    if not first or _EXACT_ATOMS.issuperset(map(type, first)):
+    parts = held_by(fn)
+    if not parts or _EXACT_ATOMS.issuperset(map(type, parts)):
         return False
-    stack = [fn]
-    seen: set[int] = set()
-    kinds: set[type] = set()
-    ways: dict[type, Any] = {}
-    holders = items = 0
-    while stack:
-        item = stack.pop()
-        kind = type(item)
-        way = ways.get(kind)
-        if way is None:
-            way = ways[kind] = _way_in(kind)
-        if way is _RNG:
-            if _rng_of_its_own(item):
-                return True
+    from cash import value_watch
+
+    walk = _StreamWalk(id(fn))
+    for part in parts:
+        kind = type(part)
+        if kind in _EXACT_ATOMS:
             continue
-        if way is _STREAM:
+        if kind in _EXACT_CONTAINERS and value_watch.WATCHING:
+            # What a lookup table or a list of records holds is read once:
+            # while the watchers prove it unchanged since (no item, key or
+            # attribute of it set), it holds no stream still.
+            found = value_watch.digest(part, walk.part, value_watch.KIND_NO_STREAM, _kept_as_clean)
+        else:
+            found = walk.part(part)
+        if found is _HOLDS:
             return True
-        if way is _NOTHING or id(item) in seen:
-            continue
-        seen.add(id(item))
-        if way is _OBJECT:
-            # A user's object, a namespace, a ``partial``: what it holds,
-            # read without asking it. Its attributes as items, its class
-            # once; one of numbers and text is not looked at further.
-            for child in gc.get_referents(item):
-                child_kind = type(child)
-                if child_kind is dict:
-                    items += len(child)
-                    for part in (dict.values(child), dict.keys(child)):
-                        if not _EXACT_ATOMS.issuperset(map(type, part)):
-                            stack.extend(part)
-                elif child_kind not in _EXACT_ATOMS:
-                    stack.append(child)
-            if kind not in kinds:
-                kinds.add(kind)
-                holders += 1
-            if holders > _STREAM_HOLDERS_AT or items > _STREAM_ITEMS_AT:
-                return True
-            continue
-        if way is _DICT:
-            items += len(item)
-            if items > _STREAM_ITEMS_AT:
-                return True
-            for part in (dict.values(item), dict.keys(item)):
-                if not _EXACT_ATOMS.issuperset(map(type, part)):
-                    stack.extend(part)
-            continue
-        if way is _SEQUENCE:
-            children: Any = item
-        else:  # a function, a method or a class: `held_by`
-            children = held_by(item)
-            if not children:
-                continue
-            holders += 1
-            if holders > _STREAM_HOLDERS_AT:
-                return True
-        items += len(children)
-        if items > _STREAM_ITEMS_AT:
-            return True
-        if not _EXACT_ATOMS.issuperset(map(type, children)):
-            stack.extend(children)  # atoms among them are passed over as taken
     return False
+
+
+#: `_StreamWalk.part`'s answers: a stream found; none, and nothing the
+#: watchers cannot see met (`_kept_as_clean`); none, past such a thing.
+_HOLDS, _CLEAN, _UNSEEN = object(), object(), object()
+
+
+def _kept_as_clean(_value: Any, found: Any) -> bool:
+    return found is _CLEAN
+
+
+class _StreamWalk:
+    """`holds_a_stream`'s walk, one held part at a time, its bounds and the
+    objects it met shared by the parts of one function."""
+
+    __slots__ = ("holders", "items", "object_kinds", "seen", "ways")
+
+    def __init__(self, fn_id: int) -> None:
+        self.seen: set[int] = {fn_id}
+        self.ways: dict[type, Any] = {}
+        self.object_kinds: set[type] = set()
+        self.holders = self.items = 0
+
+    def part(self, part: Any) -> Any:
+        """``_HOLDS``, ``_CLEAN`` or ``_UNSEEN`` for *part* and what it
+        holds. ``_UNSEEN`` once a function, a method or a class with members
+        was met: the watchers see neither a closure cell set nor a
+        function's attributes."""
+        kernels = _native.kernels
+        ways, seen = self.ways, self.seen
+        children = [part]
+        clean = True
+        while children:
+            kinds = kernels.type_set(children) if kernels is not None else set(map(type, children))
+            for kind in kinds - ways.keys():
+                way = ways[kind] = _way_in(kind)
+                if way is _STREAM:
+                    return _HOLDS
+            if any(ways[kind] is _RNG for kind in kinds):
+                clean = False
+                if any(_rng_of_its_own(item) for item in children if ways[type(item)] is _RNG):
+                    return _HOLDS
+            skipped = {kind for kind in kinds if ways[kind] not in _WALKED}
+            next_children: list[Any] = []
+            for kind, group in _by_kind(kernels, children, skipped):
+                new = kernels.new_in(group, False, seen) if kernels is not None else _new_in(group, seen)
+                if not new:
+                    continue
+                self.items += len(new)
+                way = ways[kind]
+                if way is _HELD:  # a function, a method or a class: `held_by`
+                    self.holders += len(new)
+                    for item in new:
+                        held = held_by(item)
+                        if held:
+                            clean = False
+                            next_children.extend(held)
+                elif way is _OBJECT:
+                    # A user's object, a namespace, a ``partial``: what it
+                    # holds (its ``__dict__``, its slots, its class), read
+                    # without asking it.
+                    self.object_kinds.add(kind)
+                    next_children.extend(gc.get_referents(*new))
+                elif not (
+                    kernels is not None
+                    and kind in _EXACT_CONTAINERS
+                    and (kernels.dict_children if way is _DICT else kernels.seq_children)(
+                        new, _EXACT_ATOMS, next_children
+                    )
+                    is None
+                ):
+                    if way is _DICT:
+                        items = itertools.chain(
+                            itertools.chain.from_iterable(map(dict.keys, new)),
+                            itertools.chain.from_iterable(map(dict.values, new)),
+                        )
+                    else:
+                        items = itertools.chain.from_iterable(new)
+                    next_children.extend(item for item in items if type(item) not in _EXACT_ATOMS)
+                if self.holders + len(self.object_kinds) > _STREAM_HOLDERS_AT or self.items > _STREAM_ITEMS_AT:
+                    return _HOLDS
+            children = next_children
+        return _CLEAN if clean else _UNSEEN
+
+
+def _by_kind(kernels: Any, children: list, skipped: set[type]) -> list[tuple[type, list]]:
+    """*children* but those of a *skipped* type, by exact type."""
+    groups = kernels.split_level(children, skipped, set()) if kernels is not None else NotImplemented
+    if groups is not NotImplemented:
+        return groups
+    by_kind: dict[type, list] = {}
+    for child in children:
+        kind = type(child)
+        if kind not in skipped:
+            by_kind.setdefault(kind, []).append(child)
+    return list(by_kind.items())
+
+
+def _new_in(group: list, seen: set[int]) -> list:
+    """Each of *group* once, none in *seen* (by id), which this adds them to."""
+    found = dict(zip(map(id, group), group))
+    for key in seen & found.keys():
+        del found[key]
+    seen.update(found)
+    return list(found.values())
 
 
 #: How many functions and classes `holds_a_stream` looks into.
 _STREAM_HOLDERS_AT = 10_000
-#: How many items, all holders together, `holds_a_stream` reads.
+#: How many objects other than numbers, text and dates `holds_a_stream` reads.
 _STREAM_ITEMS_AT = 2_000_000
 _RNG, _STREAM, _NOTHING, _OBJECT, _SEQUENCE, _DICT, _HELD = (object() for _ in range(7))
-#: Per type, `_stream_type`'s answer. Weak: a class a call made is not kept alive.
-_STREAM_TYPES: weakref.WeakKeyDictionary[type, Any] = weakref.WeakKeyDictionary()
+_WALKED = frozenset((_OBJECT, _SEQUENCE, _DICT, _HELD))
 
 
 def _way_in(kind: type) -> Any:
@@ -320,19 +383,18 @@ def _way_in(kind: type) -> Any:
     by what it holds (``_OBJECT``, ``_HELD``: `held_by`), or not at all."""
     if kind in _EXACT_ATOMS:
         return _NOTHING
-    try:
-        found = _STREAM_TYPES.get(kind)
-    except TypeError:  # not weakly referable
-        found = None
-    if found is None:
-        found = _stream_type(kind)
-        with contextlib.suppress(TypeError):
-            _STREAM_TYPES[kind] = found
+    # Asked once per kind per walk, not kept: a class given ``__next__``
+    # later is a stream from then on.
+    found = _stream_type(kind)
     if found is not _NOTHING:
         return found
     if kind in (tuple, list, set, frozenset):
         return _SEQUENCE
     if kind is dict:
+        return _DICT
+    if issubclass(kind, dict) and not _users_type(kind):
+        # A library's dict (``OrderedDict``, ``defaultdict``): its items,
+        # read through ``dict``'s own methods.
         return _DICT
     if kind is _types.FunctionType or kind is _types.MethodType or issubclass(kind, type):
         return _HELD
