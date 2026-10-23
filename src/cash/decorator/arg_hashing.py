@@ -731,20 +731,23 @@ CALL_POLARS: contextvars.ContextVar[Any] = contextvars.ContextVar("cash_call_pol
 #: is there only when no arm came between the walk and the tag.
 KEYED_PARTS: contextvars.ContextVar[dict | None] = contextvars.ContextVar("cash_keyed_parts", default=None)
 
-#: A plain list's identity snapshot in `KEYED_PARTS` when no other thread
-#: was alive as its key was built: none could write it from then to the body,
-#: so the snapshot the check takes before the body is as good as one taken
-#: before the walk, and a hit, which takes none, pays nothing.
-SNAPSHOT_AT_BODY = object()
+
+class WatchedSince:
+    """A plain list's identity snapshot in `KEYED_PARTS` while the watchers
+    track it: the arm it had before its key's walk (*gen*). The check before
+    the body takes the snapshot, which stands for the content the key holds
+    when the arm is still that one and the watchers still give the key's
+    digest -- no write since, by any thread or any code -- and a hit, which
+    runs no check, takes none."""
+
+    __slots__ = ("gen",)
+
+    def __init__(self, gen: int) -> None:
+        self.gen = gen
+
 
 #: A tuple of these alone has nothing a call could change (`identity_snapshot`).
 _PRIM_SET = frozenset(IMMUTABLE_PRIMS)
-
-
-def _other_thread_alive() -> bool:
-    from ..tracking.trace_recorder import other_thread_alive  # imports the decorator's modules
-
-    return other_thread_alive(None)
 
 
 def _with_copies(form: tuple, rows: dict[int, tuple[list, list]]) -> tuple:
@@ -1730,23 +1733,19 @@ class ArgHasher:
         """
         try:
             keyed = KEYED_PARTS.get()
-            # Another thread could write an argument while its key is built:
-            # with none alive, none can until the body (only this one runs,
-            # and it runs cash's code), so nothing below is needed for it.
-            threads = keyed is not None and _other_thread_alive()
             # What each plain list or tuple holds, as identities, before its
             # walk: the check after the body compares with these, so a write
             # by another thread from here on shows, whichever threads are
-            # alive by then (`PurityChecks.argument_identities`).
-            before = (
-                {
-                    id(v): _plain_data.identity_snapshot(v)
-                    for v in (*hashed_args, *hashed_kwargs.values())
-                    if type(v) is list or (type(v) is tuple and not _PRIM_SET.issuperset(map(type, v)))
-                }
-                if threads
-                else None
-            )
+            # alive by then (`PurityChecks.argument_identities`). For one the
+            # watchers track, its arm: the check takes the snapshot when no
+            # write came since, and a hit takes none.
+            before: dict[int, Any] | None = None
+            if keyed is not None:
+                before = {}
+                for v in (*hashed_args, *hashed_kwargs.values()):
+                    if type(v) is list or (type(v) is tuple and not _PRIM_SET.issuperset(map(type, v))):
+                        armed = value_watch.gen(v) if value_watch.WATCHING else None
+                        before[id(v)] = WatchedSince(armed) if armed is not None else _plain_data.identity_snapshot(v)
             # A list, not ``map``: a StopIteration raised inside ``map`` ends
             # it early, and the arguments after it would leave the key.
             parts = [plain_key_part(a) for a in hashed_args]
@@ -1758,14 +1757,14 @@ class ArgHasher:
                 if keyed is not None and value_watch.WATCHING
                 else None
             )
-            # With another thread alive, a list of records is walked as a
-            # copy taken here: what the walk reads is then one content, which
-            # its token is filed for only if the list still holds it after the
-            # tag. Walking the list itself, another thread could swap an item
-            # in and back during the walk, and the token went to a key of
-            # content the list never held after.
+            # A list of records is walked as a copy taken here: what the walk
+            # reads is then one content, which its token is filed for only if
+            # the list still holds it after the tag. Walking the list itself,
+            # another thread, or code of the user's the walk runs, could swap
+            # an item in and back during the walk, and the token went to a key
+            # of content the list never held after.
             rows: dict[int, tuple[list, list]] = {}
-            if walked_from is not None and threads:
+            if walked_from is not None:
                 for p, v in pairs:
                     if p is v and type(v) is list and v:
                         copy = list(v)
@@ -1825,8 +1824,12 @@ class ArgHasher:
         if keyed is not None:
             for part, value in pairs:
                 if part is not value and type(value) in _plain_data.TREE_NODES:
-                    snapshot = before.get(id(value)) if before is not None else SNAPSHOT_AT_BODY
-                    keyed[id(value)] = (value, value_watch.KIND_PLAIN_KEY, part, snapshot)
+                    keyed[id(value)] = (
+                        value,
+                        value_watch.KIND_PLAIN_KEY,
+                        part,
+                        before.get(id(value)) if before is not None else None,
+                    )
         return args_bytes
 
     def arg_hash(self, arg: Any) -> Any:

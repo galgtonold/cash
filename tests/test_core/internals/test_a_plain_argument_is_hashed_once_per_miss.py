@@ -142,15 +142,30 @@ def _counted_snapshots(monkeypatch) -> list:
     return taken
 
 
-def test_with_no_other_thread_a_hit_takes_no_identity_snapshot(disk_cash, monkeypatch):
-    """No other thread alive at the key build: none can write the list
-    before the body, so its snapshot waits for the body, and a hit, which
-    has none, takes none -- a hit on a million ints paid 44 ms for one."""
-    from cash.decorator import arg_hashing
+@pytest.fixture
+def watched(monkeypatch):
+    """The watchers track every list the namespace binds, however small."""
+    if not value_watch.enabled() or value_watch.VERIFY:
+        pytest.skip("needs the watchers, not hashing behind each reuse")
+    cw = value_watch._cw
+    before = cw.stats()
+    cw.reset()
+    cw.configure(min_bytes=0)
+    ns: dict = {}
+    monkeypatch.setattr(value_watch, "_anchors", lambda: (ns,))
+    yield ns
+    cw.reset()
+    value_watch.reset()
+    cw.configure(min_bytes=before["min_bytes"], budget=before["budget"])
 
-    monkeypatch.setattr(arg_hashing, "_other_thread_alive", lambda: False)
+
+def test_a_hit_on_watched_lists_takes_no_identity_snapshot(disk_cash, monkeypatch, watched):
+    """A watched list's snapshot waits for the check before the body, which
+    a hit does not run: a hit on a million ints paid 44 ms for one."""
     big, small = list(range(200_000)), list(range(1000))
+    watched.update(big=big, small=small)
     f = disk_cash.cache(lambda a, b: len(a) + len(b))
+    f(big, small)
     f(big, small)
     taken = _counted_snapshots(monkeypatch)
     for _ in range(3):
@@ -158,22 +173,40 @@ def test_with_no_other_thread_a_hit_takes_no_identity_snapshot(disk_cash, monkey
     assert taken == []
 
 
-def test_with_no_other_thread_a_miss_is_still_hashed_once(disk_cash, monkeypatch):
-    from cash.decorator import arg_hashing
-
-    monkeypatch.setattr(arg_hashing, "_other_thread_alive", lambda: False)
+def test_a_miss_on_a_watched_list_is_still_hashed_once(disk_cash, watched):
     rows = list(range(200_000))
-    f = disk_cash.cache(lambda rows: len(rows))
+    watched["rows"] = rows
+    f = disk_cash.cache(lambda rows, scale=1: len(rows) * scale)
+    f(rows)
+    f(rows, scale=3)  # armed
     with method_calls(PurityChecks, "checked_arguments_hash") as rehash:
-        f(rows)
+        f(rows, scale=2)
     assert rehash.calls == 0
+
+
+def test_a_watched_list_written_after_its_arm_is_hashed_again(disk_cash, monkeypatch, watched):
+    """A write between the arm read before the walk and the check: the
+    snapshot taken at the check would stand for the new content, so the list
+    is hashed again after the body instead."""
+    rows = list(range(200_000))
+    watched["rows"] = rows
+    f = disk_cash.cache(lambda rows, scale=1: len(rows) * scale)
+    f(rows)
+    f(rows, scale=3)
+    real = PurityChecks.argument_identities
+
+    def written(self, *args, **kwargs):
+        rows[5] = -5
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(PurityChecks, "argument_identities", written)
+    with method_calls(PurityChecks, "checked_arguments_hash") as rehash:
+        f(rows, scale=2)
+    assert rehash.calls == 1
 
 
 def test_a_tuple_of_ints_takes_no_snapshot_before_its_walk(disk_cash, monkeypatch):
     """Nothing in it can change: the snapshot would be ``[None]``."""
-    from cash.decorator import arg_hashing
-
-    monkeypatch.setattr(arg_hashing, "_other_thread_alive", lambda: True)
     rows = tuple(range(200_000))
     f = disk_cash.cache(lambda rows, n: len(rows) + n)
     taken = _counted_snapshots(monkeypatch)

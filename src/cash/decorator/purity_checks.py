@@ -49,7 +49,7 @@ from ..source_reading import getsource, getsourcelines
 from ..tracking.randomness import capture_argument_carrier_states, moved_carriers, rng_carrier_kind
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
 from . import code_trace
-from .arg_hashing import SNAPSHOT_AT_BODY, is_cow_pandas
+from .arg_hashing import WatchedSince, is_cow_pandas
 from .arg_key import keyed_arguments
 from .cash_key import cash_key_method_of_type
 from .closure_fold import capture_digest, iter_code_scopes, unsafe_uses_of
@@ -1314,11 +1314,15 @@ class PurityChecks:
                 if held is not None and held[0] is not value:
                     held = None
                 taken_before = held is not None and held[1] == value_watch.KIND_PLAIN_KEY and held[3] is not None
-                if taken_before and held[3] is SNAPSHOT_AT_BODY:
-                    # No other thread was alive at the key build: taken now,
-                    # it is the content the key was built from.
+                if taken_before and type(held[3]) is WatchedSince:
+                    # Taken now, it is the content the key holds when the
+                    # watchers saw no write since the arm before the walk.
                     snapshot = _plain_data.identity_snapshot(value)
-                    taken_before = snapshot is not None
+                    taken_before = (
+                        snapshot is not None
+                        and value_watch.gen(value) == held[3].gen
+                        and value_watch.peek(value, value_watch.KIND_PLAIN_KEY) == held[2]
+                    )
                 else:
                     snapshot = held[3] if taken_before else _plain_data.identity_snapshot(value)
                 if snapshot is None:
