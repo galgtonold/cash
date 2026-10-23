@@ -199,8 +199,11 @@ def test_a_value_once_too_costly_is_not_digested_again_until_it_shrinks(cash_mag
         return real(value, *args, **kwargs)
 
     import cash.notebook.lineage_formula as lineage_formula
+    import cash.notebook.statement.lineage as statement_lineage
 
     monkeypatch.setattr(lineage_formula, "budgeted_hash", counted)
+    # The statement's own digest, shared with the session hash (`_no_cache_value`).
+    monkeypatch.setattr(statement_lineage, "budgeted_hash", counted)
     monkeypatch.setattr(value_hash, "CHANGE_CHECK_BUDGET_S", 0.0)
     _lineages_of_v(cash_magics, COSTLY, 1)
     monkeypatch.setattr(value_hash, "CHANGE_CHECK_BUDGET_S", 10.0)

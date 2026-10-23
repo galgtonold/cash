@@ -14,6 +14,7 @@ import pytest
 import cash.analysis.handed_callables as hc
 from cash.analysis.annotations import CacheAnnotation
 from cash.backends.persistence_policy import PersistencePolicy
+from cash.notebook import held_functions
 from cash.notebook.cache_status import CacheStatus
 from tests._cell_driver import run_cash_cell
 
@@ -282,9 +283,10 @@ def test_a_function_over_plain_data_is_served(statement_processor, monkeypatch, 
     Past `ITEM_TYPES_AT` items (a set of pairs) the container is served only
     when no class of the user's alive has a special method that reaches
     outside its objects (`special_classes_exist`): one an earlier test in
-    the same process left alive refused it, rightly. Only this test's
-    classes are counted."""
+    the same process left alive, or left in a module of the user's it
+    imported, refused it, rightly. Only this test's classes are counted."""
     monkeypatch.setattr(hc, "live_users_classes", lambda: [])
+    monkeypatch.setattr(held_functions, "users_module_classes", lambda: [])
     _run(statement_processor, f"{_DATA[case]}\ndef f():\n    return len(xs)")
     _run(statement_processor, "v = f()")
     second = _run(statement_processor, "v = f()")
