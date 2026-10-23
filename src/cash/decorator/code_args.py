@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from .. import _plain_data, canonical_form
 from .._active import EXPLAINING as _EXPLAINING
 from .._memo import CODE_OBJECTS, LruMemo
+from .._user_attrs import attribute_dict
 from ..analysis.purity_analyzer import get_analyzer
 from ..analysis.purity_report import ISSUE_AMBIENT_READ, ISSUE_UNTRACKABLE_DEP
 from ..code_digest import unwrap_partials
@@ -484,7 +485,7 @@ class CodeArgs:
         if not verdict[1]:
             yield from self._iter_library_held(value, _depth, _seen)
             return
-        attrs = getattr(value, "__dict__", None)
+        attrs = attribute_dict(value)
         values: list[Any] = list(attrs.values()) if isinstance(attrs, dict) else []
         for klass in type(value).__mro__:
             slots = klass.__dict__.get("__slots__", ())

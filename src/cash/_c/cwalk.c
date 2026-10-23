@@ -1184,7 +1184,25 @@ static PyObject *py_referrers_in(PyObject *self, PyObject *const *args, Py_ssize
     return out;
 }
 
+/*
+ * stored_dict(obj) -> dict | None
+ *
+ * The attribute dict Python keeps for obj, the one its attribute lookup
+ * reads, where obj's class defines a __dict__ of its own (a property
+ * computing it): reading obj.__dict__ runs that, and plain Python never
+ * does. None when obj keeps no dict.
+ */
+static PyObject *py_stored_dict(PyObject *self, PyObject *o) {
+    PyObject *d = PyObject_GenericGetDict(o, NULL);
+    if (!d) {
+        PyErr_Clear();
+        Py_RETURN_NONE;
+    }
+    return d;
+}
+
 static PyMethodDef cwalk_methods[] = {
+    {"stored_dict", py_stored_dict, METH_O, "stored_dict(obj) -> dict | None"},
     {"leaf_items", (PyCFunction)(void (*)(void))py_leaf_items, METH_FASTCALL,
      "leaf_items(group, mode, leaves) -> bool | NotImplemented"},
     {"seq_children", (PyCFunction)(void (*)(void))py_seq_children, METH_FASTCALL,

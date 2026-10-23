@@ -34,6 +34,7 @@ from typing import Any, NamedTuple
 
 from . import _plain_data, kept_state
 from ._memo import SORTED_SETS, LruMemo
+from ._user_attrs import attribute_dict
 from .sizing import SPARSE_PARTS, pandas_nbytes
 from .value_types import CODELESS_PRIMS, IMMUTABLE_PRIMS, LEAF_TYPES, PARSED_VALUE_TYPES
 
@@ -67,7 +68,7 @@ def object_state(value: Any) -> dict:
     not just a ``__dict__``-backed one.
     """
     state: dict = {}
-    obj_dict = getattr(value, "__dict__", None)
+    obj_dict = attribute_dict(value)
     if isinstance(obj_dict, dict):
         state.update(obj_dict)
     for klass in type(value).__mro__:
@@ -480,7 +481,7 @@ def holds_content_data(value: Any, content: ContentHashing) -> bool:
     list of records markedly slower. An object holding its frames in slots is
     pickled whole.
     """
-    state = getattr(value, "__dict__", None)
+    state = attribute_dict(value)
     if type(state) is not dict:
         return False
     family = content.family
@@ -748,7 +749,7 @@ def _object_by_fields(value: Any, walk: _Walk) -> Any:
     t = type(value)
     if not fields_class(t):
         return None
-    state = getattr(value, "__dict__", None)
+    state = attribute_dict(value)
     if type(state) is not dict or not _STR_ONLY.issuperset(map(type, state)):
         return None
     views = kept_state.derived_views(value)

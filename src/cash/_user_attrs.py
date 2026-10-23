@@ -5,6 +5,8 @@ from __future__ import annotations
 import types
 from typing import Any
 
+from . import _native
+
 
 def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
     """``getattr(obj, name, default)``, with any error the lookup raises taken
@@ -93,6 +95,52 @@ def is_routine(obj: Any) -> bool:
         return inspect.isroutine(obj)
     except Exception:  # noqa: BLE001 - the object's own error, not one of cash's
         return False
+
+
+#: `attribute_dict`'s answer for a type: its ``__dict__`` slot reader, or
+#: one of these.
+_NO_DICT = object()
+_OWN_DICT = object()
+_ATTRIBUTE_DICTS: dict[type, Any] = {}
+
+
+def attribute_dict(obj: Any) -> Any:
+    """``getattr(obj, "__dict__", None)``, without running a ``__dict__``
+    that *obj*'s class defines itself (a property computing it).
+
+    Plain Python never runs one to read an attribute: its lookup reads the
+    dict Python keeps for the object, and so does this, through C
+    (``stored_dict``). A key built from ``obj.__dict__`` ran the property at
+    every walk over the object, 15 times on a call's first run and 7 more
+    on a hit. Without the C extension the property is run, as before.
+    """
+    kind = type(obj)
+    reader = _ATTRIBUTE_DICTS.get(kind)
+    if reader is None:
+        if len(_ATTRIBUTE_DICTS) >= _OWN_LOOKUP_MAX:
+            _ATTRIBUTE_DICTS.clear()
+        reader = _NO_DICT
+        for klass in kind.__mro__:
+            found = klass.__dict__.get("__dict__")
+            if found is not None:
+                reader = found if type(found) in _SLOT_READERS else _OWN_DICT
+                break
+        _ATTRIBUTE_DICTS[kind] = reader
+    if reader is _NO_DICT:
+        return None
+    if reader is _OWN_DICT:
+        if _STORED_DICT is None:
+            return attribute_or(obj, "__dict__", None)
+        return _STORED_DICT(obj)
+    try:
+        return reader.__get__(obj, kind)
+    except Exception:  # noqa: BLE001 - the object's own slot, not cash's error
+        return None
+
+
+#: The C read of the dict Python keeps for an object (``cwalk.c``); None
+#: without the kernels, or in a build from before it.
+_STORED_DICT = getattr(_native.kernels, "stored_dict", None)
 
 
 #: What Python's own ``__dict__`` slot is, on a class or a module.

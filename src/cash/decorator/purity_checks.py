@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 from .. import _plain_data, identity_refs
 from .._clock import perf_counter as _perf_counter
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
+from .._user_attrs import attribute_dict
 from ..analysis.bytecode import GLOBAL_WRITES, argvals
 from ..analysis.cacheability_decision import identity_coupled_reason
 from ..analysis.helper_bindings import resolve_binding
@@ -533,7 +534,7 @@ def _own_attributes(value):
     module = sys.modules.get(type(value).__module__)
     if not (is_user_code_module(module) or getattr(module, "__name__", None) in MAIN_MODULE_NAMES):
         return []
-    state = getattr(value, "__dict__", None)
+    state = attribute_dict(value)
     if not isinstance(state, dict):
         return []
     return [

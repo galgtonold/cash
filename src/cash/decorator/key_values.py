@@ -9,6 +9,7 @@ import threading
 import types
 from typing import Any
 
+from .._user_attrs import attribute_dict
 from ..analysis.helper_code import is_mock, renamed
 from ..jit_functions import jit_python_function
 from ..value_types import IMMUTABLE_LEAF_TYPES
@@ -253,7 +254,7 @@ def _stabilized(v: Any, hash_callable, _path: frozenset[int], carried: bool) -> 
         inner = _path | {id(v)}
         parts = [_stabilized(x, hash_callable, inner, carried) for x in v]
         return type(v)(x for x, _ in parts), any(moved for _, moved in parts)
-    state = getattr(v, "__dict__", None)
+    state = attribute_dict(v)
     if (
         type(state) is dict
         and state

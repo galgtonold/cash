@@ -15,6 +15,7 @@ import types
 from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, LruMemo
+from .._user_attrs import attribute_dict
 from ..analysis.helper_code import renamed
 from ..code_digest import source_digest, unwrap_partials
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -786,7 +787,7 @@ class CodeSurface:
                     parts.append((cls.__qualname__, self.user_class_source_hash(cls)))
                 except SOURCE_RETRIEVAL_ERRORS:
                     pass
-            held = getattr(item, "__dict__", None)
+            held = attribute_dict(item)
             if isinstance(held, dict):
                 found = [
                     inner

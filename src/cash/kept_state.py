@@ -29,7 +29,7 @@ import weakref
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from ._user_attrs import instance_of
+from ._user_attrs import attribute_dict, instance_of
 
 __all__ = [
     "DefinedAgain",
@@ -1341,7 +1341,7 @@ def derived_views(obj: Any) -> frozenset[str]:
     value that is a snapshot (a number, a list) is kept: it may be stale.
     """
     names = cached_properties(type(obj))
-    state = getattr(obj, "__dict__", None)
+    state = attribute_dict(obj)
     if not names or not isinstance(state, dict):
         return frozenset()
     present = [name for name in names if name in state]
