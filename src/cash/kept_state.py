@@ -29,6 +29,7 @@ import weakref
 from collections.abc import Callable, Iterator
 from typing import Any
 
+from . import _native
 from ._user_attrs import instance_of
 
 __all__ = [
@@ -645,6 +646,10 @@ def key_aliases(outside: dict[int, Any] | None = None) -> Callable[[Any], Any]:
     seen: dict[int, tuple[int, Any]] = {}
     atoms = _ATOMS
     by_name = _BY_NAME
+    kernel = getattr(_native.kernels, "key_alias_id", None)
+    if kernel is not None:
+        # The same answers at C speed: asked of every object a key writes.
+        return functools.partial(kernel, seen, atoms, by_name, {}, _identityless, outside)
 
     def persistent_id(obj: Any, type: Any = type, id: Any = id) -> Any:
         t = type(obj)
