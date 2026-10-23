@@ -18,6 +18,7 @@ import warnings
 import numpy as np
 import pytest
 
+from cash.notebook.call_key import changes_its_closure
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
@@ -76,8 +77,20 @@ def _run_all(magics, cells) -> list[str]:
     return statuses
 
 
+@pytest.fixture
+def every_call_stored(monkeypatch):
+    """Every call past the cost floor, as on a busy machine: ``h, peek =
+    tlib.make_helper()`` took over 3 ms there, and only then was it stored."""
+    from cash.notebook.call_unit import CallUnit
+
+    monkeypatch.setattr(CallUnit, "_cost_floor_s", lambda self: 0.0)
+
+
 @pytest.mark.parametrize("case", sorted(CASES))
-def test_the_draw_below_matches_plain_after_a_restart(cash_magics, tlib, case):
+def test_the_draw_below_matches_plain_after_a_restart(cash_magics, tlib, every_call_stored, case):
+    """Stored, the factory's result was handed back after the restart as the
+    functions the last run made, their generator moved on by its draws: x
+    was the second number. A closure holding a generator is not stored."""
     cells = CASES[case]
     _run_all(cash_magics, cells)
     ns = cash_magics.shell.user_ns
@@ -97,3 +110,15 @@ def test_a_generator_in_a_variable_is_still_followed(cash_magics):
     _run_all(cash_magics, cells)
     _restart(cash_magics)
     assert "RESTORED" in _run_all(cash_magics, cells)[2], "the draw is stored"
+
+
+def test_a_closure_holding_a_generator_changes_what_it_holds():
+    def make(held):
+        def draw():
+            return held.normal() if hasattr(held, "normal") else next(held)
+
+        return draw
+
+    assert changes_its_closure(make(np.random.default_rng(0)))
+    assert changes_its_closure(make(iter(range(3))))
+    assert not changes_its_closure(make((1, 2)))
