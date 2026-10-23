@@ -12,7 +12,9 @@ from __future__ import annotations
 import pytest
 
 from cash.analysis.annotations import CacheAnnotation
+from cash.backends.persistence_policy import PersistencePolicy
 from cash.notebook.cache_status import CacheStatus
+from tests._cell_driver import run_cash_cell
 
 _PERSIST = CacheAnnotation(persist=True)
 _GEN = "(i for i in range(100))"
@@ -102,3 +104,42 @@ def test_many_objects_holding_only_numbers_are_served(statement_processor, attr)
     _run(statement_processor, "v = total()")
     second = _run(statement_processor, "v = total()")
     assert second["status"] == CacheStatus.RESTORED
+
+
+_RUN_ALL_DRAWS = {
+    "a counter a function reads": [
+        "import itertools\nsrc = itertools.count()\ndef g():\n    return next(src)",
+        "v = g()",
+        "print('v is', v)\nseen = v",
+    ],
+    "a counter made through __import__": [
+        "src = __import__('itertools').count()\ndef g():\n    return next(src)",
+        "v = g()",
+        "seen = v",
+    ],
+    "one counter two functions read": [
+        "import itertools\nc = itertools.count()\ndef a():\n    return next(c)\ndef b():\n    return next(c) * 10",
+        "v = a()",
+        "u = b()",
+        "seen = [v, u]",
+    ],
+}
+
+
+@pytest.mark.parametrize("case", list(_RUN_ALL_DRAWS))
+def test_a_reader_below_a_draw_through_a_function_does_not_draw_again(cash_magics, monkeypatch, case):
+    """``v = g()`` runs every time, as it draws from the counter ``g``
+    reads. The reader below checks that ``v`` is what ``v = g()`` gave; it
+    found the simulation's key for ``v = g()`` answering ``src`` from where
+    the draw left it, not where it stood, missed the value ``v`` was keyed
+    by, and ran ``v = g()`` again: a second draw, ``v`` 1 where Python gives
+    0, on every Run All."""
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    cells = _RUN_ALL_DRAWS[case]
+    ns = cash_magics.shell.user_ns
+    for run in range(3):
+        plain: dict = {}
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+            exec(cell, plain)
+        assert ns["seen"] == plain["seen"], f"Run All {run + 1}"
