@@ -260,6 +260,18 @@ def test_a_module_in_a_folder_with_no_init_is_keyed_by_its_source(tmp_path, spel
         "import builtins\n\ndef _unused(getattr):\n    return getattr\n\n"
         "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
         "K = int(max(map(getattr, [E], ['environ']))['K'])",
+        "import operator, builtins\n"
+        "E = max(map(operator.attrgetter('__import__'), [builtins]))\n"
+        "K = int(max(map(E, ['os'])).environ['K'])",
+        "import operator, builtins\n"
+        "E = max(map(operator.methodcaller('__import__', 'os'), [builtins]))\n"
+        "K = int(E.environ['K'])",
+        "import builtins\ntry:\n    pass\nexcept Exception as getattr:\n    pass\n"
+        "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
+        "K = int(max(map(getattr, [E], ['environ']))['K'])",
+        "import builtins\nif False:\n    getattr = 1\n"
+        "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
+        "K = int(max(map(getattr, [E], ['environ']))['K'])",
     ],
     ids=[
         "eval_handed_to_map",
@@ -267,6 +279,10 @@ def test_a_module_in_a_folder_with_no_init_is_keyed_by_its_source(tmp_path, spel
         "eval_taken_from_dunder_builtins",
         "a_method_under_an_allowed_builtin",
         "getattr_a_parameter_elsewhere_names",
+        "an_attrgetter_of_a_dunder",
+        "a_methodcaller_of_a_dunder",
+        "getattr_an_except_handler_names",
+        "getattr_bound_on_a_path_that_does_not_run",
     ],
 )
 def test_a_value_read_outside_the_source_without_a_call_runs_with_a_warning(tmp_path, top_level):
@@ -275,7 +291,10 @@ def test_a_value_read_outside_the_source_without_a_call_runs_with_a_warning(tmp_
     outside the source, so the module cannot be vouched for by it. So does
     ``eval`` taken from ``__builtins__``, ``object.__getattribute__``
     (allowed as ``object`` was), and ``getattr`` at the top level, which a
-    parameter of another function in the module was taken to rebind."""
+    parameter of another function in the module was taken to rebind, an
+    ``except ... as getattr`` unbinds as its handler ends, or an ``if False:``
+    never binds; and ``operator.attrgetter`` or ``methodcaller`` given
+    ``'__import__'``, ``getattr`` by another name."""
     _write(tmp_path, "helpmod.py", f"import sys\n\n{top_level}\n\ndef scale(x):\n    return x * K\n")
     _write(
         tmp_path,
@@ -339,8 +358,15 @@ def test_a_module_with_only_its_bytecode_runs_with_a_warning(tmp_path):
     [
         "K = max(map(str.upper, ['k']))",
         "def pick(getattr):\n    return max(map(getattr, [1], ['real']))\n\nK = pick(lambda value, name: 3)",
+        "import operator\nK = max(map(operator.attrgetter('real'), [3]))",
+        "getattr = abs\nK = max(map(getattr, [-3]))",
     ],
-    ids=["a_str_method_handed_to_map", "a_parameter_named_like_a_builtin"],
+    ids=[
+        "a_str_method_handed_to_map",
+        "a_parameter_named_like_a_builtin",
+        "an_attrgetter_of_a_public_name",
+        "a_builtin_name_the_module_always_binds",
+    ],
 )
 def test_a_source_only_top_level_is_still_vouched_for(tmp_path, monkeypatch, top_level):
     """A public method of ``str`` handed on, and a parameter named
