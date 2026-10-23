@@ -84,6 +84,14 @@ CASES = {
         "def upd(v):\n    if Z == 2:\n        x = v.byteswap(True)",
         "Z = {z}\n_ = df['v'].apply(upd)",
     ),
+    "a_byteswap_chained_on": (
+        "def upd(v):\n    if Z == 2:\n        return v.byteswap(True).sum()",
+        "Z = {z}\n_ = df['v'].apply(upd)",
+    ),
+    "a_byteswap_chained_in_a_lambda": (
+        "",
+        "Z = {z}\n_ = df['v'].apply(lambda v: v.byteswap(True)[0] if Z == 2 else None)",
+    ),
     "a_partition_in_a_lambda": ("", "Z = {z}\n_ = df['n'].apply(lambda n: n.partition(0) if Z == 2 else None)"),
     "a_partition_passed_on": (
         "def upd(n):\n    if Z == 2:\n        return str(n.partition(0))",

@@ -128,7 +128,11 @@ _PURE_METHODS = frozenset(
 
 #: Methods of the frame libraries that build a new object and leave their
 #: receiver alone (``x.mean()``, ``s.reset_index()``): not watched.
-_NEW_OBJECT = KNOWN_PURE_METHODS | NEW_OBJECT_CHAIN_METHODS
+#: pandas' window and grouping builders, which hand back an object that
+#: reads the one they are called on (``x.rolling(5).mean()``).
+_WINDOWS = frozenset({"rolling", "expanding", "ewm", "resample"})
+
+_NEW_OBJECT = KNOWN_PURE_METHODS | NEW_OBJECT_CHAIN_METHODS | _WINDOWS
 
 #: The unbound methods of a type: ``dict.update``, ``np.ndarray.fill``.
 _UNBOUND = (types.MethodDescriptorType, types.WrapperDescriptorType)
@@ -277,9 +281,6 @@ class _Reader:
         #: Whether a parameter was handed to a library's code, which may
         #: change it (`OBSERVE`).
         self.observed = False
-        #: The ids of the calls another method or a subscript is applied to
-        #: (``x.rolling(5).mean()``): they returned an object.
-        self._chained: set[int] = set()
 
     # -- callables -------------------------------------------------------
 
@@ -374,11 +375,6 @@ class _Reader:
         if _written_through_calls(fdef, reach):
             # ``np.frombuffer(p)[0:1] = z``: a library's view of a parameter.
             self.observed = True
-        self._chained |= {
-            id(node.value)
-            for node in ast.walk(fdef)
-            if isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(node.value, ast.Call)
-        }
         for node in ast.walk(fdef):
             if not isinstance(node, ast.Call):
                 continue
@@ -424,13 +420,13 @@ class _Reader:
                 # everywhere in cash. A callable of the user's handed to it
                 # with the parameter (``frame['o'].apply(upd)``) is read.
                 # What it does to the parameter itself is not read from its
-                # name: the run is watched, whether the result is dropped or
+                # name: the run is watched, whether the result is dropped,
                 # used (``return v.partition(0)`` sorts ``v`` and returns
-                # None). Not for the builtins' methods that change nothing,
-                # the frame libraries' that build a new object, nor one whose
-                # result has methods of its own called (``x.rolling(5).mean()``):
-                # the in-place forms return None.
-                if method not in _PURE_METHODS and method not in _NEW_OBJECT and id(call) not in self._chained:
+                # None) or chained on (``v.byteswap(True).sum()`` swaps ``v``
+                # and returns it). Not for the builtins' methods that change
+                # nothing, nor the frame libraries' that build a new object
+                # (``x.rolling(5).mean()``).
+                if method not in _PURE_METHODS and method not in _NEW_OBJECT:
                     self.observed = True
                 return self._library_call(call, passed, everything) | self._handed_callables(call, reach, scope, depth)
             if (
