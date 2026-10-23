@@ -51,6 +51,7 @@ import weakref
 from collections.abc import Iterable, Mapping
 from typing import Any, NamedTuple
 
+from cash import _plain_data
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 
 from ..analysis.mutation_effects import captured_call_receivers
@@ -437,6 +438,79 @@ def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> He
         if look.items < 0:
             break
     return HeldStreams(sorted(set(found)), look.stopped)
+
+
+def held_consumable_path(name: str, value: Any) -> str | None:
+    """Where inside *value* a generator, iterator or queue sits that a store
+    could not copy (`is_consumable_unrestorable`), as a path (``s.iloc[70]``,
+    ``reg['last'].g``); None when there is none.
+
+    A statement binding such a container (``s = pd.Series([..., gen])``, a
+    dict of the user's objects one of which holds a generator) was served:
+    the restored value held the generator the earlier runs had already
+    drawn from, and a reader below drew on from there. Read are every item
+    of the user's containers, every attribute of the user's objects, and the
+    items of a numpy or pandas object container, whose types are read at C
+    speed; a library's own objects are not looked into."""
+    if type(value) in _LEAVES or _plain_data.is_tree(value):
+        return None
+    stack: list[tuple[str, Any]] = [(name, value)]
+    seen: set[int] = set()
+    while stack:
+        path, obj = stack.pop()
+        if id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        if obj is not value and is_consumable_unrestorable(obj):
+            return path
+        for label, child in _stored_children(obj):
+            if type(child) not in _LEAVES:
+                stack.append((f"{path}{label}", child))
+    return None
+
+
+def _stored_children(obj: Any) -> list[tuple[str, Any]]:
+    """What a store of *obj* stores with it, for `held_consumable_path`."""
+    if type(obj) is dict or type(obj) in _CONTAINERS:
+        items = dict.values(obj) if type(obj) is dict else obj
+        if _LEAVES.issuperset(map(type, items)):
+            return []
+        return _items_up_to(obj, sys.maxsize) or []
+    if instance_of(obj, (types.FunctionType, types.MethodType, types.ModuleType, type)):
+        return []
+    found = _items_up_to(obj, sys.maxsize) if _object_container(obj) else None
+    if found is not None:
+        return [(label, child) for label, child in found if type(child) not in _LEAVES]
+    if instance_of(obj, (dict, *_CONTAINERS)) or _users_class(type(obj)):
+        children = _items_up_to(obj, sys.maxsize) or []
+        try:
+            attrs = object.__getattribute__(obj, "__dict__")
+        except (AttributeError, TypeError):
+            attrs = None
+        if isinstance(attrs, dict):
+            children.extend((f".{k}", v) for k, v in list(attrs.items()))
+        return children
+    return []
+
+
+def _object_container(obj: Any) -> bool:
+    """A numpy array or pandas object holding Python objects, whose items
+    are read at C speed: True only when one of them is not a leaf."""
+    module = (type(obj).__module__ or "").split(".")[0]
+    if module == "numpy":
+        if attribute_or(attribute_or(obj, "dtype"), "kind") != "O":
+            return False
+        return not _LEAVES.issuperset(map(type, obj.flat))
+    if module != "pandas":
+        return False
+    name = type(obj).__name__
+    if name == "Series":
+        return obj.dtype.kind == "O" and not _LEAVES.issuperset(map(type, obj.array))
+    if name == "DataFrame":
+        return any(
+            dtype.kind == "O" and not _LEAVES.issuperset(map(type, obj[col].array)) for col, dtype in obj.dtypes.items()
+        )
+    return False
 
 
 def _callable(value: Any) -> bool:

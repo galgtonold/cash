@@ -32,6 +32,7 @@ from ...exceptions import CashWarning
 from ...source_norm import exact_source_digest
 from ...tracking.function_tracker import FunctionTracker, is_local_module
 from .._protocols import CashInstanceProtocol, ShellProtocol
+from ..consumables import held_consumable_path
 from .._trace import is_tracing, trace_event
 from ..cache_status import CacheStatus
 from ..consumables import is_write_stream
@@ -671,10 +672,15 @@ class NotebookSimulator:
                 final.update(entry.produced_lineages)
             if set(final) != set().union(*(entry.outputs for entry in trace)):
                 return None
+            user_ns = self.shell.user_ns
             broken = {
                 name
                 for name, lineage in final.items()
-                if name not in self.shell.user_ns or self.tracking_state.variable_lineage.get(name) != lineage
+                if name not in user_ns
+                or self.tracking_state.variable_lineage.get(name) != lineage
+                # What it built holds a generator a reader below may have
+                # drawn from since: current by its lineage, not by its value.
+                or held_consumable_path(name, user_ns[name]) is not None
             }
             restored_by_index: dict[int, dict] = {}
             run: list[int] = []

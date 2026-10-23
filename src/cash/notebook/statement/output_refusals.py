@@ -14,7 +14,7 @@ from typing import Any
 from cash._user_attrs import attribute_or
 
 from ...analysis.cacheability_decision import identity_coupled_reason
-from ..consumables import is_consumable_unrestorable
+from ..consumables import held_consumable_path, is_consumable_unrestorable
 from ..shared_objects import GaveUp, attrs_copied_apart, output_history, refers_back, share_group, shared_names
 from .derivation_edges import is_uncacheable_alias
 
@@ -54,6 +54,12 @@ def _consumable_refusal(name: str, value: Any) -> str | None:
             f"'{name}' is consumed as it is read (an open file or a "
             f"generator) and cannot be restored: it is re-created "
             f"every run"
+        )
+    path = held_consumable_path(name, value)
+    if path is not None:
+        return (
+            f"'{name}' holds a generator or iterator at {path}, which a restore would hand back "
+            f"where earlier runs left it: the statement runs every time"
         )
     return None
 

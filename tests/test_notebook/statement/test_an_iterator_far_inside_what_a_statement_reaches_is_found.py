@@ -143,3 +143,44 @@ def test_a_reader_below_a_draw_through_a_function_does_not_draw_again(cash_magic
             run_cash_cell(cash_magics, cell, cells=cells)
             exec(cell, plain)
         assert ns["seen"] == plain["seen"], f"Run All {run + 1}"
+
+
+_HELD_IN_AN_OUTPUT = {
+    "a pandas Series holding a generator": [
+        f"import pandas as pd\ns = pd.Series([0] * 70 + [{_GEN}], dtype=object)",
+        "v = next(s.iloc[70])",
+        "u = next(s.iloc[70])",
+        "seen = [v, u]",
+    ],
+    "a registry of objects one of which holds a generator": [
+        "class O:\n    def __init__(self, g=None):\n        self.g = g\n    def draw(self):\n        return next(self.g)\n"
+        f"reg = {{f'o{{j}}': O() for j in range(64)}}\nreg['last'] = O({_GEN})\nk = 'last'\n"
+        "def f():\n    return reg[k].draw()",
+        "v = f()",
+        "seen = [v, 'read']",
+    ],
+}
+
+
+@pytest.mark.parametrize("case", list(_HELD_IN_AN_OUTPUT))
+def test_a_container_holding_a_generator_is_built_again_on_each_run_all(cash_magics, monkeypatch, case):
+    """The statement building the container was served, or skipped as
+    current: the container came back holding the generator the readers of
+    the earlier runs had drawn from, and the second Run All read 2 and 3
+    where Python reads 0 and 1."""
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    cells = _HELD_IN_AN_OUTPUT[case]
+    ns = cash_magics.shell.user_ns
+    for run in range(3):
+        plain: dict = {}
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+            exec(cell, plain)
+        assert ns["seen"] == plain["seen"], f"Run All {run + 1}"
+
+
+def test_a_statement_binding_a_container_that_holds_a_generator_says_why_it_runs(statement_processor):
+    _run(statement_processor, "class O:\n    def __init__(self, g=None):\n        self.g = g")
+    _run(statement_processor, "reg = {f'o{j}': O() for j in range(64)}")
+    metrics = _run(statement_processor, f"reg['last'] = O({_GEN})")
+    assert any("reg['last'].g" in reason for reason in metrics["uncacheable_reasons"])
