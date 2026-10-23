@@ -126,3 +126,57 @@ def test_with_another_thread_a_watched_list_is_not_hashed_again(disk_cash, monke
         value_watch.reset()
         cw.configure(min_bytes=before["min_bytes"], budget=before["budget"])
     assert rehash.calls == 0
+
+
+def _counted_snapshots(monkeypatch) -> list:
+    from cash import _plain_data
+
+    taken: list = []
+    real = _plain_data.identity_snapshot
+
+    def counted(value):
+        taken.append(value)
+        return real(value)
+
+    monkeypatch.setattr(_plain_data, "identity_snapshot", counted)
+    return taken
+
+
+def test_with_no_other_thread_a_hit_takes_no_identity_snapshot(disk_cash, monkeypatch):
+    """No other thread alive at the key build: none can write the list
+    before the body, so its snapshot waits for the body, and a hit, which
+    has none, takes none -- a hit on a million ints paid 44 ms for one."""
+    from cash.decorator import arg_hashing
+
+    monkeypatch.setattr(arg_hashing, "_other_thread_alive", lambda: False)
+    big, small = list(range(200_000)), list(range(1000))
+    f = disk_cash.cache(lambda a, b: len(a) + len(b))
+    f(big, small)
+    taken = _counted_snapshots(monkeypatch)
+    for _ in range(3):
+        assert f(big, small) == 201_000
+    assert taken == []
+
+
+def test_with_no_other_thread_a_miss_is_still_hashed_once(disk_cash, monkeypatch):
+    from cash.decorator import arg_hashing
+
+    monkeypatch.setattr(arg_hashing, "_other_thread_alive", lambda: False)
+    rows = list(range(200_000))
+    f = disk_cash.cache(lambda rows: len(rows))
+    with method_calls(PurityChecks, "checked_arguments_hash") as rehash:
+        f(rows)
+    assert rehash.calls == 0
+
+
+def test_a_tuple_of_ints_takes_no_snapshot_before_its_walk(disk_cash, monkeypatch):
+    """Nothing in it can change: the snapshot would be ``[None]``."""
+    from cash.decorator import arg_hashing
+
+    monkeypatch.setattr(arg_hashing, "_other_thread_alive", lambda: True)
+    rows = tuple(range(200_000))
+    f = disk_cash.cache(lambda rows, n: len(rows) + n)
+    taken = _counted_snapshots(monkeypatch)
+    f(rows, 1)
+    # Taken once, before the body, by the check of the body's writes alone.
+    assert sum(value is rows for value in taken) == 1

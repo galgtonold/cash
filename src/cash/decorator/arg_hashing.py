@@ -731,6 +731,32 @@ CALL_POLARS: contextvars.ContextVar[Any] = contextvars.ContextVar("cash_call_pol
 #: is there only when no arm came between the walk and the tag.
 KEYED_PARTS: contextvars.ContextVar[dict | None] = contextvars.ContextVar("cash_keyed_parts", default=None)
 
+#: A plain list's identity snapshot in `KEYED_PARTS` when no other thread
+#: was alive as its key was built: none could write it from then to the body,
+#: so the snapshot the check takes before the body is as good as one taken
+#: before the walk, and a hit, which takes none, pays nothing.
+SNAPSHOT_AT_BODY = object()
+
+#: A tuple of these alone has nothing a call could change (`identity_snapshot`).
+_PRIM_SET = frozenset(IMMUTABLE_PRIMS)
+
+
+def _other_thread_alive() -> bool:
+    from ..tracking.trace_recorder import other_thread_alive  # imports the decorator's modules
+
+    return other_thread_alive(None)
+
+
+def _with_copies(form: tuple, rows: dict[int, tuple[list, list]]) -> tuple:
+    """*form* with each list of *rows* (``id -> (list, copy)``) replaced by
+    its copy."""
+    parts, kwarg_parts = form
+    return (
+        tuple(rows[id(p)][1] if id(p) in rows else p for p in parts),
+        {k: rows[id(p)][1] if id(p) in rows else p for k, p in kwarg_parts.items()},
+    )
+
+
 #: A polars argument at least this big (`estimated_size`) is remembered by
 #: `CallPolarsDigests`; a smaller one is read again.
 _CALL_POLARS_MIN_BYTES = 1 << 20
@@ -1704,6 +1730,10 @@ class ArgHasher:
         """
         try:
             keyed = KEYED_PARTS.get()
+            # Another thread could write an argument while its key is built:
+            # with none alive, none can until the body (only this one runs,
+            # and it runs cash's code), so nothing below is needed for it.
+            threads = keyed is not None and _other_thread_alive()
             # What each plain list or tuple holds, as identities, before its
             # walk: the check after the body compares with these, so a write
             # by another thread from here on shows, whichever threads are
@@ -1712,9 +1742,9 @@ class ArgHasher:
                 {
                     id(v): _plain_data.identity_snapshot(v)
                     for v in (*hashed_args, *hashed_kwargs.values())
-                    if type(v) is list or type(v) is tuple
+                    if type(v) is list or (type(v) is tuple and not _PRIM_SET.issuperset(map(type, v)))
                 }
-                if keyed is not None
+                if threads
                 else None
             )
             # A list, not ``map``: a StopIteration raised inside ``map`` ends
@@ -1728,26 +1758,40 @@ class ArgHasher:
                 if keyed is not None and value_watch.WATCHING
                 else None
             )
-            # A list of records is walked as a copy taken here, when it is the
-            # one argument that can hold a container: what the walk reads is
-            # then one content, which its token is filed for only if the list
-            # still holds it after the tag. Walking the list itself, another
-            # thread could swap an item in and back during the walk, and the
-            # token went to a key of content the list never held after.
-            rows: dict[int, list] = {}
-            if walked_from is not None and sum(type(v) not in IMMUTABLE_PRIMS for _, v in pairs) < 2:
+            # With another thread alive, a list of records is walked as a
+            # copy taken here: what the walk reads is then one content, which
+            # its token is filed for only if the list still holds it after the
+            # tag. Walking the list itself, another thread could swap an item
+            # in and back during the walk, and the token went to a key of
+            # content the list never held after.
+            rows: dict[int, tuple[list, list]] = {}
+            if walked_from is not None and threads:
                 for p, v in pairs:
                     if p is v and type(v) is list and v:
                         copy = list(v)
                         if field_rows_only(copy):
-                            rows[id(v)] = copy
-            if rows:
-                form = (
-                    tuple(rows.get(id(p), p) for p in parts),
-                    {k: rows.get(id(p), p) for k, p in kwarg_parts.items()},
-                )
+                            rows[id(v)] = (v, copy)
             walked: dict = {}
-            args_bytes = canonical_bytes(form, self._content, hook=self._nested_hasher, seen=walked)
+            if rows:
+                args_bytes = canonical_bytes(
+                    _with_copies(form, rows), self._content, hook=self._nested_hasher, seen=walked
+                )
+                if any(id(v) in walked for v, _copy in rows.values()):
+                    # The list itself met elsewhere in the key (``f(rows,
+                    # [rows])``): its copy would key as another list. Walked
+                    # as it is, with no token for it.
+                    walked.clear()
+                    walked_from = {key: gen for key, gen in walked_from.items() if key not in rows}
+                    rows = {}
+                    args_bytes = canonical_bytes(form, self._content, hook=self._nested_hasher, seen=walked)
+                else:
+                    for v, copy in rows.values():
+                        met = walked.pop(id(copy), None)
+                        if met is not None:
+                            # Where the walk met the list, for `shared_across`.
+                            walked[id(v)] = (met[0], v)
+            else:
+                args_bytes = canonical_bytes(form, self._content, hook=self._nested_hasher, seen=walked)
             shared = shared_across([*args, *kwargs.values()], [*hashed_args, *hashed_kwargs.values()], walked)
             if shared:
                 args_bytes += pickle.dumps(("__cash_shared__", shared), protocol=4)
@@ -1770,7 +1814,7 @@ class ArgHasher:
                         # content this key may not hold.
                         armed = walked_from.get(id(value))
                         token = value_watch.peek(value, value_watch.KIND_WALKED)
-                        copy = rows.get(id(value))
+                        copy = rows[id(value)][1] if id(value) in rows else None
                         if (
                             armed is not None
                             and token is not None
@@ -1781,7 +1825,8 @@ class ArgHasher:
         if keyed is not None:
             for part, value in pairs:
                 if part is not value and type(value) in _plain_data.TREE_NODES:
-                    keyed[id(value)] = (value, value_watch.KIND_PLAIN_KEY, part, before.get(id(value)))
+                    snapshot = before.get(id(value)) if before is not None else SNAPSHOT_AT_BODY
+                    keyed[id(value)] = (value, value_watch.KIND_PLAIN_KEY, part, snapshot)
         return args_bytes
 
     def arg_hash(self, arg: Any) -> Any:

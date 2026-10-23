@@ -10,6 +10,9 @@ under the key of the content before. Both are now taken by the key
 build, the identities before its walk, so a write after them shows,
 however many threads are alive when the body begins: the racing thread
 here has ended by then, and the count of threads is made to say one.
+With no other thread alive as the key is built, none can write the list
+before the body, and the identities are taken there; the racing thread
+is alive at the key build here, as it must be to race.
 """
 
 from __future__ import annotations
@@ -105,16 +108,19 @@ def test_a_miss_whose_list_another_thread_changed_and_keyed(
     set_item(lst, 7, 7)  # the content the next call keys, never stored
 
     real = purity_checks.PurityChecks.argument_identities
-    main, done = threading.current_thread(), []
+    main, done, go = threading.current_thread(), [], threading.Event()
 
     def other_thread():
+        assert go.wait(30)
         set_item(lst, 5, 9)
         done.append(f(lst))
 
+    worker = threading.Thread(target=other_thread)
+    worker.start()  # alive as the next call's key is built
+
     def argument_identities(self, *args, **kwargs):
         if threading.current_thread() is main and not done:
-            worker = threading.Thread(target=other_thread)
-            worker.start()
+            go.set()
             worker.join(30)
         return real(self, *args, **kwargs)
 
@@ -128,21 +134,37 @@ def test_a_miss_whose_list_another_thread_changed_and_keyed(
     assert f(lst) == truth(lst)
 
 
+@pytest.fixture
+def racing_thread():
+    """Another thread, alive while the test runs, as the thread a race
+    needs is."""
+    stop = threading.Event()
+    thread = threading.Thread(target=stop.wait, daemon=True)
+    thread.start()
+    yield thread
+    stop.set()
+    thread.join(10)
+
+
 @pytest.mark.parametrize("backend", ["disk", "memory"])
-def test_a_record_swapped_in_and_back_during_the_key_walk(tmp_path, watching, monkeypatch, one_thread_counted, backend):
+@pytest.mark.parametrize("extra", [(), ([1],), ((1, 2),), ({"a": 1},)], ids=["alone", "a list", "a tuple", "a dict"])
+def test_a_record_swapped_in_and_back_during_the_key_walk(
+    tmp_path, watching, monkeypatch, racing_thread, backend, extra
+):
     """Another thread swaps a record into the list while its key is walked
     and puts the old one back before the walk ends. The key is of a copy
-    taken before the walk, so it is of the content the body runs on."""
+    taken before the walk, so it is of the content the body runs on,
+    whatever the other arguments are."""
     from cash.decorator import arg_hashing
 
-    def total(lst):
+    def total(lst, *_extra):
         return _sum_records(lst)
 
     f = _cash(tmp_path, backend).cache(total)
     lst = _records()
     watching["lst"] = lst
     for _ in range(3):
-        f(lst)
+        f(lst, *extra)
     _set_records(lst, 7, -1)
     other = Rec(10**6)
     real = arg_hashing.canonical_bytes
@@ -161,8 +183,8 @@ def test_a_record_swapped_in_and_back_during_the_key_walk(tmp_path, watching, mo
         return real(form, *args, **kwargs)
 
     monkeypatch.setattr(arg_hashing, "canonical_bytes", canonical_bytes)
-    assert f(lst) == _sum_records(lst)
+    assert f(lst, *extra) == _sum_records(lst)
     assert fired
     monkeypatch.setattr(arg_hashing, "canonical_bytes", real)
     lst[5] = other
-    assert f(lst) == _sum_records(lst)
+    assert f(lst, *extra) == _sum_records(lst)
