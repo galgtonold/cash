@@ -141,7 +141,42 @@ _NONE_EXISTED = ((), (), True)
 #: rebinds or changes the value, so a container walked once is not walked
 #: again for every statement reading it. A class's methods are read again
 #: each time: ``M.build = other`` changes what an object of ``M`` runs.
-_MEMO: LruMemo[tuple[int, str], tuple[tuple[Any, ...], tuple[type, ...], bool]] = LruMemo(CODE_OBJECTS)
+#: The functions and classes are held weakly: a class the notebook made
+#: again stays alive otherwise, with what its class attributes hold, and
+#: is counted as a live class with objects alive (`unseen_writes`). An
+#: entry one of whose functions or classes is gone is walked again.
+_MEMO: LruMemo[tuple[int, str], tuple[tuple[Any, ...], tuple[Any, ...], bool]] = LruMemo(CODE_OBJECTS)
+
+
+def _weakly(found: tuple[tuple[Any, ...], tuple[type, ...], bool]) -> tuple[tuple[Any, ...], tuple[Any, ...], bool]:
+    """*found* as `_MEMO` keeps it: each function and class by a weak
+    reference where it takes one."""
+    functions, classes, complete = found
+    return tuple(map(_weak, functions)), tuple(map(_weak, classes)), complete
+
+
+def _weak(obj: Any) -> Any:
+    try:
+        return weakref.ref(obj)
+    except TypeError:
+        return obj  # takes none (a builtin): nothing of the notebook's to keep alive
+
+
+def _strongly(
+    kept: tuple[tuple[Any, ...], tuple[Any, ...], bool],
+) -> tuple[tuple[Any, ...], tuple[type, ...], bool] | None:
+    """What `_weakly` kept, or None when any of it is gone."""
+    out: list[tuple[Any, ...]] = []
+    for part in kept[:2]:
+        objs = []
+        for item in part:
+            if type(item) is weakref.ReferenceType:
+                item = item()
+                if item is None:
+                    return None
+            objs.append(item)
+        out.append(tuple(objs))
+    return out[0], out[1], kept[2]
 
 
 def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | None = None) -> Held:
@@ -171,6 +206,8 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
         if not _anything_to_find(namespace):
             return _NOTHING
         found = None  # one exists now: walk to the end
+    elif found is not None:
+        found = _strongly(found)
     if found is None:
         try:
             found = _walk(value, namespace, check_at=EXISTENCE_CHECK_AT)
@@ -179,7 +216,7 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
                 _MEMO[memo_key] = _NONE_EXISTED
             return _NOTHING
         if memo_key is not None:
-            _MEMO[memo_key] = found
+            _MEMO[memo_key] = _weakly(found)
     functions, classes, complete = found
     codes: dict[int, types.CodeType] = {}
     for fn in functions:

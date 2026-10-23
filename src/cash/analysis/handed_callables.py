@@ -45,6 +45,7 @@ import inspect
 import operator
 import sys
 import types
+import weakref
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from itertools import chain, compress, repeat
@@ -1021,8 +1022,11 @@ def _is_users_callable(value: Any) -> bool:
     return _is_users_object(value) and callable(value)
 
 
-#: ``class -> whether it is the user's`` (`is_users_class`).
-_USERS_CLASSES: LruMemo[type, bool] = LruMemo(CODE_OBJECTS)
+#: ``class -> whether it is the user's`` (`is_users_class`). Weakly keyed:
+#: a class the notebook made again is not kept alive by it, with what its
+#: class attributes hold (counted then as a live class with an object
+#: alive, `live_users_classes`).
+_USERS_CLASSES: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
 
 
 #: Read through ``type``'s own descriptors: a metaclass's
@@ -1314,8 +1318,33 @@ def is_users_instance(value: Any) -> bool:
 
 
 #: ``class -> (what its classes hold, `reaching_special_functions`)``: read
-#: again only when a class of its MRO holds something else.
-_SPECIAL_MEMO: dict[type, tuple[tuple, list[Any]]] = {}
+#: again only when a class of its MRO holds something else. Weakly keyed,
+#: and what an entry keeps refers to its class only weakly (`_kept`), so
+#: the entry goes with the class.
+_SPECIAL_MEMO: weakref.WeakKeyDictionary[type, tuple[tuple, list[Any]]] = weakref.WeakKeyDictionary()
+
+#: ``type``'s descriptors for ``__dict__`` and ``__weakref__``: each refers
+#: to its class and takes no weak reference.
+_TYPE_DESCRIPTORS = (types.GetSetDescriptorType, types.MemberDescriptorType)
+
+
+def _kept(value: Any) -> Any:
+    """*value* as `_SPECIAL_MEMO` keeps it: by a weak reference where it
+    takes one, a descriptor of its class by its name."""
+    if type(value) in _TYPE_DESCRIPTORS:
+        return (_TYPE_DESCRIPTORS, value.__name__)
+    try:
+        return weakref.ref(value)
+    except TypeError:
+        return value
+
+
+def _is_kept(value: Any, kept: Any) -> bool:
+    if type(kept) is weakref.ReferenceType:
+        return kept() is value
+    if type(value) in _TYPE_DESCRIPTORS:
+        return type(kept) is tuple and kept == (_TYPE_DESCRIPTORS, value.__name__)
+    return kept is value
 
 
 def reaching_special_functions(cls: type) -> list[Any]:
@@ -1326,16 +1355,17 @@ def reaching_special_functions(cls: type) -> list[Any]:
         snapshot = tuple(tuple(_CLASS_DICT(k).values()) for k in _CLASS_MRO(cls) if k is not object)
     except TypeError:
         snapshot = None
-    kept = _SPECIAL_MEMO.get(cls)
-    if kept is not None and snapshot is not None:
+    kept = _SPECIAL_MEMO.get(cls) if snapshot is not None else None
+    if kept is not None:
         try:
             same = len(kept[0]) == len(snapshot) and all(
-                len(a) == len(b) and all(map(operator.is_, a, b)) for a, b in zip(kept[0], snapshot)
+                len(a) == len(b) and all(map(_is_kept, b, a)) for a, b in zip(kept[0], snapshot)
             )
         except Exception:  # noqa: BLE001 - a class attribute's comparison
             same = False
-        if same:
-            return kept[1]
+        found = [fn() for fn in kept[1]] if same else []
+        if same and all(fn is not None for fn in found):
+            return found
     out = []
     from ..install_paths import is_user_code_file
 
@@ -1358,9 +1388,13 @@ def reaching_special_functions(cls: type) -> list[Any]:
         ):
             out.append(fn)
     if snapshot is not None:
-        if len(_SPECIAL_MEMO) > 512:
-            _SPECIAL_MEMO.clear()
-        _SPECIAL_MEMO[cls] = (snapshot, out)
+        try:
+            _SPECIAL_MEMO[cls] = (
+                tuple(tuple(map(_kept, part)) for part in snapshot),
+                [weakref.ref(fn) for fn in out],
+            )
+        except TypeError:
+            pass  # a class or a function that takes no weak reference: not kept
     return out
 
 
