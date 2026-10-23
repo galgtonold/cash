@@ -215,6 +215,13 @@ _ATOMS = (int, float, complex, str, bytes, bool, type(None))
 _EXACT_ATOMS = frozenset({*_ATOMS, _dt.datetime, _dt.date, _dt.time, _dt.timedelta})
 
 
+#: The type of a ``functools.cache`` / ``lru_cache`` wrapper: None where it
+#: is not a class (an interpreter without the C ``_functools``).
+_MEMO_WRAPPER = getattr(functools, "_lru_cache_wrapper", None)
+if not isinstance(_MEMO_WRAPPER, type):
+    _MEMO_WRAPPER = None
+
+
 def holds_a_closure_with_state(value) -> bool:
     """Whether *value* is, or holds in its tuples, lists, sets and dicts
     however deeply nested, a function that changes what its closure holds
@@ -227,6 +234,10 @@ def holds_a_closure_with_state(value) -> bool:
     levels of containers were looked into, so ``{"on": {"click":
     [counter]}}`` was served; a seen set now ends a container that holds
     itself.
+
+    A ``functools.cache`` memo counts too: a hit handed back the memo the
+    last run made, already filled, so the function it wraps did not run
+    (or print) where plain Python runs it.
     """
     if _plain_data.is_tree(value):
         # JSON-like data holds no function: answered a level at a time at C
@@ -241,6 +252,8 @@ def holds_a_closure_with_state(value) -> bool:
         kind = type(item)
         if kind in atoms or instance_of(item, _ATOMS):
             continue
+        if _MEMO_WRAPPER is not None and issubclass(kind, _MEMO_WRAPPER):
+            return True
         if instance_of(item, _types.FunctionType):
             if changes_its_closure(item):
                 return True
