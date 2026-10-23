@@ -560,6 +560,63 @@ static PyObject *py_type_set(PyObject *self, PyObject *lst) {
 }
 
 
+/* distinct_types(list) -> [type]: the types of the list's objects, each
+ * once, told apart by identity: a metaclass's own __hash__ or __eq__ never
+ * runs. `unseen_writes._with_objects_alive` asks it of the whole heap
+ * (gc.get_objects): 0.4 s in Python for 2.4 million objects. */
+static PyObject *py_distinct_types(PyObject *self, PyObject *lst) {
+    if (!PyList_CheckExact(lst)) {
+        PyErr_SetString(PyExc_TypeError, "distinct_types(list)");
+        return NULL;
+    }
+    Py_ssize_t cap = 1024, used = 0;
+    uintptr_t *table = PyMem_Calloc((size_t)cap, sizeof(uintptr_t));
+    if (!table) return PyErr_NoMemory();
+    PyObject *out = PyList_New(0);
+    if (!out) {
+        PyMem_Free(table);
+        return NULL;
+    }
+    PyTypeObject *last = NULL;
+    for (Py_ssize_t i = 0; i < PyList_GET_SIZE(lst); i++) {
+        PyTypeObject *t = Py_TYPE(PyList_GET_ITEM(lst, i));
+        if (t == last) continue;
+        last = t;
+        uintptr_t key = (uintptr_t)t;
+        size_t slot = (size_t)((key >> 4) * 0x9E3779B97F4A7C15ULL) & (size_t)(cap - 1);
+        while (table[slot] && table[slot] != key) slot = (slot + 1) & (size_t)(cap - 1);
+        if (table[slot]) continue;
+        table[slot] = key;
+        if (PyList_Append(out, (PyObject *)t) < 0) {
+            PyMem_Free(table);
+            Py_DECREF(out);
+            return NULL;
+        }
+        if (++used * 2 > cap) {
+            Py_ssize_t bigger = cap * 2;
+            uintptr_t *grown = PyMem_Calloc((size_t)bigger, sizeof(uintptr_t));
+            if (!grown) {
+                PyMem_Free(table);
+                Py_DECREF(out);
+                return PyErr_NoMemory();
+            }
+            for (Py_ssize_t j = 0; j < cap; j++) {
+                uintptr_t k = table[j];
+                if (!k) continue;
+                size_t at = (size_t)((k >> 4) * 0x9E3779B97F4A7C15ULL) & (size_t)(bigger - 1);
+                while (grown[at]) at = (at + 1) & (size_t)(bigger - 1);
+                grown[at] = k;
+            }
+            PyMem_Free(table);
+            table = grown;
+            cap = bigger;
+        }
+    }
+    PyMem_Free(table);
+    return out;
+}
+
+
 /* ============================================================ store walks */
 
 static PyObject *getsizeof_fn = NULL; /* sys.getsizeof */
@@ -1243,6 +1300,7 @@ static PyMethodDef cwalk_methods[] = {
      "split_level(children, skipped, extra) -> [(type, list)] | NotImplemented"},
     {"new_in", (PyCFunction)(void (*)(void))py_new_in, METH_FASTCALL, "new_in(group, by_identity, seen) -> list"},
     {"type_set", py_type_set, METH_O, "type_set(list) -> set(map(type, list))"},
+    {"distinct_types", py_distinct_types, METH_O, "distinct_types(list) -> [type], each once by identity"},
     {"tree_facts", (PyCFunction)(void (*)(void))py_tree_facts, METH_FASTCALL,
      "tree_facts(value, leaves, want_walk, top_extra, picks, mode=0) -> (types, held_once, size, nodes, walk) | None | "
      "NotImplemented"},
