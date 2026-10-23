@@ -99,6 +99,7 @@ from cash.notebook.statement.store import StatementStore
 from cash.notebook.tracking_state import TrackingState
 from cash.notebook.versioned_json_store import resolve_cache_dir
 from cash.purity import is_known_pure, is_stateful
+from cash.tracking.file_tracker import unrecorded_reads
 
 from ...analysis.analysis_budget import (
     ANALYSIS_BUDGET_REASON,
@@ -1664,6 +1665,18 @@ class StatementProcessor:
                 run.metrics["uncacheable_reasons"].append(workers)
         if execution.result.success:
             self._left_work_running(run, execution)
+        unrecorded = unrecorded_reads(execution.file_tracker)
+        if unrecorded is not None:
+            reason = f"cash failed to record {unrecorded}, so the statement is not stored and runs every time"
+            warn_diagnostic(
+                CashCacheIneffectiveWarning,
+                "KEY-READ-UNRECORDED",
+                f"{reason}.",
+                "nothing to change in your code; please report the error so cash can record that read.",
+            )
+            if not run.skip_cache:
+                run.skip_cache = True
+                run.metrics["uncacheable_reasons"].append(reason)
         if positions:
             run.carriers_advanced = moved_carrier_names(positions, self.shell.user_ns)
         if hidden and not run.skip_cache and execution.result is not None and execution.result.success:

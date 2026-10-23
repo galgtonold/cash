@@ -21,6 +21,7 @@ import pytest
 
 from cash.backends import frame_sharing
 from cash.backends.memory_backend import InMemoryBackend
+from tests._label_writes import label_array
 
 pytestmark = pytest.mark.skipif(not frame_sharing.enabled(), reason="needs pandas copy-on-write")
 
@@ -152,8 +153,8 @@ HANDLE_WRITES = {
     ),
     "date_array": lambda d: d["when"].array.__setitem__(0, pd.Timestamp("1999-01-01")),
     "object_array": lambda d: d.iloc[:, -1].array.__setitem__(0, None),
-    "index_array": lambda d: d.index.array.__setitem__(0, -1),
-    "columns_array": lambda d: d.columns.array.__setitem__(0, "renamed"),
+    "index_array": lambda d: label_array(d.index).__setitem__(0, -1),
+    "columns_array": lambda d: label_array(d.columns).__setitem__(0, "renamed"),
     "frame_values_made_writable": lambda d: (
         setattr((v := d[["x"]].values).flags, "writeable", True),
         v.__setitem__(0, -1),
@@ -276,7 +277,7 @@ class TestTheCallersTableStaysAsItWas:
         df["x"].array[0] = -1.0
         series.array[1] = -2
         df["when"].array[0] = pd.Timestamp("1999-01-01")
-        df.index.array[0] = -4
+        label_array(df.index)[0] = -4
         assert df["x"].iloc[0] == -1.0 and df["k"].iloc[1] == -2 and df.index[0] == -4
         pd.testing.assert_frame_equal(_hit(backend)["variables"]["df"], make())
 
