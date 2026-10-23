@@ -74,6 +74,36 @@ def test_the_c_read_ends_and_finds_the_module_holding_its_dict():
 
 
 @needs_kernels
+def test_the_c_read_ends_once_a_read_of_the_module_from_python_made_its_list_loop():
+    """One ``gc.get_referents`` of the module from Python (a user's, a
+    profiler's) frees the iterators of its list a second time, and on
+    3.12.0-3.12.5 that makes the list come back on itself: the C read must end
+    all the same."""
+    code = (
+        "from cash import _native\n"
+        + _GATHERS
+        + textwrap.dedent(
+            """
+        import gc, os
+        r = gc.get_referents(mod)
+        del r
+        found = _native.kernels.referrers_in([mod, [1]], {id(vars(mod))})
+        print("found" if found == [mod] else f"missed {found!r}", flush=True)
+        # Python's own collection loops on the list from here on (an import,
+        # the exit): not cash's to end.
+        os._exit(0)
+        """
+        )
+    )
+    try:
+        done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        pytest.fail("the C read did not end")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "found"
+
+
+@needs_kernels
 def test_the_c_read_finds_the_module_by_each_object_it_holds():
     _gathered()
     mod = sys.modules["_asyncio"]

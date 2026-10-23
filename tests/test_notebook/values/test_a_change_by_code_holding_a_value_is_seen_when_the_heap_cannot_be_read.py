@@ -11,6 +11,7 @@ changing ``data`` in place is seen by the statement reading it.
 from __future__ import annotations
 
 import asyncio
+import gc
 
 import pytest
 
@@ -27,10 +28,15 @@ from tests.test_notebook.values.test_a_watched_variable_changed_in_place_is_seen
 )
 
 
-def test_the_change_reaches_the_reader(watched_notebook, monkeypatch):  # noqa: F811 - the fixture
+def _unreadable(monkeypatch) -> None:
     asyncio.run(asyncio.sleep(0))  # ``_asyncio`` loaded, as in a kernel
     monkeypatch.setattr(shared_objects, "_REFERRERS_IN", None)
     monkeypatch.setattr(shared_objects, "_TRAVERSE_LOOPS", True)
+    monkeypatch.setattr(shared_objects, "_UNREADABLE", [False])
+
+
+def test_the_change_reaches_the_reader(watched_notebook, monkeypatch):  # noqa: F811 - the fixture
+    _unreadable(monkeypatch)
     magics = watched_notebook
     ns = magics.shell.user_ns
     change = CHANGES["by code holding it elsewhere"]
@@ -75,3 +81,40 @@ def test_a_holder_search_cut_short_warns(watched_notebook, monkeypatch):  # noqa
     assert searched == [["data"]]
     run_cash_cell(magics, hold, cells=cells)
     assert str(magics._last_cell_metrics["statements"][-1]["status"]) == "COMPUTED"
+
+
+def test_the_search_for_what_holds_a_value_does_not_read_gc_directly(monkeypatch):
+    """``gc.get_referrers`` reads the module's traverse too, and looped as
+    gc's other reads do: the search for a value's holders answers "not
+    known", as one out of time does."""
+    _unreadable(monkeypatch)
+
+    def looped(*objs):
+        raise AssertionError("gc.get_referrers read the heap")
+
+    monkeypatch.setattr(gc, "get_referrers", looped)
+    target = [1]
+    holder = [target]
+    with pytest.raises(shared_objects.WalkBudgetExceeded):
+        shared_objects._holders_from_referrers([target], set(), {"holder": holder}, set(), shared_objects.GaveUp())
+    assert shared_objects.heap_unreadable()
+
+
+def test_the_warning_names_the_python_not_a_time(watched_notebook, monkeypatch):  # noqa: F811 - the fixture
+    """Not known is no matter of time: the warning and the reason say what
+    cannot be read, and on which Python."""
+    _unreadable(monkeypatch)
+    magics = watched_notebook
+    hold = CHANGES["by code holding it elsewhere"][0]
+    cells = [*SETUP, hold]
+    for cell in SETUP:
+        run_cash_cell(magics, cell, cells=cells)
+    with pytest.warns(CashWarning, match="NOTEBOOK-SHARE-UNCHECKED") as caught:
+        run_cash_cell(magics, hold, cells=cells)
+    said = " ".join(str(w.message) for w in caught)
+    assert "with asyncio loaded cannot read what holds an object" in said, said
+    assert "within" not in said, said
+    from cash.notebook.statement import processor
+
+    why = processor._cut_short_why("finding what keeps the variables it hands to code", 2.0)
+    assert "cannot be done on Python" in why and "longer than" not in why, why

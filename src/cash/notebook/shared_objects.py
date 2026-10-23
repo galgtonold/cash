@@ -1888,6 +1888,18 @@ def _is_library_class(cls: type) -> bool:
     return instance_of(module, str) and module != "__main__" and not _is_local_module_class(cls)
 
 
+#: Set once a read of what refers to an object was not known here
+#: (`_referrers_of`): this Python, with ``_asyncio`` loaded and no C read,
+#: answers no such read again in this process.
+_UNREADABLE = [False]
+
+
+def heap_unreadable() -> bool:
+    """Was a search cut short because what refers to an object cannot be
+    read here at all (`_TRAVERSE_LOOPS`), not for lack of time?"""
+    return _UNREADABLE[0]
+
+
 def _referrers(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
     """`gc.get_referrers` of *objs*; where the ``_asyncio`` module's own
     read can loop for ever (`_TRAVERSE_LOOPS`), as gc's would, the read of
@@ -1914,6 +1926,7 @@ def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
     if _TRAVERSE_LOOPS and sys.modules.get("_asyncio") is not None:
         # Its module's own read can loop for ever (`_TRAVERSE_LOOPS`), and
         # Python cannot cut it short: not known, as if out of time.
+        _UNREADABLE[0] = True
         raise WalkBudgetExceeded
     found = []
     referents, misses = gc.get_referents, ids.isdisjoint
@@ -2240,7 +2253,9 @@ def _holders_from_referrers(
         args = tuple(level)
         seen.update((id(level), id(args)))
         level_ids = {id(obj) for obj in level}
-        referrers = gc.get_referrers(*args)
+        # Not known here (`_referrers`) raises as out of time does: the
+        # caller's check of the statement gives up, and it re-runs warned.
+        referrers = _referrers(args, seen)
         seen.add(id(referrers))
         upper = []
         for holder in referrers:
