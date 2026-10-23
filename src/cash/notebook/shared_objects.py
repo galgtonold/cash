@@ -2643,11 +2643,7 @@ def _check_group(
             if gave_up is not None:
                 gave_up.names |= in_frames[0]
             if not in_frames[1]:
-                # Those frames are what holds them: they join, as a frame
-                # sharing a frame's cells does (`_frames_sharing_cells`).
-                # ``flat = pd.json_normalize(recs)`` holds the tags of the
-                # records ``recs`` holds, and ``df`` holds the records.
-                return shared, set(in_frames[0])
+                return shared, None
             excess = in_frames[1]
         partial = GaveUp() if gave_up is not None else None
         found = _find_holders([nodes[k] for k in excess], internal, user_ns, set(group) | discounted, partial)
@@ -3433,25 +3429,16 @@ _FLAT_WIDEST = 1_000_000
 def _flat_holders(targets: list[Any], internal: set[int], user_ns: Mapping[str, Any], known: set[str]) -> set[str]:
     """The variables of *user_ns* not in *known* bound to a list, tuple or
     dict holding one of *targets* as an item, or in an item that is itself
-    one (a record's ``tags``), or to a frame holding one in an object column
-    (`holds_any_of`): ``recs``, the 5,000 records a frame's object
+    one (a record's ``tags``): ``recs``, the 5,000 records a frame's object
     column, or ``pd.json_normalize(recs)``'s, was built from, too wide for
     the search down (`_holders_from_names`) and too many objects for the
     search up, which gave up and refused the frame. Read by identity, at
     most `_FLAT_WIDEST` items a variable."""
     wanted = {id(obj) for obj in targets}
-    np = sys.modules.get("numpy")
-    ordered = np.array(sorted(wanted), dtype=np.int64) if np is not None else None
     found: set[str] = set()
     for name, value in list(user_ns.items()):
         kind = type(value)
-        if name in known or id(value) in internal:
-            continue
-        if kind not in _FLAT_KINDS:
-            # A frame's object column holding them: ``df`` for the records
-            # ``flat = pd.json_normalize(recs)`` and ``recs`` share.
-            if ordered is not None and any(holds_any_of(array, ordered) for array in _object_dtype_arrays(value)):
-                found.add(name)
+        if name in known or id(value) in internal or kind not in _FLAT_KINDS:
             continue
         items = dict.values(value) if kind is dict else value
         if len(items) > _FLAT_WIDEST:
