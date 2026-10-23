@@ -325,6 +325,85 @@ def test_a_loader_the_value_runs_itself_does_not_rewrite_a_pyc(tmp_path):
     assert backend.get("k") == (None, None)
 
 
+def _kept_pyc(folder: Path, name: str) -> tuple[Path, Path]:
+    """A module *name* in *folder* with a ``.pyc`` of the user's beside it."""
+    import importlib.util
+
+    source = folder / f"{name}.py"
+    source.write_text("x = 1\n", encoding="utf-8")
+    kept = Path(importlib.util.cache_from_source(str(source)))
+    kept.parent.mkdir(exist_ok=True)
+    kept.write_bytes(b"user data")
+    return source, kept
+
+
+class _Imports:
+    """Rebuilt by importing the module ``name``."""
+
+    name = ""
+
+    def __getstate__(self):
+        return {}
+
+    def __setstate__(self, state):
+        __import__(_Imports.name)
+
+
+def test_a_module_body_an_import_runs_does_not_rewrite_another_pyc(tmp_path, monkeypatch):
+    """``__setstate__`` imports a module whose body runs
+    ``SourceFileLoader(...).get_code(...)`` on another file: an import is
+    running, but that ``get_code`` is the module body's, not the import's,
+    and the ``.pyc`` it rewrote over one that was there is refused."""
+    stem = f"body_{tmp_path.name}".replace("-", "_")
+    source, kept = _kept_pyc(tmp_path, f"{stem}_kept")
+    (tmp_path / f"{stem}_runs.py").write_text(
+        f"import importlib.machinery\nimportlib.machinery.SourceFileLoader('k', {str(source)!r}).get_code('k')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    backend = InMemoryBackend()
+    _Imports.name = f"{stem}_runs"
+    try:
+        backend.set("k", {"v": _Imports()}, metadata={"copy_required": True})
+    except Exception:
+        pass
+    finally:
+        _Imports.name = ""
+        sys.modules.pop(f"{stem}_runs", None)
+    assert kept.read_bytes() == b"user data"
+    assert backend.get("k") == (None, None)
+
+
+def test_a_loader_the_value_runs_under_an_outer_import_does_not_rewrite_a_pyc(tmp_path, monkeypatch):
+    """The copy is made while a module's import runs (a call at its top
+    level): the value's own ``get_code`` is no step of that import, and the
+    ``.pyc`` it rewrote over one that was there is refused."""
+    stem = f"outer_{tmp_path.name}".replace("-", "_")
+    source, kept = _kept_pyc(tmp_path, f"{stem}_kept")
+    results = {}
+
+    def copy_now():
+        backend = InMemoryBackend()
+        _Clobbers.how, _Clobbers.source = "get_code", str(source)
+        try:
+            backend.set("k", {"v": _Clobbers(str(kept))}, metadata={"copy_required": True})
+        except Exception:
+            pass
+        finally:
+            _Clobbers.how = _Clobbers.source = ""
+        results["got"] = backend.get("k")
+
+    monkeypatch.setattr(cash, "_copy_now_for_a_test", copy_now, raising=False)
+    (tmp_path / f"{stem}_imports.py").write_text("import cash\ncash._copy_now_for_a_test()\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    try:
+        __import__(f"{stem}_imports")
+    finally:
+        sys.modules.pop(f"{stem}_imports", None)
+    assert kept.read_bytes() == b"user data"
+    assert results["got"] == (None, None)
+
+
 def test_a_users_module_whose_import_writes_is_not_imported_for_a_retry(tmp_path):
     """The first process imports the module itself and stores the value;
     the second, which never imports it, rebuilds the value from disk."""
