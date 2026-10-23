@@ -252,6 +252,9 @@ class StatementRun:
     #: The ``anchors`` and the variables found holding an object of the
     #: outputs beside them: linked to the outputs as holders are.
     anchor_links: set[str] = field(default_factory=set)
+    #: What the loop changed in place that a hit restores into the live
+    #: object (``StatementCacheMetadata.restored_into``, `in_place`).
+    restored_into: set[str] = field(default_factory=set)
     #: For each of the ``anchor_links`` that is not an anchor, the anchors
     #: whose object it held: a restore misses unless it still holds those
     #: live objects (``StatementCacheMetadata.anchor_holds``).

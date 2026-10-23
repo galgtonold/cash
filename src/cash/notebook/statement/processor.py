@@ -195,7 +195,7 @@ from ..shared_objects import (
 )
 from ..value_cutoff import LineageAliasStore
 from ..write_observer import children_left_running, kept_writes, observe_writes, process_runs
-from . import hidden_generators
+from . import hidden_generators, in_place
 from .lineage import note_own_writes
 from .observed_draws import ObservedDrawStore
 from .thread_reach import ThreadReach
@@ -289,6 +289,12 @@ def _entry_values(cached_data: Any) -> dict[str, Any] | None:
     """The values a stored entry held, by name; None when it says none."""
     variables = cached_data.get("variables") if isinstance(cached_data, dict) else None
     return variables if isinstance(variables, dict) else None
+
+
+def _is_while(tree: ast.Module | None) -> bool:
+    """Whether *tree* is a single ``while`` loop."""
+    body = attribute_or(tree, "body", None) or []
+    return len(body) == 1 and isinstance(body[0], ast.While)
 
 
 class StatementProcessor:
@@ -417,7 +423,7 @@ class StatementProcessor:
         self._records = StatementRecords(shell, self.tracking_state, cash_instance, self.function_tracker)
         self._in_loop = InLoopChanges(shell, self.tracking_state, self._records)
         self._mutation_routing = MutationRouting(
-            shell, self.tracking_state, self._mutations, self._records, self._in_loop
+            shell, self.tracking_state, self._mutations, self._records, self._in_loop, self._cheap_to_rerun
         )
 
         # Used to prevent the "redundant import" optimization from skipping
@@ -1576,7 +1582,44 @@ class StatementProcessor:
         trusted = self.unit_outcome_trusted
         if not run.skip_cache and trusted is not None and trusted(run.code, run.inputs):
             return
+        names = ", ".join(sorted(run.metrics["stored_in_place"]))
+        if _is_while(run.tree):
+            why = "a while loop is not stored with what it changes"
+        else:
+            why = "it reads a clock, draws a value or changes what its key does not name"
+        self._unstore_in_place(run, f"In-place mutation on: {names} ({why}; statement re-executes)")
+
+    def _restorable_in_place(
+        self, run: StatementRun, captured_vars: dict[str, Any], holders: dict[str, Any] | None
+    ) -> None:
+        """Keep what the loop changed stored only when a hit can restore it
+        into the live object (`in_place`): the object keeps its identity, so
+        a weak reference or an ``id()`` key still finds it. Else it runs
+        every time, with the reason."""
+        names = sorted(run.metrics["stored_in_place"])
+        values = {**captured_vars, **(holders or {})}
+        for name in names:
+            obj = captured_vars.get(name)
+            why = in_place.refusal(obj) or in_place.holder_refusal(name, obj, values)
+            if why is not None:
+                self._unstore_in_place(run, f"In-place mutation on: {name} ({why}; statement re-executes)")
+                return
+        run.restored_into = set(names)
+
+    def _cheap_to_rerun(self, run: StatementRun) -> bool:
+        """Whether a loop last ran in less than the cost model's compute
+        floor: storing what it changes costs its run the checks and the
+        write, and a hit saves next to nothing, so it runs again. A loop not
+        measured yet is stored."""
+        if run.force_persist:
+            return False
+        last = self._expected_run_time(run.code)
+        return last is not None and last < self.persistence_policy().compute_floor_s
+
+    def _unstore_in_place(self, run: StatementRun, reason: str) -> None:
+        """Run the loop every time, as before it stored what it changed."""
         names = set(run.metrics.pop("stored_in_place"))
+        run.restored_into = set()
         run.est_fit = run.est_fit - names
         run.in_place = run.in_place | names
         run.outputs = run.outputs - names
@@ -1585,10 +1628,7 @@ class StatementProcessor:
             # it changed would keep the lineage of the run that stored it.
             return
         run.skip_cache = True
-        run.metrics["uncacheable_reasons"].append(
-            f"In-place mutation on: {', '.join(sorted(names))} (it reads a clock, draws a value or "
-            "changes what its key does not name; statement re-executes)"
-        )
+        run.metrics["uncacheable_reasons"].append(reason)
 
     def _live_objects_shared(self, run: StatementRun, metadata: StatementCacheMetadata | None) -> bool:
         """Whether a hit of *run* must not restore over the objects its names
@@ -2486,6 +2526,8 @@ class StatementProcessor:
                 holders = None
                 if not run.skip_cache:
                     holders = self._refuse_unrestorable_outputs(run, captured_vars, execution.echo, execution.cost)
+                if not run.skip_cache and run.metrics.get("stored_in_place"):
+                    self._restorable_in_place(run, captured_vars, holders)
                 with logging_edges() as shared:
                     self._record_shared_object_edges(run, captured_vars, holders, execution.echo, execution.cost)
                     self._link_inputs_kept_by(run, execution.echo, execution.cost)

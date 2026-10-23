@@ -33,6 +33,8 @@ from ..shared_objects import history_names
 from .control_body import is_control_body
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from ...analysis.mutation_effects import StatementEffects
     from .._protocols import ShellProtocol
     from ..tracking_state import TrackingState
@@ -55,12 +57,16 @@ class MutationRouting:
         classifier: MutationClassifier,
         records: StatementRecords,
         in_loop: InLoopChanges | None = None,
+        cheap_to_rerun: Callable[[StatementRun], bool] = lambda run: False,
     ) -> None:
         self.shell = shell
         self.tracking_state = tracking_state
         self._classifier = classifier
         self._records = records
         self._in_loop = in_loop
+        #: Whether a loop last ran faster than storing what it changes would
+        #: save: it runs again, as it did before such loops were stored.
+        self._cheap_to_rerun = cheap_to_rerun
         #: Loop-body statement texts an earlier kernel recorded no verdict for.
         self._unrecorded: set[str] = set()
 
@@ -272,7 +278,7 @@ class MutationRouting:
             # 10,000 files sent the whole loop back to run after a restart.
             # One that cannot be stored refuses the store, and the loop runs.
             stored = {name for name in changed if _storable_name(name, user_ns)}
-            if stored:
+            if stored and not self._cheap_to_rerun(run):
                 run.outputs = run.outputs | stored
                 run.est_fit = run.est_fit | stored
                 run.metrics["stored_in_place"] = sorted(stored)

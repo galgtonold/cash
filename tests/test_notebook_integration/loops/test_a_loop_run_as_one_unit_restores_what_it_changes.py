@@ -3,8 +3,8 @@
 ``for f in files: ...; pbar.update()`` changes ``pbar`` and binds nothing
 that holds it. The loop ran again on every Run All and after every restart,
 as one changing ``st.push(v)`` did. It now stores what it changed with its
-outputs, and a hit restores it: the objects, and every name or container that
-holds them, are what plain Python gives.
+outputs, and a hit restores it into the objects it changed: they, and every
+name bound to them, are what plain Python gives.
 """
 
 import pytest
@@ -21,7 +21,6 @@ STATUS = "[s['status'] for s in get_ipython().magics_manager.registry['CashMagic
 
 CASES = {
     "another name": (P + "p = P()\nq = p", "print(p.n, q.n, p is q, len(q.seen))", "3000 3000 True 3000"),
-    "a container": (P + "p = P()\nholder = {'a': [p]}", "print(holder['a'][0].n, holder['a'][0] is p)", "3000 True"),
     "a later cell": (P + "p = P()", "print(p.n, sum(p.seen))", "3000 4498500"),
     "some passes": (
         P + "p = P()",
