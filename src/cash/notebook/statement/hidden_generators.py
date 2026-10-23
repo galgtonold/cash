@@ -70,9 +70,9 @@ def _children(obj: Any) -> Iterable[tuple[str, Any]]:
         yield "__self__", obj.__self__
         yield "__func__", obj.__func__
         return
-    attrs = own_dict(obj)
-    if attrs is not None and len(attrs) <= _WIDTH:
-        yield from ((f".{k}", v) for k, v in attrs.items())
+    attrs = own_dict(obj, subclasses=True)
+    if attrs is not None and dict.__len__(attrs) <= _WIDTH:
+        yield from ((f".{k}", v) for k, v in dict.items(attrs))
 
 
 def positions(roots: Mapping[str, Any], followed: Iterable[Any] = ()) -> dict[int, tuple[str, Any, Any]]:

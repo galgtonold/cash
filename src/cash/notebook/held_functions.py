@@ -711,9 +711,9 @@ def _visit_group(
     children.append(kind)
     if _may_have_dict(kind):
         for obj in group:
-            attrs = own_dict(obj)
+            attrs = own_dict(obj, subclasses=True)
             if attrs is not None:
-                children.extend(attrs.values())
+                children.extend(dict.values(attrs))
     for name in _slot_names(kind):
         getter = _slot_getter(kind, name)
         if getter is not None:

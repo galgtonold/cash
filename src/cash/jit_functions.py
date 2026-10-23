@@ -38,7 +38,8 @@ def is_jit_type(t: type) -> bool:
 
 def _own_dict(obj: Any) -> dict | None:
     """*obj*'s instance ``__dict__``, read without running its ``__getattr__``."""
-    return own_dict(obj)
+    own = own_dict(obj, subclasses=True)
+    return own if own is None or type(own) is dict else dict(dict.items(own))
 
 
 def jit_python_function(obj: Any) -> types.FunctionType | None:

@@ -670,9 +670,10 @@ def helper_ambient_reads(
 
 def _makes_the_read(fn: Any, where: str) -> bool:
     """Is *fn* the function the analysis says reads (``where`` is
-    ``module.qualname``)?"""
-    qualname = getattr(fn, "__qualname__", None)
-    return isinstance(qualname, str) and (where == qualname or where.endswith("." + qualname))
+    ``module.qualname``)? By both: a ``stamp`` of the notebook is not
+    ``Clock.stamp``."""
+    module, qualname = getattr(fn, "__module__", None), getattr(fn, "__qualname__", None)
+    return isinstance(qualname, str) and where in (f"{module}.{qualname}", qualname)
 
 
 def module_data_component(reach: Reach) -> str:

@@ -175,8 +175,8 @@ def _static_attribute(obj: Any, attr: str) -> Any | None:
 
 def _in_instance_dict(obj: Any, attr: str) -> bool:
     """Was *attr* found in the object's own ``__dict__``, where Python does not bind?"""
-    own = own_dict(obj)
-    return own is not None and attr in own
+    own = own_dict(obj, subclasses=True)
+    return own is not None and dict.__contains__(own, attr)
 
 
 def _is_mock(obj: Any) -> bool:

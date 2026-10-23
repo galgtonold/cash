@@ -527,8 +527,8 @@ def _plain_attribute(base: Any, attr: str) -> Any:
         value = inspect.getattr_static(base, attr)
     except AttributeError:
         return _UNKNOWN  # a `__getattr__` answer, or no such attribute
-    own = own_dict(base)
-    if own is not None and attr in own and own[attr] is value:
+    own = own_dict(base, subclasses=True)
+    if own is not None and dict.get(own, attr, _UNKNOWN) is value:
         return value  # the instance's own data, which Python returns as it is
     if has_attribute(type(value), "__get__"):
         return _UNKNOWN  # a property, a method, any descriptor: reading it runs code
