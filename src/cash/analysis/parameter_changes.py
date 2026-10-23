@@ -113,6 +113,19 @@ _READS_ONLY = tuple(
 #: change nothing: ``dict.get(d, 'k')`` reads ``d``.
 _BUILTIN_CONTAINERS = (dict, list, set, frozenset, tuple, str, bytes, int, float, complex)
 
+#: The names of `_BUILTIN_CONTAINERS`' methods that change nothing: called
+#: on a parameter, read from the name alone (``d.get('k')``, ``s.strip()``).
+#: Not ``partition``, which an array's changes in place and a string's does
+#: not: called on a parameter of a type not known before it runs, for what
+#: it does, a method of another name may change it (``v.partition(0)``,
+#: ``a.frombytes(b)``), and is watched (`OBSERVE`).
+_PURE_METHODS = frozenset(
+    name
+    for kind in _BUILTIN_CONTAINERS
+    for name in dir(kind)
+    if not name.startswith("_") and name not in MUTATING_METHODS and name != "partition"
+)
+
 #: The unbound methods of a type: ``dict.update``, ``np.ndarray.fill``.
 _UNBOUND = (types.MethodDescriptorType, types.WrapperDescriptorType)
 
@@ -249,6 +262,10 @@ class _Reader:
         #: Whether a parameter was handed to a library's code, which may
         #: change it (`OBSERVE`).
         self.observed = False
+        #: The ids of the calls whose result the body being read drops
+        #: (``v.partition(0)`` as a statement of its own): made for what
+        #: they do.
+        self._for_effect: set[int] = set()
 
     # -- callables -------------------------------------------------------
 
@@ -344,6 +361,7 @@ class _Reader:
         if _written_through_calls(fdef, reach):
             # ``np.frombuffer(p)[0:1] = z``: a library's view of a parameter.
             self.observed = True
+        self._for_effect |= {id(node.value) for node in ast.walk(fdef) if isinstance(node, ast.Expr)}
         for node in ast.walk(fdef):
             if not isinstance(node, ast.Call):
                 continue
@@ -388,6 +406,12 @@ class _Reader:
                 # A method of a value cash knows nothing of: a library's, as
                 # everywhere in cash. A callable of the user's handed to it
                 # with the parameter (``frame['o'].apply(upd)``) is read.
+                # What it does to the parameter itself is not read from its
+                # name either, when its result is dropped: made for what it
+                # does, past the builtins' that change nothing. One whose
+                # result is used (``x.rolling(5).mean()``) is read for it.
+                if id(call) in self._for_effect and method not in _PURE_METHODS:
+                    self.observed = True
                 return self._library_call(call, passed, everything) | self._handed_callables(call, reach, scope, depth)
             if (
                 func.attr not in MUTATING_METHODS

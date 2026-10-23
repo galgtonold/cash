@@ -11,7 +11,8 @@ a positional ``out`` slot, ``copy=False``, an unbound method
 (``dict.update(d, ...)``) or a view of the parameter (``np.asarray(v)``)
 changes it as ``out=`` does. A call handed a parameter is watched around
 the run instead, so a pure one (``queue.Queue().put(v)``) is still
-served."""
+served. So is a method called on the parameter itself whose name no
+builtin's changing nothing tells (``v.partition(0)``, ``v.byteswap(True)``)."""
 
 import pytest
 
@@ -63,6 +64,14 @@ CASES = {
         "def upd(v):\n    np.frombuffer(v, dtype=float)[0:1] = Z",
         "Z = {z}\n_ = df['v'].apply(upd)",
     ),
+    "a_partition_called_on_it": (
+        "def upd(n):\n    if Z == 2:\n        n.partition(0)",
+        "Z = {z}\n_ = df['n'].apply(upd)",
+    ),
+    "a_byteswap_called_on_it": (
+        "def upd(v):\n    if Z == 2:\n        v.byteswap(True)",
+        "Z = {z}\n_ = df['v'].apply(upd)",
+    ),
     "control_a_plain_apply": (SETZ, "Z = {z}\n_ = df['o'].apply(setz)"),
 }
 SHOWN = (
@@ -81,6 +90,20 @@ def test_the_reader_below_sees_the_change(cash_magics, case):
         ns = cash_magics.shell.user_ns
         want = eval(f"{SHOWN}.tolist()", {"df": ns["df"]})
         assert ns["g"] == want, f"Z = {z}"
+
+
+def test_a_builtin_method_that_changes_nothing_is_served(cash_magics):
+    """``d.get('i')`` is read from its name: no builtin's ``get`` changes
+    what it is called on."""
+    cells = [
+        "import time\nimport numpy as np, pandas as pd",
+        f"{FRAME}\ndef upd(d):\n    return d.get('i')",
+        f"_ = ({SLOW}, df['o'].apply(upd))[1]",
+    ]
+    for _ in range(3):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+    assert [str(s["status"]) for s in cash_magics._last_cell_metrics["statements"]] == ["RESTORED"]
 
 
 def test_a_library_call_that_leaves_its_argument_alone_is_served(cash_magics):
