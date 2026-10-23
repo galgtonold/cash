@@ -33,6 +33,7 @@ import os
 import sys
 import textwrap
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -232,6 +233,8 @@ class _Clobbers:
     how = ""
     #: A ``_write_atomic`` of the user's, in a folder named like importlib's.
     fake = None
+    #: The module whose ``.pyc`` the value's own ``get_code`` rewrites.
+    source = ""
 
     def __init__(self, path):
         self.path = path
@@ -254,6 +257,11 @@ class _Clobbers:
             bootstrap._write_atomic(self.path, b"clobbered")
         elif _Clobbers.how == "a_function_of_that_name":
             _Clobbers.fake(self.path, b"clobbered")
+        elif _Clobbers.how == "get_code":
+            import importlib.machinery
+
+            source = _Clobbers.source
+            importlib.machinery.SourceFileLoader("keep", source).get_code("keep")
 
 
 @pytest.mark.parametrize("how", ["remove", "replace", "write_atomic", "a_function_of_that_name"])
@@ -290,6 +298,30 @@ def test_a_pyc_that_was_there_is_left_alone(tmp_path, how, monkeypatch):
     finally:
         _Clobbers.how = ""
     assert kept.read_text(encoding="utf-8") == "user data"
+    assert backend.get("k") == (None, None)
+
+
+def test_a_loader_the_value_runs_itself_does_not_rewrite_a_pyc(tmp_path):
+    """``SourceFileLoader(...).get_code(...)`` in ``__setstate__`` runs
+    importlib's own steps below ``get_code``, but no import: the ``.pyc``
+    it rewrote over one that was there is refused like any other write."""
+    import importlib.util
+
+    source = tmp_path / "pkg" / "keep.py"
+    source.parent.mkdir()
+    source.write_text("x = 1\n", encoding="utf-8")
+    kept = Path(importlib.util.cache_from_source(str(source)))
+    kept.parent.mkdir()
+    kept.write_bytes(b"user data")
+    backend = InMemoryBackend()
+    _Clobbers.how, _Clobbers.source = "get_code", str(source)
+    try:
+        backend.set("k", {"v": _Clobbers(str(kept))}, metadata={"copy_required": True})
+    except Exception:
+        pass
+    finally:
+        _Clobbers.how = _Clobbers.source = ""
+    assert kept.read_bytes() == b"user data"
     assert backend.get("k") == (None, None)
 
 

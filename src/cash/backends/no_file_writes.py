@@ -216,18 +216,30 @@ def _by_importlib(function: str, depth: int | None = 12) -> bool:
     """Is ``importlib``'s own *function* running, within *depth* frames of
     the event (any depth for None)? For the steps that write a ``.pyc``,
     only as part of an import's: below ``SourceLoader.get_code`` caching
-    the module's bytecode. The value's own call of ``_write_atomic``, or of
-    a function of that name in another file, is not."""
-    names = {function, "_cache_bytecode", "get_code"} if function in _BYTECODE_STEPS else {function}
+    the module's bytecode, while an import or a reload runs. The value's
+    own call of ``_write_atomic``, of a function of that name in another
+    file, or of ``SourceFileLoader(...).get_code(...)`` is not."""
+    steps = function in _BYTECODE_STEPS
+    names = {function, "_cache_bytecode", "get_code"} if steps else {function}
+    importing = not steps
+    if steps:
+        depth = None if depth is None else depth + _IMPORT_FRAMES
     frame = sys._getframe(1)
-    while frame is not None and (depth is None or depth > 0) and names:
+    while frame is not None and (depth is None or depth > 0) and (names or not importing):
         code = frame.f_code
         if code.co_filename in _IMPORTLIB_FILES:
             names.discard(code.co_name)
+            importing = importing or code.co_name in _IMPORTING
         frame = frame.f_back
         if depth is not None:
             depth -= 1
-    return not names
+    return not names and importing
+
+
+#: ``importlib``'s functions an import or a reload runs a loader under.
+_IMPORTING = frozenset(("_find_and_load", "_load", "_exec"))
+#: How many frames more an import's own steps sit above ``get_code``.
+_IMPORT_FRAMES = 8
 
 
 #: The steps of an import's write of a module's ``.pyc``: let through only
