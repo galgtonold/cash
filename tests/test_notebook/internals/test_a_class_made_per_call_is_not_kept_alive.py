@@ -144,12 +144,12 @@ def _factory(kind):
     )
 
 
-#: Statements that hand the object on: a key reads it, a function gets it,
-#: a copy is made of it.
+#: Statements that hand the object on: a key reads it, a function gets it.
+#: Not a ``@cash.cache`` function: the decorator's per-``Cash`` memos of
+#: code and classes (`LruMemo`, bounded) keep the last classes they saw.
 HANDED = {
     "read": ("n = len(obj.rows)", "pair = [obj, obj]"),
     "passed": ("def use(o):\n    return len(o.rows)", "u = use(obj)"),
-    "copied": ("import copy", "c = copy.copy(obj)", "del c"),
 }
 
 
