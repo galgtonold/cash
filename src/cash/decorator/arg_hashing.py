@@ -8,6 +8,7 @@ import functools
 import hashlib
 import inspect
 import logging
+import operator
 import pickle
 import sys
 import threading
@@ -28,6 +29,7 @@ from ..canonical_form import (
     canonical_bytes,
     canonical_call_bytes,
     canonical_marker_bytes,
+    field_rows_only,
     stable_key_repr,
 )
 from ..content_hashers import (
@@ -718,6 +720,43 @@ HANDED_DIGESTS: contextvars.ContextVar[Any] = contextvars.ContextVar("cash_hande
 #: The `CallPolarsDigests` of the call whose key is built, or whose
 #: arguments are checked after its body, on this context.
 CALL_POLARS: contextvars.ContextVar[Any] = contextvars.ContextVar("cash_call_polars", default=None)
+
+#: ``{id(argument): (argument, kind, part)}`` for the call whose key is being
+#: built (set by the decorator around its key build): what each list or
+#: tuple argument was keyed by, so the check after the body compares against
+#: the content the key holds, not the content when the body began. *kind* is
+#: KIND_PLAIN_KEY with the digest marker, or KIND_WALKED with the token, which
+#: is there only when no arm came between the walk and the tag.
+KEYED_PARTS: contextvars.ContextVar[dict | None] = contextvars.ContextVar("cash_keyed_parts", default=None)
+
+
+class WatchedSince:
+    """A plain list's identity snapshot in `KEYED_PARTS` while the watchers
+    track it: the arm it had before its key's walk (*gen*). The check before
+    the body takes the snapshot, which stands for the content the key holds
+    when the arm is still that one and the watchers still give the key's
+    digest -- no write since, by any thread or any code -- and a hit, which
+    runs no check, takes none."""
+
+    __slots__ = ("gen",)
+
+    def __init__(self, gen: int) -> None:
+        self.gen = gen
+
+
+#: A tuple of these alone has nothing a call could change (`identity_snapshot`).
+_PRIM_SET = frozenset(IMMUTABLE_PRIMS)
+
+
+def _with_copies(form: tuple, rows: dict[int, tuple[list, list]]) -> tuple:
+    """*form* with each list of *rows* (``id -> (list, copy)``) replaced by
+    its copy."""
+    parts, kwarg_parts = form
+    return (
+        tuple(rows[id(p)][1] if id(p) in rows else p for p in parts),
+        {k: rows[id(p)][1] if id(p) in rows else p for k, p in kwarg_parts.items()},
+    )
+
 
 #: A polars argument at least this big (`estimated_size`) is remembered by
 #: `CallPolarsDigests`; a smaller one is read again.
@@ -1691,12 +1730,44 @@ class ArgHasher:
         arguments share is marked here (`shared_across`).
         """
         try:
+            keyed = KEYED_PARTS.get()
+            # What each plain list or tuple holds, as identities, before its
+            # walk: the check after the body compares with these, so a write
+            # by another thread from here on shows, whichever threads are
+            # alive by then (`PurityChecks.argument_identities`). For one the
+            # watchers track, its arm: the check takes the snapshot when no
+            # write came since, and a hit takes none.
+            before: dict[int, Any] | None = None
+            if keyed is not None:
+                before = {}
+                for v in (*hashed_args, *hashed_kwargs.values()):
+                    if type(v) is list or (type(v) is tuple and not _PRIM_SET.issuperset(map(type, v))):
+                        armed = value_watch.gen(v) if value_watch.WATCHING else None
+                        before[id(v)] = WatchedSince(armed) if armed is not None else _plain_data.identity_snapshot(v)
             # A list, not ``map``: a StopIteration raised inside ``map`` ends
             # it early, and the arguments after it would leave the key.
-            form: tuple = (
-                tuple([plain_key_part(a) for a in hashed_args]),
-                {k: plain_key_part(v) for k, v in hashed_kwargs.items()},
+            parts = [plain_key_part(a) for a in hashed_args]
+            kwarg_parts = {k: plain_key_part(v) for k, v in hashed_kwargs.items()}
+            form: tuple = (tuple(parts), kwarg_parts)
+            pairs = list(zip([*parts, *kwarg_parts.values()], [*hashed_args, *hashed_kwargs.values()]))
+            walked_from = (
+                {id(v): value_watch.gen(v) for p, v in pairs if p is v and type(v) in _plain_data.TREE_NODES}
+                if keyed is not None and value_watch.WATCHING
+                else None
             )
+            # A list of records is walked as a copy taken here: what the walk
+            # reads is then one content, which its token is filed for only if
+            # the list still holds it after the tag. Walking the list itself,
+            # another thread, or code of the user's the walk runs, could swap
+            # an item in and back during the walk, and the token went to a key
+            # of content the list never held after.
+            rows: dict[int, tuple[list, list]] = {}
+            if walked_from is not None:
+                for p, v in pairs:
+                    if p is v and type(v) is list and v:
+                        copy = list(v)
+                        if field_rows_only(copy):
+                            rows[id(v)] = (v, copy)
             walked: dict = {}
 
             def outside() -> dict[int, tuple]:
@@ -1717,13 +1788,69 @@ class ArgHasher:
                         spots[id(arg)] = (i, -2, 0)
                 return spots
 
-            args_bytes = canonical_bytes(form, self._content, hook=self._nested_hasher, seen=walked, outside=outside)
+            if rows:
+                args_bytes = canonical_bytes(
+                    _with_copies(form, rows), self._content, hook=self._nested_hasher, seen=walked, outside=outside
+                )
+                if any(id(v) in walked for v, _copy in rows.values()):
+                    # The list itself met elsewhere in the key (``f(rows,
+                    # [rows])``): its copy would key as another list. Walked
+                    # as it is, with no token for it.
+                    walked.clear()
+                    walked_from = {key: gen for key, gen in walked_from.items() if key not in rows}
+                    rows = {}
+                    args_bytes = canonical_bytes(
+                        form, self._content, hook=self._nested_hasher, seen=walked, outside=outside
+                    )
+                else:
+                    for v, copy in rows.values():
+                        met = walked.pop(id(copy), None)
+                        if met is not None:
+                            # Where the walk met the list, for `shared_across`.
+                            walked[id(v)] = (met[0], v)
+            else:
+                args_bytes = canonical_bytes(
+                    form, self._content, hook=self._nested_hasher, seen=walked, outside=outside
+                )
             shared = shared_across([*args, *kwargs.values()], [*hashed_args, *hashed_kwargs.values()], walked)
             if shared:
                 args_bytes += pickle.dumps(("__cash_shared__", shared), protocol=4)
         except BaseException as exc:
             _raise_panic_as_unhashable(exc)
             raise
+        if value_watch.WATCHING and not (self.override_hashers or self.type_hashers):
+            # A list of records walked into the key as it is: a token of its
+            # own, so the fast hit path can serve the next call with it
+            # while the watchers prove it unchanged. Not with a registered
+            # hasher, whose code the walk ran and no watcher sees.
+            for part, value in pairs:
+                if part is value and type(value) in _plain_data.TREE_NODES:
+                    value_watch.tag(value)
+                    if walked_from is not None:
+                        # The token stands for the walked content only when
+                        # the value was armed, and not armed again, from
+                        # before the walk to after the tag: an arm by
+                        # another thread in between files a token for
+                        # content this key may not hold.
+                        armed = walked_from.get(id(value))
+                        token = value_watch.peek(value, value_watch.KIND_WALKED)
+                        copy = rows[id(value)][1] if id(value) in rows else None
+                        if (
+                            armed is not None
+                            and token is not None
+                            and value_watch.gen(value) == armed
+                            and (copy is None or (len(copy) == len(value) and all(map(operator.is_, value, copy))))
+                        ):
+                            keyed[id(value)] = (value, value_watch.KIND_WALKED, token)
+        if keyed is not None:
+            for part, value in pairs:
+                if part is not value and type(value) in _plain_data.TREE_NODES:
+                    keyed[id(value)] = (
+                        value,
+                        value_watch.KIND_PLAIN_KEY,
+                        part,
+                        before.get(id(value)) if before is not None else None,
+                    )
         return args_bytes
 
     def arg_hash(self, arg: Any) -> Any:

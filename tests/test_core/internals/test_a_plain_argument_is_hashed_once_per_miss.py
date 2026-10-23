@@ -6,12 +6,21 @@ the body: a second full hash of a list of ten million ints, a second of a
 by the identities of what they hold (`_plain_data.identity_snapshot`), and
 their leaves cannot change in place, so when no identity moved and every
 other argument cannot change at all, the second hash proves nothing more.
+
+That holds for the content the key was built from, and another thread can
+change the list between the key build and the body: the snapshot is taken
+before the key's walk, so such a write shows as a moved identity. The tests
+run with the test run's own threads alive, and cash's writer threads, as in
+any process with a disk cache.
 """
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
+from cash import value_watch
 from cash.decorator.purity_checks import PurityChecks
 from tests._work_counts import hashed_bytes, method_calls
 
@@ -70,3 +79,137 @@ def test_an_int_subclass_beside_a_plain_list_is_hashed_again(disk_cash):
     with method_calls(PurityChecks, "checked_arguments_hash") as rehash:
         f([1, 2, 3], Tagged(4))
     assert rehash.calls == 1
+
+
+def test_with_another_thread_an_unwatched_list_is_hashed_once(disk_cash):
+    """Another thread alive does not cost a second hash: the snapshot taken
+    before the key's walk is of the content the key holds, whoever runs."""
+    rows = list(range(200_000))
+    stop = threading.Event()
+    other = threading.Thread(target=stop.wait, daemon=True)
+    other.start()
+    try:
+        f = disk_cash.cache(lambda rows: len(rows))
+        with method_calls(PurityChecks, "checked_arguments_hash") as rehash:
+            f(rows)
+    finally:
+        stop.set()
+        other.join(10)
+    assert rehash.calls == 0
+
+
+def test_with_another_thread_a_watched_list_is_not_hashed_again(disk_cash, monkeypatch):
+    """The watchers still giving the key's digest after the snapshot show it
+    is of that content, whatever other threads run."""
+    if not value_watch.enabled() or value_watch.VERIFY:
+        pytest.skip("needs the watchers, not hashing behind each reuse")
+    cw = value_watch._cw
+    before = cw.stats()
+    cw.reset()
+    cw.configure(min_bytes=0)
+    rows = list(range(200_000))
+    ns = {"rows": rows}
+    monkeypatch.setattr(value_watch, "_anchors", lambda: (ns,))
+    stop = threading.Event()
+    other = threading.Thread(target=stop.wait, daemon=True)
+    other.start()
+    try:
+        f = disk_cash.cache(lambda rows, scale=1: len(rows) * scale)
+        f(rows)  # the first hash only sights it; the second arms it
+        f(rows, scale=3)
+        with method_calls(PurityChecks, "checked_arguments_hash") as rehash:
+            f(rows, scale=2)
+    finally:
+        stop.set()
+        other.join(10)
+        cw.reset()
+        value_watch.reset()
+        cw.configure(min_bytes=before["min_bytes"], budget=before["budget"])
+    assert rehash.calls == 0
+
+
+def _counted_snapshots(monkeypatch) -> list:
+    from cash import _plain_data
+
+    taken: list = []
+    real = _plain_data.identity_snapshot
+
+    def counted(value):
+        taken.append(value)
+        return real(value)
+
+    monkeypatch.setattr(_plain_data, "identity_snapshot", counted)
+    return taken
+
+
+@pytest.fixture
+def watched(monkeypatch):
+    """The watchers track every list the namespace binds, however small."""
+    if not value_watch.enabled() or value_watch.VERIFY:
+        pytest.skip("needs the watchers, not hashing behind each reuse")
+    cw = value_watch._cw
+    before = cw.stats()
+    cw.reset()
+    cw.configure(min_bytes=0)
+    ns: dict = {}
+    monkeypatch.setattr(value_watch, "_anchors", lambda: (ns,))
+    yield ns
+    cw.reset()
+    value_watch.reset()
+    cw.configure(min_bytes=before["min_bytes"], budget=before["budget"])
+
+
+def test_a_hit_on_watched_lists_takes_no_identity_snapshot(disk_cash, monkeypatch, watched):
+    """A watched list's snapshot waits for the check before the body, which
+    a hit does not run: a hit on a million ints paid 44 ms for one."""
+    big, small = list(range(200_000)), list(range(1000))
+    watched.update(big=big, small=small)
+    f = disk_cash.cache(lambda a, b: len(a) + len(b))
+    f(big, small)
+    f(big, small)
+    taken = _counted_snapshots(monkeypatch)
+    for _ in range(3):
+        assert f(big, small) == 201_000
+    assert taken == []
+
+
+def test_a_miss_on_a_watched_list_is_still_hashed_once(disk_cash, watched):
+    rows = list(range(200_000))
+    watched["rows"] = rows
+    f = disk_cash.cache(lambda rows, scale=1: len(rows) * scale)
+    f(rows)
+    f(rows, scale=3)  # armed
+    with method_calls(PurityChecks, "checked_arguments_hash") as rehash:
+        f(rows, scale=2)
+    assert rehash.calls == 0
+
+
+def test_a_watched_list_written_after_its_arm_is_hashed_again(disk_cash, monkeypatch, watched):
+    """A write between the arm read before the walk and the check: the
+    snapshot taken at the check would stand for the new content, so the list
+    is hashed again after the body instead."""
+    rows = list(range(200_000))
+    watched["rows"] = rows
+    f = disk_cash.cache(lambda rows, scale=1: len(rows) * scale)
+    f(rows)
+    f(rows, scale=3)
+    real = PurityChecks.argument_identities
+
+    def written(self, *args, **kwargs):
+        rows[5] = -5
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(PurityChecks, "argument_identities", written)
+    with method_calls(PurityChecks, "checked_arguments_hash") as rehash:
+        f(rows, scale=2)
+    assert rehash.calls == 1
+
+
+def test_a_tuple_of_ints_takes_no_snapshot_before_its_walk(disk_cash, monkeypatch):
+    """Nothing in it can change: the snapshot would be ``[None]``."""
+    rows = tuple(range(200_000))
+    f = disk_cash.cache(lambda rows, n: len(rows) + n)
+    taken = _counted_snapshots(monkeypatch)
+    f(rows, 1)
+    # Taken once, before the body, by the check of the body's writes alone.
+    assert sum(value is rows for value in taken) == 1
