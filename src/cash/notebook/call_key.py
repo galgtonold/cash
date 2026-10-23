@@ -348,16 +348,63 @@ def _plain_part(part: Any, ptype: type, atoms: frozenset) -> bool:
     return ptype is dict and _plain_record(part, atoms)
 
 
-def _flat_record(item: Any, kind: type, atoms: frozenset) -> bool:
-    """Does *item*, an object of *kind*, hold only plain values (its class
-    aside): its attributes atoms, or lists, tuples or an attribute dict of
-    them (`_plain_part`)?"""
-    for part in gc.get_referents(item):
+class _FlatRecords:
+    """Which records of a walk hold only plain values (`record`).
+
+    Plain is *leaves*: the atoms, and the types the walk does not look into
+    (`_SKIP`: a numpy scalar, a ``Decimal``), added to as they are met. A
+    record of them held by a record (a ``Point`` in a ``Segment``, an Enum
+    member) is plain too: its class goes in *nested*, to be looked at once
+    for its memos. *flat* holds the ids of the records so held, alive
+    inside the value walked: an Enum member every row holds is judged once.
+    """
+
+    __slots__ = ("flat", "leaves", "nested", "readings")
+
+    def __init__(self, atoms: frozenset, readings: dict[type, int]) -> None:
+        self.leaves = set(atoms)
+        self.readings = readings
+        self.nested: set[type] = set()
+        self.flat: set[int] = set()
+
+    def record(self, item: Any, kind: type, top: bool = True) -> bool:
+        """Does *item*, an object of *kind*, hold only plain values (its
+        class aside): its attributes, or lists and tuples of them, or an
+        attribute dict of them?"""
+        leaves = self.leaves
+        for part in gc.get_referents(item):
+            ptype = type(part)
+            if ptype in leaves or part is kind:
+                continue
+            if ptype is list or ptype is tuple:
+                if leaves.issuperset(map(type, part)):
+                    continue
+                return False
+            if ptype is dict:
+                for v in part.values():
+                    if type(v) not in leaves and not self._part(v, kind, top):
+                        return False
+            elif not self._part(part, kind, top):
+                return False
+        return True
+
+    def _part(self, part: Any, kind: type, top: bool) -> bool:
         ptype = type(part)
-        if ptype in atoms or part is kind or _plain_part(part, ptype, atoms):
-            continue
+        if part is kind or id(part) in self.flat:
+            return True
+        if ptype is list or ptype is tuple:
+            return self.leaves.issuperset(map(type, part))
+        reading = self.readings.get(ptype)
+        if reading is None:
+            reading = self.readings[ptype] = _reading(ptype)
+        if reading == _SKIP:
+            self.leaves.add(ptype)
+            return True
+        if reading == _REFERENTS and top and self.record(part, ptype, top=False):
+            self.nested.add(ptype)
+            self.flat.add(id(part))
+            return True
         return False
-    return True
 
 
 def _memos_on(cls: type) -> list[tuple[str, Any, Any, bool]]:
@@ -599,6 +646,8 @@ def holds_a_closure_with_state(
     # How each type is read, for this walk: thousands of records share one.
     readings: dict[type, int] = {}
     record_kinds: set[type] = set()  # classes of flat records, pushed once
+    flat_records = _FlatRecords(atoms, readings)
+    nested = flat_records.nested
     steps = 0
     while stack:
         item = stack.pop()
@@ -680,13 +729,15 @@ def holds_a_closure_with_state(
             reading = readings.get(ctype)
             if reading is None:
                 reading = readings[ctype] = _reading(ctype)
-            if reading == _REFERENTS and _flat_record(child, ctype, atoms):
+            if reading == _REFERENTS and (nested.clear() or flat_records.record(child, ctype)):
                 # A record of plain values (a dataclass row): looked at here,
                 # with no step of its own, so a million rows are not past
-                # the bound. Its class is looked at once, for its memos.
-                if ctype not in record_kinds:
-                    record_kinds.add(ctype)
-                    stack.append(ctype)
+                # the bound. Its class, and those of the records it holds,
+                # are looked at once, for their memos.
+                nested.add(ctype)
+                if not record_kinds.issuperset(nested):
+                    stack.extend(nested - record_kinds)
+                    record_kinds |= nested
                     pushed = True
                 continue
             stack.append(child)

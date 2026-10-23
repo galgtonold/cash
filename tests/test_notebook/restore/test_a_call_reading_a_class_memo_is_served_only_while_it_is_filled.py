@@ -16,6 +16,7 @@ import sys
 
 import pytest
 
+from cash.notebook import shadow
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S as SLEEP
 from tests.test_notebook.restore.test_review_memofill4_e2e import NAMES, _clean, _plain, _restart, _run_all
 
@@ -60,13 +61,13 @@ def user_module(tmp_path, monkeypatch):
     _drop()
 
 
-@pytest.mark.parametrize("trace", ["on", "off"])
-def test_a_call_that_read_a_filled_memo_runs_after_a_restart(cash_magics, capsys, user_module, monkeypatch, trace):
-    # ``r`` reads what ``a`` filled. After a restart ``a`` was served, so
-    # the memo stayed empty, and ``r`` was served too: the reader filled it,
-    # printing LOOKUP where plain Python prints it in ``a``.
-    if trace == "off":
-        monkeypatch.setenv("CASH_TRACE", "0")
+def test_a_call_that_read_a_filled_memo_runs_after_a_restart(cash_magics, capsys, user_module, monkeypatch):
+    # ``r`` reads what ``a`` filled. Without a trace it was not stored; then
+    # after a restart ``a`` was served, the memo stayed empty, and the reader
+    # printed LOOKUP where plain Python prints it in ``a``. With a trace, the
+    # same in a real kernel:
+    # ``tests/test_notebook_integration/restart/test_a_call_reading_a_filled_class_memo_runs_after_a_restart.py``.
+    monkeypatch.setenv("CASH_TRACE", "0")
     cells = [
         f"import {NAME}",
         f"a = {NAME}.fit(1)",
@@ -87,4 +88,9 @@ def test_a_call_that_read_a_filled_memo_is_served_while_it_is_filled(cash_magics
     cells = [f"import {NAME}", f"a = {NAME}.fit(1)", f"r = {NAME}.fit(1)"]
     _run_all(cash_magics, cells, capsys)
     seen, _ = _run_all(cash_magics, cells[2:], capsys)
-    assert seen == [["MIXED"]], "the call inside was served"
+    if shadow.SHADOW is None:
+        # Without a trace the memo, in a module only the call imports, is
+        # not watched: whether it was filled is unknown, and the call runs.
+        assert seen == [["COMPUTED"]]
+    else:
+        assert seen == [["MIXED"]], "the call inside was served"

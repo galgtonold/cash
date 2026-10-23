@@ -294,7 +294,9 @@ body. So cash follows these rules:
   holds every key and answer it read, compared by value. After a kernel
   restart it runs until the memo is filled again, and the first statement
   to read an answer that can change in place after that runs once more,
-  so cash has seen the answer as it was.
+  so cash has seen the answer as it was. As above, `cache_info()` then
+  counts fewer hits than a run would, on one of your classes too
+  (`Model.lookup.cache_info()`).
 
 Nothing to do: the results are the ones a run gives, at the cost of those
 runs. cash reads a memo's answers only when it holds at most 256 of them;

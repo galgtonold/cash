@@ -13,11 +13,14 @@ from __future__ import annotations
 import argparse
 import collections
 import dataclasses
+import decimal
+import enum
 import functools
 import reprlib
 import time
 import types
 
+import numpy as np
 import pytest
 
 from cash.notebook.call_interception import CallSite
@@ -559,11 +562,47 @@ def test_the_walk_takes_a_bounded_number_of_values(monkeypatch):
     from cash.notebook.statement.store import _holds_state
 
     monkeypatch.setattr(call_key, "_STEPS_AT", 1000)
-    rows = [_Tagged(_Tagged(i)) for i in range(2000)]
+    rows = [_Tagged(_Tagged(_Tagged(i))) for i in range(2000)]
     with pytest.raises(call_key.TooMuchToLookThrough):
         holds_a_closure_with_state(rows)
     assert _holds_state(rows) == "too_many"
-    assert not holds_a_closure_with_state(rows[:300])
+    assert not holds_a_closure_with_state(rows[:100])
+
+
+class _Color(enum.Enum):
+    RED = 1
+
+
+class _Pair:
+    def __init__(self, a, b):
+        self.a = a
+        self.b = b
+
+
+ROWS_OF = {
+    "numpy_scalar": lambda i: _Pair(i, np.float64(i)),
+    "enum_member": lambda i: _Pair(i, _Color.RED),
+    "decimal": lambda i: _Pair(i, decimal.Decimal(i)),
+    "record_of_records": lambda i: _Pair(_Pair(i, 0.5), _Pair(-i, 0.5)),
+}
+
+
+@pytest.mark.parametrize("shape", list(ROWS_OF))
+def test_records_of_scalars_enum_members_or_flat_records_are_not_counted(monkeypatch, shape):
+    # A row holding a numpy scalar, an Enum member, a Decimal or a record of
+    # plain values took a step of its own: 300,000 of them went past the
+    # bound and were not stored, where the base stored them.
+    from cash.notebook import call_key
+
+    monkeypatch.setattr(call_key, "_HOLDERS_LOOKED_INTO", 50)
+    monkeypatch.setattr(call_key, "_STEPS_AT", 1000)
+    assert not holds_a_closure_with_state([ROWS_OF[shape](i) for i in range(2000)])
+
+
+def test_a_memo_on_the_class_of_a_record_a_record_holds_is_seen():
+    held = _instance_with_a_class_memo()
+    assert holds_a_closure_with_state([_Pair(i, 0.5) for i in range(100)] + [_Pair(1, held)])
+    assert holds_a_closure_with_state([_Pair(_Pair(i, 0.5), held) for i in range(100)])
 
 
 def test_a_million_plain_records_are_looked_through_within_the_bound():

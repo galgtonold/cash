@@ -1084,6 +1084,9 @@ class CallUnit:
             not displayed
             and pyplot_state() == figures_before
             and _left_pyplot_alone(call.fn, unit)
+            # The floor first: reading the memos digests their answers,
+            # which a call below it would pay for nothing.
+            and elapsed >= self._cost_floor_s()
             and not isinstance(memos := helper_memos.used(memos_before, clears=_clears(call.fn, memos_before)), tuple)
             # With what the memos on named classes the result reaches hold:
             # served only while they hold it again (`holds_a_closure_with_state`).
@@ -1185,26 +1188,22 @@ class CallUnit:
         class_memos: list[dict] | None = None,
         before: Mapping[int, int] | None = None,
     ) -> bool:
-        """Past the cost floor, safe to hand back as a copy, and cheaper to
-        restore than to compute again. *unit* is the call's trace, when one
-        was recorded: what ran in it. *class_memos*, what the helper memos
+        """Safe to hand back as a copy, and cheaper to restore than to compute
+        again (the caller checked the cost floor). *unit* is the call's
+        trace, when one was recorded: what ran in it. *class_memos*, what the helper memos
         it called held (`helper_memos.used`), gets what the memos on named
         classes the result reaches hold; *before* is the memos' miss counts
         before the call (`helper_memos.misses_before`)."""
-        return (
-            elapsed >= self._cost_floor_s()
-            and self._entries.storable(
-                result,
-                call.args,
-                call.kwargs,
-                call.fn,
-                result_held,
-                ran=attribute_or(unit, "codes", None),
-                memos=class_memos,
-                before=before,
-            )
-            and self._entries.restore_pays(result, elapsed)
-        )
+        return self._entries.storable(
+            result,
+            call.args,
+            call.kwargs,
+            call.fn,
+            result_held,
+            ran=attribute_or(unit, "codes", None),
+            memos=class_memos,
+            before=before,
+        ) and self._entries.restore_pays(result, elapsed)
 
     def _store_result(
         self,
