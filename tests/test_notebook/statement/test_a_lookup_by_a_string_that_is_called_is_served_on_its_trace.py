@@ -12,15 +12,16 @@ records nothing, so that statement still runs every time, as it does before
 
 from __future__ import annotations
 
-import sys
 import warnings
 from unittest.mock import patch
 
 import pytest
 
+from cash.decorator import code_trace
 from cash.notebook.cache_status import CacheStatus
 
-TRACED = sys.version_info >= (3, 12)
+# A record of what ran: Python 3.12 or newer, and not turned off (CASH_TRACE=0).
+TRACED = code_trace.on()
 
 DEFINITIONS = """import time
 cfg = 1

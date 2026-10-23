@@ -468,6 +468,19 @@ class MutationVisitor(ast.NodeVisitor):
         any Call (result captured or not). For multi-output ufuncs ``out`` is a
         tuple: ``out=(q, r)``."""
         self._record_method_mutation(node, node.lineno)
+        if isinstance(node.func, ast.Name) and node.func.id in ("setattr", "delattr") and node.args:
+            # ``setattr(points[7], "x", -3)`` changes what ``points`` holds
+            # as ``points[7].x = -3`` does.
+            base = extract_base_name(node.args[0])
+            if base:
+                self.mutations.append(
+                    MutationInfo(
+                        variable=base,
+                        method="__setattr__" if node.func.id == "setattr" else "__delattr__",
+                        kind="attribute_assign",
+                        line=node.lineno,
+                    )
+                )
         for kw in node.keywords:
             if kw.arg != "out":
                 continue

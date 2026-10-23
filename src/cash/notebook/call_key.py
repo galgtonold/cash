@@ -10,29 +10,36 @@ statement it sits in.
 
 from __future__ import annotations
 
+import argparse
+import builtins
+import collections
+import contextlib
 import dataclasses
 import datetime as _dt
 import decimal as _decimal
 import fractions as _fractions
 import functools
+import gc
 import hashlib
 import logging
 import pathlib as _pathlib
+import reprlib
 import sys
 import types as _types
+import weakref
 from collections.abc import Callable, Mapping
 from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING, Any
 
 from cash import _plain_data
 from cash._memo import CODE_OBJECTS, LruMemo
-from cash._paths import is_pseudo_filename
-from cash._user_attrs import attribute_or, has_attribute, instance_of
+from cash._paths import MAIN_MODULE_NAMES, is_pseudo_filename
+from cash._user_attrs import attribute_or, has_attribute
 from cash.analysis.bytecode import NAME_LOADS, argvals
 from cash.analysis.callee_effects import source_global_mutations
 from cash.analysis.namespace_effects import capturable_globals
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
-from cash.install_paths import is_user_path
+from cash.install_paths import is_user_code_module, is_user_path
 from cash.notebook import shadow as _shadow
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_effects import closure_cells, rebinds_its_closure
@@ -52,6 +59,7 @@ __all__ = [
     "changes_its_closure",
     "global_digests",
     "global_names_reached",
+    "TooMuchToLookThrough",
     "holds_a_closure_with_state",
 ]
 
@@ -214,19 +222,417 @@ _ATOMS = (int, float, complex, str, bytes, bool, type(None))
 #: The same, by exact type, plus dates: one set lookup instead of a scan of `_ATOMS`.
 _EXACT_ATOMS = frozenset({*_ATOMS, _dt.datetime, _dt.date, _dt.time, _dt.timedelta})
 
+#: ``functools.cache`` / ``lru_cache``'s wrapper: a memo that fills as it is called.
+#: A type where the C ``_functools`` is there; otherwise a function, and unused.
+_MEMO_WRAPPER = functools.__dict__.get("_lru_cache_wrapper")
+if not isinstance(_MEMO_WRAPPER, type):
+    _MEMO_WRAPPER = None
 
-def holds_a_closure_with_state(value) -> bool:
-    """Whether *value* is, or holds in its tuples, lists, sets and dicts
-    however deeply nested, a function that changes what its closure holds
-    when called: a counter or a log a factory returned.
+#: How many functions, partials, methods, objects and classes the walk looks
+#: into. Past it, what the rest holds is not known: the value is taken as
+#: holding state, and not served (one rerun), rather than served unchecked.
+_HOLDERS_LOOKED_INTO = 100_000
+#: How many values the walk takes in all, plain records included: past it,
+#: as past `_HOLDERS_LOOKED_INTO`, not known. A million records took 2.7 s
+#: to the end; this many take about a second.
+_STEPS_AT = 300_000
+
+#: ``type -> whether it is a class of the user's`` (its module is user code).
+#: Weak: a class a call made is not kept alive, nor the memo on it.
+_USERS_TYPES: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
+
+#: Read through ``type``'s own descriptors: a metaclass's
+#: ``__getattribute__`` is not asked.
+_CLASS_DICT = type.__dict__["__dict__"].__get__
+_CLASS_MRO = type.__dict__["__mro__"].__get__
+_CLASS_MODULE = type.__dict__["__module__"].__get__
+_CLASS_NAME = type.__dict__["__name__"].__get__
+
+#: Plain attribute bags and containers of the library, read like the user's
+#: objects: what they hold is what was put in them.
+_PLAIN_HOLDERS = (
+    _types.SimpleNamespace,
+    argparse.Namespace,
+    collections.deque,
+    collections.UserDict,
+    collections.UserList,
+    collections.ChainMap,
+)
+
+#: What a class body holds a function in: read for what it holds.
+_MEMBER_HOLDERS = (
+    functools.partial,
+    classmethod,
+    staticmethod,
+    property,
+    functools.partialmethod,
+    functools.cached_property,
+)
+
+#: The containers read item by item; a user's subclass of one is read as the
+#: user's object (`_held_by`), without asking it for its items.
+_CONTAINERS = (tuple, list, set, frozenset, dict)
+_EXACT_CONTAINERS = frozenset(_CONTAINERS)
+
+
+def _repr_guards() -> frozenset[_types.CodeType]:
+    """The code of the standard library's guard against a ``__repr__``
+    calling itself (``reprlib.recursive_repr``, and dataclasses' own copy
+    of it before 3.13): a closure over a set it adds to and takes from on
+    each call, which leaves nothing behind once the call returns."""
+
+    def plain(self):
+        return ""
+
+    guards = {reprlib.recursive_repr()(plain).__code__}
+    own = dataclasses.__dict__.get("_recursive_repr")
+    if callable(own):
+        guards.add(own(plain).__code__)
+    return frozenset(guards)
+
+
+_REPR_GUARDS = _repr_guards()
+#: By id, the codes kept alive above: a code object hashes its whole body.
+_REPR_GUARD_IDS = frozenset(map(id, _REPR_GUARDS))
+
+
+def _plain_record(attrs: dict, atoms: frozenset) -> bool:
+    """Does an object's *attrs* hold only plain values, or lists and tuples
+    of them: nothing inside to look at?"""
+    for v in attrs.values():
+        t = type(v)
+        if t in atoms:
+            continue
+        if (t is list or t is tuple) and atoms.issuperset(map(type, v)):
+            continue
+        return False
+    return True
+
+
+#: How the walk reads a type (`_reading`): skipped, item by item, by its
+#: referents, or one at a time (functions, methods, classes, memos).
+_SKIP, _ITEMS, _REFERENTS, _ONE = range(4)
+
+
+def _reading(kind: type) -> int:
+    if kind in _EXACT_ATOMS or issubclass(kind, _ATOMS):
+        return _SKIP
+    if kind in _EXACT_CONTAINERS:
+        return _ITEMS
+    if kind is _types.FunctionType or kind is _types.MethodType or issubclass(kind, type):
+        return _ONE
+    if _MEMO_WRAPPER is not None and issubclass(kind, _MEMO_WRAPPER):
+        return _ONE
+    users = _users_type(kind)
+    if issubclass(kind, _CONTAINERS) and not users:
+        return _ITEMS
+    if users or issubclass(kind, (*_MEMBER_HOLDERS, *_PLAIN_HOLDERS)):
+        return _REFERENTS
+    return _SKIP  # a library object: not looked into
+
+
+class TooMuchToLookThrough(Exception):
+    """`holds_a_closure_with_state` looked into `_HOLDERS_LOOKED_INTO`
+    objects, or took `_STEPS_AT` values, and found more: what the rest
+    holds is not known."""
+
+
+def _plain_part(part: Any, ptype: type, atoms: frozenset) -> bool:
+    """Is *part*, something a holder holds, a plain value or a list or
+    tuple of them: nothing inside to look at? A record's attribute dict
+    of them is too (`_plain_record`). On 3.12+ an instance hands over its
+    attributes themselves, not a dict, until something asks for its
+    ``__dict__``."""
+    if ptype is list or ptype is tuple:
+        return atoms.issuperset(map(type, part))
+    return ptype is dict and _plain_record(part, atoms)
+
+
+class _FlatRecords:
+    """Which records of a walk hold only plain values (`record`).
+
+    Plain is *leaves*: the atoms, and the types the walk does not look into
+    (`_SKIP`: a numpy scalar, a ``Decimal``), added to as they are met. A
+    record of them held by a record (a ``Point`` in a ``Segment``, an Enum
+    member) is plain too: its class goes in *nested*, to be looked at once
+    for its memos. *flat* holds the ids of the records so held, alive
+    inside the value walked: an Enum member every row holds is judged once.
+    """
+
+    __slots__ = ("flat", "leaves", "nested", "readings")
+
+    def __init__(self, atoms: frozenset, readings: dict[type, int]) -> None:
+        self.leaves = set(atoms)
+        self.readings = readings
+        self.nested: set[type] = set()
+        self.flat: set[int] = set()
+
+    def record(self, item: Any, kind: type, top: bool = True) -> bool:
+        """Does *item*, an object of *kind*, hold only plain values (its
+        class aside): its attributes, or lists and tuples of them, or an
+        attribute dict of them?"""
+        leaves = self.leaves
+        for part in gc.get_referents(item):
+            ptype = type(part)
+            if ptype in leaves or part is kind:
+                continue
+            if ptype is list or ptype is tuple:
+                if leaves.issuperset(map(type, part)):
+                    continue
+                return False
+            if ptype is dict:
+                for v in part.values():
+                    if type(v) not in leaves and not self._part(v, kind, top):
+                        return False
+            elif not self._part(part, kind, top):
+                return False
+        return True
+
+    def _part(self, part: Any, kind: type, top: bool) -> bool:
+        ptype = type(part)
+        if part is kind or id(part) in self.flat:
+            return True
+        if ptype is list or ptype is tuple:
+            return self.leaves.issuperset(map(type, part))
+        reading = self.readings.get(ptype)
+        if reading is None:
+            reading = self.readings[ptype] = _reading(ptype)
+        if reading == _SKIP:
+            self.leaves.add(ptype)
+            return True
+        if reading == _REFERENTS and top and self.record(part, ptype, top=False):
+            self.nested.add(ptype)
+            self.flat.add(id(part))
+            return True
+        return False
+
+
+def _memos_on(cls: type) -> list[tuple[str, Any, Any, bool]]:
+    """``(name, memo, its wrapped function, reachable by name)`` for each
+    ``functools.cache`` memo a class body member holds: itself, or inside
+    a ``staticmethod`` or ``classmethod`` (reachable by its name), or a
+    ``property`` or ``partialmethod`` (not). Read through ``type``'s
+    descriptors and the wrappers' own slots, and kept per class while the
+    members it holds are the same objects."""
+    members = _CLASS_DICT(cls)
+    stamp = tuple(map(id, members.values()))
+    try:
+        known = _CLASS_MEMOS.get(cls)
+    except TypeError:  # not weakly referable
+        known = None
+    if known is not None and known[0] == stamp:
+        return known[1]
+    found = []
+    for name, value in members.items():
+        kind = type(value)
+        named = True
+        if kind is staticmethod or kind is classmethod:
+            value = value.__func__
+        elif kind is property:
+            value, named = value.fget, False
+        elif kind is functools.partialmethod:
+            value, named = value.func, False
+        if _MEMO_WRAPPER is not None and type(value) is _MEMO_WRAPPER:
+            wrapped = value.__dict__.get("__wrapped__")
+            found.append((name, value, wrapped, named))
+    with contextlib.suppress(TypeError):
+        _CLASS_MEMOS[cls] = (stamp, found)
+    return found
+
+
+#: ``class -> (the ids of its members, `_memos_on`)``.
+_CLASS_MEMOS: weakref.WeakKeyDictionary[type, tuple[tuple[int, ...], list]] = weakref.WeakKeyDictionary()
+
+
+def _named_class_memo_changed(
+    cls: type, ran: Any, memos: list[dict] | None = None, before: Mapping[int, int] | None = None
+) -> bool:
+    """Is a memo on a class its module names (*cls* or a base of the
+    user's) one a served result cannot stand for? Served, the next run
+    finds the class's memo as the first run left it, where plain Python
+    makes it again or fills it. Counted:
+
+    - a memo whose function is not the class body's own: it was set on it
+      from outside (``Holder.memo = staticmethod(cache(f))``);
+    - one holding answers whose function ran in the call (*ran*, the codes
+      its trace recorded): the call filled it, and a served entry would
+      replay what that run printed where a run that finds it filled
+      prints nothing;
+    - one holding answers, with no trace, that *memos* has no record of
+      and whose miss count moved since *before* (``id(memo) -> misses``
+      before the call, `helper_memos.misses_before`), or that *before*
+      did not know: the call may have filled it;
+    - one holding answers, without *memos*: an earlier fill cannot be told
+      from this call's.
+
+    Otherwise a memo holding answers is recorded in *memos*
+    (`helper_memos.class_memo_record`): the entry is served only while it
+    holds them all again, so after a restart, with the memo empty, the
+    call runs and fills it."""
+    for base in _CLASS_MRO(cls):
+        if not (_users_type(base) and _named(base)):
+            continue
+        prefix = type.__dict__["__qualname__"].__get__(base) + "."
+        for name, memo, wrapped, named in _memos_on(base):
+            if type(wrapped) is not _types.FunctionType or not wrapped.__qualname__.startswith(prefix):
+                return True
+            if not memo.cache_info().currsize:
+                continue
+            if memos is None or (ran is not None and wrapped.__code__ in ran):
+                return True
+            from cash.notebook import helper_memos
+
+            record = helper_memos.class_memo_record(base, name, memo) if named else None
+            if record is None:
+                return True
+            if any(known.get("where") == record["where"] for known in memos):
+                continue  # read, and recorded, by `helper_memos.used`
+            if ran is None and (before or {}).get(id(memo)) != memo.cache_info().misses:
+                return True
+            memos.append(record)
+    return False
+
+
+def _named(kind: type) -> bool:
+    """Is *kind* the class its module holds under its name: a pickle or a
+    copy of an instance comes back with this very class, so a memo on it is
+    the one the next run uses as plain Python would, not one the result
+    carries? A class a call made (``<locals>`` in its name) is not."""
+    try:
+        name = _CLASS_NAME(kind)
+        qualname = type.__dict__["__qualname__"].__get__(kind)
+        found: Any = sys.modules.get(_CLASS_MODULE(kind))
+        if found is None or "<locals>" in qualname:
+            return False
+        for part in qualname.split("."):
+            if issubclass(type(found), type):
+                found = _CLASS_DICT(found).get(part)
+            elif type(found) is _ModuleType:
+                found = found.__dict__.get(part)
+            else:
+                return False
+        return found is kind and bool(name)
+    except Exception:  # noqa: BLE001 - not known to be named: looked into
+        return False
+
+
+_TYPE_FLAGS = type.__dict__["__flags__"].__get__
+_HEAP_TYPE = 1 << 9  # Py_TPFLAGS_HEAPTYPE: made by a class statement or `type()`
+
+
+def _users_type(kind: type) -> bool:
+    try:
+        known = _USERS_TYPES.get(kind)
+    except TypeError:  # not weakly referable
+        known = None
+    if known is None:
+        try:
+            # A class made in a notebook cell: `__main__`, which under a
+            # test runner is the runner's own module; or made by `exec` in a
+            # namespace with no `__name__`, which names it `builtins`. Not
+            # one of the interpreter's own types that ``builtins`` does not
+            # name (``module``, ``function``): looked into, every statement
+            # with an ``import`` was not stored, numpy's memos counted as its.
+            module = _CLASS_MODULE(kind)
+            known = (
+                module in MAIN_MODULE_NAMES
+                or (
+                    module == "builtins"
+                    and _TYPE_FLAGS(kind) & _HEAP_TYPE
+                    and builtins.__dict__.get(_CLASS_NAME(kind)) is not kind
+                )
+                or (isinstance(module, str) and is_user_code_module(sys.modules.get(module)))
+            )
+        except Exception:  # noqa: BLE001 - not known to be the user's: not looked into
+            known = False
+        with contextlib.suppress(TypeError):
+            _USERS_TYPES[kind] = known
+    return known
+
+
+def _held_by(item) -> list | None:
+    """What a holder that is not a container keeps a function or a memo in:
+    a function's closure, defaults and attributes, a ``partial``'s function
+    and arguments, a bound method's function and object, what a
+    ``SimpleNamespace``, an ``argparse.Namespace``, a ``deque`` or a user's
+    object holds (its class included), and the members of a user's class
+    and of its user's bases. None for anything else: a library object is
+    not looked into. Read without asking the object (``gc.get_referents``,
+    ``type``'s own descriptors): an object's ``__getattr__``, a ``__dict__``
+    property or a metaclass runs no code here."""
+    kind = type(item)
+    if kind is _types.FunctionType:
+        parts = [cell.cell_contents for cell in item.__closure__ or () if _filled(cell)]
+        parts.extend(item.__defaults__ or ())
+        parts.extend((item.__kwdefaults__ or {}).values())
+        return parts + list(item.__dict__.values())
+    if kind is _types.MethodType:
+        return [item.__func__, item.__self__]
+    if issubclass(kind, type):
+        # A class its module names: what is on it is the live class's, which
+        # the next run uses in plain Python too (a module-level dataclass, a
+        # class with a ``functools.cache`` method).
+        if not _users_type(item) or _named(item):
+            return None
+        return [
+            value
+            for base in _CLASS_MRO(item)
+            if _users_type(base) and not _named(base)
+            for value in _CLASS_DICT(base).values()
+        ]
+    if issubclass(kind, (*_MEMBER_HOLDERS, *_PLAIN_HOLDERS)) or _users_type(kind):
+        # A user's list or dict subclass included: its items and its own
+        # attributes, without asking it (``__iter__``, ``values``).
+        return gc.get_referents(item)
+    return None
+
+
+def _filled(cell) -> bool:
+    try:
+        cell.cell_contents  # an empty cell raises
+    except ValueError:
+        return False
+    return True
+
+
+def holds_a_closure_with_state(
+    value, ran: Any = None, memos: list[dict] | None = None, before: Mapping[int, int] | None = None
+) -> bool:
+    """Whether *value* is, or holds however deeply nested, a function that
+    changes what its closure holds when called (a counter or a log a factory
+    returned), or a ``functools.cache`` memo. Looked for in tuples, lists,
+    sets and dicts, and in what a function, a ``partial``, a bound method, a
+    ``SimpleNamespace``, a user's object or a user's class holds
+    (`_held_by`); a library object is not looked into.
 
     Such a value cannot be served from the cache. The store keeps a function
     by reference, so a hit hands back the closure the last run made, with
     everything it has counted or collected since: ``counter =
-    make_counter(0)`` run again gave a counter that went on from 2. Only two
+    make_counter(0)`` run again gave a counter that went on from 2. A
+    ``functools.cache`` memo is one too: ``functools.cache(g)`` stored, then
+    filled later in the statement, came back already filled after a restart,
+    and ``g`` did not run (or print) where plain Python ran it; held on an
+    object (``SimpleNamespace(f=cache(g))``), in a wrapper's closure or in a
+    ``partial``, a deep copy of the result still holds the same memo, as a
+    function or a class copies as itself. Only two
     levels of containers were looked into, so ``{"on": {"click":
     [counter]}}`` was served; a seen set now ends a container that holds
     itself.
+
+    A class its module names is looked into for its memos only: a copy of
+    the result comes back with that very class, whose memo the next run
+    uses in plain Python too (a dataclass, a class with a
+    ``functools.cache`` method), unless the call put the memo there or
+    filled it; one it only read is recorded in *memos* (what
+    `helper_memos.used` recorded, added to) for the entry to be served only
+    while the memo holds its answers again (`_named_class_memo_changed`;
+    *ran* is the code the call's trace recorded, None without one, and
+    *before* the memos' miss counts before it). A class
+    a call made is looked into
+    whole. The standard library's guard on a dataclass's ``__repr__`` keeps
+    no state between calls. Past `_HOLDERS_LOOKED_INTO` objects with
+    something inside to look at, or `_STEPS_AT` values in all, it raises
+    `TooMuchToLookThrough`: not known, so not served.
     """
     if _plain_data.is_tree(value):
         # JSON-like data holds no function: answered a level at a time at C
@@ -235,41 +641,109 @@ def holds_a_closure_with_state(value) -> bool:
         return False
     stack = [value]
     seen: set[int] = set()
+    looked_into = 0
     atoms = _EXACT_ATOMS
+    # How each type is read, for this walk: thousands of records share one.
+    readings: dict[type, int] = {}
+    record_kinds: set[type] = set()  # classes of flat records, pushed once
+    flat_records = _FlatRecords(atoms, readings)
+    nested = flat_records.nested
+    steps = 0
     while stack:
         item = stack.pop()
+        steps += 1
+        if steps > _STEPS_AT:
+            raise TooMuchToLookThrough
+        # By type, not `isinstance`: that asks an object for its
+        # `__class__`, which may be the user's code.
         kind = type(item)
-        if kind in atoms or instance_of(item, _ATOMS):
+        reading = readings.get(kind)
+        if reading is None:
+            reading = readings[kind] = _reading(kind)
+        if reading == _SKIP:
             continue
-        if instance_of(item, _types.FunctionType):
-            if changes_its_closure(item):
+        if reading == _ONE:
+            if kind is _types.FunctionType:
+                if (
+                    item.__closure__ is None
+                    and item.__defaults__ is None
+                    and not item.__kwdefaults__
+                    and not item.__dict__
+                ):
+                    continue  # holds nothing of its own: most functions
+                if id(item.__code__) in _REPR_GUARD_IDS:
+                    continue  # a dataclass's ``__repr__``: its set is empty between calls
+                if changes_its_closure(item):
+                    return True
+            elif _MEMO_WRAPPER is not None and issubclass(kind, _MEMO_WRAPPER):
                 return True
-            continue
-        if instance_of(item, (tuple, list, set, frozenset, dict)):
+        if reading != _ITEMS:
             if id(item) in seen:
                 continue
-            children = item.values() if instance_of(item, dict) else item
-            # Only atoms, by exact type: asked at C speed, where the loop
-            # below took a Python step per item (22 ms for 200,000 ints).
-            if atoms.issuperset(map(type, children)):
-                continue
-            # A container holding only atoms (a million small tuples of a
-            # record list) has nothing to look into and is not remembered.
-            pushed = False
-            for child in children:
-                ctype = type(child)
-                if ctype in atoms:
+            seen.add(id(item))  # a class each record holds is looked at once
+            if reading == _ONE and issubclass(kind, type) and _users_type(item):
+                # Its bases its module names, and itself when it is one:
+                # their memos only (`_named_class_memo_changed`).
+                if _named_class_memo_changed(item, ran, memos, before):
+                    return True
+                if _named(item):
                     continue
-                if ctype is tuple:
-                    for part in child:
-                        if type(part) not in atoms:
-                            break
-                    else:
+            held = gc.get_referents(item) if reading == _REFERENTS else _held_by(item)
+            if held:
+                pushed = False
+                for part in held:
+                    ptype = type(part)
+                    if ptype in atoms or id(part) in seen:
                         continue
-                stack.append(child)
-                pushed = True
-            if pushed:
-                seen.add(id(item))  # the containers stay alive inside *value*
+                    if _plain_part(part, ptype, atoms):
+                        continue  # a record's attributes: nothing inside to look at
+                    stack.append(part)
+                    pushed = True
+                if pushed:
+                    # Only an object with something inside to look at counts:
+                    # 100,000 records of plain values are looked through.
+                    looked_into += 1
+                    if looked_into > _HOLDERS_LOOKED_INTO:
+                        raise TooMuchToLookThrough
+            continue
+        if id(item) in seen:
+            continue
+        children = item.values() if issubclass(kind, dict) else item
+        # Only atoms, by exact type: asked at C speed, where the loop
+        # below took a Python step per item (22 ms for 200,000 ints).
+        if atoms.issuperset(map(type, children)):
+            continue
+        # A container holding only atoms (a million small tuples of a
+        # record list) has nothing to look into and is not remembered.
+        pushed = False
+        for child in children:
+            ctype = type(child)
+            if ctype in atoms:
+                continue
+            if ctype is tuple:
+                for part in child:
+                    if type(part) not in atoms:
+                        break
+                else:
+                    continue
+            reading = readings.get(ctype)
+            if reading is None:
+                reading = readings[ctype] = _reading(ctype)
+            if reading == _REFERENTS and (nested.clear() or flat_records.record(child, ctype)):
+                # A record of plain values (a dataclass row): looked at here,
+                # with no step of its own, so a million rows are not past
+                # the bound. Its class, and those of the records it holds,
+                # are looked at once, for their memos.
+                nested.add(ctype)
+                if not record_kinds.issuperset(nested):
+                    stack.extend(nested - record_kinds)
+                    record_kinds |= nested
+                    pushed = True
+                continue
+            stack.append(child)
+            pushed = True
+        if pushed:
+            seen.add(id(item))  # the containers stay alive inside *value*
     return False
 
 

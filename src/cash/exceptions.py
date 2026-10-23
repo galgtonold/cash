@@ -57,6 +57,7 @@ SOURCE_RETRIEVAL_ERRORS: tuple[type[BaseException], ...] = (
     IndentationError,  # SyntaxError subclass; listed for the reader
     UnicodeDecodeError,  # ValueError subclass; file is not decodable text
     ValueError,  # e.g. inspect given a built-in with a bogus lineno
+    AttributeError,  # an object passing for a function or class by its ``__class__``
 )
 
 

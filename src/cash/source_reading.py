@@ -23,6 +23,7 @@ import time
 import types
 
 from ._memo import CODE_OBJECTS, LruMemo
+from ._user_attrs import own_dict
 from .tracking.tracker_context import untracked
 
 __all__ = [
@@ -107,14 +108,16 @@ _CLASS_SOURCE_PARSES_FILE = sys.version_info < (3, 13) and hasattr(inspect, "_Cl
 
 def _source_target(obj: object) -> tuple | None:
     """What decides *obj*'s source within its file, or None to not memoise:
-    the first line for code, the qualified name for a class."""
-    if inspect.ismethod(obj):
+    the first line for code, the qualified name for a class. Asked of the
+    real type: an object passing for one by its ``__class__`` has none of
+    their parts, and is not memoised."""
+    if type(obj) is types.MethodType:
         obj = obj.__func__
-    if inspect.isfunction(obj):
+    if type(obj) is types.FunctionType:
         obj = obj.__code__
-    if inspect.iscode(obj):
+    if type(obj) is types.CodeType:
         return ("code", obj.co_firstlineno)
-    if inspect.isclass(obj):
+    if issubclass(type(obj), type):
         return ("class", obj.__qualname__, vars(obj).get("__firstlineno__"))
     return None
 
@@ -489,11 +492,10 @@ def wrapper_layers(fn: object) -> list[object]:
         # Read from the object's own ``__dict__``, where ``functools.wraps``
         # puts it: no ``__getattr__`` runs, and a mock's made-up attributes
         # do not lead on forever.
-        try:
-            own = object.__getattribute__(current, "__dict__")
-        except (AttributeError, TypeError):
+        own = own_dict(current, subclasses=True)
+        if own is None:
             return layers
-        current = own.get("__wrapped__") if isinstance(own, dict) else None
+        current = dict.get(own, "__wrapped__")
         if current is None or id(current) in seen:
             return layers
         seen.add(id(current))
