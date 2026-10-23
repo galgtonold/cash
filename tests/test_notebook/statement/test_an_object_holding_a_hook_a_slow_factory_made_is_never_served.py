@@ -23,6 +23,11 @@ HOLDERS = {
         "h.inner.f(5)",
     ],
     "in a variable": ["f = make(store)", "f(5)"],
+    "in a partial": ["import functools\nh = functools.partial(make(store))", "h(5)"],
+    "in a partial on an object": [
+        "import functools\nclass H:\n    def __init__(self, f):\n        self.f = f\nh = H(f=functools.partial(make(store)))",
+        "h.f(5)",
+    ],
 }
 HOOKS = {
     "lambda": MAKE.format(hook=LAMBDA),

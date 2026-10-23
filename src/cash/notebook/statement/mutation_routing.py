@@ -13,6 +13,9 @@ changing.
 from __future__ import annotations
 
 import ast
+import functools
+import itertools
+import types
 from typing import TYPE_CHECKING
 
 from ..._user_attrs import attribute_or, own_dict
@@ -102,13 +105,19 @@ class MutationRouting:
         # would skip the call inside, and the list would stay empty. In a loop
         # or branch body too: without a lineage the body statement's key never
         # moves, so nothing else sends it back to run.
-        closure_writers = self._callees_changing_their_closure(run.tree)
+        closure_writers, writers = self._callees_changing_their_closure(run.tree)
         if closure_writers:
             _skip(
                 run,
                 f"Callee changes its closure: {', '.join(sorted(closure_writers))} "
                 "(statement re-executes, call still cached)",
             )
+            # A list the closure holds that the notebook holds too (``f, log =
+            # make()``) is an output, as a list is of ``log.append(x)``: its
+            # lineage moves, so a reader of ``log`` below is not served the
+            # last run's printout. The loop or branch owns its body's writes.
+            if not is_control_body(run.code):
+                run.outputs = run.outputs | _names_holding_closures_of(writers, self.shell.user_ns)
         # The same for one that sets state on a local module: `mylib.add(5)`
         # bumping the module's counter, `mylib.K = slow()`. The module is no
         # variable of the notebook either, and a hit restores the statement's
@@ -341,21 +350,9 @@ class MutationRouting:
             return ""
         return f" -- assumed changed, its change check gave up as too costly to read: {', '.join(said)}"
 
-    def _callees_changing_their_closure(self, tree: ast.AST | None) -> set[str]:
-        """The functions *tree* calls, outside loop and branch bodies, that
-        change their closure (:func:`changes_its_closure`): by name, or taken
-        out of a dict, list or object the notebook holds (``hooks['f'](5)``,
-        ``h.f(5)``), read without running code of the user's."""
-        user_ns = self.shell.user_ns
-        found = {name for name in called_names(tree, "no_control_bodies") if changes_its_closure(user_ns.get(name))}
-        for call in calls_in(tree, "no_control_bodies"):
-            if isinstance(call.func, (ast.Subscript, ast.Attribute)):
-                fn = _held_callable(call.func, user_ns)
-                # Of the user's: cash's own ``@cash.cache`` wrapper counts its calls.
-                code = attribute_or(fn, "__code__", None)
-                if code is not None and is_user_code_file(code.co_filename) and changes_its_closure(fn):
-                    found.add(ast.unparse(call.func))
-        return found
+    def _callees_changing_their_closure(self, tree: ast.AST | None) -> tuple[set[str], list]:
+        """`callees_changing_their_closure` in the notebook's namespace."""
+        return callees_changing_their_closure(tree, self.shell.user_ns)
 
     # ------------------------------------------------------------------
     # After execution
@@ -544,7 +541,96 @@ def _skip(run: StatementRun, reason: str) -> None:
     run.metrics["uncacheable_reasons"].append(reason)
 
 
+def callees_changing_their_closure(tree: ast.AST | None, user_ns) -> tuple[set[str], list]:
+    """The functions *tree* calls, outside loop and branch bodies, that
+    change their closure (:func:`changes_its_closure`), by how the call
+    names them, and the functions: by name, taken out of a dict, list or
+    object the notebook holds (``hooks['f'](5)``, ``h.f(5)``), or held in
+    one a call reaches by a name (``hooks.get('f')(5)``, ``hl[-1](5)``,
+    ``map(f, xs)``, ``partial(f, 5)()``), read without running code of
+    the user's."""
+    found: set[str] = set()
+    writers: list = []
+    for name in called_names(tree, "no_control_bodies"):
+        fn = user_ns.get(name)
+        if changes_its_closure(fn):
+            found.add(name)
+            writers.append(fn)
+    reached: set[str] = set()
+    for call in calls_in(tree, "no_control_bodies"):
+        if isinstance(call.func, (ast.Subscript, ast.Attribute)):
+            fn = _held_callable(call.func, user_ns)
+            if _users_closure_writer(fn):
+                found.add(ast.unparse(call.func))
+                writers.append(fn)
+                continue
+        for part in (call.func, *call.args, *(k.value for k in call.keywords)):
+            reached.update(node.id for node in ast.walk(part) if isinstance(node, ast.Name))
+    for name in sorted(reached - found):
+        held = [fn for fn in _held_functions(user_ns.get(name)) if _users_closure_writer(fn)]
+        if held:
+            found.add(name)
+            writers.extend(held)
+    return found, writers
+
+
+def closure_holder_names(tree: ast.AST | None, user_ns) -> set[str]:
+    """The notebook's names bound to an object a function *tree* calls
+    changes through its closure (`callees_changing_their_closure`): ``log``
+    of ``f, log = make()``, which ``f(z)`` appends to."""
+    found, writers = callees_changing_their_closure(tree, user_ns)
+    return _names_holding_closures_of(writers, user_ns) if found else set()
+
+
 _MISSING = object()
+
+#: How many values `_held_functions` looks at in one holder.
+_HELD_LOOKED_AT = 64
+
+
+def _users_closure_writer(fn: object) -> bool:
+    """Is *fn* a function of the user's that changes its closure? Not cash's
+    own ``@cash.cache`` wrapper, which counts its calls."""
+    code = attribute_or(fn, "__code__", None)
+    return code is not None and is_user_code_file(code.co_filename) and changes_its_closure(fn)
+
+
+def _held_functions(value: object) -> list:
+    """*value* when a function, else the functions a plain dict, list,
+    tuple or ``partial`` holds, or an object holds in its own dict, one
+    level down: read without running code of the user's."""
+    kind = type(value)
+    if kind is types.FunctionType:
+        return [value]
+    if kind is dict:
+        items = dict.values(value)
+    elif kind in (list, tuple):
+        items = value
+    elif kind is functools.partial:
+        items = (value.func, *value.args, *value.keywords.values())
+    else:
+        attrs = own_dict(value)
+        items = attrs.values() if attrs is not None else ()
+    return [item for item in itertools.islice(items, _HELD_LOOKED_AT) if type(item) is types.FunctionType]
+
+
+def _names_holding_closures_of(writers: list, user_ns) -> set[str]:
+    """The notebook's names bound to an object a closure of *writers* holds."""
+    held: set[int] = set()
+    for fn in writers:
+        for cell in fn.__closure__ or ():
+            try:
+                content = cell.cell_contents
+            except ValueError:
+                continue
+            if type(content) not in _ATOMS:
+                held.add(id(content))
+    if not held:
+        return set()
+    return {name for name, value in list(user_ns.items()) if id(value) in held and not name.startswith("_")}
+
+
+_ATOMS = frozenset({int, float, complex, str, bytes, bool, type(None)})
 
 
 def _held_callable(expr: ast.expr, user_ns) -> object | None:
