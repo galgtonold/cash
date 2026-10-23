@@ -689,7 +689,10 @@ def own_writes(code: types.CodeType) -> frozenset[str]:
     callee. ``"?"`` when its text cannot be read."""
     node = _function_node(code)
     if node is None:
-        return frozenset((_UNKNOWN,))
+        # Its text cannot be read (a lambda compiled from a string): its
+        # bytecode says what it changes where that is plain.
+        writes = _bytecode_writes(code)
+        return frozenset((_UNKNOWN,)) if writes is None else writes
     try:
         changed = set(free_vars_mutated_in_function(node))
     except RecursionError:
@@ -697,6 +700,45 @@ def own_writes(code: types.CodeType) -> frozenset[str]:
     changed |= _rebound(node)
     changed |= _handed_writes(node) - scope_locals(node)
     return frozenset(changed)
+
+
+#: Builtins that change an object or a namespace a name of theirs gives.
+_CHANGERS_BY_NAME = frozenset({"setattr", "delattr", "globals", "vars", "exec", "eval", "__import__", "locals"})
+_STORES = frozenset({"STORE_GLOBAL", "DELETE_GLOBAL", "STORE_DEREF", "DELETE_DEREF"})
+#: An object changed in place: on which object, the bytecode alone does not
+#: say plainly.
+_IN_PLACE = frozenset({"STORE_ATTR", "DELETE_ATTR", "STORE_SUBSCR", "DELETE_SUBSCR", "STORE_SLICE"})
+
+
+def _bytecode_writes(code: types.CodeType) -> frozenset[str] | None:
+    """The free names *code* (and the code made inside it) rebinds, read off
+    its bytecode; None when it may change an object in place (an attribute
+    or item set, a mutating method, a function that changes its argument),
+    which the text tells apart and the bytecode does not."""
+    out: set[str] = set()
+    pending = [code]
+    seen: set[types.CodeType] = set()
+    while pending:
+        c = pending.pop()
+        if c in seen:
+            continue
+        seen.add(c)
+        for ins in dis.get_instructions(c):
+            op = ins.opname
+            if op in _STORES:
+                if op.endswith("_DEREF") and ins.argval not in c.co_freevars:
+                    continue
+                out.add(ins.argval)
+            elif op in _IN_PLACE:
+                return None
+            elif op in ("LOAD_ATTR", "LOAD_METHOD") and (ins.argval in MUTATING_METHODS or ins.argval.startswith("__")):
+                return None
+            elif op in ("LOAD_GLOBAL", "LOAD_NAME", "LOAD_DEREF") and (
+                ins.argval in _FIRST_ARG_CHANGERS or ins.argval in _FIRST_ARG_MODULES or ins.argval in _CHANGERS_BY_NAME
+            ):
+                return None
+        pending.extend(k for k in c.co_consts if isinstance(k, types.CodeType))
+    return frozenset(out)
 
 
 #: Functions that change their first argument: ``next(GEN)`` moves it on.
