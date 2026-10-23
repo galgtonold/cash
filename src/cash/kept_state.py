@@ -29,6 +29,7 @@ import weakref
 from collections.abc import Callable, Iterator
 from typing import Any
 
+from ._own_work import own_work
 from ._user_attrs import instance_of
 
 __all__ = [
@@ -550,7 +551,8 @@ def _dumps(
         pickler.fast = True
         pickler.persistent_id = key_aliases(aliases if type(aliases) is dict else None)
     pickler.dispatch_table = _KeepDict(protocol, extra, keyed) if table is None else table
-    pickler.dump(value)
+    with own_work:
+        pickler.dump(value)
     if after is not None:
         after(pickler)
     return b"" if sink is not None else buf.getvalue()
