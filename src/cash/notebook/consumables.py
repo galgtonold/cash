@@ -372,7 +372,9 @@ def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> He
 
     Every item of the user's containers and every attribute of the user's
     objects is looked at; a value that holds nothing (an ``int``, a ``str``)
-    costs no budget. Inside a library's objects and functions only a
+    costs no budget. Any stream the user's own function, container or object
+    holds counts (an ``itertools.count()`` a function reads); inside a
+    library's objects and functions only a
     generator of the user's counts: a library keeps its own counters
     (matplotlib's callback ids). A look that runs out of objects, items or
     depth on the user's objects says where it stopped (``stopped``), so the
@@ -382,24 +384,29 @@ def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> He
         return HeldStreams([])
     look = _Look()
     found: list[str] = []
-    frontier: list[tuple[str, Any, int, bool]] = []
+    # (path, object, depth, whether what it holds is the user's, whether its
+    # holder is the user's: a stream the user's object holds is the user's to
+    # draw from, whoever made it)
+    frontier: list[tuple[str, Any, int, bool, bool]] = []
     for node in ast.walk(tree):
         if isinstance(node, (ast.Attribute, ast.Subscript)) and not isinstance(node.ctx, ast.Store):
             found.extend(path for path, value in _spelled(node, user_ns, look) if _held_stream(value))
         if isinstance(node, ast.Call):
-            frontier.extend((path, callee, 0, _owned(callee)) for path, callee in _callees(node.func, user_ns, look))
+            frontier.extend(
+                (path, callee, 0, _owned(callee), True) for path, callee in _callees(node.func, user_ns, look)
+            )
             for arg in [*node.args, *(k.value for k in node.keywords)]:
                 frontier.extend(
-                    (path, value, 0, True) for path, value in _spelled(arg, user_ns, look) if _callable(value)
+                    (path, value, 0, True, True) for path, value in _spelled(arg, user_ns, look) if _callable(value)
                 )
     seen: set[int] = set()
     while frontier:
-        path, obj, depth, owned = frontier.pop()
+        path, obj, depth, owned, held_by_user = frontier.pop()
         if type(obj) in _LEAVES or id(obj) in seen or instance_of(obj, (str, bytes, int, float, complex)):
             continue
         seen.add(id(obj))
         if depth > 0 and _held_stream(obj):
-            if owned or _users_generator(obj):
+            if held_by_user or _users_generator(obj):
                 found.append(path)
             continue
         if depth >= _HELD_DEPTH:
@@ -421,6 +428,7 @@ def held_stream_paths(tree: ast.Module | None, user_ns: Mapping[str, Any]) -> He
                         child,
                         depth + 1,
                         owned and _owned(child),
+                        owned,
                     )
                 )
         except Exception:  # noqa: BLE001 - a look into arbitrary objects must not break the statement
