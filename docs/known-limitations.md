@@ -880,7 +880,10 @@ default argument or base class does. **Fix:** move the binding above this cell.
   notebook, the walks over what a statement reads and what it holds read
   the attributes Python keeps instead, and never run it. Keep such a
   property free of side effects, or give the function what it needs as
-  plain arguments.
+  plain arguments. A `dict` subclass set as an object's `__dict__` is read
+  the same way, without its own methods, but storing the object still
+  pickles it, which calls the subclass's `items` and `__reduce_ex__`: if
+  those raise, the statement is not cached and re-runs each time.
 
 ## Reporting something not on this page
 

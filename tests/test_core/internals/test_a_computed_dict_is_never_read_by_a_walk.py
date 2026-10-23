@@ -14,7 +14,7 @@ import pytest
 
 from cash import jit_functions, source_reading
 from cash.analysis import ast_util, handed_callables
-from cash.notebook import shared_objects
+from cash.notebook import held_functions, shared_objects
 from cash.notebook.control_structures import single_unit_policy
 from cash.notebook.statement import hidden_generators
 
@@ -118,6 +118,7 @@ SUBCLASS_READS = {
     "wrapper layers": lambda: source_reading.wrapper_layers(Held())[-1] is helper,
     "jit dict": lambda: jit_functions._own_dict(Held())["fn"] is helper,
     "plain attribute": lambda: single_unit_policy._plain_attribute(Held(), "kept") is helper,
+    "held functions": lambda: helper.__code__ in held_functions.held_notebook_code(Held(), globals()).codes,
 }
 
 
