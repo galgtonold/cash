@@ -79,11 +79,15 @@ def warn_changed_below(
     cells: list[str],
     cell_idx: int,
     warned: set[tuple[int, str, str]],
+    through: str | None = None,
 ) -> bool:
     """Warn NOTEBOOK-CHANGED-BELOW when *name*, an input of cell *cell_idx*
     that is about to be rebuilt as the cells above leave it, was last changed
-    in place by *last_code*, a statement of a cell below. Once per cell,
-    name and statement (*warned*). Returns whether it warned."""
+    in place by *last_code*, a statement of a cell below. *through*: the
+    input the cell reads, when *name* is a variable whose object that input
+    holds (``def draw(k, rows=BIG)`` holds ``BIG``, which ``BIG.append(...)``
+    changes). Once per cell, name and statement (*warned*). Returns whether
+    it warned."""
     if not last_code or not 0 <= cell_idx < len(cells):
         return False
     code = strip_markers(last_code).strip()
@@ -93,6 +97,7 @@ def warn_changed_below(
     if found is None or not _changes_in_place(code, name):
         return False
     below, written = found
+    reads = f"'{name}'" if through is None else f"'{through}', which holds '{name}',"
     key = (cell_idx, name, code)
     if key in warned:
         return False
@@ -101,7 +106,7 @@ def warn_changed_below(
     if len(first) > 60:
         first = first[:57] + "..."
     what = (
-        f"cell {cell_idx + 1} reads '{name}', which cell {below + 1} below changed in place "
+        f"cell {cell_idx + 1} reads {reads}, which cell {below + 1} below changed in place "
         f"(`{first}`). Re-run on its own, cell {cell_idx + 1} gets '{name}' rebuilt as the cells "
         f"above leave it, so it computes without that change, and '{name}' no longer holds it "
         f"until cell {below + 1} runs again."
