@@ -706,15 +706,17 @@ is an in-place change, so as one unit it is not cached at all. The badge row
 then shows `In-place mutation on: out`. A shorter loop runs pass by pass:
 each `append` runs, and the expensive call inside it comes from the cache.
 
-<!-- claim: cash/notebook/heavy_loops.py:is_heavy @908c4eba, cash/notebook/heavy_loops.py:HEAVY_FACTOR == 4, cash/notebook/heavy_loops.py:MIN_HEAVY_ITER_SEC == 0.01, cash/notebook/heavy_loops.py:header_identity @ba179718, cash/notebook/control_structures/for_handler.py:ForLoopHandler._prefers_iterations @4510a192 -->
+<!-- claim: cash/notebook/heavy_loops.py:is_heavy @908c4eba, cash/notebook/heavy_loops.py:HEAVY_FACTOR == 4, cash/notebook/heavy_loops.py:MIN_HEAVY_ITER_SEC == 0.01, cash/notebook/heavy_loops.py:header_identity @ba179718, cash/notebook/heavy_loops.py:HeavyLoopStore._find @d8473e07, cash/notebook/control_structures/for_handler.py:ForLoopHandler._prefers_iterations @b5475b31 -->
 That estimate is a guess made before the loop has run. A loop run as one unit
 is measured while it runs, and when one iteration's work takes at least four
 times its estimated bookkeeping, and at least 10 ms, the next runs cache it
 per iteration again. As one unit, raising its `range` or editing the last
 statement of its body runs every iteration again; per iteration, an edit runs
 only the iterations it changes or adds. The measurement is kept in the cache
-folder under the loop's header with its numbers left out, so it carries over
-an edit of the body or of the loop's length (`range(100)` to `range(180)`).
+folder under the loop's header and body with its numbers left out, so it
+carries over a change of the loop's length (`range(100)` to `range(180)`) and
+an edit to up to half of the body's statements. Another loop with the same
+header and a different body keeps a measurement of its own.
 The first edit after the measuring run still runs every iteration, since that
 run writes the per-iteration entries; edits after it reuse them. Run again
 unchanged, the loop is restored whole from its unit entry. A loop kept per
