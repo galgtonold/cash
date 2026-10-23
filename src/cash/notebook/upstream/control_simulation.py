@@ -27,6 +27,7 @@ from ..lineage_formula import output_lineage
 from ..loop_split import split_nodes
 from ..run_memo import file_component_this_run
 from ..statement.derivation_edges import bump_derived_lineages
+from ..statement.lineage import rewritten_by_the_notebook_since
 from ..tracking_state import TrackingState, outcome_key
 from ._types import SimulationResult, TraceEntry
 from .cache_probe import CacheProbe, ControlOutcome
@@ -256,7 +257,9 @@ class ControlSimulation:
         # lineages it produced.
         recorded = self._recorded_outcome(stmt_code, virtual_lineage, occurrence_index)
         if recorded is not None:
-            if file_component_this_run(recorded[2]) != recorded[3]:
+            if file_component_this_run(recorded[2]) != recorded[3] and not rewritten_by_the_notebook_since(
+                self.tracking_state, outcome_key(stmt_code, occurrence_index), recorded[2]
+            ):
                 # A file behind its outputs moved: the one change the entry
                 # lineages cannot show, because a `Path` does not change when
                 # the file it names does. Say so, or the loop trust keeps the

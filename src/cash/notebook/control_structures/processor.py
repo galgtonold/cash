@@ -277,6 +277,10 @@ class ControlStructureProcessor:
 
             outcome = (entry, left, frozenset(files), compute_file_hash_component(files))
             state.control_outcomes[outcome_key(code, occurrence_index)] = outcome
+            # When it read them, for a write of the notebook's after it
+            # (`rewritten_by_the_notebook_since`).
+            state.file_event_seq += 1
+            state.file_read_seq[outcome_key(code, occurrence_index)] = state.file_event_seq
             # Judged only on a run that restored nothing: a restored statement
             # puts back the RNG state it was stored with, so a loop that draws
             # nothing still moves the generators when it hits in a new kernel.
