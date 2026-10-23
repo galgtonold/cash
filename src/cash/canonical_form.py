@@ -34,6 +34,7 @@ from typing import Any, NamedTuple
 
 from . import _plain_data, kept_state
 from ._memo import SORTED_SETS, LruMemo
+from ._type_memo import TypeMemo, type_key
 from .sizing import SPARSE_PARTS, pandas_nbytes
 from .value_types import CODELESS_PRIMS, IMMUTABLE_PRIMS, LEAF_TYPES, PARSED_VALUE_TYPES
 
@@ -1084,12 +1085,9 @@ def _holds_native_state(type_: type) -> bool:
     left alone: reducing one can serialise all its data (a tensor's
     storage) on every call.
     """
-    try:
-        return _NATIVE_STATE[type_]
-    except KeyError:
-        pass
-    except TypeError:  # a class whose metaclass makes it unhashable
-        return False
+    known = _NATIVE_STATE.get(type_key(type_))
+    if known is not None:
+        return known
     top = (getattr(type_, "__module__", "") or "").split(".", 1)[0]
     found = (
         not issubclass(type_, _NO_NATIVE_STATE)
@@ -1097,8 +1095,7 @@ def _holds_native_state(type_: type) -> bool:
         and (top == "builtins" or top in sys.stdlib_module_names)
         and any(k.__flags__ & _IMMUTABLE_TYPE_FLAG for k in type_.__mro__[:-1])
     )
-    _NATIVE_STATE[type_] = found
-    return found
+    return _NATIVE_STATE.put(type_, found)
 
 
-_NATIVE_STATE: dict[type, bool] = {}
+_NATIVE_STATE: TypeMemo[bool] = TypeMemo()

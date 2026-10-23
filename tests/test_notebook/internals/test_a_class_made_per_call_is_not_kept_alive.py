@@ -74,7 +74,7 @@ def test_the_class_goes_when_its_objects_do(kind):
     attribute_or(obj, "fit")
     gone = weakref.ref(cls)
     del obj, cls
-    gc.collect()
+    _collect()
     assert gone() is None
 
 
@@ -144,9 +144,30 @@ def _factory(kind):
     )
 
 
+#: Statements that hand the object on: a key reads it, a function gets it,
+#: a copy is made of it.
+HANDED = {
+    "read": ("n = len(obj.rows)", "pair = [obj, obj]"),
+    "passed": ("def use(o):\n    return len(o.rows)", "u = use(obj)"),
+    "copied": ("import copy", "c = copy.copy(obj)", "del c"),
+}
+
+
+def _collect():
+    """Python 3.12's ``inspect.getattr_static`` keeps the MRO tuples it was
+    asked about (an ``lru_cache``; 3.13 keys it weakly): not cash's memo."""
+    import inspect
+
+    clear = getattr(getattr(inspect, "_shadowed_dict_from_mro_tuple", None), "cache_clear", None)
+    if clear is not None:
+        clear()
+    gc.collect()
+
+
+@pytest.mark.parametrize("handed", list(HANDED))
 @pytest.mark.parametrize("persist", [False, True], ids=["ram", "persist"])
 @pytest.mark.parametrize("kind", list(BODIES))
-def test_a_statement_run_does_not_keep_the_class_alive(statement_processor, mock_shell, kind, persist):
+def test_a_statement_run_does_not_keep_the_class_alive(statement_processor, mock_shell, kind, persist, handed):
     """End to end: the statements' walks ask every per-class question of a
     class made per call; once its objects are gone, so is the class. Before,
     eight memos kept it alive (`own_dict`'s readers, the library kinds, the
@@ -155,16 +176,16 @@ def test_a_statement_run_does_not_keep_the_class_alive(statement_processor, mock
     from cash.analysis.annotations import CacheAnnotation
 
     annotation = CacheAnnotation(persist=True) if persist else None
-    for source in (_factory(kind), "obj = make()", "n = len(obj.rows)", "pair = [obj, obj]"):
+    for source in (_factory(kind), "obj = make()", *HANDED[handed]):
         statement_processor.process_statement(source, annotation=annotation)
     gone = weakref.ref(type(mock_shell.user_ns["obj"]))
-    statement_processor.process_statement("del obj, pair", annotation=annotation)
+    statement_processor.process_statement("del obj" + (", pair" if handed == "read" else ""), annotation=annotation)
     statement_processor.process_statement("x = 1", annotation=annotation)
-    if persist:
-        # The stored ``obj = make()`` holds an object of the class, as a
-        # cache entry should: with the entries dropped, nothing else does.
-        statement_processor.cash_instance.backend.clear()
-    gc.collect()
+    # A stored ``obj = make()`` holds an object of the class, as a cache
+    # entry should (in RAM too, when ``make()`` ran past the time floor):
+    # with the entries dropped, nothing else does.
+    statement_processor.cash_instance.backend.clear()
+    _collect()
     assert gone() is None, [type(r).__name__ for r in gc.get_referrers(gone())]
 
 
