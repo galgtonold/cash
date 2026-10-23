@@ -54,7 +54,7 @@ from typing import Any
 
 from cash import _native, _plain_data
 from cash._clock import CpuLimit
-from cash._user_attrs import _own_lookup, attribute_or, has_attribute, instance_of, own_dict
+from cash._user_attrs import attribute_or, has_attribute, instance_of, own_dict, own_lookup
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
 
@@ -2760,7 +2760,7 @@ def _flat_record_class(kind: type, children: list[Any], value_types: tuple[type,
     try:
         if issubclass(kind, (*_CONTAINERS, *_CALLABLE_TYPES, types.CellType)):
             return False
-        if _own_lookup(kind) or _slot_members(kind):
+        if own_lookup(kind) or _slot_members(kind):
             return False
         for klass in kind.__mro__[:-1]:
             if not klass.__flags__ & _HEAPTYPE:
