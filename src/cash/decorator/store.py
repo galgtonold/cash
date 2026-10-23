@@ -68,9 +68,10 @@ STORE_FAILED_FIX = (
 #: that writes what the notebook holds (`kept_state.set_reducer_veto`).
 REDUCER_NOT_RUN_FIX = (
     "the result's own __reduce__ / __getstate__ changes values the notebook "
-    "holds, and pickling it to store it would change them where plain Python "
-    "never does: have it only read, and change those values in the code that "
-    "needs them."
+    "holds, or cash cannot read what it changes, and pickling it to store it "
+    "could change them where plain Python never does: have it only read, "
+    "defined in a file cash can read, and change those values in the code "
+    "that needs them."
 )
 
 

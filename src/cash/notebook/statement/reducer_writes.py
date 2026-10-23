@@ -107,7 +107,7 @@ def watch(user_ns: Mapping[str, Any]) -> None:
     """Judge from now on what writers reach against *user_ns*, and refuse
     to run one that reaches a variable of it (`refuses`)."""
     _NAMESPACE[0] = user_ns
-    set_reducer_veto(refuses)
+    set_reducer_veto(refuses, refusal_reason)
 
 
 def unwatch() -> None:
@@ -148,6 +148,14 @@ def refuses(t: type) -> bool:
         with contextlib.suppress(TypeError):
             _REFUSED[t] = mark
     return known
+
+
+def refusal_reason(t: type) -> str:
+    """Why `refuses` stops *t*'s reducer, for the error that says so."""
+    writer = _writer(t)
+    if writer is not None and writer.functions is None:
+        return "cash cannot tell what it changes (its source cannot be read, or it changes the object it pickles)"
+    return "it changes other values"
 
 
 def refused_since(since: int) -> list[str]:

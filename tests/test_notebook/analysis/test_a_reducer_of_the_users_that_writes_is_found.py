@@ -340,3 +340,28 @@ class HandsAGlobalToAMethodOfABuiltinType:
 def test_a_global_handed_to_a_method_of_a_builtin_type_counts_as_written():
     writer = reducer_writes._decide(HandsAGlobalToAMethodOfABuiltinType)
     assert writer is not None and {"LST", "DEFAULTS"} <= writer.handed
+
+
+def test_a_cached_result_whose_reducer_cannot_be_read_is_not_stored_and_says_why_once(disk_cash):
+    import warnings
+
+    ns: dict = {"__name__": __name__}
+    exec("class Unread:\n    def __reduce__(self):\n        return (Unread, ())\n", ns)
+    calls = []
+
+    @disk_cash.cache
+    def make(i):
+        calls.append(i)
+        return ns["Unread"]()
+
+    reducer_writes.watch({})
+    try:
+        with warnings.catch_warnings(record=True) as seen:
+            warnings.simplefilter("always")
+            for i in (1, 1, 2):
+                make(i)
+    finally:
+        reducer_writes.unwatch()
+    assert calls == [1, 1, 2]
+    said = [str(w.message) for w in seen if "STORE-FAILED" in str(w.message)]
+    assert len(said) == 1 and "its source cannot be read" in said[0], said

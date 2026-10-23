@@ -1581,19 +1581,22 @@ class ReducerNotRun(TypeError):
 
 #: Set by the notebook (`reducer_writes.watch`): whether a class's reducer
 #: of the user's must not run in a pickle of cash's.
-_REDUCER_VETO: list[Any] = [None]
+_REDUCER_VETO: list[Any] = [None, None]
 
 
-def set_reducer_veto(veto: Any) -> None:
+def set_reducer_veto(veto: Any, reason: Any = None) -> None:
     """Ask *veto* (a class -> bool) before a pickle of cash's runs a
-    reducer of the user's; one it answers True for is not run."""
+    reducer of the user's; one it answers True for is not run. *reason*
+    (a class -> str), when given, says why in the error."""
     _REDUCER_VETO[0] = veto
+    _REDUCER_VETO[1] = reason
 
 
 def _refuse_writer(t: type) -> None:
-    veto = _REDUCER_VETO[0]
+    veto, reason = _REDUCER_VETO
     if veto is not None and veto(t):
-        raise ReducerNotRun(f"cash does not run the reducer of {t.__qualname__}: it changes other values")
+        why = reason(t) if reason is not None else "it changes other values"
+        raise ReducerNotRun(f"cash does not run the reducer of {t.__qualname__}: {why}")
 
 
 def next_mark() -> int:
