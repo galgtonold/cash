@@ -626,3 +626,19 @@ def test_a_module_is_not_looked_into():
 
     assert not holds_a_closure_with_state(fnmatch)
     assert not holds_a_closure_with_state({"m": [fnmatch]})
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        lambda m: m,
+        lambda m: (m, 1),
+        lambda m: {"lookup": [m]},
+    ],
+    ids=["itself", "in_a_tuple", "in_a_dict_of_lists"],
+)
+def test_a_memo_is_state(shape):
+    # Served, ``f = functools.cache(g)`` handed back the memo the last run
+    # filled: ``f(1)`` then did not run ``g`` where plain Python runs it.
+    assert holds_a_closure_with_state(shape(functools.cache(_double)))
+    assert holds_a_closure_with_state(shape(functools.lru_cache(maxsize=4)(_double)))
