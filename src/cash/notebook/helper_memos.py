@@ -111,6 +111,28 @@ def _memos_in(value: Any, path: list[str], seen: set[int]) -> Iterator[tuple[lis
             yield [*path, *steps], memo
 
 
+def holds_a_filled_memo(value: Any) -> bool:
+    """Whether *value* is, or holds in its class body, a memo of the user's
+    that holds answers (``functools.cache`` on a function or a method).
+
+    A function or a class is kept by reference: a hit hands back the one
+    the last run made, and its memo with what calls filled it with since.
+    Run again, the ``def`` or ``class`` makes it afresh, empty: ``class
+    Cases`` with a cached ``make`` that seeds ``random`` was served after a
+    restart with ``make(3)`` answered, so the seed was skipped and every
+    draw below differed from plain Python."""
+    if not instance_of(value, (type, types.FunctionType)) and not _is_user_memo(value):
+        return False
+    for _, memo in _memos_in(value, [], set()):
+        info = attribute_or(memo, "cache_info", None)
+        try:
+            if info is not None and info().currsize:
+                return True
+        except Exception:  # noqa: BLE001 - a memo that cannot say holds answers, as far as cash knows
+            return True
+    return False
+
+
 def _class_memos(cls: type, seen: set[int]) -> list[tuple[list[str], Any]]:
     """The memos the body of a class holds, remembered per class until names
     are added to or taken from it. Any class: one made in a cell names the
