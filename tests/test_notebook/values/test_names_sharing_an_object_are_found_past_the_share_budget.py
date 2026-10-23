@@ -91,6 +91,36 @@ def test_the_climb_finds_a_holder_of_what_the_root_holds():
     assert "points" in names
 
 
+@pytest.mark.parametrize(
+    "link",
+    ["head = recs[:100]", "head = list(recs)", "import copy\nhead = copy.copy(recs)"],
+    ids=["a slice copy of many records", "a list of them", "a copy of the list"],
+)
+def test_a_search_cut_short_links_the_output_to_what_it_read(cash_magics, no_budget, monkeypatch, link):
+    """The search from the outputs up is cut short, finding nothing: ``head``
+    may hold what ``recs`` holds, and a change through it still moves ``recs``."""
+    monkeypatch.setattr(processor, "referring_names", lambda *_args, **_kwargs: (set(), False))
+    cells = ["import argparse\nrecs = [argparse.Namespace(x=i) for i in range(300)]", link, "head[0].x = 4"]
+    cash_magics.cash_on("")
+    cash_magics.badges.mode = "off"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for cell in cells[:2]:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        before = cash_magics.tracking_state.variable_lineage["recs"]
+        run_cash_cell(cash_magics, cells[2], cells=cells)
+    assert cash_magics.tracking_state.variable_lineage["recs"] != before
+    assert [w for w in caught if getattr(w.message, "code", None) == "NOTEBOOK-SHARE-UNCHECKED"]
+
+
+def test_a_climb_past_its_object_limit_is_reported_incomplete(monkeypatch):
+    monkeypatch.setattr(shared_objects, "_REFERRER_OBJECTS", 100)
+    points = [[i] for i in range(1000)]
+    head = points[:]
+    names, complete = shared_objects.referring_names([head], {"points": points, "head": head}, 30.0)
+    assert not complete
+
+
 def test_a_spent_budget_is_reported_incomplete():
     root = [[i] for i in range(5000)]
     names, complete = shared_objects.referring_names([root], {"root": root}, 0.0)

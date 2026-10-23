@@ -2690,6 +2690,20 @@ class StatementProcessor:
             skip_name=lambda name: foreign(name) or name in names,
             ignore=[captured_vars, run.metrics, echo, *cash_held],
         )
+        if not complete:
+            # Cut short: an output may hold what any value the statement read
+            # holds (``head = points[:1000]``, ``list(points)``), and unlinked,
+            # a write through it left a cached read of the input below
+            # answering with the old content. Linked to each of them, such a
+            # write moves it on: a needless miss at worst (`_view_bases_of`).
+            found_names = found_names | {
+                other
+                for other in run.inputs
+                if other in user_ns
+                and other not in names
+                and not foreign(other)
+                and not is_value(user_ns[other], value_types)
+            }
         return [(outputs, found_names)], complete
 
     def _fallback_seconds(self, run: StatementRun, fallback_floor: float) -> float:
