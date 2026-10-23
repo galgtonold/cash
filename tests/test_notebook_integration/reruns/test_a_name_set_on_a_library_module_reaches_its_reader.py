@@ -49,6 +49,21 @@ SHAPES = {
         "setattr(tw, 'r' + 'v', (time.sleep(0.3), Z)[1])",
         "import textwrap\nprint('R', textwrap.rv)",
     ),
+    "read_by_getattr": (
+        "import textwrap as tw",
+        "tw.rv = (time.sleep(0.3), Z)[1]",
+        "import textwrap\nprint('R', getattr(textwrap, 'rv'))",
+    ),
+    "set_through_sys_modules": (
+        "import sys, textwrap",
+        "sys.modules['textwrap'].rv = (time.sleep(0.3), Z)[1]",
+        "print('R', textwrap.rv)",
+    ),
+    "set_through_vars": (
+        "import textwrap",
+        "vars(textwrap)['rv'] = (time.sleep(0.3), Z)[1]",
+        "print('R', textwrap.rv)",
+    ),
     "read_in_a_function": (
         "import textwrap as tw\nimport textwrap\ndef get():\n    return textwrap.rv",
         "tw.rv = (time.sleep(0.3), Z)[1]",
@@ -72,3 +87,24 @@ def test_the_reader_prints_what_plain_python_prints(nb_runner, shape):
         nb_runner.run_all()
         seen.append([line for line in nb_runner.get_output(len(cells)).splitlines() if line.startswith("R ")])
     assert seen == [["R 1"], ["R 2"], ["R 2"], ["R 2"], ["R 2"]]
+
+
+def test_a_counter_set_on_a_library_module_draws_as_plain_python_does(nb_runner):
+    """``textwrap.cnt = itertools.count()``, then a cheap draw and a slow
+    one: each run draws 0 and then 1, as plain Python does."""
+    cells = [
+        HEAD,
+        "import itertools\nimport textwrap",
+        "textwrap.cnt = itertools.count()",
+        "a = (time.sleep(0.05), next(textwrap.cnt))[1]",
+        "b = (time.sleep(0.3), next(textwrap.cnt))[1]\nprint('R', a, b)",
+    ]
+    nb_runner.create_notebook(cells)
+    nb_runner.start_kernel()
+    seen = []
+    for run in range(4):
+        if run == 2:
+            nb_runner.restart()
+        nb_runner.run_all()
+        seen.append([line for line in nb_runner.get_output(len(cells)).splitlines() if line.startswith("R ")])
+    assert seen == [["R 0 1"]] * 4

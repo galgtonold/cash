@@ -151,6 +151,7 @@ from ..callee_reach import (
     CWD,
     ENVIRON,
     import_state_writes,
+    library_streams_read,
     module_globals,
     module_state_writes,
     rebound_modules,
@@ -1242,6 +1243,14 @@ class StatementProcessor:
             )
             run.skip_cache = True
             run.drew_from_stream = any(isinstance(self.shell.user_ns.get(name), io.IOBase) for name in drawn)
+            return
+        drawn = library_streams_read(run.code, self.shell.user_ns)
+        if drawn:
+            run.metrics["uncacheable_reasons"].append(
+                f"Reads from {', '.join(drawn)}, an iterator or stream set on a library's module: "
+                f"a cache hit would not advance it, so the statement runs every time"
+            )
+            run.skip_cache = True
             return
         looked_at = reads_open_handle(run.inputs - run.outputs, self.shell.user_ns)
         if looked_at:

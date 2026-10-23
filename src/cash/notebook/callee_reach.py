@@ -52,6 +52,7 @@ __all__ = [
     "module_holders",
     "module_state_names",
     "import_state_writes",
+    "library_streams_read",
     "module_state_writes",
     "one_walk",
     "process_state_writes",
@@ -121,7 +122,7 @@ def reached_user_code(code: str, namespace: Mapping[str, Any] | None, *, close: 
     if not code or not namespace:
         return _EMPTY
     steps = names_read(code)
-    taken = _taken_from_libraries(code)
+    taken = _taken_from_libraries(code, namespace)
     if not taken and (not steps or all(_leads_nowhere(namespace, root, attrs) for root, attrs in steps)):
         return _EMPTY
     found = _Found(namespace)
@@ -339,6 +340,15 @@ def _state_writes(
                 _note_set_on_a_library(home, node.attr)
                 found.add(home)
                 return
+        else:
+            # ``vars(textwrap)["rv"] = v``, ``textwrap.__dict__["rv"] = v``.
+            owner = _module_dict_of(node.value)
+            home = _set_on_a_module(owner, namespace) if owner is not None else None
+            if home is not None:
+                key = node.slice
+                _note_set_on_a_library(home, key.value if isinstance(key, ast.Constant) else _ANY_NAME)
+                found.add(home)
+                return
         changed_in_place(node.value)
 
     def changed_in_place(root: ast.expr) -> None:
@@ -529,13 +539,44 @@ def _set_on_a_module(owner: ast.expr, namespace: Mapping[str, Any]) -> str | Non
     the process as a local one is: with every statement stored, ``print(
     textwrap.rv)`` below such a statement was keyed on the import alone, and
     printed the value from before an edit."""
-    if not isinstance(owner, ast.Name):
-        return None
-    module = namespace.get(owner.id)
+    module = _module_named(owner, namespace)
     if not instance_of(module, types.ModuleType) or vars(module) is namespace:
         return None
     name = attribute_or(module, "__name__", None)
     return name if isinstance(name, str) and sys.modules.get(name) is module else None
+
+
+def _module_named(owner: ast.expr, namespace: Mapping[str, Any]) -> Any:
+    """What *owner* names: a global, or ``sys.modules["textwrap"]`` with
+    ``sys`` the notebook's."""
+    if isinstance(owner, ast.Name):
+        return namespace.get(owner.id)
+    if (
+        isinstance(owner, ast.Subscript)
+        and isinstance(owner.slice, ast.Constant)
+        and isinstance(owner.slice.value, str)
+        and isinstance(owner.value, ast.Attribute)
+        and owner.value.attr == "modules"
+        and isinstance(owner.value.value, ast.Name)
+        and namespace.get(owner.value.value.id) is sys
+    ):
+        return sys.modules.get(owner.slice.value)
+    return None
+
+
+def _module_dict_of(node: ast.expr) -> ast.expr | None:
+    """The module expression whose namespace *node* is: ``vars(textwrap)``,
+    ``textwrap.__dict__``."""
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "vars"
+        and len(node.args) == 1
+    ):
+        return node.args[0]
+    if isinstance(node, ast.Attribute) and node.attr == "__dict__":
+        return node.value
+    return None
 
 
 #: ``module -> names`` the notebook's statements set on a library's module
@@ -544,16 +585,20 @@ def _set_on_a_module(owner: ast.expr, namespace: Mapping[str, Any]) -> str | Non
 #: textwrap as tw; tw.rv = v`` moved ``tw`` only, and ``import textwrap;
 #: print(textwrap.rv)`` below it, under a name bound afresh, was keyed on its
 #: import alone. Its value is folded instead, whatever name it is read by.
+#: Process-wide and never cleared, as the module is: the value set stays on
+#: it after ``%cash_off`` or a new ``Cash``. A name folded that nothing set
+#: any more costs a key input, never a wrong result.
 _SET_ON_LIBRARIES: dict[str, set[str]] = {}
 _ANY_NAME = "*"
 
 
-def _taken_from_libraries(code: str) -> list[tuple[types.ModuleType, str]]:
-    """``(module, name)`` for each name ``from module import name`` in *code*
-    takes that the notebook set on a library's module: ``from textwrap
-    import rv`` after ``tw.rv = v`` holds the value set, under a name bound
-    afresh."""
-    if not _SET_ON_LIBRARIES or "import" not in code:
+def _taken_from_libraries(code: str, namespace: Mapping[str, Any]) -> list[tuple[types.ModuleType, str]]:
+    """``(module, name)`` for each name *code* takes, not as ``module.name``,
+    that the notebook set on a library's module: ``from textwrap import
+    rv`` after ``tw.rv = v`` holds the value set, under a name bound
+    afresh, as ``getattr(textwrap, "rv")`` reads it (every name set on the
+    module, for a name spelled at run time)."""
+    if not _SET_ON_LIBRARIES or ("import" not in code and "getattr" not in code):
         return []
     tree = parse_cached(code)
     if tree is None:
@@ -567,7 +612,52 @@ def _taken_from_libraries(code: str) -> list[tuple[types.ModuleType, str]]:
                 for alias in node.names
                 if module is not None and _set_on_by_the_notebook(module, alias.name)
             )
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+        ):
+            module = _module_named(node.args[0], namespace)
+            names = _SET_ON_LIBRARIES.get(attribute_or(module, "__name__", None)) if module is not None else None
+            if not names:
+                continue
+            key = node.args[1]
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                if _set_on_by_the_notebook(module, key.value):
+                    taken.append((module, key.value))
+            else:
+                taken.extend((module, name) for name in sorted(names) if name != _ANY_NAME)
     return taken
+
+
+def library_streams_read(code: str, namespace: Mapping[str, Any] | None) -> list[str]:
+    """``module.name`` for each name *code* reads that the notebook set on a
+    library's module to an iterator or another stream: ``next(textwrap.cnt)``
+    after ``textwrap.cnt = itertools.count()``. A hit would not move it, and
+    its value, folded into the key, was the one the run before left: a draw
+    restored without drawing left the next draw keyed as the first and
+    drawing what plain Python had drawn already. Read as a draw, as one
+    from a variable is (`drawn_stream_inputs`)."""
+    if not _SET_ON_LIBRARIES or not code or not namespace:
+        return []
+    from .consumables import is_stream
+
+    found: list[str] = []
+    for module, attr in _taken_from_libraries(code, namespace):
+        if is_stream(vars(module).get(attr)):
+            found.append(f"{module.__name__}.{attr}")
+    for root, attrs in names_read(code):
+        obj = namespace.get(root)
+        for attr in reversed(attrs):
+            if not instance_of(obj, types.ModuleType):
+                break
+            value = vars(obj).get(attr)
+            if _set_on_by_the_notebook(obj, attr) and is_stream(value):
+                found.append(f"{obj.__name__}.{attr}")
+                break
+            obj = value
+    return sorted(set(found))
 
 
 def _note_set_on_a_library(module_name: str, name: Any) -> None:
