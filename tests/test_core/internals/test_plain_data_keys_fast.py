@@ -202,5 +202,7 @@ def test_a_small_dict_beside_a_big_list_leaves_the_list_on_the_fast_path(tmp_pat
     monkeypatch.setattr(_plain_data, "pickle_unshared", lambda v: unshared.append(v) or real_pickle(v))
     monkeypatch.setattr(canonical_form, "stable_key_repr", lambda *a, **k: walked.append(1) or real_canon(*a, **k))
     c._args.hash_payload((rows,), {"opts": {"b": 1, "a": 2}})
-    assert any(v is rows for v in unshared), "the list was not keyed on its own"
+    # Keyed from the copy of its items its census took (`arg_hashing.KeyedLists`).
+    keyed_alone = (v is rows or (type(v) is list and len(v) == len(rows) and v[0] is rows[0]) for v in unshared)
+    assert any(keyed_alone), "the list was not keyed on its own"
     assert len(walked) < 100, f"the general path walked the rows ({len(walked)} calls)"

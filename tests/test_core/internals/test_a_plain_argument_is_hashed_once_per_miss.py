@@ -6,6 +6,12 @@ the body: a second full hash of a list of ten million ints, a second of a
 by the identities of what they hold (`_plain_data.identity_snapshot`), and
 their leaves cannot change in place, so when no identity moved and every
 other argument cannot change at all, the second hash proves nothing more.
+
+Identities taken as the body starts say nothing of a write made while the
+key was read and undone before the body, so a list is vouched for only
+while it holds what its key was read from (`arg_hashing.KeyedLists`): a
+list of leaves or tuples is keyed from one copy of its items. A list of
+lists, which one copy does not cover, is hashed again on a first miss.
 """
 
 from __future__ import annotations
@@ -28,9 +34,8 @@ class Tagged(int):
         lambda: list(range(200_000)),
         lambda: tuple(range(200_000)),
         lambda: [(i, str(i), float(i)) for i in range(50_000)],
-        lambda: [[i, i + 1] for i in range(50_000)],
     ],
-    ids=["list of ints", "tuple of ints", "list of tuples", "list of lists"],
+    ids=["list of ints", "tuple of ints", "list of tuples"],
 )
 def test_a_miss_on_plain_data_does_not_hash_it_again_after_the_body(disk_cash, build):
     rows = build()  # built here: a parameter's value is held for the whole run
@@ -53,11 +58,12 @@ def test_a_miss_hashes_a_big_plain_list_about_once(disk_cash):
 
 @pytest.mark.parametrize(
     "arg",
-    [{"a": [1, 2]}, bytearray(b"abc"), [bytearray(b"abc")], [{"a": 1}]],
-    ids=["dict", "bytearray", "list of bytearrays", "list of dicts"],
+    [{"a": [1, 2]}, bytearray(b"abc"), [bytearray(b"abc")], [{"a": 1}], [[1, 2], [3]], ([1], [2])],
+    ids=["dict", "bytearray", "list of bytearrays", "list of dicts", "list of lists", "tuple of lists"],
 )
 def test_an_argument_identities_cannot_vouch_for_is_hashed_again(disk_cash, arg):
-    """Control: a dict or a bytearray can change with every identity in place."""
+    """Control: a dict or a bytearray can change with every identity in place,
+    and the key read a list held in a list apart from the copy of its items."""
     f = disk_cash.cache(lambda x: 1)
     with method_calls(PurityChecks, "checked_arguments_hash") as rehash:
         f(arg)

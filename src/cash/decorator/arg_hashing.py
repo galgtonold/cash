@@ -8,6 +8,7 @@ import functools
 import hashlib
 import inspect
 import logging
+import operator
 import pickle
 import sys
 import threading
@@ -75,13 +76,21 @@ def plain_census(value: Any) -> tuple[str, Any, dict] | None:
     the containers inside that another argument could also hold
     (`_plain_data.sharing`).
     """
+    return _census(value)[1]
+
+
+def _census(value: Any) -> tuple[Any, tuple[str, Any, dict] | None, list]:
+    """``(value, plain_census(value), top)``, through the key build's memo.
+    *top* holds the copy of a list's items `_plain_data.sharing` took when
+    they are all leaves (`KeyedLists`)."""
     memo = getattr(PLAIN_CENSUS, "memo", None)
     if memo is not None:
         hit = memo.get(id(value))
         if hit is not None and hit[0] is value:
-            return hit[1]
+            return hit
     found: tuple[str, Any, dict] | None = None
-    shape = _plain_data.sharing(value)
+    top: list = []
+    shape = _plain_data.sharing(value, top=top)
     if shape is not None:
         repeats, shared, numpy = shape
         if numpy:
@@ -104,9 +113,10 @@ def plain_census(value: Any) -> tuple[str, Any, dict] | None:
             shape = _plain_data.sharing(value, tree=True)
             if shape is not None:
                 found = ("tree", (value, shape[0]), shape[1])
+    entry = (value, found, top)
     if memo is not None:
-        memo[id(value)] = (value, found)
-    return found
+        memo[id(value)] = entry
+    return entry
 
 
 def plain_key_part(value: Any) -> Any:
@@ -121,8 +131,29 @@ def plain_key_part(value: Any) -> Any:
     if type(value) not in _plain_data.TREE_NODES:
         return value
     if value_watch.WATCHING:
-        return value_watch.digest(value, _plain_key_part, value_watch.KIND_PLAIN_KEY, _is_marker)
+        part = value_watch.digest(value, _plain_key_part, value_watch.KIND_PLAIN_KEY, _keeps)
+        keyed = CALL_LISTS.get()
+        if keyed is not None and type(value) is list:
+            # Unless the census copy was read for it just now.
+            keyed.note_watched(value, part)
+        return part
     return _plain_key_part(value)
+
+
+def _keeps(value: Any, part: Any) -> bool:
+    """May the watchers keep *part* for *value*: a marker (`_is_marker`),
+    and, when it was read from the copy its census took, one of the items
+    *value* holds now, which they compare with the items they armed on (the
+    census can be older than that)."""
+    if not _is_marker(value, part):
+        return False
+    memo = getattr(PLAIN_CENSUS, "memo", None)
+    hit = memo.get(id(value)) if memo is not None else None
+    if hit is None or hit[0] is not value or not hit[2]:
+        # Read from *value* after they armed, as before.
+        return True
+    top = hit[2][0]
+    return len(value) == len(top) and all(map(operator.is_, value, top))
 
 
 def _is_marker(value: Any, part: Any) -> bool:
@@ -142,8 +173,15 @@ def is_plain_data(value: Any) -> bool:
 
 
 def _plain_key_part(value: Any) -> Any:
-    """`plain_key_part`, read from the value."""
-    census = plain_census(value)
+    """`plain_key_part`, read from the value: a list of leaves from the copy
+    of its items its census took, which the body's check compares it with
+    (`KeyedLists`)."""
+    _value, census, top = _census(value)
+    if census is not None and census[0] == "plain" and top and type(value) is list:
+        keyed = CALL_LISTS.get()
+        if keyed is not None:
+            keyed.note_read(value, top[0])
+        return ("__cash_plain__", hashlib.sha256(_plain_data.pickle_unshared(top[0])).hexdigest())
     if census is None:
         return value
     kind, data, _shared = census
@@ -720,6 +758,54 @@ HANDED_DIGESTS: contextvars.ContextVar[Any] = contextvars.ContextVar("cash_hande
 #: The `CallPolarsDigests` of the call whose key is built, or whose
 #: arguments are checked after its body, on this context.
 CALL_POLARS: contextvars.ContextVar[Any] = contextvars.ContextVar("cash_call_polars", default=None)
+
+
+class KeyedLists:
+    """What a call's key read of each plain list argument, for the check
+    before its body that the body gets what the key was read from.
+
+    The check after the body compares identities taken as the body starts
+    (`PurityChecks.argument_identities`) and hashes a plain list again only
+    when they moved. Another thread that wrote an item while the key was
+    read, and put it back before the body, left them in place: the result
+    of the original items was stored under the key of the written ones.
+
+    So a list of leaves (and tuples of them) is keyed from the copy of its
+    items its census took (`_plain_data.sharing`'s *top*), and one the
+    watchers vouch for from the digest they kept (`value_watch.digest`).
+    Unless the list still holds those items, or the watchers still vouch
+    for it, it is hashed again after the body, and the result is stored
+    only when that hash is the key's. So is a list holding lists, whose
+    items one copy does not hold.
+    """
+
+    __slots__ = ("_reads",)
+
+    def __init__(self) -> None:
+        #: ``id -> (value, items copied, watched digest)``.
+        self._reads: dict[int, tuple[Any, list | None, Any]] = {}
+
+    def note_read(self, value: list, items: list) -> None:
+        self._reads[id(value)] = (value, items, None)
+
+    def note_watched(self, value: list, part: Any) -> None:
+        read = self._reads.get(id(value))
+        if read is None or read[0] is not value:
+            self._reads[id(value)] = (value, None, part)
+
+    def unchanged(self, value: Any) -> bool:
+        """Does *value* hold what its key was read from?"""
+        read = self._reads.get(id(value))
+        if read is None or read[0] is not value:
+            return False
+        _value, items, part = read
+        if items is not None:
+            return len(value) == len(items) and all(map(operator.is_, value, items))
+        return part is not None and value_watch.peek(value, value_watch.KIND_PLAIN_KEY) is part
+
+
+#: The `KeyedLists` of the call whose key is being built, or None.
+CALL_LISTS: contextvars.ContextVar[KeyedLists | None] = contextvars.ContextVar("cash_call_lists", default=None)
 
 #: A polars argument at least this big (`estimated_size`) is remembered by
 #: `CallPolarsDigests`; a smaller one is read again.

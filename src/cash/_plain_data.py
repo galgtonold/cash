@@ -160,7 +160,9 @@ def aliases(value: Any) -> tuple[tuple, bool] | None:
     return None if found is None else (found[0], found[2])
 
 
-def sharing(value: Any, *, tree: bool = False, held_twice_at: int | None = None) -> tuple[tuple, dict, bool] | None:
+def sharing(
+    value: Any, *, tree: bool = False, held_twice_at: int | None = None, top: list | None = None
+) -> tuple[tuple, dict, bool] | None:
     """``(repeats, shared, numpy)`` for plain data -- or, with *tree*, for
     exact dicts, lists and tuples nested over leaves (`tree_levels`) -- or None.
 
@@ -176,6 +178,9 @@ def sharing(value: Any, *, tree: bool = False, held_twice_at: int | None = None)
     by identity. A reference held elsewhere, such as a variable naming one
     row, only makes that row a candidate. *held_twice_at* names a level
     whose items the caller's own temporaries hold once more (`dict_rows`).
+    *top*, when given, gets the items of *value* when nothing below it can
+    change in place (leaves and tuples of them): a copy taken in one step,
+    which a key can be read from (`arg_hashing.KeyedLists`).
     """
     kinds = TREE_NODES if tree else PLAIN_SEQS
     if type(value) not in kinds:
@@ -190,6 +195,14 @@ def sharing(value: Any, *, tree: bool = False, held_twice_at: int | None = None)
         for depth, (flat, types) in enumerate(levels):
             if numbers and not has_numbers:
                 has_numbers = not types.isdisjoint(numbers)
+            if top is not None:
+                if not depth and types.isdisjoint(_WRITABLE):
+                    # Leaves and tuples, which cannot change in place: held,
+                    # they look shared to no later census.
+                    top.append(flat)
+                elif not types.isdisjoint(_WRITABLE):
+                    # A list below a tuple: the copy does not hold what it holds.
+                    top.clear()
             if types.isdisjoint(_WRITABLE):
                 continue
             if types <= _WRITABLE:

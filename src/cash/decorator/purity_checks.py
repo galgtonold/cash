@@ -59,7 +59,7 @@ from .user_code import own_package
 
 if TYPE_CHECKING:
     from ..config.schema import CashConfig
-    from .arg_hashing import ArgHasher
+    from .arg_hashing import ArgHasher, KeyedLists
     from .class_data import ClassDataFold
     from .frozen import FrozenResults
     from .global_reads import GlobalReads
@@ -1261,7 +1261,7 @@ class PurityChecks:
         return capture_argument_carrier_states(held) if held else []
 
     def argument_identities(
-        self, func_name: str, args: tuple, kwargs: dict
+        self, func_name: str, args: tuple, kwargs: dict, keyed: KeyedLists | None = None
     ) -> tuple[dict[str, tuple[Any, list]], bool]:
         """``({parameter: (value, identity snapshot)}, covers_all)`` for the
         plain lists and tuples a call receives, before the body runs.
@@ -1278,6 +1278,11 @@ class PurityChecks:
         when no identity at any level moved, nothing in it did, and
         `PurityChecks.check_argument_mutation` needs no hash after the body:
         on a list of ten million ints that hash was a second of a 3.5 s miss.
+
+        With *keyed*, what the call's key read (`KeyedLists`), a list is
+        vouched for only when it still holds what its key was read from:
+        identities taken here say nothing of a write made while the key was
+        read and undone before the body.
         """
         try:
             canon_args, canon_kwargs = self._checked_arguments(func_name, args, kwargs)
@@ -1293,6 +1298,8 @@ class PurityChecks:
                     covers_all = False
                 elif any(level is not None for level in snapshot):
                     found[name] = (value, snapshot)
+                    if keyed is not None and not keyed.unchanged(value):
+                        covers_all = False
             elif not _cannot_change(value):
                 covers_all = False
         return found, covers_all

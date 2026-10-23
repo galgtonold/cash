@@ -40,7 +40,15 @@ from ..tracking.randomness import (
     replayable,
 )
 from . import code_trace, hit_memo
-from .arg_hashing import CALL_POLARS, HANDED_DIGESTS, PLAIN_CENSUS, CallPolarsDigests, call_polars
+from .arg_hashing import (
+    CALL_LISTS,
+    CALL_POLARS,
+    HANDED_DIGESTS,
+    PLAIN_CENSUS,
+    CallPolarsDigests,
+    KeyedLists,
+    call_polars,
+)
 from .arg_key import keyed_arguments
 from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
@@ -1229,6 +1237,8 @@ class CallRunner:
         token = HANDED_DIGESTS.set(handed) if handed is not None else None
         call.polars_args = CallPolarsDigests()
         polars_token = CALL_POLARS.set(call.polars_args)
+        call.keyed_lists = KeyedLists()
+        lists_token = CALL_LISTS.set(call.keyed_lists)
         copies = self._keys.split_for_key(spec, args, kwargs)
         try:
             if copies is None:
@@ -1239,6 +1249,7 @@ class CallRunner:
                     spec, copies.args, copies.kwargs, split, refused=copies.refused
                 )
         finally:
+            CALL_LISTS.reset(lists_token)
             CALL_POLARS.reset(polars_token)
             if token is not None:
                 HANDED_DIGESTS.reset(token)
@@ -1405,7 +1416,7 @@ class CallRunner:
         run.observer = self._purity.make_effect_observer()
         run.observer.arg_snapshot = self._purity.argument_snapshot(func_name, args, kwargs)
         run.observer.arg_identities, run.observer.arg_identities_cover_all = self._purity.argument_identities(
-            func_name, args, kwargs
+            func_name, args, kwargs, call.keyed_lists
         )
         run.observer.held_generators = self._purity.held_generators(func_name, args, kwargs)
         # Watch the global RNG across the call: a draw inside the body is an

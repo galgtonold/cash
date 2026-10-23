@@ -93,6 +93,7 @@ class Call:
         "outcome",
         "handed",
         "polars_args",
+        "keyed_lists",
         "stored_in",
         "traced",
         "needs_trace",
@@ -117,6 +118,9 @@ class Call:
         #: The key's digests of the big polars arguments (`CallPolarsDigests`),
         #: for the in-place-change check after the body.
         self.polars_args: Any = None
+        #: What the key read of the plain list arguments (`KeyedLists`), for
+        #: the check before the body.
+        self.keyed_lists: Any = None
         #: The tiers the store put the result in (``storage``), once stored.
         self.stored_in: list[str] | None = None
         #: The key's `BuiltKey.traced` and ``needs_trace``, and what recorded
