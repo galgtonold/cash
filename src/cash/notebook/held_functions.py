@@ -40,6 +40,7 @@ from cash._user_attrs import attribute_or, builtin_items, instance_of
 
 from .. import _native
 from .._memo import CODE_OBJECTS, LruMemo
+from .._type_memo import per_type
 from ..install_paths import is_user_code_module
 from ..tracking.function_tracker import is_local_module
 from ..value_types import LEAF_TYPES, library_scalar_types
@@ -140,7 +141,32 @@ _NONE_EXISTED = ((), (), True)
 #: rebinds or changes the value, so a container walked once is not walked
 #: again for every statement reading it. A class's methods are read again
 #: each time: ``M.build = other`` changes what an object of ``M`` runs.
-_MEMO: LruMemo[tuple[int, str], tuple[tuple[Any, ...], tuple[type, ...], bool]] = LruMemo(CODE_OBJECTS)
+#: What it found is held weakly (`_held`): a class a function makes per call
+#: is not kept alive by the memo of a value that held one of its objects.
+_MEMO: LruMemo[tuple[int, str], Any] = LruMemo(CODE_OBJECTS)
+
+
+def _held(found: tuple[tuple[Any, ...], tuple[Any, ...], bool]) -> Any:
+    """*found* as `_MEMO` keeps it: weak references to its functions and
+    classes, or *found* itself when one cannot be weakly referenced."""
+    functions, classes, complete = found
+    try:
+        return (tuple(map(weakref.ref, functions)), tuple(map(weakref.ref, classes)), complete, _WEAK)
+    except TypeError:
+        return found
+
+
+def _unheld(kept: Any) -> tuple[tuple[Any, ...], tuple[Any, ...], bool] | None:
+    """What `_held` kept, or None when one of its functions or classes is gone."""
+    if kept is None or kept is _NONE_EXISTED or len(kept) == 3:
+        return kept
+    functions, classes = [ref() for ref in kept[0]], [ref() for ref in kept[1]]
+    if None in functions or None in classes:
+        return None
+    return tuple(functions), tuple(classes), kept[2]
+
+
+_WEAK = "weak"
 
 
 def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | None = None) -> Held:
@@ -165,7 +191,7 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
     if type(value) is types.FunctionType and _plain_function(value):
         return Held((value.__code__,)) if _is_notebook(value, namespace) else _NOTHING
     memo_key = (id(value), lineage) if lineage else None
-    found = _MEMO.get(memo_key) if memo_key is not None else None
+    found = _unheld(_MEMO.get(memo_key)) if memo_key is not None else None
     if found is _NONE_EXISTED:
         if not _anything_to_find(namespace):
             return _NOTHING
@@ -178,7 +204,7 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
                 _MEMO[memo_key] = _NONE_EXISTED
             return _NOTHING
         if memo_key is not None:
-            _MEMO[memo_key] = found
+            _MEMO[memo_key] = _held(found)
     functions, classes, complete = found
     codes: dict[int, types.CodeType] = {}
     for fn in functions:
@@ -801,7 +827,7 @@ def _identity_keys(objects: list[Any], kinds: set[type]) -> Iterable[Any]:
     return [obj if type(obj) in by_identity else id(obj) for obj in objects]
 
 
-@functools.lru_cache(maxsize=1024)
+@per_type
 def _identity_hashed(kind: type) -> bool:
     """Whether an object of *kind* hashes and compares as ``object`` does:
     by its address, with no code of its class run. Two distinct live
@@ -872,7 +898,7 @@ _WALKED_KINDS = (
 )
 
 
-@functools.lru_cache(maxsize=1024)
+@per_type
 def _inert(kind: type) -> bool:
     """An object of *kind* leads `_visit_group` to its class alone: no
     instance dict, no slots, and not a kind it walks into otherwise."""
@@ -881,7 +907,7 @@ def _inert(kind: type) -> bool:
     return not _may_have_dict(kind) and not _slot_names(kind)
 
 
-@functools.lru_cache(maxsize=1024)
+@per_type
 def _may_have_dict(kind: type) -> bool:
     """Can ``object.__getattribute__(obj, "__dict__")`` find anything on an
     object of *kind*: it has an instance dict, or a class along its MRO
@@ -895,19 +921,31 @@ def _may_have_dict(kind: type) -> bool:
         return True
 
 
-@functools.lru_cache(maxsize=1024)
 def _slot_getter(kind: type, name: str) -> Callable[[Any], Any] | None:
     """The ``__get__`` of the slot descriptor ``object.__getattribute__``
     finds for *name* on an object of *kind* (the first class along the MRO
     that defines *name*), or None when that is not a plain slot."""
-    try:
-        for klass in kind.__mro__:
-            found = vars(klass).get(name, _MISSING)
-            if found is not _MISSING:
-                return found.__get__ if type(found) is types.MemberDescriptorType else None
-    except TypeError:
-        return None
-    return None
+    at = _slot_places(kind).get(name)
+    return None if at is None else vars(kind.__mro__[at])[name].__get__
+
+
+@per_type
+def _slot_places(kind: type) -> dict[str, int | None]:
+    """For each of `_slot_names`, where along *kind*'s MRO its plain slot
+    descriptor is (None when what is found first is not one): the place,
+    not the descriptor, which refers to its class and would keep it alive."""
+    places: dict[str, int | None] = {}
+    for name in _slot_names(kind):
+        places[name] = None
+        try:
+            for at, klass in enumerate(kind.__mro__):
+                found = vars(klass).get(name, _MISSING)
+                if found is not _MISSING:
+                    places[name] = at if type(found) is types.MemberDescriptorType else None
+                    break
+        except TypeError:
+            pass
+    return places
 
 
 _MISSING = object()
@@ -923,7 +961,7 @@ def _cell_contents(cells: tuple[Any, ...] | None) -> list[Any]:
     return found
 
 
-@functools.lru_cache(maxsize=1024)
+@per_type
 def _slot_names(kind: type) -> tuple[str, ...]:
     """The slots *kind* and its bases declare, but ``__dict__`` and ``__weakref__``."""
     names: list[str] = []

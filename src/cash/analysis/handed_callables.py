@@ -45,6 +45,7 @@ import inspect
 import operator
 import sys
 import types
+import weakref
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from itertools import chain, compress, repeat
@@ -53,6 +54,7 @@ from typing import Any, NamedTuple
 from .. import _plain_data
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import is_pseudo_filename
+from .._type_memo import TypeMemo, type_key
 from .._user_attrs import instance_of
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import own_source, wrapper_layers
@@ -1015,14 +1017,14 @@ def _is_users_callable(value: Any) -> bool:
     return _is_users_object(value) and callable(value)
 
 
-#: ``class -> whether it is the user's`` (`_is_users_class`).
-_USERS_CLASSES: LruMemo[type, bool] = LruMemo(CODE_OBJECTS)
+#: ``class -> whether it is the user's`` (`_is_users_class`), held weakly.
+_USERS_CLASSES: TypeMemo[bool] = TypeMemo()
 
 
 def _is_users_class(cls: type) -> bool:
     """A class defined in a cell or in a local module: by its module, or by
     the functions it defines (a class made by ``exec`` names no module)."""
-    known = _USERS_CLASSES.get(cls)
+    known = _USERS_CLASSES.get(type_key(cls))
     if known is None:
         name = getattr(cls, "__module__", None)
         try:
@@ -1033,7 +1035,7 @@ def _is_users_class(cls: type) -> bool:
                 known = any(instance_of(v, types.FunctionType) and _is_users(v) for v in own)
         except (TypeError, AttributeError):
             known = False
-        _USERS_CLASSES[cls] = known
+        _USERS_CLASSES.put(cls, known)
     return known
 
 
@@ -1232,9 +1234,24 @@ def is_users_instance(value: Any) -> bool:
     return _is_users_object(value)
 
 
-#: ``class -> (what its classes hold, `_reaching_special_functions`)``: read
-#: again only when a class of its MRO holds something else.
-_SPECIAL_MEMO: dict[type, tuple[tuple, list[Any]]] = {}
+#: ``id(class) -> (ids of what its classes hold, weak references to those
+#: that take one, `_reaching_special_functions` held weakly)``, held weakly:
+#: read again only when a class of its MRO holds something else. Nothing in
+#: it refers to the class (its ``__dict__`` slot and methods using
+#: ``super()`` do), so a class made per call is not kept alive.
+_SPECIAL_MEMO: TypeMemo[tuple[tuple, tuple, list]] = TypeMemo()
+
+
+def _held_weakly(values: Iterable[Any]) -> tuple:
+    """A weak reference to each of *values* that takes one: one gone means
+    its id may be another object's now."""
+    refs = []
+    for value in values:
+        try:
+            refs.append(weakref.ref(value))
+        except TypeError:
+            continue
+    return tuple(refs)
 
 
 def _reaching_special_functions(cls: type) -> list[Any]:
@@ -1242,19 +1259,15 @@ def _reaching_special_functions(cls: type) -> list[Any]:
     function by name or calls a method of a global object: the others
     change nothing outside their objects, whatever their globals hold."""
     try:
-        snapshot = tuple(tuple(vars(k).values()) for k in cls.__mro__ if k is not object)
+        held = [tuple(vars(k).values()) for k in cls.__mro__ if k is not object]
+        snapshot = tuple(tuple(map(id, values)) for values in held)
     except TypeError:
-        snapshot = None
-    kept = _SPECIAL_MEMO.get(cls)
-    if kept is not None and snapshot is not None:
-        try:
-            same = len(kept[0]) == len(snapshot) and all(
-                len(a) == len(b) and all(map(operator.is_, a, b)) for a, b in zip(kept[0], snapshot)
-            )
-        except Exception:  # noqa: BLE001 - a class attribute's comparison
-            same = False
-        if same:
-            return kept[1]
+        held, snapshot = [], None
+    kept = _SPECIAL_MEMO.get(type_key(cls))
+    if kept is not None and snapshot is not None and kept[0] == snapshot:
+        found = [ref() for ref in kept[2]]
+        if all(ref() is not None for ref in kept[1]) and None not in found:
+            return found
     out = []
     for fn in special_functions(cls):
         facts = _call_facts(fn)
@@ -1268,9 +1281,9 @@ def _reaching_special_functions(cls: type) -> list[Any]:
         ):
             out.append(fn)
     if snapshot is not None:
-        if len(_SPECIAL_MEMO) > 512:
-            _SPECIAL_MEMO.clear()
-        _SPECIAL_MEMO[cls] = (snapshot, out)
+        refs = _held_weakly(out)
+        if len(refs) == len(out):
+            _SPECIAL_MEMO.put(cls, (snapshot, _held_weakly(chain.from_iterable(held)), list(refs)))
     return out
 
 

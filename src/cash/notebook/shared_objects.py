@@ -52,7 +52,7 @@ from typing import Any
 
 from cash import _native, _plain_data
 from cash._clock import CpuLimit
-from cash._type_memo import TypeMemo
+from cash._type_memo import TypeMemo, type_key
 from cash._user_attrs import attribute_or, builtin_items, has_attribute, instance_of
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
@@ -292,13 +292,13 @@ def _is_estimator_class(cls: type) -> bool:
     """Whether *cls* has scikit-learn's estimator interface. A pipeline or an
     ensemble holds the estimators it was built from (``Pipeline([('s',
     scaler), ...])``), and a restore copies them along with it."""
-    known = _ESTIMATOR_CLASSES.get(cls)
+    known = _ESTIMATOR_CLASSES.get(type_key(cls))
     if known is None:
         try:
             known = callable(attribute_or(cls, "get_params", None)) and callable(attribute_or(cls, "fit", None))
         except Exception:  # noqa: BLE001 - a class that cannot be asked is a leaf
             known = False
-        _ESTIMATOR_CLASSES[cls] = known
+        _ESTIMATOR_CLASSES.put(cls, known)
     return known
 
 
@@ -310,14 +310,14 @@ def _is_local_module_class(cls: type) -> bool:
     ``mylib.py`` next to the notebook, their package): its objects are the
     user's as much as a class defined in a cell, and ``training_rows(ds)``
     returning ``ds.rows`` hands back a list the argument holds."""
-    known = _LOCAL_MODULE_CLASSES.get(cls)
+    known = _LOCAL_MODULE_CLASSES.get(type_key(cls))
     if known is None:
         try:
             module = sys.modules.get(cls.__module__)
             known = instance_of(module, types.ModuleType) and is_local_module(module)
         except Exception:  # noqa: BLE001 - a class that cannot be asked is a leaf
             known = False
-        _LOCAL_MODULE_CLASSES[cls] = known
+        _LOCAL_MODULE_CLASSES.put(cls, known)
     return known
 
 
@@ -366,7 +366,7 @@ def _slot_members(cls: type) -> tuple[tuple[str, Any], ...]:
     """``(name, member descriptor)`` for each ``__slots__`` entry along
     *cls*'s MRO, read from each class's own ``__dict__`` (a private slot
     under its mangled name)."""
-    known = _SLOT_MEMBERS.get(cls)
+    known = _SLOT_MEMBERS.get(type_key(cls))
     if known is None:
         found: list[tuple[str, int]] = []
         for at, klass in enumerate(cls.__mro__):
@@ -374,7 +374,7 @@ def _slot_members(cls: type) -> tuple[tuple[str, Any], ...]:
                 if instance_of(member, types.MemberDescriptorType) and "__slots__" in vars(klass):
                     found.append((name, at))
         known = tuple(found)
-        _SLOT_MEMBERS[cls] = known
+        _SLOT_MEMBERS.put(cls, known)
     if not known:
         return ()
     mro = cls.__mro__
@@ -424,7 +424,7 @@ def _library_children(value: Any) -> list[Any] | None:
     a ``UserDict``'s ``data``, a ``ChainMap``'s ``maps``, an object array's
     items (one that owns them: a view's items are its base's), and a
     pandas object's ``attrs``."""
-    kind = _LIBRARY_KINDS.get(type(value))
+    kind = _LIBRARY_KINDS.get(type_key(type(value)))
     if kind is None:
         kind = _library_kind(type(value))
     if kind is _LEAF:
@@ -447,8 +447,8 @@ def _library_children(value: Any) -> list[Any] | None:
 
 _LEAF, _DEQUE, _WRAPPING, _ARRAY, _PANDAS = "leaf", "deque", "wrapping", "array", "pandas"
 
-#: `_library_kind` by type: a walk asks for every leaf it meets.
-_LIBRARY_KINDS: dict[type, str] = {}
+#: `_library_kind` by type, held weakly: a walk asks for every leaf it meets.
+_LIBRARY_KINDS: TypeMemo[str] = TypeMemo()
 
 
 def _library_kind(cls: type) -> str:
@@ -466,10 +466,7 @@ def _library_kind(cls: type) -> str:
             kind = _PANDAS
         else:
             kind = _LEAF
-    if len(_LIBRARY_KINDS) > 4096:
-        _LIBRARY_KINDS.clear()
-    _LIBRARY_KINDS[cls] = kind
-    return kind
+    return _LIBRARY_KINDS.put(cls, kind)
 
 
 def _pandas_attrs(value: Any) -> dict | None:
@@ -1669,7 +1666,7 @@ def _reads_inside(node: Any, value_types: tuple[type, ...]) -> bool:
             return False
     except Exception:  # noqa: BLE001 - an object whose attributes raise (see `is_value`)
         return False
-    kind = _LIBRARY_KINDS.get(type(node))
+    kind = _LIBRARY_KINDS.get(type_key(type(node)))
     return (kind or _library_kind(type(node))) is _LEAF
 
 
@@ -1681,7 +1678,7 @@ def _read_down(obj: Any, value_types: tuple[type, ...]) -> bool | None:
         return None
     if _holds_only_values(obj, value_types) or _is_extension_dtype(obj):
         return None
-    return (_LIBRARY_KINDS.get(type(obj)) or _library_kind(type(obj))) is _LEAF
+    return (_LIBRARY_KINDS.get(type_key(type(obj))) or _library_kind(type(obj))) is _LEAF
 
 
 def _is_extension_dtype(obj: Any) -> bool:
@@ -1887,7 +1884,7 @@ def _is_library_own(obj: Any) -> bool:
     cls = type(obj)
     if cls.__module__ == "builtins" or not _is_library_class(cls):
         return False
-    return (_LIBRARY_KINDS.get(cls) or _library_kind(cls)) is _LEAF
+    return (_LIBRARY_KINDS.get(type_key(cls)) or _library_kind(cls)) is _LEAF
 
 
 def _is_library_class(cls: type) -> bool:

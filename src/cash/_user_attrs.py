@@ -6,7 +6,7 @@ import collections
 import types
 from typing import Any
 
-from ._type_memo import TypeMemo
+from ._type_memo import TypeMemo, type_key
 
 
 def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
@@ -25,7 +25,7 @@ def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
     the cell with.
     """
     kind = type(obj)
-    own = _OWN_LOOKUP.get(kind)
+    own = _OWN_LOOKUP.get(type_key(kind))
     if own is None:
         own = _own_lookup(kind)
     try:
@@ -48,10 +48,9 @@ def _own_lookup(kind: type) -> bool:
     (``fit``, ``__code__``, the ``__class__`` an ``isinstance`` asks for
     when the type does not match) ran it, where plain Python never asks:
     they are answered by Python's generic lookup and the real type."""
-    own = _OWN_LOOKUP.get(kind)
+    own = _OWN_LOOKUP.get(type_key(kind))
     if own is None:
-        own = type(kind.__getattribute__) is types.FunctionType
-        _OWN_LOOKUP[kind] = own
+        own = _OWN_LOOKUP.put(kind, type(kind.__getattribute__) is types.FunctionType)
     return own
 
 
@@ -77,7 +76,7 @@ def instance_of(obj: Any, kinds: type | tuple[type, ...]) -> bool:
     way passes for itself.
     """
     kind = type(obj)
-    own = _OWN_LOOKUP.get(kind)
+    own = _OWN_LOOKUP.get(type_key(kind))
     if own is None:
         own = _own_lookup(kind)
     if own:
@@ -104,8 +103,9 @@ def is_routine(obj: Any) -> bool:
 
 #: What Python's own ``__dict__`` slot is, on a class or a module.
 _SLOT_READERS = (types.GetSetDescriptorType, types.MemberDescriptorType)
-#: Per type, how to read an instance's own attribute dict (`own_dict`).
-_DICT_READERS: dict[type, Any] = {}
+#: Per type, whether the ``__dict__`` its MRO finds first is the slot
+#: Python gives an instance (`own_dict`), held weakly.
+_DICT_READERS: TypeMemo[bool] = TypeMemo()
 
 
 def own_dict(obj: Any) -> dict | None:
@@ -120,19 +120,21 @@ def own_dict(obj: Any) -> dict | None:
     that slot, has none that cash reads.
     """
     kind = type(obj)
-    reader = _DICT_READERS.get(kind)
-    if reader is None:
-        reader = False
+    slot = _DICT_READERS.get(type_key(kind))
+    if slot is None:
+        slot = False
         for klass in kind.__mro__:
             found = klass.__dict__.get("__dict__")
             if found is not None:
-                reader = found if type(found) in _SLOT_READERS else False
+                slot = type(found) in _SLOT_READERS
                 break
-        _DICT_READERS[kind] = reader
-    if reader is False:
+        _DICT_READERS.put(kind, slot)
+    if not slot:
         return None
     try:
-        attributes = reader.__get__(obj, kind)
+        # The slot found first along the MRO is a data descriptor, so this
+        # reads through it: not kept, as it refers to its class.
+        attributes = object.__getattribute__(obj, "__dict__")
     except Exception:  # noqa: BLE001 - the object's own slot, not cash's error
         return None
     return attributes if type(attributes) is dict else None
