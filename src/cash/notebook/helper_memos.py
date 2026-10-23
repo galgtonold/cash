@@ -121,20 +121,64 @@ def _memos_in(value: Any, path: list[str], seen: set[int]) -> Iterator[tuple[lis
 
 
 def holds_a_filled_memo(value: Any) -> bool:
-    """Whether *value* is, or holds in its class body, a memo of the user's
-    that holds answers (``functools.cache`` on a function or a method).
+    """Whether *value* is, or holds however deeply nested, a memo of the
+    user's that holds answers (``functools.cache`` on a function or a
+    method), on a function or class a run makes afresh.
 
     A function or a class is kept by reference: a hit hands back the one
     the last run made, and its memo with what calls filled it with since.
     Run again, the ``def`` or ``class`` makes it afresh, empty: ``class
     Cases`` with a cached ``make`` that seeds ``random`` was served after a
     restart with ``make(3)`` answered, so the seed was skipped and every
-    draw below differed from plain Python."""
-    if type(value) in (tuple, list):
-        # A call's result: ``Cases, n = make_cases()``.
-        return any(holds_a_filled_memo(item) for item in value[:16] if type(item) not in (tuple, list))
-    if not instance_of(value, (type, types.FunctionType)) and not _is_user_memo(value):
-        return False
+    draw below differed from plain Python. Looked for in tuples, lists,
+    sets and dicts, in an object of the user's (its class included), and in
+    what a function, a ``partial`` or a method holds (`call_key._held_by`):
+    ``((Cases, n), m)`` and an instance of ``Cases`` were served.
+
+    One its module names (a module-level class or function) is left out:
+    run again, plain Python hands back that very one, memo and all. Past
+    `_MEMO_WALK_AT` holders, not known: taken as holding one."""
+    from .call_key import _held_by
+
+    stack = [value]
+    seen: set[int] = set()
+    steps = 0
+    while stack:
+        item = stack.pop()
+        kind = type(item)
+        if kind in _ATOMS or id(item) in seen:
+            continue
+        seen.add(id(item))
+        if kind in (tuple, list, set, frozenset):
+            children: Any = item
+        elif kind is dict:
+            children = [*dict.keys(item), *dict.values(item)]
+        else:
+            if (instance_of(item, (type, types.FunctionType)) or _is_user_memo(item)) and not _named_by_its_module(
+                item
+            ):
+                if _fills(item):
+                    return True
+            children = _held_by(item)
+            if not children:
+                continue
+        if _ATOMS.issuperset(map(type, children)):
+            continue
+        steps += 1
+        if steps > _MEMO_WALK_AT:
+            return True
+        stack.extend(child for child in children if type(child) not in _ATOMS)
+    return False
+
+
+#: Values with nothing inside them: skipped by `holds_a_filled_memo`.
+_ATOMS = frozenset({int, float, complex, str, bytes, bool, type(None)})
+#: How many containers and holders `holds_a_filled_memo` looks into.
+_MEMO_WALK_AT = 20_000
+
+
+def _fills(value: Any) -> bool:
+    """Whether a memo *value* is or holds in its class body holds answers."""
     for _, memo in _memos_in(value, [], set()):
         info = attribute_or(memo, "cache_info", None)
         try:
@@ -143,6 +187,34 @@ def holds_a_filled_memo(value: Any) -> bool:
         except Exception:  # noqa: BLE001 - a memo that cannot say holds answers, as far as cash knows
             return True
     return False
+
+
+def _named_by_its_module(value: Any) -> bool:
+    """Is *value* (a class, function or memo) what its module holds under
+    its qualified name? One a call made (``<locals>``) is not."""
+    try:
+        if instance_of(value, type):
+            module = type.__dict__["__module__"].__get__(value)
+            qualname = type.__dict__["__qualname__"].__get__(value)
+        else:
+            module = attribute_or(value, "__module__", None)
+            qualname = attribute_or(value, "__qualname__", None)
+        found: Any = sys.modules.get(module) if isinstance(module, str) else None
+        if found is None or not isinstance(qualname, str) or "<locals>" in qualname:
+            return False
+        for part in qualname.split("."):
+            if instance_of(found, type):
+                holder = type.__dict__["__dict__"].__get__(found)
+            elif instance_of(found, types.ModuleType):
+                holder = found.__dict__
+            else:
+                return False
+            found = holder.get(part)
+            if instance_of(found, (staticmethod, classmethod)):
+                found = attribute_or(found, "__func__", None)
+        return found is value
+    except Exception:  # noqa: BLE001 - not known to be named: looked into
+        return False
 
 
 def _class_memos(cls: type, seen: set[int]) -> list[tuple[list[str], Any]]:

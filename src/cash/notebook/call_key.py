@@ -219,22 +219,52 @@ def changes_its_closure(fn) -> bool:
 
 
 def holds_a_stream(cells: Mapping[str, _types.CellType]) -> bool:
-    """Whether a closure holds a random generator or an iterator: calling
-    the function draws from it whatever method it calls (``g.normal()``),
-    so the function changes what it holds. Stored, a hit handed back the
-    function the last run made, its generator moved on by every draw since:
-    after a restart ``x = h()`` gave the second number, not the first."""
+    """Whether a closure holds a random generator or an iterator, however
+    deeply: calling the function draws from it whatever method it calls
+    (``g.normal()``), so the function changes what it holds. Stored, a hit
+    handed back the function the last run made, its generator moved on by
+    every draw since: after a restart ``x = h()`` gave the second number,
+    not the first. Looked for in what the closure holds as
+    `holds_a_closure_with_state` looks: in tuples, lists, sets and dicts
+    (``st = {'it': iter(...)}``), in an object of the user's (``self.it``),
+    and in another function's closure (a helper ``g`` that holds it). Past
+    `_STREAM_WALK_AT` holders, not known: taken as holding one."""
     from cash.notebook.consumables import is_stream
     from cash.tracking.randomness.state import rng_carrier_kind
 
-    for cell in cells.values():
-        try:
-            held = cell.cell_contents
-        except ValueError:  # empty: the variable is not bound yet
+    stack = [cell.cell_contents for cell in cells.values() if _filled(cell)]
+    seen: set[int] = set()
+    steps = 0
+    while stack:
+        item = stack.pop()
+        kind = type(item)
+        if kind in _EXACT_ATOMS or id(item) in seen:
             continue
-        if rng_carrier_kind(held) is not None or is_stream(held):
+        seen.add(id(item))
+        try:
+            if rng_carrier_kind(item) is not None or is_stream(item):
+                return True
+        except Exception:  # noqa: BLE001 - a user's ``__iter__`` that raises: not known
             return True
+        if kind in (tuple, list, set, frozenset):
+            children: Any = item
+        elif kind is dict:
+            children = [*dict.keys(item), *dict.values(item)]
+        else:
+            children = _held_by(item)
+            if not children:
+                continue
+        if _EXACT_ATOMS.issuperset(map(type, children)):
+            continue
+        steps += 1
+        if steps > _STREAM_WALK_AT:
+            return True
+        stack.extend(child for child in children if type(child) not in _EXACT_ATOMS)
     return False
+
+
+#: How many containers and holders `holds_a_stream` looks into.
+_STREAM_WALK_AT = 10_000
 
 
 #: Values with nothing inside them to look at: skipped without a call.
