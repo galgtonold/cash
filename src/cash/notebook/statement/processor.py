@@ -1090,6 +1090,7 @@ class StatementProcessor:
         """Read *run*'s annotation, warn about its randomness, start its
         metrics and parse it."""
         code = run.code
+        reducer_writes.watch(self.shell.user_ns)
         run.reducer_mark = reducer_writes.runs_now()
         run.effective_ttl, run.force_persist, run.skip_cache, run.allow_random = statement_directives(
             run.annotation, run.ttl, self.persist_all
@@ -2803,6 +2804,9 @@ class StatementProcessor:
         misses when the write changed it and hits when it did not. Every
         variable moves when the code's reach cannot be read. Warned
         (``NOTEBOOK-REDUCE-WROTE``), naming the class."""
+        refused = reducer_writes.refused_since(run.reducer_mark)
+        if refused:
+            self._warn_reducer_refused(run, refused)
         found = reducer_writes.writers(run.reducer_mark)
         if not found:
             return
@@ -2836,6 +2840,21 @@ class StatementProcessor:
             f"__reduce__ or __getstate__ changes other values: "
             + ("every variable" if names is None else ", ".join(sorted(moved)) or "nothing tracked")
             + " counted as changed, and the statement was not stored"
+        )
+        fix = (
+            "Have the class's __reduce__ / __getstate__ only read: change other "
+            "values in the statement that needs them instead"
+        )
+        warn_diagnostic(CashWarning, "NOTEBOOK-REDUCE-WROTE", what, fix)
+
+    @staticmethod
+    def _warn_reducer_refused(run: StatementRun, classes: list[str]) -> None:
+        """Warn that cash did not run the writing reducers of *classes*
+        (`reducer_writes.refuses`), so *run*'s statement was not stored."""
+        run.reducer_mark = reducer_writes.runs_now()
+        what = (
+            f"a value of {', '.join(dict.fromkeys(classes))} has a __reduce__ or __getstate__ that changes "
+            "other values, so cash did not pickle it: the statement was not stored, and runs again next time"
         )
         fix = (
             "Have the class's __reduce__ / __getstate__ only read: change other "

@@ -3,8 +3,8 @@ pickle runs the value's own ``__reduce__``: code of the user's that plain
 Python never runs there. One that writes into a frame sharing other
 frames' cells (``df.at[3, 'o'] = ...``) changed ``df`` behind every
 statement, and a reader of ``df['o']`` below was served what it read
-before the write. Cash now counts the frame as changed: the reader is
-never served stale, and the notebook gives what plain Python gives, where
+before the write. Cash now does not run such a reducer: it does not
+pickle the value, and the notebook gives what plain Python gives, where
 the reducer never runs. A ``__getstate__`` that only reads stays cached.
 """
 

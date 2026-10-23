@@ -74,3 +74,78 @@ def test_one_whose_source_cannot_be_read_reaches_every_variable():
     hidden.__reduce__.__module__ = __name__
     writer = reducer_writes._decide(hidden)
     assert writer is not None and reducer_writes.reach([writer], {"x": 1}) is None
+
+
+SKIP = ("cache",)
+
+
+def _drop(d, keys):
+    for k in keys:
+        d.pop(k, None)
+    return d
+
+
+def _drop_inside(d):
+    d["rows"].append(0)
+    return d
+
+
+class HandsAFreshCopy:
+    def __getstate__(self):
+        return _drop(self.__dict__.copy(), SKIP)
+
+
+class HandsAFreshLocal:
+    def __getstate__(self):
+        state = dict(self.__dict__)
+        return _drop(state, SKIP)
+
+
+class HandsAShallowCopyChangedInside:
+    def __getstate__(self):
+        return _drop_inside(self.__dict__.copy())
+
+
+class HandsADeepCopyChangedInside:
+    def __getstate__(self):
+        import copy
+
+        return _drop_inside(copy.deepcopy(self.__dict__))
+
+
+def test_one_handing_a_fresh_copy_to_a_helper_that_edits_it_is_no_writer():
+    assert reducer_writes._decide(HandsAFreshCopy) is None
+    assert reducer_writes._decide(HandsAFreshLocal) is None
+    assert reducer_writes._decide(HandsADeepCopyChangedInside) is None
+
+
+def test_one_whose_helper_changes_what_a_shallow_copy_shares_writes():
+    assert reducer_writes._decide(HandsAShallowCopyChangedInside) is not None
+
+
+def test_what_a_writer_reaches_is_found_by_object_not_by_name():
+    writer = reducer_writes._decide(WritesAGlobal)
+    # The notebook's own ``TABLE`` is another object: it is not reached.
+    assert reducer_writes.reach([writer], {"TABLE": {}}) == set()
+    # The module's table, bound to another name, is.
+    assert reducer_writes.reach([writer], {"table": TABLE}) == {"table"}
+
+
+def test_one_whose_source_cannot_be_read_is_run_not_refused(monkeypatch):
+    """Its code unread, what it changes is told after it ran (every
+    variable moves): refused, an ``exec``'d class's pure ``__getstate__``
+    stopped every pickle of it."""
+    import sys
+    import types
+
+    module = types.ModuleType("_unread_reducer")
+    module.__file__ = None
+    exec("class Chosen:\n    def __getstate__(self):\n        return {'k': 1}\n", module.__dict__)
+    module.Chosen.__module__ = module.__name__
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    reducer_writes.watch({"a": []})
+    try:
+        assert reducer_writes._writer(module.Chosen).functions is None
+        assert not reducer_writes.refuses(module.Chosen)
+    finally:
+        reducer_writes._NAMESPACE[0] = None

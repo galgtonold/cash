@@ -1799,7 +1799,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
 | [NOTEBOOK-NO-LIVE-READER](#notebook-no-live-reader) | notebook | cells above are read from the saved file, so an unsaved edit there is not seen |
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook's cells cannot be read; cells above the one you run are not re-checked |
-| [NOTEBOOK-REDUCE-WROTE](#notebook-reduce-wrote) | notebook | a value's own `__reduce__` or `__getstate__`, run when cash pickled it, changes other values; they count as changed, and the statement is not stored |
+| [NOTEBOOK-REDUCE-WROTE](#notebook-reduce-wrote) | notebook | a value's own `__reduce__` or `__getstate__` changes other values, so cash does not pickle it, and the statement is not stored |
 | [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload or restart dropped state cells set on a module, and cash cannot rebuild it |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
 | [NOTEBOOK-SHARE-UNCHECKED](#notebook-share-unchecked) | notebook | not every variable sharing an object with a statement's outputs was found in time |
@@ -2115,32 +2115,35 @@ bottom once. It is shown once per session.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._move_what_reducers_wrote @6ef57de0, cash/notebook/statement/reducer_writes.py:_decide @1503044d -->
+<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @f8da48a1, cash/notebook/statement/reducer_writes.py:_decide @a0ec2964, cash/notebook/statement/processor.py:StatementProcessor._move_what_reducers_wrote @a8f482f2 -->
 **What happened.** cash pickles a statement's values to hash and store
 them, and pickling runs the value's own `__reduce__`, `__reduce_ex__`,
 `__getstate__` or `__getnewargs__` (or a reducer you registered with
 `copyreg`). One of yours changes other values when it runs: it writes a
 global (`df.at[3, 'o'] = ...`), hands one to a function of yours that
-changes it, changes the object being pickled, or calls a function of
-yours whose source cash cannot read. Plain Python never runs it there. The
-message names the class, and the variables its code can reach, which now
-count as changed; when that reach cannot be read, every variable does.
-The statement was not stored. A reducer whose code reaches no variable
-of the notebook (a counter in its own module) is left as it is, with no
-warning.
+changes it, or changes the object being pickled. Plain Python never runs it there, so
+cash does not run it either: it does not pickle the value, as it does not
+pickle one that cannot be pickled. The message names the class. The
+statement was not stored. A reducer whose code reaches no variable of the
+notebook (a counter in its own module) runs as before, with no warning;
+what it reaches is found by object, so a module's list the notebook holds
+under another name counts. A helper that edits a fresh copy it is handed
+(`_drop(self.__dict__.copy(), keys)`) changes nothing of yours.
 
-**Why it matters.** Your results are correct: what reads those variables
-below runs again rather than be served what it read before the write, and
-a variable cash can rebuild from the cells above is rebuilt, as plain
-Python left it. The statement runs again every time, and so does what
-reads the variables it moved.
+A reducer whose source cash cannot read runs, as do those cash finds out
+about only after they ran (the class could not be named): the variables
+its code can reach count as changed, or every variable when its code or
+that reach cannot be read, and the message says which.
+
+**Why it matters.** Your results are correct: the variables hold what
+plain Python leaves in them. The statement runs again every time, and a
+statement that hands the value on (`ws = [w, 1]`) is not stored either.
 
 **What to do.** Have the reducer only read: build the state it returns
 from the object (`state = self.__dict__.copy()`, then drop keys from
 `state`), and change other values in the statement that needs them.
 
-**When it is safe to ignore.** When the statement and its readers are
-cheap.
+**When it is safe to ignore.** When the statement is cheap.
 
 ### NOTEBOOK-RELOAD-STATE {#notebook-reload-state}
 

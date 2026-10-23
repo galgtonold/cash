@@ -1567,8 +1567,39 @@ def user_state_runs() -> int:
 
 
 def _counted(obj: Any, reducer: Any) -> Any:
+    _refuse_writer(type(obj))
     _note_user_state_run(type(obj))
     return reducer(obj)
+
+
+class ReducerNotRun(TypeError):
+    """A reducer of the user's cash does not run: it writes what the
+    notebook holds (`set_reducer_veto`). A TypeError, as pickle raises for
+    an object it cannot pickle, so every caller that falls back for one
+    falls back for this."""
+
+
+#: Set by the notebook (`reducer_writes.watch`): whether a class's reducer
+#: of the user's must not run in a pickle of cash's.
+_REDUCER_VETO: list[Any] = [None]
+
+
+def set_reducer_veto(veto: Any) -> None:
+    """Ask *veto* (a class -> bool) before a pickle of cash's runs a
+    reducer of the user's; one it answers True for is not run."""
+    _REDUCER_VETO[0] = veto
+
+
+def _refuse_writer(t: type) -> None:
+    veto = _REDUCER_VETO[0]
+    if veto is not None and veto(t):
+        raise ReducerNotRun(f"cash does not run the reducer of {t.__qualname__}: it changes other values")
+
+
+def next_mark() -> int:
+    """Move `user_state_runs` on by one, naming no class, and return it."""
+    _USER_STATE_RUNS[0] += 1
+    return _USER_STATE_RUNS[0]
 
 
 def _note_user_state_run(t: type) -> None:
@@ -1591,6 +1622,7 @@ def reduce_counted(obj: Any, protocol: int) -> Any:
     runs code of the user's (`runs_users_state`): for reduces cash calls
     itself, outside its picklers."""
     if runs_users_state(type(obj)):
+        _refuse_writer(type(obj))
         _note_user_state_run(type(obj))
     return obj.__reduce_ex__(protocol)
 
@@ -1599,7 +1631,11 @@ def runs_users_state(t: type) -> bool:
     """Does pickling an instance of *t* run code of the user's: their own
     ``__getstate__``, ``__reduce__``, ``__reduce_ex__``, ``__getnewargs__``
     or ``__getnewargs_ex__``, or a reducer of theirs registered with
-    ``copyreg``? Remembered per type."""
+    ``copyreg``? Remembered per type, but for a ``copyreg`` registration,
+    which may come after the type was first asked about."""
+    registered = copyreg.dispatch_table.get(t)
+    if registered is not None:
+        return users_function(registered)
     try:
         return _RUNS_USERS_STATE[t]
     except KeyError:
@@ -1611,17 +1647,26 @@ def runs_users_state(t: type) -> bool:
 
 
 def _decide_runs_users_state(t: type) -> bool:
-    from .install_paths import is_user_code_module
-
-    registered = copyreg.dispatch_table.get(t)
-    if registered is not None:
-        return is_user_code_module(sys.modules.get(getattr(registered, "__module__", None) or ""))
     return any(
-        any(isinstance(klass.__dict__.get(name), _PYTHON_METHODS) for name in (*_STATE_METHODS, *_NEWARGS_METHODS))
-        and is_user_code_module(sys.modules.get(klass.__module__))
+        users_function(method)
         for klass in t.__mro__
         if klass is not object
+        for name in (*_STATE_METHODS, *_NEWARGS_METHODS)
+        if isinstance(method := klass.__dict__.get(name), _PYTHON_METHODS)
     )
+
+
+def users_function(function: Any) -> bool:
+    """Is *function* code of the user's: of a module of theirs, or, when
+    its module is not loaded, of a file of theirs?"""
+    from .install_paths import is_user_code_file, is_user_code_module
+
+    function = getattr(function, "__func__", function)
+    module = sys.modules.get(getattr(function, "__module__", None) or "")
+    if module is not None:
+        return is_user_code_module(module)
+    code = getattr(function, "__code__", None)
+    return code is not None and is_user_code_file(code.co_filename)
 
 
 _NEWARGS_METHODS = ("__getnewargs__", "__getnewargs_ex__")

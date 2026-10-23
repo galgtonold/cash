@@ -14,14 +14,21 @@ A body that only reads -- ``return self.__dict__.copy()`` -- writes
 nothing, and nothing moves. A call into a library is read as the callee
 analysis reads it (`callee_effects`): it changes no global of the user's.
 A function of the user's whose source cannot be read is taken to write.
+
+A writer whose code reaches a variable of the notebook is not run at all
+(`refuses`): cash's pickle refuses the object, as it refuses any it cannot
+pickle, so the statement is not stored and nothing is written, as in plain
+Python, where no pickle runs it. What it reaches is found by object, through
+its functions' own globals: a module's ``SEEN`` the notebook holds as
+``seen``, never a notebook variable that only shares a name with it.
 """
 
 from __future__ import annotations
 
 import ast
+import contextlib
 import copyreg
 import inspect
-import sys
 import textwrap
 import types
 import weakref
@@ -34,13 +41,13 @@ from cash.analysis.callee_effects import (
     free_vars_mutated_in_function,
     params_mutated_in_function,
     parse_function_source,
+    positional_param_names,
     source_global_rebinds,
 )
-from cash.install_paths import is_user_code_module
-from cash.kept_state import user_state_runs, user_state_types_since
+from cash.kept_state import next_mark, set_reducer_veto, user_state_runs, user_state_types_since, users_function
 from cash.source_reading import getsourcelines
 
-__all__ = ["Writer", "reach", "runs_now", "writers", "writes_into"]
+__all__ = ["Writer", "reach", "refused_since", "refuses", "runs_now", "watch", "writers", "writes_into"]
 
 #: The methods a pickle runs on an object, found on its class.
 _REDUCERS = ("__reduce__", "__reduce_ex__", "__getstate__", "__getnewargs__", "__getnewargs_ex__")
@@ -61,8 +68,64 @@ class Writer:
 
 
 def runs_now() -> int:
-    """The mark `writers` counts from: `kept_state.user_state_runs`."""
+    """The mark `writers` and `refused_since` count from:
+    `kept_state.user_state_runs`. Taken as each statement begins, it also
+    forgets what `refuses` decided for the statement before."""
+    _REFUSES.clear()
     return user_state_runs()
+
+
+#: The notebook namespace `refuses` judges a writer's reach against.
+_NAMESPACE: list[Mapping[str, Any] | None] = [None]
+#: `refuses` by class, for the statement being processed.
+_REFUSES: dict[Any, bool] = {}
+#: The `runs_now` mark of the last pickle `refuses` stopped, by class.
+_REFUSED: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def watch(user_ns: Mapping[str, Any]) -> None:
+    """Judge from now on what writers reach against *user_ns*, and refuse
+    to run one that reaches a variable of it (`refuses`)."""
+    _NAMESPACE[0] = user_ns
+    set_reducer_veto(refuses)
+
+
+def refuses(t: type) -> bool:
+    """Should cash's pickle refuse an instance of *t* rather than run its
+    reducer of the user's? Yes when its code, read, writes and reaches a
+    variable of the watched namespace (`reach`), or what it reaches cannot
+    be told. A writer of its own module's counter alone runs, as it did,
+    and so does one whose code cannot be read."""
+    try:
+        known = _REFUSES.get(t)
+    except TypeError:  # a class whose metaclass makes it unhashable
+        known = None
+    if known is None:
+        user_ns = _NAMESPACE[0]
+        writer = _writer(t)
+        if writer is None or writer.functions is None or user_ns is None:
+            # A reducer whose code cannot be read runs, as it did: what it
+            # changed is not told, so every variable moves after
+            # (`writers`). Refused, an ``exec``'d class's pure
+            # ``__getstate__`` stopped every pickle of it.
+            known = False
+        else:
+            names = reach([writer], user_ns)
+            known = names is None or bool(names)
+        with contextlib.suppress(TypeError):
+            _REFUSES[t] = known
+    if known:
+        mark = next_mark()
+        with contextlib.suppress(TypeError):
+            _REFUSED[t] = mark
+    return known
+
+
+def refused_since(since: int) -> list[str]:
+    """The names of the classes `refuses` stopped since the mark *since*."""
+    return sorted(
+        attribute_or(t, "__qualname__", None) or "an object" for t, mark in list(_REFUSED.items()) if mark > since
+    )
 
 
 def writers(since: int) -> list[Writer]:
@@ -80,7 +143,10 @@ def writes_into(since: int, user_ns: Mapping[str, Any]) -> bool:
     """Has a reducer that writes, run since the mark *since*, reached a
     variable of *user_ns* (`reach`)? One whose code reaches none (a counter
     of its own module's) leaves nothing a statement reads changed, and a
-    hit that skips it gives what plain Python gives, where it never runs."""
+    hit that skips it gives what plain Python gives, where it never runs.
+    One refused since (`refuses`) left an object cash could not pickle."""
+    if refused_since(since):
+        return True
     found = writers(since)
     if not found:
         return False
@@ -90,32 +156,43 @@ def writes_into(since: int, user_ns: Mapping[str, Any]) -> bool:
 
 def reach(found: list[Writer], user_ns: Mapping[str, Any]) -> set[str] | None:
     """The variables of *user_ns* the code of the writers *found* can reach:
-    each global name their functions look up. None when a writer's
-    functions are unknown, or one writes the object it pickles (which
-    variables hold it is not known): every variable may have changed."""
-    names: set[str] = set()
+    those bound to an object a global name of their functions looks up, in
+    that function's own globals. None when a writer's functions are
+    unknown, or one writes the object it pickles (which variables hold it
+    is not known): every variable may have changed."""
+    reached: dict[int, Any] = {}
+    written: set[int] = set()
     for writer in found:
         if writer.functions is None:
             return None
         for function in writer.functions:
-            names.update(chain[0] for chain in bytecode_global_refs(function))
-        names.update(writer.written)
+            g = attribute_or(function, "__globals__", None)
+            if not isinstance(g, dict):
+                return None
+            for chain in bytecode_global_refs(function):
+                value = g.get(chain[0], _ABSENT)
+                if value is _ABSENT:
+                    continue
+                # A module, class or function it only names (``time.sleep``)
+                # is code it runs, not data it writes; one it writes counts.
+                if chain[0] in writer.written:
+                    written.add(id(value))
+                elif type(value) in _CODE_TYPES:
+                    continue
+                reached[id(value)] = value
+    if not reached:
+        return set()
     return {
         name
-        for name in names
-        if name in user_ns
-        and not name.startswith("_")
-        # A module, class or function it only names (``time.sleep``) is
-        # code it runs, not data it writes; one it writes is in `written`.
-        and (name in _written(found) or type(user_ns[name]) not in _CODE_TYPES)
+        for name, value in list(user_ns.items())
+        if not name.startswith("_")
+        and id(value) in reached
+        and (id(value) in written or type(value) not in _CODE_TYPES)
     }
 
 
 _CODE_TYPES = (types.ModuleType, types.FunctionType, types.BuiltinFunctionType, type)
-
-
-def _written(found: list[Writer]) -> set[str]:
-    return {name for writer in found for name in writer.written}
+_ABSENT = object()
 
 
 #: `_writer` by class: None for a class whose reducers write nothing.
@@ -124,6 +201,9 @@ _PURE = object()
 
 
 def _writer(t: type) -> Writer | None:
+    if copyreg.dispatch_table.get(t) is not None:
+        # Registered with ``copyreg``, perhaps after it was first decided.
+        return _decide(t)
     try:
         found = _WRITERS.get(t)
     except TypeError:
@@ -139,6 +219,8 @@ def _decide(t: type) -> Writer | None:
     seen: dict[int, Any] = {}
     roots = {id(function) for function in functions}
     pending = list(functions)
+    #: By callee, each call that hands it something, and the caller's body.
+    handed: dict[int, list[tuple[ast.Call | None, ast.AST]]] = {}
     writes = False
     written: set[str] = set()
     while pending:
@@ -153,13 +235,133 @@ def _decide(t: type) -> Writer | None:
         if changed or _rebinds(function):
             written |= changed
             writes = True
-        elif id(function) not in roots and params_mutated_in_function(body):
+        elif id(function) not in roots and not _changes_only_fresh(body, handed.get(id(function), [])):
             # A function of the user's the reducer hands something to, and
             # which changes what it is handed: what was handed may be a
             # variable's object.
             writes = True
-        pending.extend(_users_callees(function, body, t))
+        for callee, call in _users_callees(function, body, t):
+            handed.setdefault(id(callee), []).append((call, body))
+            pending.append(callee)
     return Writer(name, list(seen.values()), frozenset(written)) if writes else None
+
+
+def _changes_only_fresh(
+    body: ast.FunctionDef | ast.AsyncFunctionDef, calls: list[tuple[ast.Call | None, ast.AST]]
+) -> bool:
+    """Does the callee *body* change only what each of its *calls* made
+    fresh for it? ``_drop(self.__dict__.copy(), SKIP)`` hands a new dict,
+    and ``d.pop(k)`` changes nothing else: no variable's object changes.
+    Only a call by name is read; a parameter it changes past its top level
+    (``d['rows'].append``) is fresh only from a deep copy."""
+    changed = params_mutated_in_function(body)
+    if not changed:
+        return True
+    if not calls:
+        return False
+    params = positional_param_names(body)
+    if params[:1] in (["self"], ["cls"]):
+        return False  # a method or a class's ``__init__``: its arguments shift
+    for call, caller in calls:
+        if call is None or not isinstance(call.func, ast.Name):
+            return False
+        given = {params[i]: arg for i, arg in enumerate(call.args) if i < len(params)}
+        given.update((k.arg, k.value) for k in call.keywords if k.arg is not None)
+        if any(isinstance(arg, ast.Starred) for arg in call.args) or any(k.arg is None for k in call.keywords):
+            return False
+        for param in changed:
+            arg = given.get(param)
+            depth = _fresh(arg, caller) if arg is not None else None
+            if depth is None or (depth == "top" and not _changes_only_itself(body, param)):
+                return False
+    return True
+
+
+#: Calls that build a new top-level object from what they are given.
+_SHALLOW_COPIES = frozenset({"dict", "list", "set", "bytearray"})
+
+
+def _fresh(arg: ast.expr, caller: ast.AST, depth: int = 0) -> str | None:
+    """How new the object *arg* evaluates to is in *caller*: ``"deep"``
+    (``copy.deepcopy(x)``), ``"top"`` (``x.copy()``, ``dict(x)``, a
+    literal: new, its items shared), or None (it may be anyone's)."""
+    if isinstance(arg, (ast.Dict, ast.List, ast.Set, ast.DictComp, ast.ListComp, ast.SetComp)):
+        return "top"
+    if isinstance(arg, ast.Call):
+        func = arg.func
+        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id == "copy":
+            return {"deepcopy": "deep", "copy": "top"}.get(func.attr)
+        if isinstance(func, ast.Name):
+            return "deep" if func.id == "deepcopy" else "top" if func.id in _SHALLOW_COPIES else None
+        if isinstance(func, ast.Attribute) and func.attr == "copy" and not arg.args and not arg.keywords:
+            return "top"
+        return None
+    if isinstance(arg, ast.Name) and depth < 4:
+        # A local bound once, to something fresh.
+        bound = [
+            node.value
+            for node in ast.walk(caller)
+            if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr))
+            and any(isinstance(t, ast.Name) and t.id == arg.id for t in _targets(node))
+        ]
+        params = {a.arg for a in ast.walk(caller) if isinstance(a, ast.arg)}
+        if len(bound) == 1 and bound[0] is not None and arg.id not in params and not _loops_bind(caller, arg.id):
+            return _fresh(bound[0], caller, depth + 1)
+    return None
+
+
+def _targets(node: ast.AST) -> list[ast.AST]:
+    if isinstance(node, ast.Assign):
+        return [t for target in node.targets for t in ast.walk(target)]
+    return [node.target]
+
+
+def _loops_bind(caller: ast.AST, name: str) -> bool:
+    """Is *name* bound in *caller* other than by assignment: a loop, ``with``,
+    ``except``, comprehension or import, a ``global`` or ``nonlocal``?"""
+    for node in ast.walk(caller):
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+            if any(isinstance(t, ast.Name) and t.id == name for t in ast.walk(node.target)):
+                return True
+        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
+            if any(isinstance(t, ast.Name) and t.id == name for t in ast.walk(node.optional_vars)):
+                return True
+        elif isinstance(node, ast.ExceptHandler) and node.name == name:
+            return True
+        elif isinstance(node, (ast.Global, ast.Nonlocal)) and name in node.names:
+            return True
+        elif isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+            (a.asname or a.name.split(".")[0]) == name for a in node.names
+        ):
+            return True
+    return False
+
+
+def _changes_only_itself(body: ast.FunctionDef | ast.AsyncFunctionDef, param: str) -> bool:
+    """Does *body* use its parameter *param* only at its top level: a
+    method call on it as a statement of its own (``d.pop(k, None)``), an
+    item set or deleted on it, a test of what it holds (``k in d``),
+    returned? Nothing it holds is taken out, so nothing inside it changes."""
+    parents: dict[int, ast.AST] = {}
+    for node in ast.walk(body):
+        for child in ast.iter_child_nodes(node):
+            parents[id(child)] = node
+    for node in ast.walk(body):
+        if not (isinstance(node, ast.Name) and node.id == param and isinstance(node.ctx, ast.Load)):
+            continue
+        parent = parents.get(id(node))
+        if isinstance(parent, ast.Return):
+            continue
+        if isinstance(parent, ast.Compare) and node in parent.comparators:
+            continue
+        if isinstance(parent, ast.Subscript) and parent.value is node and isinstance(parent.ctx, (ast.Store, ast.Del)):
+            continue
+        if isinstance(parent, ast.Attribute) and parent.value is node:
+            call = parents.get(id(parent))
+            if isinstance(call, ast.Call) and call.func is parent and isinstance(parents.get(id(call)), ast.Expr):
+                continue
+        return False
+    return True
 
 
 def _reducers_of(t: type) -> list[Any]:
@@ -188,7 +390,7 @@ def _function(member: Any) -> Any:
 
 
 def _users(function: Any) -> bool:
-    return is_user_code_module(sys.modules.get(attribute_or(function, "__module__", None) or ""))
+    return users_function(function)
 
 
 def _body(function: Any) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
@@ -215,10 +417,10 @@ def _rebinds(function: Any) -> bool:
     return bool(source_global_rebinds(source))
 
 
-def _users_callees(function: Any, body: ast.AST, t: type) -> list[Any]:
+def _users_callees(function: Any, body: ast.AST, t: type) -> list[tuple[Any, ast.Call]]:
     """The functions of the user's *body* calls by name, or as a method
     of its first argument (``self.parts()``), found in *function*'s globals
-    and on *t*."""
+    and on *t*, each with the call."""
     found = []
     g = attribute_or(function, "__globals__", {})
     for node in ast.walk(body):
@@ -238,5 +440,5 @@ def _users_callees(function: Any, body: ast.AST, t: type) -> list[Any]:
             callee = _function(callee.__dict__.get("__init__"))
         callee = _function(callee)
         if callee is not None and _users(callee):
-            found.append(callee)
+            found.append((callee, node))
     return found
