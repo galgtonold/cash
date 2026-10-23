@@ -21,6 +21,7 @@ from cash.decorator import code_trace
 from cash.notebook import shadow
 from cash.notebook.statement import processor
 from tests._cell_driver import run_cash_cell
+from tests._modules import forget_module
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S as F
 
 #: Without a trace (Python 3.10 and 3.11, ``CASH_TRACE=0``) the objects are
@@ -210,8 +211,8 @@ def test_a_generator_expression_run_on_its_own_is_read_from_its_line(tmp_path, m
         encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
+    forget_module(monkeypatch, "gx_made")
     module = importlib.import_module("gx_made")
-    monkeypatch.delitem(sys.modules, "gx_made")
     made = [c for c in module.mk.__code__.co_consts if isinstance(c, types.CodeType)]
     assert sorted(own_writes(c) for c in made) == [frozenset(), frozenset({"calls"})]
 

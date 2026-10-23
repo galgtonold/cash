@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from cash import Cash
+from tests._modules import forget_module
 from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core]
@@ -59,7 +60,7 @@ def test_an_edit_in_this_process_invalidates_the_caller(tmp_path, monkeypatch, m
     helpers = f"_marked_helpers_{tmp_path.name}"
     caller = f"_marked_caller_{tmp_path.name}"
     for name in (helpers, caller):
-        monkeypatch.delitem(sys.modules, name, raising=False)
+        forget_module(monkeypatch, name)
     (tmp_path / f"{helpers}.py").write_text(HELPER.format(marker=marker, step=1), encoding="utf-8")
     (tmp_path / f"{caller}.py").write_text(CALLER.format(helpers=helpers), encoding="utf-8")
 

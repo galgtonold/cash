@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from cash import _native
+from tests._modules import forget_module
 from tests._scripts import run_python
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -31,7 +32,7 @@ def no_loaded_module(monkeypatch):
     """Forget any ``cash._cwatch`` this process loaded, for the test's length."""
     import cash
 
-    monkeypatch.delitem(sys.modules, MODULE, raising=False)
+    forget_module(monkeypatch, MODULE)
     monkeypatch.delattr(cash, "_cwatch", raising=False)
     monkeypatch.delenv("CASH_PURE_PYTHON", raising=False)
     return monkeypatch

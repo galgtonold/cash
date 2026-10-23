@@ -17,12 +17,11 @@ caching as a call inside the statement, where the same copy broke it.
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 from cash.backends.persistence_policy import PersistencePolicy
 from tests._cell_driver import run_cash_cell
+from tests._modules import forget_module
 
 FACTORY = "import numpy as np\ndef mk():\n    arr = np.zeros(10)\n    return arr, (lambda: arr)\n"
 CELLS = [
@@ -69,7 +68,7 @@ def test_the_closure_is_looked_through_as_the_store_pickles(cash_magics, monkeyp
     module = f"closing_shape_{list(FACTORIES).index(shape)}"
     (tmp_path / f"{module}.py").write_text(source, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
-    monkeypatch.delitem(sys.modules, module, raising=False)
+    forget_module(monkeypatch, module)
     cells = [f"import numpy as np\nfrom {module} import mk", unpack, "v = a[2:5]", "v[:] = 7", CELLS[4]]
     for cell in cells:
         run_cash_cell(cash_magics, cell, cells=cells)

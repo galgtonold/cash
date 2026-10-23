@@ -13,6 +13,7 @@ import sys
 import types
 
 from cash.notebook import server_discovery as sd
+from tests._modules import forget_module
 
 IPYNB = {
     "ipynb": {
@@ -77,6 +78,6 @@ def test_result_cached_within_ttl(monkeypatch):
 
 
 def test_no_op_when_not_in_colab(monkeypatch):
-    monkeypatch.delitem(sys.modules, "google.colab", raising=False)
+    forget_module(monkeypatch, "google.colab")
     assert sd.in_colab() is False
     assert sd.NotebookCellReaders().colab() is None

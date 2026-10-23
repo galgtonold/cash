@@ -21,6 +21,7 @@ import pytest
 
 from cash import source_reading
 from cash.analysis import mutable_globals
+from tests._modules import forget_module
 
 pytestmark = [pytest.mark.core]
 
@@ -75,7 +76,7 @@ def factory():
 def _load(tmp_path, monkeypatch, step: int = 1, age: float = 60.0):
     monkeypatch.syspath_prepend(str(tmp_path))
     name = f"_source_memo_{tmp_path.name}"
-    monkeypatch.delitem(sys.modules, name, raising=False)
+    forget_module(monkeypatch, name)
     path = tmp_path / f"{name}.py"
     path.write_text(MODULE.format(step=step), encoding="utf-8")
     settled = time.time() - age

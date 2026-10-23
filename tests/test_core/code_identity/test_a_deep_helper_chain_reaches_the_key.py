@@ -15,7 +15,6 @@ end. That call runs uncached, with a warning, instead of leaving code out.
 from __future__ import annotations
 
 import importlib
-import sys
 import warnings
 from pathlib import Path
 
@@ -25,6 +24,7 @@ from cash import Cash
 from cash.analysis.helper_walk import HelperWalk
 from cash.analysis.purity_analyzer import get_analyzer
 from cash.exceptions import CashWarning
+from tests._modules import forget_module
 from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core]
@@ -78,7 +78,7 @@ def _run(project: Path, seed: str = "0") -> str:
 def test_every_helper_of_a_deep_chain_is_keyed(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(tmp_path))
     name = f"_deep_chain_{tmp_path.name}"
-    monkeypatch.delitem(sys.modules, name, raising=False)
+    forget_module(monkeypatch, name)
     (tmp_path / f"{name}.py").write_text(
         _helpers(1) + "\n\ndef entry(x):\n    return h0(x) + h1(x) + h2(x) + h3(x) + h4(x)\n",
         encoding="utf-8",
@@ -138,7 +138,7 @@ def test_a_walk_with_no_end_runs_uncached_with_a_warning(tmp_path, monkeypatch):
     monkeypatch.setattr(HelperWalk, "WALK_LIMIT", 40)  # the real bound only costs time
     monkeypatch.syspath_prepend(str(tmp_path))
     name = f"_endless_{tmp_path.name}"
-    monkeypatch.delitem(sys.modules, name, raising=False)
+    forget_module(monkeypatch, name)
     (tmp_path / f"{name}.py").write_text(ENDLESS.format(name=name), encoding="utf-8")
     module = importlib.import_module(name)
 

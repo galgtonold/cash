@@ -23,6 +23,7 @@ import cash.decorator.registry as registry
 from cash import Cash
 from cash.analysis.helper_code import callable_layers
 from cash.exceptions import CashWarning
+from tests._modules import forget_module
 
 pytestmark = [pytest.mark.core]
 
@@ -117,7 +118,7 @@ def test_argument_code_whose_references_never_end_runs_uncached(tmp_path, monkey
     monkeypatch.setattr(code_refs, "MAX_CODE_REF_TARGETS", 40)  # the real bound only costs time
     monkeypatch.syspath_prepend(str(tmp_path))
     name = f"_endless_refs_{tmp_path.name}"
-    monkeypatch.delitem(sys.modules, name, raising=False)
+    forget_module(monkeypatch, name)
     (tmp_path / f"{name}.py").write_text(ENDLESS, encoding="utf-8")
     module = importlib.import_module(name)
 

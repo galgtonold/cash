@@ -17,6 +17,7 @@ import pytest
 
 from cash import Cash
 from cash.analysis.purity_analyzer import PurityAnalyzer
+from tests._modules import forget_module
 
 pytestmark = [pytest.mark.core]
 
@@ -61,7 +62,7 @@ def modules(tmp_path, monkeypatch):
     tag = tmp_path.name
     a, b, caller = f"_same_text_a_{tag}", f"_same_text_b_{tag}", f"_same_text_caller_{tag}"
     for name in (a, b, caller):
-        monkeypatch.delitem(sys.modules, name, raising=False)
+        forget_module(monkeypatch, name)
     (tmp_path / f"{a}.py").write_text(HELPER.format(step=1), encoding="utf-8")
     (tmp_path / f"{b}.py").write_text(HELPER.format(step=2), encoding="utf-8")
     (tmp_path / f"{caller}.py").write_text(CALLER.format(a=a, b=b), encoding="utf-8")
