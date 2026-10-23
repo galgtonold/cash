@@ -499,7 +499,7 @@ class Shadow:
         found = rc is not None
         held = None
         if not found or code.co_freevars:
-            held = self._holder(code, [(module, g), (nbn, nb)], ran)
+            held = self._holder(code, [(module, g), (nbn, nb)], ran) or _library_holder(code, nb)
         if held is not None:
             hmod, hname = held
             hns = namespace_of(hmod, nb, nbn)
@@ -517,13 +517,24 @@ class Shadow:
                 kind = "inside"
             elif library_made(code, g):
                 kind = "library-made"
-            elif _in_a_value(code, [g, nb]):
-                # Held in a list, a dict or an object a global holds
-                # (``aggs = {'a': lambda s: s.max()}``): set again only
-                # by changing that value, which its readers are keyed on.
-                kind = "in a value"
             else:
-                kind = "unresolved"
+                holder = _in_a_value(code, [(module, g), (nbn, nb)])
+                if holder is not None:
+                    # Held in a list, a dict or an object a global holds
+                    # (``aggs = {'a': lambda s: s.max()}``): the entry is
+                    # served while that global's digest is the same. The
+                    # code alone vouched for the function before, and a
+                    # lambda held as a default whose own defaults were set
+                    # again (``f.__defaults__ = (77,)``) was served stale.
+                    hmod, hname = holder
+                    hns = namespace_of(hmod, nb, nbn)
+                    add(
+                        ("held", hmod, hname, qn),
+                        _held_digest(hns, hname, value_digest) if hns is not None else "missing",
+                    )
+                    kind = "in a value"
+                else:
+                    kind = "unresolved"
             add(("gap", module, qn), kind)
         if isinstance(owner, type) and user_class(owner):
             add_class(owner)
@@ -952,47 +963,53 @@ _IN_A_VALUE_AT = 5_000
 _IN_A_VALUE_DEPTH = 6
 
 
-def _in_a_value(code: types.CodeType, spaces: Iterable[Mapping[str, Any]]) -> bool:
-    """Whether a function of *code* is held by a global of *spaces*, some
-    steps down: an item of a list, tuple or dict, an attribute of an object,
-    a member of a class of the user's (a ``cached_property``'s function, a
-    ``default_factory``), a default or a closure cell of a function (a
-    decorator's wrapper without ``functools.wraps``), or what a method
-    holder or ``partial`` wraps. The global's digest holds it."""
+def _in_a_value(
+    code: types.CodeType, spaces: Iterable[tuple[str | None, Mapping[str, Any]]]
+) -> tuple[str | None, str] | None:
+    """``(module, name)`` of the global of *spaces* that holds a function of
+    *code* some steps down: an item of a list, tuple or dict, an attribute
+    of an object, a member of a class of the user's (a
+    ``cached_property``'s function, a ``default_factory``), a default or a
+    closure cell of a function (a decorator's wrapper without
+    ``functools.wraps``), or what a method holder or ``partial`` wraps. None
+    when none does. The global's digest holds that function: its code, its
+    defaults and its closure."""
     from ...tracking.trace_items import is_user_type
 
     looked = 0
     seen: set[int] = set()
-    pending: list[tuple[Any, int]] = []
+    pending: list[tuple[Any, int, tuple[str | None, str]]] = []
     modules: set[Any] = set()
 
     def users(cls: type) -> bool:
         # A class made in one of *spaces*, or in a module of the user's.
         return type.__dict__["__module__"].__get__(cls) in modules or is_user_type(cls)
 
-    for ns in spaces:
+    for module, ns in spaces:
         modules.add(attribute_or(ns, "get", dict().get)("__name__"))
         try:
-            pending.extend((v, 0) for k, v in list(ns.items()) if isinstance(k, str) and not k.startswith("_"))
+            pending.extend(
+                (v, 0, (module, k)) for k, v in list(ns.items()) if isinstance(k, str) and not k.startswith("_")
+            )
         except Exception:  # noqa: BLE001 - a namespace that cannot be listed
             continue
     while pending and looked < _IN_A_VALUE_AT:
-        value, depth = pending.pop()
+        value, depth, root = pending.pop()
         if id(value) in seen:
             continue
         seen.add(id(value))
         looked += 1
         kind = type(value)
         if kind is types.FunctionType and value.__code__ is code and depth:
-            return True
+            return root
         if depth >= _IN_A_VALUE_DEPTH or kind in (str, bytes) or issubclass(kind, types.ModuleType):
             continue
         try:
             items = _held_parts(value, kind, users)
         except Exception:  # noqa: BLE001 - a value that cannot be looked into
             continue
-        pending.extend((item, depth + 1) for item in items[:1000])
-    return False
+        pending.extend((item, depth + 1, root) for item in items[:1000])
+    return None
 
 
 def _held_parts(value: Any, kind: type, users: Callable[[type], bool]) -> list:
@@ -1024,6 +1041,33 @@ def _held_parts(value: Any, kind: type, users: Callable[[type], bool]) -> list:
     # ``cached_property`` holds its function there too.
     own = object.__getattribute__(value, "__dict__")
     return list(own.values())[:1000] if type(own) is dict else []
+
+
+def _library_holder(code: types.CodeType, notebook: Mapping[str, Any]) -> tuple[str, str] | None:
+    """``(module, name)`` of the library module, one the notebook imported,
+    that holds a function of *code* as a global: a patch
+    (``statistics.mean = mk(99)``, ``= user.__defaults__[0]``). Its digest
+    holds the function's defaults and closure, which the code alone does
+    not: ``mk(77)`` set in its place was served what ``mk(99)`` gave."""
+    try:
+        values = list(notebook.values())
+    except Exception:  # noqa: BLE001 - a namespace that cannot be listed
+        return None
+    seen: set[int] = set()
+    for module in values:
+        if not issubclass(type(module), types.ModuleType) or id(module) in seen:
+            continue
+        seen.add(id(module))
+        own = attribute_or(module, "__dict__", None)
+        name = attribute_or(module, "__name__", None)
+        if not isinstance(own, dict) or own is notebook or not isinstance(name, str):
+            continue
+        if sys.modules.get(name) is not module:
+            continue
+        for attr, value in list(own.items()):
+            if type(value) is types.FunctionType and value.__code__ is code and isinstance(attr, str):
+                return name, attr
+    return None
 
 
 def _held_digest(ns: Mapping[str, Any], name: str, value_digest: Callable[[Any], str]) -> str:

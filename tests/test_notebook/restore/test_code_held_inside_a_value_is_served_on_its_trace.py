@@ -78,5 +78,5 @@ def test_a_lambda_in_a_pipeline_is_found_in_its_value():
 
     double = lambda X: X * 2
     ns = {"__name__": "__main__", "pipe": make_pipeline(FunctionTransformer(double))}
-    assert _in_a_value(double.__code__, [ns])
-    assert not _in_a_value((lambda X: X * 3).__code__, [ns])
+    assert _in_a_value(double.__code__, [("__main__", ns)]) == ("__main__", "pipe")
+    assert _in_a_value((lambda X: X * 3).__code__, [("__main__", ns)]) is None
