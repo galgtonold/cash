@@ -818,6 +818,20 @@ class Shadow:
         except Exception:  # noqa: BLE001 - shadow never breaks a statement
             return False
 
+    def entry_stale(self, key: str) -> bool:
+        """Does the trace kept with the entry *key* name something that
+        changed since it was stored (`verify`)? What a lookup's check would
+        refuse (`stale`), asked where an entry is restored without one: the
+        check of the cells above a reader."""
+        try:
+            self._ensure_loaded()
+            trace = self.traces.get(key)
+            if trace is None or not self._usable(trace):
+                return False
+            return bool(self.verify(trace, {})["changed"])
+        except Exception:  # noqa: BLE001 - shadow never breaks a statement
+            return False
+
     @staticmethod
     def agreed(pending: dict | None) -> bool:
         """Did the check before a lookup (`check`) find the entry's trace,
