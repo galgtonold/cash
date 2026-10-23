@@ -840,7 +840,7 @@ class MismatchClassifier:
         )
         self._repair_upstream_rerun_bindings(required_inputs, sim.trace, result.broken_vars)
         self._rebuild_what_shares_a_rebuilt_object(result.broken_vars, sim.trace, check)
-        self._warn_held_changed_below(vars_to_check - result.broken_vars, check)
+        self._warn_held_changed_below(vars_to_check, check)
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("[UPSTREAM_DEBUG] Broken vars: %s", result.broken_vars)
@@ -848,31 +848,38 @@ class MismatchClassifier:
                 logger.debug("[UPSTREAM_DEBUG] No broken vars, nothing to re-execute")
         return result
 
-    def _warn_held_changed_below(self, kept: set[str], check: CellCheck) -> None:
-        """Say NOTEBOOK-CHANGED-BELOW for a function the cell reads and keeps
-        that holds a variable a cell below changed in place, where nothing
-        links the two: ``rebind(BIG)`` set the ``nonlocal rows`` that
-        ``draw`` reads, so ``BIG.append(...)`` below moved no lineage of
-        ``draw``. The cell is served as a run from the top leaves it,
-        without the change; this only says so. By identity, and only when
-        a variable was last changed by a statement of a cell below."""
+    def _warn_held_changed_below(self, inputs: set[str], check: CellCheck) -> None:
+        """Say NOTEBOOK-CHANGED-BELOW for a function the cell reads that holds
+        a variable a cell below changed in place, rebuilt or kept: the cell
+        gets the function as the cells above leave it, without the change.
+        ``rebind(BIG)`` set the ``nonlocal rows`` that ``draw`` reads, so
+        ``BIG.append(...)`` below links nothing to ``draw``, and the rule
+        that rebuilds ``draw`` need not be the one that says so. By identity;
+        where the walk over the function was cut short, every variable a cell
+        below changed in place is one it may hold. Only a variable last
+        changed by a statement of a cell below is asked about."""
         cells, idx = check.notebook_cells, check.current_cell_idx
         if not cells or not 0 <= idx < len(cells) - 1:
             return
         below = "\n".join(cells[idx + 1 :])
         codes = self.tracking_state.executed_cell_codes
-        changed = {name for name, code in codes.items() if code and strip_markers(code).strip() in below}
         user_ns = self.shell.user_ns
-        changed = {name for name in changed if name in user_ns}
+        changed = {
+            name for name, code in codes.items() if code and name in user_ns and strip_markers(code).strip() in below
+        }
         if not changed:
             return
-        for name in sorted(kept):
+        warned = self._warned_changed_below
+        for name in sorted(inputs):
             value = user_ns.get(name)
             if not instance_of(value, (types.FunctionType, functools.partial)):
                 continue
-            ids, _ = held_objects(value)
-            for held in sorted(other for other in changed if other != name and id(user_ns[other]) in ids):
-                warn_changed_below(held, codes.get(held), cells, idx, self._warned_changed_below, through=name)
+            ids, complete = held_objects(value)
+            for other in sorted(changed - {name}):
+                if id(user_ns[other]) in ids:
+                    warn_changed_below(other, codes.get(other), cells, idx, warned, through=name)
+                elif not complete:
+                    warn_changed_below(other, codes.get(other), cells, idx, warned, through=name, maybe=True)
 
     def _rebuild_what_shares_a_rebuilt_object(
         self, broken_vars: set[str], simulation_trace: list, check: CellCheck | None = None

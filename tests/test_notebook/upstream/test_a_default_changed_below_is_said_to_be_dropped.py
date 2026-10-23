@@ -138,3 +138,62 @@ def test_a_closure_cell_rebound_to_another_list_is_not_said_to_hold_it(cash_magi
     said = _rerun_after(cash_magics, [setup, reader, change], reader, change)
     assert cash_magics.shell.user_ns["y"] == 1
     assert not said, said
+
+
+MAKE = (
+    "import time\nBIG = [{'id': i} for i in range(3)]\n"
+    "def make(rows):\n    def draw(k):\n        time.sleep(0.05)\n        return len(rows)\n"
+    "    def rebind(r):\n        nonlocal rows\n        rows = r\n    return draw, rebind\n"
+)
+
+
+def test_a_closure_rebound_away_is_rebuilt_with_its_rebind(cash_magics):
+    """``draw, rebind = make(BIG)`` then ``rebind([0])``: a run from the top
+    leaves ``draw`` reading ``[0]``. Rebuilt for a change to ``BIG`` below,
+    it got ``make(BIG)`` again without the ``rebind([0])`` after it and read
+    ``BIG``. The call is a change to every function sharing the cell."""
+    setup = MAKE + "draw, rebind = make(BIG)\nrebind([0])\n"
+    reader = "y = draw(1)"
+    change = CHANGES["append"]
+    said = _rerun_after(cash_magics, [setup, reader, change], reader, change)
+    assert cash_magics.shell.user_ns["y"] == 1, "not the value a run from the top gives"
+    assert not said, said
+
+
+def test_a_reader_edited_after_the_change_below_gets_the_run_from_the_top(cash_magics):
+    """``rebind(BIG)`` above, ``BIG.append`` below, then the reader edited:
+    the edited reader misses and runs, on ``draw`` as the cells above leave
+    it, and the warning says so."""
+    setup = MAKE.replace("range(3)", "range(20000)") + "draw, rebind = make([0])\nrebind(BIG)\n"
+    reader, edited = "y = draw(1)", "y = draw(1) + 0"
+    change = CHANGES["append"]
+    cells = [setup, reader, change]
+    run_cash_cell(cash_magics, setup, cells=cells)
+    run_cash_cell(cash_magics, reader, cells=cells)
+    run_cash_cell(cash_magics, change, cells=cells)
+    cells = [setup, edited, change]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        run_cash_cell(cash_magics, edited, cells=cells)
+    said = [str(w.message) for w in caught if "NOTEBOOK-CHANGED-BELOW" in str(w.message)]
+    assert cash_magics.shell.user_ns["y"] == 20_000, "not the value a run from the top gives"
+    assert said and "reads 'draw', which holds 'BIG'" in said[0], said
+
+
+def test_a_walk_cut_short_with_nothing_linking_them_says_it_may_hold(cash_magics, monkeypatch):
+    """``rebind({'rows': [..., BIG]})`` puts ``BIG`` past the walk's limit, and
+    no statement links ``draw`` to ``BIG``: what ``draw`` holds is not all
+    seen, so the change below is said to be one it may hold."""
+    from cash.notebook.upstream import changed_below
+
+    monkeypatch.setattr(changed_below, "_HOLD_ITEMS", 100)
+    setup = (
+        MAKE.replace("return len(rows)", "return len(rows['rows'][-1])")
+        + "draw, rebind = make({'rows': [[0]]})\nrebind({'rows': [*[{'i': i} for i in range(150)], BIG]})\n"
+    )
+    reader = "y = draw(1)"
+    change = CHANGES["append"]
+    said = _rerun_after(cash_magics, [setup, reader, change], reader, change)
+    assert cash_magics.shell.user_ns["y"] == 3, "not the value a run from the top gives"
+    assert said, "the walk ran out and the change below was dropped without a word"
+    assert "reads 'draw', which may hold 'BIG'" in said[0], said[0]
