@@ -2661,9 +2661,26 @@ class StatementProcessor:
         def foreign(name: str) -> bool:
             return name in hidden or is_history_name(name)
 
+        def cut_short(links: list) -> list:
+            # Cut short: an output may hold what any value the statement read
+            # holds (``head = points[:1000]``, ``list(points)``), and unlinked,
+            # a write through it left a cached read of the input below
+            # answering with the old content. Linked to each of them, such a
+            # write moves it on: a needless miss at worst (`_view_bases_of`).
+            read = {
+                other
+                for other in run.inputs
+                if other in user_ns
+                and other not in names
+                and not foreign(other)
+                and not is_value(user_ns[other], value_types)
+            }
+            return [*links, (outputs, read)] if read else links
+
         budget = share_check_budget(cost)
         if run.share_gave_up is not None:
-            return list(run.share_gave_up.links), run.share_gave_up.complete
+            links, complete = list(run.share_gave_up.links), run.share_gave_up.complete
+            return (links if complete else cut_short(links)), complete
         timed_out = run.share_unchecked
         if not timed_out:
             try:
@@ -2680,7 +2697,8 @@ class StatementProcessor:
                 # closure, a function's defaults): the variables found beside
                 # it, not a search from the outputs up, which would climb
                 # through the library until its budget ran out.
-                return list(gave_up.links), gave_up.complete
+                links = list(gave_up.links)
+                return (links if gave_up.complete else cut_short(links)), gave_up.complete
             except WalkBudgetExceeded:
                 timed_out = True
         found_names, complete = referring_names(
@@ -2690,21 +2708,8 @@ class StatementProcessor:
             skip_name=lambda name: foreign(name) or name in names,
             ignore=[captured_vars, run.metrics, echo, *cash_held],
         )
-        if not complete:
-            # Cut short: an output may hold what any value the statement read
-            # holds (``head = points[:1000]``, ``list(points)``), and unlinked,
-            # a write through it left a cached read of the input below
-            # answering with the old content. Linked to each of them, such a
-            # write moves it on: a needless miss at worst (`_view_bases_of`).
-            found_names = found_names | {
-                other
-                for other in run.inputs
-                if other in user_ns
-                and other not in names
-                and not foreign(other)
-                and not is_value(user_ns[other], value_types)
-            }
-        return [(outputs, found_names)], complete
+        links = [(outputs, found_names)]
+        return (links if complete else cut_short(links)), complete
 
     def _fallback_seconds(self, run: StatementRun, fallback_floor: float) -> float:
         """How long the search from the outputs up (`referring_names`) may

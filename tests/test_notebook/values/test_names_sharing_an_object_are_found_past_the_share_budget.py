@@ -113,6 +113,32 @@ def test_a_search_cut_short_links_the_output_to_what_it_read(cash_magics, no_bud
     assert [w for w in caught if getattr(w.message, "code", None) == "NOTEBOOK-SHARE-UNCHECKED"]
 
 
+def test_a_share_check_cut_short_links_the_output_to_what_it_read(cash_magics):
+    """The share check itself gives up (``head = recs[:65]``: more records
+    than one climb asks about at once, in a list too wide to read down):
+    ``head`` is still linked to ``recs``, and a cached read of ``recs``
+    below sees a change through ``head``."""
+    n = shared_objects._DOWN_WIDEST + 1000
+    cells = [
+        f"import argparse\nrecs = [argparse.Namespace(x=i) for i in range({n})]",
+        f"head = recs[:{shared_objects._MAX_REFERRER_TARGETS + 1}]",
+        "s = sum(r.x for r in recs)",
+        "head[7].x = -3",
+        "s = sum(r.x for r in recs)  # after",
+    ]
+    cash_magics.cash_on("")
+    cash_magics.cash_persist("on")
+    cash_magics.badges.mode = "off"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        assert cash_magics.shell.user_ns["s"] == sum(range(n)) - 10
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+    assert cash_magics.shell.user_ns["s"] == sum(range(n)) - 10
+
+
 def test_a_climb_past_its_object_limit_is_reported_incomplete(monkeypatch):
     monkeypatch.setattr(shared_objects, "_REFERRER_OBJECTS", 100)
     points = [[i] for i in range(1000)]
