@@ -13,6 +13,7 @@ ingredients they have; this module decides how they combine.
 from __future__ import annotations
 
 import ast
+import contextlib
 import hashlib
 import logging
 import os
@@ -25,6 +26,7 @@ from typing import Any, Callable, Iterable
 
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 
+from .. import value_watch
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.ast_util import parse_cached
 from ..analysis.mutations import repeatable_setting_receiver
@@ -731,14 +733,36 @@ def module_data_digest(label: str, value: Any) -> str:
     (`held_code_digest`). The value hash pickles a function by its name, so
     a registry holding a function edited since keyed as it did."""
     try:
-        digest = compute_hash(value)
-        code = held_code_digest(value)
+        home = _home_namespace(label, value)
+        with value_watch.anchored(home) if home is not None else contextlib.nullcontext():
+            digest = compute_hash(value)
+            code = value_watch.digest(value, held_code_digest, value_watch.KIND_HELD_CODE, _holds_no_code)
         if code:
             digest = hashlib.sha256(f"{digest}:code:{code}".encode("utf-8")).hexdigest()
         return digest
     except Exception:
         logger.debug("Could not hash module data %s", label, exc_info=True)
         return UNHASHABLE + secrets.token_hex(16)
+
+
+def _home_namespace(label: str, value: Any) -> dict | None:
+    """The globals of the module that holds *value* as its name *label*
+    (``mylib.TABLE``), so its digest can be reused while it is provably
+    unchanged (`value_watch.anchored`); None for a class attribute."""
+    module_name, _, attr = label.rpartition(".")
+    module = sys.modules.get(module_name)
+    if module is None:
+        return None
+    namespace = attribute_or(module, "__dict__")
+    if type(namespace) is not dict or namespace.get(attr) is not value:
+        return None
+    return namespace
+
+
+def _holds_no_code(value: Any, digest: str) -> bool:
+    # Code it holds can change with nothing the watchers see (a function's
+    # callees); none can appear without changing the value.
+    return digest == ""
 
 
 def module_data_digests(reach: Reach) -> list[tuple[str, str]]:

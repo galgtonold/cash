@@ -80,3 +80,32 @@ def test_a_change_to_a_name_a_function_never_reads_is_served(cash_magics, monkey
     run_cash_cell(cash_magics, cells[2], cells=cells)
     (statement,) = cash_magics.cash_status("dict")["last_cell"]["statements"]
     assert str(statement["status"]).endswith("RESTORED")
+
+
+@pytest.mark.parametrize("change", ["mylib.BIG[5] = -1", "mylib.BIG.append(7)", "mylib.LOOKUP[5] = 'x'"])
+def test_a_change_in_place_to_a_big_table_reaches_the_reader_on_every_hit(cash_magics, monkeypatch, tmp_path, change):
+    """The module's tables are hashed once and then reused while the
+    watchers prove them unchanged: a change made in place outside the
+    cells, after several hits, still reaches the reader."""
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    _modules(
+        monkeypatch,
+        tmp_path,
+        tlib_getattr_probe="BIG = list(range(200_000))\nLOOKUP = {i: str(i) for i in range(50_000)}\n",
+    )
+    cells = [
+        "import tlib_getattr_probe as mylib\nname = 'BIG'",
+        "v = (getattr(mylib, name)[5], len(getattr(mylib, name)), getattr(mylib, 'LOOK' + 'UP')[5])",
+        "w = [v, 'read']",
+    ]
+    ns = cash_magics.shell.user_ns
+    for _ in range(3):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+    assert ns["w"] == [(5, 200_000, "5"), "read"]
+
+    exec(change, ns)
+    expected = {"mylib.BIG[5] = -1": (-1, 200_000, "5"), "mylib.BIG.append(7)": (5, 200_001, "5")}
+    for cell in cells[1:]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert ns["w"] == [expected.get(change, (5, 200_000, "x")), "read"], "the reader was served the old value"
