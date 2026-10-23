@@ -610,15 +610,9 @@ class StatementStore:
             # output lineages, which a restart needs.
             return self._store_metadata_only(run, execution, None, {})
         by_reference = {name for name, value in payload["variables"].items() if instance_of(value, CallRef)}
-        try:
-            should_skip, skip_reason, prediction = self._refusal(
-                run, execution, captured_vars, miss_guarded, by_reference=by_reference
-            )
-        except Exception as exc:  # noqa: BLE001 - the value's own methods raised as cash looked into it
-            # A class of the user's whose own ``values()`` or ``__iter__``
-            # raises: what the checks could not read is not stored.
-            should_skip, prediction = True, None
-            skip_reason = f"cash could not look into its value to check it can be stored ({type(exc).__name__}: {exc})"
+        should_skip, skip_reason, prediction = self._refusal(
+            run, execution, captured_vars, miss_guarded, by_reference=by_reference
+        )
         cost_fields = _cost_fields(prediction)
         if should_skip:
             return self._store_metadata_only(run, execution, skip_reason, cost_fields)

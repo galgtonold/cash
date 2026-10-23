@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 from cash import _plain_data
 from cash._memo import CODE_OBJECTS, LruMemo
 from cash._paths import is_pseudo_filename
-from cash._user_attrs import attribute_or, has_attribute, instance_of
+from cash._user_attrs import attribute_or, builtin_items, has_attribute, instance_of
 from cash.analysis.bytecode import NAME_LOADS, argvals
 from cash.analysis.callee_effects import source_global_mutations
 from cash.analysis.namespace_effects import capturable_globals
@@ -213,6 +213,7 @@ _ATOMS = (int, float, complex, str, bytes, bool, type(None))
 
 #: The same, by exact type, plus dates: one set lookup instead of a scan of `_ATOMS`.
 _EXACT_ATOMS = frozenset({*_ATOMS, _dt.datetime, _dt.date, _dt.time, _dt.timedelta})
+_EXACT_CONTAINERS = frozenset({tuple, list, set, frozenset})
 
 
 def holds_a_closure_with_state(value) -> bool:
@@ -245,10 +246,17 @@ def holds_a_closure_with_state(value) -> bool:
             if changes_its_closure(item):
                 return True
             continue
-        if issubclass(type(item), (tuple, list, set, frozenset, dict)):
+        if issubclass(kind, (tuple, list, set, frozenset, dict)):
             if id(item) in seen:
                 continue
-            children = item.values() if issubclass(type(item), dict) else item
+            if kind is dict:
+                children = item.values()
+            elif kind in _EXACT_CONTAINERS:
+                children = item
+            else:
+                # A subclass's own ``values()`` or ``__iter__`` may raise:
+                # what the builtin type holds.
+                children = builtin_items(item)
             # Only atoms, by exact type: asked at C speed, where the loop
             # below took a Python step per item (22 ms for 200,000 ints).
             if atoms.issuperset(map(type, children)):
