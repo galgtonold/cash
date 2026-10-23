@@ -65,11 +65,8 @@ def main(argv: list[str] | None = None) -> int:
             print(report.text(options.statuses), flush=True)
             reports.append(report)
     bad = [r for r in reports if not r.ok]
-    rebuilt = [r for r in reports if r.ok and r.rebuilt]
-    print(
-        f"\n{len(reports) - len(bad) - len(rebuilt)} OK, {len(rebuilt)} REBUILT, {len(bad)} BAD"
-        f" of {len(reports)} shapes ({work})"
-    )
+    counts = {verdict: sum(r.verdict == verdict for r in reports) for verdict in ("OK", "AS-RESTART", "REBUILT", "BAD")}
+    print("\n" + ", ".join(f"{n} {verdict}" for verdict, n in counts.items()) + f" of {len(reports)} shapes ({work})")
     if options.json_out:
         Path(options.json_out).write_text(
             json.dumps([r.__dict__ for r in reports], indent=1, default=str), encoding="utf-8"

@@ -78,3 +78,17 @@ def test_a_plan_of_its_own_names_each_run():
         ("restart+step4", False, [1]),
     ]
     assert [name for name, *_ in notebook("default", ["a = 1"]).runs()] == list(plain_checker.RUNS)
+
+
+def test_module_state_as_a_restart_gives_it_is_kept_apart_from_a_rebuild(monkeypatch, tmp_path):
+    def fake(shape, work, config):
+        second = "2" if config is None else "1"
+        return Outcome(seen={"run1": {"n": "1", "v": "1"}, "run2": {"n": second, "v": second}})
+
+    monkeypatch.setattr("tools.plain_checker.kernel.run_notebook", fake)
+    report = check(notebook("fake", ["n = f()"], module_writes=["n"]), tmp_path, ["trace"])
+    assert [where for *_, where, _c, _p in report.as_restart] == ["n"]
+    assert [where for *_, where, _c, _p in report.rebuilt] == ["v"]
+    assert report.verdict == "REBUILT"
+    only_n = check(notebook("fake", ["n = f()"], module_writes=["n", "v"]), tmp_path, ["trace"])
+    assert only_n.verdict == "AS-RESTART" and only_n.ok

@@ -42,12 +42,17 @@ Each shape gets a verdict:
 - **OK** means nothing differs.
 - **BAD** means a value or output differs from plain Python. The exit
   status is then 1.
-- **REBUILT** means it differs from the same kernel's plain run, but
-  every difference equals what a fresh kernel's Run All of the same cells
-  gives. Cash rebuilds a generator or a module's state rather than drawing
-  on it further (see "Randomness" in docs/known-limitations.md), so this can
-  be by design. A stale result looks the same, though, so read these
-  against that rule.
+- **AS-RESTART** means a variable the shape lists in `module_writes`
+  differs from the same kernel's plain run, but equals what a restart and a
+  Run All give. This is accepted. For module state a statement writes (a
+  counter a function bumps), the reference is a restart followed by a Run
+  All, because cash puts the write back on a hit (see "Setting state on one
+  of your modules" in docs/known-limitations.md).
+- **REBUILT** means any other variable differs in the same way: its value
+  equals a fresh kernel's Run All of the same cells. This is by design when
+  cash rebuilds a generator that a variable holds (see "Randomness"). A
+  stale value looks the same, though, so read each one. A real stale value
+  matches neither run and shows as BAD.
 
 An error in a cell is compared as output, and the run goes on.
 

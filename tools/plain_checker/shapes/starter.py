@@ -71,6 +71,7 @@ SHAPES = [
             "n = hd_count.CALLS[0]",
         ],
         names=["t", "u", "w", "n"],
+        module_writes=["n"],
         source="reviews/rerun-new-lineage/review.md F1 Repro A (d_byname_count); call count read back as n",
     ),
     notebook(

@@ -49,6 +49,12 @@ class Shape:
     #: Variables compared after each run; None compares every top-level name
     #: the cells assign (not functions, classes or modules).
     names: list[str] | None = None
+    #: Variables that read module state a statement writes (a counter a
+    #: function bumps). There cash answers as a restart and a Run All would
+    #: (documented: the write is put back on a hit), not as the same kernel
+    #: run again would; a difference on them that a fresh kernel's Run All
+    #: gives is accepted (``AS-RESTART``).
+    module_writes: list[str] = field(default_factory=list)
     setup: str = ""
     steps: list[str] = field(default_factory=list)
     source: str = ""
@@ -88,16 +94,31 @@ def notebook(
     edits: dict[int, dict[int, str]] | None = None,
     names: list[str] | None = None,
     plan: list[str | int] | None = None,
+    module_writes: list[str] | None = None,
     source: str = "",
 ) -> Shape:
-    return Shape(name, "notebook", cells=list(cells), edits=dict(edits or {}), names=names, plan=plan, source=source)
+    return Shape(
+        name,
+        "notebook",
+        cells=list(cells),
+        edits=dict(edits or {}),
+        names=names,
+        plan=plan,
+        module_writes=list(module_writes or ()),
+        source=source,
+    )
 
 
-def decorator(name: str, setup: str, steps: list[str], *, source: str = "") -> Shape:
+def decorator(
+    name: str, setup: str, steps: list[str], *, module_writes: list[str] | None = None, source: str = ""
+) -> Shape:
     """*setup* defines the functions, decorated with the bare name ``cache``
     (cash's decorator, or nothing in plain Python); *steps* are statements
-    run in order, and a bare expression's value is compared."""
-    return Shape(name, "decorator", setup=setup, steps=list(steps), source=source)
+    run in order, and a bare expression's value is compared (``"step 3
+    value"`` is what *module_writes* names for step 3)."""
+    return Shape(
+        name, "decorator", setup=setup, steps=list(steps), module_writes=list(module_writes or ()), source=source
+    )
 
 
 @dataclass
@@ -130,9 +151,13 @@ class Report:
     #: (config, run, where, cash, plain): each place cash and plain differ.
     mismatches: list[tuple[str, str, str, str, str]] = field(default_factory=list)
     #: The same, where cash's value is what a fresh kernel's Run All of the
-    #: same cells gives: allowed where cash rebuilds what the cells hold
-    #: (a generator, a module's state) rather than drawing on it further.
+    #: same cells gives, on a variable the shape does not name in
+    #: ``module_writes``: by design where cash rebuilds a generator a
+    #: variable holds, but a stale value looks the same, so each needs a read.
     rebuilt: list[tuple[str, str, str, str, str]] = field(default_factory=list)
+    #: The same, on a ``module_writes`` variable: what a restart and a Run
+    #: All give, the reference for module state a statement writes.
+    as_restart: list[tuple[str, str, str, str, str]] = field(default_factory=list)
     #: config -> run -> cell index -> statuses of its statements.
     statuses: dict[str, dict[str, dict[int, list[str]]]] = field(default_factory=dict)
     #: (config, error): a side that could not run at all.
@@ -145,16 +170,20 @@ class Report:
 
     @property
     def verdict(self) -> str:
-        return "BAD" if not self.ok else "REBUILT" if self.rebuilt else "OK"
+        if not self.ok:
+            return "BAD"
+        return "REBUILT" if self.rebuilt else "AS-RESTART" if self.as_restart else "OK"
 
     def text(self, show_statuses: bool = False) -> str:
-        lines = [f"{self.verdict:7} {self.shape}"]
+        lines = [f"{self.verdict:10} {self.shape}"]
         for config, error in self.errors:
             lines.append(f"    [{config}] could not run: {error}")
         for config, run, where, cash, plain in self.mismatches:
             lines.append(f"    [{config}] {run} {where}: cash={cash!r} plain={plain!r}")
         for config, run, where, cash, plain in self.rebuilt:
-            lines.append(f"    [{config}] {run} {where}: cash={cash!r} plain={plain!r} (as a fresh kernel)")
+            lines.append(f"    [{config}] {run} {where}: cash={cash!r} plain={plain!r} (as a fresh kernel: read it)")
+        for config, run, where, cash, plain in self.as_restart:
+            lines.append(f"    [{config}] {run} {where}: cash={cash!r} plain={plain!r} (module state: as a restart)")
         if show_statuses or not self.ok:
             for config, runs in self.statuses.items():
                 for run, cells in runs.items():
@@ -212,7 +241,7 @@ def check(shape: Shape, work_dir: Any, configs: list[str] | None = None) -> Repo
                     continue
                 found = (config, run_name, where, str(mine.get(where)), str(theirs.get(where)))
                 if where in first and mine.get(where) == first[where]:
-                    report.rebuilt.append(found)
+                    (report.as_restart if where in shape.module_writes else report.rebuilt).append(found)
                 else:
                     report.mismatches.append(found)
     return report
