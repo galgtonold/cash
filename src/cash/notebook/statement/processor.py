@@ -510,10 +510,11 @@ class StatementProcessor:
         """*paths* without cash's own storage (its cache directories)."""
         return self._records.user_written_paths(paths)
 
-    def note_share_edges(self, code: str, edges) -> None:
+    def note_share_edges(self, code: str, edges, entry: Mapping[str, str] | None = None) -> None:
         """Record the edges the control structure *code* linked when it ran
-        (``StatementRecords.note_share_edges``), under its source hash."""
-        self._records.note_share_edges(statement_source_hash(code), edges)
+        (``StatementRecords.note_share_edges``), under its source hash, and
+        under the lineages it read (*entry*)."""
+        self._records.note_share_edges(statement_source_hash(code), edges, entry)
 
     def recorded_share_edges(self, code: str):
         """The edges the control structure *code* linked when it last ran
@@ -2228,7 +2229,9 @@ class StatementProcessor:
                     self._link_inputs_kept_by(run, execution.echo, execution.cost)
                 if not is_control_body(run.code):
                     run.linked_edges = frozenset((src, dst) for src, dst in linked | shared if src != dst)
-                    self._records.note_share_edges(run.source_hash, run.linked_edges)
+                    self._records.note_share_edges(
+                        run.source_hash, run.linked_edges, {"": run.cache_key} if run.cache_key else None
+                    )
                 with self._after_it_ran(run):
                     self._record_file_effects(run, execution)
                 self._note_per_item_rerun(run, execution)

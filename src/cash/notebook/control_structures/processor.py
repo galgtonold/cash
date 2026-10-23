@@ -249,7 +249,7 @@ class ControlStructureProcessor:
                 recorded = sp.recorded_share_edges(code) or frozenset()
                 apply_share_record(state.derivation_edges, (), recorded)
                 linked = linked | recorded
-            sp.note_share_edges(code, linked)
+            sp.note_share_edges(code, linked, entry)
             left = {v: h for v, h in lineage.items() if before.get(v) != h or v in writes}
             # Where a draw left an RNG variable depends on the seed above,
             # which the entry lineages do not hold: the simulation moves it on
