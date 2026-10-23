@@ -1,0 +1,123 @@
+"""A hit is not remembered for a list another thread changed while it ran.
+
+The memo remembers an ordinary hit under the token the watchers give its
+list. It read that token after the call: a thread that changed the list
+and called the function in between had its call give the list a new
+token, and the first call's result, built for the old content, was filed
+under it. The next call was served the old result. The token is now read
+before the key is built, and a hit is remembered only if it is still the
+same afterwards.
+"""
+
+from __future__ import annotations
+
+import queue
+import threading
+
+import pytest
+
+from cash import Cash
+from cash.decorator import hit_memo
+
+pytestmark = [
+    pytest.mark.skipif(not hit_memo.ENABLED, reason="the fast hit path needs the C extension"),
+    pytest.mark.filterwarnings("ignore::cash.exceptions.CashImpurityWarning"),
+]
+
+
+class Rec:
+    def __init__(self, x):
+        self.x = x
+
+
+def _records():
+    return [Rec(i) for i in range(500)]
+
+
+def _set_records(lst, value):
+    lst[5].x = value
+
+
+def _ints():
+    return list(range(500))
+
+
+def _set_ints(lst, value):
+    lst[5] = value
+
+
+def _sum_records(lst):
+    return sum(p.x for p in lst)
+
+
+KINDS = {
+    "records": (_records, _set_records, _sum_records),
+    "ints": (_ints, _set_ints, sum),
+}
+
+
+class Worker:
+    """A thread that calls on request: started before the memo is warm, as
+    a thread started later moves the epochs the memo is keyed by."""
+
+    def __init__(self):
+        self.jobs: queue.Queue = queue.Queue()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        while (job := self.jobs.get()) is not None:
+            fn, done = job
+            done.append(fn())
+
+    def call(self, fn) -> list:
+        done: list = []
+        self.jobs.put((fn, done))
+        return done
+
+    def stop(self):
+        self.jobs.put(None)
+        self.thread.join(10)
+
+
+@pytest.mark.parametrize("kind", KINDS.values(), ids=KINDS.keys())
+def test_a_hit_paused_while_another_thread_changes_the_list(tmp_path, watching, monkeypatch, kind):
+    make, set_item, truth = kind
+
+    def total(lst):
+        return truth(lst)
+
+    worker = Worker()
+    f = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False).cache(total)
+    lst = make()
+    watching["lst"] = lst
+    changed = make()
+    set_item(changed, 9)
+    f(changed)
+    f(changed)  # the changed content's entry, from an equal copy
+    for _ in range(8):
+        f(lst)  # the first content's entry, and the memo warm
+    hit_memo.bump()  # the next call takes the ordinary path, and offers
+
+    paused, resume = threading.Event(), threading.Event()
+    real = hit_memo.HitMemo._entry
+
+    def entry(self, call, hit):
+        if threading.current_thread() is worker.thread and not paused.is_set():
+            paused.set()
+            assert resume.wait(10)
+        return real(self, call, hit)
+
+    monkeypatch.setattr(hit_memo.HitMemo, "_entry", entry)
+    try:
+        result = worker.call(lambda: f(lst))
+        assert paused.wait(10), "the worker's hit was never offered"
+        set_item(lst, 9)
+        assert f(lst) == truth(lst)  # an ordinary hit of the changed content
+    finally:
+        resume.set()
+        worker.stop()
+    assert result == [truth(make())]
+
+    assert f(lst) == truth(lst)
+    assert f(lst) == truth(lst)

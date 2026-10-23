@@ -1225,7 +1225,7 @@ class CallRunner:
         handed = claim_handed_digests()
         # Before the key: a fast hit remembered from this call must not
         # outlive a change made while the key was built (`hit_memo`).
-        epochs_before = hit_memo.epochs(spec)
+        epochs_before = hit_memo.epochs(spec, args, kwargs)
         token = HANDED_DIGESTS.set(handed) if handed is not None else None
         call.polars_args = CallPolarsDigests()
         polars_token = CALL_POLARS.set(call.polars_args)

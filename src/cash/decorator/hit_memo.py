@@ -139,14 +139,17 @@ def forget(state: list | None) -> None:
             memo.state[S_ENTRIES] = {}
 
 
-def epochs(spec: CachedFunction) -> tuple | None:
-    """``(world, cash, entries)`` now for *spec*, or None when the path is
-    off: an ordinary hit is remembered only if none of them moved while its
-    key was built."""
+def epochs(spec: CachedFunction, args: tuple, kwargs: dict) -> tuple | None:
+    """``(world, cash, entries, memo key)`` now for *spec* called with
+    *args*, or None when the path is off: an ordinary hit is remembered
+    only if none of them moved while its key was built. The memo key is
+    taken here, not after the call: another thread may change a watched
+    argument and call again in between, and its call files a new token
+    the content this call's key was built from does not have."""
     if _world_epoch is None:
         return None
     state = spec.hit_state
-    return _world_epoch(), _cash_epoch(), state[S_ENTRIES] if state is not None else None
+    return _world_epoch(), _cash_epoch(), state[S_ENTRIES] if state is not None else None, _cw.any_key(args, kwargs)
 
 
 #: Every memo with fast hits not yet handed to the net-loss accounting.
@@ -888,9 +891,9 @@ class HitMemo:
         entry = self._entry(call, hit)
         if entry is None:
             return
-        key = _cw.any_key(args, kwargs)
-        if key is None:
-            return
+        key = before[3]
+        if key is None or _cw.any_key(args, kwargs) != key:
+            return  # not watched before the key build, or changed since
         entries = state[S_ENTRIES]
         if len(entries) >= self.MAX_ENTRIES:
             entries.clear()
