@@ -2875,8 +2875,10 @@ def _holds_only_values(obj: Any, value_types: tuple[type, ...], depth: int = 3) 
 
 
 def _is_cash_own(obj: Any) -> bool:
-    """Whether *obj* is one of cash's own records (its type is cash's)."""
-    module = type(obj).__module__
+    """Whether *obj* is one of cash's own records (its type is cash's). A
+    class made by ``type()`` in globals with no ``__name__`` has no
+    ``__module__`` at all."""
+    module = attribute_or(type(obj), "__module__", None)
     return instance_of(module, str) and (module == "cash" or module.startswith("cash."))
 
 

@@ -49,5 +49,7 @@ def test_a_change_through_the_frame_reaches_the_result_on_every_run(cash_magics,
                 run_cash_cell(cash_magics, cell, cells=cells)
         assert ns["f"]["o"].loc[25] is ns["df"]["o"].loc[25]
         assert ns["f"]["o"].loc[25] == [25, 1]
-        if frame == "too many cells":
+        # Said on the first run; a refusal the share check repeats for the
+        # same key is not said again.
+        if frame == "too many cells" and _ == 0:
             assert any("NOTEBOOK-CELLS-SHARED" in str(w.message) for w in caught)

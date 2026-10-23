@@ -262,3 +262,11 @@ def test_an_object_of_a_class_with_no_module_runs_as_plain_python(cash_magics):
     run_cash_cell(cash_magics, "x = g['W']()\n")
     run_cash_cell(cash_magics, "y = 1\n")
     assert cash_magics.shell.user_ns["y"] == 1
+
+
+def test_the_share_walk_reads_an_object_of_a_class_with_no_module():
+    from cash.notebook import shared_objects
+
+    g: dict = {}
+    exec("W = type('W', (), {})", g)
+    assert not shared_objects._is_cash_own(g["W"]())
