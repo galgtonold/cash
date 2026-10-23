@@ -107,14 +107,16 @@ _CLASS_SOURCE_PARSES_FILE = sys.version_info < (3, 13) and hasattr(inspect, "_Cl
 
 def _source_target(obj: object) -> tuple | None:
     """What decides *obj*'s source within its file, or None to not memoise:
-    the first line for code, the qualified name for a class."""
-    if inspect.ismethod(obj):
+    the first line for code, the qualified name for a class. Asked of the
+    real type: an object passing for one by its ``__class__`` has none of
+    their parts, and is not memoised."""
+    if type(obj) is types.MethodType:
         obj = obj.__func__
-    if inspect.isfunction(obj):
+    if type(obj) is types.FunctionType:
         obj = obj.__code__
-    if inspect.iscode(obj):
+    if type(obj) is types.CodeType:
         return ("code", obj.co_firstlineno)
-    if inspect.isclass(obj):
+    if issubclass(type(obj), type):
         return ("class", obj.__qualname__, vars(obj).get("__firstlineno__"))
     return None
 
