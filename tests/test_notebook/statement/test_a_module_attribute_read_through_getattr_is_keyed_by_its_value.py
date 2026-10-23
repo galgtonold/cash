@@ -4,7 +4,8 @@ names: both are keyed by what the local module holds, so a change made to
 it outside the notebook's cells (the console, a thread) reaches the
 statement and the reader below it instead of serving them the old value.
 So is a module used whole in any other way: ``vars(mylib)``, its
-``__dict__``, or handed to a function that reads it by name.
+``__dict__``, handed to a function that reads it by name, or held as a
+function's default argument.
 
 A function that calls ``getattr`` on something else is keyed only by the
 module names it spells.
@@ -26,6 +27,10 @@ READS = {
     "getattr in a function": "def get(n):\n    return getattr(mylib, 'val_' + n)\nv = get(name)",
     "getattr on a submodule": "v = getattr(mylib.sub, 'val_' + name)",
     "getattr on a module handed to a function": "def get(mod, n):\n    return getattr(mod, 'val_' + n)\nv = get(mylib, name)",
+    "getattr on a module a default argument holds": "def get(n, m=mylib):\n    return getattr(m, 'val_' + n)\nv = get(name)",
+    "getattr on a module a keyword-only default holds": (
+        "def get(n, *, m=mylib):\n    return getattr(m, 'val_' + n)\nv = get(name)"
+    ),
     "getattr on an alias in a function": "def get(n):\n    m = mylib\n    return getattr(m, 'val_' + n)\nv = get(name)",
     "vars of the module": "v = vars(mylib)['val_' + name]",
     "the module's __dict__": "v = mylib.__dict__['val_' + name]",

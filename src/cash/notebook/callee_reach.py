@@ -1180,6 +1180,7 @@ class _Found:
                     self.value(cell.cell_contents)
                 except ValueError:  # an empty cell
                     pass
+            self._default_modules(value)
             self._wrapped(value)
         elif instance_of(value, types.FunctionType):
             # A wrapper that is not the user's code (``@cash.cache``'s): what
@@ -1345,6 +1346,15 @@ class _Found:
         (`_modules_used_whole`)."""
         for module in _modules_used_whole(code, namespace):
             if _is_local(module):
+                self.modules.add(module.__name__)
+                self._module_attributes(module, [name for name in list(vars(module)) if not name.startswith("__")])
+
+    def _default_modules(self, fn: types.FunctionType) -> None:
+        """Every name of each local module *fn* holds as a default argument
+        (``def get(n, m=mylib)``): its body reads it as a local, by any name."""
+        defaults = (*(fn.__defaults__ or ()), *(fn.__kwdefaults__ or {}).values())
+        for module in defaults:
+            if instance_of(module, types.ModuleType) and _is_local(module):
                 self.modules.add(module.__name__)
                 self._module_attributes(module, [name for name in list(vars(module)) if not name.startswith("__")])
 
