@@ -171,7 +171,7 @@ the loop runs again. The loop's own working variables (`parts` in
 `for f in files: parts.append(read(f))`) are not stored; a cell that reads
 them runs the loop.
 
-<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting._route_unit @a2badde5, cash/notebook/statement/processor.py:StatementProcessor._keep_stored_in_place @b8c0edcd -->
+<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting._route_unit @a2badde5, cash/notebook/statement/processor.py:StatementProcessor._keep_stored_in_place @ced6780e -->
 A long `for` loop that cash runs as one step stores the objects it changes in
 place, such as a progress counter it calls `update()` on or a list from an
 earlier cell it appends to, when the loop passes the same checks. A restore

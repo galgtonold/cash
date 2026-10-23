@@ -14,5 +14,7 @@ c = cash.Cash(register_magic=False)
 def f(lock):
     return id(lock)
 
-f(threading.Lock())
+held = threading.Lock()
+held.acquire()
+f(held)
 ```
