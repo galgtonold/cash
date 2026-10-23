@@ -89,3 +89,16 @@ def test_a_reader_of_a_draw_from_a_library_counter_a_function_holds_is_not_serve
     _run(statement_processor, "v = a()")
     _run(statement_processor, "w = [v]")
     assert mock_shell.user_ns["w"] == [1]
+
+
+@pytest.mark.parametrize(
+    "attr",
+    [pytest.param("{'x': j}", id="dict attributes"), pytest.param("[1, 2, 3]", id="list attributes")],
+)
+def test_many_objects_holding_only_numbers_are_served(statement_processor, attr):
+    fields = "\n".join(f"        self.p{j} = {attr.replace('j', str(j))}" for j in range(40))
+    _run(statement_processor, f"class P:\n    def __init__(self):\n{fields}\nobjs = {{i: P() for i in range(64)}}")
+    _run(statement_processor, "def total():\n    return len(objs)")
+    _run(statement_processor, "v = total()")
+    second = _run(statement_processor, "v = total()")
+    assert second["status"] == CacheStatus.RESTORED

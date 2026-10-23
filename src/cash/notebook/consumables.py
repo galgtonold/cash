@@ -47,6 +47,7 @@ import logging
 import queue
 import sys
 import types
+import weakref
 from collections.abc import Iterable, Mapping
 from typing import Any, NamedTuple
 
@@ -591,11 +592,28 @@ def _items_up_to(owner: Any, width: int) -> list[tuple[str, Any]] | None:
     return None
 
 
+_USERS_CLASS: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
+
+
 def _users_class(cls: type) -> bool:
     """Whether *cls* was defined in the user's code: a function of its own
     was compiled from a notebook cell or a file of theirs, or, with none, its
     module is theirs (a notebook's ``__main__``). A library's class keeps its
-    counters and iterators to itself, as `hidden_generators` treats them."""
+    counters and iterators to itself, as `hidden_generators` treats them.
+    Answered once per class: the look asks it of every object it passes."""
+    try:
+        return _USERS_CLASS[cls]
+    except (KeyError, TypeError):
+        pass
+    answer = _decide_users_class(cls)
+    try:
+        _USERS_CLASS[cls] = answer
+    except TypeError:
+        pass
+    return answer
+
+
+def _decide_users_class(cls: type) -> bool:
     try:
         attrs = object.__getattribute__(cls, "__dict__")
     except (AttributeError, TypeError):
