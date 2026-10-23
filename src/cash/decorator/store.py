@@ -251,6 +251,11 @@ class ResultStore:
             watched_moved = self._purity.learn_mutating_captures(func, func_name, capture_watch)
         if refusal is None and self._purity.refuses_identity_coupled(func_name, res):
             refusal = "the result is tied to the identity of an object in memory"
+        if refusal is None and self._purity.holds_state_a_hit_would_share(res):
+            refusal = (
+                "the result holds a function or functools memo that keeps state between calls; "
+                "a hit would hand back the one this call made, with what was put in it since"
+            )
         if refusal is None and self._files.work_outlived_call(func_name, tracker):
             refusal = "work it handed to a thread or thread pool was still running when it returned"
         if refusal is None and self._files.inputs_moved_during_call(func_name, tracker):

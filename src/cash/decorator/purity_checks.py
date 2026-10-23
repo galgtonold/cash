@@ -1158,6 +1158,26 @@ class PurityChecks:
         )
         return True
 
+    @staticmethod
+    def holds_state_a_hit_would_share(result: Any) -> bool:
+        """Whether *result* holds a function that changes what its closure
+        holds (a counter a factory returns) or a ``functools.cache`` memo,
+        however deeply (`call_key.holds_a_closure_with_state`): stored, a
+        hit hands it back by reference, as a copy of it still holds it.
+        ``SimpleNamespace(f=functools.cache(double))`` returned by a cached
+        factory came back with the answers the first caller's calls put in
+        it, where plain Python's call makes a new, empty one. Past what the
+        walk looks through, not known: stored, as before."""
+        from ..notebook.call_key import TooMuchToLookThrough, holds_a_closure_with_state
+
+        try:
+            return holds_a_closure_with_state(result)
+        except TooMuchToLookThrough:
+            return False
+        except Exception:
+            logger.debug("closure-state check raised", exc_info=True)
+            return False
+
     def _checked_arguments(self, func_name: str, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
         """The arguments the in-place-change check looks at, canonicalised
         (`ArgHasher.normalize_call_args`): every one, except the parameters
