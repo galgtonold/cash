@@ -557,6 +557,27 @@ def _main_module_put_back():
 
 
 @pytest.fixture(autouse=True)
+def _temp_modules_dropped(tmp_path_factory):
+    """Drop the modules a test imported from a file it wrote under the run's
+    temporary folder.
+
+    ``monkeypatch.delitem(sys.modules, name, raising=False)`` before the
+    import puts nothing back after it, so the module stayed loaded for the
+    rest of the worker: ``wc_memo``, a ``functools.cache`` helper holding a
+    16 MB array, was then a memo every later statement in that worker
+    watched, and ``test_a_library_memo_is_not_watched`` failed after it.
+    """
+    before = set(sys.modules)
+    yield
+    root = str(tmp_path_factory.getbasetemp())
+    for name in set(sys.modules) - before:
+        module = sys.modules.get(name)
+        path = getattr(module, "__file__", None) if module is not None else None
+        if isinstance(path, str) and path.startswith(root):
+            del sys.modules[name]
+
+
+@pytest.fixture(autouse=True)
 def _cash_logger_put_back():
     """Leave the ``cash`` logger, and cash's record of its own handlers, as
     the test found them.
