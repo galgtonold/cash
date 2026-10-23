@@ -111,7 +111,7 @@ def is_frame(value: Any) -> bool:
 
 #: Within `reading_once`: `addresses` and `slots_digest` by the id of the
 #: array read, each with the array (kept alive, so no other takes its id).
-_READ_ONCE: dict[tuple[str, int], tuple[Any, Any]] | None = None
+_READ_ONCE: dict[tuple, tuple[Any, Any]] | None = None
 #: `kept_state.user_state_runs` when `_READ_ONCE` was last emptied.
 _READ_SINCE = 0
 #: Called when `_READ_ONCE` is emptied for code of the user's that ran.
@@ -144,7 +144,7 @@ def when_read_again(forget: Callable[[], None]) -> None:
     _ON_REREAD.append(forget)
 
 
-def read_once() -> dict[tuple[str, int], tuple[Any, Any]] | None:
+def read_once() -> dict[tuple, tuple[Any, Any]] | None:
     """`_READ_ONCE`, emptied first (with whatever `_ON_REREAD` empties)
     when code of the user's ran since. Called before any read kept within
     `reading_once` is used."""
@@ -163,14 +163,31 @@ def read_once() -> dict[tuple[str, int], tuple[Any, Any]] | None:
 def addresses(array: Any) -> Any:
     """The addresses of the objects in the slots of the object *array*, as
     an int64 array: read from its memory, where the slots hold them. Within
-    `reading_once`, read once for each array."""
+    `reading_once`, read once for each memory of slots (`_slots_of`)."""
     memo = read_once()
     if memo is None:
         return _addresses(array)
-    kept = memo.get(("a", id(array)))
-    if kept is None or kept[0] is not array:
-        kept = memo[("a", id(array))] = (array, _addresses(array))
+    key = ("a", *_slots_of(array))
+    kept = memo.get(key)
+    if kept is None:
+        kept = memo[key] = (array, _addresses(array))
     return kept[1]
+
+
+def sampled_addresses(array: Any, count: int) -> Any:
+    """`addresses` of every so many of *array*'s slots, about *count* of
+    them spread over it (``addresses(array)[::step]``), reading those
+    slots only."""
+    return _addresses(array[:: max(1, len(array) // count)])
+
+
+def _slots_of(array: Any) -> tuple[int, int, int]:
+    """The memory of *array*'s slots, as `read_once` keeps what was read of
+    them: two views of one column (``df`` and ``df[:]``, or the array a
+    frame read and the run of it a share check reads) are read once. The
+    array is kept beside what was read, so its memory is not freed and
+    taken by another while the read is kept."""
+    return (array.__array_interface__["data"][0], len(array), array.strides[0])
 
 
 def _addresses(array: Any) -> Any:
@@ -223,15 +240,14 @@ def sorted_cells(array: Any) -> Any:
     oldest go to keep the newest kept none of them once there were more
     than the bound holds (a hundred frames of a hundred thousand rows each
     sorted anew, on every statement)."""
-    raw = addresses(array)
-    if len(raw) < 1024:
-        return sorted_unique(raw)
+    if len(array) < 1024:
+        return sorted_unique(addresses(array))
     digest = slots_digest(array)
     key = (array.__array_interface__["data"][0], len(array), array.strides[0])
     kept = _SORTED_CELLS.get(key)
     if kept is not None and kept[0] == digest:
         return kept[1]
-    ordered = sorted_unique(raw)
+    ordered = sorted_unique(addresses(array))
     owner = memory_owner(array)
     held = sum(len(entry[1]) for entry in _SORTED_CELLS.values()) - (len(kept[1]) if kept is not None else 0)
     if held + len(ordered) > _SORTED_CELLS_MAX:
@@ -277,14 +293,27 @@ _FIRST_SLOTS = 2048
 
 def slots_digest(array: Any) -> bytes:
     """A digest of the addresses the slots of the object *array* hold.
-    Within `reading_once`, taken once for each array."""
+    Within `reading_once`, taken once for each memory of slots
+    (`_slots_of`)."""
     memo = read_once()
     if memo is None:
-        return _slots_digest(addresses(array))
-    kept = memo.get(("d", id(array)))
-    if kept is None or kept[0] is not array:
-        kept = memo[("d", id(array))] = (array, _slots_digest(addresses(array)))
+        return _slots_digest(_slots_bytes(array))
+    key = ("d", *_slots_of(array))
+    kept = memo.get(key)
+    if kept is None:
+        kept = memo[key] = (array, _slots_digest(_slots_bytes(array)))
     return kept[1]
+
+
+def _slots_bytes(array: Any) -> Any:
+    """The addresses *array*'s slots hold, as `addresses` reads them, or
+    the memory of the slots itself where they are one run in order: the
+    same bytes, without the copy (the most of a digest's time)."""
+    if len(array) and array.strides[0] == ctypes.sizeof(ctypes.c_void_p):
+        np = sys.modules["numpy"]
+        data = array.__array_interface__["data"][0]
+        return np.frombuffer((ctypes.c_void_p * len(array)).from_address(data), dtype=np.int64)
+    return addresses(array)
 
 
 def memory_owner(array: Any) -> Any:

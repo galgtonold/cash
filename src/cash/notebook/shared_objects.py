@@ -62,6 +62,7 @@ from cash.notebook.frame_cells import (
     memory_owner,
     read_once,
     reading_once,
+    sampled_addresses,
     slots_digest,
     sorted_cells,
     sorted_unique,
@@ -993,7 +994,14 @@ def holds_through_libraries_what_is_held_elsewhere(value: Any) -> bool:
 def object_columns_of(value: Any) -> list[Any] | None:
     """The arrays of *value*'s object columns that hold more than values
     pandas tells apart in C (`infer_dtype`), when it is a pandas frame or
-    series; None for anything else. Within `_columns_kept`, read once."""
+    series; None for anything else. Within `_columns_kept`, read once,
+    and a frame read is found before anything else is asked: a statement
+    over a hundred frames asked some four hundred times."""
+    if _COLUMNS is not None:
+        read_once()
+        kept = _COLUMNS.get(id(value), _UNREAD)
+        if kept is not _UNREAD:
+            return kept
     pd = sys.modules.get("pandas")
     if pd is None:
         return None
@@ -1001,10 +1009,12 @@ def object_columns_of(value: Any) -> list[Any] | None:
         return None
     read_once()
     if _COLUMNS is not None:
-        if id(value) not in _COLUMNS:
-            _COLUMNS[id(value)] = _read_object_columns(value, pd)
+        _COLUMNS[id(value)] = _read_object_columns(value, pd)
         return _COLUMNS[id(value)]
     return _read_object_columns(value, pd)
+
+
+_UNREAD = object()
 
 
 #: While `_columns_kept` runs: `object_columns_of` by the id of each frame or
@@ -1102,6 +1112,7 @@ def column_values_only(array: Any, pd: Any) -> bool:
     too: its own few rows may be values only, and are then checked as
     though they were not."""
     read_once()
+    array = _whole_run(array)
     span = _span(array)
     if _VALUES_READ is not None and span is not None:
         for (start, end), values in _VALUES_READ.items():
@@ -1125,7 +1136,10 @@ def _kept_values_only(array: Any, pd: Any) -> bool:
     while its slots hold the same objects (their digest): the same objects
     are of the same types. Each of a hundred frames of a hundred thousand
     rows was read anew on every statement, at a millisecond each, where its
-    digest takes a quarter of one."""
+    digest takes a quarter of one. One whose first slot holds a dict, a
+    list, a set or a tuple holds more, unread: none is a value."""
+    if len(array) and array.ndim == 1 and type(array[0]) in _NOT_VALUES:
+        return False
     if len(array) < 1024 or array.ndim != 1:
         return pd.api.types.infer_dtype(array, skipna=True) in VALUE_COLUMNS
     digest = slots_digest(array)
@@ -1143,6 +1157,30 @@ def _kept_values_only(array: Any, pd: Any) -> bool:
         except TypeError:
             pass
     return values
+
+
+def _whole_run(array: Any) -> Any:
+    """The row of its block *array* is a run of (``df.iloc[i:]``'s column
+    of ``df``'s), or *array* when it is none: read for the row, fifty views
+    are one read, where each view read on its own from the narrowest up
+    was a read of its own. The row holding only values, so does the run;
+    holding more, the run is read as holding more too
+    (`column_values_only`)."""
+    root = memory_owner(array)
+    if root is array or array.ndim != 1 or root.dtype != object or not root.flags.c_contiguous or root.ndim > 2:
+        return array
+    rows = root.reshape(-1, root.shape[-1]) if root.ndim == 2 else root.reshape(1, -1)
+    size, width = root.itemsize, rows.shape[1] * root.itemsize
+    offset = _address(array) - _address(root)
+    if array.strides[0] != size or offset < 0 or not width:
+        return array
+    at, start = divmod(offset, width)
+    if at >= len(rows) or start % size or start // size + len(array) > rows.shape[1]:
+        return array
+    return rows[at]
+
+
+_NOT_VALUES = frozenset({dict, list, set, frozenset, tuple, bytearray})
 
 
 def _span(array: Any) -> tuple[int, int] | None:
@@ -1371,26 +1409,34 @@ def _copy_proof(ordered: list[Any], np: Any) -> list[tuple[int, list[tuple[int, 
     is a copy. Read off the addresses the slots hold alone, so kept by
     them (`_COPY_PROOFS`): the same hundred frames proved copies of
     ``df``'s cells again on every statement. The reference counts read
-    from the cells (`_cells_held_elsewhere`) are read each time."""
+    from the cells (`_cells_held_elsewhere`) are read each time.
+
+    And one more frame than the last statement read (``w5 = df[df.x >
+    5]`` after ``w4``), shorter than those, is the last one's proof with
+    the new one read against it (`_PROOF_SO_FAR`): the arrays before it
+    are read in the same order, and found copies of the same bases."""
     key = tuple((_address(array), len(array), slots_digest(array)) for array in ordered)
     if key in _COPY_PROOFS:
         _COPY_PROOFS[key] = _COPY_PROOFS.pop(key)  # the most recent last
         return _COPY_PROOFS[key]
-    bases: list[tuple[int, _Base]] = []
-    copies = 0
-    for at, array in enumerate(ordered):
-        slots = addresses(array)
+    start, bases, copies = 0, [], 0
+    so_far = _PROOF_SO_FAR[0]
+    if so_far is not None and len(so_far[0]) < len(key) and key[: len(so_far[0])] == so_far[0]:
+        start, copies = len(so_far[0]), so_far[2]
+        bases = [(at, base.copy()) for at, base in so_far[1]]
+    for at in range(start, len(ordered)):
+        slots = addresses(ordered[at])
         if any(base.run(slots, np) or base.gather(slots, np) for _, base in bases):
             copies += 1
         else:
-            bases.append((at, _Base(array, slots, np)))
+            bases.append((at, _Base(slots, np)))
     proof: list[tuple[int, list[tuple[int, Any]]]] | None = None
     if copies:
         proof = []
         for at, base in bases:
             slots = base.slots(np)
             rows = np.arange(len(slots))
-            found, first, inverse = np.unique(addresses(base.array), return_index=True, return_inverse=True)
+            found, first, inverse = base.unique(np)
             if len(found) < len(rows):
                 # A cell in several rows (``df.merge(other)`` repeats each of
                 # ``other``'s): held by the slots of all of them, read once.
@@ -1398,6 +1444,10 @@ def _copy_proof(ordered: list[Any], np: Any) -> list[tuple[int, list[tuple[int, 
                 rows = first
             del found, first, inverse
             proof.append((at, [(count, rows[slots == count]) for count in sorted_unique(slots).tolist()]))
+    # Kept after the proof: the sorts it read of each base are kept with them.
+    _PROOF_SO_FAR[0] = (
+        (key, [(at, base.copy()) for at, base in bases], copies) if len(key) <= _PROOF_SO_FAR_MAX else None
+    )
     _COPY_PROOFS[key] = proof
     while len(_COPY_PROOFS) > _COPY_PROOFS_MAX:
         del _COPY_PROOFS[next(iter(_COPY_PROOFS))]
@@ -1408,6 +1458,12 @@ def _copy_proof(ordered: list[Any], np: Any) -> list[tuple[int, list[tuple[int, 
 #: digest of its slots. The last `_COPY_PROOFS_MAX`, the oldest let go.
 _COPY_PROOFS: dict[tuple, Any] = {}
 _COPY_PROOFS_MAX = 8
+#: The bases of the last `_copy_proof` read, by its key, and how many of
+#: its arrays were copies: addresses alone, holding no array of the user's
+#: (a reference would count as another holder of each cell). For at most
+#: `_PROOF_SO_FAR_MAX` arrays.
+_PROOF_SO_FAR: list[tuple[tuple, list[tuple[int, _Base]], int] | None] = [None]
+_PROOF_SO_FAR_MAX = 256
 
 
 def _runs_of_one_memory(arrays: list[Any], np: Any) -> list[Any]:
@@ -1454,15 +1510,31 @@ def _address(array: Any) -> int:
 
 
 class _Base:
-    """An object array of `_held_beyond_copies` others are copies of, with
-    the slots counted so far for each of its cells."""
+    """The addresses an object array of `_held_beyond_copies` holds, which
+    others are copies of, with the slots counted so far for each of its
+    cells."""
 
-    def __init__(self, array: Any, held: Any, np: Any) -> None:
-        self.array = array
+    def __init__(self, held: Any, np: Any) -> None:
         self.held = held
-        self.more = np.zeros(len(array) + 1, dtype=np.int64)
-        self.extra = np.zeros(len(array), dtype=np.int64)
+        self.more = np.zeros(len(held) + 1, dtype=np.int64)
+        self.extra = np.zeros(len(held), dtype=np.int64)
         self.order: Any = None
+        self.distinct: Any = None
+
+    def copy(self) -> _Base:
+        """This base with counts of its own to add to: what it read of its
+        addresses shared."""
+        other = object.__new__(_Base)
+        other.held, other.order, other.distinct = self.held, self.order, self.distinct
+        other.more, other.extra = self.more.copy(), self.extra.copy()
+        return other
+
+    def unique(self, np: Any) -> tuple[Any, Any, Any]:
+        """``np.unique`` of the addresses, with the first row of each and
+        the inverse, read once."""
+        if self.distinct is None:
+            self.distinct = np.unique(self.held, return_index=True, return_inverse=True)
+        return self.distinct
 
     def run(self, slots: Any, np: Any) -> bool:
         """Whether *slots* is a run of this array's, address for address;
@@ -2214,8 +2286,8 @@ def _holding_other_cells(values: Mapping[str, Any], group: Mapping[str, Any]) ->
     for name, value in values.items():
         columns = [array for array, other in longest if other is not value][:_COVER_COLUMNS]
         for array in object_columns_of(value) or ():
-            slots = addresses(array)
-            sample = slots[:: max(1, len(slots) // _COVER_SAMPLE)]
+            # Only the sample's slots read: each frame's every slot took most of the time.
+            sample = sampled_addresses(array, _COVER_SAMPLE)
             if not any(in_sorted(sample, cells(column)).all() for column in columns):
                 names.add(name)
                 break
