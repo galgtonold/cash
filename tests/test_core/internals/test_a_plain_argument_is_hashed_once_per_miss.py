@@ -173,6 +173,62 @@ def test_a_hit_on_watched_lists_takes_no_identity_snapshot(disk_cash, monkeypatc
     assert taken == []
 
 
+def test_a_hit_on_a_tuple_of_numbers_reads_none_of_its_items_for_a_snapshot(disk_cash, monkeypatch, watched):
+    """Whether a tuple can hold a list was read item by item on every key
+    build, hits included: a hit on a million ints took twice as long. Once
+    the collector untracked the tuple, it holds no list, and nothing is
+    read; a tuple holding a list is still snapshotted."""
+    import gc
+
+    from cash.decorator import arg_hashing
+
+    numbers, small = tuple(range(200_000)), list(range(1000))
+    nested = (1, (2, [3]))
+    watched.update(small=small)
+    f = disk_cash.cache(lambda a, b: len(a) + len(b))
+    f(numbers, small)
+    f(nested, small)
+    gc.collect()
+    assert not gc.is_tracked(numbers) and gc.is_tracked(nested)
+    scans: list = []
+
+    class Counted(frozenset):
+        def issuperset(self, items):
+            scans.append(1)
+            return super().issuperset(items)
+
+    monkeypatch.setattr(arg_hashing, "_PRIM_SET", Counted(arg_hashing._PRIM_SET))
+    taken = _counted_snapshots(monkeypatch)
+    for _ in range(3):
+        assert f(numbers, small) == 201_000
+    assert scans == [] and taken == []
+    f(nested, small)
+    assert any(value is nested for value in taken)
+
+
+@pytest.mark.parametrize("inside", ["a dict", "a bytearray"])
+def test_a_tuple_holding_something_written_in_place_is_still_checked(disk_cash, inside):
+    """A dict or bytearray inside a tuple can be untracked with it, and
+    changed in place. The snapshot skipped for such a tuple compares
+    lists only; what else it holds is hashed again after the body, as it
+    was, so a write by the body is seen and a later call is not served."""
+    import gc
+
+    held = {"n": 1} if inside == "a dict" else bytearray(b"\x01")
+    pair = (0, held)
+
+    def bump(t):
+        if isinstance(t[1], dict):
+            t[1]["n"] += 1
+            return t[1]["n"]
+        t[1][0] += 1
+        return t[1][0]
+
+    f = disk_cash.cache(bump)
+    gc.collect()
+    assert [f(pair) for _ in range(3)] == [2, 3, 4]
+
+
 def test_a_miss_on_a_watched_list_is_still_hashed_once(disk_cash, watched):
     rows = list(range(200_000))
     watched["rows"] = rows
