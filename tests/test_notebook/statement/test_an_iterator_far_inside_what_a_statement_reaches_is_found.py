@@ -80,3 +80,12 @@ def test_a_look_that_cannot_finish_runs_every_time_and_says_so(statement_process
     assert second["status"] == CacheStatus.COMPUTED
     assert mock_shell.user_ns["v"] == 1
     assert any("could not finish looking" in r for r in second["uncacheable_reasons"])
+
+
+def test_a_reader_of_a_draw_from_a_library_counter_a_function_holds_is_not_served_stale(statement_processor, mock_shell):
+    _run(statement_processor, "import itertools\nc = itertools.count()\ndef a():\n    return next(c)")
+    _run(statement_processor, "v = a()")
+    _run(statement_processor, "w = [v]")
+    _run(statement_processor, "v = a()")
+    _run(statement_processor, "w = [v]")
+    assert mock_shell.user_ns["w"] == [1]
