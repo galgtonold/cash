@@ -893,8 +893,11 @@ default argument or base class does. **Fix:** move the binding above this cell.
   its file), is stopped there: the result is not cached, in memory or on
   disk, an entry stored before is not served, and the file keeps what it
   held. A scratch file or folder the rebuild makes new in the temp folder
-  is allowed. A write through a file already open (one the object held)
-  is not seen.
+  is allowed, and so is Python's own `.pyc` for a module the rebuild
+  imports. A library whose first import writes its own cache (matplotlib's
+  font list) is imported as your program would import it, and the rebuild
+  tried again. A write through a file already open (one the object held)
+  is not seen, and neither are `os.chmod` and `os.mkfifo`.
 
 - **A `__dict__` your class computes may run under `@cash.cache`.** A class
   that defines `__dict__` itself (a `@property` building it) has it read

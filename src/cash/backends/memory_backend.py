@@ -33,7 +33,7 @@ from ..value_types import IMMUTABLE_PRIMS
 from . import frame_sharing, heap_blocks, iterative_copy, set_order, shared_blocks
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, gdsf_value
 from .entry_format import SplitPayload
-from .no_file_writes import WouldWriteAFile, no_file_writes
+from .no_file_writes import WouldWriteAFile, no_file_writes, refused_now, would_write_a_file
 from .serialization import Serializer
 
 psutil = LazyModule("psutil")  # imported on first use: ~11 ms off `import cash`
@@ -794,6 +794,10 @@ class InMemoryBackend(CacheBackend):
                 return InMemoryBackend._deep_copy(value, memo, known_cells, record_cells, by_deepcopy)
             return InMemoryBackend._deep_copy(value, {}, known_cells, record_cells, by_deepcopy)
         except (TypeError, pickle.PicklingError, RecursionError, AttributeError) as exc:
+            if would_write_a_file(exc):
+                # Never handed out as it is instead: stored so, every hit
+                # would copy it the same way (`no_file_writes`).
+                raise CacheBackendError(f"the result could not be copied: {exc}") from exc
             if required:
                 # Storing it would hand every caller the SAME object: a caller
                 # mutating a hit changes what later calls get, and two threads
@@ -941,6 +945,32 @@ class InMemoryBackend(CacheBackend):
         record_cells: dict[int, bool] | None,
         by_deepcopy: list[bool] | None = None,
     ) -> Any:
+        """`_copy_unchecked` of *value*, which may not change a file
+        (`no_file_writes`): a ``TypeError`` caused by `WouldWriteAFile` if
+        it would, however it copies -- the round trip, the ``deepcopy`` a
+        value pickle refuses falls back to, or the copy that keeps its own
+        stack. Stored or handed to a hit alike: a ``__setstate__`` reopening
+        its sink with ``"w"`` emptied the user's file on every hit."""
+        with no_file_writes() as no_writes:
+            try:
+                copied = InMemoryBackend._copy_unchecked(value, memo, known_cells, record_cells, by_deepcopy)
+            except Exception as exc:
+                if no_writes.refused is not None and not would_write_a_file(exc):
+                    raise TypeError(f"copying it would {no_writes.refused}") from WouldWriteAFile(no_writes.refused)
+                raise
+        if no_writes.refused is not None:
+            # Refused, and the refusal caught inside the value's own code.
+            raise TypeError(f"copying it would {no_writes.refused}") from WouldWriteAFile(no_writes.refused)
+        return copied
+
+    @staticmethod
+    def _copy_unchecked(
+        value: Any,
+        memo: dict[int, Any],
+        known_cells: dict[int, bool] | None,
+        record_cells: dict[int, bool] | None,
+        by_deepcopy: list[bool] | None = None,
+    ) -> Any:
         """A copy of *value* as a disk hit hands it back: a pickle round trip.
 
         ``copy.deepcopy`` differed from the disk tier in ways a caller sees:
@@ -1029,7 +1059,7 @@ class InMemoryBackend(CacheBackend):
         # stored instance's class is the old one. A disk hit looks the class
         # up by name and gets the new one; so does the second attempt here.
         stores = record_cells is not None  # `_cash_stored_as_is` is looked for
-        refused: str | None = None
+        refused = refused_now
         for hook in (persistent_id if memo or frames or ndarray or stores else None, renamed_id):
             try:
                 buffers: list[pickle.PickleBuffer] = []
@@ -1047,31 +1077,19 @@ class InMemoryBackend(CacheBackend):
                 unpickler.persistent_load = memo.__getitem__
                 started = time.perf_counter()
                 try:
-                    if not stores:
-                        return unpickler.load()
-                    # Stored, the copy rebuilds only what the caller already
-                    # holds: a rebuild that opens a file to write would
-                    # truncate or add to the user's file, once more than
-                    # plain Python did.
-                    with no_file_writes() as no_writes:
-                        try:
-                            copied = unpickler.load()
-                        finally:
-                            refused = no_writes.refused
-                    no_writes.check()
-                    return copied
+                    return unpickler.load()
                 finally:
                     _UNPICKLED.seconds = getattr(_UNPICKLED, "seconds", 0.0) + time.perf_counter() - started
             except WouldWriteAFile as exc:
                 # Not by deepcopy either: it rebuilds by the same recipe.
                 raise TypeError(f"copying it would {exc.args[0].removeprefix('rebuilding it would ')}") from exc
             except pickle.PicklingError:
-                if refused is not None:
-                    raise TypeError(f"copying it would {refused}") from WouldWriteAFile(refused)
+                if refused() is not None:
+                    raise TypeError(f"copying it would {refused()}") from WouldWriteAFile(refused())
                 logger.debug("could not copy a %s by pickle", type(value).__name__, exc_info=True)
             except Exception as exc:
-                if refused is not None:
-                    raise TypeError(f"copying it would {refused}") from WouldWriteAFile(refused)
+                if refused() is not None:
+                    raise TypeError(f"copying it would {refused()}") from WouldWriteAFile(refused())
                 if kept_state.too_deep(exc):
                     # Deeper than the pickler may recurse: deepcopy recurses
                     # deeper still, so the copy keeps its own stack.
@@ -1391,7 +1409,18 @@ class InMemoryBackend(CacheBackend):
             return metadata
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
-        metadata, value = self._get_copy(key)
+        try:
+            metadata, value = self._get_copy(key)
+        except Exception as exc:
+            if not would_write_a_file(exc):
+                raise
+            # Its copy would change a file: not served, and not kept to be
+            # copied the same way by the next hit.
+            logger.debug("%r is not served: %s", key, exc)
+            with self._lock:
+                if key in self._store:
+                    self._drop(key)
+            return None, None
         # The copy's sets iterate as the stored ones do (`set_order`).
         set_order.restore(value, metadata)
         return metadata, value
@@ -1614,7 +1643,9 @@ class InMemoryBackend(CacheBackend):
                 trial = dict(memo)
                 try:
                     copied[name] = InMemoryBackend._deep_copy(item, trial, known_cells, None)
-                except Exception:  # noqa: BLE001 - what cannot be copied is shared, as the whole was
+                except Exception as exc:
+                    if would_write_a_file(exc):
+                        raise
                     if _reaches_marshalled(item):
                         raise _Unservable from None
                     copied[name] = item
