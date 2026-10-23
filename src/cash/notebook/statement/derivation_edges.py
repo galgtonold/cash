@@ -187,7 +187,13 @@ def read_share_edges(record: dict | None) -> frozenset[tuple[str, str]] | None:
         return None
 
 
-def is_uncacheable_alias(value: Any, user_ns: dict, cash_held: Iterable[Any] = (), inputs: Iterable[str] = ()) -> bool:
+def is_uncacheable_alias(
+    value: Any,
+    user_ns: dict,
+    cash_held: Iterable[Any] = (),
+    inputs: Iterable[str] = (),
+    may_borrow: bool = True,
+) -> bool:
     """True if *value* is, or holds, a live-alias of a ``user_ns`` object that
     must NOT be cache-restored.
 
@@ -200,6 +206,9 @@ def is_uncacheable_alias(value: Any, user_ns: dict, cash_held: Iterable[Any] = (
     libraries (``pl.Series(arr)``, ``pd.Series(arr, copy=False)``,
     ``df['a'].to_numpy()``; `borrowed_memory_names`, looking into the
     containers among the statement's *inputs*).
+
+    *may_borrow* False says `may_borrow_from_a_variable` already found no
+    variable *value* could share memory with.
 
     *value* is walked as the shared-object check walks an output (the builtin
     containers and the attributes of the notebook's own objects), so views
@@ -227,7 +236,7 @@ def is_uncacheable_alias(value: Any, user_ns: dict, cash_held: Iterable[Any] = (
         # other checks share), where the walk below takes a Python step per
         # container -- 2.4 s for a million parsed records.
         return False
-    if borrowed_memory_names([value], user_ns, containers=set(inputs)):
+    if may_borrow and borrowed_memory_names([value], user_ns, containers=set(inputs)):
         # A frame over a variable's memory (``pl.Series(arr)``): a restored
         # copy would not see the next write to it.
         return True

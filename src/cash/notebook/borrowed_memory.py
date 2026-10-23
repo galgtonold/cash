@@ -503,6 +503,25 @@ def borrowed_memory_names(
     return names
 
 
+def may_borrow_from_a_variable(
+    values: Iterable[Any], user_ns: Mapping[str, Any], containers: Container[str] | None = None
+) -> bool:
+    """False when no one of *values* can share memory with a variable of
+    *user_ns*: no variable is a candidate for any of them. Asked once for
+    many values, it answers what `borrowed_memory_names` would for each,
+    when that is "none": each one's candidates are among those found here
+    for all of them, with no object of theirs left out."""
+    if "numpy" not in sys.modules:
+        return False
+    borrowers = _borrowers_in(values)
+    if not borrowers:
+        return False
+    families = {partner for _obj, family in borrowers for partner in _PARTNERS[family]}
+    if _pandas_writes_shared_blocks() and any(family == _PANDAS for _obj, family in borrowers):
+        families.add(_PANDAS)
+    return bool(_candidates(user_ns, families, lambda name: False, set(), containers))
+
+
 def lazy_frame_sources(values: Iterable[Any], inputs: Iterable[str], user_ns: Mapping[str, Any]) -> set[str]:
     """The inputs a polars LazyFrame among *values* may keep its data in.
 

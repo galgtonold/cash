@@ -14,6 +14,7 @@ from typing import Any
 from cash._user_attrs import attribute_or
 
 from ...analysis.cacheability_decision import identity_coupled_reason
+from ..borrowed_memory import may_borrow_from_a_variable
 from ..consumables import is_consumable_unrestorable
 from ..shared_objects import GaveUp, attrs_copied_apart, output_history, refers_back, share_group, shared_names
 from .derivation_edges import is_uncacheable_alias
@@ -30,14 +31,19 @@ def is_history_name(name: str) -> bool:
 
 
 def _alias_refusal(
-    name: str, value: Any, user_ns: dict[str, Any], cash_held: Iterable[Any] = (), inputs: Iterable[str] = ()
+    name: str,
+    value: Any,
+    user_ns: dict[str, Any],
+    cash_held: Iterable[Any] = (),
+    inputs: Iterable[str] = (),
+    may_borrow: bool = True,
 ) -> str | None:
     """A live-alias object (numpy view, pandas groupby/rolling ref-holder)
     is not cached: pickling and restoring it decouples it from its live
     base, so a later base mutation would be lost after restore. It is
     re-derived from the live base instead. ``.copy()`` produces no alias
     and stays cacheable."""
-    if is_uncacheable_alias(value, user_ns, cash_held, inputs):
+    if is_uncacheable_alias(value, user_ns, cash_held, inputs, may_borrow):
         return f"Live-alias object '{name}' (view/ref-holder); re-derived from live base, not cached."
     return None
 
@@ -122,9 +128,17 @@ def _value_refusal(
     cash_held: Iterable[Any] = (),
     inputs: Iterable[str] = (),
 ) -> str | None:
-    """The first refusal one output's value earns on its own."""
+    """The first refusal one output's value earns on its own.
+
+    Whether any of them could share memory with a variable is asked once
+    for all of them (`may_borrow_from_a_variable`): with a view's holders,
+    df and every view taken from it before, asked for each it scanned the
+    namespace once a holder."""
+    inputs = set(inputs)
+    values = [captured_vars[out] for out in outputs if captured_vars.get(out) is not None]
+    may_borrow = len(values) < 2 or may_borrow_from_a_variable(values, user_ns, containers=inputs)
     refusals: tuple[Callable[[str, Any], str | None], ...] = (
-        lambda name, value: _alias_refusal(name, value, user_ns, cash_held, inputs),
+        lambda name, value: _alias_refusal(name, value, user_ns, cash_held, inputs, may_borrow),
         identity_coupled_reason,
         _consumable_refusal,
     )
