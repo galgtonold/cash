@@ -331,6 +331,12 @@ class StatementProcessor:
         #: The work NOTEBOOK-WORK-RUNNING was given for.
         self._work_running_warned: set[str] = set()
         self._unseen_warned: set[str] = set()
+        #: ``key -> (the entry's timestamp, {output: digest of its stored
+        #: value})`` a rerun under that key took (`_changed_from_refused_entry`)
+        #: and did not store, refused after it ran (`_refuse_unseen_writes`):
+        #: the next rerun compares with these, not with the value read back
+        #: and hashed again.
+        self._refused_entry_digests: dict[str, tuple[Any, dict[str, str]]] = {}
         #: Statements the share check refused, by key (`_refused_again`).
         self._share_refused: dict[str, list] = {}
         #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
@@ -1303,13 +1309,18 @@ class StatementProcessor:
         run.value_keyed_outputs = keyed
         return keyed
 
-    @staticmethod
-    def _note_refused_entry(run: StatementRun, metadata: Any, cached_data: Any) -> None:
+    def _note_refused_entry(self, run: StatementRun, metadata: Any, cached_data: Any) -> None:
         """What `_changed_from_refused_entry` compares with: the entry's digests
         of its outputs, its values for the outputs it has none of, and which
         it had keyed by value."""
         run.refused_value_keyed = frozenset(attribute_or(metadata, "value_keyed", None) or ())
         run.refused_digests = dict(attribute_or(metadata, "rerun_digests", None) or {})
+        run.refused_stamp = attribute_or(metadata, "timestamp", None)
+        kept = self._refused_entry_digests.get(run.cache_key)
+        if kept is not None and run.refused_stamp is not None and kept[0] == run.refused_stamp:
+            # A rerun before this one hashed this entry's values and was not
+            # stored: what it found stands while the entry does.
+            run.refused_digests = {**kept[1], **run.refused_digests}
         if not set(run.refused_digests) >= set(attribute_or(metadata, "outputs", None) or ()):
             run.refused_values = _entry_values(cached_data)
 
@@ -1348,9 +1359,23 @@ class StatementProcessor:
             before = run.refused_digests.get(name)
             if before is None and stored is not None and name in stored:
                 before = value_hash.budgeted_hash(stored[name], self.compute_hash)
+                if before is not None and run.refused_stamp is not None:
+                    self._keep_refused_entry_digest(run, name, before)
             if before is None or before != after:
                 changed.add(name)
         return frozenset(changed)
+
+    def _keep_refused_entry_digest(self, run: StatementRun, name: str, digest: str) -> None:
+        """Keep the digest of the stored value of *name* the entry *run* refused
+        held (`_refused_entry_digests`)."""
+        kept = self._refused_entry_digests.get(run.cache_key)
+        if kept is None or kept[0] != run.refused_stamp:
+            kept = (run.refused_stamp, {})
+        kept[1][name] = digest
+        self._refused_entry_digests.pop(run.cache_key, None)
+        self._refused_entry_digests[run.cache_key] = kept
+        while len(self._refused_entry_digests) > _UNSEEN_REFUSED_KEPT:
+            del self._refused_entry_digests[next(iter(self._refused_entry_digests))]
 
     @staticmethod
     def _drawn_names(run: StatementRun) -> frozenset[str]:
