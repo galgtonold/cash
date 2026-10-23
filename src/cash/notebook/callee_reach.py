@@ -787,10 +787,19 @@ def helper_seeded_modules(
 def _notebook_function_source(
     name: str, namespace: Mapping[str, Any], def_source: Callable[[str], str | None] | None
 ) -> str | None:
-    """The source of the notebook function *name*, or None when it is not one."""
+    """The source of the notebook function *name*, or None when it is not one.
+    A wrapper a decorator made (``functools.cache``) stands for the function
+    it wraps (``__wrapped__``)."""
     fn = namespace.get(name)
     if fn is None:
         return def_source(name) if def_source is not None else None
+    for _ in range(8):
+        if type(fn) is types.FunctionType:
+            break
+        inner = attribute_or(fn, "__wrapped__", None)
+        if inner is None:
+            break
+        fn = inner
     if type(fn) is not types.FunctionType or fn.__globals__ is not namespace:
         return None
     return _code_source(fn.__code__)

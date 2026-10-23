@@ -40,3 +40,31 @@ def test_a_redrawn_value_warns_unless_its_seed_runs_again(nb_runner, how):
         assert "RANDOM-REDRAWN" in shown and "m = [k * random.random()" in shown, shown
     else:
         assert "RANDOM-REDRAWN" not in shown, shown
+
+
+def test_a_memo_the_plan_defines_again_seeds_again_and_stays_quiet(nb_runner):
+    """Edited ``a`` makes cash run ``@cache def rc`` again, so its answers are
+    fresh and ``suite = (rc(a), rc(6))`` seeds the stream again before ``m``
+    draws: the value is the one a run from the top gives, and no warning."""
+    cells = [
+        "%cash_badge print\nimport random, time\nfrom functools import cache",
+        "@cache\ndef rc(n):\n    random.seed(n)\n    return tuple(range(n))",
+        "a = 5",
+        "suite = (rc(a), rc(6))",
+        "m = [random.random() for _ in suite] + [time.sleep(0.25)]",
+        "print('M', m[:2])",
+    ]
+    namespace: dict = {}
+    exec(
+        "\n".join([cells[0].split("\n", 1)[1], cells[1], "a = 7", *cells[3:5]]).replace("time.sleep(0.25)", "0"),
+        namespace,
+    )
+    nb_runner.create_notebook(cells)
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    nb_runner.set_cell_source(3, "a = 7")
+    nb_runner.run_cell(6)
+    shown = nb_runner.get_raw_output(6)
+    assert f"M {namespace['m'][:2]}" in shown, shown
+    assert "RANDOM-REDRAWN" not in shown, shown
