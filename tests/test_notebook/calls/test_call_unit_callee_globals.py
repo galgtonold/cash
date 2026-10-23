@@ -433,3 +433,25 @@ class TestPayloadLivesOnTheValueNotInMetadata:
         assert unwrap_callee_globals(None, {}) == (None, None)
         result, globs = unwrap_callee_globals((None, {"C": [1]}), {"has_callee_globals": True})
         assert result is None and globs == {"C": [1]}
+
+
+def test_a_function_whose_source_cannot_be_read_does_not_answer_for_an_equal_one_whose_can():
+    """Code objects compare equal whatever file they came from: the same
+    ``def`` ``exec``'d from a string, with no source to read, gave its ``()``
+    to the one defined in a cell, and that one's ``seen.append`` went
+    uncaptured, so its hit left ``seen`` as it was."""
+    import linecache
+
+    source = "def add(x):\n    seen.append(x)\n    return len(seen)\n"
+    unread = {"seen": []}
+    exec(compile(source, "<cash-ut-no-source>", "exec"), unread)
+    cell = "<ipython-input-cash-ut-source-mutations>"
+    linecache.cache[cell] = (len(source), None, source.splitlines(True), cell)
+    read = {"seen": []}
+    try:
+        exec(compile(source, cell, "exec"), read)
+        assert unread["add"].__code__ == read["add"].__code__
+        assert callee_mutated_globals(unread["add"]) == ()
+        assert callee_mutated_globals(read["add"]) == ("seen",)
+    finally:
+        linecache.cache.pop(cell, None)

@@ -108,7 +108,12 @@ def _loop_var_digest(name: str, value: object, loop_var_digests: Mapping[str, st
 #: intercepted call. A redefined function has a new code object, so an edit is
 #: never served the old verdict. It is the code of the function ``getsource``
 #: reads: a ``functools.wraps`` wrapper's own code, each layer read apart.
-_GLOBAL_MUTATION_CACHE: LruMemo[Any, tuple[str, ...]] = LruMemo(CODE_OBJECTS)
+#:
+#: By the code object's identity, with the object held to keep its id: two
+#: code objects compare equal whatever file they came from, so a function
+#: ``exec``'d from a string, whose source cannot be read, gave its ``()`` to
+#: the same function defined in a cell, and that one's writes went uncaptured.
+_GLOBAL_MUTATION_CACHE: LruMemo[int, tuple[Any, tuple[str, ...]]] = LruMemo(CODE_OBJECTS)
 
 
 def callee_mutated_globals(fn) -> tuple[str, ...]:
@@ -194,15 +199,16 @@ def _source_mutations(fn) -> tuple[str, ...]:
     """The free names *fn*'s own source mutates in place, sorted, memoised
     on its code: a ``functools.wraps`` wrapper's own body, not the wrapped
     function's (`own_source`)."""
-    memo_key = attribute_or(fn, "__code__", None)
-    cached = _GLOBAL_MUTATION_CACHE.get(memo_key) if memo_key is not None else None
-    if cached is None:
-        try:
-            cached = tuple(sorted(source_global_mutations(own_source(fn))))
-        except SOURCE_RETRIEVAL_ERRORS:
-            cached = ()
-        if memo_key is not None:
-            _GLOBAL_MUTATION_CACHE[memo_key] = cached
+    code = attribute_or(fn, "__code__", None)
+    held = _GLOBAL_MUTATION_CACHE.get(id(code)) if code is not None else None
+    if held is not None and held[0] is code:
+        return held[1]
+    try:
+        cached = tuple(sorted(source_global_mutations(own_source(fn))))
+    except SOURCE_RETRIEVAL_ERRORS:
+        cached = ()
+    if code is not None:
+        _GLOBAL_MUTATION_CACHE[id(code)] = (code, cached)
     return cached
 
 
