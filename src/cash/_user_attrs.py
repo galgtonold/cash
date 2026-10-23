@@ -119,8 +119,7 @@ def _plain_class(kind: type) -> bool:
     is ``issubclass`` of the type, and the object is never asked."""
     return _PLAIN_CLASS.put(
         kind,
-        own_lookup(kind)
-        or not any("__class__" in _CLASS_DICT(klass) for klass in mro_of(kind) if klass is not object),
+        own_lookup(kind) or not any("__class__" in _CLASS_DICT(klass) for klass in mro_of(kind) if klass is not object),
     )
 
 
