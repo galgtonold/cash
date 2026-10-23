@@ -366,6 +366,7 @@ class StatementProcessor:
             is_stateful_call=self._check_callable_stateful,
             digests=digests,
         )
+        self._calls.outside_lineage = self._call_reads_thread_changes
 
         # Cache-freshness checker (TTL / file-dep / input-file invalidation).
         # Stateless w.r.t. tracking state — receives it per call. It reads the
@@ -1828,6 +1829,23 @@ class StatementProcessor:
             self._alias_values[(run.code, name)] = (inputs, digest)
             if before is not None and before[0] == inputs and before[1] != digest:
                 run.reads_outside_lineage = True
+
+    def _call_reads_thread_changes(self, fn: Any) -> bool:
+        """Whether a call of *fn* reads a variable that work in a thread
+        changed, or may change (`changed_by_work`, `thread_reach`): no
+        lineage saw that change, so the call cache, keyed on lineages, would
+        serve ``z = get()`` what it gave before the thread set ``D['k']``."""
+        changed = self.tracking_state.changed_by_work
+        running = self._thread_reach.names
+        if not changed and not running:
+            return False
+        user_ns = self.shell.user_ns
+        names = set(reachable_by_work([fn], user_ns))
+        try:
+            names |= carrier_candidates(names, user_ns, self.tracking_state.variable_lineage)
+        except Exception:  # noqa: BLE001 - the names it reads itself, then
+            pass
+        return any(name in changed or name in running for name in names)
 
     def _thread_reachable(self, run: StatementRun) -> set[str]:
         return self._reachable_by_threads(run.inputs or ())

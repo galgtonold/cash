@@ -58,3 +58,26 @@ def test_a_change_by_a_thread_cash_never_saw_reaches_a_reader_of_the_alias(cash_
         run_cash_cell(cash_magics, cell, cells=cells)
     assert ns["v"] == 2
     assert ns["w"] == [2, "read"], "the reader was served what the old item gave"
+
+
+@pytest.mark.parametrize(
+    "work",
+    [
+        pytest.param("th = threading.Thread(target=lambda: D.__setitem__('k', 2))\nth.start()\nth.join()", id="Thread"),
+        pytest.param("tm = threading.Timer(0.01, lambda: D.__setitem__('k', 2))\ntm.start()\ntm.join()", id="Timer"),
+    ],
+)
+def test_a_call_reading_what_a_joined_thread_changed_is_not_served(cash_magics, monkeypatch, work):
+    """``z = get()`` ran, but the call ``get()`` inside it was served from
+    the call cache: keyed on lineages, and no lineage moved when the
+    thread set ``D['k']``, it handed back the 1 that ``v = get()`` stored."""
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    cells = [
+        "import threading, time\nD = {'k': 1}\ndef get():\n    time.sleep(0.02)\n    return D['k']",
+        "v = get()",
+        work,
+        "z = get()",
+    ]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert cash_magics.shell.user_ns["z"] == 2

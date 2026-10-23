@@ -618,6 +618,10 @@ class CallUnit:
         #: The hashes of the frames this cell's calls received, checked
         #: rather than read again while unchanged; emptied by :meth:`begin_cell`.
         self._fingerprints = self._digests.fingerprints
+        #: Whether a call of a function reads what no lineage follows (what
+        #: work in a thread changed): such a call runs plain, as its key
+        #: cannot tell the change.
+        self.outside_lineage: Callable[[Any], bool] | None = None
 
     def _cost_floor_s(self) -> float:
         """The bar a call's own execution must clear to be stored (:func:`call_cost_floor_s`)."""
@@ -876,6 +880,10 @@ class CallUnit:
                 # `counter()` bumps a `nonlocal`: a hit would skip the bump
                 # and hand the next call the same count.
                 return fn(*args, **kwargs)
+            if self.outside_lineage is not None and self.outside_lineage(fn):
+                # `z = get()` after a thread set `D['k']`: no lineage moved,
+                # so its key is the one the old value was stored under.
+                return self._run_unkeyed(fn, args, kwargs, _perf_counter())
             checked = _perf_counter()
             hands = _hands_a_state_changing_callable(fn, args, kwargs)
             if hands:
