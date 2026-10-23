@@ -6,11 +6,14 @@ the Python above it.
 process changes ``d/``: the listing was taken as ``p``'s own file, keyed
 ``p = load()`` on it, and a cell below reading ``CALLS`` rebuilt ``p`` as
 ``load()``'s list. A folder of the Python installation is no file of the
-user's: listed, it is no dependency, and nothing is stale.
+user's, nor is ``/proc`` where there is one, though it changes as
+processes come and go: listed, neither is a dependency, and nothing is
+stale.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
@@ -34,8 +37,15 @@ while True:
 
 @pytest.mark.parametrize(
     "magic",
-    ["p = !echo {len(os.listdir('d')) * 0}", "p = !echo {len(os.listdir(os.path.dirname(os.__file__))) * 0}"],
-    ids=["a-changing-folder", "an-installed-folder"],
+    [
+        "p = !echo {len(os.listdir('d')) * 0}",
+        "p = !echo {len(os.listdir(os.path.dirname(os.__file__))) * 0}",
+        pytest.param(
+            "p = !echo {len(os.listdir('/proc')) * 0}",
+            marks=pytest.mark.skipif(not os.path.isdir("/proc"), reason="no /proc here"),
+        ),
+    ],
+    ids=["a-changing-folder", "an-installed-folder", "the-proc-folder"],
 )
 def test_a_magic_reading_a_changing_folder_keeps_its_value(nb_runner, magic):
     d = nb_runner.work_dir / "d"
