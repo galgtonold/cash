@@ -1120,13 +1120,14 @@ static int visit_referent(PyObject *o, void *arg) {
 
 /*
  * The _asyncio module's own traverse on 3.12.0-3.12.5 can loop for ever:
- * after the module's state it walks the free list of FutureIter objects,
- * visiting each one's type, and that list can come back on itself (fixed in
- * 3.12.6). Only the module's state comes before the list, and the list's
- * visits are FutureIter's type, which the state visits first; the module's
- * dict comes after the traverse. So the walk stops after FREE_LIST_BOUND
- * visits -- the state is ~40 and the list holds 255 at most -- and the dict
- * is looked at here: the same references, none lost.
+ * after the module's state it visits each entry of its free list of
+ * FutureIter objects, and that list can come back on itself. An entry is a
+ * freed iterator, cleared, whose one field links the next entry: never an
+ * object of the program's, and 3.12.6 no longer visits the list at all.
+ * Only the state comes before the list, and the module's dict comes after
+ * the traverse. So the walk stops after FREE_LIST_BOUND visits -- the state
+ * is ~20 and the list holds 255 at most -- and the dict is looked at here:
+ * the references 3.12.6 gives, none lost.
  */
 #define FREE_LIST_BOUND 4096
 #define STOPPED_SHORT 2

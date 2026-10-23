@@ -102,3 +102,18 @@ def test_the_python_read_answers_where_the_module_s_read_ends(monkeypatch):
     holder = [target]
     monkeypatch.setattr(shared_objects, "_REFERRERS_IN", None)
     assert any(obj is holder for obj in shared_objects._referrers_of((target,), set()))
+
+
+@needs_kernels
+def test_a_read_for_few_objects_goes_through_the_c_read_where_gc_s_can_loop(monkeypatch):
+    """``gc.get_referrers`` reads the module's traverse as well: where it can
+    loop, the read for a few objects is the C read too."""
+    _gathered()
+    asked = []
+    real = shared_objects._referrers_of
+    monkeypatch.setattr(shared_objects, "_referrers_of", lambda objs, stop: asked.append(objs) or real(objs, stop))
+    monkeypatch.setattr(shared_objects, "_TRAVERSE_LOOPS", True)
+    target = [1]
+    holder = [target]
+    assert any(obj is holder for obj in shared_objects._referrers((target,), set()))
+    assert asked == [(target,)]

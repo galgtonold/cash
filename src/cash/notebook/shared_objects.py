@@ -1069,7 +1069,6 @@ def referring_names(
     *complete* is False when the climb or the walk was cut short -- by
     *seconds*, depth or size -- so names may be missing.
     """
-    import gc
 
     limit = CpuLimit(seconds)
     value_types = VALUE_TYPES + library_value_types()
@@ -1104,7 +1103,10 @@ def referring_names(
         # One tuple, passed on as the call's own arguments, so it is known.
         args = tuple(frontier)
         stop.add(id(args))
-        referrers = gc.get_referrers(*args)
+        try:
+            referrers = _referrers(args, stop)
+        except WalkBudgetExceeded:
+            return names, False
         stop.add(id(referrers))
         following: list[Any] = []
         stop.add(id(following))
@@ -1823,7 +1825,7 @@ def _variables_holding(
             # The answer the read of the heap below would give, when a module
             # holds one of them: E18's seaborn grid read it twice (1.9 s).
             return None
-        referrers = gc.get_referrers(*args) if len(args) <= _REFERRERS_BY_CALL else _referrers_of(args, stop)
+        referrers = _referrers(args, stop) if len(args) <= _REFERRERS_BY_CALL else _referrers_of(args, stop)
         stop.add(id(referrers))
         following: list[Any] = []
         stop.add(id(following))
@@ -1886,6 +1888,15 @@ def _is_library_class(cls: type) -> bool:
     return instance_of(module, str) and module != "__main__" and not _is_local_module_class(cls)
 
 
+def _referrers(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
+    """`gc.get_referrers` of *objs*; where the ``_asyncio`` module's own
+    read can loop for ever (`_TRAVERSE_LOOPS`), as gc's would, the read of
+    `_referrers_of`, which the C kernel ends."""
+    if _TRAVERSE_LOOPS:
+        return _referrers_of(objs, stop)
+    return gc.get_referrers(*objs)
+
+
 def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
     """`gc.get_referrers` of *objs*, in one read of the heap whatever their
     number. The heap's list goes in *stop*."""
@@ -1922,7 +1933,7 @@ def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
 _REFERRERS_BLOCK = 256
 
 #: Whether the ``_asyncio`` module's own traverse can loop for ever, as it
-#: does on 3.12.0-3.12.5 once its free list of future iterators comes back on
+#: can on 3.12.0-3.12.5 once its free list of future iterators comes back on
 #: itself (``gc.get_referents(sys.modules["_asyncio"])`` never returns). The
 #: C kernel stops it short and loses nothing (``cwalk.c``); the Python loop
 #: cannot.
