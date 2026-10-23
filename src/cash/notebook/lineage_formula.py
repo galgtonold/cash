@@ -672,7 +672,7 @@ def _makes_the_read(fn: Any, where: str) -> bool:
     """Is *fn* the function the analysis says reads (``where`` is
     ``module.qualname``)? By both: a ``stamp`` of the notebook is not
     ``Clock.stamp``."""
-    module, qualname = getattr(fn, "__module__", None), getattr(fn, "__qualname__", None)
+    module, qualname = attribute_or(fn, "__module__", None), attribute_or(fn, "__qualname__", None)
     return isinstance(qualname, str) and where in (f"{module}.{qualname}", qualname)
 
 
