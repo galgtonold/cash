@@ -305,6 +305,22 @@ def _cut_short_why(what: str, budget: float) -> str:
     return f"{what} would take longer than {budget:.1f}s, more than the statement is worth, so it re-runs every time"
 
 
+def _bound_names(tree: ast.AST | None) -> set[str] | None:
+    """The names *tree* binds: assigned, defined, imported; None when there
+    is no tree to read them from."""
+    if tree is None:
+        return None
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+            found.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            found.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            found.update((a.asname or a.name).split(".")[0] for a in node.names)
+    return found
+
+
 class StatementProcessor:
     """
     Processes and caches individual Python statements.
@@ -2834,10 +2850,16 @@ class StatementProcessor:
         user_ns = self.shell.user_ns
         # A class or a module: an object of the user's, or a list, is looked
         # down into by the outputs' own check already.
+        # Changed in place, not bound: a class a method changed through its
+        # object (``type(self).held.append(d)`` in ``sbox.hold(d)``) is an
+        # output the statement does not read by name.
+        bound = _bound_names(run.tree)
         changed = {
             name
-            for name in run.outputs & run.inputs
-            if name in user_ns and instance_of(user_ns[name], (type, types.ModuleType))
+            for name in run.outputs
+            if (name in run.inputs or (bound is not None and name not in bound))
+            and name in user_ns
+            and instance_of(user_ns[name], (type, types.ModuleType))
         }
         if not changed:
             return
