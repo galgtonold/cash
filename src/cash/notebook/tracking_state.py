@@ -256,12 +256,15 @@ class TrackingState:
     # notebook's last write of it with the file's `stat_key` right after. A
     # file a statement read and the notebook itself rewrote LATER (``n =
     # int(open(P).read())`` then ``open(P, 'w').write(str(n + 1))``) is no
-    # change to that read: a top-to-bottom run read it before the write too.
+    # change to that read: a top-to-bottom run read it before the write too,
+    # when the write is in the reading cell or one below it (`running_cell`
+    # at the read and at the write; None while the upstream check rebuilds).
     # W: _record_file_reads, StatementProcessor._record_file_effects.
     # R: StatementLineage (`rewritten_by_the_notebook_since`).
     file_event_seq: int = 0
     file_read_seq: dict[str, int] = field(default_factory=dict)
-    own_file_writes: dict[str, tuple[int, tuple[int, int, int]]] = field(default_factory=dict)
+    file_read_cell: dict[str, int | None] = field(default_factory=dict)
+    own_file_writes: dict[str, tuple[int, tuple[int, int, int], int | None]] = field(default_factory=dict)
 
     # Cache key -> {output: digest of the value} a ``no-cache`` statement bound
     # on its last run. It goes into those outputs' lineage, so a reader below

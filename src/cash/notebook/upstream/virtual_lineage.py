@@ -213,9 +213,10 @@ class VirtualLineage:
     ) -> bool:
         """Return True if any file dep for the cached cell at *idx* has changed.
 
-        A file the notebook rewrote after the cell was simulated, and that is
-        still as that write left it, has not changed for the cell: a cell
-        below rewrote it after this one read it, as in a top-to-bottom run.
+        A file the notebook rewrote after the cell was simulated, from the
+        cell or one below it, and that is still as that write left it, has
+        not changed for the cell: as in a top-to-bottom run. A cell above
+        run again on its own is a change: Run All would read its write.
         Taken as a change, the cell's loop re-ran alone and read the new text
         (``u = t`` took the 2 a later cell wrote where plain Python has 1).
 
@@ -234,7 +235,7 @@ class VirtualLineage:
             if resolved is None or st is None:
                 return True
             now = stat_key(st)
-            if now != stored and not rewritten_by_the_notebook_after(self.tracking_state, simulated_at, fpath):
+            if now != stored and not rewritten_by_the_notebook_after(self.tracking_state, simulated_at, fpath, idx):
                 logger.debug(
                     "[UPSTREAM_DEBUG] File dependency changed: %s (cached stat=%s, current=%s)",
                     resolved,
