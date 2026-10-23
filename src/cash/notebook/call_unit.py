@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import contextvars
 import dataclasses
 import functools
 import itertools
@@ -1658,12 +1659,17 @@ _ABSENT = object()
 def _watched_state(fn: Any, names: tuple[str, ...], fingerprints: Any) -> tuple:
     """The content hashes of *fn*'s globals *names*, an unreadable one as
     changed (`hash_args`). A class by what its attributes are bound to and
-    hold: its own hash is its name, and ``setattr(NS, 'a', x)`` keeps it."""
+    hold: its own hash is its name, and ``setattr(NS, 'a', x)`` keeps it.
+    A context variable by the object it holds."""
     globals_dict = fn.__globals__
     values = []
     for name in names:
         value = globals_dict.get(name, _ABSENT)
-        if instance_of(value, type):
+        if type(value) is contextvars.ContextVar:
+            # Nothing changes one in place: ``set`` gives it another value
+            # in the context, which is what it is read by.
+            value = ("context variable", id(value.get(_ABSENT)))
+        elif instance_of(value, type):
             attrs = dict(vars(value))
             value = (
                 tuple((key, id(item)) for key, item in attrs.items()),

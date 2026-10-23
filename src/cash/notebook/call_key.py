@@ -306,13 +306,16 @@ def _user_source(globals_dict: dict, name: str) -> str | None:
 
 
 _NOT_BOUND = object()
+_LRU_WRAPPER = attribute_or(functools, "_lru_cache_wrapper", None)
 
 
 def _worth_watching(value) -> bool:
     """Whether a change *value* takes in place could be missed: not a
-    module, a function (followed instead), a library class, or a value
-    with nothing inside to change."""
-    if value is _NOT_BOUND or type(value) in _EXACT_ATOMS:
+    module, a function or a memo (followed instead), a library class, or a
+    value with nothing inside to change."""
+    if value is _NOT_BOUND or type(value) in _EXACT_ATOMS or type(value) is _LRU_WRAPPER:
+        # A memo: what a call leaves in it is followed as for every call
+        # (`helper_memos`), and its hash cannot be read.
         return False
     if instance_of(value, (_ModuleType, _types.FunctionType, _types.BuiltinFunctionType)) and not bound_to_state(value):
         return False
