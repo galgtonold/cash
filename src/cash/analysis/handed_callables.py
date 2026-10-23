@@ -2035,7 +2035,17 @@ class _Found:
         if found is None or type(found[0]) is not types.MethodType:
             return
         owner, fn = found[0].__self__, found[0].__func__
-        if instance_of(owner, type) or not instance_of(fn, types.FunctionType) or not self._users(fn):
+        if not instance_of(fn, types.FunctionType) or not self._users(fn):
+            return
+        if instance_of(owner, type):
+            # A class method (``SBox.bump(7)``, or called on an object): its
+            # first argument is the class, so what it changes through it
+            # (``cls.held[-1]['n'] += n``) is the class.
+            for layer in wrapper_layers(fn):
+                source = _source_of(layer) if instance_of(layer, types.FunctionType) else None
+                if source is not None and _changes_its_first_argument(layer, owner, source):
+                    self._changed(owner, None)
+                    return
             return
         for layer in wrapper_layers(fn):
             source = _source_of(layer) if instance_of(layer, types.FunctionType) else None
