@@ -169,6 +169,8 @@ class StatementRandomness:
         #: Streams a hit put where its run, which seeded them unseen, left
         #: them: adopted as that run's seed was (`adopt_seeds_of_a_hit`).
         self._seeded_by_a_hit: set[str] = set()
+        #: Streams a statement seeded and set back (a temp seed): not adopted.
+        self._set_back: set[str] = set()
         #: Where the generators a statement reaches through an attribute stood.
         self._held = HeldGenerators()
 
@@ -197,6 +199,7 @@ class StatementRandomness:
         (``seed(None)`` cash did not read) takes a lineage fresh per run.
         """
         by_a_hit, self._seeded_by_a_hit = self._seeded_by_a_hit, set()
+        set_back, self._set_back = self._set_back, set()
         last, self._last_statement = self._last_statement, None
         adopted: dict[str, str] = {}
         try:
@@ -207,6 +210,12 @@ class StatementRandomness:
                 if self._ledgered_generation.get(module, 0) == generation and module not in by_a_hit:
                     continue
                 self._ledgered_generation[module] = generation
+                if module in set_back and module not in by_a_hit:
+                    # A temp seed (``with temp_seed(123):``) put the stream
+                    # back where the seed above left it: that seed's lineage
+                    # still holds, and adopting would cut the draws below
+                    # off from it.
+                    continue
                 var = rng_virtual_var(module)
                 if module not in seeded:
                     if module in self._adopted:
@@ -753,6 +762,8 @@ class StatementRandomness:
             self._record_hidden_draws(code, self.observed_draw - seeded_before_drawing(pre_rng))
             reseeded = {m for m, g in self._generation_at_start.items() if seed_generation(m) != g}
             self.reseeded_streams = frozenset(reseeded)
+            # Seeded, yet left where it stood: a temp seed set it back.
+            self._set_back |= reseeded - changed
             if reseeded:
                 self.note_ledgered_seeds(code)
             self.moved_streams = self._moved_streams(code, post, changed | reseeded)

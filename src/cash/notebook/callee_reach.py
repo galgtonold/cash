@@ -788,13 +788,14 @@ def _notebook_function_source(
     name: str, namespace: Mapping[str, Any], def_source: Callable[[str], str | None] | None
 ) -> str | None:
     """The source of the notebook function *name*, or None when it is not one.
-    A wrapper a decorator made (``functools.cache``) stands for the function
-    it wraps (``__wrapped__``)."""
+    A wrapper a decorator made (``functools.cache``,
+    ``contextlib.contextmanager``) stands for the function it wraps
+    (``__wrapped__``)."""
     fn = namespace.get(name)
     if fn is None:
         return def_source(name) if def_source is not None else None
     for _ in range(8):
-        if type(fn) is types.FunctionType:
+        if type(fn) is types.FunctionType and fn.__globals__ is namespace:
             break
         inner = attribute_or(fn, "__wrapped__", None)
         if inner is None:
@@ -818,12 +819,18 @@ def _code_source(code: types.CodeType) -> str | None:
 @functools.lru_cache(maxsize=1024)
 def _seeds_and_calls(source: str) -> tuple[frozenset[str], tuple[str, ...]]:
     """What the function defined by *source* seeds itself, and the plain
-    names it calls (the notebook functions among them are followed)."""
+    names it calls (the notebook functions among them are followed).
+
+    A context manager that also sets a stream back (``setstate``,
+    ``set_state``: ``with temp_seed(123):``) seeds nothing for what runs
+    after its ``with``: it leaves the stream where it found it."""
     try:
         seeded = frozenset(get_seeding_rng_modules(source))
         tree = ast.parse(source)
     except (SyntaxError, ValueError, AttributeError, RecursionError):
         return frozenset(), ()
+    if _sets_a_stream_back(tree):
+        seeded = frozenset()
     calls = sorted(
         {node.func.id for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
     )
@@ -1382,3 +1389,33 @@ def _local_homes(value: Any) -> Iterable[str]:
         module = _loaded(home)
         if module is not None and _is_local(module):
             yield module.__name__
+
+
+def _sets_a_stream_back(tree: ast.AST) -> bool:
+    if not any(isinstance(node, (ast.Yield, ast.YieldFrom)) for node in ast.walk(tree)):
+        return False
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in ("setstate", "set_state")
+        for node in ast.walk(tree)
+    )
+
+
+def temp_seeded_modules(code: str, namespace: Mapping[str, Any]) -> frozenset[str]:
+    """The RNG modules the notebook function *code* calls seeds in its own
+    body, a temp seed included: ``temp_seed(123)`` in ``with temp_seed(123):``
+    seeds the stream the ``with`` body draws from."""
+    tree = parse_cached(code)
+    if tree is None or len(tree.body) != 1 or not isinstance(tree.body[0], ast.Expr):
+        return frozenset()
+    call = tree.body[0].value
+    if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+        return frozenset()
+    source = _notebook_function_source(call.func.id, namespace, None)
+    if source is None:
+        return frozenset()
+    try:
+        return frozenset(get_seeding_rng_modules(source))
+    except (SyntaxError, ValueError, AttributeError, RecursionError):
+        return frozenset()

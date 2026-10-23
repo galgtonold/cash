@@ -110,11 +110,37 @@ class RngRewind:
                     continue
                 if src not in already and src not in prepend:
                     prepend.append(src)
-            if prepend and logger.isEnabledFor(logging.DEBUG):
+            if not prepend:
+                return statements
+            inputs = self._input_definitions_of_cells(prepend, upstream)
+            rest = [stmt for stmt in statements if stmt not in inputs]
+            if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("[UPSTREAM] Rebuilding RNG chain (%d cells) before draw", len(prepend))
-            return prepend + statements
+            return inputs + prepend + rest
         except (AttributeError, IndexError, TypeError, ValueError):  # pragma: no cover - defensive
             return statements
+
+    def _input_definitions_of_cells(self, cells: list[str], upstream: list[str]) -> list[str]:
+        """The upstream statements, outside *cells*, that bind what *cells*
+        read and the kernel does not hold, in source order: after a restart
+        the chain's ``def temp_seed`` cell reads ``contextlib`` from an
+        import above it, which must run first (`_with_input_definitions`)."""
+        all_stmts: list[str] = []
+        chain: set[int] = set()
+        for cell in upstream:
+            tree = parse_cached(clean_cell_source(cell))
+            if tree is None:
+                continue
+            for node in tree.body:
+                try:
+                    stmt = ast.unparse(node)
+                except (ValueError, TypeError):
+                    continue
+                if cell in cells:
+                    chain.add(len(all_stmts))
+                all_stmts.append(stmt)
+        extra = self._with_input_definitions(chain, all_stmts) - chain
+        return [all_stmts[idx] for idx in sorted(extra)]
 
     def _prepend_rng_chain_for_reexecuted_draws(
         self,
@@ -156,8 +182,8 @@ class RngRewind:
             drawn: set[str] = set()
             seeded_in_plan: set[str] = set()
             for stmt in statements:
-                drawn |= get_drawing_rng_modules(stmt)
-                seeded_in_plan |= get_seeding_rng_modules(stmt)
+                drawn |= self._draws(stmt)
+                seeded_in_plan |= self._seeds(stmt, surely=True)
             # Only modules whose draw re-executes but whose seed is NOT already
             # being re-run need their chain re-established.
             missing = drawn - seeded_in_plan
@@ -172,7 +198,7 @@ class RngRewind:
             all_stmts: list[str] = []
             rng_positions: list[tuple[int, bool]] = []
             for cell in upstream:
-                tree = parse_cached(cell)
+                tree = parse_cached(clean_cell_source(cell))
                 if tree is None:
                     continue
                 for node in tree.body:
@@ -181,8 +207,8 @@ class RngRewind:
                     except (ValueError, TypeError):
                         continue
                     all_stmts.append(stmt)
-                    draws = get_drawing_rng_modules(stmt) & missing
-                    seeds = get_seeding_rng_modules(stmt) & missing
+                    draws = self._draws(stmt) & missing
+                    seeds = self._seeds(stmt) & missing
                     if draws or seeds:
                         rng_positions.append((len(all_stmts) - 1, bool(draws)))
 
@@ -222,6 +248,39 @@ class RngRewind:
             return prepend + statements
         except (AttributeError, IndexError, TypeError, ValueError):  # pragma: no cover - defensive
             return statements
+
+    def _draws(self, stmt: str) -> set[str]:
+        """The global streams *stmt* draws from: those it spells, and those a
+        run of it was seen to draw from inside a call (``df.sample(...)``,
+        ``model.fit()``: the observed-draw ledger). A ``def`` or ``class``
+        draws when it is called."""
+        if _only_defines(stmt):
+            return set()
+        prefix = rng_virtual_var("")
+        observed = {var[len(prefix) :] for var in observed_rng_reads(self.tracking_state, stmt)}
+        return get_drawing_rng_modules(stmt) | observed
+
+    def _seeds(self, stmt: str, *, surely: bool = False) -> set[str]:
+        """The global streams *stmt* seeds: by a seed it spells, or through a
+        notebook function it calls (``set_seed(0)``). With *surely*, a call
+        through a memo (``@cache``) counts for nothing: a memo that serves
+        does not run its body, so the seed in it may not run again."""
+        from ..callee_reach import helper_seeded_modules
+
+        spelled = get_seeding_rng_modules(stmt)
+        if surely and _calls_a_memo(stmt, self.shell.user_ns):
+            return spelled
+        if not surely:
+            # Seen to seed when it last ran, through code cash does not read
+            # as seeding (``mylib.setup(4)``, ``Exp(3)`` seeding in __init__).
+            adopted = self.tracking_state.adopted_rng_after.get(exact_source_digest(stmt))
+            if adopted:
+                prefix = rng_virtual_var("")
+                spelled = spelled | {var[len(prefix) :] for var in adopted[1] if var.startswith(prefix)}
+        try:
+            return spelled | set(helper_seeded_modules(stmt, self.shell.user_ns))
+        except (SyntaxError, ValueError, AttributeError, RecursionError, TypeError):
+            return spelled
 
     def _with_input_definitions(self, chain: set[int], all_stmts: list[str]) -> set[int]:
         """Widen an RNG chain to include the definitions its statements read.
@@ -289,13 +348,10 @@ class RngRewind:
         the position a run from the top gives it: a value it makes can differ
         from a plain run. Said, never silent; once per statement.
         """
-        from ..callee_reach import helper_seeded_modules
-
         try:
             seeded = {rng_virtual_var(module) for module in seed_epochs()}
             if not seeded:
                 return
-            ns = self.shell.user_ns
             reset: set[str] = set()
             for stmt in statements:
                 tree = parse_cached(stmt)
@@ -305,9 +361,19 @@ class RngRewind:
                     continue  # its body seeds and draws when it is called
                 try:
                     spelled = {rng_virtual_var(module) for module in get_seeding_rng_modules(stmt)}
-                    called = {rng_virtual_var(module) for module in helper_seeded_modules(stmt, ns)}
                 except (SyntaxError, ValueError, AttributeError, RecursionError, TypeError):
-                    spelled = called = set()
+                    spelled = set()
+                called = {rng_virtual_var(module) for module in self._seeds(stmt)} - spelled
+                if tree is not None and len(tree.body) == 1 and isinstance(tree.body[0], (ast.With, ast.AsyncWith)):
+                    # ``with temp_seed(123):`` seeds before its body draws.
+                    from ..callee_reach import temp_seeded_modules
+
+                    for item in tree.body[0].items:
+                        context = ast.unparse(item.context_expr)
+                        spelled |= {
+                            rng_virtual_var(m)
+                            for m in self._seeds(context) | temp_seeded_modules(context, self.shell.user_ns)
+                        }
                 # A draw after a seed the statement spells reads that seed.
                 drawn = (hidden_lineage_reads(stmt) | observed_rng_reads(self.tracking_state, stmt)) & seeded
                 unset = drawn - reset - spelled
@@ -464,3 +530,26 @@ class RngRewind:
                 return  # nearest predecessor only, whether or not it was recorded
         except (AttributeError, IndexError, TypeError):  # pragma: no cover - defensive
             return
+
+
+def _only_defines(stmt: str) -> bool:
+    """Whether *stmt* only defines functions and classes."""
+    tree = parse_cached(stmt)
+    return (
+        tree is not None
+        and bool(tree.body)
+        and all(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for node in tree.body)
+    )
+
+
+def _calls_a_memo(stmt: str, namespace: dict) -> bool:
+    """Whether *stmt* calls a name bound to a wrapped function (a memo)."""
+    tree = parse_cached(stmt)
+    if tree is None:
+        return False
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and hasattr(namespace.get(node.func.id), "__wrapped__")
+        for node in ast.walk(tree)
+    )

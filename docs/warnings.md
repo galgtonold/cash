@@ -2306,10 +2306,12 @@ same as a run from the top.
 **What happened.** You ran a cell whose inputs were out of date, and cash ran
 a statement above it again to bring them up to date. That statement draws from
 a seeded random stream (`random`, `numpy.random`), and nothing cash ran before
-it seeds that stream again: the seed was set inside a function cash could not
-re-run for it (a `functools.cache` helper whose answer was already kept, a
-function of an imported module). So the draw continues from where the stream
-stands now. The message names the cell, the statement and the stream, once per
+it seeds that stream again: the seed was set where cash cannot set it again,
+such as a module that seeds when it is first imported (a second `import` does
+nothing). A seed cash can run again, written out, in a notebook function
+(`set_seed(0)`), in a library call it saw seed (`mylib.setup(0)`), or in a
+`with` that seeds for its body, is run again ahead of the draw, quietly. So the
+draw continues from where the stream stands now. The message names the cell, the statement and the stream, once per
 statement.
 
 **Why it matters.** The numbers it draws can differ from the ones a run from
