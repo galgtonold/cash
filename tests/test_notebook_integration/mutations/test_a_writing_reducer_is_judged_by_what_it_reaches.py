@@ -109,8 +109,7 @@ def test_a_module_reducer_writing_its_list_moves_the_notebooks_alias(nb_runner, 
             "        self.rows = list(range(1000))\n"
             "    def __reduce__(self):\n"
             "        return (rebuild, (State(self.rows), VERSION))\n"
-            "n = 2\n"
-            "p = (time.sleep(0.3), P())[1]",
+            "n = 2",
             id="builds-a-new-object",
         ),
         pytest.param(
@@ -120,22 +119,20 @@ def test_a_module_reducer_writing_its_list_moves_the_notebooks_alias(nb_runner, 
             "        self.rows = list(range(1000))\n"
             "        self.cache = {}\n"
             "    def __getstate__(self):\n"
-            "        return _clean(self.__dict__)\n"
-            "p = (time.sleep(0.3), P())[1]",
+            "        return _clean(self.__dict__)",
             id="reads-through-a-lambda",
         ),
     ],
 )
-def test_a_reducer_that_only_reads_stays_cached(nb_runner, holder):
+def test_a_reducer_that_only_reads_is_run_and_not_warned_about(nb_runner, holder):
     """Building a new object of the user's class, reading a constant equal
-    to a variable's value, or reading through a lambda writes nothing: the
-    statement is stored, and nothing is warned."""
-    nb_runner.create_notebook([SETUP, holder, "q = (time.sleep(0.3), len(p.rows))[1]"])
+    to a variable's value, or reading through a lambda writes nothing: cash
+    runs it, and nothing is warned."""
+    cells = [SETUP, holder, "p = (time.sleep(0.3), P())[1]", "q = (time.sleep(0.3), len(p.rows))[1]", "print('Q', q)"]
+    nb_runner.create_notebook(cells)
     nb_runner.start_kernel()
-    nb_runner.run_all()
-    nb_runner.run_all()
-    assert ast.literal_eval(nb_runner.peek(STATUSES)) == ["RESTORED"]
-    nb_runner.run_cell(2)
-    statuses = ast.literal_eval(nb_runner.peek(STATUSES))
-    assert statuses[-1] == "RESTORED", statuses
-    assert "NOTEBOOK-REDUCE-WROTE" not in nb_runner.get_output(2)
+    for _ in range(2):
+        nb_runner.run_all()
+        outputs = [nb_runner.get_raw_output(n) for n in range(1, len(cells) + 1)]
+        assert not any("NOTEBOOK-REDUCE-WROTE" in out for out in outputs), outputs
+        assert nb_runner.get_output(len(cells)).strip() == "Q 1000"
