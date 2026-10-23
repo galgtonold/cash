@@ -224,6 +224,7 @@ def test_cash_asks_such_an_object_nothing_but_to_pickle_it(cash_magics, tmp_path
     where a fast machine never stored it (a statement past the floor on a
     slow or loaded one)."""
     import numpy  # noqa: F401 - `kept_state._flat_array` looks only once numpy is loaded
+    import pandas  # noqa: F401 - the RAM tier's copy looks for frames only once pandas is loaded
 
     from cash import kept_state
 
@@ -241,13 +242,14 @@ def test_cash_asks_such_an_object_nothing_but_to_pickle_it(cash_magics, tmp_path
     ]
     for cell in cells:
         run_cash_cell(cash_magics, cell, cells=cells)
-    pickling = {"__class__", "__reduce_ex__", "__reduce__", "__getstate__"}
+    pickling = {"__class__", "__reduce_ex__", "__reduce__", "__getstate__", "__setstate__", "__dict__"}
     asked = {name: n for name, n in cash_magics.shell.user_ns["CALLS"].items() if name not in pickling | {"v"}}
     assert asked == {}
     asked_class = cash_magics.shell.user_ns["ASKED_CLASS"]
     # The key's pickle of ``c`` (read by the statements below it) and the
     # store's copy of it.
     assert len(asked_class) <= 2, "\n----\n".join(asked_class)
+    assert all("pickle" in stack for stack in asked_class), "\n----\n".join(asked_class)
 
 
 #: Classes whose instances raise for ``__class__``, as a property and from
