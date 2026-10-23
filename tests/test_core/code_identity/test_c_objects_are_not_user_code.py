@@ -13,6 +13,7 @@ kernel ``logging.basicConfig()`` alone was enough.
 from __future__ import annotations
 
 import _io
+import copyreg
 import importlib.machinery
 import io
 import logging
@@ -169,6 +170,18 @@ def test_an_execd_class_still_is(body):
     namespace: dict = {}
     exec(body, namespace)
     assert is_user_code_object(namespace["A"])
+
+
+def test_an_extensions_heap_type_once_copied_is_not_user_code():
+    """``copyreg`` caches ``__slotnames__`` on a type the first time one of
+    its objects is copied or pickled. On ``PyDataFrame``, after a cached
+    call returned a polars frame, the type counted as user code for the rest
+    of the process."""
+    pl = pytest.importorskip("polars")
+    native = type(pl.DataFrame({"a": [1]})._df)
+    copyreg._slotnames(native)
+    assert "__slotnames__" in vars(native)
+    assert not is_user_code_object(native)
 
 
 def test_a_polars_frame_argument_carries_no_code(cash_instance):
