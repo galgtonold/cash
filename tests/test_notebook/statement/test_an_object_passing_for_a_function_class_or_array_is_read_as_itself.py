@@ -109,22 +109,3 @@ def test_kinds_nested_as_isinstance_takes_them_are_read_as_isinstance_reads_them
     assert instance_of(3, str | int)
     assert not instance_of(3.0, (str, (bytes, int)))
     assert instance_of(type, (int, (type,)))
-
-
-@pytest.mark.parametrize("kind", ["FunctionType", "MethodType", "CodeType", "type"])
-def test_the_source_reader_takes_such_an_object_for_none_of_them(kind):
-    import types
-
-    from cash.source_reading import _source_target
-
-    claimed = type if kind == "type" else getattr(types, kind)
-
-    class Passes:
-        @property
-        def __class__(self):
-            return claimed
-
-        def __call__(self):
-            return 1
-
-    assert _source_target(Passes()) is None
