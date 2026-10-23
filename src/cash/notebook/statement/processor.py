@@ -203,6 +203,10 @@ from .thread_reach import ThreadReach
 
 __all__ = ["StatementProcessor", "is_control_body"]
 
+#: How long `StatementProcessor._check_alias_values` digests an alias's
+#: value: a number, a string, a small container, not a frame.
+_ALIAS_CHECK_BUDGET_S = 0.002
+
 # Debug log prefixes — module-level constants for filtering and consistency.
 _LOG_PROCESSOR = "[PROCESSOR]"
 
@@ -313,6 +317,9 @@ class StatementProcessor:
         self._amplification = AmplificationGuard()
         #: The variables work a statement left running can change (`thread_reach`).
         self._thread_reach = ThreadReach()
+        #: ``(alias statement, name) -> (its input lineages, its value's
+        #: digest)`` when it last ran (`_check_alias_values`).
+        self._alias_values: dict[tuple[str, str], tuple[tuple[tuple[str, str], ...], str]] = {}
         #: The work NOTEBOOK-WORK-RUNNING was given for.
         self._work_running_warned: set[str] = set()
         #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
@@ -946,6 +953,13 @@ class StatementProcessor:
                 "so the statement runs rather than be served"
             )
             self._warn_work_running(running)
+        elif cached_data is not None and self._thread_reach.reached(self._thread_reachable(run)):
+            # Work a statement left running changed, or may have changed,
+            # what this one reads, through a function or a copy as well as by
+            # name (``v = get()``, ``v = dict(D)['k']``): no lineage saw the
+            # change, so the stored value may be the old one. It runs, and
+            # what it binds is keyed by its value (`_left_work_running`).
+            metadata, cached_data = None, None
         run.entry_holders = bool(metadata is not None and metadata.holders)
         if _shadow.SHADOW is not None:
             _shadow.SHADOW.statement_lookup(self, run, bool(cached_data))
@@ -1692,6 +1706,7 @@ class StatementProcessor:
                 run.metrics["uncacheable_reasons"].append(workers)
         if execution.result.success:
             self._left_work_running(run, execution)
+            self._check_alias_values(run)
         unrecorded = unrecorded_reads(execution.file_tracker)
         if unrecorded is not None:
             reason = f"cash failed to record {unrecorded}, so the statement is not stored and runs every time"
@@ -1762,11 +1777,7 @@ class StatementProcessor:
                     "from then on is in no key, so the statement runs every time"
                 )
             return
-        try:
-            names = carrier_candidates(run.inputs or (), user_ns, self.tracking_state.variable_lineage)
-        except Exception:  # noqa: BLE001 - the inputs alone, then
-            names = set(run.inputs or ())
-        reached = self._thread_reach.reached(names)
+        reached = self._thread_reach.reached(self._thread_reachable(run))
         if reached:
             # What work in a thread changed is in no lineage: what the
             # statement binds or fills from it is keyed by its value, whatever
@@ -1780,6 +1791,56 @@ class StatementProcessor:
                     "so the statement runs every time"
                 )
         self._thread_reach.rebound(run.outputs or ())
+
+    def _check_alias_values(self, run: StatementRun) -> None:
+        """Key *run*'s aliases by value when one bound another value over the
+        same input lineages (``v = D['k']``, run again after work cash did not
+        see, from the console or a library's callback, changed ``D``).
+
+        An alias runs every time and its lineage stays pinned to its inputs'
+        lineages: with the inputs unchanged, a reader below would be served
+        what the old value gave. A value that takes more than a moment to
+        digest is not checked."""
+        aliases = attribute_or(run.analysis, "alias_targets", frozenset())
+        if not aliases or run.reads_outside_lineage or run.value_varies or self.compute_hash is None:
+            return
+        inputs = tuple(sorted(self.tracking_state.statement_entry_lineages.get(run.code, {}).items()))
+        user_ns = self.shell.user_ns
+        for name in aliases:
+            if name not in user_ns:
+                continue
+            value = user_ns[name]
+            try:
+                digest = value_hash.budgeted_hash(value, self.compute_hash, seconds=_ALIAS_CHECK_BUDGET_S)
+            except Exception:  # noqa: BLE001 - a value that cannot be read is not checked
+                digest = None
+            if digest is None or value_hash.is_identity_fallback_hash(value, digest):
+                self._alias_values.pop((run.code, name), None)
+                continue
+            before = self._alias_values.get((run.code, name))
+            self._alias_values[(run.code, name)] = (inputs, digest)
+            if before is not None and before[0] == inputs and before[1] != digest:
+                run.reads_outside_lineage = True
+
+    def _thread_reachable(self, run: StatementRun) -> set[str]:
+        return self._reachable_by_threads(run.inputs or ())
+
+    def _reachable_by_threads(self, inputs: Iterable[str]) -> set[str]:
+        """The variables a statement reading *inputs* reads that work in a
+        thread may change: its inputs and the globals the functions it calls
+        read."""
+        if not self._thread_reach.names:
+            return set()
+        try:
+            return carrier_candidates(inputs, self.shell.user_ns, self.tracking_state.variable_lineage)
+        except Exception:  # noqa: BLE001 - the inputs alone, then
+            return set(inputs)
+
+    def thread_changed(self, inputs: Iterable[str]) -> bool:
+        """Whether work a statement left running can have changed what a
+        statement reading *inputs* reads: an upstream restore of it would
+        bring back what it gave before the change (`CacheRestorer`)."""
+        return bool(self._thread_reach.reached(self._reachable_by_threads(inputs)))
 
     def _warn_work_running(self, running: str) -> None:
         """NOTEBOOK-WORK-RUNNING, once for each piece of work: cells run

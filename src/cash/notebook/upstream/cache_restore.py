@@ -106,6 +106,10 @@ class CacheRestorer:
         #: The cell's TTL (``ttl=`` of the run), which the statement's lookup
         #: applies to the entry the forward probe finds (`_lookup_refuses`).
         self.lookup_ttl: int | None = None
+        #: Called with a statement's inputs; True when work left running in a
+        #: thread can have changed what it reads, so its entry may hold what
+        #: it gave before (the statement processor's ``thread_changed``).
+        self.thread_changed: Callable[[set[str]], bool] | None = None
         #: What the entry the last successful `try_virtual_restore` restored
         #: showed when it ran: ``{"stdout", "stderr", "rich_outputs"}``.
         self.last_outputs: dict[str, Any] = {}
@@ -130,6 +134,9 @@ class CacheRestorer:
 
         if not self.probe.cash_instance:
             return set(), 0.0, 0.0
+        if self.thread_changed is not None and self.thread_changed(inputs):
+            logger.debug("[UPSTREAM] Not restored: work in a thread can have changed what it reads")
+            return set(), _perf_counter() - start_time, 0.0
 
         if virtual_modules is None:
             virtual_modules = set()
