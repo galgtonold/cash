@@ -54,6 +54,7 @@ __all__ = [
     "digest",
     "enabled",
     "forget",
+    "gen",
     "peek",
     "reset",
     "stats",
@@ -381,6 +382,17 @@ def tag(value: Any) -> None:
     if cw is None or cw.peek(value, KIND_WALKED) is not None:
         return
     cw.commit(value, KIND_WALKED, ("__cash_walked__", next(_TOKENS)), 0.0)
+
+
+def gen(value: Any) -> int | None:
+    """The arm generation of *value* while it is tracked and not seen
+    changed, else None: one number per arm in this process, never handed
+    out twice. Reads no content, so a write shows only at the next check
+    (`peek`)."""
+    cw = _cw
+    if cw is None:
+        return None
+    return cw.gen(value)
 
 
 def peek(value: Any, kind: int = KIND_VALUE) -> Any:

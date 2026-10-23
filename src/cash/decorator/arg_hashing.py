@@ -721,6 +721,14 @@ HANDED_DIGESTS: contextvars.ContextVar[Any] = contextvars.ContextVar("cash_hande
 #: arguments are checked after its body, on this context.
 CALL_POLARS: contextvars.ContextVar[Any] = contextvars.ContextVar("cash_call_polars", default=None)
 
+#: ``{id(argument): (argument, kind, part)}`` for the call whose key is being
+#: built (set by the decorator around its key build): what each list or
+#: tuple argument was keyed by, so the check after the body compares against
+#: the content the key holds, not the content when the body began. *kind* is
+#: KIND_PLAIN_KEY with the digest marker, or KIND_WALKED with the token, which
+#: is there only when no arm came between the walk and the tag.
+KEYED_PARTS: contextvars.ContextVar[dict | None] = contextvars.ContextVar("cash_keyed_parts", default=None)
+
 #: A polars argument at least this big (`estimated_size`) is remembered by
 #: `CallPolarsDigests`; a smaller one is read again.
 _CALL_POLARS_MIN_BYTES = 1 << 20
@@ -1698,6 +1706,13 @@ class ArgHasher:
             parts = [plain_key_part(a) for a in hashed_args]
             kwarg_parts = {k: plain_key_part(v) for k, v in hashed_kwargs.items()}
             form: tuple = (tuple(parts), kwarg_parts)
+            keyed = KEYED_PARTS.get()
+            pairs = list(zip([*parts, *kwarg_parts.values()], [*hashed_args, *hashed_kwargs.values()]))
+            walked_from = (
+                {id(v): value_watch.gen(v) for p, v in pairs if p is v and type(v) in _plain_data.TREE_NODES}
+                if keyed is not None and value_watch.WATCHING
+                else None
+            )
             walked: dict = {}
             args_bytes = canonical_bytes(form, self._content, hook=self._nested_hasher, seen=walked)
             shared = shared_across([*args, *kwargs.values()], [*hashed_args, *hashed_kwargs.values()], walked)
@@ -1711,9 +1726,23 @@ class ArgHasher:
             # own, so the fast hit path can serve the next call with it
             # while the watchers prove it unchanged. Not with a registered
             # hasher, whose code the walk ran and no watcher sees.
-            for part, value in zip([*parts, *kwarg_parts.values()], [*hashed_args, *hashed_kwargs.values()]):
+            for part, value in pairs:
                 if part is value and type(value) in _plain_data.TREE_NODES:
                     value_watch.tag(value)
+                    if walked_from is not None:
+                        # The token stands for the walked content only when
+                        # the value was armed, and not armed again, from
+                        # before the walk to after the tag: an arm by
+                        # another thread in between files a token for
+                        # content this key may not hold.
+                        armed = walked_from.get(id(value))
+                        token = value_watch.peek(value, value_watch.KIND_WALKED)
+                        if armed is not None and token is not None and value_watch.gen(value) == armed:
+                            keyed[id(value)] = (value, value_watch.KIND_WALKED, token)
+        if keyed is not None:
+            for part, value in pairs:
+                if part is not value and type(value) in _plain_data.TREE_NODES:
+                    keyed[id(value)] = (value, value_watch.KIND_PLAIN_KEY, part)
         return args_bytes
 
     def arg_hash(self, arg: Any) -> Any:

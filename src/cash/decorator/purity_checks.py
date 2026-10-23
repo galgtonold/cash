@@ -13,6 +13,7 @@ import itertools
 import logging
 import sys
 import textwrap
+import threading
 import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -771,6 +772,18 @@ class _Watched:
         self.token = token
 
 
+def _snapshot_is_of_key(value: Any, held: tuple | None) -> bool:
+    """Is the identity snapshot just taken of *value* one of the content its
+    key was built from (*held*, from `arg_hashing.KEYED_PARTS`)? When the
+    watchers still give the key's digest, no write came since it was taken
+    (or what was written was put back); with no other thread alive, nothing
+    ran in between but cash."""
+    if held is not None and held[1] == value_watch.KIND_PLAIN_KEY and value_watch.WATCHING:
+        if value_watch.peek(value, value_watch.KIND_PLAIN_KEY) == held[2]:
+            return True
+    return threading.active_count() == 1
+
+
 def _cannot_change(value: Any) -> bool:
     """Whether *value* can never change in place: an exact immutable
     primitive, or an exact tuple or frozenset of such values."""
@@ -1272,7 +1285,7 @@ class PurityChecks:
         return capture_argument_carrier_states(held) if held else []
 
     def argument_identities(
-        self, func_name: str, args: tuple, kwargs: dict
+        self, func_name: str, args: tuple, kwargs: dict, keyed: dict | None = None
     ) -> tuple[dict[str, tuple[Any, list]], bool]:
         """``({parameter: (value, identity snapshot)}, covers_all)`` for the
         plain lists and tuples a call receives, before the body runs.
@@ -1292,6 +1305,14 @@ class PurityChecks:
         A list of records, which has no identity snapshot, counts as covered
         while the watchers prove it unchanged since its key was built (its
         `value_watch.tag` token); the hash runs when they saw any write.
+
+        Both stand for the content the key was built from only when nothing
+        changed it in between, and another thread can, between the key build
+        and here. *keyed* is what the key build saw (`arg_hashing.KEYED_PARTS`):
+        a list of records counts with the token taken there, and a list of
+        plain values once its snapshot is shown to be of the content the key
+        holds -- the watchers still give the key's digest after it is taken,
+        or no other thread runs.
         """
         try:
             canon_args, canon_kwargs = self._checked_arguments(func_name, args, kwargs)
@@ -1302,15 +1323,19 @@ class PurityChecks:
         named = [(f"*args[{i}]", v) for i, v in enumerate(canon_args)] + list(canon_kwargs.items())
         for name, value in named:
             if type(value) is list or type(value) is tuple:
+                held = keyed.get(id(value)) if keyed else None
+                if held is not None and held[0] is not value:
+                    held = None
                 snapshot = _plain_data.identity_snapshot(value)
                 if snapshot is None:
-                    token = value_watch.peek(value, value_watch.KIND_WALKED) if value_watch.WATCHING else None
-                    if token is None:
+                    if held is None or held[1] != value_watch.KIND_WALKED:
                         covers_all = False
                     else:
-                        found[name] = (value, _Watched(token))
+                        found[name] = (value, _Watched(held[2]))
                 elif any(level is not None for level in snapshot):
                     found[name] = (value, snapshot)
+                    if covers_all and not _snapshot_is_of_key(value, held):
+                        covers_all = False
             elif not _cannot_change(value):
                 covers_all = False
         return found, covers_all

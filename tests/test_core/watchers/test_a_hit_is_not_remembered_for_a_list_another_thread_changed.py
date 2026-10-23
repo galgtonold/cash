@@ -7,6 +7,11 @@ token, and the first call's result, built for the old content, was filed
 under it. The next call was served the old result. The token is now read
 before the key is built, and a hit is remembered only if it is still the
 same afterwards.
+
+The key of a list of plain values is a digest of its content, so it comes
+back when the content is put back: a hit keyed from the content in between
+was filed under it. Each arm of a watched value has a number never handed
+out again (`cwatch.keyed`), and that is compared too.
 """
 
 from __future__ import annotations
@@ -50,9 +55,14 @@ def _sum_records(lst):
     return sum(p.x for p in lst)
 
 
+def _many_ints():
+    return list(range(5000))  # past what the memo key holds by value: watched
+
+
 KINDS = {
     "records": (_records, _set_records, _sum_records),
     "ints": (_ints, _set_ints, sum),
+    "many ints": (_many_ints, _set_ints, sum),
 }
 
 
@@ -97,6 +107,9 @@ def test_a_hit_paused_while_another_thread_changes_the_list(tmp_path, watching, 
     f(changed)  # the changed content's entry, from an equal copy
     for _ in range(8):
         f(lst)  # the first content's entry, and the memo warm
+    before = hit_memo.status()["fast_hits"]
+    assert f(lst) == truth(lst)
+    assert hit_memo.status()["fast_hits"] > before, "the list never took the fast path"
     hit_memo.bump()  # the next call takes the ordinary path, and offers
 
     paused, resume = threading.Event(), threading.Event()
@@ -118,6 +131,66 @@ def test_a_hit_paused_while_another_thread_changes_the_list(tmp_path, watching, 
         resume.set()
         worker.stop()
     assert result == [truth(make())]
+
+    assert f(lst) == truth(lst)
+    assert f(lst) == truth(lst)
+
+
+@pytest.mark.parametrize("kind", KINDS.values(), ids=KINDS.keys())
+def test_a_hit_keyed_while_the_list_was_changed_and_put_back(tmp_path, watching, monkeypatch, kind):
+    make, set_item, truth = kind
+
+    def total(lst):
+        return truth(lst)
+
+    keyed, keyed_on = threading.Event(), threading.Event()
+    offered, offer_on = threading.Event(), threading.Event()
+    real_epochs, real_entry = hit_memo.epochs, hit_memo.HitMemo._entry
+    pausing: list = []
+
+    def epochs(spec, args, kwargs):
+        found = real_epochs(spec, args, kwargs)
+        if pausing and threading.current_thread() is pausing[0] and not keyed.is_set():
+            keyed.set()
+            assert keyed_on.wait(10)
+        return found
+
+    def entry(self, call, hit):
+        if pausing and threading.current_thread() is pausing[0] and not offered.is_set():
+            offered.set()
+            assert offer_on.wait(10)
+        return real_entry(self, call, hit)
+
+    # Patched before the memo is warm: a module's attribute set moves the
+    # world epoch the memo is keyed by.
+    monkeypatch.setattr(hit_memo, "epochs", epochs)
+    monkeypatch.setattr(hit_memo.HitMemo, "_entry", entry)
+    worker = Worker()
+    f = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False).cache(total)
+    lst = make()
+    watching["lst"] = lst
+    changed = make()
+    set_item(changed, 9)
+    f(changed)
+    f(changed)  # the changed content's entry, from an equal copy
+    for _ in range(8):
+        f(lst)  # the first content's entry, and the memo warm
+    hit_memo.bump()
+
+    pausing.append(worker.thread)
+    try:
+        result = worker.call(lambda: f(lst))
+        assert keyed.wait(10), "the worker never took the epochs"
+        set_item(lst, 9)  # the worker's key is built from this content
+        keyed_on.set()
+        assert offered.wait(10), "the worker's hit was never offered"
+        set_item(lst, 5)  # and put back before it offers
+        assert f(lst) == truth(lst)
+    finally:
+        keyed_on.set()
+        offer_on.set()
+        worker.stop()
+    assert result == [truth(changed)]
 
     assert f(lst) == truth(lst)
     assert f(lst) == truth(lst)
