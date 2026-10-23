@@ -1136,7 +1136,14 @@ class StatementLineage:
         if entry is None:
             return {}
         key, lineages = entry
-        if self._key(stmt_code, inputs, outputs, virtual_lineage, virtual_modules, occurrence_index) != key:
+        # An import is keyed with its module's lineage once the module is
+        # loaded, and the run that seeded keyed it before: the first import
+        # ran it. Its source is what the seed went with.
+        is_import = stmt_code.strip().startswith(("import ", "from "))
+        if (
+            not is_import
+            and self._key(stmt_code, inputs, outputs, virtual_lineage, virtual_modules, occurrence_index) != key
+        ):
             return {}
         return dict(lineages)
 

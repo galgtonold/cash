@@ -93,3 +93,43 @@ def test_after_a_restart_a_temp_seed_helper_runs_after_the_import_it_reads(nb_ru
     nb_runner.run_cell(last)
     shown = nb_runner.get_raw_output(last)
     assert f"M {namespace['m'][:2]}" in shown, shown
+
+
+@pytest.mark.parametrize("how", ["library function", "seed in __init__"])
+def test_after_a_restart_the_last_cell_alone_draws_from_the_seed(nb_runner, how, tmp_path):
+    """The seed cash saw when the statement ran is kept across the restart,
+    so the draw it rebuilds for the last cell is a run from the top's."""
+    (tmp_path / "rsclib.py").write_text(LIBRARY)
+    cells, _edited, _edit = CASES[how]
+    cells = [cell.format(lib=str(tmp_path)) for cell in cells]
+    namespace: dict = {}
+    exec("\n".join(cells).replace("time.sleep(0.2)", "0"), namespace)
+
+    nb_runner.create_notebook(["%cash_badge print\n" + cells[0], *cells[1:], "print('M', m[:2])"])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.restart()
+    nb_runner._init_cash()
+    last = len(cells) + 1
+    nb_runner.run_cell(last)
+    shown = nb_runner.get_raw_output(last)
+    assert f"M {namespace['m'][:2]}" in shown, shown
+
+
+def test_a_draw_below_an_import_that_seeds_is_drawn_once_on_the_first_run_all(nb_runner, tmp_path):
+    """``import seedmod`` seeds ``random`` as it loads. The first Run All
+    draws ``x`` once: the cell that prints it does not draw it again."""
+    (tmp_path / "seedmod.py").write_text("import random\nrandom.seed(11)\n")
+    cells = [
+        f"%cash_badge print\nimport random, sys\nsys.path.insert(0, {str(tmp_path)!r})\nimport seedmod",
+        "x = random.random()",
+        "print('X', x)",
+    ]
+    import random
+
+    first = random.Random(11).random()
+    nb_runner.create_notebook(cells)
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    shown = nb_runner.get_raw_output(3)
+    assert f"X {first}" in shown and "Upstream" not in shown, shown

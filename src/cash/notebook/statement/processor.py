@@ -197,7 +197,7 @@ from ..value_cutoff import LineageAliasStore
 from ..write_observer import children_left_running, kept_writes, observe_writes, process_runs
 from . import hidden_generators
 from .lineage import note_own_writes
-from .observed_draws import ObservedDrawStore
+from .observed_draws import AdoptedSeedStore, ObservedDrawStore
 from .thread_reach import ThreadReach
 
 __all__ = ["StatementProcessor", "is_control_body"]
@@ -372,6 +372,7 @@ class StatementProcessor:
             _guard_dir = None
         self._miss_guard = MissGuard(_guard_dir)
         self._randomness.use_draw_store(ObservedDrawStore(_guard_dir) if _guard_dir else None)
+        self._randomness.use_seed_store(AdoptedSeedStore(_guard_dir) if _guard_dir else None)
         self._evicted = EvictedRecomputes()
 
         # Statement-level file-dep tracker. Stateless w.r.t. tracking state —

@@ -52,7 +52,7 @@ from ...source_norm import exact_source_digest
 from ...source_reading import own_source
 from ..callee_reach import helper_seeded_modules, reached_user_code
 from .held_generators import HeldGenerators
-from .observed_draws import ObservedDrawStore
+from .observed_draws import AdoptedSeedStore, ObservedDrawStore
 
 _LIBRARY_DRAW_FIX = (
     "pass random_state=<int> (polars: seed=<int>) to make it reproducible, put "
@@ -147,6 +147,7 @@ class StatementRandomness:
         self._cell_post: dict | None = None
         #: Where the hidden draws learnt are kept across kernels (`use_draw_store`).
         self._draw_store: ObservedDrawStore | None = None
+        self._seed_store: AdoptedSeedStore | None = None
         #: `judged_draws` when this statement began: a cached
         #: function inside it that reported its own draw moves it.
         self._draw_warnings_at_start = 0
@@ -242,8 +243,12 @@ class StatementRandomness:
             digest, key = last
             if adopted:
                 self.tracking_state.adopted_rng_after[digest] = (key, adopted)
-            else:
+            elif digest in self.tracking_state.adopted_rng_after:
                 self.tracking_state.adopted_rng_after.pop(digest, None)
+            else:
+                return
+            if self._seed_store is not None:
+                self._seed_store.record(digest, self.tracking_state.adopted_rng_after.get(digest))
 
     def statement_done(self, code: str, cache_key: str) -> None:
         """Note that the statement *code* keyed *cache_key* ran or was
@@ -845,6 +850,18 @@ class StatementRandomness:
         ledger = self.tracking_state.observed_rng_statement_draws
         for digest, modules in store.draws().items():
             ledger[digest] = ledger.get(digest, set()) | modules
+
+    def use_seed_store(self, store: AdoptedSeedStore | None) -> None:
+        """Keep the seeds adopted after a statement in *store*, and take in
+        the ones an earlier kernel adopted there: without them, after a
+        restart, a cell run alone keys and rebuilds the draws below such a
+        seed as if the stream were unseeded (`AdoptedSeedStore`)."""
+        self._seed_store = store
+        if store is None:
+            return
+        adopted = self.tracking_state.adopted_rng_after
+        for digest, entry in store.seeds().items():
+            adopted.setdefault(digest, entry)
 
     def begin_cell(self) -> None:
         """Open a fresh per-cell RNG accumulation, before the cell's statements run."""

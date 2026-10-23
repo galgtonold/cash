@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from ..versioned_json_store import VersionedJsonStore
 
-__all__ = ["ObservedDrawStore"]
+__all__ = ["AdoptedSeedStore", "ObservedDrawStore"]
 
 #: Oldest statements go first past this many: the file is rewritten on
 #: every new one.
@@ -56,4 +56,52 @@ class ObservedDrawStore(VersionedJsonStore[frozenset[str]]):
         self._items[digest] = frozenset(modules)
         while len(self._items) > _MAX_STATEMENTS:
             del self._items[next(iter(self._items))]
+        self._write()
+
+
+class AdoptedSeedStore(VersionedJsonStore[tuple[str, dict[str, str]]]):
+    """``exact source digest -> (its key, {RNG variable: lineage})``: what a
+    statement seeded through code cash does not read as seeding
+    (``mylib.setup(4)``, a seed in ``__init__``), as ``adopted_rng_after``
+    keeps it. A restart forgot it, so a cell run alone after one keyed and
+    rebuilt the draws below such a seed as if the stream were unseeded.
+
+    The lineage is a function of where the seed put the stream, the same in
+    every kernel; the key is checked before it is used, so a statement that
+    changed since takes nothing from here.
+    """
+
+    FILENAME = "adopted_seeds.json"
+    VERSION = 1
+    FIELD = "seeds"
+    LOG_TAG = "ADOPTED_SEEDS"
+
+    def _load_value(self, value: object) -> tuple[str, dict[str, str]] | None:
+        if (
+            isinstance(value, list)
+            and len(value) == 2
+            and isinstance(value[0], str)
+            and isinstance(value[1], dict)
+            and all(isinstance(k, str) and isinstance(v, str) for k, v in value[1].items())
+        ):
+            return value[0], dict(value[1])
+        return None
+
+    def _dump_value(self, value: tuple[str, dict[str, str]]) -> list:
+        return [value[0], dict(sorted(value[1].items()))]
+
+    def seeds(self) -> dict[str, tuple[str, dict[str, str]]]:
+        self._ensure_loaded()
+        return dict(self._items)
+
+    def record(self, digest: str, entry: tuple[str, dict[str, str]] | None) -> None:
+        """Keep *entry* for *digest* (None: forget it), written out at once."""
+        self._ensure_loaded()
+        if self._items.get(digest) == entry:
+            return
+        self._items.pop(digest, None)
+        if entry is not None:
+            self._items[digest] = entry
+            while len(self._items) > _MAX_STATEMENTS:
+                del self._items[next(iter(self._items))]
         self._write()

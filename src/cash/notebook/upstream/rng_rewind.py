@@ -270,9 +270,11 @@ class RngRewind:
         spelled = get_seeding_rng_modules(stmt)
         if surely and _calls_a_memo(stmt, self.shell.user_ns):
             return spelled
-        if not surely:
+        if not surely and not stmt.lstrip().startswith(("import ", "from ")):
             # Seen to seed when it last ran, through code cash does not read
             # as seeding (``mylib.setup(4)``, ``Exp(3)`` seeding in __init__).
+            # Not an import: run again, it finds its module loaded and seeds
+            # nothing.
             adopted = self.tracking_state.adopted_rng_after.get(exact_source_digest(stmt))
             if adopted:
                 prefix = rng_virtual_var("")
