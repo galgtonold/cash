@@ -580,6 +580,22 @@ device driver filling a buffer) cannot be seen at all: cash reads that buffer
 as it finds it. **Fix:** copy such a buffer (`data = buf.copy()`) in the cell
 that stops the stream, and use the copy.
 
+### A class whose pickling changes other values
+
+<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d -->
+cash pickles values to hash and store them, and pickling runs a class's own
+`__getstate__` or `__reduce__`. One that changes something else (a module's
+list, a global array, the object being pickled) would change it where plain
+Python never pickles at all, so cash does not run it: the value is not stored,
+and the statement runs again next time, with
+[NOTEBOOK-REDUCE-WROTE](warnings.md#notebook-reduce-wrote). This also happens
+when cash cannot tell: the method's source cannot be read, it changes the
+object it pickles, or it hands a global the notebook holds (or a module
+holding it) to a library call, such as `np.copyto(ARR, 5)` or `np.mean(ARR)`,
+whose effect cash does not read.
+**Fix:** have `__getstate__` / `__reduce__` only read, and change those values
+in the cell that needs them.
+
 ### A loop variable changed before it is read
 
 <!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @5304abe8 -->

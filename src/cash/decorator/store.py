@@ -26,6 +26,7 @@ from ..closure_sharing import closure_check_budget, closures_sharing
 from ..content_hashers import builtin_family_of, builtin_hash
 from ..effect_observer import EffectObserver
 from ..exceptions import CacheBackendError, CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
+from ..kept_state import ReducerNotRun
 from ..lineage_tag import own_tag, set_tags
 from ..sizing import estimate_object_size
 from ..tracking.randomness import CashRandomnessWarning
@@ -61,6 +62,15 @@ STORE_FAILED_FIX = (
     "read the exception: a full disk, a cache_dir you cannot write to, or a "
     "value that cannot be pickled -- return the data, not the handle that "
     "produced it."
+)
+
+#: The fix when the notebook kept cash from running a reducer of the user's
+#: that writes what the notebook holds (`kept_state.set_reducer_veto`).
+REDUCER_NOT_RUN_FIX = (
+    "the result's own __reduce__ / __getstate__ changes values the notebook "
+    "holds, and pickling it to store it would change them where plain Python "
+    "never does: have it only read, and change those values in the code that "
+    "needs them."
 )
 
 
@@ -758,7 +768,7 @@ class ResultStore:
                 f"result ({type(e).__name__}: {e}). Compute succeeded, nothing was "
                 f"stored, and the next call recomputes.",
                 code="STORE-FAILED",
-                fix=STORE_FAILED_FIX,
+                fix=REDUCER_NOT_RUN_FIX if isinstance(e, ReducerNotRun) else STORE_FAILED_FIX,
             )
             return False
 

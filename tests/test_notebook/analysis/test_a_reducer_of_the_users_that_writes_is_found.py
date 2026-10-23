@@ -131,10 +131,10 @@ def test_what_a_writer_reaches_is_found_by_object_not_by_name():
     assert reducer_writes.reach([writer], {"table": TABLE}) == {"table"}
 
 
-def test_one_whose_source_cannot_be_read_is_run_not_refused(monkeypatch):
-    """Its code unread, what it changes is told after it ran (every
-    variable moves): refused, an ``exec``'d class's pure ``__getstate__``
-    stopped every pickle of it."""
+def test_one_whose_source_cannot_be_read_is_refused_not_run(monkeypatch):
+    """Its code unread, what it changes cannot be told: not run, it changes
+    nothing, and only the value holding it is not stored. Run, every
+    variable moved after it."""
     import sys
     import types
 
@@ -146,6 +146,108 @@ def test_one_whose_source_cannot_be_read_is_run_not_refused(monkeypatch):
     reducer_writes.watch({"a": []})
     try:
         assert reducer_writes._writer(module.Chosen).functions is None
-        assert not reducer_writes.refuses(module.Chosen)
+        assert reducer_writes.refuses(module.Chosen)
     finally:
-        reducer_writes._NAMESPACE[0] = None
+        reducer_writes.unwatch()
+
+
+VERSION = 2
+
+
+class State:
+    def __init__(self, d):
+        self.d = d
+
+
+class BuildsOne:
+    def __reduce__(self):
+        return (list, (State(self.rows), VERSION))
+
+
+class StateChangingWhatItIsHanded:
+    def __init__(self, d):
+        self.d = d
+        self.d.append(1)
+
+
+class BuildsOneThatChangesItsArgument:
+    def __reduce__(self):
+        return (list, (StateChangingWhatItIsHanded(self.rows),))
+
+
+_clean = lambda d: {k: v for k, v in d.items() if k != "cache"}
+
+
+class ReadsThroughALambda:
+    def __getstate__(self):
+        return _clean(self.__dict__)
+
+
+COUNT = 0
+
+
+class CountsInAGlobalNumber:
+    def __reduce__(self):
+        global COUNT
+        COUNT += 1
+        return (CountsInAGlobalNumber, ())
+
+
+def test_building_a_new_object_of_the_users_class_is_no_write():
+    assert reducer_writes._decide(BuildsOne) is None
+
+
+def test_building_one_whose_init_changes_its_argument_writes():
+    assert reducer_writes._decide(BuildsOneThatChangesItsArgument) is not None
+
+
+def test_a_lambda_that_only_reads_is_read():
+    assert reducer_writes._decide(ReadsThroughALambda) is None
+
+
+def test_an_equal_number_is_not_the_number_a_writer_changes():
+    """``n = 1`` shares its object with any other 1: matched by id, a
+    writer of ``COUNT`` reached it. Only the name it rebinds is reached,
+    and only in its own namespace."""
+    writer = reducer_writes._decide(CountsInAGlobalNumber)
+    assert writer is not None
+    assert reducer_writes.reach([writer], {"n": COUNT, "m": 2}) == set()
+    assert reducer_writes.reach([writer], globals()) >= {"COUNT"}
+
+
+def test_a_module_whose_list_it_changes_is_reached_through_the_module():
+    """``len(rmod.SEEN)`` reads the list through the module: the notebook
+    holds ``rmod``, not ``SEEN``. So does a function of the module."""
+    import sys
+
+    module = sys.modules[__name__]
+    writer = reducer_writes._decide(HandsAGlobalOn)
+    assert reducer_writes.reach([writer], {"rmod": module}) == {"rmod"}
+    assert reducer_writes.reach([writer], {"record": _record}) == {"record"}
+
+
+ARR: list = [0.0]
+
+
+class HandsAGlobalToALibrary:
+    def __getstate__(self):
+        import operator
+
+        operator.setitem(ARR, 0, 5.0)
+        return {}
+
+
+def test_a_global_handed_to_a_library_call_counts_as_written():
+    writer = reducer_writes._decide(HandsAGlobalToALibrary)
+    assert writer is not None and "ARR" in writer.handed
+    assert reducer_writes.reach([writer], {"arr": ARR}) == {"arr"}
+
+
+def test_cash_off_runs_every_reducer_again():
+    reducer_writes.watch({"table": TABLE})
+    try:
+        assert reducer_writes.refuses(WritesAGlobal)
+    finally:
+        reducer_writes.unwatch()
+    reducer_writes.runs_now()
+    assert not reducer_writes.refuses(WritesAGlobal)

@@ -2115,7 +2115,7 @@ bottom once. It is shown once per session.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @f8da48a1, cash/notebook/statement/reducer_writes.py:_decide @a0ec2964, cash/notebook/statement/processor.py:StatementProcessor._move_what_reducers_wrote @a8f482f2 -->
+<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_decide @6c9fffd5, cash/notebook/statement/processor.py:StatementProcessor._move_what_reducers_wrote @a8f482f2 -->
 **What happened.** cash pickles a statement's values to hash and store
 them, and pickling runs the value's own `__reduce__`, `__reduce_ex__`,
 `__getstate__` or `__getnewargs__` (or a reducer you registered with
@@ -2125,15 +2125,24 @@ changes it, or changes the object being pickled. Plain Python never runs it ther
 cash does not run it either: it does not pickle the value, as it does not
 pickle one that cannot be pickled. The message names the class. The
 statement was not stored. A reducer whose code reaches no variable of the
-notebook (a counter in its own module) runs as before, with no warning;
-what it reaches is found by object, so a module's list the notebook holds
-under another name counts. A helper that edits a fresh copy it is handed
-(`_drop(self.__dict__.copy(), keys)`) changes nothing of yours.
+notebook (a counter in its own module the notebook does not import) runs
+as before, with no warning; what it reaches is found by object, so a
+module's list the notebook holds under another name counts, and so does
+the module itself when the notebook reads the list through it
+(`len(rmod.SEEN)`). A helper that edits a fresh copy it is handed
+(`_drop(self.__dict__.copy(), keys)`), or the `__init__` of a new object
+it builds (`State(self.rows)`), changes nothing of yours.
 
-A reducer whose source cash cannot read runs, as do those cash finds out
-about only after they ran (the class could not be named): the variables
-its code can reach count as changed, or every variable when its code or
-that reach cannot be read, and the message says which.
+cash does not run one it cannot read either (its source is not there), nor
+one that hands a value the notebook holds to a library call
+(`np.copyto(ARR, 5)`): what those change cannot be told. Those cash finds
+out about only after they ran (the class could not be named) count every
+variable as changed, and the message says so.
+
+Outside a notebook with cash on, or after `%cash_off`, cash's pickles run
+every reducer, as before. A `@cash.cache` function called in such a
+notebook does not store a result whose reducer would change values the
+notebook holds, and says so (`STORE-FAILED`).
 
 **Why it matters.** Your results are correct: the variables hold what
 plain Python leaves in them. The statement runs again every time, and a

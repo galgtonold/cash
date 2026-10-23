@@ -90,3 +90,52 @@ def test_a_module_reducer_writing_its_list_moves_the_notebooks_alias(nb_runner, 
         got.append(nb_runner.get_output(len(cells)).strip())
     # Plain Python never pickles ``d``, so ``SEEN`` stays empty.
     assert got == ["K 0 0"] * 3, got
+
+
+@pytest.mark.parametrize(
+    "holder",
+    [
+        pytest.param(
+            "VERSION = 2\n"
+            "class State:\n"
+            "    def __init__(self, d):\n"
+            "        self.d = d\n"
+            "def rebuild(s, v):\n"
+            "    p = P.__new__(P)\n"
+            "    p.rows = s.d\n"
+            "    return p\n"
+            "class P:\n"
+            "    def __init__(self):\n"
+            "        self.rows = list(range(1000))\n"
+            "    def __reduce__(self):\n"
+            "        return (rebuild, (State(self.rows), VERSION))\n"
+            "n = 2\n"
+            "p = (time.sleep(0.3), P())[1]",
+            id="builds-a-new-object",
+        ),
+        pytest.param(
+            "_clean = lambda d: {k: v for k, v in d.items() if k != 'cache'}\n"
+            "class P:\n"
+            "    def __init__(self):\n"
+            "        self.rows = list(range(1000))\n"
+            "        self.cache = {}\n"
+            "    def __getstate__(self):\n"
+            "        return _clean(self.__dict__)\n"
+            "p = (time.sleep(0.3), P())[1]",
+            id="reads-through-a-lambda",
+        ),
+    ],
+)
+def test_a_reducer_that_only_reads_stays_cached(nb_runner, holder):
+    """Building a new object of the user's class, reading a constant equal
+    to a variable's value, or reading through a lambda writes nothing: the
+    statement is stored, and nothing is warned."""
+    nb_runner.create_notebook([SETUP, holder, "q = (time.sleep(0.3), len(p.rows))[1]"])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.run_all()
+    assert ast.literal_eval(nb_runner.peek(STATUSES)) == ["RESTORED"]
+    nb_runner.run_cell(2)
+    statuses = ast.literal_eval(nb_runner.peek(STATUSES))
+    assert statuses[-1] == "RESTORED", statuses
+    assert "NOTEBOOK-REDUCE-WROTE" not in nb_runner.get_output(2)
