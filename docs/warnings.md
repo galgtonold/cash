@@ -2140,7 +2140,7 @@ bottom once. It is shown once per session.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_decide @6c9fffd5, cash/notebook/statement/processor.py:StatementProcessor._move_what_reducers_wrote @a8f482f2, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @7d51958d, cash/decorator/store.py:_store_error @150ddaae -->
+<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_decide @6c9fffd5, cash/notebook/statement/processor.py:StatementProcessor._move_what_reducers_wrote @a8f482f2, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @b090d7eb, cash/decorator/store.py:_store_error @150ddaae -->
 **What happened.** cash pickles a statement's values to hash and store
 them, and pickling runs the value's own `__reduce__`, `__reduce_ex__`,
 `__getstate__` or `__getnewargs__` (or a reducer you registered with

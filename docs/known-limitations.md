@@ -618,7 +618,7 @@ that stops the stream, and use the copy.
 
 ### A class whose pickling changes other values
 
-<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @7d51958d -->
+<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @b090d7eb -->
 cash pickles values to hash and store them, and pickling runs a class's own
 `__getstate__` or `__reduce__`. One that changes something else (a module's
 list, a global array, the object being pickled) would change it where plain
