@@ -151,3 +151,59 @@ def test_a_parent_step_after_a_linked_folder_goes_where_the_open_goes(tmp_path, 
     finally:
         file_dep_snapshot.end_file_state_epoch()
     assert os.path.normcase(resolved) == os.path.normcase(os.path.realpath(path))
+
+
+# One photo in each of 5,750 folders paid a full `realpath` per folder, ~30 us
+# each. A folder that is no link resolves through its parent, resolved once.
+
+
+def _read_in_a_run(paths):
+    file_dep_snapshot.begin_file_state_epoch()
+    try:
+        return [realpath_of_read_this_run(str(p))[0] for p in paths]
+    finally:
+        file_dep_snapshot.end_file_state_epoch()
+
+
+def test_files_in_many_folders_resolve_their_parent_once(tmp_path, resolutions):
+    files = []
+    for i in range(30):
+        f = tmp_path / "people" / f"person{i}" / "face.jpg"
+        f.parent.mkdir(parents=True)
+        f.write_bytes(b"x")
+        files.append(f)
+    got = _read_in_a_run(files)
+    asked = list(resolutions)
+    assert got == [os.path.realpath(str(f)) for f in files]
+    if os.name != "nt":
+        assert len(asked) <= 1, asked
+
+
+def test_a_linked_folder_on_the_way_is_followed(tmp_path):
+    real = tmp_path / "real"
+    (real / "sub").mkdir(parents=True)
+    (real / "sub" / "data.csv").write_text("x", encoding="utf-8")
+    try:
+        os.symlink(real, tmp_path / "link", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("cannot create a symlink here")
+    path = tmp_path / "link" / "sub" / "data.csv"
+    assert _read_in_a_run([path]) == [os.path.realpath(str(path))]
+    assert os.path.normcase(normalize_path(_read_in_a_run([path])[0])).endswith(os.path.normcase("real/sub/data.csv"))
+
+
+def test_a_folder_made_a_link_resolves_to_its_target_in_the_next_run(tmp_path):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "a.csv").write_text("old", encoding="utf-8")
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere" / "a.csv").write_text("new", encoding="utf-8")
+    path = tmp_path / "data" / "a.csv"
+    first = _read_in_a_run([path])[0]
+    os.rename(tmp_path / "data", tmp_path / "old")
+    try:
+        os.symlink(tmp_path / "elsewhere", tmp_path / "data", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("cannot create a symlink here")
+    second = _read_in_a_run([path])[0]
+    assert first != second
+    assert second == os.path.realpath(str(path))

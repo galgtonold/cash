@@ -211,7 +211,7 @@ def realpath_of_read_this_run(
                 resolved = folders[key] = os.path.realpath(folder)
             return resolved
     else:
-        resolve_folder = realpath_this_run
+        resolve_folder = _folder_realpath_this_run
         key = ("" if os.path.isabs(path) else os.getcwd(), path)
         if _REALPATH_MEMO_EPOCH == epoch:
             resolved = _REALPATH_MEMO.get(key)
@@ -252,6 +252,35 @@ def realpath_of_read_this_run(
                 _remember_realpath(key, resolved)
             return resolved, (st if _stat.S_ISREG(st.st_mode) else None)
     return (realpath_this_run(path) if epoch is not None else os.path.realpath(path)), None
+
+
+def _folder_realpath_this_run(folder: str) -> str:
+    """`realpath_this_run` of the absolute *folder*, with no ``..`` in it.
+
+    ``realpath`` looks at every part of a path again: a statement reading one
+    photo from each of 5,750 folders paid ~30 us a folder for it. A folder
+    that is no link resolves to its parent's real path plus its name, so the
+    parent, resolved once, answers for all its folders, and the folder's own
+    ``lstat`` is the one look it needs. Not on Windows, whose ``realpath``
+    also answers each name as the disk spells it."""
+    if os.name != "nt" and HASH_EPOCH is not None:
+        if _REALPATH_MEMO_EPOCH == HASH_EPOCH:
+            resolved = _REALPATH_MEMO.get(("", folder))
+            if resolved is not None:
+                return resolved
+        parent, name = os.path.split(folder)
+        if name and parent != folder:
+            try:
+                st = own_lstat(folder)
+            except (OSError, ValueError):
+                st = None
+            if st is not None and _stat.S_ISDIR(st.st_mode):
+                # The parents up to the root are resolved first, which starts
+                # this run's memo (`realpath_this_run`).
+                resolved = os.path.join(_folder_realpath_this_run(parent), name)
+                _remember_realpath(("", folder), resolved)
+                return resolved
+    return realpath_this_run(folder)
 
 
 #: ``FILE_ATTRIBUTE_REPARSE_POINT``: a symlink or junction on Windows.
