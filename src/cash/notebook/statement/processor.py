@@ -1185,15 +1185,11 @@ class StatementProcessor:
         """The outputs of *run* keyed by value (`_drawn_names`,
         `_changed_from_refused_entry`), noted for its entry to keep.
 
-        None in a statement of a control structure's body: the simulation
-        models the structure as one statement and cannot find digests filed
-        for its body (`ControlSimulation`), so a value-keyed lineage there
-        was one the simulation never gave. Two copies of ``t = next(G)`` in
-        separate ``if`` blocks then reran both draws and their readers for
-        the next cell, and the first reader got the third draw."""
-        if is_control_body(run.code):
-            run.value_keyed_outputs = frozenset()
-            return run.value_keyed_outputs
+        In a control structure's body too: the simulation takes what the
+        structure bound from the outcome its run recorded, filed for that
+        copy of it in the cell (`outcome_key`), value-keyed lineages
+        included. Left out there, a draw in an ``if`` handed its reader in
+        the next cell the value built on the first draw on every run."""
         keyed = self._drawn_names(run) | self._changed_from_refused_entry(run)
         if run.needs_trace and run.skip_cache:
             # Its key does not name what a string found, and it is not
