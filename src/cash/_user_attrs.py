@@ -21,7 +21,7 @@ def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
     kind = type(obj)
     own = _OWN_LOOKUP.get(kind)
     if own is None:
-        own = _own_lookup(kind)
+        own = own_lookup(kind)
     try:
         if own:
             return object.__getattribute__(obj, name)
@@ -30,13 +30,13 @@ def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
         return default
 
 
-#: Per type, `_own_lookup`'s answer. Dropped whole past `_OWN_LOOKUP_MAX`
+#: Per type, `own_lookup`'s answer. Dropped whole past `_OWN_LOOKUP_MAX`
 #: types: a class made per call (``df.itertuples()``) is not kept alive.
 _OWN_LOOKUP: dict[type, bool] = {}
 _OWN_LOOKUP_MAX = 4096
 
 
-def _own_lookup(kind: type) -> bool:
+def own_lookup(kind: type) -> bool:
     """Does *kind* look its attributes up with a ``__getattribute__`` of
     its own, written in Python? cash's questions about such an object
     (``fit``, ``__code__``, the ``__class__`` an ``isinstance`` asks for
@@ -68,7 +68,7 @@ def instance_of(obj: Any, kinds: type | tuple[type, ...]) -> bool:
     ABC's check. An object whose ``__getattribute__`` raises for it failed
     cash's own question and the cell with it, where plain Python never asks.
     An object with a ``__getattribute__`` of its own in Python is not asked
-    at all (`_own_lookup`): its real type answers, so a proxy written that
+    at all (`own_lookup`): its real type answers, so a proxy written that
     way passes for itself, and none passes for a function, class, module
     or array by its ``__class__`` alone (`_passable`).
     """
@@ -86,7 +86,7 @@ def instance_of(obj: Any, kinds: type | tuple[type, ...]) -> bool:
         if plain:
             # Its ``__class__`` is its type: ``isinstance`` would answer as above.
             return False
-    elif _own_lookup(kind):
+    elif own_lookup(kind):
         return issubclass(kind, kinds)
     try:
         # Not by its real type: by the ``__class__`` it answers, but never
@@ -109,11 +109,11 @@ _PLAIN_CLASS: dict[type, bool] = {}
 
 def _plain_class(kind: type) -> bool:
     """Do *kind*'s instances answer their real type for ``__class__``, and
-    look attributes up as Python does (`_own_lookup`)? Then ``isinstance``
+    look attributes up as Python does (`own_lookup`)? Then ``isinstance``
     is ``issubclass`` of the type, and the object is never asked."""
     if len(_PLAIN_CLASS) >= _OWN_LOOKUP_MAX:
         _PLAIN_CLASS.clear()
-    plain = _PLAIN_CLASS[kind] = _own_lookup(kind) or not any(
+    plain = _PLAIN_CLASS[kind] = own_lookup(kind) or not any(
         "__class__" in vars(klass) for klass in kind.__mro__ if klass is not object
     )
     return plain
@@ -177,7 +177,7 @@ def is_routine(obj: Any) -> bool:
     builtin is not an object whose lookups raise."""
     import inspect
 
-    if _own_lookup(type(obj)):
+    if own_lookup(type(obj)):
         return False
     try:
         return inspect.isroutine(obj)
