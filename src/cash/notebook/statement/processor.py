@@ -1808,7 +1808,10 @@ class StatementProcessor:
         An alias runs every time and its lineage stays pinned to its inputs'
         lineages: with the inputs unchanged, a reader below would be served
         what the old value gave. A value that takes more than a moment to
-        digest is not checked."""
+        digest, or that digests only by its identity, cannot be checked so:
+        it is keyed by its value as well, which gives it a digest of its own
+        where it cannot be read (`no_cache_value_digest`), and its readers
+        recompute."""
         aliases = attribute_or(run.analysis, "alias_targets", frozenset())
         if not aliases or run.reads_outside_lineage or run.value_varies or self.compute_hash is None:
             return
@@ -1824,6 +1827,7 @@ class StatementProcessor:
                 digest = None
             if digest is None or value_hash.is_identity_fallback_hash(value, digest):
                 self._alias_values.pop((run.code, name), None)
+                run.reads_outside_lineage = True
                 continue
             before = self._alias_values.get((run.code, name))
             self._alias_values[(run.code, name)] = (inputs, digest)

@@ -81,3 +81,43 @@ def test_a_call_reading_what_a_joined_thread_changed_is_not_served(cash_magics, 
     for cell in cells:
         run_cash_cell(cash_magics, cell, cells=cells)
     assert cash_magics.shell.user_ns["z"] == 2
+
+
+_UNREADABLE_ALIASES = {
+    "too long to digest in a moment": (
+        "D = {'k': list(range(300_000))}",
+        "w = sum(v)",
+        "D['k'] = list(range(1, 300_001))",
+    ),
+    "changed in place, too long to digest in a moment": (
+        "D = {'k': list(range(300_000))}",
+        "w = sum(v)",
+        "D['k'][0] = 10**9",
+    ),
+    "digested only by its identity": (
+        "import threading\nclass O:\n    def __init__(self, x):\n        self.x = x\n        self.lock = threading.Lock()\n"
+        "D = {'k': O(1)}",
+        "w = v.x * 10",
+        "D['k'] = O(2)",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_UNREADABLE_ALIASES))
+def test_an_alias_whose_value_cannot_be_checked_is_keyed_by_it(cash_magics, monkeypatch, case):
+    """An alias whose value took more than 2 ms to digest, or digests only
+    by identity, was not checked: changed outside the cells, its reader was
+    served what the old value gave."""
+    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    setup, reader, change = _UNREADABLE_ALIASES[case]
+    cells = [setup, "v = D['k']", reader]
+    ns = cash_magics.shell.user_ns
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    exec(change, ns)
+    plain = dict(ns)
+    exec(cells[1], plain)
+    exec(cells[2], plain)
+    for cell in cells[1:]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert ns["w"] == plain["w"], "the reader was served what the old value gave"
