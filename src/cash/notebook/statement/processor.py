@@ -184,6 +184,8 @@ from ..shared_objects import (
     ViewBasesCutShort,
     WalkBudgetExceeded,
     anchors_held,
+    forget_heap_unreadable,
+    heap_unreadable,
     history_names,
     is_value,
     library_value_types,
@@ -289,6 +291,17 @@ def _entry_values(cached_data: Any) -> dict[str, Any] | None:
     """The values a stored entry held, by name; None when it says none."""
     variables = cached_data.get("variables") if isinstance(cached_data, dict) else None
     return variables if isinstance(variables, dict) else None
+
+
+_PYTHON = ".".join(map(str, sys.version_info[:3]))
+
+
+def _cut_short_why(what: str, budget: float) -> str:
+    """Why a statement whose share check was cut short re-runs: out of time,
+    or a Python that cannot read what holds an object (`heap_unreadable`)."""
+    if heap_unreadable():
+        return f"{what} cannot be done on Python {_PYTHON} with asyncio loaded, so it re-runs every time"
+    return f"{what} would take longer than {budget:.1f}s, more than the statement is worth, so it re-runs every time"
 
 
 class StatementProcessor:
@@ -770,6 +783,7 @@ class StatementProcessor:
             'saved_time', 'restored_vars', 'code', plus optional keys depending
             on cache status.
         """
+        forget_heap_unreadable()
         run = StatementRun(
             code,
             ttl=ttl,
@@ -2631,10 +2645,7 @@ class StatementProcessor:
                     }
         except WalkBudgetExceeded:
             run.share_unchecked = True
-            reason = (
-                f"finding which other variables hold objects of its outputs would take longer than "
-                f"{budget:.1f}s, more than the statement is worth, so it re-runs every time"
-            )
+            reason = _cut_short_why("finding which other variables hold objects of its outputs", budget)
         if reason is None and anchors:
             run.anchors = {name: self.tracking_state.current_session_hashes[name] for name in anchors}
             run.anchor_links = anchor_links | set(anchors)
@@ -2832,8 +2843,9 @@ class StatementProcessor:
         hidden = attribute_or(self.shell, "user_ns_hidden", None) or {}
         cash_held = [*self._calls.held_call_results(), echo, run.metrics, *history]
         gave_up = GaveUp()
+        budget = share_check_budget(cost)
         try:
-            with walk_budget(share_check_budget(cost)):
+            with walk_budget(budget):
                 share_group(
                     handed,
                     user_ns,
@@ -2844,8 +2856,23 @@ class StatementProcessor:
                     gave_up=gave_up,
                 )
         except WalkBudgetExceeded:
-            pass  # what was found by then is linked; the rest stays unlinked
+            # Out of time, or not known (`shared_objects._TRAVERSE_LOOPS`): a
+            # holder not found would go unlinked, and its later change would
+            # serve what was stored. The statement is not stored, as when the
+            # share check of its outputs runs out.
+            run.share_unchecked = True
+            run.skip_cache = True
+            run.metrics.setdefault("uncacheable_reasons", []).append(
+                _cut_short_why("finding what keeps the variables it hands to code", budget)
+            )
+            self._warn_share_unchecked(run, handed, cost)
+            gave_up.complete = False
         edges = self.tracking_state.derivation_edges
+        if not gave_up.complete:
+            # A holder not found may be any class or module the statement
+            # changed: each is linked, a needless miss at worst.
+            record_shared_object_edges(edges, handed, changed)
+            return
         for owners, holders in gave_up.links:
             kept_by = set(holders) & changed
             if kept_by:
@@ -3043,14 +3070,19 @@ class StatementProcessor:
             return
         self._share_unchecked_warned.add(run.source_hash)
         listed = ", ".join(f"'{name}'" for name in sorted(outputs))
+        if heap_unreadable():
+            within = f": Python {_PYTHON} with asyncio loaded cannot read what holds an object"
+            upgrade = " Python 3.12.6 or later reads it."
+        else:
+            within, upgrade = f" within {share_check_budget(cost):.1f}s", ""
         what = (
-            f"cash could not find, within {share_check_budget(cost):.1f}s, every other variable that holds "
-            f"an object of {listed} or is held in one. A later change made in place through such a variable "
-            f"may not re-run the cells that read {listed}, or the other way round."
+            f"cash could not find every other variable that holds an object of {listed} or is held in "
+            f"one{within}. A later change made in place through such a variable may not re-run the cells "
+            f"that read {listed}, or the other way round."
         )
         fix = (
             "if a later cell changes these objects in place through another name, rebind instead "
-            "(x = x + [v]) or re-run the cells that read them yourself."
+            f"(x = x + [v]) or re-run the cells that read them yourself.{upgrade}"
         )
         log_diagnostic(logger, "NOTEBOOK-SHARE-UNCHECKED", what, fix)
         # At the cell, as cash's other notebook warnings are: with no
