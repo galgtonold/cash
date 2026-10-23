@@ -45,6 +45,7 @@ from ..lineage_formula import (
     call_time_reads,
     callable_source_component,
     changed_module_environment,
+    def_names,
     function_identity,
     input_lineage,
     lineage_hidden_reads,
@@ -343,8 +344,9 @@ class StatementLineageBuilder:
         if rebuilt and len(bound) > 1:
             lineages = tracking_state.value_cutoff.lineage_for_outputs(bound, lineages, content_hash)
 
+        functions = def_names(code) if body_only else frozenset()
         for var_name, value in bound.items():
-            if body_only:
+            if var_name in functions:
                 # What a key reads for the function this ``def`` bound: its
                 # code and what the ``def`` evaluated, not the globals only
                 # its body reads (`lineage_formula.function_identity`).
@@ -352,9 +354,10 @@ class StatementLineageBuilder:
                     lineages[var_name],
                     code,
                     source_hash,
-                    [function_identity(h) for name, h in input_lineage_map.items() if name not in body_only],
+                    [function_identity(h, name) for name, h in input_lineage_map.items() if name not in body_only],
                     func_component,
                     user_ns,
+                    var_name,
                 )
             self._record_output(
                 tracking_state,

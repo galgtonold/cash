@@ -390,7 +390,7 @@ def key_lineage(name: str, lineage: str, variable_lineage: Mapping[str, str]) ->
     """
     if variable_lineage.get(name, lineage) != lineage:
         return lineage
-    return function_identity(lineage)
+    return function_identity(lineage, name)
 
 
 def called_function_dependencies(

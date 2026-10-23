@@ -60,6 +60,7 @@ from ..lineage_formula import (
     call_time_reads,
     callable_source_component,
     changed_module_environment,
+    def_names,
     function_identity,
     held_lineage,
     input_lineage,
@@ -716,14 +717,18 @@ class StatementLineage:
             stmt_code, (inputs | lineage_hidden_reads(stmt_code)) - body_only, virtual_lineage, virtual_modules
         )
         func_component = self._func_component(inputs, virtual_lineage)
-        for lineage in lineage_by_out.values():
+        functions = def_names(stmt_code)
+        for name, lineage in lineage_by_out.items():
+            if name not in functions:
+                continue
             note_function_identity(
                 lineage,
                 stmt_code,
                 statement_source_hash(stmt_code),
-                [function_identity(h) for h in def_time.values()],
+                [function_identity(h, input_name) for input_name, h in def_time.items()],
                 func_component,
                 self.shell.user_ns,
+                name,
             )
 
     # -- Files -----------------------------------------------------------------

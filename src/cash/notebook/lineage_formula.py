@@ -466,12 +466,23 @@ def call_time_reads(code: str, user_ns: Mapping[str, Any], virtual_modules: Iter
     )
 
 
+def def_names(code: str) -> frozenset[str]:
+    """The names *code*'s own ``def`` statements bind: the functions whose
+    identity `note_function_identity` records. Not what else the statement
+    binds or changes, such as a frame a default argument's call wrote into,
+    which shares the ``def``'s lineage but not what a key reads of it."""
+    tree = parse_cached(code)
+    if tree is None:
+        return frozenset()
+    return frozenset(node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)))
+
+
 #: A notebook function's lineage -> its identity (`function_identity`), for
 #: this process. One entry per ``def`` run; a dropped one only re-keys.
-_FUNCTION_IDENTITIES: LruMemo[str, str] = LruMemo(CODE_OBJECTS)
+_FUNCTION_IDENTITIES: LruMemo[str, tuple[str, frozenset[str]]] = LruMemo(CODE_OBJECTS)
 
 
-def function_identity(lineage: str) -> str:
+def function_identity(lineage: str, name: str | None = None) -> str:
     """What *lineage* contributes to a cache key (``cache_key``): for a
     function a plain ``def`` bound, the lineage of its code and of what the
     ``def`` evaluated, without the globals its body reads; for any other
@@ -487,8 +498,15 @@ def function_identity(lineage: str) -> str:
     the function also folds those globals as they are now
     (``cache_key.called_function_dependencies``), so the identity leaves
     them out and the key loses nothing.
+
+    Only for the name the ``def`` bound, when *name* is given: a frame its
+    default argument's call wrote into shares the lineage, and is no
+    function (`def_names`).
     """
-    return _FUNCTION_IDENTITIES.get(lineage) or lineage
+    found = _FUNCTION_IDENTITIES.get(lineage)
+    if found is None or (name is not None and name not in found[1]):
+        return lineage
+    return found[0]
 
 
 def note_function_identity(
@@ -498,9 +516,10 @@ def note_function_identity(
     def_time_lineages: Iterable[str],
     func_component: str,
     user_ns: Mapping[str, Any] | None,
+    name: str,
 ) -> None:
     """Record the identity (`function_identity`) of the function the ``def``
-    statement *code* bound with *lineage*. *def_time_lineages* are the input
+    statement *code* bound to *name* with *lineage*. *def_time_lineages* are the input
     lineages less those of `call_time_reads`. Both engines call this, with
     the same ingredients, wherever they give a ``def`` its lineage."""
     identity = output_lineage(
@@ -512,7 +531,9 @@ def note_function_identity(
         ":defn" + statement_environment_component(code, user_ns),
     )
     if identity != lineage:
-        _FUNCTION_IDENTITIES[lineage] = identity
+        known = _FUNCTION_IDENTITIES.get(lineage)
+        names = known[1] if known is not None and known[0] == identity else frozenset()
+        _FUNCTION_IDENTITIES[lineage] = (identity, names | {name})
 
 
 def input_lineage(
