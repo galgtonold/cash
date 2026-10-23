@@ -61,6 +61,31 @@ _CHANGING_DUNDERS = frozenset(
     {"__setitem__", "__delitem__", "__setattr__", "__delattr__", "__iadd__", "__isub__", "__imul__", "__ior__"}
 )
 
+#: Library methods and functions that change an argument in place, not
+#: their receiver: ``random.Random(z).shuffle(v)``, ``rng.shuffle(v)``,
+#: ``np.add.at(v, i, 1)``, ``np.copyto(v, w)``, ``heapq.heappush(h, x)``.
+#: Any argument passed to one may change; so may one passed as ``out=``.
+_CHANGES_ARGUMENTS = frozenset(
+    {
+        "shuffle",
+        "at",
+        "copyto",
+        "place",
+        "put",
+        "putmask",
+        "put_along_axis",
+        "fill_diagonal",
+        "heapify",
+        "heappush",
+        "heappop",
+        "heapreplace",
+        "heappushpop",
+        "insort",
+        "insort_left",
+        "insort_right",
+    }
+)
+
 #: ``operator`` functions that change their first argument.
 _SETS_FIRST = tuple(
     getattr(operator, name) for name in ("setitem", "delitem", "iadd", "isub", "imul", "ior", "iand", "iconcat")
@@ -114,13 +139,15 @@ def _class_attribute(cls: type, name: str) -> Any:
 
 def _answers_attributes(cls: type) -> bool:
     """Whether *cls* (a plain class) computes attributes itself."""
-    for klass in _mro(cls):
-        if klass is object:
-            continue
-        held = _type_dict(klass)
-        if "__getattr__" in held or "__getattribute__" in held:
-            return True
-    return False
+    return _own_lookup(cls, "__getattr__") or _own_lookup(cls, "__getattribute__")
+
+
+def _own_lookup(cls: type, name: str) -> bool:
+    """Whether *cls*'s MRO holds *name* as code of its own, not as the C
+    slot of the plain lookup: up to 3.12 ``types.SimpleNamespace`` holds
+    ``__getattribute__`` as such a slot, from 3.13 it does not."""
+    found = _class_attribute(cls, name)
+    return found is not _MISSING and type(found) is not types.WrapperDescriptorType
 
 
 def _is_users_function(fn: types.FunctionType) -> bool:
@@ -313,15 +340,16 @@ class _Reader:
                 # A method of a value cash knows nothing of: a library's, as
                 # everywhere in cash. A callable of the user's handed to it
                 # with the parameter (``frame['o'].apply(upd)``) is read.
-                return self._handed_callables(call, reach, scope, depth)
+                return _written_arguments(call, passed, everything) | self._handed_callables(call, reach, scope, depth)
             if (
                 func.attr not in MUTATING_METHODS
                 and func.attr not in _CHANGING_DUNDERS
                 and _library_result(func.value, reach, locals_, scope, results)
             ):
                 # ``s.diff().rolling(w)``: a method of what a library's code
-                # returned is the library's too.
-                return self._handed_callables(call, reach, scope, depth)
+                # returned is the library's too, which changes what it is
+                # handed only as `_written_arguments` says.
+                return _written_arguments(call, passed, everything) | self._handed_callables(call, reach, scope, depth)
         elif isinstance(func, ast.Name) and func.id in reach:
             # ``put('z', 1)`` with ``put = d.__setitem__``; a parameter called.
             return reach[func.id] | everything
@@ -330,7 +358,7 @@ class _Reader:
             return _reached(func, reach) | everything
         value = scope.resolve(func, locals_)
         if value is _LIBRARY:
-            return self._handed_callables(call, reach, scope, depth)
+            return _written_arguments(call, passed, everything) | self._handed_callables(call, reach, scope, depth)
         if value is _UNKNOWN or value is _LOCAL:
             return everything
         if any(value is runs for runs in _RUNS_TEXT):
@@ -340,7 +368,7 @@ class _Reader:
         if any(value is setter for setter in _SETS_FIRST):
             return passed.get(0, set()) | self._handed_callables(call, reach, scope, depth)
         if not is_users(value):
-            return self._handed_callables(call, reach, scope, depth)
+            return _written_arguments(call, passed, everything) | self._handed_callables(call, reach, scope, depth)
         return self._handed_to(value, passed, everything, depth) | self._handed_callables(call, reach, scope, depth)
 
     def _handed_to(self, value: Any, passed, everything: set[str], depth: int) -> set[str]:
@@ -540,10 +568,7 @@ def _attribute_of(owner: Any, name: str) -> Any:
 def _instance_dict(owner: Any, kind: type) -> dict | None:
     """*owner*'s own ``__dict__`` when its class reads attributes the plain
     way, so a value found there is what the attribute gives."""
-    if (
-        _class_attribute(kind, "__getattribute__") is not _MISSING
-        or _class_attribute(kind, "__getattr__") is not _MISSING
-    ):
+    if _answers_attributes(kind):
         return None
     try:
         held = object.__getattribute__(owner, "__dict__")
@@ -587,6 +612,17 @@ def _reached(node: ast.AST, reach: Mapping[str, set[str]]) -> set[str]:
         elif isinstance(current, (ast.IfExp, ast.BoolOp, ast.NamedExpr)):
             pending.extend(ast.iter_child_nodes(current))
     return out
+
+
+def _written_arguments(call: ast.Call, passed: Mapping[int | str | None, set[str]], everything: set[str]) -> set[str]:
+    """The parameters a library's *call* may change in place though they
+    are not its receiver: all it is handed, when it is named in
+    `_CHANGES_ARGUMENTS`; else what it is handed as ``out=``."""
+    func = call.func
+    name = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else None
+    if name in _CHANGES_ARGUMENTS:
+        return everything
+    return set(passed.get("out", ()))
 
 
 def _library_result(

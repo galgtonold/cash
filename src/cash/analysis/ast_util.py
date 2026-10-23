@@ -258,6 +258,27 @@ def nodes_in(tree: ast.AST | None, scope: CallScope = "all") -> list[ast.AST]:
     return out
 
 
+def nodes_run_now(tree: ast.AST | None) -> list[ast.AST]:
+    """Every node of *tree* the statement runs when it runs: not a ``def``'s
+    body, which runs when the function is called, but its decorators, its
+    defaults and its annotations, and the whole of a class body."""
+    if tree is None:
+        return []
+    out: list[ast.AST] = []
+    stack: list[ast.AST] = [tree]
+    while stack:
+        node = stack.pop()
+        out.append(node)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            stack.extend(node.decorator_list)
+            stack.append(node.args)
+            if node.returns is not None:
+                stack.append(node.returns)
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+    return out
+
+
 def _call_names(tree: ast.AST | None, scope: CallScope, pick) -> frozenset[str]:
     """The names *pick* takes from each ``Call`` in *tree*, within *scope*."""
     if tree is None:

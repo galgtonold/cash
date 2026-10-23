@@ -34,7 +34,7 @@ from ..value_types import BUILTIN_NAMES
 from .aliases import aliased_sources
 from .analysis_budget import ANALYSIS_BUDGET_REASON, AnalysisBudgetExceeded, no_analysis_budget
 from .annotations import extract_annotations_for_statements
-from .ast_util import called_names, nodes_in
+from .ast_util import called_names, nodes_run_now
 from .cacheability import analyze_statement
 from .cacheability_decision import analysis_failed, receiver_is_identity_coupled
 from .callee_effects import (
@@ -1668,7 +1668,8 @@ def _changed_through_lambda_parameters(
     builders: set[int] = set()
     # A ``def``'s body runs when it is called, not when it is defined: its
     # calls change nothing now, and its parameter names are no variables.
-    running = nodes_in(tree, "top_level")
+    # Its decorators and defaults run now, as does a class body.
+    running = nodes_run_now(tree)
     for node in running:
         if isinstance(node, ast.Subscript):
             # ``df.loc[pick]``: pandas calls a callable key with the frame.
