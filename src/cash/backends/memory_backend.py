@@ -793,6 +793,10 @@ class InMemoryBackend(CacheBackend):
                 return InMemoryBackend._deep_copy(value, memo, known_cells, record_cells, by_deepcopy)
             return InMemoryBackend._deep_copy(value, {}, known_cells, record_cells, by_deepcopy)
         except (TypeError, pickle.PicklingError, RecursionError, AttributeError) as exc:
+            if isinstance(exc, kept_state.ReducerNotRun):
+                # Not stored: held as it is, a hit would hand out the
+                # caller's own object; copied, the reducer would run.
+                raise
             if required:
                 # Storing it would hand every caller the SAME object: a caller
                 # mutating a hit changes what later calls get, and two threads
@@ -1051,6 +1055,8 @@ class InMemoryBackend(CacheBackend):
             except pickle.PicklingError:
                 logger.debug("could not copy a %s by pickle", type(value).__name__, exc_info=True)
             except Exception as exc:
+                if isinstance(exc, kept_state.ReducerNotRun):
+                    raise  # deepcopy would run the very reducer refused
                 if kept_state.too_deep(exc):
                     # Deeper than the pickler may recurse: deepcopy recurses
                     # deeper still, so the copy keeps its own stack.

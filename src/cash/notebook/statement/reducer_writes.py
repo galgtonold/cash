@@ -37,6 +37,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import copyreg
+import functools
 import inspect
 import sys
 import textwrap
@@ -475,14 +476,38 @@ _READS_ONLY = frozenset(
         "range",
         "print",
         "format",
+        "map",
+        "filter",
+        "iter",
+        "reversed",
+        "callable",
+        "ord",
+        "chr",
+        "ascii",
+        "bin",
+        "hex",
+        "oct",
+        "divmod",
+        "pow",
+        "complex",
+        "slice",
+        "bytearray",
     }
 )
+
+#: Modules whose functions read what they are handed and change none of it
+#: (``itertools.chain(LST)``, ``copy.deepcopy(D)``, ``json.dumps(D)``).
+_MODULES_THAT_READ = frozenset({"itertools", "math", "cmath", "statistics", "json", "copy", "string", "textwrap"})
+
+#: Values nothing can change: handing one to a library is no write.
+_NEVER_CHANGED = frozenset({str, bytes, int, float, complex, bool, type(None), range})
 
 
 def _handed_to_libraries(function: Any, body: ast.AST) -> set[str]:
     """The global names *body* hands, as an argument, to a call of a
-    function that is not the user's (``np.copyto(ARR, 5)``) and not a
-    builtin that only reads. What such a call does to them is not read."""
+    function that is not the user's (``np.copyto(ARR, 5)``) and not one
+    that only reads. What such a call does to them is not read. A value
+    nothing can change (``KEY = 'a'``, ``DT = np.float64``) is never one."""
     g = attribute_or(function, "__globals__", {})
     local = {a.arg for a in ast.walk(body) if isinstance(a, ast.arg)} | {
         n.id for n in ast.walk(body) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
@@ -495,18 +520,45 @@ def _handed_to_libraries(function: Any, body: ast.AST) -> set[str]:
             if node.func.id in _READS_ONLY and node.func.id not in g:
                 continue
             callee = g.get(node.func.id)
-            if callee is not None and _users(callee):
-                continue  # read through `_users_callees`
-        elif isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
-            holder = g.get(node.func.value.id)
-            if node.func.value.id in ("self", "cls") or (instance_of(holder, type) and _users(holder)):
-                continue
+            if callee is not None and (_users(callee) or _only_reads(callee)):
+                continue  # the user's is read through `_users_callees`
+        elif isinstance(node.func, ast.Attribute):
+            if isinstance(node.func.value, ast.Constant):
+                continue  # ``'-'.join(PARTS)``: a method of a constant
+            if isinstance(node.func.value, ast.Name):
+                holder = g.get(node.func.value.id)
+                if node.func.value.id in ("self", "cls") or (instance_of(holder, type) and _users(holder)):
+                    continue
+                if node.func.value.id not in local and node.func.value.id in g and type(holder) in _NEVER_CHANGED:
+                    continue  # ``SEP.join(PARTS)``: a method of a str (``list.append(LST, 1)`` is not)
+                if instance_of(holder, types.ModuleType) and (
+                    attribute_or(holder, "__name__", None) in _MODULES_THAT_READ
+                    or (attribute_or(holder, "__name__", None) == "functools" and node.func.attr == "reduce")
+                ):
+                    continue
         for arg in [*node.args, *(k.value for k in node.keywords)]:
             if isinstance(arg, ast.Starred):
                 arg = arg.value
-            if isinstance(arg, ast.Name) and arg.id not in local and arg.id in g:
+            if isinstance(arg, ast.Name) and arg.id not in local and arg.id in g and not _never_changed(g[arg.id]):
                 found.add(arg.id)
     return found
+
+
+def _only_reads(callee: Any) -> bool:
+    """A function of a module whose functions only read
+    (``from itertools import chain``), or ``functools.reduce``."""
+    return callee is functools.reduce or attribute_or(callee, "__module__", None) in _MODULES_THAT_READ
+
+
+def _never_changed(value: Any) -> bool:
+    """Can nothing change *value*: an int, a str, a type, a function, a
+    NumPy scalar, or a tuple of such?"""
+    if type(value) in _NEVER_CHANGED or isinstance(value, (type, types.FunctionType, types.BuiltinFunctionType)):
+        return True
+    if type(value) in (tuple, frozenset):
+        return len(value) <= 64 and all(_never_changed(item) for item in value)
+    np = sys.modules.get("numpy")
+    return np is not None and isinstance(value, np.generic) and type(value) is not np.void
 
 
 def _changes_only_itself(body: ast.FunctionDef | ast.AsyncFunctionDef, param: str) -> bool:

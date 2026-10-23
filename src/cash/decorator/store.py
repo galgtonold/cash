@@ -74,6 +74,15 @@ REDUCER_NOT_RUN_FIX = (
 )
 
 
+def _store_error(store_errors: list[str]) -> Exception:
+    """What the tiers' *store_errors* say went wrong: `ReducerNotRun` when
+    one refused to run a reducer of the user's, so the warning says why."""
+    message = "; ".join(str(e) for e in store_errors)
+    if any(f": {ReducerNotRun.__name__}: " in str(e) for e in store_errors):
+        return ReducerNotRun(message)
+    return CacheBackendError(message)
+
+
 #: Result types seen to refuse an attribute (dict, list, ndarray, ...): not
 #: tried again (`ResultStore.attach_lineage`).
 UNTAGGABLE_TYPES: LruMemo[type, bool] = LruMemo(RESULT_TYPES)
@@ -732,7 +741,7 @@ class ResultStore:
             # nothing could store is a STORE-FAILED like any other.
             store_errors = meta_dict.get("store_errors")
             if store_errors and not [t for t in (meta_dict.get("storage") or []) if t != "RAM"]:
-                raise CacheBackendError("; ".join(str(e) for e in store_errors))
+                raise _store_error(store_errors)
             not_persisted = not_persisted_reason(meta_dict) or request.chunks_not_persisted
             self._warn_if_result_changed(func_name, cache_key, meta, request.auto_file_deps)
             self._misses.remember_outcome(
@@ -1059,7 +1068,7 @@ class ResultStore:
             # instead of raising (`ResultStore.store`).
             store_errors = chunk_metadata.get("store_errors")
             if store_errors and not [t for t in (chunk_metadata.get("storage") or []) if t != "RAM"]:
-                raise CacheBackendError("; ".join(str(e) for e in store_errors))
+                raise _store_error(store_errors)
         except Exception as e:  # noqa: BLE001 - as in `ResultStore.store`: the stream goes on
             backend_name = type(self._backend_slot.backend).__name__
             self._notices.warn_once(

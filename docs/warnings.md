@@ -2115,7 +2115,7 @@ bottom once. It is shown once per session.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_decide @6c9fffd5, cash/notebook/statement/processor.py:StatementProcessor._move_what_reducers_wrote @a8f482f2 -->
+<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_decide @6c9fffd5, cash/notebook/statement/processor.py:StatementProcessor._move_what_reducers_wrote @a8f482f2, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @7d51958d, cash/decorator/store.py:_store_error @150ddaae -->
 **What happened.** cash pickles a statement's values to hash and store
 them, and pickling runs the value's own `__reduce__`, `__reduce_ex__`,
 `__getstate__` or `__getnewargs__` (or a reducer you registered with
@@ -2134,8 +2134,11 @@ the module itself when the notebook reads the list through it
 it builds (`State(self.rows)`), changes nothing of yours.
 
 cash does not run one it cannot read either (its source is not there), nor
-one that hands a value the notebook holds to a library call
-(`np.copyto(ARR, 5)`): what those change cannot be told. Those cash finds
+one that hands a list, dict or array the notebook holds to a library call
+(`np.copyto(ARR, 5)`): what those change cannot be told. A number, string,
+class or function handed on, a builtin that only reads (`len`, `map`,
+`iter`), and the functions of `itertools`, `math`, `json` or `copy` are
+not counted. Those cash finds
 out about only after they ran (the class could not be named) count every
 variable as changed, and the message says so.
 

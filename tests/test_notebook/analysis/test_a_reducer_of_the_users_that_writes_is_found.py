@@ -251,3 +251,90 @@ def test_cash_off_runs_every_reducer_again():
         reducer_writes.unwatch()
     reducer_writes.runs_now()
     assert not reducer_writes.refuses(WritesAGlobal)
+
+
+KEY = "a"
+VER = 2
+INDENT = 2
+SEP = ","
+SCALE = 2.5
+DT = float
+PARTS = ["a", "b"]
+LST = [1, 2, 3]
+DEFAULTS = {"k": [1]}
+
+
+class OnlyReadsWhatItIsHanded:
+    def __getstate__(self):
+        import copy
+        import functools
+        import itertools
+        import json
+        import math
+        import operator
+
+        return {
+            "a": self.__dict__.get(KEY),
+            "b": "v{}".format(VER),
+            "c": json.dumps(self.__dict__, indent=INDENT),
+            "d": "a,b".split(SEP),
+            "e": math.floor(SCALE),
+            "f": DT(SCALE),
+            "g": "-".join(PARTS),
+            "h": list(map(str, LST)) + list(filter(None, LST)) + list(iter(LST)) + list(reversed(LST)),
+            "i": list(itertools.chain(LST)),
+            "j": functools.reduce(operator.add, LST),
+            "k": copy.deepcopy(DEFAULTS),
+            "l": SEP.join(PARTS),
+        }
+
+
+def test_a_reducer_that_hands_globals_only_to_calls_that_read_is_no_writer():
+    assert reducer_writes._decide(OnlyReadsWhatItIsHanded) is None
+
+
+CFG = {"k": 1}
+
+
+class WritesAGlobalDict:
+    def __reduce__(self):
+        CFG["k"] += 1
+        return (WritesAGlobalDict, ())
+
+
+def test_a_cached_function_returning_one_is_not_stored_and_the_reducer_does_not_run(tmp_path):
+    import warnings
+
+    import cash
+    from cash.decorator.store import REDUCER_NOT_RUN_FIX
+
+    calls = []
+
+    @cash.cache(cache_dir=str(tmp_path))
+    def make(i):
+        calls.append(i)
+        return WritesAGlobalDict()
+
+    reducer_writes.watch({"cfg": CFG})
+    try:
+        with warnings.catch_warnings(record=True) as seen:
+            warnings.simplefilter("always")
+            make(1)
+            make(1)
+    finally:
+        reducer_writes.unwatch()
+    assert CFG == {"k": 1}
+    assert calls == [1, 1]
+    assert any(REDUCER_NOT_RUN_FIX.split(":")[0] in str(w.message) for w in seen)
+
+
+class HandsAGlobalToAMethodOfABuiltinType:
+    def __getstate__(self):
+        list.append(LST, 4)
+        dict.update(DEFAULTS, k=2)
+        return {}
+
+
+def test_a_global_handed_to_a_method_of_a_builtin_type_counts_as_written():
+    writer = reducer_writes._decide(HandsAGlobalToAMethodOfABuiltinType)
+    assert writer is not None and {"LST", "DEFAULTS"} <= writer.handed
