@@ -205,6 +205,10 @@ def _handed_callables(
             # the statement iterates.
             target = _resolve_argument(call.func, namespace, bound)
             found.methodcaller_called(call, namespace, bound)
+            for value, root in [*target.values, *target.any_of]:
+                if instance_of(value, operator.methodcaller):
+                    # ``mcs[0](a)``: called on what it is handed.
+                    found.methodcaller_value(value, root, found.first_argument(call, namespace, bound))
             for value, root in target.values:
                 found.add(value, root, False)
             for value, root in target.any_of:
@@ -214,6 +218,7 @@ def _handed_callables(
         if not call.args and not call.keywords:
             continue
         calling: _Opened | None = None
+        found.methodcallers_handed(call, namespace, bound)
         for position, keyword, arg in _arguments(call):
             resolved = _resolve_argument(arg, namespace, bound)
             for value, root in resolved.values:
@@ -1874,11 +1879,7 @@ class _Found:
         if instance_of(value, functools.partial):
             self.add(value, root, False)
         elif instance_of(value, operator.methodcaller):
-            name, args, keywords = _methodcaller_parts(value)
-            self._methods_named(name, call, namespace, bound)
-            handed = [[(arg, root)] for arg in args]
-            handed_keywords = {key: [(arg, root)] for key, arg in keywords.items()}
-            self._methodcaller_args_changed(name, handed, handed_keywords, call, namespace, bound)
+            self.methodcaller_value(value, root, self.first_argument(call, namespace, bound))
         elif instance_of(value, types.FunctionType) and isinstance(getattr(value, "registry", None), Mapping):
             # ``functools.singledispatch``: any implementation registered.
             for impl in list(value.registry.values()):
@@ -1894,7 +1895,16 @@ class _Found:
     ) -> None:
         """``operator.methodcaller('add', v)(rec)``: the method of that name
         of what it is handed."""
-        maker = call.func
+        made = self.inline_methodcaller(call.func, namespace, bound)
+        if made is not None:
+            self._methodcaller_on(*made, self.first_argument(call, namespace, bound))
+
+    def inline_methodcaller(
+        self, maker: ast.expr, namespace: Mapping[str, Any], bound: Mapping[str, tuple[ast.expr, ...]]
+    ) -> tuple[str, list[list[tuple[Any, str | None]] | None] | None, dict] | None:
+        """``(name, handed, handed keywords)`` when *maker* is
+        ``operator.methodcaller('add', ...)`` spelled out: what each of its
+        arguments resolves to (`_methodcaller_on`)."""
         if not (
             isinstance(maker, ast.Call)
             and isinstance(maker.func, (ast.Name, ast.Attribute))
@@ -1902,18 +1912,66 @@ class _Found:
             and isinstance(maker.args[0], ast.Constant)
             and isinstance(maker.args[0].value, str)
         ):
-            return
+            return None
         target = _users_target(maker.func, namespace)
-        if target is not None and target[0] is operator.methodcaller:
-            name = maker.args[0].value
-            self._methods_named(name, call, namespace, bound)
-            handed = [self._handed_values(arg, namespace, bound) for arg in maker.args[1:]]
-            handed_keywords = {
-                kw.arg: self._handed_values(kw.value, namespace, bound) for kw in maker.keywords if kw.arg is not None
-            }
-            if any(kw.arg is None for kw in maker.keywords) or any(isinstance(a, ast.Starred) for a in maker.args):
-                handed = None
-            self._methodcaller_args_changed(name, handed, handed_keywords, call, namespace, bound)
+        if target is None or target[0] is not operator.methodcaller:
+            return None
+        handed = [self._handed_values(arg, namespace, bound) for arg in maker.args[1:]]
+        handed_keywords = {
+            kw.arg: self._handed_values(kw.value, namespace, bound) for kw in maker.keywords if kw.arg is not None
+        }
+        if any(kw.arg is None for kw in maker.keywords) or any(isinstance(a, ast.Starred) for a in maker.args):
+            return maker.args[0].value, None, handed_keywords
+        return maker.args[0].value, handed, handed_keywords
+
+    def methodcaller_value(
+        self, value: operator.methodcaller, root: str | None, receivers: list[tuple[Any, str | None]]
+    ) -> None:
+        """The methodcaller *value*, held under *root*, called on each of
+        *receivers*."""
+        name, args, keywords = _methodcaller_parts(value)
+        handed = [[(arg, root)] for arg in args]
+        handed_keywords = {key: [(arg, root)] for key, arg in keywords.items()}
+        self._methodcaller_on(name, handed, handed_keywords, receivers)
+
+    def methodcallers_handed(
+        self, call: ast.Call, namespace: Mapping[str, Any], bound: Mapping[str, tuple[ast.expr, ...]]
+    ) -> None:
+        """A methodcaller *call* is handed (``map(methodcaller('add', lst,
+        1), [a])``): the callee may call it on anything else it is handed,
+        and on what those hold."""
+        arguments = [*call.args, *(kw.value for kw in call.keywords)]
+        for index, arg in enumerate(arguments):
+            made = self.inline_methodcaller(arg, namespace, bound)
+            named = [] if made is not None else _resolve_argument(arg, namespace, bound).values
+            named = [(value, root) for value, root in named if instance_of(value, operator.methodcaller)]
+            if made is None and not named:
+                continue
+            receivers: list[tuple[Any, str | None]] = []
+            for other in arguments[:index] + arguments[index + 1 :]:
+                for value, root in _resolve_argument(other, namespace, bound).values:
+                    receivers.append((value, root))
+                    items = value.values() if type(value) is dict else value
+                    if type(value) not in (list, tuple, set, frozenset, dict):
+                        continue
+                    if len(value) > _INSTANCE_LIMIT:
+                        self.unreadable.append(
+                            f"a methodcaller is handed to a call beside more than {_INSTANCE_LIMIT} objects "
+                            "it may be called on"
+                        )
+                        continue
+                    receivers += [(item, root) for item in items]
+            if made is not None:
+                self._methodcaller_on(*made, receivers)
+            for value, root in named:
+                self.methodcaller_value(value, root, receivers)
+
+    @staticmethod
+    def first_argument(
+        call: ast.Call, namespace: Mapping[str, Any], bound: Mapping[str, tuple[ast.expr, ...]]
+    ) -> list[tuple[Any, str | None]]:
+        """What a methodcaller called as *call* is called on."""
+        return list(_resolve_argument(call.args[0], namespace, bound).values) if call.args else []
 
     def _handed_values(
         self, arg: ast.expr, namespace: Mapping[str, Any], bound: Mapping[str, tuple[ast.expr, ...]]
@@ -1925,70 +1983,78 @@ class _Found:
         values = _resolve_argument(arg, namespace, bound).values
         return list(values) if values else None
 
-    def _methodcaller_args_changed(
+    def _methodcaller_on(
         self,
         name: str,
         args: list[list[tuple[Any, str | None]] | None] | None,
         keywords: Mapping[str, list[tuple[Any, str | None]] | None],
-        call: ast.Call,
-        namespace: Mapping[str, Any],
-        bound: Mapping[str, tuple[ast.expr, ...]],
+        receivers: list[tuple[Any, str | None]],
     ) -> None:
-        """The objects a methodcaller hands the method *name* of what it is
-        called on, in parameters that method changes in place: with ``def
-        add(self, lst, x): lst.append(x)``, ``methodcaller('add', lst,
-        1)(a)`` changes ``lst``, which the statement hands only to
-        ``methodcaller``. *args* and *keywords* hold what each argument
-        resolves to (None: cannot be told; *args* None: unpacked)."""
-        if not self.objects or not call.args:
-            return
-        for obj, _root in _resolve_argument(call.args[0], namespace, bound).values:
+        """A methodcaller of the method *name* called on each of *receivers*:
+        what the method of that name of each object of the user's changes,
+        and the objects the methodcaller hands it in parameters it changes
+        in place, as a call of the method itself would (with ``def add(self,
+        lst, x): lst.append(x)``, ``methodcaller('add', lst, 1)(a)`` changes
+        ``lst``, which the statement hands only to ``methodcaller``). *args*
+        and *keywords* hold what each argument resolves to (None: cannot be
+        told; *args* None: unpacked)."""
+        for obj, obj_root in receivers:
             if not (_is_users_object(obj) or (instance_of(obj, type) and is_users_class(obj))):
                 continue
             member = _attribute(obj, name)
-            skip = 0
-            if instance_of(member, types.MethodType):
-                member, skip = member.__func__, 1
-            if not instance_of(member, types.FunctionType) or not self._users(member):
+            if member is _MISSING or not callable(member):
                 continue
-            source = _source_of(member)
-            node = parse_function_source(source) if source is not None else None
-            if node is None:
-                continue  # said unreadable where the method itself is added
-            mutated = params_mutated_in_function(node)
-            if not mutated:
-                continue
-            params = [a.arg for a in (*node.args.posonlyargs, *node.args.args)][skip:]
-            if args is None:
-                self.unreadable.append(
-                    f"methodcaller('{name}', ...) hands {member.__qualname__}() arguments cash cannot tell apart, "
-                    "and it changes one of its arguments"
-                )
-                return
-            handed = [(param, arg) for param, arg in zip(params, args)]
-            handed += [(param, arg) for param, arg in keywords.items()]
-            for param, values in handed:
-                if param not in mutated:
-                    continue
-                if values is None:
-                    self.unreadable.append(
-                        f"methodcaller('{name}', ...) hands {member.__qualname__}() an argument cash cannot "
-                        f"tell, which it changes ({param!r})"
-                    )
-                    continue
-                for value, root in values:
-                    if type(value) not in _ATOMS:
-                        self._changed(value, root)
+            self.add(member, obj_root, False)
+            if self.objects:
+                self._method_args_changed(name, member, args, keywords)
 
-    def _methods_named(
-        self, name: str, call: ast.Call, namespace: Mapping[str, Any], bound: Mapping[str, tuple[ast.expr, ...]]
+    def _method_args_changed(
+        self,
+        name: str,
+        member: Any,
+        args: list[list[tuple[Any, str | None]] | None] | None,
+        keywords: Mapping[str, list[tuple[Any, str | None]] | None],
     ) -> None:
-        for arg in call.args[:1]:
-            for obj, obj_root in _resolve_argument(arg, namespace, bound).values:
-                if _is_users_object(obj) or (instance_of(obj, type) and is_users_class(obj)):
-                    member = _attribute(obj, name)
-                    if member is not _MISSING and callable(member):
-                        self.add(member, obj_root, False)
+        skip = 0
+        if instance_of(member, types.MethodType):
+            member, skip = member.__func__, 1
+        if not instance_of(member, types.FunctionType) or not self._users(member):
+            return
+        source = _source_of(member)
+        node = parse_function_source(source) if source is not None else None
+        if node is None:
+            return  # said unreadable where the method itself is added
+        # What it hands on to the functions of its module counts, as for a
+        # direct call of the method (`function_arg_mutations`).
+        mutated = params_mutated_in_function(node, _module_source(member), frozenset({node.name}))
+        if not mutated:
+            return
+        if args is None:
+            self.unreadable.append(
+                f"methodcaller('{name}', ...) hands {member.__qualname__}() arguments cash cannot tell apart, "
+                "and it changes one of its arguments"
+            )
+            return
+        params = [a.arg for a in (*node.args.posonlyargs, *node.args.args)][skip:]
+        named = {*params, *(a.arg for a in node.args.kwonlyargs)}
+        vararg = node.args.vararg.arg if node.args.vararg else None
+        kwarg = node.args.kwarg.arg if node.args.kwarg else None
+        # Past the named parameters into ``*items``; a keyword no parameter
+        # names into ``**kw``.
+        handed = [(params[i] if i < len(params) else vararg, arg) for i, arg in enumerate(args)]
+        handed += [(param if param in named else kwarg, arg) for param, arg in keywords.items()]
+        for param, values in handed:
+            if param is None or param not in mutated:
+                continue
+            if values is None:
+                self.unreadable.append(
+                    f"methodcaller('{name}', ...) hands {member.__qualname__}() an argument cash cannot "
+                    f"tell, which it changes ({param!r})"
+                )
+                continue
+            for value, root in values:
+                if type(value) not in _ATOMS:
+                    self._changed(value, root)
 
     def run_implicitly(self, tree: ast.AST, namespace: Mapping[str, Any], scope: CallScope) -> None:
         """The methods of the user's that Python runs for the statement
@@ -2362,6 +2428,20 @@ def _is_users(fn: types.FunctionType) -> bool:
 #: ``code object -> source`` (None when it cannot be read) of the functions
 #: met, so a call made once per element does not read its source each time.
 _SOURCES: LruMemo[Any, str | None] = LruMemo(CODE_OBJECTS)
+
+
+def _module_source(fn: types.FunctionType) -> Callable[[str], str | None]:
+    """``name -> source`` of the function of the user's *fn*'s module holds
+    under the name: what `params_mutated_in_function` follows."""
+    namespace = fn.__globals__
+
+    def resolve(name: str) -> str | None:
+        value = namespace.get(name)
+        if not instance_of(value, types.FunctionType) or not (value.__globals__ is namespace or _is_users(value)):
+            return None
+        return _source_of(value)
+
+    return resolve
 
 
 def _source_of(fn: types.FunctionType) -> str | None:
