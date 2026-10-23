@@ -303,6 +303,16 @@ def decide_cacheability(**kwargs: Any) -> tuple[bool, list[str]]:
 _OF_THE_WORLD = frozenset({"network", "database_write", "system"})
 
 
+def reads_the_world(analysis: StatementAnalysis, annotation: CacheAnnotation | None) -> bool:
+    """Whether the statement calls a process, the network or a database,
+    whose answer moves with the world and no lineage follows: what it binds
+    or fills in place from that answer (``L.append(subprocess.check_output(
+    ...))``) is keyed by its value, whatever refuses it."""
+    if getattr(annotation, "assume_safe", False):
+        return False
+    return any(e.kind in _OF_THE_WORLD for e in analysis.side_effects)
+
+
 def cacheability_verdict(
     *,
     code: str,
@@ -399,7 +409,7 @@ def cacheability_verdict(
         if ast_reasons:
             # What a call to a process, the network or a database gives back
             # moves with the world: what it binds is keyed by its value.
-            varies = not waived and any(e.kind in _OF_THE_WORLD for e in analysis.side_effects)
+            varies = reads_the_world(analysis, annotation)
             return CacheabilityVerdict(False, ast_reasons, varies=varies and bool(outputs))
         return CacheabilityVerdict(False, ["Input variable missing lineage"])
 
