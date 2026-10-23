@@ -2305,6 +2305,13 @@ not call that function (a `functools.cached_property` it filled the first
 time, a hash Python 3.14 keeps in a tuple) is not stored either, while the
 function is still defined: after a restart it would run again.
 
+The same warning names a statement that writes into an object no name in
+its text leads to: `globals()[name][7].x = -3`, `ns['points'][7].x = -3`
+with `ns = globals()`, or `f('x', -3)` with `f =
+functools.partial(setattr, points[7])` made in a cell above. Cash cannot
+tell which variable changes before the statement runs, so it takes every
+variable as changed: what reads any of them after it runs again.
+
 **Why it matters.** Served from the cache, the statement would not run the
 function, so the change would not happen. Cash runs the statement every
 time instead and does not store it.
