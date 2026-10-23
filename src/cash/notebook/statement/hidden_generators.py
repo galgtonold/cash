@@ -19,7 +19,7 @@ import types
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from cash._user_attrs import instance_of
+from cash._user_attrs import instance_of, own_dict
 from cash.tracking.randomness.state import object_carrier_state, rng_carrier_kind, same_carrier_state
 from cash.tracking.trace_recorder import is_user_code
 
@@ -70,12 +70,9 @@ def _children(obj: Any) -> Iterable[tuple[str, Any]]:
         yield "__self__", obj.__self__
         yield "__func__", obj.__func__
         return
-    try:
-        attrs = object.__getattribute__(obj, "__dict__")
-    except (AttributeError, TypeError):
-        return
-    if isinstance(attrs, dict) and len(attrs) <= _WIDTH:
-        yield from ((f".{k}", v) for k, v in attrs.items())
+    attrs = own_dict(obj, subclasses=True)
+    if attrs is not None and dict.__len__(attrs) <= _WIDTH:
+        yield from ((f".{k}", v) for k, v in dict.items(attrs))
 
 
 def positions(roots: Mapping[str, Any], followed: Iterable[Any] = ()) -> dict[int, tuple[str, Any, Any]]:

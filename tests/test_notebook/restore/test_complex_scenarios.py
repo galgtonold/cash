@@ -63,15 +63,14 @@ res = c.compute()
     mock_shell.user_ns.pop("c", None)
     mock_shell.user_ns.pop("Complex", None)
 
+    # The notebook's namespace is ``__main__``'s, as in IPython: a class the
+    # statement defines is pickled by name there, which no restore can
+    # bring back, so the statement runs again (and its lineage persists).
     metrics2 = statement_processor.process_statement(code, annotation=_PERSIST)
-    assert metrics2["status"] == CacheStatus.RESTORED
-    assert "res" in mock_shell.user_ns
+    assert metrics2["status"] == CacheStatus.COMPUTED
+    assert "unrestorable by value" in (metrics2.get("skipped_reason") or "")
     assert mock_shell.user_ns["res"] == 20
-
-    # Note: 'c' and 'Complex' won't be restored because they are locally defined classes
-    # not available at module level for pickle. This is expected behavior.
-    if "c" in mock_shell.user_ns:
-        assert mock_shell.user_ns["c"].val == 10
+    assert mock_shell.user_ns["c"].val == 10
 
 
 def test_file_dependency_invalidation_integrated(statement_processor, mock_shell):

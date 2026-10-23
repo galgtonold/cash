@@ -881,6 +881,17 @@ default argument or base class does. **Fix:** move the binding above this cell.
   multiprocessing do the same). Results are equal; only code that depends on
   that order sees a difference, such as the key order of a dict built by
   looping over the set. Use `sorted(s)` where the order matters.
+- **A `__dict__` your class computes may run under `@cash.cache`.** A class
+  that defines `__dict__` itself (a `@property` building it) has it read
+  when an object of it is part of a cached function's key, its arguments
+  or the globals it reads, as Python's own `vars(obj)` would. In a
+  notebook, the walks over what a statement reads and what it holds read
+  the attributes Python keeps instead, and never run it. Keep such a
+  property free of side effects, or give the function what it needs as
+  plain arguments. A `dict` subclass set as an object's `__dict__` is read
+  the same way, without its own methods, but storing the object still
+  pickles it, which calls the subclass's `items` and `__reduce_ex__`: if
+  those raise, the statement is not cached and re-runs each time.
 
 ## Reporting something not on this page
 
