@@ -7,7 +7,9 @@ stream without spelling a draw, so the runtime took it for a hidden draw
 it knew, while the simulation keyed it on the next run's key: one cell below,
 a draw from that stream looked stale and was run again, drawing a second time
 (a printed mean plain Python never gives). A function that draws before it
-seeds still reads the stream it inherits.
+seeds still reads the stream it inherits, and so does one that sets the
+stream back to a saved state (``setstate``), or whose seed another thread
+set.
 """
 
 from __future__ import annotations
@@ -49,8 +51,12 @@ def test_a_seed_before_any_draw_is_no_hidden_draw(run, helper):
     [
         "def rc(n):\n    random.random()\n    random.seed(n)\n    return tuple(range(n))",
         "def rc(n):\n    random.seed()\n    return tuple(random.random() for _ in range(n))",
+        "def rc(n):\n    st = random.getstate()\n    random.seed(n)\n    random.setstate(st)\n"
+        "    return tuple(random.random() for _ in range(n))",
+        "import threading\ndef rc(n):\n    t = threading.Thread(target=random.seed, args=(n,))\n    t.start()\n"
+        "    t.join()\n    return tuple(random.random() for _ in range(n))",
     ],
-    ids=["draws then seeds", "seeds from entropy"],
+    ids=["draws then seeds", "seeds from entropy", "seeds then sets the stream back", "seeds from another thread"],
 )
 def test_a_draw_before_the_seed_still_reads_the_stream(run, helper):
     run(SETUP)

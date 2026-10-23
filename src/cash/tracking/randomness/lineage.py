@@ -12,6 +12,7 @@ import hashlib
 import secrets
 import sys
 import textwrap
+import threading
 from collections.abc import Iterable, Mapping
 
 from ...source_norm import exact_source_digest
@@ -122,16 +123,23 @@ _FIRST_SEED_STATE: dict[str, object] = {}
 _ENTROPY = object()
 
 
+#: The thread whose statement opened the window (`open_seed_window`).
+_WINDOW_THREAD: list[int] = [0]
+
+
 def open_seed_window() -> None:
     """Forget the streams' states at their first seed: a statement begins."""
     _FIRST_SEED_STATE.clear()
+    _WINDOW_THREAD[0] = threading.get_ident()
 
 
 def seeded_before_drawing(pre: Mapping[str, object]) -> set[str]:
     """The streams a seed with a value was set on since `open_seed_window`
-    while they still stood where *pre* (`capture_rng_state` then) has them:
-    nothing drew from them before, so what they gave since comes from that
-    seed and not from where they stood."""
+    while they still stood where *pre* (`capture_rng_state` then) has them,
+    and that nothing set back to a saved state since (``setstate``,
+    ``set_state``: the temp-seed idiom puts the stream back where it stood
+    and draws from there): nothing drew from them before the seed, so what
+    they gave since comes from it and not from where they stood."""
     from .state import _rng_states_equal
 
     return {
@@ -141,8 +149,19 @@ def seeded_before_drawing(pre: Mapping[str, object]) -> set[str]:
     }
 
 
+def _void_seed_window(module: str) -> None:
+    """*module*'s stream was set to a saved state, or seeded from another
+    thread, in the window: what it gave is not its seed's alone."""
+    _FIRST_SEED_STATE[module] = _ENTROPY
+
+
 def _note_first_seed(module: str, args: tuple, kwargs: dict) -> None:
-    if module in _FIRST_SEED_STATE or module == "torch":
+    if module == "torch":
+        return
+    if threading.get_ident() != _WINDOW_THREAD[0]:
+        _void_seed_window(module)
+        return
+    if module in _FIRST_SEED_STATE:
         return
     if (args[0] if args else kwargs.get("seed", kwargs.get("a"))) is None:
         _FIRST_SEED_STATE[module] = _ENTROPY
@@ -181,6 +200,18 @@ def _seed_wrapper(module: str, original):
     seed.__name__ = getattr(original, "__name__", "seed")
     seed.__doc__ = getattr(original, "__doc__", None)
     return seed
+
+
+def _set_state_wrapper(module: str, original):
+    def set_state(*args, **kwargs):
+        _void_seed_window(module)
+        return original(*args, **kwargs)
+
+    set_state.__wrapped__ = original  # type: ignore[attr-defined]
+    set_state.__cash_seed_watch__ = True  # type: ignore[attr-defined]
+    set_state.__name__ = getattr(original, "__name__", "set_state")
+    set_state.__doc__ = getattr(original, "__doc__", None)
+    return set_state
 
 
 def start_seed_watch(loaded_before: Iterable[str]) -> None:
@@ -246,6 +277,13 @@ def watch_seeds() -> None:
             except (AttributeError, TypeError):  # pragma: no cover - read-only module
                 continue
             newly.add(rng)
+        setter_name = _STATE_SETTERS.get(rng)
+        setter = getattr(mod, setter_name, None) if setter_name else None
+        if setter is not None and not getattr(setter, "__cash_seed_watch__", False):
+            try:
+                setattr(mod, setter_name, _set_state_wrapper(rng, setter))
+            except (AttributeError, TypeError):  # pragma: no cover - read-only module
+                pass
         _WATCHED.add(rng)
     unseen = newly - _LOADED_UNDER_WATCH - {"torch"}
     if unseen:
@@ -254,6 +292,10 @@ def watch_seeds() -> None:
         for module in seeded_before_watch(unseen):
             _PROCESS_SEEDED.add(module)
             _SEED_GENERATION[module] = _SEED_GENERATION.get(module, 0) + 1
+
+
+#: The function that sets each global stream to a saved state.
+_STATE_SETTERS = {"random": "setstate", "numpy.random": "set_state"}
 
 
 def seed_generation(module: str) -> int:
