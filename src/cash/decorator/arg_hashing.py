@@ -8,6 +8,7 @@ import functools
 import hashlib
 import inspect
 import logging
+import operator
 import pickle
 import sys
 import threading
@@ -32,6 +33,7 @@ from ..canonical_form import (
 )
 from ..content_hashers import (
     BUILTIN_CONTENT,
+    IMMUTABLE_ITEM_KINDS,
     ColumnPieces,
     builtin_family_of,
     builtin_hash,
@@ -406,7 +408,9 @@ def _axis_arrays(axis: Any) -> list:
     return [axis._data]
 
 
-def frame_borrows_its_data(obj: Any, held: Any = None, since: int = 0) -> bool:
+def frame_borrows_its_data(
+    obj: Any, held: Any = None, since: int = 0, lists: list | None = None, kept: dict | None = None
+) -> bool:
     """Whether *obj*'s data sits in memory something outside pandas may write.
 
     The memo trusts copy-on-write: while the memo's shallow copy *held*
@@ -441,11 +445,20 @@ def frame_borrows_its_data(obj: Any, held: Any = None, since: int = 0) -> bool:
     Called when the memo stores a frame, as well as when it is looked up:
     a caller's array written and then dropped between two calls leaves no
     reference to find at the second.
+
+    A block of Python objects is vouched for only when its items cannot
+    change: immutable scalars. With *lists*, a block whose items are all
+    lists of immutable scalars (``groupby(...).agg(list)``) is let through
+    too, and its lists are appended to *lists*: what they hold can change
+    in place, which no reference count shows, so the caller checks them
+    item by item against a copy (`FrameDigests`). A list in *kept*, the
+    copies, is not read again for what its items are: the check finds the
+    same objects in it or fails.
     """
     if -1 in _EXPOSED:
         return True
     try:
-        found = _frame_memory(obj, held)
+        found = _frame_memory(obj, held, lists, kept)
         if found is None:
             return True
         arrays, pandas_refs = found
@@ -460,7 +473,9 @@ def frame_borrows_its_data(obj: Any, held: Any = None, since: int = 0) -> bool:
         return True
 
 
-def _frame_memory(obj: Any, held: Any) -> tuple[list, dict[int, int]] | None:
+def _frame_memory(
+    obj: Any, held: Any, lists: list | None = None, kept: dict | None = None
+) -> tuple[list, dict[int, int]] | None:
     """``(arrays, {id(array): references pandas holds})`` for everything
     *obj* keeps its data in, or ``None`` when some of it cannot be vouched
     for (see `frame_borrows_its_data`).
@@ -527,7 +542,9 @@ def _frame_memory(obj: Any, held: Any) -> tuple[list, dict[int, int]] | None:
         if isinstance(holder, block_type):
             values = holder.values
             if type(values) is np.ndarray and values.dtype == object and not immutable_items(values):
-                return None  # Python objects change in place: `s[0].append(...)`
+                # Python objects change in place: `s[0].append(...)`
+                if lists is None or not _lists_of_immutables(values, lists, kept):
+                    return None
             if not reference(values):
                 return None
             shared = holder.refs.referenced_blocks
@@ -567,6 +584,22 @@ def _frame_memory(obj: Any, held: Any) -> tuple[list, dict[int, int]] | None:
             if other is not None and not is_pin(other):  # the RAM tier's mark on a frozen block
                 hold(other)
     return arrays, pandas_refs
+
+
+def _lists_of_immutables(values: Any, lists: list, kept: dict | None = None) -> bool:
+    """Whether every item of the object array *values* is a list of
+    immutable scalars (`immutable_items`); each one is appended to
+    *lists*. One in *kept* is taken as one."""
+    from pandas.api.types import infer_dtype
+
+    items = values.ravel(order="K").tolist()
+    if not items or any(type(item) is not list for item in items):
+        return False
+    kept = kept or {}
+    if not all(id(item) in kept or infer_dtype(item, skipna=True) in IMMUTABLE_ITEM_KINDS for item in items):
+        return False
+    lists.extend(items)
+    return True
 
 
 def _hold_cached_indexes(index: Any, hold: Callable, pd: Any) -> None:
@@ -1128,12 +1161,13 @@ class FrameDigests:
         entry = entries.get(id(obj))
         if entry is None:
             return None
-        wref, held, signature, content_hash, since, _pieces = entry
-        if frame_borrows_its_data(obj, held, since):
+        wref, held, signature, content_hash, since, _pieces, kept = entry
+        lists: list = []
+        if frame_borrows_its_data(obj, held, since, lists if kept else None, kept):
             entries.pop(id(obj), None)
             return None
         try:
-            if wref() is obj and frame_signature(obj) == signature:
+            if wref() is obj and frame_signature(obj) == signature and _lists_unchanged(lists, kept):
                 return content_hash
         except Exception:  # noqa: BLE001 - a pandas internals change: just re-hash
             pass
@@ -1175,15 +1209,19 @@ class FrameDigests:
         try:
             watch_array_handles()
             held = obj.copy(deep=False)
-            if frame_borrows_its_data(obj, held, since):
+            lists: list = []
+            if frame_borrows_its_data(obj, held, since, lists):
                 return
+            # What each list of a block of lists held when the content was
+            # hashed, which no copy-on-write guards (`_lists_unchanged`).
+            kept = {id(items): (items, tuple(items)) for items in lists}
             signature = frame_signature(obj)
             entries = self._entries
             key = id(obj)
             wref = weakref.ref(obj, lambda _ref, key=key, entries=entries: entries.pop(key, None))
         except Exception:  # noqa: BLE001 - the memo is a speedup; hash every time
             return
-        self._entries[key] = (wref, held, signature, content_hash, since, pieces or {})
+        self._entries[key] = (wref, held, signature, content_hash, since, pieces or {}, kept)
         if pieces:
             columns = self._columns
             if len(columns) > 64 * self._entries.maxsize:
@@ -1198,6 +1236,25 @@ class FrameDigests:
                 owners = columns.get(column, ())
                 alive = (owner for owner in owners if owner != key and owner in self._entries)
                 columns[column] = (key, *alive)[:_COLUMN_OWNERS]
+
+
+def _lists_unchanged(lists: list, kept: dict[int, tuple[list, tuple]]) -> bool:
+    """Whether *lists*, the lists a frame's blocks of lists hold now, are
+    the ones *kept* when its content was hashed, each still holding the
+    same objects, which are immutable (`_lists_of_immutables`): then what
+    they hold is unchanged. The same objects, not equal ones: an item
+    swapped for an equal one is caught too, as the read would give the
+    same bytes either way."""
+    if len({id(items) for items in lists}) != len(kept):
+        return False
+    for items in lists:
+        known = kept.get(id(items))
+        if known is None or known[0] is not items:
+            return False
+        before = known[1]
+        if len(items) != len(before) or not all(map(operator.is_, items, before)):
+            return False
+    return True
 
 
 class _KnownPieces:
