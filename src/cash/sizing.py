@@ -14,6 +14,7 @@ Functions only; nothing here hashes or stores a value.
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import itertools
 import logging
 import pickle
@@ -406,6 +407,10 @@ def _est_sparse_coo(m: Any) -> int:
     return int(m.data.nbytes + m.row.nbytes + m.col.nbytes)
 
 
+#: What `inspect.getattr_static` answers for an object without ``nbytes``.
+_NO_NBYTES = object()
+
+
 def _data_size(obj: Any) -> int | None:
     """The bytes a frame, array or sparse matrix holds, or None for anything
     else -- a builtin, or an object that does not say.
@@ -446,6 +451,10 @@ def _data_size(obj: Any) -> int | None:
         return _est_sparse_csr_csc(obj)
     if type_name in _SPARSE_COO_TYPES:
         return _est_sparse_coo(obj)
+    if inspect.getattr_static(obj, "nbytes", _NO_NBYTES) is _NO_NBYTES:
+        # Asked only of an object that has one: ``getattr`` ran a class's own
+        # ``__getattribute__`` (the user's code) for every object stored.
+        return None
     try:
         nbytes = getattr(obj, "nbytes", None)
     except Exception:  # noqa: BLE001 - a property of someone else's class: any failure means "does not say"
@@ -477,7 +486,8 @@ def estimate_object_size(obj: Any, _depth: int = 0) -> int:
         size = _data_size(obj)
         if size is not None:
             return size
-        if dataclasses.is_dataclass(obj) and not instance_of(obj, type):
+        # By its real type: ``is_dataclass(obj)`` asks the object for ``__class__``.
+        if dataclasses.is_dataclass(type(obj)) and not instance_of(obj, type):
             base = sys.getsizeof(obj)
             return base + sum(estimate_object_size(getattr(obj, f.name), _depth + 1) for f in dataclasses.fields(obj))
         if instance_of(obj, tuple) and hasattr(obj, "_fields"):  # namedtuple

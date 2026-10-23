@@ -13,6 +13,7 @@ kernel ``logging.basicConfig()`` alone was enough.
 from __future__ import annotations
 
 import _io
+import copyreg
 import importlib.machinery
 import io
 import logging
@@ -157,6 +158,17 @@ def test_an_extensions_heap_type_is_not_user_code():
     pl = pytest.importorskip("polars")
     for native in (type(pl.DataFrame({"a": [1]})._df), type(pl.Series([1])._s)):
         assert native.__module__ == "builtins"
+        assert not is_user_code_object(native)
+
+
+def test_an_extensions_heap_type_stays_c_code_once_its_objects_were_copied():
+    """Pickling or copying an object caches ``__slotnames__`` on its type
+    (copyreg), a list that is no C code: a polars frame copied by an earlier
+    statement in the process made ``PyDataFrame`` user code from then on."""
+    pl = pytest.importorskip("polars")
+    for native in (type(pl.DataFrame({"a": [1]})._df), type(pl.Series([1])._s)):
+        copyreg._slotnames(native)
+        assert "__slotnames__" in vars(native)
         assert not is_user_code_object(native)
 
 

@@ -1001,7 +1001,8 @@ class InMemoryBackend(CacheBackend):
                 # copies it as usual.
                 memo[key] = obj
                 return key
-            if frames and isinstance(obj, frames):
+            # By its real type: an object passing for a frame by ``__class__`` is not one.
+            if frames and issubclass(obj_type, frames):
                 if _is_pandas_frame(type(obj)):
                     memo[key] = InMemoryBackend._copy_frame(obj, known_cells, record_cells, memo)
                 elif record_cells is not None:

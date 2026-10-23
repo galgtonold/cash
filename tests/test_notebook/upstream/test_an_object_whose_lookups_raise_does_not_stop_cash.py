@@ -206,20 +206,27 @@ class Counted:
 """
 
 
+@pytest.mark.parametrize("floors", ["default", "zero"])
 @pytest.mark.parametrize("flat_first", [False, True], ids=["pickled", "walked-first"])
-def test_cash_asks_such_an_object_nothing_but_to_pickle_it(cash_magics, tmp_path, monkeypatch, flat_first):
+def test_cash_asks_such_an_object_nothing_but_to_pickle_it(cash_magics, tmp_path, monkeypatch, flat_first, floors):
     """Its ``__getattribute__`` is the user's code: cash's own questions
     (``isinstance`` asking for ``__class__``, ``fit``, ``__code__``) read
     its real type and Python's generic lookup instead. Storing it pickles
     it, and pickle asks. Also where values are walked before they are
     pickled (`kept_state.FLAT_FIRST`, Python 3.10 on Windows), with numpy
-    loaded, whose array check asked it twice more."""
+    loaded, whose array check asked it twice more. With the store floor
+    at zero, as a loaded machine makes it for these quick statements, the
+    store sized ``c`` by asking it for ``nbytes``; copying it asks what
+    unpickling does."""
     import numpy  # noqa: F401 - `kept_state._flat_array` looks only once numpy is loaded
+    import pandas  # noqa: F401 - the RAM tier's copy looks for frames only once pandas is loaded
 
     from cash import kept_state
 
     monkeypatch.setattr(kept_state, "FLAT_FIRST", flat_first)
-    module = f"counted_mod_{flat_first}"  # one per case: an imported module is kept
+    if floors == "zero":
+        monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    module = f"counted_mod_{flat_first}_{floors}"  # one per case: an imported module is kept
     (tmp_path / f"{module}.py").write_text(COUNTED, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     cells = [
@@ -231,8 +238,11 @@ def test_cash_asks_such_an_object_nothing_but_to_pickle_it(cash_magics, tmp_path
     ]
     for cell in cells:
         run_cash_cell(cash_magics, cell, cells=cells)
-    pickling = {"__class__", "__reduce_ex__", "__reduce__", "__getstate__"}
+    pickling = {"__class__", "__reduce_ex__", "__reduce__", "__getstate__", "__setstate__", "__dict__"}
     asked = {name: n for name, n in cash_magics.shell.user_ns["CALLS"].items() if name not in pickling | {"v"}}
     assert asked == {}
     asked_class = cash_magics.shell.user_ns["ASKED_CLASS"]
-    assert len(asked_class) <= 1, "\n----\n".join(asked_class)  # the store's one pickle
+    if floors == "default":
+        assert len(asked_class) <= 1, "\n----\n".join(asked_class)  # the store's one pickle
+    # Stored, it is pickled to be digested and to be copied: pickle asks.
+    assert all("pickle" in stack for stack in asked_class), "\n----\n".join(asked_class)
