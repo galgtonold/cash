@@ -40,3 +40,18 @@ def test_a_hook_writing_its_closure_runs_on_every_run_all(cash_magics, shape):
         for cell in cells:
             run_cash_cell(cash_magics, cell, cells=cells)
         assert cash_magics.shell.user_ns["r"] == [5], f"{run} Run All"
+
+
+@pytest.mark.parametrize("shape", list(SHAPES))
+def test_a_hook_whose_source_is_gone_runs_on_every_run_all(cash_magics, monkeypatch, shape):
+    """A hook whose source cannot be read is taken to write its closure,
+    not to write nothing: in a long run of the suite a lambda's cell had
+    gone from where its source is read, and the hook was served."""
+    import cash.notebook.call_key as call_key
+
+    def gone(fn):
+        raise OSError("could not get source code")
+
+    monkeypatch.setattr(call_key, "own_source", gone)
+    call_key._GLOBAL_MUTATION_CACHE.clear()
+    test_a_hook_writing_its_closure_runs_on_every_run_all(cash_magics, shape)

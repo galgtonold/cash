@@ -200,8 +200,9 @@ def _source_mutations(fn) -> tuple[str, ...]:
 
 
 def _read_mutations(fn) -> tuple[str, ...] | None:
-    """`_source_mutations`, None when *fn*'s source cannot be read: a
-    lambda whose line holds no one lambda of its parameters."""
+    """`_source_mutations`, None when *fn*'s source cannot be read (or
+    parsed), or is a lambda whose line holds no one lambda of its
+    parameters."""
     memo_key = attribute_or(fn, "__code__", None)
     cached = _GLOBAL_MUTATION_CACHE.get(memo_key, _UNREAD) if memo_key is not None else _UNREAD
     if cached is _UNREAD:
@@ -212,9 +213,9 @@ def _read_mutations(fn) -> tuple[str, ...] | None:
                 cached = None if fdef is None else tuple(sorted(free_vars_mutated_in_function(fdef)))
             else:
                 cached = tuple(sorted(source_global_mutations(source)))
-        except SOURCE_RETRIEVAL_ERRORS:
-            cached = ()
-        except RecursionError:
+        except (*SOURCE_RETRIEVAL_ERRORS, RecursionError):
+            # Unread, not "writes nothing": a cell's source let go in a long
+            # session left a hook that writes its closure served.
             cached = None
         if memo_key is not None:
             _GLOBAL_MUTATION_CACHE[memo_key] = cached
