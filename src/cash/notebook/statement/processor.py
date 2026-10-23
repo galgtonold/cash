@@ -115,6 +115,7 @@ from ...analysis.cacheability import analyze_statement, statement_writes_files
 from ...analysis.cacheability_decision import (
     cacheability_verdict,
     identity_coupled_reason,
+    reads_the_world,
 )
 from ...analysis.code_analyzer import CodeAnalyzer, calls_ipython, reaches_the_shell, statement_code
 from ...analysis.handed_callables import answers_shared, new_analysis_round, stop_sharing_answers
@@ -1227,6 +1228,11 @@ class StatementProcessor:
         (``StatementRun.reads_outside_lineage``); refused already, it gets no
         second reason."""
         refused = run.skip_cache
+        if run.skip_cache and run.analysis is not None and reads_the_world(run.analysis, run.annotation):
+            # What it fills in place from a process's or the network's answer
+            # (``L.append(subprocess.check_output(...))``), refused for the
+            # change, is keyed by its value, as what it binds from one is.
+            run.reads_outside_lineage = True
 
         def refuse(reason: str) -> None:
             run.reads_outside_lineage = True

@@ -303,6 +303,18 @@ FILLED = {
         "open(p, 'w').write('2')",
         False,
     ),
+    "an append of a process's output": (
+        [TMP_FILE, "L = []", "L.append(subprocess.check_output(CAT + [p]).decode().strip())", "w = list(L)"],
+        None,
+        "open(p, 'w').write('2')",
+        False,
+    ),
+    "an update from a process's output": (
+        [TMP_FILE, "D = {}", "D.update(k=subprocess.check_output(CAT + [p]).decode().strip())", "w = dict(D)"],
+        None,
+        "open(p, 'w').write('2')",
+        False,
+    ),
     "an extend by a thread's data": (
         [
             "import threading\ndata = [1]\nev = threading.Event()\ndef worker():\n    ev.wait()\n    data.append(2)\n"
