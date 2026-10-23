@@ -20,7 +20,6 @@ from ...analysis.ast_util import called_names
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import control_structure_mutations, is_module_name
-from ...source_norm import exact_source_digest
 from ..cache_key import statement_source_hash
 from ..callee_reach import module_state_names
 from ..control_structures import extract_target_names, get_control_structure_type
@@ -28,7 +27,8 @@ from ..lineage_formula import output_lineage
 from ..loop_split import split_nodes
 from ..run_memo import file_component_this_run
 from ..statement.derivation_edges import bump_derived_lineages
-from ..tracking_state import TrackingState
+from ..statement.lineage import rewritten_by_the_notebook_since
+from ..tracking_state import TrackingState, outcome_key
 from ._types import SimulationResult, TraceEntry
 from .cache_probe import CacheProbe, ControlOutcome
 from .statement_lineage import StatementLineage
@@ -145,7 +145,7 @@ class ControlSimulation:
             )
         return extra_outputs
 
-    def simulate(self, node: ast.AST, sim: SimulationResult) -> None:
+    def simulate(self, node: ast.AST, sim: SimulationResult, occurrence_index: int = 0) -> None:
         """
         Simulate execution of a control structure as a single unit.
 
@@ -212,9 +212,9 @@ class ControlSimulation:
                     self._simulate_unit(half, sim)
                 return
 
-        self._simulate_unit(node, sim)
+        self._simulate_unit(node, sim, occurrence_index)
 
-    def _simulate_unit(self, node: ast.AST, sim: SimulationResult) -> None:
+    def _simulate_unit(self, node: ast.AST, sim: SimulationResult, occurrence_index: int = 0) -> None:
         """Simulate ONE control structure as a single statement.
 
         Split out of :meth:`simulate` so a split loop can
@@ -226,7 +226,15 @@ class ControlSimulation:
 
         inputs, input_hashes = self._input_hashes(stmt_code, virtual_lineage)
 
-        outputs, lookup_time, files_stale, _ = self.statements.apply(stmt_code, virtual_lineage, sim.virtual_modules)
+        # The edges a run with these inputs linked: one of the same text
+        # elsewhere may have linked others.
+        outputs, lookup_time, files_stale, _ = self.statements.apply(
+            stmt_code,
+            virtual_lineage,
+            sim.virtual_modules,
+            occurrence_index=occurrence_index,
+            own_edges=self.statements.share_record_at(stmt_code, input_hashes),
+        )
 
         mutated_vars = self.collect_mutations(
             node,
@@ -253,9 +261,11 @@ class ControlSimulation:
         # What the runtime left behind when it last ran this very structure
         # (see TrackingState.control_outcomes): the files it read, and the
         # lineages it produced.
-        recorded = self._recorded_outcome(stmt_code, virtual_lineage)
+        recorded = self._recorded_outcome(stmt_code, virtual_lineage, occurrence_index)
         if recorded is not None:
-            if file_component_this_run(recorded[2]) != recorded[3]:
+            if file_component_this_run(recorded[2]) != recorded[3] and not rewritten_by_the_notebook_since(
+                self.tracking_state, outcome_key(stmt_code, occurrence_index), recorded[2]
+            ):
                 # A file behind its outputs moved: the one change the entry
                 # lineages cannot show, because a `Path` does not change when
                 # the file it names does. Say so, or the loop trust keeps the
@@ -322,10 +332,13 @@ class ControlSimulation:
                 input_hashes[inp] = self.tracking_state.variable_lineage[inp]
         return inputs, input_hashes
 
-    def _recorded_outcome(self, stmt_code: str, virtual_lineage: Mapping[str, str]) -> ControlOutcome | None:
-        """The outcome the runtime recorded for *stmt_code*: this session's,
-        else an earlier kernel's that may still be trusted."""
-        recorded = self.tracking_state.control_outcomes.get(exact_source_digest(stmt_code))
+    def _recorded_outcome(
+        self, stmt_code: str, virtual_lineage: Mapping[str, str], occurrence_index: int = 0
+    ) -> ControlOutcome | None:
+        """The outcome the runtime recorded for *stmt_code*: this session's
+        (for that copy in its cell), else an earlier kernel's that may still
+        be trusted."""
+        recorded = self.tracking_state.control_outcomes.get(outcome_key(stmt_code, occurrence_index))
         if recorded is None:
             variable_lineage = self.tracking_state.variable_lineage
             recorded = self.probe.control_outcome(

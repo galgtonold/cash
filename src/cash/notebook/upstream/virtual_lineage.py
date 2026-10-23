@@ -658,11 +658,15 @@ class VirtualLineage:
         raw_cell: str | None,
     ) -> None:
         try:
-            if is_control_structure(node):
-                self.controls.simulate(node, sim)
-                return
-
             stmt_code = statement_code(node, raw_cell)
+            if is_control_structure(node):
+                # Counted as the runtime counts it (`CellExecutor`): two
+                # copies of ``with ...: t = next(G)`` in one cell are two
+                # statements, each with its own value digests.
+                occ = cell_stmt_occurrence_counts.get(stmt_code, 0)
+                cell_stmt_occurrence_counts[stmt_code] = occ + 1
+                self.controls.simulate(node, sim, occurrence_index=occ)
+                return
         except (ValueError, TypeError, AttributeError) as e:
             logger.debug("[UPSTREAM] Error processing node in cell %d: %s", i, e)
             raise

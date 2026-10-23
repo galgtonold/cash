@@ -27,14 +27,16 @@ class TestRealisticCommentedCodeScenario:
 
     @pytest.fixture(autouse=True)
     def _set_up(self, _notebook):
-        # Create a realistic DataFrame
-        np.random.seed(42)
+        # Create a realistic DataFrame. From a generator of its own: seeding
+        # numpy's global stream would stay seeded for the rest of the
+        # process, and a later test's unseeded draw would read as seeded.
+        self.rng = np.random.default_rng(42)
         self.shell.user_ns["df_clean"] = pd.DataFrame(
             {
                 "date": pd.date_range("2023-01-01", periods=100),
-                "sales": np.random.rand(100) * 1000,
-                "units": np.random.randint(1, 20, 100),
-                "product": np.random.choice(["A", "B", "C"], 100),
+                "sales": self.rng.random(100) * 1000,
+                "units": self.rng.integers(1, 20, 100),
+                "product": self.rng.choice(["A", "B", "C"], 100),
             }
         )
 
@@ -43,9 +45,9 @@ class TestRealisticCommentedCodeScenario:
         self.shell.user_ns["df_clean"] = pd.DataFrame(
             {
                 "date": pd.date_range("2023-01-01", periods=100),
-                "sales": np.random.rand(100) * 1000,
-                "units": np.random.randint(1, 20, 100),
-                "product": np.random.choice(["A", "B", "C"], 100),
+                "sales": self.rng.random(100) * 1000,
+                "units": self.rng.integers(1, 20, 100),
+                "product": self.rng.choice(["A", "B", "C"], 100),
             }
         )
 
