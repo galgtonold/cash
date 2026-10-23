@@ -54,7 +54,7 @@ from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from ..cache_key import CacheKeyContext, compute_cache_key, statement_source_hash
 from ..callee_reach import helper_seeded_modules, module_state_names
-from ..consumables import drawn_stream_inputs, is_stream, watched_call_receivers
+from ..consumables import drawn_stream_inputs, is_stream, watched_call_receivers, with_other_names
 from ..lineage_formula import (
     binding_source_hash,
     call_time_reads,
@@ -1337,7 +1337,10 @@ class StatementLineage:
     def _drawn_streams(self, stmt_code: str, inputs: set[str], outputs: set[str]) -> set[str]:
         """The iterators and streams *stmt_code* reads from, which move as a
         generator does (``drawn_stream_inputs``, as the runtime finds them)."""
-        return set(drawn_stream_inputs(parse_cached(stmt_code), inputs, outputs, self.shell.user_ns))
+        drawn = drawn_stream_inputs(parse_cached(stmt_code), inputs, outputs, self.shell.user_ns)
+        if not drawn:
+            return set()
+        return with_other_names(drawn, self.shell.user_ns, self.tracking_state.variable_lineage) - outputs
 
     def _advanced_carriers(
         self,

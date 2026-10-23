@@ -60,6 +60,7 @@ __all__ = [
     "consumable_state",
     "has_diverged",
     "is_write_stream",
+    "with_other_names",
 ]
 
 # ``itertools`` iterators that hold advanceable state and are not deep-copyable.
@@ -305,6 +306,20 @@ def drawn_stream_inputs(
             continue
         if is_stream(value):
             found.append(name)
+    return found
+
+
+def with_other_names(names: Iterable[str], user_ns: Mapping[str, Any], known: Iterable[str]) -> set[str]:
+    """*names* and the names of *known* bound to the same object as one of
+    them: ``it2 = it`` above, a draw through ``it`` moved ``it2`` as well.
+    The simulation moves ``it2`` on through the edge ``it2 = it`` linked; the
+    runtime moves it with the drawn name, so both leave it alike."""
+    held = {id(user_ns[name]): user_ns[name] for name in names if name in user_ns}
+    found = set(names)
+    for name in known:
+        value = user_ns.get(name, held)
+        if value is not held and held.get(id(value), held) is value:
+            found.add(name)
     return found
 
 
