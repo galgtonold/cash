@@ -45,6 +45,7 @@ from ..exceptions import (
     CashImpurityWarning,
 )
 from ..install_paths import is_user_code_module, is_user_module
+from ..kept_state import reduce_counted
 from ..source_reading import getsource, getsourcelines
 from ..tracking.randomness import capture_argument_carrier_states, moved_carriers, rng_carrier_kind
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
@@ -161,7 +162,7 @@ def _comes_back_as_itself(value) -> bool:
         # a logger for a name none has: looked up instead.
         return _known_logger((value.name,)) is value
     try:
-        rv = value.__reduce_ex__(5)
+        rv = reduce_counted(value, 5)
         if isinstance(rv, str):
             import pickle
 

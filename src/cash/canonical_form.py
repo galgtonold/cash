@@ -984,7 +984,7 @@ def _pickled_state(value: Any) -> Any:
     module, a function) keeps its instance state alone.
     """
     try:
-        reduced = value.__reduce_ex__(4)
+        reduced = kept_state.reduce_counted(value, 4)
     except TypeError:
         return object_state(value)
     if isinstance(reduced, str):

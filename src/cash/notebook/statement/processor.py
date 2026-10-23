@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import functools
+import hashlib
 import io
 import logging
 import os
@@ -44,7 +45,7 @@ from cash.notebook.compiled_source import register_cell_source
 from cash.notebook.consumables import drawn_stream_inputs
 from cash.notebook.per_item_reruns import MIN_COST_S as PER_ITEM_MIN_COST_S
 from cash.notebook.read_handles import reaches_read_handle
-from cash.notebook.statement import sparse_order
+from cash.notebook.statement import reducer_writes, sparse_order
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.amplification import AmplificationGuard
 from cash.notebook.statement.call_routing import CallRouting
@@ -809,6 +810,7 @@ class StatementProcessor:
                 if shadow is not None:
                     shadow.statement_served(run, done)
                 self._advance_rng(run)
+                self._move_what_reducers_wrote(run)
                 return done
             with self._executing(run) as runner:
                 self._offer_digests(run, runner)
@@ -825,6 +827,7 @@ class StatementProcessor:
             return result
         finally:
             self._advance_rng(run)
+            self._move_what_reducers_wrote(run)
 
     @staticmethod
     def _begin_recording(shadow: Any, run: StatementRun) -> Any:
@@ -897,6 +900,7 @@ class StatementProcessor:
                 if shadow is not None:
                     shadow.statement_served(run, done)
                 self._advance_rng(run)
+                self._move_what_reducers_wrote(run)
                 return done
             with self._executing(run) as runner:
                 unit = self._begin_recording(shadow, run)
@@ -911,6 +915,7 @@ class StatementProcessor:
             return result
         finally:
             self._advance_rng(run)
+            self._move_what_reducers_wrote(run)
 
     def _prepare(self, run: StatementRun) -> ProcessResult | None:
         """Analyse, key and look up *run*'s statement, before it may execute.
@@ -1219,6 +1224,8 @@ class StatementProcessor:
         """Read *run*'s annotation, warn about its randomness, start its
         metrics and parse it."""
         code = run.code
+        reducer_writes.watch(self.shell.user_ns)
+        run.reducer_mark = reducer_writes.runs_now()
         run.effective_ttl, run.force_persist, run.skip_cache, run.allow_random = statement_directives(
             run.annotation, run.ttl, self.persist_all
         )
@@ -2495,6 +2502,11 @@ class StatementProcessor:
                 # may change an output another check walked; it never reads
                 # the facts over wider leaves those checks took.
                 _plain_data.forget_wider_facts()
+                if not run.skip_cache and reducer_writes.writes_into(run.reducer_mark, self.shell.user_ns):
+                    # A reducer of the user's that cash ran wrote: stored, the
+                    # entry would be served without that write
+                    # (`_move_what_reducers_wrote`).
+                    run.skip_cache = True
                 if not run.skip_cache:
                     saved_metadata = self._store.save(
                         run,
@@ -3111,6 +3123,74 @@ class StatementProcessor:
 
         location = ("<cash>", running_cell_count(self.shell))
         warn_diagnostic(CashWarning, "NOTEBOOK-SHARE-UNCHECKED", what, fix, location=location)
+
+    def _move_what_reducers_wrote(self, run: StatementRun) -> None:
+        """Move on the variables a reducer of the user's could have written,
+        when one that writes ran in a pickle of cash's while *run*'s
+        statement was processed (`reducer_writes`): ``__reduce__`` doing
+        ``df.at[3, 'o'] = ...`` changes ``df``, which no statement named,
+        and a reader of ``df`` below would be served what it read before.
+        Each moves to a lineage carrying its content now, so a reader
+        misses when the write changed it and hits when it did not. Every
+        variable moves when the code's reach cannot be read. Warned
+        (``NOTEBOOK-REDUCE-WROTE``), naming the class."""
+        refused = reducer_writes.refused_since(run.reducer_mark)
+        if refused:
+            self._warn_reducer_refused(run, refused)
+        found = reducer_writes.writers(run.reducer_mark)
+        if not found:
+            return
+        user_ns = self.shell.user_ns
+        names = reducer_writes.reach(found, user_ns)
+        if names is not None and not names:
+            # It writes nothing of the notebook's (`reducer_writes.writes_into`).
+            run.reducer_mark = reducer_writes.runs_now()
+            return
+        lineages = self.tracking_state.variable_lineage
+        moved = set(lineages) if names is None else names
+        moved = {name for name in moved if name in lineages and name in user_ns}
+        for name in sorted(moved):
+            value = user_ns[name]
+            try:
+                content = no_cache_value_digest(value)
+            except Exception:  # noqa: BLE001 - a value that cannot be read moves to one of its own
+                content = "fresh:" + secrets.token_hex(16)
+            lineage = hashlib.sha256(f"reduce-wrote:{lineages[name]}:{content}".encode()).hexdigest()
+            self.tracking_state.lineage.record(name, lineage, value=value)
+            # Its session hash follows: the value now is the one a later cell
+            # starts from (`StaleValueGuard`).
+            self.lineage_builder.note_content_hash(self.tracking_state, name, value, lineage)
+        if moved:
+            self.lineage_builder.replay_derivation_bumps(self.tracking_state, moved, set(), code=run.code)
+        # What the reads above ran is this statement's too, and moved nothing more.
+        run.reducer_mark = reducer_writes.runs_now()
+        classes = ", ".join(sorted({writer.name for writer in found}))
+        what = (
+            f"cash pickled a value of {classes} to hash or store it, and its own "
+            f"__reduce__ or __getstate__ changes other values: "
+            + ("every variable" if names is None else ", ".join(sorted(moved)) or "nothing tracked")
+            + " counted as changed, and the statement was not stored"
+        )
+        fix = (
+            "Have the class's __reduce__ / __getstate__ only read: change other "
+            "values in the statement that needs them instead"
+        )
+        warn_diagnostic(CashWarning, "NOTEBOOK-REDUCE-WROTE", what, fix)
+
+    @staticmethod
+    def _warn_reducer_refused(run: StatementRun, classes: list[str]) -> None:
+        """Warn that cash did not run the writing reducers of *classes*
+        (`reducer_writes.refuses`), so *run*'s statement was not stored."""
+        run.reducer_mark = reducer_writes.runs_now()
+        what = (
+            f"a value of {', '.join(dict.fromkeys(classes))} has a __reduce__ or __getstate__ that changes "
+            "other values, so cash did not pickle it: the statement was not stored, and runs again next time"
+        )
+        fix = (
+            "Have the class's __reduce__ / __getstate__ only read: change other "
+            "values in the statement that needs them instead"
+        )
+        warn_diagnostic(CashWarning, "NOTEBOOK-REDUCE-WROTE", what, fix)
 
     def _move_holders(self, run: StatementRun, metadata: StatementCacheMetadata | None) -> set[str]:
         """Move on the lineages of the variables *metadata*'s entry stores
