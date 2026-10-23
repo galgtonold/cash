@@ -1846,6 +1846,12 @@ class StatementProcessor:
                 run.metrics["uncacheable_reasons"].append(reason)
         if positions:
             run.carriers_advanced = moved_carrier_names(positions, self.shell.user_ns)
+        # An iterator or stream it read from moved as a generator does: a
+        # cell re-run on its own then finds it past where the cells above
+        # leave it, and has it rebuilt, as a restart and Run All would.
+        streams = drawn_stream_inputs(run.tree, run.inputs, run.outputs, self.shell.user_ns)
+        if streams:
+            run.carriers_advanced = frozenset(run.carriers_advanced or ()) | frozenset(streams)
         if hidden and not run.skip_cache and execution.result is not None and execution.result.success:
             drawn = hidden_generators.moved(hidden)
             if drawn:

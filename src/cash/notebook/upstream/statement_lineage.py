@@ -54,7 +54,7 @@ from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from ..cache_key import CacheKeyContext, compute_cache_key, statement_source_hash
 from ..callee_reach import helper_seeded_modules, module_state_names
-from ..consumables import is_stream, watched_call_receivers
+from ..consumables import drawn_stream_inputs, is_stream, watched_call_receivers
 from ..lineage_formula import (
     binding_source_hash,
     call_time_reads,
@@ -1334,6 +1334,11 @@ class StatementLineage:
         }
         return reachable_generators(inputs, user_ns, self.tracking_state.variable_lineage) | dead
 
+    def _drawn_streams(self, stmt_code: str, inputs: set[str], outputs: set[str]) -> set[str]:
+        """The iterators and streams *stmt_code* reads from, which move as a
+        generator does (``drawn_stream_inputs``, as the runtime finds them)."""
+        return set(drawn_stream_inputs(parse_cached(stmt_code), inputs, outputs, self.shell.user_ns))
+
     def _advanced_carriers(
         self,
         stmt_code: str,
@@ -1356,7 +1361,9 @@ class StatementLineage:
         if recorded is None:
             recorded = self._recorded_draws(stmt_code)
         if recorded is None:
-            recorded = self._reachable_generators(inputs, virtual_lineage)
+            recorded = self._reachable_generators(inputs, virtual_lineage) | self._drawn_streams(
+                stmt_code, inputs, outputs
+            )
         return set(recorded) - outputs
 
     def _advance_carriers_without_outputs(
@@ -1376,7 +1383,11 @@ class StatementLineage:
         recorded = self._recorded_draws(stmt_code)
         if recorded is not None and not recorded:
             return set()
-        if recorded is None and not self._reachable_generators(inputs, virtual_lineage):
+        if (
+            recorded is None
+            and not self._reachable_generators(inputs, virtual_lineage)
+            and not self._drawn_streams(stmt_code, inputs, set())
+        ):
             return set()
         cache_key = self._key(
             stmt_code, inputs | hidden_reads, set(), virtual_lineage, virtual_modules, occurrence_index
