@@ -247,7 +247,11 @@ def _walk(value: Any, walk: _Walk) -> Any:
     main thread stack, killing the process, before Python's recursion limit
     is reached. An exception a part raises is thrown into the generator that
     asked for it, as a recursive call would raise it there, so
-    ``_object_steps`` can still catch one.
+    ``_object_steps`` can still catch one. One that passes up through a
+    step keeps the traceback it was raised with: each step it passed added
+    its frame, and one thrown up through a hundred thousand levels (a
+    timeout's, in the middle of a deep value) took pytest minutes to print
+    and its worker's memory to send.
     """
     entered = _enter(value, walk)
     if type(entered) is not _Descend:
@@ -255,6 +259,7 @@ def _walk(value: Any, walk: _Walk) -> Any:
     steps = [entered.steps]
     sent: Any = None
     error: BaseException | None = None
+    raised_at = None
     while True:
         current = steps[-1]
         try:
@@ -270,6 +275,10 @@ def _walk(value: Any, walk: _Walk) -> Any:
             continue
         except BaseException as exc:
             steps.pop()
+            if exc is error:
+                exc.__traceback__ = raised_at
+            else:
+                raised_at = exc.__traceback__
             if not steps:
                 raise
             sent, error = None, exc
@@ -278,7 +287,7 @@ def _walk(value: Any, walk: _Walk) -> Any:
         try:
             entered = _enter(part, walk)
         except BaseException as exc:  # noqa: BLE001 - raised in the step that asked for the part, as a call would
-            sent, error = None, exc
+            sent, error, raised_at = None, exc, exc.__traceback__
             continue
         if type(entered) is _Descend:
             steps.append(entered.steps)
