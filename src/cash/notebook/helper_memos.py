@@ -121,6 +121,9 @@ def holds_a_filled_memo(value: Any) -> bool:
     Cases`` with a cached ``make`` that seeds ``random`` was served after a
     restart with ``make(3)`` answered, so the seed was skipped and every
     draw below differed from plain Python."""
+    if type(value) in (tuple, list):
+        # A call's result: ``Cases, n = make_cases()``.
+        return any(holds_a_filled_memo(item) for item in value[:16] if type(item) not in (tuple, list))
     if not instance_of(value, (type, types.FunctionType)) and not _is_user_memo(value):
         return False
     for _, memo in _memos_in(value, [], set()):

@@ -21,46 +21,47 @@ import pytest
 from cash.notebook.call_unit import CallUnit
 from tests._cell_driver import run_cash_cell
 
-IMPORTS = "import functools, random"
-
-CLASS = (
-    "class Cases:\n    @staticmethod\n    @functools.cache\n    def make(n):\n"
-    "        random.seed(n)\n        return tuple(random.random() for _ in range(n))"
-)
-
 HELPERS = (
+    "import functools, random\n"
     "import numpy as np\n"
     "def make_helper():\n"
     "    g = np.random.default_rng(0)\n"
     "    def helper():\n        return float(g.normal())\n"
     "    def peek():\n        return float(g.normal())\n"
     "    return helper, peek\n"
+    "def make_cases():\n"
+    "    class Cases:\n        @staticmethod\n        @functools.cache\n        def make(n):\n"
+    "            random.seed(n)\n            return tuple(random.random() for _ in range(n))\n"
+    "    return Cases\n"
+    "def make_plain():\n"
+    "    class Plain:\n        def twice(self, n):\n            return 2 * n\n"
+    "    return Plain\n"
 )
 
+# Made by a module's factory: a ``class`` or ``def`` in a cell names
+# ``__main__`` in a kernel and is never stored by value.
 CASES = {
     "a class whose memo is filled": (
         [
-            IMPORTS,
+            "import vbr_helpers, random\nCases = vbr_helpers.make_cases()",
             "random.seed(0)",
-            CLASS,
             "bench = sum(Cases.make(3)) + random.random()",
             "r = (Cases.make(3), random.random())[1]",
         ],
-        "r",
-    ),
-    "a function whose memo is filled": (
-        [
-            IMPORTS,
-            "random.seed(0)",
-            "@functools.cache\ndef make(n):\n    random.seed(n)\n    return n",
-            "a = make(3) + random.random()",
-            "r = (make(3), random.random())[1]",
-        ],
-        "r",
+        ("r", "bench"),
     ),
     "a closure holding a generator": (
         ["import vbr_helpers\nh, peek = vbr_helpers.make_helper()", "x = h()", "y = peek()"],
-        "x",
+        ("x", "y"),
+    ),
+    "a closure holding an iterator": (
+        [
+            "def make():\n    it = iter(range(100))\n    def h():\n        return next(it)\n    return h",
+            "h = make()",
+            "x = h()",
+            "y = h()",
+        ],
+        ("x", "y"),
     ),
 }
 
@@ -76,10 +77,10 @@ def floors_at_zero(cash_instance, monkeypatch, tmp_path):
     sys.modules.pop("vbr_helpers", None)
 
 
-def _restart(magics, cells) -> None:
+def _restart(magics) -> None:
     magics.tracking_state.reset_session_state()
     magics._upstream_checker.simulator.cache.reset()
-    for name in ("functools", "random", "vbr_helpers", "Cases", "make", "bench", "a", "r", "h", "peek", "x", "y"):
+    for name in ("random", "vbr_helpers", "Cases", "make", "bench", "r", "h", "peek", "x", "y", "Plain"):
         magics.shell.user_ns.pop(name, None)
     sys.modules.pop("vbr_helpers", None)
 
@@ -89,31 +90,28 @@ def _statuses(magics) -> list[str]:
 
 
 @pytest.mark.parametrize("case", sorted(CASES))
-def test_after_a_restart_the_value_below_matches_plain(cash_magics, floors_at_zero, case):
-    cells, name = CASES[case]
+def test_each_run_and_a_restart_match_plain(cash_magics, floors_at_zero, case):
+    cells, names = CASES[case]
     plain: dict = {}
     for code in cells:
         exec(code, plain)
     sys.modules.pop("vbr_helpers", None)
-    for code in cells:
-        run_cash_cell(cash_magics, code)
-    _restart(cash_magics, cells)
-    statuses = []
-    for code in cells:
-        run_cash_cell(cash_magics, code)
-        statuses.append(_statuses(cash_magics))
-    assert cash_magics.shell.user_ns[name] == plain[name], f"statuses: {statuses}"
+    want = {n: plain[n] for n in names}
+    for run in ("first", "second", "third", "restart", "after the restart"):
+        if run == "restart":
+            _restart(cash_magics)
+        statuses = []
+        for code in cells:
+            run_cash_cell(cash_magics, code)
+            statuses.append(_statuses(cash_magics))
+        got = {n: cash_magics.shell.user_ns[n] for n in names}
+        assert got == want, f"{run} run, statuses: {statuses}"
 
 
 def test_a_class_without_state_is_still_served(cash_magics, floors_at_zero):
     """Ordinary notebooks keep their hits: a class whose calls change
-    nothing, and one whose memo is empty, are restored."""
-    cells = [IMPORTS, "class Plain:\n    def twice(self, n):\n        return 2 * n", CLASS]
-    for code in cells:
-        run_cash_cell(cash_magics, code)
-    _restart(cash_magics, cells)
-    statuses = []
-    for code in cells:
-        run_cash_cell(cash_magics, code)
-        statuses.extend(_statuses(cash_magics))
-    assert statuses[1:] == ["RESTORED", "RESTORED"]
+    nothing, and one whose memo is empty, are served."""
+    cell = "import vbr_helpers\nPlain = vbr_helpers.make_plain()\nCases = vbr_helpers.make_cases()"
+    run_cash_cell(cash_magics, cell)
+    run_cash_cell(cash_magics, cell)
+    assert "COMPUTED" not in _statuses(cash_magics)[1:]

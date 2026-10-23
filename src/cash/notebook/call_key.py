@@ -206,11 +206,11 @@ def changes_its_closure(fn) -> bool:
         return False
     cells = closure_cells(fn)
     return bool(cells) and (
-        rebinds_its_closure(fn) or any(n in cells for n in _source_mutations(fn)) or _holds_a_stream(cells)
+        rebinds_its_closure(fn) or any(n in cells for n in _source_mutations(fn)) or holds_a_stream(cells)
     )
 
 
-def _holds_a_stream(cells: Mapping[str, _types.CellType]) -> bool:
+def holds_a_stream(cells: Mapping[str, _types.CellType]) -> bool:
     """Whether a closure holds a random generator or an iterator: calling
     the function draws from it whatever method it calls (``g.normal()``),
     so the function changes what it holds. Stored, a hit handed back the
