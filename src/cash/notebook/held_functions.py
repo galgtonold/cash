@@ -347,10 +347,11 @@ def module_class_objects_exist() -> bool:
 
     A function defined at the top of such a module is asked about as a class
     is (`_users_module_functions`): held in a value (``{'fn': mylib.helper,
-    'rows': rows}``), it runs the module's code.
+    'rows': rows}``), it runs the module's code. Only one something holds
+    besides its module is asked about (`_held_elsewhere`).
     """
     classes = _users_module_classes()
-    module_functions = _users_module_functions()
+    module_functions = _held_elsewhere(_users_module_functions())
     if not classes and not module_functions:
         return False
     if _objects_frozen_since_import():
@@ -476,6 +477,26 @@ def _users_module_functions() -> list[types.FunctionType]:
             if type(value) is types.FunctionType and value.__module__ == name:
                 found.append(value)
     return found
+
+
+def _held_elsewhere(functions: list[types.FunctionType]) -> list[types.FunctionType]:
+    """The *functions* something holds besides their module: what a value
+    could hold. The rest are not asked about: ``gc.get_referrers`` costs
+    each tracked object a look at every function asked of it, and a
+    project's ``utils.py`` of a few hundred functions made each big
+    value's walk 3-5x slower. Read by reference count, against a function
+    held by its module alone and counted the same way (`_alone`), in the
+    same list: *functions*, which nothing else may hold."""
+    functions.append(_alone)
+    counts = [sys.getrefcount(fn) for fn in functions]
+    functions.pop()
+    alone = counts.pop()
+    return [fn for fn, count in zip(functions, counts) if count > alone]
+
+
+def _alone() -> None:
+    """Held by this module alone: the reference count `_held_elsewhere`
+    takes as nothing else's."""
 
 
 def _users_module_classes() -> list[type]:

@@ -163,3 +163,33 @@ def test_a_module_function_held_in_a_value_counts(monkeypatch):
     big = {"fn": module.helper, "rows": [1, 2]}
     assert held_functions.module_class_objects_exist()
     del big
+
+
+def test_only_a_module_function_held_elsewhere_is_looked_for(monkeypatch):
+    # Every top-level function of the user's modules was asked about, and
+    # ``gc.get_referrers`` costs each tracked object a look at each one: a
+    # ``utils.py`` of 300 functions made a big value's walk 3-5x slower.
+    # One its module alone holds is in no value.
+    module = types.ModuleType("_a_users_module")
+    exec("".join(f"def f{i}(v):\n    return v + {i}\n" for i in range(300)), vars(module))
+    monkeypatch.setitem(sys.modules, "_a_users_module", module)
+    monkeypatch.setattr(held_functions, "_users_module_classes", list)
+    monkeypatch.setattr(
+        held_functions,
+        "_users_module_functions",
+        lambda: [v for v in vars(module).values() if type(v) is types.FunctionType],
+    )
+    asked = []
+    real = gc.get_referrers
+
+    def counting(*objects):
+        asked.append(len(objects))
+        return [referrer for referrer in real(*objects) if referrer is not objects]
+
+    monkeypatch.setattr(held_functions.gc, "get_referrers", counting)
+    assert not held_functions.module_class_objects_exist()
+    assert asked == [], asked
+    big = {"fn": module.f7, "rows": [1, 2]}
+    assert held_functions.module_class_objects_exist()
+    assert asked == [1], asked
+    del big
