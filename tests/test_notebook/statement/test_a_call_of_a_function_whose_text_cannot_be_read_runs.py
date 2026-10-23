@@ -1,0 +1,50 @@
+"""A statement calling a function of the user's whose text cannot be read
+runs every time, unless its bytecode shows it changes nothing.
+
+``exec("def inner(x): ... getattr(LOG, 'append')(x) ...")`` defines a function
+with no source. The statement's analysis reads a callee's writes off its text
+and took one with none for a builtin, so ``v = inner(3)`` was served without
+traces (``CASH_TRACE=0``, Python before 3.12) and ``LOG`` missed the item
+plain Python appends.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from cash.analysis.annotations import CacheAnnotation
+from cash.notebook.cache_status import CacheStatus
+
+_PERSIST = CacheAnnotation(persist=True)
+
+
+def _run(processor, code):
+    return processor.process_statement(code, annotation=_PERSIST)
+
+
+def _second_run(processor, define):
+    _run(processor, "import time\nLOG = []")
+    _run(processor, define)
+    _run(processor, "v = inner(3)")
+    return _run(processor, "v = inner(3)")
+
+
+@pytest.mark.parametrize(
+    "define",
+    [
+        "exec('def inner(x):\\n    time.sleep(0.01)\\n    getattr(LOG, \"append\")(x)\\n    return x * 10')",
+        "inner = eval('lambda x: LOG.append(x) or x * 10')",
+        "exec('def helper(x):\\n    LOG.append(x)')\ndef inner(x):\n    helper(x)\n    return x * 10",
+    ],
+    ids=["exec-def", "lambda-from-a-string", "readable-calling-unreadable"],
+)
+def test_it_runs_every_time(statement_processor, mock_shell, define):
+    second = _second_run(statement_processor, define)
+    assert second["status"] != CacheStatus.RESTORED
+    assert any("text cannot be read" in r for r in second["uncacheable_reasons"])
+
+
+def test_a_readable_one_that_changes_nothing_is_served(statement_processor):
+    """Control."""
+    second = _second_run(statement_processor, "def inner(x):\n    return x * 10")
+    assert second["status"] == CacheStatus.RESTORED

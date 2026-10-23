@@ -681,6 +681,37 @@ def library_made(code: types.CodeType, globals_: Mapping[str, Any]) -> bool:
     return code.co_name == "<lambda>" and isinstance(name, str) and name.startswith("namedtuple_")
 
 
+#: How many functions `unreadable_changers` follows from one statement.
+_CALLEES_FOLLOWED = 200
+
+
+def unreadable_changers(names: Iterable[str], namespace: Mapping[str, Any]) -> list[str]:
+    """The functions of the user's, among *names* and the functions they call
+    by name, whose text cannot be read (``exec`` of a ``def``, a lambda
+    compiled from a string) and whose bytecode does not show that they change
+    nothing (`own_writes` gives ``"?"``). The statement's own analysis reads
+    callees by their text and took such a one for a builtin, so a hit was
+    served while traces were off and what it changes was left unchanged."""
+    found: list[str] = []
+    seen: set[int] = set()
+    pending = [(name, namespace) for name in sorted(names)]
+    while pending and len(seen) < _CALLEES_FOLLOWED:
+        name, scope = pending.pop()
+        fn = scope.get(name) if isinstance(scope, Mapping) else None
+        code = attribute_or(fn, "__code__", None) if isinstance(fn, types.FunctionType) else None
+        if code is None or id(code) in seen:
+            continue
+        seen.add(id(code))
+        if not is_user_code_file(code.co_filename) and code.co_filename != "<string>":
+            continue
+        if _function_node(code) is None:
+            if _UNKNOWN in own_writes(code):
+                found.append(name)
+            continue
+        pending.extend((callee, fn.__globals__) for callee in code.co_names)
+    return found
+
+
 @functools.lru_cache(maxsize=4096)
 def own_writes(code: types.CodeType) -> frozenset[str]:
     """The free names the function of *code* changes by its own text: a
