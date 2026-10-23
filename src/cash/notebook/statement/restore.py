@@ -23,6 +23,7 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from cash._clock import perf_counter as _perf_counter
+from cash._user_attrs import instance_of
 
 from ...tracking.randomness import restore_object_rng_states, restore_rng_state
 from ..holder_patches import HolderPatch, apply_patch
@@ -137,7 +138,7 @@ class StatementRestorer:
             patched = {
                 name: apply_patch(self.shell.user_ns[name], value, restored_vars)
                 for name, value in restored_vars.items()
-                if isinstance(value, HolderPatch)
+                if instance_of(value, HolderPatch)
             }
             for var_name, value in restored_vars.items():
                 if var_name in holders:

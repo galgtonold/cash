@@ -109,7 +109,7 @@ def test_what_every_class_has_does_not_count(monkeypatch):
     _asked_about(monkeypatch, Base)
     from cash.analysis import handed_callables
 
-    handed_callables._is_users_class(Base)  # cash's own memo of it does not count
+    handed_callables.is_users_class(Base)  # cash's own memo of it does not count
     assert not held_functions.module_class_objects_exist()
     assert Derived.__mro__[1] is Base
 

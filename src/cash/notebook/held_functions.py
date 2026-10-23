@@ -36,11 +36,12 @@ import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any, NamedTuple
 
-from cash._user_attrs import attribute_or, instance_of
+from cash._user_attrs import attribute_or, instance_of, own_dict
 
 from .. import _native
 from .._memo import CODE_OBJECTS, LruMemo
 from ..install_paths import is_user_code_module
+from ..tracking import io_watch
 from ..tracking.function_tracker import is_local_module
 from ..value_types import LEAF_TYPES, library_scalar_types
 from .compiled_source import is_cash_filename
@@ -101,7 +102,7 @@ _K = _native.kernels
 _FROZEN_AT_IMPORT = gc.get_freeze_count()
 
 
-def _objects_frozen_since_import() -> bool:
+def objects_frozen_since_import() -> bool:
     """Has ``gc.freeze`` hidden objects the collector's view no longer
     shows, beyond the interpreter's own?"""
     return gc.get_freeze_count() > _FROZEN_AT_IMPORT
@@ -248,7 +249,7 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
     which may define a lambda after the question). A statement's checks
     asked it up to 13 times, 0.035-0.07 s each beside a big graph.
     """
-    if _objects_frozen_since_import():
+    if objects_frozen_since_import():
         return True
     maps = attribute_or(namespace, "maps", None)
     dicts = list(maps) if isinstance(maps, list) else [namespace]
@@ -320,7 +321,7 @@ def module_class_objects_exist() -> bool:
     classes = _users_module_classes()
     if not classes:
         return False
-    if _objects_frozen_since_import():
+    if objects_frozen_since_import():
         return True
     asked = (_new_code(), tuple(map(id, classes)))
     if _OBJECTS_SEEN[0] == asked:
@@ -430,6 +431,17 @@ def _holds_the_class(referrer: Any, own: set[int]) -> bool:
 _OBJECTS_SEEN: list[Any] = [None]
 
 
+def new_code_count() -> int:
+    """A count that grows each time code starts from an ``exec`` or a
+    function is made from code: unchanged, no code of the user's ran."""
+    return _new_code()
+
+
+def users_module_classes() -> list[type]:
+    """`_users_module_classes`, for other modules."""
+    return _users_module_classes()
+
+
 def _users_module_classes() -> list[type]:
     """The classes defined at the top of the user's loaded modules."""
     found: list[type] = []
@@ -496,20 +508,15 @@ _NO_FUNCTIONS: dict[frozenset[int], int] = {}
 _NEW_CODE_EVENTS = frozenset(("exec", "function.__new__"))
 #: How many times code started running from an ``exec`` or a function was
 #: made from code (``types.FunctionType``) in this process: counted by the C
-#: extension's audit hook (``caudit.c``) when it is in, else by a Python one,
-#: which Python calls for every audited event (an ``id()`` included).
-_counted = [0]
+#: extension's audit hook (``caudit.c``) when it is in, else by io_watch's
+#: Python one, shared, since Python calls every hook installed for every
+#: audited event (an ``id()`` included).
+_counted = io_watch.count_events(_NEW_CODE_EVENTS)
 
-
-def _note_new_code(event: str, _args: tuple) -> None:
-    if event in _NEW_CODE_EVENTS:
-        _counted[0] += 1
-
-
-if _K is not None and _K.audit_hook_install():
+if _counted is None and _K is not None and _K.audit_hook_install():
     _new_code = _K.audit_new_code
 else:
-    sys.addaudithook(_note_new_code)
+    _counted = _counted if _counted is not None else [0]
 
     def _new_code() -> int:
         return _counted[0]
@@ -711,12 +718,9 @@ def _visit_group(
     children.append(kind)
     if _may_have_dict(kind):
         for obj in group:
-            try:
-                attrs = object.__getattribute__(obj, "__dict__")
-            except (AttributeError, TypeError):
-                attrs = None
-            if isinstance(attrs, dict):
-                children.extend(attrs.values())
+            attrs = own_dict(obj, subclasses=True)
+            if attrs is not None:
+                children.extend(dict.values(attrs))
     for name in _slot_names(kind):
         getter = _slot_getter(kind, name)
         if getter is not None:

@@ -142,6 +142,24 @@ class StatementRun:
     #: name changed in place, by the statement or a function it calls, keeps
     #: the lineage the change gives it (`MutationRouting.route`).
     bound: frozenset[str] = frozenset()
+    #: Its entry was found under its key and not served, because what the
+    #: key cannot name (code a string found, code changed in place) may have
+    #: changed: run again, it can bind a new value under the same key, so its
+    #: outputs are keyed by value, and what is built on them misses when the
+    #: value changed.
+    key_blind: bool = False
+    #: The values the entry it refused held (`key_blind`), until its outputs
+    #: are recorded, for those of its outputs the entry kept no digest of:
+    #: one that came out the same keeps the formula's lineage.
+    refused_values: dict[str, Any] | None = None
+    #: What the refused entry recorded of its own outputs
+    #: (``StatementCacheMetadata.value_keyed`` and ``rerun_digests``).
+    refused_value_keyed: frozenset[str] = frozenset()
+    refused_digests: dict[str, str] = field(default_factory=dict)
+    #: Its outputs keyed by value this run, and the digest of each output a
+    #: rerun under the same key compared (`key_blind`): its entry keeps both.
+    value_keyed_outputs: frozenset[str] = frozenset()
+    rerun_digests: dict[str, str] = field(default_factory=dict)
     allow_random: bool = False
     unseeded_calls: list = field(default_factory=list)
     inputs: set[str] = field(default_factory=set)
@@ -216,6 +234,8 @@ class StatementRun:
     #: The ``functools`` memos of the user's it called, with what each held
     #: after it ran (`helper_memos.used`).
     helper_memos: list[dict] | None = None
+    #: ``id(memo) -> its miss count`` before it ran (`helper_memos.misses_before`).
+    memo_misses_before: dict[int, int] | None = None
     #: For a statement that runs a magic or a shell command: the identity of
     #: every binding in the namespace before it ran (``calls_ipython``).
     ipython_bindings: dict[str, int] | None = None

@@ -10,6 +10,7 @@ code, once its old code is gone, is recorded afresh and checked.
 from __future__ import annotations
 
 import gc
+import linecache
 import sys
 
 import pytest
@@ -77,7 +78,7 @@ def test_a_long_session_keeps_no_statement_code(traced, statement_processor):
     assert codes_after - codes < 50
 
 
-def test_a_function_whose_old_code_is_gone_is_still_checked(traced, statement_processor, mock_shell):
+def test_a_function_whose_old_code_is_gone_is_still_checked(traced, statement_processor, mock_shell, monkeypatch):
     """Its old code dropped from the recorder, the function's new code is
     seen when it runs: the stored statement reruns, never served stale."""
     recorder = code_trace._recorder()
@@ -88,7 +89,11 @@ def test_a_function_whose_old_code_is_gone_is_still_checked(traced, statement_pr
     fn = mock_shell.user_ns["inner"]
     old = fn.__code__
     assert old in recorder.user_codes
-    fn.__code__ = compile("def inner(x):\n    return x * 10", "<edit>", "exec").co_consts[0]
+    # Its text readable, as a cell's is: a function whose text cannot be
+    # read runs every time (`unseen_writes`), which is not the point here.
+    edit = "def inner(x):\n    return x * 10\n"
+    monkeypatch.setitem(linecache.cache, "<edit>", (len(edit), None, edit.splitlines(True), "<edit>"))
+    fn.__code__ = compile(edit, "<edit>", "exec").co_consts[0]
     del old
     gc.collect()
     assert _run(statement_processor, "t = inner(3)") == CacheStatus.COMPUTED
