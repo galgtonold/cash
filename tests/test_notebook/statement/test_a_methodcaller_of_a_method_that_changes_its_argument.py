@@ -37,8 +37,10 @@ CASES = {
 
 
 @pytest.mark.parametrize("case", list(CASES))
-def test_run_all_again_appends_again(cash_magics, monkeypatch, case):
-    monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+def test_run_all_again_appends_again(cash_magics, case):
+    # Stored only as dear as the kernel stores them: with every statement
+    # kept, ``lst = [0]`` is restored with the list the served call left,
+    # and the stale result hides behind it.
     build, call = CASES[case]
     cells = [SETUP, build, call, "n = (len(lst), r)"]
     ns = cash_magics.shell.user_ns
