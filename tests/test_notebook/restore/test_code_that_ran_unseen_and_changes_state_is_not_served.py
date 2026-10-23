@@ -382,3 +382,37 @@ def test_a_lambda_in_a_literal_over_several_lines_is_read(cash_magics, body, sto
     run_cash_cell(cash_magics, statement)
     assert _status(cash_magics) == (["RESTORED"] if stored else ["COMPUTED"])
     assert ("NOTEBOOK-UNSEEN-WRITES" in said) is not stored
+
+
+SWAPPED = {
+    "deque_appendleft": ("DQ = collections.deque()", "DQ.appendleft(x) or x * 10", "DQ"),
+    "list_append": ("DQ = []", "DQ.append(x) or x * 10", "DQ"),
+    "dict_update": ("DQ = {}", "DQ.update(a=x) or x * 10", "DQ"),
+}
+
+
+@pytest.mark.parametrize("trace", ["on", "off"])
+@pytest.mark.parametrize("case", list(SWAPPED))
+def test_a_function_given_code_whose_text_cannot_be_read_runs_each_time(cash_magics, monkeypatch, case, trace):
+    """``inner.__code__`` swapped for a lambda compiled from a string: its
+    text cannot be read, and it appends to ``DQ``. With a trace the run
+    names it; without one (``CASH_TRACE=0``) only the function ``inner(3)``
+    names was there to read, and nothing did: a run slow enough to be
+    stored was served after a restart with ``DQ`` left empty."""
+    if trace == "off":
+        monkeypatch.setenv("CASH_TRACE", "0")
+        monkeypatch.setattr(shadow, "SHADOW", None)
+    elif not code_trace.on():
+        pytest.skip("reads the trace of the run (3.12+)")
+    setup, body, name = SWAPPED[case]
+    swap = f"inner.__code__ = eval(compile({('lambda x: ' + body)!r}, '<variant>', 'eval')).__code__"
+    said = []
+    for _ in range(2):
+        run_cash_cell(cash_magics, f"import collections, time\n{setup}\ndef inner(x):\n    return x * 2")
+        run_cash_cell(cash_magics, swap)
+        said += _codes(cash_magics, f"v = (inner(3), {SLEEP})")
+        assert len(cash_magics.shell.user_ns[name]) == 1
+        _restart(cash_magics)
+        for gone in ("DQ", "inner", "collections"):
+            cash_magics.shell.user_ns.pop(gone, None)
+    assert "NOTEBOOK-UNSEEN-WRITES" in said
