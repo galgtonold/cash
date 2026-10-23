@@ -2554,8 +2554,9 @@ class StatementProcessor:
         hidden = attribute_or(self.shell, "user_ns_hidden", None) or {}
         cash_held = [*self._calls.held_call_results(), echo, run.metrics, *history]
         gave_up = GaveUp()
+        budget = share_check_budget(cost)
         try:
-            with walk_budget(share_check_budget(cost)):
+            with walk_budget(budget):
                 share_group(
                     handed,
                     user_ns,
@@ -2566,7 +2567,17 @@ class StatementProcessor:
                     gave_up=gave_up,
                 )
         except WalkBudgetExceeded:
-            pass  # what was found by then is linked; the rest stays unlinked
+            # Out of time, or not known (`shared_objects._TRAVERSE_LOOPS`): a
+            # holder not found would go unlinked, and its later change would
+            # serve what was stored. What was found is linked; the statement
+            # is not stored, as when the share check of its outputs runs out.
+            run.share_unchecked = True
+            run.skip_cache = True
+            run.metrics.setdefault("uncacheable_reasons", []).append(
+                f"finding what keeps the variables it hands to code would take longer than "
+                f"{budget:.1f}s, more than the statement is worth, so it re-runs every time"
+            )
+            self._warn_share_unchecked(run, handed, cost)
         edges = self.tracking_state.derivation_edges
         for owners, holders in gave_up.links:
             kept_by = set(holders) & changed

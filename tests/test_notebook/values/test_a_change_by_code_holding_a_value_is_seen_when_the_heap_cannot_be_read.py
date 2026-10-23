@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
+from cash.exceptions import CashWarning
 from cash.notebook import shared_objects
 from tests._cell_driver import run_cash_cell
 from tests.test_notebook.values.test_a_watched_variable_changed_in_place_is_seen import (
@@ -44,3 +47,31 @@ def test_the_change_reaches_the_reader(watched_notebook, monkeypatch):  # noqa: 
         run_cash_cell(magics, cell, cells=cells)
     run_cash_cell(magics, READ, cells=cells)
     assert ns["result"] == _expected(ns) != before
+
+
+def test_a_holder_search_cut_short_warns(watched_notebook, monkeypatch):  # noqa: F811 - the fixture
+    """Out of time, or not known, the search for what keeps a variable
+    handed to code (``Pt.hold(data['meta'])``) left the rest unlinked
+    silently. Now the statement is not stored, and says so."""
+    from cash.notebook.statement import processor
+
+    real = processor.share_group
+    searched = []
+
+    def cut_short(names, values, user_ns, *args, **kwargs):
+        if values is user_ns:  # the search from the handed variables up
+            searched.append(names)
+            raise shared_objects.WalkBudgetExceeded
+        return real(names, values, user_ns, *args, **kwargs)
+
+    monkeypatch.setattr(processor, "share_group", cut_short)
+    magics = watched_notebook
+    hold = CHANGES["by code holding it elsewhere"][0]
+    cells = [*SETUP, hold]
+    for cell in SETUP:
+        run_cash_cell(magics, cell, cells=cells)
+    with pytest.warns(CashWarning, match="NOTEBOOK-SHARE-UNCHECKED"):
+        run_cash_cell(magics, hold, cells=cells)
+    assert searched == [["data"]]
+    run_cash_cell(magics, hold, cells=cells)
+    assert str(magics._last_cell_metrics["statements"][-1]["status"]) == "COMPUTED"
