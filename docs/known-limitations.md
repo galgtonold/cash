@@ -919,6 +919,12 @@ default argument or base class does. **Fix:** move the binding above this cell.
   multiprocessing do the same). Results are equal; only code that depends on
   that order sees a difference, such as the key order of a dict built by
   looping over the set. Use `sorted(s)` where the order matters.
+- **A call given a set of strings runs again after a restart.** Inside a
+  cell, cash keys a call of your function on its arguments as they are
+  stored, and a set or frozenset of strings is stored in an order that
+  changes with every Python process. So after a kernel restart that call
+  runs once more instead of being served; later runs are served as usual.
+  Results are right. A list, a tuple, or a set of numbers is not affected.
 - **A `__dict__` your class computes may run under `@cash.cache`.** A class
   that defines `__dict__` itself (a `@property` building it) has it read
   when an object of it is part of a cached function's key, its arguments
