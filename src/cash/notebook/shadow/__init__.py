@@ -854,6 +854,20 @@ class Shadow:
         ns = namespace_of(module, self.notebook or {}, self.notebook_name)
         return isinstance(ns, dict) and qualname.split(".", 1)[0] in ns
 
+    def changed_since_traced(self, key: str) -> bool:
+        """Did code the unit *key* ran when it was last stored change since,
+        or can its trace not tell? Asked on a miss: an entry cleared or
+        never stored again leaves the trace, and a rerun under the same key
+        may bind a new value (`StatementRun.key_blind`)."""
+        try:
+            self._ensure_loaded()
+            trace = self.traces.get(key)
+            if trace is None:
+                return False
+            return not self._usable(trace) or bool(self.verify(trace, {})["changed"])
+        except Exception:  # noqa: BLE001 - shadow never breaks a statement
+            return True
+
     @staticmethod
     def agreed(pending: dict | None) -> bool:
         """Did the check before a lookup (`check`) find the entry's trace,

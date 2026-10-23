@@ -1020,6 +1020,11 @@ class StatementProcessor:
                 # Stored before code it ran was seen to change what its
                 # outputs leave out: it runs, and is not stored again.
                 cached_data = None
+            elif not cached_data and _shadow.SHADOW.changed_since_traced(run.cache_key):
+                # No entry (cleared, or a rerun not stored again), and code
+                # it ran when last stored changed: it can bind a new value
+                # under the same key, with no entry to compare it with.
+                run.key_blind = True
         elif run.needs_trace:
             cached_data = None
             run.key_blind = True
