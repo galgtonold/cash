@@ -232,8 +232,12 @@ _statement = 0
 #: namespace is looked through again only when a function or class was
 #: bound in it, and the modules once per statement or when one was
 #: imported (walking hundreds of modules per call made a 50,000-call loop
-#: take over 30 s).
-_ns_reached: dict[int, tuple[tuple[int, ...], list[tuple[list[str], Any]], list[tuple[str, type]]]] = {}
+#: take over 30 s). The memos and classes are held weakly: an entry
+#: outlives its namespace (a notebook's ``__main__`` made again), and
+#: would keep the classes once bound there alive, with what their class
+#: attributes hold. One gone is skipped: a namespace still alive holds what
+#: was found in it.
+_ns_reached: dict[int, tuple[tuple[int, ...], list[tuple[list[str], Any]], list[tuple[str, Any]]]] = {}
 _modules_reached: tuple[int, Any, list[tuple[list[str], Any]]] = (-1, None, [])
 
 
@@ -254,8 +258,11 @@ def _where(ns: Mapping[str, Any], *, fresh: bool = False) -> list[tuple[list[str
     if known is None or known[0] != holders:
         if len(_ns_reached) > 64:
             _ns_reached.clear()
-        known = (holders, *_ns_memos(ns))
-        _ns_reached[id(ns)] = known
+        memos, classes = _ns_memos(ns)
+        _ns_reached[id(ns)] = (holders, [(w, _weak(m)) for w, m in memos], [(n, _weak(c)) for n, c in classes])
+        known = (holders, memos, classes)
+    else:
+        known = (holders, _alive(known[1]), _alive(known[2]))
     modules = _modules_of_user()
     if (
         fresh
@@ -266,6 +273,25 @@ def _where(ns: Mapping[str, Any], *, fresh: bool = False) -> list[tuple[list[str
     ):
         _modules_reached = (_statement, modules, _module_memos())
     return known[1] + _class_part(known[2]) + _modules_reached[2]
+
+
+def _weak(obj: Any) -> Any:
+    try:
+        return weakref.ref(obj)
+    except TypeError:
+        return obj  # takes none (a ``staticmethod``): kept as it is
+
+
+def _alive(kept: list[tuple[Any, Any]]) -> list[tuple[Any, Any]]:
+    """*kept* (as `_weak` left each second item) with the gone ones left out."""
+    out = []
+    for where, item in kept:
+        if type(item) is weakref.ReferenceType:
+            item = item()
+            if item is None:
+                continue
+        out.append((where, item))
+    return out
 
 
 def watched(ns: Mapping[str, Any]) -> list[tuple[list[str], Any, int, int, int, Any]] | None:
