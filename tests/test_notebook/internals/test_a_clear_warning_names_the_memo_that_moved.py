@@ -110,3 +110,52 @@ def test_no_memo_is_named_when_several_only_grew_and_none_is_named():
     verdict = helper_memos.used(before, clears=True)
     assert isinstance(verdict, tuple), verdict
     assert "It may empty a helper memo or read" in verdict[1], verdict[1]
+
+
+class _Holder:
+    pass
+
+
+def _filled_beside_a_clear_through_an_attribute():
+    @functools.lru_cache(maxsize=None)
+    def other(n):
+        return n * 2
+
+    @functools.lru_cache(maxsize=None)
+    def score(n):
+        return n * 3
+
+    holder = _Holder()
+    holder.memo = score
+    ns = {"other": other, "score": score, "H": holder}
+    exec("def go(n):\n    other(n)\n    H.memo.cache_clear()\n    return n", ns)
+    other(1)
+    return ns
+
+
+@pytest.mark.parametrize("through", ["statement", "function"])
+def test_a_clear_through_an_attribute_names_that_memo_not_one_filled(through):
+    """``H.memo.cache_clear()`` with ``H.memo = score`` beside a call that
+    fills ``other``: ``other`` only grew, so it is not named; the memo
+    the attribute holds is."""
+    ns = _filled_beside_a_clear_through_an_attribute()
+    before = helper_memos.watched(ns)
+    if through == "statement":
+        code = "r = go(5)"
+        exec(code, ns)
+        verdict = helper_memos.used(before, clears=True, ns=ns, site=(code, None))
+    else:
+        ns["go"](5)
+        verdict = helper_memos.used(before, clears=True, site=(None, ns["go"]))
+    assert isinstance(verdict, tuple), verdict
+    assert "helper memo score " in verdict[1], verdict[1]
+
+
+def test_a_memo_that_only_grew_beside_a_clear_cash_cannot_read_is_not_named():
+    ns = _filled_beside_a_clear_through_an_attribute()
+    before = helper_memos.watched(ns)
+    ns["other"](5)
+    getattr(ns["score"], "cache_clear")()
+    verdict = helper_memos.used(before, clears=True)
+    assert isinstance(verdict, tuple), verdict
+    assert "It may empty a helper memo or read" in verdict[1], verdict[1]

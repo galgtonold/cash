@@ -594,9 +594,9 @@ def _changed_label(
     went back or that dropped a key it held; else one whose ``cache_clear``
     the code names (*named*, ids) and that moved, or is the only one named
     (a Run All defines the memo again, so it is empty before the clear and
-    only grows); else the one memo that moved. None when none, or several,
-    moved: the memo cash found first may be one the statement never
-    touched, so it names none."""
+    only grows). None otherwise: a memo that only grew may be one the
+    statement filled beside a clear it made through a name cash could not
+    read, and the memo cash found first one it never touched."""
     moved: list[tuple[int, str]] = []
     for where, memo, hits, misses, size, held in before:
         try:
@@ -618,24 +618,29 @@ def _changed_label(
     named_watched = {_label(where) for where, memo, *_ in before if id(memo) in named}
     if len(named_watched) == 1:
         return next(iter(named_watched))
-    if len(moved) == 1:
-        return moved[0][1]
     return None
 
 
 def _memos_cleared_by(code: str | None, ns: Mapping[str, Any] | None, fn: Any = None) -> set[int]:
     """The ids of the memos whose ``cache_clear`` *code* (a statement's text,
     read with *ns*) or *fn*, or a function of the user's either reaches,
-    names as ``memo.cache_clear``."""
+    names as ``memo.cache_clear``, or through attributes of a global
+    (``holder.memo.cache_clear``), read without running a property."""
     import ast
     import dis
+    import inspect
 
     from cash.decorator.closure_fold import iter_code_scopes
     from cash.notebook.callee_reach import reached_user_code
 
     found: set[int] = set()
 
-    def memo_id(value: Any) -> None:
+    def memo_id(value: Any, attrs: list[str] = ()) -> None:
+        for attr in attrs:
+            try:
+                value = inspect.getattr_static(value, attr)
+            except Exception:  # noqa: BLE001 - not there: no memo named
+                return
         if type(value) is _LRU_WRAPPER:
             found.add(id(value))
 
@@ -643,8 +648,14 @@ def _memos_cleared_by(code: str | None, ns: Mapping[str, Any] | None, fn: Any = 
     try:
         if code is not None and ns is not None:
             for node in ast.walk(ast.parse(code)):
-                if isinstance(node, ast.Attribute) and node.attr == "cache_clear" and isinstance(node.value, ast.Name):
-                    memo_id(ns.get(node.value.id))
+                if isinstance(node, ast.Attribute) and node.attr == "cache_clear":
+                    attrs: list[str] = []
+                    value = node.value
+                    while isinstance(value, ast.Attribute):
+                        attrs.insert(0, value.attr)
+                        value = value.value
+                    if isinstance(value, ast.Name):
+                        memo_id(ns.get(value.id), attrs)
             functions.extend(reached_user_code(code, ns).functions)
         elif fn is not None:
             name, globals_ = attribute_or(fn, "__name__", None), attribute_or(fn, "__globals__", None)
@@ -660,11 +671,16 @@ def _memos_cleared_by(code: str | None, ns: Mapping[str, Any] | None, fn: Any = 
         for scope in iter_code_scopes(code_obj):
             if "cache_clear" not in scope.co_names:
                 continue
-            last = None
+            chain: list[str] = []  # a global, then the attributes read off it
             for ins in dis.get_instructions(scope):
-                if ins.opname in ("LOAD_ATTR", "LOAD_METHOD") and ins.argval == "cache_clear" and last is not None:
-                    memo_id(globals_.get(last))
-                last = ins.argval if ins.opname in ("LOAD_GLOBAL", "LOAD_NAME") else None
+                if ins.opname in ("LOAD_ATTR", "LOAD_METHOD") and chain:
+                    if ins.argval == "cache_clear":
+                        memo_id(globals_.get(chain[0]), chain[1:])
+                        chain = []
+                    else:
+                        chain.append(ins.argval)
+                    continue
+                chain = [ins.argval] if ins.opname in ("LOAD_GLOBAL", "LOAD_NAME") else []
     return found
 
 
