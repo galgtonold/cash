@@ -79,7 +79,7 @@ from .namespace_effects import (
     users_callee,
 )
 from .object_protocol import ObjectProtocolResets, changed_through_their_objects, object_protocol_mutations
-from .parameter_changes import callable_changes_parameters, lambda_changes_parameters
+from .parameter_changes import OBSERVE, callable_changes_parameters, lambda_changes_parameters
 from .parameter_changes import is_users as parameter_is_users
 
 __all__ = [
@@ -1575,7 +1575,10 @@ def classify_receivers(
     tier1 = calls.mutation_receivers
     changed = calls.changed_receivers
     # Before the early return: ``list(map(upd, df['o']))`` calls no method.
-    through = _changed_through_lambda_parameters(tree, calls, namespace)
+    through, watched = _changed_through_lambda_parameters(tree, calls, namespace)
+    # Handed to a library's code by a callable that changes nothing itself:
+    # fingerprinted around the run, as an argument of a bare call is.
+    args |= {name for name in watched - through if not is_module_name(name, namespace, virtual_modules)}
     if not candidates and not assigned and not drawn_args and not args and not changed and not through:
         return ReceiverClasses()
     inner = calls.inner_methods
@@ -1647,7 +1650,7 @@ def classify_receivers(
 
 def _changed_through_lambda_parameters(
     tree: ast.Module | None, calls: Any, namespace: Mapping[str, Any] | None = None
-) -> set[str]:
+) -> tuple[set[str], set[str]]:
     """The names a callable changing its own parameter in place changes, in
     *tree*: the receiver and the other arguments of the call it is handed
     to, and what those are built from. ``df['o'].map(lambda d:
@@ -1660,12 +1663,17 @@ def _changed_through_lambda_parameters(
     it cash cannot follow, a callable object of a class that answers its
     own attributes, what a call of the user's returns -- counts as changing
     what it is handed: a reader then reruns where it might have been served
-    the items as they were."""
+    the items as they were.
+
+    ``(changed, watched)``: *watched* are the names a callable that changes
+    nothing itself hands to a library's code (``np.add(p, z, p)``), which may
+    change them (`parameter_changes.OBSERVE`)."""
     if tree is None:
-        return set()
+        return set(), set()
     changed = set(calls.mutation_receivers) | set(calls.changed_receivers)
     found: set[str] = set()
-    builders: set[int] = set()
+    watched: set[str] = set()
+    builders: dict[int, set[str]] = {}
     # A ``def``'s body runs when it is called, not when it is defined: its
     # calls change nothing now, and its parameter names are no variables.
     # Its decorators and defaults run now, as does a class body.
@@ -1673,8 +1681,10 @@ def _changed_through_lambda_parameters(
     for node in running:
         if isinstance(node, ast.Subscript):
             # ``df.loc[pick]``: pandas calls a callable key with the frame.
-            if namespace is not None and _handed_changes(node.slice, changed, namespace):
-                found |= _argument_roots(node.value)
+            if namespace is not None:
+                verdict = _handed_changes(node.slice, changed, namespace)
+                if verdict:
+                    (watched if verdict is OBSERVE else found).update(_argument_roots(node.value))
             continue
         if not isinstance(node, ast.Call):
             continue
@@ -1686,37 +1696,44 @@ def _changed_through_lambda_parameters(
             # argument, fingerprinted as any is.
             handed = [given for given in handed if isinstance(given, ast.Lambda)]
         for given in handed:
-            if not _handed_changes(given, changed, namespace):
+            verdict = _handed_changes(given, changed, namespace)
+            if not verdict:
                 continue
+            into = watched if verdict is OBSERVE else found
             if isinstance(node.func, ast.Attribute):
-                found |= _argument_roots(node.func.value)
+                into |= _argument_roots(node.func.value)
             for arg in handed if namespace is None else [*node.args, *(k.value for k in node.keywords)]:
                 if arg is not given:
-                    found |= _argument_roots(arg)
+                    into |= _argument_roots(arg)
             # ``np.vectorize(setz)(df['o'])``: what it builds is called on them.
-            builders.add(id(node))
+            if builders.get(id(node)) is not found:
+                builders[id(node)] = into
     if namespace is None:
-        return found
+        return found, watched
     iterated = iterated_sources(tree)
     for node in running:
         if not isinstance(node, ast.Call):
             continue
         if isinstance(node.func, ast.Call) and id(node.func) in builders:
+            into = builders[id(node.func)]
             for arg in (*node.args, *(k.value for k in node.keywords)):
-                found |= _argument_roots(arg)
+                into |= _argument_roots(arg)
         elif iterated and isinstance(node.func, (ast.Name, ast.Attribute)):
             # ``[fix(d) for d in df['o']]``: a callable of the user's called
             # on the items of what the statement iterates.
             items = {a.id for a in node.args if isinstance(a, ast.Name) and a.id in iterated}
-            if items and _handed_callable_changes(node.func, namespace):
+            verdict = _handed_callable_changes(node.func, namespace) if items else False
+            if verdict:
+                into = watched if verdict is OBSERVE else found
                 for item in items:
-                    found |= set(iterated[item])
-    return found
+                    into |= set(iterated[item])
+    return found, watched
 
 
-def _handed_changes(given: ast.expr, changed: set[str], namespace: Mapping[str, Any] | None) -> bool:
+def _handed_changes(given: ast.expr, changed: set[str], namespace: Mapping[str, Any] | None) -> Any:
     """Whether the argument *given* is a callable that changes what it is
-    handed (`_lambda_changes_parameters`, `_handed_callable_changes`)."""
+    handed (`_lambda_changes_parameters`, `_handed_callable_changes`);
+    `OBSERVE` when it hands it to a library's code."""
     if isinstance(given, ast.Lambda):
         return _lambda_changes_parameters(given, changed, namespace)
     if isinstance(given, ast.Starred):
@@ -1763,7 +1780,7 @@ def _argument_roots(node: ast.AST) -> set[str]:
     return out
 
 
-def _handed_callable_changes(given: ast.expr, namespace: Mapping[str, Any]) -> bool:
+def _handed_callable_changes(given: ast.expr, namespace: Mapping[str, Any]) -> Any:
     """Whether the argument *given* hands over a callable of the user's that
     changes its parameter in place, or whose code cannot be read whole
     (`callable_changes_parameters`), read without running any of the
@@ -1771,12 +1788,13 @@ def _handed_callable_changes(given: ast.expr, namespace: Mapping[str, Any]) -> b
     a partial's function). A call's result is a callable handed over when
     what it calls is the user's (``make_scorer(2)``), or when a callable
     handed to it is (``functools.partial(upd, z=2)``, which hands ``upd``
-    on): ``df['o'].map(str)`` is data, as a comprehension or a constant is."""
+    on): ``df['o'].map(str)`` is data, as a comprehension or a constant is.
+    `OBSERVE` when the callable only hands its parameter to a library's code."""
     if isinstance(given, ast.Call):
         callee = _static_callee(given.func, namespace)
         if callee is not None and parameter_is_users(callee):
             return True
-        return any(
+        return _strongest(
             _handed_callable_changes(argument, namespace)
             for argument in (*given.args, *(keyword.value for keyword in given.keywords))
         )
@@ -1784,16 +1802,34 @@ def _handed_callable_changes(given: ast.expr, namespace: Mapping[str, Any]) -> b
         value = namespace.get(given.id, _MISSING_NAME)
         if value is _MISSING_NAME or not parameter_is_users(value):
             return False
-        return callable_changes_parameters(value) is not False
+        return _verdict(callable_changes_parameters(value))
     if not isinstance(given, (ast.Attribute, ast.Subscript)):
         return False
     resolved = handed_resolution(given, namespace)
     if resolved.unknown:
         return True
-    for value, _root in (*resolved.values, *resolved.any_of):
-        if parameter_is_users(value) and callable_changes_parameters(value) is not False:
+    return _strongest(
+        _verdict(callable_changes_parameters(value))
+        for value, _root in (*resolved.values, *resolved.any_of)
+        if parameter_is_users(value)
+    )
+
+
+def _verdict(answer: Any) -> Any:
+    """`callable_changes_parameters`'s answer as True, False or `OBSERVE`:
+    one that cannot be read whole (None) counts as changing."""
+    return answer if answer is False or answer is OBSERVE else True
+
+
+def _strongest(verdicts: Iterable[Any]) -> Any:
+    """True when one of *verdicts* is; else `OBSERVE` when one is; else False."""
+    found: Any = False
+    for verdict in verdicts:
+        if verdict is True:
             return True
-    return False
+        if verdict is OBSERVE:
+            found = OBSERVE
+    return found
 
 
 def _static_callee(func: ast.expr, namespace: Mapping[str, Any]) -> Any:
@@ -1867,11 +1903,12 @@ _SETS_ITS_FIRST_ARGUMENT = frozenset(
 )
 
 
-def _lambda_changes_parameters(lam: ast.Lambda, changed: set[str], namespace: Mapping[str, Any] | None) -> bool:
+def _lambda_changes_parameters(lam: ast.Lambda, changed: set[str], namespace: Mapping[str, Any] | None) -> Any:
     """Whether the lambda *lam* changes one of its parameters in place: by a
     method it calls on it (in *changed*), by ``operator.setitem`` and its
     kind, by a dunder or ``vars(o)`` (`_changed_by_calls`), or by handing it
-    to a function of the user's that changes the parameter it takes it as."""
+    to a function of the user's that changes the parameter it takes it as.
+    `OBSERVE` when it hands one only to a library's code."""
     params = {arg.arg for arg in (*lam.args.posonlyargs, *lam.args.args, *lam.args.kwonlyargs)}
     params |= {arg.arg for arg in (lam.args.vararg, lam.args.kwarg) if arg is not None}
     inside = top_level_calls(ast.Module(body=[ast.Expr(lam.body)], type_ignores=[]))
@@ -1880,8 +1917,13 @@ def _lambda_changes_parameters(lam: ast.Lambda, changed: set[str], namespace: Ma
         return True
     if _changed_by_calls(lam.body, frozenset(params), namespace):
         return True
-    if namespace is not None and lambda_changes_parameters(lam, namespace):
-        return True
+    observed = False
+    if namespace is not None:
+        verdict = lambda_changes_parameters(lam, namespace)
+        if verdict is OBSERVE:
+            observed = True
+        elif verdict:
+            return True
     for sub in ast.walk(lam.body):
         if not isinstance(sub, ast.Call):
             continue
@@ -1895,7 +1937,7 @@ def _lambda_changes_parameters(lam: ast.Lambda, changed: set[str], namespace: Ma
             and (name in {"setattr", "delattr"} or isinstance(func, ast.Attribute) or _from_operator(name, namespace))
         ):
             return True
-    return False
+    return OBSERVE if observed else False
 
 
 def _from_operator(name: str, namespace: Mapping[str, Any] | None) -> bool:
