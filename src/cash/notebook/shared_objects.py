@@ -40,6 +40,8 @@ import enum
 import fractions
 import gc
 import inspect
+import itertools
+import operator
 import pathlib
 import re
 import sys
@@ -52,7 +54,7 @@ from typing import Any
 
 from cash import _native, _plain_data
 from cash._clock import CpuLimit
-from cash._user_attrs import attribute_or, has_attribute, instance_of, own_dict
+from cash._user_attrs import _own_lookup, attribute_or, has_attribute, instance_of, own_dict
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
 
@@ -2093,6 +2095,10 @@ _DOWN_DEPTH = 4
 _DOWN_NODES = 5_000
 _DOWN_WIDEST = 2_000
 
+#: Most targets `_holders_from_names` looks for by identity in a list or
+#: tuple wider than `_DOWN_WIDEST`, a pass over its items each.
+_WIDE_TARGETS = 8
+
 
 def _holders_from_names(
     targets: list[Any], internal: set[int], user_ns: Mapping[str, Any], known: set[str]
@@ -2135,6 +2141,14 @@ def _holders_from_names(
                     continue
                 children = list(attrs.values())
             elif len(obj) > _DOWN_WIDEST:
+                # Too wide to read down, but a target it holds itself is
+                # told at C speed, by identity alone: ``p`` from ``for p in
+                # points:`` over 200,000 records, which the search up found
+                # with a pass over every object the collector tracks, twice
+                # per statement.
+                if (type(obj) is list or type(obj) is tuple) and len(targets) <= _WIDE_TARGETS:
+                    if any(any(map(operator.is_, obj, itertools.repeat(target))) for target in targets):
+                        hits.add(id(obj))
                 continue
             else:
                 children = children_of(obj)
@@ -2619,6 +2633,7 @@ def _descend(
     statement."""
     exact = exact_value_types()
     containers = EXACT_CONTAINER_TYPES
+    flat: dict[type, bool] = {}
     pops = 0
     while stack:
         pops += 1
@@ -2630,6 +2645,10 @@ def _descend(
         # list of 200,000 ints.
         if not children or exact.issuperset(map(type, children)):
             continue
+        if len(children) >= _FLAT_RECORDS_MIN:
+            left = _records_left(children, value_types, leaves, exact, flat)
+            if left is not None:
+                children = left
         for child in children:
             ctype = type(child)
             if ctype in exact or (ctype not in containers and is_value(child, value_types)):
@@ -2658,6 +2677,104 @@ def _descend(
 #: Fewest items of a list or dict below a root that `_descend` asks about as
 #: one tree: a smaller one is walked as quickly as it is asked about.
 _TREE_BELOW_MIN = 32
+
+#: Fewest children `_descend` asks `_records_left` about.
+_FLAT_RECORDS_MIN = 32
+
+#: ``Py_TPFLAGS_HEAPTYPE``: a class defined in Python (or made at run time).
+_HEAPTYPE = 1 << 9
+
+
+def _records_left(
+    children: list[Any],
+    value_types: tuple[type, ...],
+    leaves: Leaves | None,
+    exact: frozenset[type],
+    flat: dict[type, bool],
+) -> list[Any] | None:
+    """The children `_descend` must still take one at a time when the rest
+    are values and records of one class whose attributes are all values
+    (`_flat_record_class`), each held by nothing but the container they
+    came from: such a record is no part of anything else, so no count can
+    find it shared and nothing below it is walked. Told by reference count
+    (`_LONE_RECORD`), at C speed: a list of 200,000 small objects took 0.3 s
+    a walk a record at a time, and a loop over it is walked twice per
+    statement. None, with nothing decided, for any other children."""
+    kinds = set(map(type, children)) - exact
+    if len(kinds) != 1:
+        return None
+    (kind,) = kinds
+    known = flat.get(kind)
+    if known is None:
+        known = flat[kind] = _flat_record_class(kind, children, value_types)
+    if not known:
+        return None
+    # Counted first, while nothing here but *children* holds a record.
+    counts = list(map(sys.getrefcount, children))
+    mixed = len(kinds) != len(set(map(type, children)))
+    records = [child for child in children if type(child) is kind] if mixed else children
+    try:
+        states = list(map(_OWN_DICT, records))
+    except (AttributeError, TypeError):
+        return None
+    if set(map(type, states)) != {dict} or not exact.issuperset(
+        map(type, itertools.chain.from_iterable(map(dict.values, states)))
+    ):
+        return None
+    del states, records
+    left = list(itertools.compress(children, map(_LONE_RECORD.__ne__, counts)))
+    if mixed:
+        left = [child for child in left if type(child) is kind]
+    if leaves and leaves.ids:
+        left_ids = set(map(id, left))
+        left.extend(
+            child for child in children if type(child) is kind and id(child) in leaves.ids and id(child) not in left_ids
+        )
+    return left
+
+
+#: A record's own ``__dict__``, read as ``object.__getattribute__`` reads it
+#: for a class `_flat_record_class` admits (no lookup or ``__dict__`` of its own).
+_OWN_DICT = operator.attrgetter("__dict__")
+
+
+def _calibrate_lone() -> int:
+    """The count `_records_left` reads for a record held once by its
+    container and once by the children `children_of` listed: measured, as
+    `_calibrate` measures, since 3.14 stops counting the argument."""
+    container = [types.SimpleNamespace()]
+    children = list(container)
+    return list(map(sys.getrefcount, children))[0]
+
+
+_LONE_RECORD = _calibrate_lone()
+
+
+def _flat_record_class(kind: type, children: list[Any], value_types: tuple[type, ...]) -> bool:
+    """Do `_descend` and `children_of` treat every instance of *kind* alike,
+    by its type alone, as an object that is no value and whose children are
+    its own ``__dict__``'s values? A class of the notebook or the user's
+    modules (`attributes_of`), with no ``__slots__``, no lookup of its own,
+    no ``__class__`` or ``__dict__`` of its own, and none of the containers,
+    callables or cells `children_of` asks about first."""
+    try:
+        if issubclass(kind, (*_CONTAINERS, *_CALLABLE_TYPES, types.CellType)):
+            return False
+        if _own_lookup(kind) or _slot_members(kind):
+            return False
+        for klass in kind.__mro__[:-1]:
+            if not klass.__flags__ & _HEAPTYPE:
+                return False  # a C base may look attributes up its own way
+            own = vars(klass)
+            if "__class__" in own or "__getattr__" in own:
+                return False
+            held = own.get("__dict__")
+            if held is not None and type(held) is not types.GetSetDescriptorType:
+                return False
+        sample = next(child for child in children if type(child) is kind)
+        return not is_value(sample, value_types) and attributes_of(sample) is not None
+    except Exception:  # noqa: BLE001 - a class that cannot be asked: one at a time
+        return False
 
 
 def _took_as_tree(

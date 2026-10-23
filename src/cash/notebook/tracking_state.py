@@ -442,6 +442,15 @@ class TrackingState:
     # W: StatementProcessor, control structures, StatementLineage (read back
     # after a restart). R: StatementLineage, ControlSimulation, the hit path.
     share_edge_records: dict[str, frozenset[tuple[str, str]]] = field(default_factory=dict)
+    # (Structure source hash, the lineages it read when it ran) -> the edges
+    # that run linked. Two loops of one text in two cells link apart (one
+    # finds the records it reads held by its list alone, the other also by a
+    # tuple built between them), and the one record by text is the later
+    # run's: the simulation of the earlier one moved what only the later one
+    # linked. Read where the inputs match, as ``control_outcomes`` are; a
+    # statement's under its cache key (``{"": key}``), which holds them.
+    # W: StatementRecords. R: ControlSimulation.
+    share_edge_records_at: dict[tuple[str, tuple], frozenset[tuple[str, str]]] = field(default_factory=dict)
     # The source hash of each change a run made to ``share_edge_records``,
     # in order: its length is the generation a simulation snapshot keeps. A
     # snapshot taken before a record of one of its statements changed is

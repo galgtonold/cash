@@ -226,8 +226,14 @@ class ControlSimulation:
 
         inputs, input_hashes = self._input_hashes(stmt_code, virtual_lineage)
 
+        # The edges a run with these inputs linked: one of the same text
+        # elsewhere may have linked others.
         outputs, lookup_time, files_stale, _ = self.statements.apply(
-            stmt_code, virtual_lineage, sim.virtual_modules, occurrence_index=occurrence_index
+            stmt_code,
+            virtual_lineage,
+            sim.virtual_modules,
+            occurrence_index=occurrence_index,
+            own_edges=self.statements.share_record_at(stmt_code, input_hashes),
         )
 
         mutated_vars = self.collect_mutations(

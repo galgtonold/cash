@@ -331,6 +331,8 @@ class StatementProcessor:
         #: The work NOTEBOOK-WORK-RUNNING was given for.
         self._work_running_warned: set[str] = set()
         self._unseen_warned: set[str] = set()
+        #: Statements the share check refused, by key (`_refused_again`).
+        self._share_refused: dict[str, list] = {}
         #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
         self._share_unchecked_warned: set[str] = set()
         #: Statements already told about NOTEBOOK-ANALYSIS-BUDGET.
@@ -529,10 +531,11 @@ class StatementProcessor:
         """*paths* without cash's own storage (its cache directories)."""
         return self._records.user_written_paths(paths)
 
-    def note_share_edges(self, code: str, edges) -> None:
+    def note_share_edges(self, code: str, edges, entry: Mapping[str, str] | None = None) -> None:
         """Record the edges the control structure *code* linked when it ran
-        (``StatementRecords.note_share_edges``), under its source hash."""
-        self._records.note_share_edges(statement_source_hash(code), edges)
+        (``StatementRecords.note_share_edges``), under its source hash, and
+        under the lineages it read (*entry*)."""
+        self._records.note_share_edges(statement_source_hash(code), edges, entry)
 
     def recorded_share_edges(self, code: str):
         """The edges the control structure *code* linked when it last ran
@@ -2431,7 +2434,9 @@ class StatementProcessor:
                     self._link_inputs_kept_by(run, execution.echo, execution.cost)
                 if not is_control_body(run.code):
                     run.linked_edges = frozenset((src, dst) for src, dst in linked | shared if src != dst)
-                    self._records.note_share_edges(run.source_hash, run.linked_edges)
+                    self._records.note_share_edges(
+                        run.source_hash, run.linked_edges, {"": run.cache_key} if run.cache_key else None
+                    )
                 with self._after_it_ran(run):
                     self._record_file_effects(run, execution)
                 self._note_per_item_rerun(run, execution)
@@ -2534,6 +2539,8 @@ class StatementProcessor:
         A fitted estimator (``run.est_fit``) is checked like any output: the
         variables holding it, or its steps and parameters, are stored with it.
         """
+        if self._refused_again(run):
+            return None
         holders: dict[str, Any] | None = None if is_control_body(run.code) else {}
         # The check may not take longer than the statement is worth: a hit
         # saves `cost`, and finding the holders of a loop variable that is
@@ -2613,11 +2620,52 @@ class StatementProcessor:
         # all the same are linked (`_holders_of`), and asking again would
         # cost the check twice.
         run.share_gave_up = gave_up[0] if gave_up else None
+        self._note_share_refusal(run, reason)
         if reason is not None:
             run.skip_cache = True
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)
             return None
         return holders
+
+    #: Most statements `_share_refused` remembers, and the most runs one is
+    #: refused in a row without the check.
+    _SHARE_REFUSED_MAX = 256
+    _SHARE_REFUSED_BACKOFF = 64
+
+    def _refused_again(self, run: StatementRun) -> bool:
+        """Refuse *run* as the share check refused it last time, without the
+        check, when its key is that run's: the same code over the same
+        inputs makes the same outputs, which the same variables hold. A
+        loop variable left on an item of a list of 200,000 records paid the
+        walk on every run to be refused again. Asked again after 1, 2, 4,
+        ... such runs (up to `_SHARE_REFUSED_BACKOFF`), since a holder
+        outside the inputs may have gone; a refusal it skips costs a store,
+        never a wrong value."""
+        entry = self._share_refused.get(run.cache_key) if run.cache_key else None
+        if entry is None:
+            return False
+        reason, unchecked, left, _backoff = entry
+        if left <= 0:
+            return False
+        entry[2] = left - 1
+        run.share_unchecked = unchecked
+        run.skip_cache = True
+        run.metrics.setdefault("uncacheable_reasons", []).append(reason)
+        return True
+
+    def _note_share_refusal(self, run: StatementRun, reason: str | None) -> None:
+        """Remember the share check's verdict on *run* for `_refused_again`."""
+        if not run.cache_key:
+            return
+        refused = self._share_refused
+        if reason is None:
+            refused.pop(run.cache_key, None)
+            return
+        entry = refused.get(run.cache_key)
+        backoff = 1 if entry is None else min(entry[3] * 2, self._SHARE_REFUSED_BACKOFF)
+        if entry is None and len(refused) >= self._SHARE_REFUSED_MAX:
+            refused.pop(next(iter(refused)))
+        refused[run.cache_key] = [reason, run.share_unchecked, backoff, backoff]
 
     def _lazy_frame_refusal(self, run: StatementRun, captured_vars: dict[str, Any]) -> str | None:
         """A polars LazyFrame built over its inputs' data (``pl.LazyFrame({'a':
