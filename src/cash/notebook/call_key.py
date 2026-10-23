@@ -217,7 +217,7 @@ _EXACT_ATOMS = frozenset({*_ATOMS, _dt.datetime, _dt.date, _dt.time, _dt.timedel
 
 #: The type of a ``functools.cache`` / ``lru_cache`` wrapper: None where it
 #: is not a class (an interpreter without the C ``_functools``).
-_MEMO_WRAPPER = getattr(functools, "_lru_cache_wrapper", None)
+_MEMO_WRAPPER = attribute_or(functools, "_lru_cache_wrapper", None)
 if not isinstance(_MEMO_WRAPPER, type):
     _MEMO_WRAPPER = None
 
