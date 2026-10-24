@@ -28,7 +28,7 @@ SETUP = (
     "class NS: pass\n"
     "PUSH = LOG.append\n"
     "PUSHP = functools.partial(list.append, LOG)\n"
-    "OPS = {'push': LOG.append}\nOPL = [LOG.append]\n"
+    "OPS = {'push': LOG.append}\nOPL = [LOG.append]\nHOOKS = [LOG.append]\n"
 )
 
 BODIES = {
@@ -46,6 +46,10 @@ BODIES = {
     "builtin_class_method": ("list.append(LOG, x)", "n = len(LOG)", 1),
     "a_method_a_dict_holds": ("OPS['push'](x)", "n = len(LOG)", 1),
     "a_method_a_list_holds": ("OPL[0](x)", "n = len(LOG)", 1),
+    # Called through a local bound to what the global holds.
+    "hooks_iterated": ("for h in HOOKS:\n        h(x)", "n = len(LOG)", 1),
+    "a_local_alias_of_a_held_method": ("p = OPS['push']\n    p(x)", "n = len(LOG)", 1),
+    "an_alias_got_from_a_dict": ("p = OPS.get('push')\n    p(x)", "n = len(LOG)", 1),
 }
 
 

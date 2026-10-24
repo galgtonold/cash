@@ -1693,10 +1693,13 @@ def _function_shape(
     free names it reads and those it calls. Memoised per tree
     (`resolve_function_def` hands out one per source), which is only read."""
     local = scope_locals(fdef)
+    iterated = dict(iterated_sources(fdef))
+    for name, roots in _local_aliases(fdef).items():
+        iterated[name] = iterated.get(name, frozenset()) | roots
     calls = tuple(calls_with_lambdas(fdef))
     reads = sorted({n.id for n in ast.walk(fdef) if isinstance(n, ast.Name) and n.id not in local})
     called = sorted({c.func.id for c in calls if isinstance(c.func, ast.Name) and c.func.id not in local})
-    return frozenset(all_param_names(fdef)), local, iterated_sources(fdef), calls, tuple(reads), tuple(called)
+    return frozenset(all_param_names(fdef)), local, iterated, calls, tuple(reads), tuple(called)
 
 
 def calls_with_lambdas(tree: ast.AST, *, control_bodies: bool = True) -> list[ast.Call]:
@@ -1729,6 +1732,14 @@ def _call_handoffs(
     unknown, and to *free* the free names a function of the user's it calls
     hands on (see :func:`function_handoffs`)."""
     func = call.func
+    if isinstance(func, ast.Name) and func.id in local:
+        # ``for h in HOOKS: h(x)``, ``p = OPS['push']; p(x)``: a local bound
+        # to what a global holds, a method of which changes what it is bound
+        # to, watched as for ``OPS['push'](x)``.
+        for source in iterated.get(func.id, frozenset()):
+            if source not in local:
+                held = user_ns.get(source)
+                roots.update(_holders_of_bound(held, user_ns) or ({source} if _may_hold_bound(held) else set()))
     if isinstance(func, ast.Name) and func.id not in local:
         if func.id in seen:
             return
@@ -1895,6 +1906,56 @@ def _followed_elsewhere(value: Any) -> bool:
     if issubclass(type(value), (types.ModuleType, type, pathlib.PurePath, _IMMUTABLE_ARGUMENT_TYPES)):
         return True
     return inspect.isroutine(value) or rng_carrier_kind(value) is not None
+
+
+def _local_aliases(fdef: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, frozenset[str]]:
+    """The locals *fdef* binds to what a variable holds, each with that
+    variable: ``p = OPS['push']``, ``h = cfg.hook``, ``f = OPS.get('f')``
+    lead to ``OPS`` and ``cfg``; ``q = p`` to what ``p`` leads to."""
+    direct: dict[str, set[str]] = {}
+    for node in ast.walk(fdef):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        root = _held_root(value)
+        if root is None:
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name) and target.id != root:
+                direct.setdefault(target.id, set()).add(root)
+    resolved: dict[str, frozenset[str]] = {}
+    for name, roots in direct.items():
+        found: set[str] = set()
+        pending, seen = list(roots), {name}
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            if current in direct:
+                pending.extend(direct[current])
+            else:
+                found.add(current)
+        resolved[name] = frozenset(found)
+    return resolved
+
+
+def _held_root(value: ast.expr) -> str | None:
+    """The variable *value* reads an item or attribute of, or is: ``OPS``
+    for ``OPS['push']``, ``cfg.hook``, ``OPS.get('f')`` or ``OPS``."""
+    if isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute) and value.func.attr == "get":
+        value = value.func.value
+    while isinstance(value, (ast.Subscript, ast.Attribute)):
+        value = value.value
+    return value.id if isinstance(value, ast.Name) else None
+
+
+def _may_hold_bound(value: Any) -> bool:
+    """A container a method may be called out of, or a bound method."""
+    return instance_of(value, (dict, list, tuple)) or bound_to_state(value)
 
 
 def _readable_function(name: str, resolve_source: Callable[[str], str | None] | None):
