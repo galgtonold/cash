@@ -24,7 +24,7 @@ import textwrap
 import types
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
-from itertools import islice, repeat
+from itertools import compress, islice, repeat
 from typing import Any, NamedTuple
 
 from cash._user_attrs import attribute_or, has_attribute, instance_of, is_routine
@@ -757,6 +757,8 @@ def library_draw_source(label: str, value: Any) -> bool:
 _DRAW_DEPTH = 32
 _DRAW_NODES = 5000
 _DRAW_SCAN = 1_000_000
+#: `IMMUTABLE_PRIMS` as a set: asked of each item's exact type in C.
+_PRIM_SET = frozenset(IMMUTABLE_PRIMS)
 
 
 def _holds_a_draw(value: Any, depth: int, seen: set[int]) -> bool | None:
@@ -787,15 +789,15 @@ def _holds_a_draw(value: Any, depth: int, seen: set[int]) -> bool | None:
         parts = _parts_held(value, kind)
         if parts is None:
             return None
-    scanned = list(islice(parts, _DRAW_SCAN + 1))
+    scanned = parts if type(parts) is list else list(islice(parts, _DRAW_SCAN + 1))
     if len(scanned) > _DRAW_SCAN:
         return None
-    if set(map(type, scanned)).issubset(IMMUTABLE_PRIMS):
+    # Plain items dropped by their exact type at C speed: a million strings
+    # in a deque took a Python step each.
+    if _PRIM_SET.issuperset(map(type, scanned)):
         return False
     unsure = False
-    for item in scanned:
-        if type(item) in IMMUTABLE_PRIMS:
-            continue
+    for item in compress(scanned, map(operator.not_, map(_PRIM_SET.__contains__, map(type, scanned)))):
         held = _holds_a_draw(item, depth + 1, seen)
         if held:
             return True
@@ -808,16 +810,35 @@ def _parts_held(value: Any, kind: type) -> Iterable[Any] | None:
     plain container, read without running code of its: what the collector
     sees it hold (a deque's items, ``__slots__``, a ``partial``'s function,
     arguments and keywords, an object's ``__dict__``), and the items of a
-    numpy array of objects, which the collector does not see. None when
-    the collector cannot read it: what it holds is not known."""
-    dtype = attribute_or(value, "dtype", None) if attribute_or(kind, "__module__", "") == "numpy" else None
+    numpy array of objects (a masked one too), which the collector does
+    not see. None when the collector cannot read it: what it holds is not
+    known. An object of a type without the collector's support reads to it
+    as holding nothing: known to, for the interpreter's own and numpy's
+    (a ``datetime``, a ``range``, a dtype), whose types that hold objects
+    all support it, and not known for another library's."""
+    module = attribute_or(kind, "__module__", "")
+    top = module.partition(".")[0] if isinstance(module, str) else ""
+    dtype = attribute_or(value, "dtype", None) if top == "numpy" else None
     if dtype is not None:
         return value.ravel(order="K") if attribute_or(dtype, "hasobject", False) else ()
+    if not kind.__flags__ & _HAVE_GC:
+        return () if top in _OWN_GC_MODULES or top in sys.stdlib_module_names else None
     try:
         held = gc.get_referents(value)
     except Exception:  # noqa: BLE001 - an object the collector cannot read
         return None
-    return [item for item in held if item is not kind]
+    # Its class, which the collector names first for a class of Python
+    # code: found by identity in C, never by a comparison of the items.
+    at = next(compress(range(len(held)), map(operator.is_, held, repeat(kind))), None)
+    if at is not None:
+        del held[at]
+    return held
+
+
+#: ``Py_TPFLAGS_HAVE_GC``: the type tells the collector what its objects hold.
+_HAVE_GC = 1 << 14
+#: Besides the standard library's: modules whose types without it hold no objects.
+_OWN_GC_MODULES = frozenset({"builtins", "numpy"})
 
 
 #: The values `_warn_unchecked` warned about, once each.
