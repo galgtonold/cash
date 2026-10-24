@@ -1734,7 +1734,7 @@ you must. See [Silencing one code](#silencing-one-code).
 
 ### KEY-UNTRACKABLE-DEP {#key-untrackable-dep}
 
-<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks._warn_untrackable @90bfa6af, cash/decorator/registry.py:FunctionRegistry.refresh_helper_bindings @006fceab -->
 **What happened.** The function, or a helper it calls, picks the code it runs
@@ -1760,6 +1760,11 @@ Before Python 3.12 (or with `CASH_TRACE=0`) the same warning names an
 answers with an `__instancecheck__` or `__subclasscheck__` of yours: what it
 reads, such as a set its `register()` fills, is state the class keeps, and no
 key holds it. On 3.12 and newer the record of what the call ran covers it.
+
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._tell_looked_up_by_string @829fd48b -->
+In a notebook, a statement whose function looks names up this way, and whose
+trace cannot follow the lookup (`m = importlib.import_module(name)`, then
+`m.scale(x)`), runs every time: the warning comes once per statement.
 
 **Why it matters.** cash cannot tell from the source which code that name
 lands on, so an edit to it, or to a global it reads, would not change the key.

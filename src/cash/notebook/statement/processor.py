@@ -373,6 +373,7 @@ class StatementProcessor:
         self._share_unchecked_warned: set[str] = set()
         #: Statements already told about NOTEBOOK-ANALYSIS-BUDGET.
         self._past_budget_told: set[str] = set()
+        self._by_string_told: set[str] = set()
         #: What a statement's text last took to run, in seconds, or None when
         #: never measured (``CashSession.expected_compute``, set by the
         #: magics): its analysis budget (`analysis_budget_seconds`).
@@ -1237,6 +1238,18 @@ class StatementProcessor:
             changed.add(ENVIRON)
         run.process_state = frozenset(changed)
 
+    def _tell_looked_up_by_string(self, run: StatementRun, reason: str) -> None:
+        """Say once per statement that it runs every time because what it
+        reaches is looked up by a string its trace cannot follow
+        (``KEY-UNTRACKABLE-DEP``): ``m = importlib.import_module(name)`` in
+        a helper, then ``m.scale(x)``."""
+        if run.source_hash in self._by_string_told:
+            return
+        self._by_string_told.add(run.source_hash)
+        fix = "import what it needs by name (`from wmod import scale`), so the key names the module."
+        log_diagnostic(logger, "KEY-UNTRACKABLE-DEP", reason, fix)
+        warn_diagnostic(CashCacheIneffectiveWarning, "KEY-UNTRACKABLE-DEP", reason, fix)
+
     def _tell_past_budget(self, run: StatementRun, cost: float) -> None:
         """Say once per statement that it was not cached because working out
         how to key it took longer than it could save
@@ -1503,11 +1516,13 @@ class StatementProcessor:
             # Its key cannot name the function a string spells at run time
             # (``string_lookups``): served, it could be stale.
             who = "The statement" if THE_STATEMENT in by_string else ", ".join(repr(n) for n in sorted(by_string))
-            run.metrics["uncacheable_reasons"].append(
-                f"{who} looks names up by a string (globals(), eval, vars(), getattr on a module): "
-                f"which function that reaches, and what it reads, is known only when it runs, "
-                f"so the statement runs every time"
+            reason = (
+                f"{who} looks names up by a string (globals(), eval, vars(), getattr on a module, "
+                f"importlib.import_module, __import__): which function that reaches, and what it reads, "
+                f"is known only when it runs, so the statement runs every time"
             )
+            run.metrics["uncacheable_reasons"].append(reason)
+            self._tell_looked_up_by_string(run, reason)
             run.skip_cache = True
             run.value_varies = True
             return
