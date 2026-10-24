@@ -119,6 +119,15 @@ class _StallWatchdog:
         # test was running 10-100x until pytest-timeout killed the worker
         # ("node down: Not properly terminated", a different test each run).
         self._tick = threading.Event()
+        self._stopped = False
+
+    def stop(self) -> None:
+        """End the thread without firing: a test's own watchdog, which left
+        running fired in a later test, its ``_fire`` then running inside that
+        test's statement (`tests/test_tooling/test_stall_watchdog.py`)."""
+        with self._lock:
+            self._stopped = True
+        self._tick.set()
 
     def poke(self, what: str | None = None) -> None:
         with self._lock:
@@ -177,6 +186,8 @@ class _StallWatchdog:
         while True:
             self._tick.wait(self.poll_interval)
             with self._lock:
+                if self._stopped:
+                    return
                 idle = _monotonic() - self._last
                 current = self._current
                 limit = self._allowance or self.timeout
@@ -511,6 +522,19 @@ def _io_watch_held_no_longer_than_the_test():
 
 #: The process's own ``__main__``, as pytest started it.
 _MAIN = sys.modules["__main__"]
+
+
+@pytest.fixture(autouse=True)
+def _reducer_veto_put_back():
+    """Disarm the reducer veto a test's ``%cash_on`` left armed.
+
+    ``reducer_writes.watch`` stays armed until ``%cash_off``; a later test's
+    ``@cash.cache`` then refused to store any result whose reducer cash
+    cannot read (a class made by ``exec``), as in a cash-on notebook."""
+    yield
+    from cash.kept_state import set_reducer_veto
+
+    set_reducer_veto(None)
 
 
 @pytest.fixture(autouse=True)

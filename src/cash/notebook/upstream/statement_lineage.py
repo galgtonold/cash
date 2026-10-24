@@ -90,6 +90,7 @@ from ..statement.derivation_edges import (
     static_share_edges,
 )
 from ..statement.lineage import rewritten_by_the_notebook_since
+from ..statement.mutation_routing import callees_changing_their_closure, sharing_a_cell
 from ..tracking_state import TrackingState
 from .cache_probe import CacheProbe
 from .simulated_callables import SimulatedCallables
@@ -468,6 +469,11 @@ class StatementLineage:
             # A statement that sets state on a local module changes the
             # module, as the runtime routes it (``MutationRouting.route``).
             outputs |= self.module_state_outputs(stmt_code)
+            # One that calls a function changing its closure changes every
+            # function sharing that cell, as the runtime routes it.
+            writers = callees_changing_their_closure(tree, self.shell.user_ns)
+            if writers:
+                outputs |= sharing_a_cell(writers, self.shell.user_ns)
             # One that draws through pyplot changes the current figure and
             # axes, as the runtime took them (``pyplot_draws``).
             drawn = self.pyplot_draw_outputs(stmt_code, tree)

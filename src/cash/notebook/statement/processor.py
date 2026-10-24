@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import functools
+import hashlib
 import io
 import logging
 import os
@@ -44,7 +45,7 @@ from cash.notebook.compiled_source import register_cell_source
 from cash.notebook.consumables import drawn_stream_inputs
 from cash.notebook.per_item_reruns import MIN_COST_S as PER_ITEM_MIN_COST_S
 from cash.notebook.read_handles import reaches_read_handle
-from cash.notebook.statement import sparse_order
+from cash.notebook.statement import reducer_writes, sparse_order
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.amplification import AmplificationGuard
 from cash.notebook.statement.call_routing import CallRouting
@@ -185,6 +186,8 @@ from ..shared_objects import (
     ViewBasesCutShort,
     WalkBudgetExceeded,
     anchors_held,
+    forget_heap_unreadable,
+    heap_unreadable,
     history_names,
     is_value,
     library_value_types,
@@ -432,6 +435,17 @@ _NO_STATE = (
 )
 
 
+_PYTHON = ".".join(map(str, sys.version_info[:3]))
+
+
+def _cut_short_why(what: str, budget: float) -> str:
+    """Why a statement whose share check was cut short re-runs: out of time,
+    or a Python that cannot read what holds an object (`heap_unreadable`)."""
+    if heap_unreadable():
+        return f"{what} cannot be done on Python {_PYTHON} with asyncio loaded, so it re-runs every time"
+    return f"{what} would take longer than {budget:.1f}s, more than the statement is worth, so it re-runs every time"
+
+
 class StatementProcessor:
     """
     Processes and caches individual Python statements.
@@ -472,6 +486,12 @@ class StatementProcessor:
         #: The work NOTEBOOK-WORK-RUNNING was given for.
         self._work_running_warned: set[str] = set()
         self._unseen_warned: set[str] = set()
+        #: ``key -> (the entry's timestamp, {output: digest of its stored
+        #: value})`` a rerun under that key took (`_changed_from_refused_entry`)
+        #: and did not store, refused after it ran (`_refuse_unseen_writes`):
+        #: the next rerun compares with these, not with the value read back
+        #: and hashed again.
+        self._refused_entry_digests: dict[str, tuple[Any, dict[str, str]]] = {}
         #: Statements the share check refused, by key (`_refused_again`).
         self._share_refused: dict[str, list] = {}
         #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
@@ -905,6 +925,7 @@ class StatementProcessor:
             'saved_time', 'restored_vars', 'code', plus optional keys depending
             on cache status.
         """
+        forget_heap_unreadable()
         run = StatementRun(
             code,
             ttl=ttl,
@@ -930,6 +951,7 @@ class StatementProcessor:
                 if shadow is not None:
                     shadow.statement_served(run, done)
                 self._advance_rng(run)
+                self._move_what_reducers_wrote(run)
                 return done
             with self._executing(run) as runner:
                 self._offer_digests(run, runner)
@@ -946,6 +968,7 @@ class StatementProcessor:
             return result
         finally:
             self._advance_rng(run)
+            self._move_what_reducers_wrote(run)
 
     @staticmethod
     def _begin_recording(shadow: Any, run: StatementRun) -> Any:
@@ -1018,6 +1041,7 @@ class StatementProcessor:
                 if shadow is not None:
                     shadow.statement_served(run, done)
                 self._advance_rng(run)
+                self._move_what_reducers_wrote(run)
                 return done
             with self._executing(run) as runner:
                 unit = self._begin_recording(shadow, run)
@@ -1032,6 +1056,7 @@ class StatementProcessor:
             return result
         finally:
             self._advance_rng(run)
+            self._move_what_reducers_wrote(run)
 
     def _prepare(self, run: StatementRun) -> ProcessResult | None:
         """Analyse, key and look up *run*'s statement, before it may execute.
@@ -1047,6 +1072,8 @@ class StatementProcessor:
         if effects.unanalysed:
             run.metrics["uncacheable_reasons"].extend(effects.unanalysed)
             run.skip_cache = True
+        if effects.unrooted is not None:
+            self._tell_unrooted_write(run, effects.unrooted)
         if run.tree is not None and calls_ipython(run.tree):
             run.metrics["uncacheable_reasons"].append(_IPYTHON_REASON)
             run.skip_cache = True
@@ -1120,6 +1147,11 @@ class StatementProcessor:
                 # Stored before code it ran was seen to change what its
                 # outputs leave out: it runs, and is not stored again.
                 cached_data = None
+            elif not cached_data and _shadow.SHADOW.changed_since_traced(run.cache_key):
+                # No entry (cleared, or a rerun not stored again), and code
+                # it ran when last stored changed: it can bind a new value
+                # under the same key, with no entry to compare it with.
+                run.key_blind = True
         elif run.needs_trace:
             cached_data = None
             run.key_blind = True
@@ -1282,6 +1314,22 @@ class StatementProcessor:
         log_diagnostic(logger, "NOTEBOOK-UNSEEN-WRITES", what, fix)
         warn_diagnostic(CashWarning, "NOTEBOOK-UNSEEN-WRITES", what, fix)
 
+    def _tell_unrooted_write(self, run: StatementRun, what: str) -> None:
+        """Warn, once per statement, that it writes into an object no name
+        in its text roots (`unrooted_write`): it runs every time, and what
+        reads any variable after it runs again."""
+        said = f"unrooted\n{run.code}"
+        if said in self._unseen_warned:
+            return
+        self._unseen_warned.add(said)
+        fix = (
+            "write into the variable by its name (`points[7].x = -3`, `setattr(points[7], 'x', -3)`), "
+            "or put '# @cash:assume-safe' on the statement if the change does not matter."
+        )
+        what = f"{what}, so the statement runs every time and every variable is taken as changed by it"
+        log_diagnostic(logger, "NOTEBOOK-UNSEEN-WRITES", what, fix)
+        warn_diagnostic(CashWarning, "NOTEBOOK-UNSEEN-WRITES", what, fix)
+
     def _still_refused_for_unseen_writes(self, run: StatementRun, place: str) -> None:
         """Refuse *run*, whose trace holds no writer, when its statement was
         refused for one this session and that writer is still alive."""
@@ -1340,6 +1388,8 @@ class StatementProcessor:
         """Read *run*'s annotation, warn about its randomness, start its
         metrics and parse it."""
         code = run.code
+        reducer_writes.watch(self.shell.user_ns)
+        run.reducer_mark = reducer_writes.runs_now()
         run.effective_ttl, run.force_persist, run.skip_cache, run.allow_random = statement_directives(
             run.annotation, run.ttl, self.persist_all
         )
@@ -1444,13 +1494,18 @@ class StatementProcessor:
         run.value_keyed_outputs = keyed
         return keyed
 
-    @staticmethod
-    def _note_refused_entry(run: StatementRun, metadata: Any, cached_data: Any) -> None:
+    def _note_refused_entry(self, run: StatementRun, metadata: Any, cached_data: Any) -> None:
         """What `_changed_from_refused_entry` compares with: the entry's digests
         of its outputs, its values for the outputs it has none of, and which
         it had keyed by value."""
         run.refused_value_keyed = frozenset(attribute_or(metadata, "value_keyed", None) or ())
         run.refused_digests = dict(attribute_or(metadata, "rerun_digests", None) or {})
+        run.refused_stamp = attribute_or(metadata, "timestamp", None)
+        kept = self._refused_entry_digests.get(run.cache_key)
+        if kept is not None and run.refused_stamp is not None and kept[0] == run.refused_stamp:
+            # A rerun before this one hashed this entry's values and was not
+            # stored: what it found stands while the entry does.
+            run.refused_digests = {**kept[1], **run.refused_digests}
         if not set(run.refused_digests) >= set(attribute_or(metadata, "outputs", None) or ()):
             run.refused_values = _entry_values(cached_data)
 
@@ -1489,9 +1544,23 @@ class StatementProcessor:
             before = run.refused_digests.get(name)
             if before is None and stored is not None and name in stored:
                 before = value_hash.budgeted_hash(stored[name], self.compute_hash)
+                if before is not None and run.refused_stamp is not None:
+                    self._keep_refused_entry_digest(run, name, before)
             if before is None or before != after:
                 changed.add(name)
         return frozenset(changed)
+
+    def _keep_refused_entry_digest(self, run: StatementRun, name: str, digest: str) -> None:
+        """Keep the digest of the stored value of *name* the entry *run* refused
+        held (`_refused_entry_digests`)."""
+        kept = self._refused_entry_digests.get(run.cache_key)
+        if kept is None or kept[0] != run.refused_stamp:
+            kept = (run.refused_stamp, {})
+        kept[1][name] = digest
+        self._refused_entry_digests.pop(run.cache_key, None)
+        self._refused_entry_digests[run.cache_key] = kept
+        while len(self._refused_entry_digests) > _UNSEEN_REFUSED_KEPT:
+            del self._refused_entry_digests[next(iter(self._refused_entry_digests))]
 
     @staticmethod
     def _drawn_names(run: StatementRun) -> frozenset[str]:
@@ -2598,6 +2667,11 @@ class StatementProcessor:
                 # may change an output another check walked; it never reads
                 # the facts over wider leaves those checks took.
                 _plain_data.forget_wider_facts()
+                if not run.skip_cache and reducer_writes.writes_into(run.reducer_mark, self.shell.user_ns):
+                    # A reducer of the user's that cash ran wrote: stored, the
+                    # entry would be served without that write
+                    # (`_move_what_reducers_wrote`).
+                    run.skip_cache = True
                 if not run.skip_cache:
                     saved_metadata = self._store.save(
                         run,
@@ -2748,10 +2822,7 @@ class StatementProcessor:
                     }
         except WalkBudgetExceeded:
             run.share_unchecked = True
-            reason = (
-                f"finding which other variables hold objects of its outputs would take longer than "
-                f"{budget:.1f}s, more than the statement is worth, so it re-runs every time"
-            )
+            reason = _cut_short_why("finding which other variables hold objects of its outputs", budget)
         if reason is None and anchors:
             run.anchors = {name: self.tracking_state.current_session_hashes[name] for name in anchors}
             run.anchor_links = anchor_links | set(anchors)
@@ -3016,8 +3087,9 @@ class StatementProcessor:
         hidden = attribute_or(self.shell, "user_ns_hidden", None) or {}
         cash_held = [*self._calls.held_call_results(), echo, run.metrics, *history]
         gave_up = GaveUp()
+        budget = share_check_budget(cost)
         try:
-            with walk_budget(share_check_budget(cost)):
+            with walk_budget(budget):
                 share_group(
                     handed,
                     user_ns,
@@ -3028,7 +3100,17 @@ class StatementProcessor:
                     gave_up=gave_up,
                 )
         except WalkBudgetExceeded:
-            gave_up = GaveUp(complete=False)
+            # Out of time, or not known (`shared_objects._TRAVERSE_LOOPS`): a
+            # holder not found would go unlinked, and its later change would
+            # serve what was stored. The statement is not stored, as when the
+            # share check of its outputs runs out.
+            run.share_unchecked = True
+            run.skip_cache = True
+            run.metrics.setdefault("uncacheable_reasons", []).append(
+                _cut_short_why("finding what keeps the variables it hands to code", budget)
+            )
+            self._warn_share_unchecked(run, handed, cost)
+            gave_up.complete = False
         if not gave_up.complete:
             # Cut short, or given up past a holder it could not climb, the
             # search hands back what its last pass found, not a holder its
@@ -3154,9 +3236,26 @@ class StatementProcessor:
         def foreign(name: str) -> bool:
             return name in hidden or is_history_name(name)
 
+        def cut_short(links: list) -> list:
+            # Cut short: an output may hold what any value the statement read
+            # holds (``head = points[:1000]``, ``list(points)``), and unlinked,
+            # a write through it left a cached read of the input below
+            # answering with the old content. Linked to each of them, such a
+            # write moves it on: a needless miss at worst (`_view_bases_of`).
+            read = {
+                other
+                for other in run.inputs
+                if other in user_ns
+                and other not in names
+                and not foreign(other)
+                and not is_value(user_ns[other], value_types)
+            }
+            return [*links, (outputs, read)] if read else links
+
         budget = share_check_budget(cost)
         if run.share_gave_up is not None:
-            return list(run.share_gave_up.links), run.share_gave_up.complete
+            links, complete = list(run.share_gave_up.links), run.share_gave_up.complete
+            return (links if complete else cut_short(links)), complete
         timed_out = run.share_unchecked
         if not timed_out:
             try:
@@ -3173,7 +3272,8 @@ class StatementProcessor:
                 # closure, a function's defaults): the variables found beside
                 # it, not a search from the outputs up, which would climb
                 # through the library until its budget ran out.
-                return list(gave_up.links), gave_up.complete
+                links = list(gave_up.links)
+                return (links if gave_up.complete else cut_short(links)), gave_up.complete
             except WalkBudgetExceeded:
                 timed_out = True
         found_names, complete = referring_names(
@@ -3183,7 +3283,8 @@ class StatementProcessor:
             skip_name=lambda name: foreign(name) or name in names,
             ignore=[captured_vars, run.metrics, echo, *cash_held],
         )
-        return [(outputs, found_names)], complete
+        links = [(outputs, found_names)]
+        return (links if complete else cut_short(links)), complete
 
     def _fallback_seconds(self, run: StatementRun, fallback_floor: float) -> float:
         """How long the search from the outputs up (`referring_names`) may
@@ -3301,14 +3402,19 @@ class StatementProcessor:
             return
         self._share_unchecked_warned.add(run.source_hash)
         listed = ", ".join(f"'{name}'" for name in sorted(outputs))
+        if heap_unreadable():
+            within = f": Python {_PYTHON} with asyncio loaded cannot read what holds an object"
+            upgrade = " Python 3.12.6 or later reads it."
+        else:
+            within, upgrade = f" within {share_check_budget(cost):.1f}s", ""
         what = (
-            f"cash could not find, within {share_check_budget(cost):.1f}s, every other variable that holds "
-            f"an object of {listed} or is held in one. A later change made in place through such a variable "
-            f"may not re-run the cells that read {listed}, or the other way round."
+            f"cash could not find every other variable that holds an object of {listed} or is held in "
+            f"one{within}. A later change made in place through such a variable may not re-run the cells "
+            f"that read {listed}, or the other way round."
         )
         fix = (
             "if a later cell changes these objects in place through another name, rebind instead "
-            "(x = x + [v]) or re-run the cells that read them yourself."
+            f"(x = x + [v]) or re-run the cells that read them yourself.{upgrade}"
         )
         log_diagnostic(logger, "NOTEBOOK-SHARE-UNCHECKED", what, fix)
         # At the cell, as cash's other notebook warnings are: with no
@@ -3318,6 +3424,74 @@ class StatementProcessor:
 
         location = ("<cash>", running_cell_count(self.shell))
         warn_diagnostic(CashWarning, "NOTEBOOK-SHARE-UNCHECKED", what, fix, location=location)
+
+    def _move_what_reducers_wrote(self, run: StatementRun) -> None:
+        """Move on the variables a reducer of the user's could have written,
+        when one that writes ran in a pickle of cash's while *run*'s
+        statement was processed (`reducer_writes`): ``__reduce__`` doing
+        ``df.at[3, 'o'] = ...`` changes ``df``, which no statement named,
+        and a reader of ``df`` below would be served what it read before.
+        Each moves to a lineage carrying its content now, so a reader
+        misses when the write changed it and hits when it did not. Every
+        variable moves when the code's reach cannot be read. Warned
+        (``NOTEBOOK-REDUCE-WROTE``), naming the class."""
+        refused = reducer_writes.refused_since(run.reducer_mark)
+        if refused:
+            self._warn_reducer_refused(run, refused)
+        found = reducer_writes.writers(run.reducer_mark)
+        if not found:
+            return
+        user_ns = self.shell.user_ns
+        names = reducer_writes.reach(found, user_ns)
+        if names is not None and not names:
+            # It writes nothing of the notebook's (`reducer_writes.writes_into`).
+            run.reducer_mark = reducer_writes.runs_now()
+            return
+        lineages = self.tracking_state.variable_lineage
+        moved = set(lineages) if names is None else names
+        moved = {name for name in moved if name in lineages and name in user_ns}
+        for name in sorted(moved):
+            value = user_ns[name]
+            try:
+                content = no_cache_value_digest(value)
+            except Exception:  # noqa: BLE001 - a value that cannot be read moves to one of its own
+                content = "fresh:" + secrets.token_hex(16)
+            lineage = hashlib.sha256(f"reduce-wrote:{lineages[name]}:{content}".encode()).hexdigest()
+            self.tracking_state.lineage.record(name, lineage, value=value)
+            # Its session hash follows: the value now is the one a later cell
+            # starts from (`StaleValueGuard`).
+            self.lineage_builder.note_content_hash(self.tracking_state, name, value, lineage)
+        if moved:
+            self.lineage_builder.replay_derivation_bumps(self.tracking_state, moved, set(), code=run.code)
+        # What the reads above ran is this statement's too, and moved nothing more.
+        run.reducer_mark = reducer_writes.runs_now()
+        classes = ", ".join(sorted({writer.name for writer in found}))
+        what = (
+            f"cash pickled a value of {classes} to hash or store it, and its own "
+            f"__reduce__ or __getstate__ changes other values: "
+            + ("every variable" if names is None else ", ".join(sorted(moved)) or "nothing tracked")
+            + " counted as changed, and the statement was not stored"
+        )
+        fix = (
+            "Have the class's __reduce__ / __getstate__ only read: change other "
+            "values in the statement that needs them instead"
+        )
+        warn_diagnostic(CashWarning, "NOTEBOOK-REDUCE-WROTE", what, fix)
+
+    @staticmethod
+    def _warn_reducer_refused(run: StatementRun, classes: list[str]) -> None:
+        """Warn that cash did not run the writing reducers of *classes*
+        (`reducer_writes.refuses`), so *run*'s statement was not stored."""
+        run.reducer_mark = reducer_writes.runs_now()
+        what = (
+            f"a value of {', '.join(dict.fromkeys(classes))} has a __reduce__ or __getstate__ that changes "
+            "other values, so cash did not pickle it: the statement was not stored, and runs again next time"
+        )
+        fix = (
+            "Have the class's __reduce__ / __getstate__ only read: change other "
+            "values in the statement that needs them instead"
+        )
+        warn_diagnostic(CashWarning, "NOTEBOOK-REDUCE-WROTE", what, fix)
 
     def _move_holders(self, run: StatementRun, metadata: StatementCacheMetadata | None) -> set[str]:
         """Move on the lineages of the variables *metadata*'s entry stores

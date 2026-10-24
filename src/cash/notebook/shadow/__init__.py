@@ -505,6 +505,10 @@ class Shadow:
         bound = type(fn) is types.FunctionType and fn.__code__ is code
         if not found or code.co_freevars or not bound:
             holders = [self._holder(code, [(module, g), (nbn, nb)], ran), *_library_holders(code, nb)]
+            # And some steps down in a library module's global
+            # (``statistics._reg = [mkd(77)]``): ``mkd(55)`` set in its place
+            # was served 77, also beside ``statistics.mean = mkd(77)``.
+            holders.append(_in_a_value(code, _library_spaces(nb), private=True))
             for hmod, hname in dict.fromkeys(h for h in holders if h is not None):
                 held = hmod, hname
                 hns = namespace_of(hmod, nb, nbn)
@@ -818,6 +822,52 @@ class Shadow:
         except Exception:  # noqa: BLE001 - shadow never breaks a statement
             return False
 
+    def entry_stale(self, key: str) -> bool:
+        """Does the trace kept with the entry *key* name code that changed
+        since it was stored (`verify`)? Asked where an entry is restored
+        without a lookup's check (`stale`): the check of the cells above a
+        reader. Code only, and only code defined now: the namespace is as the
+        simulation finds it, before the cells above run, so a value the trace
+        read, or a function not defined yet, can differ from what the entry
+        was built from without anything having changed."""
+        try:
+            self._ensure_loaded()
+            trace = self.traces.get(key)
+            if trace is None or not self._usable(trace):
+                return False
+            code = {"items": [item for item in trace.get("items") or () if item and item[0] == "code"]}
+            # Code not defined yet (after a restart, the cells above have not
+            # run) is the simulation's to follow, not a change.
+            return any(
+                change[-1] != "missing" or self._bound(change[1], change[2])
+                for change in self.verify(code, {})["changed"]
+            )
+        except Exception:  # noqa: BLE001 - shadow never breaks a statement
+            return False
+
+    def _bound(self, module: str, qualname: str) -> bool:
+        """Is the name *qualname* starts with bound in *module* now: code of
+        it not found is then code that changed (``f.__code__`` swapped), not
+        code not defined yet."""
+        from ...tracking.trace_items import namespace_of
+
+        ns = namespace_of(module, self.notebook or {}, self.notebook_name)
+        return isinstance(ns, dict) and qualname.split(".", 1)[0] in ns
+
+    def changed_since_traced(self, key: str) -> bool:
+        """Did code the unit *key* ran when it was last stored change since,
+        or can its trace not tell? Asked on a miss: an entry cleared or
+        never stored again leaves the trace, and a rerun under the same key
+        may bind a new value (`StatementRun.key_blind`)."""
+        try:
+            self._ensure_loaded()
+            trace = self.traces.get(key)
+            if trace is None:
+                return False
+            return not self._usable(trace) or bool(self.verify(trace, {})["changed"])
+        except Exception:  # noqa: BLE001 - shadow never breaks a statement
+            return True
+
     @staticmethod
     def agreed(pending: dict | None) -> bool:
         """Did the check before a lookup (`check`) find the entry's trace,
@@ -972,7 +1022,7 @@ _IN_A_VALUE_DEPTH = 6
 
 
 def _in_a_value(
-    code: types.CodeType, spaces: Iterable[tuple[str | None, Mapping[str, Any]]]
+    code: types.CodeType, spaces: Iterable[tuple[str | None, Mapping[str, Any]]], private: bool = False
 ) -> tuple[str | None, str] | None:
     """``(module, name)`` of the global of *spaces* that holds a function of
     *code* some steps down: an item of a list, tuple or dict, an attribute
@@ -981,7 +1031,8 @@ def _in_a_value(
     closure cell of a function (a decorator's wrapper without
     ``functools.wraps``), or what a method holder or ``partial`` wraps. None
     when none does. The global's digest holds that function: its code, its
-    defaults and its closure."""
+    defaults and its closure. With *private*, globals named with a leading
+    underscore too (a library's ``_registry``)."""
     from ...tracking.trace_items import is_user_type
 
     looked = 0
@@ -997,7 +1048,9 @@ def _in_a_value(
         modules.add(attribute_or(ns, "get", dict().get)("__name__"))
         try:
             pending.extend(
-                (v, 0, (module, k)) for k, v in list(ns.items()) if isinstance(k, str) and not k.startswith("_")
+                (v, 0, (module, k))
+                for k, v in list(ns.items())
+                if isinstance(k, str) and not k.startswith("__") and (private or not k.startswith("_"))
             )
         except Exception:  # noqa: BLE001 - a namespace that cannot be listed
             continue
@@ -1060,12 +1113,23 @@ def _library_holders(code: types.CodeType, notebook: Mapping[str, Any]) -> list[
     its place was served what ``mk(99)`` gave. Every one, not the first:
     which of ``mean = mk(99)`` and ``median = mk(77)`` ran, the trace does
     not say, and taking ``mean`` vouched for ``median``."""
+    return [
+        (name, attr)
+        for name, own in _library_spaces(notebook)
+        for attr, value in list(own.items())
+        if isinstance(attr, str) and _wraps_code(value, code)
+    ]
+
+
+def _library_spaces(notebook: Mapping[str, Any]) -> list[tuple[str, dict]]:
+    """``(name, globals)`` of each module the notebook imported, as
+    ``sys.modules`` has it, other than the notebook's own."""
     try:
         values = list(notebook.values())
     except Exception:  # noqa: BLE001 - a namespace that cannot be listed
         return []
     seen: set[int] = set()
-    found: list[tuple[str, str]] = []
+    spaces: list[tuple[str, dict]] = []
     for module in values:
         if not issubclass(type(module), types.ModuleType) or id(module) in seen:
             continue
@@ -1076,10 +1140,8 @@ def _library_holders(code: types.CodeType, notebook: Mapping[str, Any]) -> list[
             continue
         if sys.modules.get(name) is not module:
             continue
-        for attr, value in list(own.items()):
-            if isinstance(attr, str) and _wraps_code(value, code):
-                found.append((name, attr))
-    return found
+        spaces.append((name, own))
+    return spaces
 
 
 def _wraps_code(value: Any, code: types.CodeType) -> bool:
