@@ -504,6 +504,9 @@ _BODIES = {
     "a_with_target": "import contextlib\nwith contextlib.nullcontext(ALIASED) as c:\n    c['rows'].append(1)",
     "next_of_iter": "c = next(iter([ALIASED]))\nc['rows'].append(1)",
     "a_conditional": "c = ALIASED if self else None\nc['rows'].append(1)",
+    "sorted_items_that_change": "c = sorted(NESTED_ROWS)\nc[0].append(1)",
+    "a_comprehension_of_items_that_change": "c = [r for r in NESTED_ROWS]\nc[0].append(1)",
+    "a_loop_over_items_that_change": "for c in NESTED_ROWS:\n    c.append(1)",
 }
 
 
@@ -516,7 +519,8 @@ def test_a_change_through_any_local_bound_from_a_global_counts(tmp_path, monkeyp
     module = _module_with(tmp_path, monkeypatch, _BODIES[body])
     writer = reducer_writes._decide(module.Made)
     assert writer is not None, "not a writer"
-    holder = module.ALIASED_OBJECT if "ALIASED_OBJECT" in _BODIES[body] else module.ALIASED
+    named = next(name for name in ("ALIASED_OBJECT", "NESTED_ROWS", "ALIASED") if name in _BODIES[body])
+    holder = getattr(module, named)
     assert reducer_writes.reach([writer], {"cfg": holder}) == {"cfg"}
 
 
@@ -545,6 +549,29 @@ def test_a_local_holding_nothing_of_a_global_is_no_writer(tmp_path, monkeypatch,
     assert reducer_writes._decide(module.Made) is None
 
 
+_BODIES_THAT_CHANGE_ONLY_A_NEW_OBJECT = {
+    "a_comprehension_filtered_by_a_global": (
+        "state = {k: v for k, v in self.__dict__.items() if k not in SKIP}\nstate['version'] = 2"
+    ),
+    "a_loop_over_names": "state = {}\nfor name in NAMES:\n    state[name] = getattr(self, name, None)",
+    "sorted_names": "order = sorted(NAMES)\norder.append('x')",
+    "a_merge_of_dicts_of_atoms": "state = {**self.__dict__, **EXTRA}\nstate['v'] = 1",
+    "a_list_of_names": "c = list(NAMES)\nc.append('z')",
+    "a_comprehension_of_names": "rows = [r for r in NAMES]\nrows.append('x')",
+    "a_dict_of_atoms_updated": "out = dict(DEFAULTS)\nout.update(self.__dict__)",
+}
+
+
+@pytest.mark.parametrize("body", list(_BODIES_THAT_CHANGE_ONLY_A_NEW_OBJECT))
+def test_a_change_to_a_new_object_built_from_a_global_is_no_writer(tmp_path, monkeypatch, body):
+    """A global read in a test (``k not in SKIP``), or numbers and strings
+    taken out of one (``for name in NAMES``, ``sorted(NAMES)``, ``{**EXTRA}``):
+    the local holds nothing a change can reach in the global, yet any global
+    read counted, and the statement building the object never cached."""
+    module = _module_with(tmp_path, monkeypatch, _BODIES_THAT_CHANGE_ONLY_A_NEW_OBJECT[body])
+    assert reducer_writes._decide(module.Made) is None
+
+
 def _module_with(tmp_path, monkeypatch, body: str, params: str = "", closure: bool = False):
     """A module file whose class ``Made`` has a ``__getstate__`` running
     *body*: its source is read from the file, as a module of the user's is."""
@@ -563,7 +590,9 @@ def _module_with(tmp_path, monkeypatch, body: str, params: str = "", closure: bo
         )
     else:
         source = "import copy\nclass Cfg:\n    def __init__(self):\n        self.seen = []\n"
-        source += "ALIASED = {'rows': []}\nALIASED_OBJECT = Cfg()\nclass Made:\n" + method
+        source += "ALIASED = {'rows': []}\nALIASED_OBJECT = Cfg()\nNESTED_ROWS = [[1]]\n"
+        source += "SKIP = {'_lock'}\nNAMES = ['a', 'b']\nEXTRA = {'v': 0}\nDEFAULTS = {'x': 1}\n"
+        source += "class Made:\n" + method
     (tmp_path / f"{name}.py").write_text(source, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.delitem(sys.modules, name, raising=False)
