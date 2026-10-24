@@ -103,6 +103,15 @@ class TrackingState:
     # W: StatementProcessor. R: StatementLineage._inputs_moved.
     statement_entry_lineages: dict[str, dict[str, str]] = field(default_factory=dict)
 
+    # `outcome_key` of a statement that reads a name it binds (``n = n + 1 if
+    # 'n' in globals() else 1``) -> ({input: lineage at entry}, {output:
+    # lineage it left}). Replayed over the value its own run bound, it would
+    # take that name a step on; reached with no binder above and the inputs
+    # it ran with, the simulation takes what it left instead. Not kept for one
+    # that read a file or a hidden variable.
+    # W: StatementLineageBuilder. R: VirtualLineage.
+    self_update_outcomes: dict[str, tuple[dict[str, str], dict[str, str]]] = field(default_factory=dict)
+
     # sha256 of every whole-cell source that ran this session, to tell an
     # edited-but-not-rerun seed() cell from one that ran.
     # W: CellExecutor. R: UpstreamChecker.

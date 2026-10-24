@@ -48,7 +48,7 @@ from ..magic_effects import (
 from ..recorded_reads import REBOUND, one_reading, outside_changes, take_known_as_read, watched_module_data
 from ..run_memo import stats_this_run
 from ..statement.lineage import rewritten_by_the_notebook_after
-from ..tracking_state import TrackingState
+from ..tracking_state import TrackingState, outcome_key
 from ._types import (
     IncrementalStartResult,
     InputHashes,
@@ -705,12 +705,14 @@ class VirtualLineage:
         if callee_lineages or hidden_lineages:
             input_hashes = InputHashes(input_hashes, callee_lineages, hidden_lineages)
 
+        unbound_above = {inp for inp in inputs if inp not in virtual_lineage}
         outputs, lookup_time, files_stale, stmt_file_deps = self.statements.apply(
             stmt_code,
             virtual_lineage,
             virtual_modules,
             occurrence_index=occurrence_index,
         )
+        self._take_what_it_left(stmt_code, occurrence_index, input_hashes, unbound_above, virtual_lineage)
 
         if stmt_file_deps:
             cell_file_deps.update(stmt_file_deps)
@@ -746,6 +748,30 @@ class VirtualLineage:
             # a figure was rebuilt without it.
             if statement_writes_files(stmt_code) or (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
                 sim.trace.append(TraceEntry(stmt_code, outputs, inputs, input_hashes, {}, files_stale))
+
+    def _take_what_it_left(
+        self,
+        stmt_code: str,
+        occurrence_index: int,
+        input_hashes: dict[str, str],
+        unbound_above: set[str],
+        virtual_lineage: dict[str, str],
+    ) -> None:
+        """Give a statement that reads a name it binds (``n = n + 1 if 'n' in
+        globals() else 1``) the lineages its last run left, when nothing above
+        binds that name and every other input is as it ran on. Replayed over
+        the value its own run bound, it took the name a step on, and each
+        cell below reading the name re-ran it (``self_update_outcomes``)."""
+        recorded = self.tracking_state.self_update_outcomes.get(outcome_key(stmt_code, occurrence_index))
+        if recorded is None or isinstance(input_hashes, InputHashes):
+            return
+        entry, left = recorded
+        own = left.keys() & unbound_above
+        if not own:
+            return
+        if {k: v for k, v in input_hashes.items() if k not in own} != {k: v for k, v in entry.items() if k not in own}:
+            return
+        virtual_lineage.update(left)
 
     def simulate_one_cell(
         self,

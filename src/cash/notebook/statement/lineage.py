@@ -59,6 +59,7 @@ from ..lineage_formula import (
     value_digests_key,
 )
 from ..restored_var import hashed_by_lineage
+from ..tracking_state import outcome_key
 from .derivation_edges import (
     assigned_names,
     bump_derived_lineages,
@@ -412,6 +413,18 @@ class StatementLineageBuilder:
                 accessed_files=accessed_files,
                 taken=taken,
             )
+
+        # One that reads a name it binds is filed with what it ran on and
+        # what it left (``TrackingState.self_update_outcomes``).
+        filed = outcome_key(code, occurrence_index)
+        if (
+            bound.keys() & inputs
+            and not (accessed_files or accessed_remote or probes)
+            and not lineage_hidden_reads(code)
+        ):
+            tracking_state.self_update_outcomes[filed] = (dict(input_lineage_map), dict(lineages))
+        else:
+            tracking_state.self_update_outcomes.pop(filed, None)
 
         filed = value_digests_key(source_hash, input_lineage_map, occurrence_index)
         if value_digests:
