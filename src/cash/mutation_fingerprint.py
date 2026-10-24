@@ -8,6 +8,7 @@ an AnnData-like object that scanpy writes to.
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 from collections.abc import Callable
 from typing import Any
@@ -36,6 +37,11 @@ def mutation_fingerprint(obj: Any, content: Callable[[Any], str] | None = None) 
     h = hashlib.sha256()
     t = type(obj)
     h.update(f"{t.__module__}.{t.__qualname__}".encode("utf-8"))
+    if t is contextvars.ContextVar:
+        # Nothing changes one in place: ``set`` binds another value to it
+        # in the context, which is what it is read by.
+        h.update(f"context variable|{id(obj.get(_UNSET))}".encode())
+        return h.hexdigest()
     canon = _canonical_sparse(obj)
     if canon is not obj:
         # A copy in canonical form: hashed on its own, never handed on.
@@ -63,6 +69,9 @@ def mutation_fingerprint(obj: Any, content: Callable[[Any], str] | None = None) 
         return None
     h.update(digest.encode("utf-8"))
     return h.hexdigest()
+
+
+_UNSET = object()
 
 
 def _is_anndata_like(obj: Any) -> bool:

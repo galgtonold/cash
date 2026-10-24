@@ -17,10 +17,11 @@ import pytest
 from tests._cell_driver import run_cash_cell
 
 SETUP = (
-    "import operator, bisect, collections, time\n"
+    "import operator, bisect, collections, contextvars, time\n"
     "LOG = []\nD = {}\nDQ = collections.deque()\nOD = collections.OrderedDict(a=1, b=2)\n"
     "class NS: pass\n"
     "PUSH = LOG.append\n"
+    "CV = contextvars.ContextVar('cv', default=0)\n"
 )
 
 BODIES = {
@@ -33,6 +34,8 @@ BODIES = {
     "od_move_to_end": ("OD.move_to_end('a')", "n = list(OD)", ["b", "a"]),
     "operator_iadd": ("operator.iadd(LOG, [x])", "n = len(LOG)", 1),
     "methodcaller": ("operator.methodcaller('append', x)(LOG)", "n = len(LOG)", 1),
+    # Its value lives in the context: a restore of ``CV`` cannot set it.
+    "context_variable_set": ("CV.set(CV.get() + x)", "n = CV.get()", 3),
 }
 
 
