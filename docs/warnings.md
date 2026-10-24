@@ -1800,6 +1800,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
 | [NOTEBOOK-NO-LIVE-READER](#notebook-no-live-reader) | notebook | cells above are read from the saved file, so an unsaved edit there is not seen |
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook's cells cannot be read; cells above the one you run are not re-checked |
+| [NOTEBOOK-REDUCE-WROTE](#notebook-reduce-wrote) | notebook | a value's own `__reduce__` or `__getstate__` changes other values, so cash does not pickle it, and the statement is not stored |
 | [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload or restart dropped state cells set on a module, and cash cannot rebuild it |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
 | [NOTEBOOK-SHARE-UNCHECKED](#notebook-share-unchecked) | notebook | not every variable sharing an object with a statement's outputs was found in time |
@@ -1894,14 +1895,16 @@ If it is not code, delete it or make it a markdown cell.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/upstream/mismatch_classifier.py:MismatchClassifier._reject_read_only_input @d536a0ab, cash/notebook/upstream/changed_below.py:warn_changed_below @bbf25145 -->
+<!-- claim: cash/notebook/upstream/mismatch_classifier.py:MismatchClassifier._reject_read_only_input @4c86c0cd, cash/notebook/upstream/changed_below.py:warn_changed_below @8bd3d1a3, cash/notebook/upstream/changed_below.py:held_objects @31b2cf0e -->
 **What happened.** You re-ran a cell on its own, and a cell below it had
 changed one of its inputs in place (`s.iloc[0] = 1e9`, `rows.append(r)`).
 cash gives the re-run the input as the cells above leave it, as a run from the
 top does: it rebuilt the value, so the cell computed without the change below,
 and the variable no longer holds that change. The message names the variable,
-the cell below and its statement. It is shown once per cell, variable and
-statement.
+the cell below and its statement. When the cell reads the variable through a
+function that holds it (`def draw(k, rows=BIG)`, a closure cell, a `partial`),
+it names the function too, and says "may hold" when the function holds more
+than cash looks through. It is shown once per cell, variable and statement.
 
 **Why it matters.** Plain Jupyter would run the cell on the changed value.
 Here the result is the one a run from the top gives, and the change the cell
@@ -2134,6 +2137,52 @@ close and reopen the notebook.
 
 **When it is safe to ignore.** In a run that executes the notebook top to
 bottom once. It is shown once per session.
+
+### NOTEBOOK-REDUCE-WROTE {#notebook-reduce-wrote}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_decide @6c9fffd5, cash/notebook/statement/processor.py:StatementProcessor._move_what_reducers_wrote @a8f482f2, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @b090d7eb, cash/decorator/store.py:_store_error @150ddaae -->
+**What happened.** cash pickles a statement's values to hash and store
+them, and pickling runs the value's own `__reduce__`, `__reduce_ex__`,
+`__getstate__` or `__getnewargs__` (or a reducer you registered with
+`copyreg`). One of yours changes other values when it runs: it writes a
+global (`df.at[3, 'o'] = ...`), hands one to a function of yours that
+changes it, or changes the object being pickled. Plain Python never runs it there, so
+cash does not run it either: it does not pickle the value, as it does not
+pickle one that cannot be pickled. The message names the class. The
+statement was not stored. A reducer whose code reaches no variable of the
+notebook (a counter in its own module the notebook does not import) runs
+as before, with no warning; what it reaches is found by object, so a
+module's list the notebook holds under another name counts, and so does
+the module itself when the notebook reads the list through it
+(`len(rmod.SEEN)`). A helper that edits a fresh copy it is handed
+(`_drop(self.__dict__.copy(), keys)`), or the `__init__` of a new object
+it builds (`State(self.rows)`), changes nothing of yours.
+
+cash does not run one it cannot read either (its source is not there), nor
+one that hands a list, dict or array the notebook holds to a library call
+(`np.copyto(ARR, 5)`): what those change cannot be told. A number, string,
+class or function handed on, a builtin that only reads (`len`, `map`,
+`iter`), and the functions of `itertools`, `math`, `json` or `copy` are
+not counted. Those cash finds
+out about only after they ran (the class could not be named) count every
+variable as changed, and the message says so.
+
+Outside a notebook with cash on, or after `%cash_off`, cash's pickles run
+every reducer, as before. A `@cash.cache` function called in such a
+notebook does not store a result whose reducer would change values the
+notebook holds, and says so (`STORE-FAILED`).
+
+**Why it matters.** Your results are correct: the variables hold what
+plain Python leaves in them. The statement runs again every time, and a
+statement that hands the value on (`ws = [w, 1]`) is not stored either.
+
+**What to do.** Have the reducer only read: build the state it returns
+from the object (`state = self.__dict__.copy()`, then drop keys from
+`state`), and change other values in the statement that needs them.
+
+**When it is safe to ignore.** When the statement is cheap.
 
 ### NOTEBOOK-RELOAD-STATE {#notebook-reload-state}
 

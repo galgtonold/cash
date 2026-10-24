@@ -3,7 +3,8 @@
 The share check after a statement stops at a time budget (twice the
 statement's cost, at least a second); past it the statement re-runs each
 time. Which other variables hold its outputs is then not known from that
-check, so they are looked for from the outputs up their referrers instead,
+check, so they are looked for from the outputs, and what they hold, up their
+referrers instead,
 and a later change through either name still moves the other. When even
 that is cut short, NOTEBOOK-SHARE-UNCHECKED says so.
 """
@@ -41,11 +42,24 @@ def no_budget(monkeypatch):
         ("config = {'deep': {'features': raw}}", "raw.append(4)", "config"),
         ("config = {'deep': {'features': raw}}", "config['deep']['features'].append(4)", "raw"),
         ("item = rows[1]", "item.append(4)", "rows"),
+        ("head = rows[:1]", "head[0].append(4)", "rows"),
+        ("head = recs[:1]", "head[0].x = 4", "recs"),
     ],
-    ids=["alias", "held deep in a dict", "changed deep through the dict", "taken out of a list"],
+    ids=[
+        "alias",
+        "held deep in a dict",
+        "changed deep through the dict",
+        "taken out of a list",
+        "a slice copy",
+        "a slice copy of records",
+    ],
 )
 def test_a_change_moves_the_other_name_past_the_budget(cash_magics, no_budget, link, change, other):
-    cells = ["raw = [1]\nrows = [[1], [2]]", link, change]
+    cells = [
+        "import argparse\nraw = [1]\nrows = [[1], [2]]\nrecs = [argparse.Namespace(x=i) for i in range(3)]",
+        link,
+        change,
+    ]
     cash_magics.cash_on("")
     cash_magics.badges.mode = "off"
     with warnings.catch_warnings(record=True) as caught:
@@ -65,6 +79,72 @@ def test_the_climb_finds_a_holder_and_what_the_root_holds():
     names, complete = shared_objects.referring_names([root], ns, 5.0, skip_name=lambda n: n == "root")
     assert complete
     assert names == {"inner", "outer"}
+
+
+def test_the_climb_finds_a_holder_of_what_the_root_holds():
+    """``head = points[:2]``: nothing holds the new list, but ``points``
+    holds its items."""
+    points = [[i] for i in range(10)]
+    head = points[:2]
+    names, complete = shared_objects.referring_names([head], {"points": points, "head": head}, 5.0)
+    assert complete
+    assert "points" in names
+
+
+@pytest.mark.parametrize(
+    "link",
+    ["head = recs[:100]", "head = list(recs)", "import copy\nhead = copy.copy(recs)"],
+    ids=["a slice copy of many records", "a list of them", "a copy of the list"],
+)
+def test_a_search_cut_short_links_the_output_to_what_it_read(cash_magics, no_budget, monkeypatch, link):
+    """The search from the outputs up is cut short, finding nothing: ``head``
+    may hold what ``recs`` holds, and a change through it still moves ``recs``."""
+    monkeypatch.setattr(processor, "referring_names", lambda *_args, **_kwargs: (set(), False))
+    cells = ["import argparse\nrecs = [argparse.Namespace(x=i) for i in range(300)]", link, "head[0].x = 4"]
+    cash_magics.cash_on("")
+    cash_magics.badges.mode = "off"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for cell in cells[:2]:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        before = cash_magics.tracking_state.variable_lineage["recs"]
+        run_cash_cell(cash_magics, cells[2], cells=cells)
+    assert cash_magics.tracking_state.variable_lineage["recs"] != before
+    assert [w for w in caught if getattr(w.message, "code", None) == "NOTEBOOK-SHARE-UNCHECKED"]
+
+
+def test_a_share_check_cut_short_links_the_output_to_what_it_read(cash_magics):
+    """The share check itself gives up (``head = recs[:65]``: more records
+    than one climb asks about at once, in a list too wide to read down):
+    ``head`` is still linked to ``recs``, and a cached read of ``recs``
+    below sees a change through ``head``."""
+    n = shared_objects._DOWN_WIDEST + 1000
+    cells = [
+        f"import argparse\nrecs = [argparse.Namespace(x=i) for i in range({n})]",
+        f"head = recs[:{shared_objects._MAX_REFERRER_TARGETS + 1}]",
+        "s = sum(r.x for r in recs)",
+        "head[7].x = -3",
+        "s = sum(r.x for r in recs)  # after",
+    ]
+    cash_magics.cash_on("")
+    cash_magics.cash_persist("on")
+    cash_magics.badges.mode = "off"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        assert cash_magics.shell.user_ns["s"] == sum(range(n)) - 10
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+    assert cash_magics.shell.user_ns["s"] == sum(range(n)) - 10
+
+
+def test_a_climb_past_its_object_limit_is_reported_incomplete(monkeypatch):
+    monkeypatch.setattr(shared_objects, "_REFERRER_OBJECTS", 100)
+    points = [[i] for i in range(1000)]
+    head = points[:]
+    names, complete = shared_objects.referring_names([head], {"points": points, "head": head}, 30.0)
+    assert not complete
 
 
 def test_a_spent_budget_is_reported_incomplete():

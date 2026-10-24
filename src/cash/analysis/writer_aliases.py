@@ -14,6 +14,8 @@ import types
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from cash._user_attrs import attribute_or, instance_of
+
 from .mutations import A_HELD_WRITER, MUTATING_METHODS, THE_NAMESPACE, WRITER_ROOTS, WRITER_SPELLINGS, WRITES_INTO
 
 __all__ = ["namespace_writer_aliases", "writer_names_aliases"]
@@ -72,14 +74,17 @@ def _held_writer(value: Any) -> tuple[Any] | None:
     """``(the object it writes into,)`` for a writer bound to it: a builtin
     method that changes its object (``rows.append``, ``p.__setattr__``), a
     ``functools.partial`` of a writer and its object. None for anything else."""
-    if isinstance(value, (types.BuiltinMethodType, types.MethodWrapperType)):
-        owner = getattr(value, "__self__", None)
-        name = getattr(value, "__name__", "")
-        if owner is not None and not isinstance(owner, types.ModuleType):
+    # The notebook's own objects may raise for any lookup, ``__class__``
+    # included: asked through `instance_of` and `attribute_or`, they are not
+    # writers.
+    if instance_of(value, (types.BuiltinMethodType, types.MethodWrapperType)):
+        owner = attribute_or(value, "__self__", None)
+        name = attribute_or(value, "__name__", "")
+        if owner is not None and not instance_of(owner, types.ModuleType):
             if name in MUTATING_METHODS or name in _WRITING_DUNDERS:
                 return (owner,)
         return None
-    if isinstance(value, functools.partial) and value.args:
+    if instance_of(value, functools.partial) and value.args:
         known = _WRITER_OBJECTS.get(id(value.func))
         if known is not None and known[0] is value.func and known[1] in WRITER_SPELLINGS:
             return (value.args[0],)

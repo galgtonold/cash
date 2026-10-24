@@ -9,6 +9,9 @@ through counts every class alive with one. The reason said such a method
 
 from __future__ import annotations
 
+import gc
+import weakref
+
 import pytest
 
 from cash.notebook import shadow
@@ -29,6 +32,14 @@ HEAD = (
 def no_trace(monkeypatch):
     monkeypatch.setenv("CASH_TRACE", "0")
     monkeypatch.setattr(shadow, "SHADOW", None)
+
+
+@pytest.fixture
+def earlier_classes_collected():
+    """A class is in a reference cycle (its ``__mro__`` holds it): one an
+    earlier test made stays alive, with what its class attributes hold,
+    until the collector runs, and is rightly counted as alive."""
+    gc.collect()
 
 
 def _reasons(statement_processor, code):
@@ -69,7 +80,9 @@ BIG_BUT_PLAIN = {
 
 
 @pytest.mark.parametrize("value", list(BIG_BUT_PLAIN))
-def test_a_big_value_of_plain_items_is_looked_through(no_trace, cash_magics, statement_processor, value):
+def test_a_big_value_of_plain_items_is_looked_through(
+    no_trace, earlier_classes_collected, cash_magics, statement_processor, value
+):
     # Counted as too big, any class with a writing method and an object
     # alive (``v``) refused every statement reading it, the method never
     # used on it. A notebook's namespace is ``__main__``: a dataclass made
@@ -86,7 +99,9 @@ def test_a_big_value_of_plain_items_is_looked_through(no_trace, cash_magics, sta
     assert "Vec.__add__" not in reasons, reasons
 
 
-def test_a_class_with_no_object_alive_is_not_counted(no_trace, cash_magics, statement_processor):
+def test_a_class_with_no_object_alive_is_not_counted(
+    no_trace, earlier_classes_collected, cash_magics, statement_processor
+):
     # Too big to look through, and ``Vec`` has no object alive: none can
     # be inside it.
     run_cash_cell(cash_magics, HEAD + "big = [types.SimpleNamespace() for _ in range(100_001)]")
@@ -132,3 +147,49 @@ def test_a_method_set_on_a_class_later_is_named_by_it(cash_magics, statement_pro
     )
     reasons = _reasons(statement_processor, f"w = (d[k][0] + 1, time.sleep({F}))[0]")
     assert "Vec.__add__() ran in this statement" in reasons, reasons
+
+
+def test_a_class_dropped_is_not_kept_alive_by_cash(cash_magics):
+    # cash's memos of what a walk found and of which classes are the user's
+    # kept each class a statement read, with the ``Vec`` its class attribute
+    # holds: counted then as a class with an object alive, and the reason
+    # named ``Vec.__add__`` for a value no ``Vec`` was in.
+    run_cash_cell(cash_magics, HEAD + "class C:\n    x = Vec()\ndef via_class(a):\n    return C.x + a")
+    run_cash_cell(cash_magics, f"w = via_class(1 + (time.sleep({F}), 0)[1])")
+    first = weakref.ref(cash_magics.shell.user_ns["C"])
+    for name in ("C", "Vec", "via_class", "w"):
+        del cash_magics.shell.user_ns[name]
+    gc.collect()
+    assert first() is None
+
+
+def test_a_class_made_again_is_not_kept_alive_by_cash(no_trace, cash_magics, statement_processor):
+    # Read per class on every walk (its attribute lookup, its dict slot,
+    # its slots, its hashing family), each class a statement met stayed in
+    # those caches for good.
+    make = HEAD + "class C:\n    x = Vec()\n    def m(self):\n        return 1\nc = C()"
+    run_cash_cell(cash_magics, make)
+    _reasons(statement_processor, f"w = (c.m(), C.x, time.sleep({F}))[0]")
+    first = weakref.ref(cash_magics.shell.user_ns["C"])
+    run_cash_cell(cash_magics, make)
+    _reasons(statement_processor, f"w = (c.m(), C.x, time.sleep({F}))[0]")
+    gc.collect()
+    assert first() is None
+
+
+def test_a_lookup_function_that_keeps_nothing_is_left_alone(monkeypatch):
+    """Where ``inspect`` has a ``_shadowed_dict_from_mro_tuple`` that is no
+    ``lru_cache``, there is nothing to empty, and nothing is asked of it."""
+    import importlib
+    import inspect
+
+    from cash import _inspect_cache
+
+    monkeypatch.setattr(inspect, "_shadowed_dict_from_mro_tuple", lambda *args: {}, raising=False)
+    try:
+        importlib.reload(_inspect_cache)
+        assert _inspect_cache._STRONG_CACHE is None
+        _inspect_cache.forget_static_lookups()
+    finally:
+        monkeypatch.undo()
+        importlib.reload(_inspect_cache)

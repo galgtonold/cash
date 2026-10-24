@@ -16,6 +16,11 @@ where no function holds the defaults: its holders were not looked up, and
 ``mkd(55)`` was served what ``mkd(77)`` gave. Every library global holding
 a function of that code is an item now, as is or in a ``partial``: which
 of ``mean = mk(99)`` and ``median = mk(77)`` ran, the trace does not say.
+
+A patch held some steps down in a library global (``statistics._reg =
+[mkd(77)]``) was not looked for there, and ``mkd(55)`` set in its place was
+served 77, beside a library global of the same code too. The library's
+globals are looked into as the notebook's are.
 """
 
 from __future__ import annotations
@@ -81,6 +86,7 @@ FACTORIES = {
 @pytest.fixture
 def library_put_back():
     yield
+    statistics.__dict__.pop("_reg", None)
     importlib.reload(statistics)
 
 
@@ -106,3 +112,25 @@ def test_a_patch_a_factory_made_again_runs_it_again(cash_magics, library_put_bac
     seen += [_ran(cash_magics, [second, STATEMENT]), _ran(cash_magics, [STATEMENT])]
     seen += [_ran(cash_magics, [first, STATEMENT]), _ran(cash_magics, [STATEMENT])]
     assert seen == [99, 99, 77, 77, 99, 99]
+
+
+MKD = "def mk(v):\n    return lambda xs, b=v: b\n"
+
+#: The factory, and a library global beside the list.
+IN_A_LIBRARY_LIST = {
+    "bound_by_a_default": (MKD, ""),
+    "a_closure": (MK, ""),
+    "beside_a_global_of_the_same_value": (MK, "statistics.mean = mk(99)\n"),
+    "beside_a_global_of_another_value": (MK, "statistics.mean = mk(1)\n"),
+}
+
+
+@pytest.mark.parametrize("shape", list(IN_A_LIBRARY_LIST))
+def test_a_patch_in_a_library_list_made_again_runs_it_again(cash_magics, library_put_back, shape):
+    factory, beside = IN_A_LIBRARY_LIST[shape]
+    setup = HEAD + factory + beside + "def run(xs):\n    return statistics._reg[0](xs)\n"
+    first, second = "statistics._reg = [mk(99)]", "statistics._reg = [mk(77)]"
+    seen = [_ran(cash_magics, [setup, first, STATEMENT]), _ran(cash_magics, [STATEMENT])]
+    seen += [_ran(cash_magics, [second, STATEMENT]), _ran(cash_magics, [STATEMENT])]
+    seen += [_ran(cash_magics, [first, STATEMENT])]
+    assert seen == [99, 99, 77, 77, 99]

@@ -41,13 +41,14 @@ def _loop(n=N, tail="res.append(s + i + 1)"):
 def _seed(work_dir, loop_src, seconds):
     import ast
 
-    from cash.notebook.heavy_loops import header_identity
+    from cash.notebook.heavy_loops import body_identity, header_identity
 
     node = ast.parse(loop_src).body[1]
     cache_dir = work_dir / ".cash"
     cache_dir.mkdir(parents=True, exist_ok=True)
     (cache_dir / "_heavy_loops.json").write_text(
-        json.dumps({"version": 1, "loops": {header_identity(node): [seconds, ""]}}), encoding="utf-8"
+        json.dumps({"version": 2, "loops": {header_identity(node): [[seconds, "", list(body_identity(node))]]}}),
+        encoding="utf-8",
     )
 
 

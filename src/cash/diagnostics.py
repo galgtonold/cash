@@ -332,6 +332,9 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # file and nothing sends unsaved edits; shown once per session
         "NOTEBOOK-NOT-FOUND",  # no notebook cells to read; cells above the one
         # run are not re-checked, statements still cache on their own inputs
+        "NOTEBOOK-REDUCE-WROTE",  # a value's own __reduce__ / __getstate__,
+        # run when cash pickled it, changes other values: they count as
+        # changed, and the statement is not stored
         "NOTEBOOK-RELOAD-STATE",  # an edited module was reloaded, or the
         # kernel restarted, and cash cannot rebuild the state a cell set on it
         "NOTEBOOK-THREAD-ALIVE",  # a thread the cell started still runs after

@@ -45,14 +45,17 @@ import inspect
 import operator
 import sys
 import types
+import weakref
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from itertools import chain, compress, repeat
 from typing import Any, NamedTuple
 
 from .. import _plain_data
+from .._inspect_cache import forget_static_lookups
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import is_pseudo_filename
+from .._type_memo import TypeMemo, type_key
 from .._user_attrs import instance_of, own_dict
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import own_source, wrapper_layers
@@ -1021,8 +1024,8 @@ def _is_users_callable(value: Any) -> bool:
     return _is_users_object(value) and callable(value)
 
 
-#: ``class -> whether it is the user's`` (`is_users_class`).
-_USERS_CLASSES: LruMemo[type, bool] = LruMemo(CODE_OBJECTS)
+#: ``class -> whether it is the user's`` (`is_users_class`), held weakly.
+_USERS_CLASSES: TypeMemo[bool] = TypeMemo()
 
 
 #: Read through ``type``'s own descriptors: a metaclass's
@@ -1035,7 +1038,7 @@ _CLASS_MODULE = type.__dict__["__module__"].__get__
 def is_users_class(cls: type) -> bool:
     """A class defined in a cell or in a local module: by its module, or by
     the functions it defines (a class made by ``exec`` names no module)."""
-    known = _USERS_CLASSES.get(cls)
+    known = _USERS_CLASSES.get(type_key(cls))
     if known is None:
         try:
             name = _CLASS_MODULE(cls)
@@ -1046,7 +1049,7 @@ def is_users_class(cls: type) -> bool:
                 known = any(instance_of(v, types.FunctionType) and _is_users(v) for v in own)
         except (TypeError, AttributeError):
             known = False
-        _USERS_CLASSES[cls] = known
+        _USERS_CLASSES.put(cls, known)
     return known
 
 
@@ -1194,10 +1197,10 @@ def _item(container: Any, index: ast.expr) -> Any:
     if instance_of(container, HELD_IN_DATA):
         container = container.data
     try:
-        if instance_of(container, dict):
+        if issubclass(type(container), dict):
             # ``dict.get``: a defaultdict's factory does not run.
             return dict.get(container, key, _MISSING)
-        if instance_of(container, (list, tuple, collections.deque)):
+        if issubclass(type(container), (list, tuple, collections.deque)):
             return container[key]
     except (IndexError, TypeError):
         pass
@@ -1313,9 +1316,38 @@ def is_users_instance(value: Any) -> bool:
     return _is_users_object(value)
 
 
-#: ``class -> (what its classes hold, `reaching_special_functions`)``: read
-#: again only when a class of its MRO holds something else.
-_SPECIAL_MEMO: dict[type, tuple[tuple, list[Any]]] = {}
+#: ``id(class) -> (ids of what its classes hold, weak references to those
+#: that take one, `reaching_special_functions` held weakly)``, held weakly:
+#: read again only when a class of its MRO holds something else. Nothing in
+#: it refers to the class (its ``__dict__`` slot and methods using
+#: ``super()`` do), so a class made per call is not kept alive.
+_SPECIAL_MEMO: TypeMemo[tuple[tuple, tuple, list]] = TypeMemo()
+
+
+def _held_weakly(values: Iterable[Any]) -> tuple:
+    """A weak reference to each of *values* that takes one: one gone means
+    its id may be another object's now."""
+    refs = []
+    for value in values:
+        try:
+            refs.append(weakref.ref(value))
+        except TypeError:
+            continue
+    return tuple(refs)
+
+
+def _with_parts(values: Iterable[Any]) -> Iterator[Any]:
+    """*values*, each followed by the functions it runs (a property's,
+    a ``staticmethod``'s): a property takes no weak reference, so a new one
+    at a freed one's address is told apart by its functions."""
+    for value in values:
+        yield value
+        if instance_of(value, property):
+            yield value.fget
+            yield value.fset
+            yield value.fdel
+        elif instance_of(value, (staticmethod, classmethod)):
+            yield value.__func__
 
 
 def reaching_special_functions(cls: type) -> list[Any]:
@@ -1323,19 +1355,15 @@ def reaching_special_functions(cls: type) -> list[Any]:
     function by name or calls a method of a global object: the others
     change nothing outside their objects, whatever their globals hold."""
     try:
-        snapshot = tuple(tuple(_CLASS_DICT(k).values()) for k in _CLASS_MRO(cls) if k is not object)
+        held = [tuple(_with_parts(_CLASS_DICT(k).values())) for k in _CLASS_MRO(cls) if k is not object]
+        snapshot = tuple(tuple(map(id, values)) for values in held)
     except TypeError:
-        snapshot = None
-    kept = _SPECIAL_MEMO.get(cls)
-    if kept is not None and snapshot is not None:
-        try:
-            same = len(kept[0]) == len(snapshot) and all(
-                len(a) == len(b) and all(map(operator.is_, a, b)) for a, b in zip(kept[0], snapshot)
-            )
-        except Exception:  # noqa: BLE001 - a class attribute's comparison
-            same = False
-        if same:
-            return kept[1]
+        held, snapshot = [], None
+    kept = _SPECIAL_MEMO.get(type_key(cls))
+    if kept is not None and snapshot is not None and kept[0] == snapshot:
+        found = [ref() for ref in kept[2]]
+        if all(ref() is not None for ref in kept[1]) and None not in found:
+            return found
     out = []
     from ..install_paths import is_user_code_file
 
@@ -1358,9 +1386,9 @@ def reaching_special_functions(cls: type) -> list[Any]:
         ):
             out.append(fn)
     if snapshot is not None:
-        if len(_SPECIAL_MEMO) > 512:
-            _SPECIAL_MEMO.clear()
-        _SPECIAL_MEMO[cls] = (snapshot, out)
+        refs = _held_weakly(out)
+        if len(refs) == len(out):
+            _SPECIAL_MEMO.put(cls, (snapshot, _held_weakly(chain.from_iterable(held)), list(refs)))
     return out
 
 
@@ -1874,7 +1902,11 @@ class _Found:
         if instance_of(value, functools.partial):
             self.add(value, root, False)
         elif instance_of(value, operator.methodcaller):
-            self._methods_named(value.__reduce__()[1][0], call, namespace, bound)
+            name, args, keywords = _methodcaller_parts(value)
+            self._methods_named(name, call, namespace, bound)
+            handed = [[(arg, root)] for arg in args]
+            handed_keywords = {key: [(arg, root)] for key, arg in keywords.items()}
+            self._methodcaller_args_changed(name, handed, handed_keywords, call, namespace, bound)
         elif instance_of(value, types.FunctionType) and isinstance(getattr(value, "registry", None), Mapping):
             # ``functools.singledispatch``: any implementation registered.
             for impl in list(value.registry.values()):
@@ -1901,7 +1933,80 @@ class _Found:
             return
         target = _users_target(maker.func, namespace)
         if target is not None and target[0] is operator.methodcaller:
-            self._methods_named(maker.args[0].value, call, namespace, bound)
+            name = maker.args[0].value
+            self._methods_named(name, call, namespace, bound)
+            handed = [self._handed_values(arg, namespace, bound) for arg in maker.args[1:]]
+            handed_keywords = {
+                kw.arg: self._handed_values(kw.value, namespace, bound) for kw in maker.keywords if kw.arg is not None
+            }
+            if any(kw.arg is None for kw in maker.keywords) or any(isinstance(a, ast.Starred) for a in maker.args):
+                handed = None
+            self._methodcaller_args_changed(name, handed, handed_keywords, call, namespace, bound)
+
+    def _handed_values(
+        self, arg: ast.expr, namespace: Mapping[str, Any], bound: Mapping[str, tuple[ast.expr, ...]]
+    ) -> list[tuple[Any, str | None]] | None:
+        """The objects *arg* of a methodcaller hands its method; None when
+        it cannot be told (`_resolve_argument`), [] for a constant."""
+        if isinstance(arg, ast.Constant):
+            return []
+        values = _resolve_argument(arg, namespace, bound).values
+        return list(values) if values else None
+
+    def _methodcaller_args_changed(
+        self,
+        name: str,
+        args: list[list[tuple[Any, str | None]] | None] | None,
+        keywords: Mapping[str, list[tuple[Any, str | None]] | None],
+        call: ast.Call,
+        namespace: Mapping[str, Any],
+        bound: Mapping[str, tuple[ast.expr, ...]],
+    ) -> None:
+        """The objects a methodcaller hands the method *name* of what it is
+        called on, in parameters that method changes in place: with ``def
+        add(self, lst, x): lst.append(x)``, ``methodcaller('add', lst,
+        1)(a)`` changes ``lst``, which the statement hands only to
+        ``methodcaller``. *args* and *keywords* hold what each argument
+        resolves to (None: cannot be told; *args* None: unpacked)."""
+        if not self.objects or not call.args:
+            return
+        for obj, _root in _resolve_argument(call.args[0], namespace, bound).values:
+            if not (_is_users_object(obj) or (instance_of(obj, type) and is_users_class(obj))):
+                continue
+            member = _attribute(obj, name)
+            skip = 0
+            if instance_of(member, types.MethodType):
+                member, skip = member.__func__, 1
+            if not instance_of(member, types.FunctionType) or not self._users(member):
+                continue
+            source = _source_of(member)
+            node = parse_function_source(source) if source is not None else None
+            if node is None:
+                continue  # said unreadable where the method itself is added
+            mutated = params_mutated_in_function(node)
+            if not mutated:
+                continue
+            params = [a.arg for a in (*node.args.posonlyargs, *node.args.args)][skip:]
+            if args is None:
+                self.unreadable.append(
+                    f"methodcaller('{name}', ...) hands {member.__qualname__}() arguments cash cannot tell apart, "
+                    "and it changes one of its arguments"
+                )
+                return
+            handed = [(param, arg) for param, arg in zip(params, args)]
+            handed += [(param, arg) for param, arg in keywords.items()]
+            for param, values in handed:
+                if param not in mutated:
+                    continue
+                if values is None:
+                    self.unreadable.append(
+                        f"methodcaller('{name}', ...) hands {member.__qualname__}() an argument cash cannot "
+                        f"tell, which it changes ({param!r})"
+                    )
+                    continue
+                for value, root in values:
+                    if type(value) not in _ATOMS:
+                        self._changed(value, root)
 
     def _methods_named(
         self, name: str, call: ast.Call, namespace: Mapping[str, Any], bound: Mapping[str, tuple[ast.expr, ...]]
@@ -2035,7 +2140,17 @@ class _Found:
         if found is None or type(found[0]) is not types.MethodType:
             return
         owner, fn = found[0].__self__, found[0].__func__
-        if instance_of(owner, type) or not instance_of(fn, types.FunctionType) or not self._users(fn):
+        if not instance_of(fn, types.FunctionType) or not self._users(fn):
+            return
+        if instance_of(owner, type):
+            # A class method (``SBox.bump(7)``, or called on an object): its
+            # first argument is the class, so what it changes through it
+            # (``cls.held[-1]['n'] += n``) is the class.
+            for layer in wrapper_layers(fn):
+                source = _source_of(layer) if instance_of(layer, types.FunctionType) else None
+                if source is not None and _changes_its_first_argument(layer, owner, source):
+                    self._changed(owner, None)
+                    return
             return
         for layer in wrapper_layers(fn):
             source = _source_of(layer) if instance_of(layer, types.FunctionType) else None
@@ -2175,6 +2290,16 @@ class _Found:
 
     def _users(self, fn: types.FunctionType) -> bool:
         return fn.__globals__ is self.namespace or _is_users(fn)
+
+
+def _methodcaller_parts(mc: operator.methodcaller) -> tuple[str, tuple[Any, ...], dict[str, Any]]:
+    """``(method name, arguments, keywords)`` of *mc*, read off its reduce
+    (C code: runs nothing of the user's). With keywords it reduces to a
+    partial of ``methodcaller`` over the name and keywords."""
+    maker, args = mc.__reduce__()
+    if instance_of(maker, functools.partial):
+        return maker.args[0], tuple(args), dict(maker.keywords)
+    return args[0], tuple(args[1:]), {}
 
 
 def _method_key(method: Any, root: str | None) -> tuple[Any, type, str | None]:
@@ -3122,6 +3247,8 @@ def answers_shared() -> Iterator[None]:
     finally:
         _SHARED_ROUND[0] = outer
         _ANSWERED_THIS_ROUND.clear()
+        # Nor in the standard library's cache, where it held each class.
+        forget_static_lookups()
 
 
 def stop_sharing_answers() -> None:
@@ -3163,14 +3290,14 @@ def _items(container: Any) -> Iterable[Any]:
     if type(container) in OPENED:
         if instance_of(container, HELD_IN_DATA):
             container = container.data
-        if instance_of(container, dict):
+        if issubclass(type(container), dict):
             return chain(dict.keys(container), dict.values(container))
         return container
-    if instance_of(container, _CONTAINERS):
+    if issubclass(type(container), _CONTAINERS):
         # A namedtuple, a subclass of the user's of a list or dict: its
         # items, read through the builtin's own slots so no ``__iter__`` of
         # theirs runs, and its attributes.
-        if instance_of(container, dict):
+        if issubclass(type(container), dict):
             items: Iterable[Any] = chain(dict.keys(container), dict.values(container))
         else:
             base = next(kind for kind in _CONTAINERS if instance_of(container, kind))
