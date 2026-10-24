@@ -42,6 +42,12 @@ def mutation_fingerprint(obj: Any, content: Callable[[Any], str] | None = None) 
         # in the context, which is what it is read by.
         h.update(f"context variable|{id(obj.get(_UNSET))}".encode())
         return h.hexdigest()
+    held = _sync_state(obj)
+    if held is not None:
+        # A queue or an event holds a lock, so it pickles to nothing to
+        # compare: what ``put``, ``get``, ``set`` change, read instead.
+        h.update(f"sync|{held}".encode())
+        return h.hexdigest()
     canon = _canonical_sparse(obj)
     if canon is not obj:
         # A copy in canonical form: hashed on its own, never handed on.
@@ -72,6 +78,27 @@ def mutation_fingerprint(obj: Any, content: Callable[[Any], str] | None = None) 
 
 
 _UNSET = object()
+
+
+def _sync_state(obj: Any) -> str | None:
+    """What a ``queue.Queue`` (its items, by identity, and the tasks not
+    done), a ``queue.SimpleQueue`` (its size) or a ``threading.Event``
+    (whether it is set) holds; None for anything else."""
+    import queue
+    import threading
+
+    try:
+        if isinstance(obj, queue.Queue):
+            with obj.mutex:
+                items = list(obj.queue)
+                return f"queue|{obj.unfinished_tasks}|{[id(item) for item in items]}"
+        if isinstance(obj, queue.SimpleQueue):
+            return f"simple queue|{obj.qsize()}"
+        if isinstance(obj, threading.Event):
+            return f"event|{obj.is_set()}"
+    except Exception:  # noqa: BLE001 - a subclass that cannot be read
+        return None
+    return None
 
 
 def _is_anndata_like(obj: Any) -> bool:

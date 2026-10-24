@@ -17,11 +17,12 @@ import pytest
 from tests._cell_driver import run_cash_cell
 
 SETUP = (
-    "import operator, bisect, collections, contextvars, time\n"
+    "import operator, bisect, collections, contextvars, queue, threading, time\n"
     "LOG = []\nD = {}\nDQ = collections.deque()\nOD = collections.OrderedDict(a=1, b=2)\n"
     "class NS: pass\n"
     "PUSH = LOG.append\n"
     "CV = contextvars.ContextVar('cv', default=0)\n"
+    "Q = queue.Queue()\nSQ = queue.SimpleQueue()\nEV = threading.Event()\n"
 )
 
 BODIES = {
@@ -36,6 +37,10 @@ BODIES = {
     "methodcaller": ("operator.methodcaller('append', x)(LOG)", "n = len(LOG)", 1),
     # Its value lives in the context: a restore of ``CV`` cannot set it.
     "context_variable_set": ("CV.set(CV.get() + x)", "n = CV.get()", 3),
+    # A lock inside: they pickle to nothing a change moves.
+    "queue_put": ("Q.put(x)", "n = Q.qsize()", 1),
+    "simple_queue_put": ("SQ.put(x)", "n = SQ.qsize()", 1),
+    "event_set": ("EV.set()", "n = EV.is_set()", True),
 }
 
 
