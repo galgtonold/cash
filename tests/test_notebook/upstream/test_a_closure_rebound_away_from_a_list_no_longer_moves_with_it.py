@@ -6,7 +6,9 @@ rebinds the cell they share, and binds no name, so the edges stayed: a
 change to ``BIG`` below moved ``draw`` on, and running ``y = draw(1)`` again
 rebuilt ``draw`` from the cell above without the ``rebind`` after it, which
 gave 2000 where the cells above give 1. Whether ``draw`` got the edge at all
-followed the hash seed (seeds 1 and 2 here).
+followed the hash seed (seeds 1 and 2 here). So it is when the call goes
+through a name the statement hands on (``for f in [rebind]: f([0])``):
+running the reader rebuilt both cells above, the rebinding one included.
 """
 
 from __future__ import annotations
@@ -28,9 +30,14 @@ CELLS = [
 ]
 
 
+@pytest.mark.parametrize(
+    "call",
+    ["rebind([0])", "for f in [rebind]:\n    f([0])", "_ = list(map(rebind, [[0]]))"],
+    ids=["by-name", "in-a-loop", "through-map"],
+)
 @pytest.mark.parametrize("change", ["BIG.append({'id': -1})", "BIG[0]['id'] = -1"])
-def test_a_change_to_the_list_does_not_run_the_reader_again(cash_magics, change):
-    cells = [*CELLS, change]
+def test_a_change_to_the_list_does_not_run_the_reader_again(cash_magics, change, call):
+    cells = [CELLS[0], call, CELLS[2], change]
     for cell in cells:
         run_cash_cell(cash_magics, cell, cells=cells)
     run_cash_cell(cash_magics, cells[2], cells=cells)

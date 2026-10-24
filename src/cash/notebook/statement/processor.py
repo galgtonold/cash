@@ -3443,11 +3443,17 @@ class StatementProcessor:
         """
         if run.tree is None or is_control_body(run.code):
             return
+        self.unlink_what_shares_nothing(run.tree, cost)
+
+    def unlink_what_shares_nothing(self, tree: ast.AST, cost: float = 0.0) -> None:
+        """`_unlink_what_shares_nothing` for the statement parsed as *tree*: a
+        loop or a branch asks once it has run as a whole, as its body's
+        statements do not (``for f in [rebind]: f([0])``)."""
         user_ns = self.shell.user_ns
         edges = self.tracking_state.derivation_edges
-        bound = bound_names(run.tree) or set()
+        bound = bound_names(tree) or set()
         called: set[str] = set()
-        for node in ast.walk(run.tree):
+        for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
