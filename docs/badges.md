@@ -236,7 +236,7 @@ the statement every time instead of storing it:
   a library's registry or a closure, or the statement is in a loop body. See
   [Mutating an object created in an earlier cell](known-limitations.md#mutating-an-object-created-in-an-earlier-cell).
 
-<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @93847c81 -->
+<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @6c33da3e -->
 - **Holds a weak reference, or the `id()` of an object the notebook holds**:
   `wr = weakref.ref(p.child)`, a `WeakValueDictionary`, `reg = {id(p): ...}`.
   Restored, the value would point at the object as it was when it was

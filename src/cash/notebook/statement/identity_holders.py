@@ -62,12 +62,12 @@ def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> str 
     numbers: set[int] = set()
     _walk([value], seen, user_kinds, refs, numbers)
     for ref in refs:
-        if not isinstance(ref, weakref.ReferenceType):
+        if not issubclass(type(ref), weakref.ReferenceType):
             if _alive(ref):
                 return f"'{name}' holds a weak proxy; restored, it would point at another object, so the statement re-runs every time"
             continue
         target = ref()
-        if target is not None and id(target) not in seen and not isinstance(target, _BY_REFERENCE):
+        if target is not None and id(target) not in seen and not issubclass(type(target), _BY_REFERENCE):
             return (
                 f"'{name}' holds a weak reference to an object it does not hold; restored, it would "
                 "point at another object, so the statement re-runs every time"
@@ -93,6 +93,8 @@ def _alive(proxy: Any) -> bool:
         proxy.__class__  # raises once the object is gone
     except ReferenceError:
         return False
+    except Exception:  # noqa: BLE001 - the object's own lookup raised: it is there
+        return True
     return True
 
 
@@ -110,15 +112,21 @@ def _walk(roots: list[Any], seen: set[int], user_kinds: dict[type, bool], refs: 
                 continue
             if id(item) in seen:
                 continue
-            if isinstance(item, _REFERENCES):
+            if issubclass(kind, _REFERENCES):
                 seen.add(id(item))
                 refs.append(item)
                 continue
-            if kind in _CONTAINERS or isinstance(item, (list, dict, set)):
-                items: Any = list(item.keys()) + list(item.values()) if isinstance(item, dict) else item
-            elif isinstance(item, _WEAK_CONTAINERS):
+            if kind in _CONTAINERS or issubclass(kind, (list, dict, set)):
+                items: Any = list(item.keys()) + list(item.values()) if issubclass(kind, dict) else item
+            elif issubclass(kind, _WEAK_CONTAINERS):
                 data = attribute_or(item, "data")
-                items = list(data.keys()) + list(data.values()) if isinstance(data, dict) else list(data or ())
+                items = (
+                    list(data.keys()) + list(data.values())
+                    if type(data) is dict
+                    else list(data)
+                    if type(data) is set
+                    else []
+                )
             elif _users(kind, user_kinds):
                 state = attribute_or(item, "__dict__")
                 if type(state) is not dict:
