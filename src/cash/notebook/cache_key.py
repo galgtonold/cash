@@ -16,7 +16,7 @@ import logging
 import secrets
 import sys
 import types
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
@@ -1011,15 +1011,54 @@ _IMPORTED_BY: LruMemo[types.CodeType, frozenset[str]] = LruMemo(CODE_OBJECTS)
 
 
 def _imported_by(code: types.CodeType) -> frozenset[str]:
-    """The modules *code* imports when it runs, by the names its
-    ``import`` statements give them (a relative one by its bare name)."""
+    """The modules *code* imports when it runs, by their full names: a
+    relative one (``from .helper import scale``, ``from . import helper2``)
+    resolved against the package of the module *code* is in, and each name
+    ``from pkg import x`` takes as ``pkg.x`` too, which may be a submodule."""
     found = _IMPORTED_BY.get(code)
     if found is None:
-        found = _IMPORTED_BY[code] = frozenset(name for name in argvals(code, _IMPORTS) if name)
+        found = _IMPORTED_BY[code] = frozenset(_imports_of(code))
     return found
 
 
-_IMPORTS = frozenset({"IMPORT_NAME"})
+def _imports_of(code: types.CodeType) -> Iterator[str]:
+    # ``IMPORT_NAME`` takes the level and the fromlist from the two
+    # constants loaded just before it.
+    loaded: list[Any] = []
+    package: str | None | object = _UNREAD_PACKAGE
+    for ins in dis.get_instructions(code):
+        if ins.opname != "IMPORT_NAME":
+            if ins.opname.startswith(("LOAD_CONST", "LOAD_SMALL_INT")):
+                loaded = [*loaded[-1:], ins.argval]
+            else:
+                loaded = []
+            continue
+        level, fromlist = loaded if len(loaded) == 2 else (0, None)
+        name = ins.argval
+        if isinstance(level, int) and level > 0:
+            if package is _UNREAD_PACKAGE:
+                package = _package_of(code.co_filename)
+            if not package:
+                continue
+            base = package.rsplit(".", level - 1)[0] if level > 1 else package
+            name = f"{base}.{name}" if name else base
+        if name:
+            yield name
+            for item in fromlist or ():
+                if isinstance(item, str) and item != "*":
+                    yield f"{name}.{item}"
+        loaded = []
+
+
+_UNREAD_PACKAGE = object()
+
+
+def _package_of(filename: str) -> str | None:
+    """The package of the loaded module whose file is *filename*."""
+    for module in list(sys.modules.values()):
+        if attribute_or(module, "__file__", None) == filename:
+            return attribute_or(module, "__package__", None) or None
+    return None
 
 
 def _body_import_parts(modules: Iterable[str]) -> list[str]:
