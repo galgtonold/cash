@@ -1592,6 +1592,9 @@ def _check_group(
     value_types = VALUE_TYPES + library_value_types()
     if memo is None:
         memo = {}
+    # What the quick pass's search found before the full pass was asked
+    # again: kept when that one gives up too, or its names were lost.
+    earlier = GaveUp()
     for fast in (True, False):
         nodes, inbound, checked, owner, breaks = _walk(
             group, bindings, value_types, keep_identity, fast=fast, memo=memo, leaves=leaves
@@ -1638,16 +1641,22 @@ def _check_group(
         found = _find_holders([nodes[k] for k in excess], internal, user_ns, set(group) | discounted, partial)
         if found is not None or breaks.isdisjoint(excess):
             if found is None and gave_up is not None and partial is not None:
-                gave_up.names |= partial.names
-                gave_up.modules |= partial.modules
+                gave_up.names |= partial.names | earlier.names
+                gave_up.modules |= partial.modules | earlier.modules
                 gave_up.complete = gave_up.complete and partial.complete
             return shared, found
+        if partial is not None:
+            earlier.names |= partial.names
+            earlier.modules |= partial.modules
         # A container a root read a level at a time holds besides its parent
         # (`_take_breaks`): the search up from it climbs through the
         # containers above it, which the walk left out of *internal*, and a
         # longer climb can give up where the full walk's would not. Asked
         # again of the full walk, with none of these references left.
         del nodes, inbound, checked, owner, breaks, internal, excess, found, partial
+    if gave_up is not None:
+        gave_up.names |= earlier.names
+        gave_up.modules |= earlier.modules
     return shared, None
 
 
