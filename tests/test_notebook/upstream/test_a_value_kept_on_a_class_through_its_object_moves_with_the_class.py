@@ -8,7 +8,8 @@ change through ``cls`` was not seen as a change to the class at all: a cell
 reading ``data`` after an edit to the bump was served the value from before.
 
 So it was when the class the list is on was one the statement names nowhere:
-a base class, a metaclass, or the class of an object reached through a list;
+a base class, a metaclass, or the class of an object reached through a list,
+a set, a dict's keys, a deque or another object's attribute;
 and when the bump is a method of the object (``type(self).held``) or of the
 metaclass (``K.bump(7)``).
 """
@@ -124,6 +125,23 @@ SHAPES = {
         READ,
     ],
 }
+_SBOX = SHAPES["an object in a list in a list"][0]
+# Held where a set, a dict's keys, a deque or an object's attribute keeps it.
+for _holder, _box in [
+    ("import collections\nboxes = [{SBox()}]", "next(iter(boxes[0]))"),
+    ("boxes = [{SBox(): 1}]", "next(iter(boxes[0]))"),
+    ("import collections\nboxes = [collections.deque([SBox()])]", "boxes[0][0]"),
+    ("boxes = [frozenset([SBox()])]", "next(iter(boxes[0]))"),
+    ("class W:\n    pass\nw = W()\nw.box = SBox()\nboxes = [w]", "boxes[0].box"),
+]:
+    SHAPES[f"held as {_holder.splitlines()[-1]}"] = [
+        _SBOX,
+        _holder,
+        DATA,
+        f"{_box}.hold(data['meta'])",
+        "SBox.bump(5)",
+        READ,
+    ]
 
 
 @pytest.mark.parametrize("shape", sorted(SHAPES))
@@ -190,7 +208,7 @@ def test_past_the_items_cash_reads_it_runs_and_warns(cash_magics):
     the statement runs every time, with a warning, and the class it reached
     still moves ``data`` on."""
     cells = list(SHAPES["the 65th item of a list"])
-    cells[1] = "boxes = [Plain()] * 100_000 + [SBox()]\ni = len(boxes) - 1"
+    cells[1] = "boxes = [Plain()] * 1_000_000 + [SBox()]\ni = len(boxes) - 1"
     cells[3] = "boxes[i].hold(data['meta'])"
     with pytest.warns(Warning, match="NOTEBOOK-SHARE-UNCHECKED"):
         for rnd in range(3):
