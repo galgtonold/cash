@@ -428,7 +428,7 @@ class ForLoopHandler:
         if store is None:
             return False
         try:
-            measured = store.get(heavy_loops.header_identity(node))
+            measured = store.get(node)
             if measured is None:
                 return False
             seconds, unit_hash = measured
@@ -457,7 +457,7 @@ class ForLoopHandler:
         if store is None or iterations <= 0:
             return
         try:
-            if store.get(heavy_loops.header_identity(node)) is None:
+            if store.get(node) is None:
                 return
         except (OSError, ValueError, RecursionError):
             return
@@ -471,7 +471,7 @@ class ForLoopHandler:
             return
         try:
             store.record(
-                heavy_loops.header_identity(node),
+                node,
                 work_seconds / iterations,
                 loop_source_hash(node) if as_unit else None,
             )

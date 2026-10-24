@@ -15,7 +15,7 @@ import logging
 import marshal
 import os
 import types
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from cash._user_attrs import attribute_or
@@ -349,7 +349,12 @@ class StatementRecords:
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("%s pyplot-draw persistence failed", _LOG_PROCESSOR)
 
-    def note_share_edges(self, source_hash: str, edges: Iterable[tuple[str, str]]) -> None:
+    #: Most records `note_share_edges` keeps by the lineages read.
+    _SHARE_RECORDS_AT_MAX = 4096
+
+    def note_share_edges(
+        self, source_hash: str, edges: Iterable[tuple[str, str]], entry: Mapping[str, str] | None = None
+    ) -> None:
         """Record the edges the statement (or structure) with *source_hash*
         linked when it ran now (``TrackingState.share_edge_records``), and
         keep them for a later kernel (``share_edges_key``).
@@ -358,9 +363,19 @@ class StatementRecords:
         simulation reads what the text says (``static_share_edges``) only
         for a statement no run has recorded. On disk, one that linked none
         writes nothing, unless a record said it had: that record is replaced.
+        With *entry*, the lineages a structure read when it ran, the record
+        is kept under them too (``TrackingState.share_edge_records_at``).
         Best-effort."""
         record = frozenset((src, dst) for src, dst in edges if src != dst)
         state = self.tracking_state
+        if entry is not None:
+            at = state.share_edge_records_at
+            key = (source_hash, tuple(sorted(entry.items())))
+            if at.get(key) != record:
+                if key not in at and len(at) >= self._SHARE_RECORDS_AT_MAX:
+                    at.pop(next(iter(at)))
+                at[key] = record
+                state.share_edge_changes.append(source_hash)
         known = state.share_edge_records
         had = known.get(source_hash)
         if had == record:

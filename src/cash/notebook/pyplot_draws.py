@@ -19,7 +19,7 @@ import sys
 from collections.abc import Mapping
 from typing import Any
 
-from cash._user_attrs import attribute_or, instance_of
+from cash._user_attrs import attribute_or, builtin_items, instance_of
 
 from .shared_objects import history_names
 
@@ -179,6 +179,9 @@ def holds_artists(value: Any) -> bool:
         # Only a numpy array: a pandas Series of objects has an object dtype
         # and a size too, but no ``.flat``.
         return value.dtype == object and value.size <= 1024 and any(instance_of(item, artist) for item in value.flat)
-    if instance_of(value, (list, tuple)) and len(value) <= 1024:
-        return any(instance_of(item, artist) for item in value)
+    if issubclass(type(value), (list, tuple)):
+        # A subclass's own ``__iter__`` or ``__len__`` may raise; a proxy
+        # that only claims to be one is not opened.
+        items = value if type(value) is list or type(value) is tuple else builtin_items(value)
+        return len(items) <= 1024 and any(instance_of(item, artist) for item in items)
     return False

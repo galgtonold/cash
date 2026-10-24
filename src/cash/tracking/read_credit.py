@@ -45,7 +45,32 @@ logger = logging.getLogger(__name__)
 #: not in a bounded memo: evicting a loader's record while its memo still
 #: serves would leave the next consumer with no dependency at all, and the
 #: record goes when nothing can run the code any more.
-_reads_by_code: weakref.WeakKeyDictionary[Any, dict[str, Any]] = weakref.WeakKeyDictionary()
+class _ReadsByCode(weakref.WeakKeyDictionary):
+    """A `weakref.WeakKeyDictionary` that counts the entries it lost
+    (``gone``): until one goes, what a lookup found is still the entry."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gone = 0
+        drop = self._remove
+
+        def remove(k: Any, drop: Any = drop, selfref: Any = weakref.ref(self)) -> None:
+            self = selfref()
+            if self is not None:
+                self.gone += 1
+            drop(k)
+
+        self._remove = remove
+
+
+_reads_by_code: _ReadsByCode = _ReadsByCode()
+
+#: ``id(code) -> (_reads_by_code.gone, ref to code, its reads)``: the entry a
+#: lookup found, while no entry has gone since. A lookup hashes the code and
+#: compares it with the key it finds, constants and all (~4 us for a cell's
+#: code), and a loop over a folder's files credits each read to the same
+#: few codes.
+_found_reads: dict[int, tuple[int, Any, dict[str, Any]]] = {}
 _CASH_PACKAGE_DIR = os.path.normcase(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -54,11 +79,22 @@ def _record_read(code: Any, abs_path: str, stat: Any) -> None:
     if _unresolved_by_code:
         _resolve_untracked(code)  # older than this read: in first
     memo = _reads_by_code
-    reads = memo.get(code)
-    if reads is None:
-        reads = {}
-        memo[code] = reads
+    found = _found_reads.get(id(code))
+    if found is not None and found[0] == memo.gone and found[1]() is code:
+        reads = found[2]
+    else:
+        reads = memo.get(code)
+        if reads is None:
+            reads = {}
+            memo[code] = reads
+        if len(_found_reads) >= _FOUND_READS_MAX:
+            _found_reads.clear()
+        _found_reads[id(code)] = (memo.gone, weakref.ref(code), reads)
     reads[abs_path] = stat  # the LATEST read: a memo refilled is current again
+
+
+#: Codes `_found_reads` keeps at most.
+_FOUND_READS_MAX = 256
 
 
 #: The decorator's code: `Cash` in core.py and the call steps in decorator/.

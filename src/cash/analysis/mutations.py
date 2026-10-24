@@ -20,6 +20,17 @@ __all__ = [
     "KNOWN_PURE_METHODS",
     "RECEIVER_READONLY_WRITE_METHODS",
     "extract_base_name",
+    "is_vars_of",
+    "namespace_item",
+    "WRITER_SPELLINGS",
+    "WRITER_ROOTS",
+    "writer_of",
+    "written_argument",
+    "writer_aliases",
+    "unrooted_write",
+    "THE_NAMESPACE",
+    "A_HELD_WRITER",
+    "WRITES_INTO",
     "iter_store_targets",
     "MutationVisitor",
     "DEFERRED_SCOPES",
@@ -317,11 +328,15 @@ def extract_base_name(node: ast.AST) -> str | None:
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, (ast.Subscript, ast.Attribute)):
-        return extract_base_name(node.value)
+        # ``globals()['points'][7].x = -3`` writes into ``points``.
+        return namespace_item(node) or extract_base_name(node.value)
     if isinstance(node, ast.Call):
         if _is_type_of(node):
             # ``type(self).n += 1`` changes the class of ``self``, as
             # ``self.__class__.n += 1`` does: rooted at ``self``.
+            return extract_base_name(node.args[0])
+        if is_vars_of(node):
+            # ``vars(p)['x'] = 3`` writes ``p.__dict__``: rooted at ``p``.
             return extract_base_name(node.args[0])
         # For chained calls like obj.method1().method2(), walk through the Call
         # to find the root variable.
@@ -329,6 +344,222 @@ def extract_base_name(node: ast.AST) -> str | None:
             return extract_base_name(node.func.value)
         if isinstance(node.func, ast.Name):
             return node.func.id
+    return None
+
+
+def is_vars_of(node: ast.Call) -> bool:
+    """``vars(x)``: the one-argument call of the name ``vars``, which hands
+    back ``x.__dict__`` itself."""
+    return isinstance(node.func, ast.Name) and node.func.id == "vars" and len(node.args) == 1 and not node.keywords
+
+
+#: The calls with no argument that hand back the notebook's namespace itself.
+_NAMESPACE_CALLS = frozenset({"globals", "vars", "locals"})
+
+
+def namespace_item(node: ast.AST) -> str | None:
+    """``"points"`` for ``globals()['points']``, ``vars()['points']`` or
+    ``locals()['points']``: the variable read out of the namespace by a
+    constant name. None for anything else."""
+    if (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id in _NAMESPACE_CALLS
+        and not node.value.args
+        and not node.value.keywords
+        and isinstance(node.slice, ast.Constant)
+        and isinstance(node.slice.value, str)
+    ):
+        return node.slice.value
+    return None
+
+
+#: What `writer_aliases` binds a name to when it holds the namespace itself
+#: (``ns = globals()``), and when it holds a writer with its object
+#: (``f = functools.partial(setattr, points[7])``): what a write through
+#: either changes has no name in the text (`unrooted_write`).
+THE_NAMESPACE = "<the namespace>"
+A_HELD_WRITER = "<a held writer>"
+#: What `writer_aliases` binds a name to when it holds a writer with an
+#: object a variable holds: ``WRITES_INTO + "rows"`` for ``app = rows.append``.
+WRITES_INTO = "<writes into>"
+
+
+def _is_namespace_call(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in _NAMESPACE_CALLS
+        and not node.args
+        and not node.keywords
+    )
+
+
+def _writer_spellings() -> dict[str, str]:
+    """``spelling -> what a call of it writes`` (see `writer_of`)."""
+    found = {}
+    for name in ("setattr", "delattr"):
+        found[name] = found[f"builtins.{name}"] = name
+        for owner in ("object", "type"):
+            found[f"{owner}.__{name}__"] = name
+    for name in ("setitem", "delitem"):
+        found[f"operator.{name}"] = found[f"operator.__{name}__"] = name
+        for owner in ("dict", "list", "bytearray"):
+            found[f"{owner}.__{name}__"] = name
+    for owner, methods in (
+        ("list", dir(list)),
+        ("dict", dir(dict)),
+        ("set", dir(set)),
+        ("bytearray", dir(bytearray)),
+    ):
+        for method in MUTATING_METHODS.intersection(methods):
+            found[f"{owner}.{method}"] = method
+    return found
+
+
+#: The spellings of a call that changes its FIRST argument in place, with
+#: what it writes there (`writer_of`).
+WRITER_SPELLINGS: dict[str, str] = _writer_spellings()
+
+#: The names a writer's spelling starts from: a name the user binds to
+#: something else is no longer one (`writer_of`'s *aliases*).
+WRITER_ROOTS = frozenset(spelling.split(".")[0] for spelling in WRITER_SPELLINGS) | {"operator", "builtins", "map"}
+
+
+def _spelling(func: ast.expr, aliases: Mapping[str, str | None]) -> str | None:
+    parts = []
+    while isinstance(func, ast.Attribute):
+        parts.append(func.attr)
+        func = func.value
+    if not isinstance(func, ast.Name):
+        return None
+    root = aliases.get(func.id, func.id)
+    if root is None:
+        return None
+    return ".".join([root, *reversed(parts)])
+
+
+def writer_of(func: ast.expr, aliases: Mapping[str, str | None] | None = None) -> str | None:
+    """What a call of *func* writes into its first argument: ``"setattr"`` or
+    ``"delattr"`` (an attribute), ``"setitem"`` or ``"delitem"`` (an item), or
+    the name of a mutating method (``list.append(rows, x)``). None when it is
+    not one of `WRITER_SPELLINGS`.
+
+    *aliases* maps a name to the spelling it stands for: ``sa`` bound to
+    ``setattr``, ``op`` to the ``operator`` module (`writer_aliases`, and
+    the namespace's own); None for a writer's root the user bound to
+    something else (``object`` a class of theirs)."""
+    spelling = _spelling(func, aliases or {})
+    return WRITER_SPELLINGS.get(spelling) if spelling is not None else None
+
+
+def written_argument(call: ast.Call, aliases: Mapping[str, str | None] | None = None) -> tuple[str, ast.expr] | None:
+    """``(what is written, the argument written into)`` for a call that
+    changes an argument in place: a writer (`writer_of`) changes its first,
+    ``map(setattr, rows, ...)`` the items of the iterable it is handed."""
+    if isinstance(call.func, ast.Name):
+        held = (aliases or {}).get(call.func.id)
+        if held is not None and held.startswith(WRITES_INTO):
+            # ``app(3)`` for ``app = rows.append`` bound in a cell above.
+            return "call", ast.Name(id=held[len(WRITES_INTO) :], ctx=ast.Load())
+    if not call.args or isinstance(call.args[0], ast.Starred):
+        return None
+    writer = writer_of(call.func, aliases)
+    if writer is not None:
+        return writer, call.args[0]
+    if _spelling(call.func, aliases or {}) in ("map", "functools.partial") and len(call.args) > 1:
+        # ``map(setattr, points, ...)``; ``functools.partial(setattr,
+        # points[7])`` is taken to write when made, as it is not seen where
+        # it is called.
+        writer = writer_of(call.args[0], aliases)
+        if writer is not None and not isinstance(call.args[1], ast.Starred):
+            return writer, call.args[1]
+    return None
+
+
+def writer_aliases(tree: ast.AST) -> dict[str, str]:
+    """The names *tree* binds to a writer or to a module one is read from:
+    ``sa = setattr``, ``osa = object.__setattr__``, ``from builtins import
+    setattr as sa2``, ``import operator as op``. ``name -> spelling``, for
+    `writer_of`."""
+    found: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            if _is_namespace_call(node.value):
+                found[node.targets[0].id] = THE_NAMESPACE
+            elif isinstance(node.value, (ast.Name, ast.Attribute)):
+                spelling = _spelling(node.value, found)
+                if spelling in WRITER_SPELLINGS or spelling in ("operator", "builtins"):
+                    found[node.targets[0].id] = spelling
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in ("operator", "builtins"):
+                    found[alias.asname or alias.name] = alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module in ("operator", "builtins") and not node.level:
+            for alias in node.names:
+                spelling = f"{node.module}.{alias.name}"
+                if spelling in WRITER_SPELLINGS or (node.module == "builtins" and alias.name in WRITER_ROOTS):
+                    found[alias.asname or alias.name] = spelling if spelling in WRITER_SPELLINGS else alias.name
+    return found
+
+
+def _namespace_rooted(node: ast.AST, aliases: Mapping[str, str | None]) -> bool:
+    """Whether the object *node* stands for is read out of the namespace by
+    a name the text does not give: ``globals()[name]``, ``ns['points']`` for
+    ``ns = globals()``, or an item or attribute of one."""
+    while isinstance(node, (ast.Attribute, ast.Subscript, ast.Call)):
+        if isinstance(node, ast.Subscript):
+            if _is_namespace_call(node.value):
+                return namespace_item(node) is None
+            if isinstance(node.value, ast.Name) and aliases.get(node.value.id) == THE_NAMESPACE:
+                return True
+        node = node.func if isinstance(node, ast.Call) else node.value
+    return False
+
+
+def _written_objects(node: ast.AST, aliases: Mapping[str, str | None]) -> list[ast.expr]:
+    """The objects *node* changes in place: an item or attribute target's
+    owner (not a name it binds: ``globals()[name] = v`` binds one), a
+    writer's argument, a mutating method's receiver."""
+    if isinstance(node, (ast.Assign, ast.Delete)):
+        targets = list(node.targets)
+    elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+        targets = [node.target]
+    elif isinstance(node, ast.Call):
+        written = written_argument(node, aliases)
+        if written is not None:
+            return [written[1]]
+        if isinstance(node.func, ast.Attribute) and node.func.attr in MUTATING_METHODS:
+            return [node.func.value]
+        return []
+    else:
+        return []
+    return [
+        leaf.value
+        for target in targets
+        for leaf in iter_store_targets(target)
+        if isinstance(leaf, (ast.Attribute, ast.Subscript))
+    ]
+
+
+def unrooted_write(tree: ast.AST, aliases: Mapping[str, str | None]) -> str | None:
+    """How *tree* writes into something no name in its text roots: an
+    object read out of the namespace by a computed name (``globals()[name][7].x
+    = -3``) or through a name holding the namespace, or a call of a held
+    writer (``f('x', -3)`` for ``f = functools.partial(setattr, points[7])``).
+    None when every write it makes is rooted at a name. *aliases* as for
+    `writer_of`: the namespace's and *tree*'s own."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            root = node.func
+            while isinstance(root, ast.Attribute):
+                root = root.value
+            if isinstance(root, ast.Name) and aliases.get(root.id) == A_HELD_WRITER:
+                return f"{ast.unparse(node.func)} holds a writer, and what it writes into has no name here"
+        for written_into in _written_objects(node, aliases):
+            if _namespace_rooted(written_into, aliases):
+                return f"{ast.unparse(written_into)} is read out of the namespace by a name cash cannot read"
     return None
 
 
@@ -366,9 +597,12 @@ def _extract_receiver_base_name(node: ast.AST) -> str | None:
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, (ast.Subscript, ast.Attribute)):
-        return _extract_receiver_base_name(node.value)
+        return namespace_item(node) or _extract_receiver_base_name(node.value)
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
         return _extract_receiver_base_name(node.func.value)
+    if isinstance(node, ast.Call) and is_vars_of(node):
+        # ``vars(p).update(x=3)``: the receiver is ``p.__dict__`` itself.
+        return _extract_receiver_base_name(node.args[0])
     if isinstance(node, ast.Call) and _is_type_of(node):
         # ``type(self).registry.append(x)``: the class of ``self``.
         return _extract_receiver_base_name(node.args[0])
@@ -392,16 +626,33 @@ def iter_store_targets(target: ast.expr):
         yield target
 
 
+def _written(variable: str, writer: str, line: int) -> MutationInfo:
+    if writer in ("setattr", "delattr"):
+        return MutationInfo(variable=variable, method=f"__{writer}__", kind="attribute_assign", line=line)
+    if writer in ("setitem", "delitem"):
+        kind = "subscript_assign" if writer == "setitem" else "subscript_delete"
+        return MutationInfo(variable=variable, method=f"__{writer}__", kind=kind, line=line)
+    return MutationInfo(variable=variable, method=writer, kind="method_call", line=line)
+
+
 class MutationVisitor(ast.NodeVisitor):
     """AST visitor that collects :class:`MutationInfo` entries."""
 
-    def __init__(self) -> None:
+    def __init__(self, aliases: Mapping[str, str | None] | None = None) -> None:
         self.mutations: list[MutationInfo] = []
+        #: Names bound to a writer (`writer_of`): the namespace's, then the
+        #: visited module's own (`visit_Module`).
+        self.aliases: dict[str, str | None] = dict(aliases or {})
         #: How the statement uses each call's value (`returns_a_new_object`):
         #: ids of the calls an expression statement drops, and of those
         #: another method or a subscript is applied to.
         self._discarded: set[int] = set()
         self._chained: set[int] = set()
+
+    def visit_Module(self, node: ast.Module) -> None:
+        # ``sa = setattr`` then ``sa(points[7], 'x', -3)``.
+        self.aliases.update(writer_aliases(node))
+        self.generic_visit(node)
 
     def visit_Expr(self, node: ast.Expr) -> None:
         if isinstance(node.value, ast.Call):
@@ -468,6 +719,17 @@ class MutationVisitor(ast.NodeVisitor):
         any Call (result captured or not). For multi-output ufuncs ``out`` is a
         tuple: ``out=(q, r)``."""
         self._record_method_mutation(node, node.lineno)
+        written = written_argument(node, self.aliases)
+        if written is not None:
+            # ``setattr(points[7], "x", -3)`` changes what ``points`` holds
+            # as ``points[7].x = -3`` does; so do ``object.__setattr__``,
+            # ``operator.setitem(vars(points[7]), 'x', -3)``,
+            # ``list.append(rows, x)``, an alias of any of them and
+            # ``map(setattr, points, ...)``.
+            writer, argument = written
+            base = extract_base_name(argument)
+            if base:
+                self.mutations.append(_written(base, writer, node.lineno))
         for kw in node.keywords:
             if kw.arg != "out":
                 continue
@@ -530,8 +792,17 @@ class MutationVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Delete(self, node: ast.Delete) -> None:
-        """Detect del d[key], del lst[0]."""
+        """Detect del d[key], del lst[0], del points[7].x."""
         for target in node.targets:
+            if isinstance(target, ast.Attribute):
+                # ``del points[7].x`` changes ``points`` as
+                # ``points[7].x = -3`` does: read back, ``points[7].x`` is
+                # now the class's.
+                base = extract_base_name(target.value)
+                if base:
+                    self.mutations.append(
+                        MutationInfo(variable=base, method="__delattr__", kind="attribute_delete", line=node.lineno)
+                    )
             if isinstance(target, ast.Subscript):
                 base = extract_base_name(target.value)
                 if base:
@@ -1271,7 +1542,7 @@ def _nested_statements(body: list[ast.stmt]):
 
 #: The kinds of `MutationInfo` that change a receiver no assignment binds:
 #: an assigned ``df['a'] = ...`` or ``x += 1`` makes its name an output anyway.
-_RECEIVER_MUTATION_KINDS = frozenset({"method_call", "inplace_kwarg", "subscript_delete"})
+_RECEIVER_MUTATION_KINDS = frozenset({"method_call", "inplace_kwarg", "subscript_delete", "attribute_delete"})
 
 
 class _TopLevelCallCollector:

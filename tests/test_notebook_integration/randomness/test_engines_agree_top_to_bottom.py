@@ -192,15 +192,21 @@ def test_edited_data_is_still_seen_by_the_report_cell(project, upstream_trace, n
     assert _report(nb_runner) == _oracle(project, CELLS)
 
 
-def test_a_file_a_loop_reads_is_still_seen_downstream(nb_runner, upstream_trace):
+@pytest.mark.parametrize("floors", ["default", "zero"])
+def test_a_file_a_loop_reads_is_still_seen_downstream(nb_runner, upstream_trace, floors):
     """A loop reading files per iteration: its inputs keep their lineage when a
-    file changes, so the recorded outcome must also check the files."""
+    file changes, so the recorded outcome must also check the files.
+
+    With no floors the loop's statements are stored, and the simulation of
+    the cells above the report was reused as it stood: the loop's files were
+    not among the cell's, so a changed one never asked the record again."""
     work = nb_runner.work_dir
     (work / "notes").mkdir(exist_ok=True)
     for name, text in (("a", "alpha"), ("b", "beta")):
         (work / "notes" / f"{name}.txt").write_text(text, encoding="utf-8")
+    pin = "cash.configure(call_cost_floor_seconds=0.0, min_execution_time_to_cache_seconds=0.0)\n"
     cells = [
-        "import cash\n%cash_on\n",
+        "import cash\n" + (pin if floors == "zero" else "") + "%cash_on\n",
         "names = ['a', 'b']\n",
         "parts = {}\n"
         "for name in names:\n"

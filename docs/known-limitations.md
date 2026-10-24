@@ -312,7 +312,7 @@ the very same key and answer objects again (cash keeps the ones it saw, so
 it compares objects, not addresses). A memo you fill yourself in
 a dict (`_cache[k] = v`) is a global the function changes, covered above.
 
-<!-- claim: cash/analysis/handed_callables.py:handed_callables @c55bd405, cash/analysis/handed_callables.py:hands_a_state_changing_callable @4c3c2d42 -->
+<!-- claim: cash/analysis/handed_callables.py:handed_callables @c55bd405, cash/analysis/handed_callables.py:hands_a_state_changing_callable @4c3c2d42, cash/analysis/handed_callables.py:ITEM_TYPES_AT == 100_000 -->
 ### A function handed to a call
 
 A function you hand to another call counts as called. One that only reads
@@ -345,7 +345,16 @@ The same holds for code of yours that the statement runs without naming it:
   class method, a hook reached through `super()`), a property, or a context
   manager's `__enter__` and `__exit__` (`with timer("fit"):`);
 - the special methods of an object of your class the statement names
-  (`bag["k"]`, `len(bag)`, `bag + 1`, `f"{bag}"`, iterating it);
+  (`bag["k"]`, `len(bag)`, `bag + 1`, `f"{bag}"`, iterating it), reads
+  from a list, tuple or dict (`d["k"] += 1`, `lst[i] + 1`; by an index
+  cash cannot read, any of its items), from a class or a library's
+  namespace (`C.x + 1`, `ns.x += 1`), or that a function of yours it calls
+  reads by name or one step into such a value (`return v + 1`,
+  `return d["k"] + 1`, `return C.x + 1`). A container of more than 100,000
+  items read by an index cash cannot read, while a class of yours has such
+  a method (any class alive, one made inside a function included), runs
+  each time with a warning
+  ([NOTEBOOK-ITEMS-UNREAD](warnings.md#notebook-items-unread));
 - the function that a wrapper made without `functools.wraps`, or a
   `compose(f, g)` closure, calls; a `functools.partial`, `np.vectorize` or
   `operator.methodcaller` called by its own name; a `functools.singledispatch`
@@ -437,7 +446,7 @@ out = summarize(s)  # cell 2: re-run this alone...
 s.iloc[0] = 1e9     # cell 3: ...and it does not see this
 ```
 
-<!-- claim: cash/notebook/upstream/changed_below.py:warn_changed_below @bbf25145 -->
+<!-- claim: cash/notebook/upstream/changed_below.py:warn_changed_below @8bd3d1a3 -->
 cash answers cell 2 as a top-to-bottom run would: it rebuilds `s` as cell 1
 leaves it, so cell 2 computes with `0.0`, and `s` holds `0.0` until cell 3 runs
 again. cash warns [NOTEBOOK-CHANGED-BELOW](warnings.md#notebook-changed-below)
@@ -561,6 +570,33 @@ a name bound through the namespace, `eval`, `exec` of a computed string and
 `sys.modules` still run every time.
 **Fix:** call the function by its name, or pass it in as an argument.
 
+### A special method that changes state outside its object
+
+<!-- claim: cash/notebook/statement/unseen_writes.py:writers_without_a_trace @fb58b1ed, cash/notebook/statement/unseen_writes.py:own_writes @bb4fc316 -->
+`s + 1` on objects of yours runs their `__add__`, which the statement's text
+does not name. When such a method changes something outside its object
+(appends to a global list), cash runs the statement every time and says so:
+[NOTEBOOK-UNSEEN-WRITES](warnings.md#notebook-unseen-writes). On Python 3.12
+and newer cash reads what ran from the run itself. Without that record
+(Python 3.10 and 3.11, `CASH_TRACE=0`) it reads the special methods' own
+text instead, and misses a change made:
+
+- by a function the method calls (`note(1)`, `self.log()`, a lambda held in
+  a dict);
+- by `__init__`, `__post_init__`, a `default_factory` or an attrs hook;
+- by an object held in a slot, a namedtuple, a list or dict subclass, a
+  default argument, a `ChainMap`, a property, or a column of a subclass of
+  `DataFrame`.
+
+A served result then leaves out that change. Without the record, a writer
+the stored run did not call (a `functools.cached_property` already filled,
+a tuple's hash Python 3.14 kept) is served after a restart; with it, a
+statement refused once for a writer is not stored again in that session
+while the writer is still defined. Either way a cell that reads what the
+method changed keeps its earlier value in the same session.
+**Fix:** pass what the method changes in and return it, or put
+`# @cash:no-cache` on the statement.
+
 ### Background threads
 
 A thread that changes data after its cell has finished is outside cash's view.
@@ -579,6 +615,31 @@ library starts that writes memory without running Python code (an audio or
 device driver filling a buffer) cannot be seen at all: cash reads that buffer
 as it finds it. **Fix:** copy such a buffer (`data = buf.copy()`) in the cell
 that stops the stream, and use the copy.
+
+### A class whose pickling changes other values
+
+<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @b809130a, cash/notebook/statement/reducer_writes.py:_changed_through_copies @a33fedda -->
+cash pickles values to hash and store them, and pickling runs a class's own
+`__getstate__` or `__reduce__`. One that changes something else (a module's
+list, a global array, the object being pickled) would change it where plain
+Python never pickles at all, so cash does not run it: the value is not stored,
+and the statement runs again next time, with
+[NOTEBOOK-REDUCE-WROTE](warnings.md#notebook-reduce-wrote). This also happens
+when cash cannot tell: the method's source cannot be read, it changes the
+object it pickles, or it hands a global the notebook holds (or a module
+holding it) to a library call, such as `np.copyto(ARR, 5)` or `np.mean(ARR)`,
+whose effect cash does not read. Builtins that only read (`len`, `map`,
+`sorted`, `iter`, ...), the functions of `itertools`, `math` and
+`statistics`, `json.dumps` and `json.loads`, `copy.deepcopy` with no memo,
+`functools.reduce` of a function that changes nothing, a method of a constant
+(`'-'.join`) and a value nothing can change (a number, a string, a class, a
+function) do not count; a list, dict or array handed to any other library
+function does, even one that only reads it (`copy.copy`, `json.dump`), and
+its statement runs every time. A change made through a local bound to a
+global or to a shallow copy of one (`c = dict(CFG); c['rows'].append(1)`)
+counts as a change of the global, the copy's own top level included.
+**Fix:** have `__getstate__` / `__reduce__` only read, and change those values
+in the cell that needs them.
 
 ### A loop variable changed before it is read
 
@@ -706,15 +767,17 @@ is an in-place change, so as one unit it is not cached at all. The badge row
 then shows `In-place mutation on: out`. A shorter loop runs pass by pass:
 each `append` runs, and the expensive call inside it comes from the cache.
 
-<!-- claim: cash/notebook/heavy_loops.py:is_heavy @908c4eba, cash/notebook/heavy_loops.py:HEAVY_FACTOR == 4, cash/notebook/heavy_loops.py:MIN_HEAVY_ITER_SEC == 0.01, cash/notebook/heavy_loops.py:header_identity @ba179718, cash/notebook/control_structures/for_handler.py:ForLoopHandler._prefers_iterations @4510a192 -->
+<!-- claim: cash/notebook/heavy_loops.py:is_heavy @908c4eba, cash/notebook/heavy_loops.py:HEAVY_FACTOR == 4, cash/notebook/heavy_loops.py:MIN_HEAVY_ITER_SEC == 0.01, cash/notebook/heavy_loops.py:header_identity @ba179718, cash/notebook/heavy_loops.py:HeavyLoopStore._find @d8473e07, cash/notebook/control_structures/for_handler.py:ForLoopHandler._prefers_iterations @b5475b31 -->
 That estimate is a guess made before the loop has run. A loop run as one unit
 is measured while it runs, and when one iteration's work takes at least four
 times its estimated bookkeeping, and at least 10 ms, the next runs cache it
 per iteration again. As one unit, raising its `range` or editing the last
 statement of its body runs every iteration again; per iteration, an edit runs
 only the iterations it changes or adds. The measurement is kept in the cache
-folder under the loop's header with its numbers left out, so it carries over
-an edit of the body or of the loop's length (`range(100)` to `range(180)`).
+folder under the loop's header and body with its numbers left out, so it
+carries over a change of the loop's length (`range(100)` to `range(180)`) and
+an edit to up to half of the body's statements. Another loop with the same
+header and a different body keeps a measurement of its own.
 The first edit after the measuring run still runs every iteration, since that
 run writes the per-iteration entries; edits after it reuse them. Run again
 unchanged, the loop is restored whole from its unit entry. A loop kept per
@@ -881,6 +944,30 @@ default argument or base class does. **Fix:** move the binding above this cell.
   multiprocessing do the same). Results are equal; only code that depends on
   that order sees a difference, such as the key order of a dict built by
   looping over the set. Use `sorted(s)` where the order matters.
+- **A call given a set of strings runs again after a restart.** Inside a
+  cell, cash keys a call of your function on its arguments as they are
+  stored, and a set or frozenset of strings is stored in an order that
+  changes with every Python process. So after a kernel restart that call
+  runs once more instead of being served; later runs are served as usual.
+  Results are right. A list, a tuple, or a set of numbers is not affected.
+- **An object's own pickle recipe runs when cash copies it.** The memory
+  tier keeps its own copy of a result, made the way pickle rebuilds it, and
+  every hit is such a copy too, as a disk hit is. A class whose
+  `__reduce__` rebuilds through a call with an effect (a constructor that
+  connects, `logging.getLogger`, which registers a logger) has that effect
+  once when the result is stored and once per hit. A rebuild that would
+  change a file, by any route (`(open, (path, "w"))`, a `__setstate__`
+  reopening its log, a constructor the recipe names, `os.remove`,
+  `os.truncate`, `os.rename`, `os.mkdir`, a `sqlite3.connect` that creates
+  its file), is stopped there: the result is not cached, in memory or on
+  disk, an entry stored before is not served, and the file keeps what it
+  held. A scratch file or folder the rebuild makes new in the temp folder
+  is allowed, and so is Python's own `.pyc` for a module the rebuild
+  imports. A library whose first import writes its own cache (matplotlib's
+  font list) is imported as your program would import it, and the rebuild
+  tried again. A write through a file already open (one the object held)
+  is not seen, and neither are `os.chmod` and `os.mkfifo`.
+
 - **A `__dict__` your class computes may run under `@cash.cache`.** A class
   that defines `__dict__` itself (a `@property` building it) has it read
   when an object of it is part of a cached function's key, its arguments
@@ -892,6 +979,13 @@ default argument or base class does. **Fix:** move the binding above this cell.
   the same way, without its own methods, but storing the object still
   pickles it, which calls the subclass's `items` and `__reduce_ex__`: if
   those raise, the statement is not cached and re-runs each time.
+- **Python 3.12.0 to 3.12.5 without the C extension: more statements re-run.**
+  On those versions, asking Python what the `_asyncio` module holds can loop
+  for ever (fixed in 3.12.6), and Jupyter loads that module. cash's C
+  extension reads around it. Without the extension, cash cannot tell which
+  variables share an object with a statement's outputs, so such a statement
+  re-runs with a warning instead of being restored. Upgrade to 3.12.6 or
+  later, or install a build with the C extension.
 
 ## Reporting something not on this page
 

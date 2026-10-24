@@ -57,6 +57,15 @@ class StatementCacheMetadata:
     #: check of it knows how far along it is, as one in the process that
     #: digested it does (`value_hash.budgeted_hash`).
     output_sizes: dict[str, int] | None = None
+    #: The outputs this run keyed by value, not by the formula's lineage (a
+    #: statement run again under the same key that bound a new value). The
+    #: entry holds what that run bound, not what was built on the formula's
+    #: lineage: a later rerun keys these by value again, whatever it binds.
+    value_keyed: list[str] | None = None
+    #: ``{output: budgeted digest}`` of the outputs a rerun under the same key
+    #: compared (`StatementRun.key_blind`): the next one compares with these,
+    #: not with the stored values hashed again.
+    rerun_digests: dict[str, str] | None = None
     #: ``{input var: its lineage when this statement ran}`` -- what the values
     #: in this entry were BUILT FROM. Recorded so a restored value can answer
     #: "was one of my inputs rebuilt since?", which only an executed one could

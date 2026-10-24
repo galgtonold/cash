@@ -1151,6 +1151,7 @@ class CellExecutor:
                     cell,
                     i,
                     stmt_code,
+                    occurrence_index=occ,
                     is_last=is_last,
                     buffered=buffered_result_outputs,
                     awaitable=awaitable,
@@ -1345,6 +1346,7 @@ class CellExecutor:
         i: int,
         stmt_code: str,
         *,
+        occurrence_index: int = 0,
         is_last: bool,
         buffered: list,
         awaitable: bool,
@@ -1383,6 +1385,7 @@ class CellExecutor:
                     silent=True,
                     raw_cell=raw_cell,
                     prior_nodes=cell.tree.body[:i],
+                    occurrence_index=occurrence_index,
                 )
         finally:
             self._statement_processor.end_control_log(control_log)

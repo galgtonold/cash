@@ -25,6 +25,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
+from .._type_memo import TypeMemo, type_key
 from ..backends.cache_dir import CASH_KEYS_FILENAME, create_temp_file
 from ..canonical_form import canonical_bytes, object_state
 from ..content_hashers import BUILTIN_CONTENT
@@ -48,15 +49,9 @@ def cash_key_method(value: Any) -> Callable[[Any], Any] | None:
     ``__cash_key__ = None`` on a subclass turns an inherited one off.
     """
     t = type(value)
-    try:
-        return _METHODS[t]
-    except KeyError:
-        pass
-    except TypeError:  # a class whose metaclass makes it unhashable
-        return _lookup(t)
-    if len(_METHODS) >= _METHODS_MAX:
-        _METHODS.clear()
-    fn = _METHODS[t] = _lookup(t)
+    fn = _METHODS.get(type_key(t), _NOT_ASKED)
+    if fn is _NOT_ASKED:
+        fn = _METHODS.put(t, _lookup(t))
     return fn
 
 
@@ -78,8 +73,8 @@ def _lookup(t: type) -> Callable[[Any], Any] | None:
 #: ``class -> its __cash_key__ or None``, asked of every value a key walk
 #: meets. A class's methods are fixed once it is defined; a redefined class
 #: is a new class and a new entry.
-_METHODS: dict[type, Callable[[Any], Any] | None] = {}
-_METHODS_MAX = 4096
+_METHODS: TypeMemo[Callable[[Any], Any] | None] = TypeMemo()
+_NOT_ASKED = object()
 #: Seconds the check thread waits for more work before it ends.
 _IDLE_S = 5.0
 

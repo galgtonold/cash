@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any
 from cash import _plain_data
 from cash._memo import CODE_OBJECTS, LruMemo
 from cash._paths import MAIN_MODULE_NAMES, is_pseudo_filename
-from cash._user_attrs import attribute_or, has_attribute
+from cash._user_attrs import attribute_or, builtin_items, has_attribute
 from cash.analysis.bytecode import NAME_LOADS, argvals
 from cash.analysis.callee_effects import source_global_mutations
 from cash.analysis.namespace_effects import capturable_globals
@@ -421,27 +421,34 @@ def _memos_on(cls: type) -> list[tuple[str, Any, Any, bool]]:
     except TypeError:  # not weakly referable
         known = None
     if known is not None and known[0] == stamp:
-        return known[1]
-    found = []
-    for name, value in members.items():
-        kind = type(value)
-        named = True
-        if kind is staticmethod or kind is classmethod:
-            value = value.__func__
-        elif kind is property:
-            value, named = value.fget, False
-        elif kind is functools.partialmethod:
-            value, named = value.func, False
-        if _MEMO_WRAPPER is not None and type(value) is _MEMO_WRAPPER:
-            wrapped = value.__dict__.get("__wrapped__")
-            found.append((name, value, wrapped, named))
-    with contextlib.suppress(TypeError):
-        _CLASS_MEMOS[cls] = (stamp, found)
-    return found
+        names = known[1]
+    else:
+        names = tuple(name for name, value in members.items() if _memo_member(value) is not None)
+        with contextlib.suppress(TypeError):
+            _CLASS_MEMOS[cls] = (stamp, names)
+    return [(name, *_memo_member(members[name])) for name in names]  # type: ignore[misc]
 
 
-#: ``class -> (the ids of its members, `_memos_on`)``.
-_CLASS_MEMOS: weakref.WeakKeyDictionary[type, tuple[tuple[int, ...], list]] = weakref.WeakKeyDictionary()
+def _memo_member(value: Any) -> tuple[Any, Any, bool] | None:
+    """``(memo, its wrapped function, reachable by name)`` for a class body
+    member that holds a ``functools.cache`` memo (`_memos_on`), else None."""
+    kind = type(value)
+    named = True
+    if kind is staticmethod or kind is classmethod:
+        value = value.__func__
+    elif kind is property:
+        value, named = value.fget, False
+    elif kind is functools.partialmethod:
+        value, named = value.func, False
+    if _MEMO_WRAPPER is not None and type(value) is _MEMO_WRAPPER:
+        return value, value.__dict__.get("__wrapped__"), named
+    return None
+
+
+#: ``class -> (the ids of its members, the names of those holding a memo)``.
+#: Names, not the memos: a memo's function holds its globals, the class in
+#: them, and a weak key its own value refers to never goes.
+_CLASS_MEMOS: weakref.WeakKeyDictionary[type, tuple[tuple[int, ...], tuple[str, ...]]] = weakref.WeakKeyDictionary()
 
 
 def _named_class_memo_changed(
@@ -708,7 +715,14 @@ def holds_a_closure_with_state(
             continue
         if id(item) in seen:
             continue
-        children = item.values() if issubclass(kind, dict) else item
+        if kind is dict:
+            children = item.values()
+        elif kind in _EXACT_CONTAINERS:
+            children = item
+        else:
+            # A subclass's own ``values()`` or ``__iter__`` may raise:
+            # what the builtin type holds.
+            children = builtin_items(item)
         # Only atoms, by exact type: asked at C speed, where the loop
         # below took a Python step per item (22 ms for 200,000 ints).
         if atoms.issuperset(map(type, children)):
