@@ -36,10 +36,11 @@ import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any, NamedTuple
 
-from cash._user_attrs import attribute_or, instance_of, own_dict
+from cash._user_attrs import attribute_or, builtin_items, instance_of, own_dict
 
 from .. import _native
 from .._memo import CODE_OBJECTS, LruMemo
+from .._type_memo import per_mro, per_type
 from ..install_paths import is_user_code_module
 from ..tracking import io_watch
 from ..tracking.function_tracker import is_local_module
@@ -141,7 +142,32 @@ _NONE_EXISTED = ((), (), True)
 #: rebinds or changes the value, so a container walked once is not walked
 #: again for every statement reading it. A class's methods are read again
 #: each time: ``M.build = other`` changes what an object of ``M`` runs.
-_MEMO: LruMemo[tuple[int, str], tuple[tuple[Any, ...], tuple[type, ...], bool]] = LruMemo(CODE_OBJECTS)
+#: What it found is held weakly (`_held`): a class a function makes per call
+#: is not kept alive by the memo of a value that held one of its objects.
+_MEMO: LruMemo[tuple[int, str], Any] = LruMemo(CODE_OBJECTS)
+
+
+def _held(found: tuple[tuple[Any, ...], tuple[Any, ...], bool]) -> Any:
+    """*found* as `_MEMO` keeps it: weak references to its functions and
+    classes, or *found* itself when one cannot be weakly referenced."""
+    functions, classes, complete = found
+    try:
+        return (tuple(map(weakref.ref, functions)), tuple(map(weakref.ref, classes)), complete, _WEAK)
+    except TypeError:
+        return found
+
+
+def _unheld(kept: Any) -> tuple[tuple[Any, ...], tuple[Any, ...], bool] | None:
+    """What `_held` kept, or None when one of its functions or classes is gone."""
+    if kept is None or kept is _NONE_EXISTED or len(kept) == 3:
+        return kept
+    functions, classes = [ref() for ref in kept[0]], [ref() for ref in kept[1]]
+    if None in functions or None in classes:
+        return None
+    return tuple(functions), tuple(classes), kept[2]
+
+
+_WEAK = "weak"
 
 
 def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | None = None) -> Held:
@@ -166,7 +192,7 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
     if type(value) is types.FunctionType and _plain_function(value):
         return Held((value.__code__,)) if _is_notebook(value, namespace) else _NOTHING
     memo_key = (id(value), lineage) if lineage else None
-    found = _MEMO.get(memo_key) if memo_key is not None else None
+    found = _unheld(_MEMO.get(memo_key)) if memo_key is not None else None
     if found is _NONE_EXISTED:
         if not _anything_to_find(namespace):
             return _NOTHING
@@ -179,7 +205,7 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
                 _MEMO[memo_key] = _NONE_EXISTED
             return _NOTHING
         if memo_key is not None:
-            _MEMO[memo_key] = found
+            _MEMO[memo_key] = _held(found)
     functions, classes, complete = found
     codes: dict[int, types.CodeType] = {}
     for fn in functions:
@@ -188,6 +214,9 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
             codes.setdefault(id(code), code)
     module_classes: dict[int, type] = {}
     for cls in classes:
+        if type(cls) is types.FunctionType:
+            module_classes.setdefault(id(cls), cls)
+            continue
         for code in _class_codes(cls, namespace):
             codes.setdefault(id(code), code)
         for klass in cls.__mro__:
@@ -213,6 +242,19 @@ def _globals_ids(namespace: Mapping[str, Any]) -> frozenset[int]:
 
 def _is_notebook(fn: Any, namespace: Mapping[str, Any]) -> bool:
     return id(attribute_or(fn, "__globals__", None)) in _globals_ids(namespace)
+
+
+def _referrers_or_none(objs: tuple[Any, ...], stop: set[int] | None = None) -> list[Any] | None:
+    """`gc.get_referrers` of *objs*, read as the share check reads it
+    (`shared_objects._referrers`); None where that cannot be known (the
+    ``_asyncio`` module's read can loop for ever on 3.12.0-3.12.5). The
+    heap's list, when read, goes in *stop*."""
+    from .shared_objects import WalkBudgetExceeded, referrers_read
+
+    try:
+        return referrers_read(objs, set() if stop is None else stop)
+    except WalkBudgetExceeded:
+        return None
 
 
 def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
@@ -267,7 +309,10 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
             if type(value) is function and id(value.__globals__) in globals_ids:
                 return True
     for mapping in dicts:
-        for referrer in gc.get_referrers(mapping):
+        referrers = _referrers_or_none((mapping,))
+        if referrers is None:
+            return True  # not known: a yes, as for a frozen heap
+        for referrer in referrers:
             if (
                 type(referrer) is function
                 and id(referrer.__globals__) in globals_ids
@@ -290,7 +335,7 @@ def _anything_to_find(namespace: Mapping[str, Any]) -> bool:
 def module_class_objects_exist() -> bool:
     """Whether any object of a class defined at the top of one of the
     user's loaded modules, or of a class derived from one, exists, or
-    anything else that holds such a class.
+    anything else that holds such a class or such a module's function.
 
     An object refers to its class, so ``gc.get_referrers`` of the classes
     finds them all, in one pass at C speed. With no module of the user's
@@ -313,17 +358,22 @@ def module_class_objects_exist() -> bool:
     cached inside one, or a restore after a restart, and a trace that was
     dropped or cannot be used checks nothing. Still not seen: a class
     reached through a module's ``__dict__`` held in a value
-    (``SimpleNamespace(d=vars(mylib))``). One reached only through the
-    ``__class__`` cell of its own method (``[mylib.C.helper] + rows`` with
-    ``super()`` in ``helper``) is seen, though not by design: the walk's
-    own memo (`Held.module_classes`) refers to the class, and counts.
+    (``SimpleNamespace(d=vars(mylib))``), and a method of such a class held
+    below where the walk asks (``[SimpleNamespace(f=mylib.C.helper)] +
+    rows``): a class's methods are referred to by the class itself.
+
+    A function defined at the top of such a module is asked about as a class
+    is (`_users_module_functions`): held in a value (``{'fn': mylib.helper,
+    'rows': rows}``), it runs the module's code. Only one something holds
+    besides its module is asked about (`_held_elsewhere`).
     """
     classes = _users_module_classes()
-    if not classes:
+    module_functions = _held_elsewhere(_users_module_functions())
+    if not classes and not module_functions:
         return False
     if objects_frozen_since_import():
         return True
-    asked = (_new_code(), tuple(map(id, classes)))
+    asked = (_new_code(), tuple(map(id, classes)), tuple(map(id, module_functions)))
     if _OBJECTS_SEEN[0] == asked:
         return True
     kinds: set[type] = set()
@@ -339,8 +389,8 @@ def module_class_objects_exist() -> bool:
             pass
     # A tuple passes through ``*`` as it is: the call's arguments are then
     # one of the asker's own.
-    asked_of = tuple(kinds)
-    own = {id(classes), id(pending), id(kinds), id(asked_of)}
+    asked_of = (*kinds, *module_functions)
+    own = {id(classes), id(module_functions), id(pending), id(kinds), id(asked_of)}
     for cls in kinds:
         own.add(id(cls))
         own.add(id(cls.__mro__))
@@ -348,7 +398,10 @@ def module_class_objects_exist() -> bool:
     own |= _cash_memos()
     for cls in kinds:
         own |= _class_cells(cls)
-    found = any(type(referrer) in kinds or _holds_the_class(referrer, own) for referrer in gc.get_referrers(*asked_of))
+    referrers = _referrers_or_none(asked_of, own)
+    if referrers is None:
+        return True  # not known: a yes, as for a frozen heap
+    found = any(type(referrer) in kinds or _holds_the_class(referrer, own) for referrer in referrers)
     if found:
         _OBJECTS_SEEN[0] = asked
     return found
@@ -431,6 +484,41 @@ def _holds_the_class(referrer: Any, own: set[int]) -> bool:
 _OBJECTS_SEEN: list[Any] = [None]
 
 
+def _users_module_functions() -> list[types.FunctionType]:
+    """The functions defined at the top of the user's loaded modules: one
+    held in a value (``{'fn': mylib.helper, 'rows': rows}``) runs the
+    module's code, as a class held there does."""
+    found: list[types.FunctionType] = []
+    for module in list(sys.modules.values()):
+        if not _users_module(module):
+            continue
+        name = module.__name__
+        for value in list(vars(module).values()):
+            if type(value) is types.FunctionType and value.__module__ == name:
+                found.append(value)
+    return found
+
+
+def _held_elsewhere(functions: list[types.FunctionType]) -> list[types.FunctionType]:
+    """The *functions* something holds besides their module: what a value
+    could hold. The rest are not asked about: ``gc.get_referrers`` costs
+    each tracked object a look at every function asked of it, and a
+    project's ``utils.py`` of a few hundred functions made each big
+    value's walk 3-5x slower. Read by reference count, against a function
+    held by its module alone and counted the same way (`_alone`), in the
+    same list: *functions*, which nothing else may hold."""
+    functions.append(_alone)
+    counts = [sys.getrefcount(fn) for fn in functions]
+    functions.pop()
+    alone = counts.pop()
+    return [fn for fn, count in zip(functions, counts) if count > alone]
+
+
+def _alone() -> None:
+    """Held by this module alone: the reference count `_held_elsewhere`
+    takes as nothing else's."""
+
+
 def new_code_count() -> int:
     """A count that grows each time code starts from an ``exec`` or a
     function is made from code: unchanged, no code of the user's ran."""
@@ -481,6 +569,17 @@ def _users_module(module: Any) -> bool:
 
 #: Class -> whether a module of the user's defined it (`_of_a_users_module`).
 _USERS_CLASS: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
+
+
+def _of_a_users_module_function(fn: types.FunctionType) -> bool:
+    """Was *fn* defined at the top of one of the user's own modules (not a
+    cell): a ``def`` whose module holds it under its name?"""
+    module = sys.modules.get(attribute_or(fn, "__module__", None) or "")
+    return (
+        _users_module(module)
+        and fn.__globals__ is attribute_or(module, "__dict__", None)
+        and "<locals>" not in fn.__qualname__
+    )
 
 
 def _of_a_users_module(cls: type) -> bool:
@@ -560,7 +659,7 @@ def _walk(
         visited += sum(len(group) for _kind, group in level)
         if check_at is not None and visited > check_at:
             check_at = None
-            if not _anything_to_find(namespace):
+            if not (functions or classes or _anything_to_find(namespace)):
                 raise _NoNotebookFunctions
         if visited > WALK_LIMIT:
             return tuple(functions.values()), tuple(classes.values()), False
@@ -575,7 +674,7 @@ def _walk(
             # Asked before the next level is sorted: a sheet's 400,000
             # cells cost more to dedup than the question does.
             check_at = None
-            if not _anything_to_find(namespace):
+            if not (functions or classes or _anything_to_find(namespace)):
                 raise _NoNotebookFunctions
         level = _next_level(children, seen)
     return tuple(functions.values()), tuple(classes.values()), True
@@ -655,7 +754,8 @@ def _visit_group(
         elif kind in _SEQUENCES and _K.seq_children(group, _leaves(), children) is not NotImplemented:
             return
     if issubclass(kind, dict):
-        keys = list(itertools.chain.from_iterable(group))
+        # By dict's own methods: a subclass's may raise.
+        keys = list(itertools.chain.from_iterable(map(dict.keys, group)))
         key_kinds = set(map(type, keys))
         # Keys that are tuples of plain values (an openpyxl sheet's cells by
         # ``(row, column)``) lead nowhere: one pass says so, as for a list.
@@ -670,15 +770,22 @@ def _visit_group(
             return
     elif issubclass(kind, _SEQUENCES):
         # A list of numbers or strings leads nowhere: one pass at C speed
-        # says so, and adds none of its items.
-        if not set(map(type, itertools.chain.from_iterable(group))) <= _leaves():
-            children.extend(itertools.chain.from_iterable(group))
+        # says so, and adds none of its items. A subclass is read by its
+        # builtin type's own iteration: its ``__iter__`` may raise.
+        items = group if kind in _SEQUENCES else list(map(builtin_items, group))
+        if not set(map(type, itertools.chain.from_iterable(items))) <= _leaves():
+            children.extend(itertools.chain.from_iterable(items))
         if kind in _SEQUENCES:
             return
     elif kind is types.FunctionType:
         for fn in group:
             if id(fn.__globals__) in globals_ids:
                 functions.setdefault(id(fn), fn)
+            elif _of_a_users_module_function(fn):
+                # Noted, not entered, as a class of the user's modules is:
+                # its code and the module data it reads are keyed by its
+                # module (`Held.module_classes`).
+                classes.setdefault(id(fn), fn)
             children.extend(fn.__defaults__ or ())
             children.extend((fn.__kwdefaults__ or {}).values())
             children.extend(_cell_contents(fn.__closure__))
@@ -775,7 +882,7 @@ def _identity_keys(objects: list[Any], kinds: set[type]) -> Iterable[Any]:
     return [obj if type(obj) in by_identity else id(obj) for obj in objects]
 
 
-@functools.lru_cache(maxsize=1024)
+@per_mro
 def _identity_hashed(kind: type) -> bool:
     """Whether an object of *kind* hashes and compares as ``object`` does:
     by its address, with no code of its class run. Two distinct live
@@ -846,7 +953,7 @@ _WALKED_KINDS = (
 )
 
 
-@functools.lru_cache(maxsize=1024)
+@per_type
 def _inert(kind: type) -> bool:
     """An object of *kind* leads `_visit_group` to its class alone: no
     instance dict, no slots, and not a kind it walks into otherwise."""
@@ -855,7 +962,7 @@ def _inert(kind: type) -> bool:
     return not _may_have_dict(kind) and not _slot_names(kind)
 
 
-@functools.lru_cache(maxsize=1024)
+@per_mro
 def _may_have_dict(kind: type) -> bool:
     """Can ``object.__getattribute__(obj, "__dict__")`` find anything on an
     object of *kind*: it has an instance dict, or a class along its MRO
@@ -869,19 +976,31 @@ def _may_have_dict(kind: type) -> bool:
         return True
 
 
-@functools.lru_cache(maxsize=1024)
 def _slot_getter(kind: type, name: str) -> Callable[[Any], Any] | None:
     """The ``__get__`` of the slot descriptor ``object.__getattribute__``
     finds for *name* on an object of *kind* (the first class along the MRO
     that defines *name*), or None when that is not a plain slot."""
-    try:
-        for klass in kind.__mro__:
-            found = vars(klass).get(name, _MISSING)
-            if found is not _MISSING:
-                return found.__get__ if type(found) is types.MemberDescriptorType else None
-    except TypeError:
-        return None
-    return None
+    at = _slot_places(kind).get(name)
+    return None if at is None else vars(kind.__mro__[at])[name].__get__
+
+
+@per_mro
+def _slot_places(kind: type) -> dict[str, int | None]:
+    """For each of `_slot_names`, where along *kind*'s MRO its plain slot
+    descriptor is (None when what is found first is not one): the place,
+    not the descriptor, which refers to its class and would keep it alive."""
+    places: dict[str, int | None] = {}
+    for name in _slot_names(kind):
+        places[name] = None
+        try:
+            for at, klass in enumerate(kind.__mro__):
+                found = vars(klass).get(name, _MISSING)
+                if found is not _MISSING:
+                    places[name] = at if type(found) is types.MemberDescriptorType else None
+                    break
+        except TypeError:
+            pass
+    return places
 
 
 _MISSING = object()
@@ -897,7 +1016,7 @@ def _cell_contents(cells: tuple[Any, ...] | None) -> list[Any]:
     return found
 
 
-@functools.lru_cache(maxsize=1024)
+@per_mro
 def _slot_names(kind: type) -> tuple[str, ...]:
     """The slots *kind* and its bases declare, but ``__dict__`` and ``__weakref__``."""
     names: list[str] = []

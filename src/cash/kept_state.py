@@ -29,6 +29,7 @@ import weakref
 from collections.abc import Callable, Iterator
 from typing import Any
 
+from ._own_work import own_work
 from ._user_attrs import instance_of
 
 __all__ = [
@@ -100,7 +101,7 @@ def _dumps_value(
     persistent_id: Any = None,
     keyed: bool = False,
     on_retry: Any = None,
-    aliases: bool = False,
+    aliases: bool | dict = False,
     sink: Any = None,
     reducer_override: Any = None,
 ) -> bytes:
@@ -157,7 +158,7 @@ def _dumps_value(
     # attempt that failed are taken back first.
     if on_retry is not None:
         on_retry()
-    flat = flatten(value, _KeepDict(protocol, extra, keyed), _persistent_leaf(persistent_id))
+    flat = flatten(value, _KeepDict(protocol, extra, keyed), _held_leaf(_persistent_leaf(persistent_id), aliases))
     return _dumps(flat, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases)
 
 
@@ -239,7 +240,7 @@ def _dumps_walked_first(
     extra: dict | None,
     persistent_id: Any,
     keyed: bool,
-    aliases: bool = False,
+    aliases: bool | dict = False,
     sink: Any = None,
     reducer_override: Any = None,
 ) -> bytes:
@@ -249,7 +250,7 @@ def _dumps_walked_first(
     (`_SAFE_DEPTH`). Deeper, it is pickled flat; for a key, as deep as
     pickle follows elsewhere, and past that it raises RecursionError as the
     pickler raises on other Pythons."""
-    reducers, leaf = _KeepDict(protocol, extra, keyed), _flat_leaf(persistent_id)
+    reducers, leaf = _KeepDict(protocol, extra, keyed), _held_leaf(_flat_leaf(persistent_id), aliases)
     walk = _Walk(getattr(sink, "walked", None), reducer_override)
     if _at_most_deep(value, _SAFE_DEPTH, reducers, leaf, walk):
         override = walk.override() if walk.reduced else reducer_override
@@ -471,6 +472,17 @@ def _persistent_leaf(persistent_id: Any) -> Any:
     return None if persistent_id is None else (lambda obj: persistent_id(obj) is not None)
 
 
+def _held_leaf(leaf: Any, aliases: bool | dict) -> Any:
+    """*leaf*, and a container the rest of a key holds (`key_aliases`'s
+    *outside*): kept as itself in the flat steps, the key pickle marks it
+    as held there, where a step of its own would key it like a copy."""
+    if type(aliases) is not dict:
+        return leaf
+    if leaf is None:
+        return lambda obj: id(obj) in aliases
+    return lambda obj: id(obj) in aliases or leaf(obj)
+
+
 def _flat_leaf(persistent_id: Any) -> Any:
     """What `flatten` pickles whole on `FLAT_FIRST` Pythons: what
     *persistent_id* takes, and a library's objects (`_library_type`)."""
@@ -518,7 +530,7 @@ def _dumps(
     extra: dict | None,
     persistent_id: Any,
     keyed: bool,
-    aliases: bool = False,
+    aliases: bool | dict = False,
     sink: Any = None,
     table: _KeepDict | None = None,
     override: Any = None,
@@ -537,9 +549,10 @@ def _dumps(
         # Key bytes: sharing marked for the objects whose sharing means
         # something, never through pickle's memo (`key_aliases`).
         pickler.fast = True
-        pickler.persistent_id = key_aliases()
+        pickler.persistent_id = key_aliases(aliases if type(aliases) is dict else None)
     pickler.dispatch_table = _KeepDict(protocol, extra, keyed) if table is None else table
-    pickler.dump(value)
+    with own_work:
+        pickler.dump(value)
     if after is not None:
         after(pickler)
     return b"" if sink is not None else buf.getvalue()
@@ -604,7 +617,7 @@ class _Overriding(pickle.Pickler):
         return self.override(obj)
 
 
-def key_aliases() -> Callable[[Any], Any]:
+def key_aliases(outside: dict[int, Any] | None = None) -> Callable[[Any], Any]:
     """A key pickle's ``persistent_id`` (`dumps` with *aliases*): an object
     that can change met a second time is written as a mark naming its first
     appearance; anything else is written in full every time.
@@ -623,6 +636,13 @@ def key_aliases() -> Callable[[Any], Any]:
 
     Every object it marks is kept for the dump: a temporary a reduce made
     and dropped must not hand its id to the next.
+
+    *outside*, ``id(obj) -> where``, are the containers the rest of the key
+    holds, each kept by the caller: one of them met here is written as a
+    mark of where, its content keyed there. An object the key walk left to
+    pickle whole holding a list the walk keyed too, or a plain argument
+    keyed by its own digest, keyed like an equal copy before
+    (`canonical_form.canonical_bytes`).
     """
     seen: dict[int, tuple[int, Any]] = {}
     atoms = _ATOMS
@@ -635,6 +655,10 @@ def key_aliases() -> Callable[[Any], Any]:
         found = seen.get(id(obj))
         if found is not None:
             return ("__cash_alias__", found[0])
+        if outside is not None:
+            where = outside.get(id(obj))
+            if where is not None:
+                return ("__cash_held__", where)
         seen[id(obj)] = (len(seen), obj)
         return None
 
@@ -1006,6 +1030,14 @@ class _KeepDict(dict):
         return reducer
 
     def _reducer(self, t: type) -> Any:
+        reducer = self._chosen_reducer(t)
+        if runs_users_state(t):
+            # Counted each time it runs: what it runs is the user's code,
+            # which may change what cash read before it (`user_state_runs`).
+            return functools.partial(_counted, reducer=reducer)
+        return reducer
+
+    def _chosen_reducer(self, t: type) -> Any:
         if issubclass(t, type):
             raise KeyError(t)  # a class: pickled by name, as pickle does
         registered = copyreg.dispatch_table.get(t)
@@ -1540,6 +1572,133 @@ def _reduce_with_dict(obj: Any, protocol: int) -> Any:
     rest += [None] * (4 - len(rest))
     state, listitems, dictitems, setter = rest[:4]
     return rebuild, args, (state, setter, dict(attrs)), listitems, dictitems, restore_with_dict
+
+
+#: How many times a pickle of cash's has run a reducer of the user's.
+_USER_STATE_RUNS = [0]
+#: The `_USER_STATE_RUNS` of the last run of each class's reducer.
+_USER_STATE_TYPES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+#: The `_USER_STATE_RUNS` of the last run of one for a class not in it.
+_USER_STATE_UNNAMED = [0]
+
+
+def user_state_runs() -> int:
+    """How many times cash's pickles have run a ``__reduce__``,
+    ``__reduce_ex__``, ``__getstate__`` or ``__getnewargs__`` of the user's,
+    or a reducer of theirs registered with ``copyreg``: code that may have
+    changed what cash read of other objects before it pickled."""
+    return _USER_STATE_RUNS[0]
+
+
+def _counted(obj: Any, reducer: Any) -> Any:
+    _refuse_writer(type(obj))
+    _note_user_state_run(type(obj))
+    return reducer(obj)
+
+
+class ReducerNotRun(TypeError):
+    """A reducer of the user's cash does not run: it writes what the
+    notebook holds (`set_reducer_veto`). A TypeError, as pickle raises for
+    an object it cannot pickle, so every caller that falls back for one
+    falls back for this."""
+
+
+#: Set by the notebook (`reducer_writes.watch`): whether a class's reducer
+#: of the user's must not run in a pickle of cash's.
+_REDUCER_VETO: list[Any] = [None, None]
+
+
+def set_reducer_veto(veto: Any, reason: Any = None) -> None:
+    """Ask *veto* (a class -> bool) before a pickle of cash's runs a
+    reducer of the user's; one it answers True for is not run. *reason*
+    (a class -> str), when given, says why in the error."""
+    _REDUCER_VETO[0] = veto
+    _REDUCER_VETO[1] = reason
+
+
+def _refuse_writer(t: type) -> None:
+    veto, reason = _REDUCER_VETO
+    if veto is not None and veto(t):
+        why = reason(t) if reason is not None else "it changes other values"
+        raise ReducerNotRun(f"cash does not run the reducer of {t.__qualname__}: {why}")
+
+
+def next_mark() -> int:
+    """Move `user_state_runs` on by one, naming no class, and return it."""
+    _USER_STATE_RUNS[0] += 1
+    return _USER_STATE_RUNS[0]
+
+
+def _note_user_state_run(t: type) -> None:
+    _USER_STATE_RUNS[0] += 1
+    try:
+        _USER_STATE_TYPES[t] = _USER_STATE_RUNS[0]
+    except TypeError:  # a class that takes no weak reference, or no hash
+        _USER_STATE_UNNAMED[0] = _USER_STATE_RUNS[0]
+
+
+def user_state_types_since(runs: int) -> tuple[list[type], bool]:
+    """The classes whose reducers of the user's cash's pickles ran since
+    `user_state_runs` was *runs*, and whether one ran that could not be
+    named (a class that takes no weak reference)."""
+    return [t for t, last in list(_USER_STATE_TYPES.items()) if last > runs], _USER_STATE_UNNAMED[0] > runs
+
+
+def reduce_counted(obj: Any, protocol: int) -> Any:
+    """``obj.__reduce_ex__(protocol)``, counted in `user_state_runs` when it
+    runs code of the user's (`runs_users_state`): for reduces cash calls
+    itself, outside its picklers."""
+    if runs_users_state(type(obj)):
+        _refuse_writer(type(obj))
+        _note_user_state_run(type(obj))
+    return obj.__reduce_ex__(protocol)
+
+
+def runs_users_state(t: type) -> bool:
+    """Does pickling an instance of *t* run code of the user's: their own
+    ``__getstate__``, ``__reduce__``, ``__reduce_ex__``, ``__getnewargs__``
+    or ``__getnewargs_ex__``, or a reducer of theirs registered with
+    ``copyreg``? Remembered per type, but for a ``copyreg`` registration,
+    which may come after the type was first asked about."""
+    registered = copyreg.dispatch_table.get(t)
+    if registered is not None:
+        return users_function(registered)
+    try:
+        return _RUNS_USERS_STATE[t]
+    except KeyError:
+        pass
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return _decide_runs_users_state(t)
+    found = _RUNS_USERS_STATE[t] = _decide_runs_users_state(t)
+    return found
+
+
+def _decide_runs_users_state(t: type) -> bool:
+    return any(
+        users_function(method)
+        for klass in t.__mro__
+        if klass is not object
+        for name in (*_STATE_METHODS, *_NEWARGS_METHODS)
+        if isinstance(method := klass.__dict__.get(name), _PYTHON_METHODS)
+    )
+
+
+def users_function(function: Any) -> bool:
+    """Is *function* code of the user's: of a module of theirs, or, when
+    its module is not loaded, of a file of theirs?"""
+    from .install_paths import is_user_code_file, is_user_code_module
+
+    function = getattr(function, "__func__", function)
+    module = sys.modules.get(getattr(function, "__module__", None) or "")
+    if module is not None:
+        return is_user_code_module(module)
+    code = getattr(function, "__code__", None)
+    return code is not None and is_user_code_file(code.co_filename)
+
+
+_NEWARGS_METHODS = ("__getnewargs__", "__getnewargs_ex__")
+
+_RUNS_USERS_STATE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
 def chooses_its_state(t: type) -> bool:

@@ -13,6 +13,7 @@ from . import memory_backend, set_order
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, entry_expired, store_seconds
 from .clear_watch import ClearWatcher
 from .entry_format import SplitPayload
+from .no_file_writes import would_write_a_file
 from .persistence_policy import SERIALIZED_ESTIMATE, PersistencePolicy
 from .sampled_cost import sampled_cost
 from .serialization import PickleSerializer, Serializer
@@ -727,6 +728,9 @@ class TieredBackend(CacheBackend):
         if metadata.get("ttl") is None and self.default_ttl is not None:
             metadata["ttl"] = self.default_ttl
 
+        #: The RAM tier's copy was refused: rebuilding the value changes a file.
+        writes_a_file: list[bool] = []
+
         def write_first_tier() -> None:
             # The RAM tier may refuse a value its cap could never hold
             # (`InMemoryBackend.set` returns False); then it is not a
@@ -745,6 +749,8 @@ class TieredBackend(CacheBackend):
                 # refuses a value it cannot copy, and nothing else would say why the
                 # call recomputes every time.
                 store_errors.append(f"{type(self.backends[0]).__name__}: {type(e).__name__}: {e}")
+                if would_write_a_file(e):
+                    writes_a_file.append(True)
 
         # A value the RAM tier would copy 64 MB or more of goes to disk alone
         # when a disk tier writes it: the copy doubled the memory the value
@@ -762,7 +768,9 @@ class TieredBackend(CacheBackend):
             metadata["size"] = memory_footprint(value)
 
         decision = None
-        if len(self.backends) == 1:
+        if len(self.backends) == 1 or writes_a_file:
+            # Nor stored on disk: every hit would rebuild it the same way,
+            # and change the file again (`no_file_writes`).
             self._release_handoff()
         else:
             _note_serialized_size(metadata, value, serializer)

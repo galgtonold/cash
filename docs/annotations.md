@@ -171,11 +171,14 @@ A call is cached when it does not read the statement's own target:
 A call's key is the function and the values it receives, so a reordered loop or
 the same call in another cell is served too. Inside a comprehension each element
 is part of the key. Builtins, classes and method calls (`model.predict(x)`) are
-not cached this way. Calls show on the badge tagged `[intercepted]`:
+not cached this way. Each call site gets a `sub-call` line under its statement,
+and the badge lists the functions under `intercepted calls:`, tagged
+`[intercepted]`:
 
 ```text title="Output"
-  @cash.cache:
-    compute() [intercepted]: 2/3 cached (0.402s)
+    sub-call compute(x): 2/3 hit
+  intercepted calls:
+    compute() [intercepted]: counted in the sub-call lines above (0.402s)
 ```
 
 <!-- claim: cash/notebook/call_unit.py:_time_to_probe @62963b23 -->

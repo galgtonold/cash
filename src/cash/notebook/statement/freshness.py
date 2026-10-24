@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 from ... import _plain_data
 from ..._clock import perf_counter as _perf_counter
 from ...backends._base import ttl_expired
+from ...backends.no_file_writes import no_file_writes
 from ...tracking.env_reads import environment_unchanged
 from ...tracking.file_dep_snapshot import FreshnessMemo, snapshot_is_fresh
 from ...value_types import IMMUTABLE_LEAF_TYPES
@@ -252,9 +253,19 @@ class CacheFreshnessChecker:
                 continue
             if _copies(value):
                 continue
-            try:
-                copy.deepcopy(value)
-            except Exception:  # noqa: BLE001 - whatever stops the copy stops the hit
+            # The copy runs the value's own code, which may not change a
+            # file (`no_file_writes`): a sink reopened with ``"w"`` in
+            # ``__setstate__`` emptied the user's file on every hit.
+            with no_file_writes() as no_writes:
+                try:
+                    copy.deepcopy(value)
+                    copied = True
+                except Exception:  # noqa: BLE001 - whatever stops the copy stops the hit
+                    copied = False
+            if no_writes.refused is not None:
+                self.last_miss_reason = f"a copy of '{name}' would {no_writes.refused}"
+                return None
+            if not copied:
                 self.last_miss_reason = f"'{name}' cannot be copied, so a hit would hand back the same object"
                 return None
         return cached_data
