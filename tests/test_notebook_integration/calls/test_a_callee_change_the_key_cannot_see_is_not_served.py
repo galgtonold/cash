@@ -28,6 +28,7 @@ SETUP = (
     "class NS: pass\n"
     "PUSH = LOG.append\n"
     "PUSHP = functools.partial(list.append, LOG)\n"
+    "OPS = {'push': LOG.append}\nOPL = [LOG.append]\n"
 )
 
 BODIES = {
@@ -43,6 +44,8 @@ BODIES = {
     "partial_of_append": ("PUSHP(x)", "n = len(LOG)", 1),
     "class_method_of_a_module": ("collections.deque.append(DQ, x)", "n = len(DQ)", 1),
     "builtin_class_method": ("list.append(LOG, x)", "n = len(LOG)", 1),
+    "a_method_a_dict_holds": ("OPS['push'](x)", "n = len(LOG)", 1),
+    "a_method_a_list_holds": ("OPL[0](x)", "n = len(LOG)", 1),
 }
 
 

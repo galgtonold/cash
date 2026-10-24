@@ -1743,6 +1743,15 @@ def _call_handoffs(
             free.update(callee_free)
             return
     args = [*call.args, *(kw.value for kw in call.keywords)]
+    if isinstance(func, ast.Subscript):
+        holder = func.value
+        while isinstance(holder, (ast.Attribute, ast.Subscript)):
+            holder = holder.value
+        if isinstance(holder, ast.Name) and holder.id not in local:
+            # ``OPS = {'push': LOG.append}`` then ``OPS['push'](x)``: what a
+            # method it holds is bound to changes, watched by the names that
+            # hold it; by the container itself when none does.
+            roots.update(_holders_of_bound(user_ns.get(holder.id), user_ns) or {holder.id})
     if isinstance(func, ast.Attribute):
         base = func.value
         while isinstance(base, (ast.Attribute, ast.Subscript)):
@@ -1839,6 +1848,26 @@ def state_bound(value: Any, depth: int = 0) -> list[Any]:
 
 #: Partials of partials followed.
 _PARTIAL_DEPTH = 3
+#: How many items of a container `_holders_of_bound` looks at.
+_BOUND_SCAN = 1000
+
+
+def _holders_of_bound(container: Any, user_ns: Mapping[str, Any]) -> set[str]:
+    """The names of *user_ns* holding an object a method or a partial in
+    *container* (a dict's values, a list's or a tuple's items, one level
+    down) is bound to. Empty when it holds none, or too many to look at."""
+    if instance_of(container, dict):
+        items = list(dict.values(container))
+    elif instance_of(container, (list, tuple)):
+        items = list(container)
+    else:
+        return set()
+    if len(items) > _BOUND_SCAN:
+        return set()
+    owners = {id(owner) for item in items for owner in state_bound(item)}
+    if not owners:
+        return set()
+    return {name for name, value in list(user_ns.items()) if id(value) in owners}
 
 
 def _followed_elsewhere(value: Any) -> bool:
