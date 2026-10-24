@@ -839,9 +839,9 @@ def _globals_read(
             if _is_own_class(inner, self_name):
                 return {_OWN_CLASS}
             if isinstance(inner, ast.Name) and inner.id not in local and inner.id not in params:
-                if _a_users_class(g.get(inner.id)):
-                    # ``K.seen``: a class's attributes change, the class
-                    # does not.
+                if _a_users_class(g.get(inner.id)) or instance_of(g.get(inner.id), types.ModuleType):
+                    # ``K.seen``, ``M.SEEN``: a class's or a module's
+                    # attributes change, the class or module does not.
                     return {inner.id}
             return held(inner, local)
         if isinstance(node, (ast.Starred, ast.NamedExpr, ast.Await)):

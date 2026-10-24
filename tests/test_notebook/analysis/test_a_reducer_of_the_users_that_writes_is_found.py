@@ -509,6 +509,7 @@ _BODIES = {
     "a_comprehension_of_items_that_change": "c = [r for r in NESTED_ROWS]\nc[0].append(1)",
     "a_loop_over_items_that_change": "for c in NESTED_ROWS:\n    c.append(1)",
     "a_class_attribute": "c = K.seen\nc.append(1)",
+    "a_module_attribute": "c = M.SEEN\nc.append(1)",
     "its_own_class_by_type": "c = type(self).seen\nc.append(1)",
     "its_own_class_by_dunder": "c = self.__class__.seen\nc.append(1)",
     "what_a_function_returns": "c = holder().seen\nc.append(1)",
@@ -516,6 +517,7 @@ _BODIES = {
 #: The variable a body changes, where the body does not name it.
 _HELD_IN = {
     "a_class_attribute": "K",
+    "a_module_attribute": "M",
     "its_own_class_by_type": "Made",
     "its_own_class_by_dunder": "Made",
     "what_a_function_returns": "ALIASED_OBJECT",
@@ -528,7 +530,7 @@ def test_a_change_through_any_local_bound_from_a_global_counts(tmp_path, monkeyp
     1``: only a local bound to the global or to a recognised copy of it was
     followed, and the reducer, run on every pickle, appended where plain
     Python never pickles. So were ``K.seen`` (a class counted as never
-    changed), ``type(self).seen`` and ``holder().seen`` (no global named)."""
+    changed), ``M.SEEN`` (a module), ``type(self).seen`` and ``holder().seen`` (no global named)."""
     module = _module_with(tmp_path, monkeypatch, _BODIES[body])
     writer = reducer_writes._decide(module.Made)
     assert writer is not None, "not a writer"
@@ -607,6 +609,7 @@ def _module_with(tmp_path, monkeypatch, body: str, params: str = "", closure: bo
         source += "ALIASED = {'rows': []}\nALIASED_OBJECT = Cfg()\nNESTED_ROWS = [[1]]\n"
         source += "SKIP = {'_lock'}\nNAMES = ['a', 'b']\nEXTRA = {'v': 0}\nDEFAULTS = {'x': 1}\n"
         source += "class K:\n    seen = []\ndef holder():\n    return ALIASED_OBJECT\n"
+        source += "import types\nM = types.ModuleType('m')\nM.SEEN = []\n"
         source += "class Made:\n" + method
     (tmp_path / f"{name}.py").write_text(source, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
