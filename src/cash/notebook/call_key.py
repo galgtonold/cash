@@ -213,7 +213,39 @@ def changes_its_closure(fn) -> bool:
     if type(fn) is not _types.FunctionType:
         return False
     cells = closure_cells(fn)
-    return bool(cells) and (rebinds_its_closure(fn) or any(n in cells for n in _source_mutations(fn)))
+    if not cells:
+        return False
+    if rebinds_its_closure(fn) or any(n in cells for n in _source_mutations(fn)):
+        return True
+    return _draws_on_its_closure(fn, cells)
+
+
+def _draws_on_its_closure(fn, cells: Mapping[str, _types.CellType]) -> bool:
+    """Whether a cell of *fn* holds an iterator, generator or stream, or
+    *fn* changes a cell in a way the shared reader leaves out (``next(c)``,
+    ``heapq.heappush(h, x)``), or its text cannot be read and a cell holds
+    more than a plain value. ``lambda: next(c)`` over ``c =
+    itertools.count()`` changes nothing the shared reader names, and a hit
+    handed back the closure the last run had drawn on."""
+    from .consumables import is_stream
+    from .statement.unseen_writes import own_writes
+
+    held = []
+    for cell in cells.values():
+        try:
+            held.append(cell.cell_contents)
+        except ValueError:  # an empty cell
+            continue
+    if any(is_stream(value) for value in held):
+        return True
+    writes: set[str] = set()
+    for layer in wrapper_layers(fn):
+        code = attribute_or(layer, "__code__", None)
+        if isinstance(code, _types.CodeType):
+            writes |= own_writes(code)
+    if "?" in writes:
+        return any(type(value) not in _EXACT_ATOMS and not callable(value) for value in held)
+    return any(name in cells for name in writes)
 
 
 #: Values with nothing inside them to look at: skipped without a call.
