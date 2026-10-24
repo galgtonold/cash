@@ -188,7 +188,7 @@ def _cached_by_its_type(obj: Any, name: str) -> bool:
     attributes computed: a ``Timedelta``'s ``seconds`` keeps ``_seconds``
     in its dict. Computed again from the value, a copy without it gives the
     same, so it is no attribute of the user's."""
-    return name.startswith("_") and len(name) > 1 and hasattr(type(obj), name[1:])
+    return name.startswith("_") and len(name) > 1 and has_attribute(type(obj), name[1:])
 
 
 def _hook_pandas_scalars(pd: Any) -> None:
@@ -548,7 +548,7 @@ def _pandas_objects(value: Any) -> list[Any]:
     exact = exact_value_types()
     found: list[Any] = []
     for block in blocks:
-        values = getattr(block, "values", None)
+        values = attribute_or(block, "values")
         if np is None or type(values) is not np.ndarray or values.dtype.kind != "O":
             continue  # numbers, or an extension array (Arrow text) of no Python objects
         for column in values.reshape(-1, values.shape[-1]) if values.ndim > 1 else (values,):
