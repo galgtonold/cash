@@ -30,6 +30,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from . import _native
+from ._own_work import own_work
 from ._user_attrs import instance_of
 
 __all__ = [
@@ -551,7 +552,8 @@ def _dumps(
         pickler.fast = True
         pickler.persistent_id = key_aliases(aliases if type(aliases) is dict else None)
     pickler.dispatch_table = _KeepDict(protocol, extra, keyed) if table is None else table
-    pickler.dump(value)
+    with own_work:
+        pickler.dump(value)
     if after is not None:
         after(pickler)
     return b"" if sink is not None else buf.getvalue()
@@ -1033,6 +1035,14 @@ class _KeepDict(dict):
         return reducer
 
     def _reducer(self, t: type) -> Any:
+        reducer = self._chosen_reducer(t)
+        if runs_users_state(t):
+            # Counted each time it runs: what it runs is the user's code,
+            # which may change what cash read before it (`user_state_runs`).
+            return functools.partial(_counted, reducer=reducer)
+        return reducer
+
+    def _chosen_reducer(self, t: type) -> Any:
         if issubclass(t, type):
             raise KeyError(t)  # a class: pickled by name, as pickle does
         registered = copyreg.dispatch_table.get(t)
@@ -1584,6 +1594,133 @@ def _reduce_with_dict(obj: Any, protocol: int) -> Any:
     rest += [None] * (4 - len(rest))
     state, listitems, dictitems, setter = rest[:4]
     return rebuild, args, (state, setter, dict(attrs)), listitems, dictitems, restore_with_dict
+
+
+#: How many times a pickle of cash's has run a reducer of the user's.
+_USER_STATE_RUNS = [0]
+#: The `_USER_STATE_RUNS` of the last run of each class's reducer.
+_USER_STATE_TYPES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+#: The `_USER_STATE_RUNS` of the last run of one for a class not in it.
+_USER_STATE_UNNAMED = [0]
+
+
+def user_state_runs() -> int:
+    """How many times cash's pickles have run a ``__reduce__``,
+    ``__reduce_ex__``, ``__getstate__`` or ``__getnewargs__`` of the user's,
+    or a reducer of theirs registered with ``copyreg``: code that may have
+    changed what cash read of other objects before it pickled."""
+    return _USER_STATE_RUNS[0]
+
+
+def _counted(obj: Any, reducer: Any) -> Any:
+    _refuse_writer(type(obj))
+    _note_user_state_run(type(obj))
+    return reducer(obj)
+
+
+class ReducerNotRun(TypeError):
+    """A reducer of the user's cash does not run: it writes what the
+    notebook holds (`set_reducer_veto`). A TypeError, as pickle raises for
+    an object it cannot pickle, so every caller that falls back for one
+    falls back for this."""
+
+
+#: Set by the notebook (`reducer_writes.watch`): whether a class's reducer
+#: of the user's must not run in a pickle of cash's.
+_REDUCER_VETO: list[Any] = [None, None]
+
+
+def set_reducer_veto(veto: Any, reason: Any = None) -> None:
+    """Ask *veto* (a class -> bool) before a pickle of cash's runs a
+    reducer of the user's; one it answers True for is not run. *reason*
+    (a class -> str), when given, says why in the error."""
+    _REDUCER_VETO[0] = veto
+    _REDUCER_VETO[1] = reason
+
+
+def _refuse_writer(t: type) -> None:
+    veto, reason = _REDUCER_VETO
+    if veto is not None and veto(t):
+        why = reason(t) if reason is not None else "it changes other values"
+        raise ReducerNotRun(f"cash does not run the reducer of {t.__qualname__}: {why}")
+
+
+def next_mark() -> int:
+    """Move `user_state_runs` on by one, naming no class, and return it."""
+    _USER_STATE_RUNS[0] += 1
+    return _USER_STATE_RUNS[0]
+
+
+def _note_user_state_run(t: type) -> None:
+    _USER_STATE_RUNS[0] += 1
+    try:
+        _USER_STATE_TYPES[t] = _USER_STATE_RUNS[0]
+    except TypeError:  # a class that takes no weak reference, or no hash
+        _USER_STATE_UNNAMED[0] = _USER_STATE_RUNS[0]
+
+
+def user_state_types_since(runs: int) -> tuple[list[type], bool]:
+    """The classes whose reducers of the user's cash's pickles ran since
+    `user_state_runs` was *runs*, and whether one ran that could not be
+    named (a class that takes no weak reference)."""
+    return [t for t, last in list(_USER_STATE_TYPES.items()) if last > runs], _USER_STATE_UNNAMED[0] > runs
+
+
+def reduce_counted(obj: Any, protocol: int) -> Any:
+    """``obj.__reduce_ex__(protocol)``, counted in `user_state_runs` when it
+    runs code of the user's (`runs_users_state`): for reduces cash calls
+    itself, outside its picklers."""
+    if runs_users_state(type(obj)):
+        _refuse_writer(type(obj))
+        _note_user_state_run(type(obj))
+    return obj.__reduce_ex__(protocol)
+
+
+def runs_users_state(t: type) -> bool:
+    """Does pickling an instance of *t* run code of the user's: their own
+    ``__getstate__``, ``__reduce__``, ``__reduce_ex__``, ``__getnewargs__``
+    or ``__getnewargs_ex__``, or a reducer of theirs registered with
+    ``copyreg``? Remembered per type, but for a ``copyreg`` registration,
+    which may come after the type was first asked about."""
+    registered = copyreg.dispatch_table.get(t)
+    if registered is not None:
+        return users_function(registered)
+    try:
+        return _RUNS_USERS_STATE[t]
+    except KeyError:
+        pass
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return _decide_runs_users_state(t)
+    found = _RUNS_USERS_STATE[t] = _decide_runs_users_state(t)
+    return found
+
+
+def _decide_runs_users_state(t: type) -> bool:
+    return any(
+        users_function(method)
+        for klass in t.__mro__
+        if klass is not object
+        for name in (*_STATE_METHODS, *_NEWARGS_METHODS)
+        if isinstance(method := klass.__dict__.get(name), _PYTHON_METHODS)
+    )
+
+
+def users_function(function: Any) -> bool:
+    """Is *function* code of the user's: of a module of theirs, or, when
+    its module is not loaded, of a file of theirs?"""
+    from .install_paths import is_user_code_file, is_user_code_module
+
+    function = getattr(function, "__func__", function)
+    module = sys.modules.get(getattr(function, "__module__", None) or "")
+    if module is not None:
+        return is_user_code_module(module)
+    code = getattr(function, "__code__", None)
+    return code is not None and is_user_code_file(code.co_filename)
+
+
+_NEWARGS_METHODS = ("__getnewargs__", "__getnewargs_ex__")
+
+_RUNS_USERS_STATE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
 def chooses_its_state(t: type) -> bool:

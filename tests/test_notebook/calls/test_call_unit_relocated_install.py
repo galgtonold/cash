@@ -18,6 +18,7 @@ import pytest
 
 from cash.notebook.call_interception import CallSite
 from cash.tracking.file_tracker import FileAccessTracker
+from tests._modules import forget_module
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 # Runs are counted through os.write: a global the callee wrote would be
@@ -54,7 +55,7 @@ def _site(root, name, rate):
 @pytest.fixture
 def import_from(monkeypatch):
     """Import ``relocpkg`` from one site, as a process with that install would."""
-    monkeypatch.delitem(sys.modules, "relocpkg", raising=False)
+    forget_module(monkeypatch, "relocpkg")
     original = list(sys.path)
 
     def _import(site):

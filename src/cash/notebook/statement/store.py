@@ -32,6 +32,7 @@ from cash.diagnostics import log_diagnostic, warn_diagnostic
 from cash.exceptions import CashCacheStoreFailedWarning
 from cash.notebook.anchors import AnchorUnrebuilt, with_anchor_refs
 from cash.notebook.shared_objects import scalar_identity
+from cash.notebook.statement import reducer_writes
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.capture import replay_record
 from cash.notebook.statement.carrier_advances import PAYLOAD_FIELD as CARRIERS_FIELD
@@ -621,6 +622,10 @@ class StatementStore:
         kept_out = self._copy_dearer_than_compute(run, execution, payload["variables"])
         if kept_out is not None:
             return self._store_metadata_only(run, execution, kept_out, cost_fields)
+        if reducer_writes.writes_into(run.reducer_mark, self.shell.user_ns):
+            # The checks above pickled a value whose reducer of the user's
+            # writes (`StatementProcessor._move_what_reducers_wrote`).
+            return None
 
         metadata = StatementCacheMetadata(
             timestamp=time.time(),
