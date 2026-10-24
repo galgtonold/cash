@@ -5,7 +5,9 @@ the same objects, taken as immutable. A ``pd.Timestamp`` takes attributes,
 and a subclass of ``int`` or ``datetime`` holds them too, and the key reads
 them: after ``t.tag = 2`` a cached function given the frame was served what
 it gave for ``t.tag = 1``. Such a list is read every time, and a list of
-dates is trusted only while none of them has an attribute set.
+dates is trusted only while none of them has an attribute set, and only
+with no time zone or one of the standard library's: a zone of the user's
+own can change its offset (``tz.hours = 5``).
 """
 
 from __future__ import annotations
@@ -102,3 +104,52 @@ def test_a_cached_function_sees_the_attribute_change(kind, disk_cash):
     assert tags(frame)[-1] == 1
     item.tag = 2
     assert tags(frame)[-1] == 2
+
+
+class Zone(datetime.tzinfo):
+    """A time zone of the user's own, whose offset a later write changes."""
+
+    def __init__(self, hours):
+        self.hours = hours
+
+    def utcoffset(self, dt):
+        return datetime.timedelta(hours=self.hours)
+
+    def dst(self, dt):
+        return datetime.timedelta(0)
+
+    def tzname(self, dt):
+        return f"Z{self.hours}"
+
+
+ZONED = {
+    "datetime": lambda tz: datetime.datetime(2021, 1, 1, tzinfo=tz),
+    "time": lambda tz: datetime.time(1, 2, tzinfo=tz),
+    "timestamp": lambda tz: pd.Timestamp(datetime.datetime(2021, 1, 1, tzinfo=tz)),
+}
+
+
+@pytest.mark.parametrize("kind", list(ZONED))
+def test_a_change_to_a_users_own_time_zone_changes_the_digest(kind):
+    zone = Zone(1)
+    frame = _frame(ZONED[kind](zone))
+    first = cow_frame_digest(frame)
+    zone.hours = 5
+    assert cow_frame_digest(frame) == builtin_hash(frame) != first
+
+
+@pytest.mark.parametrize(
+    "zone",
+    [datetime.timezone.utc, datetime.timezone(datetime.timedelta(hours=2))],
+    ids=["utc", "fixed offset"],
+)
+def test_a_standard_time_zone_is_trusted(zone, monkeypatch):
+    from cash.decorator import arg_hashing
+
+    frame = _frame(datetime.datetime(2021, 1, 1, tzinfo=zone))
+    reads: list = []
+    real = arg_hashing.FrameDigests.hash_frame
+    monkeypatch.setattr(arg_hashing.FrameDigests, "hash_frame", lambda self, obj: reads.append(1) or real(self, obj))
+    first = cow_frame_digest(frame)
+    assert cow_frame_digest(frame) == first == builtin_hash(frame)
+    assert len(reads) == 1
