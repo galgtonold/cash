@@ -100,19 +100,42 @@ def test_a_property_is_not_run_to_look_for_a_stream(statement_processor, mock_sh
     assert mock_shell.user_ns["P"].reads == 1
 
 
-def test_an_item_only_bound_to_a_name_is_served(statement_processor):
+def test_an_item_only_bound_to_a_name_is_served(statement_processor, monkeypatch):
     """Control: ``x = h[i]`` does not draw from what it reads, so a holder too
-    big to read through does not stop the hit."""
-    _run(statement_processor, "h = list(range(2_000_000)) + [iter(range(6))]\ni = 5")
+    big to read through does not stop the hit. (The limit is lowered to keep
+    the test quick.)"""
+    monkeypatch.setattr("cash.notebook.consumables._HELD_ITEMS", 10_000)
+    _run(statement_processor, "h = list(range(20_000)) + [iter(range(6))]\ni = 5")
     _run(statement_processor, "x = h[i]")
     assert _run(statement_processor, "x = h[i]")["status"] == CacheStatus.RESTORED
 
 
-def test_a_method_whose_result_is_dropped_is_not_a_draw(statement_processor, mock_shell):
+def test_a_method_whose_result_is_dropped_is_not_a_draw(statement_processor, mock_shell, monkeypatch):
     """Control: ``h.append(..)`` as its own statement draws nothing, however
     much ``h`` holds."""
     from cash.notebook.consumables import drawn_stream_inputs
 
-    _run(statement_processor, "h = list(range(2_000_000)) + [iter(range(6))]")
+    monkeypatch.setattr("cash.notebook.consumables._HELD_ITEMS", 10_000)
+    _run(statement_processor, "h = list(range(20_000)) + [iter(range(6))]")
     tree = __import__("ast").parse("h.append(1)")
     assert drawn_stream_inputs(tree, ["h"], [], mock_shell.user_ns) == []
+
+
+def test_numbers_past_the_objects_cash_reads_are_served(statement_processor):
+    """Control: numbers and strings are passed over in bulk, so a draw by an
+    index cash cannot follow from a list of a million numbers is no draw."""
+    _run(statement_processor, "h = list(range(1_000_001))\nkeys = [0, 1]")
+    _run(statement_processor, "s = sum(h[k] for k in keys)")
+    assert _run(statement_processor, "s = sum(h[k] for k in keys)")["status"] == CacheStatus.RESTORED
+
+
+def test_a_holder_past_the_objects_cash_reads_says_so(statement_processor, mock_shell):
+    """Past the objects cash reads, the draw counts, and the reason says the
+    holder is too big to read, not that it is an iterator."""
+    _run(statement_processor, "class O:\n    pass\nh = {i: O() for i in range(30_000)}\nkeys = [0, 1]")
+    _run(statement_processor, "def f(x):\n    return 1")
+    _run(statement_processor, "s = [f(h[k]) for k in keys]")
+    second = _run(statement_processor, "s = [f(h[k]) for k in keys]")
+    assert second["status"] == CacheStatus.COMPUTED
+    assert any("more objects than cash reads" in r for r in second["uncacheable_reasons"])
+    assert not any("an iterator or stream" in r for r in second["uncacheable_reasons"])
