@@ -187,6 +187,32 @@ def test_a_read_through_objects_a_class_already_keeps_is_served(cash_magics):
     assert statuses[1] == CacheStatus.RESTORED, statuses
 
 
+@pytest.mark.parametrize(
+    ("big", "read"),
+    [
+        ("big = list(range(200_000))", "sum(big)"),
+        ("big = {i: [i, i + 1] for i in range(60_000)}", "len(big)"),
+    ],
+    ids=["numbers", "lists-of-numbers"],
+)
+def test_numbers_past_the_items_cash_reads_are_served(cash_magics, recwarn, big, read):
+    """Numbers and strings keep nothing a class could hold: however many
+    there are, a statement that reads them beside a method call is served,
+    and nothing warns."""
+    cells = [
+        "import time\nclass Cfg:\n    opts = {'a': 1}",
+        big,
+        f"s = (time.sleep(0.3), {read})[1]",
+    ]
+    statuses = []
+    for _ in range(2):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        statuses.append(cash_magics.cash_status("dict")["last_cell"]["statements"][-1].get("status"))
+    assert statuses[1] == CacheStatus.RESTORED, statuses
+    assert not [w for w in recwarn if "NOTEBOOK-SHARE-UNCHECKED" in str(w.message)]
+
+
 def test_past_the_items_cash_reads_it_runs_and_warns(cash_magics):
     """Past the items cash reads, which class the call reaches is unknown:
     the statement runs every time, with a warning, and the class it reached

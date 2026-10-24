@@ -299,6 +299,9 @@ def _entry_values(cached_data: Any) -> dict[str, Any] | None:
 #: cannot tell which class a call reached.
 _ITEMS_READ = 100_000
 _DEPTH_READ = 4
+#: Items `_classes_with_state` neither counts nor looks into.
+_ATOMS = frozenset({int, float, complex, bool, str, bytes, type(None)})
+_NESTED = frozenset({list, tuple, dict})
 
 
 def _calls_a_method(tree: ast.AST | None) -> bool:
@@ -338,14 +341,18 @@ def _classes_with_state(
                     continue
                 seen.add(id(container))
                 items = container.values() if type(container) is dict else container
+                # The kinds of item, read at C speed: numbers and strings
+                # (``sum(big)``) keep nothing and cost none of the budget.
+                kinds = set(map(type, items))
+                if kinds <= _ATOMS:
+                    continue
                 if len(items) > left or depth >= _DEPTH_READ:
-                    unread = unread or len(items) > 0
+                    unread = True
                     continue
                 left -= len(items)
-                for item in items:
-                    classes.add(type(item))
-                    if type(item) in (list, tuple, dict):
-                        stack.append((item, depth + 1))
+                classes |= kinds
+                if kinds & _NESTED:
+                    stack.extend((item, depth + 1) for item in items if type(item) in _NESTED)
         for cls in classes:
             origin = named.get(id(cls))
             for related in (*cls.__mro__, *type(cls).__mro__):
@@ -2990,8 +2997,8 @@ class StatementProcessor:
             if not run.skip_cache:
                 run.skip_cache = True
                 run.metrics["uncacheable_reasons"].append(
-                    "Calls a method through a list too big or too deep for cash to read which classes it reaches "
-                    "(statement re-executes)"
+                    "Calls a method while it reads a list or dict too big or too deep for cash to read which "
+                    "classes it holds (statement re-executes)"
                 )
             self._warn_classes_unread(run)
         if not changed and not around:
@@ -3276,8 +3283,8 @@ class StatementProcessor:
             return
         self._share_unchecked_warned.add(run.source_hash)
         what = (
-            f"`{run.code.strip().splitlines()[0][:80]}` calls a method through a list or dict with more items, "
-            "or more levels, than cash reads, so it cannot tell which class may keep what it hands on. "
+            f"`{run.code.strip().splitlines()[0][:80]}` calls a method and reads a list or dict holding more "
+            "objects, or more levels, than cash reads, so it cannot tell which class may keep what it hands on. "
             "It runs every time instead of being served."
         )
         fix = "nothing, if it is fast enough; otherwise call the method on the object by a name of its own."
