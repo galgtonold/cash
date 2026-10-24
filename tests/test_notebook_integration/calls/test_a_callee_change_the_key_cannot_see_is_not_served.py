@@ -56,7 +56,9 @@ def test_each_run_all_makes_the_change_again(cash_magics, shape, spelled):
         assert (ns["v"], ns["n"]) == (30, expected), f"Run All {run + 1}"
 
 
-@pytest.mark.parametrize("trace", ["on", "off"])
+# Off in a kernel of its own: a warm one was started with traces on, and
+# ``CASH_TRACE`` set now never reaches it.
+@pytest.mark.parametrize("trace", ["on", pytest.param("off", marks=pytest.mark.fresh_kernel)])
 @pytest.mark.parametrize(
     "define",
     [
