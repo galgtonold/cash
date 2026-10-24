@@ -2069,6 +2069,16 @@ def forget_heap_unreadable() -> None:
     _UNREADABLE[0] = False
 
 
+def referrers_read(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
+    """`gc.get_referrers` of *objs* for a caller outside this module
+    (`held_functions`). `gc.get_referrers` compares each reference of each
+    tracked object with every one of *objs*: asked of the 2,000 classes of
+    a long session's modules over 1.5 million objects, 2-7 s. Past a few,
+    one read of the heap whatever their number (`_referrers_of`)."""
+    read = _referrers if len(objs) <= _REFERRERS_BY_CALL else _referrers_of
+    return read(objs, stop)
+
+
 def _referrers(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
     """`gc.get_referrers` of *objs*; where the ``_asyncio`` module's own
     read can loop for ever (`_TRAVERSE_LOOPS`), as gc's would, the read of

@@ -43,6 +43,7 @@ import io
 import itertools
 import logging
 import queue
+import sys
 import types
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -359,9 +360,15 @@ def _chain_meets_stream(value: Any, chain: list[ast.AST]) -> bool:
         else:
             items = value.values() if type(value) is dict else value
             return any(is_stream(item) for item in itertools.islice(items, _HELD_SCAN))
-        if is_stream(value):
+        if is_stream(value) and not _an_output_stream(value):
             return True
     return False
+
+
+def _an_output_stream(obj: Any) -> bool:
+    """The process's own output streams (``sys.stderr`` handed to a log
+    handler): written to, never read, so reaching one draws nothing."""
+    return any(obj is attribute_or(sys, name, None) for name in ("stdout", "stderr", "__stdout__", "__stderr__"))
 
 
 def is_stream(obj: Any) -> bool:
