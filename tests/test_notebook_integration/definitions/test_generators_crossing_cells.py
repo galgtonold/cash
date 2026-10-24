@@ -316,9 +316,10 @@ def test_genfunc_downstream_instance_edit(nb_runner):
 
 def test_half_consumed_iterator_isolated_rerun_persist(nb_runner):
     """Half of the iterator consumed in B, rest in C; ISOLATED re-run of C
-    under persist. Exhausted-generator-adjacent: with the statement cached (persist on),
-    can cash serve rest=[3, 4, 5] instead of re-executing on the exhausted
-    iterator?"""
+    under persist. Plain Python's re-run of C reads the exhausted iterator
+    and prints ``[]``: B draws from ``it`` and runs every time, so ``it`` is
+    keyed by its value, which the Run All left exhausted, and C runs again
+    as plain Python does rather than serving ``[3, 4, 5]``."""
     nb_runner.create_notebook(
         [
             "it = iter(range(6))",
@@ -332,4 +333,4 @@ def test_half_consumed_iterator_isolated_rerun_persist(nb_runner):
     assert "[0, 1, 2]" in nb_runner.get_output(2), nb_runner.get_output(2)
     assert "[3, 4, 5]" in nb_runner.get_output(3), nb_runner.get_output(3)
     nb_runner.run_cell(3)
-    assert "[3, 4, 5]" in nb_runner.get_output(3), f"isolated re-run of the tail consumer: {nb_runner.get_output(3)!r}"
+    assert "[]" in nb_runner.get_output(3), f"isolated re-run of the tail consumer: {nb_runner.get_output(3)!r}"
