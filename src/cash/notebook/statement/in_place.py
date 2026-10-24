@@ -13,11 +13,18 @@ Stored this way only when that restore is what plain Python gives
 (``__getstate__`` or ``__reduce__``, which may leave out what the loop
 added), or one that reaches itself, whose copy would point at the copy, runs
 the loop again, as do other names or containers holding it beside its own
-name (`holder_refusal`), and a weak reference to an object it holds or a
-dict or set of the notebook keyed by one's ``id()``: what it holds comes back
-as copies. A name bound to the object itself is fine: it is bound to the live
-object again. An ``id()`` key kept anywhere else (inside another object, in a
-module) is not seen.
+name (`holder_refusal`), and a weak reference the notebook holds to an
+object it holds, or an ``id()`` of one kept in a container of the notebook
+(`_held_by_the_notebook`): what it holds comes back as copies. A name bound
+to the object itself is fine: it is bound to the live object again. An
+``id()`` kept in a module, or below a container too big to walk, is not
+seen. A hit asks again of the live objects, since a weak reference made
+after the store finds a copy too.
+
+An object of a kind no restore goes into, which the loop only assigns into
+(``arr[i] = v``), is bound to the stored copy as any output is
+(`bound_as_a_copy`), unless the notebook holds it by a weak reference or
+its ``id()``.
 """
 
 from __future__ import annotations
@@ -29,14 +36,17 @@ import weakref
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from cash._user_attrs import attribute_or
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
-__all__ = ["holder_refusal", "ready", "refusal", "restore_into"]
+__all__ = ["bound_as_a_copy", "holder_refusal", "ready", "refusal", "restorable_kind", "restore_into"]
 
 #: Containers restored by their contents.
 _CONTAINERS = (list, dict, set)
 #: Most objects one check looks through: past it the loop runs again.
 _MAX_SEEN = 200_000
+#: A container with more items is not looked inside (`_held_by_the_notebook`).
+_MAX_SCANNED = 10_000
 #: What pickle's default handling of an object would be overridden by.
 _OWN_PICKLING = ("__reduce__", "__reduce_ex__", "__getstate__", "__setstate__", "__getnewargs_ex__", "__getnewargs__")
 #: Not looked into: what they hold is not the object's state as pickle sees it.
@@ -61,39 +71,122 @@ def _default_object(kind: type) -> bool:
 
 def refusal(obj: Any, namespace: Mapping[str, Any] | None = None) -> str | None:
     """Why *obj* cannot be restored into, or None. What it holds comes back
-    as copies, so a weak reference to one, or a key of a dict or set of
-    *namespace* that is the ``id()`` of one, refuses it too."""
+    as copies, so a weak reference the notebook holds to one, or an
+    ``id()`` of one kept in a container of *namespace*, refuses it too
+    (`_held_by_the_notebook`)."""
     kind = type(obj)
-    if kind not in _CONTAINERS and not _default_object(kind):
+    if not restorable_kind(obj):
         return f"a {kind.__name__} is not restored into the object it is, and a new one would not be that object"
     parts: set[int] = set()
-    found = _reaches(_state(obj), obj, weakly_held=True, seen=parts)
+    weakly: list[Any] = []
+    found = _reaches(_state(obj), obj, seen=parts, weakly=weakly)
     if found is None:
         return "it holds too many objects to check that it does not hold itself"
-    if found is _WEAKLY_HELD:
-        return "a weak reference points at an object it holds, and a restore would hand it a copy"
     if found:
         return "it holds itself, and a copy would hold the copy"
-    if namespace is not None and _keyed_by_id(parts, namespace):
-        return "a dict or set keys an object it holds by its id(), and a restore would hand it a copy"
+    # A weak reference the state holds itself comes back with it (pandas'
+    # between the blocks of a frame).
+    refs = [ref for item in weakly for ref in weakref.getweakrefs(item) if id(ref) not in parts]
+    held = _held_by_the_notebook(parts, refs, namespace or {})
+    if held == _WEAK:
+        return "a weak reference points at an object it holds, and a restore would hand it a copy"
+    if held == _BY_ID:
+        return "a container keeps the id() of an object it holds, and a restore would hand it a copy"
     return None
 
 
-def _keyed_by_id(parts: set[int], namespace: Mapping[str, Any]) -> bool:
-    """Whether a dict or set bound in *namespace* has the ``id()`` of one of
-    *parts* among its keys: ``reg = {id(p.seen): ...}``. A key that only
-    happens to equal one runs the loop again, which is always right."""
-    if not parts:
+def restorable_kind(obj: Any) -> bool:
+    """Whether *obj* is of a kind a restore can go into: a list, dict or
+    set, or an object whose ``__dict__`` is its state."""
+    kind = type(obj)
+    return kind in _CONTAINERS or _default_object(kind)
+
+
+def bound_as_a_copy(obj: Any, namespace: Mapping[str, Any]) -> bool:
+    """Whether *obj*, which a loop only assigns into, may be bound to the
+    stored copy as any output is (``arr[i] = v`` on a NumPy array): it is of
+    a kind no restore goes into, not a list, dict or set of a subclass (whose
+    own ``__setitem__`` a copy would call), and nothing holds it by identity,
+    a weak reference or its ``id()``."""
+    if restorable_kind(obj) or isinstance(obj, (list, dict, set)):
         return False
+    try:
+        refs = weakref.getweakrefs(obj)
+    except TypeError:
+        refs = []
+    return _held_by_the_notebook({id(obj)}, refs, namespace) is None
+
+
+#: Packages whose objects `_held_by_the_notebook` does not look into: the
+#: shell's ``exit`` reaches the shell, and through it cash's own records,
+#: which key objects by their ``id()``.
+_NOT_THE_NOTEBOOKS = frozenset({"IPython", "ipykernel", "jupyter_client", "traitlets", "zmq", "tornado", "cash"})
+
+#: What `_held_by_the_notebook` finds.
+_WEAK = "weak"
+_BY_ID = "by id"
+
+
+def _held_by_the_notebook(parts: set[int], refs: list[Any], namespace: Mapping[str, Any]) -> str | None:
+    """`_WEAK` when the notebook holds one of *refs*, the weak references to
+    an object of *parts* (by ``id()``): in a variable or a container of
+    *namespace* at any depth (dicts, lists, tuples, sets, an object's
+    ``__dict__``, so a ``WeakValueDictionary`` too, but not an object of
+    IPython's or cash's), or as a ``weakref.finalize``. Those cash keeps
+    itself are not the notebook's.
+    `_BY_ID` when one of those keeps the ``id()`` of one of *parts* as a
+    key or an item: ``reg = {id(p.seen): ...}``, ``ids = [id(p.seen)]``.
+    Else None.
+
+    A number that only happens to equal an ``id()`` runs the loop again,
+    which is always right; so do containers too many to look through. What
+    a container of more than `_MAX_SCANNED` items holds is looked at, but
+    not inside, nor for a weak reference: a list of a million tokens is
+    checked at C speed, and walking each item cost every restore 60 ms."""
+    if any(isinstance(attribute_or(ref, "__callback__"), weakref.finalize) for ref in refs):
+        return _WEAK
+    ref_ids = {id(ref) for ref in refs}
     budget = _MAX_SEEN
-    for value in list(namespace.values()):
-        if type(value) in (dict, set, frozenset):
-            if len(value) > budget:
-                return True
-            budget -= len(value)
-            if any(type(k) is int and k in parts for k in value):
-                return True
-    return False
+    seen: set[int] = set()
+    level = list(namespace.values())
+    if parts.intersection(v for v in level if type(v) is int):
+        return _BY_ID
+    while level:
+        if ref_ids and any(id(v) in ref_ids for v in level):
+            return _WEAK
+        nxt: list[Any] = []
+        for value in level:
+            kind = type(value)
+            if kind in (dict, list, tuple, set, frozenset):
+                items = value.keys() if kind is dict else value
+            elif (
+                isinstance(value, _OPAQUE)
+                or type(kind.__module__) is not str
+                or (kind.__module__.partition(".")[0] in _NOT_THE_NOTEBOOKS)
+            ):
+                continue
+            else:
+                state = attribute_or(value, "__dict__")
+                if type(state) is not dict:
+                    continue
+                items = state.values()
+            if id(value) in seen:
+                continue
+            seen.add(id(value))
+            try:
+                if not parts.isdisjoint(items):
+                    return _BY_ID
+            except TypeError:  # an unhashable item: one at a time
+                if any(type(item) is int and item in parts for item in items):
+                    return _BY_ID
+            if len(items) > _MAX_SCANNED:
+                continue
+            budget -= len(items) + 1
+            if budget < 0:
+                return _BY_ID
+            nxt.extend(value.values() if kind is dict else items)
+        level = [v for v in nxt if type(v) not in IMMUTABLE_LEAF_TYPES]
+    return None
 
 
 def holder_refusal(name: str, obj: Any, values: Mapping[str, Any]) -> str | None:
@@ -120,18 +213,12 @@ def _state(obj: Any) -> list[Any]:
     return [obj.__dict__]
 
 
-#: What `_reaches` gives for an object a weak reference points at.
-_WEAKLY_HELD = "weakly held"
-
-
 def _reaches(
-    roots: Iterable[Any], target: Any, weakly_held: bool = False, seen: set[int] | None = None
-) -> bool | str | None:
+    roots: Iterable[Any], target: Any, seen: set[int] | None = None, weakly: list[Any] | None = None
+) -> bool | None:
     """Whether *target* is among *roots* or what they hold; None past `_MAX_SEEN`.
-    With *weakly_held*, `_WEAKLY_HELD` when one of them is the referent of a
-    weak reference: the restore puts a copy of it in its place, which the
-    reference does not point at. *seen* gets the ``id()`` of each object
-    looked at."""
+    *seen* gets the ``id()`` of each object looked at, and *weakly* each one
+    a weak reference points at."""
     module_dicts = {id(vars(m)) for m in list(sys.modules.values()) if isinstance(m, types.ModuleType)}
     if seen is None:
         seen = set()
@@ -145,8 +232,8 @@ def _reaches(
             if key in seen or key in module_dicts or isinstance(item, _OPAQUE):
                 continue
             seen.add(key)
-            if weakly_held and weakref.getweakrefcount(item):
-                return _WEAKLY_HELD
+            if weakly is not None and weakref.getweakrefcount(item):
+                weakly.append(item)
             if len(seen) > _MAX_SEEN:
                 return None
             nxt.extend(ref for ref in gc.get_referents(item) if type(ref) not in IMMUTABLE_LEAF_TYPES)
