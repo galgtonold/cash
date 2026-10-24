@@ -2995,12 +2995,14 @@ class StatementProcessor:
                     gave_up=gave_up,
                 )
         except WalkBudgetExceeded:
-            # Cut short, the search hands back nothing (a holder its quick
-            # pass found included), and whether it runs out depends on the
+            gave_up = GaveUp(complete=False)
+        if not gave_up.complete:
+            # Cut short, or given up past a holder it could not climb, the
+            # search hands back what its last pass found, not a holder its
+            # quick pass found first; and whether it runs out depends on the
             # machine's speed. Each handed variable is linked to each class
             # the statement changed: a later change through one moves it on,
             # held there or not, and a reader runs again.
-            gave_up = GaveUp()
             gave_up.add(handed, changed | set(around))
         edges = self.tracking_state.derivation_edges
         for owners, holders in gave_up.links:
