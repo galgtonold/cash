@@ -1003,16 +1003,33 @@ def reducers(protocol: int = pickle.DEFAULT_PROTOCOL, extra: dict | None = None)
 _LOCK_TYPES = frozenset({type(threading.Lock()), type(threading.RLock())})
 
 
+def _refused(obj: Any) -> Any:
+    """A key's reduce of a writer cash puts in front of a stream: refused,
+    as the stream it stands for is."""
+    raise TypeError(f"cannot key {type(obj).__name__!r} object")
+
+
+def _stand_in(obj: Any, reducer: Any, watch: list | None) -> Any:
+    """*reducer*'s reduce of a writer cash puts in front of a stream, which
+    stores as the stream (``notebook/_tee.py``); *watch* is told, as a key
+    refuses it (`_refused`)."""
+    if watch is not None:
+        watch.append(True)
+    return reducer(obj)
+
+
 def _or_live(obj: Any, reducer: Any, watch: list | None = None) -> Any:
     """*reducer*'s reduce of *obj*; for one pickle refuses, a standard stream
     or a free lock, the stand-in `live_state.live_reduce` gives. What pickled
-    before pickles as it did. A lock is given one in the stored bytes only,
-    which *watch* (`_KeepDict`) is told of: its keyed bytes still refuse it.
+    before pickles as it did. The stand-in is in the stored bytes only, which
+    *watch* (`_KeepDict`) is told of: keyed bytes still refuse the object.
 
     A standard stream's own reduce may succeed and its state fail later
     (ipykernel's ``OutStream`` holds the session's HMAC): one is asked whether
     it pickles whole, which only the few streams bound in ``sys`` are."""
     if is_live_stream(obj) and not _pickles(obj):
+        if watch is not None:
+            watch.append(True)
         return live_reduce(obj)
     try:
         return reducer(obj)
@@ -1060,11 +1077,14 @@ class _KeepDict(dict):
             reducer = _names_apart(self._reducer(t), self._names)
             if _holds_dtype(t):
                 reducer = _dtypes_apart(reducer, self._dtypes)
-        if issubclass(t, io.IOBase):
-            reducer = functools.partial(_or_live, reducer=reducer)
-        elif t in _LOCK_TYPES and not self._keyed:
-            # Stored as a new free lock, never keyed as one: every free lock
-            # would key alike, and a key would lose which lock it was.
+        if self._keyed:
+            # A key refuses a stream and a lock as it did: what stands in for
+            # one is stored, never keyed (`live_state`).
+            if getattr(t, "_cash_wrapped_stream", None) is not None:
+                reducer = _refused
+        elif getattr(t, "_cash_wrapped_stream", None) is not None:
+            reducer = functools.partial(_stand_in, reducer=reducer, watch=self._watch)
+        elif issubclass(t, io.IOBase) or t in _LOCK_TYPES:
             reducer = functools.partial(_or_live, reducer=reducer, watch=self._watch)
         self[t] = reducer
         return reducer

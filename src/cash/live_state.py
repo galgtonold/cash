@@ -4,15 +4,20 @@ A progress bar holds the stream it writes to: ``pyprind.ProgBar(n,
 stream=sys.stdout)``. ``sys.stdout`` cannot be pickled, so neither could the
 bar, and a loop that called ``pbar.update()`` ran again after every restart.
 What plain Python gives after a restart and a Run All is a bar writing to the
-stream the process has then. So a stream that *is* ``sys.stdout`` or
+stream the process has then. So one of the process's own streams (the
+interpreter's or the kernel's, `_own_stream`) that is ``sys.stdout`` or
 ``sys.stderr`` (or ``sys.__stdout__`` / ``sys.__stderr__``) when it is
 stored is stored as that name, and a restore binds whatever the name holds
-now (`current_stream`). Any other file object stays unstorable.
+now (`current_stream`). Any other file object stays unstorable, also a file
+of the user's bound to ``sys.stdout`` as the object is stored.
 
 A lock an object holds for its own use is stored as a fresh unlocked lock of
 the same kind, when it is not held as it is stored; a held one stays
-unstorable. A key still refuses a lock (`kept_state._KeepDict`): every free
-lock would key alike, and the key would not say which lock it was.
+unstorable.
+
+Both are stand-ins in what is stored only: a key still refuses a stream and a
+lock (`kept_state._KeepDict`), as it did, so a decorated call given one runs
+and warns as before.
 
 Only what ``pickle`` refuses is stored this way (`live_reduce`), so nothing
 that could be stored before is stored, or keyed, differently.
@@ -40,13 +45,28 @@ def current_stream(name: str) -> Any:
     return getattr(sys, name)
 
 
+def _own_stream(obj: Any) -> bool:
+    """Whether *obj* is one of the process's own output streams: the
+    interpreter's (``sys.__stdout__``, ``sys.__stderr__``) or the kernel's
+    (ipykernel's ``OutStream``). A file of the user's that sits in
+    ``sys.stdout`` for a while is the user's, not the process's: a bar made
+    on it writes to that file, which a restore cannot give back."""
+    if obj is sys.__stdout__ or obj is sys.__stderr__:
+        return obj is not None
+    kind = type(obj)
+    return kind.__name__ == "OutStream" and kind.__module__.startswith("ipykernel.")
+
+
 def _stream_name(obj: Any) -> str | None:
-    """The ``sys`` name *obj* is bound to now, or None. A writer cash puts in
-    front of a stream while a cell runs (``notebook/_tee.py``) stands for the
-    stream it writes to."""
+    """The ``sys`` name *obj* is bound to now, or None; only for one of the
+    process's own streams (`_own_stream`). A writer cash puts in front of a
+    stream while a cell runs (``notebook/_tee.py``) stands for the stream it
+    writes to."""
     wrapped = getattr(type(obj), "_cash_wrapped_stream", None)
     if wrapped is not None:
         obj = wrapped(obj)
+    if not _own_stream(obj):
+        return None
     for name in _STREAM_NAMES:
         if getattr(sys, name, None) is obj:
             return name
