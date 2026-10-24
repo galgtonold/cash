@@ -12,6 +12,14 @@ a base class, a metaclass, or the class of an object reached through a list,
 a set, a dict's keys, a deque or another object's attribute;
 and when the bump is a method of the object (``type(self).held``) or of the
 metaclass (``K.bump(7)``).
+
+The edit runs the class cell again, and the new ``SBox`` has the old one's
+lineage: the cell that made ``boxes['s']`` was skipped, so it held an object
+of the old class, and ``hold`` added to the old class's list while
+``SBox.held`` stayed empty (``IndexError`` in the bump). A variable holding
+an object of a class defined anew is forgotten, so the cell making it runs
+again; when the variables cannot all be found, every one holding an object
+is, with a warning.
 """
 
 from __future__ import annotations
@@ -113,6 +121,15 @@ SHAPES = {
         DATA,
         "class A(Base):\n    meta = data['meta']",
         "Base.registry[-1].meta['n'] += 5",
+        READ,
+    ],
+    "an object kept from before the class cell ran again": [
+        "class Plain:\n    pass\nclass SBox:\n    held = []\n    def hold(self, d):\n        type(self).held.append(d)\n"
+        "    @classmethod\n    def bump(cls, n):\n        cls.held[-1]['n'] += n",
+        "boxes = {i: Plain() for i in range(65)}\nboxes['s'] = SBox()",
+        DATA,
+        "boxes['s'].hold(data['meta'])",
+        "SBox.bump(5)",
         READ,
     ],
     "an object in a list": [
@@ -231,12 +248,15 @@ def test_numbers_past_the_items_cash_reads_are_served(cash_magics, recwarn, big,
     assert not [w for w in recwarn if "NOTEBOOK-SHARE-UNCHECKED" in str(w.message)]
 
 
-def test_past_the_items_cash_reads_it_runs_and_warns(cash_magics):
+def test_past_the_items_cash_reads_it_runs_and_warns(cash_magics, monkeypatch):
     """Past the items cash reads, which class the call reaches is unknown:
     the statement runs every time, with a warning, and the class it reached
-    still moves ``data`` on."""
+    still moves ``data`` on. (The limit is lowered to keep the test quick.)"""
+    from cash.notebook.statement import processor
+
+    monkeypatch.setattr(processor, "_ITEMS_READ", 10_000)
     cells = list(SHAPES["the 65th item of a list"])
-    cells[1] = "boxes = [Plain()] * 1_000_000 + [SBox()]\ni = len(boxes) - 1"
+    cells[1] = "boxes = [Plain()] * 10_000 + [SBox()]\ni = len(boxes) - 1"
     cells[3] = "boxes[i].hold(data['meta'])"
     with pytest.warns(Warning, match="NOTEBOOK-SHARE-UNCHECKED"):
         for rnd in range(3):
@@ -246,3 +266,27 @@ def test_past_the_items_cash_reads_it_runs_and_warns(cash_magics):
                 run_cash_cell(cash_magics, cell, cells=cells)
             expected = sum(range(3000)) + (6 if rnd == 0 else 8)
             assert cash_magics.shell.user_ns["result"] == expected, f"run {rnd + 1} served a value from before"
+
+
+def test_holders_of_a_class_defined_anew_not_all_found_are_all_rebuilt(cash_magics, monkeypatch):
+    """When the climb to the variables holding an object of the old class is
+    cut short, every variable holding an object is forgotten, and
+    NOTEBOOK-SHARE-UNCHECKED says so."""
+    from cash.notebook.statement import processor
+
+    climb = processor.referring_names
+    cut = []
+
+    def cut_short(roots, *args, **kwargs):
+        names, _complete = climb(roots, *args, **kwargs)
+        if any(type(root).__name__ == "SBox" for root in roots):
+            cut.append(names)
+            return set(), False
+        return names, _complete
+
+    monkeypatch.setattr(processor, "referring_names", cut_short)
+    with pytest.warns(Warning, match="NOTEBOOK-SHARE-UNCHECKED"):
+        test_an_edited_change_through_the_class_is_not_served_from_before(
+            cash_magics, "an object kept from before the class cell ran again"
+        )
+    assert cut, "the climb from the old class's objects never ran"

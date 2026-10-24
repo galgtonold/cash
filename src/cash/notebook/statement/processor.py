@@ -6,6 +6,7 @@ import ast
 import collections
 import contextlib
 import functools
+import gc
 import hashlib
 import io
 import itertools
@@ -465,6 +466,22 @@ def _defined_class_bases(tree: ast.AST, user_ns: Mapping[str, Any]) -> list[type
         for base in node.bases
         if isinstance(base, ast.Name) and instance_of(user_ns.get(base.id), type)
     ]
+
+
+def _classes_it_redefines(tree: ast.AST | None, user_ns: Mapping[str, Any]) -> dict[str, type]:
+    """The class each top-level ``class`` statement of *tree* binds its name
+    over, by name: the ones a run will replace."""
+    return {
+        node.name: user_ns[node.name]
+        for node in getattr(tree, "body", ())
+        if isinstance(node, ast.ClassDef) and instance_of(user_ns.get(node.name), type)
+    }
+
+
+def _instances_of(classes: Collection[type]) -> list[Any]:
+    """The live objects whose class is one of *classes* (one heap scan)."""
+    exact = {id(cls) for cls in classes}
+    return [obj for obj in gc.get_referrers(*classes) if id(type(obj)) in exact and not isinstance(obj, type)]
 
 
 def _has_class_state(cls: type, value_types: tuple[type, ...]) -> bool:
@@ -1935,6 +1952,7 @@ class StatementProcessor:
                 run.memo_used = True
         run.handed_iterable = handed
         run.class_state_before = self._class_states_around(run)
+        run.classes_before = _classes_it_redefines(run.tree, self.shell.user_ns)
         runner = CodeRunner(code, source, tree, run.is_last, self.shell.user_ns)
         execution = runner.execution
         marks = self._calls.cash_time_marks()
@@ -2706,6 +2724,7 @@ class StatementProcessor:
                 with self._after_it_ran(run):
                     self._record_file_effects(run, execution)
                 self._note_per_item_rerun(run, execution)
+                self._forget_holders_of_replaced_classes(run, execution.cost)
 
                 # Detect in-place mutations (detection-only; do not modify lineage).
                 # Reuses the StatementAnalysis from process_statement to avoid a
@@ -3444,6 +3463,76 @@ class StatementProcessor:
             "It runs every time instead of being served."
         )
         fix = "nothing, if it is fast enough; otherwise call the method on the object by a name of its own."
+        log_diagnostic(logger, "NOTEBOOK-SHARE-UNCHECKED", what, fix)
+        from cash.notebook.ipython.cell_count import running_cell_count  # the ipython package imports this one
+
+        location = ("<cash>", running_cell_count(self.shell))
+        warn_diagnostic(CashWarning, "NOTEBOOK-SHARE-UNCHECKED", what, fix, location=location)
+
+    def _forget_holders_of_replaced_classes(self, run: StatementRun, cost: float = 0.0) -> None:
+        """Forget the lineage of every variable holding an object of a class
+        *run* defined anew (`forget_variable`).
+
+        ``boxes['s'] = SBox()`` holds an object of the ``SBox`` the class
+        cell made before it ran again; the new class has the old one's
+        lineage, so the cell that built ``boxes`` would be skipped, and
+        ``boxes['s'].hold(d)`` would add to the old class's list while
+        ``SBox.held`` stays empty, where a run from the top makes the object
+        of the new class. Without a lineage, the cell building it runs again
+        and what reads it runs uncached until it does. When the climb to the
+        variables is cut short (`referring_names`), every variable that holds
+        an object is forgotten, and NOTEBOOK-SHARE-UNCHECKED says why.
+        """
+        user_ns = self.shell.user_ns
+        replaced = [cls for name, cls in run.classes_before.items() if user_ns.get(name) is not cls]
+        run.classes_before = {}
+        if not replaced:
+            return
+        complete = not heap_unreadable()
+        names: set[str] = set()
+        if complete:
+            instances = _instances_of(replaced)
+            if not instances:
+                return
+            names, complete = referring_names(
+                instances,
+                user_ns,
+                share_check_budget(cost),
+                skip_name=lambda name: instance_of(user_ns.get(name), type),
+                ignore=[replaced, run.metrics],
+            )
+            del instances
+        if not complete:
+            value_types = VALUE_TYPES + library_value_types()
+            names = {
+                name
+                for name, value in list(user_ns.items())
+                if not name.startswith("_")
+                and not is_value(value, value_types)
+                and not instance_of(value, (type, types.ModuleType, types.FunctionType))
+            }
+            self._warn_holders_unfound(run, sorted(cls.__name__ for cls in replaced), cost)
+        for name in names:
+            self.forget_variable(name)
+
+    def _warn_holders_unfound(self, run: StatementRun, classes: list[str], cost: float) -> None:
+        """Warn (``NOTEBOOK-SHARE-UNCHECKED``) that the variables holding an
+        object of a class defined anew were not all found, so every variable
+        holding an object is rebuilt."""
+        if run.source_hash in self._share_unchecked_warned:
+            return
+        self._share_unchecked_warned.add(run.source_hash)
+        listed = ", ".join(f"'{name}'" for name in classes)
+        if heap_unreadable():
+            within = f": Python {_PYTHON} with asyncio loaded cannot read what holds an object"
+        else:
+            within = f" within {share_check_budget(cost):.1f}s"
+        what = (
+            f"cash could not find every variable holding an object of the class {listed} defined before this "
+            f"cell ran again{within}. The cells that build any variable holding an object re-run, as they "
+            "would in a run from the top."
+        )
+        fix = "nothing to do; re-run the cells that make objects of the class right after it if they are slow."
         log_diagnostic(logger, "NOTEBOOK-SHARE-UNCHECKED", what, fix)
         from cash.notebook.ipython.cell_count import running_cell_count  # the ipython package imports this one
 
