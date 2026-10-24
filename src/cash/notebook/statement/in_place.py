@@ -29,6 +29,7 @@ import weakref
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from cash.live_state import is_live_stream
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 __all__ = ["holder_refusal", "ready", "refusal", "restore_into"]
@@ -142,7 +143,8 @@ def _reaches(
             if item is target:
                 return True
             key = id(item)
-            if key in seen or key in module_dicts or isinstance(item, _OPAQUE):
+            if key in seen or key in module_dicts or isinstance(item, _OPAQUE) or is_live_stream(item):
+                # A standard stream comes back as itself (`live_state`).
                 continue
             seen.add(key)
             if weakly_held and weakref.getweakrefcount(item):
