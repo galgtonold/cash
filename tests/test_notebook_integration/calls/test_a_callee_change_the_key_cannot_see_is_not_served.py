@@ -23,6 +23,8 @@ SETUP = (
     "PUSH = LOG.append\n"
     "CV = contextvars.ContextVar('cv', default=0)\n"
     "Q = queue.Queue()\nSQ = queue.SimpleQueue()\nEV = threading.Event()\n"
+    "H = {'e': threading.Event()}\nclass BOX: pass\nBOX.q = queue.Queue()\n"
+    "LK = threading.Lock()\nRL = threading.RLock()\nSEM = threading.Semaphore(3)\n"
 )
 
 BODIES = {
@@ -41,6 +43,12 @@ BODIES = {
     "queue_put": ("Q.put(x)", "n = Q.qsize()", 1),
     "simple_queue_put": ("SQ.put(x)", "n = SQ.qsize()", 1),
     "event_set": ("EV.set()", "n = EV.is_set()", True),
+    # Held one level down: by a dict, by a class.
+    "event_in_a_dict": ("H['e'].set()", "n = H['e'].is_set()", True),
+    "queue_on_a_class": ("BOX.q.put(x)", "n = BOX.q.qsize()", 1),
+    "lock_acquire": ("LK.acquire(blocking=False)", "n = LK.locked()", True),
+    "rlock_acquire": ("RL.acquire(blocking=False)", "n = repr(RL).startswith('<locked')", True),
+    "semaphore_acquire": ("SEM.acquire(blocking=False)", "n = SEM._value", 2),
 }
 
 
