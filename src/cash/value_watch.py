@@ -50,6 +50,7 @@ __all__ = [
     "KIND_VALUE",
     "KIND_WALKED",
     "add_namespace",
+    "shells",
     "WatchMismatch",
     "classify",
     "digest",
@@ -285,6 +286,11 @@ def add_namespace(shell: Any) -> None:
     except TypeError:
         return
     _SHELLS[:] = [ref, *(other for other in _SHELLS if other() is not None and other() is not shell)][:4]
+
+
+def shells() -> list:
+    """The shells cash runs a notebook in (`add_namespace`) still alive."""
+    return [shell for shell in (ref() for ref in _SHELLS) if shell is not None]
 
 
 def _anchors() -> tuple:

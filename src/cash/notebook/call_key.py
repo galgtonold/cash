@@ -247,7 +247,11 @@ def holds_a_stream(fn) -> bool:
         return False
     from cash import value_watch
 
+    # The shell (``get_ipython = lambda: shell``) holds the whole session:
+    # the kernel's own, never the function's stream, and past the bounds.
+    kernel = {id(shell) for shell in value_watch.shells()}
     walk = _StreamWalk(id(fn))
+    walk.seen |= kernel
     for part in parts:
         kind = type(part)
         if kind in _EXACT_ATOMS:
@@ -262,14 +266,14 @@ def holds_a_stream(fn) -> bool:
             walked = []
             found = value_watch.digest(
                 part,
-                lambda value: walked.append(value) or walk.part(value, {id(fn)}),
+                lambda value: walked.append(value) or walk.part(value, {id(fn), *kernel}),
                 value_watch.KIND_NO_STREAM,
                 _kept_as_clean,
             )
             if type(found) is _HoldersMet and not walked:
                 # The table is as it was; the functions and classes it
                 # holds may not be: what they hold is read again.
-                found = walk.holders_now(found.holders, id(fn))
+                found = walk.holders_now(found.holders, {id(fn), *kernel})
         else:
             found = walk.part(part)
         if found is _HOLDS:
@@ -391,10 +395,10 @@ class _StreamWalk:
             return _UNSEEN
         return _HoldersMet(tuple(holders)) if holders else _CLEAN
 
-    def holders_now(self, holders: tuple, fn_id: int) -> Any:
+    def holders_now(self, holders: tuple, skipped: set[int]) -> Any:
         """``_HOLDS`` when one of *holders*, met in a part kept as holding no
-        stream, holds one now."""
-        seen = {fn_id}
+        stream, holds one now; *skipped*, the ids not walked."""
+        seen = set(skipped)
         for holder in holders:
             if self.part(holder, seen) is _HOLDS:
                 return _HOLDS
