@@ -6,7 +6,6 @@ import ast
 import contextlib
 import functools
 import io
-import itertools
 import logging
 import os
 import secrets
@@ -293,10 +292,13 @@ def _entry_values(cached_data: Any) -> dict[str, Any] | None:
     return variables if isinstance(variables, dict) else None
 
 
-#: Most items of a list, tuple or dict input whose classes
-#: `_classes_with_state` asks: ``boxes[0].hold(d)`` reaches its object
-#: through one.
-_ITEMS_ASKED = 64
+#: Most items, of all the lists, tuples and dicts among a statement's
+#: inputs together, whose classes `_classes_with_state` reads, and how deep
+#: it reads into lists of lists: ``boxes[64].hold(d)`` and
+#: ``boxes[0][0].hold(d)`` reach their object through one. Past them it
+#: cannot tell which class a call reached.
+_ITEMS_READ = 100_000
+_DEPTH_READ = 4
 
 
 def _calls_a_method(tree: ast.AST | None) -> bool:
@@ -307,35 +309,85 @@ def _calls_a_method(tree: ast.AST | None) -> bool:
 
 def _classes_with_state(
     values: list[Any], user_ns: Mapping[str, Any], value_types: tuple[type, ...]
-) -> dict[str, set[str]]:
-    """The notebook's classes with state of their own (an attribute that
-    is no value, function or class) around *values*: a class among them,
-    its bases and its metaclass's, and for any other value the same of its
-    class, or of the classes of a list's, tuple's or dict's first items.
-    Each by its name, with the names of the classes of *values* it came
-    from (`_link_inputs_kept_by`)."""
+) -> tuple[dict[str, set[str]], bool]:
+    """``(found, unread)``: the notebook's classes with state of their own
+    (an attribute that is no value, function or class) around *values*: a
+    class among them, its bases and its metaclass's, and for any other value
+    the same of its class, or of the classes of the items of a list, tuple
+    or dict, and of theirs (`_ITEMS_READ`, `_DEPTH_READ`). Each by its name,
+    with the names of the classes of *values* it came from
+    (`_link_inputs_kept_by`). *unread* is True when items were left unread."""
     named = {id(value): name for name, value in user_ns.items() if instance_of(value, type)}
     if not named:
-        return {}
+        return {}, False
     found: dict[str, set[str]] = {}
+    left = _ITEMS_READ
+    unread = False
     for value in values:
         if instance_of(value, (types.ModuleType, types.FunctionType)) or is_value(value, value_types):
             continue
         if instance_of(value, type):
-            classes = [value]
+            classes = {value}
         else:
-            classes = [type(value)]
-            if type(value) in (list, tuple):
-                classes += [type(item) for item in value[:_ITEMS_ASKED]]
-            elif type(value) is dict:
-                classes += [type(item) for item in itertools.islice(value.values(), _ITEMS_ASKED)]
+            classes = {type(value)}
+            seen: set[int] = set()
+            stack = [(value, 0)]
+            while stack:
+                container, depth = stack.pop()
+                if type(container) not in (list, tuple, dict) or id(container) in seen:
+                    continue
+                seen.add(id(container))
+                items = container.values() if type(container) is dict else container
+                if len(items) > left or depth >= _DEPTH_READ:
+                    unread = unread or len(items) > 0
+                    continue
+                left -= len(items)
+                for item in items:
+                    classes.add(type(item))
+                    if type(item) in (list, tuple, dict):
+                        stack.append((item, depth + 1))
         for cls in classes:
             origin = named.get(id(cls))
             for related in (*cls.__mro__, *type(cls).__mro__):
                 name = named.get(id(related))
                 if name is not None and _has_class_state(related, value_types):
                     found.setdefault(name, set()).update({origin} if origin else ())
-    return found
+    return found, unread
+
+
+#: Most objects `_class_state` reads of one class.
+_STATE_READ = 1_000
+
+
+def _class_state(cls: type) -> tuple | None:
+    """What *cls* keeps in its own attributes, by identity and length, down
+    through lists, tuples, dicts, sets and objects' attributes: equal before
+    and after a statement when it put nothing on the class. None past
+    `_STATE_READ` objects, when it cannot tell."""
+    out: list[Any] = []
+    seen: set[int] = set()
+    stack: list[Any] = [value for key, value in vars(cls).items() if not (key.startswith("__") and key.endswith("__"))]
+    while stack:
+        value = stack.pop()
+        out.append(id(value))
+        if id(value) in seen or instance_of(value, (type, types.ModuleType, types.FunctionType)):
+            continue
+        seen.add(id(value))
+        if len(seen) > _STATE_READ:
+            return None
+        if type(value) in (list, tuple, set, frozenset):
+            out.append(len(value))
+            stack.extend(value)
+        elif type(value) is dict:
+            out.append(len(value))
+            stack.extend(value.keys())
+            stack.extend(value.values())
+        else:
+            attributes = attribute_or(value, "__dict__", None)
+            if type(attributes) is dict:
+                out.append(len(attributes))
+                stack.extend(attributes.values())
+    return tuple(out)
 
 
 def _has_class_state(cls: type, value_types: tuple[type, ...]) -> bool:
@@ -1739,6 +1791,7 @@ class StatementProcessor:
                 source = ast.unparse(tree)
                 run.memo_used = True
         run.handed_iterable = handed
+        run.class_state_before = self._class_states_around(run)
         runner = CodeRunner(code, source, tree, run.is_last, self.shell.user_ns)
         execution = runner.execution
         marks = self._calls.cash_time_marks()
@@ -2888,12 +2941,33 @@ class StatementProcessor:
         }
         self._note_class_changes(run, {name for name in changed if instance_of(user_ns[name], type)})
         value_types = VALUE_TYPES + library_value_types()
-        around = _classes_with_state(
+        around, unread = _classes_with_state(
             [user_ns[name] for name in changed if instance_of(user_ns[name], type)]
             + ([user_ns[name] for name in run.inputs if name in user_ns] if _calls_a_method(run.tree) else []),
             user_ns,
             value_types,
         )
+        stateful = (
+            [
+                name
+                for name, value in list(user_ns.items())
+                if instance_of(value, type) and name not in around and _has_class_state(value, value_types)
+            ]
+            if unread
+            else []
+        )
+        if stateful:
+            # Past the items read, any class with state may be the one the
+            # call reached and left what it was handed on: each moves it on,
+            # and a hit would not put it there.
+            around.update((name, set()) for name in stateful)
+            if not run.skip_cache:
+                run.skip_cache = True
+                run.metrics["uncacheable_reasons"].append(
+                    "Calls a method through a list too big or too deep for cash to read which classes it reaches "
+                    "(statement re-executes)"
+                )
+            self._warn_classes_unread(run)
         if not changed and not around:
             return
         handed = [
@@ -2935,7 +3009,17 @@ class StatementProcessor:
                 unnamed = sorted(kept_by - run.outputs)
                 kept_by |= {origin for name in kept_by for origin in around.get(name, ()) if origin in changed}
                 record_shared_object_edges(edges, set(owners) & set(handed), kept_by)
-                self._note_class_changes(run, {name for name in kept_by if instance_of(user_ns.get(name), type)})
+                before = run.class_state_before
+                # Kept by an earlier statement (``Model.instances.append(self)``
+                # in ``__init__``), the value is no part of what this one did.
+                unnamed = [
+                    name
+                    for name in unnamed
+                    if before is None or before.get(name) is None or _class_state(user_ns[name]) != before[name]
+                ]
+                self._note_class_changes(
+                    run, {name for name in set(unnamed) | (kept_by & changed) if instance_of(user_ns.get(name), type)}
+                )
                 if unnamed and not run.skip_cache:
                     # A hit restores the outputs and nothing else: what it
                     # put on a class it does not name would be missing.
@@ -3129,6 +3213,40 @@ class StatementProcessor:
                     links.append(([name], readable - {name}))
             return links, False
         return links, True
+
+    def _class_states_around(self, run: StatementRun) -> dict[str, tuple | None] | None:
+        """Before *run* executes: the state of each class with state its
+        method calls can reach (`_classes_with_state`, `_class_state`), for
+        `_link_inputs_kept_by` to tell a class it changed from one it found
+        already keeping a value. None when it calls no method."""
+        if run.tree is None or is_control_body(run.code) or not _calls_a_method(run.tree):
+            return None
+        user_ns = self.shell.user_ns
+        around, _unread = _classes_with_state(
+            [user_ns[name] for name in run.inputs if name in user_ns],
+            user_ns,
+            VALUE_TYPES + library_value_types(),
+        )
+        return {name: _class_state(user_ns[name]) for name in around}
+
+    def _warn_classes_unread(self, run: StatementRun) -> None:
+        """Warn, once per statement, that it runs every time because the
+        classes its method calls reach could not all be read
+        (``NOTEBOOK-SHARE-UNCHECKED``)."""
+        if run.source_hash in self._share_unchecked_warned:
+            return
+        self._share_unchecked_warned.add(run.source_hash)
+        what = (
+            f"`{run.code.strip().splitlines()[0][:80]}` calls a method through a list or dict with more items, "
+            "or more levels, than cash reads, so it cannot tell which class may keep what it hands on. "
+            "It runs every time instead of being served."
+        )
+        fix = "nothing, if it is fast enough; otherwise call the method on the object by a name of its own."
+        log_diagnostic(logger, "NOTEBOOK-SHARE-UNCHECKED", what, fix)
+        from cash.notebook.ipython.cell_count import running_cell_count  # the ipython package imports this one
+
+        location = ("<cash>", running_cell_count(self.shell))
+        warn_diagnostic(CashWarning, "NOTEBOOK-SHARE-UNCHECKED", what, fix, location=location)
 
     def _warn_share_unchecked(self, run: StatementRun, outputs: list[str], cost: float) -> None:
         """Warn, once per statement, that the variables sharing an object

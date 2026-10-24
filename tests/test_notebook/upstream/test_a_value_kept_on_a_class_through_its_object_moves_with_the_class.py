@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import pytest
 
+from cash.notebook.cache_status import CacheStatus
 from tests._cell_driver import run_cash_cell
 
 pytestmark = pytest.mark.core
@@ -86,6 +87,24 @@ SHAPES = {
         "K.bump(5)",
         READ,
     ],
+    "the 65th item of a list": [
+        "class Plain:\n    pass\nclass SBox:\n    held = []\n    def hold(self, d):\n        type(self).held.append(d)\n"
+        "    @classmethod\n    def bump(cls, n):\n        cls.held[-1]['n'] += n",
+        "boxes = [Plain()] * 64 + [SBox()]",
+        DATA,
+        "boxes[64].hold(data['meta'])",
+        "SBox.bump(5)",
+        READ,
+    ],
+    "an object in a list in a list": [
+        "class SBox:\n    held = []\n    def hold(self, d):\n        type(self).held.append(d)\n"
+        "    @classmethod\n    def bump(cls, n):\n        cls.held[-1]['n'] += n",
+        "boxes = [[SBox()]]",
+        DATA,
+        "boxes[0][0].hold(data['meta'])",
+        "SBox.bump(5)",
+        READ,
+    ],
     "an object in a list": [
         "class SBox:\n    held = []\n    def hold(self, d):\n        type(self).held.append(d)\n"
         "    @classmethod\n    def bump(cls, n):\n        cls.held[-1]['n'] += n",
@@ -129,3 +148,41 @@ def test_a_holder_search_cut_short_still_links_the_class(cash_magics, monkeypatc
 
     monkeypatch.setattr(processor, "share_group", cut_short)
     test_an_edited_change_through_the_class_is_not_served_from_before(cash_magics, "through-an-object")
+
+
+def test_a_read_through_objects_a_class_already_keeps_is_served(cash_magics):
+    """``Model.instances`` keeps each model, put there by ``__init__`` in the
+    cell above; ``scores = [x.score(data) for x in models]`` puts nothing on
+    the class, and is served on the next run."""
+    cells = [
+        "import time\nclass Model:\n    instances = []\n    def __init__(self, k):\n        self.k = k\n"
+        "        Model.instances.append(self)\n    def score(self, d):\n        time.sleep(0.2)\n"
+        "        return sum(d) * self.k",
+        "data = list(range(1000))",
+        "models = [Model(i) for i in range(3)]",
+        "scores = [x.score(data) for x in models]",
+    ]
+    statuses = []
+    for _ in range(2):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        statuses.append(cash_magics.cash_status("dict")["last_cell"]["statements"][-1].get("status"))
+    assert cash_magics.shell.user_ns["scores"] == [0, 499500, 999000]
+    assert statuses[1] == CacheStatus.RESTORED, statuses
+
+
+def test_past_the_items_cash_reads_it_runs_and_warns(cash_magics):
+    """Past the items cash reads, which class the call reaches is unknown:
+    the statement runs every time, with a warning, and the class it reached
+    still moves ``data`` on."""
+    cells = list(SHAPES["the 65th item of a list"])
+    cells[1] = "boxes = [Plain()] * 100_000 + [SBox()]\ni = len(boxes) - 1"
+    cells[3] = "boxes[i].hold(data['meta'])"
+    with pytest.warns(Warning, match="NOTEBOOK-SHARE-UNCHECKED"):
+        for rnd in range(3):
+            if rnd == 1:
+                cells[4] = cells[4].replace("5", "7")
+            for cell in cells:
+                run_cash_cell(cash_magics, cell, cells=cells)
+            expected = sum(range(3000)) + (6 if rnd == 0 else 8)
+            assert cash_magics.shell.user_ns["result"] == expected, f"run {rnd + 1} served a value from before"
