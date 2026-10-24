@@ -612,12 +612,38 @@ def _scalars_of_no_state(items: list) -> bool:
     its value, or a pandas date or missing value with no attribute set on
     it: the key reads what is set (``t.tag = 1``), so a list of them is
     unchanged only while that is nothing (`_lists_unchanged`). A subclass
-    of ``int`` or ``datetime`` holds its attributes too."""
+    of ``int`` or ``datetime`` holds its attributes too, and so does a
+    time zone of the user's own (``tz.h = 5``): a date is trusted only with
+    no zone or one of the standard library's (`_plain_zones`)."""
     plain, stateful = _plain_scalar_types()
     kinds = set(map(type, items))
     if not kinds <= plain | stateful:
         return False
+    zoned, zones = _plain_zones()
+    if not kinds.isdisjoint(zoned):
+        dates = itertools.compress(items, map(zoned.__contains__, map(type, items)))
+        if not set(map(type, map(_TZINFO, dates))) <= zones:
+            return False
     return kinds.isdisjoint(stateful) or not any(map(_OWN_STATE, _stateful_of(items)))
+
+
+_TZINFO = operator.attrgetter("tzinfo")
+
+
+@functools.cache
+def _plain_zones() -> tuple[frozenset[type], frozenset[type]]:
+    """The scalar types that carry a time zone, and the types of zone that
+    hold nothing a later write can change: none, ``datetime.timezone`` and
+    ``zoneinfo.ZoneInfo``."""
+    import datetime
+    import zoneinfo
+
+    import pandas as pd
+
+    return (
+        frozenset((datetime.datetime, datetime.time, pd.Timestamp)),
+        frozenset((type(None), datetime.timezone, zoneinfo.ZoneInfo)),
+    )
 
 
 def _stateful_of(items: list) -> list:
