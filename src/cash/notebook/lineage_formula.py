@@ -402,10 +402,36 @@ def no_cache_value_digest(value: Any) -> str:
     # Within the budget of a check whether a value changed: a list of 8
     # million tuples took 8 s to hash on every run. Past it, the value is
     # taken as new, as one that cannot be hashed is.
-    digest = budgeted_hash(value)
+    digest = _function_digest(value) if type(value) is types.FunctionType else budgeted_hash(value)
     if digest is None or is_identity_fallback_hash(value, digest):
         return "fresh:" + secrets.token_hex(16)
     return digest
+
+
+def _function_digest(fn: types.FunctionType, depth: int = 0) -> str | None:
+    """A function by what it runs and holds: its code (`held_code_digest`)
+    and the values of its defaults and closure cells, a function among them
+    the same way. ``bump, peek = make_counter()`` remade by each Run All is
+    the same ``peek`` while its ``n`` is; by identity, a statement reading
+    it ran again each time. None when a value cannot be hashed."""
+    parts = [held_code_digest(fn) or fn.__code__.co_qualname]
+    held: list[Any] = [*(fn.__defaults__ or ()), *(fn.__kwdefaults__ or {}).values()]
+    for cell in fn.__closure__ or ():
+        try:
+            held.append(cell.cell_contents)
+        except ValueError:  # an empty cell
+            held.append(None)
+    for value in held:
+        if type(value) is types.FunctionType:
+            part = _function_digest(value, depth + 1) if depth < 4 else None
+        else:
+            part = budgeted_hash(value)
+            if part is not None and is_identity_fallback_hash(value, part):
+                part = None
+        if part is None:
+            return None
+        parts.append(part)
+    return hashlib.sha256("\0".join(parts).encode()).hexdigest()
 
 
 def value_digests_key(source_hash: str, input_lineages: Mapping[str, str], occurrence_index: int = 0) -> str:
