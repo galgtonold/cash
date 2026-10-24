@@ -40,6 +40,7 @@ from cash.analysis.callee_effects import resolve_function_def, source_global_mut
 from cash.analysis.namespace_effects import bound_to_state, capturable_globals, function_handoffs
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
 from cash.install_paths import is_user_code_module, is_user_path
+from cash.mutation_fingerprint import sync_state
 from cash.notebook import shadow as _shadow
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_effects import closure_cells, rebinds_its_closure
@@ -251,8 +252,15 @@ def _watched_names(fn, globals_dict: dict) -> set[str]:
         # Nothing to read what it does with them from: every global it loads.
         return set(loads)
     handed = function_handoffs(fdef, globals_dict, functools.partial(_user_source, globals_dict))[1]
-    bound = {name for name in loads if bound_to_state(globals_dict.get(name))}
+    bound = {name for name in loads if bound_to_state(globals_dict.get(name)) or _holds_sync(globals_dict.get(name))}
     return {*handed, *bound, *(name for name in _source_mutations(fn) if instance_of(globals_dict.get(name), type))}
+
+
+def _holds_sync(value) -> bool:
+    """A class holding a queue, a lock or an event (``B.q = Queue()``): its
+    text calls a method on what the class holds (``B.q.put(n)``), which no
+    rule says changes the class."""
+    return instance_of(value, type) and sync_state(value) is not None
 
 
 #: ``code object -> its function's parsed def``, or None when its text cannot be read.

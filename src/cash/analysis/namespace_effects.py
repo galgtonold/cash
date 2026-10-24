@@ -29,6 +29,7 @@ from ..diagnostics import warn_diagnostic
 from ..effects import is_open_write_mode
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..install_paths import is_user_code_file
+from ..mutation_fingerprint import sync_state
 from ..purity import is_pure
 from ..source_reading import own_source, wrapper_layers
 from ..tracking.randomness.state import rng_carrier_kind
@@ -1753,7 +1754,7 @@ def _call_handoffs(
                 base = base.value
         if (
             isinstance(base, ast.Name)
-            and not (base.id not in local and _followed_elsewhere(user_ns.get(base.id)))
+            and not (base.id not in local and _followed_elsewhere(_receiver_held(func.value, base.id, user_ns)))
             and func.attr not in RECEIVER_READONLY_WRITE_METHODS
             and not chain_is_pure(func.attr, frozenset())
         ):
@@ -1795,6 +1796,34 @@ def _followed_elsewhere(value: Any) -> bool:
     if issubclass(type(value), (types.ModuleType, type, pathlib.PurePath, _IMMUTABLE_ARGUMENT_TYPES)):
         return True
     return inspect.isroutine(value) or rng_carrier_kind(value) is not None
+
+
+def _class_holding_sync(value: Any) -> bool:
+    """A class holding a queue, a lock or an event (``B.q = Queue()``): a
+    call changes what it holds in place (``B.q.put(n)``)."""
+    return isinstance(value, type) and sync_state(value) is not None
+
+
+def _receiver_held(receiver: ast.expr, root: str, user_ns: Mapping[str, Any]) -> Any:
+    """What *root*, the global a method's *receiver* starts from, holds, or,
+    when it is a class and the receiver one of its attributes (``B.q`` in
+    ``B.q.put(n)``), what the class holds there: a class no call changes,
+    what it holds a call may."""
+    value = user_ns.get(root)
+    chain: list[str] = []
+    node = receiver
+    while isinstance(node, ast.Attribute):
+        chain.append(node.attr)
+        node = node.value
+    if not chain or not isinstance(node, ast.Name) or not isinstance(value, type):
+        return value
+    held = value
+    for attr in reversed(chain):
+        try:
+            held = inspect.getattr_static(held, attr)
+        except AttributeError:
+            return value
+    return held
 
 
 def _readable_function(name: str, resolve_source: Callable[[str], str | None] | None):
@@ -2229,7 +2258,7 @@ def _changeable(names: set[str], user_ns: Mapping[str, Any]) -> frozenset[str]:
         if name not in user_ns:
             continue
         value = user_ns[name]
-        if instance_of(value, (types.ModuleType, type, _IMMUTABLE_ARGUMENT_TYPES)):
+        if instance_of(value, (types.ModuleType, type, _IMMUTABLE_ARGUMENT_TYPES)) and not _class_holding_sync(value):
             continue
         if bound_to_state(value):
             # ``PUSH = LOG.append``: what changes is ``LOG``, watched by the

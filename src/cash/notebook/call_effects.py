@@ -38,6 +38,7 @@ from cash.decorator.arg_hashing import (
     is_cow_pandas,
     watch_array_handles,
 )
+from cash.mutation_fingerprint import sync_state
 from cash.notebook._tee import StreamTaken, TeeWriter
 from cash.sizing import pandas_nbytes
 from cash.source_reading import wrapper_layers
@@ -394,7 +395,10 @@ class ArgFingerprints:
         if builtin_family_of(type(value)) == "polars":
             return self._polars_digest(value)
         if not is_cow_pandas(value):
-            return compute_hash(value)
+            digest = compute_hash(value)
+            # A queue a class holds (``B.q.put(n)``): what it holds.
+            held = sync_state(value)
+            return digest if held is None else f"{digest}|sync|{held}"
         found = self._lookup(value)
         if found is not None:
             return found

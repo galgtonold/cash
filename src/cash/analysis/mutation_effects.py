@@ -29,6 +29,7 @@ from cash._user_attrs import attribute_or, instance_of
 
 from ..content_hashers import builtin_hash_family
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..mutation_fingerprint import sync_state
 from ..tracking.randomness.state import rng_carrier_kind
 from ..value_types import BUILTIN_NAMES
 from .aliases import aliased_sources
@@ -994,6 +995,10 @@ def _watchable(name: str, namespace: Mapping[str, Any], is_module: Callable[[str
     if is_module(name) or name not in namespace:
         return False
     value = namespace[name]
+    if isinstance(value, type) and sync_state(value) is not None:
+        # A class holding a queue or a lock (``B.q.put(n)``): what it holds
+        # changes in place.
+        return True
     if issubclass(type(value), (types.ModuleType, type, *_IMMUTABLE_VALUES)):
         return False
     return not inspect.isroutine(value)
