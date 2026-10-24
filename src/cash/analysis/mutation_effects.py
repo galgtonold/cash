@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ast
 import functools
+import gc
 import inspect
 import os
 import pathlib
@@ -29,6 +30,7 @@ from cash._user_attrs import attribute_or, instance_of
 
 from ..content_hashers import builtin_hash_family
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..source_reading import getsource
 from ..tracking.randomness.state import rng_carrier_kind
 from ..value_types import BUILTIN_NAMES
 from .aliases import aliased_sources
@@ -59,6 +61,7 @@ from .mutations import (
     TopLevelCalls,
     assigned_method_call_receivers,
     chain_is_pure,
+    consumed_input_names,
     crossref_reassigned_vars,
     is_pandas_plot_call,
     selfref_inplace_write_vars,
@@ -1362,6 +1365,54 @@ def _resolve_once(resolve_source: SourceResolver) -> SourceResolver:
     return resolve
 
 
+#: How far `drawn_generator_sources` looks into what an iterator draws through.
+_DRAW_DEPTH = 4
+
+
+def drawn_generator_sources(tree: ast.AST | None, namespace: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """The sources of the notebook's functions a draw by *tree* from an
+    iterator held by name runs (``next(it)``, ``list(it)``): a generator's
+    function, and what a generator expression or ``map``, ``filter`` and
+    the like call as they draw (``map(f, rows)``). Each may change a global
+    (``log.append(i)``) as a call would."""
+    if tree is None or not namespace:
+        return ()
+    out: dict[str, None] = {}
+    stack = [(namespace.get(name), 0) for name in sorted(consumed_input_names(tree))]
+    seen: set[int] = set()
+    while stack:
+        obj, depth = stack.pop()
+        if obj is None or id(obj) in seen or depth > _DRAW_DEPTH:
+            continue
+        seen.add(id(obj))
+        if type(obj) is types.FunctionType:
+            if attribute_or(obj, "__module__", None) == "__main__":
+                _add_source(out, obj)
+            continue
+        if type(obj) is types.GeneratorType:
+            if obj.gi_frame is None:
+                continue  # done: drawing runs nothing
+            _add_source(out, obj.gi_code)
+            # A generator expression calls by name what its body calls.
+            stack.extend((namespace.get(name), depth + 1) for name in obj.gi_code.co_names if name in namespace)
+        elif not _has_next(obj):
+            continue
+        stack.extend((held, depth + 1) for held in gc.get_referents(obj))
+    return tuple(out)
+
+
+def _has_next(obj: Any) -> bool:
+    """Whether *obj* is an iterator (its type has ``__next__``)."""
+    return hasattr(type(obj), "__next__")
+
+
+def _add_source(out: dict[str, None], code: Any) -> None:
+    try:
+        out[getsource(code)] = None
+    except SOURCE_RETRIEVAL_ERRORS:
+        pass
+
+
 def statement_effects(
     code: str,
     tree: ast.Module | None,
@@ -1395,7 +1446,12 @@ def statement_effects(
             handed = handed_callables(tree, namespace, scope="no_control_bodies") if not control_body else None
         if handed is not None:
             callee_globals = (
-                callee_global_mutations(tree, resolve_source, scope="no_control_bodies", extra_sources=handed.sources)
+                callee_global_mutations(
+                    tree,
+                    resolve_source,
+                    scope="no_control_bodies",
+                    extra_sources=handed.sources + drawn_generator_sources(tree, namespace),
+                )
                 | handed.receivers
             )
             if namespace is not None:
