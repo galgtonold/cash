@@ -415,17 +415,20 @@ def test_a_module_with_only_its_bytecode_runs_with_a_warning(tmp_path):
         "def pick(getattr):\n    return max(map(getattr, [1], ['real']))\n\nK = pick(lambda value, name: 3)",
         "import operator\nK = max(map(operator.attrgetter('real'), [3]))",
         "getattr = abs\nK = max(map(getattr, [-3]))",
+        "import numpy as np\nW = np.zeros(4)\nK = int(np.max([3]))",
     ],
     ids=[
         "a_str_method_handed_to_map",
         "a_parameter_named_like_a_builtin",
         "an_attrgetter_of_a_public_name",
         "a_builtin_name_the_module_always_binds",
+        "numpy_arrays_made_from_their_arguments",
     ],
 )
 def test_a_source_only_top_level_is_still_vouched_for(tmp_path, monkeypatch, top_level):
     """A public method of ``str`` handed on, and a parameter named
-    ``getattr`` used in its own function's body, follow from the source."""
+    ``getattr`` used in its own function's body, follow from the source,
+    as do ``np.zeros(4)`` and ``np.max([3])``."""
     from cash.analysis.unloaded_modules import source_digest
 
     _write(tmp_path, "plainmod.py", f"{top_level}\n\ndef scale(x):\n    return x\n")

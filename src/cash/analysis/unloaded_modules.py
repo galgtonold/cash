@@ -74,6 +74,15 @@ _SOURCE_ONLY_CALLS = frozenset(
         "typing.runtime_checkable",
         "cash.cache",
         "cash.pure",
+        # numpy's array makers and reductions: functions of their
+        # arguments. Not ``numpy.empty``, whose items are whatever memory held.
+        *(
+            f"numpy.{n}"
+            for n in (
+                "abs all any arange array asarray concatenate cumsum dot exp eye full identity linspace log max "
+                "mean min ones prod sqrt stack sum where zeros"
+            ).split()
+        ),
     }
 )
 #: Modules whose every function is a function of its arguments.
