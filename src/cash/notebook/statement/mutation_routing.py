@@ -13,6 +13,7 @@ changing.
 from __future__ import annotations
 
 import ast
+import logging
 import types
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
@@ -26,6 +27,8 @@ from ...analysis.mutation_effects import (
     statement_watch_candidates,
 )
 from ...control_markers import strip_markers
+from ...diagnostics import log_diagnostic, warn_diagnostic
+from ...exceptions import CashCacheIneffectiveWarning
 from ...value_hash import costly_after
 from ...value_types import BUILTIN_NAMES
 from ..cache_key import statement_source_hash
@@ -44,6 +47,8 @@ if TYPE_CHECKING:
     from .run import StatementRun
 
 __all__ = ["MutationRouting"]
+
+logger = logging.getLogger(__name__)
 
 
 class MutationRouting:
@@ -350,8 +355,19 @@ class MutationRouting:
 
     def _callees_changing_their_closure(self, tree: ast.AST | None) -> set[str]:
         """The functions *tree* calls by name, outside loop and branch bodies,
-        that change their closure (:func:`changes_its_closure`)."""
-        return callees_changing_their_closure(tree, self.shell.user_ns)
+        that change their closure (:func:`changes_its_closure`). Past the
+        chain `closure_writers_reached` follows, every one of the notebook's,
+        with a warning."""
+        found, past = closure_writers_reached(tree, self.shell.user_ns)
+        if past and found:
+            what = (
+                f"the statement calls a chain of more than {_CALLEES_FOLLOWED} of your functions, too long for cash "
+                "to read whether one of them changes what another's closure holds, so it runs every time"
+            )
+            fix = "nothing, if the statement is quick; otherwise call the function that does the work directly."
+            log_diagnostic(logger, "NOTEBOOK-ANALYSIS-BUDGET", what, fix)
+            warn_diagnostic(CashCacheIneffectiveWarning, "NOTEBOOK-ANALYSIS-BUDGET", what, fix)
+        return found
 
     # ------------------------------------------------------------------
     # After execution
@@ -529,20 +545,61 @@ def callees_changing_their_closure(tree: ast.AST | None, user_ns: Mapping[str, A
     that change their closure (:func:`changes_its_closure`), and those of
     *user_ns* a notebook function it calls names in turn: ``def setup():
     rebind([0])``, then ``setup()``, rebinds ``rebind``'s cell."""
+    return closure_writers_reached(tree, user_ns)[0]
+
+
+def closure_writers_reached(tree: ast.AST | None, user_ns: Mapping[str, Any]) -> tuple[set[str], bool]:
+    """`callees_changing_their_closure`, and whether the chain ran past
+    `_CALLEES_FOLLOWED` functions. Past it, every function of *user_ns*
+    that changes its closure is taken as reached: ``h299() -> ... -> h0()
+    -> rebind([0])`` was served, ``rebind``'s cell left as the last run set
+    it."""
     found: set[str] = set()
     seen: set[str] = set()
-    todo = list(called_names(tree, "no_control_bodies"))
-    while todo and len(seen) < _CALLEES_FOLLOWED:
+    # A loop or branch run as one unit owns what its body changes: ``if
+    # True: setup()`` calls ``setup``.
+    todo = list(called_names(tree, "all" if _is_structure(tree) else "no_control_bodies"))
+    while todo:
         name = todo.pop()
         if name in seen:
             continue
+        if len(seen) >= _CALLEES_FOLLOWED:
+            found |= {name for name, value in list(user_ns.items()) if changes_its_closure(value)}
+            return found, True
         seen.add(name)
-        fn = user_ns.get(name)
-        if changes_its_closure(fn):
-            found.add(name)
-        if type(fn) is types.FunctionType and fn.__globals__ is user_ns:
-            todo.extend(_global_names(fn.__code__))
-    return found
+        value = user_ns.get(name)
+        # A function, or the functions a dict, list or tuple holds (``HOOKS
+        # = {'r': rebind}``, then ``HOOKS['r']([0])``).
+        for fn in _functions_in(value):
+            if changes_its_closure(fn):
+                # By its name, or the container's and the names the
+                # function it holds is bound to.
+                found.add(name)
+                if fn is not value:
+                    found |= {n for n, v in list(user_ns.items()) if v is fn}
+            if fn.__globals__ is user_ns:
+                todo.extend(_global_names(fn.__code__))
+    return found, False
+
+
+#: How many items of a container `_functions_in` looks at.
+_ITEMS_LOOKED_AT = 1000
+
+
+def _functions_in(value: Any) -> list[types.FunctionType]:
+    """*value* if a function, or the functions an exact dict, list or tuple
+    of at most `_ITEMS_LOOKED_AT` items holds."""
+    if type(value) is types.FunctionType:
+        return [value]
+    if type(value) is dict:
+        items = list(value.values())
+    elif type(value) in (list, tuple):
+        items = list(value)
+    else:
+        return []
+    if len(items) > _ITEMS_LOOKED_AT:
+        return []
+    return [item for item in items if type(item) is types.FunctionType]
 
 
 #: How many functions `callees_changing_their_closure` looks at.
@@ -560,8 +617,14 @@ def _global_names(code: types.CodeType) -> set[str]:
 
 def sharing_a_cell(writers: set[str], user_ns: Mapping[str, Any]) -> set[str]:
     """The functions of *user_ns* that share a closure cell with one of
-    *writers*, those included: what a call of one of them changes."""
-    cells = {id(cell) for name in writers for cell in attribute_or(user_ns.get(name), "__closure__", None) or ()}
+    *writers* (or one a dict, list or tuple of them holds), those included:
+    what a call of one of them changes."""
+    cells = {
+        id(cell)
+        for name in writers
+        for fn in _functions_in(user_ns.get(name))
+        for cell in attribute_or(fn, "__closure__", None) or ()
+    }
     if not cells:
         return set()
     return {

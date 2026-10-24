@@ -212,3 +212,36 @@ def test_a_closure_rebound_inside_a_helper_is_rebuilt_with_its_rebind(cash_magic
             run_cash_cell(cash_magics, cell, cells=cells)
     run_cash_cell(cash_magics, reader, cells=cells)
     assert cash_magics.shell.user_ns["y"] == 1, "not the value a run from the top gives"
+
+
+def _chain(n: int) -> str:
+    return "def h0():\n    rebind([0])\n" + "".join(f"def h{i}():\n    h{i - 1}()\n" for i in range(1, n))
+
+
+@pytest.mark.parametrize(
+    ("defined", "call", "warned"),
+    [
+        ("def setup():\n    rebind([0])\n", "if True:\n    setup()", False),
+        (_chain(300), "h299()", True),
+    ],
+    ids=["a_helper_called_under_an_if", "a_chain_of_helpers_past_the_cap"],
+)
+def test_a_closure_rebound_by_a_helper_reached_another_way_is_rebuilt_with_its_rebind(
+    cash_magics, defined, call, warned
+):
+    """``setup()`` under an ``if``, which the branch runs as one unit, or a
+    chain of 300 helpers past the 256 the search follows: neither was
+    followed to ``rebind``, and the reader re-run on its own after a Run All
+    read ``BIG``. Past the chain, the statement runs every time, and says so."""
+    setup = MAKE.replace("range(3)", "range(20000)") + "draw, rebind = make(BIG)\n" + defined
+    reader = "y = draw(1)"
+    cells = [setup, call, reader, CHANGES["append"]]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for _ in range(2):
+            for cell in cells:
+                run_cash_cell(cash_magics, cell, cells=cells)
+        run_cash_cell(cash_magics, reader, cells=cells)
+    assert cash_magics.shell.user_ns["y"] == 1, "not the value a run from the top gives"
+    said = [str(w.message) for w in caught if "too long for cash" in str(w.message)]
+    assert bool(said) is warned, said
