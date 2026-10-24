@@ -222,7 +222,8 @@ def _chain(n: int) -> str:
     ("defined", "call", "warned"),
     [
         ("def setup():\n    rebind([0])\n", "if True:\n    setup()", False),
-        (_chain(300), "h299()", True),
+        # Made by one statement: 300 def statements cost more than the test.
+        (f"exec({_chain(300)!r})\n", "h299()", True),
     ],
     ids=["a_helper_called_under_an_if", "a_chain_of_helpers_past_the_cap"],
 )
