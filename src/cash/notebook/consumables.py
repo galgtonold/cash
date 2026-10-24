@@ -38,6 +38,7 @@ a self-iterator *and* it hits the by-ref fallback.
 from __future__ import annotations
 
 import ast
+import collections
 import inspect
 import io
 import itertools
@@ -51,7 +52,7 @@ from typing import Any
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 
 from ..analysis.mutation_effects import captured_call_receivers
-from ..analysis.mutations import consumed_input_names
+from ..analysis.mutations import _NON_CONSUMING_FUNCS, consumed_input_names
 
 logger = logging.getLogger(__name__)
 
@@ -304,30 +305,62 @@ def drawn_stream_inputs(
         value = user_ns.get(name)
         if value is None:
             continue
-        if is_stream(value) or _holds_drawn_stream(tree, name, value):
+        if is_stream(value) or _holds_drawn_stream(tree, name, value, user_ns):
             found.append(name)
     return found
 
 
-# Items of a container looked through for a stream when the statement's
-# index is not a constant (``next(h[i])``): a bigger one is not walked.
-_HELD_SCAN = 64
-_PLAIN_CONTAINERS = (list, tuple, dict)
+# What cash reads of a holder when the statement's path into it cannot be
+# followed exactly (``next(h[i])``, a property, ``h.get()``): items and objects
+# looked through, and how deep. Past either it counts as a draw.
+_HELD_SCAN = 1_000_000
+_HELD_DEPTH = 6
+_PLAIN_CONTAINERS = (list, tuple, dict, collections.deque)
+_NO_STREAM = frozenset({int, float, complex, bool, str, bytes, type(None)})
+_UNKNOWN = object()
 
 
-def _holds_drawn_stream(tree: ast.Module | None, name: str, value: Any) -> bool:
+def _holds_drawn_stream(tree: ast.Module | None, name: str, value: Any, user_ns: Mapping[str, Any]) -> bool:
     """True when the statement reaches a stream inside *value* (``next(h[0])``,
     ``list(h['k'])``, ``next(b.it)``) and so draws from it as it would from a
-    name that held it. Followed through a plain list, tuple or dict by a
-    constant index and through an attribute read without running a property;
-    any other index looks through the container's own items."""
+    name that held it. Followed through a list, tuple, dict or deque by a
+    constant index (or a name the statement does not bind) and through an
+    attribute stored on the object. Where the path cannot be followed without
+    running code (another index, a property, a slot, a method call) and what
+    it gives is drawn from, any stream *value* holds counts, and so does a
+    holder too big to read."""
     if tree is None:
         return False
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    bound = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load)}
     for node in ast.walk(tree):
         chain = _reach_chain(node, name)
-        if chain and _chain_meets_stream(value, chain):
+        parent = parents.get(node)
+        if not chain or (isinstance(parent, (ast.Attribute, ast.Subscript)) and parent.value is node):
+            continue
+        if isinstance(node, ast.Attribute) and isinstance(parent, ast.Call) and parent.func is node:
+            node, parent = parent, parents.get(parent)
+        drawn = not _left_where_it_is(node, parent)
+        known = {k: v for k, v in user_ns.items() if k not in bound and type(v) in (int, str)}
+        if _chain_meets_stream(value, chain, drawn, known):
             return True
     return False
+
+
+def _left_where_it_is(node: ast.AST, parent: ast.AST | None) -> bool:
+    """True when what *node* gives is not drawn from where *parent* puts it:
+    dropped, bound to a name, compared, or only inspected (``len(..)``)."""
+    if isinstance(parent, (ast.Expr, ast.Compare, ast.BinOp, ast.UnaryOp, ast.FormattedValue)):
+        return True
+    if isinstance(parent, (ast.Assign, ast.AnnAssign)) and parent.value is node:
+        targets = parent.targets if isinstance(parent, ast.Assign) else [parent.target]
+        return all(isinstance(t, ast.Name) for t in targets)
+    return (
+        isinstance(parent, ast.Call)
+        and isinstance(parent.func, ast.Name)
+        and parent.func.id in _NON_CONSUMING_FUNCS
+        and node is not parent.func
+    )
 
 
 def _reach_chain(node: ast.AST, name: str) -> list[ast.AST] | None:
@@ -343,23 +376,27 @@ def _reach_chain(node: ast.AST, name: str) -> list[ast.AST] | None:
     return chain
 
 
-def _chain_meets_stream(value: Any, chain: list[ast.AST]) -> bool:
+def _chain_meets_stream(value: Any, chain: list[ast.AST], drawn: bool, known: Mapping[str, Any]) -> bool:
     for step in chain:
         if isinstance(step, ast.Attribute):
             try:
-                value = inspect.getattr_static(value, step.attr)
+                found = inspect.getattr_static(value, step.attr)
             except (AttributeError, TypeError):
                 return False
-        elif type(value) not in _PLAIN_CONTAINERS:
+            if hasattr(type(found), "__get__") and not isinstance(value, type):
+                # A method, property or slot: what it gives cannot be read
+                # without running it.
+                return drawn and _notebook_holder(value) and _holds_stream(value)
+            value = found
+        elif not isinstance(value, _PLAIN_CONTAINERS):
             return False
-        elif isinstance(step.slice, ast.Constant):
-            try:
-                value = value[step.slice.value]
-            except (LookupError, TypeError):
-                return False
         else:
-            items = value.values() if type(value) is dict else value
-            return any(is_stream(item) for item in itertools.islice(items, _HELD_SCAN))
+            index = _constant_index(step.slice, known)
+            if index is _UNKNOWN:
+                return drawn and _holds_stream(value)
+            value = _item(value, index)
+            if value is _UNKNOWN:
+                return False
         if is_stream(value) and not _an_output_stream(value):
             return True
     return False
@@ -369,6 +406,100 @@ def _an_output_stream(obj: Any) -> bool:
     """The process's own output streams (``sys.stderr`` handed to a log
     handler): written to, never read, so reaching one draws nothing."""
     return any(obj is getattr(sys, name, None) for name in ("stdout", "stderr", "__stdout__", "__stderr__"))
+
+
+def _constant_index(node: ast.AST, known: Mapping[str, Any]) -> Any:
+    """The index *node* spells as a literal (``0``, ``-1``, ``'k'``) or a name
+    in *known*, else _UNKNOWN."""
+    if isinstance(node, ast.Name):
+        return known.get(node.id, _UNKNOWN)
+    if isinstance(node, ast.Slice):
+        return _UNKNOWN
+    try:
+        return ast.literal_eval(node)
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        return _UNKNOWN
+
+
+def _item(container: Any, index: Any) -> Any:
+    """``container[index]`` read without a subclass's own lookup (a
+    ``defaultdict`` would add the key), or _UNKNOWN when it is not there."""
+    try:
+        if isinstance(container, dict):
+            return dict.__getitem__(container, index) if dict.__contains__(container, index) else _UNKNOWN
+        if isinstance(container, list):
+            return list.__getitem__(container, index)
+        if isinstance(container, tuple):
+            return tuple.__getitem__(container, index)
+        return collections.deque.__getitem__(container, index)
+    except (LookupError, TypeError):
+        return _UNKNOWN
+
+
+def _notebook_holder(value: Any) -> bool:
+    return isinstance(value, _PLAIN_CONTAINERS) or getattr(type(value), "__module__", None) == "__main__"
+
+
+def _holds_stream(value: Any) -> bool:
+    """True when a stream sits anywhere in *value* that cash reads (the items
+    of a list, tuple, set, dict or deque; the stored attributes and slots of
+    an object of a class the notebook defines), or when *value* holds more
+    than cash reads."""
+    seen: set[int] = set()
+    stack = [(value, 0)]
+    left = _HELD_SCAN
+    while stack:
+        obj, depth = stack.pop()
+        if type(obj) in _NO_STREAM or id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        if is_stream(obj) and not _an_output_stream(obj):
+            return True
+        items = _held_items(obj)
+        if items is None:
+            continue
+        if depth >= _HELD_DEPTH:
+            return True
+        taken = list(itertools.islice(items, left + 1))
+        left -= len(taken)
+        if left < 0:
+            return True
+        stack.extend((item, depth + 1) for item in taken)
+    return False
+
+
+def _held_items(obj: Any) -> Iterable[Any] | None:
+    """What *obj* holds that `_holds_stream` reads, or None for nothing to read."""
+    if isinstance(obj, dict):
+        return dict.values(obj)
+    if isinstance(obj, list):
+        return list.__iter__(obj)
+    if isinstance(obj, tuple):
+        return tuple.__iter__(obj)
+    if isinstance(obj, frozenset):
+        return frozenset.__iter__(obj)
+    if isinstance(obj, set):
+        return set.__iter__(obj)
+    if isinstance(obj, collections.deque):
+        return collections.deque.__iter__(obj)
+    cls = type(obj)
+    if getattr(cls, "__module__", None) != "__main__" or isinstance(obj, type):
+        return None
+    held: list[Any] = []
+    try:
+        held.extend(dict.values(object.__getattribute__(obj, "__dict__")))
+    except (AttributeError, TypeError):
+        pass
+    for klass in cls.__mro__:
+        slots = klass.__dict__.get("__slots__", ())
+        for slot in (slots,) if isinstance(slots, str) else slots:
+            member = klass.__dict__.get(slot)
+            if isinstance(member, types.MemberDescriptorType):
+                try:
+                    held.append(member.__get__(obj, cls))
+                except AttributeError:
+                    pass
+    return held
 
 
 def is_stream(obj: Any) -> bool:
