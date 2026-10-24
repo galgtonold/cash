@@ -14,6 +14,7 @@ import ast
 import hashlib
 import logging
 import pickle
+import sys
 import time
 import types
 from collections.abc import Iterable, Mapping
@@ -30,6 +31,7 @@ from cash.closure_sharing import closure_check_budget, closures_sharing
 from cash.diagnostics import log_diagnostic, warn_diagnostic
 from cash.exceptions import CashCacheStoreFailedWarning
 from cash.notebook.anchors import AnchorUnrebuilt, with_anchor_refs
+from cash.notebook.shared_objects import scalar_identity
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.capture import replay_record
 from cash.notebook.statement.carrier_advances import PAYLOAD_FIELD as CARRIERS_FIELD
@@ -656,6 +658,7 @@ class StatementStore:
             helper_memos=run.helper_memos,
             holders=run.holders or None,
             holders_moved=True if run.holders and run.moves_holders else None,
+            scalar_identity=scalar_identity() if "pandas" in sys.modules else None,
             anchors=run.anchors or None,
             anchor_links=sorted(run.anchor_links) if run.anchors else None,
             anchor_holds=run.anchor_holds or None,

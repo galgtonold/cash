@@ -189,7 +189,10 @@ from ..shared_objects import (
     library_value_types,
     output_history,
     referring_names,
+    scalar_identity,
+    scalar_identity_news,
     share_group,
+    turn_on_scalar_identity,
     view_base_names,
     walk_budget,
 )
@@ -341,6 +344,9 @@ class StatementProcessor:
         self._share_refused: dict[str, list] = {}
         #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
         self._share_unchecked_warned: set[str] = set()
+        #: The variables restored from entries stored while pandas scalars
+        #: were values (`_warn_scalar_copies`).
+        self._restored_scalar_values: set[str] = set()
         #: Statements already told about NOTEBOOK-ANALYSIS-BUDGET.
         self._past_budget_told: set[str] = set()
         #: What a statement's text last took to run, in seconds, or None when
@@ -988,6 +994,12 @@ class StatementProcessor:
         elif run.needs_trace:
             cached_data = None
             run.key_blind = True
+        if cached_data and metadata is not None and metadata.scalar_identity is False and scalar_identity():
+            # Stored while pandas scalars were values: its outputs may hold a
+            # copy of a ``Timestamp`` a variable holds, which an attribute set
+            # on it since must reach. It runs, and is stored again.
+            self._freshness.last_miss_reason = "stored before pandas scalars were kept by identity"
+            cached_data = None
         if cached_data and self._live_objects_shared(run, metadata):
             cached_data = None
         if cached_data and not import_needs_reexecution(run.tree, self.shell.user_ns):
@@ -1525,6 +1537,12 @@ class StatementProcessor:
         hit_result = self._hits.serve(run, cached_data, metadata, self._randomness.seed_epochs)
         if hit_result is None:
             return None
+        if metadata is not None and metadata.scalar_identity:
+            # Stored where an attribute was set on a pandas scalar: this
+            # session's statements keep them by identity too.
+            turn_on_scalar_identity()
+        elif metadata is not None and metadata.scalar_identity is False:
+            self._restored_scalar_values.update(run.outputs)
         # The streams its run seeded, put back where that run left them.
         self._randomness.adopt_seeds_of_a_hit(reseeded, run.code)
         if metadata is not None:
@@ -2372,6 +2390,8 @@ class StatementProcessor:
     def _post_execute_reading_once(
         self, run: StatementRun, execution: StatementExecution, reads: contextlib.ExitStack, alive: bool
     ) -> None:
+        if scalar_identity_news() and self._restored_scalar_values:
+            self._warn_scalar_copies(run)
         self._observe_process_state(run)
         self._mutation_routing.observe(run)
         self._mutation_routing.note_module_state(run)
@@ -3056,6 +3076,27 @@ class StatementProcessor:
         # At the cell, as cash's other notebook warnings are: with no
         # location the nearest frame outside cash is ipykernel's, and it
         # read ``ipkernel.py:460``.
+        from cash.notebook.ipython.cell_count import running_cell_count  # the ipython package imports this one
+
+        location = ("<cash>", running_cell_count(self.shell))
+        warn_diagnostic(CashWarning, "NOTEBOOK-SHARE-UNCHECKED", what, fix, location=location)
+
+    def _warn_scalar_copies(self, run: StatementRun) -> None:
+        """*run* set the first attribute on a pandas scalar this session,
+        after an entry stored while they were values was restored: a value
+        restored then may hold a copy of the object, which the attribute
+        does not reach until it runs again (``NOTEBOOK-SHARE-UNCHECKED``),
+        named here. From here on, such entries run."""
+        restored = sorted(self._restored_scalar_values)
+        names = ", ".join(f"'{name}'" for name in restored[:5]) + (
+            f" and {len(restored) - 5} more" if len(restored) > 5 else ""
+        )
+        what = (
+            f"{names}, restored earlier in this session, may hold a copy of the pandas Timestamp, Timedelta, "
+            "Period, NaT or NA this statement set an attribute on, and so not show that attribute."
+        )
+        fix = "run the notebook again from the top (Run All), which puts it right."
+        log_diagnostic(logger, "NOTEBOOK-SHARE-UNCHECKED", what, fix)
         from cash.notebook.ipython.cell_count import running_cell_count  # the ipython package imports this one
 
         location = ("<cash>", running_cell_count(self.shell))
