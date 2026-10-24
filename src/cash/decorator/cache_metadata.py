@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 from typing import Any
 
+from .._type_memo import TypeMemo, type_key
+
 __all__ = ["CacheMetadata"]
 
 
@@ -140,12 +142,12 @@ class CacheMetadata:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CacheMetadata:
         """Build from a backend dict, ignoring unknown keys."""
-        known = _FIELD_NAMES.get(cls)
+        known = _FIELD_NAMES.get(type_key(cls))
         if known is None:
             # Read once per class: `fields()` and the set cost ~10us, on every hit.
-            known = _FIELD_NAMES[cls] = frozenset(f.name for f in fields(cls))
+            known = _FIELD_NAMES.put(cls, frozenset(f.name for f in fields(cls)))
         return cls(**{k: v for k, v in data.items() if k in known})
 
 
 #: class -> the names of its fields, for `CacheMetadata.from_dict`.
-_FIELD_NAMES: dict[type, frozenset[str]] = {}
+_FIELD_NAMES: TypeMemo[frozenset[str]] = TypeMemo()

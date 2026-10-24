@@ -34,6 +34,7 @@ from typing import Any, NamedTuple
 
 from . import _plain_data, kept_state
 from ._memo import SORTED_SETS, LruMemo
+from ._type_memo import TypeMemo, type_key
 from .sizing import SPARSE_PARTS, pandas_nbytes
 from .value_types import CODELESS_PRIMS, IMMUTABLE_PRIMS, LEAF_TYPES, PARSED_VALUE_TYPES
 
@@ -373,7 +374,11 @@ _BY_NAME = (type, types.FunctionType, types.BuiltinFunctionType, types.ModuleTyp
 
 
 def canonical_bytes(
-    value: Any, content: ContentHashing, hook: Callable[[Any], Any] | None = None, seen: dict | None = None
+    value: Any,
+    content: ContentHashing,
+    hook: Callable[[Any], Any] | None = None,
+    seen: dict | None = None,
+    outside: Callable[[], dict[int, Any]] | None = None,
 ) -> bytes:
     """*value*'s canonical form (`stable_key_repr`), pickled: equal values give
     equal bytes, in any process, however they were built.
@@ -386,28 +391,52 @@ def canonical_bytes(
     in the form. Only when an object is left to pickle whole, which may
     share state inside, is the memo kept. *seen*, when given, is filled with
     the writable containers the walk met (`stable_key_repr`'s *seen*).
+
+    An object left to pickle whole that holds one of those containers, or
+    one of the *outside* ones (``id -> where``, the containers of values
+    keyed apart from *value*, kept by the caller and asked for only here),
+    has it marked as held there (`kept_state.key_aliases`): ``f(a,
+    Rec(a))`` and ``f([a, Rec(a)])`` keyed like the calls with an equal
+    copy of ``a``, and the second was served the first's result.
     """
     left: list = []
     fielded: list = []
     walked: dict = {} if seen is None else seen
     form = stable_key_repr(value, content, seen=walked, hook=hook, left=left, fielded=fielded)
-    if fielded and (left or len(set(fielded)) != len(fielded) or not walked.keys().isdisjoint(fielded)):
+    if fielded and (
+        left
+        or len(set(fielded)) != len(fielded)
+        or not walked.keys().isdisjoint(fielded)
+        or (outside is not None and not outside().keys().isdisjoint(fielded))
+    ):
         # An object keyed by its fields, or a list or dict inside one that
         # something else holds too, is one pickle's memo no longer sees:
         # met again -- in another argument, inside an object left to
-        # pickle, walked -- it would key like an equal copy. Keyed the old
-        # way.
+        # pickle, walked, keyed apart by the caller (*outside*) -- it would
+        # key like an equal copy. Keyed the old way.
         del form
         left = []
         walked.clear()
         form = stable_key_repr(value, content, seen=walked, hook=hook, left=left)
     try:
         if left:
-            return b"m" + _plain_data.key_dumps(form)
+            return b"m" + _plain_data.key_dumps(form, _held_elsewhere(walked, left, outside))
         return b"u" + _plain_data.content_dumps(form)
     except RecursionError:
         # An object left to pickle whole can be deeper than pickle follows.
         raise TooDeepValueError(_too_deep(value)) from None
+
+
+def _held_elsewhere(walked: dict, left: list, outside: Callable[[], dict[int, Any]] | None) -> dict[int, Any]:
+    """``id -> where`` of the containers the key holds besides the objects
+    *left* to pickle whole: the ones the walk met (*walked*, as `_enter`
+    numbered them), then the *outside* ones. Not the left objects
+    themselves, which are keyed by that pickle alone."""
+    held: dict[int, Any] = dict(outside()) if outside is not None else {}
+    held.update((oid, ("walked", met[0])) for oid, met in walked.items())
+    for obj in left:
+        held.pop(id(obj), None)
+    return held
 
 
 #: Exact types `canonical_call_bytes` writes straight into the form: each is
@@ -729,6 +758,23 @@ def _records_by_fields(value: list | tuple, walk: _Walk) -> Any:
     digest = hashlib.sha256(_plain_data.pickle_unshared(states)).hexdigest()
     walk.fielded.extend(map(id, value))  # type: ignore[union-attr]
     return ("__cash_type__", _BUILTIN_CONTAINER_TAGS[type(value)], (_fields_form("records", t, digest),))
+
+
+def field_rows_only(items: list) -> bool:
+    """Whether *items* are records of one plain class (`fields_class`)
+    whose ``__dict__`` holds values alone under string names: then nothing
+    in them reaches the list that holds them, and a copy of that list walks
+    to the same form as the list itself (`ArgHasher._payload_bytes`)."""
+    kinds = set(map(type, items))
+    if len(kinds) != 1:
+        return False
+    t = kinds.pop()
+    if not fields_class(t):
+        return False
+    states = list(map(_STATE_OF, items))
+    if set(map(type, states)) != {dict} or not _STR_ONLY.issuperset(map(type, chain.from_iterable(states))):
+        return False
+    return _FIELD_LEAVES.issuperset(map(type, chain.from_iterable(map(dict.values, states))))
 
 
 def _object_by_fields(value: Any, walk: _Walk) -> Any:
@@ -1093,12 +1139,9 @@ def _holds_native_state(type_: type) -> bool:
     left alone: reducing one can serialise all its data (a tensor's
     storage) on every call.
     """
-    try:
-        return _NATIVE_STATE[type_]
-    except KeyError:
-        pass
-    except TypeError:  # a class whose metaclass makes it unhashable
-        return False
+    known = _NATIVE_STATE.get(type_key(type_))
+    if known is not None:
+        return known
     top = (getattr(type_, "__module__", "") or "").split(".", 1)[0]
     found = (
         not issubclass(type_, _NO_NATIVE_STATE)
@@ -1106,8 +1149,7 @@ def _holds_native_state(type_: type) -> bool:
         and (top == "builtins" or top in sys.stdlib_module_names)
         and any(k.__flags__ & _IMMUTABLE_TYPE_FLAG for k in type_.__mro__[:-1])
     )
-    _NATIVE_STATE[type_] = found
-    return found
+    return _NATIVE_STATE.put(type_, found)
 
 
-_NATIVE_STATE: dict[type, bool] = {}
+_NATIVE_STATE: TypeMemo[bool] = TypeMemo()

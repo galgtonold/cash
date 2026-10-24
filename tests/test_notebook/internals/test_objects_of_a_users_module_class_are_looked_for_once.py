@@ -28,6 +28,7 @@ def _asked_about(monkeypatch, cls):
     setattr(module, name, cls)
     monkeypatch.setitem(sys.modules, "_a_users_module", module)
     monkeypatch.setattr(held_functions, "_users_module_classes", lambda: [getattr(module, name)])
+    monkeypatch.setattr(held_functions, "_users_module_functions", list)
 
 
 def test_objects_of_a_users_module_class_are_looked_for_once_until_code_runs(monkeypatch):
@@ -36,15 +37,17 @@ def test_objects_of_a_users_module_class_are_looked_for_once_until_code_runs(mon
     # long test run one statement took over 30 s. A yes makes a walk run,
     # which finds what is there, so it is kept until code runs again.
     scans = []
-    real = gc.get_referrers
+    real = held_functions._referrers_or_none
 
-    def counting(*objects):
+    def counting(objects, stop=None):
+        # Each read of what refers to the classes: `gc.get_referrers`, or the
+        # heap read that stands in for it (`_referrers_or_none`).
         scans.append(len(objects))
-        # Not the arguments tuple this wrapper made, which holds the classes.
-        return [referrer for referrer in real(*objects) if referrer is not objects]
+        return real(objects, stop)
 
     monkeypatch.setattr(held_functions, "_users_module_classes", lambda: [_OfAUsersModule])
-    monkeypatch.setattr(held_functions.gc, "get_referrers", counting)
+    monkeypatch.setattr(held_functions, "_users_module_functions", list)
+    monkeypatch.setattr(held_functions, "_referrers_or_none", counting)
     kept = _OfAUsersModule()
     assert all(held_functions.module_class_objects_exist() for _ in range(5))
     assert len(scans) == 1, scans
@@ -57,18 +60,19 @@ def test_objects_of_a_users_module_class_are_looked_for_once_until_code_runs(mon
 def test_no_object_is_looked_for_again_each_time(monkeypatch):
     # A no is not kept: running code can make an object with no new code.
     scans = []
-    real = gc.get_referrers
+    real = held_functions._referrers_or_none
 
-    def counting(*objects):
+    def counting(objects, stop=None):
+        # Each read of what refers to the classes: `gc.get_referrers`, or the
+        # heap read that stands in for it (`_referrers_or_none`).
         scans.append(len(objects))
-        # Not the arguments tuple this wrapper made, which holds the classes.
-        return [referrer for referrer in real(*objects) if referrer is not objects]
+        return real(objects, stop)
 
     class Fresh:
         pass
 
     _asked_about(monkeypatch, Fresh)
-    monkeypatch.setattr(held_functions.gc, "get_referrers", counting)
+    monkeypatch.setattr(held_functions, "_referrers_or_none", counting)
     assert not held_functions.module_class_objects_exist()
     made = Fresh()
     assert held_functions.module_class_objects_exist()
@@ -147,3 +151,89 @@ def test_a_closure_over_the_class_counts_and_an_odd_name_does_not_raise(monkeypa
     record = {"__name__": ["x"], "kind": Held}  # a parsed JSON record
     assert held_functions.module_class_objects_exist()
     del record
+
+
+def test_a_module_function_held_in_a_value_counts(monkeypatch):
+    # ``{'fn': mylib.helper, 'rows': rows}``: the function runs the module's
+    # code, as a class held there does. Its module holding it does not count.
+    module = types.ModuleType("_a_users_module")
+    exec("def helper(v):\n    return v", vars(module))
+    monkeypatch.setitem(sys.modules, "_a_users_module", module)
+    monkeypatch.setattr(held_functions, "_users_module_classes", list)
+    monkeypatch.setattr(held_functions, "_users_module_functions", lambda: [module.helper])
+    assert not held_functions.module_class_objects_exist()
+    big = {"fn": module.helper, "rows": [1, 2]}
+    assert held_functions.module_class_objects_exist()
+    del big
+
+
+def test_only_a_module_function_held_elsewhere_is_looked_for(monkeypatch):
+    # Every top-level function of the user's modules was asked about, and
+    # ``gc.get_referrers`` costs each tracked object a look at each one: a
+    # ``utils.py`` of 300 functions made a big value's walk 3-5x slower.
+    # One its module alone holds is in no value.
+    module = types.ModuleType("_a_users_module")
+    exec("".join(f"def f{i}(v):\n    return v + {i}\n" for i in range(300)), vars(module))
+    monkeypatch.setitem(sys.modules, "_a_users_module", module)
+    monkeypatch.setattr(held_functions, "_users_module_classes", list)
+    monkeypatch.setattr(
+        held_functions,
+        "_users_module_functions",
+        lambda: [v for v in vars(module).values() if type(v) is types.FunctionType],
+    )
+    asked = []
+    real = gc.get_referrers
+
+    def counting(*objects):
+        asked.append(len(objects))
+        return [referrer for referrer in real(*objects) if referrer is not objects]
+
+    monkeypatch.setattr(held_functions.gc, "get_referrers", counting)
+    assert not held_functions.module_class_objects_exist()
+    assert asked == [], asked
+    big = {"fn": module.f7, "rows": [1, 2]}
+    assert held_functions.module_class_objects_exist()
+    assert asked == [1], asked
+    del big
+
+
+def _many_classes(monkeypatch, count=300):
+    """*count* classes of one user's module: past the number `gc.get_referrers`
+    is asked about at once (`shared_objects._REFERRERS_BY_CALL`)."""
+    module = types.ModuleType("_a_users_big_module")
+    for i in range(count):
+        setattr(module, f"C{i}", type(f"C{i}", (), {"__module__": "_a_users_big_module"}))
+    monkeypatch.setitem(sys.modules, "_a_users_big_module", module)
+    # Read from the module each time: a list kept here would hold them all.
+    monkeypatch.setattr(
+        held_functions, "_users_module_classes", lambda: [getattr(module, f"C{i}") for i in range(count)]
+    )
+    monkeypatch.setattr(held_functions, "_users_module_functions", list)
+    return module
+
+
+def test_many_classes_are_looked_for_in_one_read_of_the_heap(monkeypatch):
+    """`gc.get_referrers` compares every reference with each class asked
+    about: 2,000 classes of a long session's modules over 1.5 million
+    objects took 2-7 s a walk. Past a few, the heap is read once, and the
+    answers are the same."""
+    module = _many_classes(monkeypatch)
+    asked = []
+    real = gc.get_referrers
+
+    def counting(*objects):
+        asked.append(len(objects))
+        return [referrer for referrer in real(*objects) if referrer is not objects]
+
+    monkeypatch.setattr(held_functions.gc, "get_referrers", counting)
+    assert not held_functions.module_class_objects_exist()
+    made = module.C150()
+    assert held_functions.module_class_objects_exist()
+    del made
+    held_functions._OBJECTS_SEEN[0] = None
+    rows = [module.C7, 1, 2]
+    assert held_functions.module_class_objects_exist()
+    del rows
+    held_functions._OBJECTS_SEEN[0] = None
+    assert not held_functions.module_class_objects_exist()
+    assert all(count <= 128 for count in asked), asked

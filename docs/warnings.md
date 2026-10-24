@@ -1895,14 +1895,16 @@ If it is not code, delete it or make it a markdown cell.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/upstream/mismatch_classifier.py:MismatchClassifier._reject_read_only_input @d536a0ab, cash/notebook/upstream/changed_below.py:warn_changed_below @bbf25145 -->
+<!-- claim: cash/notebook/upstream/mismatch_classifier.py:MismatchClassifier._reject_read_only_input @4c86c0cd, cash/notebook/upstream/changed_below.py:warn_changed_below @8bd3d1a3, cash/notebook/upstream/changed_below.py:held_objects @31b2cf0e -->
 **What happened.** You re-ran a cell on its own, and a cell below it had
 changed one of its inputs in place (`s.iloc[0] = 1e9`, `rows.append(r)`).
 cash gives the re-run the input as the cells above leave it, as a run from the
 top does: it rebuilt the value, so the cell computed without the change below,
 and the variable no longer holds that change. The message names the variable,
-the cell below and its statement. It is shown once per cell, variable and
-statement.
+the cell below and its statement. When the cell reads the variable through a
+function that holds it (`def draw(k, rows=BIG)`, a closure cell, a `partial`),
+it names the function too, and says "may hold" when the function holds more
+than cash looks through. It is shown once per cell, variable and statement.
 
 **Why it matters.** Plain Jupyter would run the cell on the changed value.
 Here the result is the one a run from the top gives, and the change the cell
@@ -2351,6 +2353,13 @@ Once a statement was not stored for a function, a later run of it that did
 not call that function (a `functools.cached_property` it filled the first
 time, a hash Python 3.14 keeps in a tuple) is not stored either, while the
 function is still defined: after a restart it would run again.
+
+The same warning names a statement that writes into an object no name in
+its text leads to: `globals()[name][7].x = -3`, `ns['points'][7].x = -3`
+with `ns = globals()`, or `f('x', -3)` with `f =
+functools.partial(setattr, points[7])` made in a cell above. Cash cannot
+tell which variable changes before the statement runs, so it takes every
+variable as changed: what reads any of them after it runs again.
 
 **Why it matters.** Served from the cache, the statement would not run the
 function, so the change would not happen. Cash runs the statement every

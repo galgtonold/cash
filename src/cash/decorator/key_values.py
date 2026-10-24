@@ -9,6 +9,7 @@ import threading
 import types
 from typing import Any
 
+from .._type_memo import TypeMemo, type_key
 from ..analysis.helper_code import is_mock, renamed
 from ..jit_functions import jit_python_function
 from ..value_types import IMMUTABLE_LEAF_TYPES
@@ -177,7 +178,7 @@ def stabilize_for_global_hash(
 
 
 #: `_state_is_its_dict` per class: asked of every object a global holds.
-_STATE_IS_DICT: dict[type, bool] = {}
+_STATE_IS_DICT: TypeMemo[bool] = TypeMemo()
 
 
 #: Values with nothing in them that can hold code.
@@ -193,13 +194,10 @@ def _state_is_its_dict(t: type) -> bool:
     nothing else? No custom reduce or getstate, no slots: then its dict,
     rewritten, stands for all of it. ``SimpleNamespace`` reduces to exactly
     that."""
-    try:
-        return _STATE_IS_DICT[t]
-    except KeyError:
-        known = _STATE_IS_DICT[t] = _reads_as_its_dict(t)
-        return known
-    except TypeError:  # a class whose metaclass makes it unhashable
-        return _reads_as_its_dict(t)
+    known = _STATE_IS_DICT.get(type_key(t))
+    if known is None:
+        known = _STATE_IS_DICT.put(t, _reads_as_its_dict(t))
+    return known
 
 
 def _reads_as_its_dict(t: type) -> bool:

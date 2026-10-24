@@ -25,6 +25,7 @@ from typing import Any, NamedTuple
 
 from cash._clock import CpuLimit
 from cash._plain_data import TREE_NODES, in_a_look, tree_facts, tree_levels
+from cash._type_memo import MroMemo, TypeMemo, type_key
 from cash._user_attrs import own_dict
 from cash.install_paths import is_user_code_module
 from cash.kept_state import reduce_counted
@@ -180,32 +181,37 @@ def _fresh(held: list[Iterable[Any]], places: set[int], limit: CpuLimit) -> list
     return fresh
 
 
-_SLOTS: dict[type, tuple] = {}
-_USERS: dict[type, bool] = {}
+#: Per class, held weakly: ``(index in its MRO, name)`` of each slot, not
+#: the member descriptors, which refer to their class and would keep it alive.
+_SLOTS: MroMemo = MroMemo()
+_USERS: TypeMemo[bool] = TypeMemo()
 _MODULE_OF = type.__dict__["__module__"].__get__
 
 
 def _slot_readers(kind: type) -> tuple:
     """The member descriptor of each ``__slots__`` entry along *kind*'s
     MRO: how pickle reads a slotted object, read without running its code."""
-    found = _SLOTS.get(kind)
+    found = _SLOTS.get_for(kind)
     if found is None:
-        readers = []
-        for klass in kind.__mro__:
+        places = []
+        for at, klass in enumerate(kind.__mro__):
             own = klass.__dict__
             if "__slots__" in own:
-                readers.extend(m for m in own.values() if type(m) is types.MemberDescriptorType)
-        found = _SLOTS[kind] = tuple(readers)
-    return found
+                places.extend((at, name) for name, m in own.items() if type(m) is types.MemberDescriptorType)
+        found = _SLOTS.put(kind, tuple(places))
+    if not found:
+        return ()
+    mro = kind.__mro__
+    return tuple(vars(mro[at])[name] for at, name in found)
 
 
 def _users(kind: type) -> bool:
     """Is *kind* defined in the user's code? Its own methods are never
     asked, where a library's (``__reduce_ex__``) are."""
-    found = _USERS.get(kind)
+    found = _USERS.get(type_key(kind))
     if found is None:
         module = _MODULE_OF(kind)  # type's own reading: no metaclass of the user's runs
-        found = _USERS[kind] = is_user_code_module(sys.modules.get(module)) if module else False
+        found = _USERS.put(kind, is_user_code_module(sys.modules.get(module)) if module else False)
     return found
 
 

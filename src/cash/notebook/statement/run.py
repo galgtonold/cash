@@ -143,6 +143,9 @@ class StatementRun:
     #: (``StatementCacheMetadata.value_keyed`` and ``rerun_digests``).
     refused_value_keyed: frozenset[str] = frozenset()
     refused_digests: dict[str, str] = field(default_factory=dict)
+    #: The refused entry's ``timestamp``: what it hashed of the entry's
+    #: values is kept for the next rerun while the entry stays the same.
+    refused_stamp: Any = None
     #: Its outputs keyed by value this run, and the digest of each output a
     #: rerun under the same key compared (`key_blind`): its entry keeps both.
     value_keyed_outputs: frozenset[str] = frozenset()

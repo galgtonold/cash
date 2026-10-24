@@ -24,6 +24,7 @@ from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cel
 from ...backends._base import ttl_expired
 from ...tracking.env_reads import environment_unchanged
 from ...tracking.file_dep_snapshot import snapshot_is_fresh
+from .. import shadow as _shadow
 from ..anchors import resolve_anchors
 from ..cache_key import compute_cache_key
 from ..cache_status import CacheStatus
@@ -168,6 +169,14 @@ class CacheRestorer:
                 fresh, stale = snapshot_is_fresh(file_deps)
                 if not fresh:
                     logger.debug("[UPSTREAM] Restore failed: stale file dependency (%s)", stale)
+                    return set(), _perf_counter() - start_time, 0.0
+
+                if _shadow.SHADOW is not None and _shadow.SHADOW.entry_stale(cache_key):
+                    # Code it ran changed since it was stored: refused at a
+                    # lookup (``StatementProcessor._prepare``), so not
+                    # restored here either. Restored, ``v = inner(3)`` came
+                    # back as the old code gave it above its reader.
+                    logger.debug("[UPSTREAM] Restore failed: code the entry ran changed")
                     return set(), _perf_counter() - start_time, 0.0
 
                 conflict = lineage_conflict(metadata, file_deps, expected_lineages)

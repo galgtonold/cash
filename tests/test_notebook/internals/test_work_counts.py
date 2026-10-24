@@ -18,6 +18,7 @@ import pytest
 from cash.notebook.call_key import CallKeys
 from cash.notebook.statement import StatementProcessor
 from tests._cell_driver import run_cash_cell
+from tests._modules import forget_module
 from tests._work_counts import deepcopy_steps, hashed_bytes, method_calls, pickled_bytes, ram_copied_bytes
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
@@ -50,7 +51,7 @@ def test_a_module_table_is_not_hashed_again_before_an_unrelated_cell(cash_magics
         encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
-    monkeypatch.delitem(sys.modules, "wc_helpers", raising=False)
+    forget_module(monkeypatch, "wc_helpers")
     table_bytes = 125_000 * 8 * 8
     cells = ["import wc_helpers", "v = wc_helpers.score(3)", "x1 = 1", "x2 = 2"]
     run_cash_cell(cash_magics, cells[0], cells=cells)
@@ -77,7 +78,7 @@ def test_cheap_calls_over_a_filled_memo_do_not_digest_its_answer(cash_magics, tm
         encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
-    monkeypatch.delitem(sys.modules, "wc_memo", raising=False)
+    forget_module(monkeypatch, "wc_memo")
     # Gone again after the test: left imported, its filled memo was found
     # by the helper-memo tests run after it in the same worker.
     request.addfinalizer(lambda: sys.modules.pop("wc_memo", None))

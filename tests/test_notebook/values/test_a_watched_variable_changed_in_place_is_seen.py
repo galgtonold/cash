@@ -16,12 +16,11 @@ elsewhere came back stale.
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 from cash import value_watch
 from tests._cell_driver import run_cash_cell
+from tests._modules import forget_module
 
 SETUP = [
     "from _cwatch_nb_classes import Pt",
@@ -85,7 +84,7 @@ def watched_notebook(cash_magics, cash_instance, tmp_path, monkeypatch):
     (tmp_path / "_cwatch_nb_classes.py").write_text(CLASSES, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delitem(sys.modules, "_cwatch_nb_classes", raising=False)
+    forget_module(monkeypatch, "_cwatch_nb_classes")
     cash_magics.cash_on("")
     cash_magics.badges.mode = "off"
     yield cash_magics

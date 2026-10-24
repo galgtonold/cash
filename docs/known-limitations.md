@@ -446,7 +446,7 @@ out = summarize(s)  # cell 2: re-run this alone...
 s.iloc[0] = 1e9     # cell 3: ...and it does not see this
 ```
 
-<!-- claim: cash/notebook/upstream/changed_below.py:warn_changed_below @bbf25145 -->
+<!-- claim: cash/notebook/upstream/changed_below.py:warn_changed_below @8bd3d1a3 -->
 cash answers cell 2 as a top-to-bottom run would: it rebuilds `s` as cell 1
 leaves it, so cell 2 computes with `0.0`, and `s` holds `0.0` until cell 3 runs
 again. cash warns [NOTEBOOK-CHANGED-BELOW](warnings.md#notebook-changed-below)
@@ -774,15 +774,17 @@ is an in-place change, so as one unit it is not cached at all. The badge row
 then shows `In-place mutation on: out`. A shorter loop runs pass by pass:
 each `append` runs, and the expensive call inside it comes from the cache.
 
-<!-- claim: cash/notebook/heavy_loops.py:is_heavy @908c4eba, cash/notebook/heavy_loops.py:HEAVY_FACTOR == 4, cash/notebook/heavy_loops.py:MIN_HEAVY_ITER_SEC == 0.01, cash/notebook/heavy_loops.py:header_identity @ba179718, cash/notebook/control_structures/for_handler.py:ForLoopHandler._prefers_iterations @4510a192 -->
+<!-- claim: cash/notebook/heavy_loops.py:is_heavy @908c4eba, cash/notebook/heavy_loops.py:HEAVY_FACTOR == 4, cash/notebook/heavy_loops.py:MIN_HEAVY_ITER_SEC == 0.01, cash/notebook/heavy_loops.py:header_identity @ba179718, cash/notebook/heavy_loops.py:HeavyLoopStore._find @d8473e07, cash/notebook/control_structures/for_handler.py:ForLoopHandler._prefers_iterations @b5475b31 -->
 That estimate is a guess made before the loop has run. A loop run as one unit
 is measured while it runs, and when one iteration's work takes at least four
 times its estimated bookkeeping, and at least 10 ms, the next runs cache it
 per iteration again. As one unit, raising its `range` or editing the last
 statement of its body runs every iteration again; per iteration, an edit runs
 only the iterations it changes or adds. The measurement is kept in the cache
-folder under the loop's header with its numbers left out, so it carries over
-an edit of the body or of the loop's length (`range(100)` to `range(180)`).
+folder under the loop's header and body with its numbers left out, so it
+carries over a change of the loop's length (`range(100)` to `range(180)`) and
+an edit to up to half of the body's statements. Another loop with the same
+header and a different body keeps a measurement of its own.
 The first edit after the measuring run still runs every iteration, since that
 run writes the per-iteration entries; edits after it reuse them. Run again
 unchanged, the loop is restored whole from its unit entry. A loop kept per
@@ -949,6 +951,30 @@ default argument or base class does. **Fix:** move the binding above this cell.
   multiprocessing do the same). Results are equal; only code that depends on
   that order sees a difference, such as the key order of a dict built by
   looping over the set. Use `sorted(s)` where the order matters.
+- **A call given a set of strings runs again after a restart.** Inside a
+  cell, cash keys a call of your function on its arguments as they are
+  stored, and a set or frozenset of strings is stored in an order that
+  changes with every Python process. So after a kernel restart that call
+  runs once more instead of being served; later runs are served as usual.
+  Results are right. A list, a tuple, or a set of numbers is not affected.
+- **An object's own pickle recipe runs when cash copies it.** The memory
+  tier keeps its own copy of a result, made the way pickle rebuilds it, and
+  every hit is such a copy too, as a disk hit is. A class whose
+  `__reduce__` rebuilds through a call with an effect (a constructor that
+  connects, `logging.getLogger`, which registers a logger) has that effect
+  once when the result is stored and once per hit. A rebuild that would
+  change a file, by any route (`(open, (path, "w"))`, a `__setstate__`
+  reopening its log, a constructor the recipe names, `os.remove`,
+  `os.truncate`, `os.rename`, `os.mkdir`, a `sqlite3.connect` that creates
+  its file), is stopped there: the result is not cached, in memory or on
+  disk, an entry stored before is not served, and the file keeps what it
+  held. A scratch file or folder the rebuild makes new in the temp folder
+  is allowed, and so is Python's own `.pyc` for a module the rebuild
+  imports. A library whose first import writes its own cache (matplotlib's
+  font list) is imported as your program would import it, and the rebuild
+  tried again. A write through a file already open (one the object held)
+  is not seen, and neither are `os.chmod` and `os.mkfifo`.
+
 - **A `__dict__` your class computes may run under `@cash.cache`.** A class
   that defines `__dict__` itself (a `@property` building it) has it read
   when an object of it is part of a cached function's key, its arguments
@@ -960,6 +986,13 @@ default argument or base class does. **Fix:** move the binding above this cell.
   the same way, without its own methods, but storing the object still
   pickles it, which calls the subclass's `items` and `__reduce_ex__`: if
   those raise, the statement is not cached and re-runs each time.
+- **Python 3.12.0 to 3.12.5 without the C extension: more statements re-run.**
+  On those versions, asking Python what the `_asyncio` module holds can loop
+  for ever (fixed in 3.12.6), and Jupyter loads that module. cash's C
+  extension reads around it. Without the extension, cash cannot tell which
+  variables share an object with a statement's outputs, so such a statement
+  re-runs with a warning instead of being restored. Upgrade to 3.12.6 or
+  later, or install a build with the C extension.
 
 ## Reporting something not on this page
 
