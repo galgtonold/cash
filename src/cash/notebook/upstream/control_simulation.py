@@ -104,6 +104,12 @@ class ControlSimulation:
         # Drawing through pyplot changes the current figure and axes, as the
         # runtime took them (``pyplot_draws``).
         mutated_vars |= self.statements.pyplot_draw_outputs(code, node)
+        # A callee changing its closure changes every function sharing the
+        # cell, as the runtime's ``update_lineage_after_execution`` takes it.
+        from ..statement.mutation_routing import callees_changing_their_closure, sharing_a_cell
+
+        tree = ast.Module(body=[node], type_ignores=[])
+        mutated_vars |= sharing_a_cell(callees_changing_their_closure(tree, user_ns), user_ns)
         vars_mutated_by_loops.update(mutated_vars - unseen)
         recorded = self.statements.recorded_module_state(code)
         if recorded is not None:

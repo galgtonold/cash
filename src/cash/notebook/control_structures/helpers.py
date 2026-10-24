@@ -330,6 +330,13 @@ def update_lineage_after_execution(
     statement_processor.note_module_state(code, state_names, module_state_writes(code, user_ns) | seen)
     # Drawing through pyplot changes the current figure and axes
     # (``pyplot_draws``); recorded for the simulation as a statement's is.
+    # A callee of its body that changes its closure changes every function
+    # sharing the cell, as a statement's does (``mutation_routing``):
+    # ``for f in [rebind]: f([0])`` changes what ``draw`` reads.
+    from ..statement.mutation_routing import callees_changing_their_closure, sharing_a_cell
+
+    tree = ast.Module(body=[node], type_ignores=[])
+    mutated_vars |= sharing_a_cell(callees_changing_their_closure(tree, user_ns), user_ns)
     drawn = pyplot_draw_names(node, user_ns)
     statement_processor.note_pyplot_draws(ast.unparse(node), drawn)
     mutated_vars |= drawn
