@@ -23,13 +23,16 @@ from cash.notebook.shared_objects import share_group
 
 @pytest.fixture
 def referrer_calls():
-    """Counts the calls of ``gc.get_referrers`` by a profile hook: a wrapper
-    taking ``*objs`` would add a tuple holding the very objects searched."""
+    """Counts the calls of ``gc.get_referrers``, and of the heap read that
+    stands in for it on 3.12.0-3.12.5 (`shared_objects._referrers_of`), by a
+    profile hook: a wrapper taking ``*objs`` would add a tuple holding the
+    very objects searched."""
     calls = []
     real = gc.get_referrers
+    heap_read = shared_objects._referrers_of.__code__
 
     def hook(frame, event, arg):
-        if event == "c_call" and arg is real:
+        if (event == "c_call" and arg is real) or (event == "call" and frame.f_code is heap_read):
             calls.append(1)
 
     sys.setprofile(hook)
@@ -98,12 +101,24 @@ def test_a_holder_deeper_than_the_look_from_above_is_found_by_the_walk_up(referr
 
 def test_a_container_wider_than_the_look_from_above_is_found_by_the_walk_up(referrer_calls):
     ns = {"train": [1.0]}
-    ns["wide"] = [[i] for i in range(shared_objects._DOWN_WIDEST + 1)] + [ns["train"]]
+    ns["wide"] = [[i] for i in range(shared_objects._DOWN_WIDEST + 1)] + [[ns["train"]]]
 
     holders, shared = _share(["train"], ns)
 
     assert set(holders) == {"wide"} and shared == set()
     assert referrer_calls
+
+
+def test_a_wide_list_holding_the_object_itself_is_found_without_the_walk_up(referrer_calls):
+    """``for p in points``: ``p`` is an item of a list too wide to walk, told
+    by identity at C speed, so no search of every object runs."""
+    ns = {"train": [1.0]}
+    ns["wide"] = [[i] for i in range(shared_objects._DOWN_WIDEST + 1)] + [ns["train"]]
+
+    holders, shared = _share(["train"], ns)
+
+    assert set(holders) == {"wide"} and shared == set()
+    assert referrer_calls == []
 
 
 def test_a_search_up_for_many_objects_gives_up_instead_of_walking_the_heap(referrer_calls, monkeypatch):

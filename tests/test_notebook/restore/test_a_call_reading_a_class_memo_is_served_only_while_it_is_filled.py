@@ -12,6 +12,8 @@ holds them again; after a restart the call runs and fills it.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 
 import pytest
@@ -84,13 +86,28 @@ def test_a_call_that_read_a_filled_memo_runs_after_a_restart(cash_magics, capsys
     assert [_clean(o) for o in out] == plain_out == ["", "LOOKUP 1\n", "", ""]
 
 
+def _memo(ns):
+    """What ``r`` and its class's memo hold after the run."""
+    r = ns["r"]
+    return type(r).__name__, type(r).lookup.cache_info().currsize, type(r).lookup(1)
+
+
 def test_a_call_that_read_a_filled_memo_is_served_while_it_is_filled(cash_magics, capsys, user_module):
+    # The second run finds the memo filled, as the entry recorded it. How
+    # much of it is served (the call inside, or the whole statement) differs
+    # with the Python version and the tests run before it in the process
+    # (and without a trace it may run); either way it matches plain Python:
+    # nothing printed, the memo still filled, a ``Model`` in ``r``.
     cells = [f"import {NAME}", f"a = {NAME}.fit(1)", f"r = {NAME}.fit(1)"]
+    ns, _ = _plain(cells)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        exec(cells[2], ns)
+    plain = (buf.getvalue(), _memo(ns))
+    _drop()
+
     _run_all(cash_magics, cells, capsys)
-    seen, _ = _run_all(cash_magics, cells[2:], capsys)
-    if shadow.SHADOW is None:
-        # Without a trace the memo, in a module only the call imports, is
-        # not watched: whether it was filled is unknown, and the call runs.
-        assert seen == [["COMPUTED"]]
-    else:
-        assert seen == [["MIXED"]], "the call inside was served"
+    seen, out = _run_all(cash_magics, cells[2:], capsys)
+    assert (_clean(out[0]), _memo(cash_magics.shell.user_ns)) == plain == ("", ("Model", 1, 2))
+    if shadow.SHADOW is not None:
+        assert seen[0][0] in ("MIXED", "RESTORED"), "the call was not served"

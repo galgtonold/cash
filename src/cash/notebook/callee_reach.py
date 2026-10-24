@@ -146,7 +146,11 @@ def class_data(classes: Iterable[type], namespace: Mapping[str, Any]) -> tuple[t
     leads to ``K``."""
     found = _Found(namespace)
     for cls in classes:
-        found._class(cls)
+        if type(cls) is types.FunctionType:
+            # A function of the user's module held as it is (``[mylib.helper]``).
+            found.value(cls)
+        else:
+            found._class(cls)
     return tuple(sorted(item for item in found.data.items() if item[0] not in found.written))
 
 

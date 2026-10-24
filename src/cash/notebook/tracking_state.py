@@ -16,7 +16,19 @@ from cash.notebook.value_cutoff import ValueCutoff
 if TYPE_CHECKING:
     from cash.notebook.restored_var import HeldObject
 
-__all__ = ["TrackingState"]
+__all__ = ["TrackingState", "outcome_key"]
+
+
+def outcome_key(code: str, occurrence_index: int = 0) -> str:
+    """Where `TrackingState.control_outcomes` files the structure *code*: by
+    its text, and for a second copy in its cell also by which copy it is.
+    Filed by text alone, the second ``with ...: t = next(G)`` left its
+    lineages for the first, and the next cell's check reran the first
+    copy's reader with the second draw."""
+    from cash.source_norm import exact_source_digest
+
+    digest = exact_source_digest(code)
+    return digest if not occurrence_index else f"{digest}:{occurrence_index}"
 
 
 @dataclass
@@ -244,12 +256,15 @@ class TrackingState:
     # notebook's last write of it with the file's `stat_key` right after. A
     # file a statement read and the notebook itself rewrote LATER (``n =
     # int(open(P).read())`` then ``open(P, 'w').write(str(n + 1))``) is no
-    # change to that read: a top-to-bottom run read it before the write too.
+    # change to that read: a top-to-bottom run read it before the write too,
+    # when the write is in the reading cell or one below it (`running_cell`
+    # at the read and at the write; None while the upstream check rebuilds).
     # W: _record_file_reads, StatementProcessor._record_file_effects.
     # R: StatementLineage (`rewritten_by_the_notebook_since`).
     file_event_seq: int = 0
     file_read_seq: dict[str, int] = field(default_factory=dict)
-    own_file_writes: dict[str, tuple[int, tuple[int, int, int]]] = field(default_factory=dict)
+    file_read_cell: dict[str, int | None] = field(default_factory=dict)
+    own_file_writes: dict[str, tuple[int, tuple[int, int, int], int | None]] = field(default_factory=dict)
 
     # Cache key -> {output: digest of the value} a ``no-cache`` statement bound
     # on its last run. It goes into those outputs' lineage, so a reader below
@@ -352,7 +367,8 @@ class TrackingState:
     # W: MutationRouting. R: ReexecutionPlanner.
     process_state_ran: set[str] = field(default_factory=set)
 
-    # sha256(``ast.unparse`` of a top-level if/for/while/with/try) ->
+    # `outcome_key` (sha256 of ``ast.unparse`` of a top-level
+    # if/for/while/with/try, and which copy in its cell it is) ->
     # ({input: lineage at entry}, {var: lineage it left behind}, files behind
     # those, their file-hash component). The runtime derives a control
     # structure's output lineages from values, which the simulation cannot
@@ -429,6 +445,15 @@ class TrackingState:
     # W: StatementProcessor, control structures, StatementLineage (read back
     # after a restart). R: StatementLineage, ControlSimulation, the hit path.
     share_edge_records: dict[str, frozenset[tuple[str, str]]] = field(default_factory=dict)
+    # (Structure source hash, the lineages it read when it ran) -> the edges
+    # that run linked. Two loops of one text in two cells link apart (one
+    # finds the records it reads held by its list alone, the other also by a
+    # tuple built between them), and the one record by text is the later
+    # run's: the simulation of the earlier one moved what only the later one
+    # linked. Read where the inputs match, as ``control_outcomes`` are; a
+    # statement's under its cache key (``{"": key}``), which holds them.
+    # W: StatementRecords. R: ControlSimulation.
+    share_edge_records_at: dict[tuple[str, tuple], frozenset[tuple[str, str]]] = field(default_factory=dict)
     # The source hash of each change a run made to ``share_edge_records``,
     # in order: its length is the generation a simulation snapshot keeps. A
     # snapshot taken before a record of one of its statements changed is
@@ -450,6 +475,13 @@ class TrackingState:
     # and the simulation's restore (an entry's ``output_digests``).
     # R: StatementLineageBuilder, StatementStore (the digests an entry keeps).
     value_cutoff: ValueCutoff = field(default_factory=ValueCutoff)
+
+    # The writers a statement was refused for this session (NOTEBOOK-UNSEEN-
+    # WRITES), by its text and place: a later run that did not reach them (a
+    # ``cached_property`` filled, a hash a tuple kept) is not stored while
+    # one is still alive.
+    # W/R: StatementProcessor._refuse_unseen_writes.
+    unseen_refused: dict[str, tuple[str, list[Any]]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.executed_input_lineages, InputLineages):

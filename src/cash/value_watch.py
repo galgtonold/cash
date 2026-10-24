@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import abc
 import copyreg
+import itertools
 import os
 import sys
 import types
@@ -47,12 +48,14 @@ __all__ = [
     "KIND_NO_STREAM",
     "KIND_PLAIN_KEY",
     "KIND_VALUE",
+    "KIND_WALKED",
     "add_namespace",
     "WatchMismatch",
     "classify",
     "digest",
     "enabled",
     "forget",
+    "gen",
     "peek",
     "reset",
     "stats",
@@ -63,7 +66,8 @@ __all__ = [
 #: the value's version it was taken at.
 KIND_VALUE = 0  # value_hash.compute_hash
 KIND_PLAIN_KEY = 1  # the decorator's key part for plain data (arg_hashing.plain_key_part)
-KIND_NO_STREAM = 2  # "holds no stream" for what a function holds (call_key.holds_a_stream)
+KIND_WALKED = 2  # a token for an argument the decorator's key walked (`tag`)
+KIND_NO_STREAM = 3  # "holds no stream" for what a function holds (call_key.holds_a_stream)
 
 
 class WatchMismatch(AssertionError):
@@ -363,6 +367,34 @@ def digest(
     if keep is None or keep(value, result):
         cw.commit(value, kind, result, seconds)
     return result
+
+
+#: Tokens `tag` hands out, each once in this process.
+_TOKENS = itertools.count()
+
+
+def tag(value: Any) -> None:
+    """Give *value*, an argument the decorator's key walked as it is (no
+    marker stands for it), a token of its own while the watchers prove it
+    unchanged since it was armed: the fast hit path (`hit_memo`) keys a call
+    by it. A new token for each version, never one seen before, so a value
+    that changed and an equal copy never share one. Nothing when *value* is
+    not armed or changed since."""
+    cw = _cw
+    if cw is None or cw.peek(value, KIND_WALKED) is not None:
+        return
+    cw.commit(value, KIND_WALKED, ("__cash_walked__", next(_TOKENS)), 0.0)
+
+
+def gen(value: Any) -> int | None:
+    """The arm generation of *value* while it is tracked and not seen
+    changed, else None: one number per arm in this process, never handed
+    out twice. Reads no content, so a write shows only at the next check
+    (`peek`)."""
+    cw = _cw
+    if cw is None:
+        return None
+    return cw.gen(value)
 
 
 def peek(value: Any, kind: int = KIND_VALUE) -> Any:

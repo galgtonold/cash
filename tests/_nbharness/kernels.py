@@ -872,6 +872,14 @@ try:
                 # purge to match a fresh kernel.
                 return False
             _fn = _os.path.normcase(_os.path.abspath(_f))
+            # An installed package outside the interpreter's own prefixes
+            # (``uv run --with`` adds its packages' folder by a .pth) is a
+            # library too: numpy purged and imported again made a second
+            # ``_NoValue``, and its C reductions took the new default for a
+            # value (``int() ... not '_NoValueType'`` in ``indices.max()``).
+            _parts = _fn.split(_os.sep)
+            if 'site-packages' in _parts or 'dist-packages' in _parts:
+                return True
             return any(_fn.startswith(_r) for _r in _roots)
 
         for _name in [n for n in _sys.modules if n not in _base]:

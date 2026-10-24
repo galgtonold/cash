@@ -85,7 +85,9 @@ def _is_c_type(cls: type) -> bool:
 
 
 #: What a type an extension builds holds besides its C methods and slots.
-_C_TYPE_NAMES = frozenset({"__doc__", "__module__", "__text_signature__", "__dict__", "__weakref__"})
+#: ``__slotnames__`` is copyreg's, cached on any type an object of which was
+#: pickled or copied.
+_C_TYPE_NAMES = frozenset({"__doc__", "__module__", "__text_signature__", "__dict__", "__weakref__", "__slotnames__"})
 _C_MEMBERS = (
     types.BuiltinFunctionType,
     types.MethodDescriptorType,

@@ -26,6 +26,7 @@ import contextlib
 import json
 import logging
 import os
+import weakref
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
@@ -132,12 +133,13 @@ S = TypeVar("S", bound=VersionedJsonStore)
 
 
 class StoreRegistry(Generic[S]):
-    """One store per cache dir, process-wide."""
+    """One store per cache dir, process-wide, and one per in-memory backend."""
 
     def __init__(self, make: Callable[[str | None], S], on_create: Callable[[S], None] | None = None) -> None:
         self._make = make
         self._on_create = on_create
         self._stores: dict[str | None, S] = {}
+        self._by_backend: weakref.WeakKeyDictionary[Any, S] = weakref.WeakKeyDictionary()
 
     def get(self, cache_dir: str | None) -> S:
         """The shared store for *cache_dir*."""
@@ -150,9 +152,28 @@ class StoreRegistry(Generic[S]):
 
     def for_backend(self, backend: Any) -> S | None:
         """The shared store for *backend*'s cache dir, or ``None`` if it cannot
-        be resolved -- an unresolvable store means "no store"."""
+        be resolved -- an unresolvable store means "no store". A backend with
+        no cache dir (in memory) has a store of its own: shared, one Cash's
+        measurements decided for another's loops (a heavy ``for k in
+        range(3)`` made every later ``for k in range(1500)`` run pass by
+        pass)."""
         try:
-            return self.get(resolve_cache_dir(backend))
+            cache_dir = resolve_cache_dir(backend)
+            if cache_dir is None and backend is not None:
+                return self._in_memory(backend)
+            return self.get(cache_dir)
         except Exception:  # every store here is an optimisation or a nicety
             logger.debug("could not resolve a store", exc_info=True)
             return None
+
+    def _in_memory(self, backend: Any) -> S:
+        """The store of the in-memory *backend*, kept while it lives."""
+        try:
+            store = self._by_backend.get(backend)
+        except TypeError:  # no weak reference or no hash: the shared one
+            return self.get(None)
+        if store is None:
+            store = self._by_backend[backend] = self._make(None)
+            if self._on_create is not None:
+                self._on_create(store)
+        return store

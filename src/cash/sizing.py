@@ -24,7 +24,7 @@ import weakref
 from typing import Any
 
 from . import _native, _plain_data
-from ._user_attrs import instance_of, own_dict
+from ._user_attrs import attribute_or, instance_of, own_dict
 from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS, library_scalar_types
 
 logger = logging.getLogger(__name__)
@@ -359,10 +359,15 @@ def _instance_estimate(value: Any, seen: set[int]) -> int:
                 # scikit-learn's ``Bunch`` (``fetch_lfw_people``) keeps its
                 # arrays as items. Read as 0, its RAM copy took the array
                 # copies over the pickle its digest had made (2 x 150 MB).
-                if instance_of(obj, dict):
-                    held = [*itertools.islice(obj.values(), _INSTANCE_OBJECTS), *held]
-                elif instance_of(obj, (list, tuple)) and len(obj) <= _INSTANCE_OBJECTS:
-                    held = [*obj, *held]
+                # By the builtin type's own methods: the class's may raise.
+                # By the real type: a proxy that only claims to be one holds
+                # no storage of it.
+                if issubclass(type(obj), dict):
+                    held = [*itertools.islice(dict.values(obj), _INSTANCE_OBJECTS), *held]
+                elif issubclass(type(obj), (list, tuple)):
+                    base = list if issubclass(type(obj), list) else tuple
+                    if base.__len__(obj) <= _INSTANCE_OBJECTS:
+                        held = [*base.__iter__(obj), *held]
             for item in held:
                 kind = type(item)
                 if kind in _FLAT_CELLS or id(item) in walked:
@@ -446,10 +451,10 @@ def _data_size(obj: Any) -> int | None:
         return _est_sparse_csr_csc(obj)
     if type_name in _SPARSE_COO_TYPES:
         return _est_sparse_coo(obj)
-    try:
-        nbytes = getattr(obj, "nbytes", None)
-    except Exception:  # noqa: BLE001 - a property of someone else's class: any failure means "does not say"
-        return None
+    # Through Python's generic lookup where the class has a lookup of its
+    # own: a ``__getattribute__`` of the user's was run for every value a
+    # store sized. Any failure means "does not say".
+    nbytes = attribute_or(obj, "nbytes", None)
     if isinstance(nbytes, int) or type(nbytes).__name__.startswith(("int", "uint")):
         try:
             return int(nbytes)
@@ -477,19 +482,24 @@ def estimate_object_size(obj: Any, _depth: int = 0) -> int:
         size = _data_size(obj)
         if size is not None:
             return size
-        if dataclasses.is_dataclass(obj) and not instance_of(obj, type):
+        # By its type: ``is_dataclass(obj)`` asks the object for its
+        # ``__class__`` (``isinstance``), which a lookup of the user's answers.
+        # Its fields read as pickle reads them, from its ``__dict__`` and
+        # slots, never through its own ``__getattribute__``.
+        if not instance_of(obj, type) and dataclasses.is_dataclass(type(obj)):
             base = sys.getsizeof(obj)
-            return base + sum(estimate_object_size(getattr(obj, f.name), _depth + 1) for f in dataclasses.fields(obj))
-        if instance_of(obj, tuple) and hasattr(obj, "_fields"):  # namedtuple
+            held = _field_values(obj, [f.name for f in dataclasses.fields(type(obj))])
+            return base + sum(estimate_object_size(value, _depth + 1) for value in held)
+        if issubclass(type(obj), tuple) and attribute_or(type(obj), "_fields", None) is not None:  # namedtuple
             base = sys.getsizeof(obj)
-            return base + sum(estimate_object_size(getattr(obj, name), _depth + 1) for name in obj._fields)
+            return base + sum(estimate_object_size(value, _depth + 1) for value in tuple.__iter__(obj))
         if type_name in ("bytes", "bytearray"):
             return len(obj)
-        if instance_of(obj, (list, tuple)):
+        if issubclass(type(obj), (list, tuple)):
             return _estimate_indexable(obj, _depth)
-        if instance_of(obj, dict):
+        if issubclass(type(obj), dict):
             return _estimate_dict(obj, _depth)
-        if instance_of(obj, (set, frozenset)):
+        if issubclass(type(obj), (set, frozenset)):
             return _estimate_set(obj, _depth)
         return sys.getsizeof(obj)
     except Exception:  # noqa: BLE001 - an object's own lookups (``__class__`` raising) are not cash's error
@@ -593,10 +603,10 @@ def _own_footprint(obj: Any, seen: set[int], stack: list) -> int:
             return size
         size = sys.getsizeof(obj)
         held: list = []
-        if instance_of(obj, dict):
+        if issubclass(type(obj), dict):
             held += obj.values()
             held += obj
-        elif instance_of(obj, (list, tuple, set, frozenset)):
+        elif issubclass(type(obj), (list, tuple, set, frozenset)):
             sampled = _sampled_instances(obj, seen) if len(obj) > _plain_data.SIZE_EXACT_UP_TO else None
             if sampled is None:
                 held += obj
@@ -604,7 +614,7 @@ def _own_footprint(obj: Any, seen: set[int], stack: list) -> int:
                 size += sampled
         elif not instance_of(obj, _HELD_BY_NAME):
             size += _attrs_footprint(obj, seen, held)
-    except (TypeError, RecursionError, ValueError):
+    except Exception:
         logger.debug("Could not estimate size of %s object", type(obj).__name__, exc_info=True)
         return 0
     held.reverse()  # the first popped first
@@ -656,10 +666,43 @@ def _attr_values(obj: Any) -> list:
     attrs = own_dict(obj)
     values = list(attrs.values()) if attrs is not None else []
     for name in _slot_names(type(obj)):
-        value = getattr(obj, name, None)
+        value = _slot_value(obj, name)
         if value is not None:
             values.append(value)
     return values
+
+
+def _slot_value(obj: Any, name: str, missing: Any = None) -> Any:
+    """*obj*'s slot *name*, read through the slot's own descriptor as pickle
+    reads it (never the object's ``__getattribute__``); *missing* when unset
+    or not a slot."""
+    for klass in type(obj).__mro__:
+        found = klass.__dict__.get(name)
+        if found is not None:
+            if type(found) is not types.MemberDescriptorType:
+                return missing
+            try:
+                return found.__get__(obj, type(obj))
+            except AttributeError:
+                return missing
+    return missing
+
+
+def _field_values(obj: Any, names: list[str]) -> list:
+    """The values of *obj*'s fields *names*, from its ``__dict__`` or slots;
+    one in neither (a property) is looked up as before."""
+    attrs = own_dict(obj) or {}
+    values = []
+    for name in names:
+        if name in attrs:
+            values.append(attrs[name])
+            continue
+        value = _slot_value(obj, name, _UNSET)
+        values.append(getattr(obj, name) if value is _UNSET else value)
+    return values
+
+
+_UNSET = object()
 
 
 def _attrs_footprint(obj: Any, seen: set[int], held: list) -> int:
@@ -684,7 +727,7 @@ def _attrs_footprint(obj: Any, seen: set[int], held: list) -> int:
             else:
                 held.append(value)
     for name in _slot_names(type(obj)):
-        value = getattr(obj, name, None)
+        value = _slot_value(obj, name)
         if value is not None:
             if type(value) in _FLAT_CELLS:
                 size += sys.getsizeof(value)
