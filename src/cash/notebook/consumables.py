@@ -368,7 +368,7 @@ def _chain_meets_stream(value: Any, chain: list[ast.AST]) -> bool:
 def _an_output_stream(obj: Any) -> bool:
     """The process's own output streams (``sys.stderr`` handed to a log
     handler): written to, never read, so reaching one draws nothing."""
-    return any(obj is getattr(sys, name, None) for name in ("stdout", "stderr", "__stdout__", "__stderr__"))
+    return any(obj is attribute_or(sys, name, None) for name in ("stdout", "stderr", "__stdout__", "__stderr__"))
 
 
 def is_stream(obj: Any) -> bool:
