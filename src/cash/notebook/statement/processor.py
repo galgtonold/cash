@@ -388,21 +388,27 @@ def _reached(classes: set[type]) -> set[int]:
 
 def _read_into(kind: type, named: Mapping[int, str]) -> bool:
     """Whether `_items_held` reads into a value of *kind*."""
-    return issubclass(kind, (list, tuple, dict, set, frozenset, collections.deque)) or id(kind) in named
+    return issubclass(kind, (list, tuple, dict, set, frozenset, collections.deque)) or _notebook_class(kind, named)
+
+
+def _notebook_class(kind: type, named: Mapping[int, str]) -> bool:
+    """Whether *kind* is a class the notebook defines and binds: a library's
+    objects (an estimator holding its steps) are not read into."""
+    return id(kind) in named and attribute_or(kind, "__module__", None) == "__main__"
 
 
 def _items_held(kind: type, group: list[Any], named: Mapping[int, str]) -> Iterable[Any]:
     """What the values of *group*, all of *kind*, hold that
     `_classes_with_state` reads, by the base type's own methods: the items of
     a list, tuple, set, frozenset or deque, the keys and values of a dict,
-    the stored attributes of an object of a class the notebook binds."""
+    the stored attributes of an object of a class the notebook defines."""
     chain = itertools.chain.from_iterable
     for base in (list, tuple, frozenset, set, collections.deque):
         if issubclass(kind, base):
             return chain(map(base.__iter__, group))
     if issubclass(kind, dict):
         return itertools.chain(chain(map(dict.keys, group)), chain(map(dict.values, group)))
-    if id(kind) not in named:
+    if not _notebook_class(kind, named):
         return ()
     try:
         return list(chain(map(dict.values, map(_ATTRIBUTES, group))))
