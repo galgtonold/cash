@@ -191,6 +191,7 @@ from ..shared_objects import (
     WalkBudgetExceeded,
     anchors_held,
     check_walk_budget,
+    children_of,
     forget_heap_unreadable,
     heap_unreadable,
     history_names,
@@ -477,7 +478,34 @@ def _a_closure(value: Any) -> bool:
 
 def _notebook_object(value: Any) -> bool:
     """Whether *value* is an object of a class defined in the notebook."""
-    return not instance_of(value, type) and getattr(type(value), "__module__", None) == "__main__"
+    return not instance_of(value, type) and attribute_or(type(value), "__module__", None) == "__main__"
+
+
+#: What `_read_through` takes for a leaf that holds nothing of the notebook's.
+_EMPTY_LEAVES = (type, types.ModuleType, types.BuiltinFunctionType, types.CodeType)
+
+
+def _read_through(value: Any, value_types: tuple[type, ...]) -> bool:
+    """Whether `holds_part_of` reads all *value* holds: nothing in its reach
+    is an object it cannot open (a pandas object, an object array's view, a
+    weakref, a lock), which may hold what it does not see."""
+    seen: set[int] = set()
+    stack = [value]
+    while stack:
+        obj = stack.pop()
+        if is_value(obj, value_types) or id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        check_walk_budget()
+        if _plain_data.is_tree(obj):
+            continue  # JSON-like data: builtins all the way down
+        held = children_of(obj)
+        if held is None:
+            if not instance_of(obj, _EMPTY_LEAVES):
+                return False
+            continue
+        stack.extend(held)
+    return True
 
 
 def _rechecked_partner(value: Any) -> bool:
@@ -3480,6 +3508,7 @@ class StatementProcessor:
                     partners.setdefault(dst, set()).add(src)
         if not partners.keys() - bound:
             return
+        value_types = VALUE_TYPES + library_value_types()
         try:
             with walk_budget(share_check_budget(cost)):
                 for name in sorted(partners.keys() - bound):
@@ -3488,7 +3517,11 @@ class StatementProcessor:
                         if other is _ABSENT or value is _ABSENT or not _rechecked_partner(other):
                             continue
                         check_walk_budget()
-                        if not holds_part_of(value, [other]) and not holds_part_of(other, [value]):
+                        if holds_part_of(value, [other]) or holds_part_of(other, [value]):
+                            continue
+                        # Neither holds part of the other as far as it reads:
+                        # dropped only when it reads all of both.
+                        if _read_through(value, value_types) and _read_through(other, value_types):
                             unlink(edges, name, partner)
         except WalkBudgetExceeded:
             pass  # what is left unasked stays linked
