@@ -65,6 +65,7 @@ from cash.notebook.statement.derivation_edges import (
     logging_edges,
     own_share_edges,
     record_shared_object_edges,
+    unlink,
 )
 from cash.notebook.statement.directives import statement_directives, ttl_floor_from_called_functions
 from cash.notebook.statement.evictions import EvictedRecomputes
@@ -189,9 +190,11 @@ from ..shared_objects import (
     ViewBasesCutShort,
     WalkBudgetExceeded,
     anchors_held,
+    check_walk_budget,
     forget_heap_unreadable,
     heap_unreadable,
     history_names,
+    holds_part_of,
     is_value,
     library_value_types,
     output_history,
@@ -465,6 +468,23 @@ def _defined_class_bases(tree: ast.AST, user_ns: Mapping[str, Any]) -> list[type
         for base in node.bases
         if isinstance(base, ast.Name) and instance_of(user_ns.get(base.id), type)
     ]
+
+
+def _a_closure(value: Any) -> bool:
+    """Whether *value* is a function of the user's with cells it closes over."""
+    return type(value) is types.FunctionType and bool(value.__closure__)
+
+
+def _notebook_object(value: Any) -> bool:
+    """Whether *value* is an object of a class defined in the notebook."""
+    return not instance_of(value, type) and getattr(type(value), "__module__", None) == "__main__"
+
+
+def _rechecked_partner(value: Any) -> bool:
+    """Whether an edge to *value* can be asked again by `holds_part_of`: a
+    builtin container, a closure or an object of the notebook's. A class,
+    a module or a library's object (a frame and its groupby) is not."""
+    return type(value) in (list, dict, set, tuple) or _a_closure(value) or _notebook_object(value)
 
 
 def _has_class_state(cls: type, value_types: tuple[type, ...]) -> bool:
@@ -2698,6 +2718,7 @@ class StatementProcessor:
                 with logging_edges() as shared:
                     self._record_shared_object_edges(run, captured_vars, holders, execution.echo, execution.cost)
                     self._link_inputs_kept_by(run, execution.echo, execution.cost)
+                    self._unlink_what_shares_nothing(run, execution.cost)
                 if not is_control_body(run.code):
                     run.linked_edges = frozenset((src, dst) for src, dst in linked | shared if src != dst)
                     self._records.note_share_edges(
@@ -3406,6 +3427,65 @@ class StatementProcessor:
                     links.append(([name], readable - {name}))
             return links, False
         return links, True
+
+    def _unlink_what_shares_nothing(self, run: StatementRun, cost: float = 0.0) -> None:
+        """Drop the edges of the closures and the notebook's objects *run*
+        called through to what they share nothing with any more.
+
+        ``draw, rebind = make(BIG)`` links both to ``BIG``; ``rebind([0])``
+        then rebinds the cell they share, and binds no name, so the edges
+        stayed, and ``BIG.append(...)`` moved ``draw`` on and re-ran its
+        readers. Each edge of such a name to a container, a function or an
+        object of the notebook's is asked again (`holds_part_of`), within the
+        share check's budget; any other kind of partner (a class, a frame) is
+        left linked, as is everything once the budget is spent. The dropped
+        edges go into the statement's share record (`unlink`).
+        """
+        if run.tree is None or is_control_body(run.code):
+            return
+        user_ns = self.shell.user_ns
+        edges = self.tracking_state.derivation_edges
+        bound = bound_names(run.tree) or set()
+        called: set[str] = set()
+        for node in ast.walk(run.tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Name) and _a_closure(user_ns.get(func.id)):
+                called.add(func.id)
+            elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+                if _notebook_object(user_ns.get(func.value.id)):
+                    called.add(func.value.id)
+        # The closures of the same factory share their cells: ``draw``
+        # holds ``BIG`` through the cell ``rebind`` rebound.
+        cells = {id(cell) for name in called if _a_closure(user_ns.get(name)) for cell in user_ns[name].__closure__}
+        if cells:
+            called |= {
+                name
+                for name, value in list(user_ns.items())
+                if _a_closure(value) and any(id(cell) in cells for cell in value.__closure__)
+            }
+        partners: dict[str, set[str]] = {}
+        for src, targets in edges.items():
+            for dst in targets:
+                if src in called:
+                    partners.setdefault(src, set()).add(dst)
+                if dst in called:
+                    partners.setdefault(dst, set()).add(src)
+        if not partners.keys() - bound:
+            return
+        try:
+            with walk_budget(share_check_budget(cost)):
+                for name in sorted(partners.keys() - bound):
+                    for partner in sorted(partners[name] - bound):
+                        value, other = user_ns.get(name, _ABSENT), user_ns.get(partner, _ABSENT)
+                        if other is _ABSENT or value is _ABSENT or not _rechecked_partner(other):
+                            continue
+                        check_walk_budget()
+                        if not holds_part_of(value, [other]) and not holds_part_of(other, [value]):
+                            unlink(edges, name, partner)
+        except WalkBudgetExceeded:
+            pass  # what is left unasked stays linked
 
     def _class_states_around(self, run: StatementRun) -> dict[str, tuple | None] | None:
         """Before *run* executes: the state of each class with state its
