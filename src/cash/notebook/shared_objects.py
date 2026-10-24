@@ -1621,7 +1621,7 @@ def _check_group(
             return _inside_library_objects(group, nodes, owner, value_types, user_ns, bindings, cash_held)
         if _held_within(nodes, counted, excess, value_types):
             return _inside_library_objects(group, nodes, owner, value_types, user_ns, bindings, cash_held)
-        shared = {owner[k] for k in excess}
+        shared = _owners_of(owner, excess)
         if user_ns is None:
             return shared, None
         named = {id(mapping) for mapping, _key in named_held if mapping is not user_ns}
@@ -2688,6 +2688,41 @@ def _iterator_parts(value: Any) -> list[Any] | None:
 _MAX_BREAKS = 64
 
 
+class _Owners(dict):
+    """`_walk`'s *owner*: the root each object was first reached from, and
+    in *meets* the pairs of roots whose walks met at an object, so each
+    root that reaches a shared object is found (`_owners_of`), not only the
+    first: ``draw`` and ``rebind`` closing over one cell, ``alias = big``."""
+
+    __slots__ = ("meets",)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.meets: set[tuple[str, str]] = set()
+
+
+def _owners_of(owner: dict[int, str], keys: Iterable[int]) -> set[str]:
+    """The roots that reach the objects *keys*: their first roots, with each
+    root whose walk met one of those (`_Owners`), and so on. A root that
+    met another at any object counts as reaching all that one reaches: a
+    link too many at worst, never one missed."""
+    found = {owner[key] for key in keys}
+    meets = getattr(owner, "meets", None)
+    if not meets:
+        return found
+    linked: dict[str, set[str]] = {}
+    for first, other in meets:
+        linked.setdefault(first, set()).add(other)
+        linked.setdefault(other, set()).add(first)
+    todo = list(found)
+    while todo:
+        for name in linked.get(todo.pop(), ()):
+            if name not in found:
+                found.add(name)
+                todo.append(name)
+    return found
+
+
 def _walk(
     group: Mapping[str, Any],
     bindings: list[Mapping[str, Any]],
@@ -2727,7 +2762,7 @@ def _walk(
     """
     nodes: dict[int, Any] = {}
     inbound: dict[int, int] = {}
-    owner: dict[int, str] = {}
+    owner = _Owners()
     order: list[int] = []
     identity = set(group) if keep_identity is None else set(keep_identity)
     exact = exact_value_types()
@@ -2744,6 +2779,8 @@ def _walk(
         key = id(root)
         inbound[key] = inbound.get(key, 0) + 1 + sum(1 for m in bindings if m.get(name) is root)
         if key in nodes:
+            if owner[key] != name:
+                owner.meets.add((owner[key], name))  # ``alias = big``
             continue
         nodes[key] = root
         owner[key] = name
@@ -2837,6 +2874,7 @@ def _descend(
     exact = exact_value_types()
     containers = EXACT_CONTAINER_TYPES
     flat: dict[type, bool] = {}
+    meets = getattr(owner, "meets", None)
     pops = 0
     while stack:
         pops += 1
@@ -2875,6 +2913,8 @@ def _descend(
                 ):
                     continue
                 stack.append(child)
+            elif meets is not None and owner[ckey] != name:
+                meets.add((owner[ckey], name))
 
 
 #: Fewest items of a list or dict below a root that `_descend` asks about as
@@ -3061,4 +3101,6 @@ def _take_breaks(
             owner[ckey] = name
             order.append(ckey)
             _descend([obj], name, nodes, inbound, owner, order, value_types, leaves)
+        elif isinstance(owner, _Owners) and owner[ckey] != name:
+            owner.meets.add((owner[ckey], name))
     return True
