@@ -110,21 +110,28 @@ def test_an_edited_change_through_the_class_is_not_served_from_before(cash_magic
         assert cash_magics.shell.user_ns["result"] == expected, f"run {rnd + 1} served a value from before the edit"
 
 
-def test_a_holder_search_cut_short_still_links_the_class(cash_magics, monkeypatch):
+@pytest.mark.parametrize("ending", ["out of time", "given up"])
+def test_a_holder_search_cut_short_still_links_the_class(cash_magics, monkeypatch, ending):
     """The search for what keeps ``data`` runs within a time budget, and cut
     short it handed back nothing: the class it had already found holding
     ``data['meta']`` went unlinked, and on a slow enough run the edited bump
-    left ``result`` served from before."""
+    left ``result`` served from before. So it did when its full pass gave up
+    climbing past a holder and handed back what that pass found, not the
+    class its quick pass had found."""
     import sys
 
-    from cash.notebook.shared_objects import WalkBudgetExceeded
+    from cash.notebook.shared_objects import GaveUp, WalkBudgetExceeded
     from cash.notebook.statement import processor
 
     search = processor.share_group
 
     def cut_short(*args, **kwargs):
         if sys._getframe(1).f_code.co_name == "_link_inputs_kept_by":
-            raise WalkBudgetExceeded
+            if ending == "out of time":
+                raise WalkBudgetExceeded
+            search(*args, **{**kwargs, "gave_up": GaveUp()})
+            kwargs["gave_up"].complete = False
+            return {}, set()
         return search(*args, **kwargs)
 
     monkeypatch.setattr(processor, "share_group", cut_short)
