@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import ast
 import types
-from typing import TYPE_CHECKING
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any
 
+from ..._user_attrs import attribute_or
 from ...analysis.ast_util import called_names
 from ...analysis.mutation_effects import (
     control_structure_mutations,
@@ -109,6 +111,12 @@ class MutationRouting:
         # or branch body too: without a lineage the body statement's key never
         # moves, so nothing else sends it back to run.
         closure_writers = self._callees_changing_their_closure(run.tree)
+        if closure_writers and not is_control_body(run.code):
+            # The functions sharing a cell with the callee are outputs, as a
+            # list is of `items.append(x)`: `rebind(BIG)` setting `nonlocal
+            # rows` changes what `draw` reads, so a rebuild of `draw` runs
+            # this statement again after the one that made it.
+            run.outputs = run.outputs | sharing_a_cell(closure_writers, self.shell.user_ns)
         if closure_writers:
             _skip(
                 run,
@@ -375,8 +383,7 @@ class MutationRouting:
     def _callees_changing_their_closure(self, tree: ast.AST | None) -> set[str]:
         """The functions *tree* calls by name, outside loop and branch bodies,
         that change their closure (:func:`changes_its_closure`)."""
-        user_ns = self.shell.user_ns
-        return {name for name in called_names(tree, "no_control_bodies") if changes_its_closure(user_ns.get(name))}
+        return callees_changing_their_closure(tree, self.shell.user_ns)
 
     # ------------------------------------------------------------------
     # After execution
@@ -547,6 +554,25 @@ class MutationRouting:
             self._records.note_module_state(run.code, run.state_names, run.state_modules | observed)
         if run.process_state:
             self._records.note_process_state(run.code, run.process_state)
+
+
+def callees_changing_their_closure(tree: ast.AST | None, user_ns: Mapping[str, Any]) -> set[str]:
+    """The functions *tree* calls by name, outside loop and branch bodies,
+    that change their closure (:func:`changes_its_closure`)."""
+    return {name for name in called_names(tree, "no_control_bodies") if changes_its_closure(user_ns.get(name))}
+
+
+def sharing_a_cell(writers: set[str], user_ns: Mapping[str, Any]) -> set[str]:
+    """The functions of *user_ns* that share a closure cell with one of
+    *writers*, those included: what a call of one of them changes."""
+    cells = {id(cell) for name in writers for cell in attribute_or(user_ns.get(name), "__closure__", None) or ()}
+    if not cells:
+        return set()
+    return {
+        name
+        for name, value in list(user_ns.items())
+        if type(value) is types.FunctionType and any(id(cell) in cells for cell in value.__closure__ or ())
+    }
 
 
 _PROCESS_WORDS = {ENVIRON: "environment", CWD: "working directory"}

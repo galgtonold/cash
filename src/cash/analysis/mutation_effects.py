@@ -66,6 +66,8 @@ from .mutations import (
     standalone_method_mutation_receivers,
     subscript_view_bindings,
     top_level_calls,
+    unrooted_write,
+    writer_aliases,
 )
 from .namespace_effects import (
     ARGUMENT_READING_BUILTINS,
@@ -79,6 +81,7 @@ from .namespace_effects import (
     users_callee,
 )
 from .object_protocol import ObjectProtocolResets, changed_through_their_objects, object_protocol_mutations
+from .writer_aliases import namespace_writer_aliases
 
 __all__ = [
     "CellEffects",
@@ -1329,6 +1332,10 @@ class StatementEffects:
     #: Why the callees could not be analysed, when they could not. The
     #: statement then runs uncached: what it writes is unknown.
     unanalysed: tuple[str, ...] = ()
+    #: How the statement writes into an object no name in its text roots
+    #: (`unrooted_write`), when it does: it runs uncached, its outputs are
+    #: every variable, and it is warned about.
+    unrooted: str | None = None
 
 
 def is_module_name(name: str, namespace: Mapping[str, Any], virtual_modules: Iterable[str] = ()) -> bool:
@@ -1407,7 +1414,29 @@ def statement_effects(
         return StatementEffects(frozenset(inputs), frozenset(outputs), frozenset(), frozenset(), (reason,))
     # A user callable handed to a call whose source cannot be read: what it
     # changes is unknown, so the statement runs uncached.
-    return StatementEffects(frozenset(inputs), frozenset(outputs), callee_globals, arg_mutations, unreadable)
+    unrooted = (
+        unrooted_write(tree, {**namespace_writer_aliases(tree, namespace), **writer_aliases(tree)}) if tree else None
+    )
+    if unrooted is not None:
+        # ``globals()[name][7].x = -3``: which variable it changes is not
+        # known before it runs, so each is taken as changed.
+        outputs = set(outputs) | every_variable(namespace)
+        unreadable = (*unreadable, unrooted)
+    return StatementEffects(frozenset(inputs), frozenset(outputs), callee_globals, arg_mutations, unreadable, unrooted)
+
+
+#: Names IPython binds in a notebook's namespace, which no statement writes into.
+_IPYTHON_NAMES = frozenset({"In", "Out", "exit", "quit", "get_ipython"})
+
+
+def every_variable(namespace: Mapping[str, Any]) -> frozenset[str]:
+    """The notebook's variables: each name *namespace* binds that is not
+    private, IPython's own, or a module."""
+    return frozenset(
+        name
+        for name, value in list(namespace.items())
+        if not name.startswith("_") and name not in _IPYTHON_NAMES and not instance_of(value, types.ModuleType)
+    )
 
 
 def _effects_past_the_budget(

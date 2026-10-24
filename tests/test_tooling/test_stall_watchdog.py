@@ -17,13 +17,36 @@ import pytest
 
 from tests.conftest import _StallWatchdog
 
+_MADE: list[_StallWatchdog] = []
+
+
+@pytest.fixture(autouse=True)
+def _stop_watchdogs():
+    """Each test's watchdogs end with it. Left running, one fired in the
+    next test of its worker, and its ``_fire`` ran inside that test's
+    statement: cash saw a function change ``fired`` there and did not store
+    the statement (test_an_entry_beside_a_kept_pickle.py)."""
+    yield
+    while _MADE:
+        _MADE.pop().stop()
+
 
 def _watchdog(timeout):
     """A watchdog whose _fire is recorded instead of killing the process."""
     w = _StallWatchdog(timeout=timeout)
     fired = []
     w._fire = lambda idle, current: fired.append((idle, current))
+    _MADE.append(w)
     return w, fired
+
+
+def test_a_stopped_watchdog_does_not_fire():
+    w, fired = _watchdog(0.3)
+    w.start()
+    w.stop()
+    time.sleep(1.0)
+
+    assert not fired
 
 
 def test_fires_when_progress_stops():
