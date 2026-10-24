@@ -23,6 +23,7 @@ from cash._paths import normalize_path
 from cash.decorator.cache_metadata import CacheMetadata
 from cash.decorator.explain import describe_stale_files
 from cash.tracking.file_dep_snapshot import dep_is_fresh, dep_path_for_this_process
+from tests._modules import forget_module
 from tests._scripts import CASH_SRC, run_python
 
 pytestmark = pytest.mark.core
@@ -117,8 +118,8 @@ def other_main(tmp_path, monkeypatch):
     main.__file__ = str(script)
     main.__spec__ = None
     monkeypatch.setitem(sys.modules, "__main__", main)
-    monkeypatch.delitem(sys.modules, "__mp_main__", raising=False)
-    monkeypatch.delitem(sys.modules, "job", raising=False)
+    forget_module(monkeypatch, "__mp_main__")
+    forget_module(monkeypatch, "job")
     return script.parent
 
 

@@ -43,6 +43,7 @@ __all__ = [
     "on_consumer_error",
     "holding",
     "own_work",
+    "refusing",
     "release",
     "subscribe",
     "subscribe_always",
@@ -91,7 +92,12 @@ def _hook(event: str, args: tuple) -> None:
     if counted is not None:
         counted[0] += 1
     consumers = _active.get(event)
-    if consumers is None or getattr(_own, "work", False):
+    if consumers is None:
+        return
+    check = getattr(_own, "refuse", None)
+    if check is not None and event in check[0]:
+        check[1](event, args)  # may raise: the audited call fails (`refusing`)
+    if getattr(_own, "work", False):
         return
     for consumer in consumers:
         try:
@@ -127,14 +133,14 @@ def _rebuild() -> None:
     old = {*_held_table, *_idle_table}
     held: dict[str, tuple[Consumer, ...]] = {}
     idle: dict[str, tuple[Consumer, ...]] = {}
-    for event in {*_subscribers, *_always}:
+    for event in {*_subscribers, *_always, *_refused}:
         subs = _subscribers.get(event, ())
         always = tuple(_always.get(event, ()))
         chosen = always + tuple(consumer for consumer, _ in subs)
-        if chosen:
+        if chosen or event in _refused:
             held[event] = chosen
         chosen = always + tuple(consumer for consumer, outside in subs if outside and _outside)
-        if chosen:
+        if chosen or event in _refused:
             idle[event] = chosen
     if _C_HOOK is not None and _hook_installed:
         # Every event either table names: `_active` is one of them, and
@@ -269,6 +275,33 @@ def own_work() -> Iterator[None]:
         yield
     finally:
         _own.work = before
+
+
+#: The events a `refusing` block has asked about: dispatched from then on
+#: (an empty consumer tuple when nothing else wants them), so a block costs
+#: no table rebuild after the first.
+_refused: set[str] = set()
+
+
+@contextmanager
+def refusing(events: tuple[str, ...], check: Callable[[str, tuple], None]) -> Iterator[None]:
+    """While inside, on this thread, *check* sees each of *events* as Python
+    raises it, cash's own work included, as ``check(event, args)``, and an
+    exception it raises fails the audited call itself: a stored value's
+    rebuild refuses an ``open`` that writes, whichever code asks for it
+    (``__setstate__``, a constructor a pickle names, ``pathlib.Path.open``)."""
+    if not _refused.issuperset(events):
+        with _lock:
+            _ensure_hook()
+            if not _refused.issuperset(events):
+                _refused.update(events)
+                _rebuild()
+    before = getattr(_own, "refuse", None)
+    _own.refuse = (frozenset(events), check)
+    try:
+        yield
+    finally:
+        _own.refuse = before
 
 
 def holding() -> bool:

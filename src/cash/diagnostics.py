@@ -327,16 +327,22 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # below binds; it runs uncached on the value in memory
         "NOTEBOOK-INPUT-UNBUILT",  # an input the cell's own cache hit was
         # to restore was not: the statement ran on the old value, unstored
+        "NOTEBOOK-ITEMS-UNREAD",  # a container too big to look through for objects
+        # whose special methods may run: the statement runs every time
         "NOTEBOOK-MAGIC-STALE",  # a name a magic bound is kept as it is,
         # though what the magic read changed since it ran, or is gone
         "NOTEBOOK-NO-LIVE-READER",  # cells above are read from the saved
         # file and nothing sends unsaved edits; shown once per session
         "NOTEBOOK-NOT-FOUND",  # no notebook cells to read; cells above the one
         # run are not re-checked, statements still cache on their own inputs
+        "NOTEBOOK-REDUCE-WROTE",  # a value's own __reduce__ / __getstate__,
+        # run when cash pickled it, changes other values: they count as
+        # changed, and the statement is not stored
         "NOTEBOOK-RELOAD-STATE",  # an edited module was reloaded, or the
         # kernel restarted, and cash cannot rebuild the state a cell set on it
         "NOTEBOOK-THREAD-ALIVE",  # a thread the cell started still runs after
         # it ended; what it changes from then on is outside cash's view
+        "NOTEBOOK-UNSEEN-WRITES",  # code that ran unseen changes what a served entry would not
         "NOTEBOOK-WORK-RUNNING",  # a thread or process a statement left
         # running has not finished; statements run rather than be served
         "NOTEBOOK-SAVEFIG-SKIP",  # refused to re-run plt.savefig() during
