@@ -249,15 +249,10 @@ def _referrers_or_none(objs: tuple[Any, ...], stop: set[int] | None = None) -> l
     (`shared_objects._referrers`); None where that cannot be known (the
     ``_asyncio`` module's read can loop for ever on 3.12.0-3.12.5). The
     heap's list, when read, goes in *stop*."""
-    from .shared_objects import _REFERRERS_BY_CALL, WalkBudgetExceeded, _referrers, _referrers_of
+    from .shared_objects import WalkBudgetExceeded, referrers_read
 
-    # `gc.get_referrers` compares each reference of each tracked object with
-    # every one of *objs*: asked of the 2,000 classes of a long session's
-    # modules over 1.5 million objects, 2-7 s. Past a few, one read of the
-    # heap whatever their number.
-    read = _referrers if len(objs) <= _REFERRERS_BY_CALL else _referrers_of
     try:
-        return read(objs, set() if stop is None else stop)
+        return referrers_read(objs, set() if stop is None else stop)
     except WalkBudgetExceeded:
         return None
 
