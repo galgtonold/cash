@@ -307,6 +307,9 @@ class _SourceOnly:
         #: names the class or function body being read binds in its own
         #: scope (a parameter ``id``), innermost last.
         self.scopes: list[dict[str, int]] = []
+        #: whether each of `scopes` is a class body's, whose names a
+        #: comprehension inside it does not see.
+        self.class_scopes: list[bool] = []
         #: the top level's functions, by name.
         self.functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
         #: user functions asked about (`_vouches`), and the answers.
@@ -432,6 +435,10 @@ class _SourceOnly:
         return name in _SOURCE_ONLY_CALLS or self._vouches(name)
 
     def _expr(self, node: ast.expr) -> bool:
+        if isinstance(node, _COMPREHENSIONS) and self.class_scopes and self.class_scopes[-1]:
+            # Its own scope, which the class body's names do not reach:
+            # ``getattr`` in it is the module's, or the builtin.
+            return self._scoped({}, False, lambda: self._expr(node))
         if isinstance(node, ast.Lambda):
             # Runs only when called; its code is in the source.
             return all(map(self._expr, [*node.args.defaults, *(d for d in node.args.kw_defaults if d is not None)]))
@@ -551,11 +558,16 @@ class _SourceOnly:
             self.in_body -= 1
 
     def _in_scope(self, node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef, read) -> bool:
-        self.scopes.append(_scope_names(node))
+        return self._scoped(_scope_names(node), isinstance(node, ast.ClassDef), read)
+
+    def _scoped(self, names: dict[str, int], is_class: bool, read) -> bool:
+        self.scopes.append(names)
+        self.class_scopes.append(is_class)
         try:
             return read()
         finally:
             self.scopes.pop()
+            self.class_scopes.pop()
 
     def _binds(self, name: str | None, node: ast.AST) -> bool:
         """Does the scope being read bind *name* by the time *node* runs, so
@@ -569,6 +581,7 @@ class _SourceOnly:
 
 
 _BUILTIN_NAMES = frozenset(dir(builtins))
+_COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
 #: How many user functions deep a call at import is followed (`_SourceOnly._vouches`).
 _MAX_DEPTH = 8
 #: Values read from outside the source wherever a module names them.
@@ -631,6 +644,8 @@ def _scope_names(node: ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFu
     ... as`` name, which the handler's end unbinds; and only for a use on a
     line below that statement. Not the names a function, class, lambda or
     comprehension inside binds."""
+    if isinstance(node, ast.Module):
+        return _module_bound(node)
     if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return _always_bound(node.body)
     args = node.args
@@ -649,6 +664,22 @@ def _scope_names(node: ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFu
             names.add(child.name)
         pending.extend(ast.iter_child_nodes(child))
     return dict.fromkeys(names, 0)
+
+
+def _module_bound(tree: ast.Module) -> dict[str, int]:
+    """`_always_bound` for a module, less what may be bound again by the
+    time a use runs: a name a function of it declares ``global`` (``del
+    getattr`` there, called at import, brings the builtin back), and, after
+    ``from m import *`` anywhere in it, every builtin's name (``from
+    builtins import *`` binds them all)."""
+    bound = _always_bound(tree.body)
+    rebound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Global):
+            rebound.update(node.names)
+        elif isinstance(node, ast.ImportFrom) and any(alias.name == "*" for alias in node.names):
+            rebound |= _BUILTIN_NAMES
+    return {name: line for name, line in bound.items() if name not in rebound}
 
 
 def _always_bound(body: list[ast.stmt]) -> dict[str, int]:

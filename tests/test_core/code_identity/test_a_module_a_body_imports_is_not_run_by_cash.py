@@ -288,6 +288,18 @@ def test_a_module_in_a_folder_with_no_init_is_keyed_by_its_source(tmp_path, spel
         "import builtins\nfrom builtins import getattr as ga\n"
         "E = max(map(max(map(ga, [builtins], ['__import__'])), ['os']))\n"
         "K = int(max(map(ga, [E], ['environ']))['K'])",
+        "import builtins\ngetattr = abs\ndef _drop():\n    global getattr\n    del getattr\n_drop()\n"
+        "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
+        "K = int(max(map(getattr, [E], ['environ']))['K'])",
+        "import builtins\ngetattr = abs\nif True:\n    from builtins import getattr\n"
+        "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
+        "K = int(max(map(getattr, [E], ['environ']))['K'])",
+        "import builtins\ngetattr = abs\nfrom builtins import *\n"
+        "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
+        "K = int(max(map(getattr, [E], ['environ']))['K'])",
+        "import builtins\nclass C:\n    getattr = abs\n"
+        "    E = [max(map(max(map(getattr, [builtins], ['__import__'])), ['os'])) for _ in [0]][0]\n"
+        "    K = [int(max(map(getattr, [E], ['environ']))['K']) for E in [E]][0]\nK = C.K",
     ],
     ids=[
         "eval_handed_to_map",
@@ -304,6 +316,10 @@ def test_a_module_in_a_folder_with_no_init_is_keyed_by_its_source(tmp_path, spel
         "getattr_read_from_the_builtins_module_by_another_name",
         "getattr_imported_from_builtins",
         "getattr_imported_from_builtins_by_another_name",
+        "getattr_deleted_by_a_function_the_top_level_calls",
+        "getattr_imported_again_under_an_if",
+        "getattr_imported_again_by_a_star_import",
+        "getattr_in_a_comprehension_of_a_class_body",
     ],
 )
 def test_a_value_read_outside_the_source_without_a_call_runs_with_a_warning(tmp_path, top_level):
