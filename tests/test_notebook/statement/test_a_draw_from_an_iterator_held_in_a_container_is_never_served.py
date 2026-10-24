@@ -121,10 +121,12 @@ def test_a_method_whose_result_is_dropped_is_not_a_draw(statement_processor, moc
     assert drawn_stream_inputs(tree, ["h"], [], mock_shell.user_ns) == []
 
 
-def test_numbers_past_the_objects_cash_reads_are_served(statement_processor):
+def test_numbers_past_the_objects_cash_reads_are_served(statement_processor, monkeypatch):
     """Control: numbers and strings are passed over in bulk, so a draw by an
-    index cash cannot follow from a list of a million numbers is no draw."""
-    _run(statement_processor, "h = list(range(1_000_001))\nkeys = [0, 1]")
+    index cash cannot follow from more numbers than the objects cash looks
+    into is no draw. (The limit is lowered to keep the test quick.)"""
+    monkeypatch.setattr("cash.notebook.consumables._HELD_SCAN", 1_000)
+    _run(statement_processor, "h = list(range(20_000)) + ['a', 'b']\nkeys = [0, 1]")
     _run(statement_processor, "s = sum(h[k] for k in keys)")
     assert _run(statement_processor, "s = sum(h[k] for k in keys)")["status"] == CacheStatus.RESTORED
 
