@@ -236,6 +236,15 @@ the statement every time instead of storing it:
   a library's registry or a closure, or the statement is in a loop body. See
   [Mutating an object created in an earlier cell](known-limitations.md#mutating-an-object-created-in-an-earlier-cell).
 
+<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @93847c81 -->
+- **Holds a weak reference, or the `id()` of an object the notebook holds**:
+  `wr = weakref.ref(p.child)`, a `WeakValueDictionary`, `reg = {id(p): ...}`.
+  Restored, the value would point at the object as it was when it was
+  stored, while the statement that binds `p` binds a new one. It runs again,
+  as in plain Python. Ids are looked for in lists, tuples, dicts, sets and
+  objects of your own classes, not inside a container of more than 10,000
+  items.
+
 A line that is an IPython magic or a shell command (`%load_ext autoreload`,
 `!ls`) shows `Runs an IPython magic or shell command`: cash cannot see what it
 does, so it always runs. That is expected and needs no fix.
