@@ -28,6 +28,7 @@ from cash._plain_data import TREE_NODES, in_a_look, tree_facts, tree_levels
 from cash._type_memo import MroMemo, TypeMemo, type_key
 from cash._user_attrs import own_dict
 from cash.install_paths import is_user_code_module
+from cash.kept_state import reduce_counted
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 __all__ = ["ClosureCheck", "closure_check_budget", "closures_sharing"]
@@ -259,7 +260,7 @@ def _reduced(item: Any, kind: type) -> list:
         if not item.dtype.hasobject:
             return [] if item.base is None else [item.base]
     try:
-        reduced = item.__reduce_ex__(5)
+        reduced = reduce_counted(item, 5)
     except Exception:  # noqa: BLE001 - not picklable: stored by reference or not at all
         return []
     if not isinstance(reduced, tuple):

@@ -60,6 +60,9 @@ import weakref
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
+from .._own_work import inside as own_work_inside
+from .._own_work import left_out as own_work_left_out
+from .._own_work import rearm_with as own_work_rearm_with
 from .._paths import is_pseudo_filename
 from .._user_attrs import instance_of
 from ..analysis.purity_report import (
@@ -251,6 +254,7 @@ def _recorder_class() -> type:
             mon.use_tool_id(self.tool, self.tool_name)
             ev = mon.events
             self.rearm_works = self._rearm_works()
+            own_work_rearm_with(self._rearm_codes)
             mon.register_callback(self.tool, ev.PY_START, self._guarded(self._on_start))
             mon.register_callback(self.tool, ev.PY_RESUME, self._guarded(self._on_resume))
             mon.register_callback(self.tool, ev.CALL, self._guarded(self._on_call))
@@ -393,6 +397,9 @@ def _recorder_class() -> type:
 
         def _rearm(self) -> None:
             rearm, self.rearm = self.rearm, set()
+            self._rearm_codes(rearm)
+
+        def _rearm_codes(self, rearm: set[types.CodeType]) -> None:
             mon = sys.monitoring
             if not self.rearm_works:
                 if rearm:
@@ -428,6 +435,11 @@ def _recorder_class() -> type:
             return DISABLE
 
         def _seen_start(self, code: types.CodeType, frame: Any, g: dict, kind: tuple) -> None:
+            if own_work_inside():
+                # Run by cash's own pickling of a value, not by the user's
+                # program (`cash._own_work`): armed again once that ends.
+                own_work_left_out(code)
+                return
             units = self.active
             stack = self.stack
             if stack:
@@ -490,6 +502,9 @@ def _recorder_class() -> type:
             return DISABLE
 
         def _seen_resume(self, code: types.CodeType, g: dict, kind: tuple) -> None:
+            if own_work_inside():
+                own_work_left_out(code)
+                return
             if kind[1] is not None:
                 units = [*self.active, self.stack[-1]] if self.stack else self.active
                 for unit in units:
