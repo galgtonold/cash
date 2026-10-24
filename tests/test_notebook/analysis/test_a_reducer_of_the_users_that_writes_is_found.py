@@ -611,3 +611,27 @@ def _module_with(tmp_path, monkeypatch, body: str, params: str = "", closure: bo
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.delitem(sys.modules, name, raising=False)
     return importlib.import_module(name)
+
+
+_BODIES_THAT_WRITE_ONCE_THE_GLOBAL_HOLDS_A_LIST = {
+    "a_loop_over_it": ("for row in NAMES:\n    if isinstance(row, list):\n        row.append(1)", "NAMES"),
+    "sorted": ("for row in sorted(NAMES, key=str):\n    if isinstance(row, list):\n        row.append(1)", "NAMES"),
+    "a_merge": ("d = {**EXTRA}\nif 'rows' in d:\n    d['rows'].append(1)", "EXTRA"),
+}
+
+
+@pytest.mark.parametrize("body", list(_BODIES_THAT_WRITE_ONCE_THE_GLOBAL_HOLDS_A_LIST))
+def test_a_global_that_gains_a_list_is_decided_again(tmp_path, monkeypatch, body):
+    """``for row in NAMES: row.append(1)`` was decided writing nothing while
+    ``NAMES`` held only strings, and the answer kept for the class: after
+    ``NAMES.append([])`` the reducer changed it, unseen."""
+    text, name = _BODIES_THAT_WRITE_ONCE_THE_GLOBAL_HOLDS_A_LIST[body]
+    module = _module_with(tmp_path, monkeypatch, text)
+    assert reducer_writes._writer(module.Made) is None
+    held = getattr(module, name)
+    if type(held) is dict:
+        held["rows"] = []
+    else:
+        held.append([])
+    writer = reducer_writes._writer(module.Made)
+    assert writer is not None and name in reducer_writes.reach([writer], vars(module))

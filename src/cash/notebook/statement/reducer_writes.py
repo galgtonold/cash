@@ -292,9 +292,14 @@ _ATOMS = frozenset({int, float, complex, bool, str, bytes, type(None)})
 _ABSENT = object()
 
 
-#: `_writer` by class: None for a class whose reducers write nothing.
+#: `_writer` by class: ``(answer, cleared)``, the answer `_PURE` for a
+#: class whose reducers write nothing, *cleared* the globals `_atoms_only`
+#: found holding only numbers and strings as it was decided.
 _WRITERS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _PURE = object()
+#: The globals `_atoms_only` cleared, as ``(namespace, name)``, for the
+#: decision being made (`_writer`); None when none is being kept.
+_CLEARED: list[list[tuple[Mapping[str, Any], str]] | None] = [None]
 
 
 def _writer(t: type) -> Writer | None:
@@ -302,12 +307,22 @@ def _writer(t: type) -> Writer | None:
         # Registered with ``copyreg``, perhaps after it was first decided.
         return _decide(t)
     try:
-        found = _WRITERS.get(t)
+        kept = _WRITERS.get(t)
     except TypeError:
         return _decide(t)
-    if found is None:
-        found = _WRITERS[t] = _decide(t) or _PURE
-    return None if found is _PURE else found
+    if kept is not None and not all(_holds_atoms_only(g, name) for g, name in kept[1]):
+        # ``for row in G: row.append(1)`` was decided writing nothing while
+        # ``G`` held only strings; it holds a list now (``G.append([])``).
+        kept = None
+    if kept is None:
+        cleared: list[tuple[Mapping[str, Any], str]] = []
+        outer, _CLEARED[0] = _CLEARED[0], cleared
+        try:
+            found = _decide(t) or _PURE
+        finally:
+            _CLEARED[0] = outer
+        kept = _WRITERS[t] = (found, tuple(cleared))
+    return None if kept[0] is _PURE else kept[0]
 
 
 def _decide(t: type) -> Writer | None:
@@ -984,7 +999,17 @@ def _atoms_only(node: ast.AST, g: Mapping[str, Any], params: set[str], aliases: 
     nothing a change can reach."""
     if not isinstance(node, ast.Name) or node.id in aliases or node.id in params or node.id not in g:
         return False
-    value = g[node.id]
+    if not _holds_atoms_only(g, node.id):
+        return False
+    if _CLEARED[0] is not None:
+        _CLEARED[0].append((g, node.id))
+    return True
+
+
+def _holds_atoms_only(g: Mapping[str, Any], name: str) -> bool:
+    """Does the global *name* of *g* hold a list, tuple, set or dict of
+    numbers and strings only?"""
+    value = g.get(name, _ABSENT)
     if type(value) is dict:
         held = [*value, *value.values()]
     elif type(value) in (list, tuple, set, frozenset):
