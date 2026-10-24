@@ -822,8 +822,11 @@ def _globals_read(
     Anything else counts every global it reads: it fails closed."""
 
     def held(node: ast.AST | None, local: Mapping[str, set[str]]) -> set[str]:
-        if node is None or isinstance(node, (ast.Constant, ast.Compare, ast.UnaryOp, ast.JoinedStr)):
+        if node is None or isinstance(node, (ast.Constant, ast.Compare, ast.JoinedStr)):
             return set()
+        if isinstance(node, ast.UnaryOp):
+            # ``+G`` is whatever ``G.__pos__`` returns, which may be ``G``.
+            return set() if isinstance(node.op, ast.Not) else held(node.operand, local)
         if isinstance(node, ast.Name):
             if node.id in local:
                 return set(local[node.id])
