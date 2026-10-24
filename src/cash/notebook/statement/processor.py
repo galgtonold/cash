@@ -481,7 +481,7 @@ def _classes_it_redefines(tree: ast.AST | None, user_ns: Mapping[str, Any]) -> d
 def _instances_of(classes: Collection[type]) -> list[Any]:
     """The live objects whose class is one of *classes* (one heap scan)."""
     exact = {id(cls) for cls in classes}
-    return [obj for obj in gc.get_referrers(*classes) if id(type(obj)) in exact and not isinstance(obj, type)]
+    return [obj for obj in gc.get_referrers(*classes) if id(type(obj)) in exact and not instance_of(obj, type)]
 
 
 def _has_class_state(cls: type, value_types: tuple[type, ...]) -> bool:
@@ -3491,17 +3491,21 @@ class StatementProcessor:
         complete = not heap_unreadable()
         names: set[str] = set()
         if complete:
-            instances = _instances_of(replaced)
-            if not instances:
-                return
-            names, complete = referring_names(
-                instances,
-                user_ns,
-                share_check_budget(cost),
-                skip_name=lambda name: instance_of(user_ns.get(name), type),
-                ignore=[replaced, run.metrics],
-            )
-            del instances
+            try:
+                instances = _instances_of(replaced)
+                if not instances:
+                    return
+                names, complete = referring_names(
+                    instances,
+                    user_ns,
+                    share_check_budget(cost),
+                    skip_name=lambda name: instance_of(user_ns.get(name), type),
+                    ignore=[replaced, run.metrics],
+                )
+                del instances
+            except Exception:  # an object of the user's raised: as if cut short
+                logger.debug("[CLASS] holder search failed", exc_info=True)
+                names, complete = set(), False
         if not complete:
             value_types = VALUE_TYPES + library_value_types()
             names = {
