@@ -80,6 +80,15 @@ class CacheHitServer:
             ):
                 logger.debug("[CACHE] A name it restores into is bound to another kind of object, running it instead.")
                 return None
+            # A weak reference or an id() key held now finds a copy after the
+            # restore, whenever it was made: asked of the live objects, as
+            # when the loop was stored.
+            user_ns = self._restorer.shell.user_ns
+            for name in sorted(metadata.restored_into):
+                why = in_place.refusal(user_ns.get(name), user_ns)
+                if why is not None:
+                    logger.debug("[CACHE] Not restoring into %s (%s), running it instead.", name, why)
+                    return None
         if metadata is not None and metadata.anchors:
             # The variables' objects the entry holds by reference: the live
             # ones, or a miss when one changed (`anchors`).

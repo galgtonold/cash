@@ -30,6 +30,7 @@ from ..cache_key import statement_source_hash
 from ..call_key import changes_its_closure
 from ..callee_reach import CWD, ENVIRON, module_state_names, module_state_writes, process_state_writes, state_holders
 from ..shared_objects import history_names
+from . import in_place
 from .control_body import is_control_body
 
 if TYPE_CHECKING:
@@ -280,11 +281,13 @@ class MutationRouting:
             stored = {name for name in changed if _storable_name(name, user_ns)}
             # A name the loop only assigns into (``p.n += 1``, ``d[k] = v``)
             # is restored into too: bound to a copy, a weak reference or an
-            # ``id()`` key on the object no longer found it.
+            # ``id()`` key on the object no longer found it. One of a kind no
+            # restore goes into (``arr[i] = v``) stays an output, bound to
+            # the copy.
             stored |= {
                 name
                 for name in (run.outputs & _assigned_into(node)) - run.est_fit - _rebound_names(node)
-                if _storable_name(name, user_ns)
+                if _storable_name(name, user_ns) and not in_place.bound_as_a_copy(user_ns.get(name), user_ns)
             }
             if stored and not self._cheap_to_rerun(run):
                 run.outputs = run.outputs | stored

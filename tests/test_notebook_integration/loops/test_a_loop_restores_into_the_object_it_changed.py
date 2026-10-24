@@ -114,7 +114,20 @@ BUMP = "def bump():\n    import counter_mod\n    counter_mod.k += 1\n"
             "print(child() is p.child, p.n)",
             "weak reference",
         ),
-        (P + "p = P()\nreg = {id(p.seen): 'seen'}", LOOP, "print(reg.get(id(p.seen)), p.n)", "by its id()"),
+        (P + "p = P()\nreg = {id(p.seen): 'seen'}", LOOP, "print(reg.get(id(p.seen)), p.n)", "keeps the id()"),
+        (
+            P + "p = P()\nreg = {'m': {id(p.seen): 'seen'}}",
+            LOOP,
+            "print(reg['m'].get(id(p.seen)), p.n)",
+            "keeps the id()",
+        ),
+        (P + "p = P()\nids = [id(p.seen)]", LOOP, "print(ids[0] == id(p.seen), p.n)", "keeps the id()"),
+        (
+            P + "class R:\n    pass\np = P()\nreg = R()\nreg.m = {id(p.seen): 'seen'}",
+            LOOP,
+            "print(reg.m.get(id(p.seen)), p.n)",
+            "keeps the id()",
+        ),
         (P + GETSTATE + "p = P()", LOOP, "print(p.n, len(p.seen))", "is not restored into"),
         (P + "p = P()\nholder = {'a': [p]}", LOOP, "print(holder['a'][0].n, holder['a'][0] is p)", "container holds"),
         (
@@ -134,6 +147,9 @@ BUMP = "def bump():\n    import counter_mod\n    counter_mod.k += 1\n"
     ids=[
         "a weak reference to a part",
         "an id key of a part",
+        "an id key in a nested dict",
+        "an id in a list",
+        "an id key inside an object",
         "own pickling",
         "a container holding it",
         "a helper writing a module",
@@ -146,3 +162,51 @@ def test_what_a_restore_into_cannot_give_runs_the_loop(nb_runner, make, loop, re
     assert "RESTORED" not in str(statuses)
     if why is not None:
         assert why in _shown(nb_runner, 2)
+
+
+@pytest.mark.fresh_kernel
+@pytest.mark.parametrize(
+    ("made_later", "read", "expected"),
+    [
+        ("held = weakref.ref(p.child)", "print(held is not None and held() is p.child, p.n)", "True 3000"),
+        ("held = {id(p.child): 'child'}", "print(held and held.get(id(p.child)), p.n)", "child 3000"),
+    ],
+    ids=["a weak reference", "an id key"],
+)
+def test_what_points_into_it_is_asked_again_at_a_restore(nb_runner, made_later, read, expected):
+    """Made after the loop was stored, in a cell whose edit does not change
+    the loop's key: a restore into ``p`` would hand it a copy of the part."""
+    nb_runner.create_notebook(
+        [P + "import weakref\nclass Q:\n    pass\np = P()\np.child = Q()", "held = None", LOOP, read]
+    )
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.restart()
+    nb_runner._init_cash()
+    nb_runner.set_cell_source(2, made_later)
+    nb_runner.run_all()
+    assert nb_runner.get_output(4).strip() == expected
+
+
+@pytest.mark.fresh_kernel
+@pytest.mark.parametrize(
+    ("make", "body", "read", "expected"),
+    [
+        ("import numpy as np\nout = np.zeros(3000)", "out[i] = i * 2", "out[-1], out.sum()", "5998.0 8997000.0"),
+        (
+            "import pandas as pd\nout = {}",
+            "out[i] = pd.DataFrame({'a': [i]})",
+            "len(out), int(out[2999]['a'][0])",
+            "3000 2999",
+        ),
+    ],
+    ids=["a numpy array", "a dict of frames"],
+)
+def test_what_the_loop_assigns_into_is_restored_after_a_restart(nb_runner, make, body, read, expected):
+    """A NumPy array is bound to the restored copy, as before; a dict of
+    frames is restored into, the weak references pandas keeps between its
+    own blocks coming back with it."""
+    loop = f"for i in range(3000):\n    time.sleep(0.0003)\n    {body}"
+    printed, seen = _run(nb_runner, f"import time\n{make}", loop, f"print({read})")
+    assert printed == expected
+    assert "RESTORED" in str(seen)
