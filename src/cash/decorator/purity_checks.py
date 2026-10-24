@@ -17,7 +17,7 @@ import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from .. import _plain_data, identity_refs
+from .. import _plain_data, identity_refs, value_watch
 from .._clock import perf_counter as _perf_counter
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from ..analysis.bytecode import GLOBAL_WRITES, argvals
@@ -46,11 +46,12 @@ from ..exceptions import (
     CashImpurityWarning,
 )
 from ..install_paths import is_user_code_module, is_user_module
+from ..kept_state import reduce_counted
 from ..source_reading import getsource, getsourcelines
 from ..tracking.randomness import capture_argument_carrier_states, moved_carriers, rng_carrier_kind
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
 from . import code_trace
-from .arg_hashing import is_cow_pandas
+from .arg_hashing import WatchedSince, is_cow_pandas
 from .arg_key import keyed_arguments
 from .cash_key import cash_key_method_of_type
 from .closure_fold import capture_digest, iter_code_scopes, unsafe_uses_of
@@ -162,7 +163,7 @@ def _comes_back_as_itself(value) -> bool:
         # a logger for a name none has: looked up instead.
         return _known_logger((value.name,)) is value
     try:
-        rv = value.__reduce_ex__(5)
+        rv = reduce_counted(value, 5)
         if isinstance(rv, str):
             import pickle
 
@@ -761,6 +762,17 @@ class LearnedMutations:
 _UNCHANGEABLE_TYPES = (str, int, float, bool, type(None), bytes, complex)
 
 
+class _Watched:
+    """An argument's identity snapshot when the watchers watch it instead:
+    the token its key build gave it (`value_watch.tag`), current while they
+    prove it unchanged."""
+
+    __slots__ = ("token",)
+
+    def __init__(self, token: Any) -> None:
+        self.token = token
+
+
 def _cannot_change(value: Any) -> bool:
     """Whether *value* can never change in place: an exact immutable
     primitive, or an exact tuple or frozenset of such values."""
@@ -1262,7 +1274,7 @@ class PurityChecks:
         return capture_argument_carrier_states(held) if held else []
 
     def argument_identities(
-        self, func_name: str, args: tuple, kwargs: dict
+        self, func_name: str, args: tuple, kwargs: dict, keyed: dict | None = None
     ) -> tuple[dict[str, tuple[Any, list]], bool]:
         """``({parameter: (value, identity snapshot)}, covers_all)`` for the
         plain lists and tuples a call receives, before the body runs.
@@ -1279,6 +1291,17 @@ class PurityChecks:
         when no identity at any level moved, nothing in it did, and
         `PurityChecks.check_argument_mutation` needs no hash after the body:
         on a list of ten million ints that hash was a second of a 3.5 s miss.
+        A list of records, which has no identity snapshot, counts as covered
+        while the watchers prove it unchanged since its key was built (its
+        `value_watch.tag` token); the hash runs when they saw any write.
+
+        Both stand for the content the key was built from only when nothing
+        changed it in between, and another thread can, between the key build
+        and here. *keyed* is what the key build saw (`arg_hashing.KEYED_PARTS`):
+        a list of plain values counts with the snapshot taken before its key
+        walk, so a write since shows as a moved identity, whichever threads
+        are alive now; a list of records with the token taken there, while
+        the watchers still give it. Any other is hashed again after the body.
         """
         try:
             canon_args, canon_kwargs = self._checked_arguments(func_name, args, kwargs)
@@ -1289,11 +1312,34 @@ class PurityChecks:
         named = [(f"*args[{i}]", v) for i, v in enumerate(canon_args)] + list(canon_kwargs.items())
         for name, value in named:
             if type(value) is list or type(value) is tuple:
-                snapshot = _plain_data.identity_snapshot(value)
+                held = keyed.get(id(value)) if keyed else None
+                if held is not None and held[0] is not value:
+                    held = None
+                taken_before = held is not None and held[1] == value_watch.KIND_PLAIN_KEY and held[3] is not None
+                if taken_before and type(held[3]) is WatchedSince:
+                    # Taken now, it is the content the key holds when the
+                    # watchers saw no write since the arm before the walk.
+                    snapshot = _plain_data.identity_snapshot(value)
+                    taken_before = (
+                        snapshot is not None
+                        and value_watch.gen(value) == held[3].gen
+                        and value_watch.peek(value, value_watch.KIND_PLAIN_KEY) == held[2]
+                    )
+                else:
+                    snapshot = held[3] if taken_before else _plain_data.identity_snapshot(value)
                 if snapshot is None:
-                    covers_all = False
+                    if (
+                        held is None
+                        or held[1] != value_watch.KIND_WALKED
+                        or value_watch.peek(value, value_watch.KIND_WALKED) != held[2]
+                    ):
+                        covers_all = False
+                    else:
+                        found[name] = (value, _Watched(held[2]))
                 elif any(level is not None for level in snapshot):
                     found[name] = (value, snapshot)
+                    if not taken_before:
+                        covers_all = False
             elif not _cannot_change(value):
                 covers_all = False
         return found, covers_all
@@ -1339,10 +1385,18 @@ class PurityChecks:
         if args_hash is None:
             return
         identities = observer.arg_identities
+        watched_moved = False
         if identities:
-            moved = [
-                name for name, (value, snapshot) in identities.items() if _plain_data.identity_changed(value, snapshot)
-            ]
+            moved = []
+            for name, (value, snapshot) in identities.items():
+                if type(snapshot) is _Watched:
+                    # The watchers saw a write, which may have put back what
+                    # was there: the hash below tells.
+                    watched_moved = (
+                        watched_moved or value_watch.peek(value, value_watch.KIND_WALKED) is not snapshot.token
+                    )
+                elif _plain_data.identity_changed(value, snapshot):
+                    moved.append(name)
             if moved:
                 for name in moved:
                     self._frozen.forget_container(identities[name][0])
@@ -1353,9 +1407,10 @@ class PurityChecks:
                     f"the result was not stored, so this call runs every time",
                 )
                 return
-        if observer.arg_identities_cover_all:
-            # Every argument is plain data whose identities did not move, or
-            # cannot change at all: nothing in them changed.
+        if observer.arg_identities_cover_all and not watched_moved:
+            # Every argument is plain data whose identities did not move, a
+            # list the watchers prove unchanged since its key was built, or
+            # a value that cannot change at all: nothing in them changed.
             return
         try:
             after = self.checked_arguments_hash(func_name, args, kwargs)

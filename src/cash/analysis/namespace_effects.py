@@ -2236,16 +2236,20 @@ def users_callee(func: ast.expr, user_ns: Mapping[str, Any]) -> bool:
 
 
 def _users_code(target: Any) -> bool:
-    """Whether calling *target* runs a function the user wrote."""
-    if isinstance(target, functools.partial):
+    """Whether calling *target* runs a function the user wrote.
+
+    Asked of each step's real type, not ``isinstance``: an object whose
+    ``__class__`` answers ``FunctionType``, ``type`` or a method has none of
+    their parts, and calling it runs its type's ``__call__``."""
+    if issubclass(type(target), functools.partial):
         target = target.func
-    if inspect.ismethod(target):
+    if type(target) is types.MethodType:
         target = target.__func__
-    if isinstance(target, type):
+    if issubclass(type(target), type):
         target = inspect.getattr_static(target, "__init__", None)
-    elif type(target) is not types.FunctionType and not inspect.isroutine(target):
+    elif type(target) is not types.FunctionType:
         target = inspect.getattr_static(type(target), "__call__", None)
-    if isinstance(target, (staticmethod, classmethod)):
+    if issubclass(type(target), (staticmethod, classmethod)):
         target = target.__func__
     if type(target) is not types.FunctionType:
         return False

@@ -13,7 +13,6 @@ code -- and never taken while code with the notebook's globals is running.
 
 from __future__ import annotations
 
-import gc
 import sys
 import types
 
@@ -51,8 +50,10 @@ def test_a_lambda_made_by_the_running_statement_is_seen():
 def test_a_no_is_kept_until_code_could_make_a_function(monkeypatch):
     namespace: dict = {"__name__": "__main__"}
     asked = []
-    real = gc.get_referrers
-    monkeypatch.setattr(held_functions.gc, "get_referrers", lambda *a: asked.append(1) or real(*a))
+    real = held_functions._referrers_or_none
+    monkeypatch.setattr(
+        held_functions, "_referrers_or_none", lambda objs, stop=None: asked.append(1) or real(objs, stop)
+    )
     assert held_functions.notebook_functions_exist(namespace) is False
     assert held_functions.notebook_functions_exist(namespace) is False
     assert len(asked) == 1, "the no was not kept"

@@ -26,7 +26,8 @@ from .aliases import bare_alias_targets, reference_alias_targets
 from .ast_util import called_names
 from .callee_effects import callee_global_mutations
 from .file_effects import WRITE_TEXT_MARKERS, SideEffectInfo, SideEffectVisitor
-from .mutations import ACCUMULATOR_METHODS, MutationVisitor
+from .mutations import ACCUMULATOR_METHODS, MutationVisitor, writer_aliases
+from .writer_aliases import writer_names_aliases
 
 __all__ = ["statement_writes_files", "StatementAnalysis", "analyze_statement"]
 
@@ -149,7 +150,7 @@ class StatementAnalysis:
 
 #: ``(code, the identifiers in it that name a module) -> StatementAnalysis``.
 #: See ``analyze_statement``.
-_ANALYSIS_MEMO: LruMemo[tuple[str, frozenset], StatementAnalysis] = LruMemo(STATEMENTS)
+_ANALYSIS_MEMO: LruMemo[tuple[str, frozenset, frozenset], StatementAnalysis] = LruMemo(STATEMENTS)
 
 
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -173,14 +174,18 @@ def analyze_statement(
     immutable fields, so sharing it is safe.
     """
     modules: frozenset[str] = frozenset()
+    writers: frozenset[tuple[str, str | None]] = frozenset()
     if user_ns is not None:
-        modules = frozenset(n for n in set(_IDENTIFIER.findall(code)) if instance_of(user_ns.get(n), types.ModuleType))
+        identifiers = set(_IDENTIFIER.findall(code))
+        modules = frozenset(n for n in identifiers if instance_of(user_ns.get(n), types.ModuleType))
+        # ``sa = setattr`` in a cell above: ``sa(points[7], 'x', -3)`` writes.
+        writers = frozenset(writer_names_aliases(identifiers, user_ns).items())
     if resolve_source is not None:
-        return _analyze_statement(code, tree, modules, resolve_source)
-    key = (code, modules)
+        return _analyze_statement(code, tree, modules, resolve_source, writers)
+    key = (code, modules, writers)
     found = _ANALYSIS_MEMO.get(key)
     if found is None:
-        found = _analyze_statement(code, tree, modules, resolve_source)
+        found = _analyze_statement(code, tree, modules, resolve_source, writers)
         _ANALYSIS_MEMO[key] = found
     return found
 
@@ -190,6 +195,7 @@ def _analyze_statement(
     tree: ast.Module | None,
     module_names: frozenset[str] = frozenset(),
     resolve_source=None,
+    writers: frozenset[tuple[str, str | None]] = frozenset(),
 ) -> StatementAnalysis:
     """Return a :class:`StatementAnalysis` for *code* using pure-AST analysis.
 
@@ -204,6 +210,8 @@ def _analyze_statement(
               here; a :class:`SyntaxError` produces an empty analysis
               rather than raising.
         module_names: Names bound to modules, for the check above.
+        writers: ``(name, spelling)`` for the names the namespace binds to a
+            writer (`writer_names_aliases`), for `MutationVisitor`.
         resolve_source: Optional ``name -> source`` for called functions. When
             supplied, globals a CALLEE mutates in place are propagated into
             the mutation sets as though the mutation had been written inline
@@ -231,12 +239,13 @@ def _analyze_statement(
             )
 
     # --- All mutations (full tree walk) ---
-    full_visitor = MutationVisitor()
+    aliases = dict(writers)
+    full_visitor = MutationVisitor(aliases)
     full_visitor.visit(tree)
     all_mutated = frozenset(m.variable for m in full_visitor.mutations)
 
     # --- Top-level mutations (skip function/class bodies) ---
-    top_level_visitor = MutationVisitor()
+    top_level_visitor = MutationVisitor({**aliases, **writer_aliases(tree)})
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             continue

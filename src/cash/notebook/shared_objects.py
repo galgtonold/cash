@@ -40,6 +40,8 @@ import enum
 import fractions
 import gc
 import inspect
+import itertools
+import operator
 import pathlib
 import re
 import sys
@@ -52,7 +54,8 @@ from typing import Any
 
 from cash import _native, _plain_data
 from cash._clock import CpuLimit
-from cash._user_attrs import attribute_or, has_attribute, instance_of, own_dict
+from cash._type_memo import MroMemo, TypeMemo, type_key
+from cash._user_attrs import attribute_or, builtin_items, has_attribute, instance_of, own_dict, own_lookup
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
 
@@ -284,24 +287,24 @@ def is_value(value: Any, value_types: tuple[type, ...]) -> bool:
         return issubclass(type(value), value_types)
 
 
-_ESTIMATOR_CLASSES: dict[type, bool] = {}
+_ESTIMATOR_CLASSES: TypeMemo[bool] = TypeMemo()
 
 
 def _is_estimator_class(cls: type) -> bool:
     """Whether *cls* has scikit-learn's estimator interface. A pipeline or an
     ensemble holds the estimators it was built from (``Pipeline([('s',
     scaler), ...])``), and a restore copies them along with it."""
-    known = _ESTIMATOR_CLASSES.get(cls)
+    known = _ESTIMATOR_CLASSES.get(type_key(cls))
     if known is None:
         try:
             known = callable(attribute_or(cls, "get_params", None)) and callable(attribute_or(cls, "fit", None))
         except Exception:  # noqa: BLE001 - a class that cannot be asked is a leaf
             known = False
-        _ESTIMATOR_CLASSES[cls] = known
+        _ESTIMATOR_CLASSES.put(cls, known)
     return known
 
 
-_LOCAL_MODULE_CLASSES: dict[type, bool] = {}
+_LOCAL_MODULE_CLASSES: TypeMemo[bool] = TypeMemo()
 
 
 def _is_local_module_class(cls: type) -> bool:
@@ -309,14 +312,14 @@ def _is_local_module_class(cls: type) -> bool:
     ``mylib.py`` next to the notebook, their package): its objects are the
     user's as much as a class defined in a cell, and ``training_rows(ds)``
     returning ``ds.rows`` hands back a list the argument holds."""
-    known = _LOCAL_MODULE_CLASSES.get(cls)
+    known = _LOCAL_MODULE_CLASSES.get(type_key(cls))
     if known is None:
         try:
             module = sys.modules.get(cls.__module__)
             known = instance_of(module, types.ModuleType) and is_local_module(module)
         except Exception:  # noqa: BLE001 - a class that cannot be asked is a leaf
             known = False
-        _LOCAL_MODULE_CLASSES[cls] = known
+        _LOCAL_MODULE_CLASSES.put(cls, known)
     return known
 
 
@@ -327,13 +330,14 @@ def attributes_of(value: Any) -> dict[str, Any] | None:
     ``None`` for anything else (a leaf)."""
     cls = type(value)
     if not (
-        cls.__module__ == "__main__"
+        attribute_or(cls, "__module__", None) == "__main__"
         or cls is types.SimpleNamespace
         or dataclasses.is_dataclass(cls)
         or _is_estimator_class(cls)
         or _is_local_module_class(cls)
     ):
         return None
+    # The dict Python keeps, never a ``__dict__`` property of the class's.
     own = own_dict(value)
     slots = _slot_members(cls)
     if not slots:
@@ -351,22 +355,28 @@ def attributes_of(value: Any) -> dict[str, Any] | None:
     return found
 
 
-_SLOT_MEMBERS: dict[type, tuple[tuple[str, Any], ...]] = {}
+#: Per class, ``(name, index in its MRO)`` of each slot: not the member
+#: descriptors themselves, which refer to their class and would keep it alive.
+_SLOT_MEMBERS: MroMemo = MroMemo()
 
 
 def _slot_members(cls: type) -> tuple[tuple[str, Any], ...]:
     """``(name, member descriptor)`` for each ``__slots__`` entry along
     *cls*'s MRO, read from each class's own ``__dict__`` (a private slot
     under its mangled name)."""
-    known = _SLOT_MEMBERS.get(cls)
+    known = _SLOT_MEMBERS.get_for(cls)
     if known is None:
-        found: list[tuple[str, Any]] = []
-        for klass in cls.__mro__:
+        found: list[tuple[str, int]] = []
+        for at, klass in enumerate(cls.__mro__):
             for name, member in vars(klass).items():
                 if instance_of(member, types.MemberDescriptorType) and "__slots__" in vars(klass):
-                    found.append((name, member))
-        known = _SLOT_MEMBERS[cls] = tuple(found)
-    return known
+                    found.append((name, at))
+        known = tuple(found)
+        _SLOT_MEMBERS.put(cls, known)
+    if not known:
+        return ()
+    mro = cls.__mro__
+    return tuple((name, vars(mro[at])[name]) for name, at in known)
 
 
 def _values_only(value: Any, exact: frozenset[type]) -> bool:
@@ -383,10 +393,11 @@ def _values_only(value: Any, exact: frozenset[type]) -> bool:
 
 def children_of(value: Any) -> Iterable[Any] | None:
     """What *value* holds that a restore copies with it, or None for a leaf."""
-    if instance_of(value, dict):
-        return [*value.keys(), *value.values()]
-    if instance_of(value, _CONTAINERS):
-        return list(value)
+    # By the real type: a proxy that only claims to be a dict or list is
+    # read as what it really is.
+    items = builtin_items(value) if issubclass(type(value), _CONTAINERS) else None
+    if items is not None:
+        return items
     if instance_of(value, _CALLABLE_TYPES):
         return _bound_objects(value)
     if instance_of(value, types.CellType):
@@ -411,7 +422,7 @@ def _library_children(value: Any) -> list[Any] | None:
     a ``UserDict``'s ``data``, a ``ChainMap``'s ``maps``, an object array's
     items (one that owns them: a view's items are its base's), and a
     pandas object's ``attrs``."""
-    kind = _LIBRARY_KINDS.get(type(value))
+    kind = _LIBRARY_KINDS.get(type_key(type(value)))
     if kind is None:
         kind = _library_kind(type(value))
     if kind is _LEAF:
@@ -431,8 +442,8 @@ def _library_children(value: Any) -> list[Any] | None:
 
 _LEAF, _DEQUE, _WRAPPING, _ARRAY, _PANDAS = "leaf", "deque", "wrapping", "array", "pandas"
 
-#: `_library_kind` by type: a walk asks for every leaf it meets.
-_LIBRARY_KINDS: dict[type, str] = {}
+#: `_library_kind` by type, held weakly: a walk asks for every leaf it meets.
+_LIBRARY_KINDS: TypeMemo[str] = TypeMemo()
 
 
 def _library_kind(cls: type) -> str:
@@ -450,10 +461,7 @@ def _library_kind(cls: type) -> str:
             kind = _PANDAS
         else:
             kind = _LEAF
-    if len(_LIBRARY_KINDS) > 4096:
-        _LIBRARY_KINDS.clear()
-    _LIBRARY_KINDS[cls] = kind
-    return kind
+    return _LIBRARY_KINDS.put(cls, kind)
 
 
 def _pandas_attrs(value: Any) -> dict | None:
@@ -517,6 +525,13 @@ def _identities(value: Any, value_types: tuple[type, ...]) -> Iterable[int]:
     """The ids of the objects *value* is and holds, as `_walk` goes through
     them, that have an identity of their own: not values, nor tuples and
     frozensets (their contents are yielded)."""
+    for key, _obj in _held_identities(value, value_types):
+        yield key
+
+
+def _held_identities(value: Any, value_types: tuple[type, ...]) -> Iterable[tuple[int, Any]]:
+    """`_identities`, each id with its object: a view's bases (`view_bases`)
+    with None."""
     seen: set[int] = set()
     stack = [value]
     while stack:
@@ -525,8 +540,9 @@ def _identities(value: Any, value_types: tuple[type, ...]) -> Iterable[int]:
             continue
         seen.add(id(obj))
         if not instance_of(obj, _IMMUTABLE_CONTAINERS):
-            yield id(obj)
-            yield from view_bases(obj)
+            yield id(obj), obj
+            for base in view_bases(obj):
+                yield base, None
         kind = type(obj)
         if (
             (kind is dict or kind is list)
@@ -951,7 +967,7 @@ def output_history(
     named += [f"_{k}" for k, v in out.items() if v is not None and user_ns.get(f"_{k}") is v]
     held = [(user_ns, n) for n in named]
     hidden = attribute_or(shell, "user_ns_hidden", None)
-    if instance_of(hidden, dict):
+    if issubclass(type(hidden), dict):
         held += [(hidden, n) for n in named if hidden.get(n) is user_ns.get(n)]
     hook_attrs = attribute_or(attribute_or(shell, "displayhook", None), "__dict__", None)
     if hook_attrs is not None:
@@ -1048,6 +1064,9 @@ def check_walk_budget() -> None:
 _REFERRER_DEPTH = 8
 _REFERRER_OBJECTS = 200_000
 
+#: Up to how many objects `referring_names` asks `gc.get_referrers` of at once.
+_FEW_REFERRERS = 64
+
 
 def referring_names(
     roots: Iterable[Any],
@@ -1069,7 +1088,6 @@ def referring_names(
     *complete* is False when the climb or the walk was cut short -- by
     *seconds*, depth or size -- so names may be missing.
     """
-    import gc
 
     limit = CpuLimit(seconds)
     value_types = VALUE_TYPES + library_value_types()
@@ -1079,21 +1097,29 @@ def referring_names(
         if not skip_name(name) and not is_value(value, value_types):
             by_id.setdefault(id(value), []).append(name)
     names: set[str] = set()
-    # Down: what the roots hold.
+    # Down: what the roots hold. What they hold is climbed from as well: a
+    # record of ``head = points[:40]`` is held by ``points``, which holds
+    # no part of ``head`` itself.
+    held: dict[int, Any] = {}
     try:
         with walk_budget(seconds):
             for root in roots:
-                for key in _identities(root, value_types):
+                for key, obj in _held_identities(root, value_types):
                     names.update(by_id.get(key, ()))
+                    if obj is not None:
+                        held[key] = obj
                     check_walk_budget()
     except WalkBudgetExceeded:
         return names, False
-    # Up: what holds the roots.
-    stop = {id(user_ns), id(roots)}
+    if len(held) > _REFERRER_OBJECTS:
+        return names, False
+    # Up: what holds the roots, or anything in them.
+    stop = {id(user_ns), id(roots), id(held)}
     stop.update(id(obj) for obj in ignore)
     stop.update(id(vars(module)) for module in list(sys.modules.values()) if module is not None)
-    seen = {id(root) for root in roots}
-    frontier = list(roots)
+    seen = set(held)
+    frontier = list(held.values())
+    del held
     stop.add(id(frontier))
     taken = 0
     for _level in range(_REFERRER_DEPTH):
@@ -1104,7 +1130,12 @@ def referring_names(
         # One tuple, passed on as the call's own arguments, so it is known.
         args = tuple(frontier)
         stop.add(id(args))
-        referrers = gc.get_referrers(*args)
+        # Many objects: one read of the heap for them all, where
+        # `gc.get_referrers` looks each referent up in *args* one by one.
+        try:
+            referrers = _referrers_of(args, stop) if len(args) > _FEW_REFERRERS else _referrers(args, stop)
+        except WalkBudgetExceeded:
+            return names, False
         stop.add(id(referrers))
         following: list[Any] = []
         stop.add(id(following))
@@ -1653,7 +1684,7 @@ def _reads_inside(node: Any, value_types: tuple[type, ...]) -> bool:
             return False
     except Exception:  # noqa: BLE001 - an object whose attributes raise (see `is_value`)
         return False
-    kind = _LIBRARY_KINDS.get(type(node))
+    kind = _LIBRARY_KINDS.get(type_key(type(node)))
     return (kind or _library_kind(type(node))) is _LEAF
 
 
@@ -1665,7 +1696,7 @@ def _read_down(obj: Any, value_types: tuple[type, ...]) -> bool | None:
         return None
     if _holds_only_values(obj, value_types) or _is_extension_dtype(obj):
         return None
-    return (_LIBRARY_KINDS.get(type(obj)) or _library_kind(type(obj))) is _LEAF
+    return (_LIBRARY_KINDS.get(type_key(type(obj))) or _library_kind(type(obj))) is _LEAF
 
 
 def _is_extension_dtype(obj: Any) -> bool:
@@ -1823,7 +1854,7 @@ def _variables_holding(
             # The answer the read of the heap below would give, when a module
             # holds one of them: E18's seaborn grid read it twice (1.9 s).
             return None
-        referrers = gc.get_referrers(*args) if len(args) <= _REFERRERS_BY_CALL else _referrers_of(args, stop)
+        referrers = _referrers(args, stop) if len(args) <= _REFERRERS_BY_CALL else _referrers_of(args, stop)
         stop.add(id(referrers))
         following: list[Any] = []
         stop.add(id(following))
@@ -1871,7 +1902,7 @@ def _is_library_own(obj: Any) -> bool:
     cls = type(obj)
     if cls.__module__ == "builtins" or not _is_library_class(cls):
         return False
-    return (_LIBRARY_KINDS.get(cls) or _library_kind(cls)) is _LEAF
+    return (_LIBRARY_KINDS.get(type_key(cls)) or _library_kind(cls)) is _LEAF
 
 
 def _is_library_class(cls: type) -> bool:
@@ -1884,6 +1915,44 @@ def _is_library_class(cls: type) -> bool:
     ended, so the fit was refused as shared."""
     module = attribute_or(cls, "__module__", None)
     return instance_of(module, str) and module != "__main__" and not _is_local_module_class(cls)
+
+
+#: Set when a read of what refers to an object was not known here
+#: (`_referrers_of`): this Python, with ``_asyncio`` loaded and no C read.
+#: Cleared for each statement (`forget_heap_unreadable`): a later search
+#: cut short for lack of time is not this one.
+_UNREADABLE = [False]
+
+
+def heap_unreadable() -> bool:
+    """Was a search of this statement cut short because what refers to an
+    object cannot be read here at all (`_TRAVERSE_LOOPS`), not for lack of
+    time?"""
+    return _UNREADABLE[0]
+
+
+def forget_heap_unreadable() -> None:
+    """A new statement's searches: none was cut short yet (`heap_unreadable`)."""
+    _UNREADABLE[0] = False
+
+
+def referrers_read(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
+    """`gc.get_referrers` of *objs* for a caller outside this module
+    (`held_functions`). `gc.get_referrers` compares each reference of each
+    tracked object with every one of *objs*: asked of the 2,000 classes of
+    a long session's modules over 1.5 million objects, 2-7 s. Past a few,
+    one read of the heap whatever their number (`_referrers_of`)."""
+    read = _referrers if len(objs) <= _REFERRERS_BY_CALL else _referrers_of
+    return read(objs, stop)
+
+
+def _referrers(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
+    """`gc.get_referrers` of *objs*; where the ``_asyncio`` module's own
+    read can loop for ever (`_TRAVERSE_LOOPS`), as gc's would, the read of
+    `_referrers_of`, which the C kernel ends."""
+    if _TRAVERSE_LOOPS:
+        return _referrers_of(objs, stop)
+    return gc.get_referrers(*objs)
 
 
 def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
@@ -1900,6 +1969,11 @@ def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
             # object heap is ~0.3 s, checked once it is read.
             check_walk_budget()
             return found
+    if _TRAVERSE_LOOPS and sys.modules.get("_asyncio") is not None:
+        # Its module's own read can loop for ever (`_TRAVERSE_LOOPS`), and
+        # Python cannot cut it short: not known, as if out of time.
+        _UNREADABLE[0] = True
+        raise WalkBudgetExceeded
     found = []
     referents, misses = gc.get_referents, ids.isdisjoint
     # A block of the heap is read in one call, and only a block holding one
@@ -1916,6 +1990,13 @@ def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
 
 #: Heap objects `_referrers_of` reads in one `gc.get_referents` call.
 _REFERRERS_BLOCK = 256
+
+#: Whether the ``_asyncio`` module's own traverse can loop for ever, as it
+#: can on 3.12.0-3.12.5 once its free list of future iterators comes back on
+#: itself (``gc.get_referents(sys.modules["_asyncio"])`` never returns). The
+#: C kernel stops it short and loses nothing (``cwalk.c``); the Python loop
+#: cannot.
+_TRAVERSE_LOOPS = sys.version_info[:2] == (3, 12) and sys.version_info < (3, 12, 6)
 
 #: The C kernel `_referrers_of` reads the heap with (``cwalk.c``), answering
 #: as its Python loop does; None without the kernels, or in a build from
@@ -2092,6 +2173,10 @@ _DOWN_DEPTH = 4
 _DOWN_NODES = 5_000
 _DOWN_WIDEST = 2_000
 
+#: Most targets `_holders_from_names` looks for by identity in a list or
+#: tuple wider than `_DOWN_WIDEST`, a pass over its items each.
+_WIDE_TARGETS = 8
+
 
 def _holders_from_names(
     targets: list[Any], internal: set[int], user_ns: Mapping[str, Any], known: set[str]
@@ -2128,12 +2213,20 @@ def _holders_from_names(
     for _depth in range(_DOWN_DEPTH):
         below = []
         for obj in level:
-            if not instance_of(obj, _CONTAINERS):
+            if not issubclass(type(obj), _CONTAINERS):
                 attrs = attributes_of(obj)
                 if attrs is None:
                     continue
                 children = list(attrs.values())
             elif len(obj) > _DOWN_WIDEST:
+                # Too wide to read down, but a target it holds itself is
+                # told at C speed, by identity alone: ``p`` from ``for p in
+                # points:`` over 200,000 records, which the search up found
+                # with a pass over every object the collector tracks, twice
+                # per statement.
+                if (type(obj) is list or type(obj) is tuple) and len(targets) <= _WIDE_TARGETS:
+                    if any(any(map(operator.is_, obj, itertools.repeat(target))) for target in targets):
+                        hits.add(id(obj))
                 continue
             else:
                 children = children_of(obj)
@@ -2218,7 +2311,9 @@ def _holders_from_referrers(
         args = tuple(level)
         seen.update((id(level), id(args)))
         level_ids = {id(obj) for obj in level}
-        referrers = gc.get_referrers(*args)
+        # Not known here (`_referrers`) raises as out of time does: the
+        # caller's check of the statement gives up, and it re-runs warned.
+        referrers = _referrers(args, seen)
         seen.add(id(referrers))
         upper = []
         for holder in referrers:
@@ -2227,7 +2322,7 @@ def _holders_from_referrers(
             if holder is user_ns:
                 found.update(name for name, value in user_ns.items() if id(value) in level_ids and name not in known)
                 continue
-            if not (instance_of(holder, _CONTAINERS) or attributes_of(holder) is not None) or _is_module_namespace(
+            if not (issubclass(type(holder), _CONTAINERS) or attributes_of(holder) is not None) or _is_module_namespace(
                 holder
             ):
                 # A frame, a closure cell, a function, a module or its
@@ -2618,6 +2713,7 @@ def _descend(
     statement."""
     exact = exact_value_types()
     containers = EXACT_CONTAINER_TYPES
+    flat: dict[type, bool] = {}
     pops = 0
     while stack:
         pops += 1
@@ -2629,6 +2725,10 @@ def _descend(
         # list of 200,000 ints.
         if not children or exact.issuperset(map(type, children)):
             continue
+        if len(children) >= _FLAT_RECORDS_MIN:
+            left = _records_left(children, value_types, leaves, exact, flat)
+            if left is not None:
+                children = left
         for child in children:
             ctype = type(child)
             if ctype in exact or (ctype not in containers and is_value(child, value_types)):
@@ -2657,6 +2757,104 @@ def _descend(
 #: Fewest items of a list or dict below a root that `_descend` asks about as
 #: one tree: a smaller one is walked as quickly as it is asked about.
 _TREE_BELOW_MIN = 32
+
+#: Fewest children `_descend` asks `_records_left` about.
+_FLAT_RECORDS_MIN = 32
+
+#: ``Py_TPFLAGS_HEAPTYPE``: a class defined in Python (or made at run time).
+_HEAPTYPE = 1 << 9
+
+
+def _records_left(
+    children: list[Any],
+    value_types: tuple[type, ...],
+    leaves: Leaves | None,
+    exact: frozenset[type],
+    flat: dict[type, bool],
+) -> list[Any] | None:
+    """The children `_descend` must still take one at a time when the rest
+    are values and records of one class whose attributes are all values
+    (`_flat_record_class`), each held by nothing but the container they
+    came from: such a record is no part of anything else, so no count can
+    find it shared and nothing below it is walked. Told by reference count
+    (`_LONE_RECORD`), at C speed: a list of 200,000 small objects took 0.3 s
+    a walk a record at a time, and a loop over it is walked twice per
+    statement. None, with nothing decided, for any other children."""
+    kinds = set(map(type, children)) - exact
+    if len(kinds) != 1:
+        return None
+    (kind,) = kinds
+    known = flat.get(kind)
+    if known is None:
+        known = flat[kind] = _flat_record_class(kind, children, value_types)
+    if not known:
+        return None
+    # Counted first, while nothing here but *children* holds a record.
+    counts = list(map(sys.getrefcount, children))
+    mixed = len(kinds) != len(set(map(type, children)))
+    records = [child for child in children if type(child) is kind] if mixed else children
+    try:
+        states = list(map(_OWN_DICT, records))
+    except (AttributeError, TypeError):
+        return None
+    if set(map(type, states)) != {dict} or not exact.issuperset(
+        map(type, itertools.chain.from_iterable(map(dict.values, states)))
+    ):
+        return None
+    del states, records
+    left = list(itertools.compress(children, map(_LONE_RECORD.__ne__, counts)))
+    if mixed:
+        left = [child for child in left if type(child) is kind]
+    if leaves and leaves.ids:
+        left_ids = set(map(id, left))
+        left.extend(
+            child for child in children if type(child) is kind and id(child) in leaves.ids and id(child) not in left_ids
+        )
+    return left
+
+
+#: A record's own ``__dict__``, read as ``object.__getattribute__`` reads it
+#: for a class `_flat_record_class` admits (no lookup or ``__dict__`` of its own).
+_OWN_DICT = operator.attrgetter("__dict__")
+
+
+def _calibrate_lone() -> int:
+    """The count `_records_left` reads for a record held once by its
+    container and once by the children `children_of` listed: measured, as
+    `_calibrate` measures, since 3.14 stops counting the argument."""
+    container = [types.SimpleNamespace()]
+    children = list(container)
+    return list(map(sys.getrefcount, children))[0]
+
+
+_LONE_RECORD = _calibrate_lone()
+
+
+def _flat_record_class(kind: type, children: list[Any], value_types: tuple[type, ...]) -> bool:
+    """Do `_descend` and `children_of` treat every instance of *kind* alike,
+    by its type alone, as an object that is no value and whose children are
+    its own ``__dict__``'s values? A class of the notebook or the user's
+    modules (`attributes_of`), with no ``__slots__``, no lookup of its own,
+    no ``__class__`` or ``__dict__`` of its own, and none of the containers,
+    callables or cells `children_of` asks about first."""
+    try:
+        if issubclass(kind, (*_CONTAINERS, *_CALLABLE_TYPES, types.CellType)):
+            return False
+        if own_lookup(kind) or _slot_members(kind):
+            return False
+        for klass in kind.__mro__[:-1]:
+            if not klass.__flags__ & _HEAPTYPE:
+                return False  # a C base may look attributes up its own way
+            own = vars(klass)
+            if "__class__" in own or "__getattr__" in own:
+                return False
+            held = own.get("__dict__")
+            if held is not None and type(held) is not types.GetSetDescriptorType:
+                return False
+        sample = next(child for child in children if type(child) is kind)
+        return not is_value(sample, value_types) and attributes_of(sample) is not None
+    except Exception:  # noqa: BLE001 - a class that cannot be asked: one at a time
+        return False
 
 
 def _took_as_tree(

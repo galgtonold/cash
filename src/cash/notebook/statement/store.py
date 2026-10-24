@@ -30,6 +30,7 @@ from cash.closure_sharing import closure_check_budget, closures_sharing
 from cash.diagnostics import log_diagnostic, warn_diagnostic
 from cash.exceptions import CashCacheStoreFailedWarning
 from cash.notebook.anchors import AnchorUnrebuilt, with_anchor_refs
+from cash.notebook.statement import reducer_writes
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.capture import replay_record
 from cash.notebook.statement.carrier_advances import PAYLOAD_FIELD as CARRIERS_FIELD
@@ -619,6 +620,10 @@ class StatementStore:
         kept_out = self._copy_dearer_than_compute(run, execution, payload["variables"])
         if kept_out is not None:
             return self._store_metadata_only(run, execution, kept_out, cost_fields)
+        if reducer_writes.writes_into(run.reducer_mark, self.shell.user_ns):
+            # The checks above pickled a value whose reducer of the user's
+            # writes (`StatementProcessor._move_what_reducers_wrote`).
+            return None
 
         metadata = StatementCacheMetadata(
             timestamp=time.time(),
@@ -644,6 +649,8 @@ class StatementStore:
             output_lineages=self._lineage_builder.build_output_lineages(self.tracking_state, run.outputs),
             output_digests=self._lineage_builder.build_output_digests(self.tracking_state, run.outputs) or None,
             output_sizes=_output_sizes(captured_vars, run.outputs),
+            value_keyed=sorted(run.value_keyed_outputs) or None,
+            rerun_digests=run.rerun_digests or None,
             input_lineages=self._lineage_builder.build_input_lineages(
                 self.tracking_state, run.inputs, self.tracking_state.statement_entry_lineages.get(run.code)
             ),

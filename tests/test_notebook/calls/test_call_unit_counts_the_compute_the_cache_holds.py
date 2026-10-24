@@ -17,12 +17,16 @@ from cash.notebook.call_interception import CallSite
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 
+def slow(v):
+    """At the top of the module, found again by its name: once an earlier
+    test turned the record of what ran on, a function made inside the
+    fixture, which nothing finds again, kept its hits from being served."""
+    time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
+    return [v]
+
+
 @pytest.fixture
 def unit_and_sites(call_unit_harness):
-    def slow(v):
-        time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
-        return [v]
-
     unit = call_unit_harness(lineage={"x": "h"}, user_ns={"x": 1, "slow": slow})
     inner = unit.wrap(slow, CallSite(source="slow(x)", free_names=frozenset({"slow", "x"}), occurrence_index=0))
     return unit, inner
