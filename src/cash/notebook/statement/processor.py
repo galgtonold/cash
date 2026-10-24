@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import ast
+import collections
 import contextlib
 import functools
 import hashlib
 import io
+import itertools
 import logging
+import operator
 import os
 import secrets
 import sys
@@ -300,11 +303,10 @@ def _entry_values(cached_data: Any) -> dict[str, Any] | None:
 #: it reads into lists of lists: ``boxes[64].hold(d)`` and
 #: ``boxes[0][0].hold(d)`` reach their object through one. Past them it
 #: cannot tell which class a call reached.
-_ITEMS_READ = 100_000
+_ITEMS_READ = 1_000_000
 _DEPTH_READ = 4
 #: Items `_classes_with_state` neither counts nor looks into.
 _ATOMS = frozenset({int, float, complex, bool, str, bytes, type(None)})
-_NESTED = frozenset({list, tuple, dict})
 
 
 def _calls_a_method(tree: ast.AST | None) -> bool:
@@ -319,8 +321,10 @@ def _classes_with_state(
     """``(found, unread)``: the notebook's classes with state of their own
     (an attribute that is no value, function or class) around *values*: a
     class among them, its bases and its metaclass's, and for any other value
-    the same of its class, or of the classes of the items of a list, tuple
-    or dict, and of theirs (`_ITEMS_READ`, `_DEPTH_READ`). Each by its name,
+    the same of its class, or of the classes of what it holds
+    (`_items_held`), and of theirs (`_ITEMS_READ` objects that are no number
+    or string, `_DEPTH_READ` levels); a container of another kind that is no
+    value is left unread. Each by its name,
     with the names of the classes of *values* it came from
     (`_link_inputs_kept_by`). *unread* is True when items were left unread."""
     named = {id(value): name for name, value in user_ns.items() if instance_of(value, type)}
@@ -329,6 +333,9 @@ def _classes_with_state(
     found: dict[str, set[str]] = {}
     left = _ITEMS_READ
     unread = False
+    # Once every class with state is among the classes reached, reading on
+    # finds nothing new.
+    wanted = {key for key, name in named.items() if _has_class_state(user_ns[name], value_types)}
     for value in values:
         if instance_of(value, (types.ModuleType, types.FunctionType)) or is_value(value, value_types):
             continue
@@ -336,26 +343,35 @@ def _classes_with_state(
             classes = {value}
         else:
             classes = {type(value)}
-            seen: set[int] = set()
-            stack = [(value, 0)]
-            while stack:
-                container, depth = stack.pop()
-                if type(container) not in (list, tuple, dict) or id(container) in seen:
-                    continue
-                seen.add(id(container))
-                items = container.values() if type(container) is dict else container
-                # The kinds of item, read at C speed: numbers and strings
-                # (``sum(big)``) keep nothing and cost none of the budget.
-                kinds = set(map(type, items))
+            # Read a level at a time, each kind of holder in one go, at C
+            # speed: 100,000 objects in a list cost what 100,000 ints do.
+            level: dict[type, list[Any]] = {type(value): [value]}
+            depth = 0
+            while level and not wanted <= _reached(classes):
+                held: list[Any] = []
+                for kind, group in level.items():
+                    held.extend(_items_held(kind, group, named))
+                kinds_of = list(map(type, held))
+                kinds = set(kinds_of)
                 if kinds <= _ATOMS:
-                    continue
-                if len(items) > left or depth >= _DEPTH_READ:
+                    break
+                # Numbers and strings (``sum(big)``) keep nothing and cost
+                # none of the budget.
+                left -= len(held) - sum(map(_ATOMS.__contains__, kinds_of))
+                if left < 0 or depth >= _DEPTH_READ:
                     unread = True
-                    continue
-                left -= len(items)
+                    break
                 classes |= kinds
-                if kinds & _NESTED:
-                    stack.extend((item, depth + 1) for item in items if type(item) in _NESTED)
+                level = {}
+                for kind in kinds - _ATOMS:
+                    if _read_into(kind, named):
+                        level[kind] = list(
+                            itertools.compress(held, map(operator.is_, kinds_of, itertools.repeat(kind)))
+                        )
+                    elif issubclass(kind, Collection) and not is_value(held[kinds_of.index(kind)], value_types):
+                        # A container of a kind cash does not read into.
+                        unread = True
+                depth += 1
         for cls in classes:
             origin = named.get(id(cls))
             for related in (*cls.__mro__, *type(cls).__mro__):
@@ -363,6 +379,39 @@ def _classes_with_state(
                 if name is not None and _has_class_state(related, value_types):
                     found.setdefault(name, set()).update({origin} if origin else ())
     return found, unread
+
+
+def _reached(classes: set[type]) -> set[int]:
+    """The ids of *classes* and of the classes they derive from."""
+    return {id(related) for cls in classes for related in (*cls.__mro__, *type(cls).__mro__)}
+
+
+def _read_into(kind: type, named: Mapping[int, str]) -> bool:
+    """Whether `_items_held` reads into a value of *kind*."""
+    return issubclass(kind, (list, tuple, dict, set, frozenset, collections.deque)) or id(kind) in named
+
+
+def _items_held(kind: type, group: list[Any], named: Mapping[int, str]) -> Iterable[Any]:
+    """What the values of *group*, all of *kind*, hold that
+    `_classes_with_state` reads, by the base type's own methods: the items of
+    a list, tuple, set, frozenset or deque, the keys and values of a dict,
+    the stored attributes of an object of a class the notebook binds."""
+    chain = itertools.chain.from_iterable
+    for base in (list, tuple, frozenset, set, collections.deque):
+        if issubclass(kind, base):
+            return chain(map(base.__iter__, group))
+    if issubclass(kind, dict):
+        return itertools.chain(chain(map(dict.keys, group)), chain(map(dict.values, group)))
+    if id(kind) not in named:
+        return ()
+    try:
+        return list(chain(map(dict.values, map(_ATTRIBUTES, group))))
+    except (AttributeError, TypeError):  # a __dict__ of its own making, or none
+        attributes = [attribute_or(obj, "__dict__", None) for obj in group]
+        return chain(map(dict.values, (a for a in attributes if isinstance(a, dict))))
+
+
+_ATTRIBUTES = operator.attrgetter("__dict__")
 
 
 #: Most objects `_class_state` reads of one class.
