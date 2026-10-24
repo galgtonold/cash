@@ -300,6 +300,18 @@ def test_a_module_in_a_folder_with_no_init_is_keyed_by_its_source(tmp_path, spel
         "import builtins\nclass C:\n    getattr = abs\n"
         "    E = [max(map(max(map(getattr, [builtins], ['__import__'])), ['os'])) for _ in [0]][0]\n"
         "    K = [int(max(map(getattr, [E], ['environ']))['K']) for E in [E]][0]\nK = C.K",
+        "import builtins\ndef _u():\n    from functools import reduce as getattr\n"
+        "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
+        "K = int(max(map(getattr, [E], ['environ']))['K'])",
+        "import builtins\ndef _u():\n    import builtins as getattr\n"
+        "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
+        "K = int(max(map(getattr, [E], ['environ']))['K'])",
+        "import builtins\nclass C:\n    from functools import reduce as getattr\n"
+        "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
+        "K = int(max(map(getattr, [E], ['environ']))['K'])",
+        "import builtins\nclass C:\n    from functools import reduce as getattr\n"
+        "    E = [max(map(max(map(getattr, [builtins], ['__import__'])), ['os'])) for _ in [0]][0]\n"
+        "    K = [int(max(map(getattr, [E], ['environ']))['K']) for E in [E]][0]\nK = C.K",
     ],
     ids=[
         "eval_handed_to_map",
@@ -320,6 +332,10 @@ def test_a_module_in_a_folder_with_no_init_is_keyed_by_its_source(tmp_path, spel
         "getattr_imported_again_under_an_if",
         "getattr_imported_again_by_a_star_import",
         "getattr_in_a_comprehension_of_a_class_body",
+        "getattr_imported_in_a_function_as_another_function",
+        "getattr_imported_in_a_function_as_the_builtins_module",
+        "getattr_imported_in_a_class_body",
+        "getattr_imported_in_a_class_body_read_in_its_comprehension",
     ],
 )
 def test_a_value_read_outside_the_source_without_a_call_runs_with_a_warning(tmp_path, top_level):
@@ -332,7 +348,7 @@ def test_a_value_read_outside_the_source_without_a_call_runs_with_a_warning(tmp_
     ``except ... as getattr`` unbinds as its handler ends, or an ``if False:``
     never binds, or ``getattr = abs`` below the use, or read from the
     ``builtins`` module an import names (``builtins.getattr``, ``from
-    builtins import getattr``), which is no rebinding; and ``operator.attrgetter`` or ``methodcaller`` given
+    builtins import getattr``), which is no rebinding, or an import in a function or class binds, which leaves the top level's the builtin; and ``operator.attrgetter`` or ``methodcaller`` given
     ``'__import__'``, ``getattr`` by another name."""
     _write(tmp_path, "helpmod.py", f"import sys\n\n{top_level}\n\ndef scale(x):\n    return x * K\n")
     _write(
