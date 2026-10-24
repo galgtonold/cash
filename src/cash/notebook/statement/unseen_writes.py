@@ -407,7 +407,12 @@ def _held(value: Any, kind: type, hc: Any, work: list[int]) -> Iterable[Any]:
             return []
         if hc.users_instance_type(kind) or kind is types.SimpleNamespace:
             attributes = own_dict(value)
-            return _not_plain(attributes.values()) if attributes else []
+            held = _not_plain(attributes.values()) if attributes else []
+            if kind is not types.SimpleNamespace:
+                # Its class too: ``obj.m(3)`` runs the function its class
+                # holds, which may have been given other code.
+                held.append(kind)
+            return held
     except Exception:  # noqa: BLE001 - a value that cannot be looked into
         return []
     return []
