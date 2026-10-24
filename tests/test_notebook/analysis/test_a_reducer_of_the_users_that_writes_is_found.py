@@ -507,6 +507,17 @@ _BODIES = {
     "sorted_items_that_change": "c = sorted(NESTED_ROWS)\nc[0].append(1)",
     "a_comprehension_of_items_that_change": "c = [r for r in NESTED_ROWS]\nc[0].append(1)",
     "a_loop_over_items_that_change": "for c in NESTED_ROWS:\n    c.append(1)",
+    "a_class_attribute": "c = K.seen\nc.append(1)",
+    "its_own_class_by_type": "c = type(self).seen\nc.append(1)",
+    "its_own_class_by_dunder": "c = self.__class__.seen\nc.append(1)",
+    "what_a_function_returns": "c = holder().seen\nc.append(1)",
+}
+#: The variable a body changes, where the body does not name it.
+_HELD_IN = {
+    "a_class_attribute": "K",
+    "its_own_class_by_type": "Made",
+    "its_own_class_by_dunder": "Made",
+    "what_a_function_returns": "ALIASED_OBJECT",
 }
 
 
@@ -515,11 +526,12 @@ def test_a_change_through_any_local_bound_from_a_global_counts(tmp_path, monkeyp
     """``c = CFG['rows']; c.append(1)``, ``for c in [CFG]``, ``c, k = CFG,
     1``: only a local bound to the global or to a recognised copy of it was
     followed, and the reducer, run on every pickle, appended where plain
-    Python never pickles."""
+    Python never pickles. So were ``K.seen`` (a class counted as never
+    changed), ``type(self).seen`` and ``holder().seen`` (no global named)."""
     module = _module_with(tmp_path, monkeypatch, _BODIES[body])
     writer = reducer_writes._decide(module.Made)
     assert writer is not None, "not a writer"
-    named = next(name for name in ("ALIASED_OBJECT", "NESTED_ROWS", "ALIASED") if name in _BODIES[body])
+    named = _HELD_IN.get(body) or next(n for n in ("ALIASED_OBJECT", "NESTED_ROWS", "ALIASED") if n in _BODIES[body])
     holder = getattr(module, named)
     assert reducer_writes.reach([writer], {"cfg": holder}) == {"cfg"}
 
@@ -537,8 +549,9 @@ def test_one_reading_a_namespace_reaches_every_variable(tmp_path, monkeypatch, b
     assert writer is not None and reducer_writes.reach([writer], {"x": 1}) is None
 
 
-def test_a_closure_cell_the_notebook_holds_is_reached(tmp_path, monkeypatch):
-    module = _module_with(tmp_path, monkeypatch, "acc.append(1)", closure=True)
+@pytest.mark.parametrize("body", ["acc.append(1)", "c = acc\nc.append(1)"], ids=["directly", "through_a_local"])
+def test_a_closure_cell_the_notebook_holds_is_reached(tmp_path, monkeypatch, body):
+    module = _module_with(tmp_path, monkeypatch, body, closure=True)
     writer = reducer_writes._decide(module.Made)
     assert writer is not None and reducer_writes.reach([writer], {"held": module.ACC}) == {"held"}
 
@@ -592,6 +605,7 @@ def _module_with(tmp_path, monkeypatch, body: str, params: str = "", closure: bo
         source = "import copy\nclass Cfg:\n    def __init__(self):\n        self.seen = []\n"
         source += "ALIASED = {'rows': []}\nALIASED_OBJECT = Cfg()\nNESTED_ROWS = [[1]]\n"
         source += "SKIP = {'_lock'}\nNAMES = ['a', 'b']\nEXTRA = {'v': 0}\nDEFAULTS = {'x': 1}\n"
+        source += "class K:\n    seen = []\ndef holder():\n    return ALIASED_OBJECT\n"
         source += "class Made:\n" + method
     (tmp_path / f"{name}.py").write_text(source, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
