@@ -34,7 +34,7 @@ from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.ast_util import parse_cached
 from ..effects import environment_digests, environment_entry_digest, environment_parts_component
 from ..sizing import estimate_object_size
-from .callee_reach import module_state_writes, names_read, reached_user_code
+from .callee_reach import made_module, module_state_writes, names_read, reached_user_code
 from .lineage_formula import (
     UNHASHABLE,
     module_data_digest,
@@ -429,9 +429,15 @@ def _module_of(label: str) -> str | None:
     parts = label.split(".")
     for end in range(len(parts) - 1, 0, -1):
         name = ".".join(parts[:end])
-        if issubclass(type(sys.modules.get(name)), types.ModuleType):
+        if issubclass(type(_loaded_module(name)), types.ModuleType):
             return name
     return None
+
+
+def _loaded_module(name: str) -> Any:
+    """The module *name*: loaded, or made as the notebook ran (`made_module`)."""
+    module = sys.modules.get(name)
+    return module if module is not None else made_module(name)
 
 
 def _module_value(label: str) -> tuple[bool, Any]:
@@ -439,7 +445,7 @@ def _module_value(label: str) -> tuple[bool, Any]:
     name = _module_of(label)
     if name is None:
         return False, None
-    obj: Any = sys.modules[name]
+    obj: Any = _loaded_module(name)
     for attr in label[len(name) + 1 :].split("."):
         namespace = vars(obj) if issubclass(type(obj), (types.ModuleType, type)) else None
         if namespace is None or attr not in namespace:

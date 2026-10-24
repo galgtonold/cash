@@ -20,6 +20,7 @@ import sqlite3
 import sys
 import textwrap
 import types
+import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from itertools import repeat
@@ -48,6 +49,7 @@ __all__ = [
     "Reach",
     "class_data",
     "helper_seeded_modules",
+    "made_module",
     "module_globals",
     "module_holders",
     "module_state_names",
@@ -168,7 +170,7 @@ def _leads_nowhere(namespace: Mapping[str, Any], root: str, attrs: tuple[str, ..
     for attr in reversed(attrs):
         if not instance_of(obj, types.ModuleType):
             return True  # `_Found.chain` stops here
-        if _is_local(obj):
+        if _holds_notebook_data(obj):
             return False
         obj = vars(obj).get(attr)
         if not _inert(obj):
@@ -1259,7 +1261,7 @@ class _Found:
         for attr in reversed(attrs):
             if not instance_of(obj, types.ModuleType):
                 return
-            label = f"{obj.__name__}.{attr}" if _is_local(obj) else None
+            label = f"{obj.__name__}.{attr}" if _holds_notebook_data(obj) else None
             obj = vars(obj).get(attr)
             self.value(obj, label)
 
@@ -1405,6 +1407,32 @@ def _is_local(module: types.ModuleType) -> bool:
         return is_local_module(module)
     except (TypeError, AttributeError):
         return False
+
+
+def _holds_notebook_data(module: types.ModuleType) -> bool:
+    """Is what *module* holds the notebook's data: a local module, or one
+    made as the notebook ran (``m = types.ModuleType('m')``; ``m.v = ...``),
+    whose names only the notebook sets. One of those is noted by its name
+    (`made_module`)."""
+    if _is_local(module):
+        return True
+    if not _made_as_it_ran(module):
+        return False
+    _MADE[module.__name__] = weakref.ref(module)
+    return True
+
+
+#: The modules made as the notebook ran whose data a reach took, by name:
+#: the last one of each name. Not in ``sys.modules`` unless the notebook put
+#: it there, so `recorded_reads` finds it here.
+_MADE: dict[str, weakref.ref[types.ModuleType]] = {}
+
+
+def made_module(name: str) -> types.ModuleType | None:
+    """The module made as the notebook ran that a reach last took data
+    from under *name*, while it lives."""
+    ref = _MADE.get(name)
+    return ref() if ref is not None else None
 
 
 def _local_homes(value: Any) -> Iterable[str]:
