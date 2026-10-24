@@ -421,6 +421,8 @@ def _read_through(value: Any, value_types: tuple[type, ...]) -> bool:
             continue
         seen.add(id(obj))
         check_walk_budget()
+        if _plain_data.is_tree(obj):
+            continue  # JSON-like data: builtins all the way down
         held = children_of(obj)
         if held is None:
             if not instance_of(obj, _EMPTY_LEAVES):
