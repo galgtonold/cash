@@ -600,9 +600,6 @@ def _called_when_run(tree: ast.AST | None) -> set[str]:
             continue
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             found.add(node.func.id)
-        if structure and isinstance(node, (ast.For, ast.AsyncFor)) and _calls_its_target(node):
-            # ``for f in [rebind]: f([0])`` calls what it iterates over.
-            found |= {n.id for n in ast.walk(node.iter) if isinstance(n, ast.Name)}
         if not structure and isinstance(node, _CONTROL_STATEMENTS):
             todo.extend(
                 child
@@ -614,16 +611,6 @@ def _called_when_run(tree: ast.AST | None) -> set[str]:
             continue
         todo.extend(ast.iter_child_nodes(node))
     return found
-
-
-def _calls_its_target(loop: ast.For | ast.AsyncFor) -> bool:
-    """Does *loop*'s body call a name its target binds?"""
-    bound = {n.id for n in ast.walk(loop.target) if isinstance(n, ast.Name)}
-    return any(
-        isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in bound
-        for statement in loop.body
-        for n in ast.walk(statement)
-    )
 
 
 _CONTROL_STATEMENTS = (ast.For, ast.AsyncFor, ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try)
