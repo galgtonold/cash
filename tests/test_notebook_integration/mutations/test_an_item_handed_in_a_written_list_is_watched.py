@@ -6,7 +6,10 @@ set or dict written in the call counted as a new value holding nothing of
 the notebook's, so ``points`` was not watched while the lambda wrote into
 its item. With 200,000 records the list is not hashed whole, the sum below
 was restored after a restart, and it gave the value from before the write.
-A display's items now count as handed over, as the item itself would.
+A display's items now count as handed over, as the item itself would,
+and so does every variable in any other expression: a shallow copy
+(``points[7:8].copy()``, ``list(...)``, ``zip(...)``, ``d.values()``,
+``[] + [...]``) hands the same items.
 """
 
 import ast
@@ -23,6 +26,9 @@ WRITES = {
     "reduce over a list": "functools.reduce(lambda acc, p: setattr(p, 'x', -3), [points[7]], None)",
     "reduce over a tuple of dicts": "functools.reduce(lambda acc, d: setattr(d['p'], 'x', -3), ({'p': points[7]},), None)",
     "map over a list": "list(map(lambda p: setattr(p, 'x', -3), [points[7], points[8]]))",
+    "reduce over a copy": "functools.reduce(lambda acc, p: setattr(p, 'x', -3), points[7:8].copy(), None)",
+    "reduce over a zip": "functools.reduce(lambda acc, pq: setattr(pq[0], 'x', -3), zip(points[7:8], [1]), None)",
+    "reduce over a sum of lists": "functools.reduce(lambda acc, p: setattr(p, 'x', -3), [] + [points[7]], None)",
 }
 
 
@@ -63,7 +69,14 @@ def test_a_cached_sum_below_sees_the_change(nb_runner, write):
         ("f((a, [b]), {k: v})", {"a", "b", "k", "v"}),
         ("f([*rows])", {"rows"}),
         ("f([1, 2], {'a': 3})", set()),
-        ("f([x.copy()])", set()),
+        ("f([x.copy()])", {"x"}),
+        ("f(list(points[7:8]))", {"points"}),
+        ("f(zip(a, b))", {"a", "b"}),
+        ("f({'p': v}.values())", {"v"}),
+        ("f([] + [rows[0]])", {"rows"}),
+        ("f([p for p in rows if p])", {"rows"}),
+        ("f(lambda q: q)", set()),
+        ("f(len('ab'))", set()),
     ],
 )
 def test_the_items_of_a_written_display_are_handed(code, handed):

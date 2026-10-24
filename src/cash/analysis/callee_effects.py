@@ -345,8 +345,11 @@ def argument_roots(arg: ast.AST, iterated: dict[str, frozenset[str]]) -> frozens
     (*iterated*, see :func:`iterated_sources`); for a list, tuple, set or
     dict written in the call, what each of its items hands over:
     ``reduce(lambda acc, p: setattr(p, 'x', -3), [points[7]], None)`` hands
-    the callee an item of ``points``. Nothing for a value the call builds
-    itself (``f(x.copy())``, ``f([1, 2])``)."""
+    the callee an item of ``points``. For any other expression, every
+    variable inside it: a shallow copy hands the same items
+    (``f(x.copy())``, ``list(x)``, ``zip(x, y)``, ``d.values()``, ``[] +
+    [x]``). Nothing for a literal, text or a truth value (``f([1, 2])``,
+    ``f(f"{kind}.png")``)."""
     node = arg.value if isinstance(arg, ast.Starred) else arg
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
         return frozenset().union(*(argument_roots(item, iterated) for item in node.elts))
@@ -355,9 +358,58 @@ def argument_roots(arg: ast.AST, iterated: dict[str, frozenset[str]]) -> frozens
         return frozenset().union(*(argument_roots(item, iterated) for item in items))
     while isinstance(node, (ast.Attribute, ast.Subscript)):
         node = node.value
-    if not isinstance(node, ast.Name):
+    if isinstance(node, ast.Name):
+        return iterated.get(node.id, frozenset({node.id}))
+    if isinstance(node, _NEW_VALUES):
         return frozenset()
-    return iterated.get(node.id, frozenset({node.id}))
+    return frozenset().union(*(iterated.get(name, frozenset({name})) for name in _names_inside(node)))
+
+
+#: Expressions whose value holds nothing of what they read: text, a truth
+#: value, a constant (``f(f"{kind}.png")``, ``f(a == b)``).
+_NEW_VALUES = (ast.Constant, ast.JoinedStr, ast.Compare, ast.UnaryOp)
+
+
+#: Builtins that hand back a new number, text or truth value: nothing they
+#: are given is in it (``write(str(scores))``).
+_SCALAR_BUILTINS = frozenset(
+    ("str", "repr", "ascii", "format", "len", "int", "float", "complex", "bool", "round", "abs", "hash", "id")
+    + ("ord", "chr", "bin", "hex", "oct", "isinstance", "issubclass", "callable", "hasattr")
+)
+
+
+def _names_inside(node: ast.AST) -> set[str]:
+    """The variables expression *node* reads: not the names it binds itself
+    (a comprehension's or a lambda's), nor a called name (``list`` in
+    ``list(x)``), nor what goes into a new scalar (`_SCALAR_BUILTINS`,
+    `_NEW_VALUES`)."""
+    bound: set[str] = set()
+    called: set[int] = set()
+    scalar: set[int] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, _NEW_VALUES) or (
+            isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) and sub.func.id in _SCALAR_BUILTINS
+        ):
+            scalar |= {id(inner) for inner in ast.walk(sub)}
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.comprehension):
+            bound |= {n.id for n in ast.walk(sub.target) if isinstance(n, ast.Name)}
+        elif isinstance(sub, ast.Lambda):
+            bound |= {a.arg for a in (*sub.args.posonlyargs, *sub.args.args, *sub.args.kwonlyargs)}
+            bound |= {a.arg for a in (sub.args.vararg, sub.args.kwarg) if a is not None}
+        elif isinstance(sub, ast.NamedExpr):
+            bound.add(sub.target.id)
+        elif isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
+            called.add(id(sub.func))
+    return {
+        sub.id
+        for sub in ast.walk(node)
+        if isinstance(sub, ast.Name)
+        and isinstance(sub.ctx, ast.Load)
+        and id(sub) not in called
+        and id(sub) not in scalar
+        and sub.id not in bound
+    }
 
 
 def call_arg_targets(tree: ast.Module | None) -> frozenset[CallArgTargets]:
