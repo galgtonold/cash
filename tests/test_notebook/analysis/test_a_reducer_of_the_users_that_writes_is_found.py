@@ -350,12 +350,15 @@ def test_a_cached_result_whose_reducer_cannot_be_read_is_not_stored_and_says_why
 
     ns: dict = {"__name__": __name__}
     exec("class Unread:\n    def __reduce__(self):\n        return (Unread, ())\n", ns)
+    # The class alone, not ``ns``: exec puts builtins in it, which the key
+    # hashes, and a pybind11 library's capsule there makes the call uncached.
+    unread = ns["Unread"]
     calls = []
 
     @disk_cash.cache
     def make(i):
         calls.append(i)
-        return ns["Unread"]()
+        return unread()
 
     reducer_writes.watch({})
     try:
