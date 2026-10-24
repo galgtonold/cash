@@ -82,6 +82,18 @@ HOLDERS = {
     "class_method_of_a_module": "collections.deque.append(DQ, x)",
     "builtin_class_method": "list.append(DQ, x)",
     "default_argument": None,
+    "default_an_item_of_a_global": None,
+    "default_of_a_lambda_it_calls": None,
+}
+#: The whole definition, where the shape is not one call in ``inner``.
+DEFINED = {
+    "default_argument": "def inner(x, L=DQ):\n    time.sleep(0.05)\n    L.append(x)\n    return x * 10",
+    "default_an_item_of_a_global": (
+        "CFG = {'a': DQ}\ndef inner(x, L=CFG['a']):\n    time.sleep(0.05)\n    L.append(x)\n    return x * 10"
+    ),
+    "default_of_a_lambda_it_calls": (
+        "PL = lambda x, L=DQ: L.append(x)\ndef inner(x):\n    time.sleep(0.05)\n    PL(x)\n    return x * 10"
+    ),
 }
 
 
@@ -89,7 +101,7 @@ HOLDERS = {
 def test_a_change_through_what_a_global_holds_is_made_again(cash_magics, record, shape):
     body = HOLDERS[shape]
     if body is None:
-        fn = "def inner(x, L=DQ):\n    time.sleep(0.05)\n    L.append(x)\n    return x * 10"
+        fn = DEFINED[shape]
     else:
         fn = _readable(body)
     setup = SETUP.replace(

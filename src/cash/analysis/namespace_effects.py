@@ -1742,6 +1742,9 @@ def _call_handoffs(
             roots.update(handed_to_params(call, callee, callee_params, iterated))
             free.update(callee_free)
             return
+        # Not read (a lambda, an ``exec``'d ``def``): what its defaults
+        # hold may be what it changes (``lambda x, L=LOG: L.append(x)``).
+        free.update(_default_holders_of(user_ns.get(func.id), user_ns))
     args = [*call.args, *(kw.value for kw in call.keywords)]
     if isinstance(func, ast.Subscript):
         holder = func.value
@@ -1848,6 +1851,20 @@ def state_bound(value: Any, depth: int = 0) -> list[Any]:
 
 #: Partials of partials followed.
 _PARTIAL_DEPTH = 3
+
+
+def _default_holders_of(fn: Any, user_ns: Mapping[str, Any]) -> set[str]:
+    """The names of *user_ns* bound to an object a default of the function
+    *fn* is, a number or a string aside."""
+    if type(fn) is not types.FunctionType:
+        return set()
+    held = {id(v) for v in (*(fn.__defaults__ or ()), *(fn.__kwdefaults__ or {}).values())}
+    held -= {id(v) for v in (*(fn.__defaults__ or ()), *(fn.__kwdefaults__ or {}).values()) if _followed_elsewhere(v)}
+    if not held:
+        return set()
+    return {name for name, value in list(user_ns.items()) if id(value) in held}
+
+
 #: How many items of a container `_holders_of_bound` looks at.
 _BOUND_SCAN = 1000
 

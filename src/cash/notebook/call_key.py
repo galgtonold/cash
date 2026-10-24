@@ -248,8 +248,10 @@ def _watched_names(fn, globals_dict: dict) -> set[str]:
         loads = _CODE_NAMES[code] = _code_names(code)
     fdef = _own_def(fn)
     if fdef is None:
-        # Nothing to read what it does with them from: every global it loads.
-        return set(loads)
+        # Nothing to read what it does with them from: every global it
+        # loads, and every default (an ``exec``'d ``def f(x, L=LOG)``, a
+        # lambda's ``L=LOG``).
+        return {*loads, *_default_holders(fn, None, globals_dict)}
     params, handed = function_handoffs(fdef, globals_dict, functools.partial(_user_source, globals_dict))
     bound = {name for name in loads if bound_to_state(globals_dict.get(name))}
     return {
@@ -260,19 +262,45 @@ def _watched_names(fn, globals_dict: dict) -> set[str]:
     }
 
 
-def _default_holders(fn, params: frozenset[str], globals_dict: dict) -> set[str]:
+def _default_holders(fn, params: frozenset[str] | None, globals_dict: dict) -> set[str]:
     """The globals holding an object *fn* got as a default of a parameter
-    it changes (*params*): ``def f(x, L=LOG): L.append(x)`` changes ``LOG``
-    when called without ``L``, and no argument names it."""
+    it changes (*params*, every one when None): ``def f(x, L=LOG):
+    L.append(x)`` changes ``LOG`` when called without ``L``, and no argument
+    names it. Held directly, or as an item of a dict, list or tuple a global
+    holds (``L=CFG['a']``), two levels down."""
     code = fn.__code__
     names = code.co_varnames[: code.co_argcount + code.co_kwonlyargcount]
     positional = names[: code.co_argcount]
     defaults = dict(zip(positional[len(positional) - len(fn.__defaults__ or ()) :], fn.__defaults__ or ()))
     defaults.update(fn.__kwdefaults__ or {})
-    held = [value for name, value in defaults.items() if name in params and type(value) not in _EXACT_ATOMS]
+    held = {
+        id(value)
+        for name, value in defaults.items()
+        if (params is None or name in params) and type(value) not in _EXACT_ATOMS
+    }
     if not held:
         return set()
-    return {name for name, value in list(globals_dict.items()) if any(value is item for item in held)}
+    return {name for name, value in list(globals_dict.items()) if _holds_one_of(value, held, 2)}
+
+
+#: How many items of one container `_holds_one_of` looks at.
+_HOLDER_SCAN = 1000
+
+
+def _holds_one_of(value, ids: set[int], depth: int) -> bool:
+    """Is *value*, or an item of a dict, list or tuple it is, *depth* levels
+    down, one of the objects *ids* names?"""
+    if id(value) in ids:
+        return True
+    if depth <= 0:
+        return False
+    if type(value) is dict:
+        items = list(value.values())
+    elif type(value) in (list, tuple):
+        items = list(value)
+    else:
+        return False
+    return len(items) <= _HOLDER_SCAN and any(_holds_one_of(item, ids, depth - 1) for item in items)
 
 
 #: ``code object -> its function's parsed def``, or None when its text cannot be read.
