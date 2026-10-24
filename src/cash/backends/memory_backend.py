@@ -798,6 +798,10 @@ class InMemoryBackend(CacheBackend):
                 # Never handed out as it is instead: stored so, every hit
                 # would copy it the same way (`no_file_writes`).
                 raise CacheBackendError(f"the result could not be copied: {exc}") from exc
+            if isinstance(exc, kept_state.ReducerNotRun):
+                # Not stored: held as it is, a hit would hand out the
+                # caller's own object; copied, the reducer would run.
+                raise
             if required:
                 # Storing it would hand every caller the SAME object: a caller
                 # mutating a hit changes what later calls get, and two threads
@@ -1091,6 +1095,8 @@ class InMemoryBackend(CacheBackend):
             except Exception as exc:
                 if refused() is not None:
                     raise TypeError(f"copying it would {refused()}") from WouldWriteAFile(refused())
+                if isinstance(exc, kept_state.ReducerNotRun):
+                    raise  # deepcopy would run the very reducer refused
                 if kept_state.too_deep(exc):
                     # Deeper than the pickler may recurse: deepcopy recurses
                     # deeper still, so the copy keeps its own stack.

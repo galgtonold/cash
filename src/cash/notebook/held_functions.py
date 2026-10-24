@@ -244,6 +244,24 @@ def _is_notebook(fn: Any, namespace: Mapping[str, Any]) -> bool:
     return id(attribute_or(fn, "__globals__", None)) in _globals_ids(namespace)
 
 
+def _referrers_or_none(objs: tuple[Any, ...], stop: set[int] | None = None) -> list[Any] | None:
+    """`gc.get_referrers` of *objs*, read as the share check reads it
+    (`shared_objects._referrers`); None where that cannot be known (the
+    ``_asyncio`` module's read can loop for ever on 3.12.0-3.12.5). The
+    heap's list, when read, goes in *stop*."""
+    from .shared_objects import _REFERRERS_BY_CALL, WalkBudgetExceeded, _referrers, _referrers_of
+
+    # `gc.get_referrers` compares each reference of each tracked object with
+    # every one of *objs*: asked of the 2,000 classes of a long session's
+    # modules over 1.5 million objects, 2-7 s. Past a few, one read of the
+    # heap whatever their number.
+    read = _referrers if len(objs) <= _REFERRERS_BY_CALL else _referrers_of
+    try:
+        return read(objs, set() if stop is None else stop)
+    except WalkBudgetExceeded:
+        return None
+
+
 def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
     """Whether any function whose globals are *namespace* exists, anywhere.
 
@@ -296,7 +314,10 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
             if type(value) is function and id(value.__globals__) in globals_ids:
                 return True
     for mapping in dicts:
-        for referrer in gc.get_referrers(mapping):
+        referrers = _referrers_or_none((mapping,))
+        if referrers is None:
+            return True  # not known: a yes, as for a frozen heap
+        for referrer in referrers:
             if (
                 type(referrer) is function
                 and id(referrer.__globals__) in globals_ids
@@ -382,7 +403,10 @@ def module_class_objects_exist() -> bool:
     own |= _cash_memos()
     for cls in kinds:
         own |= _class_cells(cls)
-    found = any(type(referrer) in kinds or _holds_the_class(referrer, own) for referrer in gc.get_referrers(*asked_of))
+    referrers = _referrers_or_none(asked_of, own)
+    if referrers is None:
+        return True  # not known: a yes, as for a frozen heap
+    found = any(type(referrer) in kinds or _holds_the_class(referrer, own) for referrer in referrers)
     if found:
         _OBJECTS_SEEN[0] = asked
     return found

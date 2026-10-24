@@ -45,6 +45,7 @@ def test_a_cached_sum_below_sees_the_change(nb_runner, write):
         nb_runner.run_all()
         got.append(nb_runner.peek("s2"))
     nb_runner.restart()
+    nb_runner._init_cash()  # a restart leaves cash off
     for _ in range(2):
         nb_runner.run_all()
         got.append(nb_runner.peek("s2"))

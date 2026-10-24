@@ -43,7 +43,7 @@ from ..cache_key import called_function_globals, write_provenance_key
 from ..cache_status import CacheStatus
 from ..carrier_history import carrier_history_fingerprint
 from ..consumables import is_write_stream
-from ._types import key_lineages
+from ._types import key_lineages, latest_producer
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -570,7 +570,9 @@ class FileWriterScheduler:
         ran_with_lineages = self.tracking_state.executed_write_input_lineages
         runtime_lineage = self.tracking_state.variable_lineage
 
-        def _input_lineage_drifted(name: str, ran_with: dict[str, str] | None, at_writer: dict[str, str]) -> bool:
+        def _input_lineage_drifted(
+            name: str, ran_with: dict[str, str] | None, at_writer: dict[str, str], writer: int
+        ) -> bool:
             # The writer's payload changed even though nothing in the variable
             # plan demands it: the simulated (current-code) lineage differs
             # from the lineage last seen at runtime.
@@ -585,7 +587,29 @@ class FileWriterScheduler:
             # that is no change to what the writer wrote from. What it read
             # when it last ran, met again at the writer, is not a drift.
             recorded = ran_with.get(name) if ran_with else None
+            if recorded is not None and recorded != at_writer.get(name) and _replayed_update(name, writer):
+                return False
             return recorded is None or recorded != at_writer.get(name)
+
+        def _replayed_update(name: str, writer: int) -> bool:
+            # ``n = n + 1 if 'n' in globals() else 1`` above the writer reads
+            # what it binds: the simulation, replaying it over the live ``n``
+            # its own run bound, takes it a step on. The writer last ran with
+            # the ``n`` that run bound, as Run All leaves it, so that is no
+            # drift. Only while that code bound the live ``n`` and nothing
+            # else it reads moved.
+            producer = latest_producer(simulation_trace, name, writer)
+            if producer is None:
+                return False
+            entry = simulation_trace[producer]
+            if name not in entry.inputs or self.tracking_state.executed_cell_codes.get(name) != entry.stmt_code:
+                return False
+            seen = key_lineages(entry.input_hashes)
+            return all(
+                seen.get(other) == runtime_lineage.get(other)
+                for other in entry.inputs
+                if other != name and other in seen and other in runtime_lineage
+            )
 
         writer_indices: list[int] = []
         if writer_positions is None:
@@ -673,7 +697,7 @@ class FileWriterScheduler:
             scheduled_inputs = set(inputs) & scheduled_outputs
             ran_with = ran_with_lineages.get(stmt_code)
             at_writer = key_lineages(entry.input_hashes) if ran_with else {}
-            drifted = any(_input_lineage_drifted(v, ran_with, at_writer) for v in inputs)
+            drifted = any(_input_lineage_drifted(v, ran_with, at_writer, i) for v in inputs)
             inputs_changed = bool(scheduled_inputs) or drifted
             # ``changed`` fires for every writer after a kernel restart because
             # ``executed_write_stmt_codes`` is session-scoped and starts empty.

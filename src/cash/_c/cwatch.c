@@ -125,6 +125,7 @@ typedef struct {
     uint64_t *aext; uint32_t next, capext;
     PyObject *dg[NKINDS]; uint32_t dgver[NKINDS];
     uint32_t version;
+    uint64_t gen;                /* `arm_gen` when last armed: never handed out twice */
     uint8_t used, dirty, gone, anchored;
     uint8_t viewonly;            /* dirty only by str keys added to `vown` dicts, all in `pk_*` */
     uintptr_t *vown; uint32_t nvown, capvown;   /* instance dicts of classes with views */
@@ -151,6 +152,9 @@ static void sight_dict_gone(uintptr_t a);
 static int busy = 0;
 static int any_gone = 0;
 static uint64_t tick = 0;
+/* one more at every arm of any root, so a root's `gen` names one armed
+   content in this process: a version restarts when a root is freed */
+static uint64_t arm_gen = 0;
 
 /* settings */
 static size_t budget = (size_t)256 << 20;
@@ -1899,6 +1903,7 @@ static PyObject *arm_value(PyObject *o, PyObject *anchors, PyObject **kept) {
         if (g) sight_clear(g);
     }
     R->version++;
+    R->gen = ++arm_gen;
     R->dirty = 0; R->gone = 0;
     R->last_used = ++tick;
     R->wref = wref;
@@ -2279,7 +2284,27 @@ static PyObject *py_world_info(PyObject *self, PyObject *noargs) {
 }
 
 /* -- the memo key: the call's arguments as a typed, hashable tuple ------- */
-typedef struct { PyObject *vals; char *sig; size_t n, cap; int watched; Py_ssize_t budget; } KeyB;
+typedef struct {
+    PyObject *vals; char *sig; size_t n, cap; int watched; uint64_t wgen; Py_ssize_t budget;
+    PyObject **met; size_t nmet, metcap;   /* the lists and dicts keyed by value so far */
+} KeyB;
+
+/* 1: o is a list or dict this key met before; 0: not, and now met; -1: error.
+ * The ordinary key marks a container two places share (`shared_across`):
+ * `same(a, a)` and `same(a, [1, 2, 3])` key apart there, and a by-value
+ * key cannot say so, so it is not made. */
+static int kb_met(KeyB *k, PyObject *o) {
+    for (size_t i = 0; i < k->nmet; i++)
+        if (k->met[i] == o) return 1;
+    if (k->nmet == k->metcap) {
+        size_t nc = k->metcap ? k->metcap * 2 : 16;
+        PyObject **p = realloc(k->met, nc * sizeof *p);
+        if (!p) { PyErr_NoMemory(); return -1; }
+        k->met = p; k->metcap = nc;
+    }
+    k->met[k->nmet++] = o;
+    return 0;
+}
 
 /* Items of small lists and dicts keyed by value, over all arguments: past
  * it a container is keyed only when the watchers vouch for it. */
@@ -2336,6 +2361,8 @@ static int kb_atom(KeyB *k, PyObject *o, int depth) {
         if (depth > 32) return 0;
         Py_ssize_t n = PyList_GET_SIZE(o);
         if ((k->budget -= n + 1) < 0) return 0;
+        int met = kb_met(k, o);
+        if (met != 0) return met < 0 ? -1 : 0;
         if (kb_sig(k, '[') < 0) return -1;
         for (Py_ssize_t i = 0; i < PyList_GET_SIZE(o); i++) {
             int r = kb_atom(k, PyList_GET_ITEM(o, i), depth + 1);
@@ -2346,6 +2373,8 @@ static int kb_atom(KeyB *k, PyObject *o, int depth) {
     if (t == &PyDict_Type) {
         if (depth > 32) return 0;
         if ((k->budget -= 2 * PyDict_GET_SIZE(o) + 1) < 0) return 0;
+        int met = kb_met(k, o);
+        if (met != 0) return met < 0 ? -1 : 0;
         if (kb_sig(k, '{') < 0) return -1;
         Py_ssize_t pos = 0; PyObject *key, *val;
         while (PyDict_Next(o, &pos, &key, &val)) {
@@ -2359,19 +2388,22 @@ static int kb_atom(KeyB *k, PyObject *o, int depth) {
 }
 
 /* a top-level argument the watchers prove unchanged: its plain-data key
- * part (value_watch.KIND_PLAIN_KEY), as `peek` hands it out */
-static PyObject *watched_digest(PyObject *o) {
+ * part (value_watch.KIND_PLAIN_KEY), as `peek` hands it out, or else the
+ * token the decorator gave it after walking it into a key
+ * (value_watch.KIND_WALKED) */
+static PyObject *watched_digest(PyObject *o, uint64_t *gen) {
     if (!enabled || busy) return NULL;
     long r = rht_find((uintptr_t)o);
     if (r < 0) return NULL;
     busy = 1;
     Root *R = &roots[r];
     PyObject *res = NULL;
-    if (!R->dirty && same_object(R, o) && R->dg[1] && R->dgver[1] == R->version) {
+    int kind = (R->dg[1] && R->dgver[1] == R->version) ? 1 : 2;
+    if (!R->dirty && same_object(R, o) && R->dg[kind] && R->dgver[kind] == R->version) {
         int v = verify(R);
         if (v < 0) { busy = 0; PyErr_Clear(); return NULL; }
         R = &roots[r];
-        if (v == 1) { res = R->dg[1]; R->last_used = tick; R->reuses++; }
+        if (v == 1) { res = R->dg[kind]; R->last_used = tick; R->reuses++; *gen = R->gen; }
         else { mark_dirty((uint32_t)r); c_verify_fail++; }
     }
     busy = 0;
@@ -2389,14 +2421,15 @@ static int kb_arg(KeyB *k, PyObject *o) {
     if (k->watched) return 0;   /* two containers may share objects: the key says how */
     PyTypeObject *t = Py_TYPE(o);
     if (t == &PyBytes_Type || t == &PyUnicode_Type) return 0;
-    PyObject *d = watched_digest(o);
+    PyObject *d = watched_digest(o, &k->wgen);
     if (d == NULL) return 0;
     k->watched = 1;
     return (kb_sig(k, 'W') < 0 || kb_val(k, d) < 0) ? -1 : 1;
 }
 
-/* NULL with no error: no key for these arguments */
-static PyObject *memo_key(PyObject *args, PyObject *kwargs) {
+/* NULL with no error: no key for these arguments. *gen, when given, gets
+ * the `gen` of the watched argument the key holds, or 0 when none. */
+static PyObject *memo_key_gen(PyObject *args, PyObject *kwargs, uint64_t *gen) {
     KeyB k = {0};
     k.budget = KB_BUDGET;
     k.vals = PyList_New(0);
@@ -2422,9 +2455,13 @@ static PyObject *memo_key(PyObject *args, PyObject *kwargs) {
         }
     }
     free(k.sig);
+    free(k.met);
     Py_DECREF(k.vals);
+    if (gen) *gen = k.wgen;
     return res;
 }
+
+static PyObject *memo_key(PyObject *args, PyObject *kwargs) { return memo_key_gen(args, kwargs, NULL); }
 
 static PyObject *py_memo_key(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     if (nargs != 2 || !PyTuple_Check(args[0])) { PyErr_SetString(PyExc_TypeError, "memo_key(args, kwargs)"); return NULL; }
@@ -2713,11 +2750,14 @@ static PyObject *quick_key(PyObject *args, PyObject *kwargs) {
     return k;
 }
 
-static PyObject *any_key(PyObject *args, PyObject *kwargs) {
+static PyObject *any_key_gen(PyObject *args, PyObject *kwargs, uint64_t *gen) {
+    if (gen) *gen = 0;
     PyObject *k = quick_key(args, kwargs);
     if (k || PyErr_Occurred()) return k;
-    return memo_key(args, kwargs);
+    return memo_key_gen(args, kwargs, gen);
 }
+
+static PyObject *any_key(PyObject *args, PyObject *kwargs) { return any_key_gen(args, kwargs, NULL); }
 
 /* fast_call(state, args, kwargs) -> the result, or the miss sentinel
  * A hit whose entry needs more than C does here (a ttl, files to check, a
@@ -2806,6 +2846,28 @@ miss:
     return Py_NewRef(hit_miss);
 }
 
+/* keyed(args, kwargs) -> (any_key, gen) | None: gen is the `gen` of the
+ * watched argument the key holds (0: none). A plain value's key part is a
+ * digest of its content, which comes back when the content does; its gen
+ * does not, so a key equal again after a change is told apart. */
+static PyObject *py_keyed(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 2 || !PyTuple_Check(args[0])) { PyErr_SetString(PyExc_TypeError, "keyed(args, kwargs)"); return NULL; }
+    uint64_t gen = 0;
+    PyObject *k = any_key_gen(args[0], args[1], &gen);
+    if (k == NULL) { if (PyErr_Occurred()) return NULL; Py_RETURN_NONE; }
+    return Py_BuildValue("(NK)", k, (unsigned long long)gen);
+}
+
+/* gen(value) -> the `gen` of a clean tracked value, or None; reads no
+ * content, so a write since shows only at the next check */
+static PyObject *py_gen(PyObject *self, PyObject *o) {
+    long r = rht_find((uintptr_t)o);
+    if (r < 0) Py_RETURN_NONE;
+    Root *R = &roots[r];
+    if (R->dirty || !same_object(R, o)) Py_RETURN_NONE;
+    return PyLong_FromUnsignedLongLong(R->gen);
+}
+
 static PyObject *py_any_key(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     if (nargs != 2 || !PyTuple_Check(args[0])) { PyErr_SetString(PyExc_TypeError, "any_key(args, kwargs)"); return NULL; }
     PyObject *k = any_key(args[0], args[1]);
@@ -2844,6 +2906,8 @@ static PyMethodDef methods[] = {
     {"take_touches", py_take_touches, METH_NOARGS, ""},
     {"take_log", py_take_log, METH_NOARGS, ""},
     {"any_key", (PyCFunction)(void (*)(void))py_any_key, METH_FASTCALL, ""},
+    {"keyed", (PyCFunction)(void (*)(void))py_keyed, METH_FASTCALL, ""},
+    {"gen", py_gen, METH_O, "the arm generation of a clean tracked value, or None"},
     {"offers", py_offers, METH_O, ""},
     {NULL, NULL, 0, NULL}};
 

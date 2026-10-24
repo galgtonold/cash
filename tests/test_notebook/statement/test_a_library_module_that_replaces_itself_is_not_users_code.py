@@ -20,6 +20,7 @@ import pytest
 
 from cash.notebook.cache_status import CacheStatus
 from tests._cell_driver import run_cash_cell
+from tests._modules import forget_module
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 pytestmark = pytest.mark.skipif(sys.version_info < (3, 12), reason="the trace check needs sys.monitoring")
@@ -51,7 +52,7 @@ def test_a_statement_using_a_self_replacing_library_module_is_served(cash_magics
     lib.mkdir()
     (lib / "replaces_itself_vf.py").write_text(REPLACES_ITSELF, encoding="utf-8")
     monkeypatch.syspath_prepend(str(lib))
-    monkeypatch.delitem(sys.modules, "replaces_itself_vf", raising=False)
+    forget_module(monkeypatch, "replaces_itself_vf")
     # Imported before the notebook's first cell, as torch often is: its code
     # is first judged after the module put its replacement in place.
     importlib.import_module("replaces_itself_vf")
