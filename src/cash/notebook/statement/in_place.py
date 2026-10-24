@@ -13,8 +13,11 @@ Stored this way only when that restore is what plain Python gives
 (``__getstate__`` or ``__reduce__``, which may leave out what the loop
 added), or one that reaches itself, whose copy would point at the copy, runs
 the loop again, as do other names or containers holding it beside its own
-name (`holder_refusal`). A name bound to the object itself is fine: it is
-bound to the live object again.
+name (`holder_refusal`), and a weak reference to an object it holds or a
+dict or set of the notebook keyed by one's ``id()``: what it holds comes back
+as copies. A name bound to the object itself is fine: it is bound to the live
+object again. An ``id()`` key kept anywhere else (inside another object, in a
+module) is not seen.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from __future__ import annotations
 import gc
 import sys
 import types
+import weakref
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -55,17 +59,41 @@ def _default_object(kind: type) -> bool:
     return True
 
 
-def refusal(obj: Any) -> str | None:
-    """Why *obj* cannot be restored into, or None."""
+def refusal(obj: Any, namespace: Mapping[str, Any] | None = None) -> str | None:
+    """Why *obj* cannot be restored into, or None. What it holds comes back
+    as copies, so a weak reference to one, or a key of a dict or set of
+    *namespace* that is the ``id()`` of one, refuses it too."""
     kind = type(obj)
     if kind not in _CONTAINERS and not _default_object(kind):
         return f"a {kind.__name__} is not restored into the object it is, and a new one would not be that object"
-    found = _reaches(_state(obj), obj)
+    parts: set[int] = set()
+    found = _reaches(_state(obj), obj, weakly_held=True, seen=parts)
     if found is None:
         return "it holds too many objects to check that it does not hold itself"
+    if found is _WEAKLY_HELD:
+        return "a weak reference points at an object it holds, and a restore would hand it a copy"
     if found:
         return "it holds itself, and a copy would hold the copy"
+    if namespace is not None and _keyed_by_id(parts, namespace):
+        return "a dict or set keys an object it holds by its id(), and a restore would hand it a copy"
     return None
+
+
+def _keyed_by_id(parts: set[int], namespace: Mapping[str, Any]) -> bool:
+    """Whether a dict or set bound in *namespace* has the ``id()`` of one of
+    *parts* among its keys: ``reg = {id(p.seen): ...}``. A key that only
+    happens to equal one runs the loop again, which is always right."""
+    if not parts:
+        return False
+    budget = _MAX_SEEN
+    for value in list(namespace.values()):
+        if type(value) in (dict, set, frozenset):
+            if len(value) > budget:
+                return True
+            budget -= len(value)
+            if any(type(k) is int and k in parts for k in value):
+                return True
+    return False
 
 
 def holder_refusal(name: str, obj: Any, values: Mapping[str, Any]) -> str | None:
@@ -92,10 +120,21 @@ def _state(obj: Any) -> list[Any]:
     return [obj.__dict__]
 
 
-def _reaches(roots: Iterable[Any], target: Any) -> bool | None:
-    """Whether *target* is among *roots* or what they hold; None past `_MAX_SEEN`."""
+#: What `_reaches` gives for an object a weak reference points at.
+_WEAKLY_HELD = "weakly held"
+
+
+def _reaches(
+    roots: Iterable[Any], target: Any, weakly_held: bool = False, seen: set[int] | None = None
+) -> bool | str | None:
+    """Whether *target* is among *roots* or what they hold; None past `_MAX_SEEN`.
+    With *weakly_held*, `_WEAKLY_HELD` when one of them is the referent of a
+    weak reference: the restore puts a copy of it in its place, which the
+    reference does not point at. *seen* gets the ``id()`` of each object
+    looked at."""
     module_dicts = {id(vars(m)) for m in list(sys.modules.values()) if isinstance(m, types.ModuleType)}
-    seen: set[int] = set()
+    if seen is None:
+        seen = set()
     level = [item for item in roots if type(item) not in IMMUTABLE_LEAF_TYPES]
     while level:
         nxt: list[Any] = []
@@ -106,6 +145,8 @@ def _reaches(roots: Iterable[Any], target: Any) -> bool | None:
             if key in seen or key in module_dicts or isinstance(item, _OPAQUE):
                 continue
             seen.add(key)
+            if weakly_held and weakref.getweakrefcount(item):
+                return _WEAKLY_HELD
             if len(seen) > _MAX_SEEN:
                 return None
             nxt.extend(ref for ref in gc.get_referents(item) if type(ref) not in IMMUTABLE_LEAF_TYPES)

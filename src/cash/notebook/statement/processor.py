@@ -1600,7 +1600,7 @@ class StatementProcessor:
         values = {**captured_vars, **(holders or {})}
         for name in names:
             obj = captured_vars.get(name)
-            why = in_place.refusal(obj) or in_place.holder_refusal(name, obj, values)
+            why = in_place.refusal(obj, self.shell.user_ns) or in_place.holder_refusal(name, obj, values)
             if why is not None:
                 self._unstore_in_place(run, f"In-place mutation on: {name} ({why}; statement re-executes)")
                 return
@@ -2525,6 +2525,9 @@ class StatementProcessor:
             with _plain_data.one_look(captured_vars):
                 holders = None
                 if not run.skip_cache:
+                    # What the analyses kept of the outputs is cash's, not a
+                    # holder the share check should count.
+                    forget_held_answers()
                     holders = self._refuse_unrestorable_outputs(run, captured_vars, execution.echo, execution.cost)
                 if not run.skip_cache and run.metrics.get("stored_in_place"):
                     self._restorable_in_place(run, captured_vars, holders)

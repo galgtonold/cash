@@ -171,19 +171,23 @@ the loop runs again. The loop's own working variables (`parts` in
 `for f in files: parts.append(read(f))`) are not stored; a cell that reads
 them runs the loop.
 
-<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting._route_unit @a2badde5, cash/notebook/statement/processor.py:StatementProcessor._keep_stored_in_place @b8c0edcd -->
+<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting._route_unit @7b5b7201, cash/notebook/statement/processor.py:StatementProcessor._keep_stored_in_place @b8c0edcd -->
 A long `for` loop that cash runs as one step stores the objects it changes in
-place, such as a progress counter it calls `update()` on or a list from an
-earlier cell it appends to, when the loop passes the same checks. A restore
+place, such as a progress counter it calls `update()` on, a list from an
+earlier cell it appends to, or an object or dict it assigns into
+(`p.n += 1`, `d[k] = v`), when the loop passes the same checks. A restore
 puts the stored state back into the object itself, so other names for it, a
 `weakref` to it and a dict keyed by its `id()` still find it, as after a
 plain run.
 
-<!-- claim: cash/notebook/statement/in_place.py:refusal @dcd706ad, cash/notebook/statement/processor.py:StatementProcessor._cheap_to_rerun @1a1db567 -->
+<!-- claim: cash/notebook/statement/in_place.py:refusal @8d6d23a3, cash/notebook/statement/processor.py:StatementProcessor._cheap_to_rerun @1a1db567 -->
 Only a list, a dict, a set, or an object of your own class pickled the default
 way is restored into. The loop runs again when the object is of another kind,
 defines its own pickling (`__getstate__`, `__reduce__`), holds itself, or sits
-inside another container; when a function it calls writes a module it imports;
+inside another container; when a `weakref` points at an object it holds, or a
+dict or set of the notebook is keyed by one's `id()` (what it holds comes back
+as copies; an `id()` kept anywhere else is not seen); when a function it calls
+writes a module it imports;
 when it is a `while` loop; and when it last ran in less than 0.1 s, where
 storing it costs more than a restore saves. A loop not measured yet is stored.
 
