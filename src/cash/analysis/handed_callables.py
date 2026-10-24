@@ -47,7 +47,7 @@ import sys
 import types
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from itertools import chain, compress, repeat
+from itertools import chain, compress, product, repeat
 from typing import Any, NamedTuple
 
 from .. import _plain_data
@@ -1076,6 +1076,89 @@ def _wrapper_called(func: ast.Name | ast.Attribute, namespace: Mapping[str, Any]
     return found if _wraps_another(fn) else None
 
 
+#: Most partials `_inline_partials` builds for one call: one for each
+#: object its function and arguments may each be.
+_MAX_PARTIALS = 16
+#: Values an argument computed from them cannot be changed through.
+_UNCHANGEABLE = (int, float, complex, str, bytes, bool, type(None))
+
+
+def _inline_partials(
+    maker: ast.expr, namespace: Mapping[str, Any], bound: Mapping[str, tuple[ast.expr, ...]], depth: int = 0
+) -> list[functools.partial] | str | None:
+    """The partials ``functools.partial(f, a)`` (*maker*) may build: one for
+    each object its function and arguments may be (``a if flag else b``,
+    ``ops[i]``: any of its items; an inner ``functools.partial(...)``: what
+    that builds). None when *maker* builds no partial; the reason the
+    statement cannot be read when a part is none of the objects found
+    (the result of a call of the user's, an argument unpacked)."""
+    if not (isinstance(maker, ast.Call) and isinstance(maker.func, (ast.Name, ast.Attribute)) and maker.args):
+        return None
+    target = _users_target(maker.func, namespace)
+    if target is None or target[0] is not functools.partial:
+        return None
+    why = f"{_short(maker)} builds a partial, and cash cannot tell what it binds without running it"
+    if (
+        depth > 8
+        or any(isinstance(arg, ast.Starred) for arg in maker.args)
+        or any(k.arg is None for k in maker.keywords)
+    ):
+        return why
+    slots: list[list[Any]] = []
+    for part in (*maker.args, *(k.value for k in maker.keywords)):
+        found = _one_of(part, namespace, bound, depth)
+        if found is None:
+            return why
+        slots.append(found)
+    count = 1
+    for found in slots:
+        count *= len(found)
+    if count > _MAX_PARTIALS:
+        return why
+    names = [k.arg for k in maker.keywords]
+    built: list[functools.partial] = []
+    for combination in product(*slots):
+        func, *rest = combination
+        if not callable(func):
+            continue  # not called: that branch builds no partial
+        positional = rest[: len(rest) - len(names)]
+        built.append(functools.partial(func, *positional, **dict(zip(names, rest[len(positional) :]))))
+    return built
+
+
+def _one_of(
+    node: ast.expr, namespace: Mapping[str, Any], bound: Mapping[str, tuple[ast.expr, ...]], depth: int
+) -> list[Any] | None:
+    """The objects the partial's function or argument *node* may be
+    (`_inline_partials`); None when that cannot be told without running it.
+    A value built in place that holds nothing of the namespace is None."""
+    if isinstance(node, ast.Constant):
+        return [node.value]
+    if isinstance(node, ast.IfExp):
+        body = _one_of(node.body, namespace, bound, depth)
+        orelse = _one_of(node.orelse, namespace, bound, depth)
+        return None if body is None or orelse is None else body + orelse
+    inner = _inline_partials(node, namespace, bound, depth + 1)
+    if isinstance(inner, str):
+        return None
+    if inner is not None:
+        return list(inner)
+    resolved = _resolve_argument(node, namespace, bound)
+    if resolved.unknown:
+        return None
+    found = [value for value, _root in resolved.values]
+    for value, _root in resolved.any_of:
+        found.append(value)
+        if type(value) in _OPENED:
+            found.extend(list(_items(value))[: _MAX_PARTIALS + 1])
+    if isinstance(node, (ast.Name, ast.Attribute, ast.Subscript, ast.Call)):
+        if not found and isinstance(node, ast.Name) and node.id not in namespace:
+            found = [vars(builtins).get(node.id)]
+        return found or [None]
+    # ``[lst]``, ``x + 1``: a value built in place, not one it names.
+    return [None] if all(isinstance(value, _UNCHANGEABLE) for value in found) else None
+
+
 def _users_target(func: ast.Name | ast.Attribute, namespace: Mapping[str, Any]) -> tuple[Any, str] | None:
     """``(value, root)`` of the call target *func*, followed through modules
     and the user's own classes and objects only: a library object's
@@ -1755,26 +1838,13 @@ class _Found:
         """``functools.partial(add, bucket)(x)``: the partial it builds,
         called, as one bound to a name is (`wrapping_object_called`). Built
         again here from what its arguments name, which runs nothing of the
-        user's; an argument that names no one object is handed as None."""
-        maker = call.func
-        if not (isinstance(maker, ast.Call) and isinstance(maker.func, (ast.Name, ast.Attribute)) and maker.args):
-            return
-        target = _users_target(maker.func, namespace)
-        if target is None or target[0] is not functools.partial:
-            return
-        if any(isinstance(arg, ast.Starred) for arg in maker.args) or any(k.arg is None for k in maker.keywords):
-            return
-        parts = []
-        for arg in maker.args:
-            values = _resolve_argument(arg, namespace, bound).values
-            parts.append(values[0][0] if len(values) == 1 else None)
-        if not callable(parts[0]):
-            return
-        keywords = {}
-        for keyword in maker.keywords:
-            values = _resolve_argument(keyword.value, namespace, bound).values
-            keywords[keyword.arg] = values[0][0] if len(values) == 1 else None
-        self.add(functools.partial(parts[0], *parts[1:], **keywords), None, False)
+        user's (`_inline_partials`)."""
+        built = _inline_partials(call.func, namespace, bound)
+        if isinstance(built, str):
+            self.unreadable.append(built)
+        elif built is not None:
+            for value in built:
+                self.add(value, None, False)
 
     def _methods_named(
         self, name: str, call: ast.Call, namespace: Mapping[str, Any], bound: Mapping[str, tuple[ast.expr, ...]]
