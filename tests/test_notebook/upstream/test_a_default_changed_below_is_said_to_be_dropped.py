@@ -245,3 +245,27 @@ def test_a_closure_rebound_by_a_helper_reached_another_way_is_rebuilt_with_its_r
     assert cash_magics.shell.user_ns["y"] == 1, "not the value a run from the top gives"
     said = [str(w.message) for w in caught if "too long for cash" in str(w.message)]
     assert bool(said) is warned, said
+
+
+@pytest.mark.parametrize(
+    ("statement", "reached"),
+    [
+        ("def h1():\n    h0()", set()),
+        ("h1 = lambda: h0()", set()),
+        ("@h0()\ndef h1():\n    pass", {"rebind"}),
+        ("def h1(x=h0()):\n    pass", {"rebind"}),
+        ("class C:\n    h0()", {"rebind"}),
+    ],
+    ids=["a_def", "a_lambda", "a_decorator", "a_default", "a_class_body"],
+)
+def test_a_def_reaches_only_what_it_runs_as_it_is_made(statement, reached):
+    """``def h1(): h0()`` runs nothing of its body, so it does not reach the
+    closure writer ``rebind`` ``h0`` calls: following its body made each ``def`` of a
+    chain of helpers read the whole chain. Its decorators and defaults run."""
+    import ast
+
+    from cash.notebook.statement.mutation_routing import callees_changing_their_closure
+
+    ns: dict = {}
+    exec(MAKE + "draw, rebind = make(BIG)\ndef h0():\n    rebind([0])\n", ns)
+    assert callees_changing_their_closure(ast.parse(statement), ns) == reached

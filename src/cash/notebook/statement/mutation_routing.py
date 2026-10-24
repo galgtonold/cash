@@ -19,7 +19,6 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from ..._user_attrs import attribute_or
-from ...analysis.ast_util import called_names
 from ...analysis.mutation_effects import (
     control_structure_mutations,
     is_module_name,
@@ -556,9 +555,7 @@ def closure_writers_reached(tree: ast.AST | None, user_ns: Mapping[str, Any]) ->
     it."""
     found: set[str] = set()
     seen: set[str] = set()
-    # A loop or branch run as one unit owns what its body changes: ``if
-    # True: setup()`` calls ``setup``.
-    todo = list(called_names(tree, "all" if _is_structure(tree) else "no_control_bodies"))
+    todo = list(_called_when_run(tree))
     while todo:
         name = todo.pop()
         if name in seen:
@@ -580,6 +577,44 @@ def closure_writers_reached(tree: ast.AST | None, user_ns: Mapping[str, Any]) ->
             if fn.__globals__ is user_ns:
                 todo.extend(_global_names(fn.__code__))
     return found, False
+
+
+def _called_when_run(tree: ast.AST | None) -> set[str]:
+    """The names *tree* calls by name as it runs, outside loop and branch
+    bodies. A loop or branch run as one unit owns what its body changes:
+    ``if True: setup()`` calls ``setup``. A ``def`` or ``lambda`` runs only
+    its decorators and defaults: ``def h2(): h1()`` calls nothing, where
+    following its body made each ``def`` of a chain read the whole chain."""
+    if tree is None:
+        return set()
+    structure = _is_structure(tree)
+    found: set[str] = set()
+    todo: list[ast.AST] = [tree]
+    while todo:
+        node = todo.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            args = node.args
+            todo.extend([*args.defaults, *(d for d in args.kw_defaults if d is not None)])
+            if not isinstance(node, ast.Lambda):
+                todo.extend(node.decorator_list)
+            continue
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            found.add(node.func.id)
+        if not structure and isinstance(node, _CONTROL_STATEMENTS):
+            todo.extend(
+                child
+                for field, value in ast.iter_fields(node)
+                if field not in _CONTROL_BODY_FIELDS
+                for child in (value if isinstance(value, list) else [value])
+                if isinstance(child, ast.AST)
+            )
+            continue
+        todo.extend(ast.iter_child_nodes(node))
+    return found
+
+
+_CONTROL_STATEMENTS = (ast.For, ast.AsyncFor, ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try)
+_CONTROL_BODY_FIELDS = frozenset({"body", "orelse", "finalbody", "handlers"})
 
 
 #: How many items of a container `_functions_in` looks at.
