@@ -342,9 +342,17 @@ def argument_roots(arg: ast.AST, iterated: dict[str, frozenset[str]]) -> frozens
     """The variables whose objects *arg*, an argument of a call, hands over:
     ``x``; the ``s`` of ``s.d`` or ``s["d"]`` (the callee gets a part of
     it); for a loop or comprehension target, the variables it iterates
-    (*iterated*, see :func:`iterated_sources`). Nothing for a value the call
-    builds itself (``f(x.copy())``, ``f([1, 2])``)."""
+    (*iterated*, see :func:`iterated_sources`); for a list, tuple, set or
+    dict written in the call, what each of its items hands over:
+    ``reduce(lambda acc, p: setattr(p, 'x', -3), [points[7]], None)`` hands
+    the callee an item of ``points``. Nothing for a value the call builds
+    itself (``f(x.copy())``, ``f([1, 2])``)."""
     node = arg.value if isinstance(arg, ast.Starred) else arg
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return frozenset().union(*(argument_roots(item, iterated) for item in node.elts))
+    if isinstance(node, ast.Dict):
+        items = [item for item in (*node.keys, *node.values) if item is not None]
+        return frozenset().union(*(argument_roots(item, iterated) for item in items))
     while isinstance(node, (ast.Attribute, ast.Subscript)):
         node = node.value
     if not isinstance(node, ast.Name):
