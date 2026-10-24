@@ -278,6 +278,14 @@ class MutationRouting:
             # 10,000 files sent the whole loop back to run after a restart.
             # One that cannot be stored refuses the store, and the loop runs.
             stored = {name for name in changed if _storable_name(name, user_ns)}
+            # A name the loop only assigns into (``p.n += 1``, ``d[k] = v``)
+            # is restored into too: bound to a copy, a weak reference or an
+            # ``id()`` key on the object no longer found it.
+            stored |= {
+                name
+                for name in (run.outputs & _assigned_into(node)) - run.est_fit - _rebound_names(node)
+                if _storable_name(name, user_ns)
+            }
             if stored and not self._cheap_to_rerun(run):
                 run.outputs = run.outputs | stored
                 run.est_fit = run.est_fit | stored
@@ -539,6 +547,40 @@ class MutationRouting:
 
 
 _PROCESS_WORDS = {ENVIRON: "environment", CWD: "working directory"}
+
+
+def _assigned_into(node: ast.AST) -> set[str]:
+    """The names *node* assigns into: the root of an attribute or item it
+    assigns, augments or deletes (``p.n += 1``, ``d[k] = v``, ``del a.x``)."""
+    names: set[str] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Attribute | ast.Subscript) and isinstance(sub.ctx, ast.Store | ast.Del):
+            root = sub.value
+            while isinstance(root, ast.Attribute | ast.Subscript):
+                root = root.value
+            if isinstance(root, ast.Name):
+                names.add(root.id)
+    return names
+
+
+def _rebound_names(node: ast.AST) -> set[str]:
+    """The names *node* binds or deletes itself, its loop target among them,
+    as against the names it only assigns into."""
+    names: set[str] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store | ast.Del):
+            names.add(sub.id)
+        elif isinstance(sub, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names.add(sub.name)
+        elif isinstance(sub, ast.alias):
+            names.add((sub.asname or sub.name).split(".")[0])
+        elif isinstance(sub, ast.Global | ast.Nonlocal):
+            names.update(sub.names)
+        elif isinstance(sub, ast.ExceptHandler) and sub.name:
+            names.add(sub.name)
+        elif isinstance(sub, ast.MatchAs | ast.MatchStar) and sub.name:
+            names.add(sub.name)
+    return names
 
 
 def _storable_name(name: str, user_ns: dict) -> bool:

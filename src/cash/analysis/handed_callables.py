@@ -3159,10 +3159,12 @@ def forget_held_answers() -> None:
     """Drop what this round's memos hold of the user's objects, keeping the
     round open: the share check a hit asks before it restores
     (`live_shared_reason`) counts every reference, and an answer kept for
-    ``p.update()`` (``(p, P.update)``) read as another holder of ``p``."""
+    ``p.update()`` (``(p, P.update)``) read as another holder of ``p``, and
+    the item types kept for ``out[k] = v`` (`_ITEM_TYPES`) as one of ``out``."""
     _ANSWERED_THIS_ROUND.clear()
     _REACHED_THIS_ROUND.clear()
     _STEPS_THIS_ROUND.clear()
+    _ITEM_TYPES.clear()
 
 
 def stop_sharing_answers() -> None:
