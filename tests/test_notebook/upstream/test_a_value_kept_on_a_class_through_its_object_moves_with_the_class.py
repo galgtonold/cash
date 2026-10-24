@@ -105,6 +105,15 @@ SHAPES = {
         "SBox.bump(5)",
         READ,
     ],
+    "a class a base class registers": [
+        "class Base:\n    registry = []\n    def __init_subclass__(cls, **kw):\n        super().__init_subclass__(**kw)\n"
+        "        Base.registry.append(cls)",
+        "x = 1",
+        DATA,
+        "class A(Base):\n    meta = data['meta']",
+        "Base.registry[-1].meta['n'] += 5",
+        READ,
+    ],
     "an object in a list": [
         "class SBox:\n    held = []\n    def hold(self, d):\n        type(self).held.append(d)\n"
         "    @classmethod\n    def bump(cls, n):\n        cls.held[-1]['n'] += n",

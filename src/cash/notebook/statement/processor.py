@@ -391,6 +391,18 @@ def _class_state(cls: type) -> tuple | None:
     return tuple(out)
 
 
+def _defined_class_bases(tree: ast.AST, user_ns: Mapping[str, Any]) -> list[type]:
+    """The notebook's classes the top-level ``class`` statements of *tree*
+    derive from, by name (``class A(Base):``)."""
+    return [
+        user_ns[base.id]
+        for node in getattr(tree, "body", ())
+        if isinstance(node, ast.ClassDef)
+        for base in node.bases
+        if isinstance(base, ast.Name) and instance_of(user_ns.get(base.id), type)
+    ]
+
+
 def _has_class_state(cls: type, value_types: tuple[type, ...]) -> bool:
     """Whether *cls* has an attribute of its own a value can be kept in (a
     list, a dict, an object), not a method, a property or a number."""
@@ -2931,6 +2943,20 @@ class StatementProcessor:
             and instance_of(user_ns[name], (type, types.ModuleType))
         }
         value_types = VALUE_TYPES + library_value_types()
+        # A class it defines keeps what its body was handed
+        # (``class A(Base): meta = data['meta']``), and the classes it
+        # derives from whose state its creation changed (``Base.registry``,
+        # appended to by ``__init_subclass__``) keep the class.
+        defined = {
+            name for name in set(bound or ()) & run.outputs if name in user_ns and instance_of(user_ns[name], type)
+        }
+        before = run.class_state_before or {}
+        registering = {
+            name
+            for name in before
+            if name in user_ns and name not in defined and _class_state(user_ns[name]) != before[name]
+        }
+        changed |= defined | registering
         around, unread = _classes_with_state(
             [user_ns[name] for name in changed if instance_of(user_ns[name], type)]
             + ([user_ns[name] for name in run.inputs if name in user_ns] if _calls_a_method(run.tree) else []),
@@ -2992,6 +3018,8 @@ class StatementProcessor:
             if kept_by:
                 unnamed = sorted(kept_by - run.outputs)
                 kept_by |= {origin for name in kept_by for origin in around.get(name, ()) if origin in changed}
+                if kept_by & defined:
+                    kept_by |= registering
                 record_shared_object_edges(edges, set(owners) & set(handed), kept_by)
                 before = run.class_state_before
                 # Kept by an earlier statement (``Model.instances.append(self)``
@@ -3199,16 +3227,25 @@ class StatementProcessor:
         """Before *run* executes: the state of each class with state its
         method calls can reach (`_classes_with_state`, `_class_state`), for
         `_link_inputs_kept_by` to tell a class it changed from one it found
-        already keeping a value. None when it calls no method."""
-        if run.tree is None or is_control_body(run.code) or not _calls_a_method(run.tree):
+        already keeping a value. A class it defines can change the classes
+        it derives from too (``__init_subclass__`` registering it): theirs
+        are taken as well. None when it calls no method and defines no class."""
+        if run.tree is None or is_control_body(run.code):
             return None
         user_ns = self.shell.user_ns
+        bases = _defined_class_bases(run.tree, user_ns)
+        if not bases and not _calls_a_method(run.tree):
+            return None
         around, _unread = _classes_with_state(
-            [user_ns[name] for name in run.inputs if name in user_ns],
+            [user_ns[name] for name in run.inputs if name in user_ns] if _calls_a_method(run.tree) else [],
             user_ns,
             VALUE_TYPES + library_value_types(),
         )
-        return {name: _class_state(user_ns[name]) for name in around}
+        # Each, an empty ``registry = []`` too: what the new class's
+        # creation puts there is not known before it runs.
+        named = {id(value): name for name, value in user_ns.items() if instance_of(value, type)}
+        derived = {named[id(cls)] for base in bases for cls in base.__mro__ if id(cls) in named}
+        return {name: _class_state(user_ns[name]) for name in set(around) | derived}
 
     def _warn_classes_unread(self, run: StatementRun) -> None:
         """Warn, once per statement, that it runs every time because the
