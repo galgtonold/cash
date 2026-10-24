@@ -50,8 +50,33 @@ SHAPES = {
     ),
     "an_iterator_past_the_walk": (
         "textwrap.cnt = Nest(40, itertools.count())",
+        "next(textwrap.cnt.leaf())",
+        "class Nest:\n    def __init__(self, n, it):\n        self.inner = Nest(n - 1, it) if n else None\n"
+        "        self.it = None if n else it\n    def leaf(self):\n        return self.inner.leaf() if self.inner else self.it",
+    ),
+    # Holders that are not a plain container nor an object with a
+    # ``__dict__``: the walk took them for holding nothing.
+    "an_iterator_in_a_deque": ("textwrap.cnt = collections.deque([itertools.count()])", "next(textwrap.cnt[0])", ""),
+    "an_iterator_in_slots": (
+        "textwrap.cnt = SBox(itertools.count())",
         "next(textwrap.cnt.it)",
-        "class Nest:\n    def __init__(self, n, it):\n        self.inner = Nest(n - 1, it) if n else None\n        self.it = it",
+        "class SBox:\n    __slots__ = ('it',)\n    def __init__(self, it):\n        self.it = it",
+    ),
+    "a_partial_drawing": ("textwrap.cnt = functools.partial(next, itertools.count())", "textwrap.cnt()", ""),
+    "an_iterator_in_an_object_array": (
+        "textwrap.cnt = np.empty(1, dtype=object)\ntextwrap.cnt[0] = itertools.count()",
+        "next(textwrap.cnt[0])",
+        "",
+    ),
+    "an_iterator_in_a_slots_dataclass": (
+        "textwrap.cnt = DBox(itertools.count())",
+        "next(textwrap.cnt.it)",
+        "import dataclasses\n@dataclasses.dataclass(slots=True)\nclass DBox:\n    it: object",
+    ),
+    "a_random_generator_in_slots": (
+        "textwrap.cnt = SBox(random.Random(0))",
+        "textwrap.cnt.it.random()",
+        "class SBox:\n    __slots__ = ('it',)\n    def __init__(self, it):\n        self.it = it",
     ),
     "a_notebook_function_drawing": (
         "textwrap.cnt = itertools.count()",
@@ -79,7 +104,7 @@ def test_each_run_draws_as_plain_python_does(cash_magics, cash_instance, shape, 
     cells = [
         cell
         for cell in (
-            "import time, itertools, random\nimport numpy as np\nimport textwrap",
+            "import time, itertools, random, collections, functools\nimport numpy as np\nimport textwrap",
             defines,
             setter,
             f"a = (time.sleep(0.05), {draw})[1]",

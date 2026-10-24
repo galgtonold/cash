@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import functools
+import gc
 import importlib
 import inspect
 import operator
@@ -760,7 +761,8 @@ _DRAW_SCAN = 1_000_000
 
 def _holds_a_draw(value: Any, depth: int, seen: set[int]) -> bool | None:
     """Whether *value* holds something a read moves; None when the walk
-    stopped at its bound before it could tell. Taken as "no", the value was
+    stopped at its bound, or met an object it cannot read, before it could
+    tell. Taken as "no", the value was
     keyed by its state, and a read restored without drawing left the next
     one drawing what plain Python had drawn already."""
     from .consumables import is_stream
@@ -782,11 +784,9 @@ def _holds_a_draw(value: Any, depth: int, seen: set[int]) -> bool | None:
     elif issubclass(kind, (list, tuple, set, frozenset)):
         parts = value
     else:
-        try:
-            own = object.__getattribute__(value, "__dict__")
-        except (AttributeError, TypeError):
-            own = None
-        parts = dict.values(own) if type(own) is dict else ()
+        parts = _parts_held(value, kind)
+        if parts is None:
+            return None
     scanned = list(islice(parts, _DRAW_SCAN + 1))
     if len(scanned) > _DRAW_SCAN:
         return None
@@ -801,6 +801,23 @@ def _holds_a_draw(value: Any, depth: int, seen: set[int]) -> bool | None:
             return True
         unsure = unsure or held is None
     return None if unsure else False
+
+
+def _parts_held(value: Any, kind: type) -> Iterable[Any] | None:
+    """What `_holds_a_draw` looks into in *value*, an object that is not a
+    plain container, read without running code of its: what the collector
+    sees it hold (a deque's items, ``__slots__``, a ``partial``'s function,
+    arguments and keywords, an object's ``__dict__``), and the items of a
+    numpy array of objects, which the collector does not see. None when
+    the collector cannot read it: what it holds is not known."""
+    dtype = attribute_or(value, "dtype", None) if attribute_or(kind, "__module__", "") == "numpy" else None
+    if dtype is not None:
+        return value.ravel(order="K") if attribute_or(dtype, "hasobject", False) else ()
+    try:
+        held = gc.get_referents(value)
+    except Exception:  # noqa: BLE001 - an object the collector cannot read
+        return None
+    return [item for item in held if item is not kind]
 
 
 #: The values `_warn_unchecked` warned about, once each.
