@@ -879,6 +879,41 @@ def ids_through_libraries(values: Iterable[Any]) -> set[int]:
     return found
 
 
+def owners_sharing(
+    links: list[tuple[frozenset[str], frozenset[str]]], values: Mapping[str, Any]
+) -> list[tuple[frozenset[str], frozenset[str]]]:
+    """*links* (`GaveUp.links`) with each one's owners joined by the other
+    names of *values* that share an object with one of them, held below
+    either (`_identities`).
+
+    A walk names one owner for each object, the first root it reached it
+    from: ``draw, poke, rebind = make(BIG)`` with ``draw`` and ``poke``
+    closing over the same ``weakref.ref(rows)``, the statement refused and
+    ``BIG`` was linked to ``poke`` alone when the walk took ``poke`` first,
+    so a change to ``BIG`` left ``draw(1)`` served from before. Within the
+    walk's budget (`walk_budget`); `WalkBudgetExceeded` leaves the caller to
+    link every name."""
+    if len(values) < 2 or not links:
+        return links
+    value_types = VALUE_TYPES + library_value_types()
+    held: dict[str, set[int]] = {}
+    for name, value in values.items():
+        ids: set[int] = set()
+        for count, key in enumerate(_identities(value, value_types)):
+            if not count & 1023:
+                check_walk_budget()
+            ids.add(key)
+        held[name] = ids
+    widened = []
+    for owners, holders in links:
+        reach: set[int] = set()
+        for owner in owners:
+            reach |= held.get(owner, set())
+        joined = {name for name, ids in held.items() if name not in owners and not ids.isdisjoint(reach)}
+        widened.append((frozenset(owners | joined), holders))
+    return widened
+
+
 def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
     """Whether *value* is or holds an object one of *sources* is or holds.
 
@@ -1481,7 +1516,9 @@ def _check_group(
             # not walked. It was walked for every statement, ``x = 0`` too
             # -- the output history holding a displayed list of 400,000
             # tuples, 1.2 s a statement.
-            return _inside_library_objects(group, nodes, owner, value_types, user_ns, bindings, cash_held, gave_up)
+            return _inside_library_objects(
+                group, nodes, owner, value_types, user_ns, bindings, cash_held, gave_up, leaves
+            )
         internal = count_held(cash_held, nodes, inbound, value_types, named_held, user_ns)
         for mapping, key in named_held:
             if id(mapping.get(key)) in nodes:
@@ -1493,9 +1530,13 @@ def _check_group(
         if excess and _count_leaf_attributes(nodes, inbound):
             excess = excess_refs(nodes, inbound, checked)
         if not excess:
-            return _inside_library_objects(group, nodes, owner, value_types, user_ns, bindings, cash_held, gave_up)
+            return _inside_library_objects(
+                group, nodes, owner, value_types, user_ns, bindings, cash_held, gave_up, leaves
+            )
         if _held_within(nodes, counted, excess, value_types):
-            return _inside_library_objects(group, nodes, owner, value_types, user_ns, bindings, cash_held, gave_up)
+            return _inside_library_objects(
+                group, nodes, owner, value_types, user_ns, bindings, cash_held, gave_up, leaves
+            )
         shared = {owner[k] for k in excess}
         if user_ns is None:
             return shared, None
@@ -1525,7 +1566,7 @@ def _check_group(
                 # what they hold: ``H = weakref.ref(BIG)`` is cash's own weak
                 # reference to ``BIG`` too, and ``BIG`` went unlinked.
                 inner, inner_found = _inside_library_objects(
-                    group, nodes, owner, value_types, user_ns, bindings, cash_held, gave_up
+                    group, nodes, owner, value_types, user_ns, bindings, cash_held, gave_up, leaves
                 )
                 if inner_found:
                     gave_up.add(inner, inner_found)
@@ -1659,6 +1700,7 @@ def _inside_library_objects(
     bindings: list[Mapping[str, Any]],
     cash_held: list[Any],
     gave_up: GaveUp | None = None,
+    leaves: Leaves | None = None,
 ) -> tuple[set[str], set[str] | None]:
     """`_check_group`'s ``(shared, found)`` for what the library objects
     among *nodes* hold, which the walk does not read (`children_of` None).
@@ -1678,7 +1720,7 @@ def _inside_library_objects(
     held inside went unlinked before."""
     if user_ns is None:
         return set(), set()
-    inside, owners = _held_from_outside(nodes, owner, value_types)
+    inside, owners = _held_from_outside(nodes, owner, value_types, leaves)
     if inside is None:
         if gave_up is not None:
             gave_up.complete = False
@@ -1859,7 +1901,7 @@ _PLAIN_SCALARS = (str, int, float, bool, bytes, complex, type(None))
 
 
 def _held_from_outside(
-    nodes: dict[int, Any], owner: dict[int, str], value_types: tuple[type, ...]
+    nodes: dict[int, Any], owner: dict[int, str], value_types: tuple[type, ...], leaves: Leaves | None = None
 ) -> tuple[dict[int, Any] | None, set[str]]:
     """``(inside, owners)``: the objects inside the library objects among
     *nodes* that something besides them holds, by id, and the names of the
@@ -1870,7 +1912,8 @@ def _held_from_outside(
     the library-object rule (`_held_within`), and their parts share the
     library's own validators and the like with every other such object.
     Nor is one of the process's standard streams (`_standard_streams`)
-    looked for."""
+    looked for, nor an anchor of *leaves* (`share_group`), which is noted
+    met as the walk notes it."""
     roots = {key: owner[key] for key, node in nodes.items() if _reads_inside(node, value_types)}
     if not roots:
         return {}, set()
@@ -1904,6 +1947,9 @@ def _held_from_outside(
             if key == root:
                 held_back.add(root)
                 break
+            if leaves is not None and key in leaves.ids:
+                leaves.met.add(key)
+                continue
             if key in nodes:
                 continue
             refs[key] = refs.get(key, 0) + (not weak)

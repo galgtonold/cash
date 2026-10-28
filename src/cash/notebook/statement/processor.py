@@ -191,6 +191,7 @@ from ..shared_objects import (
     is_value,
     library_value_types,
     output_history,
+    owners_sharing,
     referring_names,
     share_group,
     view_base_names,
@@ -3040,8 +3041,18 @@ class StatementProcessor:
             return [*links, (outputs, read)] if read else links
 
         budget = share_check_budget(cost)
+
+        def widened(links: list) -> list:
+            # Each link's owners and every output sharing an object with
+            # them (`owners_sharing`); all of them when that is cut short.
+            try:
+                with walk_budget(budget):
+                    return owners_sharing(links, {name: captured_vars[name] for name in names})
+            except WalkBudgetExceeded:
+                return [(frozenset(names) | owners, holders) for owners, holders in links]
+
         if run.share_gave_up is not None:
-            links, complete = list(run.share_gave_up.links), run.share_gave_up.complete
+            links, complete = widened(list(run.share_gave_up.links)), run.share_gave_up.complete
             return (links if complete else cut_short(links)), complete
         timed_out = run.share_unchecked
         if not timed_out:
@@ -3059,7 +3070,7 @@ class StatementProcessor:
                 # closure, a function's defaults): the variables found beside
                 # it, not a search from the outputs up, which would climb
                 # through the library until its budget ran out.
-                links = list(gave_up.links)
+                links = widened(list(gave_up.links))
                 return (links if gave_up.complete else cut_short(links)), gave_up.complete
             except WalkBudgetExceeded:
                 timed_out = True

@@ -40,19 +40,23 @@ def _edit_and_run(nb_runner, cells):
         assert nb_runner.peek("y") == str(sum(range(1, 2000)) + edit), nb_runner.get_raw_output(5)
 
 
+@pytest.mark.parametrize("rebind", [False, True], ids=["alone", "beside a closure rebinding rows"])
 @pytest.mark.parametrize("holder", sorted(HOLDERS))
-def test_a_closure_holding_the_list_where_the_collector_cannot_see_moves_with_it(nb_runner, holder):
-    """``draw`` holds ``BIG`` only through *holder*, and no other closure
-    shares its cell: no edge was made at all, and ``y`` was served from
-    before the edit."""
+def test_a_closure_holding_the_list_where_the_collector_cannot_see_moves_with_it(nb_runner, holder, rebind):
+    """``draw`` holds ``BIG`` only through *holder*: alone, no edge was made
+    at all, and ``y`` was served from before the edit. Beside ``rebind``,
+    whose cell holds ``BIG`` itself, ``BIG`` is the statement's anchor, and
+    finding it inside *holder* must not refuse what the anchor allows."""
     hold, read = HOLDERS[holder]
+    extra = "    def rebind(r):\n        nonlocal rows\n        rows = r\n" if rebind else ""
+    names = "draw, poke, rebind" if rebind else "draw, poke"
     _edit_and_run(
         nb_runner,
         [
             "import cash\n%cash_on",
             SETUP + f"def make(rows):\n    {hold}\n    def draw(k):\n"
             f"        time.sleep(0.2)\n        return sum(r.id for r in {read})\n"
-            "    def poke():\n        return len(str(H))\n    return draw, poke\ndraw, poke = make(BIG)",
+            f"    def poke():\n        return len(str(H))\n{extra}    return {names}\n{names} = make(BIG)",
             "poke()",
             "BIG[0].id = -1000",
             "y = draw(1)",
