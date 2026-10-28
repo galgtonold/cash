@@ -23,10 +23,12 @@ from cash.notebook import shadow
 from tests._cell_driver import run_cash_cell
 
 SETUP = (
-    "import operator, bisect, collections, functools, time\n"
+    "import operator, bisect, collections, contextvars, functools, queue, threading, time\n"
     "LOG = []\nD = {}\nDQ = collections.deque()\nOD = collections.OrderedDict(a=1, b=2)\n"
     "class NS: pass\n"
     "PUSH = LOG.append\n"
+    "CV = contextvars.ContextVar('cv', default=0)\n"
+    "Q = queue.Queue()\nSQ = queue.SimpleQueue()\nEV = threading.Event()\n"
     "PUSHP = functools.partial(list.append, LOG)\n"
     "OPS = {'push': LOG.append}\nOPL = [LOG.append]\nHOOKS = [LOG.append]\n"
 )
@@ -41,6 +43,12 @@ BODIES = {
     "od_move_to_end": ("OD.move_to_end('a')", "n = list(OD)", ["b", "a"]),
     "operator_iadd": ("operator.iadd(LOG, [x])", "n = len(LOG)", 1),
     "methodcaller": ("operator.methodcaller('append', x)(LOG)", "n = len(LOG)", 1),
+    # Its value lives in the context: a restore of ``CV`` cannot set it.
+    "context_variable_set": ("CV.set(CV.get() + x)", "n = CV.get()", 3),
+    # A lock inside: they pickle to nothing a change moves.
+    "queue_put": ("Q.put(x)", "n = Q.qsize()", 1),
+    "simple_queue_put": ("SQ.put(x)", "n = SQ.qsize()", 1),
+    "event_set": ("EV.set()", "n = EV.is_set()", True),
     "partial_of_append": ("PUSHP(x)", "n = len(LOG)", 1),
     "class_method_of_a_module": ("collections.deque.append(DQ, x)", "n = len(DQ)", 1),
     "builtin_class_method": ("list.append(LOG, x)", "n = len(LOG)", 1),
@@ -122,3 +130,27 @@ def test_a_change_through_what_a_global_holds_is_made_again(cash_magics, record,
         for cell in cells:
             run_cash_cell(cash_magics, cell, cells=cells)
         assert (ns["v"], ns["n"]) == (30, 1), f"Run All {run + 1}"
+
+
+# Off in a kernel of its own: a warm one was started with traces on, and
+# ``CASH_TRACE`` set now never reaches it.
+@pytest.mark.parametrize("trace", ["on", pytest.param("off", marks=pytest.mark.fresh_kernel)])
+@pytest.mark.parametrize(
+    "define",
+    [
+        "exec('def inner(x, L=LOG):\\n    time.sleep(0.05)\\n    L.append(x)\\n    return x * 10')",
+        "inner = eval('lambda x, L=LOG: (time.sleep(0.05), L.append(x), x * 10)[2]')",
+    ],
+    ids=["exec_def", "lambda_from_a_string"],
+)
+def test_a_default_an_unreadable_callee_changes_is_made_again(nb_runner, monkeypatch, define, trace):
+    """``exec('def inner(x, L=LOG): L.append(x)')``: only the globals it
+    loads were watched, and ``L`` is not one, so the call was served and
+    ``LOG`` left empty while traces were off."""
+    if trace == "off":
+        monkeypatch.setenv("CASH_TRACE", "0")
+    nb_runner.create_notebook(["import time\nLOG = []\n" + define, "v = inner(3)", "print('N', len(LOG))"])
+    nb_runner.start_kernel()
+    for run in range(3):
+        nb_runner.run_all()
+        assert "N 1" in nb_runner.get_output(3), f"Run All {run + 1}"
