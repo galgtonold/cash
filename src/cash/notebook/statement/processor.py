@@ -461,7 +461,7 @@ def _defined_class_bases(tree: ast.AST, user_ns: Mapping[str, Any]) -> list[type
     derive from, by name (``class A(Base):``)."""
     return [
         user_ns[base.id]
-        for node in getattr(tree, "body", ())
+        for node in attribute_or(tree, "body", ())
         if isinstance(node, ast.ClassDef)
         for base in node.bases
         if isinstance(base, ast.Name) and instance_of(user_ns.get(base.id), type)
@@ -473,7 +473,7 @@ def _classes_it_redefines(tree: ast.AST | None, user_ns: Mapping[str, Any]) -> d
     over, by name: the ones a run will replace."""
     return {
         node.name: user_ns[node.name]
-        for node in getattr(tree, "body", ())
+        for node in attribute_or(tree, "body", ())
         if isinstance(node, ast.ClassDef) and instance_of(user_ns.get(node.name), type)
     }
 
