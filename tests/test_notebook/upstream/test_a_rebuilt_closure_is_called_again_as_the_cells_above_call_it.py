@@ -52,3 +52,19 @@ def test_a_call_of_a_function_that_changes_nothing_is_not_run_again(cash_magics)
     ran = [s.get("code", "") for s in cash_magics._last_cell_metrics["statements"]]
     assert "rebind([0])" in ran
     assert "n = draw(0)" not in ran
+
+
+def test_a_rebind_reached_through_a_dict_is_called_on_the_rebuilt_closure(cash_magics):
+    """``HOOKS = {'r': rebind}`` and ``setup()`` calling ``HOOKS['r']([0])``:
+    the rebuild re-ran ``make`` and ``setup()``, but ``HOOKS`` still held the
+    old ``rebind``, so the call pointed the old closure at ``[0]`` and the
+    rebuilt ``draw`` read all of ``BIG`` (2001 where Run All gives 1)."""
+    make = MAKE.replace("EXTRA", "")
+    hooks = "draw, rebind = make(BIG)\nHOOKS = {'r': rebind}\ndef setup():\n    HOOKS['r']([0])"
+    cells = [make, hooks, "setup()", READER, "BIG.append({'id': -1})"]
+    ns = cash_magics.shell.user_ns
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert ns["y"] == 1
+    run_cash_cell(cash_magics, READER, cells=cells)
+    assert ns["y"] == 1

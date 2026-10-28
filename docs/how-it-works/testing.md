@@ -20,8 +20,8 @@ yourself. Figures on this page are derived from the repository by
 
 | Suite | Size | What it covers |
 |---|---|---|
-| Unit | <!-- docnum:tests_unit -->~17,730<!-- /docnum --> | keys, lineage, hashing, backends, the decorator, the notebook engine with a real IPython shell |
-| Notebook integration | <!-- docnum:tests_integration -->~4,910<!-- /docnum --> | real kernels running real notebooks, one folder per feature |
+| Unit | <!-- docnum:tests_unit -->~17,740<!-- /docnum --> | keys, lineage, hashing, backends, the decorator, the notebook engine with a real IPython shell |
+| Notebook integration | <!-- docnum:tests_integration -->~4,900<!-- /docnum --> | real kernels running real notebooks, one folder per feature |
 | Docs | <!-- docnum:tests_docs -->~630<!-- /docnum --> | the documentation's examples and claims ([below](#the-docs-are-tested-too)) |
 
 ## What runs where
