@@ -382,3 +382,52 @@ def test_a_lambda_in_a_literal_over_several_lines_is_read(cash_magics, body, sto
     run_cash_cell(cash_magics, statement)
     assert _status(cash_magics) == (["RESTORED"] if stored else ["COMPUTED"])
     assert ("NOTEBOOK-UNSEEN-WRITES" in said) is not stored
+
+
+SWAPPED = {
+    "deque_appendleft": ("DQ = collections.deque()", "DQ.appendleft(x) or x * 10", "DQ"),
+    "list_append": ("DQ = []", "DQ.append(x) or x * 10", "DQ"),
+    "dict_update": ("DQ = {}", "DQ.update(a=x) or x * 10", "DQ"),
+}
+
+
+#: ``(definition, what gets the new code, its parameters, the call)``.
+REACHED = {
+    "by_name": ("def inner(x):\n    return x * 2", "inner", "x", "inner(3)"),
+    "as_a_method_of_an_object": (
+        "class C:\n    def m(self, x):\n        return x * 2\nobj = C()",
+        "C.m",
+        "self, x",
+        "obj.m(3)",
+    ),
+}
+
+
+@pytest.mark.parametrize("trace", ["on", "off"])
+@pytest.mark.parametrize("reached", list(REACHED))
+@pytest.mark.parametrize("case", list(SWAPPED))
+def test_a_function_given_code_whose_text_cannot_be_read_runs_each_time(cash_magics, monkeypatch, case, trace, reached):
+    """``inner.__code__`` swapped for a lambda compiled from a string: its
+    text cannot be read, and it appends to ``DQ``. With a trace the run
+    names it; without one (``CASH_TRACE=0``) only the function ``inner(3)``
+    names was there to read, and nothing did: a run slow enough to be
+    stored was served after a restart with ``DQ`` left empty. Called as
+    ``obj.m(3)``, the walk opened the object but not its class."""
+    if trace == "off":
+        monkeypatch.setenv("CASH_TRACE", "0")
+        monkeypatch.setattr(shadow, "SHADOW", None)
+    elif not code_trace.on():
+        pytest.skip("reads the trace of the run (3.12+)")
+    setup, body, name = SWAPPED[case]
+    definition, target, params, call = REACHED[reached]
+    swap = f"{target}.__code__ = eval(compile({(f'lambda {params}: ' + body)!r}, '<variant>', 'eval')).__code__"
+    said = []
+    for _ in range(2):
+        run_cash_cell(cash_magics, f"import collections, time\n{setup}\n{definition}")
+        run_cash_cell(cash_magics, swap)
+        said += _codes(cash_magics, f"v = ({call}, {SLEEP})")
+        assert len(cash_magics.shell.user_ns[name]) == 1
+        _restart(cash_magics)
+        for gone in ("DQ", "inner", "C", "obj", "collections"):
+            cash_magics.shell.user_ns.pop(gone, None)
+    assert "NOTEBOOK-UNSEEN-WRITES" in said

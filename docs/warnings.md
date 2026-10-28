@@ -2314,7 +2314,7 @@ such as a progress display or a server you query from outside the notebook.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_unseen_writes @dd175d1c, cash/notebook/statement/unseen_writes.py:unseen_writers @b7dd5393, cash/notebook/statement/unseen_writes.py:own_writes @6e5e52a9 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_unseen_writes @dd175d1c, cash/notebook/statement/unseen_writes.py:unseen_writers @b7dd5393, cash/notebook/statement/unseen_writes.py:own_writes @6e5e52a9, cash/notebook/statement/unseen_writes.py:writers_without_a_trace @25806177 -->
 **What happened.** A function of yours ran while a statement ran, on a path
 cash does not read from the statement's text, and it changes something the
 statement does not name: `Vec.__add__` appending to a global list, run by
@@ -2326,8 +2326,9 @@ On Python 3.12 or newer, cash reads which functions ran from the run itself,
 and the warning is shown once for each function. Without that record
 (Python 3.10 and 3.11, `CASH_TRACE=0`, or a debugger holding
 `sys.monitoring`), cash reads the special methods of your classes whose
-objects the statement reaches, and the warning is shown once for each
-statement. That reading sees what a special method's own text changes and
+objects the statement reaches, and the functions of yours it reaches whose
+text cannot be read (`f.__code__` swapped for code compiled from a string),
+and the warning is shown once for each statement. That reading sees what a special method's own text changes and
 what it changes through a method of a global; it does not follow the
 functions it calls (see [known limitations](known-limitations.md)). A special
 method set on a class after the class was made (`Vec.__add__ = lambda ...`)
