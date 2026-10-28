@@ -247,11 +247,29 @@ def _bound_objects(value: Any) -> list[Any] | None:
     on E11's ``from sklearn.datasets import load_iris``.
     """
     if instance_of(value, types.FunctionType):
+        wrapped = _cached_original(value)
+        if wrapped is not None:
+            return _bound_objects(wrapped)
         return list(value.__closure__) if value.__closure__ and not _found_by_name(value) else None
     owner = attribute_or(value, "__self__", None)
     if owner is None or instance_of(owner, (types.ModuleType, type)):
         return None
     return [owner]
+
+
+def _cached_original(fn: types.FunctionType) -> types.FunctionType | None:
+    """The user's own function under *fn* when *fn* is the function
+    ``@cash.cache`` made of it, else None. What the made one's closure holds
+    is cash's own (its call cache, its hit memo), held by cash's records
+    too: counted as the user's, each cell that only defined such a function
+    searched the heap for their holders and could run out of time
+    (NOTEBOOK-SHARE-UNCHECKED naming the function). It carries what the
+    user's function carries."""
+    attributes = own_dict(fn)
+    if not attributes or attributes.get("_cash_cached") is not True:
+        return None
+    wrapped = attributes.get("__wrapped__")
+    return wrapped if type(wrapped) is types.FunctionType and wrapped is not fn else None
 
 
 def _found_by_name(fn: types.FunctionType) -> bool:
