@@ -216,9 +216,11 @@ def changes_its_closure(fn) -> bool:
     if type(fn) is not _types.FunctionType:
         return False
     cells = closure_cells(fn)
-    return (bool(cells) and (rebinds_its_closure(fn) or any(n in cells for n in _source_mutations(fn)))) or (
-        holds_a_stream(fn)
-    )
+    if cells and (
+        rebinds_its_closure(fn) or any(n in cells for n in _source_mutations(fn)) or _draws_on_its_closure(fn, cells)
+    ):
+        return True
+    return holds_a_stream(fn)
 
 
 def holds_a_stream(fn) -> bool:
@@ -551,6 +553,45 @@ def _rng_of_its_own(item) -> bool:
         return False
     mtrand = sys.modules.get("numpy.random.mtrand")
     return mtrand is None or item is not mtrand.__dict__.get("_rand")
+
+
+def _draws_on_its_closure(fn, cells: Mapping[str, _types.CellType]) -> bool:
+    """Whether a cell of *fn* holds an iterator, generator or stream, or
+    *fn* changes a cell in a way the shared reader leaves out (``next(c)``,
+    ``heapq.heappush(h, x)``), or its text cannot be read and a cell holds
+    more than a plain value. ``lambda: next(c)`` over ``c =
+    itertools.count()`` changes nothing the shared reader names, and a hit
+    handed back the closure the last run had drawn on."""
+    from .consumables import is_stream
+    from .statement.unseen_writes import own_writes
+
+    held = {}
+    for name, cell in cells.items():
+        try:
+            held[name] = cell.cell_contents
+        except ValueError:  # an empty cell
+            continue
+    if any(is_stream(value) for value in held.values()):
+        return True
+    # A number, a text or a tuple of them: nothing in it a call can change,
+    # whatever the text does with it (``next(held)`` over ``(1, 2)`` raises).
+    held = {name: value for name, value in held.items() if not _plain_value(value)}
+    writes: set[str] = set()
+    for layer in wrapper_layers(fn):
+        code = attribute_or(layer, "__code__", None)
+        if isinstance(code, _types.CodeType):
+            writes |= own_writes(code)
+    if "?" in writes:
+        return any(not callable(value) for value in held.values())
+    return any(name in held for name in writes)
+
+
+def _plain_value(value) -> bool:
+    """A number, a text or a date, or a tuple or frozenset of them."""
+    kind = type(value)
+    if kind in _EXACT_ATOMS:
+        return True
+    return kind in (tuple, frozenset) and len(value) <= 1000 and all(_plain_value(item) for item in value)
 
 
 #: Values with nothing inside them to look at: skipped without a call.
