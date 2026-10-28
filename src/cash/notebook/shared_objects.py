@@ -884,7 +884,7 @@ def owners_sharing(
 ) -> list[tuple[frozenset[str], frozenset[str]]]:
     """*links* (`GaveUp.links`) with each one's owners joined by the other
     names of *values* that share an object with one of them, held below
-    either (`_identities`).
+    either (`_reached_ids`).
 
     A walk names one owner for each object, the first root it reached it
     from: ``draw, poke, rebind = make(BIG)`` with ``draw`` and ``poke``
@@ -896,14 +896,7 @@ def owners_sharing(
     if len(values) < 2 or not links:
         return links
     value_types = VALUE_TYPES + library_value_types()
-    held: dict[str, set[int]] = {}
-    for name, value in values.items():
-        ids: set[int] = set()
-        for count, key in enumerate(_identities(value, value_types)):
-            if not count & 1023:
-                check_walk_budget()
-            ids.add(key)
-        held[name] = ids
+    held = {name: _reached_ids(value, value_types) for name, value in values.items()}
     widened = []
     for owners, holders in links:
         reach: set[int] = set()
@@ -912,6 +905,29 @@ def owners_sharing(
         joined = {name for name, ids in held.items() if name not in owners and not ids.isdisjoint(reach)}
         widened.append((frozenset(owners | joined), holders))
     return widened
+
+
+def _reached_ids(value: Any, value_types: tuple[type, ...]) -> set[int]:
+    """The ids `_identities` finds below *value*, and below a weak reference,
+    a view of an object array or a pandas object, what it holds
+    (`_opaque_parts`): ``draw`` holding ``pd.Series(list(rows))`` shares the
+    rows with ``rebind`` holding ``rows`` itself."""
+    found: set[int] = set()
+    stack = [value]
+    while stack:
+        obj = stack.pop()
+        if is_value(obj, value_types) or id(obj) in found:
+            continue
+        found.add(id(obj))
+        if not len(found) & 1023:
+            check_walk_budget()
+        found.update(view_bases(obj))
+        children = children_of(obj)
+        if children is None:
+            opaque = _opaque_parts(obj)
+            children = opaque[0] if opaque is not None else ()
+        stack.extend(children)
+    return found
 
 
 def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:

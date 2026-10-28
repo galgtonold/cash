@@ -18,6 +18,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.timeout(240)]
 
 HOLDERS = {
     "a pandas object series": ("H = pd.Series([rows, 1], dtype=object)", "H[0]"),
+    "a pandas object series of its items": ("H = pd.Series(list(rows), dtype=object)", "H"),
     "a pandas object frame": ("H = pd.DataFrame({'a': [rows, 1]})", "H['a'][0]"),
     "an object array's view": ("H0 = np.empty(2, dtype=object); H0[0] = rows; H = H0[:1]", "H[0]"),
     "a weakref": ("H = weakref.ref(rows)", "H()"),
@@ -46,7 +47,9 @@ def test_a_closure_holding_the_list_where_the_collector_cannot_see_moves_with_it
     """``draw`` holds ``BIG`` only through *holder*: alone, no edge was made
     at all, and ``y`` was served from before the edit. Beside ``rebind``,
     whose cell holds ``BIG`` itself, ``BIG`` is the statement's anchor, and
-    finding it inside *holder* must not refuse what the anchor allows."""
+    finding it inside *holder* must not refuse what the anchor allows, and
+    ``draw`` shares ``BIG``'s rows with ``rebind`` through *holder*, which
+    the outputs' link to ``BIG`` must see, or it named ``rebind`` alone."""
     hold, read = HOLDERS[holder]
     extra = "    def rebind(r):\n        nonlocal rows\n        rows = r\n" if rebind else ""
     names = "draw, poke, rebind" if rebind else "draw, poke"
