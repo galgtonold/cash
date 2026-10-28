@@ -275,7 +275,10 @@ class StatementLineageBuilder:
         (``t = Q.popleft()``), without the inputs it changed.
 
         *drawn* names the streams it drew from: with every output keyed by
-        its value, their lineages are left out of the outputs' (`without_drawn`).
+        its value, their lineages are left out of the outputs' (`without_drawn`),
+        whether the statement is not stored or each output is value-keyed
+        (*value_keyed*): a draw whose call was served leaves the outputs as
+        the run that stored it did, so what reads them next is served too.
 
         *accessed_remote* holds object-storage URLs the statement read. They
         join the same lineage component as local files, contributing the store's
@@ -324,7 +327,7 @@ class StatementLineageBuilder:
         body_only = call_time_reads(code, user_ns)
         left_out = sorted(drawn & set(input_lineage_map))
         if (
-            no_cache
+            (no_cache or outputs <= value_keyed)
             and left_out
             and outputs
             and all(name in user_ns and not _a_namespace(user_ns[name], user_ns) for name in outputs)
