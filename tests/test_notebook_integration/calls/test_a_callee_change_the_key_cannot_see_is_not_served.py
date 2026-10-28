@@ -121,3 +121,27 @@ def test_a_change_through_what_a_global_holds_is_made_again(cash_magics, record,
         for cell in cells:
             run_cash_cell(cash_magics, cell, cells=cells)
         assert (ns["v"], ns["n"]) == (30, 1), f"Run All {run + 1}"
+
+
+# Off in a kernel of its own: a warm one was started with traces on, and
+# ``CASH_TRACE`` set now never reaches it.
+@pytest.mark.parametrize("trace", ["on", pytest.param("off", marks=pytest.mark.fresh_kernel)])
+@pytest.mark.parametrize(
+    "define",
+    [
+        "exec('def inner(x, L=LOG):\\n    time.sleep(0.05)\\n    L.append(x)\\n    return x * 10')",
+        "inner = eval('lambda x, L=LOG: (time.sleep(0.05), L.append(x), x * 10)[2]')",
+    ],
+    ids=["exec_def", "lambda_from_a_string"],
+)
+def test_a_default_an_unreadable_callee_changes_is_made_again(nb_runner, monkeypatch, define, trace):
+    """``exec('def inner(x, L=LOG): L.append(x)')``: only the globals it
+    loads were watched, and ``L`` is not one, so the call was served and
+    ``LOG`` left empty while traces were off."""
+    if trace == "off":
+        monkeypatch.setenv("CASH_TRACE", "0")
+    nb_runner.create_notebook(["import time\nLOG = []\n" + define, "v = inner(3)", "print('N', len(LOG))"])
+    nb_runner.start_kernel()
+    for run in range(3):
+        nb_runner.run_all()
+        assert "N 1" in nb_runner.get_output(3), f"Run All {run + 1}"
