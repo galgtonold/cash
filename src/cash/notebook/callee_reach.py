@@ -11,6 +11,7 @@ statement text and the live namespace, so they reach the same answer.
 from __future__ import annotations
 
 import ast
+import dis
 import functools
 import importlib
 import inspect
@@ -316,12 +317,16 @@ def _state_writes(
     process: set[str] | None = None,
     *,
     follow: bool = True,
+    in_function: bool = False,
 ) -> None:
     """Add to *found* (unless None) the local modules *statements* set state
     on, run with *namespace* as their globals; *followed* are the notebook
     functions already walked. With *process*, add to it what of the process
     they change (`process_state_writes`). Without *follow*, a call is judged by
-    what it calls, not followed into a body.
+    what it calls, not followed into a body. *in_function* when *statements*
+    are a function's body: a function defined in it is read as run, since it
+    is made to be called there (``def inner(): import cnt; cnt.k += 1``,
+    then ``inner()``), and nothing names it to follow.
 
     This is the one walk that follows a statement into the notebook
     functions it calls: whatever else a statement's helpers can change is
@@ -370,7 +375,10 @@ def _state_writes(
         if node is None or users or found is None:
             return
         if isinstance(func, ast.Name) and func.id in ("setattr", "delattr") and node.args:
-            target = namespace.get(node.args[0].id) if isinstance(node.args[0], ast.Name) else None
+            target = None
+            if isinstance(node.args[0], ast.Name):
+                # ``import cnt; setattr(cnt, 'k', 1)``: the import binds a local.
+                target = namespace.get(node.args[0].id, imported.get(node.args[0].id))
             home = _state_home(target, namespace)
             if home is not None:
                 found.add(home)
@@ -394,7 +402,7 @@ def _state_writes(
                     found.update(_class_state_written(callee, kind, receiver, namespace))
             if callee.__globals__ is namespace and id(callee) not in followed:
                 followed.add(id(callee))
-                _state_writes(_function_body(callee), namespace, found, followed, process)
+                _state_writes(_function_body(callee), namespace, found, followed, process, in_function=True)
         return users
 
     #: ``id(function) -> (function, _modules_changed_by of it)``.
@@ -430,6 +438,8 @@ def _state_writes(
             # What runs at definition: the decorators and the defaults.
             pending.extend(attribute_or(node, "decorator_list", ()))
             pending.extend(d for d in (*node.args.defaults, *node.args.kw_defaults) if d is not None)
+            if in_function:
+                pending.extend(node.body if isinstance(node.body, list) else [node.body])
             continue
         pending.extend(ast.iter_child_nodes(node))
         if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Delete)):
@@ -1078,6 +1088,9 @@ def _modules_changed_by(
                 continue
             if _changed_globals(current.__code__):
                 found.add(home.__name__)
+            # ``def bump(): import cnt; cnt.k += 1`` in a file: the module it
+            # sets state on is a local of its own, not a global.
+            found.update(_module_function_state_writes(current))
             if process is not None:
                 process.update(_module_function_process_writes(current))
         for co in _code_objects(current.__code__):
@@ -1100,6 +1113,19 @@ def _module_function_process_writes(fn: types.FunctionType) -> frozenset[str]:
     process: set[str] = set()
     _state_writes(_function_body(fn), fn.__globals__, None, set(), process, follow=False)
     return frozenset(process)
+
+
+@functools.lru_cache(maxsize=4096)
+def _module_function_state_writes(fn: types.FunctionType) -> frozenset[str]:
+    """The local modules, other than its own, the body of the module function
+    *fn* sets state on through a module it imports itself (`_state_writes`,
+    its calls judged by what they call: `_modules_changed_by` reaches its
+    helpers). Once per function, as `_module_function_process_writes`."""
+    if "IMPORT_NAME" not in {op.opname for co in _code_objects(fn.__code__) for op in dis.get_instructions(co)}:
+        return frozenset()
+    found: set[str] = set()
+    _state_writes(_function_body(fn), fn.__globals__, found, set(), follow=False, in_function=True)
+    return frozenset(found)
 
 
 class _Found:
