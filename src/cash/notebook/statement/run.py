@@ -258,6 +258,9 @@ class StatementRun:
     #: What the loop changed in place that a hit restores into the live
     #: object (``StatementCacheMetadata.restored_into``, `in_place`).
     restored_into: set[str] = field(default_factory=set)
+    #: What the loop only assigns into and a hit binds to the stored copy
+    #: (``arr[i] = v``; ``StatementCacheMetadata.bound_copies``).
+    bound_copies: set[str] = field(default_factory=set)
     #: For each of the ``anchor_links`` that is not an anchor, the anchors
     #: whose object it held: a restore misses unless it still holds those
     #: live objects (``StatementCacheMetadata.anchor_holds``).

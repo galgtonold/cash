@@ -37,6 +37,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from cash._user_attrs import attribute_or
+from cash.install_paths import is_user_code_module
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 from .identity_holders import IdentityHeld
@@ -136,6 +137,14 @@ def bound_as_a_copy(obj: Any, namespace: Mapping[str, Any]) -> bool:
     return _held_by_the_notebook({id(obj)}, refs, namespace) is None
 
 
+def _users_class(value: Any) -> bool:
+    """Whether *value* is a class of the user's code."""
+    if not isinstance(value, type):
+        return False
+    module = sys.modules.get(attribute_or(value, "__module__") or "")
+    return module is not None and is_user_code_module(module)
+
+
 #: A target `_reaches` never finds: to collect what an object holds.
 _NOTHING = object()
 
@@ -187,13 +196,17 @@ def _held_by_the_notebook(parts: set[int], refs: list[Any], namespace: Mapping[s
             if kind in (dict, list, tuple, set, frozenset):
                 items = value
             elif (
-                isinstance(value, _OPAQUE)
+                (isinstance(value, _OPAQUE) and not _users_class(value))
                 or type(kind.__module__) is not str
                 or (kind.__module__.partition(".")[0] in _NOT_THE_NOTEBOOKS)
             ):
                 continue
             else:
                 state = attribute_or(value, "__dict__")
+                if type(state) is types.MappingProxyType and _users_class(value):
+                    # A registry on a class of the user's: ``alive =
+                    # weakref.WeakSet()``, ``by_id = {}`` filled in __init__.
+                    state = dict(state)
                 if type(state) is not dict:
                     continue
                 items = state

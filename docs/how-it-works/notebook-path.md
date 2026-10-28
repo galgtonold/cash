@@ -180,15 +180,17 @@ puts the stored state back into the object itself, so other names for it, a
 `weakref` to it and a dict keyed by its `id()` still find it, as after a
 plain run.
 
-<!-- claim: cash/notebook/statement/in_place.py:refusal @fb968733, cash/notebook/statement/in_place.py:_held_by_the_notebook @d036c033, cash/notebook/statement/processor.py:StatementProcessor._cheap_to_rerun @1a1db567 -->
+<!-- claim: cash/notebook/statement/in_place.py:refusal @b3abf462, cash/notebook/statement/in_place.py:_held_by_the_notebook @89a3f602, cash/notebook/statement/processor.py:StatementProcessor._cheap_to_rerun @1a1db567, cash/notebook/statement/in_place.py:bound_as_a_copy @57eb0eea -->
 Only a list, a dict, a set, or an object of your own class pickled the default
 way is restored into. An object of another kind the loop only assigns into
 (`arr[i] = v` on a NumPy array) is bound to the stored copy, as before, when
-nothing the notebook holds points at it by a `weakref` or its `id()`. The
+nothing the notebook holds points at it by a `weakref` or its `id()`, asked
+again at each restore. The
 loop runs again when an object it changes in place is of another kind,
 defines its own pickling (`__getstate__`, `__reduce__`), holds itself, or sits
 inside another container; when a `weakref` the notebook holds (in a
-variable or a container at any depth, or a `weakref.finalize`) points at an
+variable, a container at any depth or an attribute of a class of yours, such
+as a registry filled in `__init__`, or a `weakref.finalize`) points at an
 object it holds, or such a container keeps one's `id()` as a key, a value or
 an item (what it holds comes back as copies; both are checked again at each
 restore); when the notebook holds a container of more than 10,000 items that
