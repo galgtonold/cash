@@ -732,10 +732,16 @@ output = handler(df)
         assert len(warnings) == 0
 
     def test_is_local_module_with_pyc_only(self, tmp_path):
-        """Module with only .pyc (no .py source) should return False."""
+        """A module with only its .pyc (no .py source) in a user folder is
+        still the user's code: taken for a library, it was keyed by nothing
+        and an edited, recompiled module was served stale."""
         fake_module = types.ModuleType("fake_pyc_only")
         fake_module.__file__ = str(tmp_path / "fake_pyc_only.pyc")
-        # No corresponding .py file exists
+        assert is_local_module(fake_module) is True
+
+    def test_is_local_module_with_an_extension_module(self, tmp_path):
+        fake_module = types.ModuleType("fake_ext")
+        fake_module.__file__ = str(tmp_path / "fake_ext.cpython-314-x86_64-linux-gnu.so")
         assert is_local_module(fake_module) is False
 
     def test_auto_track_idempotent(self, tracker, temp_module):

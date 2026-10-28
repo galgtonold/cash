@@ -41,6 +41,7 @@ from ...tracking.read_classification import regular_file_stat
 from ...value_hash import budgeted_hash, compute_hash, costly_after
 from ..cache_key import statement_source_hash
 from ..lineage_formula import (
+    DRAWN_LEFT_OUT,
     binding_source_hash,
     call_time_reads,
     callable_source_component,
@@ -57,6 +58,7 @@ from ..lineage_formula import (
     setting_output_lineage,
     statement_environment_component,
     value_digests_key,
+    without_drawn,
 )
 from ..restored_var import hashed_by_lineage
 from .derivation_edges import (
@@ -238,6 +240,7 @@ class StatementLineageBuilder:
         accessed_remote: set[str] | None = None,
         no_cache: bool = False,
         value_keyed: frozenset[str] = frozenset(),
+        drawn: frozenset[str] = frozenset(),
         occurrence_index: int = 0,
         replay_bumps: bool = True,
         lineage_reads: frozenset[str] = frozenset(),
@@ -270,6 +273,9 @@ class StatementLineageBuilder:
         *value_keyed* names outputs whose lineage carries that digest too: the
         new values a statement that changed its inputs in place bound
         (``t = Q.popleft()``), without the inputs it changed.
+
+        *drawn* names the streams it drew from: with every output keyed by
+        its value, their lineages are left out of the outputs' (`without_drawn`).
 
         *accessed_remote* holds object-storage URLs the statement read. They
         join the same lineage component as local files, contributing the store's
@@ -316,6 +322,15 @@ class StatementLineageBuilder:
             tracking_state, lineage_inputs, user_ns, code
         )
         body_only = call_time_reads(code, user_ns)
+        left_out = sorted(drawn & set(input_lineage_map))
+        if (
+            no_cache
+            and left_out
+            and outputs
+            and all(name in user_ns and not _a_namespace(user_ns[name], user_ns) for name in outputs)
+        ):
+            value_digests[DRAWN_LEFT_OUT] = ",".join(left_out)
+            input_lineage_hashes = without_drawn(input_lineage_map, value_digests)
 
         # All outputs of one statement share its formula lineage (``train,
         # test = ...``, or ``M = enc.fit_transform(X)`` writing ``enc`` too):

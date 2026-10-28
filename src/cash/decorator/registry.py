@@ -554,7 +554,9 @@ class FunctionRegistry:
                 report = self.report_for(f, name)
                 if (
                     report is not None
-                    and (report.helper_bindings or report.unbound_names or report.walked_code)
+                    and (
+                        report.helper_bindings or report.unbound_names or report.unloaded_modules or report.walked_code
+                    )
                     and bindings_changed(report)
                 ):
                     with self.analysis_lock:

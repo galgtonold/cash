@@ -572,7 +572,7 @@ a name bound through the namespace, `eval`, `exec` of a computed string and
 
 ### A special method that changes state outside its object
 
-<!-- claim: cash/notebook/statement/unseen_writes.py:writers_without_a_trace @fb58b1ed, cash/notebook/statement/unseen_writes.py:own_writes @bb4fc316 -->
+<!-- claim: cash/notebook/statement/unseen_writes.py:writers_without_a_trace @25806177, cash/notebook/statement/unseen_writes.py:own_writes @bb4fc316 -->
 `s + 1` on objects of yours runs their `__add__`, which the statement's text
 does not name. When such a method changes something outside its object
 (appends to a global list), cash runs the statement every time and says so:
