@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import contextvars
 import dataclasses
 import functools
 import itertools
@@ -38,7 +39,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from cash._clock import perf_counter as _perf_counter
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, instance_of
 from cash.analysis.analysis_budget import (
     AnalysisBudget,
     AnalysisBudgetExceeded,
@@ -74,7 +75,13 @@ from cash.notebook.call_effects import (
 )
 from cash.notebook.call_entries import ONE_LOCAL, TOO_MANY_WHY, CallEntries, refs_beyond
 from cash.notebook.call_interception import CallSite, SiteSlots, interceptable, names_read
-from cash.notebook.call_key import CallKeys, callee_mutated_globals, global_digests, holds_a_stream
+from cash.notebook.call_key import (
+    CallKeys,
+    callee_mutated_globals,
+    callee_watched_globals,
+    global_digests,
+    holds_a_stream,
+)
 from cash.notebook.call_refs import (
     DIGEST_FIELD,
     SIZE_FIELD,
@@ -1048,6 +1055,10 @@ class CallUnit:
             else hash_args(call.args, call.kwargs, digest=self._digests.digest_before(ticket, call.site.source))
         )
         module_before = _module_globals(call.fn)
+        # Globals it may change that the entry does not put back: hashed as
+        # its arguments are (`callee_watched_globals`).
+        watched = callee_watched_globals(call.fn, call.mutated_globals)
+        watched_before = _watched_state(call.fn, watched, self._fingerprints) if watched else None
         # Before the clock starts: looking for memos is cash's own work, and
         # counted as the call's it pushed cheap calls over the floor.
         memos_before = helper_memos.watched(attribute_or(call.fn, "__globals__", None) or {})
@@ -1076,6 +1087,7 @@ class CallUnit:
         if (
             self._did_what_a_hit_cannot(call, rng_before, arg_hashes_before, ticket)
             or _rebound_unwatched(call, module_before)
+            or (watched_before is not None and _watched_state(call.fn, watched, self._fingerprints) != watched_before)
             or self._wrote_files(call, written)
         ):
             self._entries.refuse(call.key)
@@ -1657,6 +1669,29 @@ def _rebound_unwatched(call: _Call, before: Mapping[str, Any] | None) -> bool:
 
 
 _ABSENT = object()
+
+
+def _watched_state(fn: Any, names: tuple[str, ...], fingerprints: Any) -> tuple:
+    """The content hashes of *fn*'s globals *names*, an unreadable one as
+    changed (`hash_args`). A class by what its attributes are bound to and
+    hold: its own hash is its name, and ``setattr(NS, 'a', x)`` keeps it.
+    A context variable by the object it holds."""
+    globals_dict = fn.__globals__
+    values = []
+    for name in names:
+        value = globals_dict.get(name, _ABSENT)
+        if type(value) is contextvars.ContextVar:
+            # Nothing changes one in place: ``set`` gives it another value
+            # in the context, which is what it is read by.
+            value = ("context variable", id(value.get(_ABSENT)))
+        elif instance_of(value, type):
+            attrs = dict(vars(value))
+            value = (
+                tuple((key, id(item)) for key, item in attrs.items()),
+                {key: item for key, item in attrs.items() if not key.startswith("__") and not callable(item)},
+            )
+        values.append(value)
+    return hash_args(tuple(values), {}, fingerprints)
 
 
 def _left_pyplot_alone(fn: Any, unit: Any) -> bool:

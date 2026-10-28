@@ -37,10 +37,10 @@ from typing import TYPE_CHECKING, Any
 from cash import _native, _plain_data
 from cash._memo import CODE_OBJECTS, LruMemo
 from cash._paths import MAIN_MODULE_NAMES, is_pseudo_filename
-from cash._user_attrs import attribute_or, builtin_items, has_attribute
+from cash._user_attrs import attribute_or, builtin_items, has_attribute, instance_of
 from cash.analysis.bytecode import NAME_LOADS, argvals
-from cash.analysis.callee_effects import source_global_mutations
-from cash.analysis.namespace_effects import capturable_globals
+from cash.analysis.callee_effects import resolve_function_def, source_global_mutations
+from cash.analysis.namespace_effects import bound_to_state, capturable_globals, function_handoffs
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
 from cash.install_paths import is_user_code_module, is_user_path
 from cash.notebook import shadow as _shadow
@@ -59,6 +59,7 @@ __all__ = [
     "CallKeys",
     "call_cache_key",
     "callee_mutated_globals",
+    "callee_watched_globals",
     "changes_its_closure",
     "global_digests",
     "global_names_reached",
@@ -150,7 +151,9 @@ def callee_mutated_globals(fn) -> tuple[str, ...]:
         # a module) can change between calls, and the memo is about the
         # source.
         capturable = capturable_globals(cached, layer_globals)
-        written = {n for n in cached if n in cells or n in capturable}
+        # Not a class: a copy of one is the class, and the restore would put
+        # back what is there (`callee_watched_globals` watches it instead).
+        written = {n for n in cached if n in cells or (n in capturable and not instance_of(layer_globals[n], type))}
         if layer_globals is globals_dict:
             found |= written
         elif written:
@@ -207,6 +210,147 @@ def _source_mutations(fn) -> tuple[str, ...]:
         if memo_key is not None:
             _GLOBAL_MUTATION_CACHE[memo_key] = cached
     return cached
+
+
+def callee_watched_globals(fn, captured: tuple[str, ...]) -> tuple[str, ...]:
+    """Globals of *fn*'s own module a call of it may change in place that
+    the entry does not capture (*captured*, `callee_mutated_globals`),
+    sorted: what it hands to code whose effect on them its text cannot
+    decide (`function_handoffs`: ``bisect.insort(LOG, x)``,
+    ``DQ.appendleft(x)``, ``getattr(LOG, 'append')(x)``), a bound method it
+    loads (``PUSH = LOG.append``), a class it writes (a copy of a class is
+    the class), and every global a function whose text cannot be read loads
+    (an ``exec``'d ``def``). The functions it reaches in the same namespace
+    count too, as for `callee_mutated_globals`.
+
+    Read on a miss only: each is hashed before and after the call, and a
+    call that changed one is not stored, as for an argument it changed. A
+    hit would skip the change.
+    """
+    globals_dict = attribute_or(fn, "__globals__", None)
+    if not isinstance(globals_dict, dict):
+        return ()
+    found: set[str] = set()
+    for layer in wrapper_layers(fn):
+        if attribute_or(layer, "__globals__", None) is not globals_dict:
+            continue
+        for reached in _functions_reached_in(globals_dict, layer):
+            try:
+                found |= _watched_names(reached, globals_dict)
+            except Exception:  # noqa: BLE001 - not read is every global it loads
+                found |= _CODE_NAMES.get(reached.__code__) or _code_names(reached.__code__)
+    return tuple(sorted(n for n in found if n not in captured and _worth_watching(globals_dict.get(n, _NOT_BOUND))))
+
+
+def _watched_names(fn, globals_dict: dict) -> set[str]:
+    code = attribute_or(fn, "__code__", None)
+    if code is None:
+        return set()
+    loads = _CODE_NAMES.get(code)
+    if loads is None:
+        loads = _CODE_NAMES[code] = _code_names(code)
+    fdef = _own_def(fn)
+    if fdef is None:
+        # Nothing to read what it does with them from: every global it
+        # loads, and every default (an ``exec``'d ``def f(x, L=LOG)``, a
+        # lambda's ``L=LOG``).
+        return {*loads, *_default_holders(fn, None, globals_dict)}
+    params, handed = function_handoffs(fdef, globals_dict, functools.partial(_user_source, globals_dict))
+    bound = {name for name in loads if bound_to_state(globals_dict.get(name))}
+    return {
+        *handed,
+        *bound,
+        *_default_holders(fn, params, globals_dict),
+        *(name for name in _source_mutations(fn) if instance_of(globals_dict.get(name), type)),
+    }
+
+
+def _default_holders(fn, params: frozenset[str] | None, globals_dict: dict) -> set[str]:
+    """The globals holding an object *fn* got as a default of a parameter
+    it changes (*params*, every one when None): ``def f(x, L=LOG):
+    L.append(x)`` changes ``LOG`` when called without ``L``, and no argument
+    names it. Held directly, or as an item of a dict, list or tuple a global
+    holds (``L=CFG['a']``), two levels down."""
+    code = fn.__code__
+    names = code.co_varnames[: code.co_argcount + code.co_kwonlyargcount]
+    positional = names[: code.co_argcount]
+    defaults = dict(zip(positional[len(positional) - len(fn.__defaults__ or ()) :], fn.__defaults__ or ()))
+    defaults.update(fn.__kwdefaults__ or {})
+    held = {
+        id(value)
+        for name, value in defaults.items()
+        if (params is None or name in params) and type(value) not in _EXACT_ATOMS
+    }
+    if not held:
+        return set()
+    return {name for name, value in list(globals_dict.items()) if _holds_one_of(value, held, 2)}
+
+
+#: How many items of one container `_holds_one_of` looks at.
+_HOLDER_SCAN = 1000
+
+
+def _holds_one_of(value, ids: set[int], depth: int) -> bool:
+    """Is *value*, or an item of a dict, list or tuple it is, *depth* levels
+    down, one of the objects *ids* names?"""
+    if id(value) in ids:
+        return True
+    if depth <= 0:
+        return False
+    if type(value) is dict:
+        items = list(value.values())
+    elif type(value) in (list, tuple):
+        items = list(value)
+    else:
+        return False
+    return len(items) <= _HOLDER_SCAN and any(_holds_one_of(item, ids, depth - 1) for item in items)
+
+
+#: ``code object -> its function's parsed def``, or None when its text cannot be read.
+_OWN_DEFS: LruMemo[Any, Any] = LruMemo(CODE_OBJECTS)
+_UNREAD = object()
+
+
+def _own_def(fn):
+    code = fn.__code__
+    found = _OWN_DEFS.get(code, _UNREAD)
+    if found is _UNREAD:
+        source = _own_source_or_none(fn)
+        found = _OWN_DEFS[code] = resolve_function_def(fn.__name__, lambda _name: source)
+    return found
+
+
+def _own_source_or_none(fn) -> str | None:
+    try:
+        return own_source(fn)
+    except SOURCE_RETRIEVAL_ERRORS:
+        return None
+
+
+def _user_source(globals_dict: dict, name: str) -> str | None:
+    """The text of the function of the same namespace *name* names, for
+    `function_handoffs` to follow what it hands its parameters."""
+    value = globals_dict.get(name)
+    if type(value) is not _types.FunctionType or value.__globals__ is not globals_dict:
+        return None
+    return _own_source_or_none(value)
+
+
+_NOT_BOUND = object()
+_LRU_WRAPPER = attribute_or(functools, "_lru_cache_wrapper", None)
+
+
+def _worth_watching(value) -> bool:
+    """Whether a change *value* takes in place could be missed: not a
+    module, a function or a memo (followed instead), a library class, or a
+    value with nothing inside to change."""
+    if value is _NOT_BOUND or type(value) in _EXACT_ATOMS or type(value) is _LRU_WRAPPER:
+        # A memo: what a call leaves in it is followed as for every call
+        # (`helper_memos`), and its hash cannot be read.
+        return False
+    if instance_of(value, (_ModuleType, _types.FunctionType, _types.BuiltinFunctionType)) and not bound_to_state(value):
+        return False
+    return not instance_of(value, type) or is_user_code_module(sys.modules.get(attribute_or(value, "__module__", None)))
 
 
 def changes_its_closure(fn) -> bool:

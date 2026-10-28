@@ -526,8 +526,36 @@ class MutationRouting:
 
 def callees_changing_their_closure(tree: ast.AST | None, user_ns: Mapping[str, Any]) -> set[str]:
     """The functions *tree* calls by name, outside loop and branch bodies,
-    that change their closure (:func:`changes_its_closure`)."""
-    return {name for name in called_names(tree, "no_control_bodies") if changes_its_closure(user_ns.get(name))}
+    that change their closure (:func:`changes_its_closure`), and those of
+    *user_ns* a notebook function it calls names in turn: ``def setup():
+    rebind([0])``, then ``setup()``, rebinds ``rebind``'s cell."""
+    found: set[str] = set()
+    seen: set[str] = set()
+    todo = list(called_names(tree, "no_control_bodies"))
+    while todo and len(seen) < _CALLEES_FOLLOWED:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        fn = user_ns.get(name)
+        if changes_its_closure(fn):
+            found.add(name)
+        if type(fn) is types.FunctionType and fn.__globals__ is user_ns:
+            todo.extend(_global_names(fn.__code__))
+    return found
+
+
+#: How many functions `callees_changing_their_closure` looks at.
+_CALLEES_FOLLOWED = 256
+
+
+def _global_names(code: types.CodeType) -> set[str]:
+    """The names *code* and the code nested in it look up: its globals among them."""
+    names = set(code.co_names)
+    for const in code.co_consts:
+        if isinstance(const, types.CodeType):
+            names |= _global_names(const)
+    return names
 
 
 def sharing_a_cell(writers: set[str], user_ns: Mapping[str, Any]) -> set[str]:
