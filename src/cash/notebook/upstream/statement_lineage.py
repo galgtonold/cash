@@ -54,7 +54,13 @@ from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from ..cache_key import CacheKeyContext, compute_cache_key, statement_source_hash
 from ..callee_reach import helper_seeded_modules, module_state_names
-from ..consumables import drawn_stream_inputs, is_stream, watched_call_receivers, with_other_names
+from ..consumables import (
+    drawn_stream_inputs,
+    is_stream,
+    watched_call_receivers,
+    with_other_names,
+    without_read_handles,
+)
 from ..lineage_formula import (
     binding_source_hash,
     call_time_reads,
@@ -1365,7 +1371,8 @@ class StatementLineage:
         drawn = drawn_stream_inputs(parse_cached(stmt_code), inputs, outputs, self.shell.user_ns)
         if not drawn:
             return set()
-        return with_other_names(drawn, self.shell.user_ns, self.tracking_state.variable_lineage) - outputs
+        found = with_other_names(drawn, self.shell.user_ns, self.tracking_state.variable_lineage) - outputs
+        return set(without_read_handles(found, self.shell.user_ns))
 
     def _advanced_carriers(
         self,
