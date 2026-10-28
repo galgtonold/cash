@@ -1767,6 +1767,16 @@ def _call_handoffs(
             # hold it; by the container itself when none does.
             roots.update(_holders_of_bound(user_ns.get(holder.id), user_ns) or {holder.id})
     if isinstance(func, ast.Attribute):
+        if isinstance(func.value, ast.Name) and func.value.id not in local and func.value.id in user_ns:
+            # ``H.push = functools.partial(list.append, LOG)`` then
+            # ``H.push(x)``: what the method or partial an attribute holds
+            # is bound to changes, watched by the names that hold it.
+            try:
+                held = inspect.getattr_static(user_ns[func.value.id], func.attr)
+            except Exception:  # noqa: BLE001 - not there, or not readable without running code
+                held = None
+            if held is not None:
+                roots.update(_holders_of_bound([held], user_ns))
         base = func.value
         while isinstance(base, (ast.Attribute, ast.Subscript)):
             base = base.value
