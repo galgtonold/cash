@@ -609,8 +609,8 @@ class FileDeps:
             func_name,
             "work_running",
             f"@cash.cache on {func_name}: work the call handed to a thread or thread pool was still "
-            f"running when it returned. What that work reads or changes from then on is "
-            f"outside the cached result, so the result was returned but not cached.",
+            f"running when it returned, so the result was returned but not cached. What that work "
+            f"reads or changes from then on is outside the cached result.",
             code="STORE-WORK-RUNNING",
             fix="wait for the work before returning (future.result(), concurrent.futures.wait, "
             "or thread.join()), or leave the pool or thread out of the cached function.",
