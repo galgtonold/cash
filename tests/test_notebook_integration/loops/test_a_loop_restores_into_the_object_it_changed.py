@@ -128,6 +128,20 @@ BUMP = "def bump():\n    import counter_mod\n    counter_mod.k += 1\n"
             "print(reg.m.get(id(p.seen)), p.n)",
             "keeps the id()",
         ),
+        (P + "p = P()\nreg = {'seen': id(p.seen)}", LOOP, "print(reg['seen'] == id(p.seen), p.n)", "keeps the id()"),
+        (
+            P + "import weakref\nclass Q:\n    pass\np = P()\np.child = Q()\nwkd = weakref.WeakKeyDictionary()\n"
+            "wkd[p.child] = 'c'",
+            LOOP,
+            "print(wkd.get(p.child), p.n)",
+            "weak reference",
+        ),
+        (
+            P + "p = P()\nbig = [(j, j) for j in range(20000)] + [('seen', id(p.seen))]",
+            LOOP,
+            "print(big[-1][1] == id(p.seen), p.n)",
+            "too big to look through",
+        ),
         (P + GETSTATE + "p = P()", LOOP, "print(p.n, len(p.seen))", "is not restored into"),
         (P + "p = P()\nholder = {'a': [p]}", LOOP, "print(holder['a'][0].n, holder['a'][0] is p)", "container holds"),
         (
@@ -150,6 +164,9 @@ BUMP = "def bump():\n    import counter_mod\n    counter_mod.k += 1\n"
         "an id key in a nested dict",
         "an id in a list",
         "an id key inside an object",
+        "an id as a dict value",
+        "a weak reference as a dict key",
+        "an id inside a big container",
         "own pickling",
         "a container holding it",
         "a helper writing a module",
@@ -199,12 +216,19 @@ def test_what_points_into_it_is_asked_again_at_a_restore(nb_runner, made_later, 
             "len(out), int(out[2999]['a'][0])",
             "3000 2999",
         ),
+        (
+            "import numpy as np, pandas as pd\nout = pd.DataFrame(np.zeros((3000, 2)))",
+            "out.iloc[i, 0] = i",
+            "float(out[0].sum())",
+            "4498500.0",
+        ),
     ],
-    ids=["a numpy array", "a dict of frames"],
+    ids=["a numpy array", "a dict of frames", "a frame"],
 )
 def test_what_the_loop_assigns_into_is_restored_after_a_restart(nb_runner, make, body, read, expected):
-    """A NumPy array is bound to the restored copy, as before; a dict of
-    frames is restored into, the weak references pandas keeps between its
+    """A NumPy array, or a frame, is bound to the restored copy, as before
+    (the weak reference pandas keeps to the frame in itself comes back with
+    the copy); a dict of frames is restored into, the weak references pandas keeps between its
     own blocks coming back with it."""
     loop = f"for i in range(3000):\n    time.sleep(0.0003)\n    {body}"
     printed, seen = _run(nb_runner, f"import time\n{make}", loop, f"print({read})")
