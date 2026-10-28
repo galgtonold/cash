@@ -82,6 +82,11 @@ MUTATING_METHODS = {
     "intersection_update",
     "difference_update",
     "symmetric_difference_update",
+    # deque methods (``dq.popleft()`` in a closure)
+    "appendleft",
+    "extendleft",
+    "popleft",
+    "rotate",
 }
 
 

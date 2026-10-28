@@ -16,6 +16,7 @@ import pytest
 
 from cash.notebook.call_key import holds_a_closure_with_state
 from tests._cell_driver import run_cash_cell
+from tools.plain_checker import check, notebook
 
 MAKERS = {
     "count_in_a_tuple": ("c = itertools.count()", "(lambda: next(c),)", "d[0]", (0, 1)),
@@ -44,3 +45,32 @@ def test_a_closure_that_only_reads_its_cells_keeps_no_state():
     """Control: ``lambda x: x * scale['k']`` over a dict it only reads."""
     scale = {"k": 2}
     assert not holds_a_closure_with_state((lambda x: x * scale["k"],))
+
+
+#: ``(what mk holds, what it returns)``: a closure set on a library module
+#: (``textwrap.t = (mk(),)``) drawing through what its cell holds.
+ON_A_MODULE = {
+    "a_list_of_iterators": ("its = [itertools.count()]", "lambda: next(its[0])"),
+    "a_dict_of_iterators": ("d = {'it': itertools.count()}", "lambda: next(d['it'])"),
+    "an_object_holding_one": ("b = types.SimpleNamespace(it=itertools.count())", "lambda: next(b.it)"),
+    "a_random_of_its_own": ("r = random.Random(0)", "lambda: r.randrange(1000)"),
+    "a_deque_popleft": ("dq = collections.deque(range(100))", "lambda: dq.popleft()"),
+}
+
+
+@pytest.mark.integration
+@pytest.mark.fresh_kernel
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("shape", list(ON_A_MODULE))
+def test_a_closure_a_library_module_holds_draws_again(tmp_path, shape):
+    """Served from the call cache, the draw handed back the value the first
+    Run All drew, and the next draw read the closure moved on once only."""
+    state, returned = ON_A_MODULE[shape]
+    cells = [
+        "import collections, itertools, random, textwrap, time, types",
+        f"def mk():\n    {state}\n    return {returned}\ntextwrap.t = (mk(),)",
+        "a = (time.sleep(0.05), textwrap.t[0]())[1]",
+        "b = (time.sleep(0.3), textwrap.t[0]())[1]",
+        "print('R', a, b)",
+    ]
+    check(notebook(f"closure-on-a-module-{shape}", cells, names=["a", "b"]), tmp_path, ["floors0"]).assert_ok()
