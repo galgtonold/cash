@@ -92,6 +92,11 @@ def refusal(obj: Any, namespace: Mapping[str, Any] | None = None) -> str | None:
         return "a weak reference points at an object it holds, and a restore would hand it a copy"
     if held == _BY_ID:
         return "a container keeps the id() of an object it holds, and a restore would hand it a copy"
+    if held == _TOO_MANY:
+        return (
+            "the notebook holds containers too big to look through for a weak reference to, or the id() "
+            "of, an object it holds"
+        )
     return None
 
 
@@ -114,7 +119,17 @@ def bound_as_a_copy(obj: Any, namespace: Mapping[str, Any]) -> bool:
         refs = weakref.getweakrefs(obj)
     except TypeError:
         refs = []
+    if refs:
+        # One *obj* holds itself comes back with the copy (pandas keeps one
+        # to the frame in its ``_flags``).
+        inside: set[int] = set()
+        if _reaches(gc.get_referents(obj), _NOTHING, seen=inside) is not None:
+            refs = [ref for ref in refs if id(ref) not in inside]
     return _held_by_the_notebook({id(obj)}, refs, namespace) is None
+
+
+#: A target `_reaches` never finds: to collect what an object holds.
+_NOTHING = object()
 
 
 #: Packages whose objects `_held_by_the_notebook` does not look into: the
@@ -125,6 +140,9 @@ _NOT_THE_NOTEBOOKS = frozenset({"IPython", "ipykernel", "jupyter_client", "trait
 #: What `_held_by_the_notebook` finds.
 _WEAK = "weak"
 _BY_ID = "by id"
+_TOO_MANY = "too many"
+#: What a container too big to look inside may hold and keep nothing else.
+_LEAVES = frozenset(IMMUTABLE_LEAF_TYPES)
 
 
 def _held_by_the_notebook(parts: set[int], refs: list[Any], namespace: Mapping[str, Any]) -> str | None:
@@ -135,14 +153,15 @@ def _held_by_the_notebook(parts: set[int], refs: list[Any], namespace: Mapping[s
     IPython's or cash's), or as a ``weakref.finalize``. Those cash keeps
     itself are not the notebook's.
     `_BY_ID` when one of those keeps the ``id()`` of one of *parts* as a
-    key or an item: ``reg = {id(p.seen): ...}``, ``ids = [id(p.seen)]``.
-    Else None.
+    key, a value or an item: ``reg = {id(p.seen): ...}``, ``{'seen':
+    id(p.seen)}``, ``ids = [id(p.seen)]``. Else None.
 
     A number that only happens to equal an ``id()`` runs the loop again,
-    which is always right; so do containers too many to look through. What
-    a container of more than `_MAX_SCANNED` items holds is looked at, but
-    not inside, nor for a weak reference: a list of a million tokens is
-    checked at C speed, and walking each item cost every restore 60 ms."""
+    which is always right. What a container of more than `_MAX_SCANNED`
+    items holds is checked at C speed but not looked inside (walking each
+    item of a list of a million tokens cost every restore 60 ms): one that
+    holds anything but numbers, strings and the like gives `_TOO_MANY`, as
+    do more objects than `_MAX_SEEN`, and the loop runs again."""
     if any(isinstance(attribute_or(ref, "__callback__"), weakref.finalize) for ref in refs):
         return _WEAK
     ref_ids = {id(ref) for ref in refs}
@@ -158,7 +177,7 @@ def _held_by_the_notebook(parts: set[int], refs: list[Any], namespace: Mapping[s
         for value in level:
             kind = type(value)
             if kind in (dict, list, tuple, set, frozenset):
-                items = value.keys() if kind is dict else value
+                items = value
             elif (
                 isinstance(value, _OPAQUE)
                 or type(kind.__module__) is not str
@@ -169,22 +188,29 @@ def _held_by_the_notebook(parts: set[int], refs: list[Any], namespace: Mapping[s
                 state = attribute_or(value, "__dict__")
                 if type(state) is not dict:
                     continue
-                items = state.values()
+                items = state
             if id(value) in seen:
                 continue
             seen.add(id(value))
+            # A dict's keys and values both: ``{id(p.seen): ...}``,
+            # ``{'seen': id(p.seen)}``, ``{weakref.ref(p.child): ...}``.
+            held = (*items, *items.values()) if isinstance(items, dict) else items
             try:
-                if not parts.isdisjoint(items):
+                if not parts.isdisjoint(held):
                     return _BY_ID
             except TypeError:  # an unhashable item: one at a time
-                if any(type(item) is int and item in parts for item in items):
+                if any(type(item) is int and item in parts for item in held):
                     return _BY_ID
-            if len(items) > _MAX_SCANNED:
+            if len(held) > _MAX_SCANNED:
+                # Not looked inside: only a container of numbers, strings
+                # and the like is known to keep nothing else.
+                if not _LEAVES.issuperset(map(type, held)):
+                    return _TOO_MANY
                 continue
-            budget -= len(items) + 1
+            budget -= len(held) + 1
             if budget < 0:
-                return _BY_ID
-            nxt.extend(value.values() if kind is dict else items)
+                return _TOO_MANY
+            nxt.extend(held)
         level = [v for v in nxt if type(v) not in IMMUTABLE_LEAF_TYPES]
     return None
 
