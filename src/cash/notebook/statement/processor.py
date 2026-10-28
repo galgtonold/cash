@@ -1208,6 +1208,20 @@ class StatementProcessor:
         log_diagnostic(logger, "NOTEBOOK-UNSEEN-WRITES", what, fix)
         warn_diagnostic(CashWarning, "NOTEBOOK-UNSEEN-WRITES", what, fix)
 
+    def _tell_unreadable_changers(self, run: StatementRun, what: str) -> None:
+        """Warn, once per statement, that it calls a function whose text
+        cannot be read (`unreadable_changers`): it runs every time."""
+        said = f"unreadable\n{run.code}"
+        if said in self._unseen_warned:
+            return
+        self._unseen_warned.add(said)
+        fix = (
+            "define the function in a cell or a file instead of through exec or a compiled string, or put "
+            "'# @cash:assume-safe' on the statement if what it changes does not matter."
+        )
+        log_diagnostic(logger, "NOTEBOOK-UNSEEN-WRITES", what, fix)
+        warn_diagnostic(CashWarning, "NOTEBOOK-UNSEEN-WRITES", what, fix)
+
     def _still_refused_for_unseen_writes(self, run: StatementRun, place: str) -> None:
         """Refuse *run*, whose trace holds no writer, when its statement was
         refused for one this session and that writer is still alive."""
@@ -1537,6 +1551,7 @@ class StatementProcessor:
             )
             run.skip_cache = True
             run.value_varies = True
+            self._tell_unreadable_changers(run, run.metrics["uncacheable_reasons"][-1])
             return
         drawn = drawn_stream_inputs(run.tree, run.inputs, run.outputs, self.shell.user_ns)
         if drawn:

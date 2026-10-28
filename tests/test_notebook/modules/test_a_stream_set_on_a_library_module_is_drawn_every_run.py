@@ -213,4 +213,4 @@ def test_a_value_the_walk_cannot_finish_is_read_as_a_draw_with_a_warning(monkeyp
         assert callee_reach.library_draw_source("textwrap.cnt", textwrap.cnt) is held
         callee_reach.library_draw_source("textwrap.cnt", textwrap.cnt)
     codes = [getattr(w.message, "code", None) for w in caught]
-    assert codes == (["KEY-LIBRARY-VALUE-UNCHECKED"] if warned else []), codes
+    assert codes == (["KEY-LIBRARY-VALUE-UNREAD"] if warned else []), codes

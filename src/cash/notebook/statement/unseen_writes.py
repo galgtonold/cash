@@ -727,7 +727,7 @@ def unreadable_changers(names: Iterable[str], namespace: Mapping[str, Any]) -> l
     while pending and len(seen) < _CALLEES_FOLLOWED:
         name, scope = pending.pop()
         fn = _method_named(name, scope) if "." in name else scope.get(name) if isinstance(scope, Mapping) else None
-        code = attribute_or(fn, "__code__", None) if isinstance(fn, types.FunctionType) else None
+        code = attribute_or(fn, "__code__", None) if type(fn) is types.FunctionType else None
         if code is None or id(code) in seen:
             continue
         seen.add(id(code))

@@ -877,7 +877,7 @@ def _warn_unchecked(label: str) -> None:
     _UNCHECKED_WARNED.add(label)
     warn_diagnostic(
         CashCacheIneffectiveWarning,
-        "KEY-LIBRARY-VALUE-UNCHECKED",
+        "KEY-LIBRARY-VALUE-UNREAD",
         f"{label} is too big or too deeply nested for cash to tell whether it holds an iterator or a "
         "random generator, so code reading it runs every time.",
         f"keep iterators and random generators out of {label}, or set a smaller value there.",

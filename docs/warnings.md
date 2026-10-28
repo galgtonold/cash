@@ -1026,7 +1026,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-HELPERS-UNWALKABLE](#key-helpers-unwalkable) | both | the code a function runs cannot all be found; not cached |
 | [KEY-INSTANCE-STATE](#key-instance-state) | decorator | a bound method's instance cannot be hashed |
 | [KEY-ITERATOR-CONSUMED](#key-iterator-consumed) | decorator | a registered hasher read an iterator argument; the call ran uncached |
-| [KEY-LIBRARY-VALUE-UNCHECKED](#key-library-value-unchecked) | both | a value set on a library's module is too big to look through for an iterator; code reading it runs every time |
+| [KEY-LIBRARY-VALUE-UNREAD](#key-library-value-unread) | both | a value set on a library's module is too big to look through for an iterator; code reading it runs every time |
 | [KEY-MEMO-BEFORE-IMPORT](#key-memo-before-import) | both | a `functools` memo already held results when cash was imported |
 | [KEY-LOOP-VAR-CHANGED](#key-loop-var-changed) | notebook | a loop body changes its loop variable before work cached for each pass |
 | [KEY-NETWORK-READ](#key-network-read) | decorator | the body reads from a server or database |
@@ -1389,7 +1389,7 @@ key, a list of the same rows included.
 been read and you know the key did not read it. When it says it was read,
 the result of that call came from an emptied iterator.
 
-### KEY-LIBRARY-VALUE-UNCHECKED {#key-library-value-unchecked}
+### KEY-LIBRARY-VALUE-UNREAD {#key-library-value-unread}
 
 <span class="md-tag cash-warning-path">both</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
