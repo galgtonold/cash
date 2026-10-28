@@ -585,10 +585,16 @@ def test_the_estimate_sums_what_it_is_handed_as_python_does(monkeypatch):
 
 
 def _referrers_in_python(heap, ids):
-    """`shared_objects._referrers_of`'s Python read of the heap."""
+    """`shared_objects._referrers_of`'s Python read of the heap, past the
+    ``_asyncio`` module where its own read can loop for ever: it holds none
+    of the objects looked for here."""
     import gc
+    import sys
 
-    return [obj for obj in heap if not ids.isdisjoint(map(id, gc.get_referents(obj)))]
+    from cash.notebook import shared_objects
+
+    loops = sys.modules.get("_asyncio") if shared_objects._TRAVERSE_LOOPS else None
+    return [obj for obj in heap if obj is not loops and not ids.isdisjoint(map(id, gc.get_referents(obj)))]
 
 
 @pytest.mark.parametrize("seed", range(5))
