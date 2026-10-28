@@ -249,3 +249,17 @@ def test_an_iterator_in_a_masked_array_is_a_draw(monkeypatch):
     monkeypatch.setattr(callee_reach, "_SET_ON_LIBRARIES", {"textwrap": {"cnt"}})
     monkeypatch.setattr(textwrap, "cnt", cnt, raising=False)
     assert callee_reach.library_draw_source("textwrap.cnt", textwrap.cnt) is True
+
+
+def test_an_iterator_masked_out_is_still_a_draw(monkeypatch):
+    """``mask=[True]``: the masked array's ``ravel`` hands back ``masked``
+    for the item, and the iterator under it was not seen."""
+    import itertools
+    import textwrap
+
+    import numpy as np
+
+    cnt = np.ma.array([itertools.count()], dtype=object, mask=[True])
+    monkeypatch.setattr(callee_reach, "_SET_ON_LIBRARIES", {"textwrap": {"cnt"}})
+    monkeypatch.setattr(textwrap, "cnt", cnt, raising=False)
+    assert callee_reach.library_draw_source("textwrap.cnt", textwrap.cnt) is True

@@ -824,7 +824,14 @@ def _parts_held(value: Any, kind: type) -> Iterable[Any] | None:
     top = module.partition(".")[0] if isinstance(module, str) else ""
     dtype = attribute_or(value, "dtype", None) if top == "numpy" else None
     if dtype is not None:
-        return value.ravel(order="K") if attribute_or(dtype, "hasobject", False) else ()
+        if not attribute_or(dtype, "hasobject", False):
+            return ()
+        masked = sys.modules.get("numpy.ma")
+        if masked is not None and isinstance(value, masked.MaskedArray):
+            # Its own ``ravel`` hands back ``masked`` for a masked item: the
+            # item is there all the same, in its data.
+            value = masked.getdata(value)
+        return value.ravel(order="K")
     if not kind.__flags__ & _HAVE_GC:
         return () if top in _OWN_GC_MODULES or top in sys.stdlib_module_names else None
     try:
