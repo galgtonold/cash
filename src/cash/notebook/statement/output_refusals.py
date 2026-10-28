@@ -7,6 +7,7 @@ refusing then is what keeps the RAM tier from deep-copying them.
 
 from __future__ import annotations
 
+import contextvars
 import re
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -127,6 +128,7 @@ def _value_refusal(
         lambda name, value: _alias_refusal(name, value, user_ns, cash_held, inputs),
         identity_coupled_reason,
         _consumable_refusal,
+        _context_variable_refusal,
     )
     for refusal in refusals:
         for out in outputs:
@@ -134,6 +136,17 @@ def _value_refusal(
             reason = refusal(out, value) if value is not None else None
             if reason is not None:
                 return reason
+    return None
+
+
+def _context_variable_refusal(name: str, value: Any) -> str | None:
+    """A context variable the statement set: its value lives in the context,
+    which a restore of the variable does not put back."""
+    if type(value) is contextvars.ContextVar:
+        return (
+            f"'{name}' is a context variable the statement sets, and a restore cannot set it again; "
+            "the statement re-runs every time"
+        )
     return None
 
 

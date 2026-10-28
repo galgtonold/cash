@@ -60,6 +60,7 @@ from .mutations import MUTATING_METHODS, RECEIVER_READONLY_WRITE_METHODS, chain_
 from .read_only_callees import NOT_A_LITERAL, reads_its_arguments_only, turns_on_a_write
 
 __all__ = [
+    "bound_to_state",
     "statement_calls_user_writer",
     "statement_calls_through_ctypes",
     "statement_user_writer_call",
@@ -1731,6 +1732,10 @@ def _call_handoffs(
     if isinstance(func, ast.Name) and func.id not in local:
         if func.id in seen:
             return
+        if bound_to_state(user_ns.get(func.id)):
+            # ``PUSH = LOG.append`` then ``PUSH(x)``: the call changes what
+            # the method is bound to, which ``PUSH`` holds.
+            roots.add(func.id)
         callee = _readable_function(func.id, resolve_source)
         if callee is not None:
             callee_params, callee_free = function_handoffs(callee, user_ns, resolve_source, seen | {func.id})
@@ -1771,6 +1776,15 @@ def _call_handoffs(
             for name in argument_roots(arg, iterated)
             if name in local or not _followed_elsewhere(user_ns.get(name))
         )
+
+
+def bound_to_state(value: Any) -> bool:
+    """A method bound to an object a call can change in place: ``LOG.append``,
+    not a module's function or a class's."""
+    if not instance_of(value, (types.MethodType, types.BuiltinMethodType, types.MethodWrapperType)):
+        return False
+    owner = attribute_or(value, "__self__", None)
+    return owner is not None and not _followed_elsewhere(owner)
 
 
 def _followed_elsewhere(value: Any) -> bool:
@@ -2216,6 +2230,13 @@ def _changeable(names: set[str], user_ns: Mapping[str, Any]) -> frozenset[str]:
             continue
         value = user_ns[name]
         if instance_of(value, (types.ModuleType, type, _IMMUTABLE_ARGUMENT_TYPES)):
+            continue
+        if bound_to_state(value):
+            # ``PUSH = LOG.append``: what changes is ``LOG``, watched by the
+            # names that hold it; by ``PUSH`` itself when none does.
+            owner = value.__self__
+            holders = {other for other, held in user_ns.items() if held is owner}
+            out |= holders or {name}
             continue
         if is_routine(value) or rng_carrier_kind(value) is not None:
             continue
