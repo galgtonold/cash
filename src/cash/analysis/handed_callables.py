@@ -1098,32 +1098,39 @@ def _inline_partials(
     if target is None or target[0] is not functools.partial:
         return None
     why = f"{_short(maker)} builds a partial, and cash cannot tell what it binds without running it"
-    if (
-        depth > 8
-        or any(isinstance(arg, ast.Starred) for arg in maker.args)
-        or any(k.arg is None for k in maker.keywords)
-    ):
+    bindings = _bindings(maker, maker.args, namespace, bound, depth)
+    if bindings is None:
         return why
+    return [functools.partial(func, *rest, **keywords) for (func, *rest), keywords in bindings if callable(func)]
+
+
+def _bindings(
+    maker: ast.Call,
+    args: list[ast.expr],
+    namespace: Mapping[str, Any],
+    bound: Mapping[str, tuple[ast.expr, ...]],
+    depth: int = 0,
+) -> list[tuple[tuple[Any, ...], dict[str, Any]]] | None:
+    """``(args, keywords)`` *maker* may bind, *args* and its keywords: one
+    for each object each of them may be (`_one_of`). None when one of them
+    cannot be told without running code, or there are more than
+    `_MAX_PARTIALS`."""
+    if depth > 8 or any(isinstance(arg, ast.Starred) for arg in args) or any(k.arg is None for k in maker.keywords):
+        return None
     slots: list[list[Any]] = []
-    for part in (*maker.args, *(k.value for k in maker.keywords)):
+    for part in (*args, *(k.value for k in maker.keywords)):
         found = _one_of(part, namespace, bound, depth)
         if found is None:
-            return why
+            return None
         slots.append(found)
     count = 1
     for found in slots:
         count *= len(found)
     if count > _MAX_PARTIALS:
-        return why
+        return None
     names = [k.arg for k in maker.keywords]
-    built: list[functools.partial] = []
-    for combination in product(*slots):
-        func, *rest = combination
-        if not callable(func):
-            continue  # not called: that branch builds no partial
-        positional = rest[: len(rest) - len(names)]
-        built.append(functools.partial(func, *positional, **dict(zip(names, rest[len(positional) :]))))
-    return built
+    split = len(args)
+    return [(combination[:split], dict(zip(names, combination[split:]))) for combination in product(*slots)]
 
 
 def _one_of(
@@ -1803,7 +1810,12 @@ class _Found:
         if instance_of(value, functools.partial):
             self.add(value, root, False)
         elif instance_of(value, operator.methodcaller):
-            self._methods_named(value.__reduce__()[1][0], call, namespace, bound)
+            maker, made = value.__reduce__()
+            if instance_of(maker, functools.partial):  # keywords bound: partial(methodcaller, name, **kw)
+                name, args, keywords = maker.args[0], made, dict(maker.keywords)
+            else:
+                name, args, keywords = made[0], made[1:], {}
+            self._methods_named(name, call, namespace, bound, [(args, keywords)])
         elif instance_of(value, types.FunctionType) and isinstance(getattr(value, "registry", None), Mapping):
             # ``functools.singledispatch``: any implementation registered.
             for impl in list(value.registry.values()):
@@ -1829,8 +1841,13 @@ class _Found:
         ):
             return
         target = _users_target(maker.func, namespace)
-        if target is not None and target[0] is operator.methodcaller:
-            self._methods_named(maker.args[0].value, call, namespace, bound)
+        if target is None or target[0] is not operator.methodcaller:
+            return
+        bindings = _bindings(maker, maker.args[1:], namespace, bound)
+        if bindings is None:
+            self.unreadable.append(f"{_short(maker)} calls a method with arguments cash cannot tell without running it")
+            return
+        self._methods_named(maker.args[0].value, call, namespace, bound, bindings)
 
     def partial_called(
         self, call: ast.Call, namespace: Mapping[str, Any], bound: Mapping[str, tuple[ast.expr, ...]]
@@ -1847,14 +1864,22 @@ class _Found:
                 self.add(value, None, False)
 
     def _methods_named(
-        self, name: str, call: ast.Call, namespace: Mapping[str, Any], bound: Mapping[str, tuple[ast.expr, ...]]
+        self,
+        name: str,
+        call: ast.Call,
+        namespace: Mapping[str, Any],
+        bound: Mapping[str, tuple[ast.expr, ...]],
+        bindings: list[tuple[tuple[Any, ...], dict[str, Any]]],
     ) -> None:
+        """The method *name* of each object of the user's *call* hands the
+        methodcaller, handed the arguments it binds: any of *bindings*."""
         for arg in call.args[:1]:
             for obj, obj_root in _resolve_argument(arg, namespace, bound).values:
                 if _is_users_object(obj) or (instance_of(obj, type) and _is_users_class(obj)):
                     member = _attribute(obj, name)
                     if member is not _MISSING and callable(member):
-                        self.add(member, obj_root, False)
+                        for args, keywords in bindings:
+                            self.add(functools.partial(member, *args, **keywords), obj_root, False)
 
     def run_implicitly(self, tree: ast.AST, namespace: Mapping[str, Any], scope: CallScope) -> None:
         """The methods of the user's that Python runs for the statement

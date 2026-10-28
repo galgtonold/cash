@@ -7,7 +7,8 @@ rebuilt by the cell above, missed the append plain Python makes. A partial
 built in the statement was not read at all, and one of a bound method was
 not read through the method's function. Nor was one whose function or
 argument is any of several objects (``lists[i]``, ``lst if flag else
-other``), or is itself a partial built in the statement.
+other``), or is itself a partial built in the statement; nor the
+arguments an ``operator.methodcaller`` hands the method it calls.
 """
 
 import ast
@@ -19,7 +20,7 @@ from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 HELPERS = (
-    "import functools, time\n"
+    "import functools, operator, time\n"
     "class A:\n"
     "    def add(self, lst, x):\n"
     f"        time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n"
@@ -53,6 +54,9 @@ CALLS = {
     ),
     "a_nested_partial": ("lst = [0]", "r = functools.partial(functools.partial(add, lst), 1)()"),
     "a_nested_partial_of_a_method": ("lst = [0]", "r = functools.partial(functools.partial(a.add, lst), 1)()"),
+    "a_methodcaller_built_in_the_statement": ("lst = [0]", "r = operator.methodcaller('add', lst, 1)(a)"),
+    "a_methodcaller_bound_to_a_name": ("lst = [0]\nmc = operator.methodcaller('add', lst, 1)", "r = mc(a)"),
+    "a_methodcaller_binding_keywords": ("lst = [0]\nmc = operator.methodcaller('add', lst, x=1)", "r = mc(a)"),
 }
 
 
