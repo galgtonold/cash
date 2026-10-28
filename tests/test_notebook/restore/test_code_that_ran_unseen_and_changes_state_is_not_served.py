@@ -438,4 +438,4 @@ def test_a_function_given_code_whose_text_cannot_be_read_runs_each_time(cash_mag
         _restart(cash_magics)
         for gone in ("DQ", "inner", "C", "D", "obj", "collections"):
             cash_magics.shell.user_ns.pop(gone, None)
-    assert "NOTEBOOK-UNSEEN-WRITES" in said
+    assert "NOTEBOOK-UNSEEN-WRITES" in said, said
