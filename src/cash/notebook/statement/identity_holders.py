@@ -37,7 +37,7 @@ from typing import Any
 from cash._user_attrs import attribute_or
 from cash.install_paths import is_user_code_module
 
-__all__ = ["identity_held_reason"]
+__all__ = ["IdentityHeld", "identity_held_reason"]
 
 #: A container with more items is not looked inside.
 _MAX_SCANNED = 10_000
@@ -53,7 +53,21 @@ _WEAK_CONTAINERS = (weakref.WeakValueDictionary, weakref.WeakKeyDictionary, weak
 _LOWEST_ADDRESS = 1 << 16
 
 
-def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> str | None:
+class IdentityHeld(str):
+    """The refusal `identity_held_reason` gives: the reason, with the
+    variable it names and how its value finds the object (*kind*: ``"a weak
+    reference"`` or ``"an id()"``), for the warning (``NOTEBOOK-IDENTITY-HELD``)."""
+
+    name: str
+    kind: str
+
+    def __new__(cls, reason: str, name: str, kind: str) -> IdentityHeld:
+        made = super().__new__(cls, reason)
+        made.name, made.kind = name, kind
+        return made
+
+
+def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> IdentityHeld | None:
     """Why *value*, bound to *name*, cannot be restored apart from what it
     points at by identity (see the module docstring); None when it can."""
     user_kinds: dict[type, bool] = {}
@@ -64,13 +78,20 @@ def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> str 
     for ref in refs:
         if not issubclass(type(ref), weakref.ReferenceType):
             if _alive(ref):
-                return f"'{name}' holds a weak proxy; restored, it would point at another object, so the statement re-runs every time"
+                return IdentityHeld(
+                    f"'{name}' holds a weak proxy; restored, it would point at another object, so the statement "
+                    "re-runs every time",
+                    name,
+                    "a weak reference",
+                )
             continue
         target = ref()
         if target is not None and id(target) not in seen and not issubclass(type(target), _BY_REFERENCE):
-            return (
+            return IdentityHeld(
                 f"'{name}' holds a weak reference to an object it does not hold; restored, it would "
-                "point at another object, so the statement re-runs every time"
+                "point at another object, so the statement re-runs every time",
+                name,
+                "a weak reference",
             )
     candidates = {n for n in numbers if n >= _LOWEST_ADDRESS and not n % 8}
     if not candidates:
@@ -80,9 +101,11 @@ def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> str 
 
     roots = [v for k, v in user_ns.items() if k != name and not is_history_name(k)]
     if not _walk(roots, held, user_kinds, [], set()) or not candidates.isdisjoint(held):
-        return (
+        return IdentityHeld(
             f"'{name}' holds the id() of an object the notebook holds; restored, the object would be "
-            "another one, so the statement re-runs every time"
+            "another one, so the statement re-runs every time",
+            name,
+            "an id()",
         )
     return None
 

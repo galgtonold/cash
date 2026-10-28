@@ -6,6 +6,8 @@ None, where plain Python finds the object. Such a statement runs again."""
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 from tests._cell_driver import run_cash_cell
@@ -57,3 +59,21 @@ def test_a_value_not_finding_an_object_by_identity_is_restored(cash_magics, cash
             run_cash_cell(cash_magics, cell, cells=cells)
     statuses = [str(s["status"]) for s in cash_magics._last_cell_metrics["statements"]]
     assert "RESTORED" in statuses[-1], statuses
+
+
+@pytest.mark.parametrize(
+    ("holder", "name", "kind"),
+    [("a weak reference", "wr", "a weak reference"), ("an id key", "reg", "an id()")],
+)
+def test_it_runs_again_with_one_warning_naming_the_variable(cash_magics, cash_instance, holder, name, kind):
+    _stored_however_cheap(cash_instance)
+    hold, _read = HOLDERS[holder]
+    cells = [MAKE, hold]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for _ in range(3):
+            for cell in cells:
+                run_cash_cell(cash_magics, cell, cells=cells)
+    held = [str(w.message) for w in caught if "NOTEBOOK-IDENTITY-HELD" in str(w.message)]
+    assert len(held) == 1, held
+    assert f"'{name}' holds {kind}" in held[0]

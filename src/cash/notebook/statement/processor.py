@@ -68,6 +68,7 @@ from cash.notebook.statement.expression_memo import ExpressionMemo
 from cash.notebook.statement.file_deps import StatementFileDeps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
 from cash.notebook.statement.hit import CacheHitServer
+from cash.notebook.statement.identity_holders import IdentityHeld
 from cash.notebook.statement.imports import (
     import_bindings_hold,
     import_needs_reexecution,
@@ -371,6 +372,8 @@ class StatementProcessor:
         self._share_refused: dict[str, list] = {}
         #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
         self._share_unchecked_warned: set[str] = set()
+        #: Statements already warned NOTEBOOK-IDENTITY-HELD about.
+        self._identity_held_warned: set[str] = set()
         #: Statements already told about NOTEBOOK-ANALYSIS-BUDGET.
         self._past_budget_told: set[str] = set()
         #: What a statement's text last took to run, in seconds, or None when
@@ -2708,6 +2711,8 @@ class StatementProcessor:
         # cost the check twice.
         run.share_gave_up = gave_up[0] if gave_up else None
         self._note_share_refusal(run, reason)
+        if isinstance(reason, IdentityHeld):
+            self._warn_identity_held(run, reason)
         if reason is not None:
             run.skip_cache = True
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)
@@ -3168,6 +3173,26 @@ class StatementProcessor:
 
         location = ("<cash>", running_cell_count(self.shell))
         warn_diagnostic(CashWarning, "NOTEBOOK-SHARE-UNCHECKED", what, fix, location=location)
+
+    def _warn_identity_held(self, run: StatementRun, held: IdentityHeld) -> None:
+        """Warn, once per statement, that a value it binds finds another
+        object by identity, so it re-runs (``NOTEBOOK-IDENTITY-HELD``)."""
+        if run.source_hash in self._identity_held_warned:
+            return
+        self._identity_held_warned.add(run.source_hash)
+        what = (
+            f"'{held.name}' holds {held.kind} of an object it does not hold itself. Restored from the cache, "
+            "it would find another object, or none, so this statement runs every time instead."
+        )
+        fix = (
+            "keep the object itself rather than a weak reference or its id(), or build the registry in the "
+            "cell that builds the objects it points at."
+        )
+        log_diagnostic(logger, "NOTEBOOK-IDENTITY-HELD", what, fix)
+        from cash.notebook.ipython.cell_count import running_cell_count  # the ipython package imports this one
+
+        location = ("<cash>", running_cell_count(self.shell))
+        warn_diagnostic(CashWarning, "NOTEBOOK-IDENTITY-HELD", what, fix, location=location)
 
     def _move_what_reducers_wrote(self, run: StatementRun) -> None:
         """Move on the variables a reducer of the user's could have written,
