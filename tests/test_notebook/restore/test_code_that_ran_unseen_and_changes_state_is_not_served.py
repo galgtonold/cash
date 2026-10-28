@@ -400,6 +400,13 @@ REACHED = {
         "self, x",
         "obj.m(3)",
     ),
+    # Run through a subclass holding nothing of it.
+    "as_a_method_an_object_inherits": (
+        "class C:\n    def m(self, x):\n        return x * 2\nclass D(C):\n    pass\nobj = D()",
+        "C.m",
+        "self, x",
+        "obj.m(3)",
+    ),
 }
 
 
@@ -412,7 +419,8 @@ def test_a_function_given_code_whose_text_cannot_be_read_runs_each_time(cash_mag
     names it; without one (``CASH_TRACE=0``) only the function ``inner(3)``
     names was there to read, and nothing did: a run slow enough to be
     stored was served after a restart with ``DQ`` left empty. Called as
-    ``obj.m(3)``, the walk opened the object but not its class."""
+    ``obj.m(3)``, the walk opened the object but not its class, and then
+    not the class's bases."""
     if trace == "off":
         monkeypatch.setenv("CASH_TRACE", "0")
         monkeypatch.setattr(shadow, "SHADOW", None)
@@ -428,6 +436,6 @@ def test_a_function_given_code_whose_text_cannot_be_read_runs_each_time(cash_mag
         said += _codes(cash_magics, f"v = ({call}, {SLEEP})")
         assert len(cash_magics.shell.user_ns[name]) == 1
         _restart(cash_magics)
-        for gone in ("DQ", "inner", "C", "obj", "collections"):
+        for gone in ("DQ", "inner", "C", "D", "obj", "collections"):
             cash_magics.shell.user_ns.pop(gone, None)
     assert "NOTEBOOK-UNSEEN-WRITES" in said
