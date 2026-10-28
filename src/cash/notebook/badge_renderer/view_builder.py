@@ -1097,9 +1097,15 @@ def build_interactive_badge(
     dec_groups = _decorator_groups(current)
     if dec_groups:
         # Calls cash wrapped itself are not named after a decorator the user
-        # never wrote.
-        dec_header = "INTERCEPTED CALLS" if all(g.intercepted for g in dec_groups) else "DECORATOR CACHE (@cash.cache)"
-        sections.append(Section(kind=SectionKind.DECORATORS, header=dec_header, items=dec_groups))
+        # never wrote: they get a section of their own.
+        decorated = tuple(g for g in dec_groups if not g.intercepted)
+        intercepted = tuple(g for g in dec_groups if g.intercepted)
+        if decorated:
+            sections.append(
+                Section(kind=SectionKind.DECORATORS, header="DECORATOR CACHE (@cash.cache)", items=decorated)
+            )
+        if intercepted:
+            sections.append(Section(kind=SectionKind.DECORATORS, header="INTERCEPTED CALLS", items=intercepted))
 
     overhead = _overhead_section(timing_breakdown, cell_total_time, metrics)
     if overhead is not None:

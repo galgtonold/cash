@@ -459,6 +459,23 @@ def value_digests_key(source_hash: str, input_lineages: Mapping[str, str], occur
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
+#: Under this name in a statement's value digests (`no_cache_value_digest`):
+#: the streams it drew from whose lineages its outputs' lineages leave out.
+DRAWN_LEFT_OUT = "\x00drawn"
+
+
+def without_drawn(input_lineages: Mapping[str, str], digests: Mapping[str, str] | None) -> list[str]:
+    """The lineages of *input_lineages* an output keyed by its value takes:
+    all but those of the streams the run drew from (`DRAWN_LEFT_OUT` in
+    *digests*). ``t = next(it)`` moves ``it`` on every run; its value names
+    what was drawn, so an equal draw keeps what is built on ``t`` served."""
+    left_out = (digests or {}).get(DRAWN_LEFT_OUT)
+    if not left_out:
+        return list(input_lineages.values())
+    names = set(left_out.split(","))
+    return [lineage for name, lineage in input_lineages.items() if name not in names]
+
+
 def no_cache_value_component(digests: Mapping[str, str] | None, name: str) -> str:
     """The lineage component for output *name* of a no-cache statement, from
     the digests its last run recorded; empty for any other statement."""
@@ -754,8 +771,18 @@ def module_data_digest(label: str, value: Any) -> str:
     """The digest of *value*, the module data at *label*: its value hash,
     with the code of the functions and of the user's objects it holds
     (`held_code_digest`). The value hash pickles a function by its name, so
-    a registry holding a function edited since keyed as it did."""
+    a registry holding a function edited since keyed as it did.
+
+    A stream or random generator set on a library's module
+    (`library_draw_source`) is keyed by which object it is: each read draws
+    from it, so its state after a draw differs from the state the draw was
+    keyed on, and a cell reading what the draw bound found it moved on and
+    drew again to rebuild it. The cell setting it makes a new one."""
+    from .callee_reach import library_draw_source
+
     try:
+        if library_draw_source(label, value):
+            return f"drawn:{type(value).__qualname__}:{id(value)}"
         digest = compute_hash(value)
         code = held_code_digest(value)
         if code:
