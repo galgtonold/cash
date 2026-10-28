@@ -1,11 +1,12 @@
 """A lock-holding object, or a value holding one, is fingerprinted by what
 it holds: it pickles to nothing a change moves, so ``H['e'].set()``,
-``B.q.put(1)``, ``L.acquire()`` or ``MQ.put(1)`` in a callee was taken for
+``B.q.put(1)``, ``L.acquire()`` or ``MQ.put(1)`` (or ``next(C)`` on an ``itertools.count``) in a callee was taken for
 no change, and the statement was served with the change lost."""
 
 from __future__ import annotations
 
 import asyncio
+import itertools
 import multiprocessing
 import queue
 import threading
@@ -52,6 +53,13 @@ def _make(kind):
     if kind == "process_queue":
         mq = multiprocessing.Queue()
         return mq, lambda: (mq.put(1), time.sleep(0.2))
+    if kind == "count":
+        # Does not pickle from Python 3.14.
+        counter = itertools.count()
+        return counter, lambda: next(counter)
+    if kind == "count_in_a_dict":
+        held = {"c": itertools.count(5, 2)}
+        return held, lambda: next(held["c"])
     raise AssertionError(kind)
 
 
@@ -68,6 +76,8 @@ def _make(kind):
         "condition",
         "asyncio_queue",
         "process_queue",
+        "count",
+        "count_in_a_dict",
     ],
 )
 def test_a_change_moves_the_fingerprint(kind):
