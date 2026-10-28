@@ -275,6 +275,10 @@ def writers_without_a_trace(
             todo.append((value, 0))
     seen: set[int] = set()
     classes: dict[type, None] = {}
+    # Functions of the user's it reaches: the statement's analysis reads
+    # one from its text, which ``inner.__code__ = <a lambda compiled from a
+    # string>`` leaves it none of; the trace reads the code that ran.
+    functions: dict[Any, None] = {}
     over = False
     steps = 0
     work = [0, 0]  # items read at C speed, items looked into one by one
@@ -305,6 +309,8 @@ def writers_without_a_trace(
             break
         if kind not in classes and _users_special(kind, hc):
             classes[kind] = None
+        if kind is types.FunctionType:
+            functions[value] = None
         todo.extend((item, depth + 1) for item in _held(value, kind, hc, work))
         if work[0] > _READ_AT or work[1] > _SCAN_AT:
             over = True
@@ -312,7 +318,9 @@ def writers_without_a_trace(
     reached = set(classes)
     if over and hc.special_classes_exist(namespace):
         classes.update(dict.fromkeys(_with_objects_alive(_live_writing_classes(namespace, hc))))
-    found: list[tuple[str, tuple[str, ...]]] = []
+    found: list[tuple[str, tuple[str, ...]]] = [
+        (fn.__qualname__, ("what its unreadable text changes",)) for fn in functions if _unreadable_users(fn)
+    ]
     for cls in classes:
         before = len(found)
         for attr, fn in _users_special(cls, hc):
@@ -334,6 +342,20 @@ def writers_without_a_trace(
         if too_big is not None and cls not in reached:
             too_big.update(fn for fn, _ in found[before:])
     return found
+
+
+def _unreadable_users(fn: Any) -> bool:
+    """A function of the user's whose code has no text to read: what it
+    changes is unknown."""
+    code = fn.__code__
+    return (
+        # What Python 3.14 compiles for a class's or function's annotations
+        # (``P.__annotate__``) has no text of its own and builds a dict.
+        code.co_name != "__annotate__"
+        and is_user_code_file(code.co_filename)
+        and not library_made(code, fn.__globals__)
+        and _UNKNOWN in own_writes(code)
+    )
 
 
 _MISSING = object()
@@ -387,7 +409,12 @@ def _held(value: Any, kind: type, hc: Any, work: list[int]) -> Iterable[Any]:
             return []
         if hc.users_instance_type(kind) or kind is types.SimpleNamespace:
             attributes = own_dict(value)
-            return _not_plain(attributes.values()) if attributes else []
+            held = _not_plain(attributes.values()) if attributes else []
+            if kind is not types.SimpleNamespace:
+                # Its class too: ``obj.m(3)`` runs the function its class
+                # holds, which may have been given other code.
+                held.append(kind)
+            return held
     except Exception:  # noqa: BLE001 - a value that cannot be looked into
         return []
     return []
@@ -700,7 +727,7 @@ def unreadable_changers(names: Iterable[str], namespace: Mapping[str, Any]) -> l
     while pending and len(seen) < _CALLEES_FOLLOWED:
         name, scope = pending.pop()
         fn = _method_named(name, scope) if "." in name else scope.get(name) if isinstance(scope, Mapping) else None
-        code = attribute_or(fn, "__code__", None) if isinstance(fn, types.FunctionType) else None
+        code = attribute_or(fn, "__code__", None) if type(fn) is types.FunctionType else None
         if code is None or id(code) in seen:
             continue
         seen.add(id(code))

@@ -287,9 +287,14 @@ def _watched_names(fn, globals_dict: dict) -> set[str]:
         # loads, and every default (an ``exec``'d ``def f(x, L=LOG)``, a
         # lambda's ``L=LOG``).
         return {*loads, *_default_holders(fn, None, globals_dict)}
-    handed = function_handoffs(fdef, globals_dict, functools.partial(_user_source, globals_dict))[1]
+    params, handed = function_handoffs(fdef, globals_dict, functools.partial(_user_source, globals_dict))
     bound = {name for name in loads if bound_to_state(globals_dict.get(name))}
-    return {*handed, *bound, *(name for name in _source_mutations(fn) if instance_of(globals_dict.get(name), type))}
+    return {
+        *handed,
+        *bound,
+        *_default_holders(fn, params, globals_dict),
+        *(name for name in _source_mutations(fn) if instance_of(globals_dict.get(name), type)),
+    }
 
 
 def _default_holders(fn, params: frozenset[str] | None, globals_dict: dict) -> set[str]:
