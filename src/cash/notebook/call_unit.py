@@ -624,6 +624,8 @@ class CallUnit:
         #: The hashes of the frames this cell's calls received, checked
         #: rather than read again while unchanged; emptied by :meth:`begin_cell`.
         self._fingerprints = self._digests.fingerprints
+        #: ``(function, parameter)`` already told about STORE-DEFAULT-CHANGED.
+        self._default_change_told: set[tuple[str, str]] = set()
 
     def _cost_floor_s(self) -> float:
         """The bar a call's own execution must clear to be stored (:func:`call_cost_floor_s`)."""
@@ -1052,7 +1054,7 @@ class CallUnit:
         watched_before = _watched_state(call.fn, watched, self._fingerprints) if watched else None
         # And the defaults it may change, which no global need hold.
         defaults = callee_watched_defaults(call.fn)
-        defaults_before = _watched_values(defaults, self._fingerprints) if defaults else None
+        defaults_before = [_watched_values((value,), self._fingerprints) for *_, value in defaults]
         # Before the clock starts: looking for memos is cash's own work, and
         # counted as the call's it pushed cheap calls over the floor.
         memos_before = helper_memos.watched(attribute_or(call.fn, "__globals__", None) or {})
@@ -1082,7 +1084,7 @@ class CallUnit:
             self._did_what_a_hit_cannot(call, rng_before, arg_hashes_before, ticket)
             or _rebound_unwatched(call, module_before)
             or (watched_before is not None and _watched_state(call.fn, watched, self._fingerprints) != watched_before)
-            or (defaults_before is not None and _watched_values(defaults, self._fingerprints) != defaults_before)
+            or self._changed_a_default(call, defaults, defaults_before)
             or self._wrote_files(call, written)
         ):
             self._entries.refuse(call.key)
@@ -1226,6 +1228,33 @@ class CallUnit:
             memos=class_memos,
             before=before,
         ) and self._entries.restore_pays(result, elapsed)
+
+    def _changed_a_default(self, call: _Call, defaults: tuple, before: list) -> bool:
+        """Did the call change one of *defaults* (`callee_watched_defaults`,
+        hashed *before* it)? Said once per default (``STORE-DEFAULT-CHANGED``),
+        naming the first one it changed: a
+        memo default (``def fib(n, memo={})``) is changed by every miss, so
+        such a call is never stored."""
+        changed = [
+            (function, param)
+            for (function, param, value), digest in zip(defaults, before)
+            if _watched_values((value,), self._fingerprints) != digest
+        ]
+        if not changed:
+            return False
+        function, param = changed[0]
+        if (function, param) not in self._default_change_told:
+            self._default_change_told.add((function, param))
+            warn_diagnostic(
+                CashCacheStoreFailedWarning,
+                "STORE-DEFAULT-CHANGED",
+                f"{function} changes its default {param!r} on each call, so the result of "
+                f"{call.func_name}() is not stored: a cache hit would leave the default as it was. "
+                "The call runs every time.",
+                f"pass {param!r} in, or keep what it gathers in a global (a cache hit then "
+                "restores it), if the call is slow.",
+            )
+        return True
 
     def _store_result(
         self,

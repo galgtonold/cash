@@ -2645,6 +2645,7 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 |---|---|---|
 | [STORE-CHUNK-FAILED](#store-chunk-failed) | decorator | one chunk of an iterator failed to write |
 | [STORE-CODE-CHANGED](#store-code-changed) | decorator | code changed on disk during the call; not stored |
+| [STORE-DEFAULT-CHANGED](#store-default-changed) | notebook | a call changed its callee's default (a memo default); not stored |
 | [STORE-FAILED](#store-failed) | both | the backend refused the write |
 | [STORE-INPUT-CHANGED](#store-input-changed) | decorator | an input file changed during the call; not stored |
 | [STORE-LOCK-FAILED](#store-lock-failed) | decorator | the per-key lock failed; ran without it |
@@ -2691,6 +2692,27 @@ result may mix old and new code. Storing it could serve a wrong result later.
 something is replacing files under a running job, such as a deploy.
 
 **When it is safe to ignore.** Once, while you edit a helper during a run.
+
+### STORE-DEFAULT-CHANGED {#store-default-changed}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
+
+<!-- claim: cash/notebook/call_unit.py:CallUnit._changed_a_default @fd6ef61d -->
+**What happened.** A call in a cell changed a default of the function it
+calls, or of a helper it reaches: `def fib(n, memo={})` filling `memo`, or
+`def add(x, log=[])` appending to `log`. The result was returned but not
+stored. The warning names the function and the default, once for each.
+
+**Why it matters.** A cache hit runs no code, so the default would stay as
+it was, and whatever reads it later would see something else than a plain
+run gives. So the call runs every time.
+
+**What to do.** Nothing, if the call is cheap. Otherwise pass the value in
+(`fib(n, memo)`), or keep what it gathers in a global the cell defines,
+which a hit puts back.
+
+**When it is safe to ignore.** When the call is cheap, or the default is a
+memo nothing else reads.
 
 ### STORE-FAILED {#store-failed}
 

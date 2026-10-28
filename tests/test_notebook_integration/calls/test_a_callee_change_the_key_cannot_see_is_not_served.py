@@ -12,6 +12,8 @@ arguments are, and a call that changed it is not stored.
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 from cash.notebook import shadow
@@ -112,3 +114,22 @@ def test_a_default_no_global_holds_is_watched_itself(cash_magics, monkeypatch, s
         for cell in cells:
             run_cash_cell(cash_magics, cell, cells=cells)
         assert (ns["v"], ns["n"]) == (30, 1), f"Run All {run + 1}"
+
+
+def test_a_memo_default_is_named_once(cash_magics):
+    """``def fib(n, memo={})`` fills its memo on every miss: the call runs
+    every time, and says why once, naming the default."""
+    cells = [
+        "import time\ndef fib(n, memo={}):\n    time.sleep(0.05)\n    memo[n] = n\n    return n",
+        "a = fib(3) + fib(4)",
+    ]
+    said = []
+    for _ in range(2):
+        for cell in cells:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                run_cash_cell(cash_magics, cell, cells=cells)
+            said += [str(w.message) for w in caught if getattr(w.message, "code", None) == "STORE-DEFAULT-CHANGED"]
+    assert cash_magics.shell.user_ns["a"] == 7
+    assert len(said) == 1, said
+    assert "fib changes its default 'memo'" in said[0]

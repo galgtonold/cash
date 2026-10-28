@@ -241,8 +241,9 @@ def callee_watched_globals(fn, captured: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def callee_watched_defaults(fn) -> tuple:
-    """The defaults of *fn*, and of the functions it reaches in its own
-    module, that a call may change in place: each is hashed before and after
+    """``(function, parameter, default)`` of each default of *fn*, and of
+    the functions it reaches in its own module, that a call may change in
+    place: each is hashed before and after
     a miss, as `callee_watched_globals` are, and a call that changed one is
     not stored. ``def inner(x, L=[])`` changes its own default, which no
     global need hold (or holds deeper than a lookup reaches: ``L=K.l``,
@@ -250,17 +251,27 @@ def callee_watched_defaults(fn) -> tuple:
     globals_dict = attribute_or(fn, "__globals__", None)
     if not isinstance(globals_dict, dict):
         return ()
-    found: dict[int, object] = {}
+    found: dict[int, tuple[str, str, object]] = {}
     for layer in wrapper_layers(fn):
         if attribute_or(layer, "__globals__", None) is not globals_dict:
             continue
         for reached in _functions_reached_in(globals_dict, layer):
             if type(reached) is not _types.FunctionType:
                 continue
-            for value in (*(reached.__defaults__ or ()), *(reached.__kwdefaults__ or {}).values()):
+            for param, value in _defaults_by_name(reached).items():
                 if id(value) not in found and _worth_watching(value):
-                    found[id(value)] = value
+                    found[id(value)] = (reached.__qualname__, param, value)
     return tuple(found.values())
+
+
+def _defaults_by_name(fn) -> dict[str, object]:
+    """``parameter -> default`` of the function *fn*."""
+    code = fn.__code__
+    positional = code.co_varnames[: code.co_argcount]
+    defaults = fn.__defaults__ or ()
+    named = dict(zip(positional[len(positional) - len(defaults) :], defaults))
+    named.update(fn.__kwdefaults__ or {})
+    return named
 
 
 def _watched_names(fn, globals_dict: dict) -> set[str]:
@@ -287,11 +298,7 @@ def _default_holders(fn, params: frozenset[str] | None, globals_dict: dict) -> s
     L.append(x)`` changes ``LOG`` when called without ``L``, and no argument
     names it. Held directly, or as an item of a dict, list or tuple a global
     holds (``L=CFG['a']``), two levels down."""
-    code = fn.__code__
-    names = code.co_varnames[: code.co_argcount + code.co_kwonlyargcount]
-    positional = names[: code.co_argcount]
-    defaults = dict(zip(positional[len(positional) - len(fn.__defaults__ or ()) :], fn.__defaults__ or ()))
-    defaults.update(fn.__kwdefaults__ or {})
+    defaults = _defaults_by_name(fn)
     held = {
         id(value)
         for name, value in defaults.items()
