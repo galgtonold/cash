@@ -433,6 +433,23 @@ def value_digests_key(source_hash: str, input_lineages: Mapping[str, str], occur
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
+#: Under this name in a statement's value digests (`no_cache_value_digest`):
+#: the streams it drew from whose lineages its outputs' lineages leave out.
+DRAWN_LEFT_OUT = "\x00drawn"
+
+
+def without_drawn(input_lineages: Mapping[str, str], digests: Mapping[str, str] | None) -> list[str]:
+    """The lineages of *input_lineages* an output keyed by its value takes:
+    all but those of the streams the run drew from (`DRAWN_LEFT_OUT` in
+    *digests*). ``t = next(it)`` moves ``it`` on every run; its value names
+    what was drawn, so an equal draw keeps what is built on ``t`` served."""
+    left_out = (digests or {}).get(DRAWN_LEFT_OUT)
+    if not left_out:
+        return list(input_lineages.values())
+    names = set(left_out.split(","))
+    return [lineage for name, lineage in input_lineages.items() if name not in names]
+
+
 def no_cache_value_component(digests: Mapping[str, str] | None, name: str) -> str:
     """The lineage component for output *name* of a no-cache statement, from
     the digests its last run recorded; empty for any other statement."""

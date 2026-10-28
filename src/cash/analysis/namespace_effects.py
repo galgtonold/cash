@@ -60,6 +60,7 @@ from .mutations import MUTATING_METHODS, RECEIVER_READONLY_WRITE_METHODS, chain_
 from .read_only_callees import NOT_A_LITERAL, reads_its_arguments_only, turns_on_a_write
 
 __all__ = [
+    "bound_to_state",
     "statement_calls_user_writer",
     "statement_calls_through_ctypes",
     "statement_user_writer_call",
@@ -1731,13 +1732,29 @@ def _call_handoffs(
     if isinstance(func, ast.Name) and func.id not in local:
         if func.id in seen:
             return
+        if bound_to_state(user_ns.get(func.id)):
+            # ``PUSH = LOG.append`` then ``PUSH(x)``: the call changes what
+            # the method is bound to, which ``PUSH`` holds.
+            roots.add(func.id)
         callee = _readable_function(func.id, resolve_source)
         if callee is not None:
             callee_params, callee_free = function_handoffs(callee, user_ns, resolve_source, seen | {func.id})
             roots.update(handed_to_params(call, callee, callee_params, iterated))
             free.update(callee_free)
             return
+        # Not read (a lambda, an ``exec``'d ``def``): what its defaults
+        # hold may be what it changes (``lambda x, L=LOG: L.append(x)``).
+        free.update(_default_holders_of(user_ns.get(func.id), user_ns))
     args = [*call.args, *(kw.value for kw in call.keywords)]
+    if isinstance(func, ast.Subscript):
+        holder = func.value
+        while isinstance(holder, (ast.Attribute, ast.Subscript)):
+            holder = holder.value
+        if isinstance(holder, ast.Name) and holder.id not in local:
+            # ``OPS = {'push': LOG.append}`` then ``OPS['push'](x)``: what a
+            # method it holds is bound to changes, watched by the names that
+            # hold it; by the container itself when none does.
+            roots.update(_holders_of_bound(user_ns.get(holder.id), user_ns) or {holder.id})
     if isinstance(func, ast.Attribute):
         base = func.value
         while isinstance(base, (ast.Attribute, ast.Subscript)):
@@ -1754,6 +1771,14 @@ def _call_handoffs(
         ):
             roots.update(iterated.get(base.id, frozenset({base.id})))
         if func.attr in MUTATING_METHODS:
+            if call.args and _names_a_class(func.value, local, user_ns):
+                # ``collections.deque.append(DQ, x)``: a class's method,
+                # handed the object it changes first.
+                roots.update(
+                    name
+                    for name in argument_roots(call.args[0], iterated)
+                    if name in local or not _followed_elsewhere(user_ns.get(name))
+                )
             return  # it keeps what it is handed, and changes none of it
     if (
         isinstance(func, ast.Name)
@@ -1771,6 +1796,95 @@ def _call_handoffs(
             for name in argument_roots(arg, iterated)
             if name in local or not _followed_elsewhere(user_ns.get(name))
         )
+
+
+def _names_a_class(node: ast.expr, local: frozenset[str] | set[str], user_ns: Mapping[str, Any]) -> bool:
+    """Whether *node*, a name or a dotted path from one (``list``,
+    ``collections.deque``), is bound to a class now. Read without running
+    anything: attributes of modules and classes only, as they are stored."""
+    path: list[str] = []
+    while isinstance(node, ast.Attribute):
+        path.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name) or node.id in local:
+        return False
+    value = user_ns.get(node.id, _ABSENT_NAME)
+    if value is _ABSENT_NAME:
+        value = getattr(builtins, node.id, None)
+    for attr in reversed(path):
+        if not instance_of(value, (types.ModuleType, type)):
+            return False
+        try:
+            value = inspect.getattr_static(value, attr)
+        except AttributeError:
+            return False
+    return instance_of(value, type)
+
+
+_ABSENT_NAME = object()
+
+
+def bound_to_state(value: Any) -> bool:
+    """A method bound to an object a call can change in place: ``LOG.append``,
+    not a module's function or a class's; or a partial holding one, or
+    handing one on (``functools.partial(list.append, LOG)``)."""
+    return bool(state_bound(value))
+
+
+def state_bound(value: Any, depth: int = 0) -> list[Any]:
+    """The objects a call of *value* may change in place that *value*
+    itself holds (`bound_to_state`): a bound method's ``__self__``, and
+    what a ``functools.partial`` hands its function."""
+    if instance_of(value, (types.MethodType, types.BuiltinMethodType, types.MethodWrapperType)):
+        owner = attribute_or(value, "__self__", None)
+        return [] if owner is None or _followed_elsewhere(owner) else [owner]
+    if not instance_of(value, functools.partial) or depth > _PARTIAL_DEPTH:
+        return []
+    try:
+        handed = [*value.args, *value.keywords.values()]
+        inner = value.func
+    except Exception:  # noqa: BLE001 - a partial subclass that cannot be read
+        return []
+    out = [item for item in handed if not _followed_elsewhere(item)]
+    return out + state_bound(inner, depth + 1)
+
+
+#: Partials of partials followed.
+_PARTIAL_DEPTH = 3
+
+
+def _default_holders_of(fn: Any, user_ns: Mapping[str, Any]) -> set[str]:
+    """The names of *user_ns* bound to an object a default of the function
+    *fn* is, a number or a string aside."""
+    if type(fn) is not types.FunctionType:
+        return set()
+    held = {id(v) for v in (*(fn.__defaults__ or ()), *(fn.__kwdefaults__ or {}).values())}
+    held -= {id(v) for v in (*(fn.__defaults__ or ()), *(fn.__kwdefaults__ or {}).values()) if _followed_elsewhere(v)}
+    if not held:
+        return set()
+    return {name for name, value in list(user_ns.items()) if id(value) in held}
+
+
+#: How many items of a container `_holders_of_bound` looks at.
+_BOUND_SCAN = 1000
+
+
+def _holders_of_bound(container: Any, user_ns: Mapping[str, Any]) -> set[str]:
+    """The names of *user_ns* holding an object a method or a partial in
+    *container* (a dict's values, a list's or a tuple's items, one level
+    down) is bound to. Empty when it holds none, or too many to look at."""
+    if instance_of(container, dict):
+        items = list(dict.values(container))
+    elif instance_of(container, (list, tuple)):
+        items = list(container)
+    else:
+        return set()
+    if len(items) > _BOUND_SCAN:
+        return set()
+    owners = {id(owner) for item in items for owner in state_bound(item)}
+    if not owners:
+        return set()
+    return {name for name, value in list(user_ns.items()) if id(value) in owners}
 
 
 def _followed_elsewhere(value: Any) -> bool:
@@ -2216,6 +2330,13 @@ def _changeable(names: set[str], user_ns: Mapping[str, Any]) -> frozenset[str]:
             continue
         value = user_ns[name]
         if instance_of(value, (types.ModuleType, type, _IMMUTABLE_ARGUMENT_TYPES)):
+            continue
+        if bound_to_state(value):
+            # ``PUSH = LOG.append``: what changes is ``LOG``, watched by the
+            # names that hold it; by ``PUSH`` itself when none does.
+            owners = state_bound(value)
+            holders = {other for other, held in user_ns.items() if any(held is owner for owner in owners)}
+            out |= holders or {name}
             continue
         if is_routine(value) or rng_carrier_kind(value) is not None:
             continue

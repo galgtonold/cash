@@ -360,6 +360,11 @@ def _state_writes(
                 return
         changed_in_place(node.value)
 
+    statements = list(statements)
+    # ``def bump(): import cnt; cnt.k += 1``: a module the statements
+    # import binds a local, not one of *namespace*'s names.
+    imported = _imported_modules(statements)
+
     def changed_in_place(root: ast.expr) -> None:
         """Add the local module whose state changes when *root* is changed in place."""
         if found is None:
@@ -367,7 +372,10 @@ def _state_writes(
         while isinstance(root, (ast.Attribute, ast.Subscript)):
             root = root.value
         if isinstance(root, ast.Name):
-            home = _state_home(namespace.get(root.id), namespace)
+            value = namespace.get(root.id)
+            if value is None:
+                value = imported.get(root.id)
+            home = _state_home(value, namespace)
             if home is not None:
                 found.add(home)
 
@@ -489,6 +497,39 @@ def _state_writes(
             called(node.func, node)
             if node.args or node.keywords:
                 handed(node)
+
+
+def _made_as_it_ran(module: types.ModuleType) -> bool:
+    """Is *module* one code made as it ran (``types.ModuleType('cnt')``,
+    put in ``sys.modules``): no file, no import spec, no builtin? Its state
+    is the notebook's as much as a local module's is."""
+    return (
+        attribute_or(module, "__file__", None) is None
+        and attribute_or(module, "__spec__", None) is None
+        and module.__name__ not in sys.builtin_module_names
+        and module.__name__ != "__main__"
+    )
+
+
+def _imported_modules(statements: Iterable[ast.AST]) -> dict[str, types.ModuleType]:
+    """The loaded modules an ``import`` among *statements* binds, by the
+    name it binds: ``import cnt``, ``import a.b`` (``a``), ``import a as
+    b``, ``from pkg import mod``."""
+    bound: dict[str, types.ModuleType] = {}
+    for statement in statements:
+        for node in ast.walk(statement):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    name = alias.name if alias.asname else alias.name.partition(".")[0]
+                    module = sys.modules.get(name)
+                    if module is not None:
+                        bound[alias.asname or name] = module
+            elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                for alias in node.names:
+                    module = sys.modules.get(f"{node.module}.{alias.name}")
+                    if module is not None:
+                        bound[alias.asname or alias.name] = module
+    return bound
 
 
 def _as_handed_callee(value: Any) -> tuple[Any, str, Any]:
@@ -864,7 +905,7 @@ def _warn_unchecked(label: str) -> None:
     _UNCHECKED_WARNED.add(label)
     warn_diagnostic(
         CashCacheIneffectiveWarning,
-        "KEY-LIBRARY-VALUE-UNCHECKED",
+        "KEY-LIBRARY-VALUE-UNREAD",
         f"{label} is too big or too deeply nested for cash to tell whether it holds an iterator or a "
         "random generator, so code reading it runs every time.",
         f"keep iterators and random generators out of {label}, or set a smaller value there.",
@@ -896,7 +937,7 @@ def _state_home(value: Any, namespace: Mapping[str, Any]) -> str | None:
     if value is None or instance_of(value, (*IMMUTABLE_PRIMS, tuple, frozenset)):
         return None
     if instance_of(value, types.ModuleType):
-        return value.__name__ if _is_local(value) else None
+        return value.__name__ if _is_local(value) or _made_as_it_ran(value) else None
     if is_routine(value):
         return None
     if instance_of(value, type):

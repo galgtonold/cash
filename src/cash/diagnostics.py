@@ -278,7 +278,7 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # before work cached per pass, whose key took the variable as bound
         "KEY-ITERATOR-CONSUMED",  # building the key read an iterator argument
         # (a key= function, a registered hasher); the call ran uncached
-        "KEY-LIBRARY-VALUE-UNCHECKED",  # a value the notebook set on a library's
+        "KEY-LIBRARY-VALUE-UNREAD",  # a value the notebook set on a library's
         # module is too big or deep to look through for an iterator or random
         # generator, so code reading it runs every time
         "KEY-MEMO-BEFORE-IMPORT",  # a functools memo of the user's held results
