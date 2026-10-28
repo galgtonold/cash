@@ -446,7 +446,7 @@ out = summarize(s)  # cell 2: re-run this alone...
 s.iloc[0] = 1e9     # cell 3: ...and it does not see this
 ```
 
-<!-- claim: cash/notebook/upstream/changed_below.py:warn_changed_below @bbf25145 -->
+<!-- claim: cash/notebook/upstream/changed_below.py:warn_changed_below @8bd3d1a3 -->
 cash answers cell 2 as a top-to-bottom run would: it rebuilds `s` as cell 1
 leaves it, so cell 2 computes with `0.0`, and `s` holds `0.0` until cell 3 runs
 again. cash warns [NOTEBOOK-CHANGED-BELOW](warnings.md#notebook-changed-below)
@@ -615,6 +615,31 @@ library starts that writes memory without running Python code (an audio or
 device driver filling a buffer) cannot be seen at all: cash reads that buffer
 as it finds it. **Fix:** copy such a buffer (`data = buf.copy()`) in the cell
 that stops the stream, and use the copy.
+
+### A class whose pickling changes other values
+
+<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @b809130a, cash/notebook/statement/reducer_writes.py:_changed_through_copies @a33fedda -->
+cash pickles values to hash and store them, and pickling runs a class's own
+`__getstate__` or `__reduce__`. One that changes something else (a module's
+list, a global array, the object being pickled) would change it where plain
+Python never pickles at all, so cash does not run it: the value is not stored,
+and the statement runs again next time, with
+[NOTEBOOK-REDUCE-WROTE](warnings.md#notebook-reduce-wrote). This also happens
+when cash cannot tell: the method's source cannot be read, it changes the
+object it pickles, or it hands a global the notebook holds (or a module
+holding it) to a library call, such as `np.copyto(ARR, 5)` or `np.mean(ARR)`,
+whose effect cash does not read. Builtins that only read (`len`, `map`,
+`sorted`, `iter`, ...), the functions of `itertools`, `math` and
+`statistics`, `json.dumps` and `json.loads`, `copy.deepcopy` with no memo,
+`functools.reduce` of a function that changes nothing, a method of a constant
+(`'-'.join`) and a value nothing can change (a number, a string, a class, a
+function) do not count; a list, dict or array handed to any other library
+function does, even one that only reads it (`copy.copy`, `json.dump`), and
+its statement runs every time. A change made through a local bound to a
+global or to a shallow copy of one (`c = dict(CFG); c['rows'].append(1)`)
+counts as a change of the global, the copy's own top level included.
+**Fix:** have `__getstate__` / `__reduce__` only read, and change those values
+in the cell that needs them.
 
 ### A loop variable changed before it is read
 
@@ -954,6 +979,13 @@ default argument or base class does. **Fix:** move the binding above this cell.
   the same way, without its own methods, but storing the object still
   pickles it, which calls the subclass's `items` and `__reduce_ex__`: if
   those raise, the statement is not cached and re-runs each time.
+- **Python 3.12.0 to 3.12.5 without the C extension: more statements re-run.**
+  On those versions, asking Python what the `_asyncio` module holds can loop
+  for ever (fixed in 3.12.6), and Jupyter loads that module. cash's C
+  extension reads around it. Without the extension, cash cannot tell which
+  variables share an object with a statement's outputs, so such a statement
+  re-runs with a warning instead of being restored. Upgrade to 3.12.6 or
+  later, or install a build with the C extension.
 
 ## Reporting something not on this page
 

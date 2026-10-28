@@ -43,6 +43,7 @@ import io
 import itertools
 import logging
 import queue
+import sys
 import types
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -303,9 +304,71 @@ def drawn_stream_inputs(
         value = user_ns.get(name)
         if value is None:
             continue
-        if is_stream(value):
+        if is_stream(value) or _holds_drawn_stream(tree, name, value):
             found.append(name)
     return found
+
+
+# Items of a container looked through for a stream when the statement's
+# index is not a constant (``next(h[i])``): a bigger one is not walked.
+_HELD_SCAN = 64
+_PLAIN_CONTAINERS = (list, tuple, dict)
+
+
+def _holds_drawn_stream(tree: ast.Module | None, name: str, value: Any) -> bool:
+    """True when the statement reaches a stream inside *value* (``next(h[0])``,
+    ``list(h['k'])``, ``next(b.it)``) and so draws from it as it would from a
+    name that held it. Followed through a plain list, tuple or dict by a
+    constant index and through an attribute read without running a property;
+    any other index looks through the container's own items."""
+    if tree is None:
+        return False
+    for node in ast.walk(tree):
+        chain = _reach_chain(node, name)
+        if chain and _chain_meets_stream(value, chain):
+            return True
+    return False
+
+
+def _reach_chain(node: ast.AST, name: str) -> list[ast.AST] | None:
+    """The subscripts and attributes, outermost last, between *node* and the
+    name it starts from, or None when *node* does not start from *name*."""
+    chain: list[ast.AST] = []
+    while isinstance(node, (ast.Subscript, ast.Attribute)):
+        chain.append(node)
+        node = node.value
+    if not chain or not (isinstance(node, ast.Name) and node.id == name):
+        return None
+    chain.reverse()
+    return chain
+
+
+def _chain_meets_stream(value: Any, chain: list[ast.AST]) -> bool:
+    for step in chain:
+        if isinstance(step, ast.Attribute):
+            try:
+                value = inspect.getattr_static(value, step.attr)
+            except (AttributeError, TypeError):
+                return False
+        elif type(value) not in _PLAIN_CONTAINERS:
+            return False
+        elif isinstance(step.slice, ast.Constant):
+            try:
+                value = value[step.slice.value]
+            except (LookupError, TypeError):
+                return False
+        else:
+            items = value.values() if type(value) is dict else value
+            return any(is_stream(item) for item in itertools.islice(items, _HELD_SCAN))
+        if is_stream(value) and not _an_output_stream(value):
+            return True
+    return False
+
+
+def _an_output_stream(obj: Any) -> bool:
+    """The process's own output streams (``sys.stderr`` handed to a log
+    handler): written to, never read, so reaching one draws nothing."""
+    return any(obj is attribute_or(sys, name, None) for name in ("stdout", "stderr", "__stdout__", "__stderr__"))
 
 
 def is_stream(obj: Any) -> bool:

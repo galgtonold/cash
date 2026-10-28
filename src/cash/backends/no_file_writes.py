@@ -215,19 +215,48 @@ def _bytecode_temp(value: object) -> bool:
 def _by_importlib(function: str, depth: int | None = 12) -> bool:
     """Is ``importlib``'s own *function* running, within *depth* frames of
     the event (any depth for None)? For the steps that write a ``.pyc``,
-    only as part of an import's: below ``SourceLoader.get_code`` caching
-    the module's bytecode. The value's own call of ``_write_atomic``, or of
-    a function of that name in another file, is not."""
-    names = {function, "_cache_bytecode", "get_code"} if function in _BYTECODE_STEPS else {function}
+    only as part of an import's (`_by_an_import`)."""
+    if function in _BYTECODE_STEPS:
+        return _by_an_import(function)
     frame = sys._getframe(1)
-    while frame is not None and (depth is None or depth > 0) and names:
+    while frame is not None and (depth is None or depth > 0):
         code = frame.f_code
-        if code.co_filename in _IMPORTLIB_FILES:
-            names.discard(code.co_name)
+        if code.co_filename in _IMPORTLIB_FILES and code.co_name == function:
+            return True
         frame = frame.f_back
         if depth is not None:
             depth -= 1
-    return not names
+    return False
+
+
+def _by_an_import(step: str) -> bool:
+    """Is the event *step* of an import's own write of a module's ``.pyc``:
+    ``importlib``'s frames, unbroken, from *step* through ``_cache_bytecode``
+    and ``get_code`` up to the import or reload running them? A frame of
+    anything else in between, a module body the import runs calling
+    ``get_code`` on another file, or the value's own
+    ``SourceFileLoader(...).get_code(...)`` while an outer import runs,
+    breaks the chain, and the write is the value's."""
+    frame = sys._getframe(1)
+    while frame is not None and frame.f_code.co_filename.startswith(_CASH_DIR):
+        frame = frame.f_back  # the check's own frames, and the hook calling it
+    needed = {step, "_cache_bytecode", "get_code"}
+    while frame is not None:
+        code = frame.f_code
+        if code.co_filename not in _IMPORTLIB_FILES:
+            return False
+        needed.discard(code.co_name)
+        if code.co_name in _IMPORTING:
+            return not needed
+        frame = frame.f_back
+    return False
+
+
+#: Where cash's own files are: the audit hook and this check run from them.
+_CASH_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + os.sep
+
+#: ``importlib``'s functions an import or a reload runs a loader under.
+_IMPORTING = frozenset(("_find_and_load", "_load", "_exec"))
 
 
 #: The steps of an import's write of a module's ``.pyc``: let through only
