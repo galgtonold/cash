@@ -12,6 +12,7 @@ arguments an ``operator.methodcaller`` hands the method it calls.
 """
 
 import ast
+import warnings
 
 import pytest
 
@@ -102,3 +103,20 @@ def test_a_partial_binding_what_cannot_be_told_cannot_be_read(statement):
     exec(compile(code, filename, "exec"), namespace)
     found = handed_callables(ast.parse(statement), namespace)
     assert any("builds a partial" in why for why in found.unreadable)
+
+
+def test_such_a_statement_runs_every_time_with_one_warning(cash_magics):
+    cells = [
+        HELPERS + "\ndef pick(lists):\n    return lists[0]",
+        "lists = [[0]]\nlst = lists[0]",
+        "r = functools.partial(add, pick(lists))(1)",
+        "n = len(lst)",
+    ]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for _ in range(2):
+            _run_all(cash_magics, cells)
+            assert cash_magics.shell.user_ns["lst"] == [0, 1]
+    unread = [str(w.message) for w in caught if "NOTEBOOK-CALLABLE-UNREAD" in str(w.message)]
+    assert len(unread) == 1, unread
+    assert "builds a partial" in unread[0]

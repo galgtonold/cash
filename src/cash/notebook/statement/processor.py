@@ -310,6 +310,8 @@ class StatementProcessor:
         self._thread_reach = ThreadReach()
         #: The work NOTEBOOK-WORK-RUNNING was given for.
         self._work_running_warned: set[str] = set()
+        #: Statements already warned NOTEBOOK-CALLABLE-UNREAD about.
+        self._callable_unread_warned: set[str] = set()
         #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
         self._share_unchecked_warned: set[str] = set()
         #: Statements already told about NOTEBOOK-ANALYSIS-BUDGET.
@@ -882,6 +884,8 @@ class StatementProcessor:
         if effects.unanalysed:
             run.metrics["uncacheable_reasons"].extend(effects.unanalysed)
             run.skip_cache = True
+        if effects.unreadable_callables:
+            self._warn_callable_unread(run, effects.unreadable_callables[0])
         if run.tree is not None and calls_ipython(run.tree):
             run.metrics["uncacheable_reasons"].append(_IPYTHON_REASON)
             run.skip_cache = True
@@ -2757,6 +2761,20 @@ class StatementProcessor:
                     links.append(([name], readable - {name}))
             return links, False
         return links, True
+
+    def _warn_callable_unread(self, run: StatementRun, why: str) -> None:
+        """Warn, once per statement, that it runs every time because a
+        callable it calls or hands over cannot be read (``NOTEBOOK-CALLABLE-UNREAD``)."""
+        if run.source_hash in self._callable_unread_warned:
+            return
+        self._callable_unread_warned.add(run.source_hash)
+        what = f"this statement runs every time, uncached: {why}, so what it changes is unknown."
+        fix = "hand over a function defined in the notebook or in a module, by its name, so cash can read its source."
+        log_diagnostic(logger, "NOTEBOOK-CALLABLE-UNREAD", what, fix)
+        from cash.notebook.ipython.cell_count import running_cell_count  # the ipython package imports this one
+
+        location = ("<cash>", running_cell_count(self.shell))
+        warn_diagnostic(CashWarning, "NOTEBOOK-CALLABLE-UNREAD", what, fix, location=location)
 
     def _warn_share_unchecked(self, run: StatementRun, outputs: list[str], cost: float) -> None:
         """Warn, once per statement, that the variables sharing an object
