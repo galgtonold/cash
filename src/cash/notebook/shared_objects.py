@@ -1296,6 +1296,8 @@ def share_group(
         for owners, holders in links:
             gave_up.add(owners, (name for name in holders if not foreign(name)))
         gave_up.add(shared, (name for name in partial.names if not foreign(name)))
+        for owners, holders in partial.links:
+            gave_up.add(owners, (name for name in holders if not foreign(name)))
         gave_up.modules |= partial.modules
         gave_up.complete = gave_up.complete and partial.complete
     outputs = set(group) - joined
@@ -1479,7 +1481,7 @@ def _check_group(
             # not walked. It was walked for every statement, ``x = 0`` too
             # -- the output history holding a displayed list of 400,000
             # tuples, 1.2 s a statement.
-            return _inside_library_objects(group, nodes, owner, value_types, user_ns, bindings, cash_held)
+            return _inside_library_objects(group, nodes, owner, value_types, user_ns, bindings, cash_held, gave_up)
         internal = count_held(cash_held, nodes, inbound, value_types, named_held, user_ns)
         for mapping, key in named_held:
             if id(mapping.get(key)) in nodes:
@@ -1491,9 +1493,9 @@ def _check_group(
         if excess and _count_leaf_attributes(nodes, inbound):
             excess = excess_refs(nodes, inbound, checked)
         if not excess:
-            return _inside_library_objects(group, nodes, owner, value_types, user_ns, bindings, cash_held)
+            return _inside_library_objects(group, nodes, owner, value_types, user_ns, bindings, cash_held, gave_up)
         if _held_within(nodes, counted, excess, value_types):
-            return _inside_library_objects(group, nodes, owner, value_types, user_ns, bindings, cash_held)
+            return _inside_library_objects(group, nodes, owner, value_types, user_ns, bindings, cash_held, gave_up)
         shared = {owner[k] for k in excess}
         if user_ns is None:
             return shared, None
@@ -1517,6 +1519,16 @@ def _check_group(
                 gave_up.names |= partial.names
                 gave_up.modules |= partial.modules
                 gave_up.complete = gave_up.complete and partial.complete
+            if not found and gave_up is not None:
+                # Given up on a holder that is not a variable, the library
+                # objects and weak references among the nodes still hold
+                # what they hold: ``H = weakref.ref(BIG)`` is cash's own weak
+                # reference to ``BIG`` too, and ``BIG`` went unlinked.
+                inner, inner_found = _inside_library_objects(
+                    group, nodes, owner, value_types, user_ns, bindings, cash_held, gave_up
+                )
+                if inner_found:
+                    gave_up.add(inner, inner_found)
             return shared, found
         # A container a root read a level at a time holds besides its parent
         # (`_take_breaks`): the search up from it climbs through the
@@ -1646,6 +1658,7 @@ def _inside_library_objects(
     user_ns: Mapping[str, Any] | None,
     bindings: list[Mapping[str, Any]],
     cash_held: list[Any],
+    gave_up: GaveUp | None = None,
 ) -> tuple[set[str], set[str] | None]:
     """`_check_group`'s ``(shared, found)`` for what the library objects
     among *nodes* hold, which the walk does not read (`children_of` None).
@@ -1659,11 +1672,16 @@ def _inside_library_objects(
     found join the group and are stored with it, as for a holder the walk
     finds. A library's own globals (a plotly validator) are not variables
     and do not count, as for the library object itself. ``(owners, None)``,
-    which refuses the statement, when the search could not finish."""
+    which refuses the statement, when the search could not finish; *gave_up*
+    is then marked incomplete, so the outputs are linked to what the
+    statement read and NOTEBOOK-SHARE-UNCHECKED says so, where a variable
+    held inside went unlinked before."""
     if user_ns is None:
         return set(), set()
     inside, owners = _held_from_outside(nodes, owner, value_types)
     if inside is None:
+        if gave_up is not None:
+            gave_up.complete = False
         return owners, None
     if not inside:
         return set(), set()
@@ -1672,8 +1690,13 @@ def _inside_library_objects(
     ignore.update(id(obj) for obj in cash_held)
     names = _variables_holding(inside, user_ns, set(group), ignore, value_types)
     if names is None:
+        if gave_up is not None:
+            gave_up.complete = False
         return owners, None
-    return (owners, names) if names else (set(), set())
+    # Each output may reach the library object found holding them, not only
+    # the first one the walk reached it from: ``draw, poke = make(BIG)``
+    # share the cell holding ``pd.Series([rows], dtype=object)``.
+    return (set(group), names) if names else (set(), set())
 
 
 def _reads_inside(node: Any, value_types: tuple[type, ...]) -> bool:
@@ -1685,7 +1708,101 @@ def _reads_inside(node: Any, value_types: tuple[type, ...]) -> bool:
     except Exception:  # noqa: BLE001 - an object whose attributes raise (see `is_value`)
         return False
     kind = _LIBRARY_KINDS.get(type_key(type(node)))
-    return (kind or _library_kind(type(node))) is _LEAF
+    kind = kind or _library_kind(type(node))
+    if kind is _ARRAY:
+        return node.dtype.hasobject and node.base is not None
+    return kind is _LEAF or kind is _PANDAS
+
+
+def _opaque_parts(obj: Any) -> tuple[list[Any], bool] | None:
+    """``(parts, weak)`` for an object the walk reads as one closed value
+    that holds objects where the garbage collector does not show them: a
+    weak reference's target (*weak*: it adds no reference to it), the items
+    of a view of a numpy object array, and of a pandas object's object
+    columns (numpy does not track its object arrays). None for anything
+    else, whose parts are what the collector sees.
+
+    ``draw`` of ``make(BIG)`` holding ``BIG`` through ``weakref.ref(rows)``,
+    ``pd.Series([rows, 1], dtype=object)`` or ``H0[:1]`` was read as
+    holding nothing of it: no edge, and after ``BIG[0].id = -5`` a reader
+    of ``draw(1)`` below was served what it read before."""
+    if instance_of(obj, weakref.ref):
+        target = obj()
+        return ([] if target is None else [target]), True
+    kind = _LIBRARY_KINDS.get(type_key(type(obj))) or _library_kind(type(obj))
+    if kind is _ARRAY:
+        if not (obj.dtype.hasobject and obj.base is not None):
+            return None
+        return _not_alone(_items_of(obj)), False
+    if kind is not _PANDAS:
+        return None
+    np = sys.modules.get("numpy")
+    mgr = attribute_or(obj, "_mgr", None)
+    arrays = attribute_or(mgr, "arrays", None) if mgr is not None else None
+    if np is None or not isinstance(arrays, list):
+        return [], False  # pandas' own internals are not read down
+    items = [
+        item
+        for array in arrays
+        if instance_of(array, np.ndarray) and array.dtype.hasobject
+        for item in _items_of(array)
+    ]
+    return _not_alone(items), False
+
+
+#: What pandas' ``infer_dtype`` names an object array of values only.
+_SCALAR_KINDS = frozenset(
+    {"string", "bytes", "floating", "integer", "mixed-integer-float", "boolean", "complex", "empty"}
+)
+
+
+def _items_of(array: Any) -> list[Any]:
+    """The items of the object array *array*, none when pandas tells at C
+    speed that each is a number, a string or missing: a string column of a
+    million rows (pandas before 3.0 keeps them as objects) cost 50 ms a
+    statement read one by one."""
+    pd = sys.modules.get("pandas")
+    infer = attribute_or(attribute_or(attribute_or(pd, "api", None), "types", None), "infer_dtype", None)
+    if infer is not None:
+        try:
+            if infer(array, skipna=True) in _SCALAR_KINDS:
+                return []
+        except Exception:  # noqa: BLE001 - read item by item instead
+            pass
+    return array.ravel(order="K").tolist() if array.ndim > 1 else array.tolist()
+
+
+def _not_alone(parts: list[Any]) -> list[Any]:
+    """*parts*, an object array's items, but the values and the lists,
+    dicts and sets of values only that nothing but the array holds: neither
+    is held from outside nor holds anything that could be. A column of
+    200,000 token lists read one by one passed `_INSIDE_MAX_OBJECTS` and
+    refused the statement."""
+    exact = exact_value_types()
+    if exact.issuperset(map(type, parts)):
+        return []
+    return [part for part in parts if not _alone(part, exact, _ALONE_COUNT)]
+
+
+def _alone(part: Any, exact: frozenset[type], limit: int) -> bool:
+    """Whether *part*, an item of `_not_alone`'s *parts*, is a value, or a
+    container of values only that its array alone holds (its count is at
+    most *limit*, `_calibrate_alone`)."""
+    return type(part) in exact or (_values_only(part, exact) and sys.getrefcount(part) <= limit)
+
+
+def _calibrate_alone() -> int:
+    """The count `_alone` sees for a container only its array holds, read
+    as `_not_alone` reads it: a list stands in for the array's buffer."""
+    holder = [[]]
+    parts = list(holder)
+    for limit in range(1, 16):
+        if not [part for part in parts if not _alone(part, frozenset(), limit)]:
+            return limit
+    return 0  # not found: nothing is taken as alone
+
+
+_ALONE_COUNT = _calibrate_alone()
 
 
 def _read_down(obj: Any, value_types: tuple[type, ...]) -> bool | None:
@@ -1775,7 +1892,9 @@ def _held_from_outside(
         pops += 1
         if not pops & 255:
             check_walk_budget()
-        for child in gc.get_referents(parent):
+        opaque = _opaque_parts(parent) if id(parent) == root else None
+        children, weak = (gc.get_referents(parent), False) if opaque is None else opaque
+        for child in children:
             if type(child) in skipped:
                 continue
             read_down = _read_down(child, value_types)
@@ -1787,7 +1906,7 @@ def _held_from_outside(
                 break
             if key in nodes:
                 continue
-            refs[key] = refs.get(key, 0) + 1
+            refs[key] = refs.get(key, 0) + (not weak)
             if key in within:
                 continue
             if len(within) >= _INSIDE_MAX_OBJECTS:
@@ -1797,7 +1916,7 @@ def _held_from_outside(
             if read_down:
                 # pandas and numpy data are read by their own rules, not down.
                 stack.append((child, root))
-        child = None  # no reference of this frame's left in the counts
+        child = children = opaque = None  # no reference of this frame's left in the counts
     parent = None
     streams = _standard_streams()
     held = [
