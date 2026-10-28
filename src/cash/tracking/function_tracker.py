@@ -39,10 +39,11 @@ def is_local_module(module: types.ModuleType) -> bool:
     file_path = getattr(module, "__file__", None)
     if not file_path:
         return False
-    if not file_path.endswith(".py"):
-        # A .pyc counts when its .py sits next to it; anything else is compiled.
-        if not (file_path.endswith((".pyc", ".pyo")) and os.path.isfile(file_path[:-1])):
-            return False
+    if not file_path.endswith(".py") and not file_path.endswith((".pyc", ".pyo")):
+        # Compiled (an extension module). Bytecode counts, with its .py next to
+        # it or not: a user's .pyc alone is still the user's code, which a key
+        # must not take for a library's.
+        return False
     return is_user_module(module)
 
 
