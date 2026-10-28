@@ -3087,7 +3087,12 @@ class StatementProcessor:
             ignore=[captured_vars, run.metrics, echo, *cash_held],
         )
         links = [(outputs, found_names)]
-        return (links if complete else cut_short(links)), complete
+        # The search up finds what holds the outputs, not what they hold:
+        # ``box = Box(BIG)`` with ``box`` holding ``BIG`` in a pandas object
+        # was left unlinked when the check ran out of time, and a change to
+        # ``BIG`` served ``box.total()`` from before. What the statement read
+        # is linked too, as when the search is cut short.
+        return (links if complete and not timed_out else cut_short(links)), complete
 
     def _fallback_seconds(self, run: StatementRun, fallback_floor: float) -> float:
         """How long the search from the outputs up (`referring_names`) may
@@ -3191,7 +3196,7 @@ class StatementProcessor:
         if run.source_hash in self._identity_held_warned:
             return
         self._identity_held_warned.add(run.source_hash)
-        what = (
+        what = held.what or (
             f"'{held.name}' holds {held.kind} of an object it does not hold itself. Restored from the cache, "
             "it would find another object, or none, so this statement runs every time instead."
         )

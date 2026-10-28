@@ -34,10 +34,10 @@ import types
 import weakref
 from typing import Any
 
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, builtin_items
 from cash.install_paths import is_user_code_module
 
-__all__ = ["IdentityHeld", "identity_held_reason"]
+__all__ = ["IdentityHeld", "identity_held_reason", "weakly_held_reason"]
 
 #: A container with more items is not looked inside.
 _MAX_SCANNED = 10_000
@@ -60,21 +60,41 @@ class IdentityHeld(str):
 
     name: str
     kind: str
+    #: What the warning says, when not that *name* holds *kind* of an object.
+    what: str | None
 
-    def __new__(cls, reason: str, name: str, kind: str) -> IdentityHeld:
+    def __new__(cls, reason: str, name: str, kind: str, what: str | None = None) -> IdentityHeld:
         made = super().__new__(cls, reason)
-        made.name, made.kind = name, kind
+        made.name, made.kind, made.what = name, kind, what
         return made
 
 
 def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> IdentityHeld | None:
     """Why *value*, bound to *name*, cannot be restored apart from what it
-    points at by identity (see the module docstring); None when it can."""
+    points at by identity (see the module docstring), or while another
+    variable finds it by one (`weakly_held_reason`); None when it can."""
     user_kinds: dict[type, bool] = {}
     seen: set[int] = set()
     refs: list[Any] = []
     numbers: set[int] = set()
-    _walk([value], seen, user_kinds, refs, numbers)
+    targets: list[Any] = []
+    _walk([value], seen, user_kinds, refs, numbers, targets)
+    found = _held_by_id(name, refs, seen, numbers, user_kinds, user_ns)
+    if found is None and targets:
+        found = _weakly_held(name, targets, user_ns)
+    return found
+
+
+def _held_by_id(
+    name: str,
+    refs: list[Any],
+    seen: set[int],
+    numbers: set[int],
+    user_kinds: dict[type, bool],
+    user_ns: dict[str, Any],
+) -> IdentityHeld | None:
+    """`identity_held_reason`'s answer for what *value* itself holds, from
+    its walk: *refs*, *seen* and *numbers*."""
     for ref in refs:
         if not issubclass(type(ref), weakref.ReferenceType):
             if _alive(ref):
@@ -110,6 +130,59 @@ def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> Iden
     return None
 
 
+def weakly_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> IdentityHeld | None:
+    """Why *value*, bound to *name*, cannot be restored while another
+    variable finds it, or an object in it, by a weak reference; None when it
+    can (`_weakly_held`, with `identity_held_reason`'s walk)."""
+    targets: list[Any] = []
+    _walk([value], set(), {}, [], set(), targets)
+    return _weakly_held(name, targets, user_ns) if targets else None
+
+
+def _weakly_held(name: str, targets: list[Any], user_ns: dict[str, Any]) -> IdentityHeld | None:
+    """Why *name*'s value, whose walk found *targets* with a weak reference
+    to them, cannot be restored while another variable holds one.
+
+    ``box = Box(BIG)`` keeping ``weakref.ref(BIG)``, then ``BIG[0].id = -5``
+    restored: ``BIG`` is bound to the stored copy, the old object goes, and
+    ``box.h()`` finds nothing (``TypeError: 'NoneType' object is not
+    iterable`` where plain Python gives the sum). Asked only of objects that
+    have a weak reference at all (`weakref.getweakrefcount`). The other
+    variables are looked into as `_walk` does, `_WEAK_HOLDER_LEVELS` deep: a
+    weak reference held deeper is not found. Not up the garbage collector's
+    referrers: cash keeps weak references to the values it watches itself,
+    and the read of the heap that tells those apart spent the share check's
+    budget on every statement over them."""
+    from .output_refusals import is_history_name
+
+    wanted = {id(target) for target in targets}
+    seen: set[int] = set()
+    user_kinds: dict[type, bool] = {}
+    for var, held in list(user_ns.items()):
+        if var == name or var.startswith("_") or is_history_name(var):
+            continue
+        refs: list[Any] = []
+        _walk([held], seen, user_kinds, refs, set(), levels=_WEAK_HOLDER_LEVELS)
+        if any(issubclass(type(ref), weakref.ReferenceType) and id(ref()) in wanted for ref in refs):
+            return IdentityHeld(
+                f"'{var}' finds '{name}' by a weak reference; restored, '{name}' would be another object, "
+                "so the statement re-runs every time",
+                name,
+                "a weak reference",
+                what=(
+                    f"'{var}' keeps a weak reference to '{name}', or to an object in it. Restored from the "
+                    f"cache, '{name}' would be a copy and that reference would find nothing, so this "
+                    "statement runs every time instead."
+                ),
+            )
+    return None
+
+
+#: How deep `_weakly_held` looks into the other variables: ``box.h`` is two
+#: levels below ``box``, ``reg.data['k']`` three below ``reg``.
+_WEAK_HOLDER_LEVELS = 4
+
+
 def _alive(proxy: Any) -> bool:
     """Whether the object a weak proxy points at is alive."""
     try:
@@ -121,12 +194,26 @@ def _alive(proxy: Any) -> bool:
     return True
 
 
-def _walk(roots: list[Any], seen: set[int], user_kinds: dict[type, bool], refs: list[Any], numbers: set[int]) -> bool:
+def _walk(
+    roots: list[Any],
+    seen: set[int],
+    user_kinds: dict[type, bool],
+    refs: list[Any],
+    numbers: set[int],
+    targets: list[Any] | None = None,
+    levels: int | None = None,
+) -> bool:
     """Look through *roots* (see the module docstring), adding the ``id()``
     of each object to *seen*, each weak reference to *refs* and each
-    ``int`` to *numbers*. False when it stopped at `_MAX_SEEN`."""
+    ``int`` to *numbers*, and with *targets*, each object some weak
+    reference points at; with *levels*, no deeper than that below *roots*.
+    False when it stopped at `_MAX_SEEN`."""
     level = roots
     while level:
+        if levels is not None:
+            if levels <= 0:
+                return True
+            levels -= 1
         nxt: list[Any] = []
         for item in level:
             kind = type(item)
@@ -135,12 +222,16 @@ def _walk(roots: list[Any], seen: set[int], user_kinds: dict[type, bool], refs: 
                 continue
             if id(item) in seen:
                 continue
+            if targets is not None and weakref.getweakrefcount(item) and _notebook_own(kind, user_kinds):
+                targets.append(item)
             if issubclass(kind, _REFERENCES):
                 seen.add(id(item))
                 refs.append(item)
                 continue
             if kind in _CONTAINERS or issubclass(kind, (list, dict, set)):
-                items: Any = list(item.keys()) + list(item.values()) if issubclass(kind, dict) else item
+                # By the builtin type's own methods: a subclass whose
+                # ``keys()`` or ``__iter__`` raises is not asked.
+                items: Any = builtin_items(item) or ()
             elif issubclass(kind, _WEAK_CONTAINERS):
                 data = attribute_or(item, "data")
                 items = (
@@ -166,6 +257,14 @@ def _walk(roots: list[Any], seen: set[int], user_kinds: dict[type, bool], refs: 
             nxt.extend(items)
         level = nxt
     return True
+
+
+def _notebook_own(kind: type, user_kinds: dict[type, bool]) -> bool:
+    """Whether an object of *kind* is the notebook's own data: a list, dict
+    or set, or an object of a class of the user's code. A library's object
+    is not looked at for weak references to it: pandas keeps its own on a
+    frame (``df.flags``), which no variable of the notebook finds it by."""
+    return kind in _CONTAINERS or issubclass(kind, (list, dict, set)) or _users(kind, user_kinds)
 
 
 def _users(kind: type, user_kinds: dict[type, bool]) -> bool:
