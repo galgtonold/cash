@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pytest
 
+from cash.notebook import shadow
 from tests._cell_driver import run_cash_cell
 
 SETUP = (
@@ -78,3 +79,36 @@ def test_a_default_an_unreadable_callee_changes_is_made_again(nb_runner, monkeyp
     for run in range(3):
         nb_runner.run_all()
         assert "N 1" in nb_runner.get_output(3), f"Run All {run + 1}"
+
+
+#: ``(setup, the default, what reads the change)``: a default no global
+#: holds within a lookup's reach.
+UNHELD_DEFAULTS = {
+    "its_own": ("", "[]", "n = len(inner.__defaults__[0])"),
+    "a_class_attribute": ("class K:\n    pass\nK.l = []\n", "K.l", "n = len(K.l)"),
+    "three_levels_down": ("CFG = {'a': {'b': {'c': []}}}\n", "CFG['a']['b']['c']", "n = len(CFG['a']['b']['c'])"),
+    "a_deque_item": ("H = collections.deque([[]])\n", "H[0]", "n = len(H[0])"),
+    "a_tuple_subclass_item": ("class T(tuple):\n    pass\nS = T(([],))\n", "S[0]", "n = len(S[0])"),
+}
+
+
+@pytest.mark.parametrize("spelled", ["readable", "exec"])
+@pytest.mark.parametrize("shape", list(UNHELD_DEFAULTS))
+def test_a_default_no_global_holds_is_watched_itself(cash_magics, monkeypatch, shape, spelled):
+    """``def inner(x, L=K.l): L.append(x)`` with traces off: the defaults
+    watched were those a global holds two levels down at most, so the call
+    was served and ``K.l`` left empty."""
+    monkeypatch.setenv("CASH_TRACE", "0")
+    monkeypatch.setattr(shadow, "SHADOW", None)
+    setup, default, read = UNHELD_DEFAULTS[shape]
+    fn = f"def inner(x, L={default}):\n    time.sleep(0.05)\n    L.append(x)\n    return x * 10"
+    cells = [
+        "import time, collections\n" + setup + (fn if spelled == "readable" else f"exec({fn!r})"),
+        "v = inner(3)",
+        read,
+    ]
+    ns = cash_magics.shell.user_ns
+    for run in range(3):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        assert (ns["v"], ns["n"]) == (30, 1), f"Run All {run + 1}"

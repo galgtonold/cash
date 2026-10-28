@@ -56,6 +56,7 @@ __all__ = [
     "CallKeys",
     "call_cache_key",
     "callee_mutated_globals",
+    "callee_watched_defaults",
     "callee_watched_globals",
     "changes_its_closure",
     "global_digests",
@@ -237,6 +238,29 @@ def callee_watched_globals(fn, captured: tuple[str, ...]) -> tuple[str, ...]:
             except Exception:  # noqa: BLE001 - not read is every global it loads
                 found |= _CODE_NAMES.get(reached.__code__) or _code_names(reached.__code__)
     return tuple(sorted(n for n in found if n not in captured and _worth_watching(globals_dict.get(n, _NOT_BOUND))))
+
+
+def callee_watched_defaults(fn) -> tuple:
+    """The defaults of *fn*, and of the functions it reaches in its own
+    module, that a call may change in place: each is hashed before and after
+    a miss, as `callee_watched_globals` are, and a call that changed one is
+    not stored. ``def inner(x, L=[])`` changes its own default, which no
+    global need hold (or holds deeper than a lookup reaches: ``L=K.l``,
+    ``L=CFG['a']['b']['c']``)."""
+    globals_dict = attribute_or(fn, "__globals__", None)
+    if not isinstance(globals_dict, dict):
+        return ()
+    found: dict[int, object] = {}
+    for layer in wrapper_layers(fn):
+        if attribute_or(layer, "__globals__", None) is not globals_dict:
+            continue
+        for reached in _functions_reached_in(globals_dict, layer):
+            if type(reached) is not _types.FunctionType:
+                continue
+            for value in (*(reached.__defaults__ or ()), *(reached.__kwdefaults__ or {}).values()):
+                if id(value) not in found and _worth_watching(value):
+                    found[id(value)] = value
+    return tuple(found.values())
 
 
 def _watched_names(fn, globals_dict: dict) -> set[str]:

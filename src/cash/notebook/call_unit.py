@@ -75,7 +75,13 @@ from cash.notebook.call_effects import (
 )
 from cash.notebook.call_entries import ONE_LOCAL, TOO_MANY_WHY, CallEntries, refs_beyond
 from cash.notebook.call_interception import CallSite, SiteSlots, interceptable, names_read
-from cash.notebook.call_key import CallKeys, callee_mutated_globals, callee_watched_globals, global_digests
+from cash.notebook.call_key import (
+    CallKeys,
+    callee_mutated_globals,
+    callee_watched_defaults,
+    callee_watched_globals,
+    global_digests,
+)
 from cash.notebook.call_refs import (
     DIGEST_FIELD,
     SIZE_FIELD,
@@ -1044,6 +1050,9 @@ class CallUnit:
         # its arguments are (`callee_watched_globals`).
         watched = callee_watched_globals(call.fn, call.mutated_globals)
         watched_before = _watched_state(call.fn, watched, self._fingerprints) if watched else None
+        # And the defaults it may change, which no global need hold.
+        defaults = callee_watched_defaults(call.fn)
+        defaults_before = _watched_values(defaults, self._fingerprints) if defaults else None
         # Before the clock starts: looking for memos is cash's own work, and
         # counted as the call's it pushed cheap calls over the floor.
         memos_before = helper_memos.watched(attribute_or(call.fn, "__globals__", None) or {})
@@ -1073,6 +1082,7 @@ class CallUnit:
             self._did_what_a_hit_cannot(call, rng_before, arg_hashes_before, ticket)
             or _rebound_unwatched(call, module_before)
             or (watched_before is not None and _watched_state(call.fn, watched, self._fingerprints) != watched_before)
+            or (defaults_before is not None and _watched_values(defaults, self._fingerprints) != defaults_before)
             or self._wrote_files(call, written)
         ):
             self._entries.refuse(call.key)
@@ -1662,9 +1672,13 @@ def _watched_state(fn: Any, names: tuple[str, ...], fingerprints: Any) -> tuple:
     hold: its own hash is its name, and ``setattr(NS, 'a', x)`` keeps it.
     A context variable by the object it holds."""
     globals_dict = fn.__globals__
+    return _watched_values(tuple(globals_dict.get(name, _ABSENT) for name in names), fingerprints)
+
+
+def _watched_values(watched: tuple, fingerprints: Any) -> tuple:
+    """`_watched_state` of the objects *watched*."""
     values = []
-    for name in names:
-        value = globals_dict.get(name, _ABSENT)
+    for value in watched:
         if type(value) is contextvars.ContextVar:
             # Nothing changes one in place: ``set`` gives it another value
             # in the context, which is what it is read by.
