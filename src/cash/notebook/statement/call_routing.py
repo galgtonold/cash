@@ -23,6 +23,7 @@ from cash.notebook.call_effects import DigestHandoff
 from cash.notebook.call_interception import COUNT_NAME, HELPER_NAME, PLAIN_NAME, SITE_SLOTS, wrap_eligible_calls
 from cash.notebook.call_refs import UNHASHED_PREFIX, with_call_refs
 from cash.notebook.call_unit import CallCache, call_cost_floor_s, call_site_is_cacheable
+from cash.notebook.callee_reach import library_streams_read
 from cash.tracking.file_tracker import tracking_seconds
 from cash.value_hash import digest_via_pickle
 
@@ -536,6 +537,11 @@ class CallRouting:
             # closed instead: an exception here means "don't wrap", exactly
             # like a `False` verdict, never "crash the cell".
             try:
+                # A call drawing from a stream set on a library's module
+                # (``d()`` with ``d`` reading ``next(textwrap.cnt)``): a hit
+                # would not draw, and the next call drew what it had.
+                if library_streams_read(ast.unparse(call), self.shell.user_ns):
+                    return False
                 return call_site_is_cacheable(
                     call,
                     user_ns=self.shell.user_ns,

@@ -111,7 +111,7 @@ from ...analysis.analysis_budget import (
     no_analysis_budget,
 )
 from ...analysis.annotations import CacheAnnotation
-from ...analysis.ast_util import resolve_dotted_name
+from ...analysis.ast_util import called_names, handed_names, resolve_dotted_name
 from ...analysis.cacheability import analyze_statement, statement_writes_files
 from ...analysis.cacheability_decision import (
     cacheability_verdict,
@@ -152,6 +152,7 @@ from ..callee_reach import (
     CWD,
     ENVIRON,
     import_state_writes,
+    library_streams_read,
     module_globals,
     module_state_writes,
     rebound_modules,
@@ -210,7 +211,9 @@ from .unseen_writes import (
     UNREADABLE,
     UNREADABLE_REASON,
     UNSEEN_WRITES_REASON,
+    called_methods,
     live_writers,
+    unreadable_changers,
     unseen_writers,
     writers_without_a_trace,
 )
@@ -1205,6 +1208,20 @@ class StatementProcessor:
         log_diagnostic(logger, "NOTEBOOK-UNSEEN-WRITES", what, fix)
         warn_diagnostic(CashWarning, "NOTEBOOK-UNSEEN-WRITES", what, fix)
 
+    def _tell_unreadable_changers(self, run: StatementRun, what: str) -> None:
+        """Warn, once per statement, that it calls a function whose text
+        cannot be read (`unreadable_changers`): it runs every time."""
+        said = f"unreadable\n{run.code}"
+        if said in self._unseen_warned:
+            return
+        self._unseen_warned.add(said)
+        fix = (
+            "define the function in a cell or a file instead of through exec or a compiled string, or put "
+            "'# @cash:assume-safe' on the statement if what it changes does not matter."
+        )
+        log_diagnostic(logger, "NOTEBOOK-UNSEEN-WRITES", what, fix)
+        warn_diagnostic(CashWarning, "NOTEBOOK-UNSEEN-WRITES", what, fix)
+
     def _still_refused_for_unseen_writes(self, run: StatementRun, place: str) -> None:
         """Refuse *run*, whose trace holds no writer, when its statement was
         refused for one this session and that writer is still alive."""
@@ -1523,6 +1540,19 @@ class StatementProcessor:
             run.skip_cache = True
             run.value_varies = True
             return
+        unreadable = unreadable_changers(
+            called_names(run.tree) | handed_names(run.tree) | called_methods(run.tree), self.shell.user_ns
+        )
+        if unreadable:
+            names = ", ".join(repr(n) for n in unreadable)
+            run.metrics["uncacheable_reasons"].append(
+                f"Calls {names}, whose text cannot be read (defined through exec, or compiled from a string): "
+                f"what it changes cannot be told, so the statement runs every time"
+            )
+            run.skip_cache = True
+            run.value_varies = True
+            self._tell_unreadable_changers(run, run.metrics["uncacheable_reasons"][-1])
+            return
         drawn = drawn_stream_inputs(run.tree, run.inputs, run.outputs, self.shell.user_ns)
         if drawn:
             run.metrics["uncacheable_reasons"].append(
@@ -1532,6 +1562,14 @@ class StatementProcessor:
             run.skip_cache = True
             run.value_varies = True
             run.drew_from_stream = any(isinstance(self.shell.user_ns.get(name), io.IOBase) for name in drawn)
+            return
+        drawn = library_streams_read(run.code, self.shell.user_ns)
+        if drawn:
+            run.metrics["uncacheable_reasons"].append(
+                f"Reads from {', '.join(drawn)}, an iterator or stream set on a library's module: "
+                f"a cache hit would not advance it, so the statement runs every time"
+            )
+            run.skip_cache = True
             return
         looked_at = reads_open_handle(run.inputs - run.outputs, self.shell.user_ns)
         if looked_at:
