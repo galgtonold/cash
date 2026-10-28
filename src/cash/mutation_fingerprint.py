@@ -99,7 +99,9 @@ def _sync_state(obj: Any) -> str | None:
     tasks not done), a ``queue.SimpleQueue`` or ``multiprocessing.Queue``
     (its size), a ``threading.Event`` (whether it is set), a ``Lock`` or
     ``RLock`` (whether it is held, and by whom), a ``Semaphore`` (its
-    count) and a ``Condition`` (its lock and its waiters)."""
+    count) and a ``Condition`` (its lock and its waiters). Also an
+    ``itertools.count``, which from Python 3.14 does not pickle at all: its
+    ``repr`` (``count(3)``) is its whole state."""
     import queue
     import threading
 
@@ -108,6 +110,8 @@ def _sync_state(obj: Any) -> str | None:
             with obj.mutex:
                 items = list(obj.queue)
                 return f"queue|{obj.unfinished_tasks}|{[id(item) for item in items]}"
+        if type(obj) is itertools.count:
+            return "count|" + repr(obj)
         if isinstance(obj, queue.SimpleQueue):
             return f"simple queue|{obj.qsize()}"
         if isinstance(obj, threading.Event):
