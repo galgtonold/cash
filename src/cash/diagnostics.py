@@ -477,6 +477,8 @@ def short_diagnostic(code: str, what: str, fix: str | None = None, *, more: str 
     if items:
         sentence = f"{sentence.rstrip(' .:')}: {list_gist(items)}"
     if fix and fix.strip():
+        if not sentence.rstrip().endswith((".", "!", "?")):
+            sentence = f"{sentence.rstrip()}."
         sentence = f"{sentence} Fix: {' '.join(fix.split())}"
     where = doc_url(code) if more is None else f"{more}; {doc_url(code)}"
     sentence = _INLINE_CODE.sub(r"`\1`", sentence)
@@ -557,11 +559,45 @@ def warn_diagnostic(
     message = render_diagnostic(code, what, fix)  # raises on an unknown code
     instance = category(message)
     instance.code = code
+    level = _user_frame_level()
+    if location is None and not _blames_user_code(level):
+        location = _running_cell()
     if location is not None:
         _hide_source_lines()
         warnings.warn_explicit(instance, category, filename=location[0], lineno=location[1], registry=None)
         return
-    _warn_at(instance, _user_frame_level(), None)
+    _warn_at(instance, level, None)
+
+
+def _blames_user_code(level: int | None) -> bool:
+    """Is the frame *level* names (`_user_frame_level`, counted from
+    `warn_diagnostic`) the user's code? A statement's own check runs under
+    IPython's machinery: the nearest frame outside cash is ipykernel's
+    ``ipkernel.py:460`` or ``contextlib.py:144``, which tells a reader
+    nothing."""
+    if level is None:
+        return False
+    from .install_paths import is_user_code_file  # imports what imports this module
+
+    try:
+        return is_user_code_file(sys._getframe(level).f_code.co_filename)
+    except ValueError:  # deeper than the stack
+        return False
+
+
+def _running_cell() -> tuple[str, int] | None:
+    """The cell IPython runs now, as cash's notebook warnings name it
+    (``<cash>:N``), or None outside IPython."""
+    ipython = sys.modules.get("IPython")
+    try:
+        shell = ipython.get_ipython() if ipython is not None else None
+    except Exception:  # noqa: BLE001 - a half-imported IPython: blamed as before
+        return None
+    if shell is None:
+        return None
+    from .notebook.ipython.cell_count import running_cell_count  # the notebook package imports this one
+
+    return ("<cash>", running_cell_count(shell))
 
 
 def warn_diagnostic_message(
