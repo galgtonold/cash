@@ -74,3 +74,22 @@ def test_a_closure_a_library_module_holds_draws_again(tmp_path, shape):
         "print('R', a, b)",
     ]
     check(notebook(f"closure-on-a-module-{shape}", cells, names=["a", "b"]), tmp_path, ["floors0"]).assert_ok()
+
+
+@pytest.mark.integration
+@pytest.mark.fresh_kernel
+@pytest.mark.timeout(600)
+def test_a_closure_over_a_count_in_a_tuple_draws_again(tmp_path):
+    """``mk()`` returning a function over its own ``itertools.count()``, held
+    in a tuple on ``textwrap``: the call ``mk()`` was stored, and the
+    second Run All was handed the
+    closure the first had drawn on: ``2, 3`` where plain Python draws
+    ``0, 1``. Kept out of the cache as the closures above are."""
+    cells = [
+        "import time, itertools, functools, collections\nimport numpy as np\nimport pandas as pd\nimport textwrap",
+        "def mk():\n    it = itertools.count()\n    def f():\n        return next(it)\n    return f\ntextwrap.t = (mk(),)",
+        "a = (time.sleep(0.05), textwrap.t[0]())[1]",
+        "b = (time.sleep(0.3), textwrap.t[0]())[1]",
+        "print('R', a, b)",
+    ]
+    check(notebook("closure-over-a-count-in-a-tuple", cells, names=["a", "b"]), tmp_path, ["floors0"]).assert_ok()
