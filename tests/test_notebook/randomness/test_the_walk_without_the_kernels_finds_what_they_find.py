@@ -105,3 +105,35 @@ def test_each_object_is_met_once_and_a_repeat_is_dropped():
     assert call_key._new_in([second, third], seen) == [third]
     assert call_key._new_in([Holder, Holder, Holder], seen) == [Holder]
     assert call_key._new_in([Holder], seen) == []
+
+
+class _Shell:
+    """The IPython shell's stand-in: it holds the whole session, past the
+    walk's bounds."""
+
+    def __init__(self):
+        self.user_ns = {f"v{i}": (lambda i=i: i) for i in range(12_000)}
+
+
+@pytest.mark.parametrize("pure", [True, False], ids=["pure", "kernels"])
+def test_the_shell_is_left_out_with_and_without_the_kernels(monkeypatch, pure):
+    """``def f(x, ip=get_ipython())`` holds no stream. Without the kernels
+    the walk met objects by address over 16 and skipped the shell by its
+    address: never matched, it was walked past the bounds, and a call
+    reaching it was never stored."""
+    if not pure and _native.kernels is None:
+        pytest.skip("the C kernels are not built")
+    shell = _Shell()
+    monkeypatch.setattr(value_watch, "shells", lambda: [shell])
+
+    def f(x, ip=shell):
+        return x
+
+    def mk(sh, it):
+        def h():
+            return sh, next(it)
+
+        return h
+
+    assert _verdict(f, monkeypatch, pure) is False
+    assert _verdict(mk(shell, itertools.count()), monkeypatch, pure) is True
