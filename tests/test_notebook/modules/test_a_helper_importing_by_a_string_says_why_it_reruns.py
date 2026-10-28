@@ -40,3 +40,26 @@ def test_it_runs_every_time_with_a_warning(cash_magics, tmp_path, monkeypatch, b
     assert cash_magics.shell.user_ns["y"] == 12
     assert len(said) == 1, [str(w.message) for w in said]
     assert "importlib.import_module" in str(said[0].message)
+
+
+def test_a_loop_calling_it_warns_once(cash_magics, tmp_path, monkeypatch):
+    """Each pass of a loop is its own run of the statement: the warning came
+    once per pass (fifty for fifty)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(__import__("sys").modules, "wmod", raising=False)
+    (tmp_path / "wmod.py").write_text("def scale(x):\n    return x * 2\n", encoding="utf-8")
+    cells = [
+        f"import time\ndef g(vals, name='wmod'):\n    time.sleep(0.01)\n    {BODIES['import_module_by_a_name']}\n"
+        "    return sum(scale(v) for v in vals)",
+        "tot = 0\nfor i in range(6):\n    tot += g([i])",
+    ]
+    said = []
+    for _ in range(2):
+        for cell in cells:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                run_cash_cell(cash_magics, cell, cells=cells)
+            said += [w for w in caught if getattr(w.message, "code", None) == "KEY-UNTRACKABLE-DEP"]
+    assert cash_magics.shell.user_ns["tot"] == 30
+    assert len(said) == 1, [str(w.message) for w in said]

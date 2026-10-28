@@ -1242,10 +1242,12 @@ class StatementProcessor:
         """Say once per statement that it runs every time because what it
         reaches is looked up by a string its trace cannot follow
         (``KEY-UNTRACKABLE-DEP``): ``m = importlib.import_module(name)`` in
-        a helper, then ``m.scale(x)``."""
-        if run.source_hash in self._by_string_told:
+        a helper, then ``m.scale(x)``. Keyed by its text without the loop's
+        pass marker, so a loop's fifty passes say it once."""
+        told = run.verdict_hash or run.source_hash
+        if told in self._by_string_told:
             return
-        self._by_string_told.add(run.source_hash)
+        self._by_string_told.add(told)
         fix = "import what it needs by name (`from wmod import scale`), so the key names the module."
         log_diagnostic(logger, "KEY-UNTRACKABLE-DEP", reason, fix)
         warn_diagnostic(CashCacheIneffectiveWarning, "KEY-UNTRACKABLE-DEP", reason, fix)
