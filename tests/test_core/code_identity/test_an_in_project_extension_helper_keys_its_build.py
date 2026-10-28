@@ -18,6 +18,7 @@ import time
 
 import pytest
 
+from tests._modules import forget_module
 from tests._scripts import run_python
 
 pytestmark = [pytest.mark.timeout(300)]
@@ -115,7 +116,7 @@ def test_depending_on_it_is_not_inert(compiler, tmp_path, monkeypatch):
     (proj / "fastops.c").write_text(C_SOURCE, encoding="utf-8")
     _build(proj, 10)
     monkeypatch.syspath_prepend(str(proj))
-    monkeypatch.delitem(sys.modules, "fastops", raising=False)
+    forget_module(monkeypatch, "fastops")
     fastops = importlib.import_module("fastops")
 
     def f(x):

@@ -15,6 +15,7 @@ import sys
 import pytest
 
 from cash import Cash
+from tests._modules import forget_module
 
 pytestmark = pytest.mark.skipif(sys.version_info < (3, 12), reason="traces are recorded on Python 3.12+")
 
@@ -35,7 +36,7 @@ def build(n):
 def hostile(tmp_path, monkeypatch):
     (tmp_path / "hostile_class.py").write_text(MODULE, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
-    monkeypatch.delitem(sys.modules, "hostile_class", raising=False)
+    forget_module(monkeypatch, "hostile_class")
     import hostile_class
 
     return hostile_class

@@ -159,13 +159,14 @@ def test_a_function_only_the_namespace_holds_is_found_through_a_value_holding_th
 
 def test_a_function_bound_in_the_namespace_answers_without_a_scan_of_every_object(monkeypatch):
     scans = []
-    real = gc.get_referrers
+    real = held_functions._referrers_or_none
 
-    def counting(*objects):
+    def counting(objects, stop=None):
+        # `gc.get_referrers`, or the heap read that stands in for it.
         scans.append(len(objects))
-        return real(*objects)
+        return real(objects, stop)
 
-    monkeypatch.setattr(held_functions.gc, "get_referrers", counting)
+    monkeypatch.setattr(held_functions, "_referrers_or_none", counting)
     assert held_functions.notebook_functions_exist(_notebook("def helper():\n    return 1"))
     assert scans == []
     # One no name binds is still found, by the scan.

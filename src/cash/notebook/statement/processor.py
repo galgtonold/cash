@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import functools
+import hashlib
 import io
 import logging
 import os
@@ -44,7 +45,7 @@ from cash.notebook.compiled_source import register_cell_source
 from cash.notebook.consumables import drawn_stream_inputs
 from cash.notebook.per_item_reruns import MIN_COST_S as PER_ITEM_MIN_COST_S
 from cash.notebook.read_handles import reaches_read_handle
-from cash.notebook.statement import sparse_order
+from cash.notebook.statement import reducer_writes, sparse_order
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.amplification import AmplificationGuard
 from cash.notebook.statement.call_routing import CallRouting
@@ -67,6 +68,7 @@ from cash.notebook.statement.expression_memo import ExpressionMemo
 from cash.notebook.statement.file_deps import StatementFileDeps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
 from cash.notebook.statement.hit import CacheHitServer
+from cash.notebook.statement.identity_holders import IdentityHeld
 from cash.notebook.statement.imports import (
     import_bindings_hold,
     import_needs_reexecution,
@@ -184,6 +186,8 @@ from ..shared_objects import (
     ViewBasesCutShort,
     WalkBudgetExceeded,
     anchors_held,
+    forget_heap_unreadable,
+    heap_unreadable,
     history_names,
     is_value,
     library_value_types,
@@ -291,6 +295,50 @@ def _entry_values(cached_data: Any) -> dict[str, Any] | None:
     return variables if isinstance(variables, dict) else None
 
 
+_PYTHON = ".".join(map(str, sys.version_info[:3]))
+
+
+def _cut_short_why(what: str, budget: float) -> str:
+    """Why a statement whose share check was cut short re-runs: out of time,
+    or a Python that cannot read what holds an object (`heap_unreadable`)."""
+    if heap_unreadable():
+        return f"{what} cannot be done on Python {_PYTHON} with asyncio loaded, so it re-runs every time"
+    return f"{what} would take longer than {budget:.1f}s, more than the statement is worth, so it re-runs every time"
+
+
+def _bound_names(tree: ast.AST | None) -> set[str] | None:
+    """The names *tree* binds: assigned, defined, imported; None when there
+    is no tree to read them from."""
+    if tree is None:
+        return None
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+            found.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            found.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            found.update((a.asname or a.name).split(".")[0] for a in node.names)
+    return found
+
+
+def _pointed_into(name: str, why: IdentityHeld) -> IdentityHeld:
+    """`in_place.refusal`'s *why* for the object of *name*, with what the
+    warning says (``NOTEBOOK-IDENTITY-HELD``)."""
+    if why.kind == "too many":
+        found = (
+            "the notebook holds a container too big to look through for a weak reference to, or the id() of, "
+            "an object in it"
+        )
+    else:
+        found = f"the notebook holds {why.kind} of an object in it"
+    what = (
+        f"this loop changes '{name}' in place, and {found}. A restore would hand '{name}' copies of its "
+        "objects, so the loop runs every time instead."
+    )
+    return IdentityHeld(why, name, why.kind, what)
+
+
 def _is_while(tree: ast.Module | None) -> bool:
     """Whether *tree* is a single ``while`` loop."""
     body = attribute_or(tree, "body", None) or []
@@ -350,6 +398,8 @@ class StatementProcessor:
         self._share_refused: dict[str, list] = {}
         #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
         self._share_unchecked_warned: set[str] = set()
+        #: Statements already warned NOTEBOOK-IDENTITY-HELD about.
+        self._identity_held_warned: set[str] = set()
         #: Statements already told about NOTEBOOK-ANALYSIS-BUDGET.
         self._past_budget_told: set[str] = set()
         #: What a statement's text last took to run, in seconds, or None when
@@ -779,6 +829,7 @@ class StatementProcessor:
             'saved_time', 'restored_vars', 'code', plus optional keys depending
             on cache status.
         """
+        forget_heap_unreadable()
         run = StatementRun(
             code,
             ttl=ttl,
@@ -804,6 +855,7 @@ class StatementProcessor:
                 if shadow is not None:
                     shadow.statement_served(run, done)
                 self._advance_rng(run)
+                self._move_what_reducers_wrote(run)
                 return done
             with self._executing(run) as runner:
                 self._offer_digests(run, runner)
@@ -820,6 +872,7 @@ class StatementProcessor:
             return result
         finally:
             self._advance_rng(run)
+            self._move_what_reducers_wrote(run)
 
     @staticmethod
     def _begin_recording(shadow: Any, run: StatementRun) -> Any:
@@ -892,6 +945,7 @@ class StatementProcessor:
                 if shadow is not None:
                     shadow.statement_served(run, done)
                 self._advance_rng(run)
+                self._move_what_reducers_wrote(run)
                 return done
             with self._executing(run) as runner:
                 unit = self._begin_recording(shadow, run)
@@ -906,6 +960,7 @@ class StatementProcessor:
             return result
         finally:
             self._advance_rng(run)
+            self._move_what_reducers_wrote(run)
 
     def _prepare(self, run: StatementRun) -> ProcessResult | None:
         """Analyse, key and look up *run*'s statement, before it may execute.
@@ -921,6 +976,8 @@ class StatementProcessor:
         if effects.unanalysed:
             run.metrics["uncacheable_reasons"].extend(effects.unanalysed)
             run.skip_cache = True
+        if effects.unrooted is not None:
+            self._tell_unrooted_write(run, effects.unrooted)
         if run.tree is not None and calls_ipython(run.tree):
             run.metrics["uncacheable_reasons"].append(_IPYTHON_REASON)
             run.skip_cache = True
@@ -994,6 +1051,11 @@ class StatementProcessor:
                 # Stored before code it ran was seen to change what its
                 # outputs leave out: it runs, and is not stored again.
                 cached_data = None
+            elif not cached_data and _shadow.SHADOW.changed_since_traced(run.cache_key):
+                # No entry (cleared, or a rerun not stored again), and code
+                # it ran when last stored changed: it can bind a new value
+                # under the same key, with no entry to compare it with.
+                run.key_blind = True
         elif run.needs_trace:
             cached_data = None
             run.key_blind = True
@@ -1156,6 +1218,22 @@ class StatementProcessor:
         log_diagnostic(logger, "NOTEBOOK-UNSEEN-WRITES", what, fix)
         warn_diagnostic(CashWarning, "NOTEBOOK-UNSEEN-WRITES", what, fix)
 
+    def _tell_unrooted_write(self, run: StatementRun, what: str) -> None:
+        """Warn, once per statement, that it writes into an object no name
+        in its text roots (`unrooted_write`): it runs every time, and what
+        reads any variable after it runs again."""
+        said = f"unrooted\n{run.code}"
+        if said in self._unseen_warned:
+            return
+        self._unseen_warned.add(said)
+        fix = (
+            "write into the variable by its name (`points[7].x = -3`, `setattr(points[7], 'x', -3)`), "
+            "or put '# @cash:assume-safe' on the statement if the change does not matter."
+        )
+        what = f"{what}, so the statement runs every time and every variable is taken as changed by it"
+        log_diagnostic(logger, "NOTEBOOK-UNSEEN-WRITES", what, fix)
+        warn_diagnostic(CashWarning, "NOTEBOOK-UNSEEN-WRITES", what, fix)
+
     def _still_refused_for_unseen_writes(self, run: StatementRun, place: str) -> None:
         """Refuse *run*, whose trace holds no writer, when its statement was
         refused for one this session and that writer is still alive."""
@@ -1214,6 +1292,8 @@ class StatementProcessor:
         """Read *run*'s annotation, warn about its randomness, start its
         metrics and parse it."""
         code = run.code
+        reducer_writes.watch(self.shell.user_ns)
+        run.reducer_mark = reducer_writes.runs_now()
         run.effective_ttl, run.force_persist, run.skip_cache, run.allow_random = statement_directives(
             run.annotation, run.ttl, self.persist_all
         )
@@ -1601,6 +1681,8 @@ class StatementProcessor:
         for name in names:
             obj = captured_vars.get(name)
             why = in_place.refusal(obj, self.shell.user_ns) or in_place.holder_refusal(name, obj, values)
+            if isinstance(why, IdentityHeld):
+                self._warn_identity_held(run, _pointed_into(name, why))
             if why is not None:
                 self._unstore_in_place(run, f"In-place mutation on: {name} ({why}; statement re-executes)")
                 return
@@ -2558,6 +2640,11 @@ class StatementProcessor:
                 # may change an output another check walked; it never reads
                 # the facts over wider leaves those checks took.
                 _plain_data.forget_wider_facts()
+                if not run.skip_cache and reducer_writes.writes_into(run.reducer_mark, self.shell.user_ns):
+                    # A reducer of the user's that cash ran wrote: stored, the
+                    # entry would be served without that write
+                    # (`_move_what_reducers_wrote`).
+                    run.skip_cache = True
                 if run.metrics.get("stored_in_place"):
                     self._keep_stored_in_place(run)
                 if not run.skip_cache:
@@ -2710,10 +2797,7 @@ class StatementProcessor:
                     }
         except WalkBudgetExceeded:
             run.share_unchecked = True
-            reason = (
-                f"finding which other variables hold objects of its outputs would take longer than "
-                f"{budget:.1f}s, more than the statement is worth, so it re-runs every time"
-            )
+            reason = _cut_short_why("finding which other variables hold objects of its outputs", budget)
         if reason is None and anchors:
             run.anchors = {name: self.tracking_state.current_session_hashes[name] for name in anchors}
             run.anchor_links = anchor_links | set(anchors)
@@ -2725,6 +2809,8 @@ class StatementProcessor:
         # cost the check twice.
         run.share_gave_up = gave_up[0] if gave_up else None
         self._note_share_refusal(run, reason)
+        if isinstance(reason, IdentityHeld):
+            self._warn_identity_held(run, reason)
         if reason is not None:
             run.skip_cache = True
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)
@@ -2890,10 +2976,16 @@ class StatementProcessor:
         user_ns = self.shell.user_ns
         # A class or a module: an object of the user's, or a list, is looked
         # down into by the outputs' own check already.
+        # Changed in place, not bound: a class a method changed through its
+        # object (``type(self).held.append(d)`` in ``sbox.hold(d)``) is an
+        # output the statement does not read by name.
+        bound = _bound_names(run.tree)
         changed = {
             name
-            for name in run.outputs & run.inputs
-            if name in user_ns and instance_of(user_ns[name], (type, types.ModuleType))
+            for name in run.outputs
+            if (name in run.inputs or (bound is not None and name not in bound))
+            and name in user_ns
+            and instance_of(user_ns[name], (type, types.ModuleType))
         }
         if not changed:
             return
@@ -2911,8 +3003,9 @@ class StatementProcessor:
         hidden = attribute_or(self.shell, "user_ns_hidden", None) or {}
         cash_held = [*self._calls.held_call_results(), echo, run.metrics, *history]
         gave_up = GaveUp()
+        budget = share_check_budget(cost)
         try:
-            with walk_budget(share_check_budget(cost)):
+            with walk_budget(budget):
                 share_group(
                     handed,
                     user_ns,
@@ -2923,8 +3016,23 @@ class StatementProcessor:
                     gave_up=gave_up,
                 )
         except WalkBudgetExceeded:
-            pass  # what was found by then is linked; the rest stays unlinked
+            # Out of time, or not known (`shared_objects._TRAVERSE_LOOPS`): a
+            # holder not found would go unlinked, and its later change would
+            # serve what was stored. The statement is not stored, as when the
+            # share check of its outputs runs out.
+            run.share_unchecked = True
+            run.skip_cache = True
+            run.metrics.setdefault("uncacheable_reasons", []).append(
+                _cut_short_why("finding what keeps the variables it hands to code", budget)
+            )
+            self._warn_share_unchecked(run, handed, cost)
+            gave_up.complete = False
         edges = self.tracking_state.derivation_edges
+        if not gave_up.complete:
+            # A holder not found may be any class or module the statement
+            # changed: each is linked, a needless miss at worst.
+            record_shared_object_edges(edges, handed, changed)
+            return
         for owners, holders in gave_up.links:
             kept_by = set(holders) & changed
             if kept_by:
@@ -3018,9 +3126,26 @@ class StatementProcessor:
         def foreign(name: str) -> bool:
             return name in hidden or is_history_name(name)
 
+        def cut_short(links: list) -> list:
+            # Cut short: an output may hold what any value the statement read
+            # holds (``head = points[:1000]``, ``list(points)``), and unlinked,
+            # a write through it left a cached read of the input below
+            # answering with the old content. Linked to each of them, such a
+            # write moves it on: a needless miss at worst (`_view_bases_of`).
+            read = {
+                other
+                for other in run.inputs
+                if other in user_ns
+                and other not in names
+                and not foreign(other)
+                and not is_value(user_ns[other], value_types)
+            }
+            return [*links, (outputs, read)] if read else links
+
         budget = share_check_budget(cost)
         if run.share_gave_up is not None:
-            return list(run.share_gave_up.links), run.share_gave_up.complete
+            links, complete = list(run.share_gave_up.links), run.share_gave_up.complete
+            return (links if complete else cut_short(links)), complete
         timed_out = run.share_unchecked
         if not timed_out:
             try:
@@ -3037,7 +3162,8 @@ class StatementProcessor:
                 # closure, a function's defaults): the variables found beside
                 # it, not a search from the outputs up, which would climb
                 # through the library until its budget ran out.
-                return list(gave_up.links), gave_up.complete
+                links = list(gave_up.links)
+                return (links if gave_up.complete else cut_short(links)), gave_up.complete
             except WalkBudgetExceeded:
                 timed_out = True
         found_names, complete = referring_names(
@@ -3047,7 +3173,8 @@ class StatementProcessor:
             skip_name=lambda name: foreign(name) or name in names,
             ignore=[captured_vars, run.metrics, echo, *cash_held],
         )
-        return [(outputs, found_names)], complete
+        links = [(outputs, found_names)]
+        return (links if complete else cut_short(links)), complete
 
     def _fallback_seconds(self, run: StatementRun, fallback_floor: float) -> float:
         """How long the search from the outputs up (`referring_names`) may
@@ -3122,14 +3249,19 @@ class StatementProcessor:
             return
         self._share_unchecked_warned.add(run.source_hash)
         listed = ", ".join(f"'{name}'" for name in sorted(outputs))
+        if heap_unreadable():
+            within = f": Python {_PYTHON} with asyncio loaded cannot read what holds an object"
+            upgrade = " Python 3.12.6 or later reads it."
+        else:
+            within, upgrade = f" within {share_check_budget(cost):.1f}s", ""
         what = (
-            f"cash could not find, within {share_check_budget(cost):.1f}s, every other variable that holds "
-            f"an object of {listed} or is held in one. A later change made in place through such a variable "
-            f"may not re-run the cells that read {listed}, or the other way round."
+            f"cash could not find every other variable that holds an object of {listed} or is held in "
+            f"one{within}. A later change made in place through such a variable may not re-run the cells "
+            f"that read {listed}, or the other way round."
         )
         fix = (
             "if a later cell changes these objects in place through another name, rebind instead "
-            "(x = x + [v]) or re-run the cells that read them yourself."
+            f"(x = x + [v]) or re-run the cells that read them yourself.{upgrade}"
         )
         log_diagnostic(logger, "NOTEBOOK-SHARE-UNCHECKED", what, fix)
         # At the cell, as cash's other notebook warnings are: with no
@@ -3139,6 +3271,94 @@ class StatementProcessor:
 
         location = ("<cash>", running_cell_count(self.shell))
         warn_diagnostic(CashWarning, "NOTEBOOK-SHARE-UNCHECKED", what, fix, location=location)
+
+    def _warn_identity_held(self, run: StatementRun, held: IdentityHeld) -> None:
+        """Warn, once per statement, that a value it binds finds another
+        object by identity, so it re-runs (``NOTEBOOK-IDENTITY-HELD``)."""
+        if run.source_hash in self._identity_held_warned:
+            return
+        self._identity_held_warned.add(run.source_hash)
+        what = held.what or (
+            f"'{held.name}' holds {held.kind} of an object it does not hold itself. Restored from the cache, "
+            "it would find another object, or none, so this statement runs every time instead."
+        )
+        fix = (
+            "keep the object itself rather than a weak reference or its id(), or build the registry in the "
+            "cell that builds the objects it points at."
+        )
+        log_diagnostic(logger, "NOTEBOOK-IDENTITY-HELD", what, fix)
+        from cash.notebook.ipython.cell_count import running_cell_count  # the ipython package imports this one
+
+        location = ("<cash>", running_cell_count(self.shell))
+        warn_diagnostic(CashWarning, "NOTEBOOK-IDENTITY-HELD", what, fix, location=location)
+
+    def _move_what_reducers_wrote(self, run: StatementRun) -> None:
+        """Move on the variables a reducer of the user's could have written,
+        when one that writes ran in a pickle of cash's while *run*'s
+        statement was processed (`reducer_writes`): ``__reduce__`` doing
+        ``df.at[3, 'o'] = ...`` changes ``df``, which no statement named,
+        and a reader of ``df`` below would be served what it read before.
+        Each moves to a lineage carrying its content now, so a reader
+        misses when the write changed it and hits when it did not. Every
+        variable moves when the code's reach cannot be read. Warned
+        (``NOTEBOOK-REDUCE-WROTE``), naming the class."""
+        refused = reducer_writes.refused_since(run.reducer_mark)
+        if refused:
+            self._warn_reducer_refused(run, refused)
+        found = reducer_writes.writers(run.reducer_mark)
+        if not found:
+            return
+        user_ns = self.shell.user_ns
+        names = reducer_writes.reach(found, user_ns)
+        if names is not None and not names:
+            # It writes nothing of the notebook's (`reducer_writes.writes_into`).
+            run.reducer_mark = reducer_writes.runs_now()
+            return
+        lineages = self.tracking_state.variable_lineage
+        moved = set(lineages) if names is None else names
+        moved = {name for name in moved if name in lineages and name in user_ns}
+        for name in sorted(moved):
+            value = user_ns[name]
+            try:
+                content = no_cache_value_digest(value)
+            except Exception:  # noqa: BLE001 - a value that cannot be read moves to one of its own
+                content = "fresh:" + secrets.token_hex(16)
+            lineage = hashlib.sha256(f"reduce-wrote:{lineages[name]}:{content}".encode()).hexdigest()
+            self.tracking_state.lineage.record(name, lineage, value=value)
+            # Its session hash follows: the value now is the one a later cell
+            # starts from (`StaleValueGuard`).
+            self.lineage_builder.note_content_hash(self.tracking_state, name, value, lineage)
+        if moved:
+            self.lineage_builder.replay_derivation_bumps(self.tracking_state, moved, set(), code=run.code)
+        # What the reads above ran is this statement's too, and moved nothing more.
+        run.reducer_mark = reducer_writes.runs_now()
+        classes = ", ".join(sorted({writer.name for writer in found}))
+        what = (
+            f"cash pickled a value of {classes} to hash or store it, and its own "
+            f"__reduce__ or __getstate__ changes other values: "
+            + ("every variable" if names is None else ", ".join(sorted(moved)) or "nothing tracked")
+            + " counted as changed, and the statement was not stored"
+        )
+        fix = (
+            "Have the class's __reduce__ / __getstate__ only read: change other "
+            "values in the statement that needs them instead"
+        )
+        warn_diagnostic(CashWarning, "NOTEBOOK-REDUCE-WROTE", what, fix)
+
+    @staticmethod
+    def _warn_reducer_refused(run: StatementRun, classes: list[str]) -> None:
+        """Warn that cash did not run the writing reducers of *classes*
+        (`reducer_writes.refuses`), so *run*'s statement was not stored."""
+        run.reducer_mark = reducer_writes.runs_now()
+        what = (
+            f"a value of {', '.join(dict.fromkeys(classes))} has a __reduce__ or __getstate__ that changes "
+            "other values, so cash did not pickle it: the statement was not stored, and runs again next time"
+        )
+        fix = (
+            "Have the class's __reduce__ / __getstate__ only read: change other "
+            "values in the statement that needs them instead"
+        )
+        warn_diagnostic(CashWarning, "NOTEBOOK-REDUCE-WROTE", what, fix)
 
     def _move_holders(self, run: StatementRun, metadata: StatementCacheMetadata | None) -> set[str]:
         """Move on the lineages of the variables *metadata*'s entry stores

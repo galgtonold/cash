@@ -179,6 +179,8 @@ def test_what_a_restore_into_cannot_give_runs_the_loop(nb_runner, make, loop, re
     assert "RESTORED" not in str(statuses)
     if why is not None:
         assert why in _shown(nb_runner, 2)
+    if why in ("weak reference", "keeps the id()", "too big to look through"):
+        assert "NOTEBOOK-IDENTITY-HELD" in _shown(nb_runner, 2)
 
 
 @pytest.mark.fresh_kernel

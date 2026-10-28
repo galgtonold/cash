@@ -39,6 +39,8 @@ from typing import Any
 from cash._user_attrs import attribute_or
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
+from .identity_holders import IdentityHeld
+
 __all__ = ["bound_as_a_copy", "holder_refusal", "ready", "refusal", "restorable_kind", "restore_into"]
 
 #: Containers restored by their contents.
@@ -89,13 +91,19 @@ def refusal(obj: Any, namespace: Mapping[str, Any] | None = None) -> str | None:
     refs = [ref for item in weakly for ref in weakref.getweakrefs(item) if id(ref) not in parts]
     held = _held_by_the_notebook(parts, refs, namespace or {})
     if held == _WEAK:
-        return "a weak reference points at an object it holds, and a restore would hand it a copy"
+        return IdentityHeld(
+            "a weak reference points at an object it holds, and a restore would hand it a copy", "", "a weak reference"
+        )
     if held == _BY_ID:
-        return "a container keeps the id() of an object it holds, and a restore would hand it a copy"
+        return IdentityHeld(
+            "a container keeps the id() of an object it holds, and a restore would hand it a copy", "", "an id()"
+        )
     if held == _TOO_MANY:
-        return (
+        return IdentityHeld(
             "the notebook holds containers too big to look through for a weak reference to, or the id() "
-            "of, an object it holds"
+            "of, an object it holds",
+            "",
+            "too many",
         )
     return None
 

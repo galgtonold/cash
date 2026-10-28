@@ -117,6 +117,9 @@ class StatementRun:
 
     metrics: ProcessResult = field(default_factory=dict)  # type: ignore[assignment]
     process_start: float = 0.0
+    #: `reducer_writes.runs_now` when the statement began: the reducers of
+    #: the user's cash's pickles run from then on are this statement's.
+    reducer_mark: int = 0
     tree: ast.Module | None = None
     effective_ttl: int | None = None
     force_persist: bool = False

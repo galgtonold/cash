@@ -40,7 +40,7 @@ from ..tracking.randomness import (
     replayable,
 )
 from . import code_trace, hit_memo
-from .arg_hashing import CALL_POLARS, HANDED_DIGESTS, PLAIN_CENSUS, CallPolarsDigests, call_polars
+from .arg_hashing import CALL_POLARS, HANDED_DIGESTS, KEYED_PARTS, PLAIN_CENSUS, CallPolarsDigests, call_polars
 from .arg_key import keyed_arguments
 from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
@@ -1225,11 +1225,13 @@ class CallRunner:
         handed = claim_handed_digests()
         # Before the key: a fast hit remembered from this call must not
         # outlive a change made while the key was built (`hit_memo`).
-        epochs_before = hit_memo.epochs(spec)
+        epochs_before = hit_memo.epochs(spec, args, kwargs)
         token = HANDED_DIGESTS.set(handed) if handed is not None else None
         call.polars_args = CallPolarsDigests()
         polars_token = CALL_POLARS.set(call.polars_args)
         copies = self._keys.split_for_key(spec, args, kwargs)
+        call.keyed_parts = {}
+        keyed_token = KEYED_PARTS.set(call.keyed_parts)
         try:
             if copies is None:
                 built, call.capture_watch, call.ledger = self._keys.resolve(spec, args, kwargs)
@@ -1239,6 +1241,7 @@ class CallRunner:
                     spec, copies.args, copies.kwargs, split, refused=copies.refused
                 )
         finally:
+            KEYED_PARTS.reset(keyed_token)
             CALL_POLARS.reset(polars_token)
             if token is not None:
                 HANDED_DIGESTS.reset(token)
@@ -1405,7 +1408,7 @@ class CallRunner:
         run.observer = self._purity.make_effect_observer()
         run.observer.arg_snapshot = self._purity.argument_snapshot(func_name, args, kwargs)
         run.observer.arg_identities, run.observer.arg_identities_cover_all = self._purity.argument_identities(
-            func_name, args, kwargs
+            func_name, args, kwargs, call.keyed_parts
         )
         run.observer.held_generators = self._purity.held_generators(func_name, args, kwargs)
         # Watch the global RNG across the call: a draw inside the body is an

@@ -42,7 +42,7 @@ from ..server_discovery import (
     labextension_installed,
     set_notebook_path,
 )
-from ..statement import ProcessResult, StatementProcessor
+from ..statement import ProcessResult, StatementProcessor, reducer_writes
 from ..statement.capture import replay_outputs
 from ..statement.run import ECHO_FIELD
 from ..tracking_state import TrackingState
@@ -428,6 +428,9 @@ class CashMagics(Magics):
         self._auto_cache_enabled = False
         if self._io_release is not None:
             self._io_release()  # releases once, however often %cash_off runs
+        # Cash's pickles outside the notebook's statements run the user's
+        # reducers again, as they do in a script.
+        reducer_writes.unwatch()
         self.global_ttl = None
         print("[OK] Auto-caching disabled")
 
