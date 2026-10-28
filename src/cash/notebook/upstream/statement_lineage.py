@@ -52,7 +52,7 @@ from ...tracking.randomness import (
 from ...tracking.read_classification import stat_key
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
-from ..cache_key import CacheKeyContext, compute_cache_key, statement_source_hash
+from ..cache_key import CacheKeyContext, compute_cache_key, draw_key, statement_source_hash
 from ..callee_reach import helper_seeded_modules, module_state_names
 from ..consumables import (
     drawn_stream_inputs,
@@ -1219,7 +1219,7 @@ class StatementLineage:
         # after the run or the hit (`carrier_advances`).
         advanced = self._advanced_carriers(stmt_code, lookup.carriers, inputs, outputs, virtual_lineage)
         for name in advanced:
-            virtual_lineage[name] = advanced_carrier_lineage(cache_key, name)
+            virtual_lineage[name] = advanced_carrier_lineage(draw_key(cache_key), name)
             self._generator_lineages.add(virtual_lineage[name])
 
         if lookup.hit:
@@ -1434,7 +1434,7 @@ class StatementLineage:
         in_entry = metadata.get("carriers_advanced") if metadata else None
         advanced = self._advanced_carriers(stmt_code, in_entry, inputs, set(), virtual_lineage)
         for name in advanced:
-            virtual_lineage[name] = advanced_carrier_lineage(cache_key, name)
+            virtual_lineage[name] = advanced_carrier_lineage(draw_key(cache_key), name)
             self._generator_lineages.add(virtual_lineage[name])
         return advanced
 
