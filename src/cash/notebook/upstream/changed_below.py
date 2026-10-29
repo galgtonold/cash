@@ -18,7 +18,7 @@ import types
 
 from cash.control_markers import strip_markers
 
-from ..._user_attrs import attribute_or, builtin_base, instance_of
+from ..._user_attrs import attribute_or, builtin_base, instance_of, own_dict
 from ...analysis.ast_util import parse_cached
 from ...analysis.cacheability import analyze_statement
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
@@ -127,10 +127,18 @@ def _held_directly(obj: object) -> tuple[list, bool]:
     # ``values()`` or ``__len__`` may print or count, where plain Python
     # never asked.
     base = builtin_base(obj)
-    if base is dict:
-        return _first_items(dict.values(obj), dict.__len__(obj))
-    if base in (list, tuple, set, frozenset):
-        return _first_items(base.__iter__(obj), base.__len__(obj))
+    if base is not None:
+        if base is dict:
+            items, whole = _first_items(dict.values(obj), dict.__len__(obj))
+        else:
+            items, whole = _first_items(base.__iter__(obj), base.__len__(obj))
+        attrs = own_dict(obj) if type(obj) is not base else None
+        if attrs:
+            # A subclass's own attributes: one keeping its items there
+            # (``self._d``) held nothing by its builtin storage alone.
+            more, all_of_them = _first_items(dict.values(attrs), dict.__len__(attrs))
+            return items + more, whole and all_of_them
+        return items, whole
     if instance_of(obj, functools.partial):
         return [obj.func, *obj.args, *obj.keywords.values()], True
     children = [

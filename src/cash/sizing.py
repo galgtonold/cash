@@ -497,14 +497,26 @@ def estimate_object_size(obj: Any, _depth: int = 0) -> int:
         if type_name in ("bytes", "bytearray"):
             return len(obj)
         if issubclass(type(obj), (list, tuple)):
-            return _estimate_indexable(obj, _depth)
+            return _estimate_indexable(obj, _depth) + _estimate_own_attrs(obj, _depth)
         if issubclass(type(obj), dict):
-            return _estimate_dict(obj, _depth)
+            return _estimate_dict(obj, _depth) + _estimate_own_attrs(obj, _depth)
         if issubclass(type(obj), (set, frozenset)):
-            return _estimate_set(obj, _depth)
+            return _estimate_set(obj, _depth) + _estimate_own_attrs(obj, _depth)
         return sys.getsizeof(obj)
     except Exception:  # noqa: BLE001 - an object's own lookups (``__class__`` raising) are not cash's error
         return sys.getsizeof(obj)
+
+
+def _estimate_own_attrs(obj: Any, _depth: int) -> int:
+    """What a container subclass holds besides its items: its ``__dict__``
+    and slots. One keeping its items there (``self._d``), its builtin
+    storage empty, was estimated at 80 bytes holding 16 MB."""
+    if type(obj) in _CONTAINER_KINDS:
+        return 0
+    attrs = own_dict(obj)
+    values = list(attrs.values()) if attrs is not None else []
+    values += [v for v in (_slot_value(obj, name) for name in _slot_names(type(obj))) if v is not None]
+    return sum(estimate_object_size(value, _depth + 1) for value in values)
 
 
 def _estimate_indexable(obj: Any, _depth: int) -> int:
@@ -624,6 +636,10 @@ def _own_footprint(obj: Any, seen: set[int], stack: list) -> int:
                 size += sampled
         elif not instance_of(obj, _HELD_BY_NAME):
             size += _attrs_footprint(obj, seen, held)
+        if type(obj) not in _CONTAINER_KINDS and issubclass(type(obj), _CONTAINER_KINDS):
+            # A subclass's own attributes: one keeping its items there
+            # (``self._d``), its builtin storage empty, read as 80 bytes.
+            size += _attrs_footprint(obj, seen, held)
     except Exception:
         logger.debug("Could not estimate size of %s object", type(obj).__name__, exc_info=True)
         return 0
@@ -631,6 +647,8 @@ def _own_footprint(obj: Any, seen: set[int], stack: list) -> int:
     stack += held
     return size
 
+
+_CONTAINER_KINDS = (dict, list, tuple, set, frozenset)
 
 #: What a copy of a value refers to rather than holds: pickled by name.
 _HELD_BY_NAME = (type, types.ModuleType, types.FunctionType, types.BuiltinFunctionType, types.MethodType)

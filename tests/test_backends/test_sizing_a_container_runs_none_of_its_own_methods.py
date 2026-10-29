@@ -54,3 +54,45 @@ def test_sizing_and_the_look_below_call_nothing_of_the_class(base):
     held, whole = _held_directly(value)
     assert whole and len(held) == 5
     assert CALLS == []
+
+
+class _Elsewhere(dict):
+    """Keeps its items in an attribute; its builtin storage stays empty."""
+
+    def __init__(self):
+        super().__init__()
+        self._d = {}
+
+    def __setitem__(self, key, value):
+        self._d[key] = value
+
+    def __len__(self):
+        return len(self._d)
+
+    def __iter__(self):
+        return iter(self._d)
+
+    def values(self):
+        return self._d.values()
+
+
+class _Extra(list):
+    __slots__ = ("extra",)
+
+
+def test_a_container_keeping_its_items_in_its_attributes_is_sized_by_them():
+    """Sized by its builtin storage alone, a dict subclass holding two
+    8 MB arrays in ``self._d`` read as 80 bytes, and the look below it saw
+    nothing and called the walk complete."""
+    np = pytest.importorskip("numpy")
+    value = _Elsewhere()
+    value["a"] = np.zeros(1_000_000)
+    value["b"] = np.ones(1_000_000)
+    assert estimate_object_size(value) > 15_000_000
+    assert memory_footprint(value) > 15_000_000
+    held, _whole = _held_directly(value)
+    assert any(item is value._d for item in held)
+    slotted = _Extra()
+    slotted.extra = np.zeros(1_000_000)
+    assert estimate_object_size(slotted) > 7_000_000
+    assert memory_footprint(slotted) > 7_000_000
