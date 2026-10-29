@@ -8,6 +8,7 @@ import functools
 import gc
 import hashlib
 import inspect
+import itertools
 import logging
 import operator
 import pickle
@@ -35,6 +36,7 @@ from ..canonical_form import (
 )
 from ..content_hashers import (
     BUILTIN_CONTENT,
+    IMMUTABLE_ITEM_KINDS,
     ColumnPieces,
     builtin_family_of,
     builtin_hash,
@@ -409,7 +411,9 @@ def _axis_arrays(axis: Any) -> list:
     return [axis._data]
 
 
-def frame_borrows_its_data(obj: Any, held: Any = None, since: int = 0) -> bool:
+def frame_borrows_its_data(
+    obj: Any, held: Any = None, since: int = 0, lists: list | None = None, kept: dict | None = None
+) -> bool:
     """Whether *obj*'s data sits in memory something outside pandas may write.
 
     The memo trusts copy-on-write: while the memo's shallow copy *held*
@@ -444,11 +448,20 @@ def frame_borrows_its_data(obj: Any, held: Any = None, since: int = 0) -> bool:
     Called when the memo stores a frame, as well as when it is looked up:
     a caller's array written and then dropped between two calls leaves no
     reference to find at the second.
+
+    A block of Python objects is vouched for only when its items cannot
+    change: immutable scalars. With *lists*, a block whose items are all
+    lists of immutable scalars (``groupby(...).agg(list)``) is let through
+    too, and its lists are appended to *lists*: what they hold can change
+    in place, which no reference count shows, so the caller checks them
+    item by item against a copy (`FrameDigests`). A list in *kept*, the
+    copies, is not read again for what its items are: the check finds the
+    same objects in it or fails.
     """
     if -1 in _EXPOSED:
         return True
     try:
-        found = _frame_memory(obj, held)
+        found = _frame_memory(obj, held, lists, kept)
         if found is None:
             return True
         arrays, pandas_refs = found
@@ -463,7 +476,9 @@ def frame_borrows_its_data(obj: Any, held: Any = None, since: int = 0) -> bool:
         return True
 
 
-def _frame_memory(obj: Any, held: Any) -> tuple[list, dict[int, int]] | None:
+def _frame_memory(
+    obj: Any, held: Any, lists: list | None = None, kept: dict | None = None
+) -> tuple[list, dict[int, int]] | None:
     """``(arrays, {id(array): references pandas holds})`` for everything
     *obj* keeps its data in, or ``None`` when some of it cannot be vouched
     for (see `frame_borrows_its_data`).
@@ -530,7 +545,9 @@ def _frame_memory(obj: Any, held: Any) -> tuple[list, dict[int, int]] | None:
         if isinstance(holder, block_type):
             values = holder.values
             if type(values) is np.ndarray and values.dtype == object and not immutable_items(values):
-                return None  # Python objects change in place: `s[0].append(...)`
+                # Python objects change in place: `s[0].append(...)`
+                if lists is None or not _lists_of_immutables(values, lists, kept):
+                    return None
             if not reference(values):
                 return None
             shared = holder.refs.referenced_blocks
@@ -570,6 +587,95 @@ def _frame_memory(obj: Any, held: Any) -> tuple[list, dict[int, int]] | None:
             if other is not None and not is_pin(other):  # the RAM tier's mark on a frozen block
                 hold(other)
     return arrays, pandas_refs
+
+
+def _lists_of_immutables(values: Any, lists: list, kept: dict | None = None) -> bool:
+    """Whether every item of the object array *values* is a list of
+    immutable scalars (`immutable_items`) of exact types no attribute can be
+    set on, or a pandas date with none set (`_scalars_of_no_state`); each
+    one is appended to *lists*. One in *kept* is taken as one."""
+    from pandas.api.types import infer_dtype
+
+    items = values.ravel(order="K").tolist()
+    if not items or any(type(item) is not list for item in items):
+        return False
+    kept = kept or {}
+    if not all(
+        id(item) in kept or (infer_dtype(item, skipna=True) in IMMUTABLE_ITEM_KINDS and _scalars_of_no_state(item))
+        for item in items
+    ):
+        return False
+    lists.extend(items)
+    return True
+
+
+def _scalars_of_no_state(items: list) -> bool:
+    """Whether each of *items* is of an exact type that holds nothing but
+    its value, or a pandas date or missing value with no attribute set on
+    it: the key reads what is set (``t.tag = 1``), so a list of them is
+    unchanged only while that is nothing (`_lists_unchanged`). A subclass
+    of ``int`` or ``datetime`` holds its attributes too, and so does a
+    time zone of the user's own (``tz.h = 5``): a date is trusted only with
+    no zone or one of the standard library's (`_plain_zones`)."""
+    plain, stateful = _plain_scalar_types()
+    kinds = set(map(type, items))
+    if not kinds <= plain | stateful:
+        return False
+    zoned, zones = _plain_zones()
+    if not kinds.isdisjoint(zoned):
+        dates = itertools.compress(items, map(zoned.__contains__, map(type, items)))
+        if not set(map(type, map(_TZINFO, dates))) <= zones:
+            return False
+    return kinds.isdisjoint(stateful) or not any(map(_OWN_STATE, _stateful_of(items)))
+
+
+_TZINFO = operator.attrgetter("tzinfo")
+
+
+@functools.cache
+def _plain_zones() -> tuple[frozenset[type], frozenset[type]]:
+    """The scalar types that carry a time zone, and the types of zone that
+    hold nothing a later write can change: none, ``datetime.timezone`` and
+    ``zoneinfo.ZoneInfo``."""
+    import datetime
+    import zoneinfo
+
+    import pandas as pd
+
+    return (
+        frozenset((datetime.datetime, datetime.time, pd.Timestamp)),
+        frozenset((type(None), datetime.timezone, zoneinfo.ZoneInfo)),
+    )
+
+
+def _stateful_of(items: list) -> list:
+    """The pandas dates and missing values of *items*, which can carry
+    attributes (`_plain_scalar_types`)."""
+    _, stateful = _plain_scalar_types()
+    return list(itertools.compress(items, map(stateful.__contains__, map(type, items))))
+
+
+#: What is set on an object: None when nothing is. ``object.__getstate__``
+#: reads it without making the dict reading ``__dict__`` makes.
+_OWN_STATE = getattr(object, "__getstate__", None) or (lambda obj: getattr(obj, "__dict__", None) or None)
+
+
+@functools.cache
+def _plain_scalar_types() -> tuple[frozenset[type], frozenset[type]]:
+    """The exact scalar types no attribute can be set on, and the pandas
+    ones that take attributes (dates, ``NaT``, ``NA``)."""
+    import datetime
+    import decimal
+
+    import numpy as np
+    import pandas as pd
+
+    plain = {int, float, complex, bool, str, bytes, type(None), decimal.Decimal}
+    plain |= {datetime.datetime, datetime.date, datetime.time, datetime.timedelta}
+    numpy_kinds = (np.number, np.bool_, np.datetime64, np.timedelta64, np.str_, np.bytes_)
+    plain |= {kind for kind in np.sctypeDict.values() if issubclass(kind, numpy_kinds)}
+    stateful = {pd.Timestamp, pd.Timedelta, type(pd.NaT), type(pd.NA)}
+    return frozenset(plain), frozenset(stateful)
 
 
 def _hold_cached_indexes(index: Any, hold: Callable, pd: Any) -> None:
@@ -1178,12 +1284,13 @@ class FrameDigests:
         entry = entries.get(id(obj))
         if entry is None:
             return None
-        wref, held, signature, content_hash, since, _pieces = entry
-        if frame_borrows_its_data(obj, held, since):
+        wref, held, signature, content_hash, since, _pieces, kept = entry
+        lists: list = []
+        if frame_borrows_its_data(obj, held, since, lists if kept else None, kept):
             entries.pop(id(obj), None)
             return None
         try:
-            if wref() is obj and frame_signature(obj) == signature:
+            if wref() is obj and frame_signature(obj) == signature and _lists_unchanged(lists, kept):
                 return content_hash
         except Exception:  # noqa: BLE001 - a pandas internals change: just re-hash
             pass
@@ -1225,15 +1332,19 @@ class FrameDigests:
         try:
             watch_array_handles()
             held = obj.copy(deep=False)
-            if frame_borrows_its_data(obj, held, since):
+            lists: list = []
+            if frame_borrows_its_data(obj, held, since, lists):
                 return
+            # What each list of a block of lists held when the content was
+            # hashed, which no copy-on-write guards (`_lists_unchanged`).
+            kept = {id(items): (items, tuple(items), _stateful_of(items)) for items in lists}
             signature = frame_signature(obj)
             entries = self._entries
             key = id(obj)
             wref = weakref.ref(obj, lambda _ref, key=key, entries=entries: entries.pop(key, None))
         except Exception:  # noqa: BLE001 - the memo is a speedup; hash every time
             return
-        self._entries[key] = (wref, held, signature, content_hash, since, pieces or {})
+        self._entries[key] = (wref, held, signature, content_hash, since, pieces or {}, kept)
         if pieces:
             columns = self._columns
             if len(columns) > 64 * self._entries.maxsize:
@@ -1248,6 +1359,29 @@ class FrameDigests:
                 owners = columns.get(column, ())
                 alive = (owner for owner in owners if owner != key and owner in self._entries)
                 columns[column] = (key, *alive)[:_COLUMN_OWNERS]
+
+
+def _lists_unchanged(lists: list, kept: dict[int, tuple[list, tuple, list]]) -> bool:
+    """Whether *lists*, the lists a frame's blocks of lists hold now, are
+    the ones *kept* when its content was hashed, each still holding the
+    same objects, which are immutable (`_lists_of_immutables`), the dates
+    among them still with no attribute set: then what they hold is
+    unchanged. The same objects, not equal ones: an item
+    swapped for an equal one is caught too, as the read would give the
+    same bytes either way."""
+    if len({id(items) for items in lists}) != len(kept):
+        return False
+    for items in lists:
+        known = kept.get(id(items))
+        if known is None or known[0] is not items:
+            return False
+        before = known[1]
+        if len(items) != len(before) or not all(map(operator.is_, items, before)):
+            return False
+        if any(map(_OWN_STATE, known[2])):
+            # An attribute set on a date it holds since (``t.tag = 2``).
+            return False
+    return True
 
 
 class _KnownPieces:
