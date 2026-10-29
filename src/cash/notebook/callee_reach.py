@@ -52,6 +52,7 @@ __all__ = [
     "Reach",
     "class_data",
     "helper_seeded_modules",
+    "notebook_module",
     "module_globals",
     "module_holders",
     "module_state_names",
@@ -176,7 +177,7 @@ def _leads_nowhere(namespace: Mapping[str, Any], root: str, attrs: tuple[str, ..
     for attr in reversed(attrs):
         if not instance_of(obj, types.ModuleType):
             return True  # `_Found.chain` stops here
-        if _is_local(obj) or _set_on_by_the_notebook(obj, attr):
+        if _holds_notebook_data(obj) or _set_on_by_the_notebook(obj, attr):
             return False
         obj = vars(obj).get(attr)
         if not _inert(obj):
@@ -1643,10 +1644,14 @@ class _Found:
         """``mod.sub.attr`` (*root* ``mod``, *attrs* innermost first): each
         local module on the way, and what it ends at."""
         obj = self.namespace.get(root)
+        path = root
         for attr in reversed(attrs):
             if not instance_of(obj, types.ModuleType):
                 return
-            label = f"{obj.__name__}.{attr}" if _is_local(obj) or _set_on_by_the_notebook(obj, attr) else None
+            label = _data_label(obj, path, attr, self.namespace)
+            if label is None and _set_on_by_the_notebook(obj, attr):
+                label = f"{obj.__name__}.{attr}"
+            path = f"{path}.{attr}"
             obj = vars(obj).get(attr)
             self.value(obj, label)
 
@@ -1796,6 +1801,52 @@ def _is_local(module: types.ModuleType) -> bool:
         return is_local_module(module)
     except (TypeError, AttributeError):
         return False
+
+
+def _holds_notebook_data(module: types.ModuleType) -> bool:
+    """Is what *module* holds the notebook's data: a local module, or one
+    made as the notebook ran (``m = types.ModuleType('m')``; ``m.v = ...``),
+    whose names only the notebook sets."""
+    return _is_local(module) or _made_as_it_ran(module)
+
+
+def _data_label(module: types.ModuleType, path: str, attr: str, namespace: Mapping[str, Any]) -> str | None:
+    """The label of *module*'s ``attr``, reached as ``path.attr`` from
+    *namespace*: ``mylib.K`` for a local module, by its name; ``@m.v`` for
+    one made as the notebook ran, by the notebook's name for it.
+
+    Not by a made module's own name, which tells nothing apart: ``m =
+    fresh()`` twice, two ``ModuleType('m')``, one named ``textwrap`` or like
+    another in ``sys.modules``. Each read another module's ``v`` when the
+    label was looked up. Through a namespace other than the notebook's,
+    none: it is not followed (`notebook_module`)."""
+    if _is_local(module):
+        return f"{module.__name__}.{attr}"
+    if not _made_as_it_ran(module) or namespace.get("__name__") != "__main__":
+        return None
+    _NOTEBOOK[0] = namespace
+    return f"@{path}.{attr}"
+
+
+#: The notebook's namespace, once a reach labelled a made module's data
+#: from it (`_data_label`).
+_NOTEBOOK: list[Mapping[str, Any] | None] = [None]
+
+
+def notebook_module(path: str) -> types.ModuleType | None:
+    """The module made as the notebook ran that the notebook's name *path*
+    (``m``, ``cfg.sub``) is bound to now, read without running code: what
+    a ``@m.v`` label (`_data_label`) is looked up in."""
+    namespace = _NOTEBOOK[0]
+    if namespace is None:
+        return None
+    root, *attrs = path.split(".")
+    obj = namespace.get(root)
+    for attr in attrs:
+        if not instance_of(obj, types.ModuleType):
+            return None
+        obj = vars(obj).get(attr)
+    return obj if instance_of(obj, types.ModuleType) and _made_as_it_ran(obj) else None
 
 
 def _local_homes(value: Any) -> Iterable[str]:

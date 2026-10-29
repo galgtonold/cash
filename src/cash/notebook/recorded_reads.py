@@ -31,10 +31,11 @@ from dataclasses import dataclass, field, fields
 from typing import Any, NamedTuple
 
 from .._memo import CODE_OBJECTS, LruMemo
+from .._user_attrs import attribute_or
 from ..analysis.ast_util import parse_cached
 from ..effects import environment_digests, environment_entry_digest, environment_parts_component
 from ..sizing import estimate_object_size
-from .callee_reach import module_state_writes, names_read, reached_user_code
+from .callee_reach import module_state_writes, names_read, notebook_module, reached_user_code
 from .lineage_formula import (
     UNHASHABLE,
     module_data_digest,
@@ -320,10 +321,20 @@ def snapshot(
             if present and not _immutable(value):
                 if reached is None:
                     reached = may_change_module_data(code, user_ns)
-                if _module_of(label) not in reached and not _named_in(code, user_ns, value):
+                if _reached_name(label) not in reached and not _named_in(code, user_ns, value):
                     continue
         found[(kind, label)] = _current(kind, label)
     return found
+
+
+def _reached_name(label: str) -> str | None:
+    """The name `may_change_module_data` gives the module *label* lives in:
+    a made module's own name for a ``@m.v`` label (`module_state_writes`
+    names it so)."""
+    name = _module_of(label)
+    if name is not None and name.startswith("@"):
+        return attribute_or(_loaded_module(name), "__name__", None)
+    return name
 
 
 def may_change_module_data(code: str, user_ns: Mapping[str, Any] | None) -> frozenset[str]:
@@ -429,9 +440,17 @@ def _module_of(label: str) -> str | None:
     parts = label.split(".")
     for end in range(len(parts) - 1, 0, -1):
         name = ".".join(parts[:end])
-        if issubclass(type(sys.modules.get(name)), types.ModuleType):
+        if issubclass(type(_loaded_module(name)), types.ModuleType):
             return name
     return None
+
+
+def _loaded_module(name: str) -> Any:
+    """The module *name*: loaded, or, for ``@path``, the one made as the
+    notebook ran that the notebook's *path* is bound to (`notebook_module`)."""
+    if name.startswith("@"):
+        return notebook_module(name[1:])
+    return sys.modules.get(name)
 
 
 def _module_value(label: str) -> tuple[bool, Any]:
@@ -439,7 +458,7 @@ def _module_value(label: str) -> tuple[bool, Any]:
     name = _module_of(label)
     if name is None:
         return False, None
-    obj: Any = sys.modules[name]
+    obj: Any = _loaded_module(name)
     for attr in label[len(name) + 1 :].split("."):
         namespace = vars(obj) if issubclass(type(obj), (types.ModuleType, type)) else None
         if namespace is None or attr not in namespace:
