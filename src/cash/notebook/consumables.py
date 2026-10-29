@@ -52,12 +52,14 @@ from typing import Any
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 
 from ..analysis.mutation_effects import captured_call_receivers
-from ..analysis.mutations import _NON_CONSUMING_FUNCS, consumed_input_names
+from ..analysis.mutations import NON_CONSUMING_FUNCS, consumed_input_names
 from .read_handles import reaches_read_handle
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "GENERATOR_TYPES",
+    "QUEUE_TYPES",
     "drawn_stream_inputs",
     "is_consumable_unrestorable",
     "consumable_state",
@@ -99,13 +101,13 @@ _ITERTOOLS_TYPES: tuple[type, ...] = tuple(
     if instance_of(t, type)
 )
 
-_GENERATOR_TYPES: tuple[type, ...] = (
+GENERATOR_TYPES: tuple[type, ...] = (
     types.GeneratorType,
     types.AsyncGeneratorType,
     types.CoroutineType,
 )
 
-_QUEUE_TYPES: tuple[type, ...] = tuple(
+QUEUE_TYPES: tuple[type, ...] = tuple(
     t for t in (attribute_or(queue, n, None) for n in ("Queue", "SimpleQueue")) if instance_of(t, type)
 )
 
@@ -155,9 +157,9 @@ def is_consumable_unrestorable(obj: Any) -> bool:
 
     See the module docstring for why both halves are required.
     """
-    if instance_of(obj, _QUEUE_TYPES):
+    if instance_of(obj, QUEUE_TYPES):
         return True
-    if instance_of(obj, _GENERATOR_TYPES):
+    if instance_of(obj, GENERATOR_TYPES):
         return True
     if not _is_self_iterator(obj):
         # Not a self-iterator: re-reading does not advance it (list, dict view,
@@ -208,7 +210,7 @@ def consumable_state(obj: Any) -> Any | None:
     # Queues report their depth directly. ``qsize`` is documented as
     # approximate under concurrency, but a notebook cell draining a queue is
     # the single reader, so it is exact here.
-    if instance_of(obj, _QUEUE_TYPES):
+    if instance_of(obj, QUEUE_TYPES):
         try:
             return ("qsize", obj.qsize())
         except (NotImplementedError, AttributeError, ValueError):
@@ -383,7 +385,7 @@ def _left_where_it_is(node: ast.AST, parent: ast.AST | None) -> bool:
     return (
         isinstance(parent, ast.Call)
         and isinstance(parent.func, ast.Name)
-        and parent.func.id in _NON_CONSUMING_FUNCS
+        and parent.func.id in NON_CONSUMING_FUNCS
         and node is not parent.func
     )
 

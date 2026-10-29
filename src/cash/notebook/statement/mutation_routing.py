@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from .records import StatementRecords
     from .run import StatementRun
 
-__all__ = ["MutationRouting"]
+__all__ = ["MutationRouting", "functions_in"]
 
 logger = logging.getLogger(__name__)
 
@@ -567,7 +567,7 @@ def closure_writers_reached(tree: ast.AST | None, user_ns: Mapping[str, Any]) ->
         value = user_ns.get(name)
         # A function, or the functions a dict, list or tuple holds (``HOOKS
         # = {'r': rebind}``, then ``HOOKS['r']([0])``).
-        for fn in _functions_in(value):
+        for fn in functions_in(value):
             if changes_its_closure(fn):
                 # By its name, or the container's and the names the
                 # function it holds is bound to.
@@ -617,11 +617,11 @@ _CONTROL_STATEMENTS = (ast.For, ast.AsyncFor, ast.While, ast.If, ast.With, ast.A
 _CONTROL_BODY_FIELDS = frozenset({"body", "orelse", "finalbody", "handlers"})
 
 
-#: How many items of a container `_functions_in` looks at.
+#: How many items of a container `functions_in` looks at.
 _ITEMS_LOOKED_AT = 1000
 
 
-def _functions_in(value: Any) -> list[types.FunctionType]:
+def functions_in(value: Any) -> list[types.FunctionType]:
     """*value* if a function, or the functions an exact dict, list or tuple
     of at most `_ITEMS_LOOKED_AT` items holds."""
     if type(value) is types.FunctionType:
@@ -657,7 +657,7 @@ def sharing_a_cell(writers: set[str], user_ns: Mapping[str, Any]) -> set[str]:
     cells = {
         id(cell)
         for name in writers
-        for fn in _functions_in(user_ns.get(name))
+        for fn in functions_in(user_ns.get(name))
         for cell in attribute_or(fn, "__closure__", None) or ()
     }
     if not cells:

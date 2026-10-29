@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from .file_effects import SideEffectVisitor
 
 __all__ = [
+    "NON_CONSUMING_FUNCS",
     "MUTATING_METHODS",
     "ACCUMULATOR_METHODS",
     "PANDAS_INPLACE_METHODS",
@@ -1193,7 +1194,7 @@ def crossref_reassigned_vars(tree: ast.Module | None) -> frozenset[str]:
 # Builtins that merely *inspect* a name without advancing it. Everything else
 # that receives the name as an argument is assumed to consume it — see
 # ``consumed_input_names``.
-_NON_CONSUMING_FUNCS = frozenset(
+NON_CONSUMING_FUNCS = frozenset(
     {
         "type",
         "id",
@@ -1274,7 +1275,7 @@ def consumed_input_names(tree: ast.Module | None) -> frozenset[str]:
         if (
             isinstance(parent, ast.Call)
             and isinstance(parent.func, ast.Name)
-            and parent.func.id in _NON_CONSUMING_FUNCS
+            and parent.func.id in NON_CONSUMING_FUNCS
             and name_node is not parent.func
         ):
             return False

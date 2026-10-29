@@ -20,7 +20,7 @@ from .._trace import trace_event
 from ..cache_key import statement_source_hash
 from ..call_key import TooMuchToLookThrough, holds_a_closure_with_state
 from ..stateful_carriers import carrier_kind_from_producer, stateful_carrier_kind
-from ..statement.mutation_routing import _functions_in
+from ..statement.mutation_routing import functions_in
 from ._types import ClassificationResult, ReexecutionPlan, SimulationResult, latest_producer
 from .carrier_fills import fills_carrier
 from .figure_writes import FigureWriteGuard
@@ -1094,7 +1094,7 @@ def _holds_it(names: Iterable[str], user_ns: Mapping[str, Any], fn: Any) -> bool
     (``HOOKS = {'r': rebind}``), as `closure_writers_reached` reaches it."""
     if type(fn) is not types.FunctionType:
         return False
-    return any(item is fn for held in map(user_ns.get, names) for item in _functions_in(held))
+    return any(item is fn for held in map(user_ns.get, names) for item in functions_in(held))
 
 
 def _called_names(code: str) -> frozenset[str]:

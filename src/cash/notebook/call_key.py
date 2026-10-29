@@ -697,13 +697,13 @@ def _stream_type(kind: type) -> Any:
     ``__next__`` is taken as an iterator without asking its ``__iter__``
     whether it hands back itself, which ran the user's code at every
     object of the walk."""
-    from cash.notebook.consumables import _GENERATOR_TYPES, _QUEUE_TYPES
+    from cash.notebook.consumables import GENERATOR_TYPES, QUEUE_TYPES
 
     if issubclass(kind, type):
         return _NOTHING  # a class: its members are looked into, not its iteration
     if issubclass(kind, random.Random) or _numpy_rng_type(kind):
         return _RNG
-    if issubclass(kind, (*_GENERATOR_TYPES, *_QUEUE_TYPES)):
+    if issubclass(kind, (*GENERATOR_TYPES, *QUEUE_TYPES)):
         return _STREAM
     mro = _CLASS_MRO(kind)
     if any("__next__" in _CLASS_DICT(c) for c in mro) and any("__iter__" in _CLASS_DICT(c) for c in mro):
