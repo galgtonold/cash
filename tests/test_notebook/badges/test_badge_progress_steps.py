@@ -66,11 +66,13 @@ def executor():
     that none of these assertions touch.
     """
     from cash.notebook.ipython.cell_executor import CellExecutor
+    from cash.notebook.tracking_state import TrackingState
 
     ex = CellExecutor.__new__(CellExecutor)
     ex._badges = _RecordingBadges()
     ex._statement_processor = _StubProcessor()
     ex._upstream_checker = None
+    ex.tracking_state = TrackingState()
     return ex
 
 

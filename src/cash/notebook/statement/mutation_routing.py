@@ -13,6 +13,7 @@ changing.
 from __future__ import annotations
 
 import ast
+import dis
 import types
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
@@ -287,9 +288,11 @@ class MutationRouting:
         bound it to that cash did not store (``pbar = ProgBar(...)``: its
         own parts hold it, or it is not worth an entry), the loop only calls
         methods on it and drops
-        what they return (``pbar.update()``), and nothing after the loop
-        reads it: not the rest of its top-level statement, the statements
-        below it in the cell, the cells below, or a function of the notebook.
+        what they return (``pbar.update()``), nothing else holds it or what
+        it holds (`_kept_to_itself`), and nothing after the loop reads it:
+        not the rest of its top-level statement, the statements below it in
+        the cell, the cells below, or a function of the notebook; none of
+        those may read the namespace by name (``eval``, ``globals()``).
         A hit then leaves it as it was, and once the statement finished its
         lineage says so (`TrackingState.unapplied`). Never while the upstream
         check rebuilds, or outside a notebook's cell."""
@@ -297,7 +300,7 @@ class MutationRouting:
         if not names or not state.unstored or state.running_cell is None:
             return set()
         below, at = state.read_by_later_cells, state.running_statement
-        if below is None or at is None:
+        if below is None or at is None or any(reader in below for reader in _NAMESPACE_READERS):
             return set()
         user_ns = self.shell.user_ns
         picked = {
@@ -316,7 +319,14 @@ class MutationRouting:
             return set()
         picked -= later
         picked = {name for name in picked if _loads(body[index], name) <= _loads(run.tree, name)}
-        return picked - _read_by_functions(user_ns, picked)
+        read = _read_by_functions(user_ns, picked | _NAMESPACE_READERS)
+        if read & _NAMESPACE_READERS:
+            return set()
+        return {
+            name
+            for name in picked - read
+            if _kept_to_itself(user_ns[name], name, user_ns, _methods_called(run.tree, name))
+        }
 
     def _route_receivers(
         self, run: StatementRun, effects: StatementEffects, mut_pre_route: set[str], fit_only: set[str] = frozenset()
@@ -622,8 +632,107 @@ def _is_structure(tree: ast.Module | None) -> bool:
     return tree is not None and len(tree.body) == 1 and is_control_structure(tree.body[0])
 
 
-#: Calls that read the namespace by name, which no text scan follows.
-_NAMESPACE_READERS = frozenset({"globals", "locals", "vars", "eval", "exec", "dir"})
+#: Calls and names that read the namespace by name, which no text scan follows.
+_NAMESPACE_READERS = frozenset({"globals", "locals", "vars", "eval", "exec", "dir", "get_ipython", "__main__"})
+
+#: Most objects `_kept_to_itself` looks at in what the object holds.
+_KEPT_MAX = 5000
+
+#: Values whose sharing changes nothing: they cannot be changed in place.
+_ATOMS = (str, bytes, int, float, complex, bool, type(None), range)
+
+
+def _methods_called(tree: ast.AST, name: str) -> set[str]:
+    """The methods *tree* calls on *name* (``bar.update()``)."""
+    return {
+        sub.func.attr
+        for sub in ast.walk(tree)
+        if isinstance(sub, ast.Call)
+        and isinstance(sub.func, ast.Attribute)
+        and isinstance(sub.func.value, ast.Name)
+        and sub.func.value.id == name
+    }
+
+
+def _kept_to_itself(obj: Any, name: str, user_ns: Mapping[str, Any], methods: set[str]) -> bool:
+    """Whether a hit may leave *obj* (bound to *name*) as it was without
+    another value changing with it: no other variable, container, default
+    or closure holds *obj* or anything it holds (``Bar(sink)`` appending to
+    the notebook's ``sink``), nothing it holds is notebook code, and the
+    notebook methods the loop calls on it (*methods*) name no notebook
+    value, class or namespace reader as a global. Streams it writes to are
+    output, which a hit shows again."""
+    import gc
+    import io
+
+    held: dict[int, Any] = {}
+    todo = [obj]
+    while todo:
+        item = todo.pop()
+        if isinstance(item, _ATOMS) or id(item) in held:
+            continue
+        if isinstance(item, (types.ModuleType, type, io.IOBase)):
+            continue
+        if isinstance(item, (types.FunctionType, types.MethodType, types.BuiltinFunctionType)):
+            owner = attribute_or(item, "__self__", None)
+            if isinstance(item, types.FunctionType) or isinstance(owner, types.ModuleType):
+                if attribute_or(item, "__module__", None) == "__main__":
+                    return False
+                continue
+            todo.append(owner)
+            continue
+        held[id(item)] = item
+        if len(held) > _KEPT_MAX:
+            return False
+        todo.extend(gc.get_referents(item))
+    if any(other is not name and id(value) in held for other, value in user_ns.items()):
+        return False
+    kept = list(held.values())
+    for holder in gc.get_referrers(*kept):
+        if id(holder) in held or holder is user_ns or holder is kept or isinstance(holder, types.FrameType):
+            continue
+        return False
+    for method in methods:
+        func = attribute_or(attribute_or(type(obj), method, None), "__func__", None) or attribute_or(
+            type(obj), method, None
+        )
+        if isinstance(func, types.FunctionType) and not _names_no_notebook_value(func, user_ns, set()):
+            return False
+    return True
+
+
+def _names_no_notebook_value(func: types.FunctionType, user_ns: Mapping[str, Any], seen: set[int]) -> bool:
+    """Whether notebook function *func*, and the notebook functions it
+    names, name as a global only modules, builtins and library code."""
+    if attribute_or(func, "__module__", None) != "__main__" or id(func) in seen:
+        return True
+    seen.add(id(func))
+
+    def globals_of(code: types.CodeType):
+        for ins in dis.get_instructions(code):
+            if ins.opname in ("LOAD_GLOBAL", "STORE_GLOBAL", "DELETE_GLOBAL", "LOAD_NAME"):
+                yield ins.argval
+        for const in code.co_consts:
+            if isinstance(const, types.CodeType):
+                yield from globals_of(const)
+
+    for global_name in globals_of(func.__code__):
+        if global_name in _NAMESPACE_READERS:
+            return False
+        if global_name not in user_ns:
+            continue
+        value = user_ns[global_name]
+        if isinstance(value, types.ModuleType):
+            continue
+        if isinstance(value, types.FunctionType) and _names_no_notebook_value(value, user_ns, seen):
+            continue
+        if (
+            isinstance(value, (type, types.BuiltinFunctionType))
+            and attribute_or(value, "__module__", None) != "__main__"
+        ):
+            continue
+        return False
+    return True
 
 
 def _loaded_names(nodes) -> set[str] | None:
