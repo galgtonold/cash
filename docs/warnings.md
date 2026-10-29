@@ -1796,7 +1796,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-FILE-ROUNDTRIP](#notebook-file-roundtrip) | notebook | a file written in this session is read back, so the read reruns after every write |
 | [NOTEBOOK-FORWARD-READ](#notebook-forward-read) | notebook | the cell reads a name only a cell below binds, so it runs uncached |
 | [NOTEBOOK-INPUT-UNBUILT](#notebook-input-unbuilt) | notebook | an input the cell's own cache entry was to rebuild was not, so the statement ran on the old value, unstored |
-| [NOTEBOOK-ITEMS-UNREAD](#notebook-items-unread) | notebook | an item of a container too big to look through is read by an index cash cannot tell, while a class of yours has a special method with effects: the statement runs every time |
+| [NOTEBOOK-ITEMS-UNREAD](#notebook-items-unread) | notebook | an item of a container too big to look through is read by an index cash cannot tell, while a class of yours has a special method with effects, or an iterator may sit in it: the statement runs every time |
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
 | [NOTEBOOK-NO-LIVE-READER](#notebook-no-live-reader) | notebook | cells above are read from the saved file, so an unsaved edit there is not seen |
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook's cells cannot be read; cells above the one you run are not re-checked |
@@ -2050,7 +2050,7 @@ not affected.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/analysis/handed_callables.py:_warn_too_big @70d49368, cash/analysis/handed_callables.py:special_classes_exist @fea8fff4, cash/analysis/handed_callables.py:ITEM_TYPES_AT == 100_000 -->
+<!-- claim: cash/analysis/handed_callables.py:_warn_too_big @70d49368, cash/analysis/handed_callables.py:special_classes_exist @fea8fff4, cash/analysis/handed_callables.py:ITEM_TYPES_AT == 100_000, cash/notebook/statement/processor.py:StatementProcessor._tell_items_unread @6eef6fc6 -->
 **What happened.** A statement, or a function of yours it calls, reads an
 item of a list, tuple or dict by an index cash cannot tell (`lst[i] + 1`),
 and the container holds more than 100,000 items, too many to look through
@@ -2059,12 +2059,17 @@ changes something outside its objects (`__add__` appending to a global
 list), so the operator may run it. The message names the container. It is
 shown once for each.
 
+It is also shown, once per statement, when a statement reads an item of a
+container by an index or method cash cannot follow (`[f(h[k]) for k in
+keys]`), and the container holds more objects than cash reads to rule out
+an iterator or stream in it, which a cache hit would not advance.
+
 **Why it matters.** Served from the cache, the special method would not
 run, and what it changes would not change. Cash runs the statement every
 time instead and does not store it.
 
 **What to do.** Read the item by a constant index or key, or keep objects
-of such classes in a smaller container.
+of such classes, or iterators and streams, in a smaller container.
 
 **When it is safe to ignore.** When what the special methods change does
 not matter to any cell: put `# @cash:assume-safe` on the statement.

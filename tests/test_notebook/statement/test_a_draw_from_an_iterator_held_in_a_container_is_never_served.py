@@ -141,3 +141,19 @@ def test_a_holder_past_the_objects_cash_reads_says_so(statement_processor, mock_
     assert second["status"] == CacheStatus.COMPUTED
     assert any("more objects than cash reads" in r for r in second["uncacheable_reasons"])
     assert not any("an iterator or stream" in r for r in second["uncacheable_reasons"])
+
+
+def test_a_holder_past_the_objects_cash_reads_warns_once(statement_processor):
+    """Rerun every time, the statement says so with a warning, not only on
+    its badge, and once."""
+    import warnings
+
+    _run(statement_processor, "class O:\n    pass\nh = {i: O() for i in range(30_000)}\nkeys = [0, 1]")
+    _run(statement_processor, "def f(x):\n    return 1")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for _ in range(2):
+            _run(statement_processor, "s = [f(h[k]) for k in keys]")
+    said = [w for w in caught if "NOTEBOOK-ITEMS-UNREAD" in str(w.message)]
+    assert len(said) == 1, [str(w.message) for w in caught]
+    assert "'h'" in str(said[0].message)
