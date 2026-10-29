@@ -2055,7 +2055,7 @@ the top.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @bc641899, cash/notebook/statement/processor.py:StatementProcessor._warn_identity_held @a5aa8bda, cash/notebook/statement/processor.py:_pointed_into @41961608 -->
+<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @bc0327a6, cash/notebook/statement/processor.py:StatementProcessor._warn_identity_held @a5aa8bda, cash/notebook/statement/processor.py:_pointed_into @41961608 -->
 **What happened.** A value the statement binds finds another object by
 identity, not by holding it: a weak reference (`wr = weakref.ref(p.child)`,
 a `WeakValueDictionary`) to an object the value does not hold, or an `int`
@@ -2080,7 +2080,7 @@ statement.
 A loop that changes an object in place (`p.update(i)`) is not restored
 into it either when the notebook holds a weak reference to, or the `id()`
 of, an object inside it, or holds a container of more than 10,000 items
-that holds anything but numbers, strings and the like, which cash does not
+that holds anything but numbers, strings and the like or tuples of them, which cash does not
 look inside: a restore would hand those copies. Nor is an array the loop
 only assigns into (`out[i] = v`) bound to its stored copy when the notebook
 holds a weak reference to it or its `id()`. The loop runs every time, and

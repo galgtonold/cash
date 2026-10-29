@@ -154,7 +154,21 @@ def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> Iden
         held = _Walk(user_kinds, seen=set(walk.seen), quiet=True, candidates=frozenset(candidates))
         held.id_arrays = [] if in_arrays else None
         held.run([v for k, v in user_ns.items() if k != name and not is_history_name(k)])
-        if held.cut or held.found or not candidates.isdisjoint(held.seen) or (in_arrays and _any_held(in_arrays, held)):
+        if held.cut and not held.found:
+            # Not known to be an id(): the notebook's objects were not all
+            # looked through.
+            return IdentityHeld(
+                f"'{name}' holds a number that could be an id(), and the notebook holds more objects than cash "
+                "looks through, so the statement re-runs every time",
+                name,
+                "a container cash cannot read",
+                what=(
+                    f"'{name}' holds a number that could be the id() of an object, and the notebook holds more "
+                    "objects than cash looks through, so cash cannot tell whether it is one. This statement "
+                    "runs every time instead."
+                ),
+            )
+        if held.found or not candidates.isdisjoint(held.seen) or (in_arrays and _any_held(in_arrays, held)):
             return IdentityHeld(
                 f"'{name}' holds the id() of an object the notebook holds; restored, the object would be "
                 "another one, so the statement re-runs every time",
@@ -177,6 +191,8 @@ def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> Iden
     return None
 
 
+#: Every digit as ``0``: a run of seven digits is then ``"0000000"``.
+_DIGITS_AS_ZERO = str.maketrans("123456789", "000000000")
 #: The lines of text `as_address` may read as a number.
 _NUMBER_LINES = re.compile(r"^(?:0[xX][0-9a-fA-F]{5,16}|[0-9]{7,18})$", re.MULTILINE)
 
@@ -470,8 +486,12 @@ class _Walk:
         if str in kinds:
             # The text spelling a number, found by one search of it all.
             texts = flat if kinds == {str} else [item for item in flat if type(item) is str]
-            self.numbers.update(map(as_address, _NUMBER_LINES.findall("\n".join(texts))))
-            self.numbers.discard(None)
+            text = "\n".join(texts)
+            # Most text has no run of seven digits and no "0x": found by
+            # plain searches, far quicker than the pattern's.
+            if "0x" in text or "0X" in text or "0000000" in text.translate(_DIGITS_AS_ZERO):
+                self.numbers.update(map(as_address, _NUMBER_LINES.findall(text)))
+                self.numbers.discard(None)
         if int not in kinds:
             return True
         if kinds == {int}:

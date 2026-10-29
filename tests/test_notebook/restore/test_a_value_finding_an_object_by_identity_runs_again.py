@@ -223,3 +223,15 @@ def test_the_id_of_an_object_compiled_into_a_c_image_is_found(held):
 
     ok = eval(held, {"numpy": numpy})
     assert identity_held_reason("seen", {id(ok): "ok"}, {"ok": ok}) is not None
+
+
+def test_a_number_the_notebook_is_too_big_to_look_through_for_is_not_called_an_id():
+    """Past the walk's budget the number is not known to be an ``id()``:
+    the warning says cash could not look, not that the value holds one."""
+    from cash.notebook.statement.identity_holders import identity_held_reason
+
+    lost = object()
+    held = identity_held_reason("reg", {id(lost): "x"}, {"rows": [[i] for i in range(250_000)]})
+    assert held is not None
+    assert held.kind == "a container cash cannot read"
+    assert "more objects than cash looks through" in held

@@ -180,7 +180,7 @@ puts the stored state back into the object itself, so other names for it, a
 `weakref` to it and a dict keyed by its `id()` still find it, as after a
 plain run.
 
-<!-- claim: cash/notebook/statement/in_place.py:refusal @4357df4e, cash/notebook/statement/in_place.py:_held_by_the_notebook @2eb5bc52, cash/notebook/statement/processor.py:StatementProcessor._cheap_to_rerun @1a1db567 -->
+<!-- claim: cash/notebook/statement/in_place.py:refusal @4357df4e, cash/notebook/statement/in_place.py:_held_by_the_notebook @ffa2511c, cash/notebook/statement/processor.py:StatementProcessor._cheap_to_rerun @1a1db567 -->
 Only a list, a dict, a set, or an object of your own class pickled the default
 way is restored into. An object of another kind the loop only assigns into
 (`arr[i] = v` on a NumPy array) is bound to the stored copy, as before, when
@@ -194,7 +194,7 @@ holds, or such a container, a NumPy array, a pandas object, a
 `functools.partial` or an `argparse.Namespace` keeps one's `id()` as a
 key, a value or an item, or as text (`hex(id(x))`) (what it holds comes back as copies; both are checked again at each
 restore); when the notebook holds a container of more than 10,000 items that
-holds anything but numbers, strings and the like, which is not looked inside;
+holds anything but numbers, strings and the like or tuples of them (records), which is not looked inside;
 when a function it calls writes a module it imports;
 when it is a `while` loop; and when it last ran in less than 0.1 s, where
 storing it costs more than a restore saves. A loop not measured yet is stored.

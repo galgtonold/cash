@@ -72,6 +72,17 @@ def test_weak_references_and_id_keys_still_find_the_object(nb_runner):
 
 
 @pytest.mark.fresh_kernel
+def test_a_big_list_of_records_in_the_notebook_keeps_the_loop_restored(nb_runner):
+    """A list of 20,000 tuples of numbers and strings keeps nothing a
+    restore could miss: it is read at C speed, and the loop is restored
+    into ``p``, not run every time."""
+    make = P + "p = P()\nrows = [(j, 'row') for j in range(20000)]"
+    printed, seen = _run(nb_runner, make, LOOP, "print(len(rows), p.n)")
+    assert printed == "20000 3000"
+    assert "RESTORED" in str(seen)
+
+
+@pytest.mark.fresh_kernel
 def test_an_object_the_loop_assigns_into_is_restored_into(nb_runner):
     """``p.n += 1`` changes ``p`` as ``p.update()`` does: a weak reference
     to ``p`` still finds it after a hit."""
@@ -140,6 +151,12 @@ BUMP = "def bump():\n    import counter_mod\n    counter_mod.k += 1\n"
             P + "p = P()\nbig = [(j, j) for j in range(20000)] + [('seen', id(p.seen))]",
             LOOP,
             "print(big[-1][1] == id(p.seen), p.n)",
+            "keeps the id()",
+        ),
+        (
+            P + "p = P()\nbig = [[j] for j in range(20000)]",
+            LOOP,
+            "print(len(big), p.n)",
             "too big to look through",
         ),
         (
@@ -215,7 +232,8 @@ BUMP = "def bump():\n    import counter_mod\n    counter_mod.k += 1\n"
         "an id key inside an object",
         "an id as a dict value",
         "a weak reference as a dict key",
-        "an id inside a big container",
+        "an id inside a big container of records",
+        "a big container of lists",
         "an id in a deque",
         "an id in an integer array",
         "an id in a SimpleNamespace",

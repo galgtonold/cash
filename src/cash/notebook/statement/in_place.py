@@ -36,6 +36,7 @@ import sys
 import types
 import weakref
 from collections.abc import Iterable, Mapping
+from itertools import chain
 from typing import Any
 
 from cash._user_attrs import attribute_or, builtin_base, builtin_items, own_dict
@@ -227,9 +228,18 @@ def _held_by_the_notebook(parts: set[int], refs: list[Any], namespace: Mapping[s
                     return _BY_ID
             if len(held) > _MAX_SCANNED:
                 # Not looked inside: only a container of numbers, strings
-                # and the like is known to keep nothing else.
-                if not _LEAVES.issuperset(map(type, held)):
+                # and the like, or of tuples of them (records), is known to
+                # keep nothing else; a record's ``id()`` is looked for here.
+                kinds = set(map(type, held))
+                if kinds <= _LEAVES:
+                    continue
+                if not kinds <= _LEAVES | {tuple}:
                     return _TOO_MANY
+                fields = list(chain.from_iterable(item for item in held if type(item) is tuple))
+                if not _LEAVES.issuperset(map(type, fields)):
+                    return _TOO_MANY
+                if not parts.isdisjoint(fields) or not texts.isdisjoint(fields):
+                    return _BY_ID
                 continue
             budget -= len(held) + 1
             if budget < 0:
