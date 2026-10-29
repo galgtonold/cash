@@ -31,7 +31,8 @@ How a call gets here (`HitMemo.offer`, after an ordinary hit):
   and setting change.
 
 A later call with arguments of the same kind (atoms, tuples of atoms, or
-one big plain value the watchers already prove unchanged) is served from
+one big plain value or list of records the watchers already prove
+unchanged, keyed by its marker or its token, `value_watch.tag`) is served from
 the memo while both epochs, every remembered cell and every class tag are
 what they were and the RAM tier still holds that very entry. A ttl'd entry
 is checked against the clock and an entry that read files has them checked
@@ -138,14 +139,19 @@ def forget(state: list | None) -> None:
             memo.state[S_ENTRIES] = {}
 
 
-def epochs(spec: CachedFunction) -> tuple | None:
-    """``(world, cash, entries)`` now for *spec*, or None when the path is
-    off: an ordinary hit is remembered only if none of them moved while its
-    key was built."""
+def epochs(spec: CachedFunction, args: tuple, kwargs: dict) -> tuple | None:
+    """``(world, cash, entries, (memo key, gen))`` now for *spec* called
+    with *args*, or None when the path is off: an ordinary hit is remembered
+    only if none of them moved while its key was built. The memo key is
+    taken here, not after the call: another thread may change a watched
+    argument and call again in between. Its gen too (`cwatch.keyed`): the
+    key part of a list of plain values is a digest of its content, which
+    comes back when the content is put back, while the gen of each arm is
+    new, so a hit keyed from the content in between is not filed under it."""
     if _world_epoch is None:
         return None
     state = spec.hit_state
-    return _world_epoch(), _cash_epoch(), state[S_ENTRIES] if state is not None else None
+    return _world_epoch(), _cash_epoch(), state[S_ENTRIES] if state is not None else None, _cw.keyed(args, kwargs)
 
 
 #: Every memo with fast hits not yet handed to the net-loss accounting.
@@ -824,19 +830,23 @@ class HitMemo:
         if n:
             self.runner._calls.note_fast_effectiveness(spec.name, n, overhead, saved, body)
 
-    def _verify(self, entry: tuple, args: tuple, kwargs: dict) -> None:
+    def _ordinary_key(self, args: tuple, kwargs: dict) -> Any:
+        """The key the ordinary path builds for *args*, building nothing else."""
         from .._active import ACTIVE_CONFIG, EXPLAINING
 
-        keys = self.runner._keys
         token = EXPLAINING.set(True)
         config_token = ACTIVE_CONFIG.set(self.runner._calls._config)
         try:
-            built = keys.build(self.spec, args, kwargs)
-        except Exception as e:
-            raise HitMemoMismatch(f"fast hit of {self.spec.name}: the ordinary key build raised {e!r}") from e
+            return self.runner._keys.build(self.spec, args, kwargs)
         finally:
             ACTIVE_CONFIG.reset(config_token)
             EXPLAINING.reset(token)
+
+    def _verify(self, entry: tuple, args: tuple, kwargs: dict) -> None:
+        try:
+            built = self._ordinary_key(args, kwargs)
+        except Exception as e:
+            raise HitMemoMismatch(f"fast hit of {self.spec.name}: the ordinary key build raised {e!r}") from e
         VERIFIED[0] += 1
         if built.cache_key != entry[E_KEY]:
             raise HitMemoMismatch(
@@ -887,13 +897,40 @@ class HitMemo:
         entry = self._entry(call, hit)
         if entry is None:
             return
-        key = _cw.any_key(args, kwargs)
-        if key is None:
-            return
+        keyed = before[3]
+        if keyed is None or _cw.keyed(args, kwargs) != keyed:
+            return  # not watched before the key build, or armed again since
+        key = keyed[0]
+        if type(key[0]) is bytes and (b"[" in key[0] or b"{" in key[0]):
+            # A small list or dict is in the key by value, and no arm
+            # numbers its content: another thread may have changed it while
+            # the ordinary key was built and put it back since, and may have
+            # ended by now. Once per entry remembered, not per hit.
+            key = self._key_of_a_copy(call, args, kwargs, keyed[1])
+            if key is None:
+                return
         entries = state[S_ENTRIES]
         if len(entries) >= self.MAX_ENTRIES:
             entries.clear()
         entries[key] = (before[1], *entry)
+
+    def _key_of_a_copy(self, call: Any, args: tuple, kwargs: dict, gen: int) -> Any:
+        """The memo key of a copy of *args* whose ordinary key is the one
+        *call* was served under, or None. The copy is this call's own, so
+        what its two keys are built from is one content, whatever another
+        thread does to the arguments meanwhile."""
+        copied = tuple(_plain_copy(a, 0) for a in args)
+        copied_kw = {k: _plain_copy(v, 0) for k, v in kwargs.items()}
+        again = _cw.keyed(copied, copied_kw)
+        if again is None or again[1] != gen:
+            return None
+        try:
+            built = self._ordinary_key(copied, copied_kw)
+        except Exception:  # noqa: BLE001 - no key for the copy: not remembered
+            return None
+        if getattr(built, "cache_key", None) != call.cache_key:
+            return None
+        return again[0]
 
     def _watch_trace(self, trace: list, world_now: int) -> bool:
         """Is *trace* watched since this world epoch? Watches it when not
@@ -1041,6 +1078,21 @@ def _deep_atoms(value: Any, depth: int) -> bool:
     if t is tuple and depth < 32:
         return all(_deep_atoms(item, depth + 1) for item in value)
     return False
+
+
+def _plain_copy(value: Any, depth: int) -> Any:
+    """*value* with each list, dict and tuple in it copied, as the memo key
+    reads them by value (`cwatch.memo_key`); anything else as it is."""
+    t = type(value)
+    if depth > 32:
+        return value
+    if t is list:
+        return [_plain_copy(v, depth + 1) for v in list(value)]
+    if t is tuple:
+        return tuple(_plain_copy(v, depth + 1) for v in value)
+    if t is dict:
+        return {k: _plain_copy(v, depth + 1) for k, v in list(value.items())}
+    return value
 
 
 def memo_for(spec: CachedFunction, runner: Any) -> HitMemo | None:

@@ -33,7 +33,9 @@ from .callee_effects import callee_global_mutations
 from .file_effects import NOTEBOOK_POLICY, SCANNED_KINDS
 from .handed_callables import handed_callables
 from .helper_code import is_user_code
+from .mutations import is_vars_of, namespace_item, writer_aliases, written_argument
 from .namespace_effects import capturable_globals, notebook_global_rebinds
+from .writer_aliases import namespace_writer_aliases
 
 __all__ = [
     "CodeAnalyzer",
@@ -231,7 +233,11 @@ class _FlowVisitor(ast.NodeVisitor):
     methods each have their own complexity budget.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, aliases: Mapping[str, str | None] | None = None) -> None:
+        #: Names bound to a writer (`mutations.writer_of`): the namespace's
+        #: (`namespace_writer_aliases`), then the cell's own (`visit_Module`).
+        self.aliases: dict[str, str | None] = dict(aliases or {})
+        self.cell_aliases: dict[str, str] = {}
         # Stack of sets of defined variables. scopes[0] is the cell level.
         self.scopes: list[set[str]] = [set()]
         # Parallel stack: True where the scope at the same index is a
@@ -274,6 +280,24 @@ class _FlowVisitor(ast.NodeVisitor):
     # ------------------------------------------------------------------
     # visit_* methods
     # ------------------------------------------------------------------
+
+    def visit_Module(self, node: ast.Module) -> None:
+        # ``sa = setattr`` then ``sa(points[7], 'x', -3)``.
+        self.cell_aliases = writer_aliases(node)
+        self.aliases.update(self.cell_aliases)
+        self.generic_visit(node)
+
+    def _writer_aliases(self, call: ast.Call) -> dict[str, str | None]:
+        """`aliases`, with each name *call* is spelt from that the cell binds
+        to something else than a writer left out: ``setattr`` a function of
+        the cell's own."""
+        aliases = self.aliases
+        for spelt in (call.func, *call.args[:1]):
+            while isinstance(spelt, ast.Attribute):
+                spelt = spelt.value
+            if isinstance(spelt, ast.Name) and self.is_defined(spelt.id) and spelt.id not in self.cell_aliases:
+                aliases = {**aliases, spelt.id: None}
+        return aliases
 
     def visit_Name(self, node: ast.Name) -> None:
         if isinstance(node.ctx, ast.Store):
@@ -480,6 +504,20 @@ class _FlowVisitor(ast.NodeVisitor):
                             self.outputs.add(parent_name)
                             self.modified_objects.add(parent_name)
                     break
+        written = written_argument(node, self._writer_aliases(node)) if node.args else None
+        if written is not None:
+            # ``setattr(points[7], "x", -3)`` changes ``points`` in place, as
+            # ``points[7].x = -3`` does (`visit_Attribute`); so do
+            # ``object.__setattr__``, ``operator.setitem(vars(p), 'x', -3)``,
+            # ``list.append(rows, x)``, an alias of any of them and
+            # ``map(setattr, points, ...)``.
+            parent_name = self._extract_base_name(written[1])
+            if parent_name:
+                if not self.is_defined(parent_name):
+                    self.real_inputs.add(parent_name)
+                if len(self.scopes) == 1:
+                    self.outputs.add(parent_name)
+                    self.modified_objects.add(parent_name)
         self.generic_visit(node)
 
     def visit_Import(self, node: ast.Import) -> None:
@@ -496,7 +534,14 @@ class _FlowVisitor(ast.NodeVisitor):
         if isinstance(node, ast.Name):
             return node.id
         if isinstance(node, (ast.Subscript, ast.Attribute)):
+            # ``globals()['points'][7].x = -3`` writes into ``points``.
+            item = namespace_item(node)
+            if item is not None and not self.is_defined(node.value.func.id):  # type: ignore[attr-defined]
+                return item
             return self._extract_base_name(node.value)
+        if isinstance(node, ast.Call) and is_vars_of(node) and not self.is_defined("vars"):
+            # ``vars(p)['x'] = 3`` writes ``p.__dict__``, as ``p.x = 3`` does.
+            return self._extract_base_name(node.args[0])
         return None
 
 
@@ -1139,7 +1184,7 @@ class CodeAnalyzer:
             # What a `%time` line's Python reads and binds, in a loop body too.
             tree = magic_python(tree)
 
-        visitor = _FlowVisitor()
+        visitor = _FlowVisitor(namespace_writer_aliases(tree, user_ns) if user_ns is not None else None)
         visitor.visit(tree)
         inputs, outputs = visitor.real_inputs, visitor.outputs
         if resolve_source is not None:

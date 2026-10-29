@@ -39,9 +39,9 @@ takes 0.3 s and `mid` 0.05 s:
   EXECUTED: b = mid(2)  (0.05s) -> RAM
     sub-call mid(2): 0/1 hit
   EXECUTED: c = a + 1  (0.00s)
-  @cash.cache:
-    slow() [intercepted]: 0/1 cached (0.300s)
-    mid() [intercepted]: 0/1 cached (0.050s)
+  intercepted calls:
+    slow() [intercepted]: counted in the sub-call lines above (0.300s)
+    mid() [intercepted]: counted in the sub-call lines above (0.050s)
 ```
 
 After a restart, the same cell restores `a` and runs `b` and `c` again:
@@ -52,8 +52,8 @@ After a restart, the same cell restores `a` and runs `b` and `c` again:
   EXECUTED: b = mid(2)  (0.05s) -> RAM
     sub-call mid(2): 0/1 hit
   EXECUTED: c = a + 1  (0.00s)
-  @cash.cache:
-    mid() [intercepted]: 0/1 cached (0.050s)
+  intercepted calls:
+    mid() [intercepted]: counted in the sub-call lines above (0.050s)
 ```
 
 The HTML badge shows the same with the storage dots on each row.

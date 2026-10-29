@@ -43,6 +43,7 @@ import io
 import itertools
 import logging
 import queue
+import sys
 import types
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -51,6 +52,7 @@ from cash._user_attrs import attribute_or, has_attribute, instance_of
 
 from ..analysis.mutation_effects import captured_call_receivers
 from ..analysis.mutations import consumed_input_names
+from .read_handles import reaches_read_handle
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,8 @@ __all__ = [
     "consumable_state",
     "has_diverged",
     "is_write_stream",
+    "with_other_names",
+    "without_read_handles",
 ]
 
 # ``itertools`` iterators that hold advanceable state and are not deep-copyable.
@@ -303,9 +307,95 @@ def drawn_stream_inputs(
         value = user_ns.get(name)
         if value is None:
             continue
-        if is_stream(value):
+        if is_stream(value) or _holds_drawn_stream(tree, name, value):
             found.append(name)
     return found
+
+
+# Items of a container looked through for a stream when the statement's
+# index is not a constant (``next(h[i])``): a bigger one is not walked.
+_HELD_SCAN = 64
+_PLAIN_CONTAINERS = (list, tuple, dict)
+
+
+def _holds_drawn_stream(tree: ast.Module | None, name: str, value: Any) -> bool:
+    """True when the statement reaches a stream inside *value* (``next(h[0])``,
+    ``list(h['k'])``, ``next(b.it)``) and so draws from it as it would from a
+    name that held it. Followed through a plain list, tuple or dict by a
+    constant index and through an attribute read without running a property;
+    any other index looks through the container's own items."""
+    if tree is None:
+        return False
+    for node in ast.walk(tree):
+        chain = _reach_chain(node, name)
+        if chain and _chain_meets_stream(value, chain):
+            return True
+    return False
+
+
+def _reach_chain(node: ast.AST, name: str) -> list[ast.AST] | None:
+    """The subscripts and attributes, outermost last, between *node* and the
+    name it starts from, or None when *node* does not start from *name*."""
+    chain: list[ast.AST] = []
+    while isinstance(node, (ast.Subscript, ast.Attribute)):
+        chain.append(node)
+        node = node.value
+    if not chain or not (isinstance(node, ast.Name) and node.id == name):
+        return None
+    chain.reverse()
+    return chain
+
+
+def _chain_meets_stream(value: Any, chain: list[ast.AST]) -> bool:
+    for step in chain:
+        if isinstance(step, ast.Attribute):
+            try:
+                value = inspect.getattr_static(value, step.attr)
+            except (AttributeError, TypeError):
+                return False
+        elif type(value) not in _PLAIN_CONTAINERS:
+            return False
+        elif isinstance(step.slice, ast.Constant):
+            try:
+                value = value[step.slice.value]
+            except (LookupError, TypeError):
+                return False
+        else:
+            items = value.values() if type(value) is dict else value
+            return any(is_stream(item) for item in itertools.islice(items, _HELD_SCAN))
+        if is_stream(value) and not _an_output_stream(value):
+            return True
+    return False
+
+
+def _an_output_stream(obj: Any) -> bool:
+    """The process's own output streams (``sys.stderr`` handed to a log
+    handler): written to, never read, so reaching one draws nothing."""
+    return any(obj is attribute_or(sys, name, None) for name in ("stdout", "stderr", "__stdout__", "__stderr__"))
+
+
+def with_other_names(names: Iterable[str], user_ns: Mapping[str, Any], known: Iterable[str]) -> set[str]:
+    """*names* and the names of *known* bound to the same object as one of
+    them: ``it2 = it`` above, a draw through ``it`` moved ``it2`` as well.
+    The simulation moves ``it2`` on through the edge ``it2 = it`` linked; the
+    runtime moves it with the drawn name, so both leave it alike."""
+    held = {id(user_ns[name]): user_ns[name] for name in names if name in user_ns}
+    found = set(names)
+    for name in known:
+        value = user_ns.get(name, held)
+        if value is not held and held.get(id(value), held) is value:
+            found.add(name)
+    return found
+
+
+def without_read_handles(names: Iterable[str], user_ns: Mapping[str, Any]) -> list[str]:
+    """*names* but those bound to a file open for reading, or to what reaches
+    one (``rd = f.readline``). Such a handle is named by its file and where it
+    stands (`read_handle_digest`), and what reads it runs every time, so it
+    is not moved as a generator is: a cell that only looks at it, re-run on
+    its own, reads it where it stands, and the ``open()`` above stays as it
+    ran."""
+    return [name for name in names if not reaches_read_handle(user_ns.get(name))]
 
 
 def is_stream(obj: Any) -> bool:

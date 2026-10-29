@@ -52,9 +52,15 @@ from ...tracking.randomness import (
 from ...tracking.read_classification import stat_key
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
-from ..cache_key import CacheKeyContext, compute_cache_key, statement_source_hash
+from ..cache_key import CacheKeyContext, compute_cache_key, draw_key, statement_source_hash
 from ..callee_reach import helper_seeded_modules, module_state_names
-from ..consumables import is_stream, watched_call_receivers
+from ..consumables import (
+    drawn_stream_inputs,
+    is_stream,
+    watched_call_receivers,
+    with_other_names,
+    without_read_handles,
+)
 from ..lineage_formula import (
     binding_source_hash,
     call_time_reads,
@@ -72,6 +78,8 @@ from ..lineage_formula import (
     recorded_reads_lineage_component,
     setting_output_lineage,
     statement_environment_component,
+    value_digests_key,
+    without_drawn,
 )
 from ..loop_watch import branch_changes, loop_watch_hash, watch_candidates
 from ..pyplot_draws import pyplot_draw_names
@@ -89,6 +97,7 @@ from ..statement.derivation_edges import (
     static_share_edges,
 )
 from ..statement.lineage import rewritten_by_the_notebook_since
+from ..statement.mutation_routing import callees_changing_their_closure, sharing_a_cell
 from ..tracking_state import TrackingState
 from .cache_probe import CacheProbe
 from .simulated_callables import SimulatedCallables
@@ -219,6 +228,12 @@ class StatementLineage:
             known.setdefault(source_hash, recorded)
             return recorded
         return static_share_edges(tree, self._function_source, self.shell.user_ns)
+
+    def share_record_at(self, stmt_code: str, entry: Mapping[str, str]) -> frozenset[tuple[str, str]] | None:
+        """The edges a run of *stmt_code* that read *entry* linked
+        (``TrackingState.share_edge_records_at``), or None."""
+        key = (statement_source_hash(stmt_code), tuple(sorted(entry.items())))
+        return self.tracking_state.share_edge_records_at.get(key)
 
     def relink(
         self,
@@ -461,6 +476,11 @@ class StatementLineage:
             # A statement that sets state on a local module changes the
             # module, as the runtime routes it (``MutationRouting.route``).
             outputs |= self.module_state_outputs(stmt_code)
+            # One that calls a function changing its closure changes every
+            # function sharing that cell, as the runtime routes it.
+            writers = callees_changing_their_closure(tree, self.shell.user_ns)
+            if writers:
+                outputs |= sharing_a_cell(writers, self.shell.user_ns)
             # One that draws through pyplot changes the current figure and
             # axes, as the runtime took them (``pyplot_draws``).
             drawn = self.pyplot_draw_outputs(stmt_code, tree)
@@ -1026,12 +1046,15 @@ class StatementLineage:
         virtual_lineage: dict[str, str],
         virtual_modules: set[str] | None = None,
         occurrence_index: int = 0,
+        own_edges: frozenset[tuple[str, str]] | None = None,
     ) -> StatementOutcome:
         """Simulate *stmt_code*: update *virtual_lineage* and *virtual_modules*
         with what it binds, and return what it wrote.
 
         *occurrence_index* is the zero-based occurrence of the same statement
-        text within its cell, which the runtime's key counts.
+        text within its cell, which the runtime's key counts. *own_edges* are
+        the edges a run with these inputs linked (`share_record_at`), when
+        no entry says.
         """
         try:
             if virtual_modules is None:
@@ -1101,6 +1124,7 @@ class StatementLineage:
                 virtual_modules,
                 occurrence_index,
                 (rebound, bound),
+                own_edges,
             )
             self._advance_rng(drawn, draw_key, virtual_lineage)
             return outcome
@@ -1160,6 +1184,7 @@ class StatementLineage:
         virtual_modules: set[str],
         occurrence_index: int,
         relinked: tuple[set[str], Container[str]] = (set(), ()),
+        own_edges: frozenset[tuple[str, str]] | None = None,
     ) -> StatementOutcome:
         """Give each of *outputs* its lineage: the cache entry's when it is
         valid, else the runtime's formula's. First the edges as its run left
@@ -1180,7 +1205,10 @@ class StatementLineage:
             virtual_lineage[var] = hidden_write_lineage(cache_key)
 
         metadata = self._entry_metadata(cache_key)
-        self.relink(stmt_code, tree, *relinked, own=own_share_edges(metadata))
+        own = own_share_edges(metadata)
+        if own is None:
+            own = own_edges if own_edges is not None else self.share_record_at(stmt_code, {"": cache_key})
+        self.relink(stmt_code, tree, *relinked, own=own)
 
         file_deps_to_check = self._session_file_deps(outputs)
         lookup = self._lookup_cached_lineages(
@@ -1191,7 +1219,7 @@ class StatementLineage:
         # after the run or the hit (`carrier_advances`).
         advanced = self._advanced_carriers(stmt_code, lookup.carriers, inputs, outputs, virtual_lineage)
         for name in advanced:
-            virtual_lineage[name] = advanced_carrier_lineage(cache_key, name)
+            virtual_lineage[name] = advanced_carrier_lineage(draw_key(cache_key), name)
             self._generator_lineages.add(virtual_lineage[name])
 
         if lookup.hit:
@@ -1211,7 +1239,23 @@ class StatementLineage:
             # Union derivation-bumped vars so this cached mutation statement
             # is still recorded as a producer of the aliased base.
             self._note_made_generators(stmt_code, outputs, virtual_lineage)
-            outputs = outputs | lookup.bumped | advanced
+            # What holds a generator it drew from moves through its edges,
+            # past what the hit moved already, as the runtime's hit moves it.
+            carried = (
+                bump_derived_lineages(
+                    self.edges,
+                    virtual_lineage,
+                    advanced,
+                    inputs,
+                    record=lambda t, h: virtual_lineage.__setitem__(t, h),
+                    present=lambda t: True,
+                    skip=lookup.bumped,
+                    code=stmt_code,
+                )
+                if advanced
+                else set()
+            )
+            outputs = outputs | lookup.bumped | advanced | carried
             self._register_callables(stmt_code, tree, virtual_lineage, is_import)
             return StatementOutcome(outputs, lookup.lookup_time, False, lookup.file_deps)
 
@@ -1229,16 +1273,20 @@ class StatementLineage:
             )
 
         source_hash = statement_source_hash(stmt_code)
+        no_cache_values = self.tracking_state.no_cache_values.get(
+            value_digests_key(source_hash, input_lineage_map, occurrence_index)
+        )
         lineage_by_out = self.output_lineages(
             source_hash,
-            input_lineages_all,
+            # Less the streams its run drew from, as the runtime left them out.
+            without_drawn(input_lineage_map, no_cache_values),
             file_hash_component,
             inputs,
             outputs,
             stmt_code,
             tree,
             virtual_lineage,
-            no_cache_values=self.tracking_state.no_cache_values.get(cache_key),
+            no_cache_values=no_cache_values,
             recorded_reads=recorded_reads_lineage_component(
                 self.tracking_state, cache_key, stmt_code, self.shell.user_ns, outputs, as_last_run=True
             ),
@@ -1317,6 +1365,15 @@ class StatementLineage:
         }
         return reachable_generators(inputs, user_ns, self.tracking_state.variable_lineage) | dead
 
+    def _drawn_streams(self, stmt_code: str, inputs: set[str], outputs: set[str]) -> set[str]:
+        """The iterators and streams *stmt_code* reads from, which move as a
+        generator does (``drawn_stream_inputs``, as the runtime finds them)."""
+        drawn = drawn_stream_inputs(parse_cached(stmt_code), inputs, outputs, self.shell.user_ns)
+        if not drawn:
+            return set()
+        found = with_other_names(drawn, self.shell.user_ns, self.tracking_state.variable_lineage) - outputs
+        return set(without_read_handles(found, self.shell.user_ns))
+
     def _advanced_carriers(
         self,
         stmt_code: str,
@@ -1339,7 +1396,9 @@ class StatementLineage:
         if recorded is None:
             recorded = self._recorded_draws(stmt_code)
         if recorded is None:
-            recorded = self._reachable_generators(inputs, virtual_lineage)
+            recorded = self._reachable_generators(inputs, virtual_lineage) | self._drawn_streams(
+                stmt_code, inputs, outputs
+            )
         return set(recorded) - outputs
 
     def _advance_carriers_without_outputs(
@@ -1359,7 +1418,11 @@ class StatementLineage:
         recorded = self._recorded_draws(stmt_code)
         if recorded is not None and not recorded:
             return set()
-        if recorded is None and not self._reachable_generators(inputs, virtual_lineage):
+        if (
+            recorded is None
+            and not self._reachable_generators(inputs, virtual_lineage)
+            and not self._drawn_streams(stmt_code, inputs, set())
+        ):
             return set()
         cache_key = self._key(
             stmt_code, inputs | hidden_reads, set(), virtual_lineage, virtual_modules, occurrence_index
@@ -1371,7 +1434,7 @@ class StatementLineage:
         in_entry = metadata.get("carriers_advanced") if metadata else None
         advanced = self._advanced_carriers(stmt_code, in_entry, inputs, set(), virtual_lineage)
         for name in advanced:
-            virtual_lineage[name] = advanced_carrier_lineage(cache_key, name)
+            virtual_lineage[name] = advanced_carrier_lineage(draw_key(cache_key), name)
             self._generator_lineages.add(virtual_lineage[name])
         return advanced
 

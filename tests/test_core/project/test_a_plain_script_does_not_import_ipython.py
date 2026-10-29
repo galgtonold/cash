@@ -14,6 +14,7 @@ import sys
 import pytest
 
 from cash import _location
+from tests._modules import forget_module
 from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core]
@@ -56,7 +57,7 @@ def test_windows_reads_the_process_start_time_without_psutil_and_agrees_with_it(
 
 def test_no_shell_is_running_until_ipython_is_imported(monkeypatch):
     """Answered from ``sys.modules``: asking does not import IPython."""
-    monkeypatch.delitem(sys.modules, "IPython", raising=False)
+    forget_module(monkeypatch, "IPython")
     assert _location.interactive_shell_is_running() is False
     assert "IPython" not in sys.modules
 

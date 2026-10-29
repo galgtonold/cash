@@ -124,6 +124,10 @@ class SimulationCacheEntry(NamedTuple):
     """The source hashes of the cell's simulated statements."""
     vars_maybe_changed_by_loops: set[str] | None = None
     """Snapshot of ``SimulationResult.vars_maybe_changed_by_loops`` after this cell."""
+    file_event_seq: int = 0
+    """``TrackingState.file_event_seq`` when the cell was simulated: a file
+    of *cell_file_deps* the notebook itself rewrote after that, and left as
+    it is now, was rewritten below the cell, as in a top-to-bottom run."""
 
 
 @dataclass

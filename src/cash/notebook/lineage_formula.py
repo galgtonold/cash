@@ -34,7 +34,7 @@ from ..effects import ENVIRONMENT_TEXT_MARKERS, environment_component, environme
 from ..source_norm import unparse_without_docstrings
 from ..tracking.module_symbols import closure_digest, static_attribute_reads
 from ..tracking.randomness import hidden_lineage_reads, observed_rng_reads
-from ..value_hash import compute_hash, is_identity_fallback_hash
+from ..value_hash import budgeted_hash, compute_hash, is_identity_fallback_hash
 from .callee_reach import Reach, reached_user_code
 from .held_code import held_code_digest
 from .read_handles import read_handle_digest
@@ -389,7 +389,8 @@ def no_cache_value_digest(value: Any) -> str:
     Such a statement runs every run and can bind a new value with the same
     source and inputs, so its output's lineage carries the value: a reader
     below misses when the value changed and still hits when it did not. A
-    value whose content cannot be hashed gets a digest of its own each run, so
+    value whose content cannot be hashed, or not within the budget of a
+    change check (`budgeted_hash`), gets a digest of its own each run, so
     its readers always recompute: the identity fallback stays the same under
     in-place change, and a new object can reuse an old one's address. A file
     open for reading is named by its file and position instead
@@ -398,10 +399,55 @@ def no_cache_value_digest(value: Any) -> str:
     handle = read_handle_digest(value)
     if handle is not None:
         return handle
-    digest = compute_hash(value)
-    if is_identity_fallback_hash(value, digest):
+    # Within the budget of a check whether a value changed: a list of 8
+    # million tuples took 8 s to hash on every run. Past it, the value is
+    # taken as new, as one that cannot be hashed is.
+    digest = budgeted_hash(value)
+    if digest is None or is_identity_fallback_hash(value, digest):
         return "fresh:" + secrets.token_hex(16)
     return digest
+
+
+def value_digests_key(source_hash: str, input_lineages: Mapping[str, str], occurrence_index: int = 0) -> str:
+    """What the value digests of a statement's run are filed under
+    (``TrackingState.no_cache_values``): its source, the lineages of its
+    inputs and which copy of the statement in its cell it is, as the runtime
+    and the simulation both build them. Two copies in one cell
+    (``start = time.time()`` before and after the work) share source and
+    inputs: filed together, the second's digest stood for the first's, and
+    the work between them ran again for the reader below.
+
+    Not its cache key: a key that cannot name what the code reaches carries
+    a token of its own each time, one that reads a name no cell bound hashes
+    its value (an iterator made before cash was on moves as it is read), and
+    one that binds a name holding a module reads it as it was. Filed under
+    such a key, the simulation did not find the digests, gave the output
+    another lineage than the run did, and the statement ran a second time
+    for each reader below: ``t = globals()[name](3)`` ran twice per Run All,
+    and a draw in it drew twice."""
+    parts = [
+        source_hash,
+        str(occurrence_index),
+        *(f"{name}={lineage}" for name, lineage in sorted(input_lineages.items())),
+    ]
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+#: Under this name in a statement's value digests (`no_cache_value_digest`):
+#: the streams it drew from whose lineages its outputs' lineages leave out.
+DRAWN_LEFT_OUT = "\x00drawn"
+
+
+def without_drawn(input_lineages: Mapping[str, str], digests: Mapping[str, str] | None) -> list[str]:
+    """The lineages of *input_lineages* an output keyed by its value takes:
+    all but those of the streams the run drew from (`DRAWN_LEFT_OUT` in
+    *digests*). ``t = next(it)`` moves ``it`` on every run; its value names
+    what was drawn, so an equal draw keeps what is built on ``t`` served."""
+    left_out = (digests or {}).get(DRAWN_LEFT_OUT)
+    if not left_out:
+        return list(input_lineages.values())
+    names = set(left_out.split(","))
+    return [lineage for name, lineage in input_lineages.items() if name not in names]
 
 
 def no_cache_value_component(digests: Mapping[str, str] | None, name: str) -> str:
@@ -699,8 +745,18 @@ def module_data_digest(label: str, value: Any) -> str:
     """The digest of *value*, the module data at *label*: its value hash,
     with the code of the functions and of the user's objects it holds
     (`held_code_digest`). The value hash pickles a function by its name, so
-    a registry holding a function edited since keyed as it did."""
+    a registry holding a function edited since keyed as it did.
+
+    A stream or random generator set on a library's module
+    (`library_draw_source`) is keyed by which object it is: each read draws
+    from it, so its state after a draw differs from the state the draw was
+    keyed on, and a cell reading what the draw bound found it moved on and
+    drew again to rebuild it. The cell setting it makes a new one."""
+    from .callee_reach import library_draw_source
+
     try:
+        if library_draw_source(label, value):
+            return f"drawn:{type(value).__qualname__}:{id(value)}"
         digest = compute_hash(value)
         code = held_code_digest(value)
         if code:

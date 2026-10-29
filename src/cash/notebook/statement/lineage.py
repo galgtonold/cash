@@ -41,6 +41,7 @@ from ...tracking.read_classification import regular_file_stat
 from ...value_hash import budgeted_hash, compute_hash, costly_after
 from ..cache_key import statement_source_hash
 from ..lineage_formula import (
+    DRAWN_LEFT_OUT,
     binding_source_hash,
     call_time_reads,
     callable_source_component,
@@ -56,6 +57,8 @@ from ..lineage_formula import (
     recorded_reads_lineage_component,
     setting_output_lineage,
     statement_environment_component,
+    value_digests_key,
+    without_drawn,
 )
 from ..restored_var import hashed_by_lineage
 from .derivation_edges import (
@@ -103,6 +106,7 @@ def _record_file_reads(
         if accessed_files:
             tracking_state.file_event_seq += 1
             tracking_state.file_read_seq[cache_key] = tracking_state.file_event_seq
+            tracking_state.file_read_cell[cache_key] = tracking_state.running_cell
         if probes:
             tracking_state.statement_probes[cache_key] = dict(probes)
         else:
@@ -110,9 +114,18 @@ def _record_file_reads(
     return file_hash_component
 
 
+def _a_namespace(value: Any, user_ns: Mapping[str, Any]) -> bool:
+    """Is *value* a namespace -- the notebook's globals (``NS = globals()``)
+    or a module? Its lineage is the formula's: a digest of its value would
+    be of everything it holds, new each run, and what reads names from it
+    is keyed or traced by the names it reads."""
+    return value is user_ns or instance_of(value, types.ModuleType)
+
+
 def note_own_writes(tracking_state: "TrackingState", paths) -> None:
     """Record that the notebook wrote *paths* just now, with each file's
-    `stat_key` after the write (`TrackingState.own_file_writes`)."""
+    `stat_key` after the write and the cell that wrote them
+    (`TrackingState.own_file_writes`)."""
     tracking_state.file_event_seq += 1
     for path in paths:
         where = realpath_of_read_this_run(path)[0]  # once per folder in a run, not per file
@@ -120,27 +133,48 @@ def note_own_writes(tracking_state: "TrackingState", paths) -> None:
         if st is None:
             tracking_state.own_file_writes.pop(where, None)
         else:
-            tracking_state.own_file_writes[where] = (tracking_state.file_event_seq, st)
+            tracking_state.own_file_writes[where] = (tracking_state.file_event_seq, st, tracking_state.running_cell)
+
+
+def rewritten_by_the_notebook_after(tracking_state: "TrackingState", seq: int, path: str, cell: int) -> bool:
+    """*path* is as the notebook's own write left it, that write came after
+    event *seq* (`TrackingState.file_event_seq`), and the cell at *cell* or
+    one below it made it."""
+    where = realpath_of_read_this_run(path)[0]
+    return _written_below(tracking_state.own_file_writes.get(where), seq, cell, where)
 
 
 def rewritten_by_the_notebook_since(tracking_state: "TrackingState", cache_key: str, paths) -> bool:
     """Every one of *paths* is as the notebook's own write left it, and that
-    write came after the statement under *cache_key* last read its files.
+    write came after the statement under *cache_key* last read its files,
+    from the reading cell or one below it.
 
     ``n = int(open(P).read())`` then ``open(P, 'w').write(str(n + 1))``:
     the file the read recorded has changed, but by the notebook, after the
     read, as in a top-to-bottom run. Re-running the read to catch up would
-    re-run the write after it as well. A change from outside, or a write
-    before the read, still counts."""
+    re-run the write after it as well. A change from outside, a write
+    before the read, or one by a cell above the reader (run again on its
+    own: Run All would have the reader read what it wrote) still counts."""
     read_at = tracking_state.file_read_seq.get(cache_key)
-    if read_at is None or not paths:
+    cell = tracking_state.file_read_cell.get(cache_key)
+    if read_at is None or cell is None or not paths:
         return False
     for path in paths:
         where = realpath_of_read_this_run(path)[0]
-        own = tracking_state.own_file_writes.get(where)
-        if own is None or own[0] <= read_at or regular_file_stat(where) != own[1]:
+        if not _written_below(tracking_state.own_file_writes.get(where), read_at, cell, where):
             return False
     return True
+
+
+def _written_below(own: tuple | None, seq: int, cell: int | None, where: str) -> bool:
+    return (
+        own is not None
+        and own[0] > seq
+        and cell is not None
+        and own[2] is not None
+        and own[2] >= cell
+        and regular_file_stat(where) == own[1]
+    )
 
 
 def clear_rebound_edges(
@@ -205,6 +239,9 @@ class StatementLineageBuilder:
         tree: ast.Module | None = None,
         accessed_remote: set[str] | None = None,
         no_cache: bool = False,
+        value_keyed: frozenset[str] = frozenset(),
+        drawn: frozenset[str] = frozenset(),
+        occurrence_index: int = 0,
         replay_bumps: bool = True,
         lineage_reads: frozenset[str] = frozenset(),
         probes: dict[str, str] | None = None,
@@ -232,6 +269,16 @@ class StatementLineageBuilder:
         *no_cache* marks a ``# @cash:no-cache`` statement: each output's
         lineage then also carries a digest of its value
         (:func:`no_cache_value_digest`).
+
+        *value_keyed* names outputs whose lineage carries that digest too: the
+        new values a statement that changed its inputs in place bound
+        (``t = Q.popleft()``), without the inputs it changed.
+
+        *drawn* names the streams it drew from: with every output keyed by
+        its value, their lineages are left out of the outputs' (`without_drawn`),
+        whether the statement is not stored or each output is value-keyed
+        (*value_keyed*): a draw whose call was served leaves the outputs as
+        the run that stored it did, so what reads them next is served too.
 
         *accessed_remote* holds object-storage URLs the statement read. They
         join the same lineage component as local files, contributing the store's
@@ -278,6 +325,15 @@ class StatementLineageBuilder:
             tracking_state, lineage_inputs, user_ns, code
         )
         body_only = call_time_reads(code, user_ns)
+        left_out = sorted(drawn & set(input_lineage_map))
+        if (
+            (no_cache or outputs <= value_keyed)
+            and left_out
+            and outputs
+            and all(name in user_ns and not _a_namespace(user_ns[name], user_ns) for name in outputs)
+        ):
+            value_digests[DRAWN_LEFT_OUT] = ",".join(left_out)
+            input_lineage_hashes = without_drawn(input_lineage_map, value_digests)
 
         # All outputs of one statement share its formula lineage (``train,
         # test = ...``, or ``M = enc.fit_transform(X)`` writing ``enc`` too):
@@ -292,8 +348,12 @@ class StatementLineageBuilder:
         # refitted to the model it was, it takes that model's lineage back
         # (`value_cutoff._refitted`).
         refitted = fitted_in_place(tree, bound)
-        rebuilt = not no_cache and not any(
-            user_ns.get(name) is value and name not in refitted for name in inputs for value in bound.values()
+        rebuilt = (
+            not no_cache
+            and not value_keyed
+            and not any(
+                user_ns.get(name) is value and name not in refitted for name in inputs for value in bound.values()
+            )
         )
         cut_off = rebuilt and len(bound) == 1
 
@@ -319,7 +379,9 @@ class StatementLineageBuilder:
                 func_component,
                 self._compute_module_lineage_component(tracking_state, value, var_name, code, tree),
                 changed_module_environment(var_name, value, code, environment),
-                self._no_cache_value(value_digests, var_name, value) if no_cache else "",
+                self._no_cache_value(value_digests, var_name, value)
+                if (no_cache or var_name in value_keyed) and not _a_namespace(value, user_ns)
+                else "",
             )
             # A module set by a setting that is the same when run again
             # (``pd.set_option('display.width', 120)``) keeps one run's
@@ -369,11 +431,11 @@ class StatementLineageBuilder:
                 taken=taken,
             )
 
-        if cache_key:
-            if value_digests:
-                tracking_state.no_cache_values[cache_key] = value_digests
-            else:
-                tracking_state.no_cache_values.pop(cache_key, None)
+        filed = value_digests_key(source_hash, input_lineage_map, occurrence_index)
+        if value_digests:
+            tracking_state.no_cache_values[filed] = value_digests
+        else:
+            tracking_state.no_cache_values.pop(filed, None)
 
         if replay_bumps:
             self.replay_derivation_bumps(tracking_state, outputs, inputs, code=code)
@@ -661,6 +723,11 @@ class StatementLineageBuilder:
         session_hash = content_hash if content_hash is not None else output_lineage_hash
         tracking_state.variable_hashes.setdefault(var_name, set()).add(session_hash)
         tracking_state.current_session_hashes[var_name] = session_hash
+
+    def note_content_hash(self, tracking_state: "TrackingState", var_name: str, value: Any, lineage: str) -> None:
+        """Record *var_name*'s session hash for *value*, moved on to *lineage*
+        outside a statement's outputs (`_update_variable_content_hashes`)."""
+        self._update_variable_content_hashes(tracking_state, var_name, value, lineage)
 
     def lineage_if_rerun(self, tracking_state: "TrackingState", var_name: str, value: Any, code: str) -> str:
         """The lineage *var_name* would get if *code* ran again now: the same

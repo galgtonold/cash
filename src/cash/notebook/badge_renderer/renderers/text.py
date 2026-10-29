@@ -10,6 +10,8 @@ rows one step further in.
 
 from __future__ import annotations
 
+import re
+
 from cash._user_attrs import attribute_or
 
 from .. import theme
@@ -382,29 +384,45 @@ def _items_lines(items, *, is_upstream: bool) -> list[str]:
     return out
 
 
-def _decorator_lines(sections: tuple[Section, ...]) -> list[str]:
-    dec_section = next(
-        (s for s in sections if s.kind is SectionKind.DECORATORS),
-        None,
-    )
-    if dec_section is None or not dec_section.items:
+def _decorator_lines(sections: tuple[Section, ...], shown: list[str]) -> list[str]:
+    """The cell's decorated calls under ``@cash.cache:``, and the calls cash
+    wrapped itself under ``intercepted calls:``: the user decorated nothing
+    there, so the decorator's name would read as someone else's doing.
+
+    An intercepted function whose calls the ``sub-call`` lines of *shown*
+    already count gets no count of its own: ``concat(): 0/4 cached`` under
+    four loop passes that each read ``0/2495 hit`` counts the passes, not
+    the calls, and the two disagree.
+    """
+    groups = [item for s in sections if s.kind is SectionKind.DECORATORS for item in s.items]
+    if not groups:
         return []
-    lines = ["  @cash.cache:"]
-    for g in dec_section.items:
+    sub_calls = [line for line in shown if line.lstrip().startswith("sub-call ")]
+    decorated: list[str] = []
+    intercepted: list[str] = []
+    for g in groups:
         if not isinstance(g, DecoratorCallGroup):
             continue
         total = g.n_calls
         cached = sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)
         time_s = sum(c.time_s for c in g.calls)
         short = g.func_name.split(".")[-1] if "." in g.func_name else g.func_name
-        # Name the mechanism for a call cash wrapped itself: the user decorated
-        # nothing, so an unlabelled entry reads as someone else's doing.
-        # Deliberately not named after a directive -- interception is
-        # unconditional (default-on), and spelling this
-        # ``cache-calls`` would substring-collide with the opt-out
-        # ``no-cache-calls`` in any grep/assertion over badge text.
-        via = " [intercepted]" if g.intercepted else ""
-        lines.append(f"    {short}(){via}: {cached}/{total} cached ({time_s:.3f}s)")
+        if not g.intercepted:
+            decorated.append(f"    {short}(): {cached}/{total} cached ({time_s:.3f}s)")
+            continue
+        # The ``[intercepted]`` tag stays on the line: a grep for it is how a
+        # reader of the text finds the calls cash wrapped.
+        # The call's own name, not one ending in it (``mid`` in ``pyramid``).
+        named = re.compile(rf"(?<!\w){re.escape(short)}\(")
+        if any(named.search(line) for line in sub_calls):
+            intercepted.append(f"    {short}() [intercepted]: counted in the sub-call lines above ({time_s:.3f}s)")
+        else:
+            intercepted.append(f"    {short}() [intercepted]: {cached}/{total} cached ({time_s:.3f}s)")
+    lines = []
+    if decorated:
+        lines += ["  @cash.cache:", *decorated]
+    if intercepted:
+        lines += ["  intercepted calls:", *intercepted]
     return lines
 
 
@@ -445,6 +463,6 @@ def render_text(badge: InteractiveBadge) -> str:
     if current_section is not None:
         lines.extend(_items_lines(current_section.items, is_upstream=False))
 
-    lines.extend(_decorator_lines(badge.sections))
+    lines.extend(_decorator_lines(badge.sections, lines))
     lines.extend(_guard_summary_lines(badge))
     return "\n".join(lines)

@@ -40,30 +40,38 @@ class _Origin:
         self.body = b"a,b\n1,2\n"
 
 
+class _Handler(BaseHTTPRequestHandler):
+    """The origin's server, at the top of the module: it runs in this
+    process, on its own thread, while a statement reads from it, so the
+    record of what ran holds its methods. Found again by name, they vouch
+    for a hit; a remote server's code is not in the record at all."""
+
+    def _headers(self):
+        state = self.server.state
+        self.send_response(200)
+        self.send_header("ETag", state.etag)
+        self.send_header("Content-Length", str(len(state.body)))
+        self.end_headers()
+
+    def do_HEAD(self):
+        self._headers()
+
+    def do_GET(self):
+        # Needed as well as HEAD: the freshness token comes from HEAD, but
+        # the statement under test actually reads the object.
+        self._headers()
+        self.wfile.write(self.server.state.body)
+
+    def log_message(self, *args):
+        pass
+
+
 @pytest.fixture
 def origin():
     state = _Origin()
 
-    class Handler(BaseHTTPRequestHandler):
-        def _headers(self):
-            self.send_response(200)
-            self.send_header("ETag", state.etag)
-            self.send_header("Content-Length", str(len(state.body)))
-            self.end_headers()
-
-        def do_HEAD(self):
-            self._headers()
-
-        def do_GET(self):
-            # Needed as well as HEAD: the freshness token comes from HEAD, but
-            # the statement under test actually reads the object.
-            self._headers()
-            self.wfile.write(state.body)
-
-        def log_message(self, *args):
-            pass
-
-    server = LocalThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = LocalThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    server.state = state
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     state.url = f"http://127.0.0.1:{server.server_address[1]}/data.csv"

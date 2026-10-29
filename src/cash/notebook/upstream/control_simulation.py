@@ -11,16 +11,18 @@ from __future__ import annotations
 import ast
 import builtins
 import logging
+import os
 from collections import ChainMap
 from collections.abc import Callable, Mapping
 
 from cash._user_attrs import has_attribute
 
+from ..._paths import is_remote_url, normalize_path, resolve_file_dep_path
 from ...analysis.ast_util import called_names
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import control_structure_mutations, is_module_name
-from ...source_norm import exact_source_digest
+from ...tracking.read_classification import stat_key
 from ..cache_key import statement_source_hash
 from ..callee_reach import module_state_names
 from ..control_structures import extract_target_names, get_control_structure_type
@@ -28,7 +30,8 @@ from ..lineage_formula import output_lineage
 from ..loop_split import split_nodes
 from ..run_memo import file_component_this_run
 from ..statement.derivation_edges import bump_derived_lineages
-from ..tracking_state import TrackingState
+from ..statement.lineage import rewritten_by_the_notebook_since
+from ..tracking_state import TrackingState, outcome_key
 from ._types import SimulationResult, TraceEntry
 from .cache_probe import CacheProbe, ControlOutcome
 from .statement_lineage import StatementLineage
@@ -145,9 +148,12 @@ class ControlSimulation:
             )
         return extra_outputs
 
-    def simulate(self, node: ast.AST, sim: SimulationResult) -> None:
+    def simulate(
+        self, node: ast.AST, sim: SimulationResult, occurrence_index: int = 0
+    ) -> dict[str, tuple[int, int, int]]:
         """
-        Simulate execution of a control structure as a single unit.
+        Simulate execution of a control structure as a single unit; the files
+        it read, each with its stat now, for the cell's snapshot.
 
         The entire control structure is treated as one statement for
         simulation purposes: ``stmt_code = ast.unparse(node)``, one key, one
@@ -208,13 +214,16 @@ class ControlSimulation:
                 halves = ()
             if halves:
                 logger.debug("[UPSTREAM_DEBUG] loop split at k=%d -> simulating head and tail separately", split_k)
+                files: dict[str, tuple[int, int, int]] = {}
                 for half in halves:
-                    self._simulate_unit(half, sim)
-                return
+                    files.update(self._simulate_unit(half, sim))
+                return files
 
-        self._simulate_unit(node, sim)
+        return self._simulate_unit(node, sim, occurrence_index)
 
-    def _simulate_unit(self, node: ast.AST, sim: SimulationResult) -> None:
+    def _simulate_unit(
+        self, node: ast.AST, sim: SimulationResult, occurrence_index: int = 0
+    ) -> dict[str, tuple[int, int, int]]:
         """Simulate ONE control structure as a single statement.
 
         Split out of :meth:`simulate` so a split loop can
@@ -226,7 +235,16 @@ class ControlSimulation:
 
         inputs, input_hashes = self._input_hashes(stmt_code, virtual_lineage)
 
-        outputs, lookup_time, files_stale, _ = self.statements.apply(stmt_code, virtual_lineage, sim.virtual_modules)
+        # The edges a run with these inputs linked: one of the same text
+        # elsewhere may have linked others.
+        outputs, lookup_time, files_stale, files = self.statements.apply(
+            stmt_code,
+            virtual_lineage,
+            sim.virtual_modules,
+            occurrence_index=occurrence_index,
+            own_edges=self.statements.share_record_at(stmt_code, input_hashes),
+        )
+        files = dict(files or {})
 
         mutated_vars = self.collect_mutations(
             node,
@@ -253,9 +271,15 @@ class ControlSimulation:
         # What the runtime left behind when it last ran this very structure
         # (see TrackingState.control_outcomes): the files it read, and the
         # lineages it produced.
-        recorded = self._recorded_outcome(stmt_code, virtual_lineage)
+        recorded = self._recorded_outcome(stmt_code, virtual_lineage, occurrence_index)
         if recorded is not None:
-            if file_component_this_run(recorded[2]) != recorded[3]:
+            # The cell's snapshot must know these files, or the next check
+            # reuses it after one changed and never asks the record again: a
+            # loop reading a file per name kept serving the old text.
+            files.update(_stats_of(recorded[2], files))
+            if file_component_this_run(recorded[2]) != recorded[3] and not rewritten_by_the_notebook_since(
+                self.tracking_state, outcome_key(stmt_code, occurrence_index), recorded[2]
+            ):
                 # A file behind its outputs moved: the one change the entry
                 # lineages cannot show, because a `Path` does not change when
                 # the file it names does. Say so, or the loop trust keeps the
@@ -310,6 +334,7 @@ class ControlSimulation:
             # ``PACK.mkdir()`` without it.
             # The same rule simple statements follow in simulate_one_node.
             sim.trace.append(TraceEntry(stmt_code, set(), inputs, input_hashes, {}, files_stale))
+        return _absolute_only(files)
 
     def _input_hashes(self, stmt_code: str, virtual_lineage: dict[str, str]) -> tuple[set[str], dict[str, str]]:
         """What *stmt_code* reads, and the lineage each of those names has here."""
@@ -322,10 +347,13 @@ class ControlSimulation:
                 input_hashes[inp] = self.tracking_state.variable_lineage[inp]
         return inputs, input_hashes
 
-    def _recorded_outcome(self, stmt_code: str, virtual_lineage: Mapping[str, str]) -> ControlOutcome | None:
-        """The outcome the runtime recorded for *stmt_code*: this session's,
-        else an earlier kernel's that may still be trusted."""
-        recorded = self.tracking_state.control_outcomes.get(exact_source_digest(stmt_code))
+    def _recorded_outcome(
+        self, stmt_code: str, virtual_lineage: Mapping[str, str], occurrence_index: int = 0
+    ) -> ControlOutcome | None:
+        """The outcome the runtime recorded for *stmt_code*: this session's
+        (for that copy in its cell), else an earlier kernel's that may still
+        be trusted."""
+        recorded = self.tracking_state.control_outcomes.get(outcome_key(stmt_code, occurrence_index))
         if recorded is None:
             variable_lineage = self.tracking_state.variable_lineage
             recorded = self.probe.control_outcome(
@@ -369,3 +397,45 @@ class ControlSimulation:
         if statement_writes_files(stmt_code):
             return True
         return any(not has_attribute(builtins, name) for name in called_names(node))
+
+
+def _stats_of(paths: set[str], known: Mapping[str, tuple[int, int, int]]) -> dict[str, tuple[int, int, int]]:
+    """Each of *paths* not in *known*, with its stat key now; a path that
+    cannot be resolved or stat'ed is left out."""
+    out: dict[str, tuple[int, int, int]] = {}
+    for path in paths or ():
+        if path in known:
+            continue
+        resolved = resolve_file_dep_path(path)
+        if resolved is None:
+            continue
+        try:
+            out[path] = stat_key(os.stat(resolved))
+        except OSError:
+            continue
+    return out
+
+
+def _absolute_only(files: dict[str, tuple[int, int, int]]) -> dict[str, tuple[int, int, int]]:
+    """*files* without the relative spelling of a read they hold the
+    absolute one of too (``FileAccessTracker.track_path`` records both).
+    Checked later, the relative one is resolved against the folder the
+    notebook is in then, not the one it read in: after an ``os.chdir`` it
+    names another file, or none, and the reading cell re-ran in the wrong
+    folder."""
+    by_name: dict[str, list[str]] = {}
+    for path in files:
+        if os.path.isabs(path):
+            absolute = normalize_path(path)
+            by_name.setdefault(absolute.rpartition("/")[2], []).append(absolute)
+    kept: dict[str, tuple[int, int, int]] = {}
+    for path, stat in files.items():
+        if not os.path.isabs(path) and not is_remote_url(path):
+            parts = normalize_path(os.path.normpath(path)).split("/")
+            while parts and parts[0] == "..":
+                del parts[0]
+            tail = "/" + "/".join(parts)
+            if any(other.endswith(tail) for other in by_name.get(parts[-1], ())):
+                continue
+        kept[path] = stat
+    return kept
