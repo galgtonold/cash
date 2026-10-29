@@ -38,6 +38,7 @@ from .._annotation_refs import annotation_referents
 from ..code_digest import callable_identity, compiled_identity, extension_file_digest
 from ..effects import EffectKind
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..install_paths import top_package
 from ..jit_functions import jit_python_function
 from ..loaded_code import code_objects_of
 from ..purity import is_pure, is_stateful
@@ -180,6 +181,13 @@ class HelperWalk:
         self._unwalkable = ""
         #: (id(body), id(callee)) for each exec()/eval()-built callee judged.
         self._exec_built_sites: set[tuple[int, int]] = set()
+        #: Walk ids walked for their body, not only for the key (hash-only).
+        self._bodies_walked: set[Any] = set()
+        #: Functions audited with their findings reported, in walk order.
+        self._audited: list[Any] = []
+        #: False once something in the walk depended on where it started
+        #: (`PurityReport.audited_whole`).
+        self.composable = True
         self._stack: list[_Entry] = self._start()
 
     # --- the walk ---
@@ -191,9 +199,16 @@ class HelperWalk:
             walk_id = _walk_id(func)
             walked_reported = self._visited_ids.get(walk_id)
             if walked_reported is not None and (walked_reported or not reported):
+                if not hash_only and walk_id not in self._bodies_walked:
+                    # Met first as a class's helper, for its key only: a walk
+                    # from a function that calls it audits its body.
+                    self.composable = False
                 continue
             if self._must_stop():
+                self.composable = False
                 break
+            if not hash_only:
+                self._bodies_walked.add(walk_id)
             qualname = self._claim(func, walk_id, walked_reported, reported)
             self._walk_one(_Entry(func, depth, hash_only, reported), qualname)
         if self._layer_failures and not self._unwalkable:
@@ -257,6 +272,7 @@ class HelperWalk:
         # object under a name already taken gets a numbered one, in walk
         # order, which is the same in every process.
         if qualname in self._names:
+            self.composable = False  # the findings' names depend on walk order
             n = 2
             while f"{qualname}#{n}" in self._names:
                 n += 1
@@ -333,6 +349,8 @@ class HelperWalk:
             return
 
         body = self._audit(entry._replace(func=code_fn), qualname, func_def, src, tree)
+        if entry.reported:
+            self._audited.append(func)
         self._queue_called(body)
         self._queue_named_values(body)
         self._queue_attribute_values(body)
@@ -435,6 +453,7 @@ class HelperWalk:
             # Judged where it is called (`clock_helper_read`). Reached any
             # other way (``fn = now; fn()``), it reports its own read.
             issues = [i for i in issues if i.kind != ISSUE_AMBIENT_READ]
+            self.composable = False
         self._judged_helpers |= visitor.judged_helpers
         self._environment_reads |= visitor.environment_reads
         # Reads of module globals that are reassigned or mutated somewhere in
@@ -873,7 +892,36 @@ class HelperWalk:
             environment_reads=frozenset(self._environment_reads),
             cached_callees=tuple(self._cached_callees),
             unwalkable=self._unwalkable,
+            audited_whole=self._audited_whole(),
         )
+
+    def _audited_whole(self) -> tuple[Any, ...]:
+        """`PurityReport.audited_whole`: the functions audited here whose own
+        walk would be this one's below them.
+
+        A walk from another function differs from this one where the start
+        matters: the boundary of user code is the root's top-level package;
+        a root's closure may hold an exec()-built helper it keys itself
+        (`_captured_by_root`); a root over a library decorator starts from
+        what it wraps (`_start`). Those are left out, and so is everything
+        when the walk itself met a start-dependent case (`composable`)."""
+        if not self.composable or self._unwalkable:
+            return ()
+        package = top_package(self._root_module)
+        whole = []
+        for fn in self._audited:
+            if (
+                type(fn) is not types.FunctionType
+                or fn.__closure__
+                or hasattr(fn, "__wrapped__")
+                or top_package(getattr(fn, "__module__", None)) != package
+            ):
+                continue
+            try:
+                whole.append(weakref.ref(fn))
+            except TypeError:
+                continue
+        return tuple(whole)
 
 
 def _is_function(value: Any) -> bool:

@@ -1643,28 +1643,51 @@ def function_handoffs(
     ``lambda`` in the body would do runs later, if ever, and is left out;
     a lambda handed to a call is followed (``map(lambda v: push(h, v), xs)``).
     """
+    return _handoffs(fdef, user_ns, resolve_source, seen, [])
+
+
+def _handoffs(
+    fdef: ast.FunctionDef | ast.AsyncFunctionDef,
+    user_ns: Mapping[str, Any],
+    resolve_source: Callable[[str], str | None] | None,
+    seen: frozenset[str],
+    cuts: list[bool],
+) -> tuple[frozenset[str], frozenset[str]]:
+    """`function_handoffs`, appending to *cuts* when the answer depends on
+    *seen*: a call it did not follow because its callee was in *seen*."""
     params, local, iterated, calls, reads, called = _function_shape(fdef)
     # The answer depends on the text and on what the names it reads are
     # bound to (which callee a call reaches, what a global holds), the
     # source of the functions it calls by name included.
-    key = (
-        fdef,
-        seen,
-        tuple((name, id(value), type(value)) for name in reads for value in (user_ns.get(name, _UNBOUND),)),
-        tuple(_source_or_none(resolve_source, name) for name in called if name not in seen),
-    )
+    bindings = tuple((name, id(value), type(value)) for name in reads for value in (user_ns.get(name, _UNBOUND),))
+    sources = {name: _source_or_none(resolve_source, name) for name in called}
+    # And on *seen* only where a call stopped at a name in it. An answer
+    # where none did is the one for every *seen*: kept without it, so the
+    # helpers of a chain ``f0 -> f1 -> ... -> fN``, asked for from each of
+    # its functions in turn, are followed once and not once per caller.
+    whole_key = (fdef, None, bindings, tuple(sources.values()))
+    found = _HANDOFFS.get(whole_key)
+    if found is not None:
+        return found
+    key = (fdef, seen, bindings, tuple(source for name, source in sources.items() if name not in seen))
     found = _HANDOFFS.get(key)
     if found is not None:
+        cuts.append(True)
         return found
     roots: set[str] = set()
     free: set[str] = set()
+    own_cuts: list[bool] = []
     for call in calls:
-        _call_handoffs(call, local, iterated, user_ns, resolve_source, seen, roots, free)
+        _call_handoffs(call, local, iterated, user_ns, resolve_source, seen, roots, free, own_cuts)
     free |= {name for name in roots if name not in local}
     found = (frozenset(roots & params), frozenset(free))
     if len(_HANDOFFS) >= 1024:
         _HANDOFFS.clear()
-    _HANDOFFS[key] = found
+    if own_cuts:
+        cuts.append(True)
+        _HANDOFFS[key] = found
+    else:
+        _HANDOFFS[whole_key] = found
     return found
 
 
@@ -1724,13 +1747,18 @@ def _call_handoffs(
     seen: frozenset[str],
     roots: set[str],
     free: set[str],
+    cuts: list[bool] | None = None,
 ) -> None:
     """Add to *roots* the names the one *call* hands to code whose effect is
     unknown, and to *free* the free names a function of the user's it calls
-    hands on (see :func:`function_handoffs`)."""
+    hands on (see :func:`function_handoffs`); to *cuts* when a callee was
+    not followed for being in *seen*."""
+    if cuts is None:
+        cuts = []
     func = call.func
     if isinstance(func, ast.Name) and func.id not in local:
         if func.id in seen:
+            cuts.append(True)
             return
         if bound_to_state(user_ns.get(func.id)):
             # ``PUSH = LOG.append`` then ``PUSH(x)``: the call changes what
@@ -1738,7 +1766,7 @@ def _call_handoffs(
             roots.add(func.id)
         callee = _readable_function(func.id, resolve_source)
         if callee is not None:
-            callee_params, callee_free = function_handoffs(callee, user_ns, resolve_source, seen | {func.id})
+            callee_params, callee_free = _handoffs(callee, user_ns, resolve_source, seen | {func.id}, cuts)
             roots.update(handed_to_params(call, callee, callee_params, iterated))
             free.update(callee_free)
             return
