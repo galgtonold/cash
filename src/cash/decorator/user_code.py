@@ -120,6 +120,12 @@ def _holds_only_c_code(cls: type) -> bool:
             for name, value in vars(klass).items():
                 if name in _C_TYPE_NAMES or isinstance(value, _C_MEMBERS):
                     continue
+                if name == "__slotnames__" and type(value) is list:
+                    # What ``copyreg`` caches on a type the first time an
+                    # object of it is copied or pickled: a cached polars call
+                    # left it on ``PyDataFrame``, which counted as user code
+                    # from then on in that process.
+                    continue
                 if isinstance(value, staticmethod) and type(value.__func__) is types.BuiltinFunctionType:
                     continue
                 return False

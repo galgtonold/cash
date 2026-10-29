@@ -12,12 +12,14 @@ so the draws below match a run without cash.
 
 from __future__ import annotations
 
+import dataclasses
 import sys
 import warnings
 
 import numpy as np
 import pytest
 
+from cash.notebook.call_key import changes_its_closure, holds_a_stream
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
@@ -76,8 +78,20 @@ def _run_all(magics, cells) -> list[str]:
     return statuses
 
 
+@pytest.fixture
+def every_call_stored(monkeypatch):
+    """Every call past the cost floor, as on a busy machine: ``h, peek =
+    tlib.make_helper()`` took over 3 ms there, and only then was it stored."""
+    from cash.notebook.call_unit import CallUnit
+
+    monkeypatch.setattr(CallUnit, "_cost_floor_s", lambda self: 0.0)
+
+
 @pytest.mark.parametrize("case", sorted(CASES))
-def test_the_draw_below_matches_plain_after_a_restart(cash_magics, tlib, case):
+def test_the_draw_below_matches_plain_after_a_restart(cash_magics, tlib, every_call_stored, case):
+    """Stored, the factory's result was handed back after the restart as the
+    functions the last run made, their generator moved on by its draws: x
+    was the second number. A closure holding a generator is not stored."""
     cells = CASES[case]
     _run_all(cash_magics, cells)
     ns = cash_magics.shell.user_ns
@@ -97,3 +111,236 @@ def test_a_generator_in_a_variable_is_still_followed(cash_magics):
     _run_all(cash_magics, cells)
     _restart(cash_magics)
     assert "RESTORED" in _run_all(cash_magics, cells)[2], "the draw is stored"
+
+
+def test_a_closure_holding_a_generator_changes_what_it_holds():
+    def make(held):
+        def draw():
+            return held.normal() if hasattr(held, "normal") else next(held)
+
+        return draw
+
+    assert changes_its_closure(make(np.random.default_rng(0)))
+    assert changes_its_closure(make(iter(range(3))))
+    assert not changes_its_closure(make((1, 2)))
+
+
+def test_a_generator_or_iterator_held_as_a_default_changes_what_it_holds():
+    """``def h(it=it)`` holds it in its defaults, not its closure: the gate
+    read the closure only, and served ``y = h()`` the item ``x = h()`` got."""
+    it = iter(range(3))
+    rng = np.random.default_rng(0)
+
+    def by_default(it=it):
+        return next(it)
+
+    def by_keyword(*, g=rng):
+        return g.normal()
+
+    def in_a_dict_default(st={"g": rng}):
+        return st["g"].normal()
+
+    assert holds_a_stream(by_default) and changes_its_closure(by_default)
+    assert holds_a_stream(by_keyword) and changes_its_closure(by_keyword)
+    assert holds_a_stream(in_a_dict_default)
+
+    def plain(k=3, *, scale=1.0):
+        return k * scale
+
+    assert not holds_a_stream(plain) and not changes_its_closure(plain)
+
+
+@dataclasses.dataclass
+class _Point:
+    x: int
+    y: int
+
+
+class _Steps:
+    """An iterator class: told by its methods, its ``__iter__`` never asked."""
+
+    asked = 0
+
+    def __iter__(self):
+        type(self).asked += 1
+        return self
+
+    def __next__(self):
+        return 1
+
+
+def _closing_over(held):
+    def score(k):
+        return len(held) * k
+
+    return score
+
+
+def test_plain_data_of_any_size_holds_no_stream():
+    """Objects of one class are one class looked into: 30,000 points, or
+    records holding a list, were past the walk's bound and never stored."""
+    points = [_Point(i, i * i) for i in range(30_000)]
+    records = [{"id": i, "tags": [i, i + 1]} for i in range(30_000)]
+    rows = [[i, [i]] for i in range(30_000)]
+    for held in (points, records, rows, {"pts": points}):
+        assert not holds_a_stream(_closing_over(held))
+    assert holds_a_stream(_closing_over([*points, iter(range(3))]))
+    assert holds_a_stream(_closing_over([*records, {"g": np.random.default_rng(0)}]))
+
+
+def test_an_iterator_is_told_by_its_class():
+    _Steps.asked = 0
+    assert holds_a_stream(_closing_over([_Steps()]))
+    assert _Steps.asked == 0, "the walk ran the object's __iter__"
+
+
+def test_the_module_generators_are_not_its_own():
+    import random
+
+    assert not holds_a_stream(_closing_over([random.__dict__["_inst"], np.random.mtrand._rand]))
+    assert holds_a_stream(_closing_over([random.Random(0)]))
+
+
+def test_a_lookup_table_of_millions_of_plain_items_holds_no_stream():
+    # Counted toward the walk's bound, a table past 2,000,000 numbers or
+    # strings was taken as holding a stream: never served.
+    for held in (list(range(2_100_000)), {i: i for i in range(2_100_000)}, [str(i) for i in range(2_100_000)]):
+        assert not holds_a_stream(_closing_over(held))
+
+
+def test_a_class_given_next_later_is_a_stream_from_then_on():
+    class Steps:
+        def __iter__(self):
+            return self
+
+    fn = _closing_over([Steps()])
+    assert not holds_a_stream(fn)
+    Steps.__next__ = lambda self: 1
+    assert holds_a_stream(fn)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "table['it'] = iter(range(3))",
+        "rows[7] = iter(range(3))",
+        "rows[3]['tags'].append(iter(range(3)))",
+        "rows.append(np.random.default_rng(0))",
+    ],
+)
+def test_a_stream_put_in_a_table_read_before_is_found(cash_magics, change):
+    """What a held table was found to hold is kept while the watchers prove
+    the table unchanged: a stream put in it since is found."""
+    from cash import value_watch
+
+    run_cash_cell(
+        cash_magics,
+        "import numpy as np\n"
+        "rows = [{'id': i, 'tags': ['a']} for i in range(30_000)]\n"
+        "table = {i: [i] for i in range(30_000)}\n"
+        "def look(k, rows=rows, table=table):\n    return rows[k]['id'] + table[k][0]",
+    )
+    ns = cash_magics.shell.user_ns
+    for _ in range(3):  # watched from the second time asked
+        assert not holds_a_stream(ns["look"])
+    if value_watch.WATCHING:
+        for name in ("table", "rows"):
+            assert value_watch.peek(ns[name], value_watch.KIND_NO_STREAM) is not None, f"control: kept for {name}"
+    exec(change, ns)
+    assert holds_a_stream(ns["look"])
+
+
+def test_a_stream_in_a_librarys_dict_is_found():
+    import collections
+
+    assert holds_a_stream(_closing_over(collections.OrderedDict(it=iter(range(3)))))
+    assert holds_a_stream(_closing_over(collections.defaultdict(list, it=iter(range(3)))))
+    assert not holds_a_stream(_closing_over(collections.OrderedDict(a=[1, 2])))
+
+
+def test_a_stream_set_on_a_function_in_a_kept_table_is_found(cash_magics):
+    """A table that holds a function is not kept as holding no stream: an
+    attribute set on it (``helper.it = iter(...)``) is one the watchers do
+    not see, however little the function held before."""
+    run_cash_cell(
+        cash_magics,
+        "def helper():\n    return next(helper.it) if hasattr(helper, 'it') else 0\n"
+        "table = {i: {'id': i} for i in range(20_000)}\n"
+        "table['f'] = helper\n"
+        "def look(k, table=table):\n    return table['f']()",
+    )
+    ns = cash_magics.shell.user_ns
+    for _ in range(3):
+        assert not holds_a_stream(ns["look"])
+    exec("helper.it = iter(range(100, 200))", ns)
+    assert holds_a_stream(ns["look"])
+
+
+def test_a_function_two_parts_hold_is_looked_into_for_each(cash_magics):
+    """``f(k, a=A, b=B)`` with ``A = (X,)`` and ``B`` holding ``X``: the walk
+    of ``A`` met ``X`` first, and ``B``'s verdict, kept and reused by a
+    function holding only ``B``, still counts it."""
+    run_cash_cell(
+        cash_magics,
+        "def X():\n    return next(X.box) if hasattr(X, 'box') else 0\n"
+        "X.tag = 1\n"
+        "A = (X,)\nB = {i: {'id': i} for i in range(20_000)}\nB['f'] = X\n"
+        "def f(k, a=A, b=B):\n    return b['f']()\n"
+        "def g(k, b=B):\n    return b['f']()",
+    )
+    ns = cash_magics.shell.user_ns
+    for _ in range(3):
+        assert not holds_a_stream(ns["f"])
+    exec("X.box = iter(range(100, 200))", ns)
+    assert holds_a_stream(ns["g"])
+    assert holds_a_stream(ns["f"])
+
+
+def test_a_stream_set_on_a_function_kept_objects_hold_is_found(cash_magics):
+    """A list of the user's objects, each holding the function ``helper``:
+    kept as holding no stream, the verdict reads the functions and classes
+    the walk met again, and ``helper.it = iter(...)`` set after it is
+    found."""
+    run_cash_cell(
+        cash_magics,
+        "def helper():\n    return next(helper.it) if hasattr(helper, 'it') else 0\n"
+        "class Q:\n    def __init__(self, i):\n        self.i = i\n        self.f = helper\n"
+        "rows = [Q(i) for i in range(20_000)]\n"
+        "def look(i, rows=rows):\n    return rows[i].f()",
+    )
+    ns = cash_magics.shell.user_ns
+    for _ in range(3):
+        assert not holds_a_stream(ns["look"])
+    exec("helper.it = iter(range(100, 200))", ns)
+    assert holds_a_stream(ns["look"])
+
+
+def test_a_kept_list_of_objects_is_not_walked_again(cash_magics, monkeypatch):
+    """Kept as holding no stream, a list of 100,000 objects of one class
+    is not read again on each call, only their class is: each call walked
+    the whole list for it, 70-100 ms where a kept verdict takes 2."""
+    from cash import value_watch
+    from cash.notebook import call_key
+
+    if not value_watch.WATCHING:
+        pytest.skip("the watchers are off in this build")
+    run_cash_cell(
+        cash_magics,
+        "class P:\n    def __init__(self, i):\n        self.i = i\n"
+        "points = [P(i) for i in range(20_000)]\n"
+        "def look(i, points=points):\n    return points[i].i",
+    )
+    ns = cash_magics.shell.user_ns
+    for _ in range(3):
+        assert not holds_a_stream(ns["look"])
+    walked = []
+    part = call_key._StreamWalk.part
+
+    def counted(self, value, seen=None):
+        walked.append(type(value))
+        return part(self, value, seen)
+
+    monkeypatch.setattr(call_key._StreamWalk, "part", counted)
+    assert not holds_a_stream(ns["look"])
+    assert list not in walked, walked
+    assert type in walked, walked

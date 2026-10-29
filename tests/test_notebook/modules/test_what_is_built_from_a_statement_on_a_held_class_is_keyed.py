@@ -43,6 +43,20 @@ SHOP = (
 )
 
 
+#: Where a walk asks whether an object of a class of the user's exists
+#: (`held_functions.EXISTENCE_CHECK_AT`), lowered so a big value is a few
+#: hundred objects, not 30,000 loaded and hashed on every run.
+CHECK_AT = 50
+
+#: A big value: the walk of it stops short at the existence check.
+BIG = 3 * CHECK_AT
+
+
+@pytest.fixture(autouse=True)
+def _asks_early(monkeypatch):
+    monkeypatch.setattr(held_functions, "EXISTENCE_CHECK_AT", CHECK_AT)
+
+
 @pytest.fixture
 def shop(tmp_path, monkeypatch):
     if not shadow.requested() or shadow.SHADOW is None:
@@ -71,7 +85,7 @@ CALLS = {
 
 
 @pytest.mark.parametrize("call", list(CALLS))
-@pytest.mark.parametrize("size", [10, 30_000])
+@pytest.mark.parametrize("size", [10, BIG])
 @pytest.mark.parametrize("variants", [1, 6])
 @pytest.mark.parametrize("edit", [False, True], ids=["control", "edit"])
 def test_call_hit_with_dropped_trace(cash_magics, mock_shell, shop, size, variants, call, edit):
@@ -121,7 +135,7 @@ def test_call_hit_with_dropped_trace(cash_magics, mock_shell, shop, size, varian
 
 
 @pytest.mark.parametrize("call", ["bound", "modfn"])
-@pytest.mark.parametrize("size", [10, 30_000])
+@pytest.mark.parametrize("size", [10, BIG])
 @pytest.mark.parametrize("edit", [False, True], ids=["control", "edit"])
 def test_call_hit_after_traces_lost(cash_magics, mock_shell, shop, size, call, edit):
     """As in a restarted kernel whose traces file no longer has the call's
@@ -178,7 +192,7 @@ HELPERS = (
 )
 
 
-@pytest.mark.parametrize("size", [10, 30_000])
+@pytest.mark.parametrize("size", [10, BIG])
 @pytest.mark.parametrize("pool", [False, True], ids=["nopool", "pool"])
 @pytest.mark.parametrize("module", [False, True], ids=["nomodule", "module"])
 def test_unusable_trace_cost(cash_magics, mock_shell, tmp_path, monkeypatch, size, pool, module):
@@ -217,7 +231,7 @@ def test_unusable_trace_cost(cash_magics, mock_shell, tmp_path, monkeypatch, siz
         sys.modules.pop(name, None)
 
 
-@pytest.mark.parametrize("size", [10, 30_000])
+@pytest.mark.parametrize("size", [10, BIG])
 @pytest.mark.parametrize("edit", [False, True], ids=["control", "edit"])
 def test_call_hit_with_unusable_trace(cash_magics, mock_shell, shop, size, edit):
     """No eviction: the cached call's own trace is unusable (it started a
@@ -255,7 +269,7 @@ def test_call_hit_with_unusable_trace(cash_magics, mock_shell, shop, size, edit)
         assert open(log, encoding="utf-8").read() == before, ("control: call not served", _counts())
 
 
-@pytest.mark.parametrize("size", [10, 30_000])
+@pytest.mark.parametrize("size", [10, BIG])
 @pytest.mark.parametrize("how", ["run_all", "last_cell"])
 @pytest.mark.parametrize("edit", [False, True], ids=["control", "edit"])
 def test_restart_then_upstream_restore(tmp_path, monkeypatch, size, how, edit):
@@ -339,7 +353,7 @@ def test_restart_then_upstream_restore(tmp_path, monkeypatch, size, how, edit):
         sys.modules.pop(name, None)
 
 
-@pytest.mark.parametrize("size", [10, 30_000])
+@pytest.mark.parametrize("size", [10, BIG])
 @pytest.mark.parametrize("edit", ["cell", "file"])
 @pytest.mark.parametrize("trace", ["on", "off"])
 def test_downstream_of_a_trace_rerun(cash_magics, mock_shell, shop, size, edit, trace, monkeypatch):

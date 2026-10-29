@@ -75,7 +75,13 @@ from cash.notebook.call_effects import (
 )
 from cash.notebook.call_entries import ONE_LOCAL, TOO_MANY_WHY, CallEntries, refs_beyond
 from cash.notebook.call_interception import CallSite, SiteSlots, interceptable, names_read
-from cash.notebook.call_key import CallKeys, callee_mutated_globals, callee_watched_globals, global_digests
+from cash.notebook.call_key import (
+    CallKeys,
+    callee_mutated_globals,
+    callee_watched_globals,
+    global_digests,
+    holds_a_stream,
+)
 from cash.notebook.call_refs import (
     DIGEST_FIELD,
     SIZE_FIELD,
@@ -931,6 +937,15 @@ class CallUnit:
             call = _Call(fn, site, func_name, key, mutated_globals, args, kwargs)
             hit_started = _perf_counter()
             hit, value, recorded_cost, metadata = self._entries.lookup(key)
+            if hit and holds_a_stream(fn):
+                if self._invoked_keys:
+                    self._invoked_keys[-1] = None
+                # It draws from an iterator or a generator its closure or
+                # defaults hold: each call gives the next item, where the
+                # key, which cannot hold where the stream is, would give
+                # ``y = h()`` the item ``x = h()`` got. Asked of a hit only:
+                # a miss runs anyway.
+                return self._run_unkeyed(fn, args, kwargs, key_started)
             if hit and metadata.get("helper_memos"):
                 # Served only while the helper memos it called hold what its
                 # run left (`helper_memos.unfilled`).

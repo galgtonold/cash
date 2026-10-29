@@ -21,17 +21,20 @@ import fractions as _fractions
 import functools
 import gc
 import hashlib
+import itertools
 import logging
+import operator
 import pathlib as _pathlib
+import random
 import reprlib
 import sys
 import types as _types
 import weakref
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING, Any
 
-from cash import _plain_data
+from cash import _native, _plain_data
 from cash._memo import CODE_OBJECTS, LruMemo
 from cash._paths import MAIN_MODULE_NAMES, is_pseudo_filename
 from cash._user_attrs import attribute_or, builtin_items, has_attribute, instance_of
@@ -357,7 +360,382 @@ def changes_its_closure(fn) -> bool:
     if type(fn) is not _types.FunctionType:
         return False
     cells = closure_cells(fn)
-    return bool(cells) and (rebinds_its_closure(fn) or any(n in cells for n in _source_mutations(fn)))
+    if cells and (
+        rebinds_its_closure(fn) or any(n in cells for n in _source_mutations(fn)) or _draws_on_its_closure(fn, cells)
+    ):
+        return True
+    return holds_a_stream(fn)
+
+
+def holds_a_stream(fn) -> bool:
+    """Whether a function holds a random generator or an iterator, however
+    deeply, in its closure, its defaults (``def h(it=it)``,
+    ``g=np.random.default_rng(0)``) or its attributes: calling it draws
+    from it whatever method it calls (``g.normal()``), so the function
+    changes what it holds. Stored, a hit handed back the function the last
+    run made, its generator moved on by every draw since: after a restart
+    ``x = h()`` gave the second number, not the first. Looked for in tuples,
+    lists, sets and dicts (``st = {'it': iter(...)}``), in an object of the
+    user's (``self.it``), and in another function's closure (a helper ``g``
+    that holds it).
+
+    Told by type, read off the class (`_stream_type`): no ``__iter__`` of
+    the user's runs. Read a level at a time, each level's objects in one
+    ``gc.get_referents`` call and told apart by type: a closure over 100,000
+    records took a quarter of a second object by object, ten times the call
+    it guarded. Numbers, text and dates are passed over uncounted: a lookup
+    table of millions of them is not a holder. Past `_STREAM_HOLDERS_AT`
+    functions and classes, or `_STREAM_ITEMS_AT` other objects, not known:
+    taken as holding one."""
+    if type(fn) is not _types.FunctionType:
+        return False
+    parts = held_by(fn)
+    if not parts or _EXACT_ATOMS.issuperset(map(type, parts)):
+        return False
+    from cash import value_watch
+
+    # The shell (``get_ipython = lambda: shell``) holds the whole session:
+    # the kernel's own, never the function's stream, and past the bounds.
+    walk = _StreamWalk(fn, value_watch.shells())
+    for part in parts:
+        kind = type(part)
+        if kind in _EXACT_ATOMS:
+            continue
+        if kind in _EXACT_CONTAINERS and value_watch.WATCHING:
+            # What a lookup table or a list of records holds is read once:
+            # while the watchers prove it unchanged since (no item, key or
+            # attribute of it set), it holds no stream still.
+            # Walked with a seen set of its own: a function another part
+            # met first is met here too, so the verdict kept is this
+            # part's alone.
+            walked = []
+            found = value_watch.digest(
+                part,
+                lambda value: walked.append(value) or walk.part(value, walk.fresh_seen()),
+                value_watch.KIND_NO_STREAM,
+                _kept_as_clean,
+            )
+            if type(found) is _HoldersMet and not walked:
+                # The table is as it was; the functions and classes it
+                # holds may not be: what they hold is read again.
+                found = walk.holders_now(found.holders)
+        else:
+            found = walk.part(part)
+        if found is _HOLDS:
+            return True
+    return False
+
+
+#: `_StreamWalk.part`'s answers: a stream found; none, and nothing the
+#: watchers cannot see met (`_kept_as_clean`); none, past a function, a
+#: method or a class.
+_HOLDS, _CLEAN, _UNSEEN = object(), object(), object()
+
+
+class _HoldersMet:
+    """`_StreamWalk.part`'s answer for a part holding no stream, which met
+    *holders*: functions, methods and classes, a list of objects of the
+    user's reaching their class. The watchers see no attribute set on them,
+    so a kept answer reads them again (`_StreamWalk.holders_now`) and the
+    rest of the part not. Kept as ``_UNSEEN`` was, every call walked a list
+    of 100,000 objects again for their one class."""
+
+    __slots__ = ("holders",)
+
+    def __init__(self, holders: tuple) -> None:
+        self.holders = holders
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            type(other) is _HoldersMet
+            and len(other.holders) == len(self.holders)
+            and all(a is b for a, b in zip(self.holders, other.holders))
+        )
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+def _kept_as_clean(_value: Any, found: Any) -> bool:
+    return found is _CLEAN or type(found) is _HoldersMet
+
+
+class _StreamWalk:
+    """`holds_a_stream`'s walk, one held part at a time, its bounds and the
+    objects it met shared by the parts of one function."""
+
+    __slots__ = ("fn_id", "holders", "items", "kernels", "object_kinds", "seen", "skipped_ids", "ways")
+
+    def __init__(self, fn: Any, skipped: Iterable[Any] = ()) -> None:
+        self.kernels = _native.kernels
+        # Without the kernels an object is met by its address over the
+        # least size of an object (`_new_in`), with them by its address.
+        shift = 0 if self.kernels is not None else _ID_SHIFT
+        self.fn_id = id(fn) >> shift
+        #: Objects never walked (the shell), met as the function is.
+        self.skipped_ids = frozenset(id(obj) >> shift for obj in skipped)
+        self.seen: set[int] = self.fresh_seen()
+        self.ways: dict[type, Any] = {}
+        self.object_kinds: set[type] = set()
+        self.holders = self.items = 0
+
+    def fresh_seen(self) -> set[int]:
+        """A set of the objects met: the function and the skipped ones."""
+        return {self.fn_id, *self.skipped_ids}
+
+    def part(self, part: Any, seen: set[int] | None = None) -> Any:
+        """``_HOLDS``, ``_CLEAN``, ``_HoldersMet`` or ``_UNSEEN`` for *part*
+        and what it holds. ``_HoldersMet`` once a function, a method or a
+        class was met, with them: the watchers see neither a closure cell
+        set nor an attribute set on a function or a class (``X.it =
+        iter(...)``). ``_UNSEEN`` once a random generator held elsewhere
+        was met. *seen*: the objects met already, the function's shared set
+        if not given."""
+        kernels = self.kernels
+        ways = self.ways
+        if seen is None:
+            seen = self.seen
+        children = [part]
+        types: list[type] = []
+        clean = True
+        holders: list[Any] = []
+        while children:
+            if kernels is not None:
+                kinds = kernels.type_set(children)
+            else:
+                types = list(map(type, children))
+                kinds = set(types)
+            for kind in kinds - ways.keys():
+                way = ways[kind] = _way_in(kind)
+                if way is _STREAM:
+                    return _HOLDS
+            if any(ways[kind] is _RNG for kind in kinds):
+                clean = False
+                if any(_rng_of_its_own(item) for item in children if ways[type(item)] is _RNG):
+                    return _HOLDS
+            skipped = {kind for kind in kinds if ways[kind] not in _WALKED}
+            next_children: list[Any] = []
+            for kind, group in _by_kind(kernels, children, skipped, kinds, types):
+                new = kernels.new_in(group, False, seen) if kernels is not None else _new_in(group, seen)
+                if not new:
+                    continue
+                self.items += len(new)
+                way = ways[kind]
+                if way is _HELD:  # a function, a method or a class: `held_by`
+                    self.holders += len(new)
+                    holders.extend(new)
+                    for item in new:
+                        held = held_by(item)
+                        if held:
+                            next_children.extend(held)
+                elif way is _OBJECT:
+                    # A user's object, a namespace, a ``partial``: what it
+                    # holds (its ``__dict__``, its slots, its class), read
+                    # without asking it.
+                    self.object_kinds.add(kind)
+                    next_children.extend(gc.get_referents(*new))
+                elif not (
+                    kernels is not None
+                    and kind in _EXACT_CONTAINERS
+                    and (kernels.dict_children if way is _DICT else kernels.seq_children)(
+                        new, _EXACT_ATOMS, next_children
+                    )
+                    is None
+                ):
+                    if way is _DICT:
+                        items = itertools.chain(
+                            itertools.chain.from_iterable(map(dict.keys, new)),
+                            itertools.chain.from_iterable(map(dict.values, new)),
+                        )
+                    else:
+                        items = itertools.chain.from_iterable(new)
+                    items = list(items)
+                    # Told apart at C speed: 100,000 records are hundreds of
+                    # thousands of items, a Python test each most of a hit.
+                    next_children.extend(
+                        itertools.compress(items, map(operator.not_, map(_EXACT_ATOMS.__contains__, map(type, items))))
+                    )
+                if self.holders + len(self.object_kinds) > _STREAM_HOLDERS_AT or self.items > _STREAM_ITEMS_AT:
+                    return _HOLDS
+            children = next_children
+        if not clean:
+            return _UNSEEN
+        return _HoldersMet(tuple(holders)) if holders else _CLEAN
+
+    def holders_now(self, holders: tuple) -> Any:
+        """``_HOLDS`` when one of *holders*, met in a part kept as holding no
+        stream, holds one now."""
+        seen = self.fresh_seen()
+        for holder in holders:
+            if self.part(holder, seen) is _HOLDS:
+                return _HOLDS
+        return _CLEAN
+
+
+def _by_kind(
+    kernels: Any, children: list, skipped: set[type], kinds: set[type], types: list[type]
+) -> list[tuple[type, list]]:
+    """*children* but those of a *skipped* type, by exact type; *kinds* are
+    their types, *types* the type of each without the kernels."""
+    groups = kernels.split_level(children, skipped, set()) if kernels is not None else NotImplemented
+    if groups is not NotImplemented:
+        return groups
+    if len(kinds) == 1:
+        # One type: the level as it is, with no pass over it.
+        (kind,) = kinds
+        return [] if kind in skipped else [(kind, children)]
+    # A pass at C speed per type, not a Python step per child: the types of
+    # a level are a few. In the order they are first met, as before.
+    return [
+        (kind, list(itertools.compress(children, map(operator.is_, types, itertools.repeat(kind)))))
+        for kind in dict.fromkeys(types)
+        if kind not in skipped
+    ]
+
+
+def _new_in(group: list, seen: set[int]) -> list:
+    """Each of *group* once, none in *seen*, which this adds them to. An
+    object is met by its address over the least size of an object (16
+    bytes): no two objects share it, and a set of addresses, all multiples
+    of 16, took three times as long to fill."""
+    if group and type(group[0]) in _BY_IDENTITY:
+        # Classes and functions, hashed by identity: a list of 100,000
+        # objects meets their one class 100,000 times, told apart here
+        # without an id made for each.
+        group = list(dict.fromkeys(group))
+    ids = list(map(operator.rshift, map(id, group), itertools.repeat(_ID_SHIFT)))
+    if seen.isdisjoint(ids):
+        before = len(seen)
+        seen.update(ids)
+        if len(seen) - before == len(ids):
+            return group
+        # None met before, some twice in *group*.
+        return list(dict(zip(ids, group)).values())
+    found = dict(zip(ids, group))
+    for key in seen & found.keys():
+        del found[key]
+    seen.update(found)
+    return list(found.values())
+
+
+#: An object's address over the least size of an object, as a shift: two
+#: objects alive at once never share it.
+_ID_SHIFT = object.__basicsize__.bit_length() - 1
+#: Types whose objects hash by identity, whatever they hold: their groups
+#: are told apart by the objects themselves.
+_BY_IDENTITY = frozenset((type, _types.FunctionType))
+
+
+#: How many functions and classes `holds_a_stream` looks into.
+_STREAM_HOLDERS_AT = 10_000
+#: How many objects other than numbers, text and dates `holds_a_stream` reads.
+_STREAM_ITEMS_AT = 2_000_000
+_RNG, _STREAM, _NOTHING, _OBJECT, _SEQUENCE, _DICT, _HELD = (object() for _ in range(7))
+_WALKED = frozenset((_OBJECT, _SEQUENCE, _DICT, _HELD))
+
+
+def _way_in(kind: type) -> Any:
+    """How `holds_a_stream` reads an object of *kind*: ``_RNG`` or
+    ``_STREAM`` (`_stream_type`), item by item (``_SEQUENCE``, ``_DICT``),
+    by what it holds (``_OBJECT``, ``_HELD``: `held_by`), or not at all."""
+    if kind in _EXACT_ATOMS:
+        return _NOTHING
+    # Asked once per kind per walk, not kept: a class given ``__next__``
+    # later is a stream from then on.
+    found = _stream_type(kind)
+    if found is not _NOTHING:
+        return found
+    if kind in (tuple, list, set, frozenset):
+        return _SEQUENCE
+    if kind is dict:
+        return _DICT
+    if issubclass(kind, dict) and not _users_type(kind):
+        # A library's dict (``OrderedDict``, ``defaultdict``): its items,
+        # read through ``dict``'s own methods.
+        return _DICT
+    if kind is _types.FunctionType or kind is _types.MethodType or issubclass(kind, type):
+        return _HELD
+    if issubclass(kind, (*_MEMBER_HOLDERS, *_PLAIN_HOLDERS)) or _users_type(kind):
+        return _OBJECT
+    return _NOTHING
+
+
+def _stream_type(kind: type) -> Any:
+    """``_RNG`` for a random generator's type, ``_STREAM`` for a stream's
+    (an iterator, a generator, a queue: reading it moves it), ``_NOTHING``
+    otherwise. Read off the class: a class with ``__iter__`` and
+    ``__next__`` is taken as an iterator without asking its ``__iter__``
+    whether it hands back itself, which ran the user's code at every
+    object of the walk."""
+    from cash.notebook.consumables import _GENERATOR_TYPES, _QUEUE_TYPES
+
+    if issubclass(kind, type):
+        return _NOTHING  # a class: its members are looked into, not its iteration
+    if issubclass(kind, random.Random) or _numpy_rng_type(kind):
+        return _RNG
+    if issubclass(kind, (*_GENERATOR_TYPES, *_QUEUE_TYPES)):
+        return _STREAM
+    mro = _CLASS_MRO(kind)
+    if any("__next__" in _CLASS_DICT(c) for c in mro) and any("__iter__" in _CLASS_DICT(c) for c in mro):
+        return _STREAM
+    return _NOTHING
+
+
+def _numpy_rng_type(kind: type) -> bool:
+    np_random = sys.modules.get("numpy.random")
+    if np_random is None:
+        return False
+    rng_types = tuple(
+        t for t in (np_random.__dict__.get(n) for n in ("Generator", "RandomState")) if isinstance(t, type)
+    )
+    return issubclass(kind, rng_types)
+
+
+def _rng_of_its_own(item) -> bool:
+    """A random generator that is not the module's own (``random``'s, or
+    ``np.random``'s): those the module state replays."""
+    if item is random.__dict__.get("_inst"):
+        return False
+    mtrand = sys.modules.get("numpy.random.mtrand")
+    return mtrand is None or item is not mtrand.__dict__.get("_rand")
+
+
+def _draws_on_its_closure(fn, cells: Mapping[str, _types.CellType]) -> bool:
+    """Whether a cell of *fn* holds an iterator, generator or stream, or
+    *fn* changes a cell in a way the shared reader leaves out (``next(c)``,
+    ``heapq.heappush(h, x)``), or its text cannot be read and a cell holds
+    more than a plain value. ``lambda: next(c)`` over ``c =
+    itertools.count()`` changes nothing the shared reader names, and a hit
+    handed back the closure the last run had drawn on."""
+    from .consumables import is_stream
+    from .statement.unseen_writes import own_writes
+
+    held = {}
+    for name, cell in cells.items():
+        try:
+            held[name] = cell.cell_contents
+        except ValueError:  # an empty cell
+            continue
+    if any(is_stream(value) for value in held.values()):
+        return True
+    # A number, a text or a tuple of them: nothing in it a call can change,
+    # whatever the text does with it (``next(held)`` over ``(1, 2)`` raises).
+    held = {name: value for name, value in held.items() if not _plain_value(value)}
+    writes: set[str] = set()
+    for layer in wrapper_layers(fn):
+        code = attribute_or(layer, "__code__", None)
+        if isinstance(code, _types.CodeType):
+            writes |= own_writes(code)
+    if "?" in writes:
+        return any(not callable(value) for value in held.values())
+    return any(name in held for name in writes)
+
+
+def _plain_value(value) -> bool:
+    """A number, a text or a date, or a tuple or frozenset of them."""
+    kind = type(value)
+    if kind in _EXACT_ATOMS:
+        return True
+    return kind in (tuple, frozenset) and len(value) <= 1000 and all(_plain_value(item) for item in value)
 
 
 #: Values with nothing inside them to look at: skipped without a call.
@@ -414,7 +792,7 @@ _MEMBER_HOLDERS = (
 )
 
 #: The containers read item by item; a user's subclass of one is read as the
-#: user's object (`_held_by`), without asking it for its items.
+#: user's object (`held_by`), without asking it for its items.
 _CONTAINERS = (tuple, list, set, frozenset, dict)
 _EXACT_CONTAINERS = frozenset(_CONTAINERS)
 
@@ -701,7 +1079,7 @@ def _users_type(kind: type) -> bool:
     return known
 
 
-def _held_by(item) -> list | None:
+def held_by(item) -> list | None:
     """What a holder that is not a container keeps a function or a memo in:
     a function's closure, defaults and attributes, a ``partial``'s function
     and arguments, a bound method's function and object, what a
@@ -754,7 +1132,7 @@ def holds_a_closure_with_state(
     returned), or a ``functools.cache`` memo. Looked for in tuples, lists,
     sets and dicts, and in what a function, a ``partial``, a bound method, a
     ``SimpleNamespace``, a user's object or a user's class holds
-    (`_held_by`); a library object is not looked into.
+    (`held_by`); a library object is not looked into.
 
     Such a value cannot be served from the cache. The store keeps a function
     by reference, so a hit hands back the closure the last run made, with
@@ -839,7 +1217,7 @@ def holds_a_closure_with_state(
                     return True
                 if _named(item):
                     continue
-            held = gc.get_referents(item) if reading == _REFERENTS else _held_by(item)
+            held = gc.get_referents(item) if reading == _REFERENTS else held_by(item)
             if held:
                 pushed = False
                 for part in held:

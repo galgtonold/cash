@@ -45,10 +45,12 @@ from ._native import REASON
 from ._native import cwatch as _cw
 
 __all__ = [
+    "KIND_NO_STREAM",
     "KIND_PLAIN_KEY",
     "KIND_VALUE",
     "KIND_WALKED",
     "add_namespace",
+    "shells",
     "WatchMismatch",
     "classify",
     "digest",
@@ -66,6 +68,7 @@ __all__ = [
 KIND_VALUE = 0  # value_hash.compute_hash
 KIND_PLAIN_KEY = 1  # the decorator's key part for plain data (arg_hashing.plain_key_part)
 KIND_WALKED = 2  # a token for an argument the decorator's key walked (`tag`)
+KIND_NO_STREAM = 3  # "holds no stream" for what a function holds (call_key.holds_a_stream)
 
 
 class WatchMismatch(AssertionError):
@@ -283,6 +286,11 @@ def add_namespace(shell: Any) -> None:
     except TypeError:
         return
     _SHELLS[:] = [ref, *(other for other in _SHELLS if other() is not None and other() is not shell)][:4]
+
+
+def shells() -> list:
+    """The shells cash runs a notebook in (`add_namespace`) still alive."""
+    return [shell for shell in (ref() for ref in _SHELLS) if shell is not None]
 
 
 def _anchors() -> tuple:
