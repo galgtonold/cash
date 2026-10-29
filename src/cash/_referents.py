@@ -28,12 +28,14 @@ def _get_referents(*objs: Any) -> list[Any]:
     """``gc.get_referents(*objs)``, with a dict that reports nothing while
     it holds items read through ``dict.values``."""
     found = gc.get_referents(*objs)
-    if not any(isinstance(obj, dict) and obj for obj in objs):
+    # An object's ``__dict__`` is a plain dict; a subclass's ``__len__``
+    # is its own code, never run here.
+    if not any(type(obj) is dict and obj for obj in objs):
         return found
     found = []
     for obj in objs:
         held = gc.get_referents(obj)
-        if not held and isinstance(obj, dict) and obj:
+        if not held and type(obj) is dict and obj:
             held = list(dict.values(obj))
         found.extend(held)
     return found
