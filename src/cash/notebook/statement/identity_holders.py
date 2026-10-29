@@ -162,10 +162,12 @@ def _held_by_id(name: str, walk: _Walk, user_kinds: dict[type, bool], user_ns: d
                 name,
                 "a weak reference",
             )
-    lowest = max(_LOWEST_ADDRESS, _lowest_address())
-    candidates = {n for n in walk.numbers if lowest <= n < _HIGHEST_ADDRESS and not n % _ALIGNMENT}
+    candidates = {n for n in walk.numbers if _LOWEST_ADDRESS <= n < _HIGHEST_ADDRESS and not n % _ALIGNMENT}
     if candidates:
-        candidates = _mapped(candidates)
+        # The process's mappings are read only for a number that could be
+        # an id.
+        lowest = _lowest_address()
+        candidates = _mapped({n for n in candidates if n >= lowest})
     # An array's are kept as arrays: a column of millions of numbers is
     # checked at C speed, never made a set.
     in_arrays = [found for found in map(_addresses_in, walk.arrays) if found.size]
@@ -326,13 +328,28 @@ def _lowest_address() -> int:
 def _mapped(numbers: set[int]) -> set[int]:
     """Those of *numbers* inside a mapping of this process that can be
     written, where every object lies: on Linux, from ``/proc/self/maps``,
-    read each time. A sum of 200,000 numbers (``19999900000``) lies in no
-    mapping, so it is no id(). Elsewhere, or where the file cannot be
-    read, all of them."""
+    read again only for a number outside the mappings read before. A sum
+    of 200,000 numbers (``19999900000``) lies in no mapping, so it is no
+    id(). Elsewhere, or where the file cannot be read, all of them."""
     if not sys.platform.startswith("linux"):
         return numbers
+    ranges = _MAPPINGS[0]
+    inside = {n for n in numbers if ranges is not None and any(start <= n < end for start, end in ranges)}
+    if len(inside) == len(numbers):
+        return inside
+    # One outside the mappings read before: a mapping made since may hold
+    # it. One the process has since unmapped is kept, which only reruns.
+    ranges = _MAPPINGS[0] = _read_mappings()
+    if ranges is None:
+        return numbers
+    return {n for n in numbers if any(start <= n < end for start, end in ranges)}
+
+
+def _read_mappings() -> list[tuple[int, int]] | None:
+    """The writable mappings of ``/proc/self/maps``; None when it cannot be
+    read."""
     try:
-        with open("/proc/self/maps", encoding="ascii") as maps:
+        with open("/proc/self/maps", encoding="ascii", errors="replace") as maps:
             ranges = []
             for line in maps:
                 fields = line.split()
@@ -340,8 +357,12 @@ def _mapped(numbers: set[int]) -> set[int]:
                     start, end = fields[0].split("-", 1)
                     ranges.append((int(start, 16), int(end, 16)))
     except (OSError, ValueError):
-        return numbers
-    return {n for n in numbers if any(start <= n < end for start, end in ranges)}
+        return None
+    return ranges
+
+
+#: The mappings `_mapped` read last.
+_MAPPINGS: list[list[tuple[int, int]] | None] = [None]
 
 
 def _weakly_held(name: str, targets: list[Any], user_ns: dict[str, Any]) -> IdentityHeld | None:
