@@ -16,7 +16,7 @@ from typing import Any
 
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.bytecode import GLOBAL_WRITES, argvals, instructions
-from ..analysis.helper_bindings import local_import_map
+from ..analysis.helper_bindings import dotted_imports, local_import_map
 from ..analysis.helper_code import own_code_is_user
 from ..analysis.purity_policy import REPORTED_METHODS
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -558,9 +558,10 @@ class GlobalReads:
     def local_binding_plan(self, func: Callable) -> tuple | None:
         """What `ModuleAttrFold.local_binding_parts` needs from *func*'s source, per code object.
 
-        ``(imports, attr_reads, bare_reads)``: the names an import written in
-        the body binds (``name -> (module, prefix)``), the ``name.ATTR`` reads
-        of any local or closure name, and the bare reads of local names.
+        ``(imports, attr_reads, bare_reads, dotted)``: the names an import
+        written in the body binds (``name -> (module, prefix)``), the
+        ``name.ATTR`` reads of any local or closure name, the bare reads of
+        local names, and the dotted modules ``import pkg.sub`` loads.
         """
         code = getattr(func, "__code__", None)
         if code is None:
@@ -590,7 +591,7 @@ class GlobalReads:
                     elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in imports:
                         bare_reads.add(node.id)
                 if attr_reads or bare_reads:
-                    plan = (imports, attr_reads, bare_reads)
+                    plan = (imports, attr_reads, bare_reads, dotted_imports(func_def))
         except (*SOURCE_RETRIEVAL_ERRORS, SyntaxError, ValueError):
             plan = None
         self._local_binding_cache[code] = plan
