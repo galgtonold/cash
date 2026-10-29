@@ -34,6 +34,7 @@ from __future__ import annotations
 import ast
 import collections
 import contextlib
+import contextvars
 import dataclasses
 import datetime
 import decimal
@@ -2266,6 +2267,13 @@ def _read_down(obj: Any, value_types: tuple[type, ...]) -> bool | None:
     (a value, a type, a function, cash's own record); else whether to read
     what it holds in turn (a library's own object, not pandas or numpy data)."""
     if _is_cash_own(obj) or is_value(obj, value_types) or issubclass(type(obj), _NOT_WITHIN):
+        return None
+    if type(obj) is contextvars.Context:
+        # A thread's context (``Thread._context``, Python 3.14): a copy of
+        # the one it was started from, sharing its mapping with every other
+        # copy the kernel made. Climbed from, it reached a module's globals
+        # and gave up (NOTEBOOK-SHARE-UNCHECKED on ``t = Thread(...)``); it
+        # is the process's, as a standard stream is (`_standard_streams`).
         return None
     if _holds_only_values(obj, value_types) or _is_extension_dtype(obj):
         return None

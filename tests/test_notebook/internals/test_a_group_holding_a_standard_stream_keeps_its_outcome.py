@@ -72,6 +72,11 @@ def _run(magics, cells: list[str]) -> list[tuple[list[str | None], list[str]]]:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             run_cash_cell(magics, cell, cells=cells)
+        thread = magics.shell.user_ns.get("t")
+        if thread is not None:
+            # Ended before the next cell, as it does at once, whatever the
+            # machine's load: one still running serves nothing.
+            thread.join(5)
         statuses = [s.get("status") for s in magics.cash_status("dict")["last_cell"]["statements"]]
         codes = sorted({c for w in caught if (c := getattr(w.message, "code", None)) and c != "NOTEBOOK-NOT-FOUND"})
         out.append((statuses, codes))
