@@ -142,4 +142,4 @@ _SHAPES_C = [
     ),
 ]
 
-SHAPES = [s for s in _SHAPES_A + _SHAPES_B + _SHAPES_C if s.name != "p-reader-cell-added-scratch"]
+SHAPES = _SHAPES_A + _SHAPES_B + _SHAPES_C
