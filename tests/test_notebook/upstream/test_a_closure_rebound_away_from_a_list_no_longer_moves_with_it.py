@@ -44,3 +44,22 @@ def test_a_change_to_the_list_does_not_run_the_reader_again(cash_magics, change,
     assert cash_magics.shell.user_ns["y"] == 1
     status = cash_magics.cash_status("dict")["last_cell"]["statements"][-1].get("status")
     assert status == CacheStatus.RESTORED, status
+
+
+@pytest.mark.parametrize(
+    "call",
+    ["for f in [rebind]:\n    f([0])", "_ = list(map(rebind, [[0]]))"],
+    ids=["in-a-loop", "through-map"],
+)
+@pytest.mark.parametrize("change", ["BIG.append({'id': -1})", "BIG[0]['id'] = -1"])
+def test_a_reader_in_a_loop_after_the_change_runs_nothing_above(cash_magics, change, call):
+    """A reader that calls ``draw`` only inside a loop never asks the edge
+    again itself: the call cell, handing ``rebind`` on, has to drop it, or a
+    change to ``BIG`` makes the reader rebuild both cells above."""
+    cells = [CELLS[0], call, "for _ in range(1):\n    y = draw(1)", change]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    run_cash_cell(cash_magics, cells[2], cells=cells)
+    assert cash_magics.shell.user_ns["y"] == 1
+    ran = [str(s.get("status")) for s in cash_magics.cash_status("dict")["last_cell"]["statements"]]
+    assert ran == [str(CacheStatus.RESTORED)], ran
